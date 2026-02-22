@@ -807,56 +807,114 @@ describe("gateway server auth/connect", () => {
     });
   });
 
-  test("does not bypass pairing for control ui device identity when insecure auth is enabled", async () => {
-    testState.gatewayControlUi = { allowInsecureAuth: true };
+  test("admin-paired device satisfies operator.approvals+pairing scopes from remote with insecure auth", async () => {
+    const { mkdtemp } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { buildDeviceAuthPayload } = await import("./device-auth.js");
+    const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
+      await import("../infra/device-identity.js");
+
+    // Step 1: establish admin pairing on a plain token server (no insecure auth)
     testState.gatewayAuth = { mode: "token", token: "secret" };
-    const { writeConfigFile } = await import("../config/config.js");
-    await writeConfigFile({
-      gateway: {
-        trustedProxies: ["127.0.0.1"],
-      },
-      // oxlint-disable-next-line typescript/no-explicit-any
-    } as any);
-    const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-    process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
+    const identityDir = await mkdtemp(join(tmpdir(), "openclaw-admin-paired-remote-"));
+    const identityPath = join(identityDir, "device.json");
+    const identity = loadOrCreateDeviceIdentity(identityPath);
+    const testClient = {
+      id: GATEWAY_CLIENT_NAMES.TEST,
+      version: "1.0.0",
+      platform: "test",
+      mode: GATEWAY_CLIENT_MODES.TEST,
+    };
+    const buildDevice = (scopes: string[], nonce?: string) => {
+      const signedAtMs = Date.now();
+      const payload = buildDeviceAuthPayload({
+        deviceId: identity.deviceId,
+        clientId: testClient.id,
+        clientMode: testClient.mode,
+        role: "operator",
+        scopes,
+        signedAtMs,
+        token: "secret",
+        nonce,
+      });
+      return {
+        id: identity.deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+        signature: signDevicePayload(identity.privateKeyPem, payload),
+        signedAt: signedAtMs,
+        nonce,
+      };
+    };
+    const { server, ws: wsLocal, port, prevToken } = await startServerWithClient("secret");
     try {
-      await withGatewayServer(async ({ port }) => {
-        const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
-          headers: {
-            origin: "https://localhost",
-            "x-forwarded-for": "203.0.113.10",
-          },
-        });
-        const challengePromise = onceMessage<{
-          type?: string;
-          event?: string;
-          payload?: Record<string, unknown> | null;
-        }>(ws, (o) => o.type === "event" && o.event === "connect.challenge");
-        await new Promise<void>((resolve) => ws.once("open", resolve));
-        const challenge = await challengePromise;
-        const nonce = (challenge.payload as { nonce?: unknown } | undefined)?.nonce;
-        expect(typeof nonce).toBe("string");
-        const scopes = ["operator.admin", "operator.approvals", "operator.pairing"];
-        const { device } = await createSignedDevice({
-          token: "secret",
-          scopes,
+      const localRes = await connectReq(wsLocal, {
+        token: "secret",
+        scopes: ["operator.admin"],
+        client: testClient,
+        device: buildDevice(["operator.admin"]),
+      });
+      if (!localRes.ok) {
+        await approvePendingPairingIfNeeded();
+      }
+      wsLocal.close();
+
+      // Step 2: reconfigure for insecure auth + trusted proxies, then connect from remote
+      testState.gatewayControlUi = { allowInsecureAuth: true };
+      const { writeConfigFile } = await import("../config/config.js");
+      await writeConfigFile({
+        gateway: { trustedProxies: ["127.0.0.1"] },
+        // oxlint-disable-next-line typescript/no-explicit-any
+      } as any);
+      const wsRemote = new WebSocket(`ws://127.0.0.1:${port}`, {
+        headers: {
+          origin: "https://localhost",
+          "x-forwarded-for": "203.0.113.10",
+        },
+      });
+      const challengePromise = onceMessage<{
+        type?: string;
+        event?: string;
+        payload?: Record<string, unknown> | null;
+      }>(wsRemote, (o) => o.type === "event" && o.event === "connect.challenge");
+      await new Promise<void>((resolve) => wsRemote.once("open", resolve));
+      const challenge = await challengePromise;
+      const nonce = (challenge.payload as { nonce?: unknown } | undefined)?.nonce;
+      expect(typeof nonce).toBe("string");
+      const scopes = ["operator.admin", "operator.approvals", "operator.pairing"];
+      const buildControlUiDevice = (s: string[], n?: string) => {
+        const signedAtMs = Date.now();
+        const payload = buildDeviceAuthPayload({
+          deviceId: identity.deviceId,
           clientId: GATEWAY_CLIENT_NAMES.CONTROL_UI,
           clientMode: GATEWAY_CLIENT_MODES.WEBCHAT,
-          nonce: String(nonce),
-        });
-        const res = await connectReq(ws, {
+          role: "operator",
+          scopes: s,
+          signedAtMs,
           token: "secret",
-          scopes,
-          device,
-          client: {
-            ...CONTROL_UI_CLIENT,
-          },
+          nonce: n,
         });
-        expect(res.ok).toBe(false);
-        expect(res.error?.message ?? "").toContain("pairing required");
-        ws.close();
+        return {
+          id: identity.deviceId,
+          publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+          signature: signDevicePayload(identity.privateKeyPem, payload),
+          signedAt: signedAtMs,
+          nonce: n,
+        };
+      };
+      const res = await connectReq(wsRemote, {
+        token: "secret",
+        scopes,
+        device: buildControlUiDevice(scopes, String(nonce)),
+        client: { ...CONTROL_UI_CLIENT },
       });
+      // operator.admin in pairedScopes satisfies all operator.* scopes
+      // (consistent with DEVICE_SCOPE_IMPLICATIONS), so no scope-upgrade
+      // re-pairing is required.
+      expect(res.ok).toBe(true);
+      wsRemote.close();
     } finally {
+      await server.close();
       restoreGatewayToken(prevToken);
     }
   });
@@ -1212,6 +1270,70 @@ describe("gateway server auth/connect", () => {
     await server.close();
     restoreGatewayToken(prevToken);
   });
+
+  test.each([
+    { label: "loopback", bind: undefined as undefined | "lan" },
+    { label: "lan", bind: "lan" as const },
+  ])(
+    "allows operator.write connect when device is paired with operator.admin ($label)",
+    async ({ bind }) => {
+      const { mkdtemp } = await import("node:fs/promises");
+      const { tmpdir } = await import("node:os");
+      const { join } = await import("node:path");
+      const { listDevicePairing } = await import("../infra/device-pairing.js");
+      if (bind) {
+        testState.gatewayBind = bind;
+      }
+      const identityDir = await mkdtemp(join(tmpdir(), "openclaw-device-scope-"));
+      const identityPath = join(identityDir, "device.json");
+      const signedAdmin = await createSignedDevice({
+        token: "secret",
+        scopes: ["operator.admin"],
+        clientId: TEST_OPERATOR_CLIENT.id,
+        clientMode: TEST_OPERATOR_CLIENT.mode,
+        identityPath,
+      });
+      const { server, ws, port, prevToken } = await startServerWithClient("secret");
+      try {
+        const initial = await connectReq(ws, {
+          token: "secret",
+          scopes: ["operator.admin"],
+          client: TEST_OPERATOR_CLIENT,
+          device: signedAdmin.device,
+        });
+        if (!initial.ok) {
+          await approvePendingPairingIfNeeded();
+        }
+        ws.close();
+
+        const signedWrite = await createSignedDevice({
+          token: "secret",
+          scopes: ["operator.write"],
+          clientId: TEST_OPERATOR_CLIENT.id,
+          clientMode: TEST_OPERATOR_CLIENT.mode,
+          identityPath,
+        });
+        const ws2 = new WebSocket(`ws://127.0.0.1:${port}`);
+        await new Promise<void>((resolve) => ws2.once("open", resolve));
+        const writeConnect = await connectReq(ws2, {
+          token: "secret",
+          scopes: ["operator.write"],
+          client: TEST_OPERATOR_CLIENT,
+          device: signedWrite.device,
+        });
+        expect(writeConnect.ok).toBe(true);
+        ws2.close();
+
+        const list = await listDevicePairing();
+        expect(
+          list.pending.filter((entry) => entry.deviceId === signedAdmin.identity.deviceId),
+        ).toEqual([]);
+      } finally {
+        await server.close();
+        restoreGatewayToken(prevToken);
+      }
+    },
+  );
 
   test("allows legacy paired devices missing role/scope metadata", async () => {
     const { resolvePairingPaths, readJsonFile } = await import("../infra/pairing-files.js");
