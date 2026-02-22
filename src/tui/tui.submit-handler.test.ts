@@ -130,10 +130,32 @@ describe("shouldEnableWindowsGitBashPasteFallback", () => {
     ).toBe(true);
   });
 
-  it("disables fallback outside Windows", () => {
+  it("enables fallback on macOS iTerm", () => {
     expect(
       shouldEnableWindowsGitBashPasteFallback({
         platform: "darwin",
+        env: {
+          TERM_PROGRAM: "iTerm.app",
+        } as NodeJS.ProcessEnv,
+      }),
+    ).toBe(true);
+  });
+
+  it("enables fallback on macOS Terminal.app", () => {
+    expect(
+      shouldEnableWindowsGitBashPasteFallback({
+        platform: "darwin",
+        env: {
+          TERM_PROGRAM: "Apple_Terminal",
+        } as NodeJS.ProcessEnv,
+      }),
+    ).toBe(true);
+  });
+
+  it("disables fallback outside Windows", () => {
+    expect(
+      shouldEnableWindowsGitBashPasteFallback({
+        platform: "linux",
         env: {
           MSYSTEM: "MINGW64",
         } as NodeJS.ProcessEnv,
