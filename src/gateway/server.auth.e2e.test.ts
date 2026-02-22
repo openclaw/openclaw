@@ -967,7 +967,7 @@ describe("gateway server auth/connect", () => {
     }
   });
 
-  test("requires pairing for scope upgrades", async () => {
+  test("auto-approves scope upgrades on loopback connections", async () => {
     const { mkdtemp } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
@@ -1017,6 +1017,9 @@ describe("gateway server auth/connect", () => {
 
     ws.close();
 
+    // Scope upgrade on loopback should be auto-approved (silent pairing).
+    // This is essential for internal gateway calls (subagent spawn, cron, browser)
+    // which connect via loopback with varying least-privilege scopes.
     const ws2 = new WebSocket(`ws://127.0.0.1:${port}`);
     await new Promise<void>((resolve) => ws2.once("open", resolve));
     const res = await connectReq(ws2, {
@@ -1025,25 +1028,11 @@ describe("gateway server auth/connect", () => {
       client,
       device: buildDevice(["operator.admin"]),
     });
-    expect(res.ok).toBe(false);
-    expect(res.error?.message ?? "").toContain("pairing required");
-
-    await approvePendingPairingIfNeeded();
-    ws2.close();
-
-    const ws3 = new WebSocket(`ws://127.0.0.1:${port}`);
-    await new Promise<void>((resolve) => ws3.once("open", resolve));
-    const approved = await connectReq(ws3, {
-      token: "secret",
-      scopes: ["operator.admin"],
-      client,
-      device: buildDevice(["operator.admin"]),
-    });
-    expect(approved.ok).toBe(true);
+    expect(res.ok).toBe(true);
     paired = await getPairedDevice(identity.deviceId);
     expect(paired?.scopes).toContain("operator.admin");
 
-    ws3.close();
+    ws2.close();
     await server.close();
     restoreGatewayToken(prevToken);
   });

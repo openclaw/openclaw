@@ -655,7 +655,9 @@ export function attachGatewayWsMessageHandler(params: {
               role,
               scopes,
               remoteIp: reportedClientIp,
-              silent: isLocalClient && reason === "not-paired",
+              // Auto-approve all loopback pairing requests (not just initial pairing)
+              // so internal gateway calls with varying scopes don't get rejected.
+              silent: isLocalClient,
             });
             const context = buildRequestContext();
             if (pairing.request.silent === true) {
