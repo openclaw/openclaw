@@ -17,7 +17,12 @@ vi.mock("../utils/fetch-timeout.js", () => ({
 
 import { signalRpcRequest } from "./client.js";
 
-type ErrorWithCause = Error & { cause?: unknown };
+function rpcResponse(body: unknown, status = 200): Response {
+  if (typeof body === "string") {
+    return new Response(body, { status });
+  }
+  return new Response(JSON.stringify(body), { status });
+}
 
 describe("signalRpcRequest", () => {
   beforeEach(() => {
@@ -27,12 +32,7 @@ describe("signalRpcRequest", () => {
 
   it("returns parsed RPC result", async () => {
     fetchWithTimeoutMock.mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({ jsonrpc: "2.0", result: { version: "0.13.22" }, id: "test-id" }),
-        {
-          status: 200,
-        },
-      ),
+      rpcResponse({ jsonrpc: "2.0", result: { version: "0.13.22" }, id: "test-id" }),
     );
 
     const result = await signalRpcRequest<{ version: string }>("version", undefined, {
@@ -43,14 +43,25 @@ describe("signalRpcRequest", () => {
   });
 
   it("throws a wrapped error when RPC response JSON is malformed", async () => {
-    fetchWithTimeoutMock.mockResolvedValueOnce(new Response("not-json", { status: 502 }));
+    fetchWithTimeoutMock.mockResolvedValueOnce(rpcResponse("not-json", 502));
 
-    const err = (await signalRpcRequest("version", undefined, {
-      baseUrl: "http://127.0.0.1:8080",
-    }).catch((error: unknown) => error)) as ErrorWithCause;
+    await expect(
+      signalRpcRequest("version", undefined, {
+        baseUrl: "http://127.0.0.1:8080",
+      }),
+    ).rejects.toMatchObject({
+      message: "Signal RPC returned malformed JSON (status 502)",
+      cause: expect.any(SyntaxError),
+    });
+  });
 
-    expect(err).toBeInstanceOf(Error);
-    expect(err.message).toBe("Signal RPC returned malformed JSON (status 502)");
-    expect(err.cause).toBeInstanceOf(SyntaxError);
+  it("throws when RPC response envelope has neither result nor error", async () => {
+    fetchWithTimeoutMock.mockResolvedValueOnce(rpcResponse({ jsonrpc: "2.0", id: "test-id" }));
+
+    await expect(
+      signalRpcRequest("version", undefined, {
+        baseUrl: "http://127.0.0.1:8080",
+      }),
+    ).rejects.toThrow("Signal RPC returned invalid response envelope (status 200)");
   });
 });
