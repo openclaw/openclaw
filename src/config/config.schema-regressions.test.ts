@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { validateConfigObject } from "./config.js";
+import { validateConfigObject, validateConfigObjectWithPlugins } from "./config.js";
 
 describe("config schema regressions", () => {
   it("accepts nested telegram groupPolicy overrides", () => {
@@ -90,5 +90,17 @@ describe("config schema regressions", () => {
     if (!res.ok) {
       expect(res.issues[0]?.path).toBe("channels.imessage.attachmentRoots.0");
     }
+  });
+
+  it("accepts channels.modelByChannel in plugin-aware validation (#23084)", () => {
+    const res = validateConfigObjectWithPlugins({
+      channels: {
+        modelByChannel: {
+          "my-channel": { "*": "anthropic/claude-sonnet-4-6" },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
   });
 });
