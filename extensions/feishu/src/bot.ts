@@ -510,12 +510,7 @@ export async function handleFeishuMessage(params: {
   const log = runtime?.log ?? console.log;
   const error = runtime?.error ?? console.error;
 
-  // Dedup check: skip if this message was already processed
   const messageId = event.message.message_id;
-  if (!tryRecordMessage(messageId)) {
-    log(`feishu: skipping duplicate message ${messageId}`);
-    return;
-  }
 
   let ctx = parseFeishuMessageEvent(event, botOpenId);
   const isGroup = ctx.chatType === "group";
@@ -951,6 +946,11 @@ export async function handleFeishuMessage(params: {
     });
 
     log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
+
+    if (!tryRecordMessage(messageId)) {
+      log(`feishu: skipping duplicate message ${messageId}`);
+      return;
+    }
 
     const { queuedFinal, counts } = await core.channel.reply.dispatchReplyFromConfig({
       ctx: ctxPayload,
