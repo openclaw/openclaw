@@ -1,3 +1,5 @@
+import type { OpenClawConfig } from "../../config/config.js";
+import type { MonitorIMessageOpts, IMessagePayload } from "./types.js";
 import { hasControlCommand } from "../../auto-reply/command-detection.js";
 import {
   formatInboundEnvelope,
@@ -14,7 +16,6 @@ import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.j
 import { buildMentionRegexes, matchesMentionPatterns } from "../../auto-reply/reply/mentions.js";
 import { resolveControlCommandGate } from "../../channels/command-gating.js";
 import { logInboundDrop } from "../../channels/logging.js";
-import type { OpenClawConfig } from "../../config/config.js";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
@@ -26,7 +27,6 @@ import {
   isAllowedIMessageSender,
   normalizeIMessageHandle,
 } from "../targets.js";
-import type { MonitorIMessageOpts, IMessagePayload } from "./types.js";
 
 type IMessageReplyContext = {
   id?: string;
@@ -129,9 +129,7 @@ export function resolveIMessageInboundDecision(params: {
 
   // If the owner explicitly configures a chat_id under imessage.groups, treat that thread as a
   // "group" for permission gating + session isolation, even when is_group=false.
-  const treatAsGroupByConfig = Boolean(
-    groupIdCandidate && groupListPolicy.allowlistEnabled && groupListPolicy.groupConfig,
-  );
+  const treatAsGroupByConfig = Boolean(groupIdCandidate && groupListPolicy.groupConfig);
   const isGroup = Boolean(params.message.is_group) || treatAsGroupByConfig;
   if (isGroup && !chatId) {
     return { kind: "drop", reason: "group without chat_id" };
