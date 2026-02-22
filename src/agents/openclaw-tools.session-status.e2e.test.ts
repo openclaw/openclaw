@@ -80,8 +80,8 @@ import "./test-helpers/fast-core-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 
 function resetSessionStore(store: Record<string, unknown>) {
-  loadSessionStoreMock.mockReset();
-  updateSessionStoreMock.mockReset();
+  loadSessionStoreMock.mockClear();
+  updateSessionStoreMock.mockClear();
   loadSessionStoreMock.mockReturnValue(store);
 }
 
@@ -177,8 +177,8 @@ describe("session_status tool", () => {
   });
 
   it("scopes bare session keys to the requester agent", async () => {
-    loadSessionStoreMock.mockReset();
-    updateSessionStoreMock.mockReset();
+    loadSessionStoreMock.mockClear();
+    updateSessionStoreMock.mockClear();
     const stores = new Map<string, Record<string, unknown>>([
       [
         "/tmp/main/sessions.json",
