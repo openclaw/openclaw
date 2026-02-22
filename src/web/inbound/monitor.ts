@@ -296,7 +296,19 @@ export async function monitorWebInbox(options: {
       const senderName = msg.pushName ?? undefined;
 
       inboundLogger.info(
-        { from, to: selfE164 ?? "me", body, mediaPath, mediaType, mediaFileName, timestamp },
+        {
+          from,
+          to: selfE164 ?? "me",
+          body,
+          timestamp,
+          // Include sender details for group collectors that parse web-inbound logs.
+          // NOTE: keep key names stable (participant/senderName) for downstream scripts.
+          participant: senderE164 ?? undefined,
+          senderName,
+          mediaPath,
+          mediaType,
+          mediaFileName,
+        },
         "inbound message",
       );
       const inboundMessage: WebInboundMessage = {
