@@ -1,20 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { listRepoFiles } from "../test-utils/repo-scan.js";
+import { listRuntimeSourceFiles } from "../test-utils/repo-scan.js";
 
 const SCAN_ROOTS = ["src", "extensions"] as const;
 
-function isRuntimeTypeScriptFile(relativePath: string): boolean {
-  return !relativePath.endsWith(".test.ts") && !relativePath.endsWith(".d.ts");
-}
-
 async function findWeakRandomPatternMatches(repoRoot: string): Promise<string[]> {
   const matches: string[] = [];
-  const files = await listRepoFiles(repoRoot, {
+  const files = await listRuntimeSourceFiles(repoRoot, {
     roots: SCAN_ROOTS,
     extensions: [".ts"],
-    shouldIncludeFile: isRuntimeTypeScriptFile,
   });
   for (const filePath of files) {
     const lines = (await fs.readFile(filePath, "utf8")).split(/\r?\n/);
