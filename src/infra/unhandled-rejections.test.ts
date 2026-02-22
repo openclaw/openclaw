@@ -86,6 +86,11 @@ describe("isTransientNetworkError", () => {
     expect(isTransientNetworkError(error)).toBe(true);
   });
 
+  it("returns true for Slack request errors that only expose ENOTFOUND in message text", () => {
+    const error = new Error("A request error occurred: getaddrinfo ENOTFOUND slack.com");
+    expect(isTransientNetworkError(error)).toBe(true);
+  });
+
   it("returns true for AggregateError containing network errors", () => {
     const networkError = Object.assign(new Error("timeout"), { code: "ETIMEDOUT" });
     const error = new AggregateError([networkError], "Multiple errors");

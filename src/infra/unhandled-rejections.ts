@@ -34,12 +34,23 @@ const TRANSIENT_NETWORK_CODES = new Set([
   "UND_ERR_HEADERS_TIMEOUT",
   "UND_ERR_BODY_TIMEOUT",
 ]);
+const TRANSIENT_NETWORK_CODE_TOKENS = Array.from(TRANSIENT_NETWORK_CODES).map((code) =>
+  code.toUpperCase(),
+);
 
 function getErrorCause(err: unknown): unknown {
   if (!err || typeof err !== "object") {
     return undefined;
   }
   return (err as { cause?: unknown }).cause;
+}
+
+function getErrorMessage(err: unknown): string | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  const message = (err as { message?: unknown }).message;
+  return typeof message === "string" ? message : undefined;
 }
 
 function extractErrorCodeWithCause(err: unknown): string | undefined {
@@ -92,6 +103,14 @@ export function isTransientNetworkError(err: unknown): boolean {
   const code = extractErrorCodeWithCause(err);
   if (code && TRANSIENT_NETWORK_CODES.has(code)) {
     return true;
+  }
+
+  const message = getErrorMessage(err);
+  if (message) {
+    const upperMessage = message.toUpperCase();
+    if (TRANSIENT_NETWORK_CODE_TOKENS.some((token) => upperMessage.includes(token))) {
+      return true;
+    }
   }
 
   // "fetch failed" TypeError from undici (Node's native fetch)
