@@ -33,6 +33,14 @@
     --lg-duration-normal: 0ms;
     --lg-duration-slow: 0ms;
   }
+
+  :root[data-theme="landingTheme"] .sidebar-brand__logo img {
+    animation: none;
+  }
+
+  :root[data-theme="landingTheme"] body::after {
+    animation: none;
+  }
 }
 
 /* ─── Theme: docsTheme (default — warm dark) ─── */
