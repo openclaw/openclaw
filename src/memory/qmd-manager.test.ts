@@ -118,7 +118,7 @@ describe("QmdMemoryManager", () => {
   });
 
   beforeEach(async () => {
-    spawnMock.mockReset();
+    spawnMock.mockClear();
     spawnMock.mockImplementation(() => createMockChild());
     logWarnMock.mockClear();
     logDebugMock.mockClear();
@@ -1666,7 +1666,7 @@ describe("QmdMemoryManager", () => {
     ] as const;
 
     for (const testCase of cases) {
-      spawnMock.mockReset();
+      spawnMock.mockClear();
       spawnMock.mockImplementation(() => createMockChild());
       const { manager } = await createManager();
       try {
