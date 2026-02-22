@@ -198,11 +198,14 @@ describe("monitorTelegramProvider (grammY)", () => {
   });
 
   it("passes configured webhookHost to webhook listener", async () => {
+    const abort = new AbortController();
+    abort.abort();
     await monitorTelegramProvider({
       token: "tok",
       useWebhook: true,
       webhookUrl: "https://example.test/telegram",
       webhookSecret: "secret",
+      abortSignal: abort.signal,
       config: {
         agents: { defaults: { maxConcurrent: 2 } },
         channels: {
@@ -243,11 +246,30 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(settled).toBe(true);
   });
 
+  it("keeps webhook mode running without abort signal", async () => {
+    let settled = false;
+    void monitorTelegramProvider({
+      token: "tok",
+      useWebhook: true,
+      webhookUrl: "https://example.test/telegram",
+      webhookSecret: "secret",
+    }).then(() => {
+      settled = true;
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+  });
+
   it("falls back to configured webhookSecret when not passed explicitly", async () => {
+    const abort = new AbortController();
+    abort.abort();
     await monitorTelegramProvider({
       token: "tok",
       useWebhook: true,
       webhookUrl: "https://example.test/telegram",
+      abortSignal: abort.signal,
       config: {
         agents: { defaults: { maxConcurrent: 2 } },
         channels: {

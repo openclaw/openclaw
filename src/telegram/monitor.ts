@@ -167,14 +167,16 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       });
       // Keep the channel task alive in webhook mode so the gateway manager
       // does not treat a successful startup as an immediate exit/restart.
+      if (opts.abortSignal?.aborted) {
+        webhook.stop();
+        return;
+      }
       if (opts.abortSignal) {
-        if (opts.abortSignal.aborted) {
-          webhook.stop();
-          return;
-        }
         await new Promise<void>((resolve) => {
-          opts.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+          opts.abortSignal.addEventListener("abort", () => resolve(), { once: true });
         });
+      } else {
+        await new Promise<void>(() => {});
       }
       return;
     }
