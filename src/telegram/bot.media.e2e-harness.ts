@@ -65,6 +65,8 @@ vi.mock("../config/config.js", async (importOriginal) => {
     ...actual,
     loadConfig: () => ({
       channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+      // Keep a small non-zero debounce so forward-burst coalescing paths are exercised in e2e tests.
+      messages: { inbound: { debounceMs: 80 } },
     }),
   };
 });
