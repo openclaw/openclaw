@@ -1,4 +1,4 @@
-import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../agents/auth-profiles.js";
+import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { resolveEnvApiKey } from "../agents/model-auth.js";
 import {
   formatApiKeyPreview,
@@ -7,7 +7,6 @@ import {
 } from "./auth-choice.api-key.js";
 import { createAuthChoiceAgentModelNoter } from "./auth-choice.apply-helpers.js";
 import { applyAuthChoiceHuggingface } from "./auth-choice.apply.huggingface.js";
-import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { applyAuthChoiceOpenRouter } from "./auth-choice.apply.openrouter.js";
 import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 import {
@@ -43,7 +42,6 @@ import {
   applyZaiConfig,
   applyZaiProviderConfig,
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
-  LITELLM_DEFAULT_MODEL_REF,
   QIANFAN_DEFAULT_MODEL_REF,
   KIMI_CODING_MODEL_REF,
   MOONSHOT_DEFAULT_MODEL_REF,
@@ -151,69 +149,6 @@ export async function applyAuthChoiceApiProviders(
 
   if (authChoice === "openrouter-api-key") {
     return applyAuthChoiceOpenRouter(params);
-  }
-
-  if (authChoice === "litellm-api-key") {
-    const store = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
-    const profileOrder = resolveAuthProfileOrder({ cfg: nextConfig, store, provider: "litellm" });
-    const existingProfileId = profileOrder.find((profileId) => Boolean(store.profiles[profileId]));
-    const existingCred = existingProfileId ? store.profiles[existingProfileId] : undefined;
-    let profileId = "litellm:default";
-    let hasCredential = false;
-
-    if (existingProfileId && existingCred?.type === "api_key") {
-      profileId = existingProfileId;
-      hasCredential = true;
-    }
-    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "litellm") {
-      await setLitellmApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir);
-      hasCredential = true;
-    }
-    if (!hasCredential) {
-      await params.prompter.note(
-        "LiteLLM provides a unified API to 100+ LLM providers.\nGet your API key from your LiteLLM proxy or https://litellm.ai\nDefault proxy runs on http://localhost:4000",
-        "LiteLLM",
-      );
-      const envKey = resolveEnvApiKey("litellm");
-      if (envKey) {
-        const useExisting = await params.prompter.confirm({
-          message: `Use existing LITELLM_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
-          initialValue: true,
-        });
-        if (useExisting) {
-          await setLitellmApiKey(envKey.apiKey, params.agentDir);
-          hasCredential = true;
-        }
-      }
-      if (!hasCredential) {
-        const key = await params.prompter.text({
-          message: "Enter LiteLLM API key",
-          validate: validateApiKeyInput,
-        });
-        await setLitellmApiKey(normalizeApiKeyInput(String(key ?? "")), params.agentDir);
-        hasCredential = true;
-      }
-    }
-    if (hasCredential) {
-      nextConfig = applyAuthProfileConfig(nextConfig, {
-        profileId,
-        provider: "litellm",
-        mode: "api_key",
-      });
-    }
-    const applied = await applyDefaultModelChoice({
-      config: nextConfig,
-      setDefaultModel: params.setDefaultModel,
-      defaultModel: LITELLM_DEFAULT_MODEL_REF,
-      applyDefaultConfig: applyLitellmConfig,
-      applyProviderConfig: applyLitellmProviderConfig,
-      noteDefault: LITELLM_DEFAULT_MODEL_REF,
-      noteAgentModel,
-      prompter: params.prompter,
-    });
-    nextConfig = applied.config;
-    agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
-    return { config: nextConfig, agentModelOverride };
   }
 
   if (authChoice === "ai-gateway-api-key") {
@@ -913,14 +848,14 @@ export async function applyAuthChoiceApiProviders(
         "QIANFAN",
       );
     }
-    const envKey = resolveEnvApiKey("qianfan");
-    if (envKey) {
+    const envKey2 = resolveEnvApiKey("qianfan");
+    if (envKey2) {
       const useExisting = await params.prompter.confirm({
-        message: `Use existing QIANFAN_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        message: `Use existing QIANFAN_API_KEY (${envKey2.source}, ${formatApiKeyPreview(envKey2.apiKey)})?`,
         initialValue: true,
       });
       if (useExisting) {
-        setQianfanApiKey(envKey.apiKey, params.agentDir);
+        setQianfanApiKey(envKey2.apiKey, params.agentDir);
         hasCredential = true;
       }
     }
@@ -950,6 +885,307 @@ export async function applyAuthChoiceApiProviders(
       nextConfig = applied.config;
       agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
     }
+    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (authChoice === "litellm-api-key") {
+    let hasCredential = false;
+    let apiKey: string | undefined;
+
+    // Check for pre-provided API key via CLI options (--litellm-api-key or --token with --token-provider litellm)
+    if (!hasCredential && params.opts?.litellmApiKey) {
+      apiKey = normalizeApiKeyInput(params.opts.litellmApiKey);
+      await setLitellmApiKey(apiKey, params.agentDir);
+      hasCredential = true;
+    }
+    if (!hasCredential && params.opts?.token && params.opts?.tokenProvider === "litellm") {
+      apiKey = normalizeApiKeyInput(params.opts.token);
+      await setLitellmApiKey(apiKey, params.agentDir);
+      hasCredential = true;
+    }
+
+    if (!hasCredential) {
+      await params.prompter.note(
+        [
+          "LiteLLM is an OpenAI-compatible proxy that supports many models.",
+          "You'll need to provide:",
+          "  1. Base URL (e.g., http://localhost:4000)",
+          "  2. API key",
+          "  3. Model selection (fetched from your LiteLLM instance)",
+        ].join("\n"),
+        "LiteLLM",
+      );
+    }
+
+    // Check for existing env key
+    const envKey = resolveEnvApiKey("litellm");
+    if (!hasCredential && envKey) {
+      const useExisting = await params.prompter.confirm({
+        message: `Use existing LITELLM_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        initialValue: true,
+      });
+      if (useExisting) {
+        apiKey = envKey.apiKey;
+        await setLitellmApiKey(apiKey, params.agentDir);
+        hasCredential = true;
+      }
+    }
+
+    // Helper function to prompt for API key
+    const promptForApiKey = async () => {
+      const key = await params.prompter.text({
+        message: "Enter LiteLLM API key",
+        validate: validateApiKeyInput,
+      });
+      return normalizeApiKeyInput(String(key));
+    };
+
+    // Helper function to prompt for base URL
+    const promptForBaseUrl = async () => {
+      const defaultBaseUrl = process.env.LITELLM_BASE_URL ?? "http://localhost:4000";
+      const baseUrl = await params.prompter.text({
+        message: "Enter LiteLLM base URL",
+        initialValue: defaultBaseUrl,
+        placeholder: defaultBaseUrl,
+        validate: (value) => {
+          if (!value?.trim()) {
+            return "Base URL is required";
+          }
+          try {
+            new URL(value);
+            return undefined;
+          } catch {
+            return "Invalid URL format";
+          }
+        },
+      });
+      return String(baseUrl).trim();
+    };
+
+    if (!hasCredential) {
+      apiKey = await promptForApiKey();
+      await setLitellmApiKey(apiKey, params.agentDir);
+    }
+
+    // Check for pre-provided base URL via CLI option (--litellm-base-url)
+    let normalizedBaseUrl: string;
+    if (params.opts?.litellmBaseUrl) {
+      normalizedBaseUrl = params.opts.litellmBaseUrl.trim();
+    } else {
+      normalizedBaseUrl = await promptForBaseUrl();
+    }
+
+    // Re-store credential with base URL metadata for implicit provider discovery
+    if (apiKey) {
+      await setLitellmApiKey(apiKey, params.agentDir, normalizedBaseUrl);
+    }
+
+    // Try to fetch available models from LiteLLM
+    type LitellmModelInfo = { id: string; maxInputTokens?: number; maxOutputTokens?: number };
+    let availableModels: LitellmModelInfo[] = [];
+    const authHeaders: Record<string, string> = apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
+
+    // First fetch model list from /v1/models
+    try {
+      const base = normalizedBaseUrl.endsWith("/") ? normalizedBaseUrl : `${normalizedBaseUrl}/`;
+      const modelsUrl = new URL("v1/models", base).toString();
+      const response = await fetch(modelsUrl, {
+        headers: authHeaders,
+        signal: AbortSignal.timeout(10000),
+      });
+      if (response.ok) {
+        const data = (await response.json()) as {
+          data?: Array<{ id: string }>;
+        };
+        if (data.data && Array.isArray(data.data)) {
+          availableModels = data.data.map((m) => ({ id: m.id }));
+        }
+      }
+    } catch {
+      // Fetching models failed - will fall back to manual entry
+    }
+
+    // Then fetch detailed model info from /model/info (LiteLLM-specific endpoint)
+    // This provides context window and max tokens info
+    type ModelInfoEntry = {
+      model_name: string;
+      model_info?: {
+        max_input_tokens?: number;
+        max_tokens?: number;
+        max_output_tokens?: number;
+      };
+    };
+    const modelInfoMap = new Map<string, { maxInputTokens?: number; maxOutputTokens?: number }>();
+    try {
+      const infoBase = normalizedBaseUrl.endsWith("/")
+        ? normalizedBaseUrl
+        : `${normalizedBaseUrl}/`;
+      const modelInfoUrl = new URL("model/info", infoBase).toString();
+      const response = await fetch(modelInfoUrl, {
+        headers: authHeaders,
+        signal: AbortSignal.timeout(10000),
+      });
+      if (response.ok) {
+        const data = (await response.json()) as { data?: ModelInfoEntry[] };
+        if (data.data && Array.isArray(data.data)) {
+          for (const entry of data.data) {
+            if (entry.model_name && entry.model_info) {
+              modelInfoMap.set(entry.model_name, {
+                maxInputTokens: entry.model_info.max_input_tokens,
+                maxOutputTokens: entry.model_info.max_output_tokens ?? entry.model_info.max_tokens,
+              });
+            }
+          }
+        }
+      }
+    } catch {
+      // Model info fetch failed - context window will need manual entry
+    }
+
+    // Merge model info into available models
+    availableModels = availableModels.map((m) => {
+      const info = modelInfoMap.get(m.id);
+      return {
+        id: m.id,
+        maxInputTokens: info?.maxInputTokens,
+        maxOutputTokens: info?.maxOutputTokens,
+      };
+    });
+
+    let normalizedModelId: string;
+    let contextWindow: number | undefined;
+    let maxTokens: number | undefined;
+
+    // Check for pre-provided model via CLI option (--litellm-model)
+    if (params.opts?.litellmModel) {
+      normalizedModelId = params.opts.litellmModel.trim();
+      // Try to get context info from model info map
+      const modelInfo = availableModels.find((m) => m.id === normalizedModelId);
+      if (modelInfo?.maxInputTokens) {
+        contextWindow = modelInfo.maxInputTokens;
+      }
+      if (modelInfo?.maxOutputTokens) {
+        maxTokens = modelInfo.maxOutputTokens;
+      }
+    } else if (availableModels.length > 0) {
+      // Let user select from available models
+      type SelectOption = { value: string; label: string; hint?: string };
+      const modelOptions: SelectOption[] = availableModels.map((m) => ({
+        value: m.id,
+        label: m.id,
+        hint: m.maxInputTokens ? `${Math.round(m.maxInputTokens / 1000)}k context` : undefined,
+      }));
+
+      const selectedModel = await params.prompter.select({
+        message: `Select model (${availableModels.length} available)`,
+        options: modelOptions,
+      });
+
+      normalizedModelId = String(selectedModel);
+      const modelInfo = availableModels.find((m) => m.id === normalizedModelId);
+      if (modelInfo?.maxInputTokens) {
+        contextWindow = modelInfo.maxInputTokens;
+      }
+      if (modelInfo?.maxOutputTokens) {
+        maxTokens = modelInfo.maxOutputTokens;
+      }
+    } else if (params.opts?.nonInteractive) {
+      // In non-interactive mode, fail fast instead of prompting
+      throw new Error(
+        `LiteLLM model discovery failed: no models found at ${normalizedBaseUrl}. ` +
+          `Use --litellm-model to specify a model explicitly.`,
+      );
+    } else {
+      // No models available from LiteLLM - offer manual entry or retry
+      await params.prompter.note(
+        [
+          "Could not fetch models from LiteLLM server.",
+          `Server: ${normalizedBaseUrl}`,
+          "",
+          "This could be due to:",
+          "  \u2022 Invalid API key",
+          "  \u2022 Server not accessible",
+          "  \u2022 Network connectivity issues",
+        ].join("\n"),
+        "Model fetch failed",
+      );
+
+      const action = await params.prompter.select({
+        message: "How would you like to proceed?",
+        options: [
+          { value: "retry-apikey", label: "Re-enter API key" },
+          { value: "retry-baseurl", label: "Re-enter base URL" },
+          { value: "cancel", label: "Go back to auth method selection" },
+        ],
+      });
+
+      if (action === "cancel") {
+        throw new Error("AUTH_CHOICE_CANCELLED");
+      }
+
+      if (action === "retry-apikey") {
+        const newParams = {
+          ...params,
+          authChoice: "litellm-api-key" as const,
+          opts: {
+            ...params.opts,
+            litellmApiKey: undefined,
+            token: undefined,
+          },
+        };
+        return await applyAuthChoiceApiProviders(newParams);
+      }
+
+      if (action === "retry-baseurl") {
+        const newParams = {
+          ...params,
+          authChoice: "litellm-api-key" as const,
+          opts: {
+            ...params.opts,
+            litellmBaseUrl: undefined,
+          },
+        };
+        return await applyAuthChoiceApiProviders(newParams);
+      }
+
+      throw new Error("Failed to configure LiteLLM provider");
+    }
+
+    // Strip litellm/ prefix if the API returned it (avoid litellm/litellm/model)
+    if (normalizedModelId.startsWith("litellm/")) {
+      normalizedModelId = normalizedModelId.slice("litellm/".length);
+    }
+
+    const modelRef = `litellm/${normalizedModelId}`;
+
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "litellm:default",
+      provider: "litellm",
+      mode: "api_key",
+    });
+
+    if (params.setDefaultModel) {
+      nextConfig = applyLitellmConfig(nextConfig, {
+        baseUrl: normalizedBaseUrl,
+        modelId: normalizedModelId,
+        contextWindow,
+        maxTokens,
+      });
+      await params.prompter.note(
+        `Default model set to ${modelRef}${contextWindow ? ` (${Math.round(contextWindow / 1000)}k context)` : ""}`,
+        "Model configured",
+      );
+    } else {
+      nextConfig = applyLitellmProviderConfig(nextConfig, {
+        baseUrl: normalizedBaseUrl,
+        modelId: normalizedModelId,
+        contextWindow,
+        maxTokens,
+      });
+      agentModelOverride = modelRef;
+      await noteAgentModel(modelRef);
+    }
+
     return { config: nextConfig, agentModelOverride };
   }
 

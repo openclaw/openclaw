@@ -1,7 +1,5 @@
 import type { Command } from "commander";
-import { formatAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.js";
 import type { GatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
-import { ONBOARD_PROVIDER_AUTH_FLAGS } from "../../commands/onboard-provider-auth-flags.js";
 import type {
   AuthChoice,
   GatewayAuthChoice,
@@ -9,6 +7,8 @@ import type {
   NodeManagerChoice,
   TailscaleMode,
 } from "../../commands/onboard-types.js";
+import { formatAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.js";
+import { ONBOARD_PROVIDER_AUTH_FLAGS } from "../../commands/onboard-provider-auth-flags.js";
 import { onboardCommand } from "../../commands/onboard.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatDocsLink } from "../../terminal/links.js";
@@ -82,6 +82,8 @@ export function registerOnboardCommand(program: Command) {
   }
 
   command
+    .option("--litellm-base-url <url>", "LiteLLM base URL (default: http://localhost:4000)")
+    .option("--litellm-model <model>", "LiteLLM model name")
     .option("--custom-base-url <url>", "Custom provider base URL")
     .option("--custom-api-key <key>", "Custom provider API key (optional)")
     .option("--custom-model-id <id>", "Custom provider model ID")
@@ -150,6 +152,8 @@ export function registerOnboardCommand(program: Command) {
           opencodeZenApiKey: opts.opencodeZenApiKey as string | undefined,
           xaiApiKey: opts.xaiApiKey as string | undefined,
           litellmApiKey: opts.litellmApiKey as string | undefined,
+          litellmBaseUrl: opts.litellmBaseUrl as string | undefined,
+          litellmModel: opts.litellmModel as string | undefined,
           volcengineApiKey: opts.volcengineApiKey as string | undefined,
           byteplusApiKey: opts.byteplusApiKey as string | undefined,
           customBaseUrl: opts.customBaseUrl as string | undefined,

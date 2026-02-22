@@ -1,9 +1,9 @@
+import type { OpenClawConfig } from "./types.js";
+import type { ModelDefinitionConfig } from "./types.models.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { normalizeProviderId, parseModelRef } from "../agents/model-selection.js";
 import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
 import { resolveTalkApiKey } from "./talk.js";
-import type { OpenClawConfig } from "./types.js";
-import type { ModelDefinitionConfig } from "./types.models.js";
 
 type WarnState = { warned: boolean };
 
@@ -412,7 +412,14 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
 
     for (const [key, entry] of Object.entries(nextModels)) {
       const parsed = parseModelRef(key, "anthropic");
-      if (!parsed || parsed.provider !== "anthropic") {
+      if (!parsed) {
+        continue;
+      }
+      // Apply cache control to Anthropic models and LiteLLM Claude models
+      const isAnthropicProvider = parsed.provider === "anthropic";
+      const isLitellmClaude =
+        parsed.provider === "litellm" && parsed.model.toLowerCase().startsWith("claude-");
+      if (!isAnthropicProvider && !isLitellmClaude) {
         continue;
       }
       const current = entry ?? {};
@@ -430,17 +437,23 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
     const primary = resolvePrimaryModelRef(defaults.model?.primary ?? undefined);
     if (primary) {
       const parsedPrimary = parseModelRef(primary, "anthropic");
-      if (parsedPrimary?.provider === "anthropic") {
-        const key = `${parsedPrimary.provider}/${parsedPrimary.model}`;
-        const entry = nextModels[key];
-        const current = entry ?? {};
-        const params = (current as { params?: Record<string, unknown> }).params ?? {};
-        if (typeof params.cacheRetention !== "string") {
-          nextModels[key] = {
-            ...(current as Record<string, unknown>),
-            params: { ...params, cacheRetention: "short" },
-          };
-          modelsMutated = true;
+      if (parsedPrimary) {
+        const isPrimaryAnthropicProvider = parsedPrimary.provider === "anthropic";
+        const isPrimaryLitellmClaude =
+          parsedPrimary.provider === "litellm" &&
+          parsedPrimary.model.toLowerCase().startsWith("claude-");
+        if (isPrimaryAnthropicProvider || isPrimaryLitellmClaude) {
+          const key = `${parsedPrimary.provider}/${parsedPrimary.model}`;
+          const entry = nextModels[key];
+          const current = entry ?? {};
+          const params = (current as { params?: Record<string, unknown> }).params ?? {};
+          if (typeof params.cacheRetention !== "string") {
+            nextModels[key] = {
+              ...(current as Record<string, unknown>),
+              params: { ...params, cacheRetention: "short" },
+            };
+            modelsMutated = true;
+          }
         }
       }
     }

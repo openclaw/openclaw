@@ -126,6 +126,8 @@ export type OnboardOptions = {
   volcengineApiKey?: string;
   byteplusApiKey?: string;
   qianfanApiKey?: string;
+  litellmBaseUrl?: string;
+  litellmModel?: string;
   customBaseUrl?: string;
   customApiKey?: string;
   customModelId?: string;
