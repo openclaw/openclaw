@@ -657,7 +657,13 @@ export async function runCronIsolatedAgentTurn(params: {
     // follows the same system-message injection path as subagent completions.
     // Keep direct outbound delivery only for structured payloads (media/channel
     // data), which cannot be represented by the shared announce flow.
-    if (deliveryPayloadHasStructuredContent) {
+    //
+    // Forum/topic targets should also use direct delivery. Announce flow can
+    // be swallowed by ANNOUNCE_SKIP/NO_REPLY in the target agent turn, which
+    // silently drops cron output for topic-bound sessions.
+    const useDirectDelivery =
+      deliveryPayloadHasStructuredContent || resolvedDelivery.threadId != null;
+    if (useDirectDelivery) {
       try {
         const payloadsForDelivery =
           deliveryPayloads.length > 0
