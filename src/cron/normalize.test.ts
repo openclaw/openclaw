@@ -360,6 +360,45 @@ describe("normalizeCronJobCreate", () => {
     expect(normalized.wakeMode).toBe("now");
   });
 
+  it("normalizes sessionFreshness always-new", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "fresh",
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      sessionFreshness: " Always-New ",
+      payload: { kind: "agentTurn", message: "hello" },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.sessionFreshness).toBe("always-new");
+  });
+
+  it("normalizes sessionFreshness reuse-if-fresh", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "reuse",
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      sessionFreshness: " Reuse-If-Fresh ",
+      payload: { kind: "agentTurn", message: "hello" },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.sessionFreshness).toBe("reuse-if-fresh");
+  });
+
+  it("strips invalid sessionFreshness values", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "bogus freshness",
+      schedule: { kind: "cron", expr: "* * * * *" },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      sessionFreshness: "bogus",
+      payload: { kind: "agentTurn", message: "hello" },
+    }) as unknown as Record<string, unknown>;
+
+    expect("sessionFreshness" in normalized).toBe(false);
+  });
+
   it("strips invalid delivery mode from partial delivery objects", () => {
     const normalized = normalizeCronJobCreate({
       name: "delivery mode",

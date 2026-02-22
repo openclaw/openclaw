@@ -9,7 +9,7 @@ import { parseAbsoluteTimeMs } from "./parse.js";
 import { migrateLegacyCronPayload } from "./payload-migration.js";
 import { inferLegacyName } from "./service/normalize.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "./stagger.js";
-import type { CronJobCreate, CronJobPatch } from "./types.js";
+import type { CronJobCreate, CronJobPatch, CronSessionFreshness } from "./types.js";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -218,6 +218,17 @@ function normalizeWakeMode(raw: unknown) {
   return undefined;
 }
 
+function normalizeSessionFreshness(raw: unknown): CronSessionFreshness | undefined {
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const trimmed = raw.trim().toLowerCase();
+  if (trimmed === "reuse-if-fresh" || trimmed === "always-new") {
+    return trimmed as CronSessionFreshness;
+  }
+  return undefined;
+}
+
 function copyTopLevelAgentTurnFields(next: UnknownRecord, payload: UnknownRecord) {
   const copyString = (field: "model" | "thinking") => {
     if (typeof payload[field] === "string" && payload[field].trim()) {
@@ -353,6 +364,15 @@ export function normalizeCronJobInput(
       next.wakeMode = normalized;
     } else {
       delete next.wakeMode;
+    }
+  }
+
+  if ("sessionFreshness" in base) {
+    const normalized = normalizeSessionFreshness(base.sessionFreshness);
+    if (normalized) {
+      next.sessionFreshness = normalized;
+    } else {
+      delete next.sessionFreshness;
     }
   }
 
