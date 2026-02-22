@@ -1,4 +1,4 @@
-import { html, nothing } from "lit";
+import { html } from "lit";
 import { ConnectErrorDetailCodes } from "../../../../src/gateway/protocol/connect-error-details.js";
 import { t, i18n, type Locale } from "../../i18n/index.ts";
 import { formatRelativeTimestamp, formatDurationHuman } from "../format.ts";
