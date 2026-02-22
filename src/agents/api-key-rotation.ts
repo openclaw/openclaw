@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "../infra/errors.js";
+import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 import { collectProviderApiKeys, isApiKeyRateLimitError } from "./live-auth-keys.js";
 
 type ApiKeyRetryParams = {
@@ -15,11 +16,22 @@ type ExecuteWithApiKeyRotationOptions<T> = {
   onRetry?: (params: ApiKeyRetryParams & { message: string }) => void;
 };
 
+function normalizeApiKeyValue(value: string): string | null {
+  const normalized = normalizeSecretInput(value);
+  if (!normalized) {
+    return null;
+  }
+  if (normalized === "undefined" || normalized === "null") {
+    return null;
+  }
+  return normalized;
+}
+
 function dedupeApiKeys(raw: string[]): string[] {
   const seen = new Set<string>();
   const keys: string[] = [];
   for (const value of raw) {
-    const apiKey = value.trim();
+    const apiKey = normalizeApiKeyValue(value);
     if (!apiKey || seen.has(apiKey)) {
       continue;
     }
@@ -34,7 +46,8 @@ export function collectProviderApiKeysForExecution(params: {
   primaryApiKey?: string;
 }): string[] {
   const { primaryApiKey, provider } = params;
-  return dedupeApiKeys([primaryApiKey?.trim() ?? "", ...collectProviderApiKeys(provider)]);
+  const primary = primaryApiKey ? normalizeApiKeyValue(primaryApiKey) : null;
+  return dedupeApiKeys([primary ?? "", ...collectProviderApiKeys(provider)]);
 }
 
 export async function executeWithApiKeyRotation<T>(
