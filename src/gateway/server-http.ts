@@ -485,6 +485,12 @@ export function createGatewayHttpServer(opts: {
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
       const requestPath = new URL(req.url ?? "/", "http://localhost").pathname;
 
+      // Health check endpoint — unauthenticated, used by K8s probes and load balancers.
+      if (requestPath === "/health" || requestPath === "/healthz") {
+        sendJson(res, 200, { status: "ok", timestamp: new Date().toISOString() });
+        return;
+      }
+
       // IAM OAuth proxy endpoints (/auth/*) — unauthenticated, handles its own auth
       if (resolvedAuth.mode === "iam" && resolvedAuth.iam) {
         if (await handleIamOAuthHttpRequest(req, res, resolvedAuth.iam)) {
