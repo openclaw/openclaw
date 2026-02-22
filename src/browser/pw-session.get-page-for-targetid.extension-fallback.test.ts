@@ -8,8 +8,8 @@ const getChromeWebSocketUrlSpy = vi.spyOn(chromeModule, "getChromeWebSocketUrl")
 
 describe("pw-session getPageForTargetId", () => {
   it("falls back to the only page when CDP session attachment is blocked (extension relays)", async () => {
-    connectOverCdpSpy.mockReset();
-    getChromeWebSocketUrlSpy.mockReset();
+    connectOverCdpSpy.mockClear();
+    getChromeWebSocketUrlSpy.mockClear();
 
     const pageOn = vi.fn();
     const contextOn = vi.fn();
