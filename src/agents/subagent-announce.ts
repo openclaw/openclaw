@@ -9,6 +9,21 @@ import {
   resolveStorePath,
 } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
+import {
+  ADMIN_SCOPE,
+  READ_SCOPE,
+  WRITE_SCOPE,
+  type OperatorScope,
+} from "../gateway/method-scopes.js";
+
+/**
+ * Scopes required by the subagent announce flow.  These are passed explicitly
+ * to every `callGateway` call so the connection is not rejected with a
+ * "pairing required" scope-upgrade error when the device identity was
+ * originally paired without `operator.write`.
+ */
+const ANNOUNCE_SCOPES: OperatorScope[] = [ADMIN_SCOPE, READ_SCOPE, WRITE_SCOPE];
+
 import { createBoundDeliveryRouter } from "../infra/outbound/bound-delivery-router.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -205,6 +220,7 @@ async function readLatestSubagentOutput(sessionKey: string): Promise<string | un
   const history = await callGateway<{ messages?: Array<unknown> }>({
     method: "chat.history",
     params: { sessionKey, limit: 50 },
+    scopes: ANNOUNCE_SCOPES,
   });
   const messages = Array.isArray(history?.messages) ? history.messages : [];
   for (let i = messages.length - 1; i >= 0; i -= 1) {
@@ -494,6 +510,7 @@ async function sendAnnounce(item: AnnounceQueueItem) {
       deliver: !requesterIsSubagent,
       idempotencyKey,
     },
+    scopes: ANNOUNCE_SCOPES,
     timeoutMs: 15_000,
   });
 }
@@ -681,6 +698,7 @@ async function sendSubagentAnnounceDirectly(params: {
             message: params.completionMessage,
             idempotencyKey: params.directIdempotencyKey,
           },
+          scopes: ANNOUNCE_SCOPES,
           timeoutMs: 15_000,
         });
 
@@ -708,6 +726,7 @@ async function sendSubagentAnnounceDirectly(params: {
         threadId: params.requesterIsSubagent ? undefined : threadId,
         idempotencyKey: params.directIdempotencyKey,
       },
+      scopes: ANNOUNCE_SCOPES,
       expectFinal: true,
       timeoutMs: 15_000,
     });
@@ -977,6 +996,7 @@ export async function runSubagentAnnounceFlow(params: {
           runId: params.childRunId,
           timeoutMs: waitMs,
         },
+        scopes: ANNOUNCE_SCOPES,
         timeoutMs: waitMs + 2000,
       });
       const waitError = typeof wait?.error === "string" ? wait.error : undefined;
@@ -1212,6 +1232,7 @@ export async function runSubagentAnnounceFlow(params: {
         await callGateway({
           method: "sessions.patch",
           params: { key: params.childSessionKey, label: params.label },
+          scopes: ANNOUNCE_SCOPES,
           timeoutMs: 10_000,
         });
       } catch {
@@ -1227,6 +1248,7 @@ export async function runSubagentAnnounceFlow(params: {
             deleteTranscript: true,
             emitLifecycleHooks: false,
           },
+          scopes: ANNOUNCE_SCOPES,
           timeoutMs: 10_000,
         });
       } catch {
