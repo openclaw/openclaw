@@ -52,17 +52,21 @@ import {
   updateSkillEdit,
   updateSkillEnabled,
 } from "./controllers/skills.ts";
+import "./components/dashboard-header.ts";
 import { icons } from "./icons.ts";
 import { normalizeBasePath, TAB_GROUPS, subtitleForTab, titleForTab } from "./navigation.ts";
 import { renderAgents } from "./views/agents.ts";
+import { renderBottomTabs } from "./views/bottom-tabs.ts";
 import { renderChannels } from "./views/channels.ts";
 import { renderChat } from "./views/chat.ts";
+import { renderCommandPalette } from "./views/command-palette.ts";
 import { renderConfig } from "./views/config.ts";
 import { renderCron } from "./views/cron.ts";
 import { renderDebug } from "./views/debug.ts";
 import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
 import { renderGatewayUrlConfirmation } from "./views/gateway-url-confirmation.ts";
 import { renderInstances } from "./views/instances.ts";
+import { renderLoginGate } from "./views/login-gate.ts";
 import { renderLogs } from "./views/logs.ts";
 import { renderNodes } from "./views/nodes.ts";
 import { renderOverview } from "./views/overview.ts";
@@ -89,6 +93,15 @@ function resolveAssistantAvatarUrl(state: AppViewState): string | undefined {
 }
 
 export function renderApp(state: AppViewState) {
+  // Gate: require successful gateway connection before showing the dashboard.
+  // The gateway URL confirmation overlay is always rendered so URL-param flows still work.
+  if (!state.connected) {
+    return html`
+      ${renderLoginGate(state)}
+      ${renderGatewayUrlConfirmation(state)}
+    `;
+  }
+
   const presenceCount = state.presenceEntries.length;
   const sessionsCount = state.sessionsResult?.count ?? null;
   const cronNext = state.cronStatus?.nextWakeAtMs ?? null;
@@ -108,11 +121,67 @@ export function renderApp(state: AppViewState) {
     null;
 
   return html`
+    ${renderCommandPalette({
+      open: state.paletteOpen,
+      query: (state as unknown as { paletteQuery?: string }).paletteQuery ?? "",
+      activeIndex: (state as unknown as { paletteActiveIndex?: number }).paletteActiveIndex ?? 0,
+      onToggle: () => {
+        state.paletteOpen = !state.paletteOpen;
+      },
+      onQueryChange: (q) => {
+        (state as unknown as { paletteQuery: string }).paletteQuery = q;
+      },
+      onActiveIndexChange: (i) => {
+        (state as unknown as { paletteActiveIndex: number }).paletteActiveIndex = i;
+      },
+      onNavigate: (tab) => {
+        state.setTab(tab as import("./navigation.ts").Tab);
+      },
+      onSlashCommand: (_cmd) => {
+        state.setTab("chat" as import("./navigation.ts").Tab);
+      },
+    })}
     <div class="shell ${isChat ? "shell--chat" : ""} ${chatFocus ? "shell--chat-focus" : ""} ${state.settings.navCollapsed ? "shell--nav-collapsed" : ""} ${state.onboarding ? "shell--onboarding" : ""}">
       <header class="topbar">
-        <div class="topbar-left">
+        <dashboard-header .tab=${state.tab}></dashboard-header>
+        <button
+          class="topbar-search"
+          @click=${() => {
+            state.paletteOpen = !state.paletteOpen;
+          }}
+          title="Search or jump to… (⌘K)"
+          aria-label="Open command palette"
+        >
+          <span class="topbar-search__label">${t("common.search")}</span>
+          <kbd class="topbar-search__kbd">⌘K</kbd>
+        </button>
+        <div class="topbar-status">
+          <div class="topbar-connection ${state.connected ? "topbar-connection--ok" : ""}">
+            <span class="topbar-connection__dot"></span>
+            <span class="topbar-connection__label">${state.connected ? t("common.ok") : t("common.offline")}</span>
+          </div>
+          <span class="topbar-divider"></span>
+          ${renderThemeToggle(state)}
+        </div>
+      </header>
+      <aside class="sidebar ${state.settings.navCollapsed ? "sidebar--collapsed" : ""}">
+        <div class="sidebar-header">
+          <div class="sidebar-brand">
+            <div class="sidebar-brand__logo">
+              <img src=${basePath ? `${basePath}/favicon.svg` : "/favicon.svg"} alt="OpenClaw" width="28" height="28" />
+            </div>
+            ${
+              !state.settings.navCollapsed
+                ? html`
+                    <div class="sidebar-brand__text">
+                      <div class="sidebar-brand__title">OpenClaw</div>
+                    </div>
+                  `
+                : nothing
+            }
+          </div>
           <button
-            class="nav-collapse-toggle"
+            class="sidebar-collapse-btn"
             @click=${() =>
               state.applySettings({
                 ...state.settings,
@@ -121,70 +190,82 @@ export function renderApp(state: AppViewState) {
             title="${state.settings.navCollapsed ? t("nav.expand") : t("nav.collapse")}"
             aria-label="${state.settings.navCollapsed ? t("nav.expand") : t("nav.collapse")}"
           >
-            <span class="nav-collapse-toggle__icon">${icons.menu}</span>
+            ${state.settings.navCollapsed ? icons.panelLeftOpen : icons.panelLeftClose}
           </button>
-          <div class="brand">
-            <div class="brand-logo">
-              <img src=${basePath ? `${basePath}/favicon.svg` : "/favicon.svg"} alt="OpenClaw" />
-            </div>
-            <div class="brand-text">
-              <div class="brand-title">OPENCLAW</div>
-              <div class="brand-sub">Gateway Dashboard</div>
-            </div>
-          </div>
         </div>
-        <div class="topbar-status">
-          <div class="pill">
-            <span class="statusDot ${state.connected ? "ok" : ""}"></span>
-            <span>${t("common.health")}</span>
-            <span class="mono">${state.connected ? t("common.ok") : t("common.offline")}</span>
-          </div>
-          ${renderThemeToggle(state)}
-        </div>
-      </header>
-      <aside class="nav ${state.settings.navCollapsed ? "nav--collapsed" : ""}">
-        ${TAB_GROUPS.map((group) => {
-          const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
-          const hasActiveTab = group.tabs.some((tab) => tab === state.tab);
-          return html`
-            <div class="nav-group ${isGroupCollapsed && !hasActiveTab ? "nav-group--collapsed" : ""}">
-              <button
-                class="nav-label"
-                @click=${() => {
-                  const next = { ...state.settings.navGroupsCollapsed };
-                  next[group.label] = !isGroupCollapsed;
-                  state.applySettings({
-                    ...state.settings,
-                    navGroupsCollapsed: next,
-                  });
-                }}
-                aria-expanded=${!isGroupCollapsed}
-              >
-                <span class="nav-label__text">${t(`nav.${group.label}`)}</span>
-                <span class="nav-label__chevron">${isGroupCollapsed ? "+" : "−"}</span>
-              </button>
-              <div class="nav-group__items">
-                ${group.tabs.map((tab) => renderTab(state, tab))}
+
+        <nav class="sidebar-nav">
+          ${TAB_GROUPS.map((group) => {
+            const isGroupCollapsed = state.settings.navGroupsCollapsed[group.label] ?? false;
+            const hasActiveTab = group.tabs.some((tab) => tab === state.tab);
+            const showItems = hasActiveTab || !isGroupCollapsed;
+
+            return html`
+              <div class="nav-group ${!showItems ? "nav-group--collapsed" : ""}">
+                ${
+                  !state.settings.navCollapsed
+                    ? html`
+                  <button
+                    class="nav-group__label"
+                    @click=${() => {
+                      const next = { ...state.settings.navGroupsCollapsed };
+                      next[group.label] = !isGroupCollapsed;
+                      state.applySettings({
+                        ...state.settings,
+                        navGroupsCollapsed: next,
+                      });
+                    }}
+                    aria-expanded=${showItems}
+                  >
+                    <span class="nav-group__label-text">${t(`nav.${group.label}`)}</span>
+                    <span class="nav-group__chevron">${showItems ? icons.chevronDown : icons.chevronRight}</span>
+                  </button>
+                `
+                    : nothing
+                }
+                <div class="nav-group__items">
+                  ${group.tabs.map((tab) => renderTab(state, tab))}
+                </div>
               </div>
-            </div>
-          `;
-        })}
-        <div class="nav-group nav-group--links">
-          <div class="nav-label nav-label--static">
-            <span class="nav-label__text">${t("common.resources")}</span>
-          </div>
-          <div class="nav-group__items">
-            <a
-              class="nav-item nav-item--external"
-              href="https://docs.openclaw.ai"
-              target="_blank"
-              rel="noreferrer"
-              title="${t("common.docs")} (opens in new tab)"
-            >
-              <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
+            `;
+          })}
+        </nav>
+
+        <div class="sidebar-footer">
+          <a
+            class="nav-item nav-item--external"
+            href="https://docs.openclaw.ai"
+            target="_blank"
+            rel="noreferrer"
+            title="${t("common.docs")} (opens in new tab)"
+          >
+            <span class="nav-item__icon" aria-hidden="true">${icons.book}</span>
+            ${
+              !state.settings.navCollapsed
+                ? html`
               <span class="nav-item__text">${t("common.docs")}</span>
-            </a>
-          </div>
+              <span class="nav-item__external-icon">${icons.externalLink}</span>
+            `
+                : nothing
+            }
+          </a>
+          ${(() => {
+            const snapshot = state.hello?.snapshot as { server?: { version?: string } } | undefined;
+            const version = snapshot?.server?.version ?? "";
+            return version
+              ? html`
+                <div class="sidebar-version" title=${`v${version}`}>
+                  ${
+                    !state.settings.navCollapsed
+                      ? html`<span class="sidebar-version__text">v${version}</span>`
+                      : html`
+                          <span class="sidebar-version__dot"></span>
+                        `
+                  }
+                </div>
+              `
+              : nothing;
+          })()}
         </div>
       </aside>
       <main class="content ${isChat ? "content--chat" : ""}">
@@ -225,6 +306,15 @@ export function renderApp(state: AppViewState) {
                 cronEnabled: state.cronStatus?.enabled ?? null,
                 cronNext,
                 lastChannelsRefresh: state.channelsLastSuccess,
+                usageResult: state.usageResult,
+                sessionsResult: state.sessionsResult,
+                skillsReport: state.skillsReport,
+                cronJobs: state.cronJobs,
+                cronStatus: state.cronStatus,
+                attentionItems: state.attentionItems,
+                eventLog: state.eventLog,
+                overviewLogLines: state.overviewLogLines,
+                streamMode: state.streamMode,
                 onSettingsChange: (next) => state.applySettings(next),
                 onPasswordChange: (next) => (state.password = next),
                 onSessionKeyChange: (next) => {
@@ -240,6 +330,16 @@ export function renderApp(state: AppViewState) {
                 },
                 onConnect: () => state.connect(),
                 onRefresh: () => state.loadOverview(),
+                onNavigate: (tab) => state.setTab(tab as import("./navigation.ts").Tab),
+                onRefreshLogs: () => state.loadOverview(),
+                onToggleStreamMode: () => {
+                  state.streamMode = !state.streamMode;
+                  try {
+                    localStorage.setItem("openclaw:stream-mode", String(state.streamMode));
+                  } catch {
+                    /* */
+                  }
+                },
               })
             : nothing
         }
@@ -962,6 +1062,10 @@ export function renderApp(state: AppViewState) {
       </main>
       ${renderExecApprovalPrompt(state)}
       ${renderGatewayUrlConfirmation(state)}
+      ${renderBottomTabs({
+        activeTab: state.tab,
+        onTabChange: (tab) => state.setTab(tab),
+      })}
     </div>
   `;
 }
