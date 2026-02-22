@@ -43,6 +43,13 @@ async function createCaseDir(prefix: string): Promise<string> {
   return dir;
 }
 
+function createStaleAndFreshStore(now = Date.now()): Record<string, SessionEntry> {
+  return {
+    stale: makeEntry(now - 30 * DAY_MS),
+    fresh: makeEntry(now),
+  };
+}
+
 describe("Integration: saveSessionStore with pruning", () => {
   let testDir: string;
   let storePath: string;
@@ -78,11 +85,7 @@ describe("Integration: saveSessionStore with pruning", () => {
   it("saveSessionStore prunes stale entries on write", async () => {
     applyEnforcedMaintenanceConfig(mockLoadConfig);
 
-    const now = Date.now();
-    const store: Record<string, SessionEntry> = {
-      stale: makeEntry(now - 30 * DAY_MS),
-      fresh: makeEntry(now),
-    };
+    const store = createStaleAndFreshStore();
 
     await saveSessionStore(storePath, store);
 
@@ -168,11 +171,7 @@ describe("Integration: saveSessionStore with pruning", () => {
       },
     });
 
-    const now = Date.now();
-    const store: Record<string, SessionEntry> = {
-      stale: makeEntry(now - 30 * DAY_MS),
-      fresh: makeEntry(now),
-    };
+    const store = createStaleAndFreshStore();
 
     await saveSessionStore(storePath, store);
 

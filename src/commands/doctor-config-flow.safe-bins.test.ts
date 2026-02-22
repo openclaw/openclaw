@@ -1,7 +1,5 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempHome } from "../../test/helpers/temp-home.js";
+import { runDoctorConfigWithInput } from "./doctor-config-flow.test-utils.js";
 
 const { noteSpy } = vi.hoisted(() => ({
   noteSpy: vi.fn(),
@@ -12,25 +10,6 @@ vi.mock("../terminal/note.js", () => ({
 }));
 
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
-
-async function runDoctorConfigWithInput(params: {
-  config: Record<string, unknown>;
-  repair?: boolean;
-}) {
-  return withTempHome(async (home) => {
-    const configDir = path.join(home, ".openclaw");
-    await fs.mkdir(configDir, { recursive: true });
-    await fs.writeFile(
-      path.join(configDir, "openclaw.json"),
-      JSON.stringify(params.config, null, 2),
-      "utf-8",
-    );
-    return loadAndMaybeMigrateDoctorConfig({
-      options: { nonInteractive: true, repair: params.repair },
-      confirm: async () => false,
-    });
-  });
-}
 
 describe("doctor config flow safe bins", () => {
   beforeEach(() => {
@@ -59,6 +38,7 @@ describe("doctor config flow safe bins", () => {
           ],
         },
       },
+      run: loadAndMaybeMigrateDoctorConfig,
     });
 
     const cfg = result.cfg as {
@@ -94,6 +74,7 @@ describe("doctor config flow safe bins", () => {
           },
         },
       },
+      run: loadAndMaybeMigrateDoctorConfig,
     });
 
     expect(noteSpy).toHaveBeenCalledWith(
