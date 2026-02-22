@@ -10,6 +10,10 @@ import Speech
 import UserNotifications
 
 enum PermissionManager {
+    private static func canAccessNotificationCenter() -> Bool {
+        Bundle.main.bundleIdentifier != nil
+    }
+
     static func isLocationAuthorized(status: CLAuthorizationStatus, requireAlways: Bool) -> Bool {
         if requireAlways { return status == .authorizedAlways }
         switch status {
@@ -33,31 +37,38 @@ enum PermissionManager {
     private static func ensureCapability(_ cap: Capability, interactive: Bool) async -> Bool {
         switch cap {
         case .notifications:
-            await self.ensureNotifications(interactive: interactive)
+            guard canAccessNotificationCenter() else { return false }
+            return await self.ensureNotifications(interactive: interactive)
         case .appleScript:
-            await self.ensureAppleScript(interactive: interactive)
+            return await self.ensureAppleScript(interactive: interactive)
         case .accessibility:
-            await self.ensureAccessibility(interactive: interactive)
+            return await self.ensureAccessibility(interactive: interactive)
         case .screenRecording:
-            await self.ensureScreenRecording(interactive: interactive)
+            return await self.ensureScreenRecording(interactive: interactive)
         case .microphone:
-            await self.ensureMicrophone(interactive: interactive)
+            return await self.ensureMicrophone(interactive: interactive)
         case .speechRecognition:
-            await self.ensureSpeechRecognition(interactive: interactive)
+            return await self.ensureSpeechRecognition(interactive: interactive)
         case .camera:
-            await self.ensureCamera(interactive: interactive)
+            return await self.ensureCamera(interactive: interactive)
         case .location:
-            await self.ensureLocation(interactive: interactive)
+            return await self.ensureLocation(interactive: interactive)
         }
     }
 
     private static func ensureNotifications(interactive: Bool) async -> Bool {
+        guard canAccessNotificationCenter() else { return false }
         let center = UNUserNotificationCenter.current()
         let settings = await center.notificationSettings()
 
         switch settings.authorizationStatus {
+        #if os(macOS)
+        case .authorized, .provisional:
+            return true
+        #else
         case .authorized, .provisional, .ephemeral:
             return true
+        #endif
         case .notDetermined:
             guard interactive else { return false }
             let granted = await (try? center.requestAuthorization(options: [.alert, .sound, .badge])) ?? false
@@ -190,10 +201,20 @@ enum PermissionManager {
         for cap in caps {
             switch cap {
             case .notifications:
+                guard canAccessNotificationCenter() else {
+                    results[cap] = false
+                    break
+                }
                 let center = UNUserNotificationCenter.current()
                 let settings = await center.notificationSettings()
+            #if os(macOS)
                 results[cap] = settings.authorizationStatus == .authorized
                     || settings.authorizationStatus == .provisional
+            #else
+                results[cap] = settings.authorizationStatus == .authorized
+                    || settings.authorizationStatus == .provisional
+                    || settings.authorizationStatus == .ephemeral
+            #endif
 
             case .appleScript:
                 results[cap] = await MainActor.run { AppleScriptPermission.isAuthorized() }

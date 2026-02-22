@@ -448,7 +448,9 @@ private struct ChatComposerTextView: NSViewRepresentable {
 
         if self.shouldFocus, let window = scrollView.window {
             window.makeFirstResponder(textView)
-            self.shouldFocus = false
+            DispatchQueue.main.async {
+                self.shouldFocus = false
+            }
         }
 
         let isEditing = scrollView.window?.firstResponder == textView
