@@ -1,6 +1,12 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { SessionManager } from "@mariozechner/pi-coding-agent";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { clearConfigCache } from "../config/config.js";
+import { resetRuntimeRedactionSecretsCacheForTest } from "../logging/secret-registry.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 
 type AppendMessage = Parameters<SessionManager["appendMessage"]>[0];
@@ -51,6 +57,11 @@ function getToolResultText(messages: AgentMessage[]): string {
 }
 
 describe("installSessionToolResultGuard", () => {
+  afterEach(() => {
+    clearConfigCache();
+    resetRuntimeRedactionSecretsCacheForTest();
+  });
+
   it("inserts synthetic toolResult before non-tool message when pending", () => {
     const sm = SessionManager.inMemory();
     installSessionToolResultGuard(sm);
@@ -356,5 +367,56 @@ describe("installSessionToolResultGuard", () => {
       kind: "inter_session",
       sourceTool: "sessions_send",
     });
+  });
+
+  it("redacts runtime-configured skill secrets in persisted tool results", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tool-redact-"));
+    const configPath = path.join(root, "openclaw.json");
+    try {
+      await fs.writeFile(
+        configPath,
+        JSON.stringify({
+          logging: { redactSensitive: "tools" },
+          skills: {
+            entries: {
+              demo: {
+                apiKey: "skill-api-literal-9876543210",
+                env: { CUSTOM_SECRET: "skill-env-literal-1234567890" },
+              },
+            },
+          },
+        }),
+        "utf-8",
+      );
+
+      await withEnvAsync(
+        {
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_STATE_DIR: root,
+          OPENCLAW_CONFIG_CACHE_MS: "0",
+          SKILL_API_KEY: "skill-api-literal-9876543210",
+          CUSTOM_SECRET: "skill-env-literal-1234567890",
+        },
+        async () => {
+          clearConfigCache();
+          resetRuntimeRedactionSecretsCacheForTest();
+          const sm = SessionManager.inMemory();
+          installSessionToolResultGuard(sm);
+
+          appendToolResultText(
+            sm,
+            "payload skill-api-literal-9876543210 and skill-env-literal-1234567890",
+          );
+
+          const text = getToolResultText(getPersistedMessages(sm));
+          expect(text).not.toContain("skill-api-literal-9876543210");
+          expect(text).not.toContain("skill-env-literal-1234567890");
+          expect(text).toContain("…3210");
+          expect(text).toContain("…7890");
+        },
+      );
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });

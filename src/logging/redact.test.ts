@@ -101,4 +101,16 @@ describe("redactSensitiveText", () => {
     });
     expect(output).toBe(input);
   });
+
+  it("redacts configured literal secrets even when they do not match regex patterns", () => {
+    const secret = "skill-secret-value-1234567890";
+    const input = `tool output: ${secret}`;
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+      literalSecrets: [secret],
+    });
+    expect(output).not.toContain(secret);
+    expect(output).toContain("…7890");
+  });
 });
