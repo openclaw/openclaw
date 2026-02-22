@@ -108,6 +108,7 @@ export const zh_TW: TranslationMap = {
   },
   languages: {
     en: "English",
+    th: "ภาษาไทย",
     zhCN: "简体中文 (簡體中文)",
     zhTW: "繁體中文 (繁體中文)",
     ptBR: "Português (巴西葡萄牙語)",
