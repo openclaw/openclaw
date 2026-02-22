@@ -1,4 +1,4 @@
-import { CommandLane } from "../../process/lanes.js";
+import { CommandLane, CONV_LANE_PREFIX } from "../../process/lanes.js";
 
 export function resolveSessionLane(key: string) {
   const cleaned = key.trim() || CommandLane.Main;
@@ -25,7 +25,7 @@ export function resolveConversationLane(params: {
   if (!channel && !peerId) {
     return "";
   }
-  return `conv:${channel || "unknown"}:${accountId}:${peerId || "unknown"}`;
+  return `${CONV_LANE_PREFIX}${channel || "unknown"}:${accountId}:${peerId || "unknown"}`;
 }
 
 export function parseConversationPartsFromSessionKey(sessionKey?: string): {

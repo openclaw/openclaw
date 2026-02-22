@@ -147,7 +147,7 @@ vi.mock("../../process/command-queue.js", () => ({
 }));
 
 vi.mock("../../config/agent-limits.js", () => ({
-  resolveAgentMaxConcurrentPerConversation: vi.fn(() => 1),
+  resolveMaxConcurrentPerConversation: vi.fn(() => 1),
 }));
 
 vi.mock("../../utils/message-channel.js", () => ({

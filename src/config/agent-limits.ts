@@ -14,10 +14,13 @@ export function resolveAgentMaxConcurrent(cfg?: OpenClawConfig): number {
   return DEFAULT_AGENT_MAX_CONCURRENT;
 }
 
+/** Hard ceiling matching the zod schema `.max(10)` — enforced at runtime too. */
+export const MAX_CONCURRENT_PER_CONVERSATION = 10;
+
 export function resolveAgentMaxConcurrentPerConversation(cfg?: OpenClawConfig): number {
   const raw = cfg?.agents?.defaults?.maxConcurrentPerConversation;
   if (typeof raw === "number" && Number.isFinite(raw)) {
-    return Math.max(1, Math.floor(raw));
+    return Math.min(MAX_CONCURRENT_PER_CONVERSATION, Math.max(1, Math.floor(raw)));
   }
   return DEFAULT_AGENT_MAX_CONCURRENT_PER_CONVERSATION;
 }
@@ -48,7 +51,7 @@ function asPositiveInt(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value < 1) {
     return undefined;
   }
-  return Math.floor(value);
+  return Math.min(MAX_CONCURRENT_PER_CONVERSATION, Math.floor(value));
 }
 
 /**
