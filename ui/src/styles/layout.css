@@ -421,7 +421,10 @@
 .content {
   grid-area: content;
   padding: 12px 16px 32px;
-  display: block;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  height: 100%;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
