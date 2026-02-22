@@ -942,33 +942,25 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     }
 
     // Restore ${VAR} env var references that were resolved during config loading.
-    // Read the current file (pre-substitution) and restore any references whose
-    // resolved values match the incoming config — so we don't overwrite
-    // "${ANTHROPIC_API_KEY}" with "sk-ant-..." when the caller didn't change it.
-    //
-    // We use only the root file's parsed content (no $include resolution) to avoid
-    // pulling values from included files into the root config on write-back.
+    // Use snapshot.parsed (pre-substitution) to restore references - this is critical
+    // during migrations where the on-disk config may have already been partially modified.
     // Apply env restoration to validated.config (which has runtime defaults stripped
     // per issue #6070) rather than the raw caller input.
     let cfgToWrite = validated.config;
     try {
-      if (deps.fs.existsSync(configPath)) {
-        const currentRaw = await deps.fs.promises.readFile(configPath, "utf-8");
-        const parsedRes = parseConfigJson5(currentRaw, deps.json5);
-        if (parsedRes.ok) {
-          // Use env snapshot from when config was loaded (if available) to avoid
-          // TOCTOU issues where env changes between load and write. Falls back to
-          // live env if no snapshot exists (e.g., first write before any load).
-          const envForRestore = options.envSnapshotForRestore ?? deps.env;
-          cfgToWrite = restoreEnvVarRefs(
-            cfgToWrite,
-            parsedRes.parsed,
-            envForRestore,
-          ) as OpenClawConfig;
-        }
+      if (snapshot.valid && snapshot.exists && snapshot.parsed) {
+        // Use env snapshot from when config was loaded (if available) to avoid
+        // TOCTOU issues where env changes between load and write. Falls back to
+        // live env if no snapshot exists (e.g., first write before any load).
+        const envForRestore = options.envSnapshotForRestore ?? deps.env;
+        cfgToWrite = restoreEnvVarRefs(
+          cfgToWrite,
+          snapshot.parsed,
+          envForRestore,
+        ) as OpenClawConfig;
       }
     } catch {
-      // If reading the current file fails, write cfg as-is (no env restoration)
+      // If restoration fails, write cfg as-is (no env restoration)
     }
 
     const dir = path.dirname(configPath);
