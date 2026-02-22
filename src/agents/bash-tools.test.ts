@@ -254,7 +254,7 @@ describe("exec tool backgrounding", () => {
     expect(status).toBe("completed");
   });
 
-  it("defaults process log to a bounded tail when no window is provided", async () => {
+  it("applies default tail only when no explicit log window is provided", async () => {
     const lines = Array.from({ length: 201 }, (_value, index) => `line-${index + 1}`);
     const sessionId = await runBackgroundEchoLines(lines);
 
@@ -299,7 +299,6 @@ describe("exec tool backgrounding", () => {
     expect(textBlock).not.toContain("showing last 200");
     expect((log.details as { totalLines?: number }).totalLines).toBe(201);
   });
-
   it("scopes process sessions by scopeKey", async () => {
     const bashA = createTestExecTool({ backgroundMs: 10, scopeKey: "agent:alpha" });
     const processA = createProcessTool({ scopeKey: "agent:alpha" });
