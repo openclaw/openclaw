@@ -314,6 +314,77 @@ function createZaiToolStreamWrapper(
 }
 
 /**
+ * Transform OpenAI-style image_url content to Z.AI's files format.
+ *
+ * Z.AI's API expects images in a `files` array at the message level rather than
+ * inline in the content array like OpenAI's format. This wrapper transforms:
+ *
+ * OpenAI format:
+ *   content: [{ type: "image_url", image_url: { url: "data:image/png;base64,..." }}]
+ *
+ * Z.AI format:
+ *   content: [{ type: "text", text: "" }]
+ *   files: [{ type: "image", file: { url: "data:image/png;base64,...", name: "image.png" }}]
+ */
+function createZaiImageFormatWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const p = payload as Record<string, unknown>;
+          const messages = p.messages;
+          if (Array.isArray(messages)) {
+            for (const msg of messages) {
+              if (msg && typeof msg === "object" && "content" in msg) {
+                const content = msg.content;
+                if (Array.isArray(content)) {
+                  const files: Array<{ type: string; file: { url: string; name: string } }> = [];
+                  const newContent: Array<unknown> = [];
+
+                  for (const block of content) {
+                    if (block && typeof block === "object" && block.type === "image_url") {
+                      const imageUrl = (block as { image_url?: { url?: string } }).image_url?.url;
+                      if (imageUrl) {
+                        let name = "image.png";
+                        if (imageUrl.startsWith("data:")) {
+                          const mimeMatch = imageUrl.match(/^data:([^;]+);/);
+                          if (mimeMatch) {
+                            const mime = mimeMatch[1];
+                            const ext = mime.split("/")[1] || "png";
+                            name = `image.${ext}`;
+                          }
+                        }
+                        files.push({
+                          type: "image",
+                          file: { url: imageUrl, name },
+                        });
+                      }
+                    } else {
+                      newContent.push(block);
+                    }
+                  }
+
+                  if (files.length > 0) {
+                    // Replace content with text-only content and add files array
+                    msg.content = newContent.length > 0 ? newContent : [{ type: "text", text: "" }];
+                    (msg as Record<string, unknown>).files = files;
+                    log.debug(`transformed ${files.length} image(s) to Z.AI files format`);
+                  }
+                }
+              }
+            }
+          }
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
+/**
  * Apply extra params (like temperature) to an agent's streamFn.
  * Also adds OpenRouter app attribution headers when using the OpenRouter provider.
  *
@@ -366,6 +437,9 @@ export function applyExtraParamsToAgent(
       log.debug(`enabling Z.AI tool_stream for ${provider}/${modelId}`);
       agent.streamFn = createZaiToolStreamWrapper(agent.streamFn, true);
     }
+    // Transform image_url to Z.AI's files format
+    log.debug(`enabling Z.AI image format wrapper for ${provider}/${modelId}`);
+    agent.streamFn = createZaiImageFormatWrapper(agent.streamFn);
   }
 
   // Work around upstream pi-ai hardcoding `store: false` for Responses API.
