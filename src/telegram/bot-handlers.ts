@@ -1047,7 +1047,6 @@ export const registerTelegramHandlers = ({
 
       if (migration.migrated) {
         runtime.log?.(warn(`[telegram] Migrating group config from ${oldChatId} to ${newChatId}`));
-        migrateTelegramGroupConfig({ cfg, accountId, oldChatId, newChatId });
         await writeConfigFile(currentConfig);
         runtime.log?.(warn(`[telegram] Group config migrated and saved successfully`));
       } else if (migration.skippedExisting) {
