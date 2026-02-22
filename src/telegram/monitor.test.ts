@@ -169,8 +169,12 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(api.sendMessage).not.toHaveBeenCalled();
   });
 
-  it("retries on recoverable network errors", async () => {
-    const networkError = Object.assign(new Error("timeout"), { code: "ETIMEDOUT" });
+  it("retries on recoverable undici fetch errors", async () => {
+    const networkError = Object.assign(new TypeError("fetch failed"), {
+      cause: Object.assign(new Error("connect timeout"), {
+        code: "UND_ERR_CONNECT_TIMEOUT",
+      }),
+    });
     runSpy
       .mockImplementationOnce(() => ({
         task: () => Promise.reject(networkError),
