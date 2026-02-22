@@ -272,7 +272,12 @@ export function buildEmbeddedRunPayloads(params: {
         params.lastToolError.meta ? [params.lastToolError.meta] : undefined,
         { markdown: useMarkdown },
       );
-      const errorSuffix = params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
+      const verboseErrorDetailsEnabled =
+        params.verboseLevel === "on" || params.verboseLevel === "full";
+      const errorSuffix =
+        verboseErrorDetailsEnabled && params.lastToolError.error
+          ? `: ${params.lastToolError.error}`
+          : "";
       const warningText = `⚠️ ${toolSummary} failed${errorSuffix}`;
       const normalizedWarning = normalizeTextForComparison(warningText);
       const duplicateWarning = normalizedWarning
