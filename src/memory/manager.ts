@@ -182,6 +182,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.ensureIntervalSync();
     const statusOnly = params.purpose === "status";
     this.dirty = this.sources.has("memory") && (statusOnly ? !meta : true);
+    this.sessionsDirty = this.sources.has("sessions") && (statusOnly ? !meta : true);
     this.batch = this.resolveBatchConfig();
   }
 
