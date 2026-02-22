@@ -176,6 +176,18 @@ export type GroupToolPolicyConfig = {
   deny?: string[];
 };
 
+/**
+ * Per-sender overrides.
+ *
+ * Prefer explicit key prefixes:
+ * - id:<senderId>
+ * - e164:<phone>
+ * - username:<handle>
+ * - name:<display-name>
+ * - * (wildcard)
+ *
+ * Legacy unprefixed keys are supported for backward compatibility and are matched as senderId only.
+ */
 export type GroupToolPolicyBySenderConfig = Record<string, GroupToolPolicyConfig>;
 
 export type ExecToolConfig = {

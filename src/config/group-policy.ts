@@ -50,13 +50,138 @@ export type GroupToolPolicySender = {
   senderE164?: string | null;
 };
 
-function normalizeSenderKey(value: string): string {
+type SenderKeyType = "id" | "e164" | "username" | "name";
+
+const SENDER_KEY_TYPES: SenderKeyType[] = ["id", "e164", "username", "name"];
+const warnedLegacyToolsBySenderKeys = new Set<string>();
+
+type ParsedSenderPolicyKey =
+  | { kind: "wildcard" }
+  | { kind: "typed"; type: SenderKeyType; key: string };
+
+type SenderPolicyBuckets = Record<SenderKeyType, Map<string, GroupToolPolicyConfig>>;
+
+function normalizeSenderKey(
+  value: string,
+  options: {
+    stripLeadingAt?: boolean;
+  } = {},
+): string {
   const trimmed = value.trim();
   if (!trimmed) {
     return "";
   }
-  const withoutAt = trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
+  const withoutAt = options.stripLeadingAt && trimmed.startsWith("@") ? trimmed.slice(1) : trimmed;
   return withoutAt.toLowerCase();
+}
+
+function normalizeTypedSenderKey(value: string, type: SenderKeyType): string {
+  return normalizeSenderKey(value, {
+    stripLeadingAt: type === "username",
+  });
+}
+
+function normalizeLegacySenderKey(value: string): string {
+  return normalizeSenderKey(value, {
+    stripLeadingAt: true,
+  });
+}
+
+function parseTypedSenderKey(rawKey: string): { type: SenderKeyType; value: string } | undefined {
+  const lowered = rawKey.toLowerCase();
+  for (const type of SENDER_KEY_TYPES) {
+    const prefix = `${type}:`;
+    if (!lowered.startsWith(prefix)) {
+      continue;
+    }
+    return {
+      type,
+      value: rawKey.slice(prefix.length),
+    };
+  }
+  return undefined;
+}
+
+function warnLegacyToolsBySenderKey(rawKey: string) {
+  const trimmed = rawKey.trim();
+  if (!trimmed || warnedLegacyToolsBySenderKeys.has(trimmed)) {
+    return;
+  }
+  warnedLegacyToolsBySenderKeys.add(trimmed);
+  process.emitWarning(
+    `toolsBySender key "${trimmed}" is deprecated. Use explicit prefixes (id:, e164:, username:, name:). Legacy unprefixed keys are matched as id only.`,
+    {
+      type: "DeprecationWarning",
+      code: "OPENCLAW_TOOLS_BY_SENDER_UNTYPED_KEY",
+    },
+  );
+}
+
+function parseSenderPolicyKey(rawKey: string): ParsedSenderPolicyKey | undefined {
+  const trimmed = rawKey.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (trimmed === "*") {
+    return { kind: "wildcard" };
+  }
+  const typed = parseTypedSenderKey(trimmed);
+  if (typed) {
+    const key = normalizeTypedSenderKey(typed.value, typed.type);
+    if (!key) {
+      return undefined;
+    }
+    return {
+      kind: "typed",
+      type: typed.type,
+      key,
+    };
+  }
+
+  // Backward-compatible fallback: untyped keys now map to immutable sender IDs only.
+  warnLegacyToolsBySenderKey(trimmed);
+  const key = normalizeLegacySenderKey(trimmed);
+  if (!key) {
+    return undefined;
+  }
+  return {
+    kind: "typed",
+    type: "id",
+    key,
+  };
+}
+
+function createSenderPolicyBuckets(): SenderPolicyBuckets {
+  return {
+    id: new Map<string, GroupToolPolicyConfig>(),
+    e164: new Map<string, GroupToolPolicyConfig>(),
+    username: new Map<string, GroupToolPolicyConfig>(),
+    name: new Map<string, GroupToolPolicyConfig>(),
+  };
+}
+
+function normalizeCandidate(value: string | null | undefined, type: SenderKeyType): string {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return "";
+  }
+  return normalizeTypedSenderKey(trimmed, type);
+}
+
+function normalizeSenderIdCandidates(value: string | null | undefined): string[] {
+  const trimmed = value?.trim();
+  if (!trimmed) {
+    return [];
+  }
+  const typed = normalizeTypedSenderKey(trimmed, "id");
+  const legacy = normalizeLegacySenderKey(trimmed);
+  if (!typed) {
+    return legacy ? [legacy] : [];
+  }
+  if (!legacy || legacy === typed) {
+    return [typed];
+  }
+  return [typed, legacy];
 }
 
 export function resolveToolsBySender(
@@ -73,44 +198,49 @@ export function resolveToolsBySender(
     return undefined;
   }
 
-  const normalized = new Map<string, GroupToolPolicyConfig>();
+  const buckets = createSenderPolicyBuckets();
   let wildcard: GroupToolPolicyConfig | undefined;
   for (const [rawKey, policy] of entries) {
     if (!policy) {
       continue;
     }
-    const key = normalizeSenderKey(rawKey);
-    if (!key) {
+    const parsed = parseSenderPolicyKey(rawKey);
+    if (!parsed) {
       continue;
     }
-    if (key === "*") {
+    if (parsed.kind === "wildcard") {
       wildcard = policy;
       continue;
     }
-    if (!normalized.has(key)) {
-      normalized.set(key, policy);
+    const bucket = buckets[parsed.type];
+    if (!bucket.has(parsed.key)) {
+      bucket.set(parsed.key, policy);
     }
   }
 
-  const candidates: string[] = [];
-  const pushCandidate = (value?: string | null) => {
-    const trimmed = value?.trim();
-    if (!trimmed) {
-      return;
+  for (const senderIdCandidate of normalizeSenderIdCandidates(params.senderId)) {
+    const match = buckets.id.get(senderIdCandidate);
+    if (match) {
+      return match;
     }
-    candidates.push(trimmed);
-  };
-  pushCandidate(params.senderId);
-  pushCandidate(params.senderE164);
-  pushCandidate(params.senderUsername);
-  pushCandidate(params.senderName);
-
-  for (const candidate of candidates) {
-    const key = normalizeSenderKey(candidate);
-    if (!key) {
-      continue;
+  }
+  const senderE164 = normalizeCandidate(params.senderE164, "e164");
+  if (senderE164) {
+    const match = buckets.e164.get(senderE164);
+    if (match) {
+      return match;
     }
-    const match = normalized.get(key);
+  }
+  const senderUsername = normalizeCandidate(params.senderUsername, "username");
+  if (senderUsername) {
+    const match = buckets.username.get(senderUsername);
+    if (match) {
+      return match;
+    }
+  }
+  const senderName = normalizeCandidate(params.senderName, "name");
+  if (senderName) {
+    const match = buckets.name.get(senderName);
     if (match) {
       return match;
     }
