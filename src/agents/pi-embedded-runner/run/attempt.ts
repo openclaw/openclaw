@@ -1023,7 +1023,7 @@ export async function runEmbeddedAttempt(
           }
         } catch (validationError) {
           // Don't fail the entire run if validation has an internal error
-          log.error(`Result validation error: ${validationError} runId=${params.runId}`);
+          log.error(`Result validation error: ${String(validationError)} runId=${params.runId}`);
         }
       }
 
