@@ -99,15 +99,15 @@ describe("ensureSandboxBrowser create args", () => {
   beforeEach(() => {
     BROWSER_BRIDGES.clear();
     resetNoVncObserverTokensForTests();
-    dockerMocks.dockerContainerState.mockReset();
-    dockerMocks.execDocker.mockReset();
-    dockerMocks.readDockerContainerEnvVar.mockReset();
-    dockerMocks.readDockerContainerLabel.mockReset();
-    dockerMocks.readDockerPort.mockReset();
-    registryMocks.readBrowserRegistry.mockReset();
-    registryMocks.updateBrowserRegistry.mockReset();
-    bridgeMocks.startBrowserBridgeServer.mockReset();
-    bridgeMocks.stopBrowserBridgeServer.mockReset();
+    dockerMocks.dockerContainerState.mockClear();
+    dockerMocks.execDocker.mockClear();
+    dockerMocks.readDockerContainerEnvVar.mockClear();
+    dockerMocks.readDockerContainerLabel.mockClear();
+    dockerMocks.readDockerPort.mockClear();
+    registryMocks.readBrowserRegistry.mockClear();
+    registryMocks.updateBrowserRegistry.mockClear();
+    bridgeMocks.startBrowserBridgeServer.mockClear();
+    bridgeMocks.stopBrowserBridgeServer.mockClear();
 
     dockerMocks.dockerContainerState.mockResolvedValue({ exists: false, running: false });
     dockerMocks.execDocker.mockImplementation(async (args: string[]) => {
