@@ -104,6 +104,22 @@ async function writeCronJobs(storePath: string, jobs: CronJob[]) {
   await fs.writeFile(storePath, JSON.stringify({ version: 1, jobs }, null, 2), "utf-8");
 }
 
+async function removeDirWithRetries(dir: string, attempts = 3) {
+  let lastError: unknown;
+  for (let i = 0; i < attempts; i += 1) {
+    try {
+      await fs.rm(dir, { recursive: true, force: true });
+      return;
+    } catch (err) {
+      lastError = err;
+      await new Promise((resolve) => setTimeout(resolve, 25 * (i + 1)));
+    }
+  }
+  if (lastError) {
+    throw lastError;
+  }
+}
+
 async function startCronForStore(params: {
   storePath: string;
   cronEnabled?: boolean;
@@ -142,7 +158,7 @@ describe("Cron issue regressions", () => {
   });
 
   afterAll(async () => {
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
+    await removeDirWithRetries(fixtureRoot);
   });
 
   afterEach(() => {
