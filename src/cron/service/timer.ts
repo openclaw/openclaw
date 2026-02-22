@@ -2,7 +2,13 @@ import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
-import type { CronJob, CronRunOutcome, CronRunStatus, CronRunTelemetry } from "../types.js";
+import type {
+  CronDeliveryStatus,
+  CronJob,
+  CronRunOutcome,
+  CronRunStatus,
+  CronRunTelemetry,
+} from "../types.js";
 import {
   computeJobNextRunAtMs,
   nextWakeAtMs,
@@ -63,6 +69,16 @@ function errorBackoffMs(consecutiveErrors: number): number {
   return ERROR_BACKOFF_SCHEDULE_MS[Math.max(0, idx)];
 }
 
+function resolveDeliveryStatus(params: { job: CronJob; delivered?: boolean }): CronDeliveryStatus {
+  if (params.delivered === true) {
+    return "delivered";
+  }
+  if (params.delivered === false) {
+    return "not-delivered";
+  }
+  return resolveCronDeliveryPlan(params.job).requested ? "unknown" : "not-requested";
+}
+
 /**
  * Apply the result of a job execution to the job's state.
  * Handles consecutive error tracking, exponential backoff, one-shot disable,
@@ -81,10 +97,15 @@ export function applyJobResult(
 ): boolean {
   job.state.runningAtMs = undefined;
   job.state.lastRunAtMs = result.startedAt;
+  job.state.lastRunStatus = result.status;
   job.state.lastStatus = result.status;
   job.state.lastDurationMs = Math.max(0, result.endedAt - result.startedAt);
   job.state.lastError = result.error;
   job.state.lastDelivered = result.delivered;
+  const deliveryStatus = resolveDeliveryStatus({ job, delivered: result.delivered });
+  job.state.lastDeliveryStatus = deliveryStatus;
+  job.state.lastDeliveryError =
+    deliveryStatus === "not-delivered" && result.error ? result.error : undefined;
   job.updatedAtMs = result.endedAt;
 
   // Track consecutive errors for backoff / auto-disable.
@@ -748,6 +769,8 @@ function emitJobFinished(
     error: result.error,
     summary: result.summary,
     delivered: result.delivered,
+    deliveryStatus: job.state.lastDeliveryStatus,
+    deliveryError: job.state.lastDeliveryError,
     sessionId: result.sessionId,
     sessionKey: result.sessionKey,
     runAtMs,
