@@ -29,7 +29,7 @@ type PendingApproval = {
 };
 
 export type ExecApprovalForwarder = {
-  handleRequested: (request: ExecApprovalRequest) => Promise<void>;
+  handleRequested: (request: ExecApprovalRequest) => Promise<boolean>;
   handleResolved: (resolved: ExecApprovalResolved) => Promise<void>;
   stop: () => void;
 };
@@ -318,11 +318,11 @@ export function createExecApprovalForwarder(
   const resolveSessionTarget = deps.resolveSessionTarget ?? defaultResolveSessionTarget;
   const pending = new Map<string, PendingApproval>();
 
-  const handleRequested = async (request: ExecApprovalRequest) => {
+  const handleRequested = async (request: ExecApprovalRequest): Promise<boolean> => {
     const cfg = getConfig();
     const config = cfg.approvals?.exec;
     if (!shouldForward({ config, request })) {
-      return;
+      return false;
     }
     const filteredTargets = resolveForwardTargets({
       cfg,
@@ -332,7 +332,7 @@ export function createExecApprovalForwarder(
     }).filter((target) => !shouldSkipDiscordForwarding(target, cfg));
 
     if (filteredTargets.length === 0) {
-      return;
+      return false;
     }
 
     const expiresInMs = Math.max(0, request.expiresAtMs - nowMs());
@@ -353,17 +353,20 @@ export function createExecApprovalForwarder(
     pending.set(request.id, pendingEntry);
 
     if (pending.get(request.id) !== pendingEntry) {
-      return;
+      return false;
     }
 
     const text = buildRequestMessage(request, nowMs());
-    await deliverToTargets({
+    void deliverToTargets({
       cfg,
       targets: filteredTargets,
       text,
       deliver,
       shouldSend: () => pending.get(request.id) === pendingEntry,
+    }).catch((err) => {
+      log.error(`exec approvals: failed to deliver request ${request.id}: ${String(err)}`);
     });
+    return true;
   };
 
   const handleResolved = async (resolved: ExecApprovalResolved) => {

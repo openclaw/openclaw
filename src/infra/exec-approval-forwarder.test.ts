@@ -63,7 +63,7 @@ describe("exec approval forwarder", () => {
       resolveSessionTarget: () => ({ channel: "slack", to: "U1" }),
     });
 
-    await forwarder.handleRequested(baseRequest);
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
     expect(deliver).toHaveBeenCalledTimes(1);
 
     await forwarder.handleResolved({
@@ -82,7 +82,7 @@ describe("exec approval forwarder", () => {
     vi.useFakeTimers();
     const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
 
-    await forwarder.handleRequested(baseRequest);
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
     expect(deliver).toHaveBeenCalledTimes(1);
 
     await vi.runAllTimersAsync();
@@ -93,7 +93,7 @@ describe("exec approval forwarder", () => {
     vi.useFakeTimers();
     const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
 
-    await forwarder.handleRequested(baseRequest);
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
 
     expect(getFirstDeliveryText(deliver)).toContain("Command: `echo hello`");
   });
@@ -102,15 +102,48 @@ describe("exec approval forwarder", () => {
     vi.useFakeTimers();
     const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
 
-    await forwarder.handleRequested({
-      ...baseRequest,
-      request: {
-        ...baseRequest.request,
-        command: "echo `uname`\necho done",
-      },
-    });
+    await expect(
+      forwarder.handleRequested({
+        ...baseRequest,
+        request: {
+          ...baseRequest.request,
+          command: "echo `uname`\necho done",
+        },
+      }),
+    ).resolves.toBe(true);
 
     expect(getFirstDeliveryText(deliver)).toContain("Command:\n```\necho `uname`\necho done\n```");
+  });
+
+  it("returns false when forwarding is disabled", async () => {
+    const { deliver, forwarder } = createForwarder({
+      cfg: {} as OpenClawConfig,
+    });
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(false);
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("returns false when all targets are skipped", async () => {
+    vi.useFakeTimers();
+    const cfg = {
+      channels: {
+        discord: {
+          execApprovals: {
+            enabled: true,
+            approvers: ["123"],
+          },
+        },
+      },
+      approvals: { exec: { enabled: true, mode: "session" } },
+    } as OpenClawConfig;
+
+    const { deliver, forwarder } = createForwarder({
+      cfg,
+      resolveSessionTarget: () => ({ channel: "discord", to: "channel:123" }),
+    });
+
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(false);
+    expect(deliver).not.toHaveBeenCalled();
   });
 
   it("forwards to discord when discord exec approvals handler is disabled", async () => {
@@ -124,7 +157,7 @@ describe("exec approval forwarder", () => {
       resolveSessionTarget: () => ({ channel: "discord", to: "channel:123" }),
     });
 
-    await forwarder.handleRequested(baseRequest);
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
 
     expect(deliver).toHaveBeenCalledTimes(1);
   });
@@ -148,7 +181,7 @@ describe("exec approval forwarder", () => {
       resolveSessionTarget: () => ({ channel: "discord", to: "channel:123" }),
     });
 
-    await forwarder.handleRequested(baseRequest);
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(false);
 
     expect(deliver).not.toHaveBeenCalled();
   });
@@ -185,13 +218,15 @@ describe("exec approval forwarder", () => {
     vi.useFakeTimers();
     const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
 
-    await forwarder.handleRequested({
-      ...baseRequest,
-      request: {
-        ...baseRequest.request,
-        command: "echo ```danger```",
-      },
-    });
+    await expect(
+      forwarder.handleRequested({
+        ...baseRequest,
+        request: {
+          ...baseRequest.request,
+          command: "echo ```danger```",
+        },
+      }),
+    ).resolves.toBe(true);
 
     expect(getFirstDeliveryText(deliver)).toContain("Command:\n````\necho ```danger```\n````");
   });
