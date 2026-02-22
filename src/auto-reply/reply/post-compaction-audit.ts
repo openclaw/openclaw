@@ -1,9 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 
-// Default required files — constants, extensible to config later
+// Default required files — constants, extensible to config later.
+// Only include files that are reliably present. WORKFLOW_AUTO.md was removed
+// because it is never auto-generated and caused spurious warnings (#20444).
 const DEFAULT_REQUIRED_READS: Array<string | RegExp> = [
-  "WORKFLOW_AUTO.md",
   /memory\/\d{4}-\d{2}-\d{2}\.md/, // daily memory files
 ];
 
