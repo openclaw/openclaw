@@ -53,6 +53,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount> = {
   id: "slack",
   meta: {
     ...meta,
+    preferSessionLookupForAnnounceTarget: true,
   },
   onboarding: slackOnboardingAdapter,
   pairing: {

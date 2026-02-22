@@ -86,6 +86,7 @@ export const telegramPlugin: ChannelPlugin<ResolvedTelegramAccount, TelegramProb
   meta: {
     ...meta,
     quickstartAllowFrom: true,
+    preferSessionLookupForAnnounceTarget: true,
   },
   onboarding: telegramOnboardingAdapter,
   pairing: {
