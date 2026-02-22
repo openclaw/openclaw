@@ -1051,6 +1051,7 @@
                 "group": "Providers",
                 "pages": [
                   "providers/anthropic",
+                  "providers/google",
                   "providers/openai",
                   "providers/openrouter",
                   "providers/litellm",
