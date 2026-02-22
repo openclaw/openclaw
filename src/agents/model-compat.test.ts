@@ -45,4 +45,67 @@ describe("normalizeModelCompat", () => {
       (normalized.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole,
     ).toBe(false);
   });
+
+  it("forces supportsDeveloperRole off for Aliyun/Dashscope models", () => {
+    const model = {
+      ...baseModel(),
+      id: "qwen3-max",
+      name: "qwen3-max",
+      provider: "aliyun",
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(normalized.compat?.supportsDeveloperRole).toBe(false);
+  });
+
+  it("forces supportsDeveloperRole off for Qwen Portal models", () => {
+    const model = {
+      ...baseModel(),
+      id: "coder-model",
+      name: "coder-model",
+      provider: "qwen-portal",
+      baseUrl: "https://portal.qwen.ai/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(normalized.compat?.supportsDeveloperRole).toBe(false);
+  });
+
+  it("forces supportsDeveloperRole off for Qianfan/Baidu models", () => {
+    const model = {
+      ...baseModel(),
+      id: "deepseek-v3.2",
+      name: "deepseek-v3.2",
+      provider: "qianfan",
+      baseUrl: "https://qianfan.baidubce.com/v2",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(normalized.compat?.supportsDeveloperRole).toBe(false);
+  });
+
+  it("forces supportsDeveloperRole off for openai-responses API on unsupported providers", () => {
+    const model = {
+      ...baseModel(),
+      api: "openai-responses" as const,
+      provider: "aliyun",
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(normalized.compat?.supportsDeveloperRole).toBe(false);
+  });
+
+  it("leaves Anthropic models untouched", () => {
+    const model = {
+      ...baseModel(),
+      api: "anthropic-messages" as const,
+      provider: "anthropic",
+      baseUrl: "https://api.anthropic.com",
+    };
+    delete (model as { compat?: unknown }).compat;
+    const normalized = normalizeModelCompat(model);
+    expect(normalized.compat).toBeUndefined();
+  });
 });
