@@ -22,7 +22,9 @@ import {
 import type { OpenClawConfig, ReplyToMode } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import {
+  GROUP_POLICY_BLOCKED_LABEL,
   resolveOpenProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../../config/runtime-group-policy.js";
 import { danger, logVerbose, shouldLogVerbose, warn } from "../../globals.js";
@@ -256,7 +258,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const discordRestFetch = resolveDiscordRestFetch(rawDiscordCfg.proxy, runtime);
   const dmConfig = rawDiscordCfg.dm;
   let guildEntries = rawDiscordCfg.guilds;
-  const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+  const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
   const providerConfigPresent = cfg.channels?.discord !== undefined;
   const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
     providerConfigPresent,
@@ -269,7 +271,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     providerMissingFallbackApplied,
     providerKey: "discord",
     accountId: account.accountId,
-    blockedLabel: "guild messages",
+    blockedLabel: GROUP_POLICY_BLOCKED_LABEL.guild,
     log: (message) => runtime.log?.(warn(message)),
   });
   let allowFrom = discordCfg.allowFrom ?? dmConfig?.allowFrom;
@@ -629,6 +631,7 @@ export const __testing = {
   createDiscordGatewayPlugin,
   dedupeSkillCommandsForDiscord,
   resolveDiscordRuntimeGroupPolicy: resolveOpenProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
   resolveDiscordRestFetch,
   resolveThreadBindingsEnabled,
 };

@@ -133,9 +133,13 @@ export type {
   MSTeamsTeamConfig,
 } from "../config/types.js";
 export {
+  GROUP_POLICY_BLOCKED_LABEL,
+  resetMissingProviderGroupPolicyFallbackWarningsForTesting,
   resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
   resolveOpenProviderRuntimeGroupPolicy,
   resolveRuntimeGroupPolicy,
+  type GroupPolicyDefaultsConfig,
   type RuntimeGroupPolicyResolution,
   type RuntimeGroupPolicyParams,
   type ResolveProviderRuntimeGroupPolicyParams,

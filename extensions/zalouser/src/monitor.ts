@@ -4,6 +4,7 @@ import {
   createReplyPrefixOptions,
   mergeAllowlist,
   resolveOpenProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
   resolveSenderCommandAuthorization,
   summarizeMapping,
   warnMissingProviderGroupPolicyFallbackOnce,
@@ -179,7 +180,7 @@ async function processMessage(
   const groupName = metadata?.threadName ?? "";
   const chatId = threadId;
 
-  const defaultGroupPolicy = config.channels?.defaults?.groupPolicy;
+  const defaultGroupPolicy = resolveDefaultGroupPolicy(config);
   const { groupPolicy, providerMissingFallbackApplied } = resolveOpenProviderRuntimeGroupPolicy({
     providerConfigPresent: config.channels?.zalouser !== undefined,
     groupPolicy: account.config.groupPolicy,
