@@ -82,6 +82,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.loopDetection.detectors.knownPollNoProgress": "Tool-loop Poll No-Progress Detection",
   "tools.loopDetection.detectors.pingPong": "Tool-loop Ping-Pong Detection",
   "tools.fs.workspaceOnly": "Workspace-only FS tools",
+  "tools.fs.allowOutsideWorkspace": "Allow FS Outside Workspace",
   "tools.sessions.visibility": "Session Tools Visibility",
   "tools.exec.notifyOnExit": "Exec Notify On Exit",
   "tools.exec.notifyOnExitEmptySuccess": "Exec Notify On Empty Success",
