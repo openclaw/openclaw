@@ -824,6 +824,7 @@ describe("Cron issue regressions", () => {
     let now = dueAt;
     let activeRuns = 0;
     let peakActiveRuns = 0;
+    const startedRunIds = new Set<string>();
     const bothRunsStarted = createDeferred<void>();
     const firstRun = createDeferred<{ status: "ok"; summary: string }>();
     const secondRun = createDeferred<{ status: "ok"; summary: string }>();
@@ -838,7 +839,8 @@ describe("Cron issue regressions", () => {
       runIsolatedAgentJob: vi.fn(async (params: { job: { id: string } }) => {
         activeRuns += 1;
         peakActiveRuns = Math.max(peakActiveRuns, activeRuns);
-        if (peakActiveRuns >= 2) {
+        startedRunIds.add(params.job.id);
+        if (startedRunIds.size === 2) {
           bothRunsStarted.resolve();
         }
         try {
@@ -856,7 +858,7 @@ describe("Cron issue regressions", () => {
     await Promise.race([
       bothRunsStarted.promise,
       new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("timed out waiting for concurrent job starts")), 1_000),
+        setTimeout(() => reject(new Error("timed out waiting for concurrent cron runs")), 1_000),
       ),
     ]);
 
