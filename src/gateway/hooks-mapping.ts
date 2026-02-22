@@ -438,6 +438,11 @@ function resolveTemplateExpr(expr: string, ctx: HookMappingContext) {
   return getByPath(ctx.payload, expr);
 }
 
+// Block traversal into prototype-chain properties on attacker-controlled
+// webhook payloads.  Mirrors the same blocklist used by config-paths.ts
+// for config path traversal.
+const BLOCKED_PATH_KEYS = new Set(["__proto__", "prototype", "constructor"]);
+
 function getByPath(input: Record<string, unknown>, pathExpr: string): unknown {
   if (!pathExpr) {
     return undefined;
@@ -464,6 +469,9 @@ function getByPath(input: Record<string, unknown>, pathExpr: string): unknown {
       }
       current = current[part] as unknown;
       continue;
+    }
+    if (BLOCKED_PATH_KEYS.has(part)) {
+      return undefined;
     }
     if (typeof current !== "object") {
       return undefined;

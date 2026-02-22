@@ -151,7 +151,10 @@ Parameters:
 - `label?` (optional; used for logs/UI)
 - `agentId?` (optional; spawn under another agent id if allowed)
 - `model?` (optional; overrides the sub-agent model; invalid values error)
+- `thinking?` (optional; overrides thinking level for the sub-agent run)
 - `runTimeoutSeconds?` (default 0; when set, aborts the sub-agent run after N seconds)
+- `thread?` (default false; request thread-bound routing for this spawn when supported by the channel/plugin)
+- `mode?` (`run|session`; defaults to `run`, but defaults to `session` when `thread=true`; `mode="session"` requires `thread=true`)
 - `cleanup?` (`delete|keep`, default `keep`)
 
 Allowlist:
@@ -166,12 +169,13 @@ Behavior:
 
 - Starts a new `agent:<agentId>:subagent:<uuid>` session with `deliver: false`.
 - Sub-agents default to the full tool set **minus session tools** (configurable via `tools.subagents.tools`).
-- Depth policy is enforced for nested spawns. With the default `maxSpawnDepth = 2`, depth-1 sub-agents can call `sessions_spawn`, depth-2 sub-agents cannot.
+- Sub-agents are not allowed to call `sessions_spawn` (no sub-agent → sub-agent spawning).
 - Always non-blocking: returns `{ status: "accepted", runId, childSessionKey }` immediately.
-- After completion, OpenClaw builds a sub-agent announce system message from the child session's latest assistant reply and injects it to the requester session.
-- Delivery stays internal (`deliver=false`) when the requester is a sub-agent, and is user-facing (`deliver=true`) when the requester is main.
-- Recipient agents can return the internal silent token to suppress duplicate outward delivery in the same turn.
-- Announce replies are normalized to runtime-derived status plus result context.
+- With `thread=true`, channel plugins can bind delivery/routing to a thread target (Discord support is controlled by `session.threadBindings.*` and `channels.discord.threadBindings.*`).
+- After completion, OpenClaw runs a sub-agent **announce step** and posts the result to the requester chat channel.
+  - If the assistant final reply is empty, the latest `toolResult` from sub-agent history is included as `Result`.
+- Reply exactly `ANNOUNCE_SKIP` during the announce step to stay silent.
+- Announce replies are normalized to `Status`/`Result`/`Notes`; `Status` comes from runtime outcome (not model text).
 - Sub-agent sessions are auto-archived after `agents.defaults.subagents.archiveAfterMinutes` (default: 60).
 - Announce replies include a stats line (runtime, tokens, sessionKey/sessionId, transcript path, and optional cost).
 

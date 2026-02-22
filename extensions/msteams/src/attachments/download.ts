@@ -1,4 +1,5 @@
 import { getMSTeamsRuntime } from "../runtime.js";
+import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
 import {
   extractInlineImageCandidates,
   inferPlaceholder,
@@ -6,6 +7,7 @@ import {
   isRecord,
   isUrlAllowed,
   normalizeContentType,
+  resolveRequestUrl,
   resolveAuthAllowedHosts,
   resolveAllowedHosts,
 } from "./shared.js";
@@ -86,11 +88,12 @@ async function fetchWithAuthFallback(params: {
   url: string;
   tokenProvider?: MSTeamsAccessTokenProvider;
   fetchFn?: typeof fetch;
+  requestInit?: RequestInit;
   allowHosts: string[];
   authAllowHosts: string[];
 }): Promise<Response> {
   const fetchFn = params.fetchFn ?? fetch;
-  const firstAttempt = await fetchFn(params.url);
+  const firstAttempt = await fetchFn(params.url, params.requestInit);
   if (firstAttempt.ok) {
     return firstAttempt;
   }
@@ -108,8 +111,11 @@ async function fetchWithAuthFallback(params: {
   for (const scope of scopes) {
     try {
       const token = await params.tokenProvider.getAccessToken(scope);
+      const authHeaders = new Headers(params.requestInit?.headers);
+      authHeaders.set("Authorization", `Bearer ${token}`);
       const res = await fetchFn(params.url, {
-        headers: { Authorization: `Bearer ${token}` },
+        ...params.requestInit,
+        headers: authHeaders,
         redirect: "manual",
       });
       if (res.ok) {
@@ -117,7 +123,7 @@ async function fetchWithAuthFallback(params: {
       }
       const redirectUrl = readRedirectUrl(params.url, res);
       if (redirectUrl && isUrlAllowed(redirectUrl, params.allowHosts)) {
-        const redirectRes = await fetchFn(redirectUrl);
+        const redirectRes = await fetchFn(redirectUrl, params.requestInit);
         if (redirectRes.ok) {
           return redirectRes;
         }
@@ -125,8 +131,11 @@ async function fetchWithAuthFallback(params: {
           (redirectRes.status === 401 || redirectRes.status === 403) &&
           isUrlAllowed(redirectUrl, params.authAllowHosts)
         ) {
+          const redirectAuthHeaders = new Headers(params.requestInit?.headers);
+          redirectAuthHeaders.set("Authorization", `Bearer ${token}`);
           const redirectAuthRes = await fetchFn(redirectUrl, {
-            headers: { Authorization: `Bearer ${token}` },
+            ...params.requestInit,
+            headers: redirectAuthHeaders,
             redirect: "manual",
           });
           if (redirectAuthRes.ok) {
@@ -238,38 +247,24 @@ export async function downloadMSTeamsAttachments(params: {
       continue;
     }
     try {
-      const res = await fetchWithAuthFallback({
+      const media = await downloadAndStoreMSTeamsRemoteMedia({
         url: candidate.url,
-        tokenProvider: params.tokenProvider,
-        fetchFn: params.fetchFn,
-        allowHosts,
-        authAllowHosts,
-      });
-      if (!res.ok) {
-        continue;
-      }
-      const buffer = Buffer.from(await res.arrayBuffer());
-      if (buffer.byteLength > params.maxBytes) {
-        continue;
-      }
-      const mime = await getMSTeamsRuntime().media.detectMime({
-        buffer,
-        headerMime: res.headers.get("content-type"),
-        filePath: candidate.fileHint ?? candidate.url,
-      });
-      const originalFilename = params.preserveFilenames ? candidate.fileHint : undefined;
-      const saved = await getMSTeamsRuntime().channel.media.saveMediaBuffer(
-        buffer,
-        mime ?? candidate.contentTypeHint,
-        "inbound",
-        params.maxBytes,
-        originalFilename,
-      );
-      out.push({
-        path: saved.path,
-        contentType: saved.contentType,
+        filePathHint: candidate.fileHint ?? candidate.url,
+        maxBytes: params.maxBytes,
+        contentTypeHint: candidate.contentTypeHint,
         placeholder: candidate.placeholder,
+        preserveFilenames: params.preserveFilenames,
+        fetchImpl: (input, init) =>
+          fetchWithAuthFallback({
+            url: resolveRequestUrl(input),
+            tokenProvider: params.tokenProvider,
+            fetchFn: params.fetchFn,
+            requestInit: init,
+            allowHosts,
+            authAllowHosts,
+          }),
       });
+      out.push(media);
     } catch {
       // Ignore download failures and continue with next candidate.
     }
