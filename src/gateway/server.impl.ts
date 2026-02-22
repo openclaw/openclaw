@@ -42,6 +42,7 @@ import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/di
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner, runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { createPluginRuntime } from "../plugins/runtime/index.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -431,6 +432,7 @@ export async function startGatewayServer(
     loadConfig,
     channelLogs,
     channelRuntimeEnvs,
+    channelRuntime: createPluginRuntime().channel,
   });
   const { getRuntimeSnapshot, startChannels, startChannel, stopChannel, markChannelLoggedOut } =
     channelManager;

@@ -59,6 +59,11 @@ type ChannelManagerOptions = {
   loadConfig: () => OpenClawConfig;
   channelLogs: Record<ChannelId, SubsystemLogger>;
   channelRuntimeEnvs: Record<ChannelId, RuntimeEnv>;
+  /**
+   * Optional channel runtime helpers (from PluginRuntime) to pass to channel gateway contexts.
+   * Channels that need access to dispatch, routing, or other utilities can use this.
+   */
+  channelRuntime?: import("../plugins/runtime/types.js").PluginRuntime["channel"];
 };
 
 type StartChannelOptions = {
@@ -78,7 +83,7 @@ export type ChannelManager = {
 
 // Channel docking: lifecycle hooks (`plugin.gateway`) flow through this manager.
 export function createChannelManager(opts: ChannelManagerOptions): ChannelManager {
-  const { loadConfig, channelLogs, channelRuntimeEnvs } = opts;
+  const { loadConfig, channelLogs, channelRuntimeEnvs, channelRuntime } = opts;
 
   const channelStores = new Map<ChannelId, ChannelRuntimeStore>();
   // Tracks restart attempts per channel:account. Reset on successful start.
@@ -199,6 +204,7 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           log,
           getStatus: () => getRuntime(channelId, id),
           setStatus: (next) => setRuntime(channelId, id, next),
+          channelRuntime,
         });
         const trackedPromise = Promise.resolve(task)
           .catch((err) => {
