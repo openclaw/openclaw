@@ -171,6 +171,30 @@ struct ExecAllowlistTests {
         #expect(resolutions[0].executableName == "sh")
     }
 
+    @Test func resolveForAllowlistUnwrapsEnvShellWrapperChains() {
+        let command = ["/usr/bin/env", "/bin/sh", "-lc", "echo allowlisted && /usr/bin/touch /tmp/openclaw-allowlist-test"]
+        let resolutions = ExecCommandResolution.resolveForAllowlist(
+            command: command,
+            rawCommand: nil,
+            cwd: nil,
+            env: ["PATH": "/usr/bin:/bin"])
+        #expect(resolutions.count == 2)
+        #expect(resolutions[0].executableName == "echo")
+        #expect(resolutions[1].executableName == "touch")
+    }
+
+    @Test func resolveForAllowlistUnwrapsEnvToEffectiveDirectExecutable() {
+        let command = ["/usr/bin/env", "FOO=bar", "/usr/bin/printf", "ok"]
+        let resolutions = ExecCommandResolution.resolveForAllowlist(
+            command: command,
+            rawCommand: nil,
+            cwd: nil,
+            env: ["PATH": "/usr/bin:/bin"])
+        #expect(resolutions.count == 1)
+        #expect(resolutions[0].resolvedPath == "/usr/bin/printf")
+        #expect(resolutions[0].executableName == "printf")
+    }
+
     @Test func matchAllRequiresEverySegmentToMatch() {
         let first = ExecCommandResolution(
             rawExecutable: "echo",
