@@ -19,6 +19,7 @@ import {
 } from "../infra/exec-approvals.js";
 import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../infra/exec-host.js";
 import { getTrustedSafeBinDirs } from "../infra/exec-safe-bin-trust.js";
+import { sanitizeSystemRunEnvOverrides } from "../infra/host-env-security.js";
 import { resolveSystemRunCommand } from "../infra/system-run-command.js";
 import type {
   ExecEventPayload,
@@ -109,7 +110,11 @@ export async function handleSystemRunInvoke(opts: {
   const autoAllowSkills = approvals.agent.autoAllowSkills;
   const sessionKey = opts.params.sessionKey?.trim() || "node";
   const runId = opts.params.runId?.trim() || crypto.randomUUID();
-  const env = opts.sanitizeEnv(opts.params.env ?? undefined);
+  const envOverrides = sanitizeSystemRunEnvOverrides({
+    overrides: opts.params.env ?? undefined,
+    shellWrapper: shellCommand !== null,
+  });
+  const env = opts.sanitizeEnv(envOverrides);
   const safeBins = resolveSafeBins(agentExec?.safeBins ?? cfg.tools?.exec?.safeBins);
   const trustedSafeBinDirs = getTrustedSafeBinDirs();
   const bins = autoAllowSkills ? await opts.skillBins.current() : new Set<string>();
@@ -171,7 +176,7 @@ export async function handleSystemRunInvoke(opts: {
       command: argv,
       rawCommand: rawCommand || shellCommand || null,
       cwd: opts.params.cwd ?? null,
-      env: opts.params.env ?? null,
+      env: envOverrides ?? null,
       timeoutMs: opts.params.timeoutMs ?? null,
       needsScreenRecording: opts.params.needsScreenRecording ?? null,
       agentId: agentId ?? null,
