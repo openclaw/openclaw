@@ -30,14 +30,15 @@ export function isDomainAllowed(currentUrl: string, pinnedDomains: string[]): Do
       return { allowed: true, hostname, matchedDomain: pattern };
     }
 
-    // *.example.com or .example.com → match any subdomain
+    // *.example.com or .example.com → match subdomains only, NOT the bare domain.
+    // Consistent with src/infra/net/ssrf.ts:isHostnameAllowedByPattern
     const wildcard = pattern.startsWith("*.")
       ? pattern.slice(2)
       : pattern.startsWith(".")
         ? pattern.slice(1)
         : null;
 
-    if (wildcard && (hostname === wildcard || hostname.endsWith(`.${wildcard}`))) {
+    if (wildcard && hostname !== wildcard && hostname.endsWith(`.${wildcard}`)) {
       return { allowed: true, hostname, matchedDomain: pattern };
     }
   }

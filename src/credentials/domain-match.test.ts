@@ -32,9 +32,9 @@ describe("isDomainAllowed", () => {
     expect(result.allowed).toBe(true);
   });
 
-  it("allows wildcard *.example.com for example.com itself", () => {
+  it("rejects wildcard *.example.com for bare example.com (subdomains only)", () => {
     const result = isDomainAllowed("https://example.com", ["*.example.com"]);
-    expect(result.allowed).toBe(true);
+    expect(result.allowed).toBe(false);
   });
 
   it("allows shorthand .example.com same as *.example.com", () => {
