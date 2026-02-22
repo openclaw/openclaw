@@ -140,6 +140,54 @@ struct LowCoverageHelperTests {
         #expect(emptyReport.summary.contains("Nothing is listening"))
     }
 
+    @Test func portGuardianRemoteModeDoesNotKillDocker() {
+        #expect(PortGuardian._testIsExpected(
+            command: "com.docker.backend",
+            fullCommand: "com.docker.backend",
+            port: 18789, mode: .remote) == true)
+
+        #expect(PortGuardian._testIsExpected(
+            command: "ssh",
+            fullCommand: "ssh -L 18789:localhost:18789 user@host",
+            port: 18789, mode: .remote) == true)
+
+        #expect(PortGuardian._testIsExpected(
+            command: "podman",
+            fullCommand: "podman",
+            port: 18789, mode: .remote) == true)
+    }
+
+    @Test func portGuardianLocalModeStillRejectsUnexpected() {
+        #expect(PortGuardian._testIsExpected(
+            command: "com.docker.backend",
+            fullCommand: "com.docker.backend",
+            port: 18789, mode: .local) == false)
+
+        #expect(PortGuardian._testIsExpected(
+            command: "python",
+            fullCommand: "python server.py",
+            port: 18789, mode: .local) == false)
+
+        #expect(PortGuardian._testIsExpected(
+            command: "node",
+            fullCommand: "node /path/to/gateway-daemon",
+            port: 18789, mode: .local) == true)
+    }
+
+    @Test func portGuardianRemoteModeReportAcceptsAnyListener() {
+        let dockerReport = PortGuardian._testBuildReport(
+            port: 18789, mode: .remote,
+            listeners: [(pid: 99, command: "com.docker.backend",
+                         fullCommand: "com.docker.backend", user: "me")])
+        #expect(dockerReport.offenders.isEmpty)
+
+        let localDockerReport = PortGuardian._testBuildReport(
+            port: 18789, mode: .local,
+            listeners: [(pid: 99, command: "com.docker.backend",
+                         fullCommand: "com.docker.backend", user: "me")])
+        #expect(!localDockerReport.offenders.isEmpty)
+    }
+
     @Test @MainActor func canvasSchemeHandlerResolvesFilesAndErrors() throws {
         let root = FileManager().temporaryDirectory
             .appendingPathComponent("canvas-\(UUID().uuidString)", isDirectory: true)
