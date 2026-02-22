@@ -1,0 +1,21 @@
+{
+  "name": "@openclaw/runner-extensions",
+  "version": "2026.2.21",
+  "private": true,
+  "description": "Agent extension runtime: dynamic pi-extension loading, memory-context wiring, compaction safeguard integration, and config schema for memoryContext agent defaults",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.1.26"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
