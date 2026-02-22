@@ -231,17 +231,50 @@ function resolveStableAutoApplyAtMs(params: {
 async function runAutoUpdateCommand(params: {
   channel: "stable" | "beta";
   timeoutMs: number;
+  root?: string;
 }): Promise<AutoUpdateRunResult> {
+  const baseArgs = ["update", "--yes", "--channel", params.channel, "--json"];
+  const execPath = process.execPath?.trim();
+  const argv1 = process.argv[1]?.trim();
+  const lowerExecBase = execPath ? path.basename(execPath).toLowerCase() : "";
+  const runtimeIsNodeOrBun =
+    lowerExecBase === "node" ||
+    lowerExecBase === "node.exe" ||
+    lowerExecBase === "bun" ||
+    lowerExecBase === "bun.exe";
+  const argv: string[] = [];
+  if (execPath && argv1) {
+    argv.push(execPath, argv1, ...baseArgs);
+  } else if (execPath && !runtimeIsNodeOrBun) {
+    argv.push(execPath, ...baseArgs);
+  } else if (execPath && params.root) {
+    const candidates = [
+      path.join(params.root, "dist", "entry.js"),
+      path.join(params.root, "dist", "entry.mjs"),
+      path.join(params.root, "dist", "index.js"),
+      path.join(params.root, "dist", "index.mjs"),
+    ];
+    for (const candidate of candidates) {
+      try {
+        await fs.access(candidate);
+        argv.push(execPath, candidate, ...baseArgs);
+        break;
+      } catch {
+        // try next candidate
+      }
+    }
+  }
+  if (argv.length === 0) {
+    argv.push("openclaw", ...baseArgs);
+  }
+
   try {
-    const res = await runCommandWithTimeout(
-      ["openclaw", "update", "--yes", "--channel", params.channel, "--json"],
-      {
-        timeoutMs: params.timeoutMs,
-        env: {
-          OPENCLAW_AUTO_UPDATE: "1",
-        },
+    const res = await runCommandWithTimeout(argv, {
+      timeoutMs: params.timeoutMs,
+      env: {
+        OPENCLAW_AUTO_UPDATE: "1",
       },
-    );
+    });
     return {
       ok: res.code === 0,
       code: res.code,
@@ -273,6 +306,7 @@ export async function runGatewayUpdateCheck(params: {
   runAutoUpdate?: (params: {
     channel: "stable" | "beta";
     timeoutMs: number;
+    root?: string;
   }) => Promise<AutoUpdateRunResult>;
 }): Promise<void> {
   if (shouldSkipCheck(Boolean(params.allowInTests))) {
@@ -281,7 +315,9 @@ export async function runGatewayUpdateCheck(params: {
   if (params.isNixMode) {
     return;
   }
-  if (params.cfg.update?.checkOnStart === false) {
+  const auto = resolveAutoUpdatePolicy(params.cfg);
+  const shouldRunUpdateHints = params.cfg.update?.checkOnStart !== false;
+  if (!shouldRunUpdateHints && !auto.enabled) {
     return;
   }
 
@@ -289,11 +325,18 @@ export async function runGatewayUpdateCheck(params: {
   const state = await readState(statePath);
   const now = Date.now();
   const lastCheckedAt = state.lastCheckedAt ? Date.parse(state.lastCheckedAt) : null;
-  const persistedAvailable = resolvePersistedUpdateAvailable(state);
-  setUpdateAvailableCache({
-    next: persistedAvailable,
-    onUpdateAvailableChange: params.onUpdateAvailableChange,
-  });
+  if (shouldRunUpdateHints) {
+    const persistedAvailable = resolvePersistedUpdateAvailable(state);
+    setUpdateAvailableCache({
+      next: persistedAvailable,
+      onUpdateAvailableChange: params.onUpdateAvailableChange,
+    });
+  } else {
+    setUpdateAvailableCache({
+      next: null,
+      onUpdateAvailableChange: params.onUpdateAvailableChange,
+    });
+  }
   const checkIntervalMs = resolveCheckIntervalMs(params.cfg);
   if (lastCheckedAt && Number.isFinite(lastCheckedAt)) {
     if (now - lastCheckedAt < checkIntervalMs) {
@@ -345,15 +388,17 @@ export async function runGatewayUpdateCheck(params: {
       latestVersion: resolved.version,
       channel: tag,
     };
-    setUpdateAvailableCache({
-      next: nextAvailable,
-      onUpdateAvailableChange: params.onUpdateAvailableChange,
-    });
+    if (shouldRunUpdateHints) {
+      setUpdateAvailableCache({
+        next: nextAvailable,
+        onUpdateAvailableChange: params.onUpdateAvailableChange,
+      });
+    }
     nextState.lastAvailableVersion = resolved.version;
     nextState.lastAvailableTag = tag;
     const shouldNotify =
       state.lastNotifiedVersion !== resolved.version || state.lastNotifiedTag !== tag;
-    if (shouldNotify) {
+    if (shouldRunUpdateHints && shouldNotify) {
       params.log.info(
         `update available (${tag}): v${resolved.version} (current v${VERSION}). Run: ${formatCliCommand("openclaw update")}`,
       );
@@ -361,7 +406,6 @@ export async function runGatewayUpdateCheck(params: {
       nextState.lastNotifiedTag = tag;
     }
 
-    const auto = resolveAutoUpdatePolicy(params.cfg);
     if (auto.enabled && (channel === "stable" || channel === "beta")) {
       const runAuto = params.runAutoUpdate ?? runAutoUpdateCommand;
       const attemptIntervalMs =
@@ -407,6 +451,7 @@ export async function runGatewayUpdateCheck(params: {
         const outcome = await runAuto({
           channel,
           timeoutMs: AUTO_UPDATE_COMMAND_TIMEOUT_MS,
+          root: root ?? undefined,
         });
         if (outcome.ok) {
           nextState.autoLastSuccessVersion = resolved.version;
