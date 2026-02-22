@@ -49,6 +49,8 @@ import type {
   PluginHookToolResultPersistResult,
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
+  PluginHookOnAllCandidatesFailedEvent,
+  PluginHookOnAllCandidatesFailedResult,
 } from "./types.js";
 
 // Re-export types for consumers
@@ -93,6 +95,8 @@ export type {
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
+  PluginHookOnAllCandidatesFailedEvent,
+  PluginHookOnAllCandidatesFailedResult,
 };
 
 export type HookRunnerLogger = {
@@ -691,6 +695,36 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   // =========================================================================
+  // Resilience Hooks
+  // =========================================================================
+
+  const mergeOnAllCandidatesFailed = (
+    acc: PluginHookOnAllCandidatesFailedResult | undefined,
+    next: PluginHookOnAllCandidatesFailedResult,
+  ): PluginHookOnAllCandidatesFailedResult => ({
+    // Any plugin saying retry wins; take the largest delay.
+    retry: acc?.retry || next.retry,
+    delayMs: Math.max(acc?.delayMs ?? 0, next.delayMs ?? 0) || undefined,
+  });
+
+  /**
+   * Run on_all_candidates_failed hook.
+   * Allows plugins to request a retry after all model candidates have failed.
+   * Runs sequentially; results are merged (any retry=true wins).
+   */
+  async function runOnAllCandidatesFailed(
+    event: PluginHookOnAllCandidatesFailedEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookOnAllCandidatesFailedResult | undefined> {
+    return runModifyingHook<"on_all_candidates_failed", PluginHookOnAllCandidatesFailedResult>(
+      "on_all_candidates_failed",
+      event,
+      ctx,
+      mergeOnAllCandidatesFailed,
+    );
+  }
+
+  // =========================================================================
   // Utility
   // =========================================================================
 
@@ -739,6 +773,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Gateway hooks
     runGatewayStart,
     runGatewayStop,
+    // Resilience hooks
+    runOnAllCandidatesFailed,
     // Utility
     hasHooks,
     getHookCount,
