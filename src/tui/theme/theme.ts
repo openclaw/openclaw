@@ -9,7 +9,9 @@ import { highlight, supportsLanguage } from "cli-highlight";
 import type { SearchableSelectListTheme } from "../components/searchable-select-list.js";
 import { createSyntaxTheme } from "./syntax-theme.js";
 
-const palette = {
+export type ThemeMode = "dark" | "light" | "auto";
+
+const darkPalette = {
   text: "#E8E3D5",
   dim: "#7B7F87",
   accent: "#F6C453",
@@ -33,19 +35,81 @@ const palette = {
   success: "#7DD3A5",
 };
 
+const lightPalette = {
+  text: "#1E1E1E",
+  dim: "#6B7280",
+  accent: "#B8860B",
+  accentSoft: "#C47F17",
+  border: "#D1D5DB",
+  userBg: "#E8E3D5",
+  userText: "#1E1E1E",
+  systemText: "#4B5563",
+  toolPendingBg: "#EFF6FF",
+  toolSuccessBg: "#ECFDF5",
+  toolErrorBg: "#FEF2F2",
+  toolTitle: "#92400E",
+  toolOutput: "#374151",
+  quote: "#1D4ED8",
+  quoteBorder: "#93C5FD",
+  code: "#92400E",
+  codeBlock: "#F3F4F6",
+  codeBorder: "#D1D5DB",
+  link: "#047857",
+  error: "#DC2626",
+  success: "#047857",
+};
+
+let currentMode: "dark" | "light" = "dark";
+
+/**
+ * Detect terminal background from environment hints.
+ */
+function detectTerminalBackground(): "light" | "dark" {
+  const colorfgbg = process.env.COLORFGBG;
+  if (colorfgbg) {
+    const parts = colorfgbg.split(";");
+    const bgColor = parseInt(parts[parts.length - 1], 10);
+    if (!isNaN(bgColor)) {
+      return bgColor < 8 ? "dark" : "light";
+    }
+  }
+  return "dark";
+}
+
+/**
+ * Resolve theme mode, handling "auto" detection.
+ */
+export function resolveThemeMode(mode: ThemeMode): "dark" | "light" {
+  if (mode === "auto") {
+    return detectTerminalBackground();
+  }
+  return mode;
+}
+
+/**
+ * Set the active theme mode.
+ */
+export function setThemeMode(mode: ThemeMode): void {
+  currentMode = resolveThemeMode(mode);
+}
+
+/**
+ * Get the current palette based on active theme.
+ */
+function getPalette() {
+  return currentMode === "light" ? lightPalette : darkPalette;
+}
+
 const fg = (hex: string) => (text: string) => chalk.hex(hex)(text);
 const bg = (hex: string) => (text: string) => chalk.bgHex(hex)(text);
 
-const syntaxTheme = createSyntaxTheme(fg(palette.code));
-
 /**
  * Highlight code with syntax coloring.
- * Returns an array of lines with ANSI escape codes.
  */
 function highlightCode(code: string, lang?: string): string[] {
+  const palette = getPalette();
+  const syntaxTheme = createSyntaxTheme(fg(palette.code));
   try {
-    // Auto-detect can be slow for very large blocks; prefer explicit language when available.
-    // Check if language is supported, fall back to auto-detect
     const language = lang && supportsLanguage(lang) ? lang : undefined;
     const highlighted = highlight(code, {
       language,
@@ -54,83 +118,180 @@ function highlightCode(code: string, lang?: string): string[] {
     });
     return highlighted.split("\n");
   } catch {
-    // If highlighting fails, return plain code
     return code.split("\n").map((line) => fg(palette.code)(line));
   }
 }
 
 export const theme = {
-  fg: fg(palette.text),
+  get fg() {
+    return fg(getPalette().text);
+  },
   assistantText: (text: string) => text,
-  dim: fg(palette.dim),
-  accent: fg(palette.accent),
-  accentSoft: fg(palette.accentSoft),
-  success: fg(palette.success),
-  error: fg(palette.error),
-  header: (text: string) => chalk.bold(fg(palette.accent)(text)),
-  system: fg(palette.systemText),
-  userBg: bg(palette.userBg),
-  userText: fg(palette.userText),
-  toolTitle: fg(palette.toolTitle),
-  toolOutput: fg(palette.toolOutput),
-  toolPendingBg: bg(palette.toolPendingBg),
-  toolSuccessBg: bg(palette.toolSuccessBg),
-  toolErrorBg: bg(palette.toolErrorBg),
-  border: fg(palette.border),
+  get dim() {
+    return fg(getPalette().dim);
+  },
+  get accent() {
+    return fg(getPalette().accent);
+  },
+  get accentSoft() {
+    return fg(getPalette().accentSoft);
+  },
+  get success() {
+    return fg(getPalette().success);
+  },
+  get error() {
+    return fg(getPalette().error);
+  },
+  get header() {
+    const p = getPalette();
+    return (text: string) => chalk.bold(fg(p.accent)(text));
+  },
+  get system() {
+    return fg(getPalette().systemText);
+  },
+  get userBg() {
+    return bg(getPalette().userBg);
+  },
+  get userText() {
+    return fg(getPalette().userText);
+  },
+  get toolTitle() {
+    return fg(getPalette().toolTitle);
+  },
+  get toolOutput() {
+    return fg(getPalette().toolOutput);
+  },
+  get toolPendingBg() {
+    return bg(getPalette().toolPendingBg);
+  },
+  get toolSuccessBg() {
+    return bg(getPalette().toolSuccessBg);
+  },
+  get toolErrorBg() {
+    return bg(getPalette().toolErrorBg);
+  },
+  get border() {
+    return fg(getPalette().border);
+  },
   bold: (text: string) => chalk.bold(text),
   italic: (text: string) => chalk.italic(text),
 };
 
 export const markdownTheme: MarkdownTheme = {
-  heading: (text) => chalk.bold(fg(palette.accent)(text)),
-  link: (text) => fg(palette.link)(text),
-  linkUrl: (text) => chalk.dim(text),
-  code: (text) => fg(palette.code)(text),
-  codeBlock: (text) => fg(palette.code)(text),
-  codeBlockBorder: (text) => fg(palette.codeBorder)(text),
-  quote: (text) => fg(palette.quote)(text),
-  quoteBorder: (text) => fg(palette.quoteBorder)(text),
-  hr: (text) => fg(palette.border)(text),
-  listBullet: (text) => fg(palette.accentSoft)(text),
-  bold: (text) => chalk.bold(text),
-  italic: (text) => chalk.italic(text),
-  strikethrough: (text) => chalk.strikethrough(text),
-  underline: (text) => chalk.underline(text),
+  get heading() {
+    const p = getPalette();
+    return (text: string) => chalk.bold(fg(p.accent)(text));
+  },
+  get link() {
+    return (text: string) => fg(getPalette().link)(text);
+  },
+  linkUrl: (text: string) => chalk.dim(text),
+  get code() {
+    return (text: string) => fg(getPalette().code)(text);
+  },
+  get codeBlock() {
+    return (text: string) => fg(getPalette().code)(text);
+  },
+  get codeBlockBorder() {
+    return (text: string) => fg(getPalette().codeBorder)(text);
+  },
+  get quote() {
+    return (text: string) => fg(getPalette().quote)(text);
+  },
+  get quoteBorder() {
+    return (text: string) => fg(getPalette().quoteBorder)(text);
+  },
+  get hr() {
+    return (text: string) => fg(getPalette().border)(text);
+  },
+  get listBullet() {
+    return (text: string) => fg(getPalette().accentSoft)(text);
+  },
+  bold: (text: string) => chalk.bold(text),
+  italic: (text: string) => chalk.italic(text),
+  strikethrough: (text: string) => chalk.strikethrough(text),
+  underline: (text: string) => chalk.underline(text),
   highlightCode,
 };
 
-const baseSelectListTheme: SelectListTheme = {
-  selectedPrefix: (text) => fg(palette.accent)(text),
-  selectedText: (text) => chalk.bold(fg(palette.accent)(text)),
-  description: (text) => fg(palette.dim)(text),
-  scrollInfo: (text) => fg(palette.dim)(text),
-  noMatch: (text) => fg(palette.dim)(text),
+export const selectListTheme: SelectListTheme = {
+  get selectedPrefix() {
+    return (text: string) => fg(getPalette().accent)(text);
+  },
+  get selectedText() {
+    const p = getPalette();
+    return (text: string) => chalk.bold(fg(p.accent)(text));
+  },
+  get description() {
+    return (text: string) => fg(getPalette().dim)(text);
+  },
+  get scrollInfo() {
+    return (text: string) => fg(getPalette().dim)(text);
+  },
+  get noMatch() {
+    return (text: string) => fg(getPalette().dim)(text);
+  },
 };
 
-export const selectListTheme: SelectListTheme = baseSelectListTheme;
-
 export const filterableSelectListTheme = {
-  ...baseSelectListTheme,
-  filterLabel: (text: string) => fg(palette.dim)(text),
+  ...selectListTheme,
+  get filterLabel() {
+    return (text: string) => fg(getPalette().dim)(text);
+  },
 };
 
 export const settingsListTheme: SettingsListTheme = {
-  label: (text, selected) =>
-    selected ? chalk.bold(fg(palette.accent)(text)) : fg(palette.text)(text),
-  value: (text, selected) => (selected ? fg(palette.accentSoft)(text) : fg(palette.dim)(text)),
-  description: (text) => fg(palette.systemText)(text),
-  cursor: fg(palette.accent)("→ "),
-  hint: (text) => fg(palette.dim)(text),
+  label: (text, selected) => {
+    const p = getPalette();
+    return selected ? chalk.bold(fg(p.accent)(text)) : fg(p.text)(text);
+  },
+  value: (text, selected) => {
+    const p = getPalette();
+    return selected ? fg(p.accentSoft)(text) : fg(p.dim)(text);
+  },
+  get description() {
+    return (text: string) => fg(getPalette().systemText)(text);
+  },
+  get cursor() {
+    return fg(getPalette().accent)("→ ");
+  },
+  get hint() {
+    return (text: string) => fg(getPalette().dim)(text);
+  },
 };
 
 export const editorTheme: EditorTheme = {
-  borderColor: (text) => fg(palette.border)(text),
+  get borderColor() {
+    return (text: string) => fg(getPalette().border)(text);
+  },
   selectList: selectListTheme,
 };
 
 export const searchableSelectListTheme: SearchableSelectListTheme = {
-  ...baseSelectListTheme,
-  searchPrompt: (text) => fg(palette.accentSoft)(text),
-  searchInput: (text) => fg(palette.text)(text),
-  matchHighlight: (text) => chalk.bold(fg(palette.accent)(text)),
+  get selectedPrefix() {
+    return (text: string) => fg(getPalette().accent)(text);
+  },
+  get selectedText() {
+    const p = getPalette();
+    return (text: string) => chalk.bold(fg(p.accent)(text));
+  },
+  get description() {
+    return (text: string) => fg(getPalette().dim)(text);
+  },
+  get scrollInfo() {
+    return (text: string) => fg(getPalette().dim)(text);
+  },
+  get noMatch() {
+    return (text: string) => fg(getPalette().dim)(text);
+  },
+  get searchPrompt() {
+    return (text: string) => fg(getPalette().accentSoft)(text);
+  },
+  get searchInput() {
+    return (text: string) => fg(getPalette().text)(text);
+  },
+  get matchHighlight() {
+    const p = getPalette();
+    return (text: string) => chalk.bold(fg(p.accent)(text));
+  },
 };
