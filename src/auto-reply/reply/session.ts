@@ -95,7 +95,8 @@ function forkSessionFromParent(params: {
     };
     fs.writeFileSync(sessionFile, `${JSON.stringify(header)}\n`, "utf-8");
     return { sessionId, sessionFile };
-  } catch {
+  } catch (err) {
+    log.warn(`forkSessionFromParent failed: ${err instanceof Error ? err.message : String(err)}`);
     return null;
   }
 }
@@ -336,8 +337,9 @@ export async function initSessionState(params: {
     sessionEntry.displayName = threadLabel;
   }
   const parentSessionKey = ctx.ParentSessionKey?.trim();
+  const alreadyForked = sessionEntry.forkedFromParent === true;
   if (
-    isNewSession &&
+    !alreadyForked &&
     parentSessionKey &&
     parentSessionKey !== sessionKey &&
     sessionStore[parentSessionKey]
@@ -357,6 +359,7 @@ export async function initSessionState(params: {
       sessionEntry.sessionFile = forked.sessionFile;
       log.warn(`forked session created: file=${forked.sessionFile}`);
     }
+    sessionEntry.forkedFromParent = true;
   }
   const fallbackSessionFile = !sessionEntry.sessionFile
     ? resolveSessionTranscriptPath(sessionEntry.sessionId, agentId, ctx.MessageThreadId)

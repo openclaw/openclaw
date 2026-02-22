@@ -110,6 +110,8 @@ export type SessionEntry = {
   lastThreadId?: string | number;
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
+  /** Set to true after the session has been forked from a parent session (thread inheritance). */
+  forkedFromParent?: boolean;
 };
 
 export function mergeSessionEntry(

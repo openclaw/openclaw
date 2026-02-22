@@ -361,7 +361,9 @@ describe("slack prepareSlackMessage inbound contract", () => {
 
     expect(prepared).toBeTruthy();
     expect(prepared!.ctxPayload.IsFirstThreadTurn).toBeUndefined();
-    expect(prepared!.ctxPayload.ThreadHistoryBody).toBeUndefined();
+    // Thread history is now fetched on every turn (not just the first),
+    // so ThreadHistoryBody is populated when history exists.
+    expect(prepared!.ctxPayload.ThreadHistoryBody).toBeDefined();
   });
 
   it("includes thread_ts and parent_user_id metadata in thread replies", async () => {
