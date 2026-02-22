@@ -377,7 +377,8 @@ export async function runOnboardingWizard(
     nextConfig = authResult.config;
   }
 
-  if (authChoiceFromPrompt && authChoice !== "custom-api-key") {
+  // Always show model selector when auth was chosen interactively so users can pick or confirm the default model.
+  if (authChoiceFromPrompt) {
     const modelSelection = await promptDefaultModel({
       config: nextConfig,
       prompter,
