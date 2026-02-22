@@ -569,7 +569,11 @@ Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
     
     # Root command
     if ($commandPath -eq "") {
-         $completions = @(${program.commands.map((c) => `'${c.name()}'`).join(",")}, ${program.options.map((o) => `'${o.flags.split(" ")[0]}'`).join(",")}) 
+         $completions = @(${program.commands.map((c) => `'${c.name()}'`).join(",")}, ${program.options
+           .map((o) => o.flags.split(" ")[0])
+           .filter(Boolean)
+           .map((f) => `'${f}'`)
+           .join(",")})
          $completions | Where-Object { $_ -like "$wordToComplete*" } | ForEach-Object {
             [System.Management.Automation.CompletionResult]::new($_, $_, 'ParameterName', $_)
          }
