@@ -500,6 +500,8 @@ export async function runEmbeddedPiAgent(
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
+      let consecutiveTimeouts = 0;
+      let lastTimeoutProfileId: string | undefined;
       try {
         while (true) {
           if (runLoopIterations >= MAX_RUN_LOOP_ITERATIONS) {
@@ -951,8 +953,55 @@ export async function runEmbeddedPiAgent(
 
           // Treat timeout as potential rate limit (Antigravity hangs on rate limit)
           // But exclude post-prompt compaction timeouts (model succeeded; no profile issue)
-          const shouldRotate =
-            (!aborted && failoverFailure) || (timedOut && !timedOutDuringCompaction);
+          const isTimeoutFailure = timedOut && !timedOutDuringCompaction;
+          const shouldRotate = (!aborted && failoverFailure) || isTimeoutFailure;
+
+          // Retry logic for timeout failures before rotating auth profile
+          if (isTimeoutFailure && lastProfileId) {
+            const failoverConfig = params.config?.agents?.defaults?.modelFailover;
+            const maxRetries = failoverConfig?.retrySameProfileOnTimeout ?? 1;
+            const backoffMs = failoverConfig?.retryBackoffMs ?? [300, 1200];
+
+            // Track consecutive timeouts on the same profile
+            if (lastProfileId === lastTimeoutProfileId) {
+              consecutiveTimeouts += 1;
+            } else {
+              consecutiveTimeouts = 1;
+              lastTimeoutProfileId = lastProfileId;
+            }
+
+            // Retry on the same profile if retries not exhausted
+            if (consecutiveTimeouts <= maxRetries) {
+              const attemptIndex = Math.min(consecutiveTimeouts - 1, backoffMs.length - 1);
+              const baseDelay = backoffMs[attemptIndex] ?? backoffMs[backoffMs.length - 1] ?? 300;
+              const jitter = Math.random() * 0.3 * baseDelay; // ±30% jitter
+              const delayMs = Math.floor(baseDelay + jitter);
+
+              if (!isProbeSession) {
+                log.warn(
+                  `Profile ${lastProfileId} timed out (attempt ${consecutiveTimeouts}/${maxRetries + 1}). ` +
+                    `Retrying same profile after ${delayMs}ms...`,
+                );
+              }
+
+              await new Promise((resolve) => setTimeout(resolve, delayMs));
+              continue; // Retry with same profile
+            }
+
+            // Retries exhausted, proceed with rotation
+            if (!isProbeSession) {
+              log.warn(
+                `Profile ${lastProfileId} timed out after ${consecutiveTimeouts} attempts. ` +
+                  `Rotating to next account...`,
+              );
+            }
+          }
+
+          // Reset timeout counter on non-timeout failures or successful runs
+          if (!isTimeoutFailure) {
+            consecutiveTimeouts = 0;
+            lastTimeoutProfileId = undefined;
+          }
 
           if (shouldRotate) {
             if (lastProfileId) {
