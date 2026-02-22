@@ -47,6 +47,7 @@ import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { createOllamaStreamFn, OLLAMA_NATIVE_BASE_URL } from "../../ollama-stream.js";
+import { resolveOwnerDisplaySetting } from "../../owner-display.js";
 import {
   isCloudCodeAssistFormatError,
   resolveBootstrapMaxChars,
@@ -505,6 +506,7 @@ export async function runEmbeddedAttempt(
       moduleUrl: import.meta.url,
     });
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
+    const ownerDisplay = resolveOwnerDisplaySetting(params.config);
 
     const appendPrompt = buildEmbeddedSystemPrompt({
       workspaceDir: effectiveWorkspace,
@@ -512,11 +514,8 @@ export async function runEmbeddedAttempt(
       reasoningLevel: params.reasoningLevel ?? "off",
       extraSystemPrompt: params.extraSystemPrompt,
       ownerNumbers: params.ownerNumbers,
-      ownerDisplay: params.config?.commands?.ownerDisplay,
-      ownerDisplaySecret:
-        params.config?.commands?.ownerDisplaySecret ??
-        params.config?.gateway?.auth?.token ??
-        params.config?.gateway?.remote?.token,
+      ownerDisplay: ownerDisplay.ownerDisplay,
+      ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
       reasoningTagHint,
       heartbeatPrompt: isDefaultAgent
         ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
