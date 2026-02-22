@@ -10,9 +10,18 @@
 
 import { execFile as execFileCb } from "node:child_process";
 import { promisify } from "node:util";
-// SecretProvider interface is introduced by PR #16663 (feat: GCP Secret Manager integration).
-// This file depends on that PR landing first. See: https://github.com/openclaw/openclaw/pull/16663
-import type { SecretProvider } from "./secret-resolution.js";
+/**
+ * SecretProvider interface matching PR #16663 (feat: GCP Secret Manager integration).
+ * Once that PR lands, replace this with: import type { SecretProvider } from "./secret-resolution.js"
+ * See: https://github.com/openclaw/openclaw/pull/16663
+ */
+export interface SecretProvider {
+  name: string;
+  getSecret(name: string, version?: string): Promise<string>;
+  setSecret(name: string, value: string): Promise<void>;
+  listSecrets(): Promise<string[]>;
+  testConnection(): Promise<{ ok: boolean; error?: string }>;
+}
 
 const execFileAsync = promisify(execFileCb);
 

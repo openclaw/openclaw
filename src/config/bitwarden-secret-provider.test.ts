@@ -200,10 +200,14 @@ describe("BitwardenSecretProvider", () => {
     it("throws with available fields hint when custom field not found", async () => {
       stubBw({ "get item anthropic-key": JSON.stringify(LOGIN_ITEM) });
       const provider = createProvider();
-      const err = await provider.getSecret("anthropic-key/nonexistent").catch((e: Error) => e);
-      expect(err).toBeInstanceOf(BitwardenCliError);
-      expect(err.message).toMatch(/not found in item/);
-      expect((err as BitwardenCliError).hint).toMatch(/Available fields/);
+      try {
+        await provider.getSecret("anthropic-key/nonexistent");
+        expect.unreachable("should have thrown");
+      } catch (err) {
+        expect(err).toBeInstanceOf(BitwardenCliError);
+        expect((err as BitwardenCliError).message).toMatch(/not found in item/);
+        expect((err as BitwardenCliError).hint).toMatch(/Available fields/);
+      }
     });
 
     it("uses cache for repeated lookups within TTL", async () => {
@@ -384,9 +388,13 @@ describe("BitwardenSecretProvider", () => {
     it("throws helpful error when multiple items match", async () => {
       stubBw({ "get item x": new Error("More than one result was found") });
       const provider = createProvider();
-      const err = await provider.getSecret("x").catch((e: Error) => e);
-      expect(err).toBeInstanceOf(BitwardenCliError);
-      expect(err.message).toMatch(/item ID/i);
+      try {
+        await provider.getSecret("x");
+        expect.unreachable("should have thrown");
+      } catch (err) {
+        expect(err).toBeInstanceOf(BitwardenCliError);
+        expect((err as BitwardenCliError).message).toMatch(/item ID/i);
+      }
     });
   });
 
