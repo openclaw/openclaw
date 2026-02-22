@@ -9,6 +9,7 @@ import { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
+import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { makeProxyFetch } from "./proxy.js";
@@ -180,6 +181,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
 
     // Use grammyjs/runner for concurrent update processing
     let restartAttempts = 0;
+    let webhookCleared = false;
     const runnerOptions = createTelegramRunnerOptions(cfg);
 
     while (!opts.abortSignal?.aborted) {
@@ -217,6 +219,38 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
           throw sleepErr;
         }
         continue;
+      }
+
+      if (!webhookCleared) {
+        try {
+          await withTelegramApiErrorLogging({
+            operation: "deleteWebhook",
+            runtime: opts.runtime,
+            fn: () => bot.api.deleteWebhook({ drop_pending_updates: false }),
+          });
+          webhookCleared = true;
+        } catch (err) {
+          if (opts.abortSignal?.aborted) {
+            return;
+          }
+          if (!isRecoverableTelegramNetworkError(err, { context: "unknown" })) {
+            throw err;
+          }
+          restartAttempts += 1;
+          const delayMs = computeBackoff(TELEGRAM_POLL_RESTART_POLICY, restartAttempts);
+          (opts.runtime?.error ?? console.error)(
+            `Telegram webhook cleanup failed: ${formatErrorMessage(err)}; retrying in ${formatDurationPrecise(delayMs)}.`,
+          );
+          try {
+            await sleepWithAbort(delayMs, opts.abortSignal);
+          } catch (sleepErr) {
+            if (opts.abortSignal?.aborted) {
+              return;
+            }
+            throw sleepErr;
+          }
+          continue;
+        }
       }
 
       const runner = run(bot, runnerOptions);
