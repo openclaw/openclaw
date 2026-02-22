@@ -366,57 +366,19 @@ describe("gateway server auth/connect", () => {
       await expectMissingScopeAfterConnect(port, { scopes: [] });
     });
 
-    test("device-less auth matrix", async () => {
-      const token = resolveGatewayTokenOrEnv();
-      const matrix: Array<{
-        name: string;
-        opts: Parameters<typeof connectReq>[1];
-        expectConnectOk: boolean;
-        expectConnectError?: string;
-        expectStatusError?: string;
-      }> = [
-        {
-          name: "operator + valid shared token => connected with zero scopes",
-          opts: { role: "operator", token, device: null },
-          expectConnectOk: true,
-          expectStatusError: "missing scope",
-        },
-        {
-          name: "node + valid shared token => rejected without device",
-          opts: { role: "node", token, device: null, client: NODE_CLIENT },
-          expectConnectOk: false,
-          expectConnectError: "device identity required",
-        },
-        {
-          name: "operator + invalid shared token => unauthorized",
-          opts: { role: "operator", token: "wrong", device: null },
-          expectConnectOk: false,
-          expectConnectError: "unauthorized",
-        },
-      ];
-
-      for (const scenario of matrix) {
-        const ws = await openWs(port);
-        try {
-          const res = await connectReq(ws, scenario.opts);
-          expect(res.ok, scenario.name).toBe(scenario.expectConnectOk);
-          if (!scenario.expectConnectOk) {
-            expect(res.error?.message ?? "", scenario.name).toContain(
-              String(scenario.expectConnectError ?? ""),
-            );
-            continue;
-          }
-          if (scenario.expectStatusError) {
-            const status = await rpcReq(ws, "status");
-            expect(status.ok, scenario.name).toBe(false);
-            expect(status.error?.message ?? "", scenario.name).toContain(
-              scenario.expectStatusError,
-            );
-          }
-        } finally {
-          ws.close();
-        }
+    test("rejects requested scopes when device identity is omitted", async () => {
+      const ws = await openWs(port);
+      try {
+        const res = await connectReq(ws, { device: null });
+        expect(res.ok).toBe(false);
+        expect(res.error?.message ?? "").toContain("scopes require device identity");
+      } finally {
+        ws.close();
       }
+    });
+
+    test("allows scope-less connect when device identity is omitted", async () => {
+      await expectMissingScopeAfterConnect(port, { device: null, scopes: [] });
     });
 
     test("allows health when scopes are empty", async () => {
@@ -676,6 +638,7 @@ describe("gateway server auth/connect", () => {
       const res = await connectReq(ws, {
         token: "secret",
         device: null,
+        scopes: [],
         client: {
           ...CONTROL_UI_CLIENT,
         },
@@ -740,7 +703,7 @@ describe("gateway server auth/connect", () => {
 
     test("requires device identity when only tailscale auth is available", async () => {
       const ws = await openTailscaleWs(port);
-      const res = await connectReq(ws, { token: "dummy", device: null });
+      const res = await connectReq(ws, { token: "dummy", device: null, scopes: [] });
       expect(res.ok).toBe(false);
       expect(res.error?.message ?? "").toContain("device identity required");
       ws.close();
@@ -748,7 +711,7 @@ describe("gateway server auth/connect", () => {
 
     test("allows shared token to skip device when tailscale auth is enabled", async () => {
       const ws = await openTailscaleWs(port);
-      const res = await connectReq(ws, { token: "secret", device: null });
+      const res = await connectReq(ws, { token: "secret", device: null, scopes: [] });
       expect(res.ok).toBe(true);
       const status = await rpcReq(ws, "status");
       expect(status.ok).toBe(false);
@@ -793,6 +756,7 @@ describe("gateway server auth/connect", () => {
       const res = await connectReq(ws, {
         password: "secret",
         device: null,
+        scopes: [],
         client: {
           ...CONTROL_UI_CLIENT,
         },
@@ -916,12 +880,20 @@ describe("gateway server auth/connect", () => {
       await startRateLimitedTokenServerWithPairedDeviceToken();
     try {
       const wsBadShared = await openWs(port);
-      const badShared = await connectReq(wsBadShared, { token: "wrong", device: null });
+      const badShared = await connectReq(wsBadShared, {
+        token: "wrong",
+        device: null,
+        scopes: [],
+      });
       expect(badShared.ok).toBe(false);
       wsBadShared.close();
 
       const wsSharedLocked = await openWs(port);
-      const sharedLocked = await connectReq(wsSharedLocked, { token: "secret", device: null });
+      const sharedLocked = await connectReq(wsSharedLocked, {
+        token: "secret",
+        device: null,
+        scopes: [],
+      });
       expect(sharedLocked.ok).toBe(false);
       expect(sharedLocked.error?.message ?? "").toContain("retry later");
       wsSharedLocked.close();
@@ -952,7 +924,11 @@ describe("gateway server auth/connect", () => {
       wsDeviceLocked.close();
 
       const wsShared = await openWs(port);
-      const sharedOk = await connectReq(wsShared, { token: "secret", device: null });
+      const sharedOk = await connectReq(wsShared, {
+        token: "secret",
+        device: null,
+        scopes: [],
+      });
       expect(sharedOk.ok).toBe(true);
       wsShared.close();
 
