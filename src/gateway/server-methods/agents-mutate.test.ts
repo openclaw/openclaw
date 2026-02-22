@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   fsAppendFile: vi.fn(async () => {}),
   fsReadFile: vi.fn(async () => ""),
   fsStat: vi.fn(async () => null),
+  fsReaddir: vi.fn(async () => []),
 }));
 
 vi.mock("../../config/config.js", () => ({
@@ -85,6 +86,7 @@ vi.mock("node:fs/promises", async () => {
     appendFile: mocks.fsAppendFile,
     readFile: mocks.fsReadFile,
     stat: mocks.fsStat,
+    readdir: mocks.fsReaddir,
   };
   return { ...patched, default: patched };
 });
@@ -172,6 +174,7 @@ beforeEach(() => {
   mocks.fsStat.mockImplementation(async () => {
     throw createEnoentError();
   });
+  mocks.fsReaddir.mockImplementation(async () => []);
 });
 
 /* ------------------------------------------------------------------ */
@@ -457,5 +460,27 @@ describe("agents.files.list", () => {
 
     const names = await listAgentFileNames();
     expect(names).toContain("BOOTSTRAP.md");
+  });
+
+  it("includes markdown files from memory/", async () => {
+    mocks.fsReaddir.mockResolvedValue([
+      { name: "2026-02-22.md", isFile: () => true },
+      { name: "notes.txt", isFile: () => true },
+      { name: "subdir", isFile: () => false },
+    ]);
+    mocks.fsStat.mockImplementation(async (filePath: unknown) => {
+      if (String(filePath).endsWith("memory/2026-02-22.md")) {
+        return {
+          isFile: () => true,
+          size: 123,
+          mtimeMs: 1700000000000,
+        };
+      }
+      throw createEnoentError();
+    });
+
+    const names = await listAgentFileNames();
+    expect(names).toContain("memory/2026-02-22.md");
+    expect(names).not.toContain("memory/notes.txt");
   });
 });
