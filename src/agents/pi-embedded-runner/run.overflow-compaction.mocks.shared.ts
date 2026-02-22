@@ -1,5 +1,16 @@
 import { vi } from "vitest";
 
+export const mockedGlobalHookRunner = {
+  hasHooks: vi.fn(() => false),
+  runBeforeAgentStart: vi.fn(async () => undefined),
+  runBeforePromptBuild: vi.fn(async () => undefined),
+  runBeforeModelResolve: vi.fn(async () => undefined),
+};
+
+vi.mock("../../plugins/hook-runner-global.js", () => ({
+  getGlobalHookRunner: vi.fn(() => mockedGlobalHookRunner),
+}));
+
 vi.mock("../auth-profiles.js", () => ({
   isProfileInCooldown: vi.fn(() => false),
   markAuthProfileFailure: vi.fn(async () => {}),

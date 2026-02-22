@@ -14,6 +14,11 @@ import { resolveChannelCapabilities } from "../../../config/channel-capabilities
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+import type {
+  PluginHookAgentContext,
+  PluginHookBeforeAgentStartResult,
+  PluginHookBeforePromptBuildResult,
+} from "../../../plugins/types.js";
 import {
   isCronSessionKey,
   isSubagentSessionKey,
@@ -111,6 +116,18 @@ import {
 import { detectAndLoadPromptImages } from "./images.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
+type PromptBuildHookRunner = {
+  hasHooks: (hookName: "before_prompt_build" | "before_agent_start") => boolean;
+  runBeforePromptBuild: (
+    event: { prompt: string; messages: unknown[] },
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginHookBeforePromptBuildResult | undefined>;
+  runBeforeAgentStart: (
+    event: { prompt: string; messages: unknown[] },
+    ctx: PluginHookAgentContext,
+  ) => Promise<PluginHookBeforeAgentStartResult | undefined>;
+};
+
 export function injectHistoryImagesIntoMessages(
   messages: AgentMessage[],
   historyImagesByIndex: Map<number, ImageContent[]>,
@@ -157,6 +174,53 @@ export function injectHistoryImagesIntoMessages(
   }
 
   return didMutate;
+}
+
+export async function resolvePromptBuildHookResult(params: {
+  prompt: string;
+  messages: unknown[];
+  hookCtx: PluginHookAgentContext;
+  hookRunner?: PromptBuildHookRunner | null;
+  legacyBeforeAgentStartResult?: PluginHookBeforeAgentStartResult;
+}): Promise<PluginHookBeforePromptBuildResult> {
+  const promptBuildResult = params.hookRunner?.hasHooks("before_prompt_build")
+    ? await params.hookRunner
+        .runBeforePromptBuild(
+          {
+            prompt: params.prompt,
+            messages: params.messages,
+          },
+          params.hookCtx,
+        )
+        .catch((hookErr: unknown) => {
+          log.warn(`before_prompt_build hook failed: ${String(hookErr)}`);
+          return undefined;
+        })
+    : undefined;
+  const legacyResult =
+    params.legacyBeforeAgentStartResult ??
+    (params.hookRunner?.hasHooks("before_agent_start")
+      ? await params.hookRunner
+          .runBeforeAgentStart(
+            {
+              prompt: params.prompt,
+              messages: params.messages,
+            },
+            params.hookCtx,
+          )
+          .catch((hookErr: unknown) => {
+            log.warn(
+              `before_agent_start hook (legacy prompt build path) failed: ${String(hookErr)}`,
+            );
+            return undefined;
+          })
+      : undefined);
+  return {
+    systemPrompt: promptBuildResult?.systemPrompt ?? legacyResult?.systemPrompt,
+    prependContext: [promptBuildResult?.prependContext, legacyResult?.prependContext]
+      .filter((value): value is string => Boolean(value))
+      .join("\n\n"),
+  };
 }
 
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
@@ -934,42 +998,13 @@ export async function runEmbeddedAttempt(
           workspaceDir: params.workspaceDir,
           messageProvider: params.messageProvider ?? undefined,
         };
-        const promptBuildResult = hookRunner?.hasHooks("before_prompt_build")
-          ? await hookRunner
-              .runBeforePromptBuild(
-                {
-                  prompt: params.prompt,
-                  messages: activeSession.messages,
-                },
-                hookCtx,
-              )
-              .catch((hookErr: unknown) => {
-                log.warn(`before_prompt_build hook failed: ${String(hookErr)}`);
-                return undefined;
-              })
-          : undefined;
-        const legacyResult = hookRunner?.hasHooks("before_agent_start")
-          ? await hookRunner
-              .runBeforeAgentStart(
-                {
-                  prompt: params.prompt,
-                  messages: activeSession.messages,
-                },
-                hookCtx,
-              )
-              .catch((hookErr: unknown) => {
-                log.warn(
-                  `before_agent_start hook (legacy prompt build path) failed: ${String(hookErr)}`,
-                );
-                return undefined;
-              })
-          : undefined;
-        const hookResult = {
-          systemPrompt: promptBuildResult?.systemPrompt ?? legacyResult?.systemPrompt,
-          prependContext: [promptBuildResult?.prependContext, legacyResult?.prependContext]
-            .filter((value): value is string => Boolean(value))
-            .join("\n\n"),
-        };
+        const hookResult = await resolvePromptBuildHookResult({
+          prompt: params.prompt,
+          messages: activeSession.messages,
+          hookCtx,
+          hookRunner,
+          legacyBeforeAgentStartResult: params.legacyBeforeAgentStartResult,
+        });
         {
           if (hookResult?.prependContext) {
             effectivePrompt = `${hookResult.prependContext}\n\n${params.prompt}`;

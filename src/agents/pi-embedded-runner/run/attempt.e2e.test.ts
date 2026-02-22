@@ -1,7 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
-import { describe, expect, it } from "vitest";
-import { injectHistoryImagesIntoMessages } from "./attempt.js";
+import { describe, expect, it, vi } from "vitest";
+import { injectHistoryImagesIntoMessages, resolvePromptBuildHookResult } from "./attempt.js";
 
 describe("injectHistoryImagesIntoMessages", () => {
   const image: ImageContent = { type: "image", data: "abc", mimeType: "image/png" };
@@ -56,5 +56,53 @@ describe("injectHistoryImagesIntoMessages", () => {
     expect(didMutate).toBe(false);
     const firstAssistant = messages[0] as Extract<AgentMessage, { role: "assistant" }> | undefined;
     expect(firstAssistant?.content).toBe("noop");
+  });
+});
+
+describe("resolvePromptBuildHookResult", () => {
+  it("reuses precomputed legacy before_agent_start result without invoking hook again", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn(
+        (hookName: "before_prompt_build" | "before_agent_start") =>
+          hookName === "before_agent_start",
+      ),
+      runBeforePromptBuild: vi.fn(async () => undefined),
+      runBeforeAgentStart: vi.fn(async () => ({ prependContext: "from-hook" })),
+    };
+    const result = await resolvePromptBuildHookResult({
+      prompt: "hello",
+      messages: [],
+      hookCtx: {},
+      hookRunner,
+      legacyBeforeAgentStartResult: { prependContext: "from-cache", systemPrompt: "legacy-system" },
+    });
+
+    expect(hookRunner.runBeforeAgentStart).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      prependContext: "from-cache",
+      systemPrompt: "legacy-system",
+    });
+  });
+
+  it("calls legacy hook when precomputed result is absent", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn(
+        (hookName: "before_prompt_build" | "before_agent_start") =>
+          hookName === "before_agent_start",
+      ),
+      runBeforePromptBuild: vi.fn(async () => undefined),
+      runBeforeAgentStart: vi.fn(async () => ({ prependContext: "from-hook" })),
+    };
+    const messages = [{ role: "user", content: "ctx" }];
+    const result = await resolvePromptBuildHookResult({
+      prompt: "hello",
+      messages,
+      hookCtx: {},
+      hookRunner,
+    });
+
+    expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledTimes(1);
+    expect(hookRunner.runBeforeAgentStart).toHaveBeenCalledWith({ prompt: "hello", messages }, {});
+    expect(result.prependContext).toBe("from-hook");
   });
 });
