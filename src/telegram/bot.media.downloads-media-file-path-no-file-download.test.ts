@@ -225,7 +225,6 @@ describe("telegram media groups", () => {
       const runtimeError = vi.fn();
       const { handler, replySpy } = await createBotHandlerWithOptions({ runtimeError });
       const fetchSpy = mockTelegramPngDownload();
-
       const first = handler({
         message: {
           chat: { id: 42, type: "private" },
@@ -277,7 +276,6 @@ describe("telegram media groups", () => {
     async () => {
       const { handler, replySpy } = await createBotHandler();
       const fetchSpy = mockTelegramPngDownload();
-
       const first = handler({
         message: {
           chat: { id: 42, type: "private" },
@@ -334,6 +332,7 @@ describe("telegram forwarded bursts", () => {
       const runtimeError = vi.fn();
       const { handler, replySpy } = await createBotHandlerWithOptions({ runtimeError });
       const fetchSpy = mockTelegramPngDownload();
+      vi.useFakeTimers();
 
       try {
         await handler({
@@ -362,12 +361,8 @@ describe("telegram forwarded bursts", () => {
           getFile: async () => ({ file_path: "photos/fwd1.jpg" }),
         });
 
-        await vi.waitFor(
-          () => {
-            expect(replySpy).toHaveBeenCalledTimes(1);
-          },
-          { timeout: FORWARD_BURST_TEST_TIMEOUT_MS, interval: 10 },
-        );
+        await vi.runAllTimersAsync();
+        expect(replySpy).toHaveBeenCalledTimes(1);
 
         expect(runtimeError).not.toHaveBeenCalled();
         const payload = replySpy.mock.calls[0][0];
@@ -375,6 +370,7 @@ describe("telegram forwarded bursts", () => {
         expect(payload.MediaPaths).toHaveLength(1);
       } finally {
         fetchSpy.mockRestore();
+        vi.useRealTimers();
       }
     },
     FORWARD_BURST_TEST_TIMEOUT_MS,
@@ -589,49 +585,49 @@ describe("telegram text fragments", () => {
     async () => {
       onSpy.mockClear();
       replySpy.mockClear();
+      vi.useFakeTimers();
+      try {
+        createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
+        const handler = onSpy.mock.calls.find((call) => call[0] === "message")?.[1] as (
+          ctx: Record<string, unknown>,
+        ) => Promise<void>;
+        expect(handler).toBeDefined();
 
-      createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
-      const handler = onSpy.mock.calls.find((call) => call[0] === "message")?.[1] as (
-        ctx: Record<string, unknown>,
-      ) => Promise<void>;
-      expect(handler).toBeDefined();
+        const part1 = "A".repeat(4050);
+        const part2 = "B".repeat(50);
 
-      const part1 = "A".repeat(4050);
-      const part2 = "B".repeat(50);
+        await handler({
+          message: {
+            chat: { id: 42, type: "private" },
+            message_id: 10,
+            date: 1736380800,
+            text: part1,
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({}),
+        });
 
-      await handler({
-        message: {
-          chat: { id: 42, type: "private" },
-          message_id: 10,
-          date: 1736380800,
-          text: part1,
-        },
-        me: { username: "openclaw_bot" },
-        getFile: async () => ({}),
-      });
+        await handler({
+          message: {
+            chat: { id: 42, type: "private" },
+            message_id: 11,
+            date: 1736380801,
+            text: part2,
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({}),
+        });
 
-      await handler({
-        message: {
-          chat: { id: 42, type: "private" },
-          message_id: 11,
-          date: 1736380801,
-          text: part2,
-        },
-        me: { username: "openclaw_bot" },
-        getFile: async () => ({}),
-      });
+        expect(replySpy).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(TEXT_FRAGMENT_FLUSH_MS * 2);
+        expect(replySpy).toHaveBeenCalledTimes(1);
 
-      expect(replySpy).not.toHaveBeenCalled();
-      await vi.waitFor(
-        () => {
-          expect(replySpy).toHaveBeenCalledTimes(1);
-        },
-        { timeout: TEXT_FRAGMENT_FLUSH_MS * 2, interval: 10 },
-      );
-
-      const payload = replySpy.mock.calls[0][0] as { RawBody?: string; Body?: string };
-      expect(payload.RawBody).toContain(part1.slice(0, 32));
-      expect(payload.RawBody).toContain(part2.slice(0, 32));
+        const payload = replySpy.mock.calls[0][0] as { RawBody?: string; Body?: string };
+        expect(payload.RawBody).toContain(part1.slice(0, 32));
+        expect(payload.RawBody).toContain(part2.slice(0, 32));
+      } finally {
+        vi.useRealTimers();
+      }
     },
     TEXT_FRAGMENT_TEST_TIMEOUT_MS,
   );
