@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -129,6 +130,35 @@ async function acquireStaleLinuxLock(env: NodeJS.ProcessEnv) {
   staleProcSpy.mockRestore();
 }
 
+async function listenOnLoopbackPort() {
+  const server = net.createServer();
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve();
+    });
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("failed to resolve loopback test port");
+  }
+  return {
+    port: address.port,
+    close: async () => {
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => {
+          if (err) {
+            reject(err);
+            return;
+          }
+          resolve();
+        });
+      });
+    },
+  };
+}
+
 describe("gateway lock", () => {
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-lock-"));
@@ -225,6 +255,50 @@ describe("gateway lock", () => {
     procSpy.mockRestore();
     await acquireStaleLinuxLock(env);
     statSpy.mockRestore();
+  });
+
+  it("treats lock as stale when owner pid is alive but configured port is free", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    await writeLockFile(env, {
+      startTime: 111,
+      createdAt: new Date().toISOString(),
+    });
+    const listener = await listenOnLoopbackPort();
+    const port = listener.port;
+    await listener.close();
+
+    const lock = await acquireForTest(env, {
+      timeoutMs: 80,
+      pollIntervalMs: 5,
+      staleMs: 10_000,
+      platform: "darwin",
+      port,
+    });
+    expect(lock).not.toBeNull();
+    await lock?.release();
+  });
+
+  it("keeps lock when configured port is busy and owner pid is alive", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    await writeLockFile(env, {
+      startTime: 111,
+      createdAt: new Date().toISOString(),
+    });
+    const listener = await listenOnLoopbackPort();
+    try {
+      const pending = acquireForTest(env, {
+        timeoutMs: 20,
+        pollIntervalMs: 2,
+        staleMs: 10_000,
+        platform: "darwin",
+        port: listener.port,
+      });
+      await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
+    } finally {
+      await listener.close();
+    }
   });
 
   it("returns null when multi-gateway override is enabled", async () => {
