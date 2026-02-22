@@ -192,7 +192,44 @@ function normalizeSafeBinProfileName(raw: string): string | null {
   return name.length > 0 ? name : null;
 }
 
-function normalizeSafeBinProfileFixtures(
+function normalizeFixtureLimit(raw: number | undefined): number | undefined {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    return undefined;
+  }
+  const next = Math.trunc(raw);
+  return next >= 0 ? next : undefined;
+}
+
+function normalizeFixtureFlags(
+  flags: readonly string[] | undefined,
+): readonly string[] | undefined {
+  if (!Array.isArray(flags) || flags.length === 0) {
+    return undefined;
+  }
+  const normalized = Array.from(
+    new Set(flags.map((flag) => flag.trim()).filter((flag) => flag.length > 0)),
+  ).toSorted((a, b) => a.localeCompare(b));
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeSafeBinProfileFixture(fixture: SafeBinProfileFixture): SafeBinProfileFixture {
+  const minPositional = normalizeFixtureLimit(fixture.minPositional);
+  const maxPositionalRaw = normalizeFixtureLimit(fixture.maxPositional);
+  const maxPositional =
+    minPositional !== undefined &&
+    maxPositionalRaw !== undefined &&
+    maxPositionalRaw < minPositional
+      ? minPositional
+      : maxPositionalRaw;
+  return {
+    minPositional,
+    maxPositional,
+    allowedValueFlags: normalizeFixtureFlags(fixture.allowedValueFlags),
+    deniedFlags: normalizeFixtureFlags(fixture.deniedFlags),
+  };
+}
+
+export function normalizeSafeBinProfileFixtures(
   fixtures?: SafeBinProfileFixtures | null,
 ): Record<string, SafeBinProfileFixture> {
   const normalized: Record<string, SafeBinProfileFixture> = {};
@@ -204,12 +241,7 @@ function normalizeSafeBinProfileFixtures(
     if (!name) {
       continue;
     }
-    normalized[name] = {
-      minPositional: fixture.minPositional,
-      maxPositional: fixture.maxPositional,
-      allowedValueFlags: fixture.allowedValueFlags,
-      deniedFlags: fixture.deniedFlags,
-    };
+    normalized[name] = normalizeSafeBinProfileFixture(fixture);
   }
   return normalized;
 }

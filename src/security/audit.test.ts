@@ -296,6 +296,70 @@ describe("security audit", () => {
     expect(hasFinding(res, "tools.exec.host_sandbox_no_sandbox_agents", "warn")).toBe(true);
   });
 
+  it("warns for interpreter safeBins entries without explicit profiles", async () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        exec: {
+          safeBins: ["python3"],
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "ops",
+            tools: {
+              exec: {
+                safeBins: ["node"],
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    const res = await audit(cfg);
+
+    expect(hasFinding(res, "tools.exec.safe_bins_interpreter_unprofiled", "warn")).toBe(true);
+  });
+
+  it("does not warn for interpreter safeBins when explicit profiles are present", async () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        exec: {
+          safeBins: ["python3"],
+          safeBinProfiles: {
+            python3: {
+              maxPositional: 0,
+            },
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "ops",
+            tools: {
+              exec: {
+                safeBins: ["node"],
+                safeBinProfiles: {
+                  node: {
+                    maxPositional: 0,
+                  },
+                },
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    const res = await audit(cfg);
+
+    expect(
+      res.findings.some((f) => f.checkId === "tools.exec.safe_bins_interpreter_unprofiled"),
+    ).toBe(false);
+  });
+
   it("warns when loopback control UI lacks trusted proxies", async () => {
     const cfg: OpenClawConfig = {
       gateway: {
