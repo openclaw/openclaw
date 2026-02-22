@@ -110,9 +110,8 @@ export function resolveTranscriptPolicy(params: {
       ? "strict"
       : undefined;
   const repairToolUseResultPairing = isGoogle || isAnthropic;
-  const sanitizeThoughtSignatures = isOpenRouterGemini
-    ? { allowBase64Only: true, includeCamelCase: true }
-    : undefined;
+  const sanitizeThoughtSignatures =
+    isOpenRouterGemini || isGoogle ? { allowBase64Only: true, includeCamelCase: true } : undefined;
   const sanitizeThinkingSignatures = isAntigravityClaudeModel;
 
   return {
