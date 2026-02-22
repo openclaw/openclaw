@@ -133,11 +133,13 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     setReaction: async (emoji) => {
       await reactMessageDiscord(messageChannelId, message.id, emoji, {
         rest: client.rest as never,
+        accountId,
       });
     },
     removeReaction: async (emoji) => {
       await removeReactionDiscord(messageChannelId, message.id, emoji, {
         rest: client.rest as never,
+        accountId,
       });
     },
   };

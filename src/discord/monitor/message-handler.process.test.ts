@@ -169,7 +169,12 @@ describe("processDiscordMessage ack reactions", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
 
-    expect(sendMocks.reactMessageDiscord.mock.calls[0]).toEqual(["c1", "m1", "👀", { rest: {} }]);
+    expect(sendMocks.reactMessageDiscord.mock.calls[0]).toEqual([
+      "c1",
+      "m1",
+      "👀",
+      { rest: {}, accountId: "default" },
+    ]);
   });
 
   it("uses preflight-resolved messageChannelId when message.channelId is missing", async () => {
@@ -191,7 +196,29 @@ describe("processDiscordMessage ack reactions", () => {
       "fallback-channel",
       "m1",
       "👀",
-      { rest: {} },
+      { rest: {}, accountId: "default" },
+    ]);
+  });
+
+  it("passes accountId to reactMessageDiscord for named accounts (no default token)", async () => {
+    // Regression test for #22938: with named accounts (no root discord.token),
+    // the ack reaction was silently failing because accountId was not forwarded
+    // to reactMessageDiscord, causing it to fall back to accountId="default"
+    // which has no token configured.
+    const ctx = await createBaseContext({
+      accountId: "coach_claw",
+      shouldRequireMention: true,
+      effectiveWasMentioned: true,
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    expect(sendMocks.reactMessageDiscord.mock.calls[0]).toEqual([
+      "c1",
+      "m1",
+      "👀",
+      { rest: {}, accountId: "coach_claw" },
     ]);
   });
 
