@@ -295,9 +295,12 @@ afterEach(() => {
     urlSource: "local loopback",
     message: "",
   });
-  listDevicePairing.mockReset();
-  approveDevicePairing.mockReset();
-  summarizeDeviceTokens.mockReset();
+  listDevicePairing.mockClear();
+  listDevicePairing.mockResolvedValue({ pending: [], paired: [] });
+  approveDevicePairing.mockClear();
+  approveDevicePairing.mockResolvedValue(undefined);
+  summarizeDeviceTokens.mockClear();
+  summarizeDeviceTokens.mockReturnValue(undefined);
   withProgress.mockClear();
   runtime.log.mockClear();
   runtime.error.mockClear();
