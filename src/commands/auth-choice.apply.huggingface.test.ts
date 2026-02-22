@@ -127,4 +127,37 @@ describe("applyAuthChoiceHuggingface", () => {
     const parsed = await readAuthProfiles(agentDir);
     expect(parsed.profiles?.["huggingface:default"]?.key).toBe("hf-opts-token");
   });
+
+  it("accepts mixed-case tokenProvider from opts without prompting", async () => {
+    const agentDir = await setupTempState();
+    delete process.env.HF_TOKEN;
+    delete process.env.HUGGINGFACE_HUB_TOKEN;
+
+    const text = vi.fn().mockResolvedValue("hf-text-token");
+    const select: WizardPrompter["select"] = vi.fn(
+      async (params) => params.options?.[0]?.value as never,
+    );
+    const confirm = vi.fn(async () => true);
+    const prompter = createHuggingfacePrompter({ text, select, confirm });
+    const runtime = createExitThrowingRuntime();
+
+    const result = await applyAuthChoiceHuggingface({
+      authChoice: "huggingface-api-key",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+      opts: {
+        tokenProvider: "  HuGgInGfAcE  ",
+        token: "hf-opts-mixed",
+      },
+    });
+
+    expect(result).not.toBeNull();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(text).not.toHaveBeenCalled();
+
+    const parsed = await readAuthProfiles(agentDir);
+    expect(parsed.profiles?.["huggingface:default"]?.key).toBe("hf-opts-mixed");
+  });
 });
