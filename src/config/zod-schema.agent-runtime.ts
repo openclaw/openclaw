@@ -520,6 +520,18 @@ export const MemorySearchSchema = z
       .object({
         modelPath: z.string().optional(),
         modelCacheDir: z.string().optional(),
+        gpu: z
+          .union([
+            z.literal("auto"),
+            z.literal("metal"),
+            z.literal("cuda"),
+            z.literal("vulkan"),
+            z.literal(false),
+          ])
+          .optional()
+          .describe(
+            "GPU compute backend for local embeddings. false = CPU only, auto = best available (default).",
+          ),
       })
       .strict()
       .optional(),

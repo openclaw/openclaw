@@ -91,4 +91,96 @@ describe("config schema regressions", () => {
       expect(res.issues[0]?.path).toBe("channels.imessage.attachmentRoots.0");
     }
   });
+
+  it("accepts memorySearch.local.gpu = false (CPU only)", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "local",
+            local: {
+              modelPath: "/path/to/model.gguf",
+              gpu: false,
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it('accepts memorySearch.local.gpu = "metal"', () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "local",
+            local: {
+              modelPath: "/path/to/model.gguf",
+              gpu: "metal",
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects memorySearch.local.gpu with invalid value", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "local",
+            local: {
+              gpu: "opengl",
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
+
+  it('accepts memorySearch.local.gpu = "auto"', () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "local",
+            local: { gpu: "auto" },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it('accepts memorySearch.local.gpu = "cuda"', () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "local",
+            local: { gpu: "cuda" },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it('accepts memorySearch.local.gpu = "vulkan"', () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "local",
+            local: { gpu: "vulkan" },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
 });

@@ -382,6 +382,7 @@ agents: {
 
 - 默认本地嵌入模型：`hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf`（约 0.6 GB）。
 - 当 `memorySearch.provider = "local"` 时，`node-llama-cpp` 解析 `modelPath`；如果 GGUF 缺失，它会**自动下载**到缓存（或 `local.modelCacheDir`，如果已设置），然后加载它。下载在重试时会续传。
+- `local.gpu`：控制本地 embedding 的 GPU 计算后端。可选值：`"auto"`（默认，自动选最佳）、`"metal"`（仅 macOS）、`"cuda"`（NVIDIA）、`"vulkan"`（跨平台）、`false`（纯 CPU）。**注意：** 设置 `gpu: false` 或当前平台不支持的后端时，若无预编译 binary，会触发从源码编译（约 10-20 分钟）。
 - 原生构建要求：运行 `pnpm approve-builds`，选择 `node-llama-cpp`，然后运行 `pnpm rebuild node-llama-cpp`。
 - 回退：如果本地设置失败且 `memorySearch.fallback = "openai"`，我们自动切换到远程嵌入（`openai/text-embedding-3-small`，除非被覆盖）并记录原因。
 

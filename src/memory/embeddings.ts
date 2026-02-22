@@ -60,6 +60,7 @@ export type EmbeddingProviderOptions = {
   local?: {
     modelPath?: string;
     modelCacheDir?: string;
+    gpu?: "auto" | "metal" | "cuda" | "vulkan" | false;
   };
 };
 
@@ -102,7 +103,14 @@ async function createLocalEmbeddingProvider(
 
   const ensureContext = async () => {
     if (!llama) {
-      llama = await getLlama({ logLevel: LlamaLogLevel.error });
+      const gpuOption = options.local?.gpu;
+      // Build options object; spread typed as `object` to satisfy tsgo's strict
+      // overload resolution on the lazy-loaded getLlama function.
+      const llamaArgs =
+        gpuOption !== undefined
+          ? { logLevel: LlamaLogLevel.error, gpu: gpuOption }
+          : { logLevel: LlamaLogLevel.error };
+      llama = await getLlama(llamaArgs);
     }
     if (!embeddingModel) {
       const resolved = await resolveModelFile(modelPath, modelCacheDir || undefined);

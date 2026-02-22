@@ -19,6 +19,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Memory/Local: add `memorySearch.local.gpu` config option to control GPU compute backend for local embeddings (workaround for Metal GPU OOM on Apple Silicon) and surface indexer errors instead of silently swallowing them. (#20882) Thanks @irchelper.
+
 - Gateway/Subagents: guard gateway and subagent session-key/message trim paths against undefined inputs to prevent early `Cannot read properties of undefined (reading 'trim')` crashes during subagent spawn and wait flows.
 - Agents/Workspace: guard `resolveUserPath` against undefined/null input to prevent `Cannot read properties of undefined (reading 'trim')` crashes when workspace paths are missing in embedded runner flows.
 - Auth/Profiles: keep active `cooldownUntil`/`disabledUntil` windows immutable across retries so mid-window failures cannot extend recovery indefinitely; only recompute a backoff window after the previous deadline has expired. This resolves cron/inbound retry loops that could trap gateways until manual `usageStats` cleanup. (#23516, #23536) Thanks @arosstale.

@@ -6,6 +6,7 @@ import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope
 import type { ResolvedMemorySearchConfig } from "../agents/memory-search.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   createEmbeddingProvider,
@@ -194,7 +195,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return;
     }
     void this.sync({ reason: "session-start" }).catch((err) => {
-      log.warn(`memory sync failed (session-start): ${String(err)}`);
+      log.error(`[memory/embed] memory sync failed (session-start): ${formatErrorMessage(err)}`);
     });
     if (key) {
       this.sessionWarm.add(key);
@@ -212,7 +213,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     void this.warmSession(opts?.sessionKey);
     if (this.settings.sync.onSearch && (this.dirty || this.sessionsDirty)) {
       void this.sync({ reason: "search" }).catch((err) => {
-        log.warn(`memory sync failed (search): ${String(err)}`);
+        log.error(`[memory/embed] memory sync failed (search): ${formatErrorMessage(err)}`);
       });
     }
     const cleaned = query.trim();
