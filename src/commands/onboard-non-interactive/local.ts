@@ -2,6 +2,10 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveGatewayPort, writeConfigFile } from "../../config/config.js";
 import { logConfigUpdated } from "../../config/logging.js";
+import {
+  upsertGatewayTokenDotEnv,
+  withGatewayTokenEnvReference,
+} from "../../gateway/gateway-token-env.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME } from "../daemon-runtime.js";
 import { healthCommand } from "../health.js";
@@ -77,8 +81,20 @@ export async function runNonInteractiveOnboardingLocal(params: {
 
   nextConfig = applyNonInteractiveSkillsConfig({ nextConfig, opts, runtime });
 
+  if (gatewayResult.authMode === "token" && gatewayResult.gatewayToken) {
+    await upsertGatewayTokenDotEnv({
+      token: gatewayResult.gatewayToken,
+      env: process.env,
+    });
+  }
+
   nextConfig = applyWizardMetadata(nextConfig, { command: "onboard", mode });
-  await writeConfigFile(nextConfig);
+  await writeConfigFile(
+    withGatewayTokenEnvReference(
+      nextConfig,
+      gatewayResult.authMode === "token" ? gatewayResult.gatewayToken : undefined,
+    ),
+  );
   logConfigUpdated(runtime);
 
   await ensureWorkspaceAndSessions(workspaceDir, runtime, {

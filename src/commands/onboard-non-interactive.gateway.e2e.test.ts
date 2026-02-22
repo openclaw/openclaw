@@ -131,7 +131,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     envSnapshot.restore();
   });
 
-  it("writes gateway token auth into config and gateway enforces it", async () => {
+  it("writes gateway token env reference into config and gateway enforces it", async () => {
     await withStateDir("state-noninteractive-", async (stateDir) => {
       const token = "tok_test_123";
       const workspace = path.join(stateDir, "openclaw");
@@ -161,10 +161,15 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
       expect(cfg?.agents?.defaults?.workspace).toBe(workspace);
       expect(cfg?.gateway?.auth?.mode).toBe("token");
-      expect(cfg?.gateway?.auth?.token).toBe(token);
+      expect(cfg?.gateway?.auth?.token).toBe("${OPENCLAW_GATEWAY_TOKEN}");
+      const dotenvRaw = await fs.readFile(path.join(stateDir, ".env"), "utf8");
+      expect(dotenvRaw).toContain(`OPENCLAW_GATEWAY_TOKEN=${token}`);
+
+      const { loadConfig } = await import("../config/config.js");
+      const resolved = loadConfig();
 
       await expectGatewayTokenAuth({
-        authConfig: cfg.gateway?.auth,
+        authConfig: resolved.gateway?.auth,
         token,
         env: process.env,
       });
@@ -206,7 +211,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     });
   }, 60_000);
 
-  it("auto-generates token auth when binding LAN and persists the token", async () => {
+  it("auto-generates token auth when binding LAN and persists token in dotenv", async () => {
     if (process.platform === "win32") {
       // Windows runner occasionally drops the temp config write in this flow; skip to keep CI green.
       return;
@@ -246,11 +251,16 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       expect(cfg.gateway?.bind).toBe("lan");
       expect(cfg.gateway?.port).toBe(port);
       expect(cfg.gateway?.auth?.mode).toBe("token");
-      const token = cfg.gateway?.auth?.token ?? "";
+      expect(cfg.gateway?.auth?.token).toBe("${OPENCLAW_GATEWAY_TOKEN}");
+      const dotenvRaw = await fs.readFile(path.join(stateDir, ".env"), "utf8");
+      const match = dotenvRaw.match(/OPENCLAW_GATEWAY_TOKEN=(.+)/);
+      const token = match?.[1]?.trim().replace(/^"|"$/g, "") ?? "";
       expect(token.length).toBeGreaterThan(8);
 
+      const { loadConfig } = await import("../config/config.js");
+      const resolved = loadConfig();
       await expectGatewayTokenAuth({
-        authConfig: cfg.gateway?.auth,
+        authConfig: resolved.gateway?.auth,
         token,
         env: process.env,
       });

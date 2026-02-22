@@ -6,6 +6,7 @@ import type {
 } from "../config/config.js";
 import { writeConfigFile } from "../config/config.js";
 import { resolveGatewayAuth, type ResolvedGatewayAuth } from "./auth.js";
+import { upsertGatewayTokenDotEnv, withGatewayTokenEnvReference } from "./gateway-token-env.js";
 
 export function mergeGatewayAuthConfig(
   base?: GatewayAuthConfig,
@@ -125,12 +126,17 @@ export async function ensureGatewayStartupAuth(params: {
       },
     },
   };
+  const persistedCfg = withGatewayTokenEnvReference(nextCfg, generatedToken);
   const persist = shouldPersistGeneratedToken({
     persistRequested,
     resolvedAuth: resolved,
   });
   if (persist) {
-    await writeConfigFile(nextCfg);
+    await upsertGatewayTokenDotEnv({
+      token: generatedToken,
+      env,
+    });
+    await writeConfigFile(persistedCfg);
   }
 
   const nextAuth = resolveGatewayAuthFromConfig({

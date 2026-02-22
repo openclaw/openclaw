@@ -3,6 +3,10 @@ import type { OpenClawConfig } from "../config/config.js";
 
 const mocks = vi.hoisted(() => ({
   writeConfigFile: vi.fn(async (_cfg: OpenClawConfig) => {}),
+  upsertGatewayTokenDotEnv: vi.fn(async () => ({
+    dotenvPath: "/tmp/.openclaw/.env",
+    changed: true,
+  })),
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -10,6 +14,14 @@ vi.mock("../config/config.js", async (importOriginal) => {
   return {
     ...actual,
     writeConfigFile: mocks.writeConfigFile,
+  };
+});
+
+vi.mock("./gateway-token-env.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./gateway-token-env.js")>();
+  return {
+    ...actual,
+    upsertGatewayTokenDotEnv: mocks.upsertGatewayTokenDotEnv,
   };
 });
 
@@ -37,6 +49,7 @@ describe("ensureGatewayStartupAuth", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     mocks.writeConfigFile.mockClear();
+    mocks.upsertGatewayTokenDotEnv.mockClear();
   });
 
   async function expectNoTokenGeneration(cfg: OpenClawConfig, mode: string) {
@@ -50,6 +63,7 @@ describe("ensureGatewayStartupAuth", () => {
     expect(result.persistedGeneratedToken).toBe(false);
     expect(result.auth.mode).toBe(mode);
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(mocks.upsertGatewayTokenDotEnv).not.toHaveBeenCalled();
   }
 
   it("generates and persists a token when startup auth is missing", async () => {
@@ -64,9 +78,13 @@ describe("ensureGatewayStartupAuth", () => {
     expect(result.auth.mode).toBe("token");
     expect(result.auth.token).toBe(result.generatedToken);
     expect(mocks.writeConfigFile).toHaveBeenCalledTimes(1);
+    expect(mocks.upsertGatewayTokenDotEnv).toHaveBeenCalledWith({
+      token: result.generatedToken,
+      env: {} as NodeJS.ProcessEnv,
+    });
     const persisted = mocks.writeConfigFile.mock.calls[0]?.[0];
     expect(persisted?.gateway?.auth?.mode).toBe("token");
-    expect(persisted?.gateway?.auth?.token).toBe(result.generatedToken);
+    expect(persisted?.gateway?.auth?.token).toBe("${OPENCLAW_GATEWAY_TOKEN}");
   });
 
   it("does not generate when token already exists", async () => {
@@ -89,6 +107,7 @@ describe("ensureGatewayStartupAuth", () => {
     expect(result.auth.mode).toBe("token");
     expect(result.auth.token).toBe("configured-token");
     expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(mocks.upsertGatewayTokenDotEnv).not.toHaveBeenCalled();
   });
 
   it("does not generate in password mode", async () => {
