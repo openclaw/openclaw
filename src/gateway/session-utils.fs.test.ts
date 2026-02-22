@@ -2,8 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import * as transcriptEvents from "../sessions/transcript-events.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
 import {
+  archiveFileOnDisk,
   archiveSessionTranscripts,
   readFirstUserMessageFromTranscript,
   readLastMessagePreviewFromTranscript,
@@ -729,6 +731,33 @@ describe("archiveSessionTranscripts", () => {
 
   afterAll(() => {
     vi.unstubAllEnvs();
+  });
+
+  test("emits transcript updates for reset and deleted archives", () => {
+    const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
+    const resetPath = path.join(tmpDir, "emit-reset.jsonl");
+    const deletedPath = path.join(tmpDir, "emit-deleted.jsonl");
+    fs.writeFileSync(resetPath, '{"type":"session"}\n', "utf-8");
+    fs.writeFileSync(deletedPath, '{"type":"session"}\n', "utf-8");
+
+    const archivedReset = archiveFileOnDisk(resetPath, "reset");
+    const archivedDeleted = archiveFileOnDisk(deletedPath, "deleted");
+
+    expect(emitSpy).toHaveBeenCalledTimes(2);
+    expect(emitSpy).toHaveBeenNthCalledWith(1, archivedReset);
+    expect(emitSpy).toHaveBeenNthCalledWith(2, archivedDeleted);
+    emitSpy.mockRestore();
+  });
+
+  test("does not emit transcript updates for bak archives", () => {
+    const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
+    const bakPath = path.join(tmpDir, "emit-bak.jsonl");
+    fs.writeFileSync(bakPath, '{"type":"session"}\n', "utf-8");
+
+    archiveFileOnDisk(bakPath, "bak");
+
+    expect(emitSpy).not.toHaveBeenCalled();
+    emitSpy.mockRestore();
   });
 
   test("archives transcript from default and explicit sessionFile paths", () => {

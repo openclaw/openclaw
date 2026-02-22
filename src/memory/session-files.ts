@@ -7,6 +7,9 @@ import { hashText } from "./internal.js";
 
 const log = createSubsystemLogger("memory");
 
+const SESSION_TRANSCRIPT_FILE_RE = /\.jsonl(?:\.(?:reset|deleted)(?:\..+)?)?$/;
+const ARCHIVED_SESSION_TRANSCRIPT_FILE_RE = /\.jsonl\.(?:reset|deleted)(?:\..+)?$/;
+
 export type SessionFileEntry = {
   path: string;
   absPath: string;
@@ -18,6 +21,18 @@ export type SessionFileEntry = {
   lineMap: number[];
 };
 
+export function isIndexableSessionTranscriptFileName(fileName: string): boolean {
+  const normalized = fileName.trim();
+  if (!normalized) {
+    return false;
+  }
+  return SESSION_TRANSCRIPT_FILE_RE.test(normalized);
+}
+
+export function isArchivedSessionTranscriptPath(filePath: string): boolean {
+  return ARCHIVED_SESSION_TRANSCRIPT_FILE_RE.test(path.basename(filePath).trim());
+}
+
 export async function listSessionFilesForAgent(agentId: string): Promise<string[]> {
   const dir = resolveSessionTranscriptsDirForAgent(agentId);
   try {
@@ -25,7 +40,7 @@ export async function listSessionFilesForAgent(agentId: string): Promise<string[
     return entries
       .filter((entry) => entry.isFile())
       .map((entry) => entry.name)
-      .filter((name) => name.endsWith(".jsonl"))
+      .filter((name) => isIndexableSessionTranscriptFileName(name))
       .map((name) => path.join(dir, name));
   } catch {
     return [];
