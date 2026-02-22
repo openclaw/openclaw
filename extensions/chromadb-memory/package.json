@@ -1,0 +1,16 @@
+{
+  "name": "@openclaw/chromadb-memory",
+  "version": "2026.2.21",
+  "private": true,
+  "description": "OpenClaw ChromaDB-backed long-term memory plugin with Ollama embeddings, auto-recall, and multi-agent collection routing",
+  "type": "module",
+  "dependencies": {},
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

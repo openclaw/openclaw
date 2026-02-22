@@ -1,0 +1,85 @@
+{
+  "id": "chromadb-memory",
+  "name": "ChromaDB Memory",
+  "description": "ChromaDB long-term memory with Ollama embeddings. Auto-recall injects relevant context before each turn. Manual search tool also available.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": true,
+    "properties": {
+      "chromaUrl": {
+        "type": "string",
+        "default": "http://localhost:8100"
+      },
+      "collectionId": {
+        "type": "string",
+        "description": "Collection UUID (optional if collectionName is set)"
+      },
+      "collectionName": {
+        "type": "string",
+        "default": "longterm_memory",
+        "description": "Collection name — auto-resolves to UUID (survives reindexing)"
+      },
+      "ollamaUrl": {
+        "type": "string",
+        "default": "http://localhost:11434"
+      },
+      "embeddingModel": {
+        "type": "string",
+        "default": "nomic-embed-text"
+      },
+      "autoRecall": {
+        "type": "boolean",
+        "default": true
+      },
+      "autoRecallResults": {
+        "type": "number",
+        "default": 3
+      },
+      "minScore": {
+        "type": "number",
+        "default": 0.5
+      },
+      "collectionMap": {
+        "type": "object",
+        "description": "Per-agent collection map: { \"agentId\": \"collectionName\" }. Routes different agents to different ChromaDB collections. Falls back to collectionName if agentId not in map.",
+        "additionalProperties": {
+          "type": "string"
+        },
+        "default": {}
+      }
+    },
+    "required": []
+  },
+  "uiHints": {
+    "chromaUrl": {
+      "label": "ChromaDB URL",
+      "placeholder": "http://localhost:8100"
+    },
+    "collectionId": {
+      "label": "Collection ID (optional)",
+      "placeholder": "5a87acc5-...",
+      "help": "Leave empty to auto-resolve from collection name"
+    },
+    "collectionName": {
+      "label": "Collection Name",
+      "placeholder": "longterm_memory",
+      "help": "Preferred — survives reindexing. Defaults to 'longterm_memory'"
+    },
+    "ollamaUrl": {
+      "label": "Ollama URL",
+      "placeholder": "http://localhost:11434"
+    },
+    "embeddingModel": {
+      "label": "Embedding Model",
+      "placeholder": "nomic-embed-text"
+    },
+    "autoRecall": {
+      "label": "Auto-Recall",
+      "help": "Automatically inject relevant ChromaDB memories into context"
+    },
+    "collectionMap": {
+      "label": "Per-Agent Collection Map",
+      "help": "Map agent IDs to collection names, e.g. {\"main\": \"longterm_memory\", \"regina\": \"regina_memory\"}. Overrides collectionName for matched agents."
+    }
+  }
+}
