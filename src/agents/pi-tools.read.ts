@@ -350,20 +350,26 @@ function parameterValidationError(message: string): Error {
  */
 // Single-character file extensions that are legitimate and should NOT trigger
 // truncation detection. Covers common programming languages and file types.
-const VALID_SINGLE_CHAR_EXTENSIONS = new Set([
+export const VALID_SINGLE_CHAR_EXTENSIONS = new Set([
   "c", // C language
   "h", // C/C++ header
+  "m", // Objective-C / MATLAB
   "r", // R language
   "R", // R language (case-sensitive)
   "d", // D language / dtrace
+  "f", // Fortran
+  "l", // Lex
+  "p", // Pascal
+  "t", // Perl test
   "v", // Verilog / Coq
+  "y", // Yacc
   "o", // Object file
   "a", // Archive / static library
   "s", // Assembly
   "S", // Assembly (preprocessed)
 ]);
 
-function detectTruncatedPath(filePath: string): boolean {
+export function detectTruncatedPath(filePath: string): boolean {
   if (typeof filePath !== "string" || !filePath.trim()) {
     return false;
   }

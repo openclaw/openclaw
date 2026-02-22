@@ -1,29 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { detectTruncatedPath } from "./pi-tools.read.js";
 
-// Test the truncation detection heuristic patterns directly.
-// The actual assertPathIntegrity function is internal, but we validate
-// the detection logic matches expected behavior.
+// Test the truncation detection heuristic used to catch file paths
+// corrupted by partial JSON streaming.
 // See: https://github.com/openclaw/openclaw/issues/23622
-
-const VALID_SINGLE_CHAR_EXTENSIONS = new Set(["c", "h", "r", "R", "d", "v", "o", "a", "s", "S"]);
-
-function detectTruncatedPath(filePath: string): boolean {
-  if (typeof filePath !== "string" || !filePath.trim()) {
-    return false;
-  }
-  if (/,\s*$/.test(filePath)) {
-    return true;
-  }
-  const basename = filePath.split("/").pop() ?? filePath;
-  const singleCharExtMatch = basename.match(/\.([a-zA-Z])$/);
-  if (singleCharExtMatch) {
-    const ext = singleCharExtMatch[1];
-    if (!VALID_SINGLE_CHAR_EXTENSIONS.has(ext)) {
-      return true;
-    }
-  }
-  return false;
-}
 
 describe("detectTruncatedPath", () => {
   describe("valid paths (should NOT be flagged)", () => {
@@ -41,11 +21,17 @@ describe("detectTruncatedPath", () => {
       // Legitimate single-char extensions
       "/path/to/main.c",
       "/path/to/header.h",
+      "/path/to/ViewController.m",
       "/path/to/analysis.R",
       "/path/to/module.d",
       "/path/to/circuit.v",
       "/path/to/lib.a",
       "/path/to/boot.S",
+      "/path/to/program.f",
+      "/path/to/lexer.l",
+      "/path/to/code.p",
+      "/path/to/test.t",
+      "/path/to/parser.y",
     ];
 
     for (const p of cases) {
@@ -56,16 +42,16 @@ describe("detectTruncatedPath", () => {
   });
 
   describe("truncated paths (SHOULD be flagged)", () => {
-    const cases = [
+    const cases: Array<[string, string]> = [
       // Single-char non-valid extensions (likely truncated)
-      ["/some/path/xiaohongshu-to-douyin/README.m", ".md truncated to .m"],
-      ["/some/path/file.t", ".ts/.tsx truncated to .t"],
+      ["/some/path/xiaohongshu-to-douyin/README.b", ".bin truncated to .b"],
       ["/some/path/file.j", ".js/.json truncated to .j"],
-      ["/some/path/file.p", ".py/.php truncated to .p"],
-      ["/some/path/component.x", ".tsx/.xml truncated to .x"],
+      ["/some/path/file.x", ".tsx/.xml truncated to .x"],
+      ["/some/path/component.g", ".go truncated to .g"],
+      ["/some/path/file.w", ".wasm truncated to .w"],
       // JSON structure leaked into path value
       ["/some/path/README.m, ", "comma from JSON leaked in"],
-      ["/some/path/file.t,", "comma from JSON leaked in"],
+      ["/some/path/file.ts,", "comma from JSON leaked in"],
       ["/path/to/file.md, ", "even valid extension with trailing comma"],
     ];
 
