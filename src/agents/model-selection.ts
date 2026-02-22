@@ -379,6 +379,24 @@ export function buildAllowedModelSet(params: {
   const catalogKeys = new Set(params.catalog.map((entry) => modelKey(entry.provider, entry.id)));
 
   if (allowAny) {
+    // Include models from explicitly configured providers so that session
+    // overrides pointing to local/custom models are not silently rejected.
+    const configuredProviders = (params.cfg.models?.providers ?? {}) as Record<
+      string,
+      { models?: Array<{ id?: string }> } | undefined
+    >;
+    for (const [providerRaw, providerCfg] of Object.entries(configuredProviders)) {
+      const normalizedProvider = normalizeProviderId(providerRaw.trim());
+      if (!normalizedProvider || !providerCfg) {
+        continue;
+      }
+      for (const model of providerCfg.models ?? []) {
+        const id = typeof model?.id === "string" ? model.id.trim() : "";
+        if (id) {
+          catalogKeys.add(modelKey(normalizedProvider, id));
+        }
+      }
+    }
     if (defaultKey) {
       catalogKeys.add(defaultKey);
     }
