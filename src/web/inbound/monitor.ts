@@ -277,6 +277,35 @@ export async function monitorWebInbox(options: {
         logVerbose(`Inbound media download failed: ${String(err)}`);
       }
 
+      // Preflight voice-note transcription: replace <media:audio> with spoken text
+      if (body === "<media:audio>" && mediaPath && mediaType?.startsWith("audio/")) {
+        try {
+          const { loadConfig } = await import("../../config/config.js");
+          const cfg = loadConfig();
+          const audioConfig = cfg.tools?.media?.audio;
+          if (audioConfig && audioConfig.enabled !== false) {
+            const { transcribeFirstAudio } =
+              await import("../../media-understanding/audio-preflight.js");
+            const transcript = await transcribeFirstAudio({
+              ctx: {
+                MediaPaths: [mediaPath],
+                MediaTypes: mediaType ? [mediaType] : undefined,
+              },
+              cfg,
+              agentDir: undefined,
+            });
+            if (transcript) {
+              body = transcript;
+              logVerbose(
+                `whatsapp: transcribed voice note (${transcript.length} chars) from ${from}`,
+              );
+            }
+          }
+        } catch (err) {
+          logVerbose(`whatsapp: voice note transcription failed: ${String(err)}`);
+        }
+      }
+
       const chatJid = remoteJid;
       const sendComposing = async () => {
         try {
