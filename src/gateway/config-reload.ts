@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import chokidar from "chokidar";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
 import type { OpenClawConfig, ConfigFileSnapshot, GatewayReloadMode } from "../config/config.js";
@@ -150,7 +151,9 @@ export function diffConfigPaths(prev: unknown, next: unknown, prefix = ""): stri
     return paths;
   }
   if (Array.isArray(prev) && Array.isArray(next)) {
-    if (prev.length === next.length && prev.every((val, idx) => val === next[idx])) {
+    // Arrays can contain object entries (for example memory.qmd.paths/scope.rules);
+    // compare structurally so identical values are not reported as changed.
+    if (isDeepStrictEqual(prev, next)) {
       return [];
     }
   }
