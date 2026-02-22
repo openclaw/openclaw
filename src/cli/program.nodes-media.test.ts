@@ -2,9 +2,16 @@ import * as fs from "node:fs/promises";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { parseCameraSnapPayload, parseCameraClipPayload } from "./nodes-camera.js";
 import { IOS_NODE, createIosNodeListResponse } from "./program.nodes-test-helpers.js";
-import { callGateway, installBaseProgramMocks, runTui, runtime } from "./program.test-mocks.js";
+import {
+  callGateway,
+  installBaseProgramMocks,
+  installSmokeProgramMocks,
+  runTui,
+  runtime,
+} from "./program.test-mocks.js";
 
 installBaseProgramMocks();
+installSmokeProgramMocks();
 
 function getFirstRuntimeLogLine(): string {
   const first = runtime.log.mock.calls[0]?.[0];
