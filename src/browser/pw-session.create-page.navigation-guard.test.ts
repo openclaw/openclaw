@@ -54,8 +54,8 @@ function installBrowserMocks() {
 }
 
 afterEach(async () => {
-  connectOverCdpSpy.mockReset();
-  getChromeWebSocketUrlSpy.mockReset();
+  connectOverCdpSpy.mockClear();
+  getChromeWebSocketUrlSpy.mockClear();
   await closePlaywrightBrowserConnection().catch(() => {});
 });
 
