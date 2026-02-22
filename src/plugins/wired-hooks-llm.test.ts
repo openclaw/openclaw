@@ -215,4 +215,64 @@ describe("llm hook runner methods", () => {
     expect(result?.prompt).toBe("modified prompt");
     expect(result?.systemPrompt).toBe("new system prompt");
   });
+
+  it("runLlmOutput returns modified assistantTexts from handler", async () => {
+    const handler = vi.fn().mockReturnValue({ assistantTexts: ["rehydrated response"] });
+    const registry = createMockPluginRegistry([{ hookName: "llm_output", handler }]);
+    const runner = createHookRunner(registry);
+
+    const result = await runner.runLlmOutput(
+      {
+        runId: "run-1",
+        sessionId: "session-1",
+        provider: "openai",
+        model: "gpt-5",
+        assistantTexts: ["masked «PERSON_001» response"],
+        lastAssistant: { role: "assistant", content: "masked" },
+        usage: { input: 10, output: 20, total: 30 },
+      },
+      { agentId: "main", sessionId: "session-1" },
+    );
+
+    expect(result).toEqual({ assistantTexts: ["rehydrated response"] });
+  });
+
+  it("runLlmOutput returns undefined when handler returns void", async () => {
+    const handler = vi.fn();
+    const registry = createMockPluginRegistry([{ hookName: "llm_output", handler }]);
+    const runner = createHookRunner(registry);
+
+    const result = await runner.runLlmOutput(
+      {
+        runId: "run-1",
+        sessionId: "session-1",
+        provider: "openai",
+        model: "gpt-5",
+        assistantTexts: ["hi"],
+        usage: { input: 10, output: 20, total: 30 },
+      },
+      { agentId: "main", sessionId: "session-1" },
+    );
+
+    expect(result).toBeUndefined();
+  });
+
+  it("runLlmOutput returns undefined when no hooks registered", async () => {
+    const registry = createMockPluginRegistry([]);
+    const runner = createHookRunner(registry);
+
+    const result = await runner.runLlmOutput(
+      {
+        runId: "run-1",
+        sessionId: "session-1",
+        provider: "openai",
+        model: "gpt-5",
+        assistantTexts: ["hi"],
+        usage: { input: 10, output: 20, total: 30 },
+      },
+      { agentId: "main", sessionId: "session-1" },
+    );
+
+    expect(result).toBeUndefined();
+  });
 });
