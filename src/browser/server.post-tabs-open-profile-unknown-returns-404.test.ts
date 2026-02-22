@@ -18,6 +18,12 @@ const cdpMocks = getCdpMocks();
 const pwMocks = getPwMocks();
 
 describe("browser control server", () => {
+  beforeEach(() => {
+    // Ensure tests are not affected by environment variables
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+  });
+
   installBrowserControlServerHooks();
 
   it("POST /tabs/open?profile=unknown returns 404", async () => {
