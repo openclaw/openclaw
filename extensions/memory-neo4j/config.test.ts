@@ -607,12 +607,14 @@ describe("resolveExtractionConfig", () => {
 
   it("should return disabled config when no API key or explicit baseUrl", () => {
     delete process.env.OPENROUTER_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
     const config = resolveExtractionConfig();
     expect(config.enabled).toBe(false);
     expect(config.apiKey).toBe("");
   });
 
   it("should enable when OPENROUTER_API_KEY env var is set", () => {
+    delete process.env.ANTHROPIC_API_KEY;
     process.env.OPENROUTER_API_KEY = "or-env-key";
     const config = resolveExtractionConfig();
     expect(config.enabled).toBe(true);
@@ -645,11 +647,47 @@ describe("resolveExtractionConfig", () => {
 
   it("should use defaults for model and baseUrl", () => {
     delete process.env.OPENROUTER_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.EXTRACTION_MODEL;
+    delete process.env.EXTRACTION_BASE_URL;
+    const config = resolveExtractionConfig();
+    expect(config.model).toBe("anthropic/claude-opus-4-6");
+    // No API keys available → falls back to OpenRouter baseUrl (disabled though)
+    expect(config.baseUrl).toBe("https://openrouter.ai/api/v1");
+  });
+
+  it("should use native Anthropic API when ANTHROPIC_API_KEY is set", () => {
+    delete process.env.OPENROUTER_API_KEY;
+    process.env.ANTHROPIC_API_KEY = "sk-ant-test-key";
+    delete process.env.EXTRACTION_MODEL;
+    delete process.env.EXTRACTION_BASE_URL;
+    const config = resolveExtractionConfig();
+    expect(config.model).toBe("anthropic/claude-opus-4-6");
+    expect(config.baseUrl).toBe("https://api.anthropic.com");
+    expect(config.apiKey).toBe("sk-ant-test-key");
+  });
+
+  it("should route Anthropic models through OpenRouter when only OPENROUTER_API_KEY exists", () => {
+    delete process.env.ANTHROPIC_API_KEY;
+    process.env.OPENROUTER_API_KEY = "or-key";
     delete process.env.EXTRACTION_MODEL;
     delete process.env.EXTRACTION_BASE_URL;
     const config = resolveExtractionConfig();
     expect(config.model).toBe("anthropic/claude-opus-4-6");
     expect(config.baseUrl).toBe("https://openrouter.ai/api/v1");
+    expect(config.apiKey).toBe("or-key");
+  });
+
+  it("should prefer explicit baseUrl over model-name detection", () => {
+    process.env.ANTHROPIC_API_KEY = "sk-ant-key";
+    process.env.OPENROUTER_API_KEY = "or-key";
+    const config = resolveExtractionConfig({
+      model: "anthropic/claude-sonnet-4-6",
+      baseUrl: "https://openrouter.ai/api/v1",
+      apiKey: "or-explicit-key",
+    });
+    expect(config.baseUrl).toBe("https://openrouter.ai/api/v1");
+    expect(config.apiKey).toBe("or-explicit-key");
   });
 
   it("should use EXTRACTION_MODEL env var", () => {
@@ -659,8 +697,9 @@ describe("resolveExtractionConfig", () => {
     expect(config.model).toBe("meta/llama-3-70b");
   });
 
-  it("should use EXTRACTION_BASE_URL env var", () => {
+  it("should use EXTRACTION_BASE_URL env var over model-name detection", () => {
     delete process.env.OPENROUTER_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
     process.env.EXTRACTION_BASE_URL = "https://my-proxy.ai/v1";
     const config = resolveExtractionConfig();
     expect(config.baseUrl).toBe("https://my-proxy.ai/v1");

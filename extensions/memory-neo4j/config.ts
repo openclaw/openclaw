@@ -160,26 +160,51 @@ export function resolveExtractionConfig(
 ): ExtractionConfig {
   const model = cfgExtraction?.model ?? process.env.EXTRACTION_MODEL ?? "anthropic/claude-opus-4-6";
 
-  // Auto-detect Anthropic models and resolve the correct API key
+  // Determine the provider from explicit config, then fall back to model-name heuristics.
+  //
+  // Resolution priority for baseUrl:
+  //   1. Explicit plugin config baseUrl (always wins)
+  //   2. EXTRACTION_BASE_URL env var
+  //   3. Auto-detect from model name: Anthropic models → api.anthropic.com, others → OpenRouter
+  //      Exception: if only OPENROUTER_API_KEY is available (no ANTHROPIC_API_KEY), route
+  //      Anthropic models through OpenRouter instead of native API.
+  //
+  // Resolution priority for apiKey:
+  //   1. Explicit plugin config apiKey
+  //   2. For Anthropic native baseUrl: ANTHROPIC_API_KEY env → OPENROUTER_API_KEY fallback
+  //   3. For everything else: OPENROUTER_API_KEY env
+
   const isAnthropicModel =
     model.toLowerCase().startsWith("anthropic/") || model.toLowerCase().startsWith("claude-");
 
   let apiKey: string;
   let baseUrl: string;
 
-  if (isAnthropicModel && !cfgExtraction?.baseUrl) {
-    // Anthropic native: use ANTHROPIC_API_KEY, fall back to config apiKey, then OpenRouter key
-    apiKey =
-      cfgExtraction?.apiKey ??
-      process.env.ANTHROPIC_API_KEY ??
-      process.env.OPENROUTER_API_KEY ??
-      "";
-    baseUrl = "https://api.anthropic.com";
-  } else {
-    // OpenAI-compatible (OpenRouter, Ollama, etc.)
+  if (cfgExtraction?.baseUrl) {
+    // Explicit baseUrl in plugin config — respect it regardless of model name.
+    // This handles OpenRouter routing Anthropic models via OpenAI-compatible API.
+    baseUrl = cfgExtraction.baseUrl;
     apiKey = cfgExtraction?.apiKey ?? process.env.OPENROUTER_API_KEY ?? "";
-    baseUrl =
-      cfgExtraction?.baseUrl ?? process.env.EXTRACTION_BASE_URL ?? "https://openrouter.ai/api/v1";
+  } else if (process.env.EXTRACTION_BASE_URL) {
+    // Explicit env var baseUrl — also takes priority over model-name detection.
+    baseUrl = process.env.EXTRACTION_BASE_URL;
+    apiKey = cfgExtraction?.apiKey ?? process.env.OPENROUTER_API_KEY ?? "";
+  } else if (isAnthropicModel) {
+    // No explicit baseUrl + Anthropic model → try native Anthropic API.
+    const anthropicKey = cfgExtraction?.apiKey ?? process.env.ANTHROPIC_API_KEY ?? "";
+    if (anthropicKey) {
+      // Have an Anthropic-compatible key → use native API
+      apiKey = anthropicKey;
+      baseUrl = "https://api.anthropic.com";
+    } else {
+      // No Anthropic key → fall back to OpenRouter (OpenAI-compatible format)
+      apiKey = process.env.OPENROUTER_API_KEY ?? "";
+      baseUrl = "https://openrouter.ai/api/v1";
+    }
+  } else {
+    // Non-Anthropic model → OpenAI-compatible (OpenRouter, Ollama, etc.)
+    apiKey = cfgExtraction?.apiKey ?? process.env.OPENROUTER_API_KEY ?? "";
+    baseUrl = "https://openrouter.ai/api/v1";
   }
 
   // Enabled when an API key is set (cloud provider) or baseUrl was explicitly

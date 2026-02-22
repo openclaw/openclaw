@@ -2,12 +2,12 @@
  * LLM API client for memory-neo4j extraction.
  *
  * Supports two API formats:
- * - **Anthropic Messages API** (native): Used when the model starts with
- *   "anthropic/" or "claude-" and baseUrl points to api.anthropic.com.
- * - **OpenAI-compatible** (OpenRouter, Ollama, etc.): Used for all other configs.
+ * - **Anthropic Messages API** (native): Used when baseUrl points to api.anthropic.com.
+ * - **OpenAI-compatible** (OpenRouter, Ollama, etc.): Used for all other baseUrls.
  *
- * Provider auto-detection: if the model name starts with "anthropic/" or "claude-"
- * AND no explicit baseUrl override points elsewhere, Anthropic native API is used.
+ * Provider detection is based on the resolved baseUrl from config, NOT the model name.
+ * This ensures that Anthropic models routed through OpenRouter use the correct
+ * OpenAI-compatible API format instead of Anthropic's native Messages API.
  */
 
 import type { ExtractionConfig } from "./config.js";
@@ -22,17 +22,12 @@ const ANTHROPIC_API_VERSION = "2023-06-01";
 
 /**
  * Detect whether the config should use the Anthropic Messages API.
- * True when the model looks like an Anthropic model AND the baseUrl is either
- * the default OpenRouter URL (will be overridden) or explicitly Anthropic's.
+ * Decision is based solely on the resolved baseUrl — if it points to
+ * api.anthropic.com, use native Anthropic format. Everything else
+ * (OpenRouter, Ollama, custom endpoints) uses OpenAI-compatible format.
  */
 function isAnthropicNative(config: ExtractionConfig): boolean {
-  const model = config.model.toLowerCase();
-  return (
-    (model.startsWith("anthropic/") || model.startsWith("claude-")) &&
-    (!config.baseUrl ||
-      config.baseUrl === "https://openrouter.ai/api/v1" ||
-      config.baseUrl.includes("anthropic.com"))
-  );
+  return config.baseUrl.includes("anthropic.com");
 }
 
 /**
