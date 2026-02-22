@@ -1,6 +1,4 @@
-import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import {
   getRunEmbeddedPiAgentMock,
   installTriggerHandlingE2eTestHooks,
@@ -49,16 +47,8 @@ describe("trigger handling", () => {
   });
   it("uses tools.elevated.allowFrom.discord for elevated approval", async () => {
     await withTempHome(async (home) => {
-      const cfg = {
-        agents: {
-          defaults: {
-            model: "anthropic/claude-opus-4-5",
-            workspace: join(home, "openclaw"),
-          },
-        },
-        tools: { elevated: { allowFrom: { discord: ["steipete"] } } },
-        session: { store: join(home, "sessions.json") },
-      } as OpenClawConfig;
+      const cfg = makeCfg(home);
+      cfg.tools = { elevated: { allowFrom: { discord: ["steipete"] } } };
 
       const res = await getReplyFromConfig(
         {
@@ -83,20 +73,12 @@ describe("trigger handling", () => {
   });
   it("treats explicit discord elevated allowlist as override", async () => {
     await withTempHome(async (home) => {
-      const cfg = {
-        agents: {
-          defaults: {
-            model: "anthropic/claude-opus-4-5",
-            workspace: join(home, "openclaw"),
-          },
+      const cfg = makeCfg(home);
+      cfg.tools = {
+        elevated: {
+          allowFrom: { discord: [] },
         },
-        tools: {
-          elevated: {
-            allowFrom: { discord: [] },
-          },
-        },
-        session: { store: join(home, "sessions.json") },
-      } as OpenClawConfig;
+      };
 
       const res = await getReplyFromConfig(
         {
