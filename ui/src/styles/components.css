@@ -487,6 +487,7 @@
 }
 
 .field select {
+  width: 100%;
   appearance: none;
   padding-right: 36px;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%23a1a1aa' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
@@ -529,7 +530,7 @@
 :root[data-theme="light"] .field input,
 :root[data-theme="light"] .field textarea,
 :root[data-theme="light"] .field select {
-  background: var(--card);
+  background-color: var(--card);
   border-color: var(--input);
 }
 
