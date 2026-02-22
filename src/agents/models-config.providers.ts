@@ -176,6 +176,16 @@ const NVIDIA_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+const SARVAM_BASE_URL = "https://api.sarvam.ai/v1";
+const SARVAM_DEFAULT_CONTEXT_WINDOW = 32768;
+const SARVAM_DEFAULT_MAX_TOKENS = 4096;
+const SARVAM_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 const log = createSubsystemLogger("agents/model-providers");
 
 interface OllamaModel {
@@ -734,6 +744,33 @@ export function buildNvidiaProvider(): ProviderConfig {
   };
 }
 
+function buildSarvamProvider(): ProviderConfig {
+  return {
+    baseUrl: SARVAM_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: "sarvam-2b",
+        name: "Sarvam 2B",
+        reasoning: false,
+        input: ["text"],
+        cost: SARVAM_DEFAULT_COST,
+        contextWindow: SARVAM_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: SARVAM_DEFAULT_MAX_TOKENS,
+      },
+      {
+        id: "sarvam-105b",
+        name: "Sarvam 105B",
+        reasoning: false,
+        input: ["text"],
+        cost: SARVAM_DEFAULT_COST,
+        contextWindow: SARVAM_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: SARVAM_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 export async function resolveImplicitProviders(params: {
   agentDir: string;
   explicitProviders?: Record<string, ProviderConfig> | null;
@@ -912,6 +949,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "nvidia", store: authStore });
   if (nvidiaKey) {
     providers.nvidia = { ...buildNvidiaProvider(), apiKey: nvidiaKey };
+  }
+
+  const sarvamKey =
+    resolveEnvApiKeyVarName("sarvam") ??
+    resolveApiKeyFromProfiles({ provider: "sarvam", store: authStore });
+  if (sarvamKey) {
+    providers.sarvam = { ...buildSarvamProvider(), apiKey: sarvamKey };
   }
 
   return providers;

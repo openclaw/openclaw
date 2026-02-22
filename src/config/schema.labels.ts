@@ -148,6 +148,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.model": "Memory Search Model",
   "agents.defaults.memorySearch.fallback": "Memory Search Fallback",
   "agents.defaults.memorySearch.local.modelPath": "Local Embedding Model Path",
+  "models.providers.sarvam": "Sarvam AI",
   "agents.defaults.memorySearch.store.path": "Memory Search Index Path",
   "agents.defaults.memorySearch.store.vector.enabled": "Memory Search Vector Index",
   "agents.defaults.memorySearch.store.vector.extensionPath": "Memory Search Vector Extension Path",
