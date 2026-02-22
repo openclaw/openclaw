@@ -20,10 +20,10 @@ vi.mock("./models-config.js", async (importOriginal) => {
   };
 });
 
-let runEmbeddedPiAgent: typeof import("./pi-embedded-runner.js").runEmbeddedPiAgent;
+let runEmbeddedPiAgent: typeof import("./pi-embedded-runner/run.js").runEmbeddedPiAgent;
 
 beforeAll(async () => {
-  ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner.js"));
+  ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner/run.js"));
 });
 
 beforeEach(() => {

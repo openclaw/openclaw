@@ -24,7 +24,7 @@ vi.mock("../infra/shell-env.js", async (importOriginal) => {
   return {
     ...mod,
     getShellPathFromLoginShell: vi.fn(() => null),
-    resolveShellEnvFallbackTimeoutMs: vi.fn(() => 500),
+    resolveShellEnvFallbackTimeoutMs: vi.fn(() => 50),
   };
 });
 
@@ -174,10 +174,10 @@ describe("createOpenClawCodingTools safeBins", () => {
     );
   });
 
-  it("does not leak file existence from sort output flags", async () => {
+  it("blocks sort output/compress bypass attempts in safeBins mode", async () => {
     await withSafeBinsExecTool(
       {
-        tmpPrefix: "openclaw-safe-bins-oracle-",
+        tmpPrefix: "openclaw-safe-bins-sort-",
         safeBins: ["sort"],
         files: [{ name: "existing.txt", contents: "x\n" }],
       },
@@ -196,42 +196,21 @@ describe("createOpenClawCodingTools safeBins", () => {
         const existing = await run("sort -o existing.txt");
         const missing = await run("sort -o missing.txt");
         expect(existing).toEqual(missing);
-      },
-    );
-  });
 
-  it("blocks sort output flags from writing files via safeBins", async () => {
-    await withSafeBinsExecTool(
-      {
-        tmpPrefix: "openclaw-safe-bins-sort-",
-        safeBins: ["sort"],
-      },
-      async ({ tmpDir, execTool }) => {
-        const cases = [
+        const outputFlagCases = [
           { command: "sort -oblocked-short.txt", target: "blocked-short.txt" },
           { command: "sort --output=blocked-long.txt", target: "blocked-long.txt" },
         ] as const;
-
-        for (const [index, testCase] of cases.entries()) {
+        for (const [index, testCase] of outputFlagCases.entries()) {
           await expect(
-            execTool.execute(`call${index + 1}`, {
+            execTool.execute(`call-output-${index + 1}`, {
               command: testCase.command,
               workdir: tmpDir,
             }),
           ).rejects.toThrow("exec denied: allowlist miss");
           expect(fs.existsSync(path.join(tmpDir, testCase.target))).toBe(false);
         }
-      },
-    );
-  });
 
-  it("blocks sort --compress-program from bypassing safeBins", async () => {
-    await withSafeBinsExecTool(
-      {
-        tmpPrefix: "openclaw-safe-bins-sort-compress-",
-        safeBins: ["sort"],
-      },
-      async ({ tmpDir, execTool }) => {
         await expect(
           execTool.execute("call1", {
             command: "sort --compress-program=sh",
