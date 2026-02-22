@@ -11,9 +11,9 @@ const defaultShell = isWin
   ? undefined
   : process.env.OPENCLAW_TEST_SHELL || resolveShellFromPath("bash") || process.env.SHELL || "sh";
 // PowerShell: Start-Sleep for delays, ; for command separation, $null for null device
-const shortDelayCmd = isWin ? "Start-Sleep -Milliseconds 15" : "sleep 0.015";
-const yieldDelayCmd = isWin ? "Start-Sleep -Milliseconds 70" : "sleep 0.07";
-const longDelayCmd = isWin ? "Start-Sleep -Milliseconds 500" : "sleep 0.5";
+const shortDelayCmd = isWin ? "Start-Sleep -Milliseconds 8" : "sleep 0.008";
+const yieldDelayCmd = isWin ? "Start-Sleep -Milliseconds 40" : "sleep 0.04";
+const longDelayCmd = isWin ? "Start-Sleep -Milliseconds 180" : "sleep 0.18";
 const POLL_INTERVAL_MS = 15;
 const TEST_EXEC_DEFAULTS = { security: "full" as const, ask: "off" as const };
 const createTestExecTool = (
