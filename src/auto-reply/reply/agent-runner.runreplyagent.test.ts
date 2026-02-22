@@ -556,17 +556,16 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const deliveryOrder: string[] = [];
     const onToolResult = vi.fn(async (payload: { text?: string }) => {
       // Simulate variable network latency: first result is slower than second
-      const delay = payload.text === "first" ? 50 : 10;
+      const delay = payload.text === "first" ? 5 : 1;
       await new Promise((r) => setTimeout(r, delay));
       deliveryOrder.push(payload.text ?? "");
     });
 
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-      // Fire two tool results without awaiting — simulates concurrent tool completion
-      void params.onToolResult?.({ text: "first", mediaUrls: [] });
-      void params.onToolResult?.({ text: "second", mediaUrls: [] });
-      // Small delay to let the chain settle before returning
-      await new Promise((r) => setTimeout(r, 150));
+      // Fire two tool results without awaiting each one; await both at the end.
+      const first = params.onToolResult?.({ text: "first", mediaUrls: [] });
+      const second = params.onToolResult?.({ text: "second", mediaUrls: [] });
+      await Promise.all([first, second]);
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
@@ -591,9 +590,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
 
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-      void params.onToolResult?.({ text: "first", mediaUrls: [] });
-      void params.onToolResult?.({ text: "second", mediaUrls: [] });
-      await new Promise((r) => setTimeout(r, 50));
+      const first = params.onToolResult?.({ text: "first", mediaUrls: [] });
+      const second = params.onToolResult?.({ text: "second", mediaUrls: [] });
+      await Promise.allSettled([first, second]);
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
