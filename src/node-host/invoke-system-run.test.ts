@@ -87,7 +87,6 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           stdout: "app-ok",
           stderr: "",
           timedOut: false,
-          truncated: false,
           exitCode: 0,
           error: null,
         },
