@@ -98,8 +98,8 @@ describe("web auto-reply", () => {
       },
     ] as const;
 
-    const width = 1200;
-    const height = 1200;
+    const width = 1150;
+    const height = 1150;
     const sharedRaw = crypto.randomBytes(width * height * 3);
 
     for (const fmt of formats) {
@@ -179,8 +179,8 @@ describe("web auto-reply", () => {
 
     const bigPng = await sharp({
       create: {
-        width: 1800,
-        height: 1800,
+        width: 1200,
+        height: 1200,
         channels: 3,
         background: { r: 0, g: 0, b: 255 },
       },
