@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
+import { redactSensitiveText } from "../../logging/redact.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveDefaultSessionStorePath } from "./paths.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
@@ -128,10 +129,15 @@ export async function appendAssistantMessageToSessionTranscript(params: {
 
   await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });
 
+  // CRITICAL-4: Redact sensitive data (API keys, tokens, etc.) from transcripts
+  // before persisting to disk. OS-level encryption (BitLocker/FileVault/LUKS) is
+  // recommended as an additional layer of protection.
+  const redactedText = redactSensitiveText(mirrorText);
+
   const sessionManager = SessionManager.open(sessionFile);
   sessionManager.appendMessage({
     role: "assistant",
-    content: [{ type: "text", text: mirrorText }],
+    content: [{ type: "text", text: redactedText }],
     api: "openai-responses",
     provider: "openclaw",
     model: "delivery-mirror",
