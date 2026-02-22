@@ -1,4 +1,5 @@
 import type { CronJobCreate, CronJobPatch } from "../types.js";
+import type { CronServiceState } from "./state.js";
 import {
   applyJobPatch,
   computeJobNextRunAtMs,
@@ -10,9 +11,16 @@ import {
   recomputeNextRunsForMaintenance,
 } from "./jobs.js";
 import { locked } from "./locked.js";
-import type { CronServiceState } from "./state.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
-import { armTimer, emit, executeJob, runMissedJobs, stopTimer, wake } from "./timer.js";
+import {
+  armTimer,
+  clearStaleRunningMarker,
+  emit,
+  executeJob,
+  runMissedJobs,
+  stopTimer,
+  wake,
+} from "./timer.js";
 
 async function ensureLoadedForRead(state: CronServiceState) {
   await ensureLoaded(state, { skipRecompute: true });
@@ -205,12 +213,19 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
     warnIfDisabled(state, "run");
     await ensureLoaded(state, { skipRecompute: true });
     const job = findJobOrThrow(state, id);
-    if (typeof job.state.runningAtMs === "number") {
-      return { ok: true, ran: false, reason: "already-running" as const };
-    }
     const now = state.deps.nowMs();
+    let clearedStaleMarker = false;
+    if (typeof job.state.runningAtMs === "number") {
+      if (!clearStaleRunningMarker(state, job, now, "run")) {
+        return { ok: true, ran: false, reason: "already-running" as const };
+      }
+      clearedStaleMarker = true;
+    }
     const due = isJobDue(job, now, { forced: mode === "force" });
     if (!due) {
+      if (clearedStaleMarker) {
+        await persist(state);
+      }
       return { ok: true, ran: false, reason: "not-due" as const };
     }
     await executeJob(state, job, now, { forced: mode === "force" });

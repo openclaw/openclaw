@@ -1,8 +1,9 @@
 import type { HeartbeatRunResult } from "../../infra/heartbeat-wake.js";
+import type { CronJob, CronRunOutcome, CronRunStatus, CronRunTelemetry } from "../types.js";
+import type { CronEvent, CronServiceState } from "./state.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
-import type { CronJob, CronRunOutcome, CronRunStatus, CronRunTelemetry } from "../types.js";
 import {
   computeJobNextRunAtMs,
   nextWakeAtMs,
@@ -10,7 +11,6 @@ import {
   resolveJobPayloadTextForMain,
 } from "./jobs.js";
 import { locked } from "./locked.js";
-import type { CronEvent, CronServiceState } from "./state.js";
 import { ensureLoaded, persist } from "./store.js";
 
 const MAX_TIMER_DELAY_MS = 60_000;
@@ -61,6 +61,51 @@ const ERROR_BACKOFF_SCHEDULE_MS = [
 function errorBackoffMs(consecutiveErrors: number): number {
   const idx = Math.min(consecutiveErrors - 1, ERROR_BACKOFF_SCHEDULE_MS.length - 1);
   return ERROR_BACKOFF_SCHEDULE_MS[Math.max(0, idx)];
+}
+
+function resolveJobTimeoutMs(job: CronJob, defaultTimeoutMs: number): number | undefined {
+  if (job.payload.kind === "agentTurn" && typeof job.payload.timeoutSeconds === "number") {
+    return job.payload.timeoutSeconds > 0 ? job.payload.timeoutSeconds * 1_000 : undefined;
+  }
+  return defaultTimeoutMs;
+}
+
+function isStaleRunning(job: CronJob, nowMs: number, defaultTimeoutMs: number): boolean {
+  if (typeof job.state.runningAtMs !== "number") {
+    return false;
+  }
+  const jobTimeoutMs = resolveJobTimeoutMs(job, defaultTimeoutMs);
+  if (typeof jobTimeoutMs !== "number") {
+    return false;
+  }
+  return nowMs - job.state.runningAtMs > jobTimeoutMs * 2;
+}
+
+export function clearStaleRunningMarker(
+  state: CronServiceState,
+  job: CronJob,
+  nowMs: number,
+  check: string,
+): boolean {
+  if (!isStaleRunning(job, nowMs, DEFAULT_JOB_TIMEOUT_MS)) {
+    return false;
+  }
+
+  const runningAtMs = job.state.runningAtMs;
+  const jobTimeoutMs = resolveJobTimeoutMs(job, DEFAULT_JOB_TIMEOUT_MS);
+  state.deps.log.warn(
+    {
+      jobId: job.id,
+      jobName: job.name,
+      check,
+      runningAtMs,
+      staleForMs: nowMs - (runningAtMs ?? nowMs),
+      jobTimeoutMs,
+    },
+    "cron: clearing stale running marker at runtime",
+  );
+  job.state.runningAtMs = undefined;
+  return true;
 }
 
 /**
@@ -255,16 +300,7 @@ export async function onTimer(state: CronServiceState) {
       job.state.runningAtMs = startedAt;
       emit(state, { jobId: job.id, action: "started", runAtMs: startedAt });
 
-      const configuredTimeoutMs =
-        job.payload.kind === "agentTurn" && typeof job.payload.timeoutSeconds === "number"
-          ? Math.floor(job.payload.timeoutSeconds * 1_000)
-          : undefined;
-      const jobTimeoutMs =
-        configuredTimeoutMs !== undefined
-          ? configuredTimeoutMs <= 0
-            ? undefined
-            : configuredTimeoutMs
-          : DEFAULT_JOB_TIMEOUT_MS;
+      const jobTimeoutMs = resolveJobTimeoutMs(job, DEFAULT_JOB_TIMEOUT_MS);
 
       try {
         const result =
@@ -408,6 +444,7 @@ function findDueJobs(state: CronServiceState): CronJob[] {
 }
 
 function isRunnableJob(params: {
+  state: CronServiceState;
   job: CronJob;
   nowMs: number;
   skipJobIds?: ReadonlySet<string>;
@@ -424,7 +461,9 @@ function isRunnableJob(params: {
     return false;
   }
   if (typeof job.state.runningAtMs === "number") {
-    return false;
+    if (!clearStaleRunningMarker(params.state, job, nowMs, "isRunnableJob")) {
+      return false;
+    }
   }
   if (params.skipAtIfAlreadyRan && job.schedule.kind === "at" && job.state.lastStatus) {
     // Any terminal status (ok, error, skipped) means the job already ran at least once.
@@ -446,6 +485,7 @@ function collectRunnableJobs(
   }
   return state.store.jobs.filter((job) =>
     isRunnableJob({
+      state,
       job,
       nowMs,
       skipJobIds: opts?.skipJobIds,
