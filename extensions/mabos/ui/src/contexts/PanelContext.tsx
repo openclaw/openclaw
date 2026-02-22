@@ -1,4 +1,3 @@
-import { useRouterState } from "@tanstack/react-router";
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
 import type { SidebarMode, EntityType, DetailPanelState } from "@/lib/types";
 
@@ -36,13 +35,6 @@ export function PanelProvider({ children }: { children: ReactNode }) {
   const closeDetailPanel = useCallback(() => {
     setDetailPanel(defaultDetailPanel);
   }, []);
-
-  // Auto-close detail panel on route change
-  const routerState = useRouterState();
-  const currentPath = routerState.location.pathname;
-  useEffect(() => {
-    closeDetailPanel();
-  }, [currentPath, closeDetailPanel]);
 
   // Keyboard shortcuts
   useEffect(() => {

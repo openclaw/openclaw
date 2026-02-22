@@ -1,12 +1,23 @@
-import type { ReactNode } from "react";
-import { PanelProvider, usePanels } from "@/contexts/PanelContext";
+import { useRouterState } from "@tanstack/react-router";
+import { useEffect, type ReactNode } from "react";
+import { usePanels } from "@/contexts/PanelContext";
 import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { FloatingChat } from "../chat/FloatingChat";
 import { EntityDetailPanel } from "./EntityDetailPanel";
 import { MobileNav } from "./MobileNav";
 import { Sidebar } from "./Sidebar";
 
-function AppShellInner({ children }: { children: ReactNode }) {
+/** Auto-close detail panel on route change */
+function RouteChangeHandler() {
+  const { closeDetailPanel } = usePanels();
+  const currentPath = useRouterState({ select: (s) => s.location.pathname });
+  useEffect(() => {
+    closeDetailPanel();
+  }, [currentPath, closeDetailPanel]);
+  return null;
+}
+
+export function AppShell({ children }: { children: ReactNode }) {
   const { sidebarMode } = usePanels();
   const isMobile = useMediaQuery("(max-width: 768px)");
   const isPhone = useMediaQuery("(max-width: 320px)");
@@ -14,6 +25,7 @@ function AppShellInner({ children }: { children: ReactNode }) {
   if (isMobile) {
     return (
       <div className="flex flex-col h-screen bg-[var(--bg-primary)]">
+        <RouteChangeHandler />
         <MobileNav compact={isPhone} />
         <main className="flex-1 overflow-y-auto p-4">{children}</main>
         <EntityDetailPanel />
@@ -24,6 +36,7 @@ function AppShellInner({ children }: { children: ReactNode }) {
 
   return (
     <>
+      <RouteChangeHandler />
       <div
         className="grid h-screen overflow-hidden bg-[var(--bg-primary)]"
         style={{
@@ -41,13 +54,5 @@ function AppShellInner({ children }: { children: ReactNode }) {
       {/* Floating chat: fixed-position, z-index above everything */}
       <FloatingChat />
     </>
-  );
-}
-
-export function AppShell({ children }: { children: ReactNode }) {
-  return (
-    <PanelProvider>
-      <AppShellInner>{children}</AppShellInner>
-    </PanelProvider>
   );
 }

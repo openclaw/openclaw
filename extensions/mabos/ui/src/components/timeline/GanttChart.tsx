@@ -142,17 +142,19 @@ export function GanttChart({
       | { type: "milestone"; item: Milestone }
     > = [];
 
+    const usedMilestoneIds = new Set<string>();
     for (const [phaseName, items] of grouped) {
       result.push({ type: "header", phase: phaseName });
       for (const item of items) {
         result.push({ type: "bar", item });
       }
-      // Add milestones that fall within the phase's time range
+      // Add milestones that fall within the phase's time range (each milestone only once)
       const phaseStart = Math.min(...items.map((i) => i.startWeek));
       const phaseEnd = Math.max(...items.map((i) => i.startWeek + i.durationWeeks));
       for (const m of milestones) {
-        if (m.week >= phaseStart && m.week <= phaseEnd) {
+        if (!usedMilestoneIds.has(m.id) && m.week >= phaseStart && m.week <= phaseEnd) {
           result.push({ type: "milestone", item: m });
+          usedMilestoneIds.add(m.id);
         }
       }
     }
