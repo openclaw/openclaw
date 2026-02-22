@@ -9,10 +9,11 @@
  * or externally provided). Documents are chunked and stored locally.
  */
 
-import fs from "node:fs";
-import path from "node:path";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import { registerDoclingCli } from "./src/cli.js";
 import { DoclingClient } from "./src/docling-client.js";
 import { DoclingServerManager } from "./src/server-manager.js";
 import { DocumentStore } from "./src/store.js";
@@ -271,6 +272,22 @@ const plugin = {
         };
       },
     });
+
+    // =====================================================================
+    // CLI commands (openclaw docs ...)
+    // =====================================================================
+
+    api.registerCli(
+      ({ program }) =>
+        registerDoclingCli({
+          program,
+          store,
+          client,
+          serverManager,
+          ensureDocling,
+        }),
+      { commands: ["docs"] },
+    );
 
     // =====================================================================
     // Service (managed docling-serve lifecycle)
