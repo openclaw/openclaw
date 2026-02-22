@@ -36,7 +36,7 @@ describe("ensureGatewayStartupAuth", () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
-    mocks.writeConfigFile.mockReset();
+    mocks.writeConfigFile.mockClear();
   });
 
   async function expectNoTokenGeneration(cfg: OpenClawConfig, mode: string) {
