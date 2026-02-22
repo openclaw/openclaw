@@ -22,6 +22,7 @@ export function buildThreadingToolContext(params: {
   hasRepliedRef: { value: boolean } | undefined;
 }): ChannelThreadingToolContext {
   const { sessionCtx, config, hasRepliedRef } = params;
+  const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
   if (!config) {
     return {};
   }
@@ -36,6 +37,7 @@ export function buildThreadingToolContext(params: {
     return {
       currentChannelId: sessionCtx.To?.trim() || undefined,
       currentChannelProvider: provider ?? (rawProvider as ChannelId),
+      ...(currentMessageId ? { currentMessageId } : {}),
       hasRepliedRef,
     };
   }
@@ -57,6 +59,7 @@ export function buildThreadingToolContext(params: {
   return {
     ...context,
     currentChannelProvider: provider!, // guaranteed non-null since dock exists
+    ...(currentMessageId ? { currentMessageId } : {}),
   };
 }
 

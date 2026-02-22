@@ -745,6 +745,13 @@ export async function runMessageAction(
   }
 
   applyTargetToParams({ action, args: params });
+  if (action === "react") {
+    const messageId = readStringParam(params, "messageId");
+    const currentMessageId = input.toolContext?.currentMessageId?.trim();
+    if (!messageId && currentMessageId) {
+      params.messageId = currentMessageId;
+    }
+  }
   if (actionRequiresTarget(action)) {
     if (!actionHasTarget(action, params)) {
       throw new Error(`Action ${action} requires a target.`);

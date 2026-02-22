@@ -145,6 +145,23 @@ describe("buildThreadingToolContext", () => {
     expect(result.currentChannelId).toBe("C1");
     expect(result.currentThreadTs).toBe("123.456");
   });
+
+  it("exposes current message id for action tools", () => {
+    const sessionCtx = {
+      Provider: "telegram",
+      To: "chat:99",
+      MessageSid: "123",
+      MessageSidFull: "chat:99:123",
+    } as TemplateContext;
+
+    const result = buildThreadingToolContext({
+      sessionCtx,
+      config: cfg,
+      hasRepliedRef: undefined,
+    });
+
+    expect(result.currentMessageId).toBe("chat:99:123");
+  });
 });
 
 describe("applyReplyThreading auto-threading", () => {

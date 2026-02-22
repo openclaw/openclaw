@@ -633,6 +633,85 @@ describe("runMessageAction sandboxed media validation", () => {
   });
 });
 
+describe("runMessageAction react messageId inference", () => {
+  const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
+    jsonResult({
+      ok: true,
+      messageId: params.messageId ?? null,
+    }),
+  );
+
+  const reactPlugin: ChannelPlugin = {
+    id: "reactchat",
+    meta: {
+      id: "reactchat",
+      label: "React Chat",
+      selectionLabel: "React Chat",
+      docsPath: "/channels/reactchat",
+      blurb: "Reaction test plugin.",
+    },
+    capabilities: { chatTypes: ["direct"], reactions: true },
+    config: {
+      listAccountIds: () => ["default"],
+      resolveAccount: () => ({ enabled: true }),
+      isConfigured: () => true,
+    },
+    actions: {
+      listActions: () => ["react"],
+      supportsAction: ({ action }) => action === "react",
+      handleAction,
+    },
+  };
+
+  beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "reactchat",
+          source: "test",
+          plugin: reactPlugin,
+        },
+      ]),
+    );
+    handleAction.mockClear();
+  });
+
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry([]));
+    vi.clearAllMocks();
+  });
+
+  it("fills react messageId from tool context when missing", async () => {
+    const cfg = {
+      channels: {
+        reactchat: {
+          enabled: true,
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await runMessageAction({
+      cfg,
+      action: "react",
+      params: {
+        channel: "reactchat",
+        target: "channel:abc",
+        emoji: "✅",
+      },
+      toolContext: {
+        currentMessageId: "mid-123",
+      },
+      dryRun: false,
+    });
+
+    expect(result.kind).toBe("action");
+    expect(result.payload).toMatchObject({
+      ok: true,
+      messageId: "mid-123",
+    });
+  });
+});
+
 describe("runMessageAction media caption behavior", () => {
   afterEach(() => {
     setActivePluginRegistry(createTestRegistry([]));
