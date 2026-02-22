@@ -486,6 +486,55 @@ describe("installPluginFromDir", () => {
       expectedCwd: res.targetDir,
     });
   });
+
+  it("strips workspace devDependencies before npm install", async () => {
+    const workDir = makeTempDir();
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(workDir, "plugin");
+    fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/test-plugin",
+        version: "0.0.1",
+        openclaw: { extensions: ["./dist/index.js"] },
+        dependencies: { "left-pad": "1.3.0" },
+        devDependencies: {
+          openclaw: "workspace:*",
+          vitest: "^3.0.0",
+        },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export {};", "utf-8");
+
+    const run = vi.mocked(runCommandWithTimeout);
+    run.mockResolvedValue({
+      code: 0,
+      stdout: "",
+      stderr: "",
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    const res = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir: path.join(stateDir, "extensions"),
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(res.targetDir, "package.json"), "utf-8"),
+    ) as {
+      devDependencies?: Record<string, string>;
+    };
+    expect(manifest.devDependencies?.openclaw).toBeUndefined();
+    expect(manifest.devDependencies?.vitest).toBe("^3.0.0");
+  });
 });
 
 describe("installPluginFromNpmSpec", () => {
