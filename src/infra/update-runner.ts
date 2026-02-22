@@ -19,6 +19,7 @@ import {
 } from "./update-channels.js";
 import { compareSemverStrings } from "./update-check.js";
 import {
+  checkDirectoryOwnership,
   cleanupGlobalRenameDirs,
   detectGlobalInstallManagerForRoot,
   globalInstallArgs,
@@ -867,6 +868,28 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
   const beforeVersion = await readPackageVersion(pkgRoot);
   const globalManager = await detectGlobalInstallManagerForRoot(runCommand, pkgRoot, timeoutMs);
   if (globalManager) {
+    const ownershipCheck = await checkDirectoryOwnership(pkgRoot);
+    if (!ownershipCheck.ok) {
+      const fileList = ownershipCheck.foreignFiles.join("\n  ");
+      return {
+        status: "error",
+        mode: globalManager,
+        root: pkgRoot,
+        reason: "foreign-owned-files",
+        before: { version: beforeVersion },
+        steps: [
+          {
+            name: "ownership preflight",
+            command: `chown check ${pkgRoot}`,
+            cwd: pkgRoot,
+            durationMs: 0,
+            exitCode: 1,
+            stderrTail: `Found files not owned by the current user in ${pkgRoot}:\n  ${fileList}\n\nRun: sudo chown -R $(whoami) ${pkgRoot}`,
+          },
+        ],
+        durationMs: Date.now() - startedAt,
+      };
+    }
     const packageName = (await readPackageName(pkgRoot)) ?? DEFAULT_PACKAGE_NAME;
     await cleanupGlobalRenameDirs({
       globalRoot: path.dirname(pkgRoot),

@@ -137,6 +137,56 @@ export function globalInstallArgs(manager: GlobalInstallManager, spec: string): 
   return ["npm", "i", "-g", spec, ...NPM_GLOBAL_INSTALL_QUIET_FLAGS];
 }
 
+export type DirectoryOwnershipResult = {
+  ok: boolean;
+  foreignFiles: string[];
+};
+
+const FOREIGN_FILES_CAP = 10;
+
+export async function checkDirectoryOwnership(dirPath: string): Promise<DirectoryOwnershipResult> {
+  if (typeof process.getuid !== "function") {
+    return { ok: true, foreignFiles: [] };
+  }
+  const currentUid = process.getuid();
+  const foreignFiles: string[] = [];
+
+  async function scan(dir: string): Promise<void> {
+    if (foreignFiles.length >= FOREIGN_FILES_CAP) {
+      return;
+    }
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true });
+    } catch {
+      // If we can't read a directory, treat it as a foreign-owned file —
+      // proceeding would let the same EACCES hit npm during the update.
+      foreignFiles.push(dir);
+      return;
+    }
+    for (const entry of entries) {
+      if (foreignFiles.length >= FOREIGN_FILES_CAP) {
+        break;
+      }
+      const fullPath = path.join(dir, entry.name);
+      try {
+        const stat = await fs.lstat(fullPath);
+        if (stat.uid !== currentUid) {
+          foreignFiles.push(fullPath);
+        }
+      } catch {
+        // ignore stat errors
+      }
+      if (entry.isDirectory() && foreignFiles.length < FOREIGN_FILES_CAP) {
+        await scan(fullPath);
+      }
+    }
+  }
+
+  await scan(dirPath);
+  return { ok: foreignFiles.length === 0, foreignFiles };
+}
+
 export async function cleanupGlobalRenameDirs(params: {
   globalRoot: string;
   packageName: string;
