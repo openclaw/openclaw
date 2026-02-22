@@ -12,9 +12,9 @@ import {
   type RateLimitCheckResult,
 } from "./auth-rate-limit.js";
 import {
+  isLocalishHost,
   isLoopbackAddress,
   isTrustedProxyAddress,
-  resolveHostName,
   resolveClientIp,
 } from "./net.js";
 
@@ -133,10 +133,6 @@ export function isLocalDirectRequest(
     return false;
   }
 
-  const host = resolveHostName(req.headers?.host);
-  const hostIsLocal = host === "localhost" || host === "127.0.0.1" || host === "::1";
-  const hostIsTailscaleServe = host.endsWith(".ts.net");
-
   const hasForwarded = Boolean(
     req.headers?.["x-forwarded-for"] ||
     req.headers?.["x-real-ip"] ||
@@ -144,7 +140,7 @@ export function isLocalDirectRequest(
   );
 
   const remoteIsTrustedProxy = isTrustedProxyAddress(req.socket?.remoteAddress, trustedProxies);
-  return (hostIsLocal || hostIsTailscaleServe) && (!hasForwarded || remoteIsTrustedProxy);
+  return isLocalishHost(req.headers?.host) && (!hasForwarded || remoteIsTrustedProxy);
 }
 
 function getTailscaleUser(req?: IncomingMessage): TailscaleUser | null {
