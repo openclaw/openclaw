@@ -29,6 +29,13 @@ type NodeListPayload = {
   nodes?: Array<{ nodeId?: string; connected?: boolean; paired?: boolean }>;
 };
 
+type ChatEventPayload = {
+  runId?: string;
+  sessionKey?: string;
+  state?: string;
+  message?: unknown;
+};
+
 const GATEWAY_START_TIMEOUT_MS = 20_000;
 const GATEWAY_STOP_TIMEOUT_MS = 1_500;
 const E2E_TIMEOUT_MS = 120_000;
@@ -340,12 +347,52 @@ const waitForNodeStatus = async (
   throw new Error(`timeout waiting for node status for ${nodeId}`);
 };
 
+function extractFirstTextBlock(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content) || content.length === 0) {
+    return undefined;
+  }
+  const first = content[0];
+  if (!first || typeof first !== "object") {
+    return undefined;
+  }
+  const text = (first as { text?: unknown }).text;
+  return typeof text === "string" ? text : undefined;
+}
+
+const waitForChatFinalEvent = async (params: {
+  events: ChatEventPayload[];
+  runId: string;
+  sessionKey: string;
+  timeoutMs?: number;
+}): Promise<ChatEventPayload> => {
+  const deadline = Date.now() + (params.timeoutMs ?? 15_000);
+  while (Date.now() < deadline) {
+    const match = params.events.find(
+      (evt) =>
+        evt.runId === params.runId && evt.sessionKey === params.sessionKey && evt.state === "final",
+    );
+    if (match) {
+      return match;
+    }
+    await sleep(20);
+  }
+  throw new Error(`timeout waiting for final chat event (runId=${params.runId})`);
+};
+
 describe("gateway multi-instance e2e", () => {
   const instances: GatewayInstance[] = [];
   const nodeClients: GatewayClient[] = [];
+  const webchatClients: GatewayClient[] = [];
 
   afterAll(async () => {
     for (const client of nodeClients) {
+      client.stop();
+    }
+    for (const client of webchatClients) {
       client.stop();
     }
     for (const inst of instances) {
@@ -393,6 +440,55 @@ describe("gateway multi-instance e2e", () => {
         waitForNodeStatus(gwA, nodeA.nodeId),
         waitForNodeStatus(gwB, nodeB.nodeId),
       ]);
+    },
+  );
+
+  it(
+    "delivers final chat event for telegram-shaped session keys",
+    { timeout: E2E_TIMEOUT_MS },
+    async () => {
+      const gw = await spawnGatewayInstance("chat-telegram-fixture");
+      instances.push(gw);
+
+      const chatEvents: ChatEventPayload[] = [];
+      const webchatClient = await connectGatewayClient({
+        url: `ws://127.0.0.1:${gw.port}`,
+        token: gw.gatewayToken,
+        clientName: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+        clientDisplayName: "chat-e2e",
+        clientVersion: "1.0.0",
+        platform: "web",
+        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+        onEvent: (evt) => {
+          if (evt.event === "chat" && evt.payload && typeof evt.payload === "object") {
+            chatEvents.push(evt.payload as ChatEventPayload);
+          }
+        },
+      });
+      webchatClients.push(webchatClient);
+
+      const sessionKey = "agent:main:telegram:direct:123456";
+      const idempotencyKey = `idem-${randomUUID()}`;
+      const sendRes = await webchatClient.request<{ runId?: string; status?: string }>(
+        "chat.send",
+        {
+          sessionKey,
+          message: "/context list",
+          idempotencyKey,
+        },
+      );
+      expect(sendRes.status).toBe("started");
+      const runId = sendRes.runId;
+      expect(typeof runId).toBe("string");
+
+      const finalEvent = await waitForChatFinalEvent({
+        events: chatEvents,
+        runId: String(runId),
+        sessionKey,
+      });
+      const finalText = extractFirstTextBlock(finalEvent.message);
+      expect(typeof finalText).toBe("string");
+      expect(finalText?.length).toBeGreaterThan(0);
     },
   );
 });
