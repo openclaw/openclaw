@@ -62,6 +62,31 @@ type DiscordChannelMessageResult = {
   channel_id?: string | null;
 };
 
+async function sendDiscordThreadTextChunks(params: {
+  rest: RequestClient;
+  threadId: string;
+  chunks: readonly string[];
+  request: DiscordClientRequest;
+  maxLinesPerMessage?: number;
+  chunkMode: ReturnType<typeof resolveChunkMode>;
+  silent?: boolean;
+}): Promise<void> {
+  for (const chunk of params.chunks) {
+    await sendDiscordText(
+      params.rest,
+      params.threadId,
+      chunk,
+      undefined,
+      params.request,
+      params.maxLinesPerMessage,
+      undefined,
+      undefined,
+      params.chunkMode,
+      params.silent,
+    );
+  }
+}
+
 /** Discord thread names are capped at 100 characters. */
 const DISCORD_THREAD_NAME_LIMIT = 100;
 
@@ -194,35 +219,25 @@ export async function sendMessageDiscord(
           chunkMode,
           opts.silent,
         );
-        for (const chunk of afterMediaChunks) {
-          await sendDiscordText(
-            rest,
-            threadId,
-            chunk,
-            undefined,
-            request,
-            accountInfo.config.maxLinesPerMessage,
-            undefined,
-            undefined,
-            chunkMode,
-            opts.silent,
-          );
-        }
+        await sendDiscordThreadTextChunks({
+          rest,
+          threadId,
+          chunks: afterMediaChunks,
+          request,
+          maxLinesPerMessage: accountInfo.config.maxLinesPerMessage,
+          chunkMode,
+          silent: opts.silent,
+        });
       } else {
-        for (const chunk of remainingChunks) {
-          await sendDiscordText(
-            rest,
-            threadId,
-            chunk,
-            undefined,
-            request,
-            accountInfo.config.maxLinesPerMessage,
-            undefined,
-            undefined,
-            chunkMode,
-            opts.silent,
-          );
-        }
+        await sendDiscordThreadTextChunks({
+          rest,
+          threadId,
+          chunks: remainingChunks,
+          request,
+          maxLinesPerMessage: accountInfo.config.maxLinesPerMessage,
+          chunkMode,
+          silent: opts.silent,
+        });
       }
     } catch (err) {
       throw await buildDiscordSendError(err, {
