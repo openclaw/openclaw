@@ -75,10 +75,10 @@ type RunWithModelFallbackParams = {
 };
 
 beforeEach(() => {
-  runEmbeddedPiAgentMock.mockReset();
-  runCliAgentMock.mockReset();
-  runWithModelFallbackMock.mockReset();
-  runtimeErrorMock.mockReset();
+  runEmbeddedPiAgentMock.mockClear();
+  runCliAgentMock.mockClear();
+  runWithModelFallbackMock.mockClear();
+  runtimeErrorMock.mockClear();
 
   // Default: no provider switch; execute the chosen provider+model.
   runWithModelFallbackMock.mockImplementation(
