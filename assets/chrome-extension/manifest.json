@@ -9,9 +9,21 @@
     "48": "icons/icon48.png",
     "128": "icons/icon128.png"
   },
-  "permissions": ["debugger", "tabs", "activeTab", "storage"],
-  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
-  "background": { "service_worker": "background.js", "type": "module" },
+  "permissions": [
+    "debugger",
+    "tabs",
+    "activeTab",
+    "storage",
+    "alarms"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
   "action": {
     "default_title": "OpenClaw Browser Relay (click to attach/detach)",
     "default_icon": {
@@ -21,5 +33,8 @@
       "128": "icons/icon128.png"
     }
   },
-  "options_ui": { "page": "options.html", "open_in_tab": true }
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  }
 }
