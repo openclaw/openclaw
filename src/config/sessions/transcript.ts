@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
+import { acquireSessionWriteLock } from "../../agents/session-write-lock.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveDefaultSessionStorePath } from "./paths.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
@@ -128,30 +129,38 @@ export async function appendAssistantMessageToSessionTranscript(params: {
 
   await ensureSessionHeader({ sessionFile, sessionId: entry.sessionId });
 
-  const sessionManager = SessionManager.open(sessionFile);
-  sessionManager.appendMessage({
-    role: "assistant",
-    content: [{ type: "text", text: mirrorText }],
-    api: "openai-responses",
-    provider: "openclaw",
-    model: "delivery-mirror",
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: {
+  const sessionLock = await acquireSessionWriteLock({
+    sessionFile,
+    maxHoldMs: 10_000,
+  });
+  try {
+    const sessionManager = SessionManager.open(sessionFile);
+    sessionManager.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: mirrorText }],
+      api: "openai-responses",
+      provider: "openclaw",
+      model: "delivery-mirror",
+      usage: {
         input: 0,
         output: 0,
         cacheRead: 0,
         cacheWrite: 0,
-        total: 0,
+        totalTokens: 0,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
       },
-    },
-    stopReason: "stop",
-    timestamp: Date.now(),
-  });
+      stopReason: "stop",
+      timestamp: Date.now(),
+    });
+  } finally {
+    await sessionLock.release();
+  }
 
   emitSessionTranscriptUpdate(sessionFile);
   return { ok: true, sessionFile };
