@@ -28,6 +28,14 @@ export const AgentSummarySchema = Type.Object(
         { additionalProperties: false },
       ),
     ),
+    /** Agent status derived from task queue: idle, working, or blocked. */
+    status: Type.Optional(
+      Type.Union([Type.Literal("idle"), Type.Literal("working"), Type.Literal("blocked")]),
+    ),
+    /** Current task description if agent is working or blocked. */
+    currentTask: Type.Optional(Type.String()),
+    /** Timestamp (ms) of last activity. */
+    lastActivity: Type.Optional(Type.Integer({ minimum: 0 })),
   },
   { additionalProperties: false },
 );

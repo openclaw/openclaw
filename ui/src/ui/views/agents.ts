@@ -129,6 +129,13 @@ export function renderAgents(props: AgentsProps) {
               : agents.map((agent) => {
                   const badge = agentBadgeText(agent.id, defaultId);
                   const emoji = resolveAgentEmoji(agent, props.agentIdentityById[agent.id] ?? null);
+                  const status = agent.status ?? "idle";
+                  const statusClass =
+                    status === "working"
+                      ? "status-working"
+                      : status === "blocked"
+                        ? "status-blocked"
+                        : "status-idle";
                   return html`
                     <button
                       type="button"
@@ -141,6 +148,7 @@ export function renderAgents(props: AgentsProps) {
                         <div class="agent-sub mono">${agent.id}</div>
                       </div>
                       ${badge ? html`<span class="agent-pill">${badge}</span>` : nothing}
+                      <span class="agent-status-pill ${statusClass}">${status}</span>
                     </button>
                   `;
                 })

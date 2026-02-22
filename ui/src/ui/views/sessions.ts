@@ -1,8 +1,8 @@
 import { html, nothing } from "lit";
+import type { GatewaySessionRow, SessionsListResult } from "../types.ts";
 import { formatRelativeTimestamp } from "../format.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatSessionTokens } from "../presenter.ts";
-import type { GatewaySessionRow, SessionsListResult } from "../types.ts";
 
 export type SessionsProps = {
   loading: boolean;
@@ -240,12 +240,20 @@ function renderRow(
   const chatUrl = canLink
     ? `${pathForTab("chat", basePath)}?session=${encodeURIComponent(row.key)}`
     : null;
+  const isSubagent = typeof row.spawnDepth === "number" && row.spawnDepth > 0;
 
   return html`
     <div class="table-row">
       <div class="mono session-key-cell">
         ${canLink ? html`<a href=${chatUrl} class="session-link">${row.key}</a>` : row.key}
         ${showDisplayName ? html`<span class="muted session-key-display-name">${displayName}</span>` : nothing}
+        ${
+          isSubagent
+            ? html`
+                <span class="agent-pill subagent-badge">subagent</span>
+              `
+            : nothing
+        }
       </div>
       <div>
         <input

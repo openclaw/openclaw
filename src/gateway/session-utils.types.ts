@@ -42,6 +42,10 @@ export type GatewaySessionRow = {
   lastChannel?: SessionEntry["lastChannel"];
   lastTo?: string;
   lastAccountId?: string;
+  /** Parent session key that spawned this session (for subagent sessions). */
+  spawnedBy?: string;
+  /** Subagent spawn depth (0 = main session, 1+ = subagent). */
+  spawnDepth?: number;
 };
 
 export type GatewayAgentRow = {
@@ -54,6 +58,12 @@ export type GatewayAgentRow = {
     avatar?: string;
     avatarUrl?: string;
   };
+  /** Agent status derived from task queue: idle, working, or blocked. */
+  status?: "idle" | "working" | "blocked";
+  /** Current task description if agent is working or blocked. */
+  currentTask?: string;
+  /** Timestamp (ms) of last activity. */
+  lastActivity?: number;
 };
 
 export type SessionPreviewItem = {

@@ -1,5 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
+import type {
+  GatewayAgentRow,
+  GatewaySessionRow,
+  GatewaySessionsDefaults,
+  SessionsListResult,
+} from "./session-utils.types.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
@@ -29,12 +35,6 @@ import {
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.js";
 import { readSessionTitleFieldsFromTranscript } from "./session-utils.fs.js";
-import type {
-  GatewayAgentRow,
-  GatewaySessionRow,
-  GatewaySessionsDefaults,
-  SessionsListResult,
-} from "./session-utils.types.js";
 
 export {
   archiveFileOnDisk,
@@ -821,6 +821,8 @@ export function listSessionsFromStore(params: {
         lastChannel: deliveryFields.lastChannel ?? entry?.lastChannel,
         lastTo: deliveryFields.lastTo ?? entry?.lastTo,
         lastAccountId: deliveryFields.lastAccountId ?? entry?.lastAccountId,
+        spawnedBy: entry?.spawnedBy,
+        spawnDepth: entry?.spawnDepth,
       };
     })
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
