@@ -32,6 +32,8 @@ export type SessionEntry = {
   lastHeartbeatSentAt?: number;
   sessionId: string;
   updatedAt: number;
+  /** Timestamp (ms) of the last human (non-heartbeat, non-cron) inbound message. */
+  lastHumanInboundAt?: number;
   sessionFile?: string;
   /** Parent session key that spawned this session (used for sandbox session-tool scoping). */
   spawnedBy?: string;

@@ -113,7 +113,20 @@ export type CronJob = {
   wakeMode: CronWakeMode;
   payload: CronPayload;
   delivery?: CronDelivery;
+  /** Skip execution when the session is actively conversing with a human. */
+  deferWhileActive?: CronDeferWhileActive;
   state: CronJobState;
+};
+
+/**
+ * When set on a job, the scheduler will skip execution if the main session
+ * received an inbound (human) message within this many milliseconds.
+ * Only applies to sessionTarget="main" jobs. Skipped runs are silent —
+ * they do not count as errors and do not trigger backoff.
+ */
+export type CronDeferWhileActive = {
+  /** Skip if last inbound message was within this many ms. Default: 300_000 (5 min). */
+  quietMs?: number;
 };
 
 export type CronStoreFile = {

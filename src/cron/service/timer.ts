@@ -562,10 +562,50 @@ export async function runDueJobs(state: CronServiceState) {
   }
 }
 
+/**
+ * Default quiet window for deferWhileActive when quietMs is not specified.
+ */
+const DEFAULT_DEFER_QUIET_MS = 5 * 60_000; // 5 minutes
+
 async function executeJobCore(
   state: CronServiceState,
   job: CronJob,
 ): Promise<CronRunOutcome & CronRunTelemetry & { delivered?: boolean }> {
+  // ─── Defer-while-active check ───────────────────────────────────────
+  // If the job (or global config) has deferWhileActive set and the session
+  // recently had activity, silently skip this run. The job will fire at its
+  // next scheduled time. This prevents redundant heartbeats/checks while
+  // the user is actively chatting.
+  if (job.sessionTarget === "main" && state.deps.getLastInboundAtMs) {
+    // Per-job setting takes priority; fall back to global config default.
+    const jobDefer = job.deferWhileActive;
+    const globalDefer = state.deps.cronConfig?.deferWhileActive;
+    const effectiveDefer = jobDefer !== undefined ? jobDefer : globalDefer;
+
+    if (effectiveDefer && (effectiveDefer as unknown) !== false) {
+      const quietMs = effectiveDefer.quietMs ?? DEFAULT_DEFER_QUIET_MS;
+      const lastInbound = state.deps.getLastInboundAtMs({
+        agentId: job.agentId,
+        sessionKey: job.sessionKey,
+      });
+      if (typeof lastInbound === "number" && lastInbound > 0) {
+        const elapsed = state.deps.nowMs() - lastInbound;
+        if (elapsed < quietMs) {
+          state.deps.log.debug(
+            {
+              jobId: job.id,
+              jobName: job.name,
+              elapsedMs: elapsed,
+              quietMs,
+            },
+            "cron: skipping job — session active (deferWhileActive)",
+          );
+          return { status: "skipped", error: "session-active" };
+        }
+      }
+    }
+  }
+
   if (job.sessionTarget === "main") {
     const text = resolveJobPayloadTextForMain(job);
     if (!text) {

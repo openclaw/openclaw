@@ -15,4 +15,16 @@ export type CronConfig = {
    * Default: "24h".
    */
   sessionRetention?: string | false;
+  /**
+   * Default deferWhileActive settings for all main-session cron jobs.
+   * Individual jobs can override with their own deferWhileActive.
+   * When set, cron jobs targeting the main session will be silently skipped
+   * if the session received activity within quietMs milliseconds.
+   */
+  deferWhileActive?:
+    | {
+        /** Skip if last session activity was within this many ms. Default: 300000 (5 min). */
+        quietMs?: number;
+      }
+    | false;
 };

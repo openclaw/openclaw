@@ -21,6 +21,7 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import { getChildLogger } from "../logging.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+import { loadSessionEntry } from "./session-utils.js";
 
 export type GatewayCronState = {
   cron: CronService;
@@ -196,6 +197,25 @@ export function buildGatewayCronService(params: {
         sessionKey: `cron:${job.id}`,
         lane: "cron",
       });
+    },
+    getLastInboundAtMs: (opts) => {
+      // Use lastHumanInboundAt (if available) to determine last human activity.
+      // This avoids false positives where cron/heartbeat responses bump updatedAt,
+      // causing deferWhileActive to defer indefinitely.
+      // Falls back to updatedAt for sessions that predate lastHumanInboundAt.
+      try {
+        const { agentId: resolvedAgentId } = resolveCronAgent(opts?.agentId);
+        const runtimeConfig = loadConfig();
+        const sessionKey = resolveCronSessionKey({
+          runtimeConfig,
+          agentId: resolvedAgentId,
+          requestedSessionKey: opts?.sessionKey,
+        });
+        const { entry } = loadSessionEntry(sessionKey);
+        return entry?.lastHumanInboundAt ?? entry?.updatedAt ?? null;
+      } catch {
+        return null;
+      }
     },
     log: getChildLogger({ module: "cron", storePath }),
     onEvent: (evt) => {

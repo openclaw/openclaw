@@ -9,6 +9,7 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../../agents/workspace.js";
 import { resolveChannelModelOverride } from "../../channels/model-overrides.js";
 import { type OpenClawConfig, loadConfig } from "../../config/config.js";
+import { updateSessionStore } from "../../config/sessions.js";
 import { applyLinkUnderstanding } from "../../link-understanding/apply.js";
 import { applyMediaUnderstanding } from "../../media-understanding/apply.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -164,6 +165,24 @@ export async function getReplyFromConfig(
     triggerBodyNormalized,
     bodyStripped,
   } = sessionState;
+
+  // Track last human inbound timestamp for deferWhileActive.
+  // Heartbeats and cron-triggered agent turns should NOT update this field,
+  // so that defer logic can distinguish real human activity from automated responses.
+  if (!opts?.isHeartbeat) {
+    const now = Date.now();
+    sessionEntry.lastHumanInboundAt = now;
+    sessionStore[sessionKey] = { ...sessionStore[sessionKey], lastHumanInboundAt: now };
+    await updateSessionStore(
+      storePath,
+      (store) => {
+        if (store[sessionKey]) {
+          store[sessionKey] = { ...store[sessionKey], lastHumanInboundAt: now };
+        }
+      },
+      { activeSessionKey: sessionKey },
+    );
+  }
 
   await applyResetModelOverride({
     cfg,

@@ -77,6 +77,15 @@ export type CronServiceDeps = {
       CronRunTelemetry
   >;
   onEvent?: (evt: CronEvent) => void;
+  /**
+   * Returns the timestamp (ms) of the last inbound (human) message on the
+   * main session, or null/undefined if unknown. Used by deferWhileActive
+   * to skip cron jobs when the user is actively chatting.
+   */
+  getLastInboundAtMs?: (opts?: {
+    agentId?: string;
+    sessionKey?: string;
+  }) => number | null | undefined;
 };
 
 export type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs"> & {
