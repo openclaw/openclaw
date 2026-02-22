@@ -111,6 +111,8 @@ export type SessionConfig = {
   resetByChannel?: Record<string, SessionResetConfig>;
   store?: string;
   typingIntervalSeconds?: number;
+  /** Typing indicator TTL in seconds. 0 = disabled (stays active until processing completes). */
+  typingTtlSeconds?: number;
   typingMode?: TypingMode;
   mainKey?: string;
   sendPolicy?: SessionSendPolicyConfig;
