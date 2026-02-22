@@ -11,16 +11,13 @@ const DEFAULT_SAFE_BIN_TRUSTED_DIRS = [
 ];
 
 type TrustedSafeBinDirsParams = {
-  pathEnv?: string | null;
-  delimiter?: string;
   baseDirs?: readonly string[];
+  extraDirs?: readonly string[];
 };
 
 type TrustedSafeBinPathParams = {
   resolvedPath: string;
   trustedDirs?: ReadonlySet<string>;
-  pathEnv?: string | null;
-  delimiter?: string;
 };
 
 type TrustedSafeBinCache = {
@@ -29,7 +26,6 @@ type TrustedSafeBinCache = {
 };
 
 let trustedSafeBinCache: TrustedSafeBinCache | null = null;
-const STARTUP_PATH_ENV = process.env.PATH ?? process.env.Path ?? "";
 
 function normalizeTrustedDir(value: string): string | null {
   const trimmed = value.trim();
@@ -39,29 +35,24 @@ function normalizeTrustedDir(value: string): string | null {
   return path.resolve(trimmed);
 }
 
-function buildTrustedSafeBinCacheKey(pathEnv: string, delimiter: string): string {
-  return `${delimiter}\u0000${pathEnv}`;
+function buildTrustedSafeBinCacheKey(params: {
+  baseDirs: readonly string[];
+  extraDirs: readonly string[];
+}): string {
+  return `${params.baseDirs.join("\u0001")}\u0000${params.extraDirs.join("\u0001")}`;
 }
 
 export function buildTrustedSafeBinDirs(params: TrustedSafeBinDirsParams = {}): Set<string> {
-  const delimiter = params.delimiter ?? path.delimiter;
-  const pathEnv = params.pathEnv ?? "";
   const baseDirs = params.baseDirs ?? DEFAULT_SAFE_BIN_TRUSTED_DIRS;
+  const extraDirs = params.extraDirs ?? [];
   const trusted = new Set<string>();
 
-  for (const entry of baseDirs) {
+  // Trust is explicit only. Do not derive from PATH, which is user/environment controlled.
+  for (const entry of [...baseDirs, ...extraDirs]) {
     const normalized = normalizeTrustedDir(entry);
     if (normalized) {
       trusted.add(normalized);
     }
-  }
-
-  const pathEntries = pathEnv
-    .split(delimiter)
-    .map((entry) => normalizeTrustedDir(entry))
-    .filter((entry): entry is string => Boolean(entry));
-  for (const entry of pathEntries) {
-    trusted.add(entry);
   }
 
   return trusted;
@@ -69,34 +60,29 @@ export function buildTrustedSafeBinDirs(params: TrustedSafeBinDirsParams = {}): 
 
 export function getTrustedSafeBinDirs(
   params: {
-    pathEnv?: string | null;
-    delimiter?: string;
+    baseDirs?: readonly string[];
+    extraDirs?: readonly string[];
     refresh?: boolean;
   } = {},
 ): Set<string> {
-  const delimiter = params.delimiter ?? path.delimiter;
-  const pathEnv = params.pathEnv ?? STARTUP_PATH_ENV;
-  const key = buildTrustedSafeBinCacheKey(pathEnv, delimiter);
+  const baseDirs = params.baseDirs ?? DEFAULT_SAFE_BIN_TRUSTED_DIRS;
+  const extraDirs = params.extraDirs ?? [];
+  const key = buildTrustedSafeBinCacheKey({ baseDirs, extraDirs });
 
   if (!params.refresh && trustedSafeBinCache?.key === key) {
     return trustedSafeBinCache.dirs;
   }
 
   const dirs = buildTrustedSafeBinDirs({
-    pathEnv,
-    delimiter,
+    baseDirs,
+    extraDirs,
   });
   trustedSafeBinCache = { key, dirs };
   return dirs;
 }
 
 export function isTrustedSafeBinPath(params: TrustedSafeBinPathParams): boolean {
-  const trustedDirs =
-    params.trustedDirs ??
-    getTrustedSafeBinDirs({
-      pathEnv: params.pathEnv,
-      delimiter: params.delimiter,
-    });
+  const trustedDirs = params.trustedDirs ?? getTrustedSafeBinDirs();
   const resolvedDir = path.dirname(path.resolve(params.resolvedPath));
   return trustedDirs.has(resolvedDir);
 }

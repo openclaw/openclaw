@@ -882,6 +882,15 @@ function renderQuotedArgv(argv: string[]): string {
   return argv.map((token) => shellEscapeSingleArg(token)).join(" ");
 }
 
+function renderSafeBinSegmentArgv(segment: ExecCommandSegment): string {
+  if (segment.argv.length === 0) {
+    return "";
+  }
+  const resolvedExecutable = segment.resolution?.resolvedPath?.trim();
+  const argv = resolvedExecutable ? [resolvedExecutable, ...segment.argv.slice(1)] : segment.argv;
+  return renderQuotedArgv(argv);
+}
+
 /**
  * Rebuilds a shell command and selectively single-quotes argv tokens for segments that
  * must be treated as literal (safeBins hardening) while preserving the rest of the
@@ -920,7 +929,7 @@ export function buildSafeBinsShellCommand(params: {
         return { ok: false, reason: "segment mapping failed" };
       }
       const needsLiteral = by === "safeBins";
-      rendered.push(needsLiteral ? renderQuotedArgv(seg.argv) : raw.trim());
+      rendered.push(needsLiteral ? renderSafeBinSegmentArgv(seg) : raw.trim());
       segIndex += 1;
     }
 

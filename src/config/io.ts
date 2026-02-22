@@ -557,11 +557,22 @@ function maybeLoadDotEnvForConfig(env: NodeJS.ProcessEnv): void {
 }
 
 function normalizeExecSafeBinProfilesInConfig(cfg: OpenClawConfig): void {
+  const normalizeTrustedDirs = (entries?: readonly string[]) => {
+    if (!Array.isArray(entries)) {
+      return undefined;
+    }
+    const normalized = entries.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+    return normalized.length > 0 ? Array.from(new Set(normalized)) : undefined;
+  };
+
   const normalizeExec = (exec: unknown) => {
     if (!exec || typeof exec !== "object" || Array.isArray(exec)) {
       return;
     }
-    const typedExec = exec as { safeBinProfiles?: Record<string, unknown> };
+    const typedExec = exec as {
+      safeBinProfiles?: Record<string, unknown>;
+      safeBinTrustedDirs?: string[];
+    };
     const normalized = normalizeSafeBinProfileFixtures(
       typedExec.safeBinProfiles as Record<
         string,
@@ -574,6 +585,7 @@ function normalizeExecSafeBinProfilesInConfig(cfg: OpenClawConfig): void {
       >,
     );
     typedExec.safeBinProfiles = Object.keys(normalized).length > 0 ? normalized : undefined;
+    typedExec.safeBinTrustedDirs = normalizeTrustedDirs(typedExec.safeBinTrustedDirs);
   };
 
   normalizeExec(cfg.tools?.exec);
