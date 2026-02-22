@@ -1,3 +1,5 @@
+import { handleDebuggerDetach, cancelAllPendingReattach } from './background-logic.js'
+
 const DEFAULT_PORT = 18792
 
 const BADGE = {
@@ -25,6 +27,9 @@ const childSessionToTab = new Map()
 
 /** @type {Map<number, {resolve:(v:any)=>void, reject:(e:Error)=>void}>} */
 const pending = new Map()
+
+/** @type {Map<number, () => void>} */
+const pendingReattach = new Map()
 
 function nowStack() {
   try {
@@ -135,6 +140,7 @@ function onRelayClosed(reason) {
   tabs.clear()
   tabBySession.clear()
   childSessionToTab.clear()
+  cancelAllPendingReattach(pendingReattach)
 }
 
 function sendToRelay(payload) {
@@ -262,6 +268,10 @@ async function attachTab(tabId, opts = {}) {
 }
 
 async function detachTab(tabId, reason) {
+  // Cancel any pending reattach
+  const cleanup = pendingReattach.get(tabId)
+  if (cleanup) cleanup()
+
   const tab = tabs.get(tabId)
   if (tab?.sessionId && tab?.targetId) {
     try {
@@ -439,10 +449,17 @@ function onDebuggerEvent(source, method, params) {
 }
 
 function onDebuggerDetach(source, reason) {
-  const tabId = source.tabId
-  if (!tabId) return
-  if (!tabs.has(tabId)) return
-  void detachTab(tabId, reason)
+  handleDebuggerDetach(source, reason, {
+    tabs,
+    pendingReattach,
+    setBadge,
+    detachTab,
+    ensureRelayConnection,
+    attachTab,
+    tabEvents: { onUpdated: chrome.tabs.onUpdated, onRemoved: chrome.tabs.onRemoved },
+    setTimeout,
+    clearTimeout,
+  })
 }
 
 chrome.action.onClicked.addListener(() => void connectOrToggleForActiveTab())
