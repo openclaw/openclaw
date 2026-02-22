@@ -189,6 +189,14 @@ function buildChatCommands(): ChatCommandDefinition[] {
       category: "management",
     }),
     defineChatCommand({
+      key: "route",
+      description: "Test routing classification for a message.",
+      textAlias: "/route",
+      acceptsArgs: true,
+      scope: "text",
+      category: "status",
+    }),
+    defineChatCommand({
       key: "context",
       nativeName: "context",
       description: "Explain how context is built and used.",

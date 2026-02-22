@@ -3,6 +3,7 @@ import { ChannelType, MessageType } from "@buape/carbon";
 import { Routes } from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createReplyDispatcherWithTyping } from "../auto-reply/reply/reply-dispatcher.js";
+import { TaskType } from "../gateway/routing/types.js";
 import {
   dispatchMock,
   readAllowFromStoreMock,
@@ -466,7 +467,13 @@ describe("discord tool result dispatch", () => {
           guilds: { "*": { requireMention: false } },
         },
       },
-      routing: { allowFrom: [] },
+      routing: {
+        default_task_type: TaskType.FALLBACK,
+        cooldown_seconds: 30,
+        antiflap_enabled: false,
+        triggers: {},
+        deny_list: [],
+      },
     } as ReturnType<typeof import("../config/config.js").loadConfig>;
 
     const handler = await createHandler(cfg);

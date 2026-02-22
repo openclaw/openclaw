@@ -500,11 +500,13 @@ export async function runEmbeddedPiAgent(
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
-      const maybeMarkAuthProfileFailure = async (params: {
+      const maybeMarkAuthProfileFailure = async ({
+        profileId,
+        reason,
+      }: {
         profileId?: string;
         reason?: Parameters<typeof markAuthProfileFailure>[0]["reason"] | null;
       }) => {
-        const { profileId, reason } = params;
         if (!profileId || !reason || reason === "timeout") {
           return;
         }

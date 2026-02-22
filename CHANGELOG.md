@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Agents/Routing: add L1.5 semantic router for intelligent model routing with 24 task types, health/budget tracking, antiflap cooldown, review gate for high-risk tasks, and opt-in per-agent configuration. (#20147) Thanks @irchelper.
 - Skills: remove bundled `food-order` skill from this repo; manage/install it from ClawHub instead.
 - Docs/Subagents: make thread-bound session guidance channel-first instead of Discord-specific, and list thread-supporting channels explicitly. (#23589) Thanks @osolmaz.
 - Channels/Config: unify channel preview streaming config handling with a shared resolver and canonical migration path.

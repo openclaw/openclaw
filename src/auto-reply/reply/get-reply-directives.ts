@@ -3,7 +3,10 @@ import type { ModelAliasIndex } from "../../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { SessionEntry } from "../../config/sessions.js";
+import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
+import { getRoutingInstance } from "../../gateway/routing/routing-instance.js";
+import { checkSafety } from "../../gateway/routing/safety-gate.js";
+import { resolveTaskType } from "../../gateway/routing/task-resolver.js";
 import { listChatCommands, shouldHandleTextCommands } from "../commands-registry.js";
 import { listSkillCommandsForWorkspace } from "../skill-commands.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -80,6 +83,14 @@ function resolveExecOverrides(params: {
   return { host, security, ask, node };
 }
 
+function resolveRoutedModelLabel(label: string): { provider?: string; model: string } {
+  const parts = label.split("/");
+  if (parts.length === 2) {
+    return { provider: parts[0], model: parts[1] };
+  }
+  return { model: label };
+}
+
 export type ReplyDirectiveResult =
   | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
   | { kind: "continue"; result: ReplyDirectiveContinuation };
@@ -119,7 +130,6 @@ export async function resolveReplyDirectives(params: {
     agentDir,
     workspaceDir,
     sessionCtx,
-    sessionEntry,
     sessionStore,
     sessionKey,
     storePath,
@@ -137,8 +147,10 @@ export async function resolveReplyDirectives(params: {
     opts,
     skillFilter,
   } = params;
+  let sessionEntry = params.sessionEntry;
   let provider = initialProvider;
   let model = initialModel;
+  let modelFallbacks: string[] | undefined;
 
   // Prefer CommandBody/RawBody (clean message without structural context) for directive parsing.
   // Keep `Body`/`BodyStripped` as the best-available prompt text (may include context).
@@ -155,6 +167,95 @@ export async function resolveReplyDirectives(params: {
     "";
   const promptSource = sessionCtx.BodyForAgent ?? sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   const commandText = commandSource || promptSource;
+
+  const routingConfig = cfg.routing;
+  if (routingConfig) {
+    const safety = checkSafety(ctx.Body ?? "", routingConfig);
+    if (!safety.ok) {
+      console.warn(`[routing] Safety gate blocked message: ${safety.error}`);
+      return {
+        kind: "reply",
+        reply: {
+          text: "Message blocked by safety filter.",
+        },
+      };
+    }
+  }
+
+  const isSubagent = sessionKey.includes(":subagent:");
+  if (provider === defaultProvider && model === defaultModel && routingConfig && isSubagent) {
+    const now = Date.now();
+    const cooldownMs = Math.max(0, routingConfig.cooldown_seconds) * 1000;
+    const lastRoutedModel = sessionEntry?.lastRoutedModel;
+    const lastRoutedAt = sessionEntry?.lastRoutedAt;
+    const withinCooldown =
+      routingConfig.antiflap_enabled &&
+      Boolean(lastRoutedModel) &&
+      typeof lastRoutedAt === "number" &&
+      cooldownMs > 0 &&
+      now - lastRoutedAt < cooldownMs;
+
+    if (withinCooldown && lastRoutedModel) {
+      const resolved = resolveRoutedModelLabel(lastRoutedModel);
+      if (resolved.provider) {
+        provider = resolved.provider;
+      }
+      model = resolved.model;
+    } else {
+      const routingInstance = getRoutingInstance(routingConfig);
+      // Build a short-window context string from the last 2 inbound messages so that
+      // short context-dependent inputs ("好", "继续", "做") can be correctly classified
+      // by the semantic router. L1 keyword matching still uses bare commandText only.
+      const recentContext =
+        ctx.InboundHistory?.slice(-2)
+          .map((m) => m.body)
+          .filter(Boolean)
+          .join("\n") || undefined;
+      const taskType = await resolveTaskType(
+        commandText,
+        routingInstance.semanticRouter,
+        recentContext,
+      );
+      const { selector, reviewGate } = routingInstance;
+      // ReviewGate hook — flag high-risk tasks in auto mode (non-blocking for now)
+      if (reviewGate.shouldReview(taskType) && reviewGate.isAutoMode()) {
+        console.info(`[routing] review-gate: task ${taskType} flagged for review`);
+      }
+      const agentList = cfg.agents?.list ?? [];
+      const models = selector.resolveModels(taskType, routingConfig, agentList);
+      console.debug(
+        `[routing] "${commandText?.slice(0, 40)}" → task=${taskType} model=${models[0] ?? "none"} fallbacks=${models.slice(1).join(",") || "none"}`,
+      );
+      if (models.length > 0) {
+        const resolved = resolveRoutedModelLabel(models[0]);
+        if (resolved.provider) {
+          provider = resolved.provider;
+        }
+        model = resolved.model;
+
+        if (models.length > 1) {
+          modelFallbacks = models.slice(1);
+        }
+
+        if (!sessionEntry) {
+          sessionEntry = {
+            sessionId: sessionKey,
+            updatedAt: now,
+          };
+        }
+        sessionEntry.lastRoutedModel = models[0];
+        sessionEntry.lastRoutedAt = now;
+        sessionEntry.updatedAt = now;
+        sessionStore[sessionKey] = sessionEntry;
+        if (storePath) {
+          await updateSessionStore(storePath, (store) => {
+            store[sessionKey] = sessionEntry;
+          });
+        }
+      }
+    }
+  }
+
   const command = buildCommandContext({
     ctx,
     cfg,
@@ -264,6 +365,11 @@ export async function resolveReplyDirectives(params: {
         hasQueueDirective: false,
         queueReset: false,
       };
+
+  if (modelFallbacks) {
+    directives = { ...directives, modelFallbacks };
+  }
+
   const existingBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
   let cleanedBody = (() => {
     if (!existingBody) {

@@ -19,6 +19,7 @@ import {
 } from "./commands-info.js";
 import { handleModelsCommand } from "./commands-models.js";
 import { handlePluginCommand } from "./commands-plugin.js";
+import { handleRouteCommand } from "./commands-route.js";
 import {
   handleAbortTrigger,
   handleActivationCommand,
@@ -56,6 +57,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
       handleStatusCommand,
       handleAllowlistCommand,
       handleApproveCommand,
+      handleRouteCommand,
       handleContextCommand,
       handleExportSessionCommand,
       handleWhoamiCommand,

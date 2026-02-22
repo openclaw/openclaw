@@ -18,6 +18,8 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { recordRoutingResult } from "../../gateway/routing/routing-hooks.js";
+import type { RoutingConfig } from "../../gateway/routing/types.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -428,6 +430,33 @@ export async function runAgentTurnWithFallback(params: {
             code: attempt.code ? String(attempt.code) : undefined,
           }))
         : [];
+
+      // routing-phase4: feed real call results into HealthTracker + BudgetTracker
+      try {
+        const routingConfig = (params.followupRun.run.config as { routing?: RoutingConfig })
+          .routing;
+        if (routingConfig) {
+          // Record each failed attempt (no precise latency data available)
+          for (const attempt of fallbackResult.attempts) {
+            recordRoutingResult(routingConfig, {
+              model: attempt.model,
+              success: false,
+              latencyMs: 0,
+            });
+          }
+          // Record the successful (final) call
+          const meta = runResult.meta;
+          recordRoutingResult(routingConfig, {
+            model: fallbackResult.model,
+            success: !meta?.error,
+            latencyMs: meta?.durationMs ?? 0,
+            promptTokens: meta?.agentMeta?.usage?.input,
+            completionTokens: meta?.agentMeta?.usage?.output,
+          });
+        }
+      } catch (err) {
+        console.warn("[routing] recordRoutingResult failed:", err);
+      }
 
       // Some embedded runs surface context overflow as an error payload instead of throwing.
       // Treat those as a session-level failure and auto-recover by starting a fresh session.
