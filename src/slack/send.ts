@@ -166,7 +166,14 @@ async function resolveChannelId(
   client: WebClient,
   recipient: SlackRecipient,
 ): Promise<{ channelId: string; isDm?: boolean }> {
-  if (recipient.kind === "channel") {
+  // Bare Slack user IDs (U-prefix) may arrive with kind="channel" when the
+  // target string had no explicit prefix (parseSlackTarget defaults bare IDs
+  // to "channel"). chat.postMessage tolerates user IDs directly, but
+  // files.uploadV2 → completeUploadExternal validates channel_id against
+  // ^[CGDZ][A-Z0-9]{8,}$ and rejects U-prefixed IDs.  Always resolve user
+  // IDs via conversations.open to obtain the DM channel ID.
+  const isUserId = recipient.kind === "user" || /^U[A-Z0-9]+$/i.test(recipient.id);
+  if (!isUserId) {
     return { channelId: recipient.id };
   }
   const response = await client.conversations.open({ users: recipient.id });
