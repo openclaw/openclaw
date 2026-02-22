@@ -50,7 +50,8 @@ export function makeRuntime(params?: { throwOnError?: boolean }): {
 }
 
 export function writeStore(data: unknown, prefix = "sessions"): string {
-  const file = path.join(os.tmpdir(), `${prefix}-${Date.now()}-${randomUUID()}.json`);
+  const fileName = `${[prefix, Date.now(), randomUUID()].join("-")}.json`;
+  const file = path.join(os.tmpdir(), fileName);
   fs.writeFileSync(file, JSON.stringify(data, null, 2));
   return file;
 }
