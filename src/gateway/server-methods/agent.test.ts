@@ -10,6 +10,8 @@ const mocks = vi.hoisted(() => ({
   registerAgentRunContext: vi.fn(),
   sessionsResetHandler: vi.fn(),
   loadConfigReturn: {} as Record<string, unknown>,
+  loadVoiceWakeRoutingConfig: vi.fn(),
+  resolveVoiceWakeRouteByTrigger: vi.fn(),
 }));
 
 vi.mock("../session-utils.js", async () => {
@@ -27,7 +29,10 @@ vi.mock("../../config/sessions.js", async () => {
   return {
     ...actual,
     updateSessionStore: mocks.updateSessionStore,
-    resolveAgentIdFromSessionKey: () => "main",
+    resolveAgentIdFromSessionKey: (sessionKey: string) => {
+      const m = /^agent:([^:]+):/.exec(sessionKey.trim());
+      return m?.[1] ?? "main";
+    },
     resolveExplicitAgentSessionKey: () => undefined,
     resolveAgentMainSessionKey: ({
       cfg,
@@ -56,6 +61,11 @@ vi.mock("../../infra/agent-events.js", () => ({
   onAgentEvent: vi.fn(),
 }));
 
+vi.mock("../../infra/voicewake-routing.js", () => ({
+  loadVoiceWakeRoutingConfig: mocks.loadVoiceWakeRoutingConfig,
+  resolveVoiceWakeRouteByTrigger: mocks.resolveVoiceWakeRouteByTrigger,
+}));
+
 vi.mock("./sessions.js", () => ({
   sessionsHandlers: {
     "sessions.reset": (...args: unknown[]) =>
@@ -81,7 +91,7 @@ const makeContext = (): GatewayRequestContext =>
   ({
     dedupe: new Map(),
     addChatRun: vi.fn(),
-    logGateway: { info: vi.fn(), error: vi.fn() },
+    logGateway: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   }) as unknown as GatewayRequestContext;
 
 type AgentHandlerArgs = Parameters<typeof agentHandlers.agent>[0];
@@ -242,6 +252,94 @@ describe("gateway agent handler", () => {
 
     mocks.loadConfigReturn = {};
     vi.useRealTimers();
+  });
+
+  it("routes voice wake trigger to configured session target", async () => {
+    mocks.loadVoiceWakeRoutingConfig.mockResolvedValue({
+      version: 1,
+      defaultTarget: { mode: "current" },
+      routes: [],
+      updatedAtMs: 0,
+    });
+    mocks.resolveVoiceWakeRouteByTrigger.mockReturnValue({ sessionKey: "agent:main:voice" });
+
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "voice-session-id",
+        updatedAt: Date.now(),
+      },
+      canonicalKey: "agent:main:voice",
+    });
+    mocks.updateSessionStore.mockResolvedValue(undefined);
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    const respond = vi.fn();
+    await agentHandlers.agent({
+      params: {
+        message: "do thing",
+        sessionKey: "main",
+        voiceWakeTrigger: "robot wake",
+        idempotencyKey: "test-voice-route",
+      },
+      respond,
+      context: makeContext(),
+      req: { type: "req", id: "voice-1", method: "agent" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as { sessionKey?: string };
+    expect(callArgs.sessionKey).toBe("agent:main:voice");
+  });
+
+  it("ignores voice wake session route targeting unknown agent", async () => {
+    mocks.loadVoiceWakeRoutingConfig.mockResolvedValue({
+      version: 1,
+      defaultTarget: { mode: "current" },
+      routes: [],
+      updatedAtMs: 0,
+    });
+    mocks.resolveVoiceWakeRouteByTrigger.mockReturnValue({ sessionKey: "agent:ghost:main" });
+
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: "main-session-id",
+        updatedAt: Date.now(),
+      },
+      canonicalKey: "agent:main:main",
+    });
+    mocks.updateSessionStore.mockResolvedValue(undefined);
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    const respond = vi.fn();
+    await agentHandlers.agent({
+      params: {
+        message: "do thing",
+        sessionKey: "main",
+        voiceWakeTrigger: "robot wake",
+        idempotencyKey: "test-voice-route-unknown",
+      },
+      respond,
+      context: makeContext(),
+      req: { type: "req", id: "voice-2", method: "agent" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    await vi.waitFor(() => expect(mocks.agentCommand).toHaveBeenCalled());
+    const callArgs = mocks.agentCommand.mock.calls.at(-1)?.[0] as { sessionKey?: string };
+    expect(callArgs.sessionKey).toBe("agent:main:main");
   });
 
   it("handles missing cliSessionIds gracefully", async () => {
