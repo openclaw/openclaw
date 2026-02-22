@@ -1,5 +1,7 @@
 import { html, nothing } from "lit";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { formatRelativeTimestamp, formatMs } from "../format.ts";
+import { toSanitizedMarkdownHtml } from "../markdown.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatCronSchedule, formatNextRun } from "../presenter.ts";
 import type { ChannelUiMetaEntry, CronJob, CronRunLogEntry, CronStatus } from "../types.ts";
@@ -484,7 +486,9 @@ function renderJobPayload(job: CronJob) {
   if (job.payload.kind === "systemEvent") {
     return html`<div class="cron-job-detail">
       <span class="cron-job-detail-label">System</span>
-      <span class="muted cron-job-detail-value">${job.payload.text}</span>
+      <span class="muted cron-job-detail-value markdown-content">
+        ${unsafeHTML(toSanitizedMarkdownHtml(job.payload.text))}
+      </span>
     </div>`;
   }
 
@@ -501,7 +505,9 @@ function renderJobPayload(job: CronJob) {
   return html`
     <div class="cron-job-detail">
       <span class="cron-job-detail-label">Prompt</span>
-      <span class="muted cron-job-detail-value">${job.payload.message}</span>
+      <span class="muted cron-job-detail-value markdown-content">
+        ${unsafeHTML(toSanitizedMarkdownHtml(job.payload.message))}
+      </span>
     </div>
     ${
       delivery
