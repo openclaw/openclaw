@@ -58,6 +58,34 @@ describe("handleSlackAction", () => {
     };
   }
 
+  function createReplyToFirstScenario() {
+    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    sendSlackMessage.mockClear();
+    const hasRepliedRef = { value: false };
+    const context = createReplyToFirstContext(hasRepliedRef);
+    return { cfg, context, hasRepliedRef };
+  }
+
+  function expectLastSlackSend(content: string, threadTs?: string) {
+    expect(sendSlackMessage).toHaveBeenLastCalledWith("channel:C123", content, {
+      mediaUrl: undefined,
+      threadTs,
+      blocks: undefined,
+    });
+  }
+
+  async function sendSecondMessageAndExpectNoThread(params: {
+    cfg: OpenClawConfig;
+    context: ReturnType<typeof createReplyToFirstContext>;
+  }) {
+    await handleSlackAction(
+      { action: "sendMessage", to: "channel:C123", content: "Second" },
+      params.cfg,
+      params.context,
+    );
+    expectLastSlackSend("Second");
+  }
+
   async function resolveReadToken(cfg: OpenClawConfig): Promise<string | undefined> {
     readSlackMessages.mockClear();
     readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
@@ -306,10 +334,7 @@ describe("handleSlackAction", () => {
   });
 
   it("replyToMode=first threads first message then stops", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
-    sendSlackMessage.mockClear();
-    const hasRepliedRef = { value: false };
-    const context = createReplyToFirstContext(hasRepliedRef);
+    const { cfg, context, hasRepliedRef } = createReplyToFirstScenario();
 
     // First message should be threaded
     await handleSlackAction(
@@ -317,31 +342,14 @@ describe("handleSlackAction", () => {
       cfg,
       context,
     );
-    expect(sendSlackMessage).toHaveBeenLastCalledWith("channel:C123", "First", {
-      mediaUrl: undefined,
-      threadTs: "1111111111.111111",
-      blocks: undefined,
-    });
+    expectLastSlackSend("First", "1111111111.111111");
     expect(hasRepliedRef.value).toBe(true);
 
-    // Second message should NOT be threaded
-    await handleSlackAction(
-      { action: "sendMessage", to: "channel:C123", content: "Second" },
-      cfg,
-      context,
-    );
-    expect(sendSlackMessage).toHaveBeenLastCalledWith("channel:C123", "Second", {
-      mediaUrl: undefined,
-      threadTs: undefined,
-      blocks: undefined,
-    });
+    await sendSecondMessageAndExpectNoThread({ cfg, context });
   });
 
   it("replyToMode=first marks hasRepliedRef even when threadTs is explicit", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
-    sendSlackMessage.mockClear();
-    const hasRepliedRef = { value: false };
-    const context = createReplyToFirstContext(hasRepliedRef);
+    const { cfg, context, hasRepliedRef } = createReplyToFirstScenario();
 
     await handleSlackAction(
       {
@@ -353,23 +361,10 @@ describe("handleSlackAction", () => {
       cfg,
       context,
     );
-    expect(sendSlackMessage).toHaveBeenLastCalledWith("channel:C123", "Explicit", {
-      mediaUrl: undefined,
-      threadTs: "2222222222.222222",
-      blocks: undefined,
-    });
+    expectLastSlackSend("Explicit", "2222222222.222222");
     expect(hasRepliedRef.value).toBe(true);
 
-    await handleSlackAction(
-      { action: "sendMessage", to: "channel:C123", content: "Second" },
-      cfg,
-      context,
-    );
-    expect(sendSlackMessage).toHaveBeenLastCalledWith("channel:C123", "Second", {
-      mediaUrl: undefined,
-      threadTs: undefined,
-      blocks: undefined,
-    });
+    await sendSecondMessageAndExpectNoThread({ cfg, context });
   });
 
   it("replyToMode=first without hasRepliedRef does not thread", async () => {
