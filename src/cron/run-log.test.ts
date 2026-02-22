@@ -105,7 +105,7 @@ describe("cron run log", () => {
     });
   });
 
-  it("ignores invalid and non-finished lines while preserving delivered flag", async () => {
+  it("ignores invalid and non-finished lines while preserving delivery fields", async () => {
     await withRunLogDir("openclaw-cron-log-filter-", async (dir) => {
       const logPath = path.join(dir, "runs", "job-1.jsonl");
       await fs.mkdir(path.dirname(logPath), { recursive: true });
@@ -120,6 +120,8 @@ describe("cron run log", () => {
             action: "finished",
             status: "ok",
             delivered: true,
+            deliveryStatus: "not-delivered",
+            deliveryError: "announce failed",
           }),
         ].join("\n") + "\n",
         "utf-8",
@@ -129,6 +131,8 @@ describe("cron run log", () => {
       expect(entries).toHaveLength(1);
       expect(entries[0]?.ts).toBe(2);
       expect(entries[0]?.delivered).toBe(true);
+      expect(entries[0]?.deliveryStatus).toBe("not-delivered");
+      expect(entries[0]?.deliveryError).toBe("announce failed");
     });
   });
 

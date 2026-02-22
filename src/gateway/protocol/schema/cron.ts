@@ -21,6 +21,17 @@ function cronAgentTurnPayloadSchema(params: { message: TSchema }) {
 
 const CronSessionTargetSchema = Type.Union([Type.Literal("main"), Type.Literal("isolated")]);
 const CronWakeModeSchema = Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")]);
+const CronRunStatusSchema = Type.Union([
+  Type.Literal("ok"),
+  Type.Literal("error"),
+  Type.Literal("skipped"),
+]);
+const CronDeliveryStatusSchema = Type.Union([
+  Type.Literal("delivered"),
+  Type.Literal("not-delivered"),
+  Type.Literal("unknown"),
+  Type.Literal("not-requested"),
+]);
 const CronCommonOptionalFields = {
   agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   sessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
@@ -151,13 +162,14 @@ export const CronJobStateSchema = Type.Object(
     nextRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     runningAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     lastRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
-    lastStatus: Type.Optional(
-      Type.Union([Type.Literal("ok"), Type.Literal("error"), Type.Literal("skipped")]),
-    ),
+    lastRunStatus: Type.Optional(CronRunStatusSchema),
+    lastStatus: Type.Optional(CronRunStatusSchema),
     lastError: Type.Optional(Type.String()),
     lastDurationMs: Type.Optional(Type.Integer({ minimum: 0 })),
     consecutiveErrors: Type.Optional(Type.Integer({ minimum: 0 })),
     lastDelivered: Type.Optional(Type.Boolean()),
+    lastDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
+    lastDeliveryError: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );
@@ -238,11 +250,12 @@ export const CronRunLogEntrySchema = Type.Object(
     ts: Type.Integer({ minimum: 0 }),
     jobId: NonEmptyString,
     action: Type.Literal("finished"),
-    status: Type.Optional(
-      Type.Union([Type.Literal("ok"), Type.Literal("error"), Type.Literal("skipped")]),
-    ),
+    status: Type.Optional(CronRunStatusSchema),
     error: Type.Optional(Type.String()),
     summary: Type.Optional(Type.String()),
+    delivered: Type.Optional(Type.Boolean()),
+    deliveryStatus: Type.Optional(CronDeliveryStatusSchema),
+    deliveryError: Type.Optional(Type.String()),
     sessionId: Type.Optional(NonEmptyString),
     sessionKey: Type.Optional(NonEmptyString),
     runAtMs: Type.Optional(Type.Integer({ minimum: 0 })),

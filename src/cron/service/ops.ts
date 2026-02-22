@@ -309,6 +309,8 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
       error: coreResult.error,
       summary: coreResult.summary,
       delivered: coreResult.delivered,
+      deliveryStatus: job.state.lastDeliveryStatus,
+      deliveryError: job.state.lastDeliveryError,
       sessionId: coreResult.sessionId,
       sessionKey: coreResult.sessionKey,
       runAtMs: prepared.startedAt,
