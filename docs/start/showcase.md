@@ -86,6 +86,72 @@ Full setup walkthrough (28m) by VelvetShark.
 
 <CardGroup cols={2}>
 
+<Card title="Cut-AI Video Slicer" icon="scissors" href="https://github.com/AI-Nate/Cut-AI">
+  **@ai_nate** · `video` `ffmpeg` `gemini` `shorts`
+
+Auto-slices long videos (Zoom calls, streams) into viral shorts with subtitles using Gemini 3.0 Pro + FFmpeg. Vibe coded in 3 hours for under $30.
+</Card>
+
+<Card title="Pipelock Egress Firewall" icon="shield-halved" href="https://github.com/luckyPipewrench/pipelock">
+  **@luckypipewrench** · `security` `firewall` `docker` `egress`
+
+Open source egress firewall for AI agents. Runs as a 15MB Docker sidecar to filter outbound network requests. Control what URLs your agent can reach.
+</Card>
+
+<Card title="Coach Cadence (Sports Coach)" icon="person-running" href="#">
+  **@jameseastwood** · `fitness` `coaching` `sports-science` `guardrails`
+
+World-class endurance sports coach powered by OpenClaw. Ingests sports science literature, manages training plans in realtime, with hallucination-preventing guardrails built via Claude Code.
+</Card>
+
+<Card title="Identiclaw (Agent Identity)" icon="fingerprint" href="https://kya.vouched.id/identiclaw">
+  **@barnacle_38112** · `identity` `security` `DID` `multi-agent`
+
+Cryptographic identity layer for OpenClaw agents using DIDs and MCP-I protocol. Each agent gets its own keypair, scoped credentials, and a central dashboard with remote kill-switch.
+</Card>
+
+<Card title="Garmin Pulse (Health Sync)" icon="heart-pulse" href="https://github.com/freakyflow/garminskill">
+  **@flow0675** · `garmin` `health` `sleep` `hrv`
+
+Syncs Garmin Connect health data (sleep, heart rate, stress, HRV, activities) into markdown files for your agent. Morning health summaries on Telegram included.
+</Card>
+
+<Card title="ClawTime (Multimodal Comm)" icon="comments" href="https://github.com/youngkent/clawtime">
+  **@youngkent6497** · `voice` `avatar` `multimodal` `local`
+
+Open source multimodal communication app. Text, voice chat, and watch an avatar react as it works on tasks. Direct local connection, no cloud service required.
+</Card>
+
+<Card title="Ecobee CLI (Thermostat)" icon="temperature-half" href="https://github.com/sumesh2279/ecobee-cli">
+  **@sudomakemetea_83608** · `smart-home` `thermostat` `ecobee` `cli`
+
+Terminal control for Ecobee thermostats. Built to work around Ecobee's discontinued developer API. Check status, change temperature, and automate climate.
+</Card>
+
+<Card title="LCARS Star Trek Interface" icon="star" href="https://x.com/russperry/status/2020614777798840568">
+  **@russperry** · `ui` `lcars` `star-trek` `crew`
+
+Star Trek LCARS-inspired UI/UX interface for the Enterprise Crew. Full themed dashboard for interacting with your agents.
+</Card>
+
+<Card title="HAL 9000 One-Click Deploy" icon="rocket" href="https://x.com/michaelaubry/status/2020396792458932568">
+  **@michael_20785** · `deploy` `one-click` `hal-9000` `demo`
+
+One-click deployable agent system inspired by HAL from 2001: A Space Odyssey. Chat interface built in a 24-hour sprint.
+</Card>
+
+<Card title="Thought-to-Agent Capture" icon="lightbulb" href="https://x.com/ItsAndreKoenig/status/2020511844104908888">
+  **@akoenig** · `capture` `input` `pebble` `workflow`
+
+Reducing the "notion-to-assistant ratio" with instant thought capture to OpenClaw. Less friction between having an idea and getting your agent working on it.
+</Card>
+
+<Card title="Autonomous Ops Email Reports" icon="envelope" href="https://x.com/i/status/2020694946341363838">
+  **@boxermicro** · `email` `ops` `autonomous` `monitoring`
+
+Local LLM-powered autonomous agent that sends daily/weekly/monthly ops and system health reports to Gmail without being asked.
+</Card>
+
 <Card title="PR Review → Telegram Feedback" icon="code-pull-request" href="https://x.com/i/status/2010878524543131691">
   **@bangnokia** • `review` `github` `telegram`
 
