@@ -77,6 +77,39 @@ describe("acquireSessionWriteLock", () => {
     }
   });
 
+  it("does not reclaim fresh malformed lock files during contention", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
+    try {
+      const sessionFile = path.join(root, "sessions.json");
+      const lockPath = `${sessionFile}.lock`;
+      await fs.writeFile(lockPath, "{}", "utf8");
+
+      await expect(
+        acquireSessionWriteLock({ sessionFile, timeoutMs: 50, staleMs: 60_000 }),
+      ).rejects.toThrow(/session file locked/);
+      await expect(fs.access(lockPath)).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reclaims malformed lock files once they are old enough", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
+    try {
+      const sessionFile = path.join(root, "sessions.json");
+      const lockPath = `${sessionFile}.lock`;
+      await fs.writeFile(lockPath, "{}", "utf8");
+      const staleDate = new Date(Date.now() - 2 * 60_000);
+      await fs.utimes(lockPath, staleDate, staleDate);
+
+      const lock = await acquireSessionWriteLock({ sessionFile, timeoutMs: 500, staleMs: 10_000 });
+      await lock.release();
+      await expect(fs.access(lockPath)).rejects.toThrow();
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
   it("watchdog releases stale in-process locks", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-"));
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
