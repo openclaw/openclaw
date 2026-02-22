@@ -279,7 +279,7 @@ export function createExecTool(
       if (elevatedRequested) {
         logInfo(`exec: elevated command ${truncateMiddle(params.command, 120)}`);
       }
-      const configuredHost = defaults?.host ?? "sandbox";
+      const configuredHost = defaults?.host ?? (defaults?.sandbox ? "sandbox" : "gateway");
       const sandboxHostConfigured = defaults?.host === "sandbox";
       const requestedHost = normalizeExecHost(params.host) ?? null;
       let host: ExecHost = requestedHost ?? configuredHost;
