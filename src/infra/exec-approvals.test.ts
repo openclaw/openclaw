@@ -293,6 +293,17 @@ describe("exec approvals command resolution", () => {
     expect(resolution?.rawExecutable).toBe("bash");
     expect(resolution?.executableName.toLowerCase()).toContain("bash");
   });
+
+  it("unwraps nice wrapper argv to resolve the effective executable", () => {
+    const resolution = resolveCommandResolutionFromArgv([
+      "/usr/bin/nice",
+      "bash",
+      "-lc",
+      "echo hi",
+    ]);
+    expect(resolution?.rawExecutable).toBe("bash");
+    expect(resolution?.executableName.toLowerCase()).toContain("bash");
+  });
 });
 
 describe("exec approvals shell parsing", () => {
@@ -1485,5 +1496,94 @@ describe("resolveAllowAlwaysPatterns", () => {
       platform: process.platform,
     });
     expect(patterns).toEqual([whoami]);
+  });
+
+  it("unwraps known dispatch wrappers before shell wrappers", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const whoami = makeExecutable(dir, "whoami");
+    const patterns = resolveAllowAlwaysPatterns({
+      segments: [
+        {
+          raw: "/usr/bin/nice /bin/zsh -lc whoami",
+          argv: ["/usr/bin/nice", "/bin/zsh", "-lc", "whoami"],
+          resolution: {
+            rawExecutable: "/usr/bin/nice",
+            resolvedPath: "/usr/bin/nice",
+            executableName: "nice",
+          },
+        },
+      ],
+      cwd: dir,
+      env: makePathEnv(dir),
+      platform: process.platform,
+    });
+    expect(patterns).toEqual([whoami]);
+    expect(patterns).not.toContain("/usr/bin/nice");
+  });
+
+  it("fails closed for unresolved dispatch wrappers", () => {
+    const patterns = resolveAllowAlwaysPatterns({
+      segments: [
+        {
+          raw: "sudo /bin/zsh -lc whoami",
+          argv: ["sudo", "/bin/zsh", "-lc", "whoami"],
+          resolution: {
+            rawExecutable: "sudo",
+            resolvedPath: "/usr/bin/sudo",
+            executableName: "sudo",
+          },
+        },
+      ],
+      platform: process.platform,
+    });
+    expect(patterns).toEqual([]);
+  });
+
+  it("prevents allow-always bypass for dispatch-wrapper + shell-wrapper chains", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const echo = makeExecutable(dir, "echo");
+    makeExecutable(dir, "id");
+    const safeBins = resolveSafeBins(undefined);
+    const env = makePathEnv(dir);
+
+    const first = evaluateShellAllowlist({
+      command: "/usr/bin/nice /bin/zsh -lc 'echo warmup-ok'",
+      allowlist: [],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    const persisted = resolveAllowAlwaysPatterns({
+      segments: first.segments,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(persisted).toEqual([echo]);
+
+    const second = evaluateShellAllowlist({
+      command: "/usr/bin/nice /bin/zsh -lc 'id > marker'",
+      allowlist: [{ pattern: echo }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(false);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: second.analysisOk,
+        allowlistSatisfied: second.allowlistSatisfied,
+      }),
+    ).toBe(true);
   });
 });
