@@ -37,14 +37,15 @@ vi.mock("./bot/delivery.js", () => ({
 
 describe("registerTelegramNativeCommands", () => {
   beforeEach(() => {
-    listSkillCommandsForAgents.mockReset();
-    pluginCommandMocks.getPluginCommandSpecs.mockReset();
+    listSkillCommandsForAgents.mockClear();
+    listSkillCommandsForAgents.mockReturnValue([]);
+    pluginCommandMocks.getPluginCommandSpecs.mockClear();
     pluginCommandMocks.getPluginCommandSpecs.mockReturnValue([]);
-    pluginCommandMocks.matchPluginCommand.mockReset();
+    pluginCommandMocks.matchPluginCommand.mockClear();
     pluginCommandMocks.matchPluginCommand.mockReturnValue(null);
-    pluginCommandMocks.executePluginCommand.mockReset();
+    pluginCommandMocks.executePluginCommand.mockClear();
     pluginCommandMocks.executePluginCommand.mockResolvedValue({ text: "ok" });
-    deliveryMocks.deliverReplies.mockReset();
+    deliveryMocks.deliverReplies.mockClear();
     deliveryMocks.deliverReplies.mockResolvedValue({ delivered: true });
   });
 
