@@ -12,18 +12,25 @@ describe("node-host sanitizeEnv", () => {
   });
 
   it("blocks dangerous env keys/prefixes", () => {
-    withEnv({ PYTHONPATH: undefined, LD_PRELOAD: undefined, BASH_ENV: undefined }, () => {
-      const env = sanitizeEnv({
-        PYTHONPATH: "/tmp/pwn",
-        LD_PRELOAD: "/tmp/pwn.so",
-        BASH_ENV: "/tmp/pwn.sh",
-        FOO: "bar",
-      });
-      expect(env.FOO).toBe("bar");
-      expect(env.PYTHONPATH).toBeUndefined();
-      expect(env.LD_PRELOAD).toBeUndefined();
-      expect(env.BASH_ENV).toBeUndefined();
-    });
+    withEnv(
+      { PYTHONPATH: undefined, LD_PRELOAD: undefined, BASH_ENV: undefined, SHELLOPTS: undefined },
+      () => {
+        const env = sanitizeEnv({
+          PYTHONPATH: "/tmp/pwn",
+          LD_PRELOAD: "/tmp/pwn.so",
+          BASH_ENV: "/tmp/pwn.sh",
+          SHELLOPTS: "xtrace",
+          PS4: "$(touch /tmp/pwned)",
+          FOO: "bar",
+        });
+        expect(env.FOO).toBe("bar");
+        expect(env.PYTHONPATH).toBeUndefined();
+        expect(env.LD_PRELOAD).toBeUndefined();
+        expect(env.BASH_ENV).toBeUndefined();
+        expect(env.SHELLOPTS).toBeUndefined();
+        expect(env.PS4).toBeUndefined();
+      },
+    );
   });
 
   it("blocks dangerous override-only env keys", () => {
