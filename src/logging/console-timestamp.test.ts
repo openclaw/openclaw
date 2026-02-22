@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { formatConsoleTimestamp } from "./console.js";
+import { formatConsoleTimestamp } from "./timestamps.js";
 
 describe("formatConsoleTimestamp", () => {
   afterEach(() => {
@@ -73,5 +73,56 @@ describe("formatConsoleTimestamp", () => {
     const afterDate = `${after.getFullYear()}-${String(after.getMonth() + 1).padStart(2, "0")}-${String(after.getDate()).padStart(2, "0")}`;
     // Allow for date boundary crossing during test
     expect([beforeDate, afterDate]).toContain(datePart);
+  });
+
+  describe("with timezone", () => {
+    it("pretty style respects timezone", () => {
+      vi.useFakeTimers();
+      const date = new Date("2023-10-27T10:00:00.123Z");
+      vi.setSystemTime(date);
+
+      // UTC
+      expect(formatConsoleTimestamp("pretty", "UTC")).toBe("10:00:00");
+
+      // NYC (UTC-4 in Oct)
+      expect(formatConsoleTimestamp("pretty", "America/New_York")).toBe("06:00:00");
+
+      // Kolkata (UTC+5:30)
+      expect(formatConsoleTimestamp("pretty", "Asia/Kolkata")).toBe("15:30:00");
+    });
+
+    it("compact style respects timezone", () => {
+      vi.useFakeTimers();
+      const date = new Date("2023-10-27T10:00:00.123Z");
+      vi.setSystemTime(date);
+
+      // UTC
+      // 2023-10-27T10:00:00.123+00:00
+      expect(formatConsoleTimestamp("compact", "UTC")).toBe("2023-10-27T10:00:00.123+00:00");
+
+      // NYC
+      // 2023-10-27T06:00:00.123-04:00
+      expect(formatConsoleTimestamp("compact", "America/New_York")).toBe(
+        "2023-10-27T06:00:00.123-04:00",
+      );
+    });
+
+    it("falls back to local time on invalid timezone without crashing", () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-01-17T18:01:02.345Z"));
+
+      // Should not throw or log recursive error
+      // We can't easily check for console.error calls if we don't spy on it,
+      // but the requirement is "falls back".
+      // The implementation catches error and falls back to:
+      // formatLocalIsoWithOffset(now) -> uses system local time.
+
+      const result = formatConsoleTimestamp("pretty", "Invalid/Timezone");
+      const now = new Date();
+      // Should match local pretty time
+      expect(result).toBe(
+        `${pad2(now.getHours())}:${pad2(now.getMinutes())}:${pad2(now.getSeconds())}`,
+      );
+    });
   });
 });

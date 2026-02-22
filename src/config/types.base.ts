@@ -148,6 +148,8 @@ export type LoggingConfig = {
   redactSensitive?: "off" | "tools";
   /** Regex patterns used to redact sensitive tokens (defaults apply when unset). */
   redactPatterns?: string[];
+  /** Timezone for console logs (e.g. "Asia/Shanghai", "UTC", "America/New_York"). Defaults to system time. */
+  timezone?: string;
 };
 
 export type DiagnosticsOtelConfig = {
