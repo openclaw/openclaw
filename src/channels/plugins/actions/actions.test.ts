@@ -1,11 +1,15 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 
-const handleDiscordAction = vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } }));
-const handleTelegramAction = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
-const sendReactionSignal = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
-const removeReactionSignal = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
-const handleSlackAction = vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } }));
+const handleDiscordAction = vi.hoisted(() =>
+  vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } })),
+);
+const handleTelegramAction = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => ({ ok: true })));
+const sendReactionSignal = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => ({ ok: true })));
+const removeReactionSignal = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => ({ ok: true })));
+const handleSlackAction = vi.hoisted(() =>
+  vi.fn(async (..._args: unknown[]) => ({ details: { ok: true } })),
+);
 
 vi.mock("../../../agents/tools/discord-actions.js", () => ({
   handleDiscordAction,

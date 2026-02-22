@@ -34,20 +34,18 @@ const mockRestPost = vi.hoisted(() => vi.fn());
 const mockRestPatch = vi.hoisted(() => vi.fn());
 const mockRestDelete = vi.hoisted(() => vi.fn());
 
-vi.mock("../send.shared.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../send.shared.js")>();
-  return {
-    ...actual,
-    createDiscordClient: () => ({
-      rest: {
-        post: mockRestPost,
-        patch: mockRestPatch,
-        delete: mockRestDelete,
-      },
-      request: (_fn: () => Promise<unknown>, _label: string) => _fn(),
-    }),
-  };
-});
+vi.mock("../send.shared.js", () => ({
+  createDiscordClient: () => ({
+    rest: {
+      post: mockRestPost,
+      patch: mockRestPatch,
+      delete: mockRestDelete,
+    },
+    request: (_fn: () => Promise<unknown>, _label: string) => _fn(),
+  }),
+  stripUndefinedFields: <T extends object>(value: T): T =>
+    Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined)) as T,
+}));
 
 vi.mock("../../gateway/client.js", () => ({
   GatewayClient: class {
