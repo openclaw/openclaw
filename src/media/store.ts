@@ -160,7 +160,20 @@ async function downloadToFile(
               return;
             }
             const redirectUrl = new URL(location, url).href;
-            resolve(downloadToFile(redirectUrl, dest, headers, maxRedirects - 1));
+            // Strip sensitive headers when redirecting to a different origin
+            // to prevent credential leakage (e.g. Authorization tokens).
+            const redirectOrigin = new URL(redirectUrl).origin;
+            const currentOrigin = parsedUrl.origin;
+            const redirectHeaders =
+              headers && redirectOrigin !== currentOrigin
+                ? Object.fromEntries(
+                    Object.entries(headers).filter(
+                      ([key]) =>
+                        !["authorization", "cookie", "set-cookie"].includes(key.toLowerCase()),
+                    ),
+                  )
+                : headers;
+            resolve(downloadToFile(redirectUrl, dest, redirectHeaders, maxRedirects - 1));
             return;
           }
           if (!res.statusCode || res.statusCode >= 400) {

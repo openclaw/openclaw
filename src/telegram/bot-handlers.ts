@@ -117,15 +117,21 @@ export const registerTelegramHandlers = ({
     text: string;
     date?: number;
     from?: Message["from"];
-  }): Message => ({
-    ...params.base,
-    ...(params.from ? { from: params.from } : {}),
-    text: params.text,
-    caption: undefined,
-    caption_entities: undefined,
-    entities: undefined,
-    ...(params.date != null ? { date: params.date } : {}),
-  });
+    caption?: Message["caption"];
+    caption_entities?: Message["caption_entities"];
+    entities?: Message["entities"];
+  }): Message => {
+    const msg: Message = {
+      ...params.base,
+      ...(params.from ? { from: params.from } : {}),
+      text: params.text,
+      ...(params.date != null ? { date: params.date } : {}),
+    };
+    msg.caption = params.caption;
+    msg.caption_entities = params.caption_entities;
+    msg.entities = params.entities;
+    return msg;
+  };
   const buildSyntheticContext = (
     ctx: Pick<TelegramContext, "me"> & { getFile?: unknown },
     message: Message,
