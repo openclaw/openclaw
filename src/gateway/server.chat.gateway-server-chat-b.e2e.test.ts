@@ -151,7 +151,7 @@ describe("gateway server chat", () => {
       await writeMainSessionStore();
       testState.agentConfig = { blockStreamingDefault: "on" };
       try {
-        spy.mockReset();
+        spy.mockClear();
         let capturedOpts: GetReplyOptions | undefined;
         spy.mockImplementationOnce(async (_ctx: unknown, opts?: GetReplyOptions) => {
           capturedOpts = opts;
@@ -343,7 +343,7 @@ describe("gateway server chat", () => {
       await createSessionDir();
       await writeMainSessionStore();
 
-      spy.mockReset();
+      spy.mockClear();
       spy.mockImplementationOnce(async (_ctx, opts) => {
         opts?.onAgentRunStart?.(opts.runId ?? "idem-abort-1");
         const signal = opts?.abortSignal;
@@ -403,7 +403,7 @@ describe("gateway server chat", () => {
         { timeout: 2_000, interval: 10 },
       );
 
-      spy.mockReset();
+      spy.mockClear();
       spy.mockResolvedValueOnce(undefined);
 
       const completeRes = await rpcReq<{ status?: string }>(ws, "chat.send", {
