@@ -167,7 +167,7 @@ describe("exec tool backgrounding", () => {
           });
           return (poll.details as { status: string }).status;
         },
-        { timeout: 3000, interval: POLL_INTERVAL_MS },
+        { timeout: 1500, interval: POLL_INTERVAL_MS },
       )
       .toBe("failed");
   });
