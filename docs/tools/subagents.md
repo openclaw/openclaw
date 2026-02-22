@@ -25,7 +25,7 @@ Use `/subagents` to inspect or control sub-agent runs for the **current session*
 
 Thread binding controls:
 
-These commands work on channels that support persistent thread bindings. Currently only Discord is supported.
+These commands work on channels that support persistent thread bindings. See **Thread supporting channels** below.
 
 - `/focus <subagent-label|session-key|session-id|session-label>`
 - `/unfocus`
@@ -93,7 +93,7 @@ When thread bindings are enabled for a channel, a sub-agent can stay bound to a 
 
 ### Thread supporting channels
 
-- Discord (currently the only supported channel): supports persistent thread-bound subagent sessions (`sessions_spawn` with `thread: true`) and manual thread controls (`/focus`, `/unfocus`, `/agents`, `/session ttl`).
+- Discord (currently the only supported channel): supports persistent thread-bound subagent sessions (`sessions_spawn` with `thread: true`), manual thread controls (`/focus`, `/unfocus`, `/agents`, `/session ttl`), and adapter keys `channels.discord.threadBindings.enabled`, `channels.discord.threadBindings.ttlHours`, and `channels.discord.threadBindings.spawnSubagentSessions`.
 
 Quick flow:
 
@@ -113,10 +113,9 @@ Manual controls:
 Config switches:
 
 - Global default: `session.threadBindings.enabled`, `session.threadBindings.ttlHours`
-- Channel override (Discord today): `channels.discord.threadBindings.enabled`, `channels.discord.threadBindings.ttlHours`
-- Spawn auto-bind opt-in (Discord today): `channels.discord.threadBindings.spawnSubagentSessions`
+- Channel override and spawn auto-bind keys are adapter-specific. See **Thread supporting channels** above.
 
-See [Configuration Reference](/gateway/configuration-reference), [Slash commands](/tools/slash-commands), and [Discord](/channels/discord) for current adapter details.
+See [Configuration Reference](/gateway/configuration-reference) and [Slash commands](/tools/slash-commands) for current adapter details.
 
 Allowlist:
 
@@ -208,7 +207,7 @@ Sub-agents report back via an announce step:
 - The announce step runs inside the sub-agent session (not the requester session).
 - If the sub-agent replies exactly `ANNOUNCE_SKIP`, nothing is posted.
 - Otherwise the announce reply is posted to the requester chat channel via a follow-up `agent` call (`deliver=true`).
-- Announce replies preserve thread/topic routing when available (Slack threads, Telegram topics, Matrix threads).
+- Announce replies preserve thread/topic routing when available on channel adapters.
 - Announce messages are normalized to a stable template:
   - `Status:` derived from the run outcome (`success`, `error`, `timeout`, or `unknown`).
   - `Result:` the summary content from the announce step (or `(not available)` if missing).
