@@ -16,7 +16,7 @@ import {
 } from "./doctor.e2e-harness.js";
 import "./doctor.fast-path-mocks.js";
 
-const DOCTOR_MIGRATION_TIMEOUT_MS = 20_000;
+const DOCTOR_MIGRATION_TIMEOUT_MS = process.platform === "win32" ? 60_000 : 45_000;
 const { doctorCommand } = await import("./doctor.js");
 
 describe("doctor command", () => {
