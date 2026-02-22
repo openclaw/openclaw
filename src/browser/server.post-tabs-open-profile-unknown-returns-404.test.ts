@@ -35,9 +35,19 @@ describe("browser control server", () => {
 });
 
 describe("profile CRUD endpoints", () => {
+  let prevGatewayToken: string | undefined;
+  let prevGatewayPassword: string | undefined;
+
   beforeEach(async () => {
     state.reachable = false;
     state.cfgAttachOnly = false;
+
+    // Avoid flaky auth coupling: some suites set gateway env auth which would
+    // make the browser control server require auth.
+    prevGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    prevGatewayPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
 
     for (const fn of Object.values(pwMocks)) {
       fn.mockClear();
@@ -71,6 +81,18 @@ describe("profile CRUD endpoints", () => {
     } else {
       process.env.OPENCLAW_GATEWAY_PORT = state.prevGatewayPort;
     }
+
+    if (prevGatewayToken === undefined) {
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    } else {
+      process.env.OPENCLAW_GATEWAY_TOKEN = prevGatewayToken;
+    }
+    if (prevGatewayPassword === undefined) {
+      delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    } else {
+      process.env.OPENCLAW_GATEWAY_PASSWORD = prevGatewayPassword;
+    }
+
     await stopBrowserControlServer();
   });
 

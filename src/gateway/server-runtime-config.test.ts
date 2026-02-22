@@ -79,6 +79,11 @@ describe("resolveGatewayRuntimeConfig", () => {
 
   describe("token/password auth modes", () => {
     it("should reject token mode without token configured", async () => {
+      const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+      const prevPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+
       const cfg = {
         gateway: {
           bind: "lan" as const,
@@ -94,6 +99,17 @@ describe("resolveGatewayRuntimeConfig", () => {
           port: 18789,
         }),
       ).rejects.toThrow("gateway auth mode is token, but no token was configured");
+
+      if (prevToken === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      } else {
+        process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+      }
+      if (prevPassword === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+      } else {
+        process.env.OPENCLAW_GATEWAY_PASSWORD = prevPassword;
+      }
     });
 
     it("should allow lan binding with token", async () => {
