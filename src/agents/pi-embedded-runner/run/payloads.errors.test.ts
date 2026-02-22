@@ -131,12 +131,56 @@ describe("buildEmbeddedRunPayloads", () => {
 
   it("adds completion fallback when tools run successfully without final assistant text", () => {
     const payloads = buildPayloads({
+      sessionKey: "agent:main:discord:direct:u123",
       toolMetas: [{ toolName: "write", meta: "/tmp/out.md" }],
       lastAssistant: makeStoppedAssistant(),
     });
 
     expectSinglePayloadText(payloads, "✅ Done.");
     expect(payloads[0]?.isError).toBeUndefined();
+  });
+
+  it("does not add completion fallback for channel sessions", () => {
+    const payloads = buildPayloads({
+      sessionKey: "agent:main:discord:channel:c123",
+      toolMetas: [{ toolName: "write", meta: "/tmp/out.md" }],
+      lastAssistant: makeAssistant({
+        stopReason: "stop",
+        errorMessage: undefined,
+        content: [],
+      }),
+    });
+
+    expect(payloads).toHaveLength(0);
+  });
+
+  it("does not add completion fallback for group sessions", () => {
+    const payloads = buildPayloads({
+      sessionKey: "agent:main:telegram:group:g123",
+      toolMetas: [{ toolName: "write", meta: "/tmp/out.md" }],
+      lastAssistant: makeAssistant({
+        stopReason: "stop",
+        errorMessage: undefined,
+        content: [],
+      }),
+    });
+
+    expect(payloads).toHaveLength(0);
+  });
+
+  it("does not add completion fallback when messaging tool already delivered output", () => {
+    const payloads = buildPayloads({
+      sessionKey: "agent:main:discord:direct:u123",
+      toolMetas: [{ toolName: "message_send", meta: "sent to #ops" }],
+      didSendViaMessagingTool: true,
+      lastAssistant: makeAssistant({
+        stopReason: "stop",
+        errorMessage: undefined,
+        content: [],
+      }),
+    });
+
+    expect(payloads).toHaveLength(0);
   });
 
   it("does not add completion fallback when the run still has a tool error", () => {
