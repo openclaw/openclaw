@@ -1,0 +1,9 @@
+{
+  "id": "wati",
+  "channels": ["wati"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

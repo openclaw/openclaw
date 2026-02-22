@@ -1102,3 +1102,86 @@ export const MSTeamsConfigSchema = z
         'channels.msteams.dmPolicy="open" requires channels.msteams.allowFrom to include "*"',
     });
   });
+
+export const WatiAccountSchemaBase = z
+  .object({
+    name: z.string().optional(),
+    enabled: z.boolean().optional(),
+    apiToken: z.string().optional().register(sensitive),
+    apiBaseUrl: z.string().optional(),
+    tenantId: z.string().optional(),
+    webhookUrl: z.string().optional(),
+    webhookSecret: z.string().optional().register(sensitive),
+    webhookPath: z.string().optional(),
+    webhookHost: z.string().optional(),
+    webhookPort: z.number().int().positive().optional(),
+    dmPolicy: DmPolicySchema.optional().default("open"),
+    allowFrom: z.array(z.string()).optional(),
+    defaultTo: z.string().optional(),
+    textChunkLimit: z.number().int().positive().optional(),
+    chunkMode: z.enum(["length", "newline"]).optional(),
+    blockStreaming: z.boolean().optional(),
+    blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    heartbeat: ChannelHeartbeatVisibilitySchema,
+    responsePrefix: z.string().optional(),
+  })
+  .strict();
+
+export const WatiAccountSchema = WatiAccountSchemaBase.superRefine((value, ctx) => {
+  requireOpenAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message: 'channels.wati.dmPolicy="open" requires channels.wati.allowFrom to include "*"',
+  });
+});
+
+export const WatiConfigSchema = WatiAccountSchemaBase.extend({
+  accounts: z.record(z.string(), WatiAccountSchema.optional()).optional(),
+}).superRefine((value, ctx) => {
+  requireOpenAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message: 'channels.wati.dmPolicy="open" requires channels.wati.allowFrom to include "*"',
+  });
+
+  const baseWebhookUrl = typeof value.webhookUrl === "string" ? value.webhookUrl.trim() : "";
+  const baseWebhookSecret =
+    typeof value.webhookSecret === "string" ? value.webhookSecret.trim() : "";
+  if (baseWebhookUrl && !baseWebhookSecret) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "channels.wati.webhookUrl requires channels.wati.webhookSecret",
+      path: ["webhookSecret"],
+    });
+  }
+  if (!value.accounts) {
+    return;
+  }
+  for (const [accountId, account] of Object.entries(value.accounts)) {
+    if (!account) {
+      continue;
+    }
+    if (account.enabled === false) {
+      continue;
+    }
+    const accountWebhookUrl =
+      typeof account.webhookUrl === "string" ? account.webhookUrl.trim() : "";
+    if (!accountWebhookUrl) {
+      continue;
+    }
+    const accountSecret =
+      typeof account.webhookSecret === "string" ? account.webhookSecret.trim() : "";
+    if (!accountSecret && !baseWebhookSecret) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "channels.wati.accounts.*.webhookUrl requires channels.wati.webhookSecret or channels.wati.accounts.*.webhookSecret",
+        path: ["accounts", accountId, "webhookSecret"],
+      });
+    }
+  }
+});

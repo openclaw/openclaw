@@ -169,6 +169,12 @@ type BuildTemplateMessageFromPayload =
   typeof import("../../line/template-messages.js").buildTemplateMessageFromPayload;
 type MonitorLineProvider = typeof import("../../line/monitor.js").monitorLineProvider;
 
+// WATI channel types
+type SendMessageWati = typeof import("../../wati/send.js").sendMessageWati;
+type SendTemplateMessageWati = typeof import("../../wati/send.js").sendTemplateMessageWati;
+type ProbeWati = typeof import("../../wati/probe.js").probeWati;
+type MonitorWatiProvider = typeof import("../../wati/monitor.js").monitorWatiProvider;
+
 export type RuntimeLogger = {
   debug?: (message: string, meta?: Record<string, unknown>) => void;
   info: (message: string, meta?: Record<string, unknown>) => void;
@@ -349,6 +355,12 @@ export type PluginRuntime = {
       createQuickReplyItems: CreateQuickReplyItems;
       buildTemplateMessageFromPayload: BuildTemplateMessageFromPayload;
       monitorLineProvider: MonitorLineProvider;
+    };
+    wati: {
+      sendMessageWati: SendMessageWati;
+      sendTemplateMessageWati: SendTemplateMessageWati;
+      probeWati: ProbeWati;
+      monitorWatiProvider: MonitorWatiProvider;
     };
   };
   logging: {

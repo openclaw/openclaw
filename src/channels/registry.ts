@@ -7,6 +7,7 @@ import type { ChannelId } from "./plugins/types.js";
 export const CHAT_CHANNEL_ORDER = [
   "telegram",
   "whatsapp",
+  "wati",
   "discord",
   "irc",
   "googlechat",
@@ -109,6 +110,16 @@ const CHAT_CHANNEL_META: Record<ChatChannelId, ChannelMeta> = {
     blurb: "this is still a work in progress.",
     systemImage: "message.fill",
   },
+  wati: {
+    id: "wati",
+    label: "WATI",
+    selectionLabel: "WATI (WhatsApp Business API)",
+    detailLabel: "WATI WhatsApp Business",
+    docsPath: "/channels/wati",
+    docsLabel: "wati",
+    blurb: "production-grade WhatsApp Business API via WATI — uses bearer-token auth and webhooks.",
+    systemImage: "phone",
+  },
 };
 
 export const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = {
@@ -116,6 +127,7 @@ export const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = {
   "internet-relay-chat": "irc",
   "google-chat": "googlechat",
   gchat: "googlechat",
+  "whatsapp-business": "wati",
 };
 
 const normalizeChannelKey = (raw?: string | null): string | undefined => {

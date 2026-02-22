@@ -518,6 +518,12 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/wati:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/whatsapp:
     devDependencies:
       openclaw:
