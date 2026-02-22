@@ -74,9 +74,9 @@ describe("update-startup", () => {
         await import("./update-startup.js"));
       loaded = true;
     }
-    vi.mocked(resolveOpenClawPackageRoot).mockReset();
-    vi.mocked(checkUpdateStatus).mockReset();
-    vi.mocked(resolveNpmChannelTag).mockReset();
+    vi.mocked(resolveOpenClawPackageRoot).mockClear();
+    vi.mocked(checkUpdateStatus).mockClear();
+    vi.mocked(resolveNpmChannelTag).mockClear();
     resetUpdateAvailableStateForTest();
   });
 
