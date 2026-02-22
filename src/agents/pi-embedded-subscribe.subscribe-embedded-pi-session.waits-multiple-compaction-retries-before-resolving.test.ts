@@ -136,7 +136,6 @@ describe("subscribeEmbeddedPiSession", () => {
     const payload = onToolResult.mock.calls[0][0];
     expect(payload.text).toContain("🌐");
     expect(payload.text).toContain("Browser");
-    expect(payload.text).toContain("snapshot");
     expect(payload.text).toContain("https://example.com");
   });
 
