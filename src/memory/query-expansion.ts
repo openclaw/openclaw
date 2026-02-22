@@ -255,6 +255,24 @@ const KO_TRAILING_PARTICLES = [
   "만",
 ].toSorted((a, b) => b.length - a.length);
 
+function stripKoreanTrailingParticle(token: string): string | null {
+  for (const particle of KO_TRAILING_PARTICLES) {
+    if (token.length > particle.length && token.endsWith(particle)) {
+      return token.slice(0, -particle.length);
+    }
+  }
+  return null;
+}
+
+function isUsefulKoreanStem(stem: string): boolean {
+  // Prevent bogus one-syllable stems from words like "논의" -> "논".
+  if (/[\uac00-\ud7af]/.test(stem)) {
+    return stem.length >= 2;
+  }
+  // Keep stripped ASCII stems for mixed tokens like "API를" -> "api".
+  return /^[a-z0-9_]+$/i.test(stem);
+}
+
 const STOP_WORDS_ZH = new Set([
   // Pronouns
   "我",
@@ -377,7 +395,7 @@ function isValidKeyword(token: string): boolean {
 }
 
 /**
- * Simple tokenizer that handles both English and Chinese text.
+ * Simple tokenizer that handles English, Chinese, and Korean text.
  * For Chinese, we do character-based splitting since we don't have a proper segmenter.
  * For English, we split on whitespace and punctuation.
  */
@@ -400,19 +418,16 @@ function tokenize(text: string): string[] {
         tokens.push(chars[i] + chars[i + 1]);
       }
     } else if (/[\uac00-\ud7af\u3131-\u3163]/.test(segment)) {
-      // For Korean (Hangul syllables and jamo), keep the word as-is
-      tokens.push(segment);
-      // Also try stripping common trailing particles to get the stem
-      for (const particle of KO_TRAILING_PARTICLES) {
-        if (segment.length > particle.length && segment.endsWith(particle)) {
-          const stem = segment.slice(0, -particle.length);
-          // Require at least 2 Hangul chars to avoid bogus single-char stems
-          // (e.g. "논의" should not produce "논" by stripping "의")
-          if (stem.length >= 2 && /[\uac00-\ud7af]/.test(stem)) {
-            tokens.push(stem);
-          }
-          break; // Only strip the first (longest) matching particle
-        }
+      // For Korean (Hangul syllables and jamo), keep the word as-is unless it is
+      // effectively a stop word once trailing particles are removed.
+      const stem = stripKoreanTrailingParticle(segment);
+      const stemIsStopWord = stem !== null && STOP_WORDS_KO.has(stem);
+      if (!STOP_WORDS_KO.has(segment) && !stemIsStopWord) {
+        tokens.push(segment);
+      }
+      // Also emit particle-stripped stems when they are useful keywords.
+      if (stem && !STOP_WORDS_KO.has(stem) && isUsefulKoreanStem(stem)) {
+        tokens.push(stem);
       }
     } else {
       // For non-CJK, keep as single token
@@ -437,25 +452,9 @@ export function extractKeywords(query: string): string[] {
   const seen = new Set<string>();
 
   for (const token of tokens) {
-    // Skip stop words (checks both raw token and any particle-stripped form)
+    // Skip stop words
     if (STOP_WORDS_EN.has(token) || STOP_WORDS_ZH.has(token) || STOP_WORDS_KO.has(token)) {
       continue;
-    }
-    // For Korean tokens, also check if stripping particles yields a stop word
-    if (/[\uac00-\ud7af]/.test(token)) {
-      let isStop = false;
-      for (const particle of KO_TRAILING_PARTICLES) {
-        if (token.length > particle.length && token.endsWith(particle)) {
-          const stem = token.slice(0, -particle.length);
-          if (STOP_WORDS_KO.has(stem)) {
-            isStop = true;
-          }
-          break;
-        }
-      }
-      if (isStop) {
-        continue;
-      }
     }
     // Skip invalid keywords
     if (!isValidKeyword(token)) {

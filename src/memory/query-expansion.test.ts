@@ -62,10 +62,30 @@ describe("extractKeywords", () => {
     expect(keywords).not.toContain("그래서");
   });
 
+  it("filters inflected Korean stop words not explicitly listed", () => {
+    const keywords = extractKeywords("그녀는 우리는");
+    expect(keywords).not.toContain("그녀는");
+    expect(keywords).not.toContain("우리는");
+    expect(keywords).not.toContain("그녀");
+    expect(keywords).not.toContain("우리");
+  });
+
   it("does not produce bogus single-char stems from particle stripping", () => {
     const keywords = extractKeywords("논의");
     expect(keywords).toContain("논의");
     expect(keywords).not.toContain("논");
+  });
+
+  it("strips longest Korean trailing particles first", () => {
+    const keywords = extractKeywords("기능으로 설명");
+    expect(keywords).toContain("기능");
+    expect(keywords).not.toContain("기능으");
+  });
+
+  it("keeps stripped ASCII stems for mixed Korean tokens", () => {
+    const keywords = extractKeywords("API를 배포했다");
+    expect(keywords).toContain("api");
+    expect(keywords).toContain("배포했다");
   });
 
   it("handles mixed Korean and English query", () => {
