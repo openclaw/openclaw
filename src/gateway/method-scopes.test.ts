@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   authorizeOperatorScopesForMethod,
+  CLI_DEFAULT_OPERATOR_SCOPES,
   isGatewayMethodClassified,
   resolveLeastPrivilegeOperatorScopesForMethod,
 } from "./method-scopes.js";
@@ -48,6 +49,16 @@ describe("operator scope authorization", () => {
       allowed: false,
       missingScope: "operator.admin",
     });
+  });
+});
+
+describe("CLI default operator scopes", () => {
+  it("includes read and write scopes for localhost auto-pair", () => {
+    expect(CLI_DEFAULT_OPERATOR_SCOPES).toContain("operator.read");
+    expect(CLI_DEFAULT_OPERATOR_SCOPES).toContain("operator.write");
+    expect(CLI_DEFAULT_OPERATOR_SCOPES).toContain("operator.admin");
+    expect(CLI_DEFAULT_OPERATOR_SCOPES).toContain("operator.approvals");
+    expect(CLI_DEFAULT_OPERATOR_SCOPES).toContain("operator.pairing");
   });
 });
 
