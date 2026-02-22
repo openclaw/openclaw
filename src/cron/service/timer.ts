@@ -267,18 +267,20 @@ export async function onTimer(state: CronServiceState) {
           : DEFAULT_JOB_TIMEOUT_MS;
 
       try {
+        const runAbortController =
+          typeof jobTimeoutMs === "number" ? new AbortController() : undefined;
         const result =
           typeof jobTimeoutMs === "number"
             ? await (async () => {
                 let timeoutId: NodeJS.Timeout | undefined;
                 try {
                   return await Promise.race([
-                    executeJobCore(state, job),
+                    executeJobCore(state, job, runAbortController?.signal),
                     new Promise<never>((_, reject) => {
-                      timeoutId = setTimeout(
-                        () => reject(new Error("cron: job execution timed out")),
-                        jobTimeoutMs,
-                      );
+                      timeoutId = setTimeout(() => {
+                        runAbortController?.abort(new Error("cron: job execution timed out"));
+                        reject(new Error("cron: job execution timed out"));
+                      }, jobTimeoutMs);
                     }),
                   ]);
                 } finally {
@@ -565,6 +567,7 @@ export async function runDueJobs(state: CronServiceState) {
 async function executeJobCore(
   state: CronServiceState,
   job: CronJob,
+  abortSignal?: AbortSignal,
 ): Promise<CronRunOutcome & CronRunTelemetry & { delivered?: boolean }> {
   if (job.sessionTarget === "main") {
     const text = resolveJobPayloadTextForMain(job);
@@ -634,10 +637,14 @@ async function executeJobCore(
   if (job.payload.kind !== "agentTurn") {
     return { status: "skipped", error: "isolated job requires payload.kind=agentTurn" };
   }
+  if (abortSignal?.aborted) {
+    return { status: "error", error: "cron: job execution aborted" };
+  }
 
   const res = await state.deps.runIsolatedAgentJob({
     job,
     message: job.payload.message,
+    abortSignal,
   });
 
   // Post a short summary back to the main session — but only when the
