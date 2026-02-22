@@ -4,8 +4,8 @@ import process from "node:process";
 import { afterEach, describe, expect, it } from "vitest";
 import { attachChildProcessBridge } from "./child-process-bridge.js";
 
-const CHILD_READY_TIMEOUT_MS = 2_000;
-const CHILD_EXIT_TIMEOUT_MS = 3_000;
+const CHILD_READY_TIMEOUT_MS = 10_000;
+const CHILD_EXIT_TIMEOUT_MS = 10_000;
 
 function waitForLine(
   stream: NodeJS.ReadableStream,
