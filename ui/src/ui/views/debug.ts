@@ -9,12 +9,14 @@ export type DebugProps = {
   models: unknown[];
   heartbeat: unknown;
   eventLog: EventLogEntry[];
+  hideHealthEventsInEventLog: boolean;
   callMethod: string;
   callParams: string;
   callResult: string | null;
   callError: string | null;
   onCallMethodChange: (next: string) => void;
   onCallParamsChange: (next: string) => void;
+  onHideHealthEventsChange: (next: boolean) => void;
   onRefresh: () => void;
   onCall: () => void;
 };
@@ -31,6 +33,10 @@ export function renderDebug(props: DebugProps) {
   const securityTone = critical > 0 ? "danger" : warn > 0 ? "warn" : "success";
   const securityLabel =
     critical > 0 ? `${critical} critical` : warn > 0 ? `${warn} warnings` : "No critical issues";
+  const visibleEventLog = props.hideHealthEventsInEventLog
+    ? props.eventLog.filter((entry) => entry.event !== "health")
+    : props.eventLog;
+  const hasHiddenHealthOnly = props.hideHealthEventsInEventLog && props.eventLog.length > 0;
 
   return html`
     <section class="grid grid-cols-2">
@@ -119,23 +125,38 @@ export function renderDebug(props: DebugProps) {
     </section>
 
     <section class="card" style="margin-top: 18px;">
-      <div class="card-title">Event Log</div>
-      <div class="card-sub">Latest gateway events.</div>
+      <div class="row" style="justify-content: space-between; align-items: flex-start;">
+        <div>
+          <div class="card-title">Event Log</div>
+          <div class="card-sub">Latest gateway events.</div>
+        </div>
+        <label class="field checkbox debug-event-log-toggle">
+          <input
+            type="checkbox"
+            .checked=${props.hideHealthEventsInEventLog}
+            @change=${(e: Event) =>
+              props.onHideHealthEventsChange((e.target as HTMLInputElement).checked)}
+          />
+          <span>Hide health history (keep latest only)</span>
+        </label>
+      </div>
       ${
-        props.eventLog.length === 0
+        visibleEventLog.length === 0
           ? html`
-              <div class="muted" style="margin-top: 12px">No events yet.</div>
+              <div class="muted" style="margin-top: 12px">
+                ${hasHiddenHealthOnly ? "Only health events received so far." : "No events yet."}
+              </div>
             `
           : html`
             <div class="list" style="margin-top: 12px;">
-              ${props.eventLog.map(
+              ${visibleEventLog.map(
                 (evt) => html`
-                  <div class="list-item">
-                    <div class="list-main">
+                  <div class="event-log-item">
+                    <div class="event-log-header">
                       <div class="list-title">${evt.event}</div>
                       <div class="list-sub">${new Date(evt.ts).toLocaleTimeString()}</div>
                     </div>
-                    <div class="list-meta">
+                    <div class="event-log-payload">
                       <pre class="code-block">${formatEventPayload(evt.payload)}</pre>
                     </div>
                   </div>

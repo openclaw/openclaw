@@ -670,6 +670,7 @@
 
 :root[data-theme="light"] .code-block,
 :root[data-theme="light"] .list-item,
+:root[data-theme="light"] .event-log-item,
 :root[data-theme="light"] .table-row,
 :root[data-theme="light"] .chip {
   background: var(--bg);
@@ -742,6 +743,55 @@
 .list-meta .field textarea,
 .list-meta .field select {
   width: 100%;
+}
+
+.debug-event-log-toggle {
+  align-items: center;
+  margin-top: 2px;
+}
+
+.debug-event-log-toggle span {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.event-log-item {
+  display: grid;
+  grid-template-columns: 80px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px;
+  background: var(--card);
+  transition: border-color var(--duration-fast) ease;
+}
+
+.event-log-item:hover {
+  border-color: var(--border-strong);
+}
+
+.event-log-header {
+  display: grid;
+  gap: 4px;
+  align-content: start;
+  min-width: 0;
+}
+
+.event-log-payload {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.event-log-payload .code-block {
+  margin: 0;
+  width: 100%;
+  max-height: 300px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-size: 12px;
 }
 
 /* Cron jobs: allow long payload/state text and keep action buttons inside the card. */
@@ -884,6 +934,15 @@
   .list-meta {
     min-width: 0;
     text-align: left;
+  }
+
+  .debug-event-log-toggle span {
+    white-space: normal;
+  }
+
+  .event-log-item {
+    grid-template-columns: 1fr;
+    gap: 10px;
   }
 
   .cron-job-actions {

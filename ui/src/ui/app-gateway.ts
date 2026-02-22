@@ -3,7 +3,7 @@ import {
   type GatewayUpdateAvailableEventPayload,
 } from "../../../src/gateway/events.js";
 import { CHAT_SESSIONS_ACTIVE_MINUTES, flushChatQueueForEvent } from "./app-chat.ts";
-import type { EventLogEntry } from "./app-events.ts";
+import { appendEventLogEntry, type EventLogEntry } from "./app-events.ts";
 import {
   applySettings,
   loadCron,
@@ -48,6 +48,7 @@ type GatewayHost = {
   onboarding?: boolean;
   eventLogBuffer: EventLogEntry[];
   eventLog: EventLogEntry[];
+  hideHealthEventsInEventLog: boolean;
   tab: Tab;
   presenceEntries: PresenceEntry[];
   presenceError: string | null;
@@ -197,10 +198,11 @@ export function handleGatewayEvent(host: GatewayHost, evt: GatewayEventFrame) {
 }
 
 function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
-  host.eventLogBuffer = [
+  host.eventLogBuffer = appendEventLogEntry(
+    host.eventLogBuffer,
     { ts: Date.now(), event: evt.event, payload: evt.payload },
-    ...host.eventLogBuffer,
-  ].slice(0, 250);
+    { collapseHealthHistory: host.hideHealthEventsInEventLog },
+  );
   if (host.tab === "debug") {
     host.eventLog = host.eventLogBuffer;
   }
