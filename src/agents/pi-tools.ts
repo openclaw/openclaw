@@ -7,6 +7,7 @@ import {
 } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runtime-policy.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { isSubagentSessionKey } from "../routing/session-key.js";
@@ -97,13 +98,6 @@ function resolveExecConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
   const globalExec = cfg?.tools?.exec;
   const agentExec =
     cfg && params.agentId ? resolveAgentConfig(cfg, params.agentId)?.tools?.exec : undefined;
-  const mergedSafeBinProfiles =
-    globalExec?.safeBinProfiles || agentExec?.safeBinProfiles
-      ? {
-          ...globalExec?.safeBinProfiles,
-          ...agentExec?.safeBinProfiles,
-        }
-      : undefined;
   return {
     host: agentExec?.host ?? globalExec?.host,
     security: agentExec?.security ?? globalExec?.security,
@@ -111,7 +105,10 @@ function resolveExecConfig(params: { cfg?: OpenClawConfig; agentId?: string }) {
     node: agentExec?.node ?? globalExec?.node,
     pathPrepend: agentExec?.pathPrepend ?? globalExec?.pathPrepend,
     safeBins: agentExec?.safeBins ?? globalExec?.safeBins,
-    safeBinProfiles: mergedSafeBinProfiles,
+    safeBinProfiles: resolveMergedSafeBinProfileFixtures({
+      global: globalExec,
+      local: agentExec,
+    }),
     backgroundMs: agentExec?.backgroundMs ?? globalExec?.backgroundMs,
     timeoutSec: agentExec?.timeoutSec ?? globalExec?.timeoutSec,
     approvalRunningNoticeMs:
