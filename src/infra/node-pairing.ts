@@ -195,7 +195,11 @@ export async function rejectNodePairing(
   baseDir?: string,
 ): Promise<{ requestId: string; nodeId: string } | null> {
   return await withLock(async () => {
-    return await rejectPendingPairingRequest({
+    return await rejectPendingPairingRequest<
+      NodePairingPendingRequest,
+      NodePairingStateFile,
+      "nodeId"
+    >({
       requestId,
       idKey: "nodeId",
       loadState: () => loadState(baseDir),

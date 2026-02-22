@@ -1,20 +1,25 @@
 type BatchOutputErrorLike = {
   error?: { message?: string };
   response?: {
-    body?: {
-      error?: { message?: string };
-    };
+    body?:
+      | string
+      | {
+          error?: { message?: string };
+        };
   };
 };
 
+function getResponseErrorMessage(line: BatchOutputErrorLike | undefined): string | undefined {
+  const body = line?.response?.body;
+  if (!body || typeof body !== "object") {
+    return undefined;
+  }
+  return typeof body.error?.message === "string" ? body.error.message : undefined;
+}
+
 export function extractBatchErrorMessage(lines: BatchOutputErrorLike[]): string | undefined {
-  const first = lines.find((line) => line.error?.message || line.response?.body?.error);
-  return (
-    first?.error?.message ??
-    (typeof first?.response?.body?.error?.message === "string"
-      ? first?.response?.body?.error?.message
-      : undefined)
-  );
+  const first = lines.find((line) => line.error?.message || getResponseErrorMessage(line));
+  return first?.error?.message ?? getResponseErrorMessage(first);
 }
 
 export function formatUnavailableBatchError(err: unknown): string | undefined {

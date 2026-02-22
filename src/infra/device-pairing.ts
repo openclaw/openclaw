@@ -383,7 +383,11 @@ export async function rejectDevicePairing(
   baseDir?: string,
 ): Promise<{ requestId: string; deviceId: string } | null> {
   return await withLock(async () => {
-    return await rejectPendingPairingRequest({
+    return await rejectPendingPairingRequest<
+      DevicePairingPendingRequest,
+      DevicePairingStateFile,
+      "deviceId"
+    >({
       requestId,
       idKey: "deviceId",
       loadState: () => loadState(baseDir),
