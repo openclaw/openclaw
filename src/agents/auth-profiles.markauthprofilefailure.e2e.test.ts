@@ -83,6 +83,32 @@ describe("markAuthProfileFailure", () => {
       expectCooldownInRange(remainingMs, 0.8 * 60 * 60 * 1000, 1.2 * 60 * 60 * 1000);
     });
   });
+  it("keeps persisted cooldownUntil unchanged across mid-window retries", async () => {
+    await withAuthProfileStore(async ({ agentDir, store }) => {
+      await markAuthProfileFailure({
+        store,
+        profileId: "anthropic:default",
+        reason: "rate_limit",
+        agentDir,
+      });
+
+      const firstCooldownUntil = store.usageStats?.["anthropic:default"]?.cooldownUntil;
+      expect(typeof firstCooldownUntil).toBe("number");
+
+      await markAuthProfileFailure({
+        store,
+        profileId: "anthropic:default",
+        reason: "rate_limit",
+        agentDir,
+      });
+
+      const secondCooldownUntil = store.usageStats?.["anthropic:default"]?.cooldownUntil;
+      expect(secondCooldownUntil).toBe(firstCooldownUntil);
+
+      const reloaded = ensureAuthProfileStore(agentDir);
+      expect(reloaded.usageStats?.["anthropic:default"]?.cooldownUntil).toBe(firstCooldownUntil);
+    });
+  });
   it("resets backoff counters outside the failure window", async () => {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
     try {
