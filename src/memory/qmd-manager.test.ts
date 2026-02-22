@@ -81,6 +81,7 @@ import { spawn as mockedSpawn } from "node:child_process";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMemoryBackendConfig } from "./backend-config.js";
 import { QmdMemoryManager } from "./qmd-manager.js";
+import * as sqliteModule from "./sqlite.js";
 
 const spawnMock = mockedSpawn as unknown as Mock;
 
@@ -218,6 +219,27 @@ describe("QmdMemoryManager", () => {
     const { manager } = await createManager({ mode: "status" });
     expect(spawnMock).not.toHaveBeenCalled();
     await manager?.close();
+  });
+
+  it("configures sqlite busy_timeout to tolerate qmd update lock contention", async () => {
+    const execMock = vi.fn();
+    const requireNodeSqliteSpy = vi.spyOn(sqliteModule, "requireNodeSqlite").mockReturnValue({
+      DatabaseSync: class {
+        exec(sql: string) {
+          execMock(sql);
+        }
+        close() {}
+      },
+    } as unknown as ReturnType<typeof sqliteModule.requireNodeSqlite>);
+    try {
+      const { manager } = await createManager({ mode: "status" });
+      const inner = manager as unknown as { ensureDb: () => unknown };
+      inner.ensureDb();
+      expect(execMock).toHaveBeenCalledWith("PRAGMA busy_timeout = 5000");
+      await manager.close();
+    } finally {
+      requireNodeSqliteSpy.mockRestore();
+    }
   });
 
   it("can be configured to block startup on boot update", async () => {
