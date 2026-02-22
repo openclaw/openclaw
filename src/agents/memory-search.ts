@@ -32,11 +32,14 @@ export type ResolvedMemorySearchConfig = {
     modelCacheDir?: string;
   };
   store: {
-    driver: "sqlite";
+    driver: "sqlite" | "postgres";
     path: string;
+    connectionString?: string;
+    schema?: string;
     vector: {
       enabled: boolean;
       extensionPath?: string;
+      indexType?: "ivfflat" | "hnsw";
     };
   };
   chunking: {
@@ -193,14 +196,20 @@ function mergeConfig(
     .map((value) => value.trim())
     .filter(Boolean);
   const extraPaths = Array.from(new Set(rawPaths));
+  const driver = overrides?.store?.driver ?? defaults?.store?.driver ?? "sqlite";
   const vector = {
     enabled: overrides?.store?.vector?.enabled ?? defaults?.store?.vector?.enabled ?? true,
     extensionPath:
       overrides?.store?.vector?.extensionPath ?? defaults?.store?.vector?.extensionPath,
+    indexType:
+      overrides?.store?.vector?.indexType ?? defaults?.store?.vector?.indexType ?? "ivfflat",
   };
   const store = {
-    driver: overrides?.store?.driver ?? defaults?.store?.driver ?? "sqlite",
+    driver,
     path: resolveStorePath(agentId, overrides?.store?.path ?? defaults?.store?.path),
+    connectionString:
+      overrides?.store?.connectionString ?? defaults?.store?.connectionString,
+    schema: overrides?.store?.schema ?? defaults?.store?.schema ?? "public",
     vector,
   };
   const chunking = {

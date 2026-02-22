@@ -304,13 +304,19 @@ export type MemorySearchConfig = {
   };
   /** Index storage configuration. */
   store?: {
-    driver?: "sqlite";
+    driver?: "sqlite" | "postgres";
     path?: string;
+    /** Postgres connection string (required when driver is postgres). */
+    connectionString?: string;
+    /** Postgres schema name for memory tables (default: public). */
+    schema?: string;
     vector?: {
       /** Enable sqlite-vec extension for vector search (default: true). */
       enabled?: boolean;
       /** Optional override path to sqlite-vec extension (.dylib/.so/.dll). */
       extensionPath?: string;
+      /** Postgres vector index type: ivfflat or hnsw (default: ivfflat). */
+      indexType?: "ivfflat" | "hnsw";
     };
     cache?: {
       /** Enable embedding cache (default: true). */

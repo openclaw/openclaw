@@ -242,6 +242,19 @@ export abstract class MemoryManagerSyncOps {
   }
 
   protected openDatabase(): DatabaseSync {
+    if (this.settings.store.driver === "postgres") {
+      const conn = this.settings.store.connectionString?.trim();
+      if (!conn) {
+        throw new Error(
+          "memorySearch.store.connectionString is required when driver is 'postgres'. " +
+            "Example: postgres://user:pass@localhost:5432/openclaw",
+        );
+      }
+      throw new Error(
+        "Postgres memory store is not yet implemented. Use driver: 'sqlite' for now. " +
+          "See https://github.com/openclaw/openclaw/issues/22927",
+      );
+    }
     const dbPath = resolveUserPath(this.settings.store.path);
     return this.openDatabaseAtPath(dbPath);
   }

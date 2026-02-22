@@ -515,12 +515,15 @@ export const MemorySearchSchema = z
       .optional(),
     store: z
       .object({
-        driver: z.literal("sqlite").optional(),
+        driver: z.enum(["sqlite", "postgres"]).optional(),
         path: z.string().optional(),
+        connectionString: z.string().optional(),
+        schema: z.string().optional(),
         vector: z
           .object({
             enabled: z.boolean().optional(),
             extensionPath: z.string().optional(),
+            indexType: z.enum(["ivfflat", "hnsw"]).optional(),
           })
           .strict()
           .optional(),
