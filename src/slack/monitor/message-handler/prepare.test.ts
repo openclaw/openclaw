@@ -193,10 +193,10 @@ describe("slack prepareSlackMessage inbound contract", () => {
     );
 
     expect(prepared).toBeTruthy();
-    expect(prepared!.ctxPayload.RawBody).toContain("[Forwarded message from Bob]\nForwarded hello");
+    expect(prepared!.ctxPayload.RawBody).toContain("[Slack attachment from Bob]\nForwarded hello");
   });
 
-  it("ignores non-forward attachments when no direct text/files are present", async () => {
+  it("includes non-forward attachment text when no direct text/files are present", async () => {
     const prepared = await prepareWithDefaultCtx(
       createSlackMessage({
         text: "",
@@ -205,7 +205,8 @@ describe("slack prepareSlackMessage inbound contract", () => {
       }),
     );
 
-    expect(prepared).toBeNull();
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.RawBody).toContain("[Slack attachment]\nlink unfurl text");
   });
 
   it("keeps channel metadata out of GroupSystemPrompt", async () => {

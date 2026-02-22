@@ -12,6 +12,11 @@ export type SlackAttachment = {
   fallback?: string;
   text?: string;
   pretext?: string;
+  title?: string;
+  fields?: Array<{
+    title?: string;
+    value?: string;
+  }>;
   author_name?: string;
   author_id?: string;
   from_url?: string;

@@ -241,7 +241,7 @@ export async function resolveSlackMedia(params: {
   return results.length > 0 ? results : null;
 }
 
-/** Extracts text and media from forwarded-message attachments. Returns null when empty. */
+/** Extracts text and media from Slack attachments. Returns null when empty. */
 export async function resolveSlackAttachmentContent(params: {
   attachments?: SlackAttachment[];
   token: string;
@@ -252,22 +252,53 @@ export async function resolveSlackAttachmentContent(params: {
     return null;
   }
 
-  const forwardedAttachments = attachments
-    .filter((attachment) => isForwardedSlackAttachment(attachment))
-    .slice(0, MAX_SLACK_FORWARDED_ATTACHMENTS);
-  if (forwardedAttachments.length === 0) {
-    return null;
-  }
+  const consideredAttachments = attachments.slice(0, MAX_SLACK_FORWARDED_ATTACHMENTS);
 
   const textBlocks: string[] = [];
   const allMedia: SlackMediaResult[] = [];
 
-  for (const att of forwardedAttachments) {
-    const text = att.text?.trim() || att.fallback?.trim();
+  for (const att of consideredAttachments) {
+    const textParts: string[] = [];
+
+    const pretext = att.pretext?.trim();
+    if (pretext) {
+      textParts.push(pretext);
+    }
+
+    const text = att.text?.trim();
     if (text) {
-      const author = att.author_name;
-      const heading = author ? `[Forwarded message from ${author}]` : "[Forwarded message]";
-      textBlocks.push(`${heading}\n${text}`);
+      textParts.push(text);
+    }
+
+    const fallback = att.fallback?.trim();
+    if (fallback && !textParts.includes(fallback)) {
+      textParts.push(fallback);
+    }
+
+    if (Array.isArray(att.fields)) {
+      for (const field of att.fields) {
+        const value = field?.value?.trim();
+        if (!value) {
+          continue;
+        }
+        const title = field?.title?.trim();
+        textParts.push(title ? `${title}: ${value}` : value);
+      }
+    }
+
+    if (textParts.length > 0) {
+      const author = att.author_name?.trim();
+      const title = att.title?.trim();
+      const heading = author
+        ? `[Slack attachment from ${author}]`
+        : title
+          ? `[Slack attachment: ${title}]`
+          : "[Slack attachment]";
+      textBlocks.push(`${heading}\n${textParts.join("\n")}`);
+    }
+
+    if (!isForwardedSlackAttachment(att)) {
+      continue;
     }
 
     const imageUrl = resolveForwardedAttachmentImageUrl(att);
