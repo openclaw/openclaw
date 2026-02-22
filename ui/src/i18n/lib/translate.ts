@@ -19,11 +19,12 @@ class I18nManager {
   }
 
   private loadLocale() {
-    const saved = localStorage.getItem("openclaw.i18n.locale");
+    const saved =
+      typeof localStorage !== "undefined" ? localStorage.getItem("openclaw.i18n.locale") : null;
     if (isSupportedLocale(saved)) {
       this.locale = saved;
     } else {
-      const navLang = navigator.language;
+      const navLang = typeof navigator !== "undefined" ? navigator.language : "en";
       if (navLang.startsWith("zh")) {
         this.locale = navLang === "zh-TW" || navLang === "zh-HK" ? "zh-TW" : "zh-CN";
       } else if (navLang.startsWith("pt")) {
@@ -39,11 +40,9 @@ class I18nManager {
   }
 
   public async setLocale(locale: Locale) {
-    if (this.locale === locale) {
-      return;
-    }
-
-    // Lazy load translations if needed
+    // Lazy-load translations before checking locale equality so that
+    // auto-detected locales (set by loadLocale but never loaded) get
+    // their translation map populated on the first setLocale call.
     if (!this.translations[locale]) {
       try {
         let module: Record<string, TranslationMap>;
@@ -63,8 +62,14 @@ class I18nManager {
       }
     }
 
+    if (this.locale === locale) {
+      return;
+    }
+
     this.locale = locale;
-    localStorage.setItem("openclaw.i18n.locale", locale);
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem("openclaw.i18n.locale", locale);
+    }
     this.notify();
   }
 
