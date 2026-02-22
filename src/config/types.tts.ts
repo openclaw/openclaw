@@ -1,4 +1,4 @@
-export type TtsProvider = "elevenlabs" | "openai" | "edge";
+export type TtsProvider = "elevenlabs" | "openai" | "edge" | "chatterbox" | "piper";
 
 export type TtsMode = "final" | "all";
 
@@ -72,6 +72,48 @@ export type TtsConfig = {
     saveSubtitles?: boolean;
     proxy?: string;
     timeoutMs?: number;
+  };
+  /** Chatterbox TTS configuration (local or self-hosted). */
+  chatterbox?: {
+    /** Explicitly enable Chatterbox TTS. */
+    enabled?: boolean;
+    /** Base URL for Chatterbox API (default: http://localhost:4123). */
+    baseUrl?: string;
+    /** Optional API key if your Chatterbox instance requires auth. */
+    apiKey?: string;
+    /** Voice name from voice library (e.g., "default", "sarah"). */
+    voice?: string;
+    /** Model variant: "chatterbox" | "chatterbox-turbo" | "chatterbox-multilingual". */
+    model?: string;
+    /** Language code for multilingual model (e.g., "en", "ar", "fr"). */
+    language?: string;
+    /** Exaggeration parameter (0.0-1.0, default 0.5). */
+    exaggeration?: number;
+    /** CFG weight parameter (0.0-1.0, default 0.5). */
+    cfgWeight?: number;
+    /** Speed multiplier (0.5-2.0, default 1.0). */
+    speed?: number;
+  };
+  /** Piper TTS configuration (local or self-hosted). */
+  piper?: {
+    /** Explicitly enable Piper TTS. */
+    enabled?: boolean;
+    /** Base URL for Piper API (default: http://localhost:8101). */
+    baseUrl?: string;
+    /** Optional API key if your Piper instance requires auth. */
+    apiKey?: string;
+    /** Voice model name (e.g., "en_US-lessac-high", "en_GB-alba-medium"). */
+    voice?: string;
+    /** Speaker ID for multi-speaker models. */
+    speakerId?: number;
+    /** Length scale / speed (0.5-2.0, default 1.0). Smaller = faster. */
+    lengthScale?: number;
+    /** Noise scale for audio variation (0.0-1.0, default 0.667). */
+    noiseScale?: number;
+    /** Noise weight for phoneme duration variation (0.0-1.0, default 0.8). */
+    noiseW?: number;
+    /** Sentence silence duration in seconds (default 0.2). */
+    sentenceSilence?: number;
   };
   /** Optional path for local TTS user preferences JSON. */
   prefsPath?: string;
