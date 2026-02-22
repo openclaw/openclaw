@@ -407,8 +407,17 @@ export function createExecTool(
         execCommandOverride = gatewayResult.execCommandOverride;
       }
 
-      const effectiveTimeout =
-        typeof params.timeout === "number" ? params.timeout : defaultTimeoutSec;
+      // For sessions that will run in the background without a user-provided timeout,
+      // skip the supervisor's overall timeout. The 30-minute default would silently
+      // kill long-running background tasks (e.g. audio transcription, polling loops)
+      // that are expected to run indefinitely until explicitly killed.
+      const hasExplicitTimeout = typeof params.timeout === "number";
+      const willBackground = allowBackground && yieldWindow !== null;
+      const effectiveTimeout: number | null = hasExplicitTimeout
+        ? params.timeout!
+        : willBackground
+          ? null
+          : defaultTimeoutSec;
       const getWarningText = () => (warnings.length ? `${warnings.join("\n")}\n\n` : "");
       const usePty = params.pty === true && !sandbox;
 
