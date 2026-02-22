@@ -27,6 +27,8 @@ export type AgentConfig = {
   model?: AgentModelConfig;
   /** Optional allowlist of skills for this agent (omit = all skills; empty = none). */
   skills?: string[];
+  /** Default thinking level for this agent (auto-downgrades for unsupported models). */
+  thinkingDefault?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
   memorySearch?: MemorySearchConfig;
   /** Human-like delay between block replies for this agent. */
   humanDelay?: HumanDelayConfig;

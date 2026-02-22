@@ -1,6 +1,7 @@
 import path from "node:path";
 import {
   listAgentIds,
+  resolveAgentConfig,
   resolveAgentDir,
   resolveEffectiveModelFallbacks,
   resolveAgentModelPrimary,
@@ -217,8 +218,14 @@ export async function agentCommand(
       );
     }
   }
-  const agentCfg = cfg.agents?.defaults;
   const sessionAgentId = agentIdOverride ?? resolveAgentIdFromSessionKey(opts.sessionKey?.trim());
+  // Merge per-agent config (e.g. thinkingDefault) with global defaults
+  const perAgentConfig = resolveAgentConfig(cfg, sessionAgentId);
+  const agentCfg = perAgentConfig
+    ? Object.assign({}, cfg.agents?.defaults, {
+        thinkingDefault: perAgentConfig.thinkingDefault ?? cfg.agents?.defaults?.thinkingDefault,
+      })
+    : cfg.agents?.defaults;
   const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const workspace = await ensureAgentWorkspace({
