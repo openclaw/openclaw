@@ -257,6 +257,28 @@ function validateConfigObjectWithPluginsBase(
     }
   }
 
+  // Warn when both commands.include and commands.exclude are set on a channel.
+  if (config.channels && isRecord(config.channels)) {
+    for (const [channelId, channelCfg] of Object.entries(config.channels)) {
+      if (!isRecord(channelCfg)) {
+        continue;
+      }
+      const cmds = channelCfg.commands;
+      if (!isRecord(cmds)) {
+        continue;
+      }
+      const inc = Array.isArray(cmds.include) ? cmds.include : [];
+      const exc = Array.isArray(cmds.exclude) ? cmds.exclude : [];
+      if (inc.length > 0 && exc.length > 0) {
+        warnings.push({
+          path: `channels.${channelId}.commands.exclude`,
+          message:
+            "commands.include and commands.exclude are mutually exclusive; include takes priority, exclude will be ignored.",
+        });
+      }
+    }
+  }
+
   const heartbeatChannelIds = new Set<string>();
   for (const channelId of CHANNEL_IDS) {
     heartbeatChannelIds.add(channelId.toLowerCase());

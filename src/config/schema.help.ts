@@ -383,6 +383,10 @@ export const FIELD_HELP: Record<string, string> = {
   "channels.telegram.commands.native": 'Override native commands for Telegram (bool or "auto").',
   "channels.telegram.commands.nativeSkills":
     'Override native skill commands for Telegram (bool or "auto").',
+  "channels.telegram.commands.include":
+    "Whitelist of command names to register in Telegram menu (include takes priority over exclude).",
+  "channels.telegram.commands.exclude":
+    "Blacklist of command names to hide from Telegram menu (ignored when include is set).",
   "channels.slack.commands.native": 'Override native commands for Slack (bool or "auto").',
   "channels.slack.commands.nativeSkills":
     'Override native skill commands for Slack (bool or "auto").',

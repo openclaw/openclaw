@@ -45,6 +45,7 @@ import { isSenderAllowed, normalizeAllowFromWithStore } from "./bot-access.js";
 import {
   buildCappedTelegramMenuCommands,
   buildPluginTelegramMenuCommands,
+  filterTelegramMenuCommands,
   syncTelegramMenuCommands,
 } from "./bot-native-command-menu.js";
 import { TelegramUpdateKeyContext } from "./bot-updates.js";
@@ -366,15 +367,20 @@ export const registerTelegramNativeCommands = ({
     ...(nativeEnabled ? pluginCatalog.commands : []),
     ...customCommands,
   ];
+  const filteredCommands = filterTelegramMenuCommands({
+    commands: allCommandsFull,
+    include: telegramCfg.commands?.include,
+    exclude: telegramCfg.commands?.exclude,
+  });
   const { commandsToRegister, totalCommands, maxCommands, overflowCount } =
     buildCappedTelegramMenuCommands({
-      allCommands: allCommandsFull,
+      allCommands: filteredCommands,
     });
   if (overflowCount > 0) {
     runtime.log?.(
       `Telegram limits bots to ${maxCommands} commands. ` +
         `${totalCommands} configured; registering first ${maxCommands}. ` +
-        `Use channels.telegram.commands.native: false to disable, or reduce plugin/skill/custom commands.`,
+        `Use channels.telegram.commands.native: false to disable, or use commands.include/exclude to filter.`,
     );
   }
   // Telegram only limits the setMyCommands payload (menu entries).
