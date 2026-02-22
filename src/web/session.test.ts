@@ -204,6 +204,51 @@ describe("web session", () => {
     expect(inFlight).toBe(0);
   });
 
+  it("does not block creds saves across different auth dirs", async () => {
+    let releaseA: (() => void) | null = null;
+    const gateA = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    let startedA = false;
+    let startedB = false;
+
+    const saveCredsA = vi.fn(async () => {
+      startedA = true;
+      await gateA;
+    });
+    const saveCredsB = vi.fn(async () => {
+      startedB = true;
+    });
+
+    useMultiFileAuthStateMock
+      .mockResolvedValueOnce({
+        state: { creds: {} as never, keys: {} as never },
+        saveCreds: saveCredsA,
+      })
+      .mockResolvedValueOnce({
+        state: { creds: {} as never, keys: {} as never },
+        saveCreds: saveCredsB,
+      });
+
+    await createWaSocket(false, false, { authDir: "/tmp/openclaw-wa-a" });
+    const sockA = getLastSocket();
+    await createWaSocket(false, false, { authDir: "/tmp/openclaw-wa-b" });
+    const sockB = getLastSocket();
+
+    sockA.ev.emit("creds.update", {});
+    sockB.ev.emit("creds.update", {});
+
+    await flushCredsUpdate();
+
+    expect(startedA).toBe(true);
+    expect(startedB).toBe(true);
+    expect(saveCredsA).toHaveBeenCalledTimes(1);
+    expect(saveCredsB).toHaveBeenCalledTimes(1);
+
+    (releaseA as (() => void) | null)?.();
+    await flushCredsUpdate();
+  });
+
   it("rotates creds backup when creds.json is valid JSON", async () => {
     const creds = mockCredsJsonSpies("{}");
     const backupSuffix = path.join(
