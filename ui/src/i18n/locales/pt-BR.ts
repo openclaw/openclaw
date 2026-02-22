@@ -12,6 +12,7 @@ export const pt_BR: TranslationMap = {
     na: "n/a",
     docs: "Docs",
     resources: "Recursos",
+    search: "Pesquisar",
   },
   nav: {
     chat: "Chat",
@@ -20,6 +21,7 @@ export const pt_BR: TranslationMap = {
     settings: "Configurações",
     expand: "Expandir barra lateral",
     collapse: "Recolher barra lateral",
+    resize: "Redimensionar barra lateral",
   },
   tabs: {
     agents: "Agentes",
@@ -37,19 +39,19 @@ export const pt_BR: TranslationMap = {
     logs: "Logs",
   },
   subtitles: {
-    agents: "Gerenciar espaços de trabalho, ferramentas e identidades de agentes.",
-    overview: "Status do gateway, pontos de entrada e leitura rápida de saúde.",
-    channels: "Gerenciar canais e configurações.",
-    instances: "Beacons de presença de clientes e nós conectados.",
-    sessions: "Inspecionar sessões ativas e ajustar padrões por sessão.",
-    usage: "Monitorar uso e custos da API.",
-    cron: "Agendar despertares e execuções recorrentes de agentes.",
-    skills: "Gerenciar disponibilidade de habilidades e injeção de chaves de API.",
-    nodes: "Dispositivos pareados, capacidades e exposição de comandos.",
-    chat: "Sessão de chat direta com o gateway para intervenções rápidas.",
-    config: "Editar ~/.openclaw/openclaw.json com segurança.",
-    debug: "Snapshots do gateway, eventos e chamadas RPC manuais.",
-    logs: "Acompanhamento ao vivo dos logs de arquivo do gateway.",
+    agents: "Espaços, ferramentas, identidades.",
+    overview: "Status, entrada, saúde.",
+    channels: "Canais e configurações.",
+    instances: "Clientes e nós conectados.",
+    sessions: "Sessões ativas e padrões.",
+    usage: "Uso e custos da API.",
+    cron: "Despertares e execuções.",
+    skills: "Habilidades e chaves API.",
+    nodes: "Dispositivos e comandos.",
+    chat: "Chat do gateway para intervenções rápidas.",
+    config: "Editar openclaw.json.",
+    debug: "Snapshots, eventos, RPC.",
+    logs: "Logs ao vivo do gateway.",
   },
   overview: {
     access: {
@@ -101,6 +103,47 @@ export const pt_BR: TranslationMap = {
       hint: "Esta página é HTTP, então o navegador bloqueia a identidade do dispositivo. Use HTTPS (Tailscale Serve) ou abra {url} no host do gateway.",
       stayHttp: "Se você precisar permanecer em HTTP, defina {config} (apenas token).",
     },
+    connection: {
+      title: "Como conectar",
+      step1: "Inicie o gateway na sua máquina host:",
+      step2: "Obtenha uma URL do painel com token:",
+      step3: "Cole a URL do WebSocket e o token acima, ou abra a URL com token diretamente.",
+      step4: "Ou gere um token reutilizável:",
+      docsHint: "Para acesso remoto, recomendamos o Tailscale Serve. ",
+      docsLink: "Leia a documentação →",
+    },
+    cards: {
+      cost: "Custo",
+      skills: "Habilidades",
+      recentSessions: "Sessões Recentes",
+    },
+    attention: {
+      title: "Atenção",
+    },
+    eventLog: {
+      title: "Log de Eventos",
+    },
+    logTail: {
+      title: "Logs do Gateway",
+    },
+    quickActions: {
+      newSession: "Nova Sessão",
+      automation: "Automação",
+      refreshAll: "Atualizar Tudo",
+      terminal: "Terminal",
+    },
+    streamMode: {
+      active: "Modo stream — valores ocultos",
+      disable: "Desativar",
+    },
+    palette: {
+      placeholder: "Digite um comando…",
+      noResults: "Sem resultados",
+    },
+  },
+  login: {
+    subtitle: "Painel do Gateway",
+    passwordPlaceholder: "opcional",
   },
   chat: {
     disconnected: "Desconectado do gateway.",

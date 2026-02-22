@@ -28,7 +28,8 @@ enum ExecApprovalEvaluator {
         let approvals = ExecApprovalsStore.resolve(agentId: normalizedAgentId)
         let security = approvals.agent.security
         let ask = approvals.agent.ask
-        let env = HostEnvSanitizer.sanitize(overrides: envOverrides)
+        let shellWrapper = ExecShellWrapperParser.extract(command: command, rawCommand: rawCommand).isWrapper
+        let env = HostEnvSanitizer.sanitize(overrides: envOverrides, shellWrapper: shellWrapper)
         let displayCommand = ExecCommandFormatter.displayString(for: command, rawCommand: rawCommand)
         let allowlistResolutions = ExecCommandResolution.resolveForAllowlist(
             command: command,

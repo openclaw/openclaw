@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox.js";
 import { execDockerRaw } from "../agents/sandbox/docker.js";
 import { resolveBrowserConfig, resolveProfile } from "../browser/config.js";
@@ -10,6 +11,10 @@ import { resolveGatewayAuth } from "../gateway/auth.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
 import { resolveGatewayProbeAuth } from "../gateway/probe-auth.js";
 import { probeGateway } from "../gateway/probe.js";
+import {
+  listInterpreterLikeSafeBins,
+  resolveMergedSafeBinProfileFixtures,
+} from "../infra/exec-safe-bin-runtime-policy.js";
 import { collectChannelSecurityFindings } from "./audit-channel.js";
 import {
   collectAttackSurfaceSummaryFindings,
@@ -270,6 +275,8 @@ function collectGatewayConfigFindings(
     (auth.mode === "token" && hasToken) || (auth.mode === "password" && hasPassword);
   const hasTailscaleAuth = auth.allowTailscale && tailscaleMode === "serve";
   const hasGatewayAuth = hasSharedSecret || hasTailscaleAuth;
+  const allowRealIpFallback = cfg.gateway?.allowRealIpFallback === true;
+  const mdnsMode = cfg.discovery?.mdns?.mode ?? "minimal";
 
   // HTTP /tools/invoke is intended for narrow automation, not session orchestration/admin operations.
   // If operators opt-in to re-enabling these tools over HTTP, warn loudly so the choice is explicit.
@@ -331,6 +338,39 @@ function collectGatewayConfigFindings(
         "gateway.bind is loopback but no gateway auth secret is configured. " +
         "If the Control UI is exposed through a reverse proxy, unauthenticated access is possible.",
       remediation: "Set gateway.auth (token recommended) or keep the Control UI local-only.",
+    });
+  }
+
+  if (allowRealIpFallback) {
+    const hasNonLoopbackTrustedProxy = trustedProxies.some(
+      (proxy) => !isStrictLoopbackTrustedProxyEntry(proxy),
+    );
+    const exposed =
+      bind !== "loopback" || (auth.mode === "trusted-proxy" && hasNonLoopbackTrustedProxy);
+    findings.push({
+      checkId: "gateway.real_ip_fallback_enabled",
+      severity: exposed ? "critical" : "warn",
+      title: "X-Real-IP fallback is enabled",
+      detail:
+        "gateway.allowRealIpFallback=true trusts X-Real-IP when trusted proxies omit X-Forwarded-For. " +
+        "Misconfigured proxies that forward client-supplied X-Real-IP can spoof source IP and local-client checks.",
+      remediation:
+        "Keep gateway.allowRealIpFallback=false (default). Only enable this when your trusted proxy " +
+        "always overwrites X-Real-IP and cannot provide X-Forwarded-For.",
+    });
+  }
+
+  if (mdnsMode === "full") {
+    const exposed = bind !== "loopback";
+    findings.push({
+      checkId: "discovery.mdns_full_mode",
+      severity: exposed ? "critical" : "warn",
+      title: "mDNS full mode can leak host metadata",
+      detail:
+        'discovery.mdns.mode="full" publishes cliPath/sshPort in local-network TXT records. ' +
+        "This can reveal usernames, filesystem layout, and management ports.",
+      remediation:
+        'Prefer discovery.mdns.mode="minimal" (recommended) or "off", especially when gateway.bind is not loopback.',
     });
   }
 
@@ -469,6 +509,35 @@ function collectGatewayConfigFindings(
   }
 
   return findings;
+}
+
+// Keep this stricter than isLoopbackAddress on purpose: this check is for
+// trust boundaries, so only explicit localhost proxy hops are treated as local.
+function isStrictLoopbackTrustedProxyEntry(entry: string): boolean {
+  const candidate = entry.trim();
+  if (!candidate) {
+    return false;
+  }
+  if (!candidate.includes("/")) {
+    return candidate === "127.0.0.1" || candidate.toLowerCase() === "::1";
+  }
+
+  const [rawIp, rawPrefix] = candidate.split("/", 2);
+  if (!rawIp || !rawPrefix) {
+    return false;
+  }
+  const ipVersion = isIP(rawIp.trim());
+  const prefix = Number.parseInt(rawPrefix.trim(), 10);
+  if (!Number.isInteger(prefix)) {
+    return false;
+  }
+  if (ipVersion === 4) {
+    return rawIp.trim() === "127.0.0.1" && prefix === 32;
+  }
+  if (ipVersion === 6) {
+    return prefix === 128 && rawIp.trim().toLowerCase() === "::1";
+  }
+  return false;
 }
 
 function collectBrowserControlFindings(
@@ -627,6 +696,65 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
         "With sandbox mode off, exec runs directly on the gateway host.",
       remediation:
         'Enable sandbox mode for these agents (`agents.list[].sandbox.mode`) or set their tools.exec.host to "gateway".',
+    });
+  }
+
+  const normalizeConfiguredSafeBins = (entries: unknown): string[] => {
+    if (!Array.isArray(entries)) {
+      return [];
+    }
+    return Array.from(
+      new Set(
+        entries
+          .map((entry) => (typeof entry === "string" ? entry.trim().toLowerCase() : ""))
+          .filter((entry) => entry.length > 0),
+      ),
+    ).toSorted();
+  };
+  const interpreterHits: string[] = [];
+  const globalExec = cfg.tools?.exec;
+  const globalSafeBins = normalizeConfiguredSafeBins(globalExec?.safeBins);
+  if (globalSafeBins.length > 0) {
+    const merged = resolveMergedSafeBinProfileFixtures({ global: globalExec }) ?? {};
+    const interpreters = listInterpreterLikeSafeBins(globalSafeBins).filter((bin) => !merged[bin]);
+    if (interpreters.length > 0) {
+      interpreterHits.push(`- tools.exec.safeBins: ${interpreters.join(", ")}`);
+    }
+  }
+
+  for (const entry of agents) {
+    if (!entry || typeof entry !== "object" || typeof entry.id !== "string") {
+      continue;
+    }
+    const agentExec = entry.tools?.exec;
+    const agentSafeBins = normalizeConfiguredSafeBins(agentExec?.safeBins);
+    if (agentSafeBins.length === 0) {
+      continue;
+    }
+    const merged =
+      resolveMergedSafeBinProfileFixtures({
+        global: globalExec,
+        local: agentExec,
+      }) ?? {};
+    const interpreters = listInterpreterLikeSafeBins(agentSafeBins).filter((bin) => !merged[bin]);
+    if (interpreters.length === 0) {
+      continue;
+    }
+    interpreterHits.push(
+      `- agents.list.${entry.id}.tools.exec.safeBins: ${interpreters.join(", ")}`,
+    );
+  }
+
+  if (interpreterHits.length > 0) {
+    findings.push({
+      checkId: "tools.exec.safe_bins_interpreter_unprofiled",
+      severity: "warn",
+      title: "safeBins includes interpreter/runtime binaries without explicit profiles",
+      detail:
+        `Detected interpreter-like safeBins entries missing explicit profiles:\n${interpreterHits.join("\n")}\n` +
+        "These entries can turn safeBins into a broad execution surface when used with permissive argv profiles.",
+      remediation:
+        "Remove interpreter/runtime bins from safeBins (prefer allowlist entries) or define hardened tools.exec.safeBinProfiles.<bin> rules.",
     });
   }
 

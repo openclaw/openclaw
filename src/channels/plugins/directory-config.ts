@@ -26,12 +26,31 @@ function addAllowFromAndDmsIds(
     }
     ids.add(raw);
   }
-  for (const id of Object.keys(dms ?? {})) {
-    const trimmed = id.trim();
-    if (trimmed) {
-      ids.add(trimmed);
-    }
+  addTrimmedEntries(ids, Object.keys(dms ?? {}));
+}
+
+function addTrimmedId(ids: Set<string>, value: unknown) {
+  const trimmed = String(value).trim();
+  if (trimmed) {
+    ids.add(trimmed);
   }
+}
+
+function addTrimmedEntries(ids: Set<string>, values: Iterable<unknown>) {
+  for (const value of values) {
+    addTrimmedId(ids, value);
+  }
+}
+
+function normalizeTrimmedSet(
+  ids: Set<string>,
+  normalize: (raw: string) => string | null,
+): string[] {
+  return Array.from(ids)
+    .map((raw) => raw.trim())
+    .filter(Boolean)
+    .map((raw) => normalize(raw))
+    .filter((id): id is string => Boolean(id));
 }
 
 function resolveDirectoryQuery(query?: string | null): string {
@@ -61,28 +80,18 @@ export async function listSlackDirectoryPeersFromConfig(
 
   addAllowFromAndDmsIds(ids, account.config.allowFrom ?? account.dm?.allowFrom, account.config.dms);
   for (const channel of Object.values(account.config.channels ?? {})) {
-    for (const user of channel.users ?? []) {
-      const raw = String(user).trim();
-      if (raw) {
-        ids.add(raw);
-      }
-    }
+    addTrimmedEntries(ids, channel.users ?? []);
   }
 
-  const normalizedIds = Array.from(ids)
-    .map((raw) => raw.trim())
-    .filter(Boolean)
-    .map((raw) => {
-      const mention = raw.match(/^<@([A-Z0-9]+)>$/i);
-      const normalizedUserId = (mention?.[1] ?? raw).replace(/^(slack|user):/i, "").trim();
-      if (!normalizedUserId) {
-        return null;
-      }
-      const target = `user:${normalizedUserId}`;
-      return normalizeSlackMessagingTarget(target) ?? target.toLowerCase();
-    })
-    .filter((id): id is string => Boolean(id))
-    .filter((id) => id.startsWith("user:"));
+  const normalizedIds = normalizeTrimmedSet(ids, (raw) => {
+    const mention = raw.match(/^<@([A-Z0-9]+)>$/i);
+    const normalizedUserId = (mention?.[1] ?? raw).replace(/^(slack|user):/i, "").trim();
+    if (!normalizedUserId) {
+      return null;
+    }
+    const target = `user:${normalizedUserId}`;
+    return normalizeSlackMessagingTarget(target) ?? target.toLowerCase();
+  }).filter((id) => id.startsWith("user:"));
   return toDirectoryEntries("user", applyDirectoryQueryAndLimit(normalizedIds, params));
 }
 
@@ -110,34 +119,20 @@ export async function listDiscordDirectoryPeersFromConfig(
     account.config.dms,
   );
   for (const guild of Object.values(account.config.guilds ?? {})) {
-    for (const entry of guild.users ?? []) {
-      const raw = String(entry).trim();
-      if (raw) {
-        ids.add(raw);
-      }
-    }
+    addTrimmedEntries(ids, guild.users ?? []);
     for (const channel of Object.values(guild.channels ?? {})) {
-      for (const user of channel.users ?? []) {
-        const raw = String(user).trim();
-        if (raw) {
-          ids.add(raw);
-        }
-      }
+      addTrimmedEntries(ids, channel.users ?? []);
     }
   }
 
-  const normalizedIds = Array.from(ids)
-    .map((raw) => raw.trim())
-    .filter(Boolean)
-    .map((raw) => {
-      const mention = raw.match(/^<@!?(\d+)>$/);
-      const cleaned = (mention?.[1] ?? raw).replace(/^(discord|user):/i, "").trim();
-      if (!/^\d+$/.test(cleaned)) {
-        return null;
-      }
-      return `user:${cleaned}`;
-    })
-    .filter((id): id is string => Boolean(id));
+  const normalizedIds = normalizeTrimmedSet(ids, (raw) => {
+    const mention = raw.match(/^<@!?(\d+)>$/);
+    const cleaned = (mention?.[1] ?? raw).replace(/^(discord|user):/i, "").trim();
+    if (!/^\d+$/.test(cleaned)) {
+      return null;
+    }
+    return `user:${cleaned}`;
+  });
   return toDirectoryEntries("user", applyDirectoryQueryAndLimit(normalizedIds, params));
 }
 
@@ -147,26 +142,17 @@ export async function listDiscordDirectoryGroupsFromConfig(
   const account = resolveDiscordAccount({ cfg: params.cfg, accountId: params.accountId });
   const ids = new Set<string>();
   for (const guild of Object.values(account.config.guilds ?? {})) {
-    for (const channelId of Object.keys(guild.channels ?? {})) {
-      const trimmed = channelId.trim();
-      if (trimmed) {
-        ids.add(trimmed);
-      }
-    }
+    addTrimmedEntries(ids, Object.keys(guild.channels ?? {}));
   }
 
-  const normalizedIds = Array.from(ids)
-    .map((raw) => raw.trim())
-    .filter(Boolean)
-    .map((raw) => {
-      const mention = raw.match(/^<#(\d+)>$/);
-      const cleaned = (mention?.[1] ?? raw).replace(/^(discord|channel|group):/i, "").trim();
-      if (!/^\d+$/.test(cleaned)) {
-        return null;
-      }
-      return `channel:${cleaned}`;
-    })
-    .filter((id): id is string => Boolean(id));
+  const normalizedIds = normalizeTrimmedSet(ids, (raw) => {
+    const mention = raw.match(/^<#(\d+)>$/);
+    const cleaned = (mention?.[1] ?? raw).replace(/^(discord|channel|group):/i, "").trim();
+    if (!/^\d+$/.test(cleaned)) {
+      return null;
+    }
+    return `channel:${cleaned}`;
+  });
   return toDirectoryEntries("group", applyDirectoryQueryAndLimit(normalizedIds, params));
 }
 

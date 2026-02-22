@@ -337,6 +337,15 @@ const ToolExecApplyPatchSchema = z
   .strict()
   .optional();
 
+const ToolExecSafeBinProfileSchema = z
+  .object({
+    minPositional: z.number().int().nonnegative().optional(),
+    maxPositional: z.number().int().nonnegative().optional(),
+    allowedValueFlags: z.array(z.string()).optional(),
+    deniedFlags: z.array(z.string()).optional(),
+  })
+  .strict();
+
 const ToolExecBaseShape = {
   host: z.enum(["sandbox", "gateway", "node"]).optional(),
   security: z.enum(["deny", "allowlist", "full"]).optional(),
@@ -344,6 +353,7 @@ const ToolExecBaseShape = {
   node: z.string().optional(),
   pathPrepend: z.array(z.string()).optional(),
   safeBins: z.array(z.string()).optional(),
+  safeBinProfiles: z.record(z.string(), ToolExecSafeBinProfileSchema).optional(),
   backgroundMs: z.number().int().positive().optional(),
   timeoutSec: z.number().int().positive().optional(),
   cleanupMs: z.number().int().positive().optional(),

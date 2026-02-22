@@ -60,7 +60,7 @@ import type { SkillMessage } from "./controllers/skills.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
 import { loadSettings, type UiSettings } from "./storage.ts";
-import type { ResolvedTheme, ThemeMode } from "./theme.ts";
+import { VALID_THEMES, type ResolvedTheme, type ThemeMode } from "./theme.ts";
 import type {
   AgentsListResult,
   AgentsFilesListResult,
@@ -70,9 +70,10 @@ import type {
   CronJob,
   CronRunLogEntry,
   CronStatus,
-  HealthSnapshot,
+  HealthSummary,
   LogEntry,
   LogLevel,
+  ModelCatalogEntry,
   PresenceEntry,
   ChannelsStatusSnapshot,
   SessionsListResult,
@@ -118,8 +119,9 @@ export class OpenClawApp extends LitElement {
   @state() tab: Tab = "chat";
   @state() onboarding = resolveOnboardingMode();
   @state() connected = false;
-  @state() theme: ThemeMode = this.settings.theme ?? "system";
+  @state() theme: ThemeMode = this.settings.theme ?? "dark";
   @state() themeResolved: ResolvedTheme = "dark";
+  @state() themeOrder: ThemeMode[] = this.buildThemeOrder(this.theme);
   @state() hello: GatewayHelloOk | null = null;
   @state() lastError: string | null = null;
   @state() eventLog: EventLogEntry[] = [];
@@ -237,6 +239,12 @@ export class OpenClawApp extends LitElement {
   @state() sessionsFilterLimit = "120";
   @state() sessionsIncludeGlobal = true;
   @state() sessionsIncludeUnknown = false;
+  @state() sessionsSearchQuery = "";
+  @state() sessionsSortColumn: "key" | "kind" | "updated" | "tokens" = "updated";
+  @state() sessionsSortDir: "asc" | "desc" = "desc";
+  @state() sessionsPage = 0;
+  @state() sessionsPageSize = 10;
+  @state() sessionsActionsOpenKey: string | null = null;
 
   @state() usageLoading = false;
   @state() usageResult: import("./types.js").SessionsUsageResult | null = null;
@@ -304,6 +312,23 @@ export class OpenClawApp extends LitElement {
 
   @state() updateAvailable: import("./types.js").UpdateAvailable | null = null;
 
+  // Overview dashboard state
+  @state() attentionItems: import("./types.js").AttentionItem[] = [];
+  @state() paletteOpen = false;
+  paletteQuery = "";
+  paletteActiveIndex = 0;
+  @state() streamMode = (() => {
+    try {
+      const stored = localStorage.getItem("openclaw:stream-mode");
+      // Default to true (redacted) unless explicitly disabled
+      return stored === null ? true : stored === "true";
+    } catch {
+      return true;
+    }
+  })();
+  @state() overviewLogLines: string[] = [];
+  @state() overviewLogCursor = 0;
+
   @state() skillsLoading = false;
   @state() skillsReport: SkillStatusReport | null = null;
   @state() skillsError: string | null = null;
@@ -312,10 +337,14 @@ export class OpenClawApp extends LitElement {
   @state() skillsBusyKey: string | null = null;
   @state() skillMessages: Record<string, SkillMessage> = {};
 
+  @state() healthLoading = false;
+  @state() healthResult: HealthSummary | null = null;
+  @state() healthError: string | null = null;
+
   @state() debugLoading = false;
   @state() debugStatus: StatusSummary | null = null;
-  @state() debugHealth: HealthSnapshot | null = null;
-  @state() debugModels: unknown[] = [];
+  @state() debugHealth: HealthSummary | null = null;
+  @state() debugModels: ModelCatalogEntry[] = [];
   @state() debugHeartbeat: unknown = null;
   @state() debugCallMethod = "";
   @state() debugCallParams = "{}";
@@ -354,8 +383,6 @@ export class OpenClawApp extends LitElement {
   basePath = "";
   private popStateHandler = () =>
     onPopStateInternal(this as unknown as Parameters<typeof onPopStateInternal>[0]);
-  private themeMedia: MediaQueryList | null = null;
-  private themeMediaHandler: ((event: MediaQueryListEvent) => void) | null = null;
   private topbarObserver: ResizeObserver | null = null;
 
   createRenderRoot() {
@@ -433,6 +460,13 @@ export class OpenClawApp extends LitElement {
 
   setTheme(next: ThemeMode, context?: Parameters<typeof setThemeInternal>[2]) {
     setThemeInternal(this as unknown as Parameters<typeof setThemeInternal>[0], next, context);
+    this.themeOrder = this.buildThemeOrder(next);
+  }
+
+  buildThemeOrder(active: ThemeMode): ThemeMode[] {
+    const all = [...VALID_THEMES];
+    const rest = all.filter((id) => id !== active);
+    return [active, ...rest];
   }
 
   async loadOverview() {

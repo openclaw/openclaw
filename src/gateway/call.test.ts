@@ -206,7 +206,13 @@ describe("callGateway url resolution", () => {
     {
       label: "keeps legacy admin scopes for explicit CLI callers",
       call: () => callGatewayCli({ method: "health" }),
-      expectedScopes: ["operator.admin", "operator.approvals", "operator.pairing"],
+      expectedScopes: [
+        "operator.admin",
+        "operator.read",
+        "operator.write",
+        "operator.approvals",
+        "operator.pairing",
+      ],
     },
   ])("scope selection: $label", async ({ call, expectedScopes }) => {
     setLocalLoopbackGatewayConfig();
@@ -328,6 +334,8 @@ describe("buildGatewayConnectionDetails", () => {
     expect((thrown as Error).message).toContain("SECURITY ERROR");
     expect((thrown as Error).message).toContain("plaintext ws://");
     expect((thrown as Error).message).toContain("wss://");
+    expect((thrown as Error).message).toContain("Tailscale Serve/Funnel");
+    expect((thrown as Error).message).toContain("openclaw doctor --fix");
   });
 
   it("allows ws:// for loopback addresses in local mode", () => {

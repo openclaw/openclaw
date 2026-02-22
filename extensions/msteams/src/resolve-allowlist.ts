@@ -1,8 +1,5 @@
+import { searchGraphUsers } from "./graph-users.js";
 import {
-  escapeOData,
-  fetchGraphJson,
-  type GraphResponse,
-  type GraphUser,
   listChannelsForTeam,
   listTeamsByName,
   normalizeQuery,
@@ -182,22 +179,7 @@ export async function resolveMSTeamsUserAllowlist(params: {
       results.push({ input, resolved: true, id: query });
       continue;
     }
-    let users: GraphUser[] = [];
-    if (query.includes("@")) {
-      const escaped = escapeOData(query);
-      const filter = `(mail eq '${escaped}' or userPrincipalName eq '${escaped}')`;
-      const path = `/users?$filter=${encodeURIComponent(filter)}&$select=id,displayName,mail,userPrincipalName`;
-      const res = await fetchGraphJson<GraphResponse<GraphUser>>({ token, path });
-      users = res.value ?? [];
-    } else {
-      const path = `/users?$search=${encodeURIComponent(`"displayName:${query}"`)}&$select=id,displayName,mail,userPrincipalName&$top=10`;
-      const res = await fetchGraphJson<GraphResponse<GraphUser>>({
-        token,
-        path,
-        headers: { ConsistencyLevel: "eventual" },
-      });
-      users = res.value ?? [];
-    }
+    const users = await searchGraphUsers({ token, query, top: 10 });
     const match = users[0];
     if (!match?.id) {
       results.push({ input, resolved: false });

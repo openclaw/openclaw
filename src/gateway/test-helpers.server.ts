@@ -469,6 +469,7 @@ export async function connectReq(
       nonce?: string;
     } | null;
     skipConnectChallengeNonce?: boolean;
+    timeoutMs?: number;
   },
 ): Promise<ConnectResponse> {
   const { randomUUID } = await import("node:crypto");
@@ -566,7 +567,7 @@ export async function connectReq(
     const rec = o as Record<string, unknown>;
     return rec.type === "res" && rec.id === id;
   };
-  return await onceMessage<ConnectResponse>(ws, isResponseForId);
+  return await onceMessage<ConnectResponse>(ws, isResponseForId, opts?.timeoutMs);
 }
 
 export async function connectOk(ws: WebSocket, opts?: Parameters<typeof connectReq>[1]) {
@@ -585,6 +586,7 @@ export async function connectWebchatClient(params: {
   const ws = new WebSocket(`ws://127.0.0.1:${params.port}`, {
     headers: { origin },
   });
+  trackConnectChallengeNonce(ws);
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("timeout waiting for ws open")), 10_000);
     const onOpen = () => {

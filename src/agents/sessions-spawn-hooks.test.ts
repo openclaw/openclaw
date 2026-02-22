@@ -1,10 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-core-tools.js";
 import {
+  findGatewayRequest,
   getCallGatewayMock,
+  getGatewayMethods,
   getSessionsSpawnTool,
   setSessionsSpawnConfigOverride,
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
+import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 
 const hookRunnerMocks = vi.hoisted(() => ({
   hasSubagentEndedHook: true,
@@ -45,21 +48,6 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
   })),
 }));
 
-type GatewayRequest = { method?: string; params?: Record<string, unknown> };
-
-function getGatewayRequests(): GatewayRequest[] {
-  const callGatewayMock = getCallGatewayMock();
-  return callGatewayMock.mock.calls.map((call: [unknown]) => call[0] as GatewayRequest);
-}
-
-function getGatewayMethods(): Array<string | undefined> {
-  return getGatewayRequests().map((request) => request.method);
-}
-
-function findGatewayRequest(method: string): GatewayRequest | undefined {
-  return getGatewayRequests().find((request) => request.method === method);
-}
-
 function expectSessionsDeleteWithoutAgentStart() {
   const methods = getGatewayMethods();
   expect(methods).toContain("sessions.delete");
@@ -79,6 +67,7 @@ function mockAgentStartFailure() {
 
 describe("sessions_spawn subagent lifecycle hooks", () => {
   beforeEach(() => {
+    resetSubagentRegistryForTests();
     hookRunnerMocks.hasSubagentEndedHook = true;
     hookRunnerMocks.runSubagentSpawning.mockClear();
     hookRunnerMocks.runSubagentSpawned.mockClear();
@@ -101,6 +90,10 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       }
       return {};
     });
+  });
+
+  afterEach(() => {
+    resetSubagentRegistryForTests();
   });
 
   it("runs subagent_spawning and emits subagent_spawned with requester metadata", async () => {

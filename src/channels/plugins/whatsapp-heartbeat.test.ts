@@ -38,6 +38,13 @@ describe("resolveWhatsAppHeartbeatRecipients", () => {
     return resolveWhatsAppHeartbeatRecipients(makeCfg(cfgOverrides), opts);
   }
 
+  function setSingleUnauthorizedSessionWithAllowFrom() {
+    setSessionStore({
+      a: { lastChannel: "whatsapp", lastTo: "+15550000099", updatedAt: 2, sessionId: "a" },
+    });
+    setAllowFromStore(["+15550000001"]);
+  }
+
   beforeEach(() => {
     vi.mocked(loadSessionStore).mockClear();
     vi.mocked(readChannelAllowFromStoreSync).mockClear();
@@ -57,10 +64,7 @@ describe("resolveWhatsAppHeartbeatRecipients", () => {
   });
 
   it("falls back to allowFrom when no session recipient is authorized", () => {
-    setSessionStore({
-      a: { lastChannel: "whatsapp", lastTo: "+15550000099", updatedAt: 2, sessionId: "a" },
-    });
-    setAllowFromStore(["+15550000001"]);
+    setSingleUnauthorizedSessionWithAllowFrom();
 
     const result = resolveWith();
 
@@ -68,10 +72,7 @@ describe("resolveWhatsAppHeartbeatRecipients", () => {
   });
 
   it("includes both session and allowFrom recipients when --all is set", () => {
-    setSessionStore({
-      a: { lastChannel: "whatsapp", lastTo: "+15550000099", updatedAt: 2, sessionId: "a" },
-    });
-    setAllowFromStore(["+15550000001"]);
+    setSingleUnauthorizedSessionWithAllowFrom();
 
     const result = resolveWith({}, { all: true });
 

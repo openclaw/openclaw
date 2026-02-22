@@ -23,7 +23,9 @@ Use `/subagents` to inspect or control sub-agent runs for the **current session*
 - `/subagents steer <id|#> <message>`
 - `/subagents spawn <agentId> <task> [--model <model>] [--thinking <level>]`
 
-Discord thread binding controls:
+Thread binding controls:
+
+These commands work on channels that support persistent thread bindings. See **Thread supporting channels** below.
 
 - `/focus <subagent-label|session-key|session-id|session-label>`
 - `/unfocus`
@@ -85,14 +87,18 @@ Tool params:
   - `mode: "session"` requires `thread: true`
 - `cleanup?` (`delete|keep`, default `keep`)
 
-## Discord thread-bound sessions
+## Thread-bound sessions
 
-When thread bindings are enabled, a sub-agent can stay bound to a Discord thread so follow-up user messages in that thread keep routing to the same sub-agent session.
+When thread bindings are enabled for a channel, a sub-agent can stay bound to a thread so follow-up user messages in that thread keep routing to the same sub-agent session.
+
+### Thread supporting channels
+
+- Discord (currently the only supported channel): supports persistent thread-bound subagent sessions (`sessions_spawn` with `thread: true`), manual thread controls (`/focus`, `/unfocus`, `/agents`, `/session ttl`), and adapter keys `channels.discord.threadBindings.enabled`, `channels.discord.threadBindings.ttlHours`, and `channels.discord.threadBindings.spawnSubagentSessions`.
 
 Quick flow:
 
 1. Spawn with `sessions_spawn` using `thread: true` (and optionally `mode: "session"`).
-2. OpenClaw creates or binds a Discord thread to that session target.
+2. OpenClaw creates or binds a thread to that session target in the active channel.
 3. Replies and follow-up messages in that thread route to the bound session.
 4. Use `/session ttl` to inspect/update auto-unfocus TTL.
 5. Use `/unfocus` to detach manually.
@@ -100,17 +106,16 @@ Quick flow:
 Manual controls:
 
 - `/focus <target>` binds the current thread (or creates one) to a sub-agent/session target.
-- `/unfocus` removes the binding for the current Discord thread.
+- `/unfocus` removes the binding for the current bound thread.
 - `/agents` lists active runs and binding state (`thread:<id>` or `unbound`).
-- `/session ttl` only works for focused Discord threads.
+- `/session ttl` only works for focused bound threads.
 
 Config switches:
 
 - Global default: `session.threadBindings.enabled`, `session.threadBindings.ttlHours`
-- Discord override: `channels.discord.threadBindings.enabled`, `channels.discord.threadBindings.ttlHours`
-- Spawn auto-bind opt-in: `channels.discord.threadBindings.spawnSubagentSessions`
+- Channel override and spawn auto-bind keys are adapter-specific. See **Thread supporting channels** above.
 
-See [Discord](/channels/discord), [Configuration Reference](/gateway/configuration-reference), and [Slash commands](/tools/slash-commands).
+See [Configuration Reference](/gateway/configuration-reference) and [Slash commands](/tools/slash-commands) for current adapter details.
 
 Allowlist:
 
@@ -202,7 +207,7 @@ Sub-agents report back via an announce step:
 - The announce step runs inside the sub-agent session (not the requester session).
 - If the sub-agent replies exactly `ANNOUNCE_SKIP`, nothing is posted.
 - Otherwise the announce reply is posted to the requester chat channel via a follow-up `agent` call (`deliver=true`).
-- Announce replies preserve thread/topic routing when available (Slack threads, Telegram topics, Matrix threads).
+- Announce replies preserve thread/topic routing when available on channel adapters.
 - Announce messages are normalized to a stable template:
   - `Status:` derived from the run outcome (`success`, `error`, `timeout`, or `unknown`).
   - `Result:` the summary content from the announce step (or `(not available)` if missing).

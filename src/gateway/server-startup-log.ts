@@ -27,13 +27,8 @@ export function logGatewayStartup(params: {
   const formatHost = (host: string) => (host.includes(":") ? `[${host}]` : host);
   const hosts =
     params.bindHosts && params.bindHosts.length > 0 ? params.bindHosts : [params.bindHost];
-  const primaryHost = hosts[0] ?? params.bindHost;
-  params.log.info(
-    `listening on ${scheme}://${formatHost(primaryHost)}:${params.port} (PID ${process.pid})`,
-  );
-  for (const host of hosts.slice(1)) {
-    params.log.info(`listening on ${scheme}://${formatHost(host)}:${params.port}`);
-  }
+  const listenEndpoints = hosts.map((host) => `${scheme}://${formatHost(host)}:${params.port}`);
+  params.log.info(`listening on ${listenEndpoints.join(", ")} (PID ${process.pid})`);
   params.log.info(`log file: ${getResolvedLoggerSettings().file}`);
   if (params.isNixMode) {
     params.log.info("gateway: running in Nix mode (config managed externally)");

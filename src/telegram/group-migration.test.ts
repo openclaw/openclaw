@@ -1,17 +1,38 @@
 import { describe, expect, it } from "vitest";
-import { migrateTelegramGroupConfig } from "./group-migration.js";
+import { migrateTelegramGroupConfig, migrateTelegramGroupsInPlace } from "./group-migration.js";
 
-describe("migrateTelegramGroupConfig", () => {
-  it("migrates global group ids", () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          groups: {
-            "-123": { requireMention: false },
+function createTelegramGlobalGroupConfig(groups: Record<string, Record<string, unknown>>) {
+  return {
+    channels: {
+      telegram: {
+        groups,
+      },
+    },
+  };
+}
+
+function createTelegramAccountGroupConfig(
+  accountId: string,
+  groups: Record<string, Record<string, unknown>>,
+) {
+  return {
+    channels: {
+      telegram: {
+        accounts: {
+          [accountId]: {
+            groups,
           },
         },
       },
-    };
+    },
+  };
+}
+
+describe("migrateTelegramGroupConfig", () => {
+  it("migrates global group ids", () => {
+    const cfg = createTelegramGlobalGroupConfig({
+      "-123": { requireMention: false },
+    });
 
     const result = migrateTelegramGroupConfig({
       cfg,
@@ -27,19 +48,9 @@ describe("migrateTelegramGroupConfig", () => {
   });
 
   it("migrates account-scoped groups", () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          accounts: {
-            primary: {
-              groups: {
-                "-123": { requireMention: true },
-              },
-            },
-          },
-        },
-      },
-    };
+    const cfg = createTelegramAccountGroupConfig("primary", {
+      "-123": { requireMention: true },
+    });
 
     const result = migrateTelegramGroupConfig({
       cfg,
@@ -56,19 +67,9 @@ describe("migrateTelegramGroupConfig", () => {
   });
 
   it("matches account ids case-insensitively", () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          accounts: {
-            Primary: {
-              groups: {
-                "-123": {},
-              },
-            },
-          },
-        },
-      },
-    };
+    const cfg = createTelegramAccountGroupConfig("Primary", {
+      "-123": {},
+    });
 
     const result = migrateTelegramGroupConfig({
       cfg,
@@ -84,16 +85,10 @@ describe("migrateTelegramGroupConfig", () => {
   });
 
   it("skips migration when new id already exists", () => {
-    const cfg = {
-      channels: {
-        telegram: {
-          groups: {
-            "-123": { requireMention: true },
-            "-100123": { requireMention: false },
-          },
-        },
-      },
-    };
+    const cfg = createTelegramGlobalGroupConfig({
+      "-123": { requireMention: true },
+      "-100123": { requireMention: false },
+    });
 
     const result = migrateTelegramGroupConfig({
       cfg,
@@ -107,6 +102,17 @@ describe("migrateTelegramGroupConfig", () => {
     expect(cfg.channels.telegram.groups).toEqual({
       "-123": { requireMention: true },
       "-100123": { requireMention: false },
+    });
+  });
+
+  it("no-ops when old and new group ids are the same", () => {
+    const groups = {
+      "-123": { requireMention: true },
+    };
+    const result = migrateTelegramGroupsInPlace(groups, "-123", "-123");
+    expect(result).toEqual({ migrated: false, skippedExisting: false });
+    expect(groups).toEqual({
+      "-123": { requireMention: true },
     });
   });
 });

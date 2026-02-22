@@ -71,6 +71,25 @@ function createSendMessageHarness(messageId = 4) {
   return { runtime, sendMessage, bot };
 }
 
+function createVoiceMessagesForbiddenError() {
+  return new Error(
+    "GrammyError: Call to 'sendVoice' failed! (400: Bad Request: VOICE_MESSAGES_FORBIDDEN)",
+  );
+}
+
+function createVoiceFailureHarness(params: {
+  voiceError: Error;
+  sendMessageResult?: { message_id: number; chat: { id: string } };
+}) {
+  const runtime = createRuntime();
+  const sendVoice = vi.fn().mockRejectedValue(params.voiceError);
+  const sendMessage = params.sendMessageResult
+    ? vi.fn().mockResolvedValue(params.sendMessageResult)
+    : vi.fn();
+  const bot = createBot({ sendVoice, sendMessage });
+  return { runtime, sendVoice, sendMessage, bot };
+}
+
 describe("deliverReplies", () => {
   beforeEach(() => {
     loadWebMedia.mockClear();
@@ -258,19 +277,13 @@ describe("deliverReplies", () => {
   });
 
   it("falls back to text when sendVoice fails with VOICE_MESSAGES_FORBIDDEN", async () => {
-    const runtime = createRuntime();
-    const sendVoice = vi
-      .fn()
-      .mockRejectedValue(
-        new Error(
-          "GrammyError: Call to 'sendVoice' failed! (400: Bad Request: VOICE_MESSAGES_FORBIDDEN)",
-        ),
-      );
-    const sendMessage = vi.fn().mockResolvedValue({
-      message_id: 5,
-      chat: { id: "123" },
+    const { runtime, sendVoice, sendMessage, bot } = createVoiceFailureHarness({
+      voiceError: createVoiceMessagesForbiddenError(),
+      sendMessageResult: {
+        message_id: 5,
+        chat: { id: "123" },
+      },
     });
-    const bot = createBot({ sendVoice, sendMessage });
 
     mockMediaLoad("note.ogg", "audio/ogg", "voice");
 
@@ -315,16 +328,9 @@ describe("deliverReplies", () => {
   });
 
   it("rethrows VOICE_MESSAGES_FORBIDDEN when no text fallback is available", async () => {
-    const runtime = createRuntime();
-    const sendVoice = vi
-      .fn()
-      .mockRejectedValue(
-        new Error(
-          "GrammyError: Call to 'sendVoice' failed! (400: Bad Request: VOICE_MESSAGES_FORBIDDEN)",
-        ),
-      );
-    const sendMessage = vi.fn();
-    const bot = createBot({ sendVoice, sendMessage });
+    const { runtime, sendVoice, sendMessage, bot } = createVoiceFailureHarness({
+      voiceError: createVoiceMessagesForbiddenError(),
+    });
 
     mockMediaLoad("note.ogg", "audio/ogg", "voice");
 

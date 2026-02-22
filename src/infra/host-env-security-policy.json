@@ -11,6 +11,8 @@
     "BASH_ENV",
     "ENV",
     "SHELL",
+    "SHELLOPTS",
+    "PS4",
     "GCONV_PATH",
     "IFS",
     "SSLKEYLOGFILE"

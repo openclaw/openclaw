@@ -83,6 +83,17 @@ function createGroupMessage(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function makeOwnerGroupConfig() {
+  return makeConfig({
+    channels: {
+      whatsapp: {
+        allowFrom: ["+111"],
+        groups: { "*": { requireMention: true } },
+      },
+    },
+  });
+}
+
 function makeInboundCfg(messagePrefix = "") {
   return {
     agents: { defaults: { workspace: "/tmp/openclaw" } },
@@ -114,21 +125,15 @@ describe("applyGroupGating", () => {
     expect(result.shouldProcess).toBe(true);
   });
 
-  it("bypasses mention gating for owner /new in group chats", () => {
-    const cfg = makeConfig({
-      channels: {
-        whatsapp: {
-          allowFrom: ["+111"],
-          groups: { "*": { requireMention: true } },
-        },
-      },
-    });
-
+  it.each([
+    { id: "g-new", command: "/new" },
+    { id: "g-status", command: "/status" },
+  ])("bypasses mention gating for owner $command in group chats", ({ id, command }) => {
     const { result } = runGroupGating({
-      cfg,
+      cfg: makeOwnerGroupConfig(),
       msg: createGroupMessage({
-        id: "g-new",
-        body: "/new",
+        id,
+        body: command,
         senderE164: "+111",
         senderName: "Owner",
       }),
@@ -159,29 +164,6 @@ describe("applyGroupGating", () => {
 
     expect(result.shouldProcess).toBe(false);
     expect(groupHistories.get("whatsapp:default:group:123@g.us")?.length).toBe(1);
-  });
-
-  it("bypasses mention gating for owner /status in group chats", () => {
-    const cfg = makeConfig({
-      channels: {
-        whatsapp: {
-          allowFrom: ["+111"],
-          groups: { "*": { requireMention: true } },
-        },
-      },
-    });
-
-    const { result } = runGroupGating({
-      cfg,
-      msg: createGroupMessage({
-        id: "g-status",
-        body: "/status",
-        senderE164: "+111",
-        senderName: "Owner",
-      }),
-    });
-
-    expect(result.shouldProcess).toBe(true);
   });
 
   it("uses per-agent mention patterns for group gating (routing + mentionPatterns)", () => {

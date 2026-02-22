@@ -165,7 +165,7 @@ For actions/directory reads, user token can be preferred when configured. For wr
 
     Channel allowlist lives under `channels.slack.channels`.
 
-    Runtime note: if `channels.slack` is completely missing (env-only setup) and `channels.defaults.groupPolicy` is unset, runtime falls back to `groupPolicy="open"` and logs a warning.
+    Runtime note: if `channels.slack` is completely missing (env-only setup), runtime falls back to `groupPolicy="allowlist"` and logs a warning (even if `channels.defaults.groupPolicy` is set).
 
     Name/ID resolution:
 

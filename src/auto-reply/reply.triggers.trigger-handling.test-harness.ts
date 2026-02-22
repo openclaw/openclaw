@@ -124,11 +124,18 @@ export function makeCfg(home: string): OpenClawConfig {
       defaults: {
         model: { primary: "anthropic/claude-opus-4-5" },
         workspace: join(home, "openclaw"),
+        // Test harness: avoid 1s coalescer idle sleeps that dominate trigger suites.
+        blockStreamingCoalesce: { idleMs: 1 },
       },
     },
     channels: {
       whatsapp: {
         allowFrom: ["*"],
+      },
+    },
+    messages: {
+      queue: {
+        debounceMs: 0,
       },
     },
     session: { store: join(home, "sessions.json") },
