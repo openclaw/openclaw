@@ -164,6 +164,63 @@ describe("buildAssistantMessage", () => {
       total: 0,
     });
   });
+
+  it("normalizes tool call names against registered tools (case-insensitive)", () => {
+    const response = {
+      model: "qwen3:32b",
+      created_at: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant" as const,
+        content: "",
+        tool_calls: [
+          { function: { name: "Read", arguments: { path: "/tmp/f" } } },
+          { function: { name: "EXEC", arguments: { command: "ls" } } },
+        ],
+      },
+      done: true,
+    };
+    const registry = new Map([
+      ["read", "read"],
+      ["exec", "exec"],
+    ]);
+    const result = buildAssistantMessage(response, modelInfo, registry);
+    const toolCalls = result.content.filter((c) => c.type === "toolCall");
+    expect((toolCalls[0] as { name: string }).name).toBe("read");
+    expect((toolCalls[1] as { name: string }).name).toBe("exec");
+  });
+
+  it("preserves original name when no registry is provided", () => {
+    const response = {
+      model: "qwen3:32b",
+      created_at: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant" as const,
+        content: "",
+        tool_calls: [{ function: { name: "Read", arguments: {} } }],
+      },
+      done: true,
+    };
+    const result = buildAssistantMessage(response, modelInfo);
+    const toolCall = result.content.find((c) => c.type === "toolCall");
+    expect((toolCall as { name: string } | undefined)?.name).toBe("Read");
+  });
+
+  it("preserves original name when tool is not in registry", () => {
+    const response = {
+      model: "qwen3:32b",
+      created_at: "2026-01-01T00:00:00Z",
+      message: {
+        role: "assistant" as const,
+        content: "",
+        tool_calls: [{ function: { name: "UnknownTool", arguments: {} } }],
+      },
+      done: true,
+    };
+    const registry = new Map([["read", "read"]]);
+    const result = buildAssistantMessage(response, modelInfo, registry);
+    const toolCall = result.content.find((c) => c.type === "toolCall");
+    expect((toolCall as { name: string } | undefined)?.name).toBe("UnknownTool");
+  });
 });
 
 // Helper: build a ReadableStreamDefaultReader from NDJSON lines

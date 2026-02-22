@@ -107,6 +107,7 @@ import {
 } from "../system-prompt.js";
 import { dropThinkingBlocks } from "../thinking.js";
 import { collectAllowedToolNames } from "../tool-name-allowlist.js";
+import { installToolRegistrationGuard } from "../tool-registration-guard.js";
 import { installToolResultContextGuard } from "../tool-result-context-guard.js";
 import { splitSdkTools } from "../tool-split.js";
 import { describeUnknownError, mapThinkingLevel } from "../utils.js";
@@ -403,6 +404,19 @@ export async function runEmbeddedAttempt(
     });
     logToolSchemasForGoogle({ tools, provider: params.provider });
 
+    // Validate that essential built-in tools are present after creation.
+    // A partial set indicates a race condition or initialization failure (#22426).
+    if (!params.disableTools) {
+      const EXPECTED_CORE_TOOLS = ["read", "write", "edit", "exec", "web_search", "web_fetch"];
+      const registeredNames = new Set(tools.map((t) => t.name));
+      const missing = EXPECTED_CORE_TOOLS.filter((name) => !registeredNames.has(name));
+      if (missing.length > 0) {
+        log.warn(
+          `tool registration incomplete after creation: missing [${missing.join(", ")}] — registered ${registeredNames.size} tools total (${[...registeredNames].join(", ")})`,
+        );
+      }
+    }
+
     const machineName = await getMachineDisplayName();
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
     let runtimeCapabilities = runtimeChannel
@@ -573,6 +587,7 @@ export async function runEmbeddedAttempt(
     let sessionManager: ReturnType<typeof guardSessionManager> | undefined;
     let session: Awaited<ReturnType<typeof createAgentSession>>["session"] | undefined;
     let removeToolResultContextGuard: (() => void) | undefined;
+    let toolRegistrationGuard: ReturnType<typeof installToolRegistrationGuard> | undefined;
     try {
       await repairSessionFileIfNeeded({
         sessionFile: params.sessionFile,
@@ -692,6 +707,16 @@ export async function runEmbeddedAttempt(
           ),
         ),
       });
+
+      // Guard the tool registry against runtime state corruption (#22426).
+      // Freezes the tools array and provides automatic recovery from snapshot.
+      toolRegistrationGuard = installToolRegistrationGuard({
+        agent: activeSession.agent,
+        expectedToolNames: tools.map((t) => t.name),
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+      });
+
       const cacheTrace = createCacheTrace({
         cfg: params.config,
         env: process.env,
@@ -1127,6 +1152,11 @@ export async function runEmbeddedAttempt(
               });
           }
 
+          // Verify tools are still intact before prompting. The SDK's async
+          // event handler can race with state mutations, causing tools to
+          // silently disappear between turns (#22426).
+          toolRegistrationGuard?.validateBeforePrompt();
+
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
           if (imageResult.images.length > 0) {
@@ -1355,6 +1385,7 @@ export async function runEmbeddedAttempt(
       // synthetic "missing tool result" errors and causing silent agent failures.
       // See: https://github.com/openclaw/openclaw/issues/8643
       removeToolResultContextGuard?.();
+      toolRegistrationGuard?.dispose();
       await flushPendingToolResultsAfterIdle({
         agent: session?.agent,
         sessionManager,

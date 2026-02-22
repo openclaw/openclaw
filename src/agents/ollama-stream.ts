@@ -316,6 +316,7 @@ function extractOllamaTools(tools: Tool[] | undefined): OllamaTool[] {
 export function buildAssistantMessage(
   response: OllamaChatResponse,
   modelInfo: { api: string; provider: string; id: string },
+  registeredToolNames?: Map<string, string>,
 ): AssistantMessage {
   const content: (TextContent | ToolCall)[] = [];
 
@@ -330,10 +331,15 @@ export function buildAssistantMessage(
   const toolCalls = response.message.tool_calls;
   if (toolCalls && toolCalls.length > 0) {
     for (const tc of toolCalls) {
+      const rawName = tc.function.name;
+      // Ollama models may return tool names with different casing than what was
+      // registered (e.g. "Read" vs "read"). Normalize against the registry so
+      // the SDK's exact-match lookup in executeToolCalls succeeds (#22426).
+      const resolvedName = registeredToolNames?.get(rawName.toLowerCase()) ?? rawName;
       content.push({
         type: "toolCall",
         id: `ollama_call_${randomUUID()}`,
-        name: tc.function.name,
+        name: resolvedName,
         arguments: tc.function.arguments,
       });
     }
@@ -502,11 +508,24 @@ export function createOllamaStreamFn(baseUrl: string): StreamFn {
           finalResponse.message.tool_calls = accumulatedToolCalls;
         }
 
-        const assistantMessage = buildAssistantMessage(finalResponse, {
-          api: model.api,
-          provider: model.provider,
-          id: model.id,
-        });
+        // Build a lowercase→canonical name map for case-insensitive tool name
+        // resolution. Ollama models sometimes return tool names with unexpected
+        // casing (e.g. "Read" instead of "read") which causes "Tool not found"
+        // errors in the SDK's exact-match lookup (#22426).
+        const toolNameRegistry = new Map<string, string>();
+        if (context.tools && Array.isArray(context.tools)) {
+          for (const t of context.tools as Array<{ name?: string }>) {
+            if (typeof t.name === "string") {
+              toolNameRegistry.set(t.name.toLowerCase(), t.name);
+            }
+          }
+        }
+
+        const assistantMessage = buildAssistantMessage(
+          finalResponse,
+          { api: model.api, provider: model.provider, id: model.id },
+          toolNameRegistry,
+        );
 
         const reason: Extract<StopReason, "stop" | "length" | "toolUse"> =
           assistantMessage.stopReason === "toolUse" ? "toolUse" : "stop";

@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { logWarn } from "../logger.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
@@ -67,103 +68,149 @@ export function createOpenClawTools(options?: {
   senderIsOwner?: boolean;
 }): AnyAgentTool[] {
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir);
+
+  // Helper: wrap individual tool creation with error handling so a single
+  // factory failure doesn't prevent the remaining tools from registering.
+  function safeTool<T>(label: string, factory: () => T): T | null {
+    try {
+      return factory();
+    } catch (err) {
+      logWarn(
+        `tool registration failed for "${label}": ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
+  }
+
   const imageTool = options?.agentDir?.trim()
-    ? createImageTool({
-        config: options?.config,
-        agentDir: options.agentDir,
-        workspaceDir,
-        sandbox:
-          options?.sandboxRoot && options?.sandboxFsBridge
-            ? { root: options.sandboxRoot, bridge: options.sandboxFsBridge }
-            : undefined,
-        modelHasVision: options?.modelHasVision,
-      })
+    ? safeTool("image", () =>
+        createImageTool({
+          config: options?.config,
+          agentDir: options.agentDir!,
+          workspaceDir,
+          sandbox:
+            options?.sandboxRoot && options?.sandboxFsBridge
+              ? { root: options.sandboxRoot, bridge: options.sandboxFsBridge }
+              : undefined,
+          modelHasVision: options?.modelHasVision,
+        }),
+      )
     : null;
-  const webSearchTool = createWebSearchTool({
-    config: options?.config,
-    sandboxed: options?.sandboxed,
-  });
-  const webFetchTool = createWebFetchTool({
-    config: options?.config,
-    sandboxed: options?.sandboxed,
-  });
+  const webSearchTool = safeTool("web_search", () =>
+    createWebSearchTool({
+      config: options?.config,
+      sandboxed: options?.sandboxed,
+    }),
+  );
+  const webFetchTool = safeTool("web_fetch", () =>
+    createWebFetchTool({
+      config: options?.config,
+      sandboxed: options?.sandboxed,
+    }),
+  );
   const messageTool = options?.disableMessageTool
     ? null
-    : createMessageTool({
-        agentAccountId: options?.agentAccountId,
+    : safeTool("message", () =>
+        createMessageTool({
+          agentAccountId: options?.agentAccountId,
+          agentSessionKey: options?.agentSessionKey,
+          config: options?.config,
+          currentChannelId: options?.currentChannelId,
+          currentChannelProvider: options?.agentChannel,
+          currentThreadTs: options?.currentThreadTs,
+          replyToMode: options?.replyToMode,
+          hasRepliedRef: options?.hasRepliedRef,
+          sandboxRoot: options?.sandboxRoot,
+          requireExplicitTarget: options?.requireExplicitMessageTarget,
+          requesterSenderId: options?.requesterSenderId ?? undefined,
+        }),
+      );
+  const tools: AnyAgentTool[] = [
+    safeTool("browser", () =>
+      createBrowserTool({
+        sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
+        allowHostControl: options?.allowHostBrowserControl,
+      }),
+    ),
+    safeTool("canvas", () => createCanvasTool({ config: options?.config })),
+    safeTool("nodes", () =>
+      createNodesTool({
         agentSessionKey: options?.agentSessionKey,
         config: options?.config,
-        currentChannelId: options?.currentChannelId,
-        currentChannelProvider: options?.agentChannel,
-        currentThreadTs: options?.currentThreadTs,
-        replyToMode: options?.replyToMode,
-        hasRepliedRef: options?.hasRepliedRef,
-        sandboxRoot: options?.sandboxRoot,
-        requireExplicitTarget: options?.requireExplicitMessageTarget,
-        requesterSenderId: options?.requesterSenderId ?? undefined,
-      });
-  const tools: AnyAgentTool[] = [
-    createBrowserTool({
-      sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
-      allowHostControl: options?.allowHostBrowserControl,
-    }),
-    createCanvasTool({ config: options?.config }),
-    createNodesTool({
-      agentSessionKey: options?.agentSessionKey,
-      config: options?.config,
-    }),
-    createCronTool({
-      agentSessionKey: options?.agentSessionKey,
-    }),
+      }),
+    ),
+    safeTool("cron", () =>
+      createCronTool({
+        agentSessionKey: options?.agentSessionKey,
+      }),
+    ),
     ...(messageTool ? [messageTool] : []),
-    createTtsTool({
-      agentChannel: options?.agentChannel,
-      config: options?.config,
-    }),
-    createGatewayTool({
-      agentSessionKey: options?.agentSessionKey,
-      config: options?.config,
-    }),
-    createAgentsListTool({
-      agentSessionKey: options?.agentSessionKey,
-      requesterAgentIdOverride: options?.requesterAgentIdOverride,
-    }),
-    createSessionsListTool({
-      agentSessionKey: options?.agentSessionKey,
-      sandboxed: options?.sandboxed,
-    }),
-    createSessionsHistoryTool({
-      agentSessionKey: options?.agentSessionKey,
-      sandboxed: options?.sandboxed,
-    }),
-    createSessionsSendTool({
-      agentSessionKey: options?.agentSessionKey,
-      agentChannel: options?.agentChannel,
-      sandboxed: options?.sandboxed,
-    }),
-    createSessionsSpawnTool({
-      agentSessionKey: options?.agentSessionKey,
-      agentChannel: options?.agentChannel,
-      agentAccountId: options?.agentAccountId,
-      agentTo: options?.agentTo,
-      agentThreadId: options?.agentThreadId,
-      agentGroupId: options?.agentGroupId,
-      agentGroupChannel: options?.agentGroupChannel,
-      agentGroupSpace: options?.agentGroupSpace,
-      sandboxed: options?.sandboxed,
-      requesterAgentIdOverride: options?.requesterAgentIdOverride,
-    }),
-    createSubagentsTool({
-      agentSessionKey: options?.agentSessionKey,
-    }),
-    createSessionStatusTool({
-      agentSessionKey: options?.agentSessionKey,
-      config: options?.config,
-    }),
+    safeTool("tts", () =>
+      createTtsTool({
+        agentChannel: options?.agentChannel,
+        config: options?.config,
+      }),
+    ),
+    safeTool("gateway", () =>
+      createGatewayTool({
+        agentSessionKey: options?.agentSessionKey,
+        config: options?.config,
+      }),
+    ),
+    safeTool("agents_list", () =>
+      createAgentsListTool({
+        agentSessionKey: options?.agentSessionKey,
+        requesterAgentIdOverride: options?.requesterAgentIdOverride,
+      }),
+    ),
+    safeTool("sessions_list", () =>
+      createSessionsListTool({
+        agentSessionKey: options?.agentSessionKey,
+        sandboxed: options?.sandboxed,
+      }),
+    ),
+    safeTool("sessions_history", () =>
+      createSessionsHistoryTool({
+        agentSessionKey: options?.agentSessionKey,
+        sandboxed: options?.sandboxed,
+      }),
+    ),
+    safeTool("sessions_send", () =>
+      createSessionsSendTool({
+        agentSessionKey: options?.agentSessionKey,
+        agentChannel: options?.agentChannel,
+        sandboxed: options?.sandboxed,
+      }),
+    ),
+    safeTool("sessions_spawn", () =>
+      createSessionsSpawnTool({
+        agentSessionKey: options?.agentSessionKey,
+        agentChannel: options?.agentChannel,
+        agentAccountId: options?.agentAccountId,
+        agentTo: options?.agentTo,
+        agentThreadId: options?.agentThreadId,
+        agentGroupId: options?.agentGroupId,
+        agentGroupChannel: options?.agentGroupChannel,
+        agentGroupSpace: options?.agentGroupSpace,
+        sandboxed: options?.sandboxed,
+        requesterAgentIdOverride: options?.requesterAgentIdOverride,
+      }),
+    ),
+    safeTool("subagents", () =>
+      createSubagentsTool({
+        agentSessionKey: options?.agentSessionKey,
+      }),
+    ),
+    safeTool("session_status", () =>
+      createSessionStatusTool({
+        agentSessionKey: options?.agentSessionKey,
+        config: options?.config,
+      }),
+    ),
     ...(webSearchTool ? [webSearchTool] : []),
     ...(webFetchTool ? [webFetchTool] : []),
     ...(imageTool ? [imageTool] : []),
-  ];
+  ].filter((t): t is AnyAgentTool => t != null);
 
   const pluginTools = resolvePluginTools({
     context: {
