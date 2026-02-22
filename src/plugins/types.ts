@@ -285,7 +285,7 @@ export type OpenClawPluginApi = {
 export type PluginOrigin = "bundled" | "global" | "workspace" | "config";
 
 export type PluginDiagnostic = {
-  level: "warn" | "error";
+  level: "info" | "warn" | "error";
   message: string;
   pluginId?: string;
   source?: string;

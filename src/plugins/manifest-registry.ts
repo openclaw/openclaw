@@ -202,8 +202,8 @@ export function loadPluginManifestRegistry(params: {
       const candidateReal = safeRealpathSync(candidate.rootDir, realpathCache);
       const samePlugin = Boolean(existingReal && candidateReal && existingReal === candidateReal);
       if (samePlugin) {
-        // Prefer higher-precedence origins even if candidates are passed in
-        // an unexpected order (config > workspace > global > bundled).
+        // Same physical directory (symlink / path alias): silently prefer
+        // the higher-precedence copy and skip adding a duplicate record.
         if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
           records[existing.recordIndex] = buildRecord({
             manifest,
@@ -216,12 +216,30 @@ export function loadPluginManifestRegistry(params: {
         }
         continue;
       }
-      diagnostics.push({
-        level: "warn",
-        pluginId: manifest.id,
-        source: candidate.source,
-        message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
-      });
+      // A user-installed plugin shadowing a bundled one is expected behaviour.
+      // Emit an info diagnostic (not a warning) so the shadowing is visible
+      // in debug output without alarming users doing intentional overrides.
+      // Only genuinely conflicting non-bundled plugins (or two bundled plugins
+      // at different paths) warrant a warning.
+      const existingIsBundled = existing.candidate.origin === "bundled";
+      const candidateIsBundled = candidate.origin === "bundled";
+      const oneBundled = existingIsBundled !== candidateIsBundled; // XOR
+      if (oneBundled) {
+        const userOrigin = existingIsBundled ? candidate.origin : existing.candidate.origin;
+        diagnostics.push({
+          level: "info",
+          pluginId: manifest.id,
+          source: candidate.source,
+          message: `bundled plugin '${manifest.id}' is shadowed by ${userOrigin}-installed copy — this is expected`,
+        });
+      } else {
+        diagnostics.push({
+          level: "warn",
+          pluginId: manifest.id,
+          source: candidate.source,
+          message: `duplicate plugin id detected; later plugin may be overridden (${candidate.source})`,
+        });
+      }
     } else {
       seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     }

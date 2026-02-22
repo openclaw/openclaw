@@ -62,7 +62,7 @@ afterEach(() => {
 });
 
 describe("loadPluginManifestRegistry", () => {
-  it("emits duplicate warning for truly distinct plugins with same id", () => {
+  it("emits duplicate warning for two non-bundled plugins with same id", () => {
     const dirA = makeTempDir();
     const dirB = makeTempDir();
     const manifest = { id: "test-plugin", configSchema: { type: "object" } };
@@ -73,12 +73,103 @@ describe("loadPluginManifestRegistry", () => {
       createPluginCandidate({
         idHint: "test-plugin",
         rootDir: dirA,
-        origin: "bundled",
+        origin: "global",
       }),
       createPluginCandidate({
         idHint: "test-plugin",
         rootDir: dirB,
+        origin: "workspace",
+      }),
+    ];
+
+    expect(countDuplicateWarnings(loadRegistry(candidates))).toBe(1);
+  });
+
+  it("suppresses duplicate warning when global-installed plugin shadows bundled (global wins)", () => {
+    const bundledDir = makeTempDir();
+    const globalDir = makeTempDir();
+    const manifest = { id: "nextcloud-talk", configSchema: { type: "object" } };
+    writeManifest(bundledDir, manifest);
+    writeManifest(globalDir, manifest);
+
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({
+        idHint: "nextcloud-talk",
+        rootDir: bundledDir,
+        origin: "bundled",
+      }),
+      createPluginCandidate({
+        idHint: "nextcloud-talk",
+        rootDir: globalDir,
         origin: "global",
+      }),
+    ];
+
+    const registry = loadRegistry(candidates);
+    expect(countDuplicateWarnings(registry)).toBe(0);
+    // Both records are present so the loader can mark the bundled copy as disabled.
+    expect(registry.plugins.length).toBe(2);
+    expect(registry.plugins.find((p) => p.origin === "global")).toBeDefined();
+    expect(registry.plugins.find((p) => p.origin === "bundled")).toBeDefined();
+    // An info diagnostic is emitted so the shadowing is visible in debug output.
+    const infoDiag = registry.diagnostics.find(
+      (d) => d.level === "info" && d.pluginId === "nextcloud-talk",
+    );
+    expect(infoDiag).toBeDefined();
+    expect(infoDiag?.message).toContain("shadowed");
+  });
+
+  it("suppresses duplicate warning when config plugin shadows bundled (config wins)", () => {
+    const bundledDir = makeTempDir();
+    const configDir = makeTempDir();
+    const manifest = { id: "config-shadows-bundled", configSchema: { type: "object" } };
+    writeManifest(bundledDir, manifest);
+    writeManifest(configDir, manifest);
+
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({
+        idHint: "config-shadows-bundled",
+        rootDir: bundledDir,
+        origin: "bundled",
+      }),
+      createPluginCandidate({
+        idHint: "config-shadows-bundled",
+        rootDir: configDir,
+        origin: "config",
+      }),
+    ];
+
+    const registry = loadRegistry(candidates);
+    expect(countDuplicateWarnings(registry)).toBe(0);
+    // Both records are present so the loader can mark the bundled copy as disabled.
+    expect(registry.plugins.length).toBe(2);
+    expect(registry.plugins.find((p) => p.origin === "config")).toBeDefined();
+    expect(registry.plugins.find((p) => p.origin === "bundled")).toBeDefined();
+    // An info diagnostic is emitted so the shadowing is visible in debug output.
+    const infoDiag = registry.diagnostics.find(
+      (d) => d.level === "info" && d.pluginId === "config-shadows-bundled",
+    );
+    expect(infoDiag).toBeDefined();
+    expect(infoDiag?.message).toContain("shadowed");
+  });
+
+  it("emits duplicate warning when two bundled plugins at different paths share the same id", () => {
+    const dirA = makeTempDir();
+    const dirB = makeTempDir();
+    const manifest = { id: "double-bundled", configSchema: { type: "object" } };
+    writeManifest(dirA, manifest);
+    writeManifest(dirB, manifest);
+
+    const candidates: PluginCandidate[] = [
+      createPluginCandidate({
+        idHint: "double-bundled",
+        rootDir: dirA,
+        origin: "bundled",
+      }),
+      createPluginCandidate({
+        idHint: "double-bundled",
+        rootDir: dirB,
+        origin: "bundled",
       }),
     ];
 
