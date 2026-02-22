@@ -145,6 +145,7 @@ function sanitizeChatHistoryMessage(message: unknown): { message: unknown; chang
   }
   const entry = { ...(message as Record<string, unknown>) };
   let changed = false;
+  const isAssistant = entry.role === "assistant";
 
   if ("details" in entry) {
     delete entry.details;
@@ -160,12 +161,36 @@ function sanitizeChatHistoryMessage(message: unknown): { message: unknown; chang
   }
 
   if (typeof entry.content === "string") {
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.content);
-    const res = truncateChatHistoryText(stripped.text);
-    entry.content = res.text;
-    changed ||= stripped.changed || res.truncated;
+    if (isAssistant) {
+      const stripped = stripInlineDirectiveTagsForDisplay(entry.content);
+      const res = truncateChatHistoryText(stripped.text);
+      entry.content = res.text;
+      changed ||= stripped.changed || res.truncated;
+    } else {
+      const res = truncateChatHistoryText(entry.content);
+      entry.content = res.text;
+      changed ||= res.truncated;
+    }
   } else if (Array.isArray(entry.content)) {
-    const updated = entry.content.map((block) => sanitizeChatHistoryContentBlock(block));
+    const updated = entry.content.map((block) => {
+      let b = block;
+      // Strip inline directive tags from assistant text content blocks.
+      if (
+        isAssistant &&
+        b &&
+        typeof b === "object" &&
+        (b as Record<string, unknown>).type === "text" &&
+        typeof (b as Record<string, unknown>).text === "string"
+      ) {
+        const stripped = stripInlineDirectiveTagsForDisplay(
+          (b as Record<string, unknown>).text as string,
+        );
+        if (stripped.changed) {
+          b = { ...(b as Record<string, unknown>), text: stripped.text };
+        }
+      }
+      return sanitizeChatHistoryContentBlock(b);
+    });
     if (updated.some((item) => item.changed)) {
       entry.content = updated.map((item) => item.block);
       changed = true;
@@ -173,10 +198,16 @@ function sanitizeChatHistoryMessage(message: unknown): { message: unknown; chang
   }
 
   if (typeof entry.text === "string") {
-    const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
-    const res = truncateChatHistoryText(stripped.text);
-    entry.text = res.text;
-    changed ||= stripped.changed || res.truncated;
+    if (isAssistant) {
+      const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
+      const res = truncateChatHistoryText(stripped.text);
+      entry.text = res.text;
+      changed ||= stripped.changed || res.truncated;
+    } else {
+      const res = truncateChatHistoryText(entry.text);
+      entry.text = res.text;
+      changed ||= res.truncated;
+    }
   }
 
   return { message: changed ? entry : message, changed };
