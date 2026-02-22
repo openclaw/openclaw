@@ -82,7 +82,7 @@ export function renderOverviewCards(props: OverviewCardsProps) {
       ? html`<span class="danger">${failedCronCount} failed</span>`
       : cronNext
         ? t("overview.stats.cronNext", { time: formatNextRun(cronNext) })
-        : nothing;
+        : "";
 
   const cards: StatCard[] = [
     {
