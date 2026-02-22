@@ -31,4 +31,12 @@ describe("enablePluginInConfig", () => {
     expect(result.enabled).toBe(false);
     expect(result.reason).toBe("blocked by denylist");
   });
+
+  it("writes built-in channels to channels.<id>.enabled instead of plugins.entries", () => {
+    const cfg: OpenClawConfig = {};
+    const result = enablePluginInConfig(cfg, "telegram");
+    expect(result.enabled).toBe(true);
+    expect(result.config.channels?.telegram?.enabled).toBe(true);
+    expect(result.config.plugins?.entries?.telegram).toBeUndefined();
+  });
 });
