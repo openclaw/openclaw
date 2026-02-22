@@ -1,3 +1,4 @@
+import type { Bot } from "grammy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTelegramDraftStream } from "./draft-stream.js";
 
@@ -18,8 +19,7 @@ function createThreadedDraftStream(
   thread: { id: number; scope: "forum" | "dm" },
 ) {
   return createTelegramDraftStream({
-    // oxlint-disable-next-line typescript/no-explicit-any
-    api: api as any,
+    api: api as unknown as Bot["api"],
     chatId: 123,
     thread,
   });
@@ -109,8 +109,7 @@ describe("createTelegramDraftStream", () => {
       deleteMessage: vi.fn().mockResolvedValue(true),
     };
     const stream = createTelegramDraftStream({
-      // oxlint-disable-next-line typescript/no-explicit-any
-      api: api as any,
+      api: api as unknown as Bot["api"],
       chatId: 123,
     });
 
@@ -146,8 +145,7 @@ describe("createTelegramDraftStream", () => {
         deleteMessage: vi.fn().mockResolvedValue(true),
       };
       const stream = createTelegramDraftStream({
-        // oxlint-disable-next-line typescript/no-explicit-any
-        api: api as any,
+        api: api as unknown as Bot["api"],
         chatId: 123,
         throttleMs: 1000,
       });
@@ -179,8 +177,7 @@ describe("createTelegramDraftStream", () => {
     };
     const onSupersededPreview = vi.fn();
     const stream = createTelegramDraftStream({
-      // oxlint-disable-next-line typescript/no-explicit-any
-      api: api as any,
+      api: api as unknown as Bot["api"],
       chatId: 123,
       onSupersededPreview,
     });
@@ -208,8 +205,7 @@ describe("createTelegramDraftStream", () => {
   it("supports rendered previews with parse_mode", async () => {
     const api = createMockDraftApi();
     const stream = createTelegramDraftStream({
-      // oxlint-disable-next-line typescript/no-explicit-any
-      api: api as any,
+      api: api as unknown as Bot["api"],
       chatId: 123,
       renderText: (text) => ({ text: `<i>${text}</i>`, parseMode: "HTML" }),
     });
@@ -229,8 +225,7 @@ describe("createTelegramDraftStream", () => {
     const api = createMockDraftApi();
     const warn = vi.fn();
     const stream = createTelegramDraftStream({
-      // oxlint-disable-next-line typescript/no-explicit-any
-      api: api as any,
+      api: api as unknown as Bot["api"],
       chatId: 123,
       maxChars: 100,
       renderText: () => ({ text: `<b>${"<".repeat(120)}</b>`, parseMode: "HTML" }),
@@ -267,8 +262,7 @@ describe("draft stream initial message debounce", () => {
     it("sends immediately on stop() even with 1 character", async () => {
       const api = createMockApi();
       const stream = createTelegramDraftStream({
-        // oxlint-disable-next-line typescript/no-explicit-any
-        api: api as any,
+        api: api as unknown as Bot["api"],
         chatId: 123,
         minInitialChars: 30,
       });
@@ -283,8 +277,7 @@ describe("draft stream initial message debounce", () => {
     it("sends immediately on stop() with short sentence", async () => {
       const api = createMockApi();
       const stream = createTelegramDraftStream({
-        // oxlint-disable-next-line typescript/no-explicit-any
-        api: api as any,
+        api: api as unknown as Bot["api"],
         chatId: 123,
         minInitialChars: 30,
       });
@@ -301,8 +294,7 @@ describe("draft stream initial message debounce", () => {
     it("does not send first message below threshold", async () => {
       const api = createMockApi();
       const stream = createTelegramDraftStream({
-        // oxlint-disable-next-line typescript/no-explicit-any
-        api: api as any,
+        api: api as unknown as Bot["api"],
         chatId: 123,
         minInitialChars: 30,
       });
@@ -316,8 +308,7 @@ describe("draft stream initial message debounce", () => {
     it("sends first message when reaching threshold", async () => {
       const api = createMockApi();
       const stream = createTelegramDraftStream({
-        // oxlint-disable-next-line typescript/no-explicit-any
-        api: api as any,
+        api: api as unknown as Bot["api"],
         chatId: 123,
         minInitialChars: 30,
       });
@@ -332,8 +323,7 @@ describe("draft stream initial message debounce", () => {
     it("works with longer text above threshold", async () => {
       const api = createMockApi();
       const stream = createTelegramDraftStream({
-        // oxlint-disable-next-line typescript/no-explicit-any
-        api: api as any,
+        api: api as unknown as Bot["api"],
         chatId: 123,
         minInitialChars: 30,
       });
@@ -349,8 +339,7 @@ describe("draft stream initial message debounce", () => {
     it("edits normally after first message is sent", async () => {
       const api = createMockApi();
       const stream = createTelegramDraftStream({
-        // oxlint-disable-next-line typescript/no-explicit-any
-        api: api as any,
+        api: api as unknown as Bot["api"],
         chatId: 123,
         minInitialChars: 30,
       });
@@ -373,8 +362,7 @@ describe("draft stream initial message debounce", () => {
     it("sends immediately without minInitialChars set (backward compatible)", async () => {
       const api = createMockApi();
       const stream = createTelegramDraftStream({
-        // oxlint-disable-next-line typescript/no-explicit-any
-        api: api as any,
+        api: api as unknown as Bot["api"],
         chatId: 123,
         // no minInitialChars (backward-compatible behavior)
       });
