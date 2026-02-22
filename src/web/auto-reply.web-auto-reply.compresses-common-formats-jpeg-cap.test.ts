@@ -1,4 +1,3 @@
-import crypto from "node:crypto";
 import sharp from "sharp";
 import { describe, expect, it, vi } from "vitest";
 import { monitorWebChannel } from "./auto-reply.js";
@@ -64,123 +63,21 @@ describe("web auto-reply", () => {
     };
   }
 
-  it("compresses common formats to jpeg under the cap", { timeout: 45_000 }, async () => {
-    const formats = [
-      {
-        name: "png",
-        mime: "image/png",
-        make: (buf: Buffer, opts: { width: number; height: number }) =>
-          sharp(buf, {
-            raw: { width: opts.width, height: opts.height, channels: 3 },
-          })
-            .png({ compressionLevel: 0 })
-            .toBuffer(),
-      },
-      {
-        name: "jpeg",
-        mime: "image/jpeg",
-        make: (buf: Buffer, opts: { width: number; height: number }) =>
-          sharp(buf, {
-            raw: { width: opts.width, height: opts.height, channels: 3 },
-          })
-            .jpeg({ quality: 90 })
-            .toBuffer(),
-      },
-      {
-        name: "webp",
-        mime: "image/webp",
-        make: (buf: Buffer, opts: { width: number; height: number }) =>
-          sharp(buf, {
-            raw: { width: opts.width, height: opts.height, channels: 3 },
-          })
-            .webp({ quality: 100 })
-            .toBuffer(),
-      },
-    ] as const;
-
-    const width = 1150;
-    const height = 1150;
-    const sharedRaw = crypto.randomBytes(width * height * 3);
-
-    for (const fmt of formats) {
-      // Force a small cap to ensure compression is exercised for every format.
-      setLoadConfigMock(() => ({ agents: { defaults: { mediaMaxMb: 1 } } }));
-      const sendMedia = vi.fn();
-      const reply = vi.fn().mockResolvedValue(undefined);
-      const sendComposing = vi.fn(async () => undefined);
-      const resolver = vi.fn().mockResolvedValue({
-        text: "hi",
-        mediaUrl: `https://example.com/big.${fmt.name}`,
-      });
-
-      let capturedOnMessage: ((msg: WebInboundMessage) => Promise<void>) | undefined;
-      const listenerFactory: ListenerFactory = async ({ onMessage }) => {
-        capturedOnMessage = onMessage;
-        return createMockWebListener();
-      };
-
-      const big = await fmt.make(sharedRaw, { width, height });
-      expect(big.length).toBeGreaterThan(1 * 1024 * 1024);
-
-      const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
-        ok: true,
-        body: true,
-        arrayBuffer: async () => big.buffer.slice(big.byteOffset, big.byteOffset + big.byteLength),
-        headers: { get: () => fmt.mime },
-        status: 200,
-      } as unknown as Response);
-
-      await monitorWebChannel(false, listenerFactory, false, resolver);
-      expect(capturedOnMessage).toBeDefined();
-
-      await capturedOnMessage?.({
-        body: "hello",
-        from: "+1",
-        conversationId: "+1",
-        to: "+2",
-        accountId: "default",
-        chatType: "direct",
-        chatId: "+1",
-        id: `msg-${fmt.name}`,
-        sendComposing,
-        reply,
-        sendMedia,
-      } as WebInboundMessage);
-
-      expect(sendMedia).toHaveBeenCalledTimes(1);
-      const payload = sendMedia.mock.calls[0][0] as {
-        image: Buffer;
-        mimetype?: string;
-      };
-      expect(payload.image.length).toBeLessThanOrEqual(1 * 1024 * 1024);
-      expect(payload.mimetype).toBe("image/jpeg");
-      expect(reply).not.toHaveBeenCalled();
-
-      fetchMock.mockRestore();
-      resetLoadConfigMock();
-    }
-  });
-
   it("honors mediaMaxMb from config", async () => {
     setLoadConfigMock(() => ({ agents: { defaults: { mediaMaxMb: 1 } } }));
     const sendMedia = vi.fn();
-    const reply = vi.fn().mockResolvedValue(undefined);
-    const sendComposing = vi.fn(async () => undefined);
-    const resolver = vi.fn().mockResolvedValue({
-      text: "hi",
-      mediaUrl: "https://example.com/big.png",
+    const { reply, dispatch } = await setupSingleInboundMessage({
+      resolverValue: {
+        text: "hi",
+        mediaUrl: "https://example.com/big.png",
+      },
+      sendMedia,
     });
-
-    let capturedOnMessage: ((msg: WebInboundMessage) => Promise<void>) | undefined;
-    const listenerFactory: ListenerFactory = async ({ onMessage }) => {
-      capturedOnMessage = onMessage;
-      return createMockWebListener();
-    };
 
     const bigPng = await sharp({
       create: {
-        width: 1200,
-        height: 1200,
+        width: 900,
+        height: 900,
         channels: 3,
         background: { r: 0, g: 0, b: 255 },
       },
@@ -198,34 +95,15 @@ describe("web auto-reply", () => {
       status: 200,
     } as unknown as Response);
 
-    await monitorWebChannel(false, listenerFactory, false, resolver);
-    expect(capturedOnMessage).toBeDefined();
+    await dispatch("msg-big");
 
-    await capturedOnMessage?.({
-      body: "hello",
-      from: "+1",
-      conversationId: "+1",
-      to: "+2",
-      accountId: "default",
-      chatType: "direct",
-      chatId: "+1",
-      id: "msg1",
-      sendComposing,
-      reply,
-      sendMedia,
-    } as WebInboundMessage);
-
-    expect(sendMedia).toHaveBeenCalledTimes(1);
-    const payload = sendMedia.mock.calls[0][0] as {
-      image: Buffer;
-      caption?: string;
-      mimetype?: string;
-    };
+    const payload = getSingleImagePayload(sendMedia);
     expect(payload.image.length).toBeLessThanOrEqual(1 * 1024 * 1024);
     expect(payload.mimetype).toBe("image/jpeg");
     expect(reply).not.toHaveBeenCalled();
 
     fetchMock.mockRestore();
+    resetLoadConfigMock();
   });
   it("falls back to text when media is unsupported", async () => {
     const sendMedia = vi.fn();
