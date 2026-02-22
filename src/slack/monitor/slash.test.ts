@@ -265,6 +265,64 @@ function createArgMenusHarness() {
   return { commands, actions, options, postEphemeral, ctx, account };
 }
 
+function createArgMenusHarnessWithUnboundAwareOptions() {
+  const commands = new Map<string, (args: unknown) => Promise<void>>();
+  const actions = new Map<string, (args: unknown) => Promise<void>>();
+  const options = new Map<string, (args: unknown) => Promise<void>>();
+
+  const postEphemeral = vi.fn().mockResolvedValue({ ok: true });
+  const app = {
+    client: { chat: { postEphemeral } },
+    command: (name: string, handler: (args: unknown) => Promise<void>) => {
+      commands.set(name, handler);
+    },
+    action: (id: string, handler: (args: unknown) => Promise<void>) => {
+      actions.set(id, handler);
+    },
+    options: function (this: unknown, id: string, handler: (args: unknown) => Promise<void>) {
+      if (this !== app) {
+        throw new Error("Slack app options handler must be bound");
+      }
+      options.set(id, handler);
+    },
+  };
+
+  const ctx = {
+    cfg: { commands: { native: true, nativeSkills: false } },
+    runtime: {},
+    botToken: "bot-token",
+    botUserId: "bot",
+    teamId: "T1",
+    allowFrom: ["*"],
+    dmEnabled: true,
+    dmPolicy: "open",
+    groupDmEnabled: false,
+    groupDmChannels: [],
+    defaultRequireMention: true,
+    groupPolicy: "open",
+    useAccessGroups: false,
+    channelsConfig: undefined,
+    slashCommand: {
+      enabled: true,
+      name: "openclaw",
+      ephemeral: true,
+      sessionPrefix: "slack:slash",
+    },
+    textLimit: 4000,
+    app,
+    isChannelAllowed: () => true,
+    resolveChannelName: async () => ({ name: "dm", type: "im" }),
+    resolveUserName: async () => ({ name: "Ada" }),
+  } as unknown;
+
+  const account = {
+    accountId: "acct",
+    config: { commands: { native: true, nativeSkills: false } },
+  } as unknown;
+
+  return { commands, actions, options, postEphemeral, ctx, account };
+}
+
 function requireHandler(
   handlers: Map<string, (args: unknown) => Promise<void>>,
   key: string,
@@ -557,6 +615,14 @@ describe("Slack native command argument menus", () => {
         text: "Sorry, that button is no longer valid.",
       }),
     );
+  });
+});
+
+describe("Slack native command argument menu option registration", () => {
+  it("registers option handler with the app context bound", async () => {
+    const harness = createArgMenusHarnessWithUnboundAwareOptions();
+
+    await expect(registerCommands(harness.ctx, harness.account)).resolves.toBeUndefined();
   });
 });
 
