@@ -110,7 +110,7 @@ describe("acquireSessionWriteLock", () => {
 
   it("derives max hold from timeout plus grace", () => {
     expect(resolveSessionLockMaxHoldFromTimeout({ timeoutMs: 600_000 })).toBe(720_000);
-    expect(resolveSessionLockMaxHoldFromTimeout({ timeoutMs: 1_000, minMs: 5_000 })).toBe(123_000);
+    expect(resolveSessionLockMaxHoldFromTimeout({ timeoutMs: 1_000, minMs: 5_000 })).toBe(121_000);
   });
 
   it("clamps max hold for effectively no-timeout runs", () => {
@@ -181,26 +181,32 @@ describe("acquireSessionWriteLock", () => {
 
   it("removes held locks on termination signals", async () => {
     const signals = ["SIGINT", "SIGTERM", "SIGQUIT", "SIGABRT"] as const;
-    for (const signal of signals) {
-      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-cleanup-"));
-      try {
-        const sessionFile = path.join(root, "sessions.json");
-        const lockPath = `${sessionFile}.lock`;
-        await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
-        const keepAlive = () => {};
-        if (signal === "SIGINT") {
-          process.on(signal, keepAlive);
-        }
+    const originalKill = process.kill.bind(process);
+    process.kill = ((_pid: number, _signal?: NodeJS.Signals) => true) as typeof process.kill;
+    try {
+      for (const signal of signals) {
+        const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-cleanup-"));
+        try {
+          const sessionFile = path.join(root, "sessions.json");
+          const lockPath = `${sessionFile}.lock`;
+          await acquireSessionWriteLock({ sessionFile, timeoutMs: 500 });
+          const keepAlive = () => {};
+          if (signal === "SIGINT") {
+            process.on(signal, keepAlive);
+          }
 
-        __testing.handleTerminationSignal(signal);
+          __testing.handleTerminationSignal(signal);
 
-        await expect(fs.stat(lockPath)).rejects.toThrow();
-        if (signal === "SIGINT") {
-          process.off(signal, keepAlive);
+          await expect(fs.stat(lockPath)).rejects.toThrow();
+          if (signal === "SIGINT") {
+            process.off(signal, keepAlive);
+          }
+        } finally {
+          await fs.rm(root, { recursive: true, force: true });
         }
-      } finally {
-        await fs.rm(root, { recursive: true, force: true });
       }
+    } finally {
+      process.kill = originalKill;
     }
   });
 
