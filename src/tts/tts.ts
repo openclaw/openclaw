@@ -75,6 +75,13 @@ const TELEGRAM_OUTPUT = {
   voiceCompatible: true,
 };
 
+const WHATSAPP_OUTPUT = {
+  openai: "opus" as const,
+  elevenlabs: "opus_48000_64",
+  extension: ".opus",
+  voiceCompatible: true,
+};
+
 const DEFAULT_OUTPUT = {
   openai: "mp3" as const,
   elevenlabs: "mp3_44100_128",
@@ -501,6 +508,9 @@ const VOICE_BUBBLE_CHANNELS = new Set(["telegram", "feishu", "whatsapp"]);
 function resolveOutputFormat(channelId?: string | null) {
   if (channelId && VOICE_BUBBLE_CHANNELS.has(channelId)) {
     return TELEGRAM_OUTPUT;
+  }
+  if (channelId === "whatsapp") {
+    return WHATSAPP_OUTPUT;
   }
   return DEFAULT_OUTPUT;
 }
