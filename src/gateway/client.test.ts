@@ -260,4 +260,26 @@ describe("GatewayClient close handling", () => {
     expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: signature invalid");
     client.stop();
   });
+
+  it("does not clear stored token when explicit credentials were provided", () => {
+    const onClose = vi.fn();
+    const identity: DeviceIdentity = {
+      deviceId: "dev-5",
+      privateKeyPem: "private-key",
+      publicKeyPem: "public-key",
+    };
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      deviceIdentity: identity,
+      token: "shared-token",
+      onClose,
+    });
+
+    client.start();
+    getLatestWs().emitClose(1008, "unauthorized: device token mismatch");
+
+    expect(clearDeviceAuthTokenMock).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch");
+    client.stop();
+  });
 });
