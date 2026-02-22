@@ -818,6 +818,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     pendingChanges = true;
     if (shouldRepair) {
       cfg = normalized.config;
+      shouldWriteConfig = true;
     } else {
       fixHints.push(`Run "${formatCliCommand("openclaw doctor --fix")}" to apply these changes.`);
     }
@@ -830,6 +831,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     pendingChanges = true;
     if (shouldRepair) {
       cfg = autoEnable.config;
+      shouldWriteConfig = true;
     } else {
       fixHints.push(`Run "${formatCliCommand("openclaw doctor --fix")}" to apply these changes.`);
     }
@@ -842,6 +844,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       candidate = repair.config;
       pendingChanges = true;
       cfg = repair.config;
+      shouldWriteConfig = true;
     }
 
     const discordRepair = maybeRepairDiscordNumericIds(candidate);
@@ -850,6 +853,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       candidate = discordRepair.config;
       pendingChanges = true;
       cfg = discordRepair.config;
+      shouldWriteConfig = true;
     }
 
     const allowFromRepair = maybeRepairOpenPolicyAllowFrom(candidate);
@@ -858,6 +862,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       candidate = allowFromRepair.config;
       pendingChanges = true;
       cfg = allowFromRepair.config;
+      shouldWriteConfig = true;
     }
   } else {
     const hits = scanTelegramAllowFromUsernameEntries(candidate);
@@ -901,6 +906,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     pendingChanges = true;
     if (shouldRepair) {
       cfg = unknown.config;
+      shouldWriteConfig = true;
       note(lines, "Doctor changes");
     } else {
       note(lines, "Unknown config keys");
