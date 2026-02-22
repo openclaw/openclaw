@@ -40,12 +40,25 @@ function isAzureUrl(baseUrl: string): boolean {
  *   => https://my-resource.services.ai.azure.com/openai/deployments/gpt-5-nano
  */
 function transformAzureUrl(baseUrl: string, modelId: string): string {
-  const normalizedUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
-  // Check if the URL already includes the deployment path
-  if (normalizedUrl.includes("/openai/deployments/")) {
-    return normalizedUrl;
+  // Use URL API to properly handle query parameters in the base URL
+  try {
+    const url = new URL(baseUrl);
+    // Check if the URL already includes the deployment path
+    if (url.pathname.includes("/openai/deployments/")) {
+      return url.toString();
+    }
+    // Append the deployment path
+    const normalizedPath = url.pathname.endsWith("/") ? url.pathname.slice(0, -1) : url.pathname;
+    url.pathname = `${normalizedPath}/openai/deployments/${modelId}`;
+    return url.toString();
+  } catch {
+    // Fallback to simple string manipulation if URL parsing fails
+    const normalizedUrl = baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl;
+    if (normalizedUrl.includes("/openai/deployments/")) {
+      return normalizedUrl;
+    }
+    return `${normalizedUrl}/openai/deployments/${modelId}`;
   }
-  return `${normalizedUrl}/openai/deployments/${modelId}`;
 }
 
 export type CustomApiCompatibility = "openai" | "anthropic";
