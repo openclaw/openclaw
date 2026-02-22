@@ -815,7 +815,10 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
     }
 
     // Detect system events and render as dividers
-    const systemDividerLabel = detectSystemDivider(normalized);
+    const systemDividerLabel = detectSystemDivider({
+      ...normalized,
+      content: normalized.content[0]?.type === "text" ? normalized.content[0].text : "",
+    });
     if (systemDividerLabel) {
       items.push({
         kind: "divider",
