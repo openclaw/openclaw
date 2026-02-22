@@ -251,6 +251,53 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
+  it("passes resolved agentDir to runEmbeddedPiAgent", async () => {
+    await withTempHome(async (home) => {
+      const deps = makeDeps();
+      const opsWorkspace = path.join(home, "ops-workspace");
+      const opsAgentDir = path.join(home, ".openclaw", "agents", "ops", "agent");
+      mockEmbeddedOk();
+
+      const cfg = makeCfg(
+        home,
+        path.join(home, ".openclaw", "agents", "{agentId}", "sessions", "sessions.json"),
+        {
+          agents: {
+            defaults: { workspace: path.join(home, "default-workspace") },
+            list: [
+              { id: "main", default: true },
+              { id: "ops", workspace: opsWorkspace, agentDir: opsAgentDir },
+            ],
+          },
+        },
+      );
+
+      const res = await runCronIsolatedAgentTurn({
+        cfg,
+        deps,
+        job: {
+          ...makeJob({
+            kind: "agentTurn",
+            message: DEFAULT_MESSAGE,
+            deliver: false,
+            channel: "last",
+          }),
+          agentId: "ops",
+        },
+        message: DEFAULT_MESSAGE,
+        sessionKey: "cron:job-ops",
+        agentId: "ops",
+        lane: "cron",
+      });
+
+      expect(res.status).toBe("ok");
+      const call = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0] as {
+        agentDir?: string;
+      };
+      expect(call?.agentDir).toBe(opsAgentDir);
+    });
+  });
+
   it("uses model override when provided", async () => {
     await withTempHome(async (home) => {
       const { res } = await runCronTurn(home, {
