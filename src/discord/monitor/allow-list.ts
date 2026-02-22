@@ -24,6 +24,7 @@ export type DiscordGuildEntryResolved = {
   requireMention?: boolean;
   ignoreOtherMentions?: boolean;
   reactionNotifications?: "off" | "own" | "all" | "allowlist";
+  memberJoinNotifications?: "off" | "on";
   users?: string[];
   roles?: string[];
   channels?: Record<
