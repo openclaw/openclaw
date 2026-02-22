@@ -17,7 +17,10 @@ type ProviderApiKeyConfig = {
   fallbackVars: string[];
 };
 
-const PROVIDER_API_KEY_CONFIG: Record<string, Omit<ProviderApiKeyConfig, "fallbackVars">> = {
+const PROVIDER_API_KEY_CONFIG: Record<
+  string,
+  Omit<ProviderApiKeyConfig, "fallbackVars">
+> = {
   anthropic: {
     liveSingle: "OPENCLAW_LIVE_ANTHROPIC_KEY",
     listVar: "OPENCLAW_LIVE_ANTHROPIC_KEYS",
@@ -83,7 +86,9 @@ function collectEnvPrefixedKeys(prefix: string): string[] {
 function resolveProviderApiKeyConfig(provider: string): ProviderApiKeyConfig {
   const normalized = normalizeProviderId(provider);
   const custom = PROVIDER_API_KEY_CONFIG[normalized];
-  const base = PROVIDER_PREFIX_OVERRIDES[normalized] ?? normalized.toUpperCase().replace(/-/g, "_");
+  const base =
+    PROVIDER_PREFIX_OVERRIDES[normalized] ??
+    normalized.toUpperCase().replace(/-/g, "_");
 
   const liveSingle = custom?.liveSingle ?? `OPENCLAW_LIVE_${base}_KEY`;
   const listVar = custom?.listVar ?? `${base}_API_KEYS`;
@@ -119,9 +124,15 @@ export function collectProviderApiKeys(provider: string): string[] {
     return [forcedSingle];
   }
 
-  const fromList = parseKeyList(config.listVar ? process.env[config.listVar] : undefined);
-  const primary = config.primaryVar ? normalizeApiKeyValue(process.env[config.primaryVar]) : null;
-  const fromPrefixed = config.prefixedVar ? collectEnvPrefixedKeys(config.prefixedVar) : [];
+  const fromList = parseKeyList(
+    config.listVar ? process.env[config.listVar] : undefined,
+  );
+  const primary = config.primaryVar
+    ? normalizeApiKeyValue(process.env[config.primaryVar])
+    : null;
+  const fromPrefixed = config.prefixedVar
+    ? collectEnvPrefixedKeys(config.prefixedVar)
+    : [];
 
   const fallback = config.fallbackVars
     .map((envVar) => normalizeApiKeyValue(process.env[envVar]))
