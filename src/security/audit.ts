@@ -293,6 +293,33 @@ function collectGatewayConfigFindings(
     (auth.mode === "token" && hasToken) || (auth.mode === "password" && hasPassword);
   const hasTailscaleAuth = auth.allowTailscale && tailscaleMode === "serve";
   const hasGatewayAuth = hasSharedSecret || hasTailscaleAuth;
+  const mdnsMode = cfg.discovery?.mdns?.mode ?? "minimal";
+  const discoveryFullConfirmed = env.OPENCLAW_DISCOVERY_ALLOW_FULL_MDNS?.trim() === "1";
+
+  if (bind !== "loopback" && mdnsMode === "full") {
+    if (!discoveryFullConfirmed) {
+      findings.push({
+        checkId: "discovery.mdns_full_non_loopback_unconfirmed",
+        severity: "critical",
+        title: "mDNS full mode on non-loopback bind is unconfirmed",
+        detail:
+          `discovery.mdns.mode="full" with gateway.bind="${bind}" exposes cliPath/sshPort metadata. ` +
+          "Runtime now falls back to minimal unless OPENCLAW_DISCOVERY_ALLOW_FULL_MDNS=1 is set.",
+        remediation:
+          'Use discovery.mdns.mode="minimal" (recommended) or "off". ' +
+          "If full mode is required, set OPENCLAW_DISCOVERY_ALLOW_FULL_MDNS=1 explicitly and review gateway exposure.",
+      });
+    } else {
+      findings.push({
+        checkId: "discovery.mdns_full_non_loopback",
+        severity: "warn",
+        title: "mDNS full mode exposes metadata on non-loopback bind",
+        detail: `discovery.mdns.mode="full" with gateway.bind="${bind}" includes cliPath/sshPort in TXT records; treat it as sensitive operational metadata.`,
+        remediation:
+          'Prefer discovery.mdns.mode="minimal" or "off" unless full TXT metadata is explicitly required.',
+      });
+    }
+  }
 
   // HTTP /tools/invoke is intended for narrow automation, not session orchestration/admin operations.
   // If operators opt-in to re-enabling these tools over HTTP, warn loudly so the choice is explicit.

@@ -7,9 +7,37 @@ import {
   resolveTailnetDnsHint,
 } from "./server-discovery.js";
 
+type GatewayBindMode = "auto" | "lan" | "loopback" | "custom" | "tailnet";
+const DISCOVERY_FULL_CONFIRM_ENV = "OPENCLAW_DISCOVERY_ALLOW_FULL_MDNS";
+
+export function resolveEffectiveMdnsMode(params: {
+  mdnsMode?: "off" | "minimal" | "full";
+  gatewayBind?: GatewayBindMode;
+  env?: NodeJS.ProcessEnv;
+  warn?: (message: string) => void;
+}): "off" | "minimal" | "full" {
+  const requestedMode = params.mdnsMode ?? "minimal";
+  const bind = params.gatewayBind ?? "loopback";
+  if (bind === "loopback") {
+    return requestedMode;
+  }
+  if (requestedMode !== "full") {
+    return requestedMode;
+  }
+  const env = params.env ?? process.env;
+  if (env[DISCOVERY_FULL_CONFIRM_ENV]?.trim() === "1") {
+    return "full";
+  }
+  params.warn?.(
+    `discovery.mdns.mode="full" requires ${DISCOVERY_FULL_CONFIRM_ENV}=1 when gateway.bind is not loopback; falling back to "minimal".`,
+  );
+  return "minimal";
+}
+
 export async function startGatewayDiscovery(params: {
   machineDisplayName: string;
   port: number;
+  gatewayBind?: GatewayBindMode;
   gatewayTls?: { enabled: boolean; fingerprintSha256?: string };
   canvasPort?: number;
   wideAreaDiscoveryEnabled: boolean;
@@ -20,7 +48,12 @@ export async function startGatewayDiscovery(params: {
   logDiscovery: { info: (msg: string) => void; warn: (msg: string) => void };
 }) {
   let bonjourStop: (() => Promise<void>) | null = null;
-  const mdnsMode = params.mdnsMode ?? "minimal";
+  const mdnsMode = resolveEffectiveMdnsMode({
+    mdnsMode: params.mdnsMode,
+    gatewayBind: params.gatewayBind,
+    env: process.env,
+    warn: params.logDiscovery.warn,
+  });
   // mDNS can be disabled via config (mdnsMode: off) or env var.
   const bonjourEnabled =
     mdnsMode !== "off" &&
