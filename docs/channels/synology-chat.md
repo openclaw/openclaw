@@ -32,9 +32,11 @@ Details: [Plugins](/tools/plugin)
 
 1. Open **DSM > Chat > Integration > Bots** and create a new bot.
 2. Set the **Outgoing Webhook URL** to your OpenClaw webhook endpoint:
-   ```
+
+   ```text
    http://<openclaw-host>:<port>/webhook/synology
    ```
+
 3. Copy the **Bot Token** (64-character string).
 4. Copy the **Incoming Webhook URL** (contains `method=chatbot`).
 5. Configure:

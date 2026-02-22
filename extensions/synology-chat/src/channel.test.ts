@@ -295,7 +295,7 @@ describe("createSynologyChatPlugin", () => {
         accountId: "default",
         log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       };
-      const result = await plugin.gateway.startAccount(ctx);
+      const result = (await plugin.gateway.startAccount(ctx)) as { stop: () => void };
       expect(typeof result.stop).toBe("function");
     });
 
@@ -308,7 +308,7 @@ describe("createSynologyChatPlugin", () => {
         accountId: "default",
         log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       };
-      const result = await plugin.gateway.startAccount(ctx);
+      const result = (await plugin.gateway.startAccount(ctx)) as { stop: () => void };
       expect(typeof result.stop).toBe("function");
     });
   });
