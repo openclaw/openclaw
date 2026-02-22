@@ -8,6 +8,7 @@ import {
   installBrowserControlServerHooks,
   makeResponse,
   getPwMocks,
+  restoreGatewayPortEnv,
   startBrowserControlServerFromConfig,
   stopBrowserControlServer,
 } from "./server.control-server.test-harness.js";
@@ -32,6 +33,20 @@ describe("browser control server", () => {
     const body = (await result.json()) as { error: string };
     expect(body.error).toContain("not found");
   });
+
+  it("POST /tabs/open returns 400 for invalid URLs", async () => {
+    await startBrowserControlServerFromConfig();
+    const base = getBrowserControlServerBaseUrl();
+
+    const result = await realFetch(`${base}/tabs/open`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: "not a url" }),
+    });
+    expect(result.status).toBe(400);
+    const body = (await result.json()) as { error: string };
+    expect(body.error).toContain("Invalid URL:");
+  });
 });
 
 describe("profile CRUD endpoints", () => {
@@ -51,6 +66,11 @@ describe("profile CRUD endpoints", () => {
     state.prevGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
     process.env.OPENCLAW_GATEWAY_PORT = String(state.testPort - 2);
 
+    state.prevGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    state.prevGatewayPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
@@ -66,10 +86,16 @@ describe("profile CRUD endpoints", () => {
   afterEach(async () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
-    if (state.prevGatewayPort === undefined) {
-      delete process.env.OPENCLAW_GATEWAY_PORT;
+    restoreGatewayPortEnv(state.prevGatewayPort);
+    if (state.prevGatewayToken !== undefined) {
+      process.env.OPENCLAW_GATEWAY_TOKEN = state.prevGatewayToken;
     } else {
-      process.env.OPENCLAW_GATEWAY_PORT = state.prevGatewayPort;
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    }
+    if (state.prevGatewayPassword !== undefined) {
+      process.env.OPENCLAW_GATEWAY_PASSWORD = state.prevGatewayPassword;
+    } else {
+      delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     }
     await stopBrowserControlServer();
   });

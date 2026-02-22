@@ -23,7 +23,7 @@ export async function runGatewayLoop(params: {
   start: () => Promise<Awaited<ReturnType<typeof startGatewayServer>>>;
   runtime: typeof defaultRuntime;
 }) {
-  const lock = await acquireGatewayLock();
+  let lock = await acquireGatewayLock();
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
   let shuttingDown = false;
   let restartResolver: (() => void) | null = null;
@@ -32,6 +32,58 @@ export async function runGatewayLoop(params: {
     process.removeListener("SIGTERM", onSigterm);
     process.removeListener("SIGINT", onSigint);
     process.removeListener("SIGUSR1", onSigusr1);
+  };
+  const exitProcess = (code: number) => {
+    cleanupSignals();
+    params.runtime.exit(code);
+  };
+  const releaseLockIfHeld = async (): Promise<boolean> => {
+    if (!lock) {
+      return false;
+    }
+    await lock.release();
+    lock = null;
+    return true;
+  };
+  const reacquireLockForInProcessRestart = async (): Promise<boolean> => {
+    try {
+      lock = await acquireGatewayLock();
+      return true;
+    } catch (err) {
+      gatewayLog.error(`failed to reacquire gateway lock for in-process restart: ${String(err)}`);
+      exitProcess(1);
+      return false;
+    }
+  };
+  const handleRestartAfterServerClose = async () => {
+    const hadLock = await releaseLockIfHeld();
+    // Release the lock BEFORE spawning so the child can acquire it immediately.
+    const respawn = restartGatewayProcessWithFreshPid();
+    if (respawn.mode === "spawned" || respawn.mode === "supervised") {
+      const modeLabel =
+        respawn.mode === "spawned"
+          ? `spawned pid ${respawn.pid ?? "unknown"}`
+          : "supervisor restart";
+      gatewayLog.info(`restart mode: full process restart (${modeLabel})`);
+      exitProcess(0);
+      return;
+    }
+    if (respawn.mode === "failed") {
+      gatewayLog.warn(
+        `full process restart failed (${respawn.detail ?? "unknown error"}); falling back to in-process restart`,
+      );
+    } else {
+      gatewayLog.info("restart mode: in-process restart (OPENCLAW_NO_RESPAWN)");
+    }
+    if (hadLock && !(await reacquireLockForInProcessRestart())) {
+      return;
+    }
+    shuttingDown = false;
+    restartResolver?.();
+  };
+  const handleStopAfterServerClose = async () => {
+    await releaseLockIfHeld();
+    exitProcess(0);
   };
 
   const DRAIN_TIMEOUT_MS = 30_000;
@@ -50,8 +102,7 @@ export async function runGatewayLoop(params: {
     const forceExitMs = isRestart ? DRAIN_TIMEOUT_MS + SHUTDOWN_TIMEOUT_MS : SHUTDOWN_TIMEOUT_MS;
     const forceExitTimer = setTimeout(() => {
       gatewayLog.error("shutdown timed out; exiting without full cleanup");
-      cleanupSignals();
-      params.runtime.exit(0);
+      exitProcess(0);
     }, forceExitMs);
 
     void (async () => {
@@ -83,29 +134,9 @@ export async function runGatewayLoop(params: {
         clearTimeout(forceExitTimer);
         server = null;
         if (isRestart) {
-          const respawn = restartGatewayProcessWithFreshPid();
-          if (respawn.mode === "spawned" || respawn.mode === "supervised") {
-            const modeLabel =
-              respawn.mode === "spawned"
-                ? `spawned pid ${respawn.pid ?? "unknown"}`
-                : "supervisor restart";
-            gatewayLog.info(`restart mode: full process restart (${modeLabel})`);
-            cleanupSignals();
-            params.runtime.exit(0);
-          } else {
-            if (respawn.mode === "failed") {
-              gatewayLog.warn(
-                `full process restart failed (${respawn.detail ?? "unknown error"}); falling back to in-process restart`,
-              );
-            } else {
-              gatewayLog.info("restart mode: in-process restart (OPENCLAW_NO_RESPAWN)");
-            }
-            shuttingDown = false;
-            restartResolver?.();
-          }
+          await handleRestartAfterServerClose();
         } else {
-          cleanupSignals();
-          params.runtime.exit(0);
+          await handleStopAfterServerClose();
         }
       }
     })();
@@ -124,7 +155,7 @@ export async function runGatewayLoop(params: {
     const authorized = consumeGatewaySigusr1RestartAuthorization();
     if (!authorized && !isGatewaySigusr1RestartExternallyAllowed()) {
       gatewayLog.warn(
-        "SIGUSR1 restart ignored (not authorized; enable commands.restart or use gateway tool).",
+        "SIGUSR1 restart ignored (not authorized; commands.restart=false or use gateway tool).",
       );
       return;
     }
@@ -158,7 +189,7 @@ export async function runGatewayLoop(params: {
       });
     }
   } finally {
-    await lock?.release();
+    await releaseLockIfHeld();
     cleanupSignals();
   }
 }

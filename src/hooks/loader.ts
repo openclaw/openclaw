@@ -6,13 +6,14 @@
  */
 
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import type { OpenClawConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { resolveHookConfig } from "./config.js";
 import { shouldIncludeHook } from "./config.js";
 import type { InternalHookHandler } from "./internal-hooks.js";
 import { registerInternalHook } from "./internal-hooks.js";
+import { importFileModule, resolveFunctionModuleExport } from "./module-loader.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
 const log = createSubsystemLogger("hooks:loader");
@@ -71,16 +72,28 @@ export async function loadInternalHooks(
       }
 
       try {
-        // Import handler module with cache-busting
-        const url = pathToFileURL(entry.hook.handlerPath).href;
-        const cacheBustedUrl = `${url}?t=${Date.now()}`;
-        const mod = (await import(cacheBustedUrl)) as Record<string, unknown>;
-
+        if (
+          !isPathInsideWithRealpath(entry.hook.baseDir, entry.hook.handlerPath, {
+            requireRealpath: true,
+          })
+        ) {
+          log.error(
+            `Hook '${entry.hook.name}' handler path resolves outside hook directory: ${entry.hook.handlerPath}`,
+          );
+          continue;
+        }
         // Get handler function (default or named export)
         const exportName = entry.metadata?.export ?? "default";
-        const handler = mod[exportName];
+        const mod = await importFileModule({
+          modulePath: entry.hook.handlerPath,
+          cacheBust: true,
+        });
+        const handler = resolveFunctionModuleExport<InternalHookHandler>({
+          mod,
+          exportName,
+        });
 
-        if (typeof handler !== "function") {
+        if (!handler) {
           log.error(`Handler '${exportName}' from ${entry.hook.name} is not a function`);
           continue;
         }
@@ -93,7 +106,7 @@ export async function loadInternalHooks(
         }
 
         for (const event of events) {
-          registerInternalHook(event, handler as InternalHookHandler);
+          registerInternalHook(event, handler);
         }
 
         log.info(
@@ -135,22 +148,34 @@ export async function loadInternalHooks(
         log.error(`Handler module path must stay within workspaceDir: ${rawModule}`);
         continue;
       }
-
-      // Import the module with cache-busting to ensure fresh reload
-      const url = pathToFileURL(modulePath).href;
-      const cacheBustedUrl = `${url}?t=${Date.now()}`;
-      const mod = (await import(cacheBustedUrl)) as Record<string, unknown>;
+      if (
+        !isPathInsideWithRealpath(baseDir, modulePath, {
+          requireRealpath: true,
+        })
+      ) {
+        log.error(
+          `Handler module path resolves outside workspaceDir after symlink resolution: ${rawModule}`,
+        );
+        continue;
+      }
 
       // Get the handler function
       const exportName = handlerConfig.export ?? "default";
-      const handler = mod[exportName];
+      const mod = await importFileModule({
+        modulePath,
+        cacheBust: true,
+      });
+      const handler = resolveFunctionModuleExport<InternalHookHandler>({
+        mod,
+        exportName,
+      });
 
-      if (typeof handler !== "function") {
+      if (!handler) {
         log.error(`Handler '${exportName}' from ${modulePath} is not a function`);
         continue;
       }
 
-      registerInternalHook(handlerConfig.event, handler as InternalHookHandler);
+      registerInternalHook(handlerConfig.event, handler);
       log.info(
         `Registered hook (legacy): ${handlerConfig.event} -> ${modulePath}${exportName !== "default" ? `#${exportName}` : ""}`,
       );

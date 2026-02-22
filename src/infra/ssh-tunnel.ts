@@ -135,7 +135,7 @@ export async function startSshPortForward(opts: {
     "-o",
     "BatchMode=yes",
     "-o",
-    "StrictHostKeyChecking=accept-new",
+    "StrictHostKeyChecking=yes",
     "-o",
     "UpdateHostKeys=yes",
     "-o",

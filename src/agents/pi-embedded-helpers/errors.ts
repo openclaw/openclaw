@@ -1,13 +1,19 @@
 import type { AssistantMessage } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { formatSandboxToolPolicyBlockedMessage } from "../sandbox.js";
 import { stableStringify } from "../stable-stringify.js";
 import type { FailoverReason } from "./types.js";
 
-export function formatBillingErrorMessage(provider?: string): string {
+const log = createSubsystemLogger("errors");
+
+export function formatBillingErrorMessage(provider?: string, model?: string): string {
   const providerName = provider?.trim();
-  if (providerName) {
-    return `⚠️ ${providerName} returned a billing error — your API key has run out of credits or has an insufficient balance. Check your ${providerName} billing dashboard and top up or switch to a different API key.`;
+  const modelName = model?.trim();
+  const providerLabel =
+    providerName && modelName ? `${providerName} (${modelName})` : providerName || undefined;
+  if (providerLabel) {
+    return `⚠️ ${providerLabel} returned a billing error — your API key has run out of credits or has an insufficient balance. Check your ${providerName} billing dashboard and top up or switch to a different API key.`;
   }
   return "⚠️ API provider returned a billing error — your API key has run out of credits or has an insufficient balance. Check your provider's billing dashboard and top up or switch to a different API key.";
 }
@@ -241,18 +247,6 @@ function shouldRewriteContextOverflowText(raw: string): boolean {
   );
 }
 
-function shouldRewriteBillingText(raw: string): boolean {
-  if (!isBillingErrorMessage(raw)) {
-    return false;
-  }
-  return (
-    isRawApiErrorPayload(raw) ||
-    isLikelyHttpErrorText(raw) ||
-    ERROR_PREFIX_RE.test(raw) ||
-    BILLING_ERROR_HEAD_RE.test(raw)
-  );
-}
-
 type ErrorPayload = Record<string, unknown>;
 
 function isErrorPayloadObject(payload: unknown): payload is ErrorPayload {
@@ -420,7 +414,7 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
 
 export function formatAssistantErrorText(
   msg: AssistantMessage,
-  opts?: { cfg?: OpenClawConfig; sessionKey?: string; provider?: string },
+  opts?: { cfg?: OpenClawConfig; sessionKey?: string; provider?: string; model?: string },
 ): string | undefined {
   // Also format errors if errorMessage is present, even if stopReason isn't "error"
   const raw = (msg.errorMessage ?? "").trim();
@@ -487,7 +481,7 @@ export function formatAssistantErrorText(
   }
 
   if (isBillingErrorMessage(raw)) {
-    return formatBillingErrorMessage(opts?.provider);
+    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model);
   }
 
   if (isLikelyHttpErrorText(raw) || isRawApiErrorPayload(raw)) {
@@ -496,7 +490,7 @@ export function formatAssistantErrorText(
 
   // Never return raw unhandled errors - log for debugging but return safe message
   if (raw.length > 600) {
-    console.warn("[formatAssistantErrorText] Long error truncated:", raw.slice(0, 200));
+    log.warn(`Long error truncated: ${raw.slice(0, 200)}`);
   }
   return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
 }
@@ -549,13 +543,6 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     }
   }
 
-  // Preserve legacy behavior for explicit billing-head text outside known
-  // error contexts (e.g., "billing: please upgrade your plan"), while
-  // keeping conversational billing mentions untouched.
-  if (shouldRewriteBillingText(trimmed)) {
-    return BILLING_ERROR_USER_MESSAGE;
-  }
-
   // Strip leading blank lines (including whitespace-only lines) without clobbering indentation on
   // the first content line (e.g. markdown/code blocks).
   const withoutLeadingEmptyLines = stripped.replace(/^(?:[ \t]*\r?\n)+/, "");
@@ -580,7 +567,12 @@ const ERROR_PATTERNS = {
     "resource_exhausted",
     "usage limit",
   ],
-  overloaded: [/overloaded_error|"type"\s*:\s*"overloaded_error"/i, "overloaded"],
+  overloaded: [
+    /overloaded_error|"type"\s*:\s*"overloaded_error"/i,
+    "overloaded",
+    "service unavailable",
+    "high demand",
+  ],
   timeout: [
     "timeout",
     "timed out",
@@ -694,6 +686,16 @@ export function isOverloadedErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.overloaded);
 }
 
+function isJsonApiInternalServerError(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const value = raw.toLowerCase();
+  // Anthropic often wraps transient 500s in JSON payloads like:
+  // {"type":"error","error":{"type":"api_error","message":"Internal server error"}}
+  return value.includes('"type":"api_error"') && value.includes("internal server error");
+}
+
 export function parseImageDimensionError(raw: string): {
   maxDimensionPx?: number;
   messageIndex?: number;
@@ -757,6 +759,37 @@ export function isAuthAssistantError(msg: AssistantMessage | undefined): boolean
   return isAuthErrorMessage(msg.errorMessage ?? "");
 }
 
+export function isModelNotFoundErrorMessage(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const lower = raw.toLowerCase();
+
+  // Direct pattern matches from OpenClaw internals and common providers.
+  if (
+    lower.includes("unknown model") ||
+    lower.includes("model not found") ||
+    lower.includes("model_not_found") ||
+    lower.includes("not_found_error") ||
+    (lower.includes("does not exist") && lower.includes("model")) ||
+    (lower.includes("invalid model") && !lower.includes("invalid model reference"))
+  ) {
+    return true;
+  }
+
+  // Google Gemini: "models/X is not found for api version"
+  if (/models\/[^\s]+ is not found/i.test(raw)) {
+    return true;
+  }
+
+  // JSON error payloads: {"status": "NOT_FOUND"} or {"code": 404} combined with not-found text.
+  if (/\b404\b/.test(raw) && /not[-_ ]?found/i.test(raw)) {
+    return true;
+  }
+
+  return false;
+}
+
 export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isImageDimensionErrorMessage(raw)) {
     return null;
@@ -764,8 +797,14 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   if (isImageSizeError(raw)) {
     return null;
   }
+  if (isModelNotFoundErrorMessage(raw)) {
+    return "model_not_found";
+  }
   if (isTransientHttpError(raw)) {
     // Treat transient 5xx provider failures as retryable transport issues.
+    return "timeout";
+  }
+  if (isJsonApiInternalServerError(raw)) {
     return "timeout";
   }
   if (isRateLimitErrorMessage(raw)) {

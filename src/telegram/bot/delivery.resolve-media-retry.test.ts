@@ -82,6 +82,19 @@ function setupTransientGetFileRetry() {
   return getFile;
 }
 
+function createFileTooBigError(): Error {
+  return new Error("GrammyError: Call to 'getFile' failed! (400: Bad Request: file is too big)");
+}
+
+async function expectTransientGetFileRetrySuccess() {
+  const getFile = setupTransientGetFileRetry();
+  const promise = resolveMedia(makeCtx("voice", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+  await flushRetryTimers();
+  const result = await promise;
+  expect(getFile).toHaveBeenCalledTimes(2);
+  return result;
+}
+
 async function flushRetryTimers() {
   await vi.runAllTimersAsync();
 }
@@ -89,8 +102,8 @@ async function flushRetryTimers() {
 describe("resolveMedia getFile retry", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    fetchRemoteMedia.mockReset();
-    saveMediaBuffer.mockReset();
+    fetchRemoteMedia.mockClear();
+    saveMediaBuffer.mockClear();
   });
 
   afterEach(() => {
@@ -98,12 +111,7 @@ describe("resolveMedia getFile retry", () => {
   });
 
   it("retries getFile on transient failure and succeeds on second attempt", async () => {
-    const getFile = setupTransientGetFileRetry();
-    const promise = resolveMedia(makeCtx("voice", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
-    await flushRetryTimers();
-    const result = await promise;
-
-    expect(getFile).toHaveBeenCalledTimes(2);
+    const result = await expectTransientGetFileRetrySuccess();
     expect(result).toEqual(
       expect.objectContaining({ path: "/tmp/file_0.oga", placeholder: "<media:audio>" }),
     );
@@ -135,15 +143,13 @@ describe("resolveMedia getFile retry", () => {
   });
 
   it("does not retry 'file is too big' error (400 Bad Request) and returns null", async () => {
-    // Simulate Telegram Bot API error when file exceeds 20MB limit
-    const fileTooBigError = new Error(
-      "GrammyError: Call to 'getFile' failed! (400: Bad Request: file is too big)",
-    );
+    // Simulate Telegram Bot API error when file exceeds 20MB limit.
+    const fileTooBigError = createFileTooBigError();
     const getFile = vi.fn().mockRejectedValue(fileTooBigError);
 
     const result = await resolveMedia(makeCtx("video", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
 
-    // Should NOT retry - "file is too big" is a permanent error, not transient
+    // Should NOT retry - "file is too big" is a permanent error, not transient.
     expect(getFile).toHaveBeenCalledTimes(1);
     expect(result).toBeNull();
   });
@@ -166,10 +172,7 @@ describe("resolveMedia getFile retry", () => {
   it.each(["audio", "voice"] as const)(
     "returns null for %s when file is too big",
     async (mediaField) => {
-      const fileTooBigError = new Error(
-        "GrammyError: Call to 'getFile' failed! (400: Bad Request: file is too big)",
-      );
-      const getFile = vi.fn().mockRejectedValue(fileTooBigError);
+      const getFile = vi.fn().mockRejectedValue(createFileTooBigError());
 
       const result = await resolveMedia(makeCtx(mediaField, getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
 
@@ -178,14 +181,17 @@ describe("resolveMedia getFile retry", () => {
     },
   );
 
-  it("still retries transient errors even after encountering file too big in different call", async () => {
-    const getFile = setupTransientGetFileRetry();
-    const promise = resolveMedia(makeCtx("voice", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
-    await flushRetryTimers();
-    const result = await promise;
+  it("throws when getFile returns no file_path", async () => {
+    const getFile = vi.fn().mockResolvedValue({});
+    await expect(
+      resolveMedia(makeCtx("voice", getFile), MAX_MEDIA_BYTES, BOT_TOKEN),
+    ).rejects.toThrow("Telegram getFile returned no file_path");
+    expect(getFile).toHaveBeenCalledTimes(1);
+  });
 
-    // Should retry transient errors
-    expect(getFile).toHaveBeenCalledTimes(2);
+  it("still retries transient errors even after encountering file too big in different call", async () => {
+    const result = await expectTransientGetFileRetrySuccess();
+    // Should retry transient errors.
     expect(result).not.toBeNull();
   });
 });

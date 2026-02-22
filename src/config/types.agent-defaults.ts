@@ -289,6 +289,10 @@ export type AgentCompactionMode = "default" | "safeguard";
 export type AgentCompactionConfig = {
   /** Compaction summarization mode. */
   mode?: AgentCompactionMode;
+  /** Pi reserve tokens target before floor enforcement. */
+  reserveTokens?: number;
+  /** Pi keepRecentTokens budget used for cut-point selection. */
+  keepRecentTokens?: number;
   /** Minimum reserve tokens enforced for Pi compaction (0 disables the floor). */
   reserveTokensFloor?: number;
   /** Max share of context window for history during safeguard pruning (0.1–0.9, default 0.5). */

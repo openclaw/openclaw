@@ -4,6 +4,7 @@ import { resolveUserPath } from "../utils.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
 import { loadPluginManifest, type PluginManifest } from "./manifest.js";
+import { safeRealpathSync } from "./path-safety.js";
 import type { PluginConfigUiHint, PluginDiagnostic, PluginKind, PluginOrigin } from "./types.js";
 
 type SeenIdEntry = {
@@ -18,20 +19,6 @@ const PLUGIN_ORIGIN_RANK: Readonly<Record<PluginOrigin, number>> = {
   global: 2,
   bundled: 3,
 };
-
-function safeRealpathSync(rootDir: string, cache: Map<string, string>): string | null {
-  const cached = cache.get(rootDir);
-  if (cached) {
-    return cached;
-  }
-  try {
-    const resolved = fs.realpathSync(rootDir);
-    cache.set(rootDir, resolved);
-    return resolved;
-  } catch {
-    return null;
-  }
-}
 
 export type PluginManifestRecord = {
   id: string;

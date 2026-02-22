@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import * as cdpModule from "./cdp.js";
+import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
 import * as pwAiModule from "./pw-ai-module.js";
 import type { BrowserServerState } from "./server-context.js";
 import "./server-context.chrome-test-harness.js";
@@ -34,6 +35,7 @@ function makeState(
       headless: true,
       noSandbox: false,
       attachOnly: false,
+      ssrfPolicy: { allowPrivateNetwork: true },
       defaultProfile: profile,
       profiles: {
         remote: {
@@ -65,12 +67,12 @@ function createRemoteRouteHarness(fetchMock?: ReturnType<typeof vi.fn>) {
 describe("browser server-context remote profile tab operations", () => {
   it("uses Playwright tab operations when available", async () => {
     const listPagesViaPlaywright = vi.fn(async () => [
-      { targetId: "T1", title: "Tab 1", url: "https://a.example", type: "page" },
+      { targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" },
     ]);
     const createPageViaPlaywright = vi.fn(async () => ({
       targetId: "T2",
       title: "Tab 2",
-      url: "https://b.example",
+      url: "http://127.0.0.1:3000",
       type: "page",
     }));
     const closePageByTargetIdViaPlaywright = vi.fn(async () => {});
@@ -86,9 +88,14 @@ describe("browser server-context remote profile tab operations", () => {
     const tabs = await remote.listTabs();
     expect(tabs.map((t) => t.targetId)).toEqual(["T1"]);
 
-    const opened = await remote.openTab("https://b.example");
+    const opened = await remote.openTab("http://127.0.0.1:3000");
     expect(opened.targetId).toBe("T2");
     expect(state.profiles.get("remote")?.lastTargetId).toBe("T2");
+    expect(createPageViaPlaywright).toHaveBeenCalledWith({
+      cdpUrl: "https://browserless.example/chrome?token=abc",
+      url: "http://127.0.0.1:3000",
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
 
     await remote.closeTab("T1");
     expect(closePageByTargetIdViaPlaywright).toHaveBeenCalledWith({
@@ -102,21 +109,21 @@ describe("browser server-context remote profile tab operations", () => {
     const responses = [
       // ensureTabAvailable() calls listTabs twice
       [
-        { targetId: "A", title: "A", url: "https://a.example", type: "page" },
-        { targetId: "B", title: "B", url: "https://b.example", type: "page" },
+        { targetId: "A", title: "A", url: "https://example.com", type: "page" },
+        { targetId: "B", title: "B", url: "https://www.example.com", type: "page" },
       ],
       [
-        { targetId: "A", title: "A", url: "https://a.example", type: "page" },
-        { targetId: "B", title: "B", url: "https://b.example", type: "page" },
+        { targetId: "A", title: "A", url: "https://example.com", type: "page" },
+        { targetId: "B", title: "B", url: "https://www.example.com", type: "page" },
       ],
       // second ensureTabAvailable() calls listTabs twice, order flips
       [
-        { targetId: "B", title: "B", url: "https://b.example", type: "page" },
-        { targetId: "A", title: "A", url: "https://a.example", type: "page" },
+        { targetId: "B", title: "B", url: "https://www.example.com", type: "page" },
+        { targetId: "A", title: "A", url: "https://example.com", type: "page" },
       ],
       [
-        { targetId: "B", title: "B", url: "https://b.example", type: "page" },
-        { targetId: "A", title: "A", url: "https://a.example", type: "page" },
+        { targetId: "B", title: "B", url: "https://www.example.com", type: "page" },
+        { targetId: "A", title: "A", url: "https://example.com", type: "page" },
       ],
     ];
 
@@ -148,7 +155,7 @@ describe("browser server-context remote profile tab operations", () => {
 
   it("uses Playwright focus for remote profiles when available", async () => {
     const listPagesViaPlaywright = vi.fn(async () => [
-      { targetId: "T1", title: "Tab 1", url: "https://a.example", type: "page" },
+      { targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" },
     ]);
     const focusPageByTargetIdViaPlaywright = vi.fn(async () => {});
 
@@ -195,7 +202,7 @@ describe("browser server-context remote profile tab operations", () => {
           {
             id: "T1",
             title: "Tab 1",
-            url: "https://a.example",
+            url: "https://example.com",
             webSocketDebuggerUrl: "wss://browserless.example/devtools/page/T1",
             type: "page",
           },
@@ -213,7 +220,9 @@ describe("browser server-context remote profile tab operations", () => {
 
 describe("browser server-context tab selection state", () => {
   it("updates lastTargetId when openTab is created via CDP", async () => {
-    vi.spyOn(cdpModule, "createTargetViaCdp").mockResolvedValue({ targetId: "CREATED" });
+    const createTargetViaCdp = vi
+      .spyOn(cdpModule, "createTargetViaCdp")
+      .mockResolvedValue({ targetId: "CREATED" });
 
     const fetchMock = vi.fn(async (url: unknown) => {
       const u = String(url);
@@ -226,7 +235,7 @@ describe("browser server-context tab selection state", () => {
           {
             id: "CREATED",
             title: "New Tab",
-            url: "https://created.example",
+            url: "http://127.0.0.1:8080",
             webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/CREATED",
             type: "page",
           },
@@ -240,8 +249,29 @@ describe("browser server-context tab selection state", () => {
     const ctx = createBrowserRouteContext({ getState: () => state });
     const openclaw = ctx.forProfile("openclaw");
 
-    const opened = await openclaw.openTab("https://created.example");
+    const opened = await openclaw.openTab("http://127.0.0.1:8080");
     expect(opened.targetId).toBe("CREATED");
     expect(state.profiles.get("openclaw")?.lastTargetId).toBe("CREATED");
+    expect(createTargetViaCdp).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18800",
+      url: "http://127.0.0.1:8080",
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
+  });
+
+  it("blocks unsupported non-network URLs before any HTTP tab-open fallback", async () => {
+    const fetchMock = vi.fn(async () => {
+      throw new Error("unexpected fetch");
+    });
+
+    global.fetch = withFetchPreconnect(fetchMock);
+    const state = makeState("openclaw");
+    const ctx = createBrowserRouteContext({ getState: () => state });
+    const openclaw = ctx.forProfile("openclaw");
+
+    await expect(openclaw.openTab("file:///etc/passwd")).rejects.toBeInstanceOf(
+      InvalidBrowserNavigationUrlError,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

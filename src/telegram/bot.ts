@@ -66,9 +66,13 @@ export function getTelegramSequentialKey(ctx: {
   chat?: { id?: number };
   me?: UserFromGetMe;
   message?: Message;
+  channelPost?: Message;
+  editedChannelPost?: Message;
   update?: {
     message?: Message;
     edited_message?: Message;
+    channel_post?: Message;
+    edited_channel_post?: Message;
     callback_query?: { message?: Message };
     message_reaction?: { chat?: { id?: number } };
   };
@@ -80,8 +84,12 @@ export function getTelegramSequentialKey(ctx: {
   }
   const msg =
     ctx.message ??
+    ctx.channelPost ??
+    ctx.editedChannelPost ??
     ctx.update?.message ??
     ctx.update?.edited_message ??
+    ctx.update?.channel_post ??
+    ctx.update?.edited_channel_post ??
     ctx.update?.callback_query?.message;
   const chatId = msg?.chat?.id ?? ctx.chat?.id;
   const rawText = msg?.text ?? msg?.caption;
@@ -140,34 +148,53 @@ export function createTelegramBot(opts: TelegramBotOptions) {
 
   const bot = new Bot(opts.token, client ? { client } : undefined);
   bot.api.config.use(apiThrottler());
-  bot.use(sequentialize(getTelegramSequentialKey));
   // Catch all errors from bot middleware to prevent unhandled rejections
   bot.catch((err) => {
     runtime.error?.(danger(`telegram bot error: ${formatUncaughtError(err)}`));
   });
 
   const recentUpdates = createTelegramUpdateDedupe();
-  let lastUpdateId =
+  const initialUpdateId =
     typeof opts.updateOffset?.lastUpdateId === "number" ? opts.updateOffset.lastUpdateId : null;
 
-  const recordUpdateId = (ctx: TelegramUpdateKeyContext) => {
-    const updateId = resolveTelegramUpdateId(ctx);
-    if (typeof updateId !== "number") {
+  // Track update_ids that have entered the middleware pipeline but have not completed yet.
+  // This includes updates that are "queued" behind sequentialize(...) for a chat/topic key.
+  // We only persist a watermark that is strictly less than the smallest pending update_id,
+  // so we never write an offset that would skip an update still waiting to run.
+  const pendingUpdateIds = new Set<number>();
+  let highestCompletedUpdateId: number | null = initialUpdateId;
+  let highestPersistedUpdateId: number | null = initialUpdateId;
+  const maybePersistSafeWatermark = () => {
+    if (typeof opts.updateOffset?.onUpdateId !== "function") {
       return;
     }
-    if (lastUpdateId !== null && updateId <= lastUpdateId) {
+    if (highestCompletedUpdateId === null) {
       return;
     }
-    lastUpdateId = updateId;
-    void opts.updateOffset?.onUpdateId?.(updateId);
+    let safe = highestCompletedUpdateId;
+    if (pendingUpdateIds.size > 0) {
+      let minPending: number | null = null;
+      for (const id of pendingUpdateIds) {
+        if (minPending === null || id < minPending) {
+          minPending = id;
+        }
+      }
+      if (minPending !== null) {
+        safe = Math.min(safe, minPending - 1);
+      }
+    }
+    if (highestPersistedUpdateId !== null && safe <= highestPersistedUpdateId) {
+      return;
+    }
+    highestPersistedUpdateId = safe;
+    void opts.updateOffset.onUpdateId(safe);
   };
 
   const shouldSkipUpdate = (ctx: TelegramUpdateKeyContext) => {
     const updateId = resolveTelegramUpdateId(ctx);
-    if (typeof updateId === "number" && lastUpdateId !== null) {
-      if (updateId <= lastUpdateId) {
-        return true;
-      }
+    const skipCutoff = highestPersistedUpdateId ?? initialUpdateId;
+    if (typeof updateId === "number" && skipCutoff !== null && updateId <= skipCutoff) {
+      return true;
     }
     const key = buildTelegramUpdateKey(ctx);
     const skipped = recentUpdates.check(key);
@@ -176,6 +203,26 @@ export function createTelegramBot(opts: TelegramBotOptions) {
     }
     return skipped;
   };
+
+  bot.use(async (ctx, next) => {
+    const updateId = resolveTelegramUpdateId(ctx);
+    if (typeof updateId === "number") {
+      pendingUpdateIds.add(updateId);
+    }
+    try {
+      await next();
+    } finally {
+      if (typeof updateId === "number") {
+        pendingUpdateIds.delete(updateId);
+        if (highestCompletedUpdateId === null || updateId > highestCompletedUpdateId) {
+          highestCompletedUpdateId = updateId;
+        }
+        maybePersistSafeWatermark();
+      }
+    }
+  });
+
+  bot.use(sequentialize(getTelegramSequentialKey));
 
   const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");
   const MAX_RAW_UPDATE_CHARS = 8000;
@@ -215,7 +262,6 @@ export function createTelegramBot(opts: TelegramBotOptions) {
       }
     }
     await next();
-    recordUpdateId(ctx);
   });
 
   const historyLimit = Math.max(

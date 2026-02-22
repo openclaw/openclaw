@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { logVerbose } from "../../globals.js";
+import { sleep } from "../../utils.js";
+import { loadWebMedia } from "../media.js";
 import { deliverWebReply } from "./deliver-reply.js";
 import type { WebInboundMsg } from "./types.js";
 
@@ -23,10 +26,6 @@ vi.mock("../../utils.js", async (importOriginal) => {
   };
 });
 
-const { loadWebMedia } = await import("../media.js");
-const { sleep } = await import("../../utils.js");
-const { logVerbose } = await import("../../globals.js");
-
 function makeMsg(): WebInboundMsg {
   return {
     from: "+10000000000",
@@ -35,6 +34,34 @@ function makeMsg(): WebInboundMsg {
     reply: vi.fn(async () => undefined),
     sendMedia: vi.fn(async () => undefined),
   } as unknown as WebInboundMsg;
+}
+
+function mockLoadedImageMedia() {
+  (
+    loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
+  ).mockResolvedValueOnce({
+    buffer: Buffer.from("img"),
+    contentType: "image/jpeg",
+    kind: "image",
+  });
+}
+
+function mockFirstSendMediaFailure(msg: WebInboundMsg, message: string) {
+  (
+    msg.sendMedia as unknown as { mockRejectedValueOnce: (v: unknown) => void }
+  ).mockRejectedValueOnce(new Error(message));
+}
+
+function mockFirstReplyFailure(msg: WebInboundMsg, message: string) {
+  (msg.reply as unknown as { mockRejectedValueOnce: (v: unknown) => void }).mockRejectedValueOnce(
+    new Error(message),
+  );
+}
+
+function mockSecondReplySuccess(msg: WebInboundMsg) {
+  (msg.reply as unknown as { mockResolvedValueOnce: (v: unknown) => void }).mockResolvedValueOnce(
+    undefined,
+  );
 }
 
 const replyLogger = {
@@ -61,38 +88,31 @@ describe("deliverWebReply", () => {
     expect(replyLogger.info).toHaveBeenCalledWith(expect.any(Object), "auto-reply sent (text)");
   });
 
-  it("retries text send on transient failure", async () => {
-    const msg = makeMsg();
-    (msg.reply as unknown as { mockRejectedValueOnce: (v: unknown) => void }).mockRejectedValueOnce(
-      new Error("connection closed"),
-    );
-    (msg.reply as unknown as { mockResolvedValueOnce: (v: unknown) => void }).mockResolvedValueOnce(
-      undefined,
-    );
+  it.each(["connection closed", "operation timed out"])(
+    "retries text send on transient failure: %s",
+    async (errorMessage) => {
+      const msg = makeMsg();
+      mockFirstReplyFailure(msg, errorMessage);
+      mockSecondReplySuccess(msg);
 
-    await deliverWebReply({
-      replyResult: { text: "hi" },
-      msg,
-      maxMediaBytes: 1024 * 1024,
-      textLimit: 200,
-      replyLogger,
-      skipLog: true,
-    });
+      await deliverWebReply({
+        replyResult: { text: "hi" },
+        msg,
+        maxMediaBytes: 1024 * 1024,
+        textLimit: 200,
+        replyLogger,
+        skipLog: true,
+      });
 
-    expect(msg.reply).toHaveBeenCalledTimes(2);
-    expect(sleep).toHaveBeenCalledWith(500);
-  });
+      expect(msg.reply).toHaveBeenCalledTimes(2);
+      expect(sleep).toHaveBeenCalledWith(500);
+    },
+  );
 
   it("sends image media with caption and then remaining text", async () => {
     const msg = makeMsg();
     const mediaLocalRoots = ["/tmp/workspace-work"];
-    (
-      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
-    ).mockResolvedValueOnce({
-      buffer: Buffer.from("img"),
-      contentType: "image/jpeg",
-      kind: "image",
-    });
+    mockLoadedImageMedia();
 
     await deliverWebReply({
       replyResult: { text: "aaaaaa", mediaUrl: "http://example.com/img.jpg" },
@@ -123,16 +143,8 @@ describe("deliverWebReply", () => {
 
   it("retries media send on transient failure", async () => {
     const msg = makeMsg();
-    (
-      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
-    ).mockResolvedValueOnce({
-      buffer: Buffer.from("img"),
-      contentType: "image/jpeg",
-      kind: "image",
-    });
-    (
-      msg.sendMedia as unknown as { mockRejectedValueOnce: (v: unknown) => void }
-    ).mockRejectedValueOnce(new Error("socket reset"));
+    mockLoadedImageMedia();
+    mockFirstSendMediaFailure(msg, "socket reset");
     (
       msg.sendMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
     ).mockResolvedValueOnce(undefined);
@@ -152,16 +164,8 @@ describe("deliverWebReply", () => {
 
   it("falls back to text-only when the first media send fails", async () => {
     const msg = makeMsg();
-    (
-      loadWebMedia as unknown as { mockResolvedValueOnce: (v: unknown) => void }
-    ).mockResolvedValueOnce({
-      buffer: Buffer.from("img"),
-      contentType: "image/jpeg",
-      kind: "image",
-    });
-    (
-      msg.sendMedia as unknown as { mockRejectedValueOnce: (v: unknown) => void }
-    ).mockRejectedValueOnce(new Error("boom"));
+    mockLoadedImageMedia();
+    mockFirstSendMediaFailure(msg, "boom");
 
     await deliverWebReply({
       replyResult: { text: "caption", mediaUrl: "http://example.com/img.jpg" },

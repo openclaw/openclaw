@@ -3,7 +3,7 @@ import {
   expandToolGroups,
   normalizeToolName,
   resolveToolProfilePolicy,
-} from "../../../../src/agents/tool-policy.js";
+} from "../../../../src/agents/tool-policy-shared.js";
 import type { AgentIdentityResult, AgentsFilesListResult, AgentsListResult } from "../types.ts";
 
 export const TOOL_SECTIONS = [
@@ -138,6 +138,30 @@ export function normalizeAgentLabel(agent: {
   return agent.name?.trim() || agent.identity?.name?.trim() || agent.id;
 }
 
+const AVATAR_URL_RE = /^(https?:\/\/|data:image\/|\/)/i;
+
+export function resolveAgentAvatarUrl(
+  agent: { identity?: { avatar?: string; avatarUrl?: string } },
+  agentIdentity?: AgentIdentityResult | null,
+): string | null {
+  const url =
+    agentIdentity?.avatar?.trim() ??
+    agent.identity?.avatarUrl?.trim() ??
+    agent.identity?.avatar?.trim();
+  if (!url) {
+    return null;
+  }
+  if (AVATAR_URL_RE.test(url)) {
+    return url;
+  }
+  return null;
+}
+
+export function agentLogoUrl(basePath: string): string {
+  const base = basePath?.trim() ? basePath.replace(/\/$/, "") : "";
+  return base ? `${base}/favicon.svg` : "/favicon.svg";
+}
+
 function isLikelyEmoji(value: string) {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -189,6 +213,14 @@ export function agentBadgeText(agentId: string, defaultId: string | null) {
   return defaultId && agentId === defaultId ? "default" : null;
 }
 
+export function agentAvatarHue(id: string): number {
+  let hash = 0;
+  for (let i = 0; i < id.length; i += 1) {
+    hash = (hash * 31 + id.charCodeAt(i)) | 0;
+  }
+  return ((hash % 360) + 360) % 360;
+}
+
 export function formatBytes(bytes?: number) {
   if (bytes == null || !Number.isFinite(bytes)) {
     return "-";
@@ -221,7 +253,7 @@ export type AgentContext = {
   workspace: string;
   model: string;
   identityName: string;
-  identityEmoji: string;
+  identityAvatar: string;
   skillsLabel: string;
   isDefault: boolean;
 };
@@ -247,14 +279,14 @@ export function buildAgentContext(
     agent.name?.trim() ||
     config.entry?.name ||
     agent.id;
-  const identityEmoji = resolveAgentEmoji(agent, agentIdentity) || "-";
+  const identityAvatar = resolveAgentAvatarUrl(agent, agentIdentity) ? "custom" : "—";
   const skillFilter = Array.isArray(config.entry?.skills) ? config.entry?.skills : null;
   const skillCount = skillFilter?.length ?? null;
   return {
     workspace,
     model: modelLabel,
     identityName,
-    identityEmoji,
+    identityAvatar,
     skillsLabel: skillFilter ? `${skillCount} selected` : "all skills",
     isDefault: Boolean(defaultId && agent.id === defaultId),
   };

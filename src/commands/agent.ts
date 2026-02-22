@@ -40,8 +40,12 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { type CliDeps, createDefaultDeps } from "../cli/deps.js";
 import { loadConfig } from "../config/config.js";
 import {
+  parseSessionThreadInfo,
+  resolveAndPersistSessionFile,
   resolveAgentIdFromSessionKey,
   resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+  resolveSessionTranscriptPath,
   type SessionEntry,
   updateSessionStore,
 } from "../config/sessions.js";
@@ -359,6 +363,7 @@ export async function agentCommand(
         storePath,
         entry: next,
       });
+      sessionEntry = next;
     }
 
     const agentModelPrimary = resolveAgentModelPrimary(cfg, sessionAgentId);
@@ -505,9 +510,33 @@ export async function agentCommand(
         });
       }
     }
-    const sessionFile = resolveSessionFilePath(sessionId, sessionEntry, {
+    const sessionPathOpts = resolveSessionFilePathOptions({
       agentId: sessionAgentId,
+      storePath,
     });
+    let sessionFile = resolveSessionFilePath(sessionId, sessionEntry, sessionPathOpts);
+    if (sessionStore && sessionKey) {
+      const threadIdFromSessionKey = parseSessionThreadInfo(sessionKey).threadId;
+      const fallbackSessionFile = !sessionEntry?.sessionFile
+        ? resolveSessionTranscriptPath(
+            sessionId,
+            sessionAgentId,
+            opts.threadId ?? threadIdFromSessionKey,
+          )
+        : undefined;
+      const resolvedSessionFile = await resolveAndPersistSessionFile({
+        sessionId,
+        sessionKey,
+        sessionStore,
+        storePath,
+        sessionEntry,
+        agentId: sessionPathOpts?.agentId,
+        sessionsDir: sessionPathOpts?.sessionsDir,
+        fallbackSessionFile,
+      });
+      sessionFile = resolvedSessionFile.sessionFile;
+      sessionEntry = resolvedSessionFile.sessionEntry;
+    }
 
     const startedAt = Date.now();
     let lifecycleEnded = false;

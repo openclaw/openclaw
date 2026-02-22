@@ -3,6 +3,7 @@ import type { Block, KnownBlock } from "@slack/web-api";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import { parseSlackModalPrivateMetadata } from "../../modal-metadata.js";
 import type { SlackMonitorContext } from "../context.js";
+import { escapeSlackMrkdwn } from "../mrkdwn.js";
 
 // Prefix for OpenClaw-generated action IDs to scope our handler
 const OPENCLAW_ACTION_PREFIX = "openclaw:";
@@ -58,6 +59,52 @@ type ModalInputSummary = InteractionSelectionFields & {
   actionId: string;
 };
 
+type SlackModalBody = {
+  user?: { id?: string };
+  team?: { id?: string };
+  view?: {
+    id?: string;
+    callback_id?: string;
+    private_metadata?: string;
+    root_view_id?: string;
+    previous_view_id?: string;
+    external_id?: string;
+    hash?: string;
+    state?: { values?: unknown };
+  };
+  is_cleared?: boolean;
+};
+
+type SlackModalEventBase = {
+  callbackId: string;
+  userId: string;
+  viewId?: string;
+  sessionRouting: ReturnType<typeof resolveModalSessionRouting>;
+  payload: {
+    actionId: string;
+    callbackId: string;
+    viewId?: string;
+    userId: string;
+    teamId?: string;
+    rootViewId?: string;
+    previousViewId?: string;
+    externalId?: string;
+    viewHash?: string;
+    isStackedView?: boolean;
+    privateMetadata?: string;
+    routedChannelId?: string;
+    routedChannelType?: string;
+    inputs: ModalInputSummary[];
+  };
+};
+
+type SlackModalInteractionKind = "view_submission" | "view_closed";
+type SlackModalEventHandlerArgs = { ack: () => Promise<void>; body: unknown };
+type RegisterSlackModalHandler = (
+  matcher: RegExp,
+  handler: (args: SlackModalEventHandlerArgs) => Promise<void>,
+) => void;
+
 function readOptionValues(options: unknown): string[] | undefined {
   if (!Array.isArray(options)) {
     return undefined;
@@ -95,15 +142,6 @@ function uniqueNonEmptyStrings(values: string[]): string[] {
     unique.push(trimmed);
   }
   return unique;
-}
-
-function escapeSlackMrkdwn(value: string): string {
-  return value
-    .replaceAll("\\", "\\\\")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replace(/([*_`~])/g, "\\$1");
 }
 
 function collectRichTextFragments(value: unknown, out: string[]): void {
@@ -374,6 +412,100 @@ function summarizeSlackViewLifecycleContext(view: {
   };
 }
 
+function resolveSlackModalEventBase(params: {
+  ctx: SlackMonitorContext;
+  body: SlackModalBody;
+}): SlackModalEventBase {
+  const callbackId = params.body.view?.callback_id ?? "unknown";
+  const userId = params.body.user?.id ?? "unknown";
+  const viewId = params.body.view?.id;
+  const inputs = summarizeViewState(params.body.view?.state?.values);
+  const sessionRouting = resolveModalSessionRouting({
+    ctx: params.ctx,
+    privateMetadata: params.body.view?.private_metadata,
+  });
+  return {
+    callbackId,
+    userId,
+    viewId,
+    sessionRouting,
+    payload: {
+      actionId: `view:${callbackId}`,
+      callbackId,
+      viewId,
+      userId,
+      teamId: params.body.team?.id,
+      ...summarizeSlackViewLifecycleContext({
+        root_view_id: params.body.view?.root_view_id,
+        previous_view_id: params.body.view?.previous_view_id,
+        external_id: params.body.view?.external_id,
+        hash: params.body.view?.hash,
+      }),
+      privateMetadata: params.body.view?.private_metadata,
+      routedChannelId: sessionRouting.channelId,
+      routedChannelType: sessionRouting.channelType,
+      inputs,
+    },
+  };
+}
+
+function emitSlackModalLifecycleEvent(params: {
+  ctx: SlackMonitorContext;
+  body: SlackModalBody;
+  interactionType: SlackModalInteractionKind;
+  contextPrefix: "slack:interaction:view" | "slack:interaction:view-closed";
+}): void {
+  const { callbackId, userId, viewId, sessionRouting, payload } = resolveSlackModalEventBase({
+    ctx: params.ctx,
+    body: params.body,
+  });
+  const isViewClosed = params.interactionType === "view_closed";
+  const isCleared = params.body.is_cleared === true;
+  const eventPayload = isViewClosed
+    ? {
+        interactionType: params.interactionType,
+        ...payload,
+        isCleared,
+      }
+    : {
+        interactionType: params.interactionType,
+        ...payload,
+      };
+
+  if (isViewClosed) {
+    params.ctx.runtime.log?.(
+      `slack:interaction view_closed callback=${callbackId} user=${userId} cleared=${isCleared}`,
+    );
+  } else {
+    params.ctx.runtime.log?.(
+      `slack:interaction view_submission callback=${callbackId} user=${userId} inputs=${payload.inputs.length}`,
+    );
+  }
+
+  enqueueSystemEvent(`Slack interaction: ${JSON.stringify(eventPayload)}`, {
+    sessionKey: sessionRouting.sessionKey,
+    contextKey: [params.contextPrefix, callbackId, viewId, userId].filter(Boolean).join(":"),
+  });
+}
+
+function registerModalLifecycleHandler(params: {
+  register: RegisterSlackModalHandler;
+  matcher: RegExp;
+  ctx: SlackMonitorContext;
+  interactionType: SlackModalInteractionKind;
+  contextPrefix: "slack:interaction:view" | "slack:interaction:view-closed";
+}) {
+  params.register(params.matcher, async ({ ack, body }: SlackModalEventHandlerArgs) => {
+    await ack();
+    emitSlackModalLifecycleEvent({
+      ctx: params.ctx,
+      body: body as SlackModalBody,
+      interactionType: params.interactionType,
+      contextPrefix: params.contextPrefix,
+    });
+  });
+}
+
 export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContext }) {
   const { ctx } = params;
   if (typeof ctx.app.action !== "function") {
@@ -537,74 +669,20 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
   if (typeof ctx.app.view !== "function") {
     return;
   }
+  const modalMatcher = new RegExp(`^${OPENCLAW_ACTION_PREFIX}`);
 
   // Handle OpenClaw modal submissions with callback_ids scoped by our prefix.
-  ctx.app.view(
-    new RegExp(`^${OPENCLAW_ACTION_PREFIX}`),
-    async ({ ack, body }: { ack: () => Promise<void>; body: unknown }) => {
-      await ack();
-
-      const typedBody = body as {
-        user?: { id?: string };
-        team?: { id?: string };
-        view?: {
-          id?: string;
-          callback_id?: string;
-          private_metadata?: string;
-          root_view_id?: string;
-          previous_view_id?: string;
-          external_id?: string;
-          hash?: string;
-          state?: { values?: unknown };
-        };
-      };
-
-      const callbackId = typedBody.view?.callback_id ?? "unknown";
-      const userId = typedBody.user?.id ?? "unknown";
-      const viewId = typedBody.view?.id;
-      const inputs = summarizeViewState(typedBody.view?.state?.values);
-      const sessionRouting = resolveModalSessionRouting({
-        ctx,
-        privateMetadata: typedBody.view?.private_metadata,
-      });
-      const eventPayload = {
-        interactionType: "view_submission",
-        actionId: `view:${callbackId}`,
-        callbackId,
-        viewId,
-        userId,
-        teamId: typedBody.team?.id,
-        ...summarizeSlackViewLifecycleContext({
-          root_view_id: typedBody.view?.root_view_id,
-          previous_view_id: typedBody.view?.previous_view_id,
-          external_id: typedBody.view?.external_id,
-          hash: typedBody.view?.hash,
-        }),
-        privateMetadata: typedBody.view?.private_metadata,
-        routedChannelId: sessionRouting.channelId,
-        routedChannelType: sessionRouting.channelType,
-        inputs,
-      };
-
-      ctx.runtime.log?.(
-        `slack:interaction view_submission callback=${callbackId} user=${userId} inputs=${inputs.length}`,
-      );
-
-      enqueueSystemEvent(`Slack interaction: ${JSON.stringify(eventPayload)}`, {
-        sessionKey: sessionRouting.sessionKey,
-        contextKey: ["slack:interaction:view", callbackId, viewId, userId]
-          .filter(Boolean)
-          .join(":"),
-      });
-    },
-  );
+  registerModalLifecycleHandler({
+    register: (matcher, handler) => ctx.app.view(matcher, handler),
+    matcher: modalMatcher,
+    ctx,
+    interactionType: "view_submission",
+    contextPrefix: "slack:interaction:view",
+  });
 
   const viewClosed = (
     ctx.app as unknown as {
-      viewClosed?: (
-        matcher: RegExp,
-        handler: (args: { ack: () => Promise<void>; body: unknown }) => Promise<void>,
-      ) => void;
+      viewClosed?: RegisterSlackModalHandler;
     }
   ).viewClosed;
   if (typeof viewClosed !== "function") {
@@ -612,67 +690,11 @@ export function registerSlackInteractionEvents(params: { ctx: SlackMonitorContex
   }
 
   // Handle modal close events so agent workflows can react to cancelled forms.
-  viewClosed(
-    new RegExp(`^${OPENCLAW_ACTION_PREFIX}`),
-    async ({ ack, body }: { ack: () => Promise<void>; body: unknown }) => {
-      await ack();
-
-      const typedBody = body as {
-        user?: { id?: string };
-        team?: { id?: string };
-        view?: {
-          id?: string;
-          callback_id?: string;
-          private_metadata?: string;
-          root_view_id?: string;
-          previous_view_id?: string;
-          external_id?: string;
-          hash?: string;
-          state?: { values?: unknown };
-        };
-        is_cleared?: boolean;
-      };
-
-      const callbackId = typedBody.view?.callback_id ?? "unknown";
-      const userId = typedBody.user?.id ?? "unknown";
-      const viewId = typedBody.view?.id;
-      const inputs = summarizeViewState(typedBody.view?.state?.values);
-      const sessionRouting = resolveModalSessionRouting({
-        ctx,
-        privateMetadata: typedBody.view?.private_metadata,
-      });
-      const eventPayload = {
-        interactionType: "view_closed",
-        actionId: `view:${callbackId}`,
-        callbackId,
-        viewId,
-        userId,
-        teamId: typedBody.team?.id,
-        ...summarizeSlackViewLifecycleContext({
-          root_view_id: typedBody.view?.root_view_id,
-          previous_view_id: typedBody.view?.previous_view_id,
-          external_id: typedBody.view?.external_id,
-          hash: typedBody.view?.hash,
-        }),
-        isCleared: typedBody.is_cleared === true,
-        privateMetadata: typedBody.view?.private_metadata,
-        routedChannelId: sessionRouting.channelId,
-        routedChannelType: sessionRouting.channelType,
-        inputs,
-      };
-
-      ctx.runtime.log?.(
-        `slack:interaction view_closed callback=${callbackId} user=${userId} cleared=${
-          typedBody.is_cleared === true
-        }`,
-      );
-
-      enqueueSystemEvent(`Slack interaction: ${JSON.stringify(eventPayload)}`, {
-        sessionKey: sessionRouting.sessionKey,
-        contextKey: ["slack:interaction:view-closed", callbackId, viewId, userId]
-          .filter(Boolean)
-          .join(":"),
-      });
-    },
-  );
+  registerModalLifecycleHandler({
+    register: viewClosed,
+    matcher: modalMatcher,
+    ctx,
+    interactionType: "view_closed",
+    contextPrefix: "slack:interaction:view-closed",
+  });
 }

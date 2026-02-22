@@ -1,5 +1,5 @@
 import type { ChannelAccountSnapshot, ChannelStatusIssue } from "../types.js";
-import { asString, isRecord } from "./shared.js";
+import { asString, collectIssuesForEnabledAccounts, isRecord } from "./shared.js";
 
 type BlueBubblesAccountStatus = {
   accountId?: unknown;
@@ -48,61 +48,53 @@ function readBlueBubblesProbeResult(value: unknown): BlueBubblesProbeResult | nu
 export function collectBlueBubblesStatusIssues(
   accounts: ChannelAccountSnapshot[],
 ): ChannelStatusIssue[] {
-  const issues: ChannelStatusIssue[] = [];
-  for (const entry of accounts) {
-    const account = readBlueBubblesAccountStatus(entry);
-    if (!account) {
-      continue;
-    }
-    const accountId = asString(account.accountId) ?? "default";
-    const enabled = account.enabled !== false;
-    if (!enabled) {
-      continue;
-    }
+  return collectIssuesForEnabledAccounts({
+    accounts,
+    readAccount: readBlueBubblesAccountStatus,
+    collectIssues: ({ account, accountId, issues }) => {
+      const configured = account.configured === true;
+      const running = account.running === true;
+      const lastError = asString(account.lastError);
+      const probe = readBlueBubblesProbeResult(account.probe);
 
-    const configured = account.configured === true;
-    const running = account.running === true;
-    const lastError = asString(account.lastError);
-    const probe = readBlueBubblesProbeResult(account.probe);
+      // Check for unconfigured accounts
+      if (!configured) {
+        issues.push({
+          channel: "bluebubbles",
+          accountId,
+          kind: "config",
+          message: "Not configured (missing serverUrl or password).",
+          fix: "Run: openclaw channels add bluebubbles --http-url <server-url> --password <password>",
+        });
+        return;
+      }
 
-    // Check for unconfigured accounts
-    if (!configured) {
-      issues.push({
-        channel: "bluebubbles",
-        accountId,
-        kind: "config",
-        message: "Not configured (missing serverUrl or password).",
-        fix: "Run: openclaw channels add bluebubbles --http-url <server-url> --password <password>",
-      });
-      continue;
-    }
+      // Check for probe failures
+      if (probe && probe.ok === false) {
+        const errorDetail = probe.error
+          ? `: ${probe.error}`
+          : probe.status
+            ? ` (HTTP ${probe.status})`
+            : "";
+        issues.push({
+          channel: "bluebubbles",
+          accountId,
+          kind: "runtime",
+          message: `BlueBubbles server unreachable${errorDetail}`,
+          fix: "Check that the BlueBubbles server is running and accessible. Verify serverUrl and password in your config.",
+        });
+      }
 
-    // Check for probe failures
-    if (probe && probe.ok === false) {
-      const errorDetail = probe.error
-        ? `: ${probe.error}`
-        : probe.status
-          ? ` (HTTP ${probe.status})`
-          : "";
-      issues.push({
-        channel: "bluebubbles",
-        accountId,
-        kind: "runtime",
-        message: `BlueBubbles server unreachable${errorDetail}`,
-        fix: "Check that the BlueBubbles server is running and accessible. Verify serverUrl and password in your config.",
-      });
-    }
-
-    // Check for runtime errors
-    if (running && lastError) {
-      issues.push({
-        channel: "bluebubbles",
-        accountId,
-        kind: "runtime",
-        message: `Channel error: ${lastError}`,
-        fix: "Check gateway logs for details. If the webhook is failing, verify the webhook URL is configured in BlueBubbles server settings.",
-      });
-    }
-  }
-  return issues;
+      // Check for runtime errors
+      if (running && lastError) {
+        issues.push({
+          channel: "bluebubbles",
+          accountId,
+          kind: "runtime",
+          message: `Channel error: ${lastError}`,
+          fix: "Check gateway logs for details. If the webhook is failing, verify the webhook URL is configured in BlueBubbles server settings.",
+        });
+      }
+    },
+  });
 }

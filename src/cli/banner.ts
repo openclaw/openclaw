@@ -2,6 +2,7 @@ import { isMabosProduct } from "../config/paths.js";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import { visibleWidth } from "../terminal/ansi.js";
 import { isRich, theme } from "../terminal/theme.js";
+import { hasRootVersionAlias } from "./argv.js";
 import { pickTagline, type TaglineOptions } from "./tagline.js";
 
 type BannerOptions = TaglineOptions & {
@@ -33,7 +34,7 @@ const hasJsonFlag = (argv: string[]) =>
   argv.some((arg) => arg === "--json" || arg.startsWith("--json="));
 
 const hasVersionFlag = (argv: string[]) =>
-  argv.some((arg) => arg === "--version" || arg === "-V" || arg === "-v");
+  argv.some((arg) => arg === "--version" || arg === "-V") || hasRootVersionAlias(argv);
 
 export function formatCliBannerLine(version: string, options: BannerOptions = {}): string {
   const commit = options.commit ?? resolveCommitHash({ env: options.env });

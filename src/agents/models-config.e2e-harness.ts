@@ -71,6 +71,17 @@ export function mockCopilotTokenExchangeSuccess(): MockFn {
   return fetchMock;
 }
 
+export async function withCopilotGithubToken<T>(
+  token: string,
+  fn: (fetchMock: MockFn) => Promise<T>,
+): Promise<T> {
+  return withTempEnv(["COPILOT_GITHUB_TOKEN"], async () => {
+    process.env.COPILOT_GITHUB_TOKEN = token;
+    const fetchMock = mockCopilotTokenExchangeSuccess();
+    return fn(fetchMock);
+  });
+}
+
 export const MODELS_CONFIG_IMPLICIT_ENV_VARS = [
   "CLOUDFLARE_AI_GATEWAY_API_KEY",
   "COPILOT_GITHUB_TOKEN",
@@ -79,14 +90,22 @@ export const MODELS_CONFIG_IMPLICIT_ENV_VARS = [
   "HF_TOKEN",
   "HUGGINGFACE_HUB_TOKEN",
   "MINIMAX_API_KEY",
+  "MINIMAX_OAUTH_TOKEN",
   "MOONSHOT_API_KEY",
   "NVIDIA_API_KEY",
   "OLLAMA_API_KEY",
   "OPENCLAW_AGENT_DIR",
+  "OPENAI_API_KEY",
   "PI_CODING_AGENT_DIR",
   "QIANFAN_API_KEY",
+  "QWEN_OAUTH_TOKEN",
+  "QWEN_PORTAL_API_KEY",
   "SYNTHETIC_API_KEY",
   "TOGETHER_API_KEY",
+  "VOLCANO_ENGINE_API_KEY",
+  "BYTEPLUS_API_KEY",
+  "KIMICODE_API_KEY",
+  "GEMINI_API_KEY",
   "VENICE_API_KEY",
   "VLLM_API_KEY",
   "XIAOMI_API_KEY",

@@ -57,12 +57,16 @@ export type ChannelConfigAdapter<ResolvedAccount> = {
   resolveAllowFrom?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
-  }) => string[] | undefined;
+  }) => Array<string | number> | undefined;
   formatAllowFrom?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
     allowFrom: Array<string | number>;
   }) => string[];
+  resolveDefaultTo?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) => string | undefined;
 };
 
 export type ChannelGroupAdapter = {
@@ -233,47 +237,37 @@ export type ChannelHeartbeatAdapter = {
   };
 };
 
+type ChannelDirectorySelfParams = {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  runtime: RuntimeEnv;
+};
+
+type ChannelDirectoryListParams = {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  query?: string | null;
+  limit?: number | null;
+  runtime: RuntimeEnv;
+};
+
+type ChannelDirectoryListGroupMembersParams = {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  groupId: string;
+  limit?: number | null;
+  runtime: RuntimeEnv;
+};
+
 export type ChannelDirectoryAdapter = {
-  self?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    runtime: RuntimeEnv;
-  }) => Promise<ChannelDirectoryEntry | null>;
-  listPeers?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    query?: string | null;
-    limit?: number | null;
-    runtime: RuntimeEnv;
-  }) => Promise<ChannelDirectoryEntry[]>;
-  listPeersLive?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    query?: string | null;
-    limit?: number | null;
-    runtime: RuntimeEnv;
-  }) => Promise<ChannelDirectoryEntry[]>;
-  listGroups?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    query?: string | null;
-    limit?: number | null;
-    runtime: RuntimeEnv;
-  }) => Promise<ChannelDirectoryEntry[]>;
-  listGroupsLive?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    query?: string | null;
-    limit?: number | null;
-    runtime: RuntimeEnv;
-  }) => Promise<ChannelDirectoryEntry[]>;
-  listGroupMembers?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    groupId: string;
-    limit?: number | null;
-    runtime: RuntimeEnv;
-  }) => Promise<ChannelDirectoryEntry[]>;
+  self?: (params: ChannelDirectorySelfParams) => Promise<ChannelDirectoryEntry | null>;
+  listPeers?: (params: ChannelDirectoryListParams) => Promise<ChannelDirectoryEntry[]>;
+  listPeersLive?: (params: ChannelDirectoryListParams) => Promise<ChannelDirectoryEntry[]>;
+  listGroups?: (params: ChannelDirectoryListParams) => Promise<ChannelDirectoryEntry[]>;
+  listGroupsLive?: (params: ChannelDirectoryListParams) => Promise<ChannelDirectoryEntry[]>;
+  listGroupMembers?: (
+    params: ChannelDirectoryListGroupMembersParams,
+  ) => Promise<ChannelDirectoryEntry[]>;
 };
 
 export type ChannelResolveKind = "user" | "group";

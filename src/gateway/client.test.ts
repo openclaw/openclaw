@@ -4,6 +4,7 @@ import type { DeviceIdentity } from "../infra/device-identity.js";
 
 const wsInstances = vi.hoisted((): MockWebSocket[] => []);
 const clearDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
+const clearDevicePairingMock = vi.hoisted(() => vi.fn());
 const logDebugMock = vi.hoisted(() => vi.fn());
 
 type WsEvent = "open" | "message" | "close" | "error";
@@ -68,6 +69,14 @@ vi.mock("../infra/device-auth-store.js", async (importOriginal) => {
   };
 });
 
+vi.mock("../infra/device-pairing.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/device-pairing.js")>();
+  return {
+    ...actual,
+    clearDevicePairing: (...args: unknown[]) => clearDevicePairingMock(...args),
+  };
+});
+
 vi.mock("../logger.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../logger.js")>();
   return {
@@ -86,25 +95,111 @@ function getLatestWs(): MockWebSocket {
   return ws;
 }
 
+function createClientWithIdentity(
+  deviceId: string,
+  onClose: (code: number, reason: string) => void,
+) {
+  const identity: DeviceIdentity = {
+    deviceId,
+    privateKeyPem: "private-key",
+    publicKeyPem: "public-key",
+  };
+  return new GatewayClient({
+    url: "ws://127.0.0.1:18789",
+    deviceIdentity: identity,
+    onClose,
+  });
+}
+
+describe("GatewayClient security checks", () => {
+  beforeEach(() => {
+    wsInstances.length = 0;
+  });
+
+  it("blocks ws:// to non-loopback addresses (CWE-319)", () => {
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://remote.example.com:18789",
+      onConnectError,
+    });
+
+    client.start();
+
+    expect(onConnectError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("SECURITY ERROR"),
+      }),
+    );
+    const error = onConnectError.mock.calls[0]?.[0] as Error;
+    expect(error.message).toContain("openclaw doctor --fix");
+    expect(error.message).toContain("Tailscale Serve/Funnel");
+    expect(wsInstances.length).toBe(0); // No WebSocket created
+    client.stop();
+  });
+
+  it("handles malformed URLs gracefully without crashing", () => {
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "not-a-valid-url",
+      onConnectError,
+    });
+
+    // Should not throw
+    expect(() => client.start()).not.toThrow();
+
+    expect(onConnectError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("SECURITY ERROR"),
+      }),
+    );
+    const error = onConnectError.mock.calls[0]?.[0] as Error;
+    expect(error.message).toContain("openclaw doctor --fix");
+    expect(wsInstances.length).toBe(0); // No WebSocket created
+    client.stop();
+  });
+
+  it("allows ws:// to loopback addresses", () => {
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      onConnectError,
+    });
+
+    client.start();
+
+    expect(onConnectError).not.toHaveBeenCalled();
+    expect(wsInstances.length).toBe(1); // WebSocket created
+    client.stop();
+  });
+
+  it("allows wss:// to any address", () => {
+    const onConnectError = vi.fn();
+    const client = new GatewayClient({
+      url: "wss://remote.example.com:18789",
+      onConnectError,
+    });
+
+    client.start();
+
+    expect(onConnectError).not.toHaveBeenCalled();
+    expect(wsInstances.length).toBe(1); // WebSocket created
+    client.stop();
+  });
+});
+
 describe("GatewayClient close handling", () => {
   beforeEach(() => {
     wsInstances.length = 0;
-    clearDeviceAuthTokenMock.mockReset();
-    logDebugMock.mockReset();
+    clearDeviceAuthTokenMock.mockClear();
+    clearDeviceAuthTokenMock.mockImplementation(() => undefined);
+    clearDevicePairingMock.mockClear();
+    clearDevicePairingMock.mockResolvedValue(true);
+    logDebugMock.mockClear();
   });
 
   it("clears stale token on device token mismatch close", () => {
     const onClose = vi.fn();
-    const identity: DeviceIdentity = {
-      deviceId: "dev-1",
-      privateKeyPem: "private-key",
-      publicKeyPem: "public-key",
-    };
-    const client = new GatewayClient({
-      url: "ws://127.0.0.1:18789",
-      deviceIdentity: identity,
-      onClose,
-    });
+    const client = createClientWithIdentity("dev-1", onClose);
 
     client.start();
     getLatestWs().emitClose(
@@ -113,6 +208,7 @@ describe("GatewayClient close handling", () => {
     );
 
     expect(clearDeviceAuthTokenMock).toHaveBeenCalledWith({ deviceId: "dev-1", role: "operator" });
+    expect(clearDevicePairingMock).toHaveBeenCalledWith("dev-1");
     expect(onClose).toHaveBeenCalledWith(
       1008,
       "unauthorized: DEVICE token mismatch (rotate/reissue device token)",
@@ -125,16 +221,7 @@ describe("GatewayClient close handling", () => {
       throw new Error("disk unavailable");
     });
     const onClose = vi.fn();
-    const identity: DeviceIdentity = {
-      deviceId: "dev-2",
-      privateKeyPem: "private-key",
-      publicKeyPem: "public-key",
-    };
-    const client = new GatewayClient({
-      url: "ws://127.0.0.1:18789",
-      deviceIdentity: identity,
-      onClose,
-    });
+    const client = createClientWithIdentity("dev-2", onClose);
 
     client.start();
     expect(() => {
@@ -144,7 +231,39 @@ describe("GatewayClient close handling", () => {
     expect(logDebugMock).toHaveBeenCalledWith(
       expect.stringContaining("failed clearing stale device-auth token"),
     );
+    expect(clearDevicePairingMock).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch");
+    client.stop();
+  });
+
+  it("does not break close flow when pairing clear rejects", async () => {
+    clearDevicePairingMock.mockRejectedValue(new Error("pairing store unavailable"));
+    const onClose = vi.fn();
+    const client = createClientWithIdentity("dev-3", onClose);
+
+    client.start();
+    expect(() => {
+      getLatestWs().emitClose(1008, "unauthorized: device token mismatch");
+    }).not.toThrow();
+
+    await Promise.resolve();
+    expect(logDebugMock).toHaveBeenCalledWith(
+      expect.stringContaining("failed clearing stale device pairing"),
+    );
+    expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch");
+    client.stop();
+  });
+
+  it("does not clear auth state for non-mismatch close reasons", () => {
+    const onClose = vi.fn();
+    const client = createClientWithIdentity("dev-4", onClose);
+
+    client.start();
+    getLatestWs().emitClose(1008, "unauthorized: signature invalid");
+
+    expect(clearDeviceAuthTokenMock).not.toHaveBeenCalled();
+    expect(clearDevicePairingMock).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: signature invalid");
     client.stop();
   });
 });

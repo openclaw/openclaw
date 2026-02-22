@@ -158,6 +158,7 @@ function renderDailyChartCompact(
   return html`
     <div class="daily-chart-compact">
       <div class="daily-chart-header">
+        <div class="card-title" style="margin: 0;">Daily ${isTokenMode ? "Token" : "Cost"} Usage</div>
         <div class="chart-toggle small sessions-toggle">
           <button
             class="toggle-btn ${dailyChartMode === "total" ? "active" : ""}"
@@ -166,13 +167,12 @@ function renderDailyChartCompact(
             Total
           </button>
           <button
-            class="toggle-btn ${dailyChartMode === "by-type" ? "active" : ""}"
+            class="toggle-btn ${dailyChartMode === "by-type" ? "active" : ""}
             @click=${() => onDailyChartModeChange("by-type")}
           >
             By Type
           </button>
         </div>
-        <div class="card-title">Daily ${isTokenMode ? "Token" : "Cost"} Usage</div>
       </div>
       <div class="daily-chart">
         <div class="daily-chart-bars" style="--bar-max-width: ${barMaxWidth}px">

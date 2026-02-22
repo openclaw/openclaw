@@ -59,6 +59,19 @@ describe("agent delivery helpers", () => {
     expect(resolved.resolvedTo).toBe("+1999");
   });
 
+  it("does not inject a default deliverable channel when session has none", () => {
+    const plan = resolveAgentDeliveryPlan({
+      sessionEntry: undefined,
+      requestedChannel: "last",
+      explicitTo: undefined,
+      accountId: undefined,
+      wantsDelivery: true,
+    });
+
+    expect(plan.resolvedChannel).toBe("webchat");
+    expect(plan.deliveryTargetMode).toBeUndefined();
+  });
+
   it("skips outbound target resolution when explicit target validation is disabled", () => {
     const plan = resolveAgentDeliveryPlan({
       sessionEntry: {
