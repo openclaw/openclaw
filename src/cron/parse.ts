@@ -3,6 +3,12 @@ const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const ISO_DATE_TIME_RE = /^\d{4}-\d{2}-\d{2}T/;
 
 function normalizeUtcIso(raw: string) {
+  // If explicitly Z, it's UTC.
+  // If explicitly +HH:MM, it's specified.
+  // If Z is followed by +HH:MM (invalid ISO but common in some systems/prompts), strip Z.
+  if (/Z[+-]\d{2}(:?\d{2})?$/i.test(raw)) {
+    return raw.replace(/Z/i, "");
+  }
   if (ISO_TZ_RE.test(raw)) {
     return raw;
   }

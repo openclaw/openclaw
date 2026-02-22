@@ -255,3 +255,11 @@ RUST_LOG=trace RUST_BACKTRACE=1 himalaya envelope list
 - Message IDs are relative to the current folder; re-list after folder changes.
 - For composing rich emails with attachments, use MML syntax (see `references/message-composition.md`).
 - Store passwords securely using `pass`, system keyring, or a command that outputs the password.
+
+## Troubleshooting / Common Mistakes
+
+- **Invalid Command**: `himalaya read` is NOT a valid command. Use `himalaya message read <ID>`.
+- **Invalid Argument Placement**: Flags like `--page-size` must be placed correctly.
+  - CORRECT: `himalaya envelope list --page-size 10`
+  - INCORRECT: `himalaya --page-size 10 envelope list` (Global flags vs subcommand flags matter).
+- **Empty Output**: If `himalaya envelope list` returns nothing, check if you are in the correct folder (`--folder`) or account (`--account`).

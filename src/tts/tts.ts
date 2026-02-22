@@ -7,6 +7,7 @@ import {
   rmSync,
   renameSync,
   unlinkSync,
+  statSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -603,6 +604,20 @@ export async function textToSpeech(params: {
           }
         }
 
+        try {
+          const stats = statSync(edgeResult.audioPath);
+          if (stats.size === 0) {
+            throw new Error("Edge TTS generated 0-byte file");
+          }
+        } catch (err) {
+          try {
+            rmSync(tempDir, { recursive: true, force: true });
+          } catch {
+            // ignore
+          }
+          throw err;
+        }
+
         scheduleCleanup(tempDir);
         const voiceCompatible = isVoiceCompatibleAudio({ fileName: edgeResult.audioPath });
 
@@ -657,6 +672,11 @@ export async function textToSpeech(params: {
           responseFormat: output.openai,
           timeoutMs: config.timeoutMs,
         });
+      }
+
+      if (!audioBuffer || audioBuffer.length === 0) {
+        lastError = `${provider}: received empty audio buffer`;
+        continue;
       }
 
       const latencyMs = Date.now() - providerStart;

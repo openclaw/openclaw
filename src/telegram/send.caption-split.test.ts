@@ -324,7 +324,7 @@ describe("sendMessageTelegram caption splitting", () => {
         api,
         mediaUrl: "https://example.com/photo.jpg",
       }),
-    ).rejects.toThrow(/Telegram send failed: chat not found \(chat_id=123\)\./);
+    ).rejects.toThrow(/Telegram action failed: chat not found \(chat_id=123\).*Likely causes:/);
   });
 
   it("does not send follow-up text when caption is empty", async () => {

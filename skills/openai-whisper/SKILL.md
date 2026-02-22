@@ -11,6 +11,12 @@ metadata:
         "install":
           [
             {
+              "id": "setup-whisper",
+              "kind": "sh",
+              "cmd": "{baseDir}/scripts/setup-whisper.sh",
+              "label": "Install OpenAI Whisper (pip + ffmpeg)",
+            },
+            {
               "id": "brew",
               "kind": "brew",
               "formula": "openai-whisper",

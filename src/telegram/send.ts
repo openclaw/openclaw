@@ -413,6 +413,9 @@ export async function sendMessageTelegram(
 
   if (mediaUrl) {
     const media = await loadWebMedia(mediaUrl, opts.maxBytes);
+    if (!media.buffer || media.buffer.byteLength === 0) {
+      throw new Error(`Media buffer is empty for URL: ${mediaUrl}`);
+    }
     const kind = mediaKindFromMime(media.contentType ?? undefined);
     const isGif = isGifMedia({
       contentType: media.contentType,
@@ -1032,13 +1035,7 @@ export async function sendPollTelegram(
     opts.verbose,
     async (effectiveParams, label) =>
       requestWithDiag(
-        () =>
-          api.sendPoll(
-            chatId,
-            normalizedPoll.question,
-            pollOptions,
-            effectiveParams as Parameters<typeof api.sendPoll>[2],
-          ),
+        () => api.sendPoll(chatId, normalizedPoll.question, pollOptions, effectiveParams as any),
         label,
       ).catch((err) => {
         throw wrapChatNotFoundError(err, chatId, to);

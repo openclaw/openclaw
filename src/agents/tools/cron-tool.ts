@@ -266,6 +266,7 @@ DELIVERY (isolated-only, top-level):
   { "mode": "none|announce", "channel": "<optional>", "to": "<optional>", "bestEffort": <optional-bool> }
   - Default for isolated agentTurn jobs (when delivery omitted): "announce"
   - If the task needs to send to a specific chat/recipient, set delivery.channel/to here; do not call messaging tools inside the run.
+  - TARGETING WARNING: Do not use names like "Tanuj". Use numeric IDs (e.g. 858302127) for direct messages.
 
 CRITICAL CONSTRAINTS:
 - sessionTarget="main" REQUIRES payload.kind="systemEvent"
