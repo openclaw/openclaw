@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { GatewayClient } from "../gateway/client.js";
+import { hasErrnoCode } from "../infra/errors.js";
 import {
   ensureExecApprovals,
   mergeExecApprovalsSocketDefaults,
@@ -193,6 +194,19 @@ async function runCommand(
     };
 
     child.on("error", (err) => {
+      if (hasErrnoCode(err, "ENOENT") && cwd) {
+        try {
+          fs.statSync(cwd);
+        } catch (statErr) {
+          if (hasErrnoCode(statErr, "ENOENT")) {
+            finalize(
+              undefined,
+              `working directory does not exist: "${cwd}" — please create it or check your agent workspace config`,
+            );
+            return;
+          }
+        }
+      }
       finalize(undefined, err.message);
     });
     child.on("exit", (code) => {
