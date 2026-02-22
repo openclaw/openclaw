@@ -778,9 +778,11 @@ export function createBrowserTool(opts?: {
           );
         }
         case "act": {
-          const request = { ...(params.request as Record<string, unknown> | undefined) };
-          if (!request || typeof request !== "object") {
+          const rawRequest = params.request as Record<string, unknown> | undefined;
+          if (!rawRequest || typeof rawRequest !== "object") {
             throw new Error("request required");
+          }
+          const request = { ...rawRequest };
           }
           // Merge top-level ref/targetId into the request body when the LLM
           // passes them as separate tool parameters instead of nesting them
