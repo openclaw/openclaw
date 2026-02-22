@@ -7,7 +7,10 @@ import {
 const sendTypingMock = vi.fn();
 const sendReadReceiptMock = vi.fn();
 const dispatchInboundMessageMock = vi.fn(
-  async (params: { replyOptions?: { onReplyStart?: () => void } }) => {
+  async (params: {
+    replyOptions?: { onReplyStart?: () => void };
+    dispatcher?: { sendFinalReply?: (payload: { text: string }) => void };
+  }) => {
     await Promise.resolve(params.replyOptions?.onReplyStart?.());
     return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
   },
@@ -68,5 +71,45 @@ describe("signal event handler typing + read receipts", () => {
       1700000000000,
       expect.any(Object),
     );
+  });
+
+  it("prefixes group bodies with sender label", async () => {
+    let capturedBody = "";
+    dispatchInboundMessageMock.mockImplementationOnce(
+      async (params: { dispatcher?: { sendFinalReply?: (payload: { text: string }) => void } }) => {
+        const ctx = params as { ctx?: { Body?: string } };
+        capturedBody = ctx.ctx?.Body ?? "";
+        params.dispatcher?.sendFinalReply?.({ text: "ok" });
+        return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+      },
+    );
+
+    const { createSignalEventHandler } = await import("./monitor/event-handler.js");
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          channels: { signal: {} },
+        } as never,
+        account: "+15550009999",
+        blockStreaming: false,
+        historyLimit: 0,
+        groupHistories: new Map(),
+        allowFrom: [],
+        groupAllowFrom: [],
+        sendReadReceipts: false,
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "hello",
+          groupInfo: { groupId: "group-1", groupName: "Test Group" },
+        },
+      }),
+    );
+
+    expect(dispatchInboundMessageMock).toHaveBeenCalled();
+    expect(capturedBody).toContain("Alice (+15550001111): hello");
   });
 });
