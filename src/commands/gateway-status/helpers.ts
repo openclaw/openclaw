@@ -1,4 +1,4 @@
-import { parseDurationMs } from "../../cli/parse-duration.js";
+import { parseTimeoutMs as parseTimeoutMsBase } from "../../cli/parse-timeout.js";
 import { resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../../config/types.js";
 import type { GatewayProbeResult } from "../../gateway/probe.js";
@@ -62,29 +62,12 @@ function parseIntOrNull(value: unknown): number | null {
 }
 
 export function parseTimeoutMs(raw: unknown, fallbackMs: number): number {
-  const value =
-    typeof raw === "string"
-      ? raw.trim()
-      : typeof raw === "number" || typeof raw === "bigint"
-        ? String(raw)
-        : "";
-  if (!value) {
+  const parsed = parseTimeoutMsBase(raw);
+  if (parsed === undefined) {
     return fallbackMs;
   }
-
-  let parsed = Number.NaN;
-  if (/[a-z]/i.test(value)) {
-    try {
-      parsed = parseDurationMs(value, { defaultUnit: "ms" });
-    } catch {
-      parsed = Number.NaN;
-    }
-  } else {
-    parsed = Number.parseInt(value, 10);
-  }
-
-  if (!Number.isFinite(parsed) || parsed <= 0) {
-    throw new Error(`invalid --timeout: ${value}`);
+  if (parsed <= 0) {
+    throw new Error(`invalid --timeout: ${String(raw)}`);
   }
   return parsed;
 }
