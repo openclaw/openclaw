@@ -10,6 +10,9 @@ import {
   handleNostrProfileImport as handleNostrProfileImportInternal,
   handleNostrProfileSave as handleNostrProfileSaveInternal,
   handleNostrProfileToggleAdvanced as handleNostrProfileToggleAdvancedInternal,
+  handleSimplexAddressShowOrCreate as handleSimplexAddressShowOrCreateInternal,
+  handleSimplexOneTimeLinkCreate as handleSimplexOneTimeLinkCreateInternal,
+  handleSimplexInviteRevoke as handleSimplexInviteRevokeInternal,
   handleWhatsAppLogout as handleWhatsAppLogoutInternal,
   handleWhatsAppStart as handleWhatsAppStartInternal,
   handleWhatsAppWait as handleWhatsAppWaitInternal,
@@ -82,6 +85,7 @@ import type {
 } from "./types.ts";
 import { type ChatAttachment, type ChatQueueItem, type CronFormState } from "./ui-types.ts";
 import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.ts";
+import type { SimplexControlState } from "./views/channels.simplex-control-state.ts";
 
 declare global {
   interface Window {
@@ -203,6 +207,7 @@ export class OpenClawApp extends LitElement {
   @state() whatsappBusy = false;
   @state() nostrProfileFormState: NostrProfileFormState | null = null;
   @state() nostrProfileAccountId: string | null = null;
+  @state() simplexControlByAccount: Record<string, SimplexControlState> = {};
 
   @state() presenceLoading = false;
   @state() presenceEntries: PresenceEntry[] = [];
@@ -507,6 +512,18 @@ export class OpenClawApp extends LitElement {
 
   handleNostrProfileToggleAdvanced() {
     handleNostrProfileToggleAdvancedInternal(this);
+  }
+
+  async handleSimplexOneTimeLinkCreate(accountId: string) {
+    await handleSimplexOneTimeLinkCreateInternal(this, accountId);
+  }
+
+  async handleSimplexInviteRevoke(accountId: string) {
+    await handleSimplexInviteRevokeInternal(this, accountId);
+  }
+
+  async handleSimplexAddressShowOrCreate(accountId: string) {
+    await handleSimplexAddressShowOrCreateInternal(this, accountId);
   }
 
   async handleExecApprovalDecision(decision: "allow-once" | "allow-always" | "deny") {

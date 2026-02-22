@@ -22,6 +22,7 @@ Text is supported everywhere; media and reactions vary by channel.
 - [Google Chat](/channels/googlechat) — Google Chat API app via HTTP webhook.
 - [Mattermost](/channels/mattermost) — Bot API + WebSocket; channels, groups, DMs (plugin, installed separately).
 - [Signal](/channels/signal) — signal-cli; privacy-focused.
+- [SimpleX](/channels/simplex) — SimpleX Chat via local CLI (plugin, installed separately).
 - [BlueBubbles](/channels/bluebubbles) — **Recommended for iMessage**; uses the BlueBubbles macOS server REST API with full feature support (edit, unsend, effects, reactions, group management — edit currently broken on macOS 26 Tahoe).
 - [iMessage (legacy)](/channels/imessage) — Legacy macOS integration via imsg CLI (deprecated, use BlueBubbles for new setups).
 - [Microsoft Teams](/channels/msteams) — Bot Framework; enterprise support (plugin, installed separately).

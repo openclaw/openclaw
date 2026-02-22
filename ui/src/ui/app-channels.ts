@@ -277,3 +277,200 @@ export async function handleNostrProfileImport(host: OpenClawApp) {
     };
   }
 }
+
+async function createSimplexInvite(
+  host: OpenClawApp,
+  accountId: string,
+  mode: "connect" | "address",
+) {
+  if (!host.client || !host.connected) {
+    return;
+  }
+  const current = host.simplexControlByAccount[accountId] ?? {
+    busyCreate: false,
+    busyRevoke: false,
+    message: null,
+    error: null,
+    addressLink: null,
+    addressQrDataUrl: null,
+    latestOneTimeInviteLink: null,
+    latestOneTimeInviteQrDataUrl: null,
+  };
+  if (current.busyCreate) {
+    return;
+  }
+  host.simplexControlByAccount = {
+    ...host.simplexControlByAccount,
+    [accountId]: {
+      ...current,
+      busyCreate: true,
+      message: null,
+      error: null,
+    },
+  };
+  try {
+    const result = await host.client.request<{
+      accountId?: string;
+      mode?: "connect" | "address";
+      link?: string | null;
+      qrDataUrl?: string | null;
+    }>("simplex.invite.create", {
+      accountId,
+      mode,
+    });
+    const resolvedId = result.accountId ?? accountId;
+    const existing = host.simplexControlByAccount[resolvedId] ?? {
+      busyCreate: false,
+      busyRevoke: false,
+      message: null,
+      error: null,
+      addressLink: null,
+      addressQrDataUrl: null,
+      latestOneTimeInviteLink: null,
+      latestOneTimeInviteQrDataUrl: null,
+    };
+    host.simplexControlByAccount = {
+      ...host.simplexControlByAccount,
+      [resolvedId]: {
+        ...existing,
+        busyCreate: false,
+        message: result.link
+          ? `${mode === "address" ? "Address" : "1-time link"} generated.`
+          : null,
+        error: null,
+        addressLink:
+          mode === "address" ? (result.link ?? existing.addressLink) : existing.addressLink,
+        addressQrDataUrl:
+          mode === "address"
+            ? (result.qrDataUrl ?? existing.addressQrDataUrl)
+            : existing.addressQrDataUrl,
+        latestOneTimeInviteLink:
+          mode === "connect" && result.link ? result.link : existing.latestOneTimeInviteLink,
+        latestOneTimeInviteQrDataUrl:
+          mode === "connect" && result.link
+            ? (result.qrDataUrl ?? null)
+            : existing.latestOneTimeInviteQrDataUrl,
+      },
+    };
+  } catch (err) {
+    const existing = host.simplexControlByAccount[accountId] ?? current;
+    host.simplexControlByAccount = {
+      ...host.simplexControlByAccount,
+      [accountId]: {
+        ...existing,
+        busyCreate: false,
+        message: null,
+        error: String(err),
+      },
+    };
+  }
+}
+
+export async function handleSimplexOneTimeLinkCreate(host: OpenClawApp, accountId: string) {
+  await createSimplexInvite(host, accountId, "connect");
+}
+
+async function fetchSimplexInviteList(host: OpenClawApp, accountId: string) {
+  const result = await host.client?.request<{
+    accountId?: string;
+    addressLink?: string | null;
+    addressQrDataUrl?: string | null;
+  }>("simplex.invite.list", {
+    accountId,
+  });
+  return result ?? null;
+}
+
+export async function handleSimplexAddressShowOrCreate(host: OpenClawApp, accountId: string) {
+  if (!host.client || !host.connected) {
+    return;
+  }
+  try {
+    const list = await fetchSimplexInviteList(host, accountId);
+    const resolvedId = list?.accountId ?? accountId;
+    const hasAddress = Boolean(list?.addressLink?.trim());
+    if (hasAddress) {
+      const existing = host.simplexControlByAccount[resolvedId] ?? {
+        busyCreate: false,
+        busyRevoke: false,
+        message: null,
+        error: null,
+        addressLink: null,
+        addressQrDataUrl: null,
+        latestOneTimeInviteLink: null,
+        latestOneTimeInviteQrDataUrl: null,
+      };
+      host.simplexControlByAccount = {
+        ...host.simplexControlByAccount,
+        [resolvedId]: {
+          ...existing,
+          message: "Address loaded.",
+          error: null,
+          addressLink: list?.addressLink ?? null,
+          addressQrDataUrl: list?.addressQrDataUrl ?? null,
+        },
+      };
+      return;
+    }
+  } catch {
+    // Fall through to create path.
+  }
+  await createSimplexInvite(host, accountId, "address");
+}
+
+export async function handleSimplexInviteRevoke(host: OpenClawApp, accountId: string) {
+  if (!host.client || !host.connected) {
+    return;
+  }
+  const current = host.simplexControlByAccount[accountId] ?? {
+    busyCreate: false,
+    busyRevoke: false,
+    message: null,
+    error: null,
+    addressLink: null,
+    addressQrDataUrl: null,
+    latestOneTimeInviteLink: null,
+    latestOneTimeInviteQrDataUrl: null,
+  };
+  if (current.busyRevoke) {
+    return;
+  }
+  host.simplexControlByAccount = {
+    ...host.simplexControlByAccount,
+    [accountId]: {
+      ...current,
+      busyRevoke: true,
+      message: null,
+      error: null,
+    },
+  };
+  try {
+    const result = await host.client.request<{ accountId?: string }>("simplex.invite.revoke", {
+      accountId,
+    });
+    const resolvedId = result.accountId ?? accountId;
+    const existing = host.simplexControlByAccount[resolvedId] ?? current;
+    host.simplexControlByAccount = {
+      ...host.simplexControlByAccount,
+      [resolvedId]: {
+        ...existing,
+        busyRevoke: false,
+        message: "Address revoked.",
+        error: null,
+        addressLink: null,
+        addressQrDataUrl: null,
+      },
+    };
+  } catch (err) {
+    const existing = host.simplexControlByAccount[accountId] ?? current;
+    host.simplexControlByAccount = {
+      ...host.simplexControlByAccount,
+      [accountId]: {
+        ...existing,
+        busyRevoke: false,
+        message: null,
+        error: String(err),
+      },
+    };
+  }
+}

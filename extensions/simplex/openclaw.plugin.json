@@ -1,0 +1,9 @@
+{
+  "id": "simplex",
+  "channels": ["simplex"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

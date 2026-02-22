@@ -58,6 +58,16 @@ export type ChannelAccountSnapshot = {
   application?: unknown;
 };
 
+export type SimplexStatus = {
+  configured: boolean;
+  running: boolean;
+  lastStartAt?: number | null;
+  lastStopAt?: number | null;
+  lastError?: string | null;
+  mode?: string | null;
+  wsUrl?: string | null;
+};
+
 export type WhatsAppSelf = {
   e164?: string | null;
   jid?: string | null;

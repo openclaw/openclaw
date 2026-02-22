@@ -8,11 +8,13 @@ import type {
   NostrProfile,
   NostrStatus,
   SignalStatus,
+  SimplexStatus,
   SlackStatus,
   TelegramStatus,
   WhatsAppStatus,
 } from "../types.ts";
 import type { NostrProfileFormState } from "./channels.nostr-profile-form.ts";
+import type { SimplexControlState } from "./channels.simplex-control-state.ts";
 
 export type ChannelKey = string;
 
@@ -34,6 +36,7 @@ export type ChannelsProps = {
   configFormDirty: boolean;
   nostrProfileFormState: NostrProfileFormState | null;
   nostrProfileAccountId: string | null;
+  simplexControlByAccount: Record<string, SimplexControlState>;
   onRefresh: (probe: boolean) => void;
   onWhatsAppStart: (force: boolean) => void;
   onWhatsAppWait: () => void;
@@ -47,6 +50,9 @@ export type ChannelsProps = {
   onNostrProfileSave: () => void;
   onNostrProfileImport: () => void;
   onNostrProfileToggleAdvanced: () => void;
+  onSimplexOneTimeLinkCreate: (accountId: string) => void;
+  onSimplexInviteRevoke: (accountId: string) => void;
+  onSimplexAddressShowOrCreate: (accountId: string) => void;
 };
 
 export type ChannelsChannelData = {
@@ -58,5 +64,6 @@ export type ChannelsChannelData = {
   signal?: SignalStatus | null;
   imessage?: IMessageStatus | null;
   nostr?: NostrStatus | null;
+  simplex?: SimplexStatus | null;
   channelAccounts?: Record<string, ChannelAccountSnapshot[]> | null;
 };
