@@ -17,13 +17,12 @@ Open the dashboard at `http://localhost:<port>` (or the gateway's configured UI 
 
 ## Themes
 
-- [ ] Theme switcher cycles through all 6 themes:
+- [ ] Theme switcher cycles through all 5 themes:
   - [ ] Dark (Obsidian)
   - [ ] Light
   - [ ] OpenKnot (Aurora)
   - [ ] Field Manual
-  - [ ] OpenAI (Solar)
-  - [ ] ClawDash
+  - [ ] ClawDash (Chrome)
 - [ ] Glass components (cards, panels, inputs) render correctly per theme
 - [ ] Theme persists across page reload
 
