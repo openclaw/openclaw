@@ -154,8 +154,8 @@ describe("msteams media-helpers", () => {
       expect(isLocalPath("\\\\server\\share\\image.png")).toBe(true);
     });
 
-    it("returns true for Windows rooted paths", () => {
-      expect(isLocalPath("\\tmp\\openclaw\\file.txt")).toBe(true);
+    it("returns true for Windows rooted paths on current drive", () => {
+      expect(isLocalPath("\\tmp\\openclaw\\image.png")).toBe(true);
     });
 
     it("returns false for http URLs", () => {
