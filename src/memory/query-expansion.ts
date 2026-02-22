@@ -118,6 +118,150 @@ const STOP_WORDS_EN = new Set([
   "give",
 ]);
 
+const STOP_WORDS_ES = new Set([
+  // Articles and determiners
+  "el",
+  "la",
+  "los",
+  "las",
+  "un",
+  "una",
+  "unos",
+  "unas",
+  "este",
+  "esta",
+  "ese",
+  "esa",
+  // Pronouns
+  "yo",
+  "me",
+  "mi",
+  "nosotros",
+  "nosotras",
+  "tu",
+  "tus",
+  "usted",
+  "ustedes",
+  "ellos",
+  "ellas",
+  // Prepositions and conjunctions
+  "de",
+  "del",
+  "a",
+  "en",
+  "con",
+  "por",
+  "para",
+  "sobre",
+  "entre",
+  "y",
+  "o",
+  "pero",
+  "si",
+  "porque",
+  "como",
+  // Common verbs / auxiliaries
+  "es",
+  "son",
+  "fue",
+  "fueron",
+  "ser",
+  "estar",
+  "haber",
+  "tener",
+  "hacer",
+  // Time references (vague)
+  "ayer",
+  "hoy",
+  "mañana",
+  "antes",
+  "despues",
+  "después",
+  "ahora",
+  "recientemente",
+  // Question/request words
+  "que",
+  "qué",
+  "cómo",
+  "cuando",
+  "cuándo",
+  "donde",
+  "dónde",
+  "porqué",
+  "favor",
+  "ayuda",
+]);
+
+const STOP_WORDS_PT = new Set([
+  // Articles and determiners
+  "o",
+  "a",
+  "os",
+  "as",
+  "um",
+  "uma",
+  "uns",
+  "umas",
+  "este",
+  "esta",
+  "esse",
+  "essa",
+  // Pronouns
+  "eu",
+  "me",
+  "meu",
+  "minha",
+  "nos",
+  "nós",
+  "você",
+  "vocês",
+  "ele",
+  "ela",
+  "eles",
+  "elas",
+  // Prepositions and conjunctions
+  "de",
+  "do",
+  "da",
+  "em",
+  "com",
+  "por",
+  "para",
+  "sobre",
+  "entre",
+  "e",
+  "ou",
+  "mas",
+  "se",
+  "porque",
+  "como",
+  // Common verbs / auxiliaries
+  "é",
+  "são",
+  "foi",
+  "foram",
+  "ser",
+  "estar",
+  "ter",
+  "fazer",
+  // Time references (vague)
+  "ontem",
+  "hoje",
+  "amanhã",
+  "antes",
+  "depois",
+  "agora",
+  "recentemente",
+  // Question/request words
+  "que",
+  "quê",
+  "quando",
+  "onde",
+  "porquê",
+  "favor",
+  "ajuda",
+]);
+
 const STOP_WORDS_KO = new Set([
   // Particles (조사)
   "은",
@@ -523,6 +667,8 @@ export function extractKeywords(query: string): string[] {
     // Skip stop words
     if (
       STOP_WORDS_EN.has(token) ||
+      STOP_WORDS_ES.has(token) ||
+      STOP_WORDS_PT.has(token) ||
       STOP_WORDS_ZH.has(token) ||
       STOP_WORDS_KO.has(token) ||
       STOP_WORDS_JA.has(token)

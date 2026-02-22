@@ -117,6 +117,32 @@ describe("extractKeywords", () => {
     expect(keywords).not.toContain("どう");
   });
 
+  it("extracts keywords from Spanish conversational query", () => {
+    const keywords = extractKeywords("ayer hablamos sobre la estrategia de despliegue");
+    expect(keywords).toContain("estrategia");
+    expect(keywords).toContain("despliegue");
+    expect(keywords).not.toContain("ayer");
+    expect(keywords).not.toContain("sobre");
+  });
+
+  it("extracts keywords from Portuguese conversational query", () => {
+    const keywords = extractKeywords("ontem falamos sobre a estratégia de implantação");
+    expect(keywords).toContain("estratégia");
+    expect(keywords).toContain("implantação");
+    expect(keywords).not.toContain("ontem");
+    expect(keywords).not.toContain("sobre");
+  });
+
+  it("filters Spanish and Portuguese question stop words", () => {
+    const keywords = extractKeywords("cómo cuando donde porquê quando onde");
+    expect(keywords).not.toContain("cómo");
+    expect(keywords).not.toContain("cuando");
+    expect(keywords).not.toContain("donde");
+    expect(keywords).not.toContain("porquê");
+    expect(keywords).not.toContain("quando");
+    expect(keywords).not.toContain("onde");
+  });
+
   it("handles empty query", () => {
     expect(extractKeywords("")).toEqual([]);
     expect(extractKeywords("   ")).toEqual([]);
