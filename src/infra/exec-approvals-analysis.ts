@@ -12,6 +12,106 @@ export type CommandResolution = {
   executableName: string;
 };
 
+const ENV_OPTIONS_WITH_VALUE = new Set([
+  "-u",
+  "--unset",
+  "-c",
+  "--chdir",
+  "-s",
+  "--split-string",
+  "--default-signal",
+  "--ignore-signal",
+  "--block-signal",
+]);
+const ENV_FLAG_OPTIONS = new Set(["-i", "--ignore-environment", "-0", "--null"]);
+
+function basenameLower(token: string): string {
+  const win = path.win32.basename(token);
+  const posix = path.posix.basename(token);
+  const base = win.length < posix.length ? win : posix;
+  return base.trim().toLowerCase();
+}
+
+function isEnvAssignment(token: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*=.*/.test(token);
+}
+
+function unwrapEnvInvocation(argv: string[]): string[] | null {
+  let idx = 1;
+  let expectsOptionValue = false;
+  while (idx < argv.length) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      idx += 1;
+      continue;
+    }
+    if (expectsOptionValue) {
+      expectsOptionValue = false;
+      idx += 1;
+      continue;
+    }
+    if (token === "--" || token === "-") {
+      idx += 1;
+      break;
+    }
+    if (isEnvAssignment(token)) {
+      idx += 1;
+      continue;
+    }
+    if (token.startsWith("-") && token !== "-") {
+      const lower = token.toLowerCase();
+      const [flag] = lower.split("=", 2);
+      if (ENV_FLAG_OPTIONS.has(flag)) {
+        idx += 1;
+        continue;
+      }
+      if (ENV_OPTIONS_WITH_VALUE.has(flag)) {
+        if (!lower.includes("=")) {
+          expectsOptionValue = true;
+        }
+        idx += 1;
+        continue;
+      }
+      if (
+        lower.startsWith("-u") ||
+        lower.startsWith("-c") ||
+        lower.startsWith("-s") ||
+        lower.startsWith("--unset=") ||
+        lower.startsWith("--chdir=") ||
+        lower.startsWith("--split-string=") ||
+        lower.startsWith("--default-signal=") ||
+        lower.startsWith("--ignore-signal=") ||
+        lower.startsWith("--block-signal=")
+      ) {
+        idx += 1;
+        continue;
+      }
+      return null;
+    }
+    break;
+  }
+  return idx < argv.length ? argv.slice(idx) : null;
+}
+
+function unwrapDispatchWrappersForResolution(argv: string[]): string[] {
+  let current = argv;
+  for (let depth = 0; depth < 4; depth += 1) {
+    const token0 = current[0]?.trim();
+    if (!token0) {
+      break;
+    }
+    if (basenameLower(token0) !== "env") {
+      break;
+    }
+    const unwrapped = unwrapEnvInvocation(current);
+    if (!unwrapped || unwrapped.length === 0) {
+      break;
+    }
+    current = unwrapped;
+  }
+  return current;
+}
+
 function isExecutableFile(filePath: string): boolean {
   try {
     const stat = fs.statSync(filePath);
@@ -101,7 +201,8 @@ export function resolveCommandResolutionFromArgv(
   cwd?: string,
   env?: NodeJS.ProcessEnv,
 ): CommandResolution | null {
-  const rawExecutable = argv[0]?.trim();
+  const effectiveArgv = unwrapDispatchWrappersForResolution(argv);
+  const rawExecutable = effectiveArgv[0]?.trim();
   if (!rawExecutable) {
     return null;
   }

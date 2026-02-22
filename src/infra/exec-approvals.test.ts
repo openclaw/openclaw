@@ -18,6 +18,7 @@ import {
   normalizeSafeBins,
   requiresExecApproval,
   resolveCommandResolution,
+  resolveCommandResolutionFromArgv,
   resolveAllowAlwaysPatterns,
   resolveExecApprovals,
   resolveExecApprovalsFromFile,
@@ -240,6 +241,30 @@ describe("exec approvals command resolution", () => {
         expect(res?.executableName, testCase.name).toBe(setup.expectedExecutableName);
       }
     }
+  });
+
+  it("unwraps env wrapper argv to resolve the effective executable", () => {
+    const dir = makeTempDir();
+    const binDir = path.join(dir, "bin");
+    fs.mkdirSync(binDir, { recursive: true });
+    const exeName = process.platform === "win32" ? "rg.exe" : "rg";
+    const exe = path.join(binDir, exeName);
+    fs.writeFileSync(exe, "");
+    fs.chmodSync(exe, 0o755);
+
+    const resolution = resolveCommandResolutionFromArgv(
+      ["/usr/bin/env", "FOO=bar", "rg", "-n", "needle"],
+      undefined,
+      makePathEnv(binDir),
+    );
+    expect(resolution?.resolvedPath).toBe(exe);
+    expect(resolution?.executableName).toBe(exeName);
+  });
+
+  it("unwraps env wrapper with shell inner executable", () => {
+    const resolution = resolveCommandResolutionFromArgv(["/usr/bin/env", "bash", "-lc", "echo hi"]);
+    expect(resolution?.rawExecutable).toBe("bash");
+    expect(resolution?.executableName.toLowerCase()).toContain("bash");
   });
 });
 
