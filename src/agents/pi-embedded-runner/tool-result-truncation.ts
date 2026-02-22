@@ -34,17 +34,73 @@ const TRUNCATION_SUFFIX =
   "offset/limit parameters to read smaller chunks.]";
 
 /**
- * Truncate a single text string to fit within maxChars, preserving the beginning.
+ * Marker inserted between head and tail when using head+tail truncation.
+ */
+const MIDDLE_OMISSION_MARKER =
+  "\n\n⚠️ [... middle content omitted — showing head and tail ...]\n\n";
+
+/**
+ * Detect whether text likely contains error/diagnostic content near the end,
+ * which should be preserved during truncation.
+ */
+function hasImportantTail(text: string): boolean {
+  // Check last ~2000 chars for error-like patterns
+  const tail = text.slice(-2000).toLowerCase();
+  return (
+    /\b(error|exception|failed|fatal|traceback|panic|stack trace|errno|exit code)\b/.test(tail) ||
+    // JSON closing — if the output is JSON, the tail has closing structure
+    /\}\s*$/.test(tail.trim()) ||
+    // Summary/result lines often appear at the end
+    /\b(total|summary|result|complete|finished|done)\b/.test(tail)
+  );
+}
+
+/**
+ * Truncate a single text string to fit within maxChars.
+ *
+ * Uses a head+tail strategy when the tail contains important content
+ * (errors, results, JSON structure), otherwise preserves the beginning.
+ * This ensures error messages and summaries at the end of tool output
+ * aren't lost during truncation.
  */
 export function truncateToolResultText(text: string, maxChars: number): string {
   if (text.length <= maxChars) {
     return text;
   }
-  const keepChars = Math.max(MIN_KEEP_CHARS, maxChars - TRUNCATION_SUFFIX.length);
-  // Try to break at a newline boundary to avoid cutting mid-line
-  let cutPoint = keepChars;
-  const lastNewline = text.lastIndexOf("\n", keepChars);
-  if (lastNewline > keepChars * 0.8) {
+  const budget = Math.max(MIN_KEEP_CHARS, maxChars - TRUNCATION_SUFFIX.length);
+
+  // If tail looks important, split budget between head and tail
+  if (hasImportantTail(text) && budget > MIN_KEEP_CHARS * 2) {
+    const tailBudget = Math.min(Math.floor(budget * 0.3), 4000);
+    const headBudget = budget - tailBudget - MIDDLE_OMISSION_MARKER.length;
+
+    if (headBudget > MIN_KEEP_CHARS) {
+      // Find clean cut points at newline boundaries
+      let headCut = headBudget;
+      const headNewline = text.lastIndexOf("\n", headBudget);
+      if (headNewline > headBudget * 0.8) {
+        headCut = headNewline;
+      }
+
+      let tailStart = text.length - tailBudget;
+      const tailNewline = text.indexOf("\n", tailStart);
+      if (tailNewline !== -1 && tailNewline < tailStart + tailBudget * 0.2) {
+        tailStart = tailNewline + 1;
+      }
+
+      return (
+        text.slice(0, headCut) +
+        MIDDLE_OMISSION_MARKER +
+        text.slice(tailStart) +
+        TRUNCATION_SUFFIX
+      );
+    }
+  }
+
+  // Default: keep the beginning
+  let cutPoint = budget;
+  const lastNewline = text.lastIndexOf("\n", budget);
+  if (lastNewline > budget * 0.8) {
     cutPoint = lastNewline;
   }
   return text.slice(0, cutPoint) + TRUNCATION_SUFFIX;
