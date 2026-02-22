@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildConfigSchema } from "./schema.js";
+import { ToolsWebSchema } from "./zod-schema.agent-runtime.js";
 
 describe("config schema", () => {
   it("exports schema + hints", () => {
@@ -116,5 +117,68 @@ describe("config schema", () => {
     expect(defaultsHint?.help).toContain("bluebubbles");
     expect(defaultsHint?.help).toContain("last");
     expect(listHint?.help).toContain("bluebubbles");
+  });
+});
+
+describe("tools.web.urlAllowlist validation", () => {
+  it("accepts valid domain patterns", () => {
+    const validPatterns = [
+      "example.com",
+      "*.github.com",
+      "*.example.co.uk",
+      "sub.domain.com",
+      "a.b.c.d.com",
+      "localhost",
+    ];
+    for (const pattern of validPatterns) {
+      const result = ToolsWebSchema.safeParse({
+        urlAllowlist: [pattern],
+        search: { enabled: true },
+        fetch: { enabled: true },
+      });
+      expect(result.success, `Expected "${pattern}" to be valid`).toBe(true);
+    }
+  });
+
+  it("rejects invalid domain patterns", () => {
+    const invalidPatterns = [
+      "", // empty string
+      "https://example.com", // protocol included
+      "example.com/path", // path included
+      "*", // just asterisk
+      "*.", // asterisk with dot
+      ".com", // starts with dot
+      "example.", // ends with dot
+      "-example.com", // starts with hyphen
+      "example-.com", // ends with hyphen
+    ];
+    for (const pattern of invalidPatterns) {
+      const result = ToolsWebSchema.safeParse({
+        urlAllowlist: [pattern],
+        search: { enabled: true },
+        fetch: { enabled: true },
+      });
+      expect(result.success, `Expected "${pattern}" to be invalid`).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues[0].message).toContain("Invalid domain pattern");
+      }
+    }
+  });
+
+  it("allows undefined urlAllowlist", () => {
+    const result = ToolsWebSchema.safeParse({
+      search: { enabled: true },
+      fetch: { enabled: true },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it("allows empty urlAllowlist", () => {
+    const result = ToolsWebSchema.safeParse({
+      urlAllowlist: [],
+      search: { enabled: true },
+      fetch: { enabled: true },
+    });
+    expect(result.success).toBe(true);
   });
 });

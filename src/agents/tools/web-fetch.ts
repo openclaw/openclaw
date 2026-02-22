@@ -1,7 +1,11 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawConfig } from "../../config/config.js";
 import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
-import { SsrFBlockedError } from "../../infra/net/ssrf.js";
+import {
+  matchesHostnameAllowlist,
+  normalizeHostnameAllowlist,
+  SsrFBlockedError,
+} from "../../infra/net/ssrf.js";
 import { logDebug } from "../../logger.js";
 import { wrapExternalContent, wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
@@ -24,9 +28,16 @@ import {
   readResponseText,
   resolveCacheTtlMs,
   resolveTimeoutSeconds,
+  resolveUrlAllowlist,
   withTimeout,
   writeCache,
 } from "./web-shared.js";
+
+// Re-export for backwards compatibility
+export { resolveUrlAllowlist };
+
+// Alias for backwards compatibility
+export const resolveFetchUrlAllowlist = resolveUrlAllowlist;
 
 export { extractReadableContent } from "./web-fetch-utils.js";
 
@@ -67,6 +78,16 @@ type WebFetchConfig = NonNullable<OpenClawConfig["tools"]>["web"] extends infer 
     ? Fetch
     : undefined
   : undefined;
+
+export function isUrlAllowedByAllowlist(url: string, allowlist: string[]): boolean {
+  try {
+    const hostname = new URL(url).hostname;
+    const normalizedAllowlist = normalizeHostnameAllowlist(allowlist);
+    return matchesHostnameAllowlist(hostname, normalizedAllowlist);
+  } catch {
+    return false;
+  }
+}
 
 type FirecrawlFetchConfig =
   | {
@@ -446,6 +467,7 @@ type WebFetchRuntimeParams = FirecrawlRuntimeParams & {
   cacheTtlMs: number;
   userAgent: string;
   readabilityEnabled: boolean;
+  urlAllowlist?: string[];
 };
 
 function toFirecrawlContentParams(
@@ -538,6 +560,24 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     res = result.response;
     finalUrl = result.finalUrl;
     release = result.release;
+
+    // Check redirect target against allowlist
+    const redirectAllowlist = params.urlAllowlist;
+    if (
+      redirectAllowlist &&
+      redirectAllowlist.length > 0 &&
+      !isUrlAllowedByAllowlist(finalUrl, redirectAllowlist)
+    ) {
+      if (release) {
+        await release();
+      }
+      return jsonResult({
+        error: "url_not_allowed",
+        message: `Redirect target not in allowlist. Allowed domains: ${redirectAllowlist.join(", ")}`,
+        blockedUrl: finalUrl,
+        blockedHostname: new URL(finalUrl).hostname,
+      }) as unknown as Record<string, unknown>;
+    }
 
     // Cloudflare Markdown for Agents — log token budget hint when present
     const markdownTokens = res.headers.get("x-markdown-tokens");
@@ -732,6 +772,7 @@ export function createWebFetchTool(options?: {
     (fetch && "userAgent" in fetch && typeof fetch.userAgent === "string" && fetch.userAgent) ||
     DEFAULT_FETCH_USER_AGENT;
   const maxResponseBytes = resolveFetchMaxResponseBytes(fetch);
+  const urlAllowlist = resolveUrlAllowlist(options?.config?.tools?.web);
   return {
     label: "Web Fetch",
     name: "web_fetch",
@@ -741,6 +782,25 @@ export function createWebFetchTool(options?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const url = readStringParam(params, "url", { required: true });
+
+      // Check URL against allowlist if configured
+      if (urlAllowlist && urlAllowlist.length > 0) {
+        if (!isUrlAllowedByAllowlist(url, urlAllowlist)) {
+          let hostname: string;
+          try {
+            hostname = new URL(url).hostname;
+          } catch {
+            hostname = url;
+          }
+          return jsonResult({
+            error: "url_not_allowed",
+            message: `URL not in allowlist. Allowed domains: ${urlAllowlist.join(", ")}`,
+            blockedUrl: url,
+            blockedHostname: hostname,
+          });
+        }
+      }
+
       const extractMode = readStringParam(params, "extractMode") === "text" ? "text" : "markdown";
       const maxChars = readNumberParam(params, "maxChars", { integer: true });
       const maxCharsCap = resolveFetchMaxCharsCap(fetch);
@@ -766,6 +826,7 @@ export function createWebFetchTool(options?: {
         firecrawlProxy: "auto",
         firecrawlStoreInCache: true,
         firecrawlTimeoutSeconds,
+        urlAllowlist,
       });
       return jsonResult(result);
     },
