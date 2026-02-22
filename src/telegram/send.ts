@@ -487,6 +487,25 @@ export async function sendMessageTelegram(
           baseParams.link_preview_options = linkPreviewOptions;
         }
         const hasBaseParams = Object.keys(baseParams).length > 0;
+        // When the HTML formatter returns empty output but the raw text was
+        // non-empty, skip HTML entirely and send as plain text so the message
+        // still reaches the user.
+        if (!htmlText.trim() && rawText.trim()) {
+          if (opts.verbose) {
+            diagLogger.warn("telegram formatter returned empty HTML, retrying as plain text");
+          }
+          const fallback = fallbackText ?? rawText;
+          const plainParams = hasBaseParams
+            ? (baseParams as Parameters<typeof api.sendMessage>[2])
+            : undefined;
+          return await requestWithChatNotFound(
+            () =>
+              plainParams
+                ? api.sendMessage(chatId, fallback, plainParams)
+                : api.sendMessage(chatId, fallback),
+            `${label}-plain-empty`,
+          );
+        }
         const sendParams = {
           parse_mode: "HTML" as const,
           ...baseParams,

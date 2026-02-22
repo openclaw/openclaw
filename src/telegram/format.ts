@@ -91,6 +91,64 @@ function buildTelegramLink(link: MarkdownLinkSpan, text: string) {
   };
 }
 
+const MARKDOWN_TABLE_DIVIDER_PATTERN = /^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/;
+
+function splitMarkdownTableColumns(line: string): string[] {
+  const normalized = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  if (!normalized.includes("|")) {
+    return [];
+  }
+  return normalized.split("|");
+}
+
+function hasMarkdownTableSyntax(markdown: string): boolean {
+  const lines = markdown.split(/\r?\n/);
+  for (let i = 0; i < lines.length - 1; i += 1) {
+    const header = lines[i]?.trim() ?? "";
+    const divider = lines[i + 1]?.trim() ?? "";
+    if (!header || !divider) {
+      continue;
+    }
+    if (!header.includes("|")) {
+      continue;
+    }
+    if (!MARKDOWN_TABLE_DIVIDER_PATTERN.test(divider)) {
+      continue;
+    }
+    const headerColumns = splitMarkdownTableColumns(header);
+    const dividerColumns = splitMarkdownTableColumns(divider);
+    if (
+      headerColumns.length >= 2 &&
+      dividerColumns.length >= 2 &&
+      headerColumns.length === dividerColumns.length
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function resolveTelegramTableMode(
+  markdown: string,
+  tableMode?: MarkdownTableMode,
+): MarkdownTableMode | undefined {
+  if (tableMode) {
+    return tableMode;
+  }
+  return hasMarkdownTableSyntax(markdown) ? "code" : undefined;
+}
+
+function ensureNonEmptyTelegramHtml(rendered: string, fallbackText: string): string {
+  if (rendered.trim()) {
+    return rendered;
+  }
+  if (!fallbackText.trim()) {
+    return rendered;
+  }
+  // Safety net for markdown that renders to empty output (for example, []()).
+  return escapeHtml(fallbackText);
+}
+
 function renderTelegramHtml(ir: MarkdownIR): string {
   return renderMarkdownWithMarkers(ir, {
     styleMarkers: {
@@ -111,14 +169,16 @@ export function markdownToTelegramHtml(
   markdown: string,
   options: { tableMode?: MarkdownTableMode; wrapFileRefs?: boolean } = {},
 ): string {
-  const ir = markdownToIR(markdown ?? "", {
+  const source = markdown ?? "";
+  const tableMode = resolveTelegramTableMode(source, options.tableMode);
+  const ir = markdownToIR(source, {
     linkify: true,
     enableSpoilers: true,
     headingStyle: "none",
     blockquotePrefix: "",
-    tableMode: options.tableMode,
+    tableMode,
   });
-  const html = renderTelegramHtml(ir);
+  const html = ensureNonEmptyTelegramHtml(renderTelegramHtml(ir), source);
   // Apply file reference wrapping if requested (for chunked rendering)
   if (options.wrapFileRefs !== false) {
     return wrapFileReferencesInHtml(html);
@@ -246,16 +306,29 @@ export function markdownToTelegramChunks(
   limit: number,
   options: { tableMode?: MarkdownTableMode } = {},
 ): TelegramFormattedChunk[] {
-  const ir = markdownToIR(markdown ?? "", {
+  const source = markdown ?? "";
+  const tableMode = resolveTelegramTableMode(source, options.tableMode);
+  const ir = markdownToIR(source, {
     linkify: true,
     enableSpoilers: true,
     headingStyle: "none",
     blockquotePrefix: "",
-    tableMode: options.tableMode,
+    tableMode,
   });
   const chunks = chunkMarkdownIR(ir, limit);
+  if (chunks.length === 0 && source.trim()) {
+    return [
+      {
+        html: ensureNonEmptyTelegramHtml("", source),
+        text: source,
+      },
+    ];
+  }
   return chunks.map((chunk) => ({
-    html: wrapFileReferencesInHtml(renderTelegramHtml(chunk)),
+    html: ensureNonEmptyTelegramHtml(
+      wrapFileReferencesInHtml(renderTelegramHtml(chunk)),
+      chunk.text,
+    ),
     text: chunk.text,
   }));
 }
