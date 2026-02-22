@@ -172,7 +172,9 @@ function resolveImageFallbackCandidates(params: {
   })();
 
   for (const raw of imageFallbacks) {
-    addRaw(raw, true);
+    // Image fallbacks explicitly configured should bypass the models allowlist,
+    // same as text model fallbacks. See: #19249
+    addRaw(raw, false);
   }
 
   return candidates;
@@ -238,7 +240,11 @@ function resolveFallbackCandidates(params: {
     if (!resolved) {
       continue;
     }
-    addCandidate(resolved.ref, true);
+    // Fallback models explicitly configured in agents.defaults.model.fallbacks
+    // should not be filtered by the models allowlist. The user intentionally
+    // added these as fallbacks and they must be reachable during failover.
+    // See: https://github.com/openclaw/openclaw/issues/19249
+    addCandidate(resolved.ref, false);
   }
 
   if (params.fallbacksOverride === undefined && primary?.provider && primary.model) {

@@ -609,4 +609,40 @@ describe("runWithModelFallback", () => {
     expect(result.provider).toBe("openai");
     expect(result.model).toBe("gpt-4.1-mini");
   });
+
+  it("fallback models bypass the models allowlist (#19249)", async () => {
+    // When agents.defaults.models (allowlist) is configured but doesn't include
+    // the fallback models, the fallbacks should still be reachable.
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["openrouter/deepseek/deepseek-v3.2"],
+          },
+          // This creates an allowlist that does NOT include the fallback model
+          models: {
+            "openai/gpt-4.1-mini": {},
+          },
+        },
+      },
+    });
+
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(Object.assign(new Error("rate limit"), { status: 429 }))
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(result.provider).toBe("openrouter");
+    expect(result.model).toBe("deepseek/deepseek-v3.2");
+  });
 });
