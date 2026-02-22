@@ -172,7 +172,7 @@ describe("secrets migrate", () => {
 
     const migratedEnv = await fs.readFile(envPath, "utf8");
     expect(migratedEnv).not.toContain("sk-openai-plaintext");
-    expect(migratedEnv).not.toContain("sk-skill-plaintext");
+    expect(migratedEnv).toContain("SKILL_KEY=sk-skill-plaintext");
     expect(migratedEnv).toContain("UNRELATED=value");
 
     const secretsPath = path.join(stateDir, "secrets.enc.json");
