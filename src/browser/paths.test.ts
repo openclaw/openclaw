@@ -138,6 +138,60 @@ describe("resolveExistingPathsWithinRoot", () => {
       });
     },
   );
+
+  it.runIf(process.platform !== "win32")(
+    "accepts canonical absolute paths when upload root is a symlink alias",
+    async () => {
+      await withFixtureRoot(async ({ baseDir }) => {
+        const canonicalUploadsDir = path.join(baseDir, "canonical", "uploads");
+        const aliasedUploadsDir = path.join(baseDir, "uploads-link");
+        await fs.mkdir(canonicalUploadsDir, { recursive: true });
+        await fs.symlink(canonicalUploadsDir, aliasedUploadsDir);
+
+        const filePath = path.join(canonicalUploadsDir, "ok.txt");
+        await fs.writeFile(filePath, "ok", "utf8");
+        const canonicalPath = await fs.realpath(filePath);
+
+        const firstPass = await resolveWithinUploads({
+          uploadsDir: aliasedUploadsDir,
+          requestedPaths: [path.join(aliasedUploadsDir, "ok.txt")],
+        });
+        expect(firstPass.ok).toBe(true);
+
+        const secondPass = await resolveWithinUploads({
+          uploadsDir: aliasedUploadsDir,
+          requestedPaths: [canonicalPath],
+        });
+        expect(secondPass.ok).toBe(true);
+        if (secondPass.ok) {
+          expect(secondPass.paths).toEqual([canonicalPath]);
+        }
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects canonical absolute paths outside symlinked upload root",
+    async () => {
+      await withFixtureRoot(async ({ baseDir }) => {
+        const canonicalUploadsDir = path.join(baseDir, "canonical", "uploads");
+        const aliasedUploadsDir = path.join(baseDir, "uploads-link");
+        await fs.mkdir(canonicalUploadsDir, { recursive: true });
+        await fs.symlink(canonicalUploadsDir, aliasedUploadsDir);
+
+        const outsideDir = path.join(baseDir, "outside");
+        await fs.mkdir(outsideDir, { recursive: true });
+        const outsideFile = path.join(outsideDir, "secret.txt");
+        await fs.writeFile(outsideFile, "secret", "utf8");
+
+        const result = await resolveWithinUploads({
+          uploadsDir: aliasedUploadsDir,
+          requestedPaths: [await fs.realpath(outsideFile)],
+        });
+        expectInvalidResult(result, "must stay within uploads directory");
+      });
+    },
+  );
 });
 
 describe("resolvePathWithinRoot", () => {
