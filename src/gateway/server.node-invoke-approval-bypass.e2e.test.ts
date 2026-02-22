@@ -13,8 +13,10 @@ import { buildDeviceAuthPayload } from "./device-auth.js";
 import {
   connectReq,
   installGatewayTestHooks,
+  onceMessage,
   rpcReq,
   startServerWithClient,
+  trackConnectChallengeNonce,
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
@@ -78,15 +80,33 @@ describe("node.invoke approval bypass", () => {
 
   const connectOperatorWithRetry = async (
     scopes: string[],
-    resolveDevice?: () => NonNullable<Parameters<typeof connectReq>[1]>["device"],
+    resolveDevice?: (nonce: string) => NonNullable<Parameters<typeof connectReq>[1]>["device"],
   ) => {
     const connectOnce = async () => {
       const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+      trackConnectChallengeNonce(ws);
+      const challengePromise = resolveDevice
+        ? onceMessage<{
+            type?: string;
+            event?: string;
+            payload?: Record<string, unknown> | null;
+          }>(ws, (o) => o.type === "event" && o.event === "connect.challenge")
+        : null;
       await new Promise<void>((resolve) => ws.once("open", resolve));
+      const nonce = (() => {
+        if (!challengePromise) {
+          return Promise.resolve("");
+        }
+        return challengePromise.then((challenge) => {
+          const value = (challenge.payload as { nonce?: unknown } | undefined)?.nonce;
+          expect(typeof value).toBe("string");
+          return String(value);
+        });
+      })();
       const res = await connectReq(ws, {
         token: "secret",
         scopes,
-        ...(resolveDevice ? { device: resolveDevice() } : {}),
+        ...(resolveDevice ? { device: resolveDevice(await nonce) } : {}),
       });
       return { ws, res };
     };
@@ -116,22 +136,26 @@ describe("node.invoke approval bypass", () => {
     const publicKeyRaw = publicKeyRawBase64UrlFromPem(publicKeyPem);
     const deviceId = deriveDeviceIdFromPublicKey(publicKeyRaw);
     expect(deviceId).toBeTruthy();
-    const signedAtMs = Date.now();
-    const payload = buildDeviceAuthPayload({
-      deviceId: deviceId!,
-      clientId: GATEWAY_CLIENT_NAMES.TEST,
-      clientMode: GATEWAY_CLIENT_MODES.TEST,
-      role: "operator",
-      scopes,
-      signedAtMs,
-      token: "secret",
+    return await connectOperatorWithRetry(scopes, (nonce) => {
+      const signedAtMs = Date.now();
+      const payload = buildDeviceAuthPayload({
+        deviceId: deviceId!,
+        clientId: GATEWAY_CLIENT_NAMES.TEST,
+        clientMode: GATEWAY_CLIENT_MODES.TEST,
+        role: "operator",
+        scopes,
+        signedAtMs,
+        token: "secret",
+        nonce,
+      });
+      return {
+        id: deviceId!,
+        publicKey: publicKeyRaw,
+        signature: signDevicePayload(privateKeyPem, payload),
+        signedAt: signedAtMs,
+        nonce,
+      };
     });
-    return await connectOperatorWithRetry(scopes, () => ({
-      id: deviceId!,
-      publicKey: publicKeyRaw,
-      signature: signDevicePayload(privateKeyPem, payload),
-      signedAt: signedAtMs,
-    }));
   };
 
   const connectLinuxNode = async (onInvoke: (payload: unknown) => void) => {

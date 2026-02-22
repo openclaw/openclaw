@@ -7,12 +7,14 @@ import { PROTOCOL_VERSION } from "./protocol/index.js";
 import { getHandshakeTimeoutMs } from "./server-constants.js";
 import {
   connectReq,
+  getTrackedConnectChallengeNonce,
   getFreePort,
   installGatewayTestHooks,
   onceMessage,
   rpcReq,
   startGatewayServer,
   startServerWithClient,
+  trackConnectChallengeNonce,
   testTailscaleWhois,
   testState,
   withGatewayServer,
@@ -35,8 +37,24 @@ async function waitForWsClose(ws: WebSocket, timeoutMs: number): Promise<boolean
 
 const openWs = async (port: number, headers?: Record<string, string>) => {
   const ws = new WebSocket(`ws://127.0.0.1:${port}`, headers ? { headers } : undefined);
+  trackConnectChallengeNonce(ws);
   await new Promise<void>((resolve) => ws.once("open", resolve));
   return ws;
+};
+
+const readConnectChallengeNonce = async (ws: WebSocket) => {
+  const cached = getTrackedConnectChallengeNonce(ws);
+  if (cached) {
+    return cached;
+  }
+  const challenge = await onceMessage<{
+    type?: string;
+    event?: string;
+    payload?: Record<string, unknown> | null;
+  }>(ws, (o) => o.type === "event" && o.event === "connect.challenge");
+  const nonce = (challenge.payload as { nonce?: unknown } | undefined)?.nonce;
+  expect(typeof nonce).toBe("string");
+  return String(nonce);
 };
 
 const openTailscaleWs = async (port: number) => {
@@ -50,6 +68,7 @@ const openTailscaleWs = async (port: number) => {
       "tailscale-user-name": "Peter",
     },
   });
+  trackConnectChallengeNonce(ws);
   await new Promise<void>((resolve) => ws.once("open", resolve));
   return ws;
 };
@@ -132,7 +151,7 @@ async function createSignedDevice(params: {
   clientId: string;
   clientMode: string;
   identityPath?: string;
-  nonce?: string;
+  nonce: string;
   signedAtMs?: number;
 }) {
   const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
@@ -434,6 +453,7 @@ describe("gateway server auth/connect", () => {
     test("does not grant admin when scopes are omitted", async () => {
       const ws = await openWs(port);
       const token = resolveGatewayTokenOrEnv();
+      const nonce = await readConnectChallengeNonce(ws);
 
       const { randomUUID } = await import("node:crypto");
       const os = await import("node:os");
@@ -445,6 +465,7 @@ describe("gateway server auth/connect", () => {
         clientId: GATEWAY_CLIENT_NAMES.TEST,
         clientMode: GATEWAY_CLIENT_MODES.TEST,
         identityPath: path.join(os.tmpdir(), `openclaw-test-device-${randomUUID()}.json`),
+        nonce,
       });
 
       const connectRes = await sendRawConnectReq(ws, {
@@ -480,12 +501,14 @@ describe("gateway server auth/connect", () => {
     test("rejects device signature when scopes are omitted but signed with admin", async () => {
       const ws = await openWs(port);
       const token = resolveGatewayTokenOrEnv();
+      const nonce = await readConnectChallengeNonce(ws);
 
       const { device } = await createSignedDevice({
         token,
         scopes: ["operator.admin"],
         clientId: GATEWAY_CLIENT_NAMES.TEST,
         clientMode: GATEWAY_CLIENT_MODES.TEST,
+        nonce,
       });
 
       const connectRes = await sendRawConnectReq(ws, {
@@ -537,15 +560,26 @@ describe("gateway server auth/connect", () => {
       await new Promise<void>((resolve) => ws.once("close", () => resolve()));
     });
 
-    test("requires nonce when host is non-local", async () => {
+    test("requires nonce for device auth", async () => {
       const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
         headers: { host: "example.com" },
       });
       await new Promise<void>((resolve) => ws.once("open", resolve));
 
-      const res = await connectReq(ws);
+      const { device } = await createSignedDevice({
+        token: "secret",
+        scopes: ["operator.admin"],
+        clientId: TEST_OPERATOR_CLIENT.id,
+        clientMode: TEST_OPERATOR_CLIENT.mode,
+        nonce: "nonce-not-sent",
+      });
+      const { nonce: _nonce, ...deviceWithoutNonce } = device;
+      const res = await connectReq(ws, {
+        token: "secret",
+        device: deviceWithoutNonce,
+      });
       expect(res.ok).toBe(false);
-      expect(res.error?.message).toBe("device nonce required");
+      expect(res.error?.message ?? "").toContain("must have required property 'nonce'");
       await new Promise<void>((resolve) => ws.once("close", () => resolve()));
     });
 
@@ -836,12 +870,16 @@ describe("gateway server auth/connect", () => {
         const challenge = await challengePromise;
         const nonce = (challenge.payload as { nonce?: unknown } | undefined)?.nonce;
         expect(typeof nonce).toBe("string");
+        const { randomUUID } = await import("node:crypto");
+        const os = await import("node:os");
+        const path = await import("node:path");
         const scopes = ["operator.admin", "operator.approvals", "operator.pairing"];
         const { device } = await createSignedDevice({
           token: "secret",
           scopes,
           clientId: GATEWAY_CLIENT_NAMES.CONTROL_UI,
           clientMode: GATEWAY_CLIENT_MODES.WEBCHAT,
+          identityPath: path.join(os.tmpdir(), `openclaw-controlui-device-${randomUUID()}.json`),
           nonce: String(nonce),
         });
         const res = await connectReq(ws, {
@@ -869,12 +907,15 @@ describe("gateway server auth/connect", () => {
     try {
       await withGatewayServer(async ({ port }) => {
         const ws = await openWs(port, { origin: originForPort(port) });
+        const challengeNonce = await readConnectChallengeNonce(ws);
+        expect(challengeNonce).toBeTruthy();
         const { device } = await createSignedDevice({
           token: "secret",
           scopes: [],
           clientId: GATEWAY_CLIENT_NAMES.CONTROL_UI,
           clientMode: GATEWAY_CLIENT_MODES.WEBCHAT,
           signedAtMs: Date.now() - 60 * 60 * 1000,
+          nonce: String(challengeNonce),
         });
         const res = await connectReq(ws, {
           token: "secret",
@@ -901,8 +942,7 @@ describe("gateway server auth/connect", () => {
 
     ws.close();
 
-    const ws2 = new WebSocket(`ws://127.0.0.1:${port}`);
-    await new Promise<void>((resolve) => ws2.once("open", resolve));
+    const ws2 = await openWs(port);
     const res2 = await connectReq(ws2, { token: deviceToken });
     expect(res2.ok).toBe(true);
 
@@ -984,7 +1024,7 @@ describe("gateway server auth/connect", () => {
       platform: "test",
       mode: GATEWAY_CLIENT_MODES.TEST,
     };
-    const buildDevice = (scopes: string[]) => {
+    const buildDevice = (scopes: string[], nonce: string) => {
       const signedAtMs = Date.now();
       const payload = buildDeviceAuthPayload({
         deviceId: identity.deviceId,
@@ -994,19 +1034,22 @@ describe("gateway server auth/connect", () => {
         scopes,
         signedAtMs,
         token: "secret",
+        nonce,
       });
       return {
         id: identity.deviceId,
         publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
         signature: signDevicePayload(identity.privateKeyPem, payload),
         signedAt: signedAtMs,
+        nonce,
       };
     };
+    const initialNonce = await readConnectChallengeNonce(ws);
     const initial = await connectReq(ws, {
       token: "secret",
       scopes: ["operator.read"],
       client,
-      device: buildDevice(["operator.read"]),
+      device: buildDevice(["operator.read"], initialNonce),
     });
     if (!initial.ok) {
       await approvePendingPairingIfNeeded();
@@ -1017,13 +1060,13 @@ describe("gateway server auth/connect", () => {
 
     ws.close();
 
-    const ws2 = new WebSocket(`ws://127.0.0.1:${port}`);
-    await new Promise<void>((resolve) => ws2.once("open", resolve));
+    const ws2 = await openWs(port);
+    const nonce2 = await readConnectChallengeNonce(ws2);
     const res = await connectReq(ws2, {
       token: "secret",
       scopes: ["operator.admin"],
       client,
-      device: buildDevice(["operator.admin"]),
+      device: buildDevice(["operator.admin"], nonce2),
     });
     expect(res.ok).toBe(false);
     expect(res.error?.message ?? "").toContain("pairing required");
@@ -1031,13 +1074,13 @@ describe("gateway server auth/connect", () => {
     await approvePendingPairingIfNeeded();
     ws2.close();
 
-    const ws3 = new WebSocket(`ws://127.0.0.1:${port}`);
-    await new Promise<void>((resolve) => ws3.once("open", resolve));
+    const ws3 = await openWs(port);
+    const nonce3 = await readConnectChallengeNonce(ws3);
     const approved = await connectReq(ws3, {
       token: "secret",
       scopes: ["operator.admin"],
       client,
-      device: buildDevice(["operator.admin"]),
+      device: buildDevice(["operator.admin"], nonce3),
     });
     expect(approved.ok).toBe(true);
     paired = await getPairedDevice(identity.deviceId);
@@ -1066,7 +1109,7 @@ describe("gateway server auth/connect", () => {
       platform: "test",
       mode: GATEWAY_CLIENT_MODES.TEST,
     };
-    const buildDevice = (role: "operator" | "node", scopes: string[], nonce?: string) => {
+    const buildDevice = (role: "operator" | "node", scopes: string[], nonce: string) => {
       const signedAtMs = Date.now();
       const payload = buildDeviceAuthPayload({
         deviceId: identity.deviceId,
@@ -1164,7 +1207,7 @@ describe("gateway server auth/connect", () => {
       platform: "test",
       mode: GATEWAY_CLIENT_MODES.TEST,
     };
-    const buildDevice = (scopes: string[]) => {
+    const buildDevice = (scopes: string[], nonce: string) => {
       const signedAtMs = Date.now();
       const payload = buildDeviceAuthPayload({
         deviceId: identity.deviceId,
@@ -1174,20 +1217,23 @@ describe("gateway server auth/connect", () => {
         scopes,
         signedAtMs,
         token: "secret",
+        nonce,
       });
       return {
         id: identity.deviceId,
         publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
         signature: signDevicePayload(identity.privateKeyPem, payload),
         signedAt: signedAtMs,
+        nonce,
       };
     };
 
+    const initialNonce = await readConnectChallengeNonce(ws);
     const initial = await connectReq(ws, {
       token: "secret",
       scopes: ["operator.admin"],
       client,
-      device: buildDevice(["operator.admin"]),
+      device: buildDevice(["operator.admin"], initialNonce),
     });
     if (!initial.ok) {
       await approvePendingPairingIfNeeded();
@@ -1195,13 +1241,13 @@ describe("gateway server auth/connect", () => {
 
     ws.close();
 
-    const ws2 = new WebSocket(`ws://127.0.0.1:${port}`);
-    await new Promise<void>((resolve) => ws2.once("open", resolve));
+    const ws2 = await openWs(port);
+    const nonce2 = await readConnectChallengeNonce(ws2);
     const res = await connectReq(ws2, {
       token: "secret",
       scopes: ["operator.read"],
       client,
-      device: buildDevice(["operator.read"]),
+      device: buildDevice(["operator.read"], nonce2),
     });
     expect(res.ok).toBe(true);
     ws2.close();
@@ -1214,26 +1260,47 @@ describe("gateway server auth/connect", () => {
   });
 
   test("allows legacy paired devices missing role/scope metadata", async () => {
+    const { mkdtemp } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { buildDeviceAuthPayload } = await import("./device-auth.js");
+    const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
+      await import("../infra/device-identity.js");
     const { resolvePairingPaths, readJsonFile } = await import("../infra/pairing-files.js");
     const { writeJsonAtomic } = await import("../infra/json-files.js");
     const { getPairedDevice } = await import("../infra/device-pairing.js");
-    const {
-      device,
-      identity: { deviceId },
-    } = await createSignedDevice({
-      token: "secret",
-      scopes: ["operator.read"],
-      clientId: TEST_OPERATOR_CLIENT.id,
-      clientMode: TEST_OPERATOR_CLIENT.mode,
-    });
+    const identityDir = await mkdtemp(join(tmpdir(), "openclaw-device-legacy-meta-"));
+    const identity = loadOrCreateDeviceIdentity(join(identityDir, "device.json"));
+    const deviceId = identity.deviceId;
+    const buildDevice = (nonce: string) => {
+      const signedAtMs = Date.now();
+      const payload = buildDeviceAuthPayload({
+        deviceId,
+        clientId: TEST_OPERATOR_CLIENT.id,
+        clientMode: TEST_OPERATOR_CLIENT.mode,
+        role: "operator",
+        scopes: ["operator.read"],
+        signedAtMs,
+        token: "secret",
+        nonce,
+      });
+      return {
+        id: deviceId,
+        publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+        signature: signDevicePayload(identity.privateKeyPem, payload),
+        signedAt: signedAtMs,
+        nonce,
+      };
+    };
     const { server, ws, port, prevToken } = await startServerWithClient("secret");
     let ws2: WebSocket | undefined;
     try {
+      const initialNonce = await readConnectChallengeNonce(ws);
       const initial = await connectReq(ws, {
         token: "secret",
         scopes: ["operator.read"],
         client: TEST_OPERATOR_CLIENT,
-        device,
+        device: buildDevice(initialNonce),
       });
       if (!initial.ok) {
         await approvePendingPairingIfNeeded();
@@ -1256,14 +1323,14 @@ describe("gateway server auth/connect", () => {
       await writeJsonAtomic(pairedPath, paired);
       ws.close();
 
-      const wsReconnect = new WebSocket(`ws://127.0.0.1:${port}`);
+      const wsReconnect = await openWs(port);
       ws2 = wsReconnect;
-      await new Promise<void>((resolve) => wsReconnect.once("open", resolve));
+      const reconnectNonce = await readConnectChallengeNonce(wsReconnect);
       const reconnect = await connectReq(wsReconnect, {
         token: "secret",
         scopes: ["operator.read"],
         client: TEST_OPERATOR_CLIENT,
-        device,
+        device: buildDevice(reconnectNonce),
       });
       expect(reconnect.ok).toBe(true);
 
@@ -1302,7 +1369,7 @@ describe("gateway server auth/connect", () => {
         platform: "test",
         mode: GATEWAY_CLIENT_MODES.TEST,
       };
-      const buildDevice = (scopes: string[]) => {
+      const buildDevice = (scopes: string[], nonce: string) => {
         const signedAtMs = Date.now();
         const payload = buildDeviceAuthPayload({
           deviceId: identity.deviceId,
@@ -1312,20 +1379,23 @@ describe("gateway server auth/connect", () => {
           scopes,
           signedAtMs,
           token: "secret",
+          nonce,
         });
         return {
           id: identity.deviceId,
           publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
           signature: signDevicePayload(identity.privateKeyPem, payload),
           signedAt: signedAtMs,
+          nonce,
         };
       };
 
+      const initialNonce = await readConnectChallengeNonce(ws);
       const initial = await connectReq(ws, {
         token: "secret",
         scopes: ["operator.read"],
         client,
-        device: buildDevice(["operator.read"]),
+        device: buildDevice(["operator.read"], initialNonce),
       });
       if (!initial.ok) {
         const list = await listDevicePairing();
@@ -1349,14 +1419,14 @@ describe("gateway server auth/connect", () => {
       delete legacy.scopes;
       await writeJsonAtomic(pairedPath, paired);
 
-      const wsUpgrade = new WebSocket(`ws://127.0.0.1:${port}`);
+      const wsUpgrade = await openWs(port);
       ws2 = wsUpgrade;
-      await new Promise<void>((resolve) => wsUpgrade.once("open", resolve));
+      const upgradeNonce = await readConnectChallengeNonce(wsUpgrade);
       const upgraded = await connectReq(wsUpgrade, {
         token: "secret",
         scopes: ["operator.admin"],
         client,
-        device: buildDevice(["operator.admin"]),
+        device: buildDevice(["operator.admin"], upgradeNonce),
       });
       expect(upgraded.ok).toBe(false);
       expect(upgraded.error?.message ?? "").toContain("pairing required");
@@ -1389,8 +1459,7 @@ describe("gateway server auth/connect", () => {
 
     ws.close();
 
-    const ws2 = new WebSocket(`ws://127.0.0.1:${port}`);
-    await new Promise<void>((resolve) => ws2.once("open", resolve));
+    const ws2 = await openWs(port);
     const res2 = await connectReq(ws2, { token: deviceToken });
     expect(res2.ok).toBe(false);
 

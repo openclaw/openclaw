@@ -206,7 +206,7 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
 - All WS clients must include `device` identity during `connect` (operator + node).
   Control UI can omit it **only** when `gateway.controlUi.dangerouslyDisableDeviceAuth`
   is enabled for break-glass use.
-- Non-local connections must sign the server-provided `connect.challenge` nonce.
+- All connections must sign the server-provided `connect.challenge` nonce.
 
 ## TLS + pinning
 
