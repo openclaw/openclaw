@@ -49,6 +49,8 @@ import type {
   PluginHookToolResultPersistResult,
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
+  PluginHookOnEmptyResponseEvent,
+  PluginHookOnEmptyResponseResult,
 } from "./types.js";
 
 // Re-export types for consumers
@@ -93,6 +95,8 @@ export type {
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
+  PluginHookOnEmptyResponseEvent,
+  PluginHookOnEmptyResponseResult,
 };
 
 export type HookRunnerLogger = {
@@ -691,6 +695,27 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   // =========================================================================
+  // Resilience Hooks
+  // =========================================================================
+
+  /**
+   * Run on_empty_response hook.
+   * Fired when the model returns an empty assistant response.
+   * Plugins can modify the session file (e.g. strip images) and request a retry.
+   * Runs sequentially; any retry=true wins.
+   */
+  async function runOnEmptyResponse(
+    event: PluginHookOnEmptyResponseEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookOnEmptyResponseResult | undefined> {
+    return runModifyingHook<"on_empty_response", PluginHookOnEmptyResponseResult>(
+      "on_empty_response",
+      event,
+      ctx,
+    );
+  }
+
+  // =========================================================================
   // Utility
   // =========================================================================
 
@@ -739,6 +764,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Gateway hooks
     runGatewayStart,
     runGatewayStop,
+    // Resilience hooks
+    runOnEmptyResponse,
     // Utility
     hasHooks,
     getHookCount,

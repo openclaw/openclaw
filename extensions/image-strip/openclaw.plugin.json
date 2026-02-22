@@ -1,0 +1,22 @@
+{
+  "id": "image-strip",
+  "kind": "agent",
+  "name": "Image Strip",
+  "description": "Automatic image block stripping when model returns empty response",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "imageStripEnabled": {
+        "type": "boolean",
+        "default": true,
+        "description": "Auto-strip images from context when model returns empty response"
+      },
+      "imageStripPersist": {
+        "type": "boolean",
+        "default": true,
+        "description": "Also strip images from persisted session file"
+      }
+    }
+  }
+}
