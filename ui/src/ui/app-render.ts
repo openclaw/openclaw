@@ -174,6 +174,13 @@ export function renderApp(state: AppViewState) {
             aria-pressed=${state.streamMode}
           >
             ${state.streamMode ? icons.eye : icons.eyeOff}
+            ${
+              state.streamMode
+                ? html`
+                    <span class="topbar-redact__label">Stream Mode</span>
+                  `
+                : nothing
+            }
           </button>
           <span class="topbar-divider"></span>
           <div class="topbar-connection ${state.connected ? "topbar-connection--ok" : ""}">
