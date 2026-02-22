@@ -48,7 +48,7 @@ export async function applyAuthChoiceFalOpenRouter(
     const envKey = resolveEnvApiKey("fal-openrouter");
     if (envKey) {
       const useExisting = await params.prompter.confirm({
-        message: `Use existing FAL_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
+        message: `Use existing FAL_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
         initialValue: true,
       });
       if (useExisting) {
@@ -61,13 +61,13 @@ export async function applyAuthChoiceFalOpenRouter(
   if (!hasCredential) {
     await params.prompter.note(
       [
-        "fal OpenRouter gives you access to 300+ LLMs via a single FAL_KEY.",
+        "fal OpenRouter gives you access to 300+ LLMs via a single FAL_API_KEY.",
         "Get your API key at: https://fal.ai/dashboard/keys",
       ].join("\n"),
       "fal OpenRouter",
     );
     const key = await params.prompter.text({
-      message: "Enter fal API key (FAL_KEY)",
+      message: "Enter fal API key (FAL_API_KEY)",
       validate: validateApiKeyInput,
     });
     await setFalOpenrouterApiKey(normalizeApiKeyInput(String(key ?? "")), params.agentDir);

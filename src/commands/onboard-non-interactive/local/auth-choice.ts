@@ -424,7 +424,7 @@ export async function applyNonInteractiveAuthChoice(params: {
       cfg: baseConfig,
       flagValue: opts.falOpenrouterApiKey,
       flagName: "--fal-openrouter-api-key",
-      envVar: "FAL_KEY",
+      envVar: "FAL_API_KEY",
       runtime,
     });
     if (!resolved) {

@@ -62,7 +62,7 @@ export const ONBOARD_PROVIDER_AUTH_FLAGS: ReadonlyArray<OnboardProviderAuthFlag>
     authChoice: "fal-openrouter-api-key",
     cliFlag: "--fal-openrouter-api-key",
     cliOption: "--fal-openrouter-api-key <key>",
-    description: "fal OpenRouter API key (FAL_KEY)",
+    description: "fal OpenRouter API key (FAL_API_KEY)",
   },
   {
     optionKey: "aiGatewayApiKey",
