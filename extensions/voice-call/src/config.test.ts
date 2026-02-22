@@ -52,6 +52,7 @@ describe("validateProviderConfig", () => {
     delete process.env.TELNYX_PUBLIC_KEY;
     delete process.env.PLIVO_AUTH_ID;
     delete process.env.PLIVO_AUTH_TOKEN;
+    delete process.env.OPENCLAW_UNSAFE_ALLOW_SKIP_SIGNATURE_VERIFICATION;
   };
 
   beforeEach(() => {
@@ -168,10 +169,76 @@ describe("validateProviderConfig", () => {
       const skippedVerification = createBaseConfig("telnyx");
       skippedVerification.skipSignatureVerification = true;
       skippedVerification.telnyx = { apiKey: "KEY123", connectionId: "CONN456" };
+      process.env.NODE_ENV = "development";
       expect(validateProviderConfig(skippedVerification)).toMatchObject({
         valid: true,
         errors: [],
       });
+    });
+  });
+
+  describe("skipSignatureVerification policy", () => {
+    it("rejects skipSignatureVerification outside development by default", () => {
+      process.env.NODE_ENV = "production";
+      const config = createBaseConfig("twilio");
+      config.skipSignatureVerification = true;
+      config.twilio = { accountSid: "AC123", authToken: "secret" };
+
+      const result = validateProviderConfig(config);
+
+      expect(result.valid).toBe(false);
+      expect(result.errors.some((error) => error.includes("skipSignatureVerification"))).toBe(true);
+    });
+
+    it("rejects skipSignatureVerification with remote exposure even in development", () => {
+      process.env.NODE_ENV = "development";
+      const config = createBaseConfig("twilio");
+      config.skipSignatureVerification = true;
+      config.twilio = { accountSid: "AC123", authToken: "secret" };
+      config.tunnel = { provider: "ngrok", allowNgrokFreeTierLoopbackBypass: false };
+
+      const result = validateProviderConfig(config);
+
+      expect(result.valid).toBe(false);
+      expect(result.errors.some((error) => error.includes("skipSignatureVerification"))).toBe(true);
+    });
+
+    it("allows skipSignatureVerification with explicit unsafe override", () => {
+      process.env.NODE_ENV = "production";
+      process.env.OPENCLAW_UNSAFE_ALLOW_SKIP_SIGNATURE_VERIFICATION = "1";
+      const config = createBaseConfig("twilio");
+      config.skipSignatureVerification = true;
+      config.twilio = { accountSid: "AC123", authToken: "secret" };
+      config.publicUrl = "https://voice.example.com/voice/webhook";
+
+      const result = validateProviderConfig(config);
+
+      expect(result).toMatchObject({ valid: true, errors: [] });
+    });
+
+    it("accepts mapped-loopback binds in development without extra exposure", () => {
+      process.env.NODE_ENV = "development";
+      const config = createBaseConfig("twilio");
+      config.skipSignatureVerification = true;
+      config.twilio = { accountSid: "AC123", authToken: "secret" };
+      config.serve.bind = "::ffff:127.0.0.1";
+
+      const result = validateProviderConfig(config);
+
+      expect(result).toMatchObject({ valid: true, errors: [] });
+    });
+
+    it("rejects wildcard bind in development without explicit override", () => {
+      process.env.NODE_ENV = "development";
+      const config = createBaseConfig("twilio");
+      config.skipSignatureVerification = true;
+      config.twilio = { accountSid: "AC123", authToken: "secret" };
+      config.serve.bind = "0.0.0.0";
+
+      const result = validateProviderConfig(config);
+
+      expect(result.valid).toBe(false);
+      expect(result.errors.some((error) => error.includes("skipSignatureVerification"))).toBe(true);
     });
   });
 
