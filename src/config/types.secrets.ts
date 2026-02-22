@@ -13,6 +13,24 @@ export type SecretRef = {
 
 export type SecretInput = string | SecretRef;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+export function isSecretRef(value: unknown): value is SecretRef {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (Object.keys(value).length !== 2) {
+    return false;
+  }
+  return (
+    (value.source === "env" || value.source === "file") &&
+    typeof value.id === "string" &&
+    value.id.trim().length > 0
+  );
+}
+
 export type EnvSecretSourceConfig = {
   type?: "env";
 };

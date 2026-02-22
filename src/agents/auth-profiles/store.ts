@@ -18,6 +18,65 @@ function _syncAuthProfileStore(target: AuthProfileStore, source: AuthProfileStor
   target.usageStats = source.usageStats;
 }
 
+const runtimeAuthStoreSnapshots = new Map<string, AuthProfileStore>();
+
+function resolveRuntimeStoreKey(agentDir?: string): string {
+  return resolveAuthStorePath(agentDir);
+}
+
+function cloneAuthProfileStore(store: AuthProfileStore): AuthProfileStore {
+  return structuredClone(store);
+}
+
+function resolveRuntimeAuthProfileStore(agentDir?: string): AuthProfileStore | null {
+  if (runtimeAuthStoreSnapshots.size === 0) {
+    return null;
+  }
+
+  const mainKey = resolveRuntimeStoreKey(undefined);
+  const requestedKey = resolveRuntimeStoreKey(agentDir);
+  const mainStore = runtimeAuthStoreSnapshots.get(mainKey);
+  const requestedStore = runtimeAuthStoreSnapshots.get(requestedKey);
+
+  if (!agentDir || requestedKey === mainKey) {
+    if (!mainStore) {
+      return null;
+    }
+    return cloneAuthProfileStore(mainStore);
+  }
+
+  if (mainStore && requestedStore) {
+    return mergeAuthProfileStores(
+      cloneAuthProfileStore(mainStore),
+      cloneAuthProfileStore(requestedStore),
+    );
+  }
+  if (requestedStore) {
+    return cloneAuthProfileStore(requestedStore);
+  }
+  if (mainStore) {
+    return cloneAuthProfileStore(mainStore);
+  }
+
+  return null;
+}
+
+export function replaceRuntimeAuthProfileStoreSnapshots(
+  entries: Array<{ agentDir?: string; store: AuthProfileStore }>,
+): void {
+  runtimeAuthStoreSnapshots.clear();
+  for (const entry of entries) {
+    runtimeAuthStoreSnapshots.set(
+      resolveRuntimeStoreKey(entry.agentDir),
+      cloneAuthProfileStore(entry.store),
+    );
+  }
+}
+
+export function clearRuntimeAuthProfileStoreSnapshots(): void {
+  runtimeAuthStoreSnapshots.clear();
+}
+
 export async function updateAuthProfileStoreWithLock(params: {
   agentDir?: string;
   updater: (store: AuthProfileStore) => boolean;
@@ -316,10 +375,30 @@ function loadAuthProfileStoreForAgent(
   return store;
 }
 
+export function loadAuthProfileStoreForRuntime(
+  agentDir?: string,
+  options?: { allowKeychainPrompt?: boolean },
+): AuthProfileStore {
+  const store = loadAuthProfileStoreForAgent(agentDir, options);
+  const authPath = resolveAuthStorePath(agentDir);
+  const mainAuthPath = resolveAuthStorePath();
+  if (!agentDir || authPath === mainAuthPath) {
+    return store;
+  }
+
+  const mainStore = loadAuthProfileStoreForAgent(undefined, options);
+  return mergeAuthProfileStores(mainStore, store);
+}
+
 export function ensureAuthProfileStore(
   agentDir?: string,
   options?: { allowKeychainPrompt?: boolean },
 ): AuthProfileStore {
+  const runtimeStore = resolveRuntimeAuthProfileStore(agentDir);
+  if (runtimeStore) {
+    return runtimeStore;
+  }
+
   const store = loadAuthProfileStoreForAgent(agentDir, options);
   const authPath = resolveAuthStorePath(agentDir);
   const mainAuthPath = resolveAuthStorePath();
