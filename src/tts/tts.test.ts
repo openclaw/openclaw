@@ -1,3 +1,4 @@
+import { unlinkSync, writeFileSync } from "node:fs";
 import { completeSimple, type AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { getApiKeyForModel } from "../agents/model-auth.js";
@@ -415,6 +416,46 @@ describe("tts", () => {
           const provider = getTtsProvider(config, testCase.prefsPath);
           expect(provider).toBe(testCase.expected);
         });
+      }
+    });
+  });
+
+  describe("resolveTtsAutoMode", () => {
+    const NOPREFS = `/tmp/nonexistent-openclaw-tts-prefs-${Date.now()}.json`;
+
+    it("returns config auto when no prefs file and no session override", () => {
+      const config = resolveTtsConfig({ messages: { tts: { auto: "always" } } });
+      expect(tts.resolveTtsAutoMode({ config, prefsPath: NOPREFS })).toBe("always");
+    });
+
+    it("config off is a hard-disable: overrides prefs file set to always", () => {
+      // Reproduces #22871: user previously ran /tts on (auto=always in prefs),
+      // admin sets messages.tts.auto: "off" in config — config should win.
+      const prefsPath = `/tmp/tts-prefs-hardoff-test-${Date.now()}.json`;
+      writeFileSync(prefsPath, JSON.stringify({ tts: { auto: "always" } }));
+      try {
+        const config = resolveTtsConfig({ messages: { tts: { auto: "off" } } });
+        expect(tts.resolveTtsAutoMode({ config, prefsPath })).toBe("off");
+      } finally {
+        unlinkSync(prefsPath);
+      }
+    });
+
+    it("config off is a hard-disable: overrides session-level ttsAuto", () => {
+      const config = resolveTtsConfig({ messages: { tts: { auto: "off" } } });
+      expect(tts.resolveTtsAutoMode({ config, prefsPath: NOPREFS, sessionAuto: "always" })).toBe(
+        "off",
+      );
+    });
+
+    it("prefs file wins over config when config is not off", () => {
+      const prefsPath = `/tmp/tts-prefs-prefswin-test-${Date.now()}.json`;
+      writeFileSync(prefsPath, JSON.stringify({ tts: { auto: "tagged" } }));
+      try {
+        const config = resolveTtsConfig({ messages: { tts: { auto: "inbound" } } });
+        expect(tts.resolveTtsAutoMode({ config, prefsPath })).toBe("tagged");
+      } finally {
+        unlinkSync(prefsPath);
       }
     });
   });

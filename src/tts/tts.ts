@@ -336,6 +336,10 @@ export function resolveTtsAutoMode(params: {
   prefsPath: string;
   sessionAuto?: string;
 }): TtsAutoMode {
+  // Config "off" is an administrative hard-disable: operator intent overrides all user prefs.
+  if (params.config.auto === "off") {
+    return "off";
+  }
   const sessionAuto = normalizeTtsAutoMode(params.sessionAuto);
   if (sessionAuto) {
     return sessionAuto;
