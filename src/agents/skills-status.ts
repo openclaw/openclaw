@@ -6,6 +6,7 @@ import { CONFIG_DIR } from "../utils.js";
 import {
   hasBinary,
   isBundledSkillAllowed,
+  isSkillQuarantinedByDefault,
   isConfigPathTruthy,
   loadWorkspaceSkillEntries,
   resolveBundledAllowlist,
@@ -175,7 +176,8 @@ function buildSkillStatus(
 ): SkillStatusEntry {
   const skillKey = resolveSkillKey(entry);
   const skillConfig = resolveSkillConfig(config, skillKey);
-  const disabled = skillConfig?.enabled === false;
+  const disabled =
+    skillConfig?.enabled === false || isSkillQuarantinedByDefault({ entry, skillKey, skillConfig });
   const allowBundled = resolveBundledAllowlist(config);
   const blockedByAllowlist = !isBundledSkillAllowed(entry, allowBundled);
   const always = entry.metadata?.always === true;

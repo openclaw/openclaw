@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { loadConfig, writeConfigFile } from "../config/config.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
@@ -32,6 +33,26 @@ async function runSkillsAction(render: (report: SkillStatusReport) => string): P
     defaultRuntime.error(String(err));
     defaultRuntime.exit(1);
   }
+}
+
+function upsertSkillEnabledEntry(
+  cfg: OpenClawConfig,
+  skillKey: string,
+  enabled: boolean,
+): OpenClawConfig {
+  return {
+    ...cfg,
+    skills: {
+      ...cfg.skills,
+      entries: {
+        ...cfg.skills?.entries,
+        [skillKey]: {
+          ...cfg.skills?.entries?.[skillKey],
+          enabled,
+        },
+      },
+    },
+  };
 }
 
 /**
@@ -72,6 +93,60 @@ export function registerSkillsCli(program: Command) {
     .option("--json", "Output as JSON", false)
     .action(async (opts) => {
       await runSkillsAction((report) => formatSkillsCheck(report, opts));
+    });
+
+  skills
+    .command("enable")
+    .description("Enable a skill in config")
+    .argument("<name>", "Skill name or skill key")
+    .action(async (name: string) => {
+      try {
+        const config = loadConfig();
+        const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+        const { buildWorkspaceSkillStatus } = await import("../agents/skills-status.js");
+        const report = buildWorkspaceSkillStatus(workspaceDir, { config });
+        const skill = report.skills.find((entry) => entry.name === name || entry.skillKey === name);
+        if (!skill) {
+          defaultRuntime.error(
+            `Skill "${name}" not found. Run "openclaw skills list" to see available skills.`,
+          );
+          defaultRuntime.exit(1);
+          return;
+        }
+        const next = upsertSkillEnabledEntry(config, skill.skillKey, true);
+        await writeConfigFile(next);
+        defaultRuntime.log(`Enabled skill "${skill.name}" (${skill.skillKey}).`);
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
+    });
+
+  skills
+    .command("disable")
+    .description("Disable a skill in config")
+    .argument("<name>", "Skill name or skill key")
+    .action(async (name: string) => {
+      try {
+        const config = loadConfig();
+        const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+        const { buildWorkspaceSkillStatus } = await import("../agents/skills-status.js");
+        const report = buildWorkspaceSkillStatus(workspaceDir, { config });
+        const skill = report.skills.find((entry) => entry.name === name || entry.skillKey === name);
+        if (!skill) {
+          defaultRuntime.error(
+            `Skill "${name}" not found. Run "openclaw skills list" to see available skills.`,
+          );
+          defaultRuntime.exit(1);
+          return;
+        }
+        const next = upsertSkillEnabledEntry(config, skill.skillKey, false);
+        await writeConfigFile(next);
+        defaultRuntime.log(`Disabled skill "${skill.name}" (${skill.skillKey}).`);
+      } catch (err) {
+        defaultRuntime.error(String(err));
+        defaultRuntime.exit(1);
+      }
     });
 
   // Default action (no subcommand) - show list

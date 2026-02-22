@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw skills` (list/info/check) and skill eligibility"
+summary: "CLI reference for `openclaw skills` (list/info/check/enable/disable) and skill eligibility"
 read_when:
   - You want to see which skills are available and ready to run
   - You want to debug missing binaries/env/config for skills
@@ -23,4 +23,6 @@ openclaw skills list
 openclaw skills list --eligible
 openclaw skills info <name>
 openclaw skills check
+openclaw skills enable <name>
+openclaw skills disable <name>
 ```

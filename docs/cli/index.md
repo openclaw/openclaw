@@ -434,6 +434,8 @@ Subcommands:
 - `skills list`: list skills (default when no subcommand).
 - `skills info <name>`: show details for one skill.
 - `skills check`: summary of ready vs missing requirements.
+- `skills enable <name>`: enable a skill in config.
+- `skills disable <name>`: disable a skill in config.
 
 Options:
 
