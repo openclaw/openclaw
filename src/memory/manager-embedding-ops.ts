@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runGeminiEmbeddingBatches, type GeminiBatchRequest } from "./batch-gemini.js";
+import { type MistralBatchRequest, runMistralEmbeddingBatches } from "./batch-mistral.js";
 import {
   OPENAI_BATCH_ENDPOINT,
   type OpenAiBatchRequest,
@@ -240,6 +241,20 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         }),
       );
     }
+    if (this.provider.id === "mistral" && this.mistral) {
+      const entries = Object.entries(this.mistral.headers)
+        .filter(([key]) => key.toLowerCase() !== "authorization")
+        .toSorted(([a], [b]) => a.localeCompare(b))
+        .map(([key, value]) => [key, value]);
+      return hashText(
+        JSON.stringify({
+          provider: "mistral",
+          baseUrl: this.mistral.baseUrl,
+          model: this.mistral.model,
+          headers: entries,
+        }),
+      );
+    }
     return hashText(JSON.stringify({ provider: this.provider.id, model: this.provider.model }));
   }
 
@@ -259,6 +274,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
     if (this.provider.id === "voyage" && this.voyage) {
       return this.embedChunksWithVoyageBatch(chunks, entry, source);
+    }
+    if (this.provider.id === "mistral" && this.mistral) {
+      return this.embedChunksWithMistralBatch(chunks, entry, source);
     }
     return this.embedChunksInBatches(chunks);
   }
@@ -370,7 +388,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     chunks: MemoryChunk[];
     entry: MemoryFileEntry | SessionFileEntry;
     source: MemorySource;
-    provider: "voyage" | "openai" | "gemini";
+    provider: "voyage" | "openai" | "gemini" | "mistral";
     enabled: boolean;
     buildRequest: (chunk: MemoryChunk) => Omit<TRequest, "custom_id">;
     runBatch: (runnerOptions: {
@@ -435,6 +453,29 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       runBatch: async (runnerOptions) =>
         await runVoyageEmbeddingBatches({
           client: voyage!,
+          ...runnerOptions,
+        }),
+    });
+  }
+
+  private async embedChunksWithMistralBatch(
+    chunks: MemoryChunk[],
+    entry: MemoryFileEntry | SessionFileEntry,
+    source: MemorySource,
+  ): Promise<number[][]> {
+    const mistral = this.mistral;
+    return await this.embedChunksWithProviderBatch<MistralBatchRequest>({
+      chunks,
+      entry,
+      source,
+      provider: "mistral",
+      enabled: Boolean(mistral),
+      buildRequest: (chunk) => ({
+        text: chunk.text,
+      }),
+      runBatch: async (runnerOptions) =>
+        await runMistralEmbeddingBatches({
+          mistral: mistral!,
           ...runnerOptions,
         }),
     });

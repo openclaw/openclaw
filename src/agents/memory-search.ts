@@ -2,6 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig, MemorySearchConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
+import { DEFAULT_MISTRAL_EMBEDDING_MODEL } from "../memory/embeddings-mistral.js";
 import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 
@@ -9,7 +10,7 @@ export type ResolvedMemorySearchConfig = {
   enabled: boolean;
   sources: Array<"memory" | "sessions">;
   extraPaths: string[];
-  provider: "openai" | "local" | "gemini" | "voyage" | "auto";
+  provider: "openai" | "local" | "gemini" | "voyage" | "mistral" | "auto";
   remote?: {
     baseUrl?: string;
     apiKey?: string;
@@ -25,7 +26,7 @@ export type ResolvedMemorySearchConfig = {
   experimental: {
     sessionMemory: boolean;
   };
-  fallback: "openai" | "gemini" | "local" | "voyage" | "none";
+  fallback: "openai" | "gemini" | "local" | "voyage" | "mistral" | "none";
   model: string;
   local: {
     modelPath?: string;
@@ -153,6 +154,7 @@ function mergeConfig(
     provider === "openai" ||
     provider === "gemini" ||
     provider === "voyage" ||
+    provider === "mistral" ||
     provider === "auto";
   const batch = {
     enabled: overrideRemote?.batch?.enabled ?? defaultRemote?.batch?.enabled ?? false,
@@ -182,7 +184,9 @@ function mergeConfig(
         ? DEFAULT_OPENAI_MODEL
         : provider === "voyage"
           ? DEFAULT_VOYAGE_MODEL
-          : undefined;
+          : provider === "mistral"
+            ? DEFAULT_MISTRAL_EMBEDDING_MODEL
+            : undefined;
   const model = overrides?.model ?? defaults?.model ?? modelDefault ?? "";
   const local = {
     modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath,
