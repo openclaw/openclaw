@@ -373,7 +373,7 @@ export async function sendMessageBlueBubbles(
   const wantsReplyThread = Boolean(opts.replyToMessageGuid?.trim());
   const wantsEffect = Boolean(effectId);
   const needsPrivateApi = wantsReplyThread || wantsEffect;
-  const canUsePrivateApi = needsPrivateApi && privateApiStatus !== false;
+  const canUsePrivateApi = needsPrivateApi && privateApiStatus === true;
   if (wantsEffect && privateApiStatus === false) {
     throw new Error(
       "BlueBubbles send failed: reply/effect requires Private API, but it is disabled on the BlueBubbles server.",
@@ -395,7 +395,7 @@ export async function sendMessageBlueBubbles(
   }
 
   // Add message effects support
-  if (effectId) {
+  if (effectId && canUsePrivateApi) {
     payload.effectId = effectId;
   }
 
