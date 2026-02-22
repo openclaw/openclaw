@@ -17,6 +17,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway/Compaction: notify users when compaction starts and trigger proactive compaction on idle sessions, extending the triple-layer post-compaction context enforcement (#18049). (#21117) Thanks @irchelper.
+
 - Agents/Streaming: keep assistant partial streaming active during reasoning streams, handle native `thinking_*` stream events consistently, dedupe mixed reasoning-end signals, and clear stale mutating tool errors after same-target retry success. (#20635) Thanks @obviyus.
 - iOS/Screen: move `WKWebView` lifecycle ownership into `ScreenWebView` coordinator and explicit attach/detach flow to reduce gesture/lifecycle crash risk (`__NSArrayM insertObject:atIndex:` paths) during screen tab updates. (#20366) Thanks @ngutman.
 - iOS/Onboarding: prevent pairing-status flicker during auto-resume by keeping resumed state transitions stable. (#20310) Thanks @mbelinky.
