@@ -109,7 +109,7 @@ export async function startSshPortForward(opts: {
 }): Promise<SshTunnel> {
   const parsed = parseSshTarget(opts.target);
   if (!parsed) {
-    throw new Error(`invalid SSH target: ${opts.target}`);
+    throw new Error(`Invalid SSH target: ${opts.target}`);
   }
 
   let localPort = opts.localPortPreferred;

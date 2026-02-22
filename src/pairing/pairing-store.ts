@@ -53,11 +53,11 @@ function resolveCredentialsDir(env: NodeJS.ProcessEnv = process.env): string {
 function safeChannelKey(channel: PairingChannel): string {
   const raw = String(channel).trim().toLowerCase();
   if (!raw) {
-    throw new Error("invalid pairing channel");
+    throw new Error("Invalid pairing channel");
   }
   const safe = raw.replace(/[\\/:*?"<>|]/g, "_").replace(/\.\./g, "_");
   if (!safe || safe === "_") {
-    throw new Error("invalid pairing channel");
+    throw new Error("Invalid pairing channel");
   }
   return safe;
 }
@@ -69,11 +69,11 @@ function resolvePairingPath(channel: PairingChannel, env: NodeJS.ProcessEnv = pr
 function safeAccountKey(accountId: string): string {
   const raw = String(accountId).trim().toLowerCase();
   if (!raw) {
-    throw new Error("invalid pairing account id");
+    throw new Error("Invalid pairing account id");
   }
   const safe = raw.replace(/[\\/:*?"<>|]/g, "_").replace(/\.\./g, "_");
   if (!safe || safe === "_") {
-    throw new Error("invalid pairing account id");
+    throw new Error("Invalid pairing account id");
   }
   return safe;
 }
@@ -200,7 +200,7 @@ function generateUniqueCode(existing: Set<string>): string {
       return code;
     }
   }
-  throw new Error("failed to generate unique pairing code");
+  throw new Error("Failed to generate unique pairing code");
 }
 
 function normalizePairingAccountId(accountId?: string): string {
