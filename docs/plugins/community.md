@@ -42,3 +42,10 @@ Use this format when adding entries:
   npm: `@scope/package`
   repo: `https://github.com/org/repo`
   install: `openclaw plugins install @scope/package`
+
+## Plugins
+
+- **Live Events** — search upcoming concerts, sports, and theater near you via the Ticketmaster Discovery API
+  npm: `@itsuzef/live-events`
+  repo: `https://github.com/itsuzef/openclaw-live-events`
+  install: `openclaw plugins install @itsuzef/live-events`
