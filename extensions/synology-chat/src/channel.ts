@@ -281,12 +281,22 @@ export function createSynologyChatPlugin() {
 
         log?.info?.(`Registered HTTP route: ${account.webhookPath} for Synology Chat`);
 
-        return {
-          stop: () => {
+        // Keep alive until abort signal fires.
+        // The gateway expects a Promise that stays pending while the channel is running.
+        // Resolving immediately triggers a restart loop.
+        return new Promise<void>((resolve) => {
+          const cleanup = () => {
             log?.info?.(`Stopping Synology Chat channel (account: ${accountId})`);
             if (typeof unregister === "function") unregister();
-          },
-        };
+            ctx.abortSignal?.removeEventListener("abort", cleanup);
+            resolve();
+          };
+          if (ctx.abortSignal?.aborted) {
+            cleanup();
+          } else {
+            ctx.abortSignal?.addEventListener("abort", cleanup);
+          }
+        });
       },
 
       stopAccount: async (ctx: any) => {
