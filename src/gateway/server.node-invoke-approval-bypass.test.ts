@@ -168,7 +168,9 @@ describe("node.invoke approval bypass", () => {
 
     const client = new GatewayClient({
       url: `ws://127.0.0.1:${port}`,
-      connectDelayMs: 0,
+      // Keep challenge timeout realistic in tests; 0 maps to a 250ms timeout and can
+      // trigger reconnect backoff loops under load.
+      connectDelayMs: 2_000,
       token: "secret",
       role: "node",
       clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
