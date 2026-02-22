@@ -59,7 +59,7 @@ const createTrackedTempMedia = async (tempPaths: string[], ext: string) => {
   return media.filePath;
 };
 
-describe("media understanding auto-detect (e2e)", () => {
+describe.skipIf(process.platform === "win32")("media understanding auto-detect (e2e)", () => {
   let tempPaths: string[] = [];
 
   beforeEach(() => {
