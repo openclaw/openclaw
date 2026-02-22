@@ -158,6 +158,102 @@ describe("sanitizeSessionHistory", () => {
     expect(first.content as string).toContain("sourceSession=agent:main:req");
   });
 
+  it("drops stale assistant usage snapshots kept before latest compaction summary", async () => {
+    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+
+    const messages = [
+      { role: "user", content: "old context" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "old answer" }],
+        stopReason: "stop",
+        usage: {
+          input: 191_919,
+          output: 2_000,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 193_919,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      },
+      {
+        role: "compactionSummary",
+        summary: "compressed",
+        tokensBefore: 191_919,
+        timestamp: new Date().toISOString(),
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-responses",
+      provider: "openai",
+      sessionManager: mockSessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    const staleAssistant = result.find((message) => message.role === "assistant") as
+      | (AgentMessage & { usage?: unknown })
+      | undefined;
+    expect(staleAssistant).toBeDefined();
+    expect(staleAssistant?.usage).toBeUndefined();
+  });
+
+  it("preserves fresh assistant usage snapshots created after latest compaction summary", async () => {
+    vi.mocked(helpers.isGoogleModelApi).mockReturnValue(false);
+
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "pre-compaction answer" }],
+        stopReason: "stop",
+        usage: {
+          input: 120_000,
+          output: 3_000,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 123_000,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      },
+      {
+        role: "compactionSummary",
+        summary: "compressed",
+        tokensBefore: 123_000,
+        timestamp: new Date().toISOString(),
+      },
+      { role: "user", content: "new question" },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "fresh answer" }],
+        stopReason: "stop",
+        usage: {
+          input: 1_000,
+          output: 250,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 1_250,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = await sanitizeSessionHistory({
+      messages,
+      modelApi: "openai-responses",
+      provider: "openai",
+      sessionManager: mockSessionManager,
+      sessionId: TEST_SESSION_ID,
+    });
+
+    const assistants = result.filter((message) => message.role === "assistant") as Array<
+      AgentMessage & { usage?: unknown }
+    >;
+    expect(assistants).toHaveLength(2);
+    expect(assistants[0]?.usage).toBeUndefined();
+    expect(assistants[1]?.usage).toBeDefined();
+  });
+
   it("keeps reasoning-only assistant messages for openai-responses", async () => {
     setNonGoogleModelApi();
 
