@@ -212,7 +212,7 @@ Tests:
 
 - `src/discord/monitor/provider*.test.ts`
 - `src/discord/monitor/reply-delivery.test.ts`
-- `src/agents/subagent-announce.format.e2e.test.ts`
+- `src/agents/subagent-announce.format.test.ts`
 
 ## Done criteria for iteration 1
 
