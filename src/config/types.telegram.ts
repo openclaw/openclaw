@@ -79,6 +79,8 @@ export type TelegramAccountConfig = {
   defaultTo?: string | number;
   /** Optional allowlist for Telegram group senders (numeric Telegram user IDs). */
   groupAllowFrom?: Array<string | number>;
+  /** Allow bot-authored messages to trigger replies in groups (default: false). */
+  allowBots?: boolean;
   /**
    * Controls how group messages are handled:
    * - "open": groups bypass allowFrom, only mention-gating applies
@@ -184,6 +186,8 @@ export type TelegramGroupConfig = {
   /** Optional tool policy overrides for this group. */
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
+  /** Allow bot-authored messages to trigger replies in this group (default: false). */
+  allowBots?: boolean;
   /** If specified, only load these skills for this group (when no topic). Omit = all skills; empty = no skills. */
   skills?: string[];
   /** Per-topic configuration (key is message_thread_id as string) */
