@@ -13,6 +13,10 @@ const PAIRING_CODE_LENGTH = 8;
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const PAIRING_PENDING_TTL_MS = 60 * 60 * 1000;
 const PAIRING_PENDING_MAX = 3;
+const PAIRING_BACKOFF_BASE_MS = 15_000;
+const PAIRING_BACKOFF_MAX_MS = 15 * 60_000;
+const PAIRING_BACKOFF_RESET_MS = 10 * 60_000;
+const PAIRING_BACKOFF_RETENTION_MS = 24 * 60 * 60_000;
 const PAIRING_STORE_LOCK_OPTIONS = {
   retries: {
     retries: 10,
@@ -37,6 +41,17 @@ export type PairingRequest = {
 type PairingStore = {
   version: 1;
   requests: PairingRequest[];
+};
+
+type PairingBackoffEntry = {
+  strikes: number;
+  lastAttemptAt: string;
+  nextAllowedAt: string;
+};
+
+type PairingBackoffStore = {
+  version: 1;
+  entries: Record<string, PairingBackoffEntry>;
 };
 
 type AllowFromStore = {
@@ -64,6 +79,13 @@ function safeChannelKey(channel: PairingChannel): string {
 
 function resolvePairingPath(channel: PairingChannel, env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveCredentialsDir(env), `${safeChannelKey(channel)}-pairing.json`);
+}
+
+function resolvePairingBackoffPath(
+  channel: PairingChannel,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return path.join(resolveCredentialsDir(env), `${safeChannelKey(channel)}-pairing-backoff.json`);
 }
 
 function safeAccountKey(accountId: string): string {
@@ -113,6 +135,26 @@ async function readPairingRequests(filePath: string): Promise<PairingRequest[]> 
   return Array.isArray(value.requests) ? value.requests : [];
 }
 
+async function readPairingBackoffEntries(
+  filePath: string,
+): Promise<Record<string, PairingBackoffEntry>> {
+  const { value } = await readJsonFile<PairingBackoffStore>(filePath, {
+    version: 1,
+    entries: {},
+  });
+  return normalizeBackoffEntries(value.entries);
+}
+
+async function writePairingBackoffEntries(
+  filePath: string,
+  entries: Record<string, PairingBackoffEntry>,
+): Promise<void> {
+  await writeJsonFile(filePath, {
+    version: 1,
+    entries,
+  } satisfies PairingBackoffStore);
+}
+
 async function readPrunedPairingRequests(filePath: string): Promise<{
   requests: PairingRequest[];
   removed: boolean;
@@ -148,6 +190,141 @@ function parseTimestamp(value: string | undefined): number | null {
     return null;
   }
   return parsed;
+}
+
+function normalizePairingBackoffIp(rawIp: string | undefined): string | null {
+  const raw = rawIp?.trim().toLowerCase();
+  if (!raw) {
+    return null;
+  }
+  const bracketed = raw.match(/^\[([^\]]+)\](?::\d+)?$/)?.[1] ?? raw;
+  const withoutPort = /^\d{1,3}(?:\.\d{1,3}){3}:\d+$/.test(bracketed)
+    ? bracketed.replace(/:\d+$/, "")
+    : bracketed;
+  const withoutZone = withoutPort.replace(/%.+$/, "");
+  const mappedIpv4 = withoutZone.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/)?.[1];
+  const normalized = mappedIpv4 ?? withoutZone;
+  return normalized || null;
+}
+
+function resolveBackoffScope(accountId?: string): string {
+  const normalized = normalizePairingAccountId(accountId);
+  return normalized || "default";
+}
+
+function buildSenderBackoffKey(params: { id: string; accountId?: string }): string {
+  return `sender:${resolveBackoffScope(params.accountId)}:${params.id.trim().toLowerCase()}`;
+}
+
+function buildIpBackoffKey(params: { sourceIp?: string; accountId?: string }): string | null {
+  const normalizedIp = normalizePairingBackoffIp(params.sourceIp);
+  if (!normalizedIp) {
+    return null;
+  }
+  return `ip:${resolveBackoffScope(params.accountId)}:${normalizedIp}`;
+}
+
+function resolveBackoffDelayMs(strikes: number): number {
+  const exponent = Math.max(0, Math.min(20, strikes - 1));
+  return Math.min(PAIRING_BACKOFF_MAX_MS, PAIRING_BACKOFF_BASE_MS * 2 ** exponent);
+}
+
+function normalizeBackoffEntries(raw: unknown): Record<string, PairingBackoffEntry> {
+  if (!raw || typeof raw !== "object") {
+    return {};
+  }
+  const out: Record<string, PairingBackoffEntry> = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!key || typeof value !== "object" || value === null) {
+      continue;
+    }
+    const entry = value as {
+      strikes?: unknown;
+      lastAttemptAt?: unknown;
+      nextAllowedAt?: unknown;
+    };
+    const strikes =
+      typeof entry.strikes === "number" && Number.isFinite(entry.strikes)
+        ? Math.floor(entry.strikes)
+        : 0;
+    const lastAttemptAt =
+      typeof entry.lastAttemptAt === "string" ? parseTimestamp(entry.lastAttemptAt) : null;
+    const nextAllowedAt =
+      typeof entry.nextAllowedAt === "string" ? parseTimestamp(entry.nextAllowedAt) : null;
+    if (strikes <= 0 || !lastAttemptAt || !nextAllowedAt) {
+      continue;
+    }
+    out[key] = {
+      strikes,
+      lastAttemptAt: new Date(lastAttemptAt).toISOString(),
+      nextAllowedAt: new Date(nextAllowedAt).toISOString(),
+    };
+  }
+  return out;
+}
+
+function pruneBackoffEntries(
+  entries: Record<string, PairingBackoffEntry>,
+  nowMs: number,
+): { entries: Record<string, PairingBackoffEntry>; removed: boolean } {
+  const out: Record<string, PairingBackoffEntry> = {};
+  let removed = false;
+  for (const [key, entry] of Object.entries(entries)) {
+    const lastAttemptAt = parseTimestamp(entry.lastAttemptAt);
+    if (!lastAttemptAt) {
+      removed = true;
+      continue;
+    }
+    if (nowMs - lastAttemptAt > PAIRING_BACKOFF_RETENTION_MS) {
+      removed = true;
+      continue;
+    }
+    out[key] = entry;
+  }
+  return { entries: out, removed };
+}
+
+function getBackoffRetryAfterMs(
+  entries: Record<string, PairingBackoffEntry>,
+  key: string | null,
+  nowMs: number,
+): number {
+  if (!key) {
+    return 0;
+  }
+  const entry = entries[key];
+  if (!entry) {
+    return 0;
+  }
+  const nextAllowedAt = parseTimestamp(entry.nextAllowedAt);
+  if (!nextAllowedAt) {
+    return 0;
+  }
+  return Math.max(0, nextAllowedAt - nowMs);
+}
+
+function applyBackoffAttempt(
+  entries: Record<string, PairingBackoffEntry>,
+  key: string | null,
+  nowMs: number,
+) {
+  if (!key) {
+    return;
+  }
+  const existing = entries[key];
+  const previousLastAttemptAt = existing ? parseTimestamp(existing.lastAttemptAt) : null;
+  const previousStrikes =
+    existing && Number.isFinite(existing.strikes) && existing.strikes > 0 ? existing.strikes : 0;
+  const strikes =
+    previousLastAttemptAt && nowMs - previousLastAttemptAt <= PAIRING_BACKOFF_RESET_MS
+      ? previousStrikes + 1
+      : 1;
+  const delayMs = resolveBackoffDelayMs(strikes);
+  entries[key] = {
+    strikes,
+    lastAttemptAt: new Date(nowMs).toISOString(),
+    nextAllowedAt: new Date(nowMs + delayMs).toISOString(),
+  };
 }
 
 function isExpired(entry: PairingRequest, nowMs: number): boolean {
@@ -469,11 +646,12 @@ export async function upsertChannelPairingRequest(params: {
   channel: PairingChannel;
   id: string | number;
   accountId?: string;
+  sourceIp?: string;
   meta?: Record<string, string | undefined | null>;
   env?: NodeJS.ProcessEnv;
   /** Extension channels can pass their adapter directly to bypass registry lookup. */
   pairingAdapter?: ChannelPairingAdapter;
-}): Promise<{ code: string; created: boolean }> {
+}): Promise<{ code: string; created: boolean; throttled?: boolean; retryAfterMs?: number }> {
   const env = params.env ?? process.env;
   const filePath = resolvePairingPath(params.channel, env);
   return await withFileLock(
@@ -493,6 +671,27 @@ export async function upsertChannelPairingRequest(params: {
             )
           : undefined;
       const meta = normalizedAccountId ? { ...baseMeta, accountId: normalizedAccountId } : baseMeta;
+      const backoffFilePath = resolvePairingBackoffPath(params.channel, env);
+      let backoffEntries = await readPairingBackoffEntries(backoffFilePath);
+      const prunedBackoff = pruneBackoffEntries(backoffEntries, nowMs);
+      backoffEntries = prunedBackoff.entries;
+      let backoffChanged = prunedBackoff.removed;
+      const senderBackoffKey = buildSenderBackoffKey({ id, accountId: normalizedAccountId });
+      const ipBackoffKey = buildIpBackoffKey({
+        sourceIp: params.sourceIp ?? baseMeta?.remoteIp,
+        accountId: normalizedAccountId,
+      });
+      const retryAfterMs = Math.max(
+        getBackoffRetryAfterMs(backoffEntries, senderBackoffKey, nowMs),
+        getBackoffRetryAfterMs(backoffEntries, ipBackoffKey, nowMs),
+      );
+      const persistBackoffIfChanged = async () => {
+        if (!backoffChanged) {
+          return;
+        }
+        await writePairingBackoffEntries(backoffFilePath, backoffEntries);
+        backoffChanged = false;
+      };
 
       let reqs = await readPairingRequests(filePath);
       const { requests: prunedExpired, removed: expiredRemoved } = pruneExpiredRequests(
@@ -523,6 +722,7 @@ export async function upsertChannelPairingRequest(params: {
         };
         reqs[existingIdx] = next;
         const { requests: capped } = pruneExcessRequests(reqs, PAIRING_PENDING_MAX);
+        await persistBackoffIfChanged();
         await writeJsonFile(filePath, {
           version: 1,
           requests: capped,
@@ -530,12 +730,21 @@ export async function upsertChannelPairingRequest(params: {
         return { code, created: false };
       }
 
+      if (retryAfterMs > 0) {
+        await persistBackoffIfChanged();
+        return { code: "", created: false, throttled: true, retryAfterMs };
+      }
+      applyBackoffAttempt(backoffEntries, senderBackoffKey, nowMs);
+      applyBackoffAttempt(backoffEntries, ipBackoffKey, nowMs);
+      backoffChanged = true;
+
       const { requests: capped, removed: cappedRemoved } = pruneExcessRequests(
         reqs,
         PAIRING_PENDING_MAX,
       );
       reqs = capped;
       if (PAIRING_PENDING_MAX > 0 && reqs.length >= PAIRING_PENDING_MAX) {
+        await persistBackoffIfChanged();
         if (expiredRemoved || cappedRemoved) {
           await writeJsonFile(filePath, {
             version: 1,
@@ -552,6 +761,7 @@ export async function upsertChannelPairingRequest(params: {
         lastSeenAt: now,
         ...(meta ? { meta } : {}),
       };
+      await persistBackoffIfChanged();
       await writeJsonFile(filePath, {
         version: 1,
         requests: [...reqs, next],
