@@ -27,6 +27,7 @@ export const GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
   "uniqueItems",
   "minProperties",
   "maxProperties",
+  "propertyNames",
 ]);
 
 const SCHEMA_META_KEYS = ["description", "title", "default"] as const;
