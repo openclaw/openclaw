@@ -19,6 +19,7 @@ export { buildNodeInvokeResultParams };
 type NodeHostRunOptions = {
   gatewayHost: string;
   gatewayPort: number;
+  gatewayPath?: string;
   gatewayTls?: boolean;
   gatewayTlsFingerprint?: string;
   nodeId?: string;
@@ -26,6 +27,17 @@ type NodeHostRunOptions = {
 };
 
 const DEFAULT_NODE_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
+function normalizeGatewayPath(raw?: string): string {
+  const trimmed = typeof raw === "string" ? raw.trim() : "";
+  if (!trimmed) {
+    return "";
+  }
+  // allow users to pass either "foo/bar" or "/foo/bar"
+  const withLeading = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  // collapse accidental "////" etc
+  return withLeading.replace(/\/{2,}/g, "/");
+}
 
 class SkillBinsCache implements SkillBinsProvider {
   private bins = new Set<string>();
@@ -80,6 +92,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const gateway: NodeHostGatewayConfig = {
     host: opts.gatewayHost,
     port: opts.gatewayPort,
+    path: opts.gatewayPath?.trim() || undefined,
     tls: opts.gatewayTls ?? loadConfig().gateway?.tls?.enabled ?? false,
     tlsFingerprint: opts.gatewayTlsFingerprint,
   };
@@ -101,7 +114,8 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   const host = gateway.host ?? "127.0.0.1";
   const port = gateway.port ?? 18789;
   const scheme = gateway.tls ? "wss" : "ws";
-  const url = `${scheme}://${host}:${port}`;
+  const path = normalizeGatewayPath(gateway.path);
+  const url = `${scheme}://${host}:${port}${path}`;
   const pathEnv = ensureNodePathEnv();
   // eslint-disable-next-line no-console
   console.log(`node host PATH: ${pathEnv}`);

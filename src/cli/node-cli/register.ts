@@ -41,6 +41,10 @@ export function registerNodeCli(program: Command) {
     .description("Run the headless node host (foreground)")
     .option("--host <host>", "Gateway host")
     .option("--port <port>", "Gateway port")
+    .option(
+      "--context <path>",
+      "Gateway WebSocket path prefix (reverse-proxy context), e.g. xydt-maas-openclaw/zx-paas/claw-r17xdv/nodes",
+    )
     .option("--tls", "Use TLS for the gateway connection", false)
     .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
     .option("--node-id <id>", "Override node id (clears pairing token)")
@@ -53,6 +57,7 @@ export function registerNodeCli(program: Command) {
       await runNodeHost({
         gatewayHost: host,
         gatewayPort: port,
+        gatewayPath: (opts.context as string | undefined)?.trim() || existing?.gateway?.path,
         gatewayTls: Boolean(opts.tls) || Boolean(opts.tlsFingerprint),
         gatewayTlsFingerprint: opts.tlsFingerprint,
         nodeId: opts.nodeId,
@@ -73,6 +78,10 @@ export function registerNodeCli(program: Command) {
     .description("Install the node host service (launchd/systemd/schtasks)")
     .option("--host <host>", "Gateway host")
     .option("--port <port>", "Gateway port")
+    .option(
+      "--context <path>",
+      "Gateway WebSocket path prefix (reverse-proxy context), e.g. xydt-maas-openclaw/zx-paas/claw-r17xdv/nodes",
+    )
     .option("--tls", "Use TLS for the gateway connection", false)
     .option("--tls-fingerprint <sha256>", "Expected TLS certificate fingerprint (sha256)")
     .option("--node-id <id>", "Override node id (clears pairing token)")

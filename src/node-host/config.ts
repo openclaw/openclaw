@@ -6,6 +6,15 @@ import { resolveStateDir } from "../config/paths.js";
 export type NodeHostGatewayConfig = {
   host?: string;
   port?: number;
+  /**
+   * Optional gateway WebSocket path prefix (a.k.a. "context path") used when the
+   * gateway is served behind a reverse proxy under a non-root path.
+   *
+   * Examples:
+   * - "/xydt-maas-openclaw/zx-paas/claw-r17xdv/nodes"
+   * - "xydt-maas-openclaw/zx-paas/claw-r17xdv/nodes"
+   */
+  path?: string;
   tls?: boolean;
   tlsFingerprint?: string;
 };
