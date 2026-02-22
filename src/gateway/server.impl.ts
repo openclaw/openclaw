@@ -174,6 +174,7 @@ export async function startGatewayServer(
 
   // Ensure all default port derivations (browser/canvas) see the actual runtime port.
   process.env.OPENCLAW_GATEWAY_PORT = String(port);
+  process.env.OPENCLAW_IS_GATEWAY_SERVER = "true";
   logAcceptedEnvOption({
     key: "OPENCLAW_RAW_STREAM",
     description: "raw stream logging enabled",

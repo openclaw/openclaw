@@ -46,6 +46,11 @@ type CallGatewayBaseOptions = {
    * Does not affect config loading; callers still control auth via opts.token/password/env/config.
    */
   configPath?: string;
+  /**
+   * Force using the local loopback interface and ignore remote URL configurations.
+   * Useful for internal tools executing inside the gateway process.
+   */
+  forceLocal?: boolean;
 };
 
 export type CallGatewayScopedOptions = CallGatewayBaseOptions & {
@@ -106,7 +111,12 @@ export function ensureExplicitGatewayAuth(params: {
 }
 
 export function buildGatewayConnectionDetails(
-  options: { config?: OpenClawConfig; url?: string; configPath?: string } = {},
+  options: {
+    config?: OpenClawConfig;
+    url?: string;
+    configPath?: string;
+    forceLocal?: boolean;
+  } = {},
 ): GatewayConnectionDetails {
   const config = options.config ?? loadConfig();
   const configPath =
@@ -123,9 +133,15 @@ export function buildGatewayConnectionDetails(
     typeof options.url === "string" && options.url.trim().length > 0
       ? options.url.trim()
       : undefined;
+
+  const forceLocal =
+    options.forceLocal === true || process.env.OPENCLAW_IS_GATEWAY_SERVER === "true";
+
   const remoteUrl =
-    typeof remote?.url === "string" && remote.url.trim().length > 0 ? remote.url.trim() : undefined;
-  const remoteMisconfigured = isRemoteMode && !urlOverride && !remoteUrl;
+    !forceLocal && typeof remote?.url === "string" && remote.url.trim().length > 0
+      ? remote.url.trim()
+      : undefined;
+  const remoteMisconfigured = isRemoteMode && !urlOverride && !remoteUrl && !forceLocal;
   const url = urlOverride || remoteUrl || localUrl;
   const urlSource = urlOverride
     ? "cli --url"
@@ -407,6 +423,7 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   const connectionDetails = buildGatewayConnectionDetails({
     config: context.config,
     url: context.urlOverride,
+    forceLocal: opts.forceLocal,
     ...(opts.configPath ? { configPath: opts.configPath } : {}),
   });
   const url = connectionDetails.url;
