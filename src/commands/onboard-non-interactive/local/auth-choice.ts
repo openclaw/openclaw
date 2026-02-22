@@ -344,7 +344,9 @@ export async function applyNonInteractiveAuthChoice(params: {
     if (!resolved) {
       return null;
     }
-    await setVolcengineApiKey(resolved.key);
+    if (resolved.source !== "profile") {
+      await setVolcengineApiKey(resolved.key);
+    }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "volcengine:default",
       provider: "volcengine",
@@ -365,7 +367,9 @@ export async function applyNonInteractiveAuthChoice(params: {
     if (!resolved) {
       return null;
     }
-    await setByteplusApiKey(resolved.key);
+    if (resolved.source !== "profile") {
+      await setByteplusApiKey(resolved.key);
+    }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "byteplus:default",
       provider: "byteplus",
@@ -409,7 +413,9 @@ export async function applyNonInteractiveAuthChoice(params: {
     if (!resolved) {
       return null;
     }
-    await setOpenaiApiKey(resolved.key);
+    if (resolved.source !== "profile") {
+      await setOpenaiApiKey(resolved.key);
+    }
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "openai:default",
       provider: "openai",
