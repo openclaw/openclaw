@@ -139,9 +139,7 @@ function ChartCard({
   return (
     <Card className="border-[var(--border-mabos)] bg-[var(--bg-card)] shadow-none">
       <CardHeader className="pb-2">
-        <CardTitle className="text-sm font-medium text-[var(--text-secondary)]">
-          {title}
-        </CardTitle>
+        <CardTitle className="text-sm font-medium text-[var(--text-secondary)]">{title}</CardTitle>
       </CardHeader>
       <CardContent>
         {isLoading ? (
@@ -159,30 +157,24 @@ function ChartCard({
 // --- Main component ---
 
 export function MetricsCharts({ data, isLoading }: MetricsChartsProps) {
-  const revenue = useMemo(
-    () => data?.revenue ?? generateMockRevenue(),
-    [data?.revenue]
-  );
+  const revenue = useMemo(() => data?.revenue ?? generateMockRevenue(), [data?.revenue]);
 
   const taskCompletion = useMemo(
     () => data?.taskCompletion ?? generateMockTaskCompletion(),
-    [data?.taskCompletion]
+    [data?.taskCompletion],
   );
 
-  const bdiCycles = useMemo(
-    () => data?.bdiCycles ?? generateMockBdiCycles(),
-    [data?.bdiCycles]
-  );
+  const bdiCycles = useMemo(() => data?.bdiCycles ?? generateMockBdiCycles(), [data?.bdiCycles]);
 
   const agentEfficiency = useMemo(
     () => data?.agentEfficiency ?? generateMockAgentEfficiency(),
-    [data?.agentEfficiency]
+    [data?.agentEfficiency],
   );
 
   // Sort agent efficiency for horizontal bar chart (ascending for bottom-up display)
   const sortedEfficiency = useMemo(
     () => [...agentEfficiency].sort((a, b) => a.tasksCompleted - b.tasksCompleted),
-    [agentEfficiency]
+    [agentEfficiency],
   );
 
   return (
@@ -191,21 +183,15 @@ export function MetricsCharts({ data, isLoading }: MetricsChartsProps) {
       <ChartCard title="Revenue" isLoading={isLoading}>
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={revenue}>
-            <CartesianGrid
-              strokeDasharray="3 3"
-              stroke="var(--border-mabos)"
-              vertical={false}
-            />
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--border-mabos)" vertical={false} />
             <XAxis dataKey="date" {...axisProps} />
-            <YAxis
-              {...axisProps}
-              tickFormatter={(v: number) =>
-                `$${(v / 1000).toFixed(0)}k`
-              }
-            />
+            <YAxis {...axisProps} tickFormatter={(v: number) => `$${(v / 1000).toFixed(0)}k`} />
             <Tooltip
               contentStyle={tooltipStyle}
-              formatter={(value: number) => [`$${value.toLocaleString()}`, "Revenue"]}
+              formatter={(value: number | undefined) => [
+                `$${(value ?? 0).toLocaleString()}`,
+                "Revenue",
+              ]}
             />
             <Line
               type="monotone"
@@ -230,29 +216,17 @@ export function MetricsCharts({ data, isLoading }: MetricsChartsProps) {
           <AreaChart data={taskCompletion}>
             <defs>
               <linearGradient id="blueGradient" x1="0" y1="0" x2="0" y2="1">
-                <stop
-                  offset="0%"
-                  stopColor="var(--accent-blue)"
-                  stopOpacity={0.3}
-                />
-                <stop
-                  offset="100%"
-                  stopColor="var(--accent-blue)"
-                  stopOpacity={0}
-                />
+                <stop offset="0%" stopColor="var(--accent-blue)" stopOpacity={0.3} />
+                <stop offset="100%" stopColor="var(--accent-blue)" stopOpacity={0} />
               </linearGradient>
             </defs>
-            <CartesianGrid
-              strokeDasharray="3 3"
-              stroke="var(--border-mabos)"
-              vertical={false}
-            />
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--border-mabos)" vertical={false} />
             <XAxis dataKey="date" {...axisProps} />
             <YAxis {...axisProps} />
             <Tooltip
               contentStyle={tooltipStyle}
-              formatter={(value: number, name: string) => [
-                value,
+              formatter={(value: number | undefined, name: string | undefined) => [
+                value ?? 0,
                 name === "completed" ? "Completed" : "Total",
               ]}
             />
@@ -279,16 +253,12 @@ export function MetricsCharts({ data, isLoading }: MetricsChartsProps) {
       <ChartCard title="BDI Cycle Frequency" isLoading={isLoading}>
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={bdiCycles}>
-            <CartesianGrid
-              strokeDasharray="3 3"
-              stroke="var(--border-mabos)"
-              vertical={false}
-            />
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--border-mabos)" vertical={false} />
             <XAxis dataKey="date" {...axisProps} />
             <YAxis {...axisProps} />
             <Tooltip
               contentStyle={tooltipStyle}
-              formatter={(value: number) => [value, "Cycles"]}
+              formatter={(value: number | undefined) => [value ?? 0, "Cycles"]}
             />
             <Bar dataKey="cycles" radius={[4, 4, 0, 0]} maxBarSize={32}>
               {bdiCycles.map((_entry, index) => (
@@ -307,11 +277,7 @@ export function MetricsCharts({ data, isLoading }: MetricsChartsProps) {
       <ChartCard title="Agent Efficiency" isLoading={isLoading}>
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={sortedEfficiency} layout="vertical">
-            <CartesianGrid
-              strokeDasharray="3 3"
-              stroke="var(--border-mabos)"
-              horizontal={false}
-            />
+            <CartesianGrid strokeDasharray="3 3" stroke="var(--border-mabos)" horizontal={false} />
             <XAxis type="number" {...axisProps} />
             <YAxis
               type="category"
@@ -322,7 +288,7 @@ export function MetricsCharts({ data, isLoading }: MetricsChartsProps) {
             />
             <Tooltip
               contentStyle={tooltipStyle}
-              formatter={(value: number) => [value, "Tasks Completed"]}
+              formatter={(value: number | undefined) => [value ?? 0, "Tasks Completed"]}
             />
             <Bar
               dataKey="tasksCompleted"

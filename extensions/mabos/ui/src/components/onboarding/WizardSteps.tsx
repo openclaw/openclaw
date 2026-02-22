@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import {
   Star,
@@ -20,10 +19,11 @@ import {
   RefreshCw,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { useState } from "react";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { api } from "@/lib/api";
 
@@ -43,10 +43,6 @@ type OnboardResult = {
   ok: boolean;
   business_id: string;
   agents_created: string[];
-};
-
-type OnboardError = {
-  error: string;
 };
 
 // ---------- Constants ----------
@@ -110,9 +106,7 @@ function StepIndicator({ currentStep }: { currentStep: number }) {
               <div
                 className="h-px w-8 sm:w-12"
                 style={{
-                  backgroundColor: isCompleted
-                    ? "var(--accent-green)"
-                    : "var(--border-mabos)",
+                  backgroundColor: isCompleted ? "var(--accent-green)" : "var(--border-mabos)",
                 }}
               />
             )}
@@ -126,23 +120,15 @@ function StepIndicator({ currentStep }: { currentStep: number }) {
                     : isActive
                       ? "var(--accent-purple)"
                       : "var(--bg-tertiary)",
-                  color: isCompleted || isActive
-                    ? "#ffffff"
-                    : "var(--text-muted)",
+                  color: isCompleted || isActive ? "#ffffff" : "var(--text-muted)",
                 }}
               >
-                {isCompleted ? (
-                  <Check className="w-4 h-4" />
-                ) : (
-                  i + 1
-                )}
+                {isCompleted ? <Check className="w-4 h-4" /> : i + 1}
               </div>
               <span
                 className="text-[10px] sm:text-xs whitespace-nowrap"
                 style={{
-                  color: isActive
-                    ? "var(--text-primary)"
-                    : "var(--text-muted)",
+                  color: isActive ? "var(--text-primary)" : "var(--text-muted)",
                 }}
               >
                 {label}
@@ -233,13 +219,8 @@ function StepBusinessInfo({
                     ? "color-mix(in srgb, var(--accent-purple) 20%, var(--bg-secondary))"
                     : "var(--bg-secondary)",
                 borderColor:
-                  data.type === bt.value
-                    ? "var(--accent-purple)"
-                    : "var(--border-mabos)",
-                color:
-                  data.type === bt.value
-                    ? "var(--accent-purple)"
-                    : "var(--text-secondary)",
+                  data.type === bt.value ? "var(--accent-purple)" : "var(--border-mabos)",
+                color: data.type === bt.value ? "var(--accent-purple)" : "var(--text-secondary)",
               }}
             >
               {bt.label}
@@ -250,9 +231,7 @@ function StepBusinessInfo({
 
       {/* Description */}
       <div className="space-y-2">
-        <label className="text-sm font-medium text-[var(--text-primary)]">
-          Description
-        </label>
+        <label className="text-sm font-medium text-[var(--text-primary)]">Description</label>
         <textarea
           placeholder="Brief description of your business..."
           value={data.description}
@@ -278,9 +257,7 @@ function StepDetails({
     <div className="space-y-6">
       {/* Legal Name */}
       <div className="space-y-2">
-        <label className="text-sm font-medium text-[var(--text-primary)]">
-          Legal Name
-        </label>
+        <label className="text-sm font-medium text-[var(--text-primary)]">Legal Name</label>
         <Input
           placeholder={data.name || "Defaults to business name"}
           value={data.legal_name}
@@ -294,9 +271,7 @@ function StepDetails({
 
       {/* Jurisdiction */}
       <div className="space-y-2">
-        <label className="text-sm font-medium text-[var(--text-primary)]">
-          Jurisdiction
-        </label>
+        <label className="text-sm font-medium text-[var(--text-primary)]">Jurisdiction</label>
         <Input
           placeholder="e.g. Delaware, USA"
           value={data.jurisdiction}
@@ -307,9 +282,7 @@ function StepDetails({
 
       {/* Stage */}
       <div className="space-y-3">
-        <label className="text-sm font-medium text-[var(--text-primary)]">
-          Business Stage
-        </label>
+        <label className="text-sm font-medium text-[var(--text-primary)]">Business Stage</label>
         <div className="space-y-2">
           {STAGES.map((s) => (
             <button
@@ -322,19 +295,13 @@ function StepDetails({
                   data.stage === s.value
                     ? "color-mix(in srgb, var(--accent-green) 10%, var(--bg-secondary))"
                     : "var(--bg-secondary)",
-                borderColor:
-                  data.stage === s.value
-                    ? "var(--accent-green)"
-                    : "var(--border-mabos)",
+                borderColor: data.stage === s.value ? "var(--accent-green)" : "var(--border-mabos)",
               }}
             >
               <div
                 className="w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0"
                 style={{
-                  borderColor:
-                    data.stage === s.value
-                      ? "var(--accent-green)"
-                      : "var(--text-muted)",
+                  borderColor: data.stage === s.value ? "var(--accent-green)" : "var(--text-muted)",
                 }}
               >
                 {data.stage === s.value && (
@@ -345,9 +312,7 @@ function StepDetails({
                 )}
               </div>
               <div>
-                <p className="text-sm font-medium text-[var(--text-primary)]">
-                  {s.label}
-                </p>
+                <p className="text-sm font-medium text-[var(--text-primary)]">{s.label}</p>
                 <p className="text-xs text-[var(--text-muted)]">{s.desc}</p>
               </div>
             </button>
@@ -383,16 +348,10 @@ function StepAgentPreview() {
                 <Icon className="w-5 h-5 text-[var(--accent-purple)]" />
               </div>
               <div className="min-w-0">
-                <p className="text-sm font-medium text-[var(--text-primary)]">
-                  {agent.role}
-                </p>
-                <p className="text-xs text-[var(--text-muted)] truncate">
-                  {agent.description}
-                </p>
+                <p className="text-sm font-medium text-[var(--text-primary)]">{agent.role}</p>
+                <p className="text-xs text-[var(--text-muted)] truncate">{agent.description}</p>
               </div>
-              <Badge
-                className="ml-auto shrink-0 bg-[var(--accent-green)]/10 text-[var(--accent-green)] border-[var(--accent-green)]/20"
-              >
+              <Badge className="ml-auto shrink-0 bg-[var(--accent-green)]/10 text-[var(--accent-green)] border-[var(--accent-green)]/20">
                 Auto
               </Badge>
             </div>
@@ -412,8 +371,7 @@ function StepReview({
   data: OnboardingFormData;
   onJumpTo: (step: number) => void;
 }) {
-  const requiredMissing =
-    !data.name.trim() || !data.business_id.trim() || !data.type;
+  const requiredMissing = !data.name.trim() || !data.business_id.trim() || !data.type;
 
   return (
     <div className="space-y-6">
@@ -430,9 +388,7 @@ function StepReview({
       <Card className="bg-[var(--bg-card)] border-[var(--border-mabos)]">
         <CardHeader className="pb-0">
           <div className="flex items-center justify-between">
-            <CardTitle className="text-sm text-[var(--text-primary)]">
-              Business Info
-            </CardTitle>
+            <CardTitle className="text-sm text-[var(--text-primary)]">Business Info</CardTitle>
             <Button
               variant="ghost"
               size="xs"
@@ -480,9 +436,7 @@ function StepReview({
       <Card className="bg-[var(--bg-card)] border-[var(--border-mabos)]">
         <CardHeader className="pb-0">
           <div className="flex items-center justify-between">
-            <CardTitle className="text-sm text-[var(--text-primary)]">
-              Details
-            </CardTitle>
+            <CardTitle className="text-sm text-[var(--text-primary)]">Details</CardTitle>
             <Button
               variant="ghost"
               size="xs"
@@ -499,7 +453,9 @@ function StepReview({
             <div>
               <p className="text-[var(--text-muted)] text-xs">Legal Name</p>
               <p className="text-[var(--text-primary)]">
-                {data.legal_name || data.name || <span className="text-[var(--text-muted)]">--</span>}
+                {data.legal_name || data.name || (
+                  <span className="text-[var(--text-muted)]">--</span>
+                )}
               </p>
             </div>
             <div>
@@ -521,13 +477,12 @@ function StepReview({
       {/* Agents count */}
       <Card className="bg-[var(--bg-card)] border-[var(--border-mabos)]">
         <CardHeader className="pb-0">
-          <CardTitle className="text-sm text-[var(--text-primary)]">
-            Agents
-          </CardTitle>
+          <CardTitle className="text-sm text-[var(--text-primary)]">Agents</CardTitle>
         </CardHeader>
         <CardContent>
           <p className="text-sm text-[var(--text-secondary)]">
-            <span className="text-[var(--accent-green)] font-bold">{CORE_AGENTS.length}</span> core agents will be created automatically.
+            <span className="text-[var(--accent-green)] font-bold">{CORE_AGENTS.length}</span> core
+            agents will be created automatically.
           </p>
         </CardContent>
       </Card>
@@ -565,9 +520,7 @@ function StepLaunch({
           <Check className="w-8 h-8 text-[var(--accent-green)]" />
         </div>
         <div className="space-y-2">
-          <h3 className="text-xl font-bold text-[var(--text-primary)]">
-            Business Launched!
-          </h3>
+          <h3 className="text-xl font-bold text-[var(--text-primary)]">Business Launched!</h3>
           <p className="text-sm text-[var(--text-secondary)]">
             <span className="font-medium text-[var(--text-primary)]">{data.name}</span> has been
             successfully onboarded.
@@ -578,9 +531,7 @@ function StepLaunch({
             <div className="space-y-3 text-sm">
               <div className="flex justify-between">
                 <span className="text-[var(--text-muted)]">Business ID</span>
-                <span className="font-mono text-[var(--text-primary)]">
-                  {result.business_id}
-                </span>
+                <span className="font-mono text-[var(--text-primary)]">{result.business_id}</span>
               </div>
               <Separator className="bg-[var(--border-mabos)]" />
               <div className="flex justify-between">
@@ -620,9 +571,7 @@ function StepLaunch({
           <AlertCircle className="w-8 h-8 text-[var(--accent-red)]" />
         </div>
         <div className="space-y-2">
-          <h3 className="text-xl font-bold text-[var(--text-primary)]">
-            Onboarding Failed
-          </h3>
+          <h3 className="text-xl font-bold text-[var(--text-primary)]">Onboarding Failed</h3>
           <p className="text-sm text-[var(--accent-red)]">{error}</p>
         </div>
         <Button
@@ -648,13 +597,11 @@ function StepLaunch({
         <Rocket className="w-8 h-8 text-[var(--accent-purple)]" />
       </div>
       <div className="space-y-2">
-        <h3 className="text-xl font-bold text-[var(--text-primary)]">
-          Ready to Launch
-        </h3>
+        <h3 className="text-xl font-bold text-[var(--text-primary)]">Ready to Launch</h3>
         <p className="text-sm text-[var(--text-secondary)]">
           Everything looks good. Click below to create{" "}
-          <span className="font-medium text-[var(--text-primary)]">{data.name}</span> and
-          provision {CORE_AGENTS.length} AI agents.
+          <span className="font-medium text-[var(--text-primary)]">{data.name}</span> and provision{" "}
+          {CORE_AGENTS.length} AI agents.
         </p>
       </div>
       <Button
@@ -749,9 +696,7 @@ export function WizardSteps() {
 
   // Extract result/error from mutation
   const mutResult = mutation.data as OnboardResult | undefined;
-  const mutError = mutation.error
-    ? (mutation.error as Error).message
-    : null;
+  const mutError = mutation.error ? (mutation.error as Error).message : null;
 
   return (
     <Card className="bg-[var(--bg-card)] border-[var(--border-mabos)]">
@@ -761,16 +706,10 @@ export function WizardSteps() {
 
         {/* Step Content */}
         <div className="min-h-[360px]">
-          {step === 0 && (
-            <StepBusinessInfo data={formData} onChange={updateFormData} />
-          )}
-          {step === 1 && (
-            <StepDetails data={formData} onChange={updateFormData} />
-          )}
+          {step === 0 && <StepBusinessInfo data={formData} onChange={updateFormData} />}
+          {step === 1 && <StepDetails data={formData} onChange={updateFormData} />}
           {step === 2 && <StepAgentPreview />}
-          {step === 3 && (
-            <StepReview data={formData} onJumpTo={handleJumpTo} />
-          )}
+          {step === 3 && <StepReview data={formData} onJumpTo={handleJumpTo} />}
           {step === 4 && (
             <StepLaunch
               data={formData}

@@ -215,7 +215,7 @@ export function GanttChart({
 
           {/* Rows */}
           <div className="relative">
-            {rows.map((row, idx) => {
+            {rows.map((row, _idx) => {
               if (row.type === "header") {
                 return (
                   <div
