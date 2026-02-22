@@ -53,7 +53,7 @@ describe("models set + fallbacks", () => {
   });
 
   beforeEach(() => {
-    readConfigFileSnapshot.mockReset();
+    readConfigFileSnapshot.mockClear();
     writeConfigFile.mockClear();
   });
 
