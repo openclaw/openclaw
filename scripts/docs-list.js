@@ -28,7 +28,13 @@ const EXCLUDED_DIRS = new Set(["archive", "research"]);
 
 function printHelp() {
   console.log(
-    `Usage: pnpm docs:list [--include-translations]\n\nOptions:\n  --include-translations  Include docs/<locale>/ directories\n  -h, --help              Show this help message`,
+    [
+      "Usage: pnpm docs:list [--include-translations]",
+      "",
+      "Options:",
+      "  --include-translations  Include docs/<locale>/ directories",
+      "  -h, --help              Show this help message",
+    ].join("\n"),
   );
 }
 
@@ -67,7 +73,11 @@ function shouldSkipDir(entryName, currentDir, rootDir, includeTranslations) {
   if (EXCLUDED_DIRS.has(entryName)) {
     return true;
   }
-  if (!includeTranslations && currentDir === rootDir && localeDirPattern.test(entryName)) {
+  if (
+    !includeTranslations &&
+    currentDir === rootDir &&
+    localeDirPattern.test(entryName)
+  ) {
     return true;
   }
   return false;
@@ -216,5 +226,8 @@ for (const relativePath of markdownFiles) {
 }
 
 console.log(
-  '\nReminder: keep docs up to date as behavior changes. When your task matches any "Read when" hint above (React hooks, cache directives, database work, tests, etc.), read that doc before coding, and suggest new coverage when it is missing.',
+  [
+    "",
+    'Reminder: keep docs up to date as behavior changes. When your task matches any "Read when" hint above (React hooks, cache directives, database work, tests, etc.), read that doc before coding, and suggest new coverage when it is missing.',
+  ].join("\n"),
 );

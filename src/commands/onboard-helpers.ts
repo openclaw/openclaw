@@ -115,7 +115,8 @@ export function applyWizardMetadata(
   cfg: OpenClawConfig,
   params: { command: string; mode: OnboardMode },
 ): OpenClawConfig {
-  const commit = process.env.GIT_COMMIT?.trim() || process.env.GIT_SHA?.trim() || undefined;
+  const commit =
+    process.env.GIT_COMMIT?.trim() || process.env.GIT_SHA?.trim() || undefined;
   return {
     ...cfg,
     wizard: {
@@ -168,7 +169,9 @@ export async function resolveBrowserOpenCommand(): Promise<BrowserOpenCommand> {
 
   if (platform === "darwin") {
     const hasOpen = await detectBinary("open");
-    return hasOpen ? { argv: ["open"], command: "open" } : { argv: null, reason: "missing-open" };
+    return hasOpen
+      ? { argv: ["open"], command: "open" }
+      : { argv: null, reason: "missing-open" };
   }
 
   if (platform === "linux") {
@@ -363,7 +366,10 @@ export async function detectBinary(name: string): Promise<boolean> {
     }
   }
 
-  const command = process.platform === "win32" ? ["where", name] : ["/usr/bin/env", "which", name];
+  const command =
+    process.platform === "win32"
+      ? ["where", name]
+      : ["/usr/bin/env", "which", name];
   try {
     const result = await runCommandWithTimeout(command, { timeoutMs: 2000 });
     return result.code === 0 && result.stdout.trim().length > 0;
