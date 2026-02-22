@@ -115,7 +115,8 @@ beforeAll(async () => {
 beforeEach(() => {
   state.entries.clear();
   state.counter = 0;
-  copyToClipboard.mockReset();
+  copyToClipboard.mockClear();
+  copyToClipboard.mockResolvedValue(false);
   runtime.log.mockClear();
   runtime.error.mockClear();
   runtime.exit.mockClear();
