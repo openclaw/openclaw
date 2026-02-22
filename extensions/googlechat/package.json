@@ -14,9 +14,6 @@
     "openclaw": ">=2026.1.26"
   },
   "openclaw": {
-    "extensions": [
-      "./index.ts"
-    ],
     "channel": {
       "id": "googlechat",
       "label": "Google Chat",

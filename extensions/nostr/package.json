@@ -11,9 +11,6 @@
     "openclaw": "workspace:*"
   },
   "openclaw": {
-    "extensions": [
-      "./index.ts"
-    ],
     "channel": {
       "id": "nostr",
       "label": "Nostr",

@@ -14,9 +14,6 @@
     "openclaw": "workspace:*"
   },
   "openclaw": {
-    "extensions": [
-      "./index.ts"
-    ],
     "channel": {
       "id": "matrix",
       "label": "Matrix",

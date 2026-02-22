@@ -8,9 +8,6 @@
     "openclaw": "workspace:*"
   },
   "openclaw": {
-    "extensions": [
-      "./index.ts"
-    ],
     "channel": {
       "id": "synology-chat",
       "label": "Synology Chat",
