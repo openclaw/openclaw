@@ -1883,6 +1883,46 @@ describe("createTelegramBot", () => {
     expect(replySpy).not.toHaveBeenCalled();
     fetchSpy.mockRestore();
   });
+  it("notifies users when media download fails for direct messages", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+    });
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () =>
+        Promise.reject(new Error("MediaFetchError: Failed to fetch media")),
+      );
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: 1234, type: "private" },
+          message_id: 411,
+          date: 1736380800,
+          photo: [{ file_id: "p1" }],
+          from: { id: 55, is_bot: false, first_name: "u" },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ file_path: "photos/p1.jpg" }),
+      });
+
+      expect(sendMessageSpy).toHaveBeenCalledWith(
+        1234,
+        "⚠️ Failed to download media. Please try again.",
+        { reply_to_message_id: 411 },
+      );
+      expect(replySpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
   it("processes remaining media group photos when one photo download fails", async () => {
     onSpy.mockReset();
     replySpy.mockReset();

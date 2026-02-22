@@ -722,7 +722,16 @@ export const registerTelegramHandlers = ({
         logger.warn({ chatId, error: String(mediaErr) }, oversizeLogMessage);
         return;
       }
-      throw mediaErr;
+      logger.warn({ chatId, error: String(mediaErr) }, "media fetch failed");
+      await withTelegramApiErrorLogging({
+        operation: "sendMessage",
+        runtime,
+        fn: () =>
+          bot.api.sendMessage(chatId, "⚠️ Failed to download media. Please try again.", {
+            reply_to_message_id: msg.message_id,
+          }),
+      }).catch(() => {});
+      return;
     }
 
     // Skip sticker-only messages where the sticker was skipped (animated/video)
