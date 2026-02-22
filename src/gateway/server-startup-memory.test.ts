@@ -13,7 +13,7 @@ import { startGatewayMemoryBackend } from "./server-startup-memory.js";
 
 describe("startGatewayMemoryBackend", () => {
   beforeEach(() => {
-    getMemorySearchManagerMock.mockReset();
+    getMemorySearchManagerMock.mockClear();
   });
 
   it("skips initialization when memory backend is not qmd", async () => {

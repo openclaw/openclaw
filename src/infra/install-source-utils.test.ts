@@ -57,7 +57,7 @@ async function runPack(spec: string, cwd: string, timeoutMs = 1000) {
 }
 
 beforeEach(() => {
-  runCommandWithTimeoutMock.mockReset();
+  runCommandWithTimeoutMock.mockClear();
 });
 
 afterEach(async () => {
