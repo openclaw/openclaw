@@ -281,7 +281,7 @@ describe("gateway hot reload", () => {
       const signalSpy = vi.fn();
       process.once("SIGUSR1", signalSpy);
 
-      onRestart?.(
+      const restartResult = onRestart?.(
         {
           changedPaths: ["gateway.port"],
           restartGateway: true,
@@ -297,6 +297,7 @@ describe("gateway hot reload", () => {
         },
         {},
       );
+      await Promise.resolve(restartResult);
 
       expect(signalSpy).toHaveBeenCalledTimes(1);
     });
