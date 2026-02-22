@@ -741,66 +741,17 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.threadId).toBe("99");
   });
 
-  it("uses hook-provided thread target for completion direct-send", async () => {
-    const { runSubagentAnnounceFlow } = await import("./subagent-announce.js");
-    hasSubagentDeliveryTargetHook = true;
-    subagentDeliveryTargetHookMock.mockResolvedValueOnce({
-      origin: {
-        channel: "discord",
-        accountId: "acct-1",
-        to: "channel:777",
-        threadId: "777",
-      },
-    });
-
-    const didAnnounce = await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:test",
+  it.each([
+    {
+      name: "requester threadId matches hook target",
       childRunId: "run-direct-thread-bound",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
       requesterOrigin: {
         channel: "discord",
         to: "channel:12345",
         accountId: "acct-1",
         threadId: "777",
       },
-      ...defaultOutcomeAnnounce,
-      expectsCompletionMessage: true,
-      spawnMode: "session",
-    });
-
-    expect(didAnnounce).toBe(true);
-    expect(subagentDeliveryTargetHookMock).toHaveBeenCalledWith(
-      {
-        childSessionKey: "agent:main:subagent:test",
-        requesterSessionKey: "agent:main:main",
-        requesterOrigin: {
-          channel: "discord",
-          to: "channel:12345",
-          accountId: "acct-1",
-          threadId: "777",
-        },
-        childRunId: "run-direct-thread-bound",
-        spawnMode: "session",
-        expectsCompletionMessage: true,
-      },
-      {
-        runId: "run-direct-thread-bound",
-        childSessionKey: "agent:main:subagent:test",
-        requesterSessionKey: "agent:main:main",
-      },
-    );
-    expect(sendSpy).toHaveBeenCalledTimes(1);
-    const call = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
-    expect(call?.params?.channel).toBe("discord");
-    expect(call?.params?.to).toBe("channel:777");
-    expect(call?.params?.threadId).toBe("777");
-    const message = typeof call?.params?.message === "string" ? call.params.message : "";
-    expect(message).toContain("completed this task (session remains active)");
-    expect(message).not.toContain("finished");
-  });
-
-  it.each([
+    },
     {
       name: "requester origin has no threadId",
       childRunId: "run-direct-thread-bound-single",
@@ -844,11 +795,29 @@ describe("subagent announce formatting", () => {
     });
 
     expect(didAnnounce).toBe(true);
+    expect(subagentDeliveryTargetHookMock).toHaveBeenCalledWith(
+      {
+        childSessionKey: "agent:main:subagent:test",
+        requesterSessionKey: "agent:main:main",
+        requesterOrigin,
+        childRunId,
+        spawnMode: "session",
+        expectsCompletionMessage: true,
+      },
+      {
+        runId: childRunId,
+        childSessionKey: "agent:main:subagent:test",
+        requesterSessionKey: "agent:main:main",
+      },
+    );
     expect(sendSpy).toHaveBeenCalledTimes(1);
     const call = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
     expect(call?.params?.channel).toBe("discord");
     expect(call?.params?.to).toBe("channel:777");
     expect(call?.params?.threadId).toBe("777");
+    const message = typeof call?.params?.message === "string" ? call.params.message : "";
+    expect(message).toContain("completed this task (session remains active)");
+    expect(message).not.toContain("finished");
   });
 
   it.each([
