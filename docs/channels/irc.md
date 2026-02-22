@@ -163,7 +163,7 @@ Use `toolsBySender` to apply a stricter policy to `"*"` and a looser one to your
             "*": {
               deny: ["group:runtime", "group:fs", "gateway", "nodes", "cron", "browser"],
             },
-            eigen: {
+            "id:eigen": {
               deny: ["gateway", "nodes", "cron"],
             },
           },
@@ -176,7 +176,9 @@ Use `toolsBySender` to apply a stricter policy to `"*"` and a looser one to your
 
 Notes:
 
-- `toolsBySender` keys can be a nick (e.g. `"eigen"`) or a full hostmask (`"eigen!~eigen@174.127.248.171"`) for stronger identity matching.
+- `toolsBySender` keys should use `id:` for IRC sender identity values:
+  `id:eigen` or `id:eigen!~eigen@174.127.248.171` for stronger matching.
+- Legacy unprefixed keys are still accepted and matched as `id:` only.
 - The first matching sender policy wins; `"*"` is the wildcard fallback.
 
 For more on group access vs mention-gating (and how they interact), see: [/channels/groups](/channels/groups).
