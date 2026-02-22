@@ -10,13 +10,11 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
-  type SecretRef,
 } from "../config/config.js";
-import { runExec } from "../process/exec.js";
+import { isSecretRef, type SecretRef } from "../config/types.secrets.js";
 import { resolveUserPath } from "../utils.js";
-
-const DEFAULT_SOPS_TIMEOUT_MS = 5_000;
-const MAX_SOPS_OUTPUT_BYTES = 10 * 1024 * 1024;
+import { readJsonPointer } from "./json-pointer.js";
+import { decryptSopsJsonFile, DEFAULT_SOPS_TIMEOUT_MS } from "./sops.js";
 
 type SecretResolverWarningCode = "SECRETS_REF_OVERRIDES_PLAINTEXT";
 
@@ -77,59 +75,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isSecretRef(value: unknown): value is SecretRef {
-  if (!isRecord(value)) {
-    return false;
-  }
-  if (Object.keys(value).length !== 2) {
-    return false;
-  }
-  return (
-    (value.source === "env" || value.source === "file") &&
-    typeof value.id === "string" &&
-    value.id.trim().length > 0
-  );
-}
-
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
-}
-
-function decodeJsonPointerToken(token: string): string {
-  return token.replace(/~1/g, "/").replace(/~0/g, "~");
-}
-
-function readJsonPointer(root: unknown, pointer: string): unknown {
-  if (!pointer.startsWith("/")) {
-    throw new Error(
-      `File-backed secret ids must be absolute JSON pointers (for example: /providers/openai/apiKey).`,
-    );
-  }
-
-  const tokens = pointer
-    .slice(1)
-    .split("/")
-    .map((token) => decodeJsonPointerToken(token));
-
-  let current: unknown = root;
-  for (const token of tokens) {
-    if (Array.isArray(current)) {
-      const index = Number.parseInt(token, 10);
-      if (!Number.isFinite(index) || index < 0 || index >= current.length) {
-        throw new Error(`JSON pointer segment "${token}" is out of bounds.`);
-      }
-      current = current[index];
-      continue;
-    }
-    if (!isRecord(current)) {
-      throw new Error(`JSON pointer segment "${token}" does not exist.`);
-    }
-    if (!Object.hasOwn(current, token)) {
-      throw new Error(`JSON pointer segment "${token}" does not exist.`);
-    }
-    current = current[token];
-  }
-  return current;
 }
 
 async function decryptSopsFile(config: OpenClawConfig): Promise<unknown> {
@@ -148,30 +95,12 @@ async function decryptSopsFile(config: OpenClawConfig): Promise<unknown> {
     typeof fileSource.timeoutMs === "number" && Number.isFinite(fileSource.timeoutMs)
       ? Math.max(1, Math.floor(fileSource.timeoutMs))
       : DEFAULT_SOPS_TIMEOUT_MS;
-
-  try {
-    const { stdout } = await runExec("sops", ["--decrypt", "--output-type", "json", resolvedPath], {
-      timeoutMs,
-      maxBuffer: MAX_SOPS_OUTPUT_BYTES,
-    });
-    return JSON.parse(stdout) as unknown;
-  } catch (err) {
-    const error = err as NodeJS.ErrnoException & { message?: string };
-    if (error.code === "ENOENT") {
-      throw new Error(
-        `sops binary not found in PATH. Install sops >= 3.9.0 or disable secrets.sources.file.`,
-        { cause: err },
-      );
-    }
-    if (typeof error.message === "string" && error.message.toLowerCase().includes("timed out")) {
-      throw new Error(`sops decrypt timed out after ${timeoutMs}ms for ${resolvedPath}.`, {
-        cause: err,
-      });
-    }
-    throw new Error(`sops decrypt failed for ${resolvedPath}: ${String(error.message ?? err)}`, {
-      cause: err,
-    });
-  }
+  return await decryptSopsJsonFile({
+    path: resolvedPath,
+    timeoutMs,
+    missingBinaryMessage:
+      "sops binary not found in PATH. Install sops >= 3.9.0 or disable secrets.sources.file.",
+  });
 }
 
 async function resolveSecretRefValue(ref: SecretRef, context: ResolverContext): Promise<unknown> {
@@ -191,7 +120,7 @@ async function resolveSecretRefValue(ref: SecretRef, context: ResolverContext): 
   if (ref.source === "file") {
     context.fileSecretsPromise ??= decryptSopsFile(context.config);
     const payload = await context.fileSecretsPromise;
-    return readJsonPointer(payload, id);
+    return readJsonPointer(payload, id, { onMissing: "throw" });
   }
 
   throw new Error(`Unsupported secret source "${String((ref as { source?: unknown }).source)}".`);
@@ -369,7 +298,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
 
 export function activateSecretsRuntimeSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): void {
   const next = cloneSnapshot(snapshot);
-  setRuntimeConfigSnapshot(next.config);
+  setRuntimeConfigSnapshot(next.config, next.sourceConfig);
   replaceRuntimeAuthProfileStoreSnapshots(next.authStores);
   activeSnapshot = next;
 }
