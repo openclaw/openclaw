@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import JSZip from "jszip";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withTempWorkspace, writeDownloadSkill } from "./skills-install.download-test-utils.js";
 import { installSkill } from "./skills-install.js";
@@ -34,23 +33,18 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
-async function createZipBuffer(
-  entries: Array<{ name: string; contents: string }>,
-): Promise<Buffer> {
-  const zip = new JSZip();
-  for (const entry of entries) {
-    zip.file(entry.name, entry.contents);
-  }
-  return zip.generateAsync({ type: "nodebuffer" });
-}
-
-const SAFE_ZIP_BUFFER_PROMISE = createZipBuffer([{ name: "hello.txt", contents: "hi" }]);
-const STRIP_COMPONENTS_ZIP_BUFFER_PROMISE = createZipBuffer([
-  { name: "package/hello.txt", contents: "hi" },
-]);
-const ZIP_SLIP_BUFFER_PROMISE = createZipBuffer([
-  { name: "../outside-write/pwned.txt", contents: "pwnd" },
-]);
+const SAFE_ZIP_BUFFER = Buffer.from(
+  "UEsDBAoAAAAAAMOJVlysKpPYAgAAAAIAAAAJAAAAaGVsbG8udHh0aGlQSwECFAAKAAAAAADDiVZcrCqT2AIAAAACAAAACQAAAAAAAAAAAAAAAAAAAAAAaGVsbG8udHh0UEsFBgAAAAABAAEANwAAACkAAAAAAA==",
+  "base64",
+);
+const STRIP_COMPONENTS_ZIP_BUFFER = Buffer.from(
+  "UEsDBAoAAAAAAMOJVlwAAAAAAAAAAAAAAAAIAAAAcGFja2FnZS9QSwMECgAAAAAAw4lWXKwqk9gCAAAAAgAAABEAAABwYWNrYWdlL2hlbGxvLnR4dGhpUEsBAhQACgAAAAAAw4lWXAAAAAAAAAAAAAAAAAgAAAAAAAAAAAAQAAAAAAAAAHBhY2thZ2UvUEsBAhQACgAAAAAAw4lWXKwqk9gCAAAAAgAAABEAAAAAAAAAAAAAAAAAJgAAAHBhY2thZ2UvaGVsbG8udHh0UEsFBgAAAAACAAIAdQAAAFcAAAAAAA==",
+  "base64",
+);
+const ZIP_SLIP_BUFFER = Buffer.from(
+  "UEsDBAoAAAAAAMOJVlwAAAAAAAAAAAAAAAADAAAALi4vUEsDBAoAAAAAAMOJVlwAAAAAAAAAAAAAAAARAAAALi4vb3V0c2lkZS13cml0ZS9QSwMECgAAAAAAw4lWXD3iZKoEAAAABAAAABoAAAAuLi9vdXRzaWRlLXdyaXRlL3B3bmVkLnR4dHB3bmRQSwECFAAKAAAAAADDiVZcAAAAAAAAAAAAAAAAAwAAAAAAAAAAABAAAAAAAAAALi4vUEsBAhQACgAAAAAAw4lWXAAAAAAAAAAAAAAAABEAAAAAAAAAAAAQAAAAIQAAAC4uL291dHNpZGUtd3JpdGUvUEsBAhQACgAAAAAAw4lWXD3iZKoEAAAABAAAABoAAAAAAAAAAAAAAAAAUAAAAC4uL291dHNpZGUtd3JpdGUvcHduZWQudHh0UEsFBgAAAAADAAMAuAAAAIwAAAAAAA==",
+  "base64",
+);
 const TAR_GZ_TRAVERSAL_BUFFER = Buffer.from(
   // Prebuilt archive containing ../outside-write/pwned.txt.
   "H4sIAK4xm2kAA+2VvU7DMBDH3UoIUWaYLXbcS5PYZegQEKhBRUBbIT4GZBpXCqJNSFySlSdgZed1eCgcUvFRaMsQgVD9k05nW3eWz8nfR0g1GMnY98RmEvlSVMllmAyFR2QqUUEAALUsnHlG7VcPtXwO+djEhm1YlJpAbYrBYAYDhKGoA8xiFEseqaPEUvihkGJanArr92fsk5eC3/x/YWl9GZUROuA9fNjBp3hMtoZWlNWU3SrL5k8/29LpdtvjYZbxqGx1IqT0vr7WCwaEh+GNIGEU3IkhH/YEKpXRxv3FQznsPxdQpGYaZFL/RzxtCu6JqFrYOzBX/wZ81n8NmEERTosocB4Lrn8T8ED6A9EwmHp0Wd1idQK2ZVIAm1ZshlvuttPeabonuyTlUkbkO7k2nGPXcYO9q+tkPzmPk4q1hTsqqXU2K+mDxit/fQ+Lyhf9F9795+tf/WoT/Z8yi+n+/xuoz+1p8Wk0Gs3i8QJSs3VlABAAAA==",
@@ -98,9 +92,8 @@ function mockTarExtractionFlow(params: {
   });
 }
 
-async function seedZipDownloadResponse() {
-  const buffer = await SAFE_ZIP_BUFFER_PROMISE;
-  mockArchiveResponse(new Uint8Array(buffer));
+function seedZipDownloadResponse() {
+  mockArchiveResponse(new Uint8Array(SAFE_ZIP_BUFFER));
 }
 
 async function installZipDownloadSkill(params: {
@@ -109,7 +102,7 @@ async function installZipDownloadSkill(params: {
   targetDir: string;
 }) {
   const url = "https://example.invalid/good.zip";
-  await seedZipDownloadResponse();
+  seedZipDownloadResponse();
   await writeDownloadSkill({
     workspaceDir: params.workspaceDir,
     name: params.name,
@@ -168,8 +161,7 @@ describe("installSkill download extraction safety", () => {
       const outsideWritePath = path.join(outsideWriteDir, "pwned.txt");
       const url = "https://example.invalid/evil.zip";
 
-      const buffer = await ZIP_SLIP_BUFFER_PROMISE;
-      mockArchiveResponse(new Uint8Array(buffer));
+      mockArchiveResponse(new Uint8Array(ZIP_SLIP_BUFFER));
 
       await writeDownloadSkill({
         workspaceDir,
@@ -213,8 +205,7 @@ describe("installSkill download extraction safety", () => {
       const targetDir = path.join(stateDir, "tools", "zip-good", "target");
       const url = "https://example.invalid/good.zip";
 
-      const buffer = await STRIP_COMPONENTS_ZIP_BUFFER_PROMISE;
-      mockArchiveResponse(new Uint8Array(buffer));
+      mockArchiveResponse(new Uint8Array(STRIP_COMPONENTS_ZIP_BUFFER));
 
       await writeDownloadSkill({
         workspaceDir,
@@ -237,8 +228,7 @@ describe("installSkill download extraction safety", () => {
       const targetDir = path.join(workspaceDir, "outside");
       const url = "https://example.invalid/good.zip";
 
-      const buffer = await SAFE_ZIP_BUFFER_PROMISE;
-      mockArchiveResponse(new Uint8Array(buffer));
+      mockArchiveResponse(new Uint8Array(SAFE_ZIP_BUFFER));
 
       await writeDownloadSkill({
         workspaceDir,
