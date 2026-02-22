@@ -10,6 +10,10 @@ title: "Ollama"
 
 Ollama is a local LLM runtime that makes it easy to run open-source models on your machine. OpenClaw integrates with Ollama's native API (`/api/chat`), supporting streaming and tool calling, and can **auto-discover tool-capable models** when you opt in with `OLLAMA_API_KEY` (or an auth profile) and do not define an explicit `models.providers.ollama` entry.
 
+<Warning>
+**Remote Ollama users**: Do not use the `/v1` OpenAI-compatible URL (`http://host:11434/v1`) with OpenClaw. This breaks tool calling — your model will output raw JSON instead of executing tools. Use the native Ollama API: `baseUrl: "http://host:11434"` with `api: "ollama"` (the default).
+</Warning>
+
 ## Quick start
 
 1. Install Ollama: [https://ollama.ai](https://ollama.ai)
@@ -133,12 +137,17 @@ If Ollama is running on a different host or port (explicit config disables auto-
     providers: {
       ollama: {
         apiKey: "ollama-local",
-        baseUrl: "http://ollama-host:11434",
+        baseUrl: "http://ollama-host:11434",  // No /v1 — use the native Ollama API
+        api: "ollama",  // Required for tool calling to work
       },
     },
   },
 }
 ```
+
+<Warning>
+Do not add `/v1` to the URL. The `/v1` path uses OpenAI-compatible mode which breaks tool calling. Use the base Ollama URL without any path suffix.
+</Warning>
 
 ### Model selection
 
@@ -177,7 +186,11 @@ OpenClaw's Ollama integration uses the **native Ollama API** (`/api/chat`) by de
 
 #### Legacy OpenAI-Compatible Mode
 
-If you need to use the OpenAI-compatible endpoint instead (e.g., behind a proxy that only supports OpenAI format), set `api: "openai-completions"` explicitly:
+<Warning>
+**Tool calling does not work with OpenAI-compatible mode.** The model will output tool call JSON as plain text instead of executing tools. Only use this mode if you specifically need OpenAI format for a proxy and do not need tools.
+</Warning>
+
+If you need to use the OpenAI-compatible endpoint (e.g., behind a proxy that only supports OpenAI format), set `api: "openai-completions"` explicitly:
 
 ```json5
 {
@@ -194,7 +207,7 @@ If you need to use the OpenAI-compatible endpoint instead (e.g., behind a proxy 
 }
 ```
 
-Note: The OpenAI-compatible endpoint may not support streaming + tool calling simultaneously. You may need to disable streaming with `params: { streaming: false }` in model config.
+This mode also does not support streaming + tool calling simultaneously. You may need to disable streaming with `params: { streaming: false }` in model config.
 
 ### Context windows
 
