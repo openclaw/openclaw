@@ -15,6 +15,7 @@ import {
   formatUnknownError,
 } from "./errors.js";
 import {
+  buildConversationReference,
   type MSTeamsAdapter,
   renderReplyPayloadsToMessages,
   sendMSTeamsMessages,
@@ -92,8 +93,11 @@ export function createMSTeamsReplyDispatcher(params: {
       deliver: async (payload) => {
         // Send any pending adaptive cards as native Teams attachments.
         // These are enqueued by plugins (e.g. consent prompts, interactive forms).
+        // Use proactive messaging to avoid depending on the short-lived webhook
+        // TurnContext which Bot Framework revokes after the HTTP request completes.
         const pendingCards = drainPendingAdaptiveCards();
         if (pendingCards.length > 0) {
+          const cardRef = buildConversationReference(params.conversationRef);
           for (const entry of pendingCards) {
             const attachments = entry.cards.map((card) => ({
               contentType: card.contentType,
@@ -101,10 +105,12 @@ export function createMSTeamsReplyDispatcher(params: {
               ...(card.name ? { name: card.name } : {}),
             }));
             try {
-              await params.context.sendActivity({
-                type: "message",
-                attachments,
-                ...(entry.text ? { text: entry.text } : {}),
+              await params.adapter.continueConversation(params.appId, cardRef, async (ctx) => {
+                await ctx.sendActivity({
+                  type: "message",
+                  attachments,
+                  ...(entry.text ? { text: entry.text } : {}),
+                });
               });
               params.log.info("sent adaptive card(s)", {
                 count: attachments.length,
@@ -139,7 +145,6 @@ export function createMSTeamsReplyDispatcher(params: {
           adapter: params.adapter,
           appId: params.appId,
           conversationRef: params.conversationRef,
-          context: params.context,
           messages,
           // Enable default retry/backoff for throttling/transient failures.
           retry: {},

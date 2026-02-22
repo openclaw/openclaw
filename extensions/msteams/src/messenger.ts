@@ -441,32 +441,40 @@ export async function sendMSTeamsMessages(params: {
     }
   };
 
+  // Always use proactive messaging via adapter.continueConversation() rather
+  // than the webhook TurnContext. The webhook context is a proxy that Bot
+  // Framework revokes after the HTTP request handler returns, but with slow
+  // local LLMs the agent response arrives well after that — causing
+  // "Cannot perform 'set' on a proxy that has been revoked" errors.
+  const baseRef = buildConversationReference(params.conversationRef);
+
   if (params.replyStyle === "thread") {
-    const ctx = params.context;
-    if (!ctx) {
-      throw new Error("Missing context for replyStyle=thread");
-    }
+    // Keep activityId so replies land in the correct thread (channels).
+    // Set replyToId on each activity for explicit thread targeting.
+    const replyToId = params.conversationRef.activityId;
     const messageIds: string[] = [];
-    for (const [idx, message] of messages.entries()) {
-      const response = await sendWithRetry(
-        async () =>
-          await ctx.sendActivity(
-            await buildActivity(
-              message,
-              params.conversationRef,
-              params.tokenProvider,
-              params.sharePointSiteId,
-              params.mediaMaxBytes,
-            ),
-          ),
-        { messageIndex: idx, messageCount: messages.length },
-      );
-      messageIds.push(extractMessageId(response) ?? "unknown");
-    }
+    await params.adapter.continueConversation(params.appId, baseRef, async (ctx) => {
+      for (const [idx, message] of messages.entries()) {
+        const activity = await buildActivity(
+          message,
+          params.conversationRef,
+          params.tokenProvider,
+          params.sharePointSiteId,
+          params.mediaMaxBytes,
+        );
+        if (replyToId) {
+          activity.replyToId = replyToId;
+        }
+        const response = await sendWithRetry(async () => await ctx.sendActivity(activity), {
+          messageIndex: idx,
+          messageCount: messages.length,
+        });
+        messageIds.push(extractMessageId(response) ?? "unknown");
+      }
+    });
     return messageIds;
   }
 
-  const baseRef = buildConversationReference(params.conversationRef);
   const proactiveRef: MSTeamsConversationReference = {
     ...baseRef,
     activityId: undefined,
