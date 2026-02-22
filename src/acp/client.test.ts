@@ -74,27 +74,29 @@ describe("resolvePermissionRequest", () => {
     expect(prompt).not.toHaveBeenCalled();
   });
 
-  it("prompts for fetch even when tool name is known", async () => {
+  it.each([
+    {
+      caseName: "prompts for fetch even when tool name is known",
+      toolCallId: "tool-f",
+      title: "fetch: https://example.com",
+      expectedToolName: "fetch",
+    },
+    {
+      caseName: "prompts when tool name contains read/search substrings but isn't a safe kind",
+      toolCallId: "tool-t",
+      title: "thread: reply",
+      expectedToolName: "thread",
+    },
+  ])("$caseName", async ({ toolCallId, title, expectedToolName }) => {
     const prompt = vi.fn(async () => false);
     const res = await resolvePermissionRequest(
       makePermissionRequest({
-        toolCall: { toolCallId: "tool-f", title: "fetch: https://example.com", status: "pending" },
+        toolCall: { toolCallId, title, status: "pending" },
       }),
       { prompt, log: () => {} },
     );
     expect(prompt).toHaveBeenCalledTimes(1);
-    expect(res).toEqual({ outcome: { outcome: "selected", optionId: "reject" } });
-  });
-
-  it("prompts when tool name contains read/search substrings but isn't a safe kind", async () => {
-    const prompt = vi.fn(async () => false);
-    const res = await resolvePermissionRequest(
-      makePermissionRequest({
-        toolCall: { toolCallId: "tool-t", title: "thread: reply", status: "pending" },
-      }),
-      { prompt, log: () => {} },
-    );
-    expect(prompt).toHaveBeenCalledTimes(1);
+    expect(prompt).toHaveBeenCalledWith(expectedToolName, title);
     expect(res).toEqual({ outcome: { outcome: "selected", optionId: "reject" } });
   });
 
