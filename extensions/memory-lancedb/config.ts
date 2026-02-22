@@ -54,14 +54,6 @@ const EMBEDDING_DIMENSIONS: Record<string, number> = {
   "text-embedding-3-large": 3072,
 };
 
-function normalizeEmbeddingModelKey(model: string): string {
-  const raw = String(model || "").trim();
-  if (!raw) return raw;
-  // Support provider-prefixed ids, e.g. "openai/text-embedding-3-large"
-  const parts = raw.split("/").filter(Boolean);
-  return (parts[parts.length - 1] || raw).trim().toLowerCase();
-}
-
 function assertAllowedKeys(value: Record<string, unknown>, allowed: string[], label: string) {
   const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
   if (unknown.length === 0) {
@@ -71,8 +63,7 @@ function assertAllowedKeys(value: Record<string, unknown>, allowed: string[], la
 }
 
 export function vectorDimsForModel(model: string): number {
-  const normalized = normalizeEmbeddingModelKey(model);
-  const dims = EMBEDDING_DIMENSIONS[normalized];
+  const dims = EMBEDDING_DIMENSIONS[model];
   if (!dims) {
     throw new Error(`Unsupported embedding model: ${model}`);
   }

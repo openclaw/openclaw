@@ -51,7 +51,8 @@
             "type": "string"
           },
           "model": {
-            "type": "string"
+            "type": "string",
+            "enum": ["text-embedding-3-small", "text-embedding-3-large"]
           },
           "baseUrl": {
             "type": "string"
