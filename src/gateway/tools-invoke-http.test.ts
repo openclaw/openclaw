@@ -198,6 +198,17 @@ const allowAgentsListForMain = () => {
   };
 };
 
+const postToolsInvoke = async (params: {
+  port: number;
+  headers?: Record<string, string>;
+  body: Record<string, unknown>;
+}) =>
+  await fetch(`http://127.0.0.1:${params.port}/tools/invoke`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...params.headers },
+    body: JSON.stringify(params.body),
+  });
+
 const invokeAgentsList = async (params: {
   port: number;
   headers?: Record<string, string>;
@@ -207,11 +218,7 @@ const invokeAgentsList = async (params: {
   if (params.sessionKey) {
     body.sessionKey = params.sessionKey;
   }
-  return await fetch(`http://127.0.0.1:${params.port}/tools/invoke`, {
-    method: "POST",
-    headers: { "content-type": "application/json", ...params.headers },
-    body: JSON.stringify(body),
-  });
+  return await postToolsInvoke({ port: params.port, headers: params.headers, body });
 };
 
 const invokeTool = async (params: {
@@ -232,11 +239,7 @@ const invokeTool = async (params: {
   if (params.sessionKey) {
     body.sessionKey = params.sessionKey;
   }
-  return await fetch(`http://127.0.0.1:${params.port}/tools/invoke`, {
-    method: "POST",
-    headers: { "content-type": "application/json", ...params.headers },
-    body: JSON.stringify(body),
-  });
+  return await postToolsInvoke({ port: params.port, headers: params.headers, body });
 };
 
 const invokeAgentsListAuthed = async (params: { sessionKey?: string } = {}) =>

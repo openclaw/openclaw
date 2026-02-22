@@ -1,6 +1,7 @@
+import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { CONFIG_PATH, type HookMappingConfig, type HooksConfig } from "../config/config.js";
+import { importFileModule, resolveFunctionModuleExport } from "../hooks/module-loader.js";
 import type { HookMessageChannel } from "./hooks.js";
 
 export type HookMappingResolved = {
@@ -330,19 +331,22 @@ async function loadTransform(transform: HookMappingTransformResolved): Promise<H
   if (cached) {
     return cached;
   }
-  const url = pathToFileURL(transform.modulePath).href;
-  const mod = (await import(url)) as Record<string, unknown>;
+  const mod = await importFileModule({ modulePath: transform.modulePath });
   const fn = resolveTransformFn(mod, transform.exportName);
   transformCache.set(cacheKey, fn);
   return fn;
 }
 
 function resolveTransformFn(mod: Record<string, unknown>, exportName?: string): HookTransformFn {
-  const candidate = exportName ? mod[exportName] : (mod.default ?? mod.transform);
-  if (typeof candidate !== "function") {
+  const candidate = resolveFunctionModuleExport<HookTransformFn>({
+    mod,
+    exportName,
+    fallbackExportNames: ["default", "transform"],
+  });
+  if (!candidate) {
     throw new Error("hook transform module must export a function");
   }
-  return candidate as HookTransformFn;
+  return candidate;
 }
 
 function resolvePath(baseDir: string, target: string): string {
@@ -352,6 +356,34 @@ function resolvePath(baseDir: string, target: string): string {
   return path.isAbsolute(target) ? path.resolve(target) : path.resolve(baseDir, target);
 }
 
+function escapesBase(baseDir: string, candidate: string): boolean {
+  const relative = path.relative(baseDir, candidate);
+  return relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+}
+
+function safeRealpathSync(candidate: string): string | null {
+  try {
+    const nativeRealpath = fs.realpathSync.native as ((path: string) => string) | undefined;
+    return nativeRealpath ? nativeRealpath(candidate) : fs.realpathSync(candidate);
+  } catch {
+    return null;
+  }
+}
+
+function resolveExistingAncestor(candidate: string): string | null {
+  let current = path.resolve(candidate);
+  while (true) {
+    if (fs.existsSync(current)) {
+      return current;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return null;
+    }
+    current = parent;
+  }
+}
+
 function resolveContainedPath(baseDir: string, target: string, label: string): string {
   const base = path.resolve(baseDir);
   const trimmed = target?.trim();
@@ -359,8 +391,20 @@ function resolveContainedPath(baseDir: string, target: string, label: string): s
     throw new Error(`${label} module path is required`);
   }
   const resolved = resolvePath(base, trimmed);
-  const relative = path.relative(base, resolved);
-  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+  if (escapesBase(base, resolved)) {
+    throw new Error(`${label} module path must be within ${base}: ${target}`);
+  }
+
+  // Block symlink escapes for existing path segments while preserving current
+  // behavior for not-yet-created files.
+  const baseRealpath = safeRealpathSync(base);
+  const existingAncestor = resolveExistingAncestor(resolved);
+  const existingAncestorRealpath = existingAncestor ? safeRealpathSync(existingAncestor) : null;
+  if (
+    baseRealpath &&
+    existingAncestorRealpath &&
+    escapesBase(baseRealpath, existingAncestorRealpath)
+  ) {
     throw new Error(`${label} module path must be within ${base}: ${target}`);
   }
   return resolved;

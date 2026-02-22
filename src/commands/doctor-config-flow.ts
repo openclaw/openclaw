@@ -15,6 +15,10 @@ import {
   readConfigFileSnapshot,
 } from "../config/config.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import {
+  listInterpreterLikeSafeBins,
+  resolveMergedSafeBinProfileFixtures,
+} from "../infra/exec-safe-bin-runtime-policy.js";
 import { listTelegramAccountIds, resolveTelegramAccount } from "../telegram/accounts.js";
 import { note } from "../terminal/note.js";
 import { isRecord, resolveHomeDir } from "../utils.js";
@@ -704,6 +708,134 @@ function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
   return { config: next, changes };
 }
 
+type ExecSafeBinCoverageHit = {
+  scopePath: string;
+  bin: string;
+  isInterpreter: boolean;
+};
+
+type ExecSafeBinScopeRef = {
+  scopePath: string;
+  safeBins: string[];
+  exec: Record<string, unknown>;
+  mergedProfiles: Record<string, unknown>;
+};
+
+function normalizeConfiguredSafeBins(entries: unknown): string[] {
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+  return Array.from(
+    new Set(
+      entries
+        .map((entry) => (typeof entry === "string" ? entry.trim().toLowerCase() : ""))
+        .filter((entry) => entry.length > 0),
+    ),
+  ).toSorted();
+}
+
+function collectExecSafeBinScopes(cfg: OpenClawConfig): ExecSafeBinScopeRef[] {
+  const scopes: ExecSafeBinScopeRef[] = [];
+  const globalExec = asObjectRecord(cfg.tools?.exec);
+  if (globalExec) {
+    const safeBins = normalizeConfiguredSafeBins(globalExec.safeBins);
+    if (safeBins.length > 0) {
+      scopes.push({
+        scopePath: "tools.exec",
+        safeBins,
+        exec: globalExec,
+        mergedProfiles:
+          resolveMergedSafeBinProfileFixtures({
+            global: globalExec,
+          }) ?? {},
+      });
+    }
+  }
+  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  for (const agent of agents) {
+    if (!agent || typeof agent !== "object" || typeof agent.id !== "string") {
+      continue;
+    }
+    const agentExec = asObjectRecord(agent.tools?.exec);
+    if (!agentExec) {
+      continue;
+    }
+    const safeBins = normalizeConfiguredSafeBins(agentExec.safeBins);
+    if (safeBins.length === 0) {
+      continue;
+    }
+    scopes.push({
+      scopePath: `agents.list.${agent.id}.tools.exec`,
+      safeBins,
+      exec: agentExec,
+      mergedProfiles:
+        resolveMergedSafeBinProfileFixtures({
+          global: globalExec,
+          local: agentExec,
+        }) ?? {},
+    });
+  }
+  return scopes;
+}
+
+function scanExecSafeBinCoverage(cfg: OpenClawConfig): ExecSafeBinCoverageHit[] {
+  const hits: ExecSafeBinCoverageHit[] = [];
+  for (const scope of collectExecSafeBinScopes(cfg)) {
+    const interpreterBins = new Set(listInterpreterLikeSafeBins(scope.safeBins));
+    for (const bin of scope.safeBins) {
+      if (scope.mergedProfiles[bin]) {
+        continue;
+      }
+      hits.push({
+        scopePath: scope.scopePath,
+        bin,
+        isInterpreter: interpreterBins.has(bin),
+      });
+    }
+  }
+  return hits;
+}
+
+function maybeRepairExecSafeBinProfiles(cfg: OpenClawConfig): {
+  config: OpenClawConfig;
+  changes: string[];
+  warnings: string[];
+} {
+  const next = structuredClone(cfg);
+  const changes: string[] = [];
+  const warnings: string[] = [];
+
+  for (const scope of collectExecSafeBinScopes(next)) {
+    const interpreterBins = new Set(listInterpreterLikeSafeBins(scope.safeBins));
+    const missingBins = scope.safeBins.filter((bin) => !scope.mergedProfiles[bin]);
+    if (missingBins.length === 0) {
+      continue;
+    }
+    const profileHolder =
+      asObjectRecord(scope.exec.safeBinProfiles) ?? (scope.exec.safeBinProfiles = {});
+    for (const bin of missingBins) {
+      if (interpreterBins.has(bin)) {
+        warnings.push(
+          `- ${scope.scopePath}.safeBins includes interpreter/runtime '${bin}' without profile; remove it from safeBins or use explicit allowlist entries.`,
+        );
+        continue;
+      }
+      if (profileHolder[bin] !== undefined) {
+        continue;
+      }
+      profileHolder[bin] = {};
+      changes.push(
+        `- ${scope.scopePath}.safeBinProfiles.${bin}: added scaffold profile {} (review and tighten flags/positionals).`,
+      );
+    }
+  }
+
+  if (changes.length === 0 && warnings.length === 0) {
+    return { config: cfg, changes: [], warnings: [] };
+  }
+  return { config: next, changes, warnings };
+}
+
 async function maybeMigrateLegacyConfig(): Promise<string[]> {
   const changes: string[] = [];
   const home = resolveHomeDir();
@@ -859,6 +991,16 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       pendingChanges = true;
       cfg = allowFromRepair.config;
     }
+    const safeBinProfileRepair = maybeRepairExecSafeBinProfiles(candidate);
+    if (safeBinProfileRepair.changes.length > 0) {
+      note(safeBinProfileRepair.changes.join("\n"), "Doctor changes");
+      candidate = safeBinProfileRepair.config;
+      pendingChanges = true;
+      cfg = safeBinProfileRepair.config;
+    }
+    if (safeBinProfileRepair.warnings.length > 0) {
+      note(safeBinProfileRepair.warnings.join("\n"), "Doctor warnings");
+    }
   } else {
     const hits = scanTelegramAllowFromUsernameEntries(candidate);
     if (hits.length > 0) {
@@ -892,6 +1034,41 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         "Doctor warnings",
       );
     }
+
+    const safeBinCoverage = scanExecSafeBinCoverage(candidate);
+    if (safeBinCoverage.length > 0) {
+      const interpreterHits = safeBinCoverage.filter((hit) => hit.isInterpreter);
+      const customHits = safeBinCoverage.filter((hit) => !hit.isInterpreter);
+      const lines: string[] = [];
+      if (interpreterHits.length > 0) {
+        for (const hit of interpreterHits.slice(0, 5)) {
+          lines.push(
+            `- ${hit.scopePath}.safeBins includes interpreter/runtime '${hit.bin}' without profile.`,
+          );
+        }
+        if (interpreterHits.length > 5) {
+          lines.push(
+            `- ${interpreterHits.length - 5} more interpreter/runtime safeBins entries are missing profiles.`,
+          );
+        }
+      }
+      if (customHits.length > 0) {
+        for (const hit of customHits.slice(0, 5)) {
+          lines.push(
+            `- ${hit.scopePath}.safeBins entry '${hit.bin}' is missing safeBinProfiles.${hit.bin}.`,
+          );
+        }
+        if (customHits.length > 5) {
+          lines.push(
+            `- ${customHits.length - 5} more custom safeBins entries are missing profiles.`,
+          );
+        }
+      }
+      lines.push(
+        `- Run "${formatCliCommand("openclaw doctor --fix")}" to scaffold missing custom safeBinProfiles entries.`,
+      );
+      note(lines.join("\n"), "Doctor warnings");
+    }
   }
 
   const unknown = stripUnknownConfigKeys(candidate);
@@ -919,6 +1096,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     } else if (fixHints.length > 0) {
       note(fixHints.join("\n"), "Doctor");
     }
+  }
+
+  if (shouldRepair && pendingChanges) {
+    shouldWriteConfig = true;
   }
 
   noteOpencodeProviderOverrides(cfg);

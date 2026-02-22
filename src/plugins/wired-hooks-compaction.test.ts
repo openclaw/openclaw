@@ -29,11 +29,11 @@ describe("compaction hook wiring", () => {
   });
 
   beforeEach(() => {
-    hookMocks.runner.hasHooks.mockReset();
+    hookMocks.runner.hasHooks.mockClear();
     hookMocks.runner.hasHooks.mockReturnValue(false);
-    hookMocks.runner.runBeforeCompaction.mockReset();
+    hookMocks.runner.runBeforeCompaction.mockClear();
     hookMocks.runner.runBeforeCompaction.mockResolvedValue(undefined);
-    hookMocks.runner.runAfterCompaction.mockReset();
+    hookMocks.runner.runAfterCompaction.mockClear();
     hookMocks.runner.runAfterCompaction.mockResolvedValue(undefined);
   });
 

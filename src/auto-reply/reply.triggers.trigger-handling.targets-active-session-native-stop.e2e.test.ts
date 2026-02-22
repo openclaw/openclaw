@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import { join } from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadSessionStore } from "../config/sessions.js";
 import {
@@ -14,8 +14,18 @@ import {
 import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./reply/queue.js";
 
 let getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
+let previousFastTestEnv: string | undefined;
 beforeAll(async () => {
+  previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
+  process.env.OPENCLAW_TEST_FAST = "1";
   ({ getReplyFromConfig } = await import("./reply.js"));
+});
+afterAll(() => {
+  if (previousFastTestEnv === undefined) {
+    delete process.env.OPENCLAW_TEST_FAST;
+    return;
+  }
+  process.env.OPENCLAW_TEST_FAST = previousFastTestEnv;
 });
 
 installTriggerHandlingE2eTestHooks();
@@ -32,16 +42,12 @@ describe("trigger handling", () => {
       const targetSessionId = "session-target";
       await fs.writeFile(
         storePath,
-        JSON.stringify(
-          {
-            [targetSessionKey]: {
-              sessionId: targetSessionId,
-              updatedAt: Date.now(),
-            },
+        JSON.stringify({
+          [targetSessionKey]: {
+            sessionId: targetSessionId,
+            updatedAt: Date.now(),
           },
-          null,
-          2,
-        ),
+        }),
       );
       const followupRun: FollowupRun = {
         prompt: "queued",
@@ -58,7 +64,7 @@ describe("trigger handling", () => {
           config: cfg,
           provider: "anthropic",
           model: "claude-opus-4-5",
-          timeoutMs: 1000,
+          timeoutMs: 10,
           blockReplyBreak: "text_end",
         },
       };
@@ -108,16 +114,12 @@ describe("trigger handling", () => {
       // Seed the target session to ensure the native command mutates it.
       await fs.writeFile(
         storePath,
-        JSON.stringify(
-          {
-            [targetSessionKey]: {
-              sessionId: "session-target",
-              updatedAt: Date.now(),
-            },
+        JSON.stringify({
+          [targetSessionKey]: {
+            sessionId: "session-target",
+            updatedAt: Date.now(),
           },
-          null,
-          2,
-        ),
+        }),
       );
 
       const res = await getReplyFromConfig(

@@ -69,7 +69,7 @@ function seedDepthTwoAncestryStore(params?: { sessionIds?: boolean }) {
 describe("sessions_spawn depth + child limits", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
+    callGatewayMock.mockClear();
     storeTemplatePath = path.join(
       os.tmpdir(),
       `openclaw-subagent-depth-${Date.now()}-${Math.random().toString(16).slice(2)}-{agentId}.json`,

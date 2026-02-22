@@ -4,7 +4,13 @@ import process from "node:process";
 import { afterEach, describe, expect, it } from "vitest";
 import { attachChildProcessBridge } from "./child-process-bridge.js";
 
-function waitForLine(stream: NodeJS.ReadableStream, timeoutMs = 10_000): Promise<string> {
+const CHILD_READY_TIMEOUT_MS = 10_000;
+const CHILD_EXIT_TIMEOUT_MS = 10_000;
+
+function waitForLine(
+  stream: NodeJS.ReadableStream,
+  timeoutMs = CHILD_READY_TIMEOUT_MS,
+): Promise<string> {
   return new Promise((resolve, reject) => {
     let buffer = "";
 
@@ -89,11 +95,14 @@ describe("attachChildProcessBridge", () => {
     addedSigterm("SIGTERM");
 
     await new Promise<void>((resolve, reject) => {
-      const timeout = setTimeout(() => reject(new Error("timeout waiting for child exit")), 10_000);
+      const timeout = setTimeout(
+        () => reject(new Error("timeout waiting for child exit")),
+        CHILD_EXIT_TIMEOUT_MS,
+      );
       child.once("exit", () => {
         clearTimeout(timeout);
         resolve();
       });
     });
-  }, 15_000);
+  }, 8_000);
 });
