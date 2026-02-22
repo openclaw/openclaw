@@ -80,6 +80,14 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function cancelResponseBody(response: Response): Promise<void> {
+  try {
+    await response.body?.cancel();
+  } catch {
+    // Ignore cleanup errors and continue retry flow.
+  }
+}
+
 async function fetchWithRetry(params: {
   fetchFn: typeof fetch;
   url: string;
@@ -98,6 +106,7 @@ async function fetchWithRetry(params: {
         attempt,
         retryAfterHeader: response.headers.get("retry-after"),
       });
+      await cancelResponseBody(response);
       console.warn(
         `[msteams] ${params.requestName} retry ${attempt + 1}/${MAX_RETRY_ATTEMPTS} in ${waitMs}ms (status ${response.status})`,
       );

@@ -75,15 +75,15 @@ describe("graph-upload", () => {
 
   it("retries on 429 for Graph requests", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const retryResponse = new Response("rate limited", {
+      status: 429,
+      statusText: "Too Many Requests",
+      headers: { "Retry-After": "0" },
+    });
+    const cancelSpy = vi.spyOn(retryResponse.body as ReadableStream, "cancel");
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(
-        new Response("rate limited", {
-          status: 429,
-          statusText: "Too Many Requests",
-          headers: { "Retry-After": "0" },
-        }),
-      )
+      .mockResolvedValueOnce(retryResponse)
       .mockResolvedValueOnce(
         new Response(JSON.stringify({ link: { webUrl: "https://share.example/link" } }), {
           status: 200,
@@ -99,6 +99,7 @@ describe("graph-upload", () => {
 
     expect(result.webUrl).toBe("https://share.example/link");
     expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(cancelSpy).toHaveBeenCalledTimes(1);
     expect(warnSpy).toHaveBeenCalledTimes(1);
   });
 });
