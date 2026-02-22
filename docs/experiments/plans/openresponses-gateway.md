@@ -116,7 +116,7 @@ Key points extracted:
   - Non-stream response shape
   - Stream event ordering and `[DONE]`
   - Session routing with headers and `user`
-- Keep `src/gateway/openai-http.e2e.test.ts` unchanged.
+- Keep `src/gateway/openai-http.test.ts` unchanged.
 - Manual: curl to `/v1/responses` with `stream: true` and verify event ordering and terminal
   `[DONE]`.
 
