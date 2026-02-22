@@ -8,6 +8,8 @@ import {
 const HELP_FLAGS = new Set(["-h", "--help"]);
 const VERSION_FLAGS = new Set(["-V", "--version"]);
 const ROOT_VERSION_ALIAS_FLAG = "-v";
+const ROOT_BOOLEAN_FLAGS = new Set(["--dev", "--no-color", "--quiet"]);
+const ROOT_VALUE_FLAGS = new Set(["--profile", "--log-level"]);
 
 export function hasHelpOrVersion(argv: string[]): boolean {
   return (
