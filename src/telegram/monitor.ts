@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { type RunOptions, run } from "@grammyjs/runner";
 import { resolveAgentMaxConcurrent } from "../config/agent-limits.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -12,7 +13,11 @@ import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { createTelegramBot } from "./bot.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { makeProxyFetch } from "./proxy.js";
-import { readTelegramUpdateOffset, writeTelegramUpdateOffset } from "./update-offset-store.js";
+import {
+  readTelegramUpdateOffset,
+  resolveTelegramUpdateOffsetPath,
+  writeTelegramUpdateOffset,
+} from "./update-offset-store.js";
 import { startTelegramWebhook } from "./webhook.js";
 
 export type MonitorTelegramOpts = {
@@ -57,6 +62,11 @@ const TELEGRAM_POLL_RESTART_POLICY = {
   factor: 1.8,
   jitter: 0.25,
 };
+
+/** Polling stale threshold (5 minutes) */
+const POLLING_STALE_MS = 5 * 60 * 1000;
+/** Health check interval (60 seconds) */
+const HEALTH_CHECK_MS = 60 * 1000;
 
 const isGetUpdatesConflict = (err: unknown) => {
   if (!err || typeof err !== "object") {
@@ -170,11 +180,28 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
 
     // Use grammyjs/runner for concurrent update processing
     let restartAttempts = 0;
+    const offsetPath = resolveTelegramUpdateOffsetPath(account.accountId);
 
     while (!opts.abortSignal?.aborted) {
       const runner = run(bot, createTelegramRunnerOptions(cfg));
+      let healthTriggered = false;
+
+      // Health check: detect stuck polling by monitoring offset file freshness
+      const healthCheck = setInterval(async () => {
+        const stat = await fs.stat(offsetPath).catch(() => null);
+        if (stat && Date.now() - stat.mtimeMs > POLLING_STALE_MS) {
+          (opts.runtime?.error ?? console.error)(
+            `[telegram] [${account.accountId}] Polling stuck, restarting...`,
+          );
+          healthTriggered = true;
+          await fs.unlink(offsetPath).catch(() => {});
+          void runner.stop();
+        }
+      }, HEALTH_CHECK_MS);
+
       const stopOnAbort = () => {
         if (opts.abortSignal?.aborted) {
+          clearInterval(healthCheck);
           void runner.stop();
         }
       };
@@ -182,8 +209,15 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       try {
         // runner.task() returns a promise that resolves when the runner stops
         await runner.task();
+        clearInterval(healthCheck);
+        if (healthTriggered) {
+          lastUpdateId = null;
+          restartAttempts = 0;
+          continue;
+        }
         return;
       } catch (err) {
+        clearInterval(healthCheck);
         if (opts.abortSignal?.aborted) {
           throw err;
         }
