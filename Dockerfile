@@ -44,6 +44,8 @@ RUN if [ -n "$OPENCLAW_INSTALL_BROWSER" ]; then \
 
 USER node
 COPY --chown=node:node . .
+# Fix world-writable extensions dirs when building on Windows/WSL (files get mode 777)
+RUN find /app/extensions -type d -exec chmod 755 {} + && find /app/extensions -type f -exec chmod 644 {} +
 RUN pnpm build
 # Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV OPENCLAW_PREFER_PNPM=1
