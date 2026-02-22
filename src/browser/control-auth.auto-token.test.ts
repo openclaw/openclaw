@@ -48,8 +48,8 @@ describe("ensureBrowserControlAuth", () => {
 
   beforeEach(() => {
     vi.restoreAllMocks();
-    mocks.loadConfig.mockReset();
-    mocks.writeConfigFile.mockReset();
+    mocks.loadConfig.mockClear();
+    mocks.writeConfigFile.mockClear();
   });
 
   it("returns existing auth and skips writes", async () => {

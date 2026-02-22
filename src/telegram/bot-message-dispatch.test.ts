@@ -42,10 +42,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
   type TelegramMessageContext = Parameters<typeof dispatchTelegramMessage>[0]["context"];
 
   beforeEach(() => {
-    createTelegramDraftStream.mockReset();
-    dispatchReplyWithBufferedBlockDispatcher.mockReset();
-    deliverReplies.mockReset();
-    editMessageTelegram.mockReset();
+    createTelegramDraftStream.mockClear();
+    dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    deliverReplies.mockClear();
+    editMessageTelegram.mockClear();
     loadSessionStore.mockClear();
     resolveStorePath.mockClear();
     resolveStorePath.mockReturnValue("/tmp/sessions.json");
