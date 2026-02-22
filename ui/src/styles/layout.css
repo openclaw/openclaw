@@ -722,7 +722,7 @@
 .content--chat {
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: 16px;
   overflow: hidden;
   padding-bottom: 0;
 }

@@ -52,7 +52,7 @@
   flex: 1 1 0; /* Grow, shrink, and use 0 base for proper scrolling */
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 14px 8px;
+  padding: 10px 6px;
   margin: 0 -4px;
   min-height: 0; /* Allow shrinking for flex scroll behavior */
   border-radius: var(--radius-lg);
@@ -318,13 +318,13 @@
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 12px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
 .chat-controls__session {
-  min-width: 140px;
-  max-width: 300px;
+  min-width: 120px;
+  max-width: 260px;
 }
 
 .chat-controls__thinking {
@@ -336,9 +336,9 @@
 
 /* Icon button style */
 .btn--icon {
-  padding: 8px !important;
-  min-width: 36px;
-  height: 36px;
+  padding: 6px !important;
+  min-width: 32px;
+  height: 32px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -350,8 +350,8 @@
 /* Controls separator */
 .chat-controls__separator {
   color: var(--border);
-  font-size: 18px;
-  margin: 0 8px;
+  font-size: 14px;
+  margin: 0 2px;
   font-weight: 300;
 }
 
@@ -369,8 +369,8 @@
 
 .btn--icon svg {
   display: block;
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   stroke: currentColor;
   fill: none;
   stroke-width: 1.5px;
@@ -379,9 +379,9 @@
 }
 
 .chat-controls__session select {
-  padding: 6px 10px;
-  font-size: 13px;
-  max-width: 300px;
+  padding: 4px 8px;
+  font-size: 12px;
+  max-width: 260px;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -390,8 +390,8 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 12px;
-  padding: 4px 10px;
+  font-size: 11px;
+  padding: 2px 8px;
   background: color-mix(in srgb, var(--secondary) 90%, transparent);
   border-radius: var(--radius-sm);
   border: 1px solid color-mix(in srgb, var(--border) 88%, transparent);
@@ -399,7 +399,7 @@
 
 @media (max-width: 640px) {
   .chat-session {
-    min-width: 140px;
+    min-width: 100px;
   }
 
   .chat-compose {
@@ -408,10 +408,11 @@
 
   .chat-controls {
     flex-wrap: wrap;
-    gap: 8px;
+    gap: 4px;
   }
 
   .chat-controls__session {
-    min-width: 120px;
+    min-width: 100px;
+    max-width: 180px;
   }
 }
