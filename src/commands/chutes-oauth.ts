@@ -43,6 +43,16 @@ function parseManualOAuthInput(
   return parsed;
 }
 
+function createDeferred<T>() {
+  let resolve: (value: T | PromiseLike<T>) => void = () => {};
+  let reject: (reason?: unknown) => void = () => {};
+  const promise = new Promise<T>((innerResolve, innerReject) => {
+    resolve = innerResolve;
+    reject = innerReject;
+  });
+  return { promise, resolve, reject }
+}
+
 function buildAuthorizeUrl(params: {
   clientId: string;
   redirectUri: string;
@@ -67,6 +77,7 @@ async function waitForLocalCallback(params: {
   expectedState: string;
   timeoutMs: number;
   onProgress?: (message: string) => void;
+  onListening?: (address: { hostname: string; port: number }) => void;
 }): Promise<{ code: string; state: string }> {
   const redirectUrl = new URL(params.redirectUri);
   if (redirectUrl.protocol !== "http:") {
@@ -141,6 +152,10 @@ async function waitForLocalCallback(params: {
       reject(err);
     });
     server.listen(port, hostname, () => {
+      const addr = server.address();
+      if (addr && typeof addr !== "string") {
+        params.onListening?.({ hostname: addr.address, port: addr.port });
+      }
       params.onProgress?.(`Waiting for OAuth callback on ${redirectUrl.origin}${expectedPath}…`);
     });
 
@@ -162,6 +177,7 @@ export async function loginChutes(params: {
   onAuth: (event: { url: string }) => Promise<void>;
   onPrompt: (prompt: OAuthPrompt) => Promise<string>;
   onProgress?: (message: string) => void;
+  onListening?: (address: { hostname: string; port: number }) => void;
   fetchFn?: typeof fetch;
 }): Promise<OAuthCredentials> {
   const createPkce = params.createPkce ?? generateChutesPkce;
@@ -189,12 +205,19 @@ export async function loginChutes(params: {
     });
     codeAndState = parseManualOAuthInput(input, state);
   } else {
+    const { promise: readyPromise, resolve: resolveReady } = createDeferred<void>();
+
     const callback = waitForLocalCallback({
       redirectUri: params.app.redirectUri,
       expectedState: state,
       timeoutMs,
       onProgress: params.onProgress,
+      onListening: (address) => {
+        params.onListening?.(address);
+        resolveReady();
+      },
     }).catch(async () => {
+      resolveReady();
       params.onProgress?.("OAuth callback not detected; paste redirect URL…");
       const input = await params.onPrompt({
         message: "Paste the redirect URL (or authorization code)",
@@ -203,6 +226,7 @@ export async function loginChutes(params: {
       return parseManualOAuthInput(input, state);
     });
 
+    await readyPromise;
     await params.onAuth({ url });
     codeAndState = await callback;
   }
