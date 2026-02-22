@@ -9,6 +9,13 @@ vi.mock("../../auto-reply/commands-registry.js", () => {
   const reportLongCommand = { key: "reportlong", nativeName: "reportlong" };
   const unsafeConfirmCommand = { key: "unsafeconfirm", nativeName: "unsafeconfirm" };
   const periodArg = { name: "period", description: "period" };
+  const baseReportPeriodChoices = [
+    { value: "day", label: "day" },
+    { value: "week", label: "week" },
+    { value: "month", label: "month" },
+    { value: "quarter", label: "quarter" },
+  ];
+  const fullReportPeriodChoices = [...baseReportPeriodChoices, { value: "year", label: "year" }];
   const hasNonEmptyArgValue = (values: unknown, key: string) => {
     const raw =
       typeof values === "object" && values !== null
@@ -113,31 +120,18 @@ vi.mock("../../auto-reply/commands-registry.js", () => {
     }) => {
       if (params.command?.key === "report") {
         return resolvePeriodMenu(params, [
-          { value: "day", label: "day" },
-          { value: "week", label: "week" },
-          { value: "month", label: "month" },
-          { value: "quarter", label: "quarter" },
-          { value: "year", label: "year" },
+          ...fullReportPeriodChoices,
           { value: "all", label: "all" },
         ]);
       }
       if (params.command?.key === "reportlong") {
         return resolvePeriodMenu(params, [
-          { value: "day", label: "day" },
-          { value: "week", label: "week" },
-          { value: "month", label: "month" },
-          { value: "quarter", label: "quarter" },
-          { value: "year", label: "year" },
+          ...fullReportPeriodChoices,
           { value: "x".repeat(90), label: "long" },
         ]);
       }
       if (params.command?.key === "reportcompact") {
-        return resolvePeriodMenu(params, [
-          { value: "day", label: "day" },
-          { value: "week", label: "week" },
-          { value: "month", label: "month" },
-          { value: "quarter", label: "quarter" },
-        ]);
+        return resolvePeriodMenu(params, baseReportPeriodChoices);
       }
       if (params.command?.key === "reportexternal") {
         return {
@@ -318,6 +312,12 @@ function expectArgMenuLayout(respond: ReturnType<typeof vi.fn>): {
   expect(payload.blocks?.[1]?.type).toBe("section");
   expect(payload.blocks?.[2]?.type).toBe("context");
   return findFirstActionsBlock(payload) ?? { type: "actions", elements: [] };
+}
+
+function expectSingleDispatchedSlashBody(expectedBody: string) {
+  expect(dispatchMock).toHaveBeenCalledTimes(1);
+  const call = dispatchMock.mock.calls[0]?.[0] as { ctx?: { Body?: string } };
+  expect(call.ctx?.Body).toBe(expectedBody);
 }
 
 async function runArgMenuAction(
@@ -509,9 +509,7 @@ describe("Slack native command argument menus", () => {
       },
     });
 
-    expect(dispatchMock).toHaveBeenCalledTimes(1);
-    const call = dispatchMock.mock.calls[0]?.[0] as { ctx?: { Body?: string } };
-    expect(call.ctx?.Body).toBe("/report month");
+    expectSingleDispatchedSlashBody("/report month");
   });
 
   it("dispatches the command when an overflow option is chosen", async () => {
@@ -528,9 +526,7 @@ describe("Slack native command argument menus", () => {
       },
     });
 
-    expect(dispatchMock).toHaveBeenCalledTimes(1);
-    const call = dispatchMock.mock.calls[0]?.[0] as { ctx?: { Body?: string } };
-    expect(call.ctx?.Body).toBe("/reportcompact quarter");
+    expectSingleDispatchedSlashBody("/reportcompact quarter");
   });
 
   it("shows an external_select menu when choices exceed static_select options max", async () => {

@@ -61,6 +61,16 @@ function mockMediaLoad(fileName: string, contentType: string, data: string) {
   });
 }
 
+function createSendMessageHarness(messageId = 4) {
+  const runtime = createRuntime();
+  const sendMessage = vi.fn().mockResolvedValue({
+    message_id: messageId,
+    chat: { id: "123" },
+  });
+  const bot = createBot({ sendMessage });
+  return { runtime, sendMessage, bot };
+}
+
 describe("deliverReplies", () => {
   beforeEach(() => {
     loadWebMedia.mockReset();
@@ -178,12 +188,7 @@ describe("deliverReplies", () => {
   });
 
   it("includes message_thread_id for DM topics", async () => {
-    const runtime = createRuntime();
-    const sendMessage = vi.fn().mockResolvedValue({
-      message_id: 4,
-      chat: { id: "123" },
-    });
-    const bot = createBot({ sendMessage });
+    const { runtime, sendMessage, bot } = createSendMessageHarness();
 
     await deliverWith({
       replies: [{ text: "Hello" }],
@@ -202,12 +207,7 @@ describe("deliverReplies", () => {
   });
 
   it("does not include link_preview_options when linkPreview is true", async () => {
-    const runtime = createRuntime();
-    const sendMessage = vi.fn().mockResolvedValue({
-      message_id: 4,
-      chat: { id: "123" },
-    });
-    const bot = createBot({ sendMessage });
+    const { runtime, sendMessage, bot } = createSendMessageHarness();
 
     await deliverWith({
       replies: [{ text: "Check https://example.com" }],
