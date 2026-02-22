@@ -76,6 +76,10 @@ Put under `plugins.entries.voice-call.config`:
   streaming: {
     enabled: true,
     streamPath: "/voice/stream",
+    preStartTimeoutMs: 5000,
+    maxPendingConnections: 32,
+    maxPendingConnectionsPerIp: 4,
+    maxConnections: 128,
   },
 }
 ```
@@ -86,6 +90,13 @@ Notes:
 - `mock` is a local dev provider (no network calls).
 - Telnyx requires `telnyx.publicKey` (or `TELNYX_PUBLIC_KEY`) unless `skipSignatureVerification` is true.
 - `tunnel.allowNgrokFreeTierLoopbackBypass: true` allows Twilio webhooks with invalid signatures **only** when `tunnel.provider="ngrok"` and `serve.bind` is loopback (ngrok local agent). Use for local dev only.
+
+Streaming security defaults:
+
+- `streaming.preStartTimeoutMs` closes sockets that never send a valid `start` frame.
+- `streaming.maxPendingConnections` caps total unauthenticated pre-start sockets.
+- `streaming.maxPendingConnectionsPerIp` caps unauthenticated pre-start sockets per source IP.
+- `streaming.maxConnections` caps total open media stream sockets (pending + active).
 
 ## Stale call reaper
 
