@@ -189,3 +189,120 @@ describe("resolveMedia getFile retry", () => {
     expect(result).not.toBeNull();
   });
 });
+
+describe("resolveMedia with localBotApiUrl", () => {
+  const LOCAL_API_URL = "http://localhost:18995";
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fetchRemoteMedia.mockReset();
+    saveMediaBuffer.mockReset();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("uses local API for getFile and file download when localBotApiUrl is set", async () => {
+    const mockFetch = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ ok: true, result: { file_path: "voice/file_0.oga" } }),
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockFetch as unknown as typeof fetch;
+
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("audio"),
+      contentType: "audio/ogg",
+      fileName: "file_0.oga",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/file_0.oga",
+      contentType: "audio/ogg",
+    });
+
+    const getFile = vi.fn();
+    const promise = resolveMedia(
+      makeCtx("voice", getFile),
+      MAX_MEDIA_BYTES,
+      BOT_TOKEN,
+      undefined,
+      LOCAL_API_URL,
+    );
+    await flushRetryTimers();
+    const result = await promise;
+
+    expect(getFile).not.toHaveBeenCalled();
+    expect(mockFetch).toHaveBeenCalledWith(`${LOCAL_API_URL}/bot${BOT_TOKEN}/getFile?file_id=v1`);
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: `${LOCAL_API_URL}/file/bot${BOT_TOKEN}/voice/file_0.oga`,
+      }),
+    );
+    expect(result).toEqual(
+      expect.objectContaining({ path: "/tmp/file_0.oga", placeholder: "<media:audio>" }),
+    );
+
+    globalThis.fetch = originalFetch;
+  });
+
+  it("falls back to ctx.getFile when localBotApiUrl is not set", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "voice/file_0.oga" });
+
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("audio"),
+      contentType: "audio/ogg",
+      fileName: "file_0.oga",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/file_0.oga",
+      contentType: "audio/ogg",
+    });
+
+    const result = await resolveMedia(makeCtx("voice", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+
+    expect(getFile).toHaveBeenCalledTimes(1);
+    expect(fetchRemoteMedia).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: `https://api.telegram.org/file/bot${BOT_TOKEN}/voice/file_0.oga`,
+      }),
+    );
+    expect(result).toEqual(
+      expect.objectContaining({ path: "/tmp/file_0.oga", placeholder: "<media:audio>" }),
+    );
+  });
+
+  it("strips trailing slashes from localBotApiUrl", async () => {
+    const mockFetch = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ ok: true, result: { file_path: "documents/file.pdf" } }),
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = mockFetch as unknown as typeof fetch;
+
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("pdf"),
+      contentType: "application/pdf",
+      fileName: "file.pdf",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/file.pdf",
+      contentType: "application/pdf",
+    });
+
+    const getFile = vi.fn();
+    const promise = resolveMedia(
+      makeCtx("audio", getFile),
+      MAX_MEDIA_BYTES,
+      BOT_TOKEN,
+      undefined,
+      `${LOCAL_API_URL}/`,
+    );
+    await flushRetryTimers();
+    await promise;
+
+    expect(mockFetch).toHaveBeenCalledWith(`${LOCAL_API_URL}/bot${BOT_TOKEN}/getFile?file_id=a1`);
+
+    globalThis.fetch = originalFetch;
+  });
+});

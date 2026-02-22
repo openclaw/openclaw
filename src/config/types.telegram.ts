@@ -115,6 +115,14 @@ export type TelegramAccountConfig = {
   /** @deprecated Legacy key; migrated automatically to `streaming`. */
   streamMode?: "off" | "partial" | "block";
   mediaMaxMb?: number;
+  /**
+   * URL of a local Telegram Bot API server (e.g. "http://localhost:8081").
+   * When set, file downloads use this server instead of the standard Telegram
+   * Bot API, raising the file size limit from 20 MB to 2 GB.
+   * All other API calls (sending messages, polling, etc.) still use the
+   * standard Telegram API.
+   */
+  localBotApiUrl?: string;
   /** Telegram API client timeout in seconds (grammY ApiClientOptions). */
   timeoutSeconds?: number;
   /** Retry policy for outbound Telegram API calls. */

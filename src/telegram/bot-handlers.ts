@@ -270,7 +270,7 @@ export const registerTelegramHandlers = ({
 
       const allMedia: TelegramMediaRef[] = [];
       for (const { ctx } of entry.messages) {
-        const media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
+        const media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch, telegramCfg.localBotApiUrl);
         if (media) {
           allMedia.push({
             path: media.path,
@@ -661,7 +661,7 @@ export const registerTelegramHandlers = ({
 
     let media: Awaited<ReturnType<typeof resolveMedia>> = null;
     try {
-      media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
+      media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch, telegramCfg.localBotApiUrl);
     } catch (mediaErr) {
       const errMsg = String(mediaErr);
       if (errMsg.includes("exceeds") && errMsg.includes("MB limit")) {
