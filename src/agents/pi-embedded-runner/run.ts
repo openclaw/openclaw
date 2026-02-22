@@ -503,6 +503,8 @@ export async function runEmbeddedPiAgent(
       const maybeMarkAuthProfileFailure = async (params: {
         profileId?: string;
         reason?: Parameters<typeof markAuthProfileFailure>[0]["reason"] | null;
+        config?: RunEmbeddedPiAgentParams["config"];
+        agentDir?: RunEmbeddedPiAgentParams["agentDir"];
       }) => {
         const { profileId, reason } = params;
         if (!profileId || !reason || reason === "timeout") {
