@@ -2257,6 +2257,8 @@ Auth: `Authorization: Bearer <token>` or `x-openclaw-token: <token>`.
 
 - `minimal` (default): omit `cliPath` + `sshPort` from TXT records.
 - `full`: include `cliPath` + `sshPort`.
+  - On non-loopback binds (`gateway.bind != "loopback"`), full mode requires
+    `OPENCLAW_DISCOVERY_ALLOW_FULL_MDNS=1`; otherwise runtime falls back to `minimal`.
 - Hostname defaults to `openclaw`. Override with `OPENCLAW_MDNS_HOSTNAME`.
 
 ### Wide-area (DNS-SD)

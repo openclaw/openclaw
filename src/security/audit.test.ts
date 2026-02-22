@@ -244,6 +244,41 @@ describe("security audit", () => {
     expect(hasFinding(res, "gateway.auth_no_rate_limit")).toBe(false);
   });
 
+  it("flags unconfirmed mDNS full mode on non-loopback bind as critical", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+      },
+      discovery: {
+        mdns: {
+          mode: "full",
+        },
+      },
+    };
+
+    const res = await audit(cfg, { env: {} });
+
+    expectFinding(res, "discovery.mdns_full_non_loopback_unconfirmed", "critical");
+  });
+
+  it("warns when mDNS full mode on non-loopback bind is explicitly confirmed", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+      },
+      discovery: {
+        mdns: {
+          mode: "full",
+        },
+      },
+    };
+
+    const res = await audit(cfg, { env: { OPENCLAW_DISCOVERY_ALLOW_FULL_MDNS: "1" } });
+
+    expectFinding(res, "discovery.mdns_full_non_loopback", "warn");
+    expect(hasFinding(res, "discovery.mdns_full_non_loopback_unconfirmed")).toBe(false);
+  });
+
   it("warns when exec host is explicitly sandbox while sandbox mode is off", async () => {
     const cfg: OpenClawConfig = {
       tools: {

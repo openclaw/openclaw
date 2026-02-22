@@ -510,6 +510,10 @@ The Gateway broadcasts its presence via mDNS (`_openclaw-gw._tcp` on port 5353) 
    }
    ```
 
+   On non-loopback binds (`gateway.bind != "loopback"`), set
+   `OPENCLAW_DISCOVERY_ALLOW_FULL_MDNS=1` to confirm this choice; otherwise
+   runtime falls back to `minimal`.
+
 4. **Environment variable** (alternative): set `OPENCLAW_DISABLE_BONJOUR=1` to disable mDNS without config changes.
 
 In minimal mode, the Gateway still broadcasts enough for device discovery (`role`, `gatewayPort`, `transport`) but omits `cliPath` and `sshPort`. Apps that need CLI path information can fetch it via the authenticated WebSocket connection instead.
