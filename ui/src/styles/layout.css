@@ -262,9 +262,10 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
+  gap: 6px;
+  min-width: 28px;
   height: 28px;
-  padding: 0;
+  padding: 0 4px;
   border: 1px solid transparent;
   border-radius: var(--radius);
   background: none;
@@ -289,13 +290,24 @@
 }
 
 .topbar-redact--active {
+  border-radius: var(--radius-full);
+  padding: 4px 10px;
   color: var(--warn);
+  background: var(--warn-subtle);
 }
 
 .topbar-redact--active:hover {
   color: var(--warn);
-  background: var(--warn-subtle);
-  border-color: color-mix(in srgb, var(--warn) 30%, transparent);
+  background: color-mix(in srgb, var(--warn-subtle) 80%, var(--warn) 10%);
+}
+
+.topbar-redact__label {
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  line-height: 1;
+  white-space: nowrap;
 }
 
 /* Topbar theme toggle sizing */
