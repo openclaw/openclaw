@@ -156,7 +156,7 @@ async function readLockPayload(lockPath: string): Promise<LockPayload | null> {
 function resolveGatewayLockPath(env: NodeJS.ProcessEnv) {
   const stateDir = resolveStateDir(env);
   const configPath = resolveConfigPath(env, stateDir);
-  const hash = createHash("sha1").update(configPath).digest("hex").slice(0, 8);
+  const hash = createHash("sha256").update(configPath).digest("hex").slice(0, 8);
   const lockDir = resolveGatewayLockDir();
   const lockPath = path.join(lockDir, `gateway.${hash}.lock`);
   return { lockPath, configPath };
@@ -231,7 +231,11 @@ export async function acquireGatewayLock(
             const st = await fs.stat(lockPath);
             stale = Date.now() - st.mtimeMs > staleMs;
           } catch {
-            stale = true;
+            // On Windows or locked filesystems we may be unable to stat the
+            // lock file even though the existing gateway is still healthy.
+            // Treat the lock as non-stale so we keep waiting instead of
+            // forcefully removing another gateway's lock.
+            stale = false;
           }
         }
         if (stale) {

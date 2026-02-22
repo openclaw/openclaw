@@ -1,6 +1,6 @@
 import type { RequestClient } from "@buape/carbon";
 import { Routes } from "discord-api-types/v10";
-import { createDraftStreamLoop } from "../channels/draft-stream-loop.js";
+import { createFinalizableDraftLifecycle } from "../channels/draft-stream-controls.js";
 
 /** Discord messages cap at 2000 characters. */
 const DISCORD_STREAM_MAX_CHARS = 2000;
@@ -37,14 +37,13 @@ export function createDiscordDraftStream(params: {
       ? params.replyToMessageId()
       : params.replyToMessageId;
 
+  const streamState = { stopped: false, final: false };
   let streamMessageId: string | undefined;
   let lastSentText = "";
-  let stopped = false;
-  let isFinal = false;
 
   const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
     // Allow final flush even if stopped (e.g., after clear()).
-    if (stopped && !isFinal) {
+    if (streamState.stopped && !streamState.final) {
       return false;
     }
     const trimmed = text.trimEnd();
@@ -54,7 +53,7 @@ export function createDiscordDraftStream(params: {
     if (trimmed.length > maxChars) {
       // Discord messages cap at 2000 chars.
       // Stop streaming once we exceed the cap to avoid repeated API failures.
-      stopped = true;
+      streamState.stopped = true;
       params.warn?.(`discord stream preview stopped (text length ${trimmed.length} > ${maxChars})`);
       return false;
     }
@@ -63,7 +62,7 @@ export function createDiscordDraftStream(params: {
     }
 
     // Debounce first preview send for better push notification quality.
-    if (streamMessageId === undefined && minInitialChars != null && !isFinal) {
+    if (streamMessageId === undefined && minInitialChars != null && !streamState.final) {
       if (trimmed.length < minInitialChars) {
         return false;
       }
@@ -91,14 +90,14 @@ export function createDiscordDraftStream(params: {
       })) as { id?: string } | undefined;
       const sentMessageId = sent?.id;
       if (typeof sentMessageId !== "string" || !sentMessageId) {
-        stopped = true;
+        streamState.stopped = true;
         params.warn?.("discord stream preview stopped (missing message id from send)");
         return false;
       }
       streamMessageId = sentMessageId;
       return true;
     } catch (err) {
-      stopped = true;
+      streamState.stopped = true;
       params.warn?.(
         `discord stream preview failed: ${err instanceof Error ? err.message : String(err)}`,
       );
@@ -106,41 +105,21 @@ export function createDiscordDraftStream(params: {
     }
   };
 
-  const loop = createDraftStreamLoop({
+  const { loop, update, stop, clear } = createFinalizableDraftLifecycle({
     throttleMs,
-    isStopped: () => stopped,
+    state: streamState,
     sendOrEditStreamMessage,
-  });
-
-  const update = (text: string) => {
-    if (stopped || isFinal) {
-      return;
-    }
-    loop.update(text);
-  };
-
-  const stop = async (): Promise<void> => {
-    isFinal = true;
-    await loop.flush();
-  };
-
-  const clear = async () => {
-    stopped = true;
-    loop.stop();
-    await loop.waitForInFlight();
-    const messageId = streamMessageId;
-    streamMessageId = undefined;
-    if (typeof messageId !== "string") {
-      return;
-    }
-    try {
+    readMessageId: () => streamMessageId,
+    clearMessageId: () => {
+      streamMessageId = undefined;
+    },
+    isValidMessageId: (value): value is string => typeof value === "string",
+    deleteMessage: async (messageId) => {
       await rest.delete(Routes.channelMessage(channelId, messageId));
-    } catch (err) {
-      params.warn?.(
-        `discord stream preview cleanup failed: ${err instanceof Error ? err.message : String(err)}`,
-      );
-    }
-  };
+    },
+    warn: params.warn,
+    warnPrefix: "discord stream preview cleanup failed",
+  });
 
   const forceNewMessage = () => {
     streamMessageId = undefined;

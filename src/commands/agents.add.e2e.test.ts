@@ -25,9 +25,9 @@ const runtime = createTestRuntime();
 
 describe("agents add command", () => {
   beforeEach(() => {
-    readConfigFileSnapshotMock.mockReset();
+    readConfigFileSnapshotMock.mockClear();
     writeConfigFileMock.mockClear();
-    wizardMocks.createClackPrompter.mockReset();
+    wizardMocks.createClackPrompter.mockClear();
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();

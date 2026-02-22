@@ -92,7 +92,7 @@ targets:
           - CFBundleURLName: ai.openclaw.ios
             CFBundleURLSchemes:
               - openclaw
-        CFBundleShortVersionString: "2026.2.20"
+        CFBundleShortVersionString: "2026.2.21"
         CFBundleVersion: "20260220"
         UILaunchScreen: {}
         UIApplicationSceneManifest:
@@ -146,7 +146,7 @@ targets:
       path: ShareExtension/Info.plist
       properties:
         CFBundleDisplayName: OpenClaw Share
-        CFBundleShortVersionString: "2026.2.20"
+        CFBundleShortVersionString: "2026.2.21"
         CFBundleVersion: "20260220"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.share-services
@@ -176,7 +176,7 @@ targets:
       path: WatchApp/Info.plist
       properties:
         CFBundleDisplayName: OpenClaw
-        CFBundleShortVersionString: "2026.2.20"
+        CFBundleShortVersionString: "2026.2.21"
         CFBundleVersion: "20260220"
         WKCompanionAppBundleIdentifier: "$(OPENCLAW_APP_BUNDLE_ID)"
         WKWatchKitApp: true
@@ -200,7 +200,7 @@ targets:
       path: WatchExtension/Info.plist
       properties:
         CFBundleDisplayName: OpenClaw
-        CFBundleShortVersionString: "2026.2.20"
+        CFBundleShortVersionString: "2026.2.21"
         CFBundleVersion: "20260220"
         NSExtension:
           NSExtensionAttributes:
@@ -228,5 +228,5 @@ targets:
       path: Tests/Info.plist
       properties:
         CFBundleDisplayName: OpenClawTests
-        CFBundleShortVersionString: "2026.2.20"
+        CFBundleShortVersionString: "2026.2.21"
         CFBundleVersion: "20260220"

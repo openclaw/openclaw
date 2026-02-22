@@ -601,6 +601,10 @@ describe("Agent-specific tool filtering", () => {
     const cfg: OpenClawConfig = {
       tools: {
         deny: ["process"],
+        exec: {
+          security: "full",
+          ask: "off",
+        },
       },
     };
 
@@ -622,11 +626,30 @@ describe("Agent-specific tool filtering", () => {
     expect(resultDetails?.status).toBe("completed");
   });
 
+  it("fails closed when exec host=sandbox is requested without sandbox runtime", async () => {
+    const tools = createOpenClawCodingTools({
+      config: {},
+      sessionKey: "agent:main:main",
+      workspaceDir: "/tmp/test-main-fail-closed",
+      agentDir: "/tmp/agent-main-fail-closed",
+    });
+    const execTool = tools.find((tool) => tool.name === "exec");
+    expect(execTool).toBeDefined();
+    await expect(
+      execTool!.execute("call-fail-closed", {
+        command: "echo done",
+        host: "sandbox",
+      }),
+    ).rejects.toThrow("exec host not allowed");
+  });
+
   it("should apply agent-specific exec host defaults over global defaults", async () => {
     const cfg: OpenClawConfig = {
       tools: {
         exec: {
           host: "sandbox",
+          security: "full",
+          ask: "off",
         },
       },
       agents: {
@@ -654,6 +677,12 @@ describe("Agent-specific tool filtering", () => {
     });
     const mainExecTool = mainTools.find((tool) => tool.name === "exec");
     expect(mainExecTool).toBeDefined();
+    const mainResult = await mainExecTool!.execute("call-main-default", {
+      command: "echo done",
+      yieldMs: 1000,
+    });
+    const mainDetails = mainResult?.details as { status?: string } | undefined;
+    expect(mainDetails?.status).toBe("completed");
     await expect(
       mainExecTool!.execute("call-main", {
         command: "echo done",
@@ -669,12 +698,18 @@ describe("Agent-specific tool filtering", () => {
     });
     const helperExecTool = helperTools.find((tool) => tool.name === "exec");
     expect(helperExecTool).toBeDefined();
-    const helperResult = await helperExecTool!.execute("call-helper", {
-      command: "echo done",
-      host: "sandbox",
-      yieldMs: 1000,
-    });
-    const helperDetails = helperResult?.details as { status?: string } | undefined;
-    expect(helperDetails?.status).toBe("completed");
+    await expect(
+      helperExecTool!.execute("call-helper-default", {
+        command: "echo done",
+        yieldMs: 1000,
+      }),
+    ).rejects.toThrow("exec host=sandbox is configured");
+    await expect(
+      helperExecTool!.execute("call-helper", {
+        command: "echo done",
+        host: "sandbox",
+        yieldMs: 1000,
+      }),
+    ).rejects.toThrow("exec host=sandbox is configured");
   });
 });

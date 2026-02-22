@@ -16,6 +16,25 @@ describe("applyPluginAutoEnable", () => {
     expect(result.changes.join("\n")).toContain("Slack configured, enabled automatically.");
   });
 
+  it("ignores channels.modelByChannel for plugin auto-enable", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: {
+          modelByChannel: {
+            openai: {
+              whatsapp: "openai/gpt-5.2",
+            },
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.entries?.modelByChannel).toBeUndefined();
+    expect(result.config.plugins?.allow).toBeUndefined();
+    expect(result.changes).toEqual([]);
+  });
+
   it("respects explicit disable", () => {
     const result = applyPluginAutoEnable({
       config: {

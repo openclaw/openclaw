@@ -10,6 +10,10 @@ import type { MsgContext } from "../../auto-reply/templating.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import {
+  stripInlineDirectiveTagsForDisplay,
+  stripInlineDirectiveTagsFromMessageForDisplay,
+} from "../../utils/directive-tags.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import {
   abortChatRunById,
@@ -103,9 +107,10 @@ function sanitizeChatHistoryContentBlock(block: unknown): { block: unknown; chan
   const entry = { ...(block as Record<string, unknown>) };
   let changed = false;
   if (typeof entry.text === "string") {
-    const res = truncateChatHistoryText(entry.text);
+    const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
+    const res = truncateChatHistoryText(stripped.text);
     entry.text = res.text;
-    changed ||= res.truncated;
+    changed ||= stripped.changed || res.truncated;
   }
   if (typeof entry.partialJson === "string") {
     const res = truncateChatHistoryText(entry.partialJson);
@@ -158,9 +163,10 @@ function sanitizeChatHistoryMessage(message: unknown): { message: unknown; chang
   }
 
   if (typeof entry.content === "string") {
-    const res = truncateChatHistoryText(entry.content);
+    const stripped = stripInlineDirectiveTagsForDisplay(entry.content);
+    const res = truncateChatHistoryText(stripped.text);
     entry.content = res.text;
-    changed ||= res.truncated;
+    changed ||= stripped.changed || res.truncated;
   } else if (Array.isArray(entry.content)) {
     const updated = entry.content.map((block) => sanitizeChatHistoryContentBlock(block));
     if (updated.some((item) => item.changed)) {
@@ -170,9 +176,10 @@ function sanitizeChatHistoryMessage(message: unknown): { message: unknown; chang
   }
 
   if (typeof entry.text === "string") {
-    const res = truncateChatHistoryText(entry.text);
+    const stripped = stripInlineDirectiveTagsForDisplay(entry.text);
+    const res = truncateChatHistoryText(stripped.text);
     entry.text = res.text;
-    changed ||= res.truncated;
+    changed ||= stripped.changed || res.truncated;
   }
 
   return { message: changed ? entry : message, changed };
@@ -535,7 +542,7 @@ function broadcastChatFinal(params: {
     sessionKey: params.sessionKey,
     seq,
     state: "final" as const,
-    message: params.message,
+    message: stripInlineDirectiveTagsFromMessageForDisplay(params.message),
   };
   params.context.broadcast("chat", payload);
   params.context.nodeSendToSession(params.sessionKey, "chat", payload);
@@ -1066,7 +1073,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey: rawSessionKey,
       seq: 0,
       state: "final" as const,
-      message: appended.message,
+      message: stripInlineDirectiveTagsFromMessageForDisplay(appended.message),
     };
     context.broadcast("chat", chatPayload);
     context.nodeSendToSession(rawSessionKey, "chat", chatPayload);

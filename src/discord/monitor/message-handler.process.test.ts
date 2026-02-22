@@ -1,20 +1,30 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_EMOJIS } from "../../channels/status-reactions.js";
 import { createBaseDiscordMessageContext } from "./message-handler.test-harness.js";
+import {
+  __testing as threadBindingTesting,
+  createThreadBindingManager,
+} from "./thread-bindings.js";
 
-const reactMessageDiscord = vi.fn(async () => {});
-const removeReactionDiscord = vi.fn(async () => {});
-const editMessageDiscord = vi.fn(async () => ({}));
-const deliverDiscordReply = vi.fn(async () => {});
-const createDiscordDraftStream = vi.fn(() => ({
-  update: vi.fn<(text: string) => void>(() => {}),
-  flush: vi.fn(async () => {}),
-  messageId: vi.fn(() => "preview-1"),
-  clear: vi.fn(async () => {}),
-  stop: vi.fn(async () => {}),
-  forceNewMessage: vi.fn(() => {}),
+const sendMocks = vi.hoisted(() => ({
+  reactMessageDiscord: vi.fn(async () => {}),
+  removeReactionDiscord: vi.fn(async () => {}),
 }));
-
+const deliveryMocks = vi.hoisted(() => ({
+  editMessageDiscord: vi.fn(async () => ({})),
+  deliverDiscordReply: vi.fn(async () => {}),
+  createDiscordDraftStream: vi.fn(() => ({
+    update: vi.fn<(text: string) => void>(() => {}),
+    flush: vi.fn(async () => {}),
+    messageId: vi.fn(() => "preview-1"),
+    clear: vi.fn(async () => {}),
+    stop: vi.fn(async () => {}),
+    forceNewMessage: vi.fn(() => {}),
+  })),
+}));
+const editMessageDiscord = deliveryMocks.editMessageDiscord;
+const deliverDiscordReply = deliveryMocks.deliverDiscordReply;
+const createDiscordDraftStream = deliveryMocks.createDiscordDraftStream;
 type DispatchInboundParams = {
   dispatcher: {
     sendFinalReply: (payload: { text?: string }) => boolean | Promise<boolean>;
@@ -36,20 +46,20 @@ const readSessionUpdatedAt = vi.fn(() => undefined);
 const resolveStorePath = vi.fn(() => "/tmp/openclaw-discord-process-test-sessions.json");
 
 vi.mock("../send.js", () => ({
-  reactMessageDiscord,
-  removeReactionDiscord,
+  reactMessageDiscord: sendMocks.reactMessageDiscord,
+  removeReactionDiscord: sendMocks.removeReactionDiscord,
 }));
 
 vi.mock("../send.messages.js", () => ({
-  editMessageDiscord,
+  editMessageDiscord: deliveryMocks.editMessageDiscord,
 }));
 
 vi.mock("../draft-stream.js", () => ({
-  createDiscordDraftStream,
+  createDiscordDraftStream: deliveryMocks.createDiscordDraftStream,
 }));
 
 vi.mock("./reply-delivery.js", () => ({
-  deliverDiscordReply,
+  deliverDiscordReply: deliveryMocks.deliverDiscordReply,
 }));
 
 vi.mock("../../auto-reply/dispatch.js", () => ({
@@ -91,15 +101,15 @@ const createBaseContext = createBaseDiscordMessageContext;
 
 beforeEach(() => {
   vi.useRealTimers();
-  reactMessageDiscord.mockClear();
-  removeReactionDiscord.mockClear();
+  sendMocks.reactMessageDiscord.mockClear();
+  sendMocks.removeReactionDiscord.mockClear();
   editMessageDiscord.mockClear();
   deliverDiscordReply.mockClear();
   createDiscordDraftStream.mockClear();
-  dispatchInboundMessage.mockReset();
-  recordInboundSession.mockReset();
-  readSessionUpdatedAt.mockReset();
-  resolveStorePath.mockReset();
+  dispatchInboundMessage.mockClear();
+  recordInboundSession.mockClear();
+  readSessionUpdatedAt.mockClear();
+  resolveStorePath.mockClear();
   dispatchInboundMessage.mockResolvedValue({
     queuedFinal: false,
     counts: { final: 0, tool: 0, block: 0 },
@@ -107,6 +117,7 @@ beforeEach(() => {
   recordInboundSession.mockResolvedValue(undefined);
   readSessionUpdatedAt.mockReturnValue(undefined);
   resolveStorePath.mockReturnValue("/tmp/openclaw-discord-process-test-sessions.json");
+  threadBindingTesting.resetThreadBindingsForTests();
 });
 
 function getLastRouteUpdate():
@@ -126,6 +137,16 @@ function getLastRouteUpdate():
   return params?.updateLastRoute;
 }
 
+function getLastDispatchCtx():
+  | { SessionKey?: string; MessageThreadId?: string | number }
+  | undefined {
+  const callArgs = dispatchInboundMessage.mock.calls.at(-1) as unknown[] | undefined;
+  const params = callArgs?.[0] as
+    | { ctx?: { SessionKey?: string; MessageThreadId?: string | number } }
+    | undefined;
+  return params?.ctx;
+}
+
 describe("processDiscordMessage ack reactions", () => {
   it("skips ack reactions for group-mentions when mentions are not required", async () => {
     const ctx = await createBaseContext({
@@ -136,7 +157,7 @@ describe("processDiscordMessage ack reactions", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
 
-    expect(reactMessageDiscord).not.toHaveBeenCalled();
+    expect(sendMocks.reactMessageDiscord).not.toHaveBeenCalled();
   });
 
   it("sends ack reactions for mention-gated guild messages when mentioned", async () => {
@@ -148,7 +169,7 @@ describe("processDiscordMessage ack reactions", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
 
-    expect(reactMessageDiscord.mock.calls[0]).toEqual(["c1", "m1", "👀", { rest: {} }]);
+    expect(sendMocks.reactMessageDiscord.mock.calls[0]).toEqual(["c1", "m1", "👀", { rest: {} }]);
   });
 
   it("uses preflight-resolved messageChannelId when message.channelId is missing", async () => {
@@ -166,7 +187,7 @@ describe("processDiscordMessage ack reactions", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
 
-    expect(reactMessageDiscord.mock.calls[0]).toEqual([
+    expect(sendMocks.reactMessageDiscord.mock.calls[0]).toEqual([
       "fallback-channel",
       "m1",
       "👀",
@@ -187,7 +208,7 @@ describe("processDiscordMessage ack reactions", () => {
     await processDiscordMessage(ctx as any);
 
     const emojis = (
-      reactMessageDiscord.mock.calls as unknown as Array<[unknown, unknown, string]>
+      sendMocks.reactMessageDiscord.mock.calls as unknown as Array<[unknown, unknown, string]>
     ).map((call) => call[2]);
     expect(emojis).toContain("👀");
     expect(emojis).toContain(DEFAULT_EMOJIS.done);
@@ -216,7 +237,7 @@ describe("processDiscordMessage ack reactions", () => {
 
     await runPromise;
     const emojis = (
-      reactMessageDiscord.mock.calls as unknown as Array<[unknown, unknown, string]>
+      sendMocks.reactMessageDiscord.mock.calls as unknown as Array<[unknown, unknown, string]>
     ).map((call) => call[2]);
     expect(emojis).toContain(DEFAULT_EMOJIS.stallSoft);
     expect(emojis).toContain(DEFAULT_EMOJIS.stallHard);
@@ -289,21 +310,109 @@ describe("processDiscordMessage session routing", () => {
       accountId: "default",
     });
   });
+
+  it("prefers bound session keys and sets MessageThreadId for bound thread messages", async () => {
+    const threadBindings = createThreadBindingManager({
+      accountId: "default",
+      persist: false,
+      enableSweeper: false,
+    });
+    await threadBindings.bindTarget({
+      threadId: "thread-1",
+      channelId: "c-parent",
+      targetKind: "subagent",
+      targetSessionKey: "agent:main:subagent:child",
+      agentId: "main",
+      webhookId: "wh_1",
+      webhookToken: "tok_1",
+      introText: "",
+    });
+
+    const ctx = await createBaseContext({
+      messageChannelId: "thread-1",
+      threadChannel: { id: "thread-1", name: "subagent-thread" },
+      boundSessionKey: "agent:main:subagent:child",
+      threadBindings,
+      route: {
+        agentId: "main",
+        channel: "discord",
+        accountId: "default",
+        sessionKey: "agent:main:discord:channel:c1",
+        mainSessionKey: "agent:main:main",
+      },
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    expect(getLastDispatchCtx()).toMatchObject({
+      SessionKey: "agent:main:subagent:child",
+      MessageThreadId: "thread-1",
+    });
+    expect(getLastRouteUpdate()).toEqual({
+      sessionKey: "agent:main:subagent:child",
+      channel: "discord",
+      to: "channel:thread-1",
+      accountId: "default",
+    });
+  });
 });
 
 describe("processDiscordMessage draft streaming", () => {
-  it("finalizes via preview edit when final fits one chunk", async () => {
+  async function runSingleChunkFinalScenario(discordConfig: Record<string, unknown>) {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.dispatcher.sendFinalReply({ text: "Hello\nWorld" });
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
 
     const ctx = await createBaseContext({
-      discordConfig: { streamMode: "partial", maxLinesPerMessage: 5 },
+      discordConfig,
     });
 
     // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
+  }
+
+  function createMockDraftStream() {
+    return {
+      update: vi.fn<(text: string) => void>(() => {}),
+      flush: vi.fn(async () => {}),
+      messageId: vi.fn(() => "preview-1"),
+      clear: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      forceNewMessage: vi.fn(() => {}),
+    };
+  }
+
+  async function createBlockModeContext() {
+    return await createBaseContext({
+      cfg: {
+        messages: { ackReaction: "👀" },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+        channels: {
+          discord: {
+            draftChunk: { minChars: 1, maxChars: 5, breakPreference: "newline" },
+          },
+        },
+      },
+      discordConfig: { streamMode: "block" },
+    });
+  }
+
+  it("finalizes via preview edit when final fits one chunk", async () => {
+    await runSingleChunkFinalScenario({ streamMode: "partial", maxLinesPerMessage: 5 });
+
+    expect(editMessageDiscord).toHaveBeenCalledWith(
+      "c1",
+      "preview-1",
+      { content: "Hello\nWorld" },
+      { rest: {} },
+    );
+    expect(deliverDiscordReply).not.toHaveBeenCalled();
+  });
+
+  it("accepts streaming=true alias for partial preview mode", async () => {
+    await runSingleChunkFinalScenario({ streaming: true, maxLinesPerMessage: 5 });
 
     expect(editMessageDiscord).toHaveBeenCalledWith(
       "c1",
@@ -332,14 +441,7 @@ describe("processDiscordMessage draft streaming", () => {
   });
 
   it("streams block previews using draft chunking", async () => {
-    const draftStream = {
-      update: vi.fn<(text: string) => void>(() => {}),
-      flush: vi.fn(async () => {}),
-      messageId: vi.fn(() => "preview-1"),
-      clear: vi.fn(async () => {}),
-      stop: vi.fn(async () => {}),
-      forceNewMessage: vi.fn(() => {}),
-    };
+    const draftStream = createMockDraftStream();
     createDiscordDraftStream.mockReturnValueOnce(draftStream);
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
@@ -347,18 +449,7 @@ describe("processDiscordMessage draft streaming", () => {
       return { queuedFinal: false, counts: { final: 0, tool: 0, block: 0 } };
     });
 
-    const ctx = await createBaseContext({
-      cfg: {
-        messages: { ackReaction: "👀" },
-        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
-        channels: {
-          discord: {
-            draftChunk: { minChars: 1, maxChars: 5, breakPreference: "newline" },
-          },
-        },
-      },
-      discordConfig: { streamMode: "block" },
-    });
+    const ctx = await createBlockModeContext();
 
     // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);
@@ -368,14 +459,7 @@ describe("processDiscordMessage draft streaming", () => {
   });
 
   it("forces new preview messages on assistant boundaries in block mode", async () => {
-    const draftStream = {
-      update: vi.fn<(text: string) => void>(() => {}),
-      flush: vi.fn(async () => {}),
-      messageId: vi.fn(() => "preview-1"),
-      clear: vi.fn(async () => {}),
-      stop: vi.fn(async () => {}),
-      forceNewMessage: vi.fn(() => {}),
-    };
+    const draftStream = createMockDraftStream();
     createDiscordDraftStream.mockReturnValueOnce(draftStream);
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
@@ -384,18 +468,7 @@ describe("processDiscordMessage draft streaming", () => {
       return { queuedFinal: false, counts: { final: 0, tool: 0, block: 0 } };
     });
 
-    const ctx = await createBaseContext({
-      cfg: {
-        messages: { ackReaction: "👀" },
-        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
-        channels: {
-          discord: {
-            draftChunk: { minChars: 1, maxChars: 5, breakPreference: "newline" },
-          },
-        },
-      },
-      discordConfig: { streamMode: "block" },
-    });
+    const ctx = await createBlockModeContext();
 
     // oxlint-disable-next-line typescript/no-explicit-any
     await processDiscordMessage(ctx as any);

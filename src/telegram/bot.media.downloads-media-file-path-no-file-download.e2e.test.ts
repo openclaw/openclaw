@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ssrf from "../infra/net/ssrf.js";
 import { onSpy, sendChatActionSpy } from "./bot.media.e2e-harness.js";
 
@@ -12,6 +12,8 @@ const TELEGRAM_TEST_TIMINGS = {
   mediaGroupFlushMs: 20,
   textFragmentGapMs: 30,
 } as const;
+let createTelegramBot: typeof import("./bot.js").createTelegramBot;
+let replySpy: ReturnType<typeof vi.fn>;
 
 async function createBotHandler(): Promise<{
   handler: (ctx: Record<string, unknown>) => Promise<void>;
@@ -30,13 +32,9 @@ async function createBotHandlerWithOptions(options: {
   replySpy: ReturnType<typeof vi.fn>;
   runtimeError: ReturnType<typeof vi.fn>;
 }> {
-  const { createTelegramBot } = await import("./bot.js");
-  const replyModule = await import("../auto-reply/reply.js");
-  const replySpy = (replyModule as unknown as { __replySpy: ReturnType<typeof vi.fn> }).__replySpy;
-
-  onSpy.mockReset();
-  replySpy.mockReset();
-  sendChatActionSpy.mockReset();
+  onSpy.mockClear();
+  replySpy.mockClear();
+  sendChatActionSpy.mockClear();
 
   const runtimeError = options.runtimeError ?? vi.fn();
   const runtimeLog = options.runtimeLog ?? vi.fn();
@@ -91,9 +89,15 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  lookupMock.mockReset();
+  lookupMock.mockClear();
   resolvePinnedHostnameSpy?.mockRestore();
   resolvePinnedHostnameSpy = null;
+});
+
+beforeAll(async () => {
+  ({ createTelegramBot } = await import("./bot.js"));
+  const replyModule = await import("../auto-reply/reply.js");
+  replySpy = (replyModule as unknown as { __replySpy: ReturnType<typeof vi.fn> }).__replySpy;
 });
 
 vi.mock("./sticker-cache.js", () => ({
@@ -322,9 +326,12 @@ describe("telegram stickers", () => {
   const STICKER_TEST_TIMEOUT_MS = process.platform === "win32" ? 30_000 : 20_000;
 
   beforeEach(() => {
-    cacheStickerSpy.mockReset();
-    getCachedStickerSpy.mockReset();
-    describeStickerImageSpy.mockReset();
+    cacheStickerSpy.mockClear();
+    getCachedStickerSpy.mockClear();
+    describeStickerImageSpy.mockClear();
+    // Re-seed defaults so per-test overrides do not leak when using mockClear.
+    getCachedStickerSpy.mockReturnValue(undefined);
+    describeStickerImageSpy.mockReturnValue(undefined);
   });
 
   it(
@@ -521,13 +528,8 @@ describe("telegram text fragments", () => {
   it(
     "buffers near-limit text and processes sequential parts as one message",
     async () => {
-      const { createTelegramBot } = await import("./bot.js");
-      const replyModule = await import("../auto-reply/reply.js");
-      const replySpy = (replyModule as unknown as { __replySpy: ReturnType<typeof vi.fn> })
-        .__replySpy;
-
-      onSpy.mockReset();
-      replySpy.mockReset();
+      onSpy.mockClear();
+      replySpy.mockClear();
 
       createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
       const handler = onSpy.mock.calls.find((call) => call[0] === "message")?.[1] as (

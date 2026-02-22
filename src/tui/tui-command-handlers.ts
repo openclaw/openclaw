@@ -43,6 +43,7 @@ type CommandHandlerContext = {
   applySessionInfoFromPatch: (result: SessionsPatchResult) => void;
   noteLocalRunId: (runId: string) => void;
   forgetLocalRunId?: (runId: string) => void;
+  requestExit: () => void;
 };
 
 export function createCommandHandlers(context: CommandHandlerContext) {
@@ -65,6 +66,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
     applySessionInfoFromPatch,
     noteLocalRunId,
     forgetLocalRunId,
+    requestExit,
   } = context;
 
   const setAgent = async (id: string) => {
@@ -451,9 +453,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       case "exit":
       case "quit":
-        client.stop();
-        tui.stop();
-        process.exit(0);
+        requestExit();
         break;
       default:
         await sendMessage(raw);
@@ -470,6 +470,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       noteLocalRunId(runId);
       state.activeChatRunId = runId;
       setActivityStatus("sending");
+      tui.requestRender();
       await client.sendChat({
         sessionKey: state.currentSessionKey,
         message: text,
@@ -479,6 +480,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         runId,
       });
       setActivityStatus("waiting");
+      tui.requestRender();
     } catch (err) {
       if (state.activeChatRunId) {
         forgetLocalRunId?.(state.activeChatRunId);
@@ -486,8 +488,8 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       state.activeChatRunId = null;
       chatLog.addSystem(`send failed: ${String(err)}`);
       setActivityStatus("error");
+      tui.requestRender();
     }
-    tui.requestRender();
   };
 
   return {

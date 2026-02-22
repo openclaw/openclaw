@@ -1,4 +1,3 @@
-import type { OpenClawConfig } from "../config/config.js";
 import {
   resolveChannelGroupRequireMention,
   resolveChannelGroupToolsPolicy,
@@ -32,6 +31,7 @@ import { normalizeSignalMessagingTarget } from "./plugins/normalize/signal.js";
 import type {
   ChannelCapabilities,
   ChannelCommandAdapter,
+  ChannelConfigAdapter,
   ChannelElevatedAdapter,
   ChannelGroupAdapter,
   ChannelId,
@@ -53,21 +53,10 @@ export type ChannelDock = {
   };
   streaming?: ChannelDockStreaming;
   elevated?: ChannelElevatedAdapter;
-  config?: {
-    resolveAllowFrom?: (params: {
-      cfg: OpenClawConfig;
-      accountId?: string | null;
-    }) => Array<string | number> | undefined;
-    formatAllowFrom?: (params: {
-      cfg: OpenClawConfig;
-      accountId?: string | null;
-      allowFrom: Array<string | number>;
-    }) => string[];
-    resolveDefaultTo?: (params: {
-      cfg: OpenClawConfig;
-      accountId?: string | null;
-    }) => string | undefined;
-  };
+  config?: Pick<
+    ChannelConfigAdapter<unknown>,
+    "resolveAllowFrom" | "formatAllowFrom" | "resolveDefaultTo"
+  >;
   groups?: ChannelGroupAdapter;
   mentions?: ChannelMentionAdapter;
   threading?: ChannelThreadingAdapter;
@@ -86,6 +75,12 @@ const formatLower = (allowFrom: Array<string | number>) =>
     .map((entry) => String(entry).trim())
     .filter(Boolean)
     .map((entry) => entry.toLowerCase());
+
+const stringifyAllowFrom = (allowFrom: Array<string | number>) =>
+  allowFrom.map((entry) => String(entry));
+
+const trimAllowFromEntries = (allowFrom: Array<string | number>) =>
+  allowFrom.map((entry) => String(entry).trim()).filter(Boolean);
 
 const formatDiscordAllowFrom = (allowFrom: Array<string | number>) =>
   allowFrom
@@ -133,6 +128,18 @@ function buildIMessageThreadToolContext(params: {
   };
 }
 
+function buildThreadToolContextFromMessageThreadOrReply(params: {
+  context: ChannelThreadingContext;
+  hasRepliedRef: ChannelThreadingToolContext["hasRepliedRef"];
+}): ChannelThreadingToolContext {
+  const threadId = params.context.MessageThreadId ?? params.context.ReplyToId;
+  return {
+    currentChannelId: params.context.To?.trim() || undefined,
+    currentThreadTs: threadId != null ? String(threadId) : undefined,
+    hasRepliedRef: params.hasRepliedRef,
+  };
+}
+
 function resolveCaseInsensitiveAccount<T>(
   accounts: Record<string, T> | undefined,
   accountId?: string | null,
@@ -147,6 +154,19 @@ function resolveCaseInsensitiveAccount<T>(
       Object.keys(accounts).find((key) => key.toLowerCase() === normalized.toLowerCase()) ?? ""
     ]
   );
+}
+
+function resolveDefaultToCaseInsensitiveAccount(params: {
+  channel?:
+    | {
+        accounts?: Record<string, { defaultTo?: string }>;
+        defaultTo?: string;
+      }
+    | undefined;
+  accountId?: string | null;
+}): string | undefined {
+  const account = resolveCaseInsensitiveAccount(params.channel?.accounts, params.accountId);
+  return (account?.defaultTo ?? params.channel?.defaultTo)?.trim() || undefined;
 }
 // Channel docks: lightweight channel metadata/behavior for shared code paths.
 //
@@ -169,13 +189,9 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     outbound: { textChunkLimit: 4000 },
     config: {
       resolveAllowFrom: ({ cfg, accountId }) =>
-        (resolveTelegramAccount({ cfg, accountId }).config.allowFrom ?? []).map((entry) =>
-          String(entry),
-        ),
+        stringifyAllowFrom(resolveTelegramAccount({ cfg, accountId }).config.allowFrom ?? []),
       formatAllowFrom: ({ allowFrom }) =>
-        allowFrom
-          .map((entry) => String(entry).trim())
-          .filter(Boolean)
+        trimAllowFromEntries(allowFrom)
           .map((entry) => entry.replace(/^(telegram|tg):/i, ""))
           .map((entry) => entry.toLowerCase()),
       resolveDefaultTo: ({ cfg, accountId }) => {
@@ -189,14 +205,8 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     },
     threading: {
       resolveReplyToMode: ({ cfg }) => cfg.channels?.telegram?.replyToMode ?? "off",
-      buildToolContext: ({ context, hasRepliedRef }) => {
-        const threadId = context.MessageThreadId ?? context.ReplyToId;
-        return {
-          currentChannelId: context.To?.trim() || undefined,
-          currentThreadTs: threadId != null ? String(threadId) : undefined,
-          hasRepliedRef,
-        };
-      },
+      buildToolContext: ({ context, hasRepliedRef }) =>
+        buildThreadToolContextFromMessageThreadOrReply({ context, hasRepliedRef }),
     },
   },
   whatsapp: {
@@ -331,15 +341,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
         const channel = cfg.channels?.irc as
           | { accounts?: Record<string, { defaultTo?: string }>; defaultTo?: string }
           | undefined;
-        const normalized = normalizeAccountId(accountId);
-        const account =
-          channel?.accounts?.[normalized] ??
-          channel?.accounts?.[
-            Object.keys(channel?.accounts ?? {}).find(
-              (key) => key.toLowerCase() === normalized.toLowerCase(),
-            ) ?? ""
-          ];
-        return (account?.defaultTo ?? channel?.defaultTo)?.trim() || undefined;
+        return resolveDefaultToCaseInsensitiveAccount({ channel, accountId });
       },
     },
     groups: {
@@ -412,15 +414,7 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
         const channel = cfg.channels?.googlechat as
           | { accounts?: Record<string, { defaultTo?: string }>; defaultTo?: string }
           | undefined;
-        const normalized = normalizeAccountId(accountId);
-        const account =
-          channel?.accounts?.[normalized] ??
-          channel?.accounts?.[
-            Object.keys(channel?.accounts ?? {}).find(
-              (key) => key.toLowerCase() === normalized.toLowerCase(),
-            ) ?? ""
-          ];
-        return (account?.defaultTo ?? channel?.defaultTo)?.trim() || undefined;
+        return resolveDefaultToCaseInsensitiveAccount({ channel, accountId });
       },
     },
     groups: {
@@ -429,14 +423,8 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     },
     threading: {
       resolveReplyToMode: ({ cfg }) => cfg.channels?.googlechat?.replyToMode ?? "off",
-      buildToolContext: ({ context, hasRepliedRef }) => {
-        const threadId = context.MessageThreadId ?? context.ReplyToId;
-        return {
-          currentChannelId: context.To?.trim() || undefined,
-          currentThreadTs: threadId != null ? String(threadId) : undefined,
-          hasRepliedRef,
-        };
-      },
+      buildToolContext: ({ context, hasRepliedRef }) =>
+        buildThreadToolContextFromMessageThreadOrReply({ context, hasRepliedRef }),
     },
   },
   slack: {
@@ -490,13 +478,9 @@ const DOCKS: Record<ChatChannelId, ChannelDock> = {
     },
     config: {
       resolveAllowFrom: ({ cfg, accountId }) =>
-        (resolveSignalAccount({ cfg, accountId }).config.allowFrom ?? []).map((entry) =>
-          String(entry),
-        ),
+        stringifyAllowFrom(resolveSignalAccount({ cfg, accountId }).config.allowFrom ?? []),
       formatAllowFrom: ({ allowFrom }) =>
-        allowFrom
-          .map((entry) => String(entry).trim())
-          .filter(Boolean)
+        trimAllowFromEntries(allowFrom)
           .map((entry) => (entry === "*" ? "*" : normalizeE164(entry.replace(/^signal:/i, ""))))
           .filter(Boolean),
       resolveDefaultTo: ({ cfg, accountId }) =>

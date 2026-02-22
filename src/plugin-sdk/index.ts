@@ -62,6 +62,16 @@ export type {
 } from "../channels/plugins/types.js";
 export type { ChannelConfigSchema, ChannelPlugin } from "../channels/plugins/types.plugin.js";
 export type {
+  ThreadBindingManager,
+  ThreadBindingRecord,
+  ThreadBindingTargetKind,
+} from "../discord/monitor/thread-bindings.js";
+export {
+  autoBindSpawnedDiscordSubagent,
+  listThreadBindingsBySessionKey,
+  unbindThreadBindingsBySessionKey,
+} from "../discord/monitor/thread-bindings.js";
+export type {
   AnyAgentTool,
   OpenClawPluginApi,
   OpenClawPluginService,
@@ -88,8 +98,11 @@ export { normalizeWebhookPath, resolveWebhookPath } from "./webhook-path.js";
 export {
   registerWebhookTarget,
   rejectNonPostWebhookRequest,
+  resolveSingleWebhookTarget,
+  resolveSingleWebhookTargetAsync,
   resolveWebhookTargets,
 } from "./webhook-targets.js";
+export type { WebhookTargetMatchResult } from "./webhook-targets.js";
 export type { AgentMediaPayload } from "./agent-media-payload.js";
 export { buildAgentMediaPayload } from "./agent-media-payload.js";
 export {
@@ -119,6 +132,19 @@ export type {
   MSTeamsReplyStyle,
   MSTeamsTeamConfig,
 } from "../config/types.js";
+export {
+  GROUP_POLICY_BLOCKED_LABEL,
+  resetMissingProviderGroupPolicyFallbackWarningsForTesting,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  resolveOpenProviderRuntimeGroupPolicy,
+  resolveRuntimeGroupPolicy,
+  type GroupPolicyDefaultsConfig,
+  type RuntimeGroupPolicyResolution,
+  type RuntimeGroupPolicyParams,
+  type ResolveProviderRuntimeGroupPolicyParams,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "../config/runtime-group-policy.js";
 export {
   DiscordConfigSchema,
   GoogleChatConfigSchema,
@@ -169,6 +195,12 @@ export {
 } from "../infra/device-pairing.js";
 export { createDedupeCache } from "../infra/dedupe.js";
 export type { DedupeCache } from "../infra/dedupe.js";
+export { createPersistentDedupe } from "./persistent-dedupe.js";
+export type {
+  PersistentDedupe,
+  PersistentDedupeCheckOptions,
+  PersistentDedupeOptions,
+} from "./persistent-dedupe.js";
 export { formatErrorMessage } from "../infra/errors.js";
 export {
   DEFAULT_WEBHOOK_BODY_TIMEOUT_MS,
@@ -198,6 +230,7 @@ export {
   clearHistoryEntries,
   clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
+  evictOldHistoryKeys,
   recordPendingHistoryEntry,
   recordPendingHistoryEntryIfEnabled,
 } from "../auto-reply/reply/history.js";
@@ -297,6 +330,11 @@ export {
   readStringParam,
 } from "../agents/tools/common.js";
 export { formatDocsLink } from "../terminal/links.js";
+export {
+  resolveDmAllowState,
+  resolveDmGroupAccessDecision,
+  resolveEffectiveAllowFromLists,
+} from "../security/dm-policy-shared.js";
 export type { HookEntry } from "../hooks/types.js";
 export { clamp, escapeRegExp, normalizeE164, safeParseJson, sleep } from "../utils.js";
 export { stripAnsi } from "../terminal/ansi.js";

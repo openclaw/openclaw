@@ -24,6 +24,33 @@ function registerExtraBootstrapFileHook() {
   });
 }
 
+function registerMalformedBootstrapFileHook() {
+  registerInternalHook("agent:bootstrap", (event) => {
+    const context = event.context as AgentBootstrapHookContext;
+    context.bootstrapFiles = [
+      ...context.bootstrapFiles,
+      {
+        name: "EXTRA.md",
+        filePath: path.join(context.workspaceDir, "BROKEN.md"),
+        content: "broken",
+        missing: false,
+      } as unknown as WorkspaceBootstrapFile,
+      {
+        name: "EXTRA.md",
+        path: 123,
+        content: "broken",
+        missing: false,
+      } as unknown as WorkspaceBootstrapFile,
+      {
+        name: "EXTRA.md",
+        path: "   ",
+        content: "broken",
+        missing: false,
+      } as unknown as WorkspaceBootstrapFile,
+    ];
+  });
+}
+
 describe("resolveBootstrapFilesForRun", () => {
   beforeEach(() => clearInternalHooks());
   afterEach(() => clearInternalHooks());
@@ -35,6 +62,23 @@ describe("resolveBootstrapFilesForRun", () => {
     const files = await resolveBootstrapFilesForRun({ workspaceDir });
 
     expect(files.some((file) => file.path === path.join(workspaceDir, "EXTRA.md"))).toBe(true);
+  });
+
+  it("drops malformed hook files with missing/invalid paths", async () => {
+    registerMalformedBootstrapFileHook();
+
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const warnings: string[] = [];
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(
+      files.every((file) => typeof file.path === "string" && file.path.trim().length > 0),
+    ).toBe(true);
+    expect(warnings).toHaveLength(3);
+    expect(warnings[0]).toContain('missing or invalid "path" field');
   });
 });
 

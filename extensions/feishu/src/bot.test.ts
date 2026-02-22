@@ -25,6 +25,24 @@ vi.mock("./send.js", () => ({
   getMessageFeishu: mockGetMessageFeishu,
 }));
 
+function createRuntimeEnv(): RuntimeEnv {
+  return {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn((code: number): never => {
+      throw new Error(`exit ${code}`);
+    }),
+  } as RuntimeEnv;
+}
+
+async function dispatchMessage(params: { cfg: ClawdbotConfig; event: FeishuMessageEvent }) {
+  await handleFeishuMessage({
+    cfg: params.cfg,
+    event: params.event,
+    runtime: createRuntimeEnv(),
+  });
+}
+
 describe("handleFeishuMessage command authorization", () => {
   const mockFinalizeInboundContext = vi.fn((ctx: unknown) => ctx);
   const mockDispatchReplyFromConfig = vi
@@ -96,17 +114,7 @@ describe("handleFeishuMessage command authorization", () => {
       },
     };
 
-    await handleFeishuMessage({
-      cfg,
-      event,
-      runtime: {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn((code: number): never => {
-          throw new Error(`exit ${code}`);
-        }),
-      } as RuntimeEnv,
-    });
+    await dispatchMessage({ cfg, event });
 
     expect(mockResolveCommandAuthorizedFromAuthorizers).toHaveBeenCalledWith({
       useAccessGroups: true,
@@ -151,17 +159,7 @@ describe("handleFeishuMessage command authorization", () => {
       },
     };
 
-    await handleFeishuMessage({
-      cfg,
-      event,
-      runtime: {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn((code: number): never => {
-          throw new Error(`exit ${code}`);
-        }),
-      } as RuntimeEnv,
-    });
+    await dispatchMessage({ cfg, event });
 
     expect(mockReadAllowFromStore).toHaveBeenCalledWith("feishu");
     expect(mockResolveCommandAuthorizedFromAuthorizers).not.toHaveBeenCalled();
@@ -198,17 +196,7 @@ describe("handleFeishuMessage command authorization", () => {
       },
     };
 
-    await handleFeishuMessage({
-      cfg,
-      event,
-      runtime: {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn((code: number): never => {
-          throw new Error(`exit ${code}`);
-        }),
-      } as RuntimeEnv,
-    });
+    await dispatchMessage({ cfg, event });
 
     expect(mockUpsertPairingRequest).toHaveBeenCalledWith({
       channel: "feishu",
@@ -262,17 +250,7 @@ describe("handleFeishuMessage command authorization", () => {
       },
     };
 
-    await handleFeishuMessage({
-      cfg,
-      event,
-      runtime: {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn((code: number): never => {
-          throw new Error(`exit ${code}`);
-        }),
-      } as RuntimeEnv,
-    });
+    await dispatchMessage({ cfg, event });
 
     expect(mockResolveCommandAuthorizedFromAuthorizers).toHaveBeenCalledWith({
       useAccessGroups: true,

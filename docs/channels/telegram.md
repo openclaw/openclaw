@@ -148,6 +148,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     `groupAllowFrom` is used for group sender filtering. If not set, Telegram falls back to `allowFrom`.
     `groupAllowFrom` entries must be numeric Telegram user IDs.
+    Runtime note: if `channels.telegram` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group policy evaluation (even if `channels.defaults.groupPolicy` is set).
 
     Example: allow any member in one specific group:
 
@@ -226,21 +227,9 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     Requirement:
 
-    - `channels.telegram.streamMode` is not `"off"` (default: `"partial"`)
-
-    Modes:
-
-    - `off`: no live preview
-    - `partial`: frequent preview updates from partial text
-    - `block`: chunked preview updates using `channels.telegram.draftChunk`
-
-    `draftChunk` defaults for `streamMode: "block"`:
-
-    - `minChars: 200`
-    - `maxChars: 800`
-    - `breakPreference: "paragraph"`
-
-    `maxChars` is clamped by `channels.telegram.textChunkLimit`.
+    - `channels.telegram.streaming` is `off | partial | block | progress` (default: `off`)
+    - `progress` maps to `partial` on Telegram (compat with cross-channel naming)
+    - legacy `channels.telegram.streamMode` and boolean `streaming` values are auto-mapped
 
     This works in direct chats and groups/topics.
 
@@ -248,7 +237,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     For complex replies (for example media payloads), OpenClaw falls back to normal final delivery and then cleans up the preview message.
 
-    `streamMode` is separate from block streaming. When block streaming is explicitly enabled for Telegram, OpenClaw skips the preview stream to avoid double-streaming.
+    Preview streaming is separate from block streaming. When block streaming is explicitly enabled for Telegram, OpenClaw skips the preview stream to avoid double-streaming.
 
     Telegram-only reasoning stream:
 
@@ -682,6 +671,25 @@ openclaw message send --channel telegram --target @name --message "hi"
 
     - Node 22+ + custom fetch/proxy can trigger immediate abort behavior if AbortSignal types mismatch.
     - Some hosts resolve `api.telegram.org` to IPv6 first; broken IPv6 egress can cause intermittent Telegram API failures.
+    - If logs include `TypeError: fetch failed` or `Network request for 'getUpdates' failed!`, OpenClaw now retries these as recoverable network errors.
+    - On VPS hosts with unstable direct egress/TLS, route Telegram API calls through `channels.telegram.proxy`:
+
+```yaml
+channels:
+  telegram:
+    proxy: socks5://user:pass@proxy-host:1080
+```
+
+    - If DNS/IPv6 selection is unstable, force Node family selection behavior explicitly:
+
+```yaml
+channels:
+  telegram:
+    network:
+      autoSelectFamily: false
+```
+
+    - Environment override (temporary): set `OPENCLAW_TELEGRAM_DISABLE_AUTO_SELECT_FAMILY=1`.
     - Validate DNS answers:
 
 ```bash
@@ -721,7 +729,7 @@ Primary reference:
 - `channels.telegram.textChunkLimit`: outbound chunk size (chars).
 - `channels.telegram.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.telegram.linkPreview`: toggle link previews for outbound messages (default: true).
-- `channels.telegram.streamMode`: `off | partial | block` (live stream preview).
+- `channels.telegram.streaming`: `off | partial | block | progress` (live stream preview; default: `off`; `progress` maps to `partial`).
 - `channels.telegram.mediaMaxMb`: inbound/outbound media cap (MB).
 - `channels.telegram.retry`: retry policy for outbound Telegram API calls (attempts, minDelayMs, maxDelayMs, jitter).
 - `channels.telegram.network.autoSelectFamily`: override Node autoSelectFamily (true=enable, false=disable). Defaults to disabled on Node 22 to avoid Happy Eyeballs timeouts.
@@ -745,7 +753,7 @@ Telegram-specific high-signal fields:
 - access control: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`, `groups.*.topics.*`
 - command/menu: `commands.native`, `customCommands`
 - threading/replies: `replyToMode`
-- streaming: `streamMode` (preview), `draftChunk`, `blockStreaming`
+- streaming: `streaming` (preview), `blockStreaming`
 - formatting/delivery: `textChunkLimit`, `chunkMode`, `linkPreview`, `responsePrefix`
 - media/network: `mediaMaxMb`, `timeoutSeconds`, `retry`, `network.autoSelectFamily`, `proxy`
 - webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookHost`

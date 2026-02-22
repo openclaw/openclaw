@@ -47,7 +47,7 @@ export const ConnectParamsSchema = Type.Object(
           publicKey: NonEmptyString,
           signature: NonEmptyString,
           signedAt: Type.Integer({ minimum: 0 }),
-          nonce: Type.Optional(NonEmptyString),
+          nonce: NonEmptyString,
         },
         { additionalProperties: false },
       ),
@@ -74,8 +74,6 @@ export const HelloOkSchema = Type.Object(
     server: Type.Object(
       {
         version: NonEmptyString,
-        commit: Type.Optional(NonEmptyString),
-        host: Type.Optional(NonEmptyString),
         connId: NonEmptyString,
       },
       { additionalProperties: false },

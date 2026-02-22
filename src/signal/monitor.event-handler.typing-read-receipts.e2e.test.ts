@@ -33,8 +33,8 @@ vi.mock("../pairing/pairing-store.js", () => ({
 describe("signal event handler typing + read receipts", () => {
   beforeEach(() => {
     vi.useRealTimers();
-    sendTypingMock.mockReset().mockResolvedValue(true);
-    sendReadReceiptMock.mockReset().mockResolvedValue(true);
+    sendTypingMock.mockClear().mockResolvedValue(true);
+    sendReadReceiptMock.mockClear().mockResolvedValue(true);
     dispatchInboundMessageMock.mockClear();
   });
 
@@ -62,7 +62,7 @@ describe("signal event handler typing + read receipts", () => {
       }),
     );
 
-    expect(sendTypingMock).toHaveBeenCalledWith("signal:+15550001111", expect.any(Object));
+    expect(sendTypingMock).toHaveBeenCalledWith("+15550001111", expect.any(Object));
     expect(sendReadReceiptMock).toHaveBeenCalledWith(
       "signal:+15550001111",
       1700000000000,

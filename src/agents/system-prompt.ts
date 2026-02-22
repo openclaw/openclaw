@@ -1,3 +1,4 @@
+import { createHmac, createHash } from "node:crypto";
 import type { ReasoningLevel, ThinkLevel } from "../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
@@ -13,6 +14,7 @@ import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
  * - "none": Just basic identity line, no sections
  */
 export type PromptMode = "full" | "minimal" | "none";
+type OwnerIdDisplay = "raw" | "hash";
 
 function buildSkillsSection(params: {
   skillsPrompt?: string;
@@ -71,6 +73,30 @@ function buildUserIdentitySection(ownerLine: string | undefined, isMinimal: bool
     return [];
   }
   return ["## Authorized Senders", ownerLine, ""];
+}
+
+function formatOwnerDisplayId(ownerId: string, ownerDisplaySecret?: string) {
+  const hasSecret = ownerDisplaySecret?.trim();
+  const digest = hasSecret
+    ? createHmac("sha256", hasSecret).update(ownerId).digest("hex")
+    : createHash("sha256").update(ownerId).digest("hex");
+  return digest.slice(0, 12);
+}
+
+function buildOwnerIdentityLine(
+  ownerNumbers: string[],
+  ownerDisplay: OwnerIdDisplay,
+  ownerDisplaySecret?: string,
+) {
+  const normalized = ownerNumbers.map((value) => value.trim()).filter(Boolean);
+  if (normalized.length === 0) {
+    return undefined;
+  }
+  const displayOwnerNumbers =
+    ownerDisplay === "hash"
+      ? normalized.map((ownerId) => formatOwnerDisplayId(ownerId, ownerDisplaySecret))
+      : normalized;
+  return `Authorized senders: ${displayOwnerNumbers.join(", ")}. These senders are allowlisted; do not assume they are the owner.`;
 }
 
 function buildTimeSection(params: { userTimezone?: string }) {
@@ -172,6 +198,8 @@ export function buildAgentSystemPrompt(params: {
   reasoningLevel?: ReasoningLevel;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
+  ownerDisplay?: OwnerIdDisplay;
+  ownerDisplaySecret?: string;
   reasoningTagHint?: boolean;
   toolNames?: string[];
   toolSummaries?: Record<string, string>;
@@ -322,11 +350,12 @@ export function buildAgentSystemPrompt(params: {
   const execToolName = resolveToolName("exec");
   const processToolName = resolveToolName("process");
   const extraSystemPrompt = params.extraSystemPrompt?.trim();
-  const ownerNumbers = (params.ownerNumbers ?? []).map((value) => value.trim()).filter(Boolean);
-  const ownerLine =
-    ownerNumbers.length > 0
-      ? `Authorized senders: ${ownerNumbers.join(", ")}. These senders are allowlisted; do not assume they are the owner.`
-      : undefined;
+  const ownerDisplay = params.ownerDisplay === "hash" ? "hash" : "raw";
+  const ownerLine = buildOwnerIdentityLine(
+    params.ownerNumbers ?? [],
+    ownerDisplay,
+    params.ownerDisplaySecret,
+  );
   const reasoningHint = params.reasoningTagHint
     ? [
         "ALL internal reasoning MUST be inside <think>...</think>.",

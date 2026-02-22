@@ -12,6 +12,7 @@ export const en: TranslationMap = {
     na: "n/a",
     docs: "Docs",
     resources: "Resources",
+    search: "Search",
   },
   nav: {
     chat: "Chat",
@@ -99,6 +100,47 @@ export const en: TranslationMap = {
       hint: "This page is HTTP, so the browser blocks device identity. Use HTTPS (Tailscale Serve) or open {url} on the gateway host.",
       stayHttp: "If you must stay on HTTP, set {config} (token-only).",
     },
+    connection: {
+      title: "How to connect",
+      step1: "Start the gateway on your host machine:",
+      step2: "Get a tokenized dashboard URL:",
+      step3: "Paste the WebSocket URL and token above, or open the tokenized URL directly.",
+      step4: "Or generate a reusable token:",
+      docsHint: "For remote access, Tailscale Serve is recommended. ",
+      docsLink: "Read the docs →",
+    },
+    cards: {
+      cost: "Cost",
+      skills: "Skills",
+      recentSessions: "Recent Sessions",
+    },
+    attention: {
+      title: "Attention",
+    },
+    eventLog: {
+      title: "Event Log",
+    },
+    logTail: {
+      title: "Gateway Logs",
+    },
+    quickActions: {
+      newSession: "New Session",
+      automation: "Automation",
+      refreshAll: "Refresh All",
+      terminal: "Terminal",
+    },
+    streamMode: {
+      active: "Stream mode — values redacted",
+      disable: "Disable",
+    },
+    palette: {
+      placeholder: "Type a command…",
+      noResults: "No results",
+    },
+  },
+  login: {
+    subtitle: "Gateway Dashboard",
+    tokenPlaceholder: "paste gateway token",
   },
   chat: {
     disconnected: "Disconnected from gateway.",

@@ -495,6 +495,9 @@ Notes:
 - Headful (Xvfb) reduces bot blocking vs headless.
 - Headless can still be used by setting `agents.defaults.sandbox.browser.headless=true`.
 - No full desktop environment (GNOME) is needed; Xvfb provides the display.
+- Browser containers default to a dedicated Docker network (`openclaw-sandbox-browser`) instead of global `bridge`.
+- Optional `agents.defaults.sandbox.browser.cdpSourceRange` restricts container-edge CDP ingress by CIDR (for example `172.21.0.1/32`).
+- noVNC observer access is password-protected by default; OpenClaw provides a short-lived observer token URL instead of sharing the raw password in the URL.
 
 Use config:
 

@@ -8,6 +8,7 @@ import { STATE_DIR } from "../../config/paths.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { markdownToSignalTextChunks } from "../../signal/format.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 
@@ -81,18 +82,18 @@ async function deliverWhatsAppPayload(params: {
 describe("deliverOutboundPayloads", () => {
   beforeEach(() => {
     setActivePluginRegistry(defaultRegistry);
-    hookMocks.runner.hasHooks.mockReset();
+    hookMocks.runner.hasHooks.mockClear();
     hookMocks.runner.hasHooks.mockReturnValue(false);
-    hookMocks.runner.runMessageSent.mockReset();
+    hookMocks.runner.runMessageSent.mockClear();
     hookMocks.runner.runMessageSent.mockResolvedValue(undefined);
-    internalHookMocks.createInternalHookEvent.mockReset();
+    internalHookMocks.createInternalHookEvent.mockClear();
     internalHookMocks.createInternalHookEvent.mockImplementation(createInternalHookEventPayload);
     internalHookMocks.triggerInternalHook.mockClear();
-    queueMocks.enqueueDelivery.mockReset();
+    queueMocks.enqueueDelivery.mockClear();
     queueMocks.enqueueDelivery.mockResolvedValue("mock-queue-id");
-    queueMocks.ackDelivery.mockReset();
+    queueMocks.ackDelivery.mockClear();
     queueMocks.ackDelivery.mockResolvedValue(undefined);
-    queueMocks.failDelivery.mockReset();
+    queueMocks.failDelivery.mockClear();
     queueMocks.failDelivery.mockResolvedValue(undefined);
   });
 
@@ -101,9 +102,7 @@ describe("deliverOutboundPayloads", () => {
   });
   it("chunks telegram markdown and passes through accountId", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
-    const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
-    process.env.TELEGRAM_BOT_TOKEN = "";
-    try {
+    await withEnvAsync({ TELEGRAM_BOT_TOKEN: "" }, async () => {
       const results = await deliverOutboundPayloads({
         cfg: telegramChunkConfig,
         channel: "telegram",
@@ -120,20 +119,12 @@ describe("deliverOutboundPayloads", () => {
       }
       expect(results).toHaveLength(2);
       expect(results[0]).toMatchObject({ channel: "telegram", chatId: "c1" });
-    } finally {
-      if (prevTelegramToken === undefined) {
-        delete process.env.TELEGRAM_BOT_TOKEN;
-      } else {
-        process.env.TELEGRAM_BOT_TOKEN = prevTelegramToken;
-      }
-    }
+    });
   });
 
   it("keeps payload replyToId across all chunked telegram sends", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
-    const prevTelegramToken = process.env.TELEGRAM_BOT_TOKEN;
-    process.env.TELEGRAM_BOT_TOKEN = "";
-    try {
+    await withEnvAsync({ TELEGRAM_BOT_TOKEN: "" }, async () => {
       await deliverOutboundPayloads({
         cfg: telegramChunkConfig,
         channel: "telegram",
@@ -146,13 +137,7 @@ describe("deliverOutboundPayloads", () => {
       for (const call of sendTelegram.mock.calls) {
         expect(call[2]).toEqual(expect.objectContaining({ replyToMessageId: 777 }));
       }
-    } finally {
-      if (prevTelegramToken === undefined) {
-        delete process.env.TELEGRAM_BOT_TOKEN;
-      } else {
-        process.env.TELEGRAM_BOT_TOKEN = prevTelegramToken;
-      }
-    }
+    });
   });
 
   it("passes explicit accountId to sendTelegram", async () => {

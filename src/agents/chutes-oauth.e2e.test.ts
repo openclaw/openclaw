@@ -14,6 +14,27 @@ const urlToString = (url: Request | URL | string): string => {
   return "url" in url ? url.url : String(url);
 };
 
+function createStoredCredential(
+  now: number,
+): Parameters<typeof refreshChutesTokens>[0]["credential"] {
+  return {
+    access: "at_old",
+    refresh: "rt_old",
+    expires: now - 10_000,
+    email: "fred",
+    clientId: "cid_test",
+  } as unknown as Parameters<typeof refreshChutesTokens>[0]["credential"];
+}
+
+function expectRefreshedCredential(
+  refreshed: Awaited<ReturnType<typeof refreshChutesTokens>>,
+  now: number,
+) {
+  expect(refreshed.access).toBe("at_new");
+  expect(refreshed.refresh).toBe("rt_old");
+  expect(refreshed.expires).toBe(now + 1800 * 1000 - 5 * 60 * 1000);
+}
+
 describe("chutes-oauth", () => {
   it("exchanges code for tokens and stores username as email", async () => {
     const fetchFn = withFetchPreconnect(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -87,19 +108,38 @@ describe("chutes-oauth", () => {
 
     const now = 2_000_000;
     const refreshed = await refreshChutesTokens({
-      credential: {
-        access: "at_old",
-        refresh: "rt_old",
-        expires: now - 10_000,
-        email: "fred",
-        clientId: "cid_test",
-      } as unknown as Parameters<typeof refreshChutesTokens>[0]["credential"],
+      credential: createStoredCredential(now),
       fetchFn,
       now,
     });
 
-    expect(refreshed.access).toBe("at_new");
-    expect(refreshed.refresh).toBe("rt_old");
-    expect(refreshed.expires).toBe(now + 1800 * 1000 - 5 * 60 * 1000);
+    expectRefreshedCredential(refreshed, now);
+  });
+
+  it("refreshes tokens and ignores empty refresh_token values", async () => {
+    const fetchFn = withFetchPreconnect(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = urlToString(input);
+      if (url !== CHUTES_TOKEN_ENDPOINT) {
+        return new Response("not found", { status: 404 });
+      }
+      expect(init?.method).toBe("POST");
+      return new Response(
+        JSON.stringify({
+          access_token: "at_new",
+          refresh_token: "",
+          expires_in: 1800,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    });
+
+    const now = 3_000_000;
+    const refreshed = await refreshChutesTokens({
+      credential: createStoredCredential(now),
+      fetchFn,
+      now,
+    });
+
+    expectRefreshedCredential(refreshed, now);
   });
 });

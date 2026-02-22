@@ -17,11 +17,11 @@ vi.mock("../pairing/pairing-store.js", () => ({
 
 describe("signal event handler sender prefix", () => {
   beforeEach(() => {
-    dispatchMock.mockReset().mockImplementation(async ({ dispatcher, ctx }) => {
+    dispatchMock.mockClear().mockImplementation(async ({ dispatcher, ctx }) => {
       dispatcher.sendFinalReply({ text: "ok" });
       return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 }, ctx };
     });
-    readAllowFromMock.mockReset().mockResolvedValue([]);
+    readAllowFromMock.mockClear().mockResolvedValue([]);
   });
 
   it("prefixes group bodies with sender label", async () => {

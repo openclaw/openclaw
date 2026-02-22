@@ -11,6 +11,19 @@ describe("workspace bootstrap file caching", () => {
     workspaceDir = await makeTempWorkspace("openclaw-bootstrap-cache-test-");
   });
 
+  const loadAgentsFile = async (dir: string) => {
+    const result = await loadWorkspaceBootstrapFiles(dir);
+    return result.find((f) => f.name === DEFAULT_AGENTS_FILENAME);
+  };
+
+  const expectAgentsContent = (
+    agentsFile: Awaited<ReturnType<typeof loadAgentsFile>>,
+    content: string,
+  ) => {
+    expect(agentsFile?.content).toBe(content);
+    expect(agentsFile?.missing).toBe(false);
+  };
+
   it("returns cached content when mtime unchanged", async () => {
     const content1 = "# Initial content";
     await writeWorkspaceFile({
@@ -20,16 +33,12 @@ describe("workspace bootstrap file caching", () => {
     });
 
     // First load
-    const result1 = await loadWorkspaceBootstrapFiles(workspaceDir);
-    const agentsFile1 = result1.find((f) => f.name === DEFAULT_AGENTS_FILENAME);
-    expect(agentsFile1?.content).toBe(content1);
-    expect(agentsFile1?.missing).toBe(false);
+    const agentsFile1 = await loadAgentsFile(workspaceDir);
+    expectAgentsContent(agentsFile1, content1);
 
     // Second load should use cached content (same mtime)
-    const result2 = await loadWorkspaceBootstrapFiles(workspaceDir);
-    const agentsFile2 = result2.find((f) => f.name === DEFAULT_AGENTS_FILENAME);
-    expect(agentsFile2?.content).toBe(content1);
-    expect(agentsFile2?.missing).toBe(false);
+    const agentsFile2 = await loadAgentsFile(workspaceDir);
+    expectAgentsContent(agentsFile2, content1);
 
     // Verify both calls returned the same content without re-reading
     expect(agentsFile1?.content).toBe(agentsFile2?.content);
@@ -46,9 +55,8 @@ describe("workspace bootstrap file caching", () => {
     });
 
     // First load
-    const result1 = await loadWorkspaceBootstrapFiles(workspaceDir);
-    const agentsFile1 = result1.find((f) => f.name === DEFAULT_AGENTS_FILENAME);
-    expect(agentsFile1?.content).toBe(content1);
+    const agentsFile1 = await loadAgentsFile(workspaceDir);
+    expectAgentsContent(agentsFile1, content1);
 
     // Wait a bit to ensure mtime will be different
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -61,10 +69,8 @@ describe("workspace bootstrap file caching", () => {
     });
 
     // Second load should detect the change and return new content
-    const result2 = await loadWorkspaceBootstrapFiles(workspaceDir);
-    const agentsFile2 = result2.find((f) => f.name === DEFAULT_AGENTS_FILENAME);
-    expect(agentsFile2?.content).toBe(content2);
-    expect(agentsFile2?.missing).toBe(false);
+    const agentsFile2 = await loadAgentsFile(workspaceDir);
+    expectAgentsContent(agentsFile2, content2);
   });
 
   it("handles file deletion gracefully", async () => {
@@ -74,10 +80,8 @@ describe("workspace bootstrap file caching", () => {
     await writeWorkspaceFile({ dir: workspaceDir, name: DEFAULT_AGENTS_FILENAME, content });
 
     // First load
-    const result1 = await loadWorkspaceBootstrapFiles(workspaceDir);
-    const agentsFile1 = result1.find((f) => f.name === DEFAULT_AGENTS_FILENAME);
-    expect(agentsFile1?.content).toBe(content);
-    expect(agentsFile1?.missing).toBe(false);
+    const agentsFile1 = await loadAgentsFile(workspaceDir);
+    expectAgentsContent(agentsFile1, content);
 
     // Delete the file
     await fs.unlink(filePath);
@@ -101,8 +105,7 @@ describe("workspace bootstrap file caching", () => {
     // All results should be identical
     for (const result of results) {
       const agentsFile = result.find((f) => f.name === DEFAULT_AGENTS_FILENAME);
-      expect(agentsFile?.content).toBe(content);
-      expect(agentsFile?.missing).toBe(false);
+      expectAgentsContent(agentsFile, content);
     }
   });
 
@@ -126,5 +129,11 @@ describe("workspace bootstrap file caching", () => {
 
     expect(agentsFile1?.content).toBe(content1);
     expect(agentsFile2?.content).toBe(content2);
+  });
+
+  it("returns missing=true when bootstrap file never existed", async () => {
+    const agentsFile = await loadAgentsFile(workspaceDir);
+    expect(agentsFile?.missing).toBe(true);
+    expect(agentsFile?.content).toBeUndefined();
   });
 });

@@ -11,6 +11,7 @@ const hoisted = vi.hoisted(() => {
 
 vi.mock("../../agents/subagent-spawn.js", () => ({
   spawnSubagentDirect: (...args: unknown[]) => hoisted.spawnSubagentDirectMock(...args),
+  SUBAGENT_SPAWN_MODES: ["run", "session"],
 }));
 
 vi.mock("../../gateway/call.js", () => ({
@@ -59,8 +60,8 @@ const baseCfg = {
 describe("/subagents spawn command", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests();
-    spawnSubagentDirectMock.mockReset();
-    hoisted.callGatewayMock.mockReset();
+    spawnSubagentDirectMock.mockClear();
+    hoisted.callGatewayMock.mockClear();
   });
 
   it("shows usage when agentId is missing", async () => {
@@ -93,6 +94,7 @@ describe("/subagents spawn command", () => {
     const [spawnParams, spawnCtx] = spawnSubagentDirectMock.mock.calls[0];
     expect(spawnParams.task).toBe("do the thing");
     expect(spawnParams.agentId).toBe("beta");
+    expect(spawnParams.mode).toBe("run");
     expect(spawnParams.cleanup).toBe("keep");
     expect(spawnParams.expectsCompletionMessage).toBe(true);
     expect(spawnCtx.agentSessionKey).toBeDefined();

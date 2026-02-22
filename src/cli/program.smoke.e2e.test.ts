@@ -57,7 +57,7 @@ describe("cli program (smoke)", () => {
         "123e4567-e89b-12d3-a456-426614174000",
       ],
     },
-  ])("$label", async ({ argv }) => {
+  ])("message command: $label", async ({ argv }) => {
     await expect(runProgram(argv)).rejects.toThrow("exit");
     expect(messageCommand).toHaveBeenCalled();
   });
@@ -92,7 +92,7 @@ describe("cli program (smoke)", () => {
       expectedTimeoutMs: undefined,
       expectedWarning: 'warning: invalid --timeout-ms "nope"; ignoring',
     },
-  ])("$label", async ({ argv, expectedTimeoutMs, expectedWarning }) => {
+  ])("tui command: $label", async ({ argv, expectedTimeoutMs, expectedWarning }) => {
     await runProgram(argv);
     if (expectedWarning) {
       expect(runtime.error).toHaveBeenCalledWith(expectedWarning);
@@ -118,7 +118,7 @@ describe("cli program (smoke)", () => {
       expectSetupCalled: false,
       expectOnboardCalled: true,
     },
-  ])("$label", async ({ argv, expectSetupCalled, expectOnboardCalled }) => {
+  ])("setup command: $label", async ({ argv, expectSetupCalled, expectOnboardCalled }) => {
     await runProgram(argv);
     expect(setupCommand).toHaveBeenCalledTimes(expectSetupCalled ? 1 : 0);
     expect(onboardCommand).toHaveBeenCalledTimes(expectOnboardCalled ? 1 : 0);
@@ -248,7 +248,7 @@ describe("cli program (smoke)", () => {
           runtime,
         ),
     },
-  ])("$label", async ({ argv, expectCall }) => {
+  ])("channels command: $label", async ({ argv, expectCall }) => {
     await runProgram(argv);
     expectCall();
   });

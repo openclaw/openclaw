@@ -1904,6 +1904,7 @@ private extension NodeAppModel {
                             }
                             GatewayDiagnostics.log(
                                 "operator gateway connected host=\(url.host ?? "?") scheme=\(url.scheme ?? "?")")
+                            await self.talkMode.reloadConfig()
                             await self.refreshBrandingFromGateway()
                             await self.refreshAgentsFromGateway()
                             await self.refreshShareRouteFromGateway()

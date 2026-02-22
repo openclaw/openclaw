@@ -1,6 +1,7 @@
 import path from "node:path";
 import { Command } from "commander";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 
 const copyToClipboard = vi.fn();
 const runtime = {
@@ -114,10 +115,11 @@ beforeAll(async () => {
 beforeEach(() => {
   state.entries.clear();
   state.counter = 0;
-  copyToClipboard.mockReset();
-  runtime.log.mockReset();
-  runtime.error.mockReset();
-  runtime.exit.mockReset();
+  copyToClipboard.mockClear();
+  copyToClipboard.mockResolvedValue(false);
+  runtime.log.mockClear();
+  runtime.error.mockClear();
+  runtime.exit.mockClear();
 });
 
 function writeManifest(dir: string) {
@@ -167,11 +169,8 @@ describe("browser extension install (fs-mocked)", () => {
   });
 
   it("copies extension path to clipboard", async () => {
-    const prev = process.env.OPENCLAW_STATE_DIR;
     const tmp = abs("/tmp/openclaw-ext-path");
-    process.env.OPENCLAW_STATE_DIR = tmp;
-
-    try {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: tmp }, async () => {
       copyToClipboard.mockResolvedValue(true);
 
       const dir = path.join(tmp, "browser", "chrome-extension");
@@ -186,12 +185,6 @@ describe("browser extension install (fs-mocked)", () => {
 
       await program.parseAsync(["browser", "extension", "path"], { from: "user" });
       expect(copyToClipboard).toHaveBeenCalledWith(dir);
-    } finally {
-      if (prev === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = prev;
-      }
-    }
+    });
   });
 });

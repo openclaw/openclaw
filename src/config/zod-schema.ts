@@ -72,9 +72,18 @@ const MemoryQmdLimitsSchema = z
   })
   .strict();
 
+const MemoryQmdMcporterSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    serverName: z.string().optional(),
+    startDaemon: z.boolean().optional(),
+  })
+  .strict();
+
 const MemoryQmdSchema = z
   .object({
     command: z.string().optional(),
+    mcporter: MemoryQmdMcporterSchema.optional(),
     searchMode: z.union([z.literal("query"), z.literal("search"), z.literal("vsearch")]).optional(),
     includeDefaultMemory: z.boolean().optional(),
     paths: z.array(MemoryQmdPathSchema).optional(),
@@ -450,6 +459,7 @@ export const OpenClawSchema = z
           .strict()
           .optional(),
         trustedProxies: z.array(z.string()).optional(),
+        allowRealIpFallback: z.boolean().optional(),
         tools: z
           .object({
             deny: z.array(z.string()).optional(),

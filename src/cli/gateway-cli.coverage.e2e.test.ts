@@ -143,7 +143,7 @@ describe("gateway-cli coverage", () => {
     },
   ])("registers gateway discover and prints $label", async ({ args, expectedOutput }) => {
     resetRuntimeCapture();
-    discoverGatewayBeacons.mockReset();
+    discoverGatewayBeacons.mockClear();
     discoverGatewayBeacons.mockResolvedValueOnce([
       {
         instanceName: "Studio (OpenClaw)",
@@ -168,7 +168,7 @@ describe("gateway-cli coverage", () => {
 
   it("validates gateway discover timeout", async () => {
     resetRuntimeCapture();
-    discoverGatewayBeacons.mockReset();
+    discoverGatewayBeacons.mockClear();
     await expectGatewayExit(["gateway", "discover", "--timeout", "0"]);
 
     expect(runtimeErrors.join("\n")).toContain("gateway discover failed:");

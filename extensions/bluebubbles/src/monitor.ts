@@ -2,8 +2,12 @@ import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import {
+  isRequestBodyLimitError,
+  readRequestBodyWithLimit,
   registerWebhookTarget,
   rejectNonPostWebhookRequest,
+  requestBodyErrorToText,
+  resolveSingleWebhookTarget,
   resolveWebhookTargets,
 } from "openclaw/plugin-sdk";
 import {
@@ -239,64 +243,61 @@ export function registerBlueBubblesWebhookTarget(target: WebhookTarget): () => v
   };
 }
 
-async function readJsonBody(req: IncomingMessage, maxBytes: number, timeoutMs = 30_000) {
-  const chunks: Buffer[] = [];
-  let total = 0;
-  return await new Promise<{ ok: boolean; value?: unknown; error?: string }>((resolve) => {
-    let done = false;
-    const finish = (result: { ok: boolean; value?: unknown; error?: string }) => {
-      if (done) {
-        return;
-      }
-      done = true;
-      clearTimeout(timer);
-      resolve(result);
+type ReadBlueBubblesWebhookBodyResult =
+  | { ok: true; value: unknown }
+  | { ok: false; statusCode: number; error: string };
+
+function parseBlueBubblesWebhookPayload(
+  rawBody: string,
+): { ok: true; value: unknown } | { ok: false; error: string } {
+  const trimmed = rawBody.trim();
+  if (!trimmed) {
+    return { ok: false, error: "empty payload" };
+  }
+  try {
+    return { ok: true, value: JSON.parse(trimmed) as unknown };
+  } catch {
+    const params = new URLSearchParams(rawBody);
+    const payload = params.get("payload") ?? params.get("data") ?? params.get("message");
+    if (!payload) {
+      return { ok: false, error: "invalid json" };
+    }
+    try {
+      return { ok: true, value: JSON.parse(payload) as unknown };
+    } catch (error) {
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+}
+
+async function readBlueBubblesWebhookBody(
+  req: IncomingMessage,
+  maxBytes: number,
+): Promise<ReadBlueBubblesWebhookBodyResult> {
+  try {
+    const rawBody = await readRequestBodyWithLimit(req, {
+      maxBytes,
+      timeoutMs: 30_000,
+    });
+    const parsed = parseBlueBubblesWebhookPayload(rawBody);
+    if (!parsed.ok) {
+      return { ok: false, statusCode: 400, error: parsed.error };
+    }
+    return parsed;
+  } catch (error) {
+    if (isRequestBodyLimitError(error)) {
+      return {
+        ok: false,
+        statusCode: error.statusCode,
+        error: requestBodyErrorToText(error.code),
+      };
+    }
+    return {
+      ok: false,
+      statusCode: 400,
+      error: error instanceof Error ? error.message : String(error),
     };
-
-    const timer = setTimeout(() => {
-      finish({ ok: false, error: "request body timeout" });
-      req.destroy();
-    }, timeoutMs);
-
-    req.on("data", (chunk: Buffer) => {
-      total += chunk.length;
-      if (total > maxBytes) {
-        finish({ ok: false, error: "payload too large" });
-        req.destroy();
-        return;
-      }
-      chunks.push(chunk);
-    });
-    req.on("end", () => {
-      try {
-        const raw = Buffer.concat(chunks).toString("utf8");
-        if (!raw.trim()) {
-          finish({ ok: false, error: "empty payload" });
-          return;
-        }
-        try {
-          finish({ ok: true, value: JSON.parse(raw) as unknown });
-          return;
-        } catch {
-          const params = new URLSearchParams(raw);
-          const payload = params.get("payload") ?? params.get("data") ?? params.get("message");
-          if (payload) {
-            finish({ ok: true, value: JSON.parse(payload) as unknown });
-            return;
-          }
-          throw new Error("invalid json");
-        }
-      } catch (err) {
-        finish({ ok: false, error: err instanceof Error ? err.message : String(err) });
-      }
-    });
-    req.on("error", (err) => {
-      finish({ ok: false, error: err instanceof Error ? err.message : String(err) });
-    });
-    req.on("close", () => {
-      finish({ ok: false, error: "connection closed" });
-    });
-  });
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -337,48 +338,6 @@ function safeEqualSecret(aRaw: string, bRaw: string): boolean {
   return timingSafeEqual(bufA, bufB);
 }
 
-function getHostName(hostHeader?: string | string[]): string {
-  const host = (Array.isArray(hostHeader) ? hostHeader[0] : (hostHeader ?? ""))
-    .trim()
-    .toLowerCase();
-  if (!host) {
-    return "";
-  }
-  // Bracketed IPv6: [::1]:18789
-  if (host.startsWith("[")) {
-    const end = host.indexOf("]");
-    if (end !== -1) {
-      return host.slice(1, end);
-    }
-  }
-  const [name] = host.split(":");
-  return name ?? "";
-}
-
-function isDirectLocalLoopbackRequest(req: IncomingMessage): boolean {
-  const remote = (req.socket?.remoteAddress ?? "").trim().toLowerCase();
-  const remoteIsLoopback =
-    remote === "127.0.0.1" || remote === "::1" || remote === "::ffff:127.0.0.1";
-  if (!remoteIsLoopback) {
-    return false;
-  }
-
-  const host = getHostName(req.headers?.host);
-  const hostIsLocal = host === "localhost" || host === "127.0.0.1" || host === "::1";
-  if (!hostIsLocal) {
-    return false;
-  }
-
-  // If a reverse proxy is in front, it will usually inject forwarding headers.
-  // Passwordless webhooks must never be accepted through a proxy.
-  const hasForwarded = Boolean(
-    req.headers?.["x-forwarded-for"] ||
-    req.headers?.["x-real-ip"] ||
-    req.headers?.["x-forwarded-host"],
-  );
-  return !hasForwarded;
-}
-
 export async function handleBlueBubblesWebhookRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -394,15 +353,9 @@ export async function handleBlueBubblesWebhookRequest(
     return true;
   }
 
-  const body = await readJsonBody(req, 1024 * 1024);
+  const body = await readBlueBubblesWebhookBody(req, 1024 * 1024);
   if (!body.ok) {
-    if (body.error === "payload too large") {
-      res.statusCode = 413;
-    } else if (body.error === "request body timeout") {
-      res.statusCode = 408;
-    } else {
-      res.statusCode = 400;
-    }
+    res.statusCode = body.statusCode;
     res.end(body.error ?? "invalid payload");
     console.warn(`[bluebubbles] webhook rejected: ${body.error ?? "invalid payload"}`);
     return true;
@@ -466,31 +419,12 @@ export async function handleBlueBubblesWebhookRequest(
     req.headers["x-bluebubbles-guid"] ??
     req.headers["authorization"];
   const guid = (Array.isArray(headerToken) ? headerToken[0] : headerToken) ?? guidParam ?? "";
-
-  const strictMatches: WebhookTarget[] = [];
-  const passwordlessTargets: WebhookTarget[] = [];
-  for (const target of targets) {
+  const matchedTarget = resolveSingleWebhookTarget(targets, (target) => {
     const token = target.account.config.password?.trim() ?? "";
-    if (!token) {
-      passwordlessTargets.push(target);
-      continue;
-    }
-    if (safeEqualSecret(guid, token)) {
-      strictMatches.push(target);
-      if (strictMatches.length > 1) {
-        break;
-      }
-    }
-  }
+    return safeEqualSecret(guid, token);
+  });
 
-  const matching =
-    strictMatches.length > 0
-      ? strictMatches
-      : isDirectLocalLoopbackRequest(req)
-        ? passwordlessTargets
-        : [];
-
-  if (matching.length === 0) {
+  if (matchedTarget.kind === "none") {
     res.statusCode = 401;
     res.end("unauthorized");
     console.warn(
@@ -499,14 +433,14 @@ export async function handleBlueBubblesWebhookRequest(
     return true;
   }
 
-  if (matching.length > 1) {
+  if (matchedTarget.kind === "ambiguous") {
     res.statusCode = 401;
     res.end("ambiguous webhook target");
     console.warn(`[bluebubbles] webhook rejected: ambiguous target match path=${path}`);
     return true;
   }
 
-  const target = matching[0];
+  const target = matchedTarget.target;
   target.statusSink?.({ lastInboundAt: Date.now() });
   if (reaction) {
     processReaction(reaction, target).catch((err) => {

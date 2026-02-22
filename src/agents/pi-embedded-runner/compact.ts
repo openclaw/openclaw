@@ -13,6 +13,7 @@ import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import { resolveChannelCapabilities } from "../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
+import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { type enqueueCommand, enqueueCommandInLane } from "../../process/command-queue.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../../routing/session-key.js";
@@ -33,6 +34,7 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import { resolveOpenClawDocsPath } from "../docs-path.js";
 import { getApiKeyForModel, resolveModelAuthMode } from "../model-auth.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
+import { resolveOwnerDisplaySetting } from "../owner-display.js";
 import {
   ensureSessionHeader,
   validateAnthropicTurns,
@@ -78,6 +80,7 @@ import {
   buildEmbeddedSystemPrompt,
   createSystemPromptOverride,
 } from "./system-prompt.js";
+import { collectAllowedToolNames } from "./tool-name-allowlist.js";
 import { splitSdkTools } from "./tool-split.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
 import { describeUnknownError, mapThinkingLevel } from "./utils.js";
@@ -131,7 +134,7 @@ type CompactionMessageMetrics = {
 };
 
 function createCompactionDiagId(): string {
-  return `cmp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  return `cmp-${Date.now().toString(36)}-${generateSecureToken(4)}`;
 }
 
 function getMessageTextChars(msg: AgentMessage): number {
@@ -383,6 +386,7 @@ export async function compactEmbeddedPiSessionDirect(
       modelAuthMode: resolveModelAuthMode(model.provider, params.config),
     });
     const tools = sanitizeToolsForGoogle({ tools: toolsRaw, provider });
+    const allowedToolNames = collectAllowedToolNames({ tools });
     logToolSchemasForGoogle({ tools, provider });
     const machineName = await getMachineDisplayName();
     const runtimeChannel = normalizeMessageChannel(params.messageChannel ?? params.messageProvider);
@@ -478,12 +482,15 @@ export async function compactEmbeddedPiSessionDirect(
       moduleUrl: import.meta.url,
     });
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
+    const ownerDisplay = resolveOwnerDisplaySetting(params.config);
     const appendPrompt = buildEmbeddedSystemPrompt({
       workspaceDir: effectiveWorkspace,
       defaultThinkLevel: params.thinkLevel,
       reasoningLevel: params.reasoningLevel ?? "off",
       extraSystemPrompt: params.extraSystemPrompt,
       ownerNumbers: params.ownerNumbers,
+      ownerDisplay: ownerDisplay.ownerDisplay,
+      ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
       reasoningTagHint,
       heartbeatPrompt: isDefaultAgent
         ? resolveHeartbeatPrompt(params.config?.agents?.defaults?.heartbeat?.prompt)
@@ -527,6 +534,7 @@ export async function compactEmbeddedPiSessionDirect(
         agentId: sessionAgentId,
         sessionKey: params.sessionKey,
         allowSyntheticToolResults: transcriptPolicy.allowSyntheticToolResults,
+        allowedToolNames,
       });
       trackSessionManagerAccess(params.sessionFile);
       const settingsManager = SettingsManager.create(effectiveWorkspace, agentDir);
@@ -582,6 +590,7 @@ export async function compactEmbeddedPiSessionDirect(
           modelApi: model.api,
           modelId,
           provider,
+          allowedToolNames,
           config: params.config,
           sessionManager,
           sessionId: params.sessionId,
