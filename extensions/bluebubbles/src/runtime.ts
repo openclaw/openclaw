@@ -1,6 +1,7 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk";
 
 let runtime: PluginRuntime | null = null;
+type LegacyRuntimeLogShape = { log?: (message: string) => void };
 
 export function setBlueBubblesRuntime(next: PluginRuntime): void {
   runtime = next;
@@ -23,7 +24,8 @@ export function getBlueBubblesRuntime(): PluginRuntime {
 
 export function warnBlueBubbles(message: string): void {
   const formatted = `[bluebubbles] ${message}`;
-  const log = runtime?.log;
+  // Backward-compatible with tests/legacy injections that pass { log }.
+  const log = (runtime as unknown as LegacyRuntimeLogShape | null)?.log;
   if (typeof log === "function") {
     log(formatted);
     return;
