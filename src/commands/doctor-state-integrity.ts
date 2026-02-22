@@ -78,6 +78,53 @@ function addUserRwx(mode: number): number {
   return perms | 0o700;
 }
 
+function isGroupOrWorldReadable(mode: number): boolean {
+  return (mode & 0o077) !== 0;
+}
+
+function listSensitiveStateFiles(params: { stateDir: string; sessionsDir: string }): string[] {
+  const files: string[] = [];
+  const envPath = path.join(params.stateDir, ".env");
+  if (existsFile(envPath)) {
+    files.push(envPath);
+  }
+
+  const logsDir = path.join(params.stateDir, "logs");
+  if (existsDir(logsDir)) {
+    try {
+      const entries = fs.readdirSync(logsDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isFile()) {
+          continue;
+        }
+        files.push(path.join(logsDir, entry.name));
+      }
+    } catch {
+      // Ignore unreadable logs dir; this is handled by existing state-dir warnings.
+    }
+  }
+
+  if (existsDir(params.sessionsDir)) {
+    try {
+      const entries = fs.readdirSync(params.sessionsDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isFile()) {
+          continue;
+        }
+        // Include rotated transcripts like *.jsonl.reset.*
+        if (!entry.name.includes(".jsonl")) {
+          continue;
+        }
+        files.push(path.join(params.sessionsDir, entry.name));
+      }
+    } catch {
+      // Ignore unreadable sessions dir; this is handled by existing state-dir warnings.
+    }
+  }
+
+  return files;
+}
+
 function countJsonlLines(filePath: string): number {
   try {
     const raw = fs.readFileSync(filePath, "utf-8");
@@ -280,7 +327,7 @@ export async function noteStateIntegrity(
       const linkStat = fs.lstatSync(configPath);
       const stat = fs.statSync(configPath);
       const isSymlink = linkStat.isSymbolicLink();
-      if (!isSymlink && (stat.mode & 0o077) !== 0) {
+      if (!isSymlink && isGroupOrWorldReadable(stat.mode)) {
         warnings.push(
           `- Config file is group/world readable (${displayConfigPath ?? configPath}). Recommend chmod 600.`,
         );
@@ -297,6 +344,60 @@ export async function noteStateIntegrity(
       warnings.push(
         `- Failed to read config permissions (${displayConfigPath ?? configPath}): ${String(err)}`,
       );
+    }
+  }
+
+  if (stateDirExists && process.platform !== "win32") {
+    const sensitiveFiles = listSensitiveStateFiles({ stateDir, sessionsDir });
+    const tooOpenFiles: string[] = [];
+    for (const filePath of sensitiveFiles) {
+      try {
+        const linkStat = fs.lstatSync(filePath);
+        const stat = fs.statSync(filePath);
+        if (linkStat.isSymbolicLink() || !stat.isFile()) {
+          continue;
+        }
+        if (isGroupOrWorldReadable(stat.mode)) {
+          tooOpenFiles.push(filePath);
+        }
+      } catch (err) {
+        warnings.push(
+          `- Failed to read sensitive file permissions (${shortenHomePath(filePath)}): ${String(err)}`,
+        );
+      }
+    }
+    if (tooOpenFiles.length > 0) {
+      const samples = tooOpenFiles
+        .slice(0, 3)
+        .map((filePath) => `  - ${shortenHomePath(filePath)}`);
+      if (tooOpenFiles.length > samples.length) {
+        samples.push(`  - ... and ${tooOpenFiles.length - samples.length} more`);
+      }
+      warnings.push(
+        ["- Sensitive state files are group/world readable. Recommend chmod 600.", ...samples].join(
+          "\n",
+        ),
+      );
+      const tighten = await prompter.confirmSkipInNonInteractive({
+        message: `Tighten permissions on ${tooOpenFiles.length} sensitive state file(s) to 600?`,
+        initialValue: true,
+      });
+      if (tighten) {
+        let tightened = 0;
+        for (const filePath of tooOpenFiles) {
+          try {
+            fs.chmodSync(filePath, 0o600);
+            tightened += 1;
+          } catch (err) {
+            warnings.push(
+              `- Failed to tighten sensitive file permissions (${shortenHomePath(filePath)}): ${String(err)}`,
+            );
+          }
+        }
+        if (tightened > 0) {
+          changes.push(`- Tightened permissions on ${tightened} sensitive state file(s) to 600`);
+        }
+      }
     }
   }
 
