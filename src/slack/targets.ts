@@ -15,6 +15,18 @@ export type SlackTarget = MessagingTarget;
 
 type SlackTargetParseOptions = MessagingTargetParseOptions;
 
+function inferSlackRawTargetKind(raw: string): MessagingTargetKind | undefined {
+  // Slack IDs are prefix-typed. Infer likely target kind for bare IDs so
+  // "U..." routes to DM open flow instead of being treated as a channel.
+  if (/^[UW][A-Z0-9]{8,}$/i.test(raw)) {
+    return "user";
+  }
+  if (/^[CGDZ][A-Z0-9]{8,}$/i.test(raw)) {
+    return "channel";
+  }
+  return undefined;
+}
+
 export function parseSlackTarget(
   raw: string,
   options: SlackTargetParseOptions = {},
@@ -59,6 +71,10 @@ export function parseSlackTarget(
       errorMessage: "Slack channels require a channel id (use channel:<id>)",
     });
     return buildMessagingTarget("channel", id, trimmed);
+  }
+  const inferredKind = inferSlackRawTargetKind(trimmed);
+  if (inferredKind) {
+    return buildMessagingTarget(inferredKind, trimmed, trimmed);
   }
   if (options.defaultKind) {
     return buildMessagingTarget(options.defaultKind, trimmed, trimmed);
