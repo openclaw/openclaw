@@ -310,8 +310,24 @@ agent to read it. Think of it as your “heartbeat checklist”: small, stable, 
 safe to include every 30 minutes.
 
 If `HEARTBEAT.md` exists but is effectively empty (only blank lines and markdown
-headers like `# Heading`), OpenClaw skips the heartbeat run to save API calls.
-If the file is missing, the heartbeat still runs and the model decides what to do.
+headers like `# Heading`), OpenClaw **currently skips** the heartbeat run to save
+API calls.
+
+If the file is **missing**, OpenClaw may create an empty `HEARTBEAT.md` during
+workspace bootstrap (see `agents.defaults.skipBootstrap`). In practice, this can
+lead to heartbeats being skipped for the same “empty file” reason.
+
+Note: this “empty or missing `HEARTBEAT.md` → skip” behavior is the subject of
+bug reports (see #11766). In particular, an empty/missing heartbeat file can
+also interfere with some manual wakes (e.g. cron jobs that rely on heartbeat to
+wake the agent).
+
+**Workarounds (until the behavior is changed):**
+
+- Put at least **one non-comment, non-heading line** in `HEARTBEAT.md` (e.g.
+  `- noop`), or
+- set a custom heartbeat `prompt` that doesn’t depend on `HEARTBEAT.md`, or
+- disable bootstrap file creation (`agents.defaults.skipBootstrap: true`).
 
 Keep it tiny (short checklist or reminders) to avoid prompt bloat.
 
