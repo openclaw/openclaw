@@ -56,6 +56,20 @@ async function requestAllowOnceApproval(ws: WebSocket, command: string): Promise
   return approvalId;
 }
 
+function createEphemeralDeviceIdentity() {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
+  const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
+  const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+  const publicKeyRaw = publicKeyRawBase64UrlFromPem(publicKeyPem);
+  const deviceId = deriveDeviceIdFromPublicKey(publicKeyRaw);
+  expect(deviceId).toBeTruthy();
+  return {
+    deviceId: deviceId!,
+    publicKeyPem,
+    privateKeyPem,
+  };
+}
+
 describe("node.invoke approval bypass", () => {
   let server: Awaited<ReturnType<typeof startServerWithClient>>["server"];
   let port: number;
@@ -159,6 +173,7 @@ describe("node.invoke approval bypass", () => {
   };
 
   const connectLinuxNode = async (onInvoke: (payload: unknown) => void) => {
+    const nodeIdentity = createEphemeralDeviceIdentity();
     let readyResolve: (() => void) | null = null;
     const ready = new Promise<void>((resolve) => {
       readyResolve = resolve;
@@ -175,6 +190,7 @@ describe("node.invoke approval bypass", () => {
       mode: GATEWAY_CLIENT_MODES.NODE,
       scopes: [],
       commands: ["system.run"],
+      deviceIdentity: nodeIdentity,
       onHelloOk: () => readyResolve?.(),
       onEvent: (evt) => {
         if (evt.event !== "node.invoke.request") {
