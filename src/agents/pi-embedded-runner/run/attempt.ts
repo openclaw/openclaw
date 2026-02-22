@@ -77,6 +77,7 @@ import {
 } from "../../skills.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
+import { sanitizeToolCallIdsForCloudCodeAssist } from "../../tool-call-id.js";
 import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
@@ -760,6 +761,32 @@ export async function runEmbeddedAttempt(
             return inner(model, context, options);
           }
           const sanitized = dropThinkingBlocks(messages as unknown as AgentMessage[]) as unknown;
+          if (sanitized === messages) {
+            return inner(model, context, options);
+          }
+          const nextContext = {
+            ...(context as unknown as Record<string, unknown>),
+            messages: sanitized,
+          } as unknown;
+          return inner(model, nextContext as typeof context, options);
+        };
+      }
+
+      // Mistral (and other strict providers) reject tool call IDs that don't match their
+      // format requirements (e.g. [a-zA-Z0-9]{9}). sanitizeSessionHistory only processes
+      // historical messages at attempt start, but the agent loop's internal tool call →
+      // tool result cycles bypass that path. Wrap streamFn so every outbound request
+      // sees sanitized tool call IDs.
+      if (transcriptPolicy.sanitizeToolCallIds && transcriptPolicy.toolCallIdMode) {
+        const inner = activeSession.agent.streamFn;
+        const mode = transcriptPolicy.toolCallIdMode;
+        activeSession.agent.streamFn = (model, context, options) => {
+          const ctx = context as unknown as { messages?: unknown };
+          const messages = ctx?.messages;
+          if (!Array.isArray(messages)) {
+            return inner(model, context, options);
+          }
+          const sanitized = sanitizeToolCallIdsForCloudCodeAssist(messages as AgentMessage[], mode);
           if (sanitized === messages) {
             return inner(model, context, options);
           }

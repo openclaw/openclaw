@@ -614,6 +614,7 @@ const ERROR_PATTERNS = {
     "tool_use_id",
     "messages.1.content.1.tool_use.id",
     "invalid request format",
+    /tool call id was.*must be/i,
   ],
 } as const;
 
