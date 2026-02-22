@@ -258,6 +258,8 @@ export type ChannelThreadingContext = {
 export type ChannelThreadingToolContext = {
   currentChannelId?: string;
   currentChannelProvider?: ChannelId;
+  /** Account ID for the current channel context, used for outbound routing. */
+  currentAccountId?: string;
   currentThreadTs?: string;
   replyToMode?: "off" | "first" | "all";
   hasRepliedRef?: { value: boolean };

@@ -639,10 +639,12 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         options?.currentChannelProvider ||
         options?.currentThreadTs ||
         options?.replyToMode ||
-        options?.hasRepliedRef
+        options?.hasRepliedRef ||
+        options?.agentAccountId
           ? {
               currentChannelId: options?.currentChannelId,
               currentChannelProvider: options?.currentChannelProvider,
+              currentAccountId: options?.agentAccountId,
               currentThreadTs: options?.currentThreadTs,
               replyToMode: options?.replyToMode,
               hasRepliedRef: options?.hasRepliedRef,

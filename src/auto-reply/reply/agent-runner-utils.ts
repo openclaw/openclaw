@@ -36,6 +36,7 @@ export function buildThreadingToolContext(params: {
     return {
       currentChannelId: sessionCtx.To?.trim() || undefined,
       currentChannelProvider: provider ?? (rawProvider as ChannelId),
+      currentAccountId: sessionCtx.AccountId?.trim() || undefined,
       hasRepliedRef,
     };
   }
@@ -57,6 +58,7 @@ export function buildThreadingToolContext(params: {
   return {
     ...context,
     currentChannelProvider: provider!, // guaranteed non-null since dock exists
+    currentAccountId: sessionCtx.AccountId?.trim() || undefined,
   };
 }
 

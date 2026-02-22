@@ -752,7 +752,10 @@ export async function runMessageAction(
   }
 
   const channel = await resolveChannel(cfg, params);
-  const accountId = readStringParam(params, "accountId") ?? input.defaultAccountId;
+  const accountId =
+    readStringParam(params, "accountId") ??
+    input.toolContext?.currentAccountId?.trim() ??
+    input.defaultAccountId;
   if (accountId) {
     params.accountId = accountId;
   }

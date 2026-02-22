@@ -213,6 +213,8 @@ export async function handleToolsInvokeHttpRequest(
     getHeader(req, "x-openclaw-message-channel") ?? "",
   );
   const accountId = getHeader(req, "x-openclaw-account-id")?.trim() || undefined;
+  // Resolve message target (optional header) for tool context routing.
+  const messageTo = getHeader(req, "x-openclaw-message-to")?.trim() || undefined;
 
   const {
     agentId,
@@ -248,6 +250,7 @@ export async function handleToolsInvokeHttpRequest(
     agentSessionKey: sessionKey,
     agentChannel: messageChannel ?? undefined,
     agentAccountId: accountId,
+    currentChannelId: messageTo,
     config: cfg,
     pluginToolAllowlist: collectExplicitAllowlist([
       profilePolicy,
