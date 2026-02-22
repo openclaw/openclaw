@@ -177,17 +177,34 @@ export function resolveEffectiveModelFallbacks(params: {
   return agentFallbacksOverride ?? defaultFallbacks;
 }
 
+/**
+ * Resolve a workspace path. Relative paths are resolved against the state dir
+ * (e.g. ~/.openclaw/) instead of process.cwd() so that sub-agent workspace
+ * resolution is deterministic regardless of prior process.chdir() calls.
+ */
+function resolveWorkspacePath(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  if (path.isAbsolute(trimmed) || trimmed.startsWith("~")) {
+    return resolveUserPath(trimmed);
+  }
+  const stateDir = resolveStateDir(process.env);
+  return path.resolve(stateDir, trimmed);
+}
+
 export function resolveAgentWorkspaceDir(cfg: OpenClawConfig, agentId: string) {
   const id = normalizeAgentId(agentId);
   const configured = resolveAgentConfig(cfg, id)?.workspace?.trim();
   if (configured) {
-    return resolveUserPath(configured);
+    return resolveWorkspacePath(configured);
   }
   const defaultAgentId = resolveDefaultAgentId(cfg);
   if (id === defaultAgentId) {
     const fallback = cfg.agents?.defaults?.workspace?.trim();
     if (fallback) {
-      return resolveUserPath(fallback);
+      return resolveWorkspacePath(fallback);
     }
     return resolveDefaultAgentWorkspaceDir(process.env);
   }

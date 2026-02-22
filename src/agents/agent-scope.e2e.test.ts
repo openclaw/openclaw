@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -279,5 +280,76 @@ describe("resolveAgentConfig", () => {
 
     const agentDir = resolveAgentDir({} as OpenClawConfig, "main");
     expect(agentDir).toBe(path.join(path.resolve(home), ".openclaw", "agents", "main", "agent"));
+  });
+
+  it("relative workspace resolves against state dir, not CWD", () => {
+    const stateDir = path.join(path.sep, "tmp", "test-state-dir");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "research", workspace: "workspace-rs" }],
+      },
+    };
+
+    const originalCwd = process.cwd();
+    try {
+      process.chdir(os.tmpdir());
+      const result = resolveAgentWorkspaceDir(cfg, "research");
+      expect(result).toBe(path.join(stateDir, "workspace-rs"));
+    } finally {
+      process.chdir(originalCwd);
+    }
+  });
+
+  it("absolute workspace paths are unaffected by CWD changes", () => {
+    const absWorkspace = path.join(path.sep, "opt", "workspaces", "research");
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "research", workspace: absWorkspace }],
+      },
+    };
+
+    const originalCwd = process.cwd();
+    try {
+      process.chdir(os.tmpdir());
+      const result = resolveAgentWorkspaceDir(cfg, "research");
+      expect(result).toBe(absWorkspace);
+    } finally {
+      process.chdir(originalCwd);
+    }
+  });
+
+  it("tilde workspace paths expand correctly", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [{ id: "research", workspace: "~/my-workspace" }],
+      },
+    };
+
+    const result = resolveAgentWorkspaceDir(cfg, "research");
+    const home = os.homedir();
+    expect(result).toBe(path.resolve(path.join(home, "my-workspace")));
+  });
+
+  it("defaults workspace resolves relative paths against state dir", () => {
+    const stateDir = path.join(path.sep, "tmp", "test-state-dir-defaults");
+    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: { workspace: "workspace-default" },
+        list: [{ id: "main", default: true }],
+      },
+    };
+
+    const originalCwd = process.cwd();
+    try {
+      process.chdir(os.tmpdir());
+      const result = resolveAgentWorkspaceDir(cfg, "main");
+      expect(result).toBe(path.join(stateDir, "workspace-default"));
+    } finally {
+      process.chdir(originalCwd);
+    }
   });
 });
