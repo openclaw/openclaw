@@ -45,6 +45,7 @@ export type GatewayClientOptions = {
   connectDelayMs?: number;
   tickWatchMinIntervalMs?: number;
   token?: string;
+  deviceToken?: string;
   password?: string;
   instanceId?: string;
   clientName?: GatewayClientName;
@@ -237,17 +238,25 @@ export class GatewayClient {
       this.connectTimer = null;
     }
     const role = this.opts.role ?? "operator";
+    const explicitGatewayToken = this.opts.token?.trim() || undefined;
+    const explicitDeviceToken = this.opts.deviceToken?.trim() || undefined;
     const storedToken = this.opts.deviceIdentity
       ? loadDeviceAuthToken({ deviceId: this.opts.deviceIdentity.deviceId, role })?.token
       : null;
-    // Prefer explicitly provided credentials (e.g. CLI `--token`) over any persisted
-    // device-auth tokens. Persisted tokens are only used when no token is provided.
-    const authToken = this.opts.token ?? storedToken ?? undefined;
+    // Keep shared gateway credentials explicit. Persisted per-device tokens only
+    // participate when no explicit shared token is provided.
+    const resolvedDeviceToken =
+      explicitDeviceToken ?? (!explicitGatewayToken ? (storedToken ?? undefined) : undefined);
+    // Legacy compatibility: keep `auth.token` populated for device-token auth when
+    // no explicit shared token is present.
+    const authToken = explicitGatewayToken ?? resolvedDeviceToken;
+    const authPassword = this.opts.password?.trim() || undefined;
     const auth =
-      authToken || this.opts.password
+      authToken || authPassword || resolvedDeviceToken
         ? {
             token: authToken,
-            password: this.opts.password,
+            deviceToken: resolvedDeviceToken,
+            password: authPassword,
           }
         : undefined;
     const signedAtMs = Date.now();

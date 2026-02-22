@@ -957,6 +957,42 @@ describe("gateway server auth/connect", () => {
     restoreGatewayToken(prevToken);
   });
 
+  test("accepts explicit auth.deviceToken when shared token is omitted", async () => {
+    const { server, ws, port, prevToken } = await startServerWithClient("secret");
+    const { deviceToken } = await ensurePairedDeviceTokenForCurrentIdentity(ws);
+
+    ws.close();
+
+    const ws2 = await openWs(port);
+    const res2 = await connectReq(ws2, {
+      skipDefaultAuth: true,
+      deviceToken,
+    });
+    expect(res2.ok).toBe(true);
+
+    ws2.close();
+    await server.close();
+    restoreGatewayToken(prevToken);
+  });
+
+  test("uses explicit auth.deviceToken fallback when shared token is wrong", async () => {
+    const { server, ws, port, prevToken } = await startServerWithClient("secret");
+    const { deviceToken } = await ensurePairedDeviceTokenForCurrentIdentity(ws);
+
+    ws.close();
+
+    const ws2 = await openWs(port);
+    const res2 = await connectReq(ws2, {
+      token: "wrong",
+      deviceToken,
+    });
+    expect(res2.ok).toBe(true);
+
+    ws2.close();
+    await server.close();
+    restoreGatewayToken(prevToken);
+  });
+
   test("keeps shared-secret lockout separate from device-token auth", async () => {
     const { server, port, prevToken, deviceToken } =
       await startRateLimitedTokenServerWithPairedDeviceToken();
