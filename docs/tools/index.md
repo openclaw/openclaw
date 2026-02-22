@@ -260,7 +260,7 @@ Search the web using Brave Search API.
 Core parameters:
 
 - `query` (required)
-- `count` (1–10; default from `tools.web.search.maxResults`)
+- `count` (1–20; default from `tools.web.search.maxResults`)
 
 Notes:
 

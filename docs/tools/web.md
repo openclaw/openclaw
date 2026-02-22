@@ -171,7 +171,7 @@ Search the web using your configured provider.
 ### Tool parameters
 
 - `query` (required)
-- `count` (1–10; default from config)
+- `count` (1–20; default from config)
 - `country` (optional): 2-letter country code for region-specific results (e.g., "DE", "US", "ALL"). If omitted, Brave chooses its default region.
 - `search_lang` (optional): ISO language code for search results (e.g., "de", "en", "fr")
 - `ui_lang` (optional): ISO language code for UI elements

@@ -341,6 +341,7 @@ Docs: https://docs.openclaw.ai
 - Extensions/Auth: add OpenAI Codex CLI auth provider integration. (#18009) Thanks @jiteshdhamaniya.
 - Feishu: add Bitable create-app/create-field tools for automation workflows. (#17963) Thanks @gaowanqi08141999.
 - Docker: add optional `OPENCLAW_INSTALL_BROWSER` build arg to preinstall Chromium + Xvfb in the Docker image, avoiding runtime Playwright installs. (#18449)
+- Web Search: raise the maximum results limit (`MAX_SEARCH_COUNT`) from 10 to 20 to align with Brave Search's native pagination capacity, and update associated documentation and UI hints. (#19379) Thanks @liyishuai.
 
 ### Fixes
 
