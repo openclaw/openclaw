@@ -11,6 +11,7 @@ import { getTrustedSafeBinDirs } from "./exec-safe-bin-trust.js";
 export type ExecSafeBinConfigScope = {
   safeBins?: string[] | null;
   safeBinProfiles?: SafeBinProfileFixtures | null;
+  safeBinTrustedDirs?: string[] | null;
 };
 
 const INTERPRETER_LIKE_SAFE_BINS = new Set([
@@ -78,6 +79,14 @@ export function listInterpreterLikeSafeBins(entries: Iterable<string>): string[]
     .toSorted();
 }
 
+function normalizeTrustedDirs(entries?: string[] | null): string[] {
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+  const normalized = entries.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+  return Array.from(new Set(normalized));
+}
+
 export function resolveMergedSafeBinProfileFixtures(params: {
   global?: ExecSafeBinConfigScope | null;
   local?: ExecSafeBinConfigScope | null;
@@ -96,7 +105,6 @@ export function resolveMergedSafeBinProfileFixtures(params: {
 export function resolveExecSafeBinRuntimePolicy(params: {
   global?: ExecSafeBinConfigScope | null;
   local?: ExecSafeBinConfigScope | null;
-  pathEnv?: string | null;
 }): {
   safeBins: Set<string>;
   safeBinProfiles: Readonly<Record<string, SafeBinProfile>>;
@@ -114,9 +122,12 @@ export function resolveExecSafeBinRuntimePolicy(params: {
   const unprofiledSafeBins = Array.from(safeBins)
     .filter((entry) => !safeBinProfiles[entry])
     .toSorted();
-  const trustedSafeBinDirs = params.pathEnv
-    ? getTrustedSafeBinDirs({ pathEnv: params.pathEnv })
-    : getTrustedSafeBinDirs();
+  const trustedSafeBinDirs = getTrustedSafeBinDirs({
+    extraDirs: [
+      ...normalizeTrustedDirs(params.global?.safeBinTrustedDirs),
+      ...normalizeTrustedDirs(params.local?.safeBinTrustedDirs),
+    ],
+  });
   return {
     safeBins,
     safeBinProfiles,

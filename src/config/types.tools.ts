@@ -227,6 +227,8 @@ export type ExecToolConfig = {
   pathPrepend?: string[];
   /** Safe stdin-only binaries that can run without allowlist entries. */
   safeBins?: string[];
+  /** Extra explicit directories trusted for safeBins path checks (never derived from PATH). */
+  safeBinTrustedDirs?: string[];
   /** Optional custom safe-bin profiles for entries in tools.exec.safeBins. */
   safeBinProfiles?: Record<string, SafeBinProfileFixture>;
   /** Default time (ms) before an exec command auto-backgrounds. */
