@@ -87,6 +87,8 @@ export class ParallelSessionManager extends EventEmitter {
     if (existing) {
       // Reactivate if hibernated — restore from backend
       if (existing.status === "hibernated") {
+        // Enforce concurrent limit before reactivating
+        await this.enforceSessionLimit();
         await this.resumeSession(sessionKey);
         existing.status = "active";
         this.emit("session:reactivated", existing);
@@ -97,15 +99,8 @@ export class ParallelSessionManager extends EventEmitter {
       return { sessionKey, isNew: false, briefing };
     }
 
-    // Check concurrent session limit
-    const activeSessions = Array.from(this.sessions.values()).filter((s) => s.status === "active");
-    if (activeSessions.length >= this.config.maxConcurrent) {
-      // Hibernate oldest idle session
-      const oldest = activeSessions.toSorted((a, b) => a.lastActivityAt - b.lastActivityAt)[0];
-      if (oldest) {
-        await this.hibernateSession(oldest.sessionKey);
-      }
-    }
+    // Enforce concurrent limit before creating new session
+    await this.enforceSessionLimit();
 
     // Create new session
     const newSession: SessionState = {
@@ -355,6 +350,19 @@ export class ParallelSessionManager extends EventEmitter {
       totalMemories: this.sessionMemory.length,
       globalKnowledgeCount: this.globalKnowledge.length,
     };
+  }
+
+  /**
+   * Enforce the concurrent session limit by hibernating the oldest active session
+   */
+  private async enforceSessionLimit(): Promise<void> {
+    const activeSessions = Array.from(this.sessions.values()).filter((s) => s.status === "active");
+    if (activeSessions.length >= this.config.maxConcurrent) {
+      const oldest = activeSessions.toSorted((a, b) => a.lastActivityAt - b.lastActivityAt)[0];
+      if (oldest) {
+        await this.hibernateSession(oldest.sessionKey);
+      }
+    }
   }
 
   /**
