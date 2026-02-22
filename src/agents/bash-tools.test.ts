@@ -13,7 +13,7 @@ const defaultShell = isWin
 // PowerShell: Start-Sleep for delays, ; for command separation, $null for null device
 const shortDelayCmd = isWin ? "Start-Sleep -Milliseconds 4" : "sleep 0.004";
 const yieldDelayCmd = isWin ? "Start-Sleep -Milliseconds 16" : "sleep 0.016";
-const longDelayCmd = isWin ? "Start-Sleep -Milliseconds 96" : "sleep 0.096";
+const longDelayCmd = isWin ? "Start-Sleep -Milliseconds 72" : "sleep 0.072";
 const POLL_INTERVAL_MS = 15;
 const TEST_EXEC_DEFAULTS = { security: "full" as const, ask: "off" as const };
 const createTestExecTool = (
@@ -164,7 +164,7 @@ describe("exec tool backgrounding", () => {
   });
 
   it("uses default timeout when timeout is omitted", async () => {
-    const customBash = createTestExecTool({ timeoutSec: 0.08, backgroundMs: 10 });
+    const customBash = createTestExecTool({ timeoutSec: 0.05, backgroundMs: 10 });
     const customProcess = createProcessTool();
 
     const result = await customBash.execute("call1", {
@@ -182,7 +182,7 @@ describe("exec tool backgrounding", () => {
           });
           return (poll.details as { status: string }).status;
         },
-        { timeout: 1500, interval: POLL_INTERVAL_MS },
+        { timeout: 1000, interval: POLL_INTERVAL_MS },
       )
       .toBe("failed");
   });

@@ -169,11 +169,10 @@ const nextSessionFile = () => {
   return path.join(workspaceDir, `session-${sessionCounter}.jsonl`);
 };
 const nextRunId = (prefix = "run-embedded-test") => `${prefix}-${++runCounter}`;
-
-const testSessionKey = "agent:test:embedded";
+const nextSessionKey = () => `agent:test:embedded:${nextRunId("session-key")}`;
 const immediateEnqueue = async <T>(task: () => Promise<T>) => task();
 
-const runWithOrphanedSingleUserMessage = async (text: string) => {
+const runWithOrphanedSingleUserMessage = async (text: string, sessionKey: string) => {
   const sessionFile = nextSessionFile();
   const sessionManager = SessionManager.open(sessionFile);
   sessionManager.appendMessage({
@@ -185,7 +184,7 @@ const runWithOrphanedSingleUserMessage = async (text: string) => {
   const cfg = makeOpenAiConfig(["mock-1"]);
   return await runEmbeddedPiAgent({
     sessionId: "session:test",
-    sessionKey: testSessionKey,
+    sessionKey,
     sessionFile,
     workspaceDir,
     config: cfg,
@@ -226,11 +225,11 @@ const readSessionMessages = async (sessionFile: string) => {
     ) as Array<{ role?: string; content?: unknown }>;
 };
 
-const runDefaultEmbeddedTurn = async (sessionFile: string, prompt: string) => {
+const runDefaultEmbeddedTurn = async (sessionFile: string, prompt: string, sessionKey: string) => {
   const cfg = makeOpenAiConfig(["mock-1"]);
   await runEmbeddedPiAgent({
     sessionId: "session:test",
-    sessionKey: testSessionKey,
+    sessionKey,
     sessionFile,
     workspaceDir,
     config: cfg,
@@ -244,7 +243,7 @@ const runDefaultEmbeddedTurn = async (sessionFile: string, prompt: string) => {
   });
 };
 
-describe("runEmbeddedPiAgent", () => {
+describe.concurrent("runEmbeddedPiAgent", () => {
   it("handles prompt error paths without dropping user state", async () => {
     for (const testCase of [
       {
@@ -264,9 +263,10 @@ describe("runEmbeddedPiAgent", () => {
     ] as const) {
       const sessionFile = nextSessionFile();
       const cfg = makeOpenAiConfig([testCase.model]);
+      const sessionKey = nextSessionKey();
       const execution = runEmbeddedPiAgent({
         sessionId: "session:test",
-        sessionKey: testSessionKey,
+        sessionKey,
         sessionFile,
         workspaceDir,
         config: cfg,
@@ -300,6 +300,7 @@ describe("runEmbeddedPiAgent", () => {
     { timeout: 90_000 },
     async () => {
       const sessionFile = nextSessionFile();
+      const sessionKey = nextSessionKey();
 
       const sessionManager = SessionManager.open(sessionFile);
       sessionManager.appendMessage({
@@ -331,7 +332,7 @@ describe("runEmbeddedPiAgent", () => {
         timestamp: Date.now(),
       });
 
-      await runDefaultEmbeddedTurn(sessionFile, "hello");
+      await runDefaultEmbeddedTurn(sessionFile, "hello", sessionKey);
 
       const messages = await readSessionMessages(sessionFile);
       const seedUserIndex = messages.findIndex(
@@ -355,7 +356,7 @@ describe("runEmbeddedPiAgent", () => {
   );
 
   it("repairs orphaned user messages and continues", async () => {
-    const result = await runWithOrphanedSingleUserMessage("orphaned user");
+    const result = await runWithOrphanedSingleUserMessage("orphaned user", nextSessionKey());
 
     expect(result.meta.error).toBeUndefined();
     expect(result.payloads?.length ?? 0).toBeGreaterThan(0);
