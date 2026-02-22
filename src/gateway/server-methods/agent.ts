@@ -577,6 +577,11 @@ export const agentHandlers: GatewayRequestHandlers = {
           groupChannel: resolvedGroupChannel,
           groupSpace: resolvedGroupSpace,
           currentThreadTs: resolvedThreadId != null ? String(resolvedThreadId) : undefined,
+          // Expose resolvedTo as currentChannelId so the message tool's target
+          // inference (no explicit `to`) routes to the correct thread/channel.
+          // This allows sub-agents to send messages to the originating thread
+          // without needing an explicit target parameter.
+          currentChannelId: resolvedTo || undefined,
         },
         groupId: resolvedGroupId,
         groupChannel: resolvedGroupChannel,
