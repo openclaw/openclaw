@@ -210,6 +210,14 @@ function findFirstActionsBlock(payload: { blocks?: Array<{ type: string }> }) {
     | undefined;
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 function createArgMenusHarness() {
   const commands = new Map<string, (args: unknown) => Promise<void>>();
   const actions = new Map<string, (args: unknown) => Promise<void>>();
@@ -857,5 +865,49 @@ describe("slack slash commands access groups", () => {
     const { respond } = await registerAndRunPolicySlash({ harness });
 
     expectUnauthorizedResponse(respond);
+  });
+});
+
+describe("slack slash command session metadata", () => {
+  const { recordSessionMetaFromInboundMock } = getSlackSlashMocks();
+
+  it("calls recordSessionMetaFromInbound after dispatching a slash command", async () => {
+    const harness = createPolicyHarness({ groupPolicy: "open" });
+    await registerAndRunPolicySlash({ harness });
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
+    expect(recordSessionMetaFromInboundMock).toHaveBeenCalledTimes(1);
+    const call = recordSessionMetaFromInboundMock.mock.calls[0]?.[0] as {
+      sessionKey?: string;
+      ctx?: { OriginatingChannel?: string };
+    };
+    expect(call.ctx?.OriginatingChannel).toBe("slack");
+    expect(call.sessionKey).toBeDefined();
+  });
+
+  it("awaits session metadata persistence before dispatch", async () => {
+    const deferred = createDeferred<void>();
+    recordSessionMetaFromInboundMock.mockReset().mockReturnValue(deferred.promise);
+
+    const harness = createPolicyHarness({ groupPolicy: "open" });
+    await registerCommands(harness.ctx, harness.account);
+
+    const runPromise = runSlashHandler({
+      commands: harness.commands,
+      command: {
+        channel_id: harness.channelId,
+        channel_name: harness.channelName,
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(recordSessionMetaFromInboundMock).toHaveBeenCalledTimes(1);
+    });
+    expect(dispatchMock).not.toHaveBeenCalled();
+
+    deferred.resolve();
+    await runPromise;
+
+    expect(dispatchMock).toHaveBeenCalledTimes(1);
   });
 });
