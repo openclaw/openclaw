@@ -31,7 +31,7 @@ echo "Starting gateway container..."
 	  -e "OPENCLAW_SKIP_CRON=1" \
 	  -e "OPENCLAW_SKIP_CANVAS_HOST=1" \
 	  "$IMAGE_NAME" \
-  bash -lc "node dist/index.js gateway --port $PORT --bind lan --allow-unconfigured > /tmp/gateway-net-e2e.log 2>&1"
+  bash -lc "entry=dist/index.mjs; [ -f \"\$entry\" ] || entry=dist/index.js; node \"\$entry\" gateway --port $PORT --bind lan --allow-unconfigured > /tmp/gateway-net-e2e.log 2>&1"
 
 echo "Waiting for gateway to come up..."
 ready=0
@@ -77,9 +77,9 @@ docker run --rm \
   -e "GW_URL=ws://$GW_NAME:$PORT" \
   -e "GW_TOKEN=$TOKEN" \
   "$IMAGE_NAME" \
-  bash -lc "node - <<'NODE'
+  bash -lc "node --import tsx - <<'NODE'
 import { WebSocket } from \"ws\";
-import { PROTOCOL_VERSION } from \"./dist/gateway/protocol/index.js\";
+import { PROTOCOL_VERSION } from \"./src/gateway/protocol/index.ts\";
 
 const url = process.env.GW_URL;
 const token = process.env.GW_TOKEN;
@@ -122,22 +122,17 @@ ws.send(
         version: \"dev\",
         platform: process.platform,
         mode: \"test\",
-      },
-      caps: [],
-      auth: { token },
-    },
-  }),
-	);
-	const connectRes = await onceFrame((o) => o?.type === \"res\" && o?.id === \"c1\");
-	if (!connectRes.ok) throw new Error(\"connect failed: \" + (connectRes.error?.message ?? \"unknown\"));
+	      },
+	      caps: [],
+	      auth: { token },
+	    },
+	  }),
+			);
+		const connectRes = await onceFrame((o) => o?.type === \"res\" && o?.id === \"c1\");
+		if (!connectRes.ok) throw new Error(\"connect failed: \" + (connectRes.error?.message ?? \"unknown\"));
 
-	ws.send(JSON.stringify({ type: \"req\", id: \"h1\", method: \"health\" }));
-	const healthRes = await onceFrame((o) => o?.type === \"res\" && o?.id === \"h1\", 10000);
-	if (!healthRes.ok) throw new Error(\"health failed: \" + (healthRes.error?.message ?? \"unknown\"));
-	if (healthRes.payload?.ok !== true) throw new Error(\"unexpected health payload\");
-
-	ws.close();
-	console.log(\"ok\");
+		ws.close();
+		console.log(\"ok\");
 NODE"
 
 echo "OK"

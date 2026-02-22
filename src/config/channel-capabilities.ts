@@ -1,7 +1,7 @@
-import type { OpenClawConfig } from "./config.js";
-import type { TelegramCapabilitiesConfig } from "./types.telegram.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import { normalizeAccountId } from "../routing/session-key.js";
+import type { OpenClawConfig } from "./config.js";
+import type { TelegramCapabilitiesConfig } from "./types.telegram.js";
 
 type CapabilitiesConfig = TelegramCapabilitiesConfig;
 

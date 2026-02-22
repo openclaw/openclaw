@@ -4,21 +4,21 @@ import {
   collectWhatsAppStatusIssues,
   createActionGate,
   DEFAULT_ACCOUNT_ID,
+  escapeRegExp,
   formatPairingApproveHint,
   getChatChannelMeta,
-  isWhatsAppGroupJid,
   listWhatsAppAccountIds,
   listWhatsAppDirectoryGroupsFromConfig,
   listWhatsAppDirectoryPeersFromConfig,
   looksLikeWhatsAppTargetId,
   migrateBaseNameToDefaultAccount,
-  missingTargetError,
   normalizeAccountId,
   normalizeE164,
   normalizeWhatsAppMessagingTarget,
   normalizeWhatsAppTarget,
   readStringParam,
   resolveDefaultWhatsAppAccountId,
+  resolveWhatsAppOutboundTarget,
   resolveWhatsAppAccount,
   resolveWhatsAppGroupRequireMention,
   resolveWhatsAppGroupToolPolicy,
@@ -32,8 +32,6 @@ import {
 import { getWhatsAppRuntime } from "./runtime.js";
 
 const meta = getChatChannelMeta("whatsapp");
-
-const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
   id: "whatsapp",
@@ -120,6 +118,12 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
         .filter((entry): entry is string => Boolean(entry))
         .map((entry) => (entry === "*" ? entry : normalizeWhatsAppTarget(entry)))
         .filter((entry): entry is string => Boolean(entry)),
+    resolveDefaultTo: ({ cfg, accountId }) => {
+      const root = cfg.channels?.whatsapp;
+      const normalized = normalizeAccountId(accountId);
+      const account = root?.accounts?.[normalized];
+      return (account?.defaultTo ?? root?.defaultTo)?.trim() || undefined;
+    },
   },
   security: {
     resolveDmPolicy: ({ cfg, accountId, account }) => {
@@ -202,7 +206,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
     resolveRequireMention: resolveWhatsAppGroupRequireMention,
     resolveToolPolicy: resolveWhatsAppGroupToolPolicy,
     resolveGroupIntroHint: () =>
-      "WhatsApp IDs: SenderId is the participant JID; [message_id: ...] is the message id for reactions (use SenderId as participant).",
+      "WhatsApp IDs: SenderId is the participant JID (group participant id).",
   },
   mentions: {
     stripPatterns: ({ ctx }) => {
@@ -290,55 +294,8 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> = {
     chunkerMode: "text",
     textChunkLimit: 4000,
     pollMaxOptions: 12,
-    resolveTarget: ({ to, allowFrom, mode }) => {
-      const trimmed = to?.trim() ?? "";
-      const allowListRaw = (allowFrom ?? []).map((entry) => String(entry).trim()).filter(Boolean);
-      const hasWildcard = allowListRaw.includes("*");
-      const allowList = allowListRaw
-        .filter((entry) => entry !== "*")
-        .map((entry) => normalizeWhatsAppTarget(entry))
-        .filter((entry): entry is string => Boolean(entry));
-
-      if (trimmed) {
-        const normalizedTo = normalizeWhatsAppTarget(trimmed);
-        if (!normalizedTo) {
-          if ((mode === "implicit" || mode === "heartbeat") && allowList.length > 0) {
-            return { ok: true, to: allowList[0] };
-          }
-          return {
-            ok: false,
-            error: missingTargetError(
-              "WhatsApp",
-              "<E.164|group JID> or channels.whatsapp.allowFrom[0]",
-            ),
-          };
-        }
-        if (isWhatsAppGroupJid(normalizedTo)) {
-          return { ok: true, to: normalizedTo };
-        }
-        if (mode === "implicit" || mode === "heartbeat") {
-          if (hasWildcard || allowList.length === 0) {
-            return { ok: true, to: normalizedTo };
-          }
-          if (allowList.includes(normalizedTo)) {
-            return { ok: true, to: normalizedTo };
-          }
-          return { ok: true, to: allowList[0] };
-        }
-        return { ok: true, to: normalizedTo };
-      }
-
-      if (allowList.length > 0) {
-        return { ok: true, to: allowList[0] };
-      }
-      return {
-        ok: false,
-        error: missingTargetError(
-          "WhatsApp",
-          "<E.164|group JID> or channels.whatsapp.allowFrom[0]",
-        ),
-      };
-    },
+    resolveTarget: ({ to, allowFrom, mode }) =>
+      resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
     sendText: async ({ to, text, accountId, deps, gifPlayback }) => {
       const send = deps?.sendWhatsApp ?? getWhatsAppRuntime().channel.whatsapp.sendMessageWhatsApp;
       const result = await send(to, text, {

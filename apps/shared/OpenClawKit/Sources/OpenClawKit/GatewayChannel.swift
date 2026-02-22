@@ -7,6 +7,7 @@ public protocol WebSocketTasking: AnyObject {
     func resume()
     func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?)
     func send(_ message: URLSessionWebSocketTask.Message) async throws
+    func sendPing(pongReceiveHandler: @escaping @Sendable (Error?) -> Void)
     func receive() async throws -> URLSessionWebSocketTask.Message
     func receive(completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)
 }
@@ -40,6 +41,18 @@ public struct WebSocketTaskBox: @unchecked Sendable {
     {
         self.task.receive(completionHandler: completionHandler)
     }
+
+    public func sendPing() async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            self.task.sendPing { error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume(returning: ())
+                }
+            }
+        }
+    }
 }
 
 public protocol WebSocketSessioning: AnyObject {
@@ -72,6 +85,10 @@ public struct GatewayConnectOptions: Sendable {
     public var clientId: String
     public var clientMode: String
     public var clientDisplayName: String?
+    // When false, the connection omits the signed device identity payload and cannot use
+    // device-scoped auth (role/scope upgrades will require pairing). Keep this true for
+    // role/scoped sessions such as operator UI clients.
+    public var includeDeviceIdentity: Bool
 
     public init(
         role: String,
@@ -81,7 +98,8 @@ public struct GatewayConnectOptions: Sendable {
         permissions: [String: Bool],
         clientId: String,
         clientMode: String,
-        clientDisplayName: String?)
+        clientDisplayName: String?,
+        includeDeviceIdentity: Bool = true)
     {
         self.role = role
         self.scopes = scopes
@@ -91,6 +109,7 @@ public struct GatewayConnectOptions: Sendable {
         self.clientId = clientId
         self.clientMode = clientMode
         self.clientDisplayName = clientDisplayName
+        self.includeDeviceIdentity = includeDeviceIdentity
     }
 }
 
@@ -127,10 +146,16 @@ public actor GatewayChannelActor {
     private var lastAuthSource: GatewayAuthSource = .none
     private let decoder = JSONDecoder()
     private let encoder = JSONEncoder()
-    private let connectTimeoutSeconds: Double = 6
-    private let connectChallengeTimeoutSeconds: Double = 0.75
+    // Remote gateways (tailscale/wan) can take a bit longer to deliver the connect.challenge event,
+    // and we must include the nonce once the gateway requires v2 signing.
+    private let connectTimeoutSeconds: Double = 12
+    private let connectChallengeTimeoutSeconds: Double = 6.0
+    // Some networks will silently drop idle TCP/TLS flows around ~30s. The gateway tick is server->client,
+    // but NATs/proxies often require outbound traffic to keep the connection alive.
+    private let keepaliveIntervalSeconds: Double = 15.0
     private var watchdogTask: Task<Void, Never>?
     private var tickTask: Task<Void, Never>?
+    private var keepaliveTask: Task<Void, Never>?
     private let defaultRequestTimeoutMs: Double = 15000
     private let pushHandler: (@Sendable (GatewayPush) async -> Void)?
     private let connectOptions: GatewayConnectOptions?
@@ -169,6 +194,9 @@ public actor GatewayChannelActor {
         self.tickTask?.cancel()
         self.tickTask = nil
 
+        self.keepaliveTask?.cancel()
+        self.keepaliveTask = nil
+
         self.task?.cancel(with: .goingAway, reason: nil)
         self.task = nil
 
@@ -198,7 +226,7 @@ public actor GatewayChannelActor {
     private func watchdogLoop() async {
         // Keep nudging reconnect in case exponential backoff stalls.
         while self.shouldReconnect {
-            try? await Task.sleep(nanoseconds: 30 * 1_000_000_000) // 30s cadence
+            guard await self.sleepUnlessCancelled(nanoseconds: 30 * 1_000_000_000) else { return } // 30s cadence
             guard self.shouldReconnect else { return }
             if self.connected { continue }
             do {
@@ -251,11 +279,37 @@ public actor GatewayChannelActor {
         self.connected = true
         self.backoffMs = 500
         self.lastSeq = nil
+        self.startKeepalive()
 
         let waiters = self.connectWaiters
         self.connectWaiters.removeAll()
         for waiter in waiters {
             waiter.resume(returning: ())
+        }
+    }
+
+    private func startKeepalive() {
+        self.keepaliveTask?.cancel()
+        self.keepaliveTask = Task { [weak self] in
+            guard let self else { return }
+            await self.keepaliveLoop()
+        }
+    }
+
+    private func keepaliveLoop() async {
+        while self.shouldReconnect {
+            guard await self.sleepUnlessCancelled(
+                nanoseconds: UInt64(self.keepaliveIntervalSeconds * 1_000_000_000))
+            else { return }
+            guard self.shouldReconnect else { return }
+            guard self.connected else { continue }
+            guard let task = self.task else { continue }
+            // Best-effort ping keeps NAT/proxy state alive without generating RPC load.
+            do {
+                try await task.sendPing()
+            } catch {
+                // Avoid spamming logs; the reconnect paths will surface meaningful errors.
+            }
         }
     }
 
@@ -307,9 +361,15 @@ public actor GatewayChannelActor {
         if !options.permissions.isEmpty {
             params["permissions"] = ProtoAnyCodable(options.permissions)
         }
-        let identity = DeviceIdentityStore.loadOrCreate()
-        let storedToken = DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: role)?.token
-        let authToken = storedToken ?? self.token
+        let includeDeviceIdentity = options.includeDeviceIdentity
+        let identity = includeDeviceIdentity ? DeviceIdentityStore.loadOrCreate() : nil
+        let storedToken =
+            (includeDeviceIdentity && identity != nil)
+                ? DeviceAuthStore.loadToken(deviceId: identity!.deviceId, role: role)?.token
+                : nil
+        // If we're not sending a device identity, a device token can't be validated server-side.
+        // In that mode we always use the shared gateway token/password.
+        let authToken = includeDeviceIdentity ? (storedToken ?? self.token) : self.token
         let authSource: GatewayAuthSource
         if storedToken != nil {
             authSource = .deviceToken
@@ -322,7 +382,7 @@ public actor GatewayChannelActor {
         }
         self.lastAuthSource = authSource
         self.logger.info("gateway connect auth=\(authSource.rawValue, privacy: .public)")
-        let canFallbackToShared = storedToken != nil && self.token != nil
+        let canFallbackToShared = includeDeviceIdentity && storedToken != nil && self.token != nil
         if let authToken {
             params["auth"] = ProtoAnyCodable(["token": ProtoAnyCodable(authToken)])
         } else if let password = self.password {
@@ -333,7 +393,7 @@ public actor GatewayChannelActor {
         let scopesValue = scopes.joined(separator: ",")
         var payloadParts = [
             connectNonce == nil ? "v1" : "v2",
-            identity.deviceId,
+            identity?.deviceId ?? "",
             clientId,
             clientMode,
             role,
@@ -345,18 +405,20 @@ public actor GatewayChannelActor {
             payloadParts.append(connectNonce)
         }
         let payload = payloadParts.joined(separator: "|")
-        if let signature = DeviceIdentityStore.signPayload(payload, identity: identity),
-           let publicKey = DeviceIdentityStore.publicKeyBase64Url(identity) {
-            var device: [String: ProtoAnyCodable] = [
-                "id": ProtoAnyCodable(identity.deviceId),
-                "publicKey": ProtoAnyCodable(publicKey),
-                "signature": ProtoAnyCodable(signature),
-                "signedAt": ProtoAnyCodable(signedAtMs),
-            ]
-            if let connectNonce {
-                device["nonce"] = ProtoAnyCodable(connectNonce)
+        if includeDeviceIdentity, let identity {
+            if let signature = DeviceIdentityStore.signPayload(payload, identity: identity),
+               let publicKey = DeviceIdentityStore.publicKeyBase64Url(identity) {
+                var device: [String: ProtoAnyCodable] = [
+                    "id": ProtoAnyCodable(identity.deviceId),
+                    "publicKey": ProtoAnyCodable(publicKey),
+                    "signature": ProtoAnyCodable(signature),
+                    "signedAt": ProtoAnyCodable(signedAtMs),
+                ]
+                if let connectNonce {
+                    device["nonce"] = ProtoAnyCodable(connectNonce)
+                }
+                params["device"] = ProtoAnyCodable(device)
             }
-            params["device"] = ProtoAnyCodable(device)
         }
 
         let frame = RequestFrame(
@@ -371,7 +433,9 @@ public actor GatewayChannelActor {
             try await self.handleConnectResponse(response, identity: identity, role: role)
         } catch {
             if canFallbackToShared {
-                DeviceAuthStore.clearToken(deviceId: identity.deviceId, role: role)
+                if let identity {
+                    DeviceAuthStore.clearToken(deviceId: identity.deviceId, role: role)
+                }
             }
             throw error
         }
@@ -379,7 +443,7 @@ public actor GatewayChannelActor {
 
     private func handleConnectResponse(
         _ res: ResponseFrame,
-        identity: DeviceIdentity,
+        identity: DeviceIdentity?,
         role: String
     ) async throws {
         if res.ok == false {
@@ -404,11 +468,13 @@ public actor GatewayChannelActor {
             let authRole = auth["role"]?.value as? String ?? role
             let scopes = (auth["scopes"]?.value as? [ProtoAnyCodable])?
                 .compactMap { $0.value as? String } ?? []
-            _ = DeviceAuthStore.storeToken(
-                deviceId: identity.deviceId,
-                role: authRole,
-                token: deviceToken,
-                scopes: scopes)
+            if let identity {
+                _ = DeviceAuthStore.storeToken(
+                    deviceId: identity.deviceId,
+                    role: authRole,
+                    token: deviceToken,
+                    scopes: scopes)
+            }
         }
         self.lastTick = Date()
         self.tickTask?.cancel()
@@ -440,6 +506,8 @@ public actor GatewayChannelActor {
         let wrapped = self.wrap(err, context: "gateway receive")
         self.logger.error("gateway ws receive failed \(wrapped.localizedDescription, privacy: .public)")
         self.connected = false
+        self.keepaliveTask?.cancel()
+        self.keepaliveTask = nil
         await self.disconnectHandler?("receive failed: \(wrapped.localizedDescription)")
         await self.failPending(wrapped)
         await self.scheduleReconnect()
@@ -498,7 +566,10 @@ public actor GatewayChannelActor {
                     }
                 })
         } catch {
-            if error is ConnectChallengeError { return nil }
+            if error is ConnectChallengeError {
+                self.logger.warning("gateway connect challenge timed out")
+                return nil
+            }
             throw error
         }
     }
@@ -537,7 +608,7 @@ public actor GatewayChannelActor {
     private func watchTicks() async {
         let tolerance = self.tickIntervalMs * 2
         while self.connected {
-            try? await Task.sleep(nanoseconds: UInt64(tolerance * 1_000_000))
+            guard await self.sleepUnlessCancelled(nanoseconds: UInt64(tolerance * 1_000_000)) else { return }
             guard self.connected else { return }
             if let last = self.lastTick {
                 let delta = Date().timeIntervalSince(last) * 1000
@@ -560,7 +631,7 @@ public actor GatewayChannelActor {
         guard self.shouldReconnect else { return }
         let delay = self.backoffMs / 1000
         self.backoffMs = min(self.backoffMs * 2, 30000)
-        try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+        guard await self.sleepUnlessCancelled(nanoseconds: UInt64(delay * 1_000_000_000)) else { return }
         guard self.shouldReconnect else { return }
         do {
             try await self.connect()
@@ -569,6 +640,15 @@ public actor GatewayChannelActor {
             self.logger.error("gateway reconnect failed \(wrapped.localizedDescription, privacy: .public)")
             await self.scheduleReconnect()
         }
+    }
+
+    private nonisolated func sleepUnlessCancelled(nanoseconds: UInt64) async -> Bool {
+        do {
+            try await Task.sleep(nanoseconds: nanoseconds)
+        } catch {
+            return false
+        }
+        return !Task.isCancelled
     }
 
     public func request(

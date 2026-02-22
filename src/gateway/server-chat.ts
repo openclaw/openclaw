@@ -1,16 +1,44 @@
+import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
+import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
+function resolveHeartbeatAckMaxChars(): number {
+  try {
+    const cfg = loadConfig();
+    return Math.max(
+      0,
+      cfg.agents?.defaults?.heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+    );
+  } catch {
+    return DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
+  }
+}
+
+function resolveHeartbeatContext(runId: string, sourceRunId?: string) {
+  const primary = getAgentRunContext(runId);
+  if (primary?.isHeartbeat) {
+    return primary;
+  }
+  if (sourceRunId && sourceRunId !== runId) {
+    const source = getAgentRunContext(sourceRunId);
+    if (source?.isHeartbeat) {
+      return source;
+    }
+  }
+  return primary;
+}
+
 /**
- * Check if webchat broadcasts should be suppressed for heartbeat runs.
- * Returns true if the run is a heartbeat and showOk is false.
+ * Check if heartbeat ACK/noise should be hidden from interactive chat surfaces.
  */
-function shouldSuppressHeartbeatBroadcast(runId: string): boolean {
-  const runContext = getAgentRunContext(runId);
+function shouldHideHeartbeatChatOutput(runId: string, sourceRunId?: string): boolean {
+  const runContext = resolveHeartbeatContext(runId, sourceRunId);
   if (!runContext?.isHeartbeat) {
     return false;
   }
@@ -23,6 +51,28 @@ function shouldSuppressHeartbeatBroadcast(runId: string): boolean {
     // Default to suppressing if we can't load config
     return true;
   }
+}
+
+function normalizeHeartbeatChatFinalText(params: {
+  runId: string;
+  sourceRunId?: string;
+  text: string;
+}): { suppress: boolean; text: string } {
+  if (!shouldHideHeartbeatChatOutput(params.runId, params.sourceRunId)) {
+    return { suppress: false, text: params.text };
+  }
+
+  const stripped = stripHeartbeatToken(params.text, {
+    mode: "heartbeat",
+    maxAckChars: resolveHeartbeatAckMaxChars(),
+  });
+  if (!stripped.didStrip) {
+    return { suppress: false, text: params.text };
+  }
+  if (stripped.shouldSkip) {
+    return { suppress: true, text: "" };
+  }
+  return { suppress: false, text: stripped.text };
 }
 
 export type ChatRunEntry = {
@@ -227,8 +277,24 @@ export function createAgentEventHandler({
   clearAgentRunContext,
   toolEventRecipients,
 }: AgentEventHandlerOptions) {
-  const emitChatDelta = (sessionKey: string, clientRunId: string, seq: number, text: string) => {
-    chatRunState.buffers.set(clientRunId, text);
+  const emitChatDelta = (
+    sessionKey: string,
+    clientRunId: string,
+    sourceRunId: string,
+    seq: number,
+    text: string,
+  ) => {
+    const cleaned = stripInlineDirectiveTagsForDisplay(text).text;
+    if (!cleaned) {
+      return;
+    }
+    if (isSilentReplyText(cleaned, SILENT_REPLY_TOKEN)) {
+      return;
+    }
+    chatRunState.buffers.set(clientRunId, cleaned);
+    if (shouldHideHeartbeatChatOutput(clientRunId, sourceRunId)) {
+      return;
+    }
     const now = Date.now();
     const last = chatRunState.deltaSentAt.get(clientRunId) ?? 0;
     if (now - last < 150) {
@@ -242,25 +308,33 @@ export function createAgentEventHandler({
       state: "delta" as const,
       message: {
         role: "assistant",
-        content: [{ type: "text", text }],
+        content: [{ type: "text", text: cleaned }],
         timestamp: now,
       },
     };
-    // Suppress webchat broadcast for heartbeat runs when showOk is false
-    if (!shouldSuppressHeartbeatBroadcast(clientRunId)) {
-      broadcast("chat", payload, { dropIfSlow: true });
-    }
+    broadcast("chat", payload, { dropIfSlow: true });
     nodeSendToSession(sessionKey, "chat", payload);
   };
 
   const emitChatFinal = (
     sessionKey: string,
     clientRunId: string,
+    sourceRunId: string,
     seq: number,
     jobState: "done" | "error",
     error?: unknown,
   ) => {
-    const text = chatRunState.buffers.get(clientRunId)?.trim() ?? "";
+    const bufferedText = stripInlineDirectiveTagsForDisplay(
+      chatRunState.buffers.get(clientRunId) ?? "",
+    ).text.trim();
+    const normalizedHeartbeatText = normalizeHeartbeatChatFinalText({
+      runId: clientRunId,
+      sourceRunId,
+      text: bufferedText,
+    });
+    const text = normalizedHeartbeatText.text.trim();
+    const shouldSuppressSilent =
+      normalizedHeartbeatText.suppress || isSilentReplyText(text, SILENT_REPLY_TOKEN);
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
     if (jobState === "done") {
@@ -269,18 +343,16 @@ export function createAgentEventHandler({
         sessionKey,
         seq,
         state: "final" as const,
-        message: text
-          ? {
-              role: "assistant",
-              content: [{ type: "text", text }],
-              timestamp: Date.now(),
-            }
-          : undefined,
+        message:
+          text && !shouldSuppressSilent
+            ? {
+                role: "assistant",
+                content: [{ type: "text", text }],
+                timestamp: Date.now(),
+              }
+            : undefined,
       };
-      // Suppress webchat broadcast for heartbeat runs when showOk is false
-      if (!shouldSuppressHeartbeatBroadcast(clientRunId)) {
-        broadcast("chat", payload);
-      }
+      broadcast("chat", payload);
       nodeSendToSession(sessionKey, "chat", payload);
       return;
     }
@@ -319,31 +391,35 @@ export function createAgentEventHandler({
 
   return (evt: AgentEventPayload) => {
     const chatLink = chatRunState.registry.peek(evt.runId);
-    const sessionKey = chatLink?.sessionKey ?? resolveSessionKeyForRun(evt.runId);
+    const eventSessionKey =
+      typeof evt.sessionKey === "string" && evt.sessionKey.trim() ? evt.sessionKey : undefined;
+    const sessionKey =
+      chatLink?.sessionKey ?? eventSessionKey ?? resolveSessionKeyForRun(evt.runId);
     const clientRunId = chatLink?.clientRunId ?? evt.runId;
+    const eventRunId = chatLink?.clientRunId ?? evt.runId;
+    const eventForClients = chatLink ? { ...evt, runId: eventRunId } : evt;
     const isAborted =
       chatRunState.abortedRuns.has(clientRunId) || chatRunState.abortedRuns.has(evt.runId);
     // Include sessionKey so Control UI can filter tool streams per session.
-    const agentPayload = sessionKey ? { ...evt, sessionKey } : evt;
+    const agentPayload = sessionKey ? { ...eventForClients, sessionKey } : eventForClients;
     const last = agentRunSeq.get(evt.runId) ?? 0;
     const isToolEvent = evt.stream === "tool";
     const toolVerbose = isToolEvent ? resolveToolVerboseLevel(evt.runId, sessionKey) : "off";
-    if (isToolEvent && toolVerbose === "off") {
-      agentRunSeq.set(evt.runId, evt.seq);
-      return;
-    }
+    // Build tool payload: strip result/partialResult unless verbose=full
     const toolPayload =
       isToolEvent && toolVerbose !== "full"
         ? (() => {
             const data = evt.data ? { ...evt.data } : {};
             delete data.result;
             delete data.partialResult;
-            return sessionKey ? { ...evt, sessionKey, data } : { ...evt, data };
+            return sessionKey
+              ? { ...eventForClients, sessionKey, data }
+              : { ...eventForClients, data };
           })()
         : agentPayload;
     if (evt.seq !== last + 1) {
       broadcast("agent", {
-        runId: evt.runId,
+        runId: eventRunId,
         stream: "error",
         ts: Date.now(),
         sessionKey,
@@ -356,6 +432,10 @@ export function createAgentEventHandler({
     }
     agentRunSeq.set(evt.runId, evt.seq);
     if (isToolEvent) {
+      // Always broadcast tool events to registered WS recipients with
+      // tool-events capability, regardless of verboseLevel. The verbose
+      // setting only controls whether tool details are sent as channel
+      // messages to messaging surfaces (Telegram, Discord, etc.).
       const recipients = toolEventRecipients.get(evt.runId);
       if (recipients && recipients.size > 0) {
         broadcastToConnIds("agent", toolPayload, recipients);
@@ -368,9 +448,13 @@ export function createAgentEventHandler({
       evt.stream === "lifecycle" && typeof evt.data?.phase === "string" ? evt.data.phase : null;
 
     if (sessionKey) {
-      nodeSendToSession(sessionKey, "agent", isToolEvent ? toolPayload : agentPayload);
+      // Send tool events to node/channel subscribers only when verbose is enabled;
+      // WS clients already received the event above via broadcastToConnIds.
+      if (!isToolEvent || toolVerbose !== "off") {
+        nodeSendToSession(sessionKey, "agent", isToolEvent ? toolPayload : agentPayload);
+      }
       if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
-        emitChatDelta(sessionKey, clientRunId, evt.seq, evt.data.text);
+        emitChatDelta(sessionKey, clientRunId, evt.runId, evt.seq, evt.data.text);
       } else if (!isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {
         if (chatLink) {
           const finished = chatRunState.registry.shift(evt.runId);
@@ -381,6 +465,7 @@ export function createAgentEventHandler({
           emitChatFinal(
             finished.sessionKey,
             finished.clientRunId,
+            evt.runId,
             evt.seq,
             lifecyclePhase === "error" ? "error" : "done",
             evt.data?.error,
@@ -388,6 +473,7 @@ export function createAgentEventHandler({
         } else {
           emitChatFinal(
             sessionKey,
+            eventRunId,
             evt.runId,
             evt.seq,
             lifecyclePhase === "error" ? "error" : "done",
@@ -408,6 +494,8 @@ export function createAgentEventHandler({
     if (lifecyclePhase === "end" || lifecyclePhase === "error") {
       toolEventRecipients.markFinal(evt.runId);
       clearAgentRunContext(evt.runId);
+      agentRunSeq.delete(evt.runId);
+      agentRunSeq.delete(clientRunId);
     }
   };
 }

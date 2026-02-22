@@ -206,7 +206,9 @@ extension OnboardingView {
                                             .textFieldStyle(.roundedBorder)
                                             .frame(width: fieldWidth)
                                     }
-                                    if let message = CommandResolver.sshTargetValidationMessage(self.state.remoteTarget) {
+                                    if let message = CommandResolver
+                                        .sshTargetValidationMessage(self.state.remoteTarget)
+                                    {
                                         GridRow {
                                             Text("")
                                                 .frame(width: labelWidth, alignment: .leading)
@@ -263,9 +265,11 @@ extension OnboardingView {
         if self.state.remoteTransport == .direct {
             return GatewayDiscoveryHelpers.directUrl(for: gateway) ?? "Gateway pairing only"
         }
-        if let host = GatewayDiscoveryHelpers.sanitizedTailnetHost(gateway.tailnetDns) ?? gateway.lanHost {
-            let portSuffix = gateway.sshPort != 22 ? " · ssh \(gateway.sshPort)" : ""
-            return "\(host)\(portSuffix)"
+        if let target = GatewayDiscoveryHelpers.sshTarget(for: gateway),
+           let parsed = CommandResolver.parseSSHTarget(target)
+        {
+            let portSuffix = parsed.port != 22 ? " · ssh \(parsed.port)" : ""
+            return "\(parsed.host)\(portSuffix)"
         }
         return "Gateway pairing only"
     }
@@ -335,7 +339,7 @@ extension OnboardingView {
                 .multilineTextAlignment(.center)
                 .frame(maxWidth: 540)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("OpenClaw supports any model — we strongly recommend Opus 4.5 for the best experience.")
+            Text("OpenClaw supports any model — we strongly recommend Opus 4.6 for the best experience.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

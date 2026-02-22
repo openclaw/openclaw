@@ -137,7 +137,7 @@ x-i18n:
 - `session`：心跳运行的可选会话键。
   - `main`（默认）：智能体主会话。
   - 显式会话键（从 `openclaw sessions --json` 或 [sessions CLI](/cli/sessions) 复制）。
-  - 会话键格式：参见[会话](/concepts/session)和[群组](/concepts/groups)。
+  - 会话键格式：参见[会话](/concepts/session)和[群组](/channels/groups)。
 - `target`：
   - `last`（默认）：发送到最后使用的外部渠道。
   - 显式渠道：`whatsapp` / `telegram` / `discord` / `googlechat` / `slack` / `msteams` / `signal` / `imessage`。

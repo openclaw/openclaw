@@ -1,15 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
-import type {
-  Hook,
-  HookEligibilityContext,
-  HookEntry,
-  HookSnapshot,
-  HookSource,
-  ParsedHookFrontmatter,
-} from "./types.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { resolveBundledHooksDir } from "./bundled-dir.js";
 import { shouldIncludeHook } from "./config.js";
@@ -18,10 +12,19 @@ import {
   resolveOpenClawMetadata,
   resolveHookInvocationPolicy,
 } from "./frontmatter.js";
+import type {
+  Hook,
+  HookEligibilityContext,
+  HookEntry,
+  HookSnapshot,
+  HookSource,
+  ParsedHookFrontmatter,
+} from "./types.js";
 
 type HookPackageManifest = {
   name?: string;
 } & Partial<Record<typeof MANIFEST_KEY, { hooks?: string[] }>>;
+const log = createSubsystemLogger("hooks/workspace");
 
 function filterHookEntries(
   entries: HookEntry[],
@@ -50,6 +53,19 @@ function resolvePackageHooks(manifest: HookPackageManifest): string[] {
     return [];
   }
   return raw.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean);
+}
+
+function resolveContainedDir(baseDir: string, targetDir: string): string | null {
+  const base = path.resolve(baseDir);
+  const resolved = path.resolve(baseDir, targetDir);
+  if (
+    !isPathInsideWithRealpath(base, resolved, {
+      requireRealpath: true,
+    })
+  ) {
+    return null;
+  }
+  return resolved;
 }
 
 function loadHookFromDir(params: {
@@ -81,7 +97,7 @@ function loadHookFromDir(params: {
     }
 
     if (!handlerPath) {
-      console.warn(`[hooks] Hook "${name}" has HOOK.md but no handler file in ${params.hookDir}`);
+      log.warn(`Hook "${name}" has HOOK.md but no handler file in ${params.hookDir}`);
       return null;
     }
 
@@ -95,7 +111,8 @@ function loadHookFromDir(params: {
       handlerPath,
     };
   } catch (err) {
-    console.warn(`[hooks] Failed to load hook from ${params.hookDir}:`, err);
+    const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
+    log.warn(`Failed to load hook from ${params.hookDir}: ${message}`);
     return null;
   }
 }
@@ -129,7 +146,13 @@ function loadHooksFromDir(params: { dir: string; source: HookSource; pluginId?: 
 
     if (packageHooks.length > 0) {
       for (const hookPath of packageHooks) {
-        const resolvedHookDir = path.resolve(hookDir, hookPath);
+        const resolvedHookDir = resolveContainedDir(hookDir, hookPath);
+        if (!resolvedHookDir) {
+          log.warn(
+            `Ignoring out-of-package hook path "${hookPath}" in ${hookDir} (must be within package directory)`,
+          );
+          continue;
+        }
         const hook = loadHookFromDir({
           hookDir: resolvedHookDir,
           source,

@@ -28,7 +28,7 @@ Run the Gateway on a persistent host and reach it via **Tailscale** or SSH.
 
 - **Best UX:** keep `gateway.bind: "loopback"` and use **Tailscale Serve** for the Control UI.
 - **Fallback:** keep loopback + SSH tunnel from any machine that needs access.
-- **Examples:** [exe.dev](/platforms/exe-dev) (easy VM) or [Hetzner](/platforms/hetzner) (production VPS).
+- **Examples:** [exe.dev](/install/exe-dev) (easy VM) or [Hetzner](/install/hetzner) (production VPS).
 
 This is ideal when your laptop sleeps often but you want the agent always-on.
 
@@ -122,8 +122,10 @@ Short version: **keep the Gateway loopback-only** unless you’re sure you need 
 - **Non-loopback binds** (`lan`/`tailnet`/`custom`, or `auto` when loopback is unavailable) must use auth tokens/passwords.
 - `gateway.remote.token` is **only** for remote CLI calls — it does **not** enable local auth.
 - `gateway.remote.tlsFingerprint` pins the remote TLS cert when using `wss://`.
-- **Tailscale Serve** can authenticate via identity headers when `gateway.auth.allowTailscale: true`.
-  Set it to `false` if you want tokens/passwords instead.
+- **Tailscale Serve** can authenticate Control UI/WebSocket traffic via identity
+  headers when `gateway.auth.allowTailscale: true`; HTTP API endpoints still
+  require token/password auth. This tokenless flow assumes the gateway host is
+  trusted. Set it to `false` if you want tokens/passwords everywhere.
 - Treat browser control like operator access: tailnet-only + deliberate node pairing.
 
 Deep dive: [Security](/gateway/security).

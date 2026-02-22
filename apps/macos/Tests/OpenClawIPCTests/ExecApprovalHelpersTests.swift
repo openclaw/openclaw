@@ -29,6 +29,24 @@ import Testing
         #expect(ExecApprovalHelpers.allowlistPattern(command: [], resolution: nil) == nil)
     }
 
+    @Test func validateAllowlistPatternReturnsReasons() {
+        #expect(ExecApprovalHelpers.isPathPattern("/usr/bin/rg"))
+        #expect(ExecApprovalHelpers.isPathPattern(" ~/bin/rg "))
+        #expect(!ExecApprovalHelpers.isPathPattern("rg"))
+
+        if case .invalid(let reason) = ExecApprovalHelpers.validateAllowlistPattern("  ") {
+            #expect(reason == .empty)
+        } else {
+            Issue.record("Expected empty pattern rejection")
+        }
+
+        if case .invalid(let reason) = ExecApprovalHelpers.validateAllowlistPattern("echo") {
+            #expect(reason == .missingPathComponent)
+        } else {
+            Issue.record("Expected basename pattern rejection")
+        }
+    }
+
     @Test func requiresAskMatchesPolicy() {
         let entry = ExecAllowlistEntry(pattern: "/bin/ls", lastUsedAt: nil, lastUsedCommand: nil, lastResolvedPath: nil)
         #expect(ExecApprovalHelpers.requiresAsk(
