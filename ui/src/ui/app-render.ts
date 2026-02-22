@@ -975,6 +975,45 @@ export function renderApp(state: AppViewState) {
                 onAbort: () => void state.handleAbortChat(),
                 onQueueRemove: (id) => state.removeQueuedMessage(id),
                 onNewSession: () => state.handleSendChat("/new", { restoreDraft: true }),
+                onClearHistory: async () => {
+                  if (!state.client || !state.connected) {
+                    return;
+                  }
+                  try {
+                    await state.client.request("sessions.reset", { key: state.sessionKey });
+                    state.chatMessages = [];
+                    state.chatStream = null;
+                    state.chatRunId = null;
+                    await loadChatHistory(state);
+                  } catch (err) {
+                    state.lastError = String(err);
+                  }
+                },
+                agentsList: state.agentsList,
+                currentAgentId: resolvedAgentId ?? "main",
+                onAgentChange: (agentId: string) => {
+                  state.sessionKey = `agent:${agentId}:main`;
+                  state.chatMessages = [];
+                  state.chatStream = null;
+                  state.chatRunId = null;
+                  state.applySettings({
+                    ...state.settings,
+                    sessionKey: state.sessionKey,
+                    lastActiveSessionKey: state.sessionKey,
+                  });
+                  void loadChatHistory(state);
+                  void state.loadAssistantIdentity();
+                },
+                onNavigateToAgent: () => {
+                  state.agentsSelectedId = resolvedAgentId;
+                  state.setTab("agents" as import("./navigation.ts").Tab);
+                },
+                onSessionSelect: (key: string) => {
+                  state.setSessionKey(key);
+                  state.chatMessages = [];
+                  void loadChatHistory(state);
+                  void state.loadAssistantIdentity();
+                },
                 showNewMessages: state.chatNewMessagesBelow && !state.chatManualRefreshInFlight,
                 onScrollToBottom: () => state.scrollToBottom(),
                 // Sidebar props for tool output viewing
@@ -1012,6 +1051,7 @@ export function renderApp(state: AppViewState) {
                 searchQuery: state.configSearchQuery,
                 activeSection: state.configActiveSection,
                 activeSubsection: state.configActiveSubsection,
+                streamMode: state.streamMode,
                 onRawChange: (next) => {
                   state.configRaw = next;
                 },

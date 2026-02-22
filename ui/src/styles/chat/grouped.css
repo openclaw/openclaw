@@ -293,3 +293,59 @@ img.chat-avatar {
     transform: translateY(0);
   }
 }
+
+/* Delete button (appears on hover in group footer) */
+
+.chat-group-delete {
+  all: unset;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 120ms ease-out,
+    color 120ms ease-out,
+    background 120ms ease-out;
+  margin-left: auto;
+}
+
+.chat-group-delete svg {
+  width: 12px;
+  height: 12px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 2px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chat-group:hover .chat-group-delete {
+  opacity: 0.5;
+  pointer-events: auto;
+}
+
+.chat-group-delete:hover {
+  opacity: 1 !important;
+  color: var(--danger);
+  background: var(--danger-subtle);
+}
+
+.chat-group-delete:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+@media (hover: none) {
+  .chat-group-delete {
+    opacity: 0.5;
+    pointer-events: auto;
+  }
+}

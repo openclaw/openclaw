@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
+import { DeletedMessages } from "../chat/deleted-messages.ts";
 import {
   renderMessageGroup,
   renderReadingIndicatorGroup,
@@ -74,6 +75,15 @@ export type ChatProps = {
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onNewSession: () => void;
+  onClearHistory: () => void;
+  agentsList: {
+    agents: Array<{ id: string; name?: string; identity?: { name?: string; avatarUrl?: string } }>;
+    defaultId?: string;
+  } | null;
+  currentAgentId: string;
+  onAgentChange: (agentId: string) => void;
+  onNavigateToAgent?: () => void;
+  onSessionSelect?: (sessionKey: string) => void;
   onOpenSidebar?: (content: string) => void;
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
@@ -86,6 +96,7 @@ const FALLBACK_TOAST_DURATION_MS = 8000;
 // Persistent instances keyed by session
 const inputHistories = new Map<string, InputHistory>();
 const pinnedMessagesMap = new Map<string, PinnedMessages>();
+const deletedMessagesMap = new Map<string, DeletedMessages>();
 
 function getInputHistory(sessionKey: string): InputHistory {
   let h = inputHistories.get(sessionKey);
@@ -103,6 +114,15 @@ function getPinnedMessages(sessionKey: string): PinnedMessages {
     pinnedMessagesMap.set(sessionKey, p);
   }
   return p;
+}
+
+function getDeletedMessages(sessionKey: string): DeletedMessages {
+  let d = deletedMessagesMap.get(sessionKey);
+  if (!d) {
+    d = new DeletedMessages(sessionKey);
+    deletedMessagesMap.set(sessionKey, d);
+  }
+  return d;
 }
 
 // Module-level ephemeral UI state (reset on navigation away)
@@ -551,6 +571,7 @@ export function renderChat(props: ChatProps) {
     avatar: props.assistantAvatar ?? props.assistantAvatarUrl ?? null,
   };
   const pinned = getPinnedMessages(props.sessionKey);
+  const deleted = getDeletedMessages(props.sessionKey);
   const inputHistory = getInputHistory(props.sessionKey);
   const hasAttachments = (props.attachments?.length ?? 0) > 0;
   const tokens = tokenEstimate(props.draft);
@@ -625,11 +646,18 @@ export function renderChat(props: ChatProps) {
             );
           }
           if (item.kind === "group") {
+            if (deleted.has(item.key)) {
+              return nothing;
+            }
             return renderMessageGroup(item, {
               onOpenSidebar: props.onOpenSidebar,
               showReasoning,
               assistantName: props.assistantName,
               assistantAvatar: assistantIdentity.avatar,
+              onDelete: () => {
+                deleted.delete(item.key);
+                requestUpdate();
+              },
             });
           }
           return nothing;
@@ -749,6 +777,8 @@ export function renderChat(props: ChatProps) {
       ${renderSearchBar(requestUpdate)}
       ${renderPinnedSection(props, pinned, requestUpdate)}
 
+      ${renderAgentBar(props)}
+
       <div class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}">
         <div
           class="chat-main"
@@ -844,53 +874,55 @@ export function renderChat(props: ChatProps) {
           @change=${(e: Event) => handleFileSelect(e, props)}
         />
 
-        <div class="agent-chat__input-row">
-          <button
-            class="agent-chat__input-btn"
-            @click=${() => {
-              document.querySelector<HTMLInputElement>(".agent-chat__file-input")?.click();
-            }}
-            title="Attach file"
-            ?disabled=${!props.connected}
-          >
-            ${icons.paperclip}
-          </button>
+        <textarea
+          ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
+          .value=${props.draft}
+          dir=${detectTextDirection(props.draft)}
+          ?disabled=${!props.connected}
+          @keydown=${handleKeyDown}
+          @input=${handleInput}
+          @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
+          placeholder=${placeholder}
+          rows="1"
+        ></textarea>
 
-          ${
-            hasVoice
-              ? html`
-                <button
-                  class="agent-chat__input-btn ${voiceActive ? "agent-chat__input-btn--active" : ""}"
-                  @click=${() => {
-                    if (voiceActive) {
-                      stopVoice(requestUpdate);
-                    } else {
-                      startVoice(props, requestUpdate);
-                    }
-                  }}
-                  title="Voice input"
-                >
-                  ${voiceActive ? icons.micOff : icons.mic}
-                </button>
-              `
-              : nothing
-          }
+        <div class="agent-chat__toolbar">
+          <div class="agent-chat__toolbar-left">
+            <button
+              class="agent-chat__input-btn"
+              @click=${() => {
+                document.querySelector<HTMLInputElement>(".agent-chat__file-input")?.click();
+              }}
+              title="Attach file"
+              ?disabled=${!props.connected}
+            >
+              ${icons.paperclip}
+            </button>
 
-          <textarea
-            ${ref((el) => el && adjustTextareaHeight(el as HTMLTextAreaElement))}
-            .value=${props.draft}
-            dir=${detectTextDirection(props.draft)}
-            ?disabled=${!props.connected}
-            @keydown=${handleKeyDown}
-            @input=${handleInput}
-            @paste=${(e: ClipboardEvent) => handlePaste(e, props)}
-            placeholder=${placeholder}
-            rows="1"
-          ></textarea>
+            ${
+              hasVoice
+                ? html`
+                  <button
+                    class="agent-chat__input-btn ${voiceActive ? "agent-chat__input-btn--active" : ""}"
+                    @click=${() => {
+                      if (voiceActive) {
+                        stopVoice(requestUpdate);
+                      } else {
+                        startVoice(props, requestUpdate);
+                      }
+                    }}
+                    title="Voice input"
+                  >
+                    ${voiceActive ? icons.micOff : icons.mic}
+                  </button>
+                `
+                : nothing
+            }
 
-          ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
+            ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
+          </div>
 
-          <div class="agent-chat__input-actions">
+          <div class="agent-chat__toolbar-right">
             <button class="btn-ghost" @click=${() => {
               searchOpen = !searchOpen;
               if (!searchOpen) {
@@ -913,37 +945,117 @@ export function renderChat(props: ChatProps) {
                   <button class="btn-ghost" @click=${props.onNewSession} title="New chat" ?disabled=${!props.connected || props.sending}>
                     ${icons.plus}
                   </button>
+                  <button class="btn-ghost btn-ghost--danger" @click=${props.onClearHistory} title="Clear history" ?disabled=${!props.connected || props.sending}>
+                    ${icons.trash}
+                  </button>
                 `
                 : nothing
             }
-          </div>
 
-          ${
-            canAbort && isBusy
-              ? html`
-                <button class="chat-send-btn chat-send-btn--stop" @click=${props.onAbort} title="Stop">
-                  ${icons.stop}
-                </button>
-              `
-              : html`
-                <button
-                  class="chat-send-btn"
-                  @click=${() => {
-                    if (props.draft.trim()) {
-                      inputHistory.push(props.draft);
-                    }
-                    props.onSend();
-                  }}
-                  ?disabled=${!props.connected || props.sending}
-                  title=${isBusy ? "Queue" : "Send"}
-                >
-                  ${icons.send}
-                </button>
-              `
-          }
+            ${
+              canAbort && isBusy
+                ? html`
+                  <button class="chat-send-btn chat-send-btn--stop" @click=${props.onAbort} title="Stop">
+                    ${icons.stop}
+                  </button>
+                `
+                : html`
+                  <button
+                    class="chat-send-btn"
+                    @click=${() => {
+                      if (props.draft.trim()) {
+                        inputHistory.push(props.draft);
+                      }
+                      props.onSend();
+                    }}
+                    ?disabled=${!props.connected || props.sending}
+                    title=${isBusy ? "Queue" : "Send"}
+                  >
+                    ${icons.send}
+                  </button>
+                `
+            }
+          </div>
         </div>
       </div>
     </section>
+  `;
+}
+
+function renderAgentBar(props: ChatProps) {
+  const agents = props.agentsList?.agents ?? [];
+  if (agents.length <= 1 && !props.sessions?.sessions?.length) {
+    return nothing;
+  }
+
+  // Filter sessions for current agent
+  const agentSessions = (props.sessions?.sessions ?? []).filter((s) => {
+    const key = s.key ?? "";
+    return (
+      key.includes(`:${props.currentAgentId}:`) || key.startsWith(`agent:${props.currentAgentId}:`)
+    );
+  });
+
+  return html`
+    <div class="chat-agent-bar">
+      <div class="chat-agent-bar__left">
+        ${
+          agents.length > 1
+            ? html`
+            <select
+              class="chat-agent-select"
+              .value=${props.currentAgentId}
+              @change=${(e: Event) => props.onAgentChange((e.target as HTMLSelectElement).value)}
+            >
+              ${agents.map(
+                (a) => html`
+                <option value=${a.id} ?selected=${a.id === props.currentAgentId}>
+                  ${a.identity?.name || a.name || a.id}
+                </option>
+              `,
+              )}
+            </select>
+          `
+            : html`<span class="chat-agent-bar__name">${agents[0]?.identity?.name || agents[0]?.name || props.currentAgentId}</span>`
+        }
+        ${
+          agentSessions.length > 0
+            ? html`
+            <details class="chat-sessions-panel">
+              <summary class="chat-sessions-summary">
+                ${icons.fileText}
+                <span>Sessions (${agentSessions.length})</span>
+              </summary>
+              <div class="chat-sessions-list">
+                ${agentSessions.map(
+                  (s) => html`
+                  <button
+                    class="chat-session-item ${s.key === props.sessionKey ? "chat-session-item--active" : ""}"
+                    @click=${() => props.onSessionSelect?.(s.key)}
+                  >
+                    <span class="chat-session-item__name">${s.displayName || s.label || s.key}</span>
+                    <span class="chat-session-item__meta muted">${s.model ?? ""}</span>
+                  </button>
+                `,
+                )}
+              </div>
+            </details>
+          `
+            : nothing
+        }
+      </div>
+      <div class="chat-agent-bar__right">
+        ${
+          props.onNavigateToAgent
+            ? html`
+            <button class="btn-ghost btn-ghost--sm" @click=${() => props.onNavigateToAgent?.()} title="Agent settings">
+              ${icons.settings}
+            </button>
+          `
+            : nothing
+        }
+      </div>
+    </div>
   `;
 }
 

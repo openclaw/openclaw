@@ -1045,3 +1045,182 @@
 .agent-chat__file-input {
   display: none;
 }
+
+/* ─── Danger ghost button ─── */
+
+.btn-ghost--danger:hover {
+  color: var(--danger) !important;
+}
+
+.btn-ghost--sm {
+  padding: 4px;
+}
+
+.btn-ghost--sm svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* ─── Agent Bar ─── */
+
+.chat-agent-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 16px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+.chat-agent-bar__left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.chat-agent-bar__right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.chat-agent-bar__name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.chat-agent-select {
+  background: color-mix(in srgb, var(--secondary) 70%, transparent);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 4px 24px 4px 8px;
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%237d8590' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+  transition: border-color 150ms ease, background 150ms ease;
+}
+
+.chat-agent-select:hover {
+  border-color: var(--border-strong);
+  background: color-mix(in srgb, var(--secondary) 90%, transparent);
+}
+
+.chat-agent-select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-subtle);
+}
+
+/* ─── Sessions Panel ─── */
+
+.chat-sessions-panel {
+  position: relative;
+}
+
+.chat-sessions-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px;
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  cursor: pointer;
+  user-select: none;
+  list-style: none;
+  transition: color 150ms ease, background 150ms ease;
+}
+
+.chat-sessions-summary::-webkit-details-marker {
+  display: none;
+}
+
+.chat-sessions-summary::before {
+  content: "▸";
+  font-size: 9px;
+  transition: transform 150ms ease;
+}
+
+.chat-sessions-panel[open] > .chat-sessions-summary::before {
+  transform: rotate(90deg);
+}
+
+.chat-sessions-summary:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg-hover) 60%, transparent);
+}
+
+.chat-sessions-summary svg {
+  width: 13px;
+  height: 13px;
+}
+
+.chat-sessions-list {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 50;
+  min-width: 240px;
+  max-width: 360px;
+  max-height: 280px;
+  overflow-y: auto;
+  margin-top: 4px;
+  padding: 4px;
+  background: var(--popover);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.chat-session-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  transition: background 120ms ease;
+}
+
+.chat-session-item:hover {
+  background: var(--bg-hover);
+}
+
+.chat-session-item--active {
+  background: var(--accent-subtle);
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.chat-session-item__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.chat-session-item__meta {
+  font-size: 11px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
