@@ -527,6 +527,25 @@ function nextChatSeq(context: { agentRunSeq: Map<string, number> }, runId: strin
   return next;
 }
 
+function stripMessageDirectiveTags(
+  message: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!message) {
+    return message;
+  }
+  const content = message.content;
+  if (!Array.isArray(content)) {
+    return message;
+  }
+  const cleaned = content.map((part: Record<string, unknown>) => {
+    if (part.type === "text" && typeof part.text === "string") {
+      return { ...part, text: stripInlineDirectiveTagsForDisplay(part.text).text };
+    }
+    return part;
+  });
+  return { ...message, content: cleaned };
+}
+
 function broadcastChatFinal(params: {
   context: Pick<GatewayRequestContext, "broadcast" | "nodeSendToSession" | "agentRunSeq">;
   runId: string;
@@ -539,7 +558,7 @@ function broadcastChatFinal(params: {
     sessionKey: params.sessionKey,
     seq,
     state: "final" as const,
-    message: params.message,
+    message: stripMessageDirectiveTags(params.message),
   };
   params.context.broadcast("chat", payload);
   params.context.nodeSendToSession(params.sessionKey, "chat", payload);
@@ -1070,7 +1089,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey: rawSessionKey,
       seq: 0,
       state: "final" as const,
-      message: appended.message,
+      message: stripMessageDirectiveTags(appended.message),
     };
     context.broadcast("chat", chatPayload);
     context.nodeSendToSession(rawSessionKey, "chat", chatPayload);
