@@ -70,6 +70,7 @@ export async function handleSystemRunInvoke(opts: {
       success?: boolean;
     };
   }) => Promise<void>;
+  preferMacAppExecHost: boolean;
 }): Promise<void> {
   const command = resolveSystemRunCommand({
     command: opts.params.command,
@@ -166,7 +167,7 @@ export async function handleSystemRunInvoke(opts: {
     ? opts.isCmdExeInvocation(segments[0]?.argv ?? [])
     : opts.isCmdExeInvocation(argv);
 
-  const useMacAppExec = process.platform === "darwin";
+  const useMacAppExec = opts.preferMacAppExecHost;
   if (useMacAppExec) {
     const execRequest: ExecHostRequest = {
       command: argv,
