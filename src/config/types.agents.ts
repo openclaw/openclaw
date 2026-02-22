@@ -7,6 +7,7 @@ import type {
   SandboxDockerSettings,
   SandboxPruneSettings,
 } from "./types.sandbox.js";
+import type { TtsConfig } from "./types.tts.js";
 import type { AgentToolsConfig, MemorySearchConfig } from "./types.tools.js";
 
 export type AgentModelConfig =
@@ -32,6 +33,8 @@ export type AgentConfig = {
   humanDelay?: HumanDelayConfig;
   /** Optional per-agent heartbeat overrides. */
   heartbeat?: AgentDefaultsConfig["heartbeat"];
+  /** Per-agent TTS overrides (voice, provider, etc.). Deep-merges over messages.tts. Issue #23405. */
+  tts?: TtsConfig;
   identity?: IdentityConfig;
   groupChat?: GroupChatConfig;
   subagents?: {

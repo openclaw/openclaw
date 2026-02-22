@@ -19,6 +19,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Avatar image path (relative to the agent workspace only) or a remote URL/data URL.",
   "agents.defaults.heartbeat.suppressToolErrorWarnings":
     "Suppress tool error warning payloads during heartbeat runs.",
+  "agents.list[].tts":
+    "Per-agent TTS overrides (voice, provider, etc.). Deep-merges over messages.tts. Issue #23405.",
   "agents.list[].heartbeat.suppressToolErrorWarnings":
     "Suppress tool error warning payloads during heartbeat runs.",
   "discovery.mdns.mode":

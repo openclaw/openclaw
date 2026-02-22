@@ -17,6 +17,8 @@ const TtsToolSchema = Type.Object({
 export function createTtsTool(opts?: {
   config?: OpenClawConfig;
   agentChannel?: GatewayMessageChannel;
+  /** Session key to derive agentId for per-agent TTS (e.g. main:telegram:123 → main). */
+  agentSessionKey?: string;
 }): AnyAgentTool {
   return {
     label: "TTS",
@@ -28,9 +30,11 @@ export function createTtsTool(opts?: {
       const text = readStringParam(params, "text", { required: true });
       const channel = readStringParam(params, "channel");
       const cfg = opts?.config ?? loadConfig();
+      const agentId = opts?.agentSessionKey?.split(":")[0]?.trim() || undefined;
       const result = await textToSpeech({
         text,
         cfg,
+        agentId,
         channel: channel ?? opts?.agentChannel,
       });
 

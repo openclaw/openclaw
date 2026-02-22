@@ -16,7 +16,7 @@ import {
   type AudioPlayer,
   type VoiceConnection,
 } from "@discordjs/voice";
-import { resolveAgentDir } from "../../agents/agent-scope.js";
+import { resolveAgentConfig, resolveAgentDir } from "../../agents/agent-scope.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { agentCommand } from "../../commands/agent.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -102,15 +102,18 @@ function mergeTtsConfig(base: TtsConfig, override?: TtsConfig): TtsConfig {
   };
 }
 
-function resolveVoiceTtsConfig(params: { cfg: OpenClawConfig; override?: TtsConfig }): {
+function resolveVoiceTtsConfig(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  override?: TtsConfig;
+}): {
   cfg: OpenClawConfig;
   resolved: ResolvedTtsConfig;
 } {
-  if (!params.override) {
-    return { cfg: params.cfg, resolved: resolveTtsConfig(params.cfg) };
-  }
   const base = params.cfg.messages?.tts ?? {};
-  const merged = mergeTtsConfig(base, params.override);
+  const agentTts = params.agentId ? resolveAgentConfig(params.cfg, params.agentId)?.tts : undefined;
+  const afterAgent = mergeTtsConfig(base, agentTts);
+  const merged = mergeTtsConfig(afterAgent, params.override);
   const messages = params.cfg.messages ?? {};
   const cfg = {
     ...params.cfg,
@@ -604,6 +607,7 @@ export class DiscordVoiceManager {
 
     const { cfg: ttsCfg, resolved: ttsConfig } = resolveVoiceTtsConfig({
       cfg: this.params.cfg,
+      agentId: entry.route.agentId,
       override: this.params.discordConfig.voice?.tts,
     });
     const directive = parseTtsDirectives(replyText, ttsConfig.modelOverrides);

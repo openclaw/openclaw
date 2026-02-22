@@ -5,6 +5,7 @@ import {
   GroupChatSchema,
   HumanDelaySchema,
   IdentitySchema,
+  TtsConfigSchema,
   ToolsLinksSchema,
   ToolsMediaSchema,
 } from "./zod-schema.core.js";
@@ -604,6 +605,7 @@ export const AgentEntrySchema = z
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),
     heartbeat: HeartbeatSchema,
+    tts: TtsConfigSchema.optional(),
     identity: IdentitySchema,
     groupChat: GroupChatSchema,
     subagents: z

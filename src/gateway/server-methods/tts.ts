@@ -19,10 +19,11 @@ import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export const ttsHandlers: GatewayRequestHandlers = {
-  "tts.status": async ({ respond }) => {
+  "tts.status": async ({ params, respond }) => {
     try {
       const cfg = loadConfig();
-      const config = resolveTtsConfig(cfg);
+      const agentId = typeof params?.agentId === "string" ? params.agentId.trim() : undefined;
+      const config = resolveTtsConfig(cfg, agentId);
       const prefsPath = resolveTtsPrefsPath(config);
       const provider = getTtsProvider(config, prefsPath);
       const autoMode = resolveTtsAutoMode({ config, prefsPath });
@@ -79,7 +80,8 @@ export const ttsHandlers: GatewayRequestHandlers = {
     try {
       const cfg = loadConfig();
       const channel = typeof params.channel === "string" ? params.channel.trim() : undefined;
-      const result = await textToSpeech({ text, cfg, channel });
+      const agentId = typeof params.agentId === "string" ? params.agentId.trim() : undefined;
+      const result = await textToSpeech({ text, cfg, agentId, channel });
       if (result.success && result.audioPath) {
         respond(true, {
           audioPath: result.audioPath,

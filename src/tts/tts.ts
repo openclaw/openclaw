@@ -13,6 +13,7 @@ import path from "node:path";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
+import { resolveAgentConfig } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type {
   TtsConfig,
@@ -252,8 +253,34 @@ function resolveModelOverridePolicy(
   };
 }
 
-export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
-  const raw: TtsConfig = cfg.messages?.tts ?? {};
+function mergeTtsConfigOverrides(base: TtsConfig, override?: TtsConfig): TtsConfig {
+  if (!override) {
+    return base;
+  }
+  return {
+    ...base,
+    ...override,
+    modelOverrides: {
+      ...base.modelOverrides,
+      ...override.modelOverrides,
+    },
+    elevenlabs: {
+      ...base.elevenlabs,
+      ...override.elevenlabs,
+      voiceSettings: {
+        ...base.elevenlabs?.voiceSettings,
+        ...override.elevenlabs?.voiceSettings,
+      },
+    },
+    openai: { ...base.openai, ...override.openai },
+    edge: { ...base.edge, ...override.edge },
+  };
+}
+
+export function resolveTtsConfig(cfg: OpenClawConfig, agentId?: string): ResolvedTtsConfig {
+  const base: TtsConfig = cfg.messages?.tts ?? {};
+  const agentOverride = agentId ? resolveAgentConfig(cfg, agentId)?.tts : undefined;
+  const raw: TtsConfig = mergeTtsConfigOverrides(base, agentOverride);
   const providerSource = raw.provider ? "config" : "default";
   const edgeOutputFormat = raw.edge?.outputFormat?.trim();
   const auto = normalizeTtsAutoMode(raw.auto) ?? (raw.enabled ? "always" : "off");
@@ -532,11 +559,12 @@ function formatTtsProviderError(provider: TtsProvider, err: unknown): string {
 export async function textToSpeech(params: {
   text: string;
   cfg: OpenClawConfig;
+  agentId?: string;
   prefsPath?: string;
   channel?: string;
   overrides?: TtsDirectiveOverrides;
 }): Promise<TtsResult> {
-  const config = resolveTtsConfig(params.cfg);
+  const config = resolveTtsConfig(params.cfg, params.agentId);
   const prefsPath = params.prefsPath ?? resolveTtsPrefsPath(config);
   const channelId = resolveChannelId(params.channel);
   const output = resolveOutputFormat(channelId);
