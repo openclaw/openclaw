@@ -1,9 +1,12 @@
 import type { SlackActionMiddlewareArgs, SlackCommandMiddlewareArgs } from "@slack/bolt";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
+import { resolveConfiguredModelRef } from "../../agents/model-selection.js";
 import type { ChatCommandDefinition, CommandArgs } from "../../auto-reply/commands-registry.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { formatAllowlistMatchMeta } from "../../channels/allowlist-match.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import { resolveNativeCommandsEnabled, resolveNativeSkillsEnabled } from "../../config/commands.js";
+import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { danger, logVerbose } from "../../globals.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import {
@@ -41,6 +44,32 @@ const SLACK_COMMAND_ARG_OVERFLOW_MAX = 5;
 const SLACK_COMMAND_ARG_SELECT_OPTIONS_MAX = 100;
 const SLACK_COMMAND_ARG_SELECT_OPTION_VALUE_MAX = 75;
 const SLACK_HEADER_TEXT_MAX = 150;
+
+function resolveMenuModelContext(params: {
+  cfg: SlackMonitorContext["cfg"];
+  agentId: string;
+  sessionKey: string;
+}): { provider: string; model: string } {
+  const resolved = resolveConfiguredModelRef({
+    cfg: params.cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+  let provider = resolved.provider ?? DEFAULT_PROVIDER;
+  let model = resolved.model ?? DEFAULT_MODEL;
+  try {
+    const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
+    const store = loadSessionStore(storePath);
+    const entry = store[params.sessionKey];
+    if (entry) {
+      provider = entry.providerOverride?.trim() || entry.modelProvider?.trim() || provider;
+      model = entry.modelOverride?.trim() || entry.model?.trim() || model;
+    }
+  } catch {
+    // Ignore session store read errors and fall back to defaults.
+  }
+  return { provider, model };
+}
 
 type EncodedMenuChoice = SlackExternalArgMenuChoice;
 const slackExternalArgMenuStore = createSlackExternalArgMenuStore();
@@ -487,10 +516,28 @@ export async function registerSlackMonitorSlashCommands(params: {
 
       if (commandDefinition && supportsInteractiveArgMenus) {
         const reg = await getCommandsRegistry();
+        const { resolveAgentRoute } = await import("../../routing/resolve-route.js");
+        const route = resolveAgentRoute({
+          cfg,
+          channel: "slack",
+          accountId: account.accountId,
+          teamId: ctx.teamId || undefined,
+          peer: {
+            kind: isDirectMessage ? "direct" : isRoom ? "channel" : "group",
+            id: isDirectMessage ? command.user_id : command.channel_id,
+          },
+        });
+        const menuModelContext = resolveMenuModelContext({
+          cfg,
+          agentId: route.agentId,
+          sessionKey: route.sessionKey,
+        });
         const menu = reg.resolveCommandArgMenu({
           command: commandDefinition,
           args: commandArgs,
           cfg,
+          provider: menuModelContext.provider,
+          model: menuModelContext.model,
         });
         if (menu) {
           const commandLabel = commandDefinition.nativeName ?? commandDefinition.key;

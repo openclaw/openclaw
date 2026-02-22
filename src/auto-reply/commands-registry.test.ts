@@ -314,6 +314,42 @@ describe("commands registry args", () => {
     expect(seenChoice?.model).toBeTruthy();
   });
 
+  it("resolves function-based choices with explicit provider/model context", () => {
+    let seen: { provider?: string; model?: string } | null = null;
+
+    const command: ChatCommandDefinition = {
+      key: "think",
+      description: "think",
+      textAliases: [],
+      scope: "both",
+      argsMenu: "auto",
+      argsParsing: "positional",
+      args: [
+        {
+          name: "level",
+          description: "level",
+          type: "string",
+          choices: ({ provider, model }) => {
+            seen = { provider, model };
+            return ["low", "high"];
+          },
+        },
+      ],
+    };
+
+    const menu = resolveCommandArgMenu({
+      command,
+      args: undefined,
+      cfg: {} as never,
+      provider: "github-copilot",
+      model: "gpt-5.2-codex",
+    });
+    expect(menu?.choices.length).toBeGreaterThan(0);
+    const seenChoice = seen as { provider?: string; model?: string } | null;
+    expect(seenChoice?.provider).toBe("github-copilot");
+    expect(seenChoice?.model).toBe("gpt-5.2-codex");
+  });
+
   it("does not show menus when args were provided as raw text only", () => {
     const command = createUsageModeCommand("none", "on or off");
 

@@ -1,4 +1,6 @@
 import type { Bot, Context } from "grammy";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { resolveConfiguredModelRef } from "../agents/model-selection.js";
 import { resolveChunkMode } from "../auto-reply/chunk.js";
 import type { CommandArgs } from "../auto-reply/commands-registry.js";
 import {
@@ -17,7 +19,11 @@ import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ChannelGroupPolicy } from "../config/group-policy.js";
 import { resolveMarkdownTableMode } from "../config/markdown-tables.js";
-import { recordSessionMetaFromInbound, resolveStorePath } from "../config/sessions.js";
+import {
+  loadSessionStore,
+  recordSessionMetaFromInbound,
+  resolveStorePath,
+} from "../config/sessions.js";
 import {
   normalizeTelegramCommandName,
   resolveTelegramCustomCommands,
@@ -68,6 +74,32 @@ import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import { buildInlineKeyboard } from "./send.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
+
+function resolveMenuModelContext(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey: string;
+}): { provider: string; model: string } {
+  const resolved = resolveConfiguredModelRef({
+    cfg: params.cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+    defaultModel: DEFAULT_MODEL,
+  });
+  let provider = resolved.provider ?? DEFAULT_PROVIDER;
+  let model = resolved.model ?? DEFAULT_MODEL;
+  try {
+    const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
+    const store = loadSessionStore(storePath);
+    const entry = store[params.sessionKey];
+    if (entry) {
+      provider = entry.providerOverride?.trim() || entry.modelProvider?.trim() || provider;
+      model = entry.modelOverride?.trim() || entry.model?.trim() || model;
+    }
+  } catch {
+    // Ignore session store read errors and fall back to defaults.
+  }
+  return { provider, model };
+}
 
 type TelegramNativeCommandContext = Context & { match?: string };
 
@@ -504,11 +536,29 @@ export const registerTelegramNativeCommands = ({
             : rawText
               ? `/${command.name} ${rawText}`
               : `/${command.name}`;
+          const baseSessionKey = route.sessionKey;
+          // DMs: use raw messageThreadId for thread sessions (not resolvedThreadId which is for forums)
+          const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
+          const threadKeys =
+            dmThreadId != null
+              ? resolveThreadSessionKeys({
+                  baseSessionKey,
+                  threadId: String(dmThreadId),
+                })
+              : null;
+          const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
+          const menuModelContext = resolveMenuModelContext({
+            cfg,
+            agentId: route.agentId,
+            sessionKey,
+          });
           const menu = commandDefinition
             ? resolveCommandArgMenu({
                 command: commandDefinition,
                 args: commandArgs,
                 cfg,
+                provider: menuModelContext.provider,
+                model: menuModelContext.model,
               })
             : null;
           if (menu && commandDefinition) {
@@ -542,17 +592,6 @@ export const registerTelegramNativeCommands = ({
             });
             return;
           }
-          const baseSessionKey = route.sessionKey;
-          // DMs: use raw messageThreadId for thread sessions (not resolvedThreadId which is for forums)
-          const dmThreadId = threadSpec.scope === "dm" ? threadSpec.id : undefined;
-          const threadKeys =
-            dmThreadId != null
-              ? resolveThreadSessionKeys({
-                  baseSessionKey,
-                  threadId: String(dmThreadId),
-                })
-              : null;
-          const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
           const { skillFilter, groupSystemPrompt } = resolveTelegramGroupPromptSettings({
             groupConfig,
             topicConfig,
