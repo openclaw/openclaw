@@ -143,6 +143,23 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.providerOverride).toBe("anthropic");
     });
 
+    // Regression test for #23470: isolated cron sessions must never reuse session IDs
+    it("creates a distinct sessionId on every call when forceNew is true (isolated job simulation)", () => {
+      const entry = {
+        sessionId: "session-from-previous-run",
+        updatedAt: NOW_MS - 1000,
+        systemSent: true,
+      };
+      const first = resolveWithStoredEntry({ entry, fresh: true, forceNew: true });
+      const second = resolveWithStoredEntry({ entry, fresh: true, forceNew: true });
+
+      expect(first.sessionEntry.sessionId).not.toBe("session-from-previous-run");
+      expect(second.sessionEntry.sessionId).not.toBe("session-from-previous-run");
+      expect(first.sessionEntry.sessionId).not.toBe(second.sessionEntry.sessionId);
+      expect(first.isNewSession).toBe(true);
+      expect(second.isNewSession).toBe(true);
+    });
+
     it("creates new sessionId when entry exists but has no sessionId", () => {
       const result = resolveWithStoredEntry({
         entry: {
