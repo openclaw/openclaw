@@ -7,6 +7,7 @@ import { isNotFoundPathError, isPathInside } from "../infra/path-guards.js";
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const HTTP_URL_RE = /^https?:\/\//i;
 const DATA_URL_RE = /^data:/i;
+const SANDBOX_CONTAINER_WORKDIR = "/workspace";
 
 function normalizeUnicodeSpaces(str: string): string {
   return str.replace(UNICODE_SPACES, " ");
@@ -90,6 +91,13 @@ export async function resolveSandboxedMediaSource(params: {
       throw new Error(`Invalid file:// URL for sandboxed media: ${raw}`);
     }
   }
+  const containerWorkspaceMapped = mapContainerWorkspacePath({
+    candidate,
+    sandboxRoot: params.sandboxRoot,
+  });
+  if (containerWorkspaceMapped) {
+    candidate = containerWorkspaceMapped;
+  }
   const tmpMediaPath = await resolveAllowedTmpMediaPath({
     candidate,
     sandboxRoot: params.sandboxRoot,
@@ -103,6 +111,25 @@ export async function resolveSandboxedMediaSource(params: {
     root: params.sandboxRoot,
   });
   return sandboxResult.resolved;
+}
+
+function mapContainerWorkspacePath(params: {
+  candidate: string;
+  sandboxRoot: string;
+}): string | undefined {
+  const normalized = params.candidate.replace(/\\/g, "/");
+  if (normalized === SANDBOX_CONTAINER_WORKDIR) {
+    return path.resolve(params.sandboxRoot);
+  }
+  const prefix = `${SANDBOX_CONTAINER_WORKDIR}/`;
+  if (!normalized.startsWith(prefix)) {
+    return undefined;
+  }
+  const rel = normalized.slice(prefix.length);
+  if (!rel) {
+    return path.resolve(params.sandboxRoot);
+  }
+  return path.resolve(params.sandboxRoot, ...rel.split("/").filter(Boolean));
 }
 
 async function resolveAllowedTmpMediaPath(params: {
