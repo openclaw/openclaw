@@ -116,8 +116,8 @@ async function handleFileConsentInvoke(
 
 /**
  * Handle adaptive card action invokes (user clicked a button on an adaptive card).
- * Stores the action data in a global queue so the copilot-studio plugin can
- * continue the conversation with the same Copilot Studio conversationId.
+ * Stores the action data in a global queue so any plugin (e.g. copilot-studio)
+ * can pick it up and continue the conversation.
  */
 function handleAdaptiveCardInvoke(
   context: MSTeamsTurnContext,
@@ -137,8 +137,8 @@ function handleAdaptiveCardInvoke(
     from: activity.from?.id,
   });
 
-  // Store invoke data in global queue for copilot-studio plugin to pick up.
-  const INVOKES_KEY = "__openclaw_copilot_pending_invokes";
+  // Store invoke data in a global queue so any interested plugin can drain it.
+  const INVOKES_KEY = "__openclaw_pending_card_invokes";
   const g = globalThis as unknown as Record<
     string,
     Array<{ actionData: unknown; timestamp: number }> | undefined
@@ -222,17 +222,16 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
       const activity = ctx.activity;
 
       // Detect Action.Submit from adaptive cards: empty text + activity.value present.
-      // Copilot Studio consent cards use Action.Submit which sends a regular message
-      // with no text but data in activity.value (unlike Action.Execute which sends
-      // an invoke activity).
+      // Some cards use Action.Submit which sends a regular message with no text but
+      // data in activity.value (unlike Action.Execute which sends an invoke activity).
       if (!activity.text?.trim() && activity.value != null && typeof activity.value === "object") {
         deps.log.info("adaptive card Action.Submit received", {
           from: activity.from?.id,
           valueKeys: Object.keys(activity.value as Record<string, unknown>),
         });
 
-        // Store invoke data in global queue for copilot-studio plugin to pick up.
-        const INVOKES_KEY = "__openclaw_copilot_pending_invokes";
+        // Store invoke data in a global queue so any interested plugin can drain it.
+        const INVOKES_KEY = "__openclaw_pending_card_invokes";
         const g = globalThis as unknown as Record<
           string,
           Array<{ actionData: unknown; timestamp: number }> | undefined

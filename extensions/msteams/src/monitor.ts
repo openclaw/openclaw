@@ -280,17 +280,29 @@ export async function monitorMSTeamsProvider(
     fallback: "/api/messages",
   });
 
-  // Start listening and capture the HTTP server handle
-  const httpServer = expressApp.listen(port, () => {
-    log.info(`msteams provider started on port ${port}`);
-  });
-
-  httpServer.on("error", (err) => {
-    log.error("msteams server error", { error: String(err) });
-  });
+  // Start listening. The returned promise resolves only after the server
+  // is actually bound so the channel manager doesn't interpret a premature
+  // resolve as "provider exited" and trigger an auto-restart loop that
+  // causes EADDRINUSE (see openclaw#22169).
+  const httpServer = await new Promise<ReturnType<typeof expressApp.listen>>(
+    (resolveServer, rejectServer) => {
+      const server = expressApp.listen(port, () => {
+        log.info(`msteams provider started on port ${port}`);
+        resolveServer(server);
+      });
+      server.on("error", (err) => {
+        const code = (err as NodeJS.ErrnoException).code;
+        log.error(`msteams server error: ${err.message}${code ? ` [code=${code}]` : ""}`);
+        if (code === "EADDRINUSE" || code === "EACCES") {
+          rejectServer(err);
+        }
+      });
+    },
+  );
 
   const shutdown = async () => {
     log.info("shutting down msteams provider");
+    httpServer.closeAllConnections();
     return new Promise<void>((resolve) => {
       httpServer.close((err) => {
         if (err) {

@@ -24,8 +24,9 @@ import { getMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
 /**
- * Drain any pending adaptive cards from the copilot-studio plugin's global queue.
- * Both plugins run in the same Node.js process, sharing state via globalThis.
+ * Drain any pending adaptive cards from the global queue.
+ * Plugins share state via globalThis within the same Node.js process,
+ * allowing any plugin to enqueue cards for delivery through Teams.
  */
 type PendingCardEntry = {
   cards: Array<{ contentType: string; content: unknown; name?: string }>;
@@ -90,7 +91,7 @@ export function createMSTeamsReplyDispatcher(params: {
       humanDelay: core.channel.reply.resolveHumanDelayConfig(params.cfg, params.agentId),
       deliver: async (payload) => {
         // Send any pending adaptive cards as native Teams attachments.
-        // These come from the copilot-studio plugin (e.g. consent prompts).
+        // These are enqueued by plugins (e.g. consent prompts, interactive forms).
         const pendingCards = drainPendingAdaptiveCards();
         if (pendingCards.length > 0) {
           for (const entry of pendingCards) {
