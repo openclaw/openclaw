@@ -272,7 +272,9 @@ https://claw.leot.fun?token=<your-gateway-token>
       "models": {
         "openrouter/auto": { "alias": "OpenRouter Auto" },
         "openrouter/anthropic/claude-3.5-haiku": { "alias": "Claude 3.5 Haiku" },
+        "openrouter/anthropic/claude-haiku-4.5": { "alias": "Claude Haiku 4.5" },
         "openrouter/anthropic/claude-sonnet-4.5": { "alias": "Claude Sonnet 4.5" },
+        "openrouter/anthropic/claude-sonnet-4.6": { "alias": "Claude Sonnet 4.6" },
         "openrouter/anthropic/claude-opus-4.6": { "alias": "Claude Opus 4.6" },
         "openrouter/google/gemini-2.5-flash": { "alias": "Gemini 2.5 Flash" },
         "openrouter/google/gemini-3-flash-preview": { "alias": "Gemini 3 Flash" },
@@ -303,7 +305,9 @@ https://claw.leot.fun?token=<your-gateway-token>
 | `/model` 命令 | 模型 | 输入价格 | 输出价格 | 适合场景 |
 |---|---|---|---|---|
 | `/model claude-haiku` | Claude 3.5 Haiku | $0.80/M | $4.00/M | 快速编码、日常对话（默认） |
+| `/model claude-haiku-4.5` | Claude Haiku 4.5 | $1.00/M | $5.00/M | 性能接近 Sonnet 4，速度快 |
 | `/model claude-sonnet` | Claude Sonnet 4.5 | $3.00/M | $15.00/M | 编码、复杂推理 |
+| `/model claude-sonnet-4.6` | Claude Sonnet 4.6 | $3.00/M | $15.00/M | 接近 Opus 性能，性价比高 |
 | `/model claude-opus` | Claude Opus 4.6 | $5.00/M | $25.00/M | 最强，长难任务 |
 | `/model gemini-2.5` | Gemini 2.5 Flash | $0.30/M | $2.50/M | 通用，性价比好 |
 | `/model gemini-3` | Gemini 3 Flash | $0.50/M | $3.00/M | 最新推理模型，1M 上下文 |
