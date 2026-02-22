@@ -16,8 +16,8 @@ final class CoalescingFSEventsWatcher: @unchecked Sendable {
         queueLabel: String,
         coalesceDelay: TimeInterval = 0.12,
         shouldNotify: @escaping (Int, UnsafeMutableRawPointer?) -> Bool = { _, _ in true },
-        onChange: @escaping () -> Void
-    ) {
+        onChange: @escaping () -> Void)
+    {
         self.paths = paths
         self.queue = DispatchQueue(label: queueLabel)
         self.coalesceDelay = coalesceDelay
@@ -92,8 +92,8 @@ extension CoalescingFSEventsWatcher {
     private func handleEvents(
         numEvents: Int,
         eventPaths: UnsafeMutableRawPointer?,
-        eventFlags: UnsafePointer<FSEventStreamEventFlags>?
-    ) {
+        eventFlags: UnsafePointer<FSEventStreamEventFlags>?)
+    {
         guard numEvents > 0 else { return }
         guard eventFlags != nil else { return }
         guard self.shouldNotify(numEvents, eventPaths) else { return }
@@ -108,4 +108,3 @@ extension CoalescingFSEventsWatcher {
         }
     }
 }
-
