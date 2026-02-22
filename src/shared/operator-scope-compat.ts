@@ -22,6 +22,9 @@ function operatorScopeSatisfied(requestedScope: string, granted: Set<string>): b
       granted.has(OPERATOR_ADMIN_SCOPE)
     );
   }
+  if (requestedScope === OPERATOR_WRITE_SCOPE) {
+    return granted.has(OPERATOR_WRITE_SCOPE) || granted.has(OPERATOR_ADMIN_SCOPE);
+  }
   return granted.has(requestedScope);
 }
 
