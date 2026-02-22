@@ -27,6 +27,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Providers/OpenRouter: default reasoning to enabled when the selected model advertises `reasoning: true` and no session/directive override is set. (#22513) Thanks @zwffff.
 - Providers/OpenRouter: map `/think` levels to `reasoning.effort` in embedded runs while preserving explicit `reasoning.max_tokens` payloads. (#17236) Thanks @robbyczgw-cla.
 - Gateway/OpenRouter: preserve stored session provider when model IDs are vendor-prefixed (for example, `anthropic/...`) so follow-up turns do not incorrectly route to direct provider APIs. (#22753) Thanks @dndodson.
 - Providers/OpenRouter: preserve the required `openrouter/` prefix for OpenRouter-native model IDs during model-ref normalization. (#12942) Thanks @omair445.
