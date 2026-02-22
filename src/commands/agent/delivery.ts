@@ -10,6 +10,7 @@ import {
 } from "../../infra/outbound/agent-delivery.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { buildOutboundResultEnvelope } from "../../infra/outbound/envelope.js";
+import { resolveAgentOutboundIdentity } from "../../infra/outbound/identity.js";
 import {
   formatOutboundPayloadLog,
   type NormalizedOutboundPayload,
@@ -184,6 +185,9 @@ export async function deliverAgentCommandResult(params: {
         (opts.sessionKey
           ? resolveSessionAgentId({ sessionKey: opts.sessionKey, config: cfg })
           : undefined);
+      const identity = deliveryAgentId
+        ? resolveAgentOutboundIdentity(cfg, deliveryAgentId)
+        : undefined;
       await deliverOutboundPayloads({
         cfg,
         channel: deliveryChannel,
@@ -191,6 +195,7 @@ export async function deliverAgentCommandResult(params: {
         accountId: resolvedAccountId,
         payloads: deliveryPayloads,
         agentId: deliveryAgentId,
+        identity,
         replyToId: resolvedReplyToId ?? null,
         threadId: resolvedThreadTarget ?? null,
         bestEffort: bestEffortDeliver,
