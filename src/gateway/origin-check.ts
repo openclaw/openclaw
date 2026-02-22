@@ -1,4 +1,5 @@
 import { isLoopbackHost, normalizeHostHeader, resolveHostName } from "./net.js";
+import { GATEWAY_CLIENT_MODES, normalizeGatewayClientMode } from "./protocol/client-info.js";
 
 type OriginCheckResult = { ok: true } | { ok: false; reason: string };
 
@@ -49,4 +50,15 @@ export function checkBrowserOrigin(params: {
   }
 
   return { ok: false, reason: "origin not allowed" };
+}
+
+export function shouldCheckBrowserOrigin(params: {
+  requestOrigin?: string;
+  clientMode?: string;
+}): boolean {
+  if (typeof params.requestOrigin === "string") {
+    return true;
+  }
+  const mode = normalizeGatewayClientMode(params.clientMode);
+  return mode === GATEWAY_CLIENT_MODES.UI || mode === GATEWAY_CLIENT_MODES.WEBCHAT;
 }
