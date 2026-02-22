@@ -5,9 +5,14 @@ import { getCliSessionId } from "../../agents/cli-session.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
+  isAuthErrorMessage,
+  isBillingErrorMessage,
   isCompactionFailureError,
   isContextOverflowError,
   isLikelyContextOverflowError,
+  isOverloadedErrorMessage,
+  isRateLimitErrorMessage,
+  isTimeoutErrorMessage,
   isTransientHttpError,
   sanitizeUserFacingText,
 } from "../../agents/pi-embedded-helpers.js";
@@ -467,6 +472,12 @@ export async function runAgentTurnWithFallback(params: {
       const isRoleOrderingError = /incorrect role information|roles must alternate/i.test(message);
       const isTransientHttp = isTransientHttpError(message);
 
+      const isRateLimit = isRateLimitErrorMessage(message);
+      const isAuthError = isAuthErrorMessage(message);
+      const isBillingError = isBillingErrorMessage(message);
+      const isTimeoutError = isTimeoutErrorMessage(message);
+      const isOverloaded = isOverloadedErrorMessage(message);
+
       if (
         isCompactionFailure &&
         !didResetAfterCompactionFailure &&
@@ -553,15 +564,30 @@ export async function runAgentTurnWithFallback(params: {
       }
 
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
-      const safeMessage = isTransientHttp
-        ? sanitizeUserFacingText(message, { errorContext: true })
-        : message;
-      const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
-      const fallbackText = isContextOverflow
-        ? "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model."
-        : isRoleOrderingError
-          ? "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session."
-          : `⚠️ Agent failed before reply: ${trimmedMessage}.\nLogs: openclaw logs --follow`;
+
+      let fallbackText: string;
+
+      if (isContextOverflow) {
+        fallbackText =
+          "⚠️ Context overflow — prompt too large for this model. Try a shorter message or a larger-context model.";
+      } else if (isRoleOrderingError) {
+        fallbackText =
+          "⚠️ Message ordering conflict - please try again. If this persists, use /new to start a fresh session.";
+      } else if (isRateLimit || isOverloaded) {
+        fallbackText = "The AI service is busy. Please wait a moment and try again.";
+      } else if (isAuthError) {
+        fallbackText =
+          "I couldn't connect to the AI service. Please verify your API key is configured correctly.";
+      } else if (isBillingError) {
+        fallbackText =
+          "I've reached my limit with the AI service. Please check your account balance and try again.";
+      } else if (isTimeoutError) {
+        fallbackText =
+          "The request timed out. Please try again, or start a fresh session with /new.";
+      } else {
+        fallbackText =
+          "Something unexpected happened. Try /new to start a fresh conversation, or try again in a moment.";
+      }
 
       return {
         kind: "final",

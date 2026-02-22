@@ -67,9 +67,65 @@ describe("trigger handling", () => {
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toBe(
-        "⚠️ Agent failed before reply: sandbox is not defined.\nLogs: openclaw logs --follow",
+        "Something unexpected happened. Try /new to start a fresh conversation, or try again in a moment.",
       );
       expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("returns friendly message for rate limit errors", async () => {
+    await withTempHome(async (home) => {
+      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+      runEmbeddedPiAgentMock.mockRejectedValue(
+        new Error("rate_limit_exceeded: API rate limit exceeded"),
+      );
+
+      const res = await getReplyFromConfig(BASE_MESSAGE, {}, makeCfg(home));
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toBe("The AI service is busy. Please wait a moment and try again.");
+    });
+  });
+
+  it("returns friendly message for auth errors", async () => {
+    await withTempHome(async (home) => {
+      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+      runEmbeddedPiAgentMock.mockRejectedValue(new Error("401 Unauthorized: Invalid API key"));
+
+      const res = await getReplyFromConfig(BASE_MESSAGE, {}, makeCfg(home));
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toBe(
+        "I couldn't connect to the AI service. Please verify your API key is configured correctly.",
+      );
+    });
+  });
+
+  it("returns friendly message for billing errors", async () => {
+    await withTempHome(async (home) => {
+      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+      runEmbeddedPiAgentMock.mockRejectedValue(
+        new Error("402 Payment Required: billing limit exceeded"),
+      );
+
+      const res = await getReplyFromConfig(BASE_MESSAGE, {}, makeCfg(home));
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toBe(
+        "I've reached my limit with the AI service. Please check your account balance and try again.",
+      );
+    });
+  });
+
+  it("returns friendly message for timeout errors", async () => {
+    await withTempHome(async (home) => {
+      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+      runEmbeddedPiAgentMock.mockRejectedValue(
+        new Error("408 Request Timeout: connection timed out"),
+      );
+
+      const res = await getReplyFromConfig(BASE_MESSAGE, {}, makeCfg(home));
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toBe(
+        "The request timed out. Please try again, or start a fresh session with /new.",
+      );
     });
   });
 
