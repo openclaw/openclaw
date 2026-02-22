@@ -13,7 +13,11 @@
     "SHELL",
     "GCONV_PATH",
     "IFS",
-    "SSLKEYLOGFILE"
+    "SSLKEYLOGFILE",
+    "GLIBC_TUNABLES",
+    "JAVA_TOOL_OPTIONS",
+    "JDK_JAVA_OPTIONS",
+    "LD_AUDIT"
   ],
-  "blockedPrefixes": ["DYLD_", "LD_", "BASH_FUNC_"]
+  "blockedPrefixes": ["DYLD_", "LD_", "BASH_FUNC_", "OPENCLAW_"]
 }
