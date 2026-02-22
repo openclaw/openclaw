@@ -71,6 +71,52 @@ describe("buildInboundMetaSystemPrompt", () => {
     const payload = parseInboundMetaPayload(prompt);
     expect(payload["sender_id"]).toBeUndefined();
   });
+
+  it("channel falls back to Surface when OriginatingChannel is missing", () => {
+    const prompt = buildInboundMetaSystemPrompt({
+      OriginatingTo: "whatsapp:123456789",
+      Surface: "whatsapp",
+      Provider: "twilio",
+      ChatType: "direct",
+    } as TemplateContext);
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["channel"]).toBe("whatsapp");
+  });
+
+  it("channel falls back to Provider when both OriginatingChannel and Surface are missing", () => {
+    const prompt = buildInboundMetaSystemPrompt({
+      OriginatingTo: "email:user@example.com",
+      Provider: "sendgrid",
+      ChatType: "direct",
+    } as TemplateContext);
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["channel"]).toBe("sendgrid");
+  });
+
+  it("channel is undefined when all three (OriginatingChannel, Surface, Provider) are missing", () => {
+    const prompt = buildInboundMetaSystemPrompt({
+      OriginatingTo: "unknown:123",
+      ChatType: "direct",
+    } as TemplateContext);
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["channel"]).toBeUndefined();
+  });
+
+  it("webchat channel correctly reflected when OriginatingChannel is webchat", () => {
+    const prompt = buildInboundMetaSystemPrompt({
+      OriginatingTo: "webchat:dashboard-session-123",
+      OriginatingChannel: "webchat",
+      Provider: "dashboard",
+      Surface: "webchat",
+      ChatType: "direct",
+    } as TemplateContext);
+
+    const payload = parseInboundMetaPayload(prompt);
+    expect(payload["channel"]).toBe("webchat");
+  });
 });
 
 describe("buildInboundUserContextPrefix", () => {
