@@ -65,4 +65,52 @@ describe("discoverAuthStorage", () => {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
   });
+
+  it("scrubs static api_key entries from legacy auth.json and keeps oauth entries", async () => {
+    const agentDir = await createAgentDir();
+    try {
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            "openrouter:default": {
+              type: "api_key",
+              provider: "openrouter",
+              key: "sk-or-v1-runtime",
+            },
+          },
+        },
+        agentDir,
+      );
+      await fs.writeFile(
+        path.join(agentDir, "auth.json"),
+        JSON.stringify(
+          {
+            openrouter: { type: "api_key", key: "legacy-static-key" },
+            "openai-codex": {
+              type: "oauth",
+              access: "oauth-access",
+              refresh: "oauth-refresh",
+              expires: Date.now() + 60_000,
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      discoverAuthStorage(agentDir);
+
+      const parsed = JSON.parse(await fs.readFile(path.join(agentDir, "auth.json"), "utf8")) as {
+        [key: string]: unknown;
+      };
+      expect(parsed.openrouter).toBeUndefined();
+      expect(parsed["openai-codex"]).toMatchObject({
+        type: "oauth",
+        access: "oauth-access",
+      });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
 });

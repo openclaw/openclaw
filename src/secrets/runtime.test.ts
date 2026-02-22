@@ -30,6 +30,14 @@ describe("secrets runtime snapshot", () => {
           },
         },
       },
+      skills: {
+        entries: {
+          "review-pr": {
+            enabled: true,
+            apiKey: { source: "env", id: "REVIEW_SKILL_API_KEY" },
+          },
+        },
+      },
     };
 
     const snapshot = await prepareSecretsRuntimeSnapshot({
@@ -37,6 +45,7 @@ describe("secrets runtime snapshot", () => {
       env: {
         OPENAI_API_KEY: "sk-env-openai",
         GITHUB_TOKEN: "ghp-env-token",
+        REVIEW_SKILL_API_KEY: "sk-skill-ref",
       },
       agentDirs: ["/tmp/openclaw-agent-main"],
       loadAuthStore: () => ({
@@ -59,6 +68,7 @@ describe("secrets runtime snapshot", () => {
     });
 
     expect(snapshot.config.models?.providers?.openai?.apiKey).toBe("sk-env-openai");
+    expect(snapshot.config.skills?.entries?.["review-pr"]?.apiKey).toBe("sk-skill-ref");
     expect(snapshot.warnings).toHaveLength(2);
     expect(snapshot.authStores[0]?.store.profiles["openai:default"]).toMatchObject({
       type: "api_key",

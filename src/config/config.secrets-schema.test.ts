@@ -36,6 +36,21 @@ describe("config secret refs schema", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts skills entry apiKey refs", () => {
+    const result = validateConfigObjectRaw({
+      skills: {
+        entries: {
+          "review-pr": {
+            enabled: true,
+            apiKey: { source: "env", id: "SKILL_REVIEW_PR_API_KEY" },
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   it("rejects invalid secret ref id", () => {
     const result = validateConfigObjectRaw({
       models: {
