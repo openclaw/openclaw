@@ -55,6 +55,38 @@ export const AgentDefaultsSchema = z
     contextTokens: z.number().int().positive().optional(),
     cliBackends: z.record(z.string(), CliBackendSchema).optional(),
     memorySearch: MemorySearchSchema,
+    tools: z
+      .object({
+        message: z
+          .object({
+            allowCrossContextSend: z.boolean().optional(),
+            crossContext: z
+              .object({
+                allowWithinProvider: z.boolean().optional(),
+                allowAcrossProviders: z.boolean().optional(),
+                marker: z
+                  .object({
+                    enabled: z.boolean().optional(),
+                    prefix: z.string().optional(),
+                    suffix: z.string().optional(),
+                  })
+                  .strict()
+                  .optional(),
+              })
+              .strict()
+              .optional(),
+            broadcast: z
+              .object({
+                enabled: z.boolean().optional(),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     contextPruning: z
       .object({
         mode: z.union([z.literal("off"), z.literal("cache-ttl")]).optional(),

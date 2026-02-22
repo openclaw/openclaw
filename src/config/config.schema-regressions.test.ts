@@ -37,6 +37,24 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts agents.defaults.tools.message cross-context configuration", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          tools: {
+            message: {
+              crossContext: {
+                allowAcrossProviders: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("accepts safe iMessage remoteHost", () => {
     const res = validateConfigObject({
       channels: {

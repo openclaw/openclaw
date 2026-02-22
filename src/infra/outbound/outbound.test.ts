@@ -647,6 +647,80 @@ describe("outbound policy", () => {
     ).not.toThrow();
   });
 
+  it("uses agents.defaults.tools.message for cross-context policy", () => {
+    const cfg = {
+      ...slackConfig,
+      tools: {
+        message: { crossContext: { allowAcrossProviders: false } },
+      },
+      agents: {
+        defaults: {
+          tools: {
+            message: {
+              crossContext: {
+                allowAcrossProviders: true,
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(() =>
+      enforceCrossContextPolicy({
+        cfg,
+        channel: "telegram",
+        action: "send",
+        args: { to: "telegram:@ops" },
+        toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
+        agentId: "main",
+      }),
+    ).not.toThrow();
+  });
+
+  it("prioritizes agent message policy over defaults when resolving cross-context", () => {
+    const cfg = {
+      ...slackConfig,
+      tools: {
+        message: { crossContext: { allowAcrossProviders: false } },
+      },
+      agents: {
+        defaults: {
+          tools: {
+            message: {
+              crossContext: {
+                allowAcrossProviders: false,
+              },
+            },
+          },
+        },
+        list: [
+          {
+            id: "main",
+            tools: {
+              message: {
+                crossContext: {
+                  allowAcrossProviders: true,
+                },
+              },
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    expect(() =>
+      enforceCrossContextPolicy({
+        cfg,
+        channel: "telegram",
+        action: "send",
+        args: { to: "telegram:@ops" },
+        toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
+        agentId: "main",
+      }),
+    ).not.toThrow();
+  });
+
   it("uses components when available and preferred", async () => {
     const decoration = await buildCrossContextDecoration({
       cfg: discordConfig,

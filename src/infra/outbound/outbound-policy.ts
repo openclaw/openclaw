@@ -1,3 +1,4 @@
+import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import type {
   ChannelId,
   ChannelMessageActionName,
@@ -37,6 +38,19 @@ const CONTEXT_MARKER_ACTIONS = new Set<ChannelMessageActionName>([
   "thread-reply",
   "sticker",
 ]);
+
+type MessageConfigSource = {
+  allowCrossContextSend?: boolean;
+  crossContext?: {
+    allowWithinProvider?: boolean;
+    allowAcrossProviders?: boolean;
+    marker?: {
+      enabled?: boolean;
+      prefix?: string;
+      suffix?: string;
+    };
+  };
+};
 
 function resolveContextGuardTarget(
   action: ChannelMessageActionName,
@@ -86,12 +100,50 @@ function isCrossContextTarget(params: {
   return normalizedTarget !== normalizedCurrent;
 }
 
+function resolveMessagePolicy(cfg: OpenClawConfig, agentId?: string): MessageConfigSource {
+  const globalPolicy = cfg.tools?.message;
+  const defaultsPolicy = cfg.agents?.defaults?.tools?.message;
+  const agentPolicy = agentId ? resolveAgentConfig(cfg, agentId)?.tools?.message : undefined;
+
+  return {
+    allowCrossContextSend:
+      agentPolicy?.allowCrossContextSend ??
+      defaultsPolicy?.allowCrossContextSend ??
+      globalPolicy?.allowCrossContextSend,
+    crossContext: {
+      allowWithinProvider:
+        agentPolicy?.crossContext?.allowWithinProvider ??
+        defaultsPolicy?.crossContext?.allowWithinProvider ??
+        globalPolicy?.crossContext?.allowWithinProvider,
+      allowAcrossProviders:
+        agentPolicy?.crossContext?.allowAcrossProviders ??
+        defaultsPolicy?.crossContext?.allowAcrossProviders ??
+        globalPolicy?.crossContext?.allowAcrossProviders,
+      marker: {
+        enabled:
+          agentPolicy?.crossContext?.marker?.enabled ??
+          defaultsPolicy?.crossContext?.marker?.enabled ??
+          globalPolicy?.crossContext?.marker?.enabled,
+        prefix:
+          agentPolicy?.crossContext?.marker?.prefix ??
+          defaultsPolicy?.crossContext?.marker?.prefix ??
+          globalPolicy?.crossContext?.marker?.prefix,
+        suffix:
+          agentPolicy?.crossContext?.marker?.suffix ??
+          defaultsPolicy?.crossContext?.marker?.suffix ??
+          globalPolicy?.crossContext?.marker?.suffix,
+      },
+    },
+  };
+}
+
 export function enforceCrossContextPolicy(params: {
   channel: ChannelId;
   action: ChannelMessageActionName;
   args: Record<string, unknown>;
   toolContext?: ChannelThreadingToolContext;
   cfg: OpenClawConfig;
+  agentId?: string;
 }): void {
   const currentTarget = params.toolContext?.currentChannelId?.trim();
   if (!currentTarget) {
@@ -101,15 +153,14 @@ export function enforceCrossContextPolicy(params: {
     return;
   }
 
-  if (params.cfg.tools?.message?.allowCrossContextSend) {
+  const messagePolicy = resolveMessagePolicy(params.cfg, params.agentId);
+  if (messagePolicy.allowCrossContextSend) {
     return;
   }
 
   const currentProvider = params.toolContext?.currentChannelProvider;
-  const allowWithinProvider =
-    params.cfg.tools?.message?.crossContext?.allowWithinProvider !== false;
-  const allowAcrossProviders =
-    params.cfg.tools?.message?.crossContext?.allowAcrossProviders === true;
+  const allowWithinProvider = messagePolicy.crossContext?.allowWithinProvider !== false;
+  const allowAcrossProviders = messagePolicy.crossContext?.allowAcrossProviders === true;
 
   if (currentProvider && currentProvider !== params.channel) {
     if (!allowAcrossProviders) {
@@ -144,6 +195,7 @@ export async function buildCrossContextDecoration(params: {
   target: string;
   toolContext?: ChannelThreadingToolContext;
   accountId?: string | null;
+  agentId?: string;
 }): Promise<CrossContextDecoration | null> {
   if (!params.toolContext?.currentChannelId) {
     return null;
@@ -156,7 +208,8 @@ export async function buildCrossContextDecoration(params: {
     return null;
   }
 
-  const markerConfig = params.cfg.tools?.message?.crossContext?.marker;
+  const messagePolicy = resolveMessagePolicy(params.cfg, params.agentId);
+  const markerConfig = messagePolicy.crossContext?.marker;
   if (markerConfig?.enabled === false) {
     return null;
   }

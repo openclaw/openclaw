@@ -113,6 +113,20 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.message.crossContext.marker.suffix":
     'Text suffix for cross-context markers (supports "{channel}").',
   "tools.message.broadcast.enabled": "Enable broadcast action (default: true).",
+  "agents.defaults.tools.message.allowCrossContextSend":
+    "Default for cross-context messaging across providers and channels (legacy override).",
+  "agents.defaults.tools.message.crossContext.allowWithinProvider":
+    "Default: allow sends to other channels within the same provider.",
+  "agents.defaults.tools.message.crossContext.allowAcrossProviders":
+    "Default: allow sends across providers.",
+  "agents.defaults.tools.message.crossContext.marker.enabled":
+    "Default: add visible origin marker for cross-context messages.",
+  "agents.defaults.tools.message.crossContext.marker.prefix":
+    'Default prefix for cross-context marker (supports "{channel}").',
+  "agents.defaults.tools.message.crossContext.marker.suffix":
+    'Default suffix for cross-context marker (supports "{channel}").',
+  "agents.defaults.tools.message.broadcast.enabled":
+    "Default: allow broadcast action for message tool.",
   "tools.web.search.enabled": "Enable the web_search tool (requires a provider API key).",
   "tools.web.search.provider": 'Search provider ("brave" or "perplexity").',
   "tools.web.search.apiKey": "Brave Search API key (fallback: BRAVE_API_KEY env var).",
