@@ -200,8 +200,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           getStatus: () => getRuntime(channelId, id),
           setStatus: (next) => setRuntime(channelId, id, next),
         });
+        let didError = false;
         const trackedPromise = Promise.resolve(task)
           .catch((err) => {
+            didError = true;
             const message = formatErrorMessage(err);
             setRuntime(channelId, id, { accountId: id, lastError: message });
             log.error?.(`[${id}] channel exited: ${message}`);
@@ -214,6 +216,12 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
             });
           })
           .then(async () => {
+            // Only auto-restart channels that crashed. Webhook-based channels
+            // (e.g. Google Chat) resolve immediately after registering their
+            // HTTP route — restarting those causes an infinite restart loop.
+            if (!didError) {
+              return;
+            }
             if (manuallyStopped.has(rKey)) {
               return;
             }
