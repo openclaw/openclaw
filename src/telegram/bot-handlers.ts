@@ -20,6 +20,7 @@ import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import type { TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
 import { danger, logVerbose, warn } from "../globals.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import { MediaFetchError } from "../media/fetch.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
@@ -60,6 +61,15 @@ import {
 } from "./model-buttons.js";
 import { buildInlineKeyboard } from "./send.js";
 import { wasSentByBot } from "./sent-message-cache.js";
+
+function isMediaSizeLimitError(err: unknown): boolean {
+  const errMsg = String(err);
+  return errMsg.includes("exceeds") && errMsg.includes("MB limit");
+}
+
+function isRecoverableMediaGroupError(err: unknown): boolean {
+  return err instanceof MediaFetchError || isMediaSizeLimitError(err);
+}
 
 export const registerTelegramHandlers = ({
   cfg,
@@ -270,7 +280,18 @@ export const registerTelegramHandlers = ({
 
       const allMedia: TelegramMediaRef[] = [];
       for (const { ctx } of entry.messages) {
-        const media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
+        let media;
+        try {
+          media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
+        } catch (mediaErr) {
+          if (!isRecoverableMediaGroupError(mediaErr)) {
+            throw mediaErr;
+          }
+          runtime.log?.(
+            warn(`media group: skipping photo that failed to fetch: ${String(mediaErr)}`),
+          );
+          continue;
+        }
         if (media) {
           allMedia.push({
             path: media.path,
@@ -663,8 +684,7 @@ export const registerTelegramHandlers = ({
     try {
       media = await resolveMedia(ctx, mediaMaxBytes, opts.token, opts.proxyFetch);
     } catch (mediaErr) {
-      const errMsg = String(mediaErr);
-      if (errMsg.includes("exceeds") && errMsg.includes("MB limit")) {
+      if (isMediaSizeLimitError(mediaErr)) {
         if (sendOversizeWarning) {
           const limitMb = Math.round(mediaMaxBytes / (1024 * 1024));
           await withTelegramApiErrorLogging({
@@ -676,7 +696,7 @@ export const registerTelegramHandlers = ({
               }),
           }).catch(() => {});
         }
-        logger.warn({ chatId, error: errMsg }, oversizeLogMessage);
+        logger.warn({ chatId, error: String(mediaErr) }, oversizeLogMessage);
         return;
       }
       throw mediaErr;
