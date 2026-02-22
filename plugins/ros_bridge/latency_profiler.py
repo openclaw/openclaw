@@ -62,6 +62,8 @@ def _compute_stats(values: Deque[float]) -> Optional[Tuple[float, float, int]]:
 
 
 class LatencyProfiler:
+    """Collect rolling latency stats for rx/preprocess/publish."""
+
     def __init__(
         self,
         enabled: bool = False,
@@ -96,6 +98,7 @@ class LatencyProfiler:
         return self._enabled
 
     def mark_rx(self) -> Optional[int]:
+        """Mark receipt time and return trace id when enabled."""
         if not self._enabled:
             return None
         trace_id = self._next_trace_id
@@ -111,6 +114,7 @@ class LatencyProfiler:
         return trace_id
 
     def mark_preprocess(self, trace_id: Optional[int]) -> None:
+        """Mark preprocess completion time for a trace id."""
         if not self._enabled or trace_id is None:
             return
         traces = self._traces
@@ -122,6 +126,7 @@ class LatencyProfiler:
         trace.preprocess_time = time.monotonic()
 
     def mark_publish(self, trace_id: Optional[int]) -> None:
+        """Mark publish completion and update rolling stats."""
         if not self._enabled or trace_id is None:
             return
         traces = self._traces

@@ -7,9 +7,11 @@ import threading
 from typing import Any, Callable, Dict, Optional
 
 try:
+    from .config import resolve_config
     from .latency_profiler import LatencyProfiler
     from .state_preprocessor import StatePreprocessor
 except ImportError:
+    from config import resolve_config
     from latency_profiler import LatencyProfiler
     from state_preprocessor import StatePreprocessor
 
@@ -30,7 +32,11 @@ else:
     _RCLPY_IMPORT_ERROR = None
 
 _LOGGER = logging.getLogger(__name__)
-_PROFILE_ENV_VARS = ("OPENCLAW_ROS_BRIDGE_PROFILE", "OPENCLAW_ROS_BRIDGE_PROFILING")
+_PROFILE_ENV_VARS = (
+    "OPENCLAW_ROS_BRIDGE_PROFILE",
+    "OPENCLAW_ROS_BRIDGE_PROFILING",
+    "ROS_BRIDGE_PROFILING",
+)
 
 StateCallback = Callable[[Dict[str, Any]], None]
 
@@ -102,6 +108,8 @@ def _resolve_profiler(config: Dict[str, Any], logger: logging.Logger) -> Latency
 
 
 class _RosBridge:
+    """ROS2 bridge that preprocesses state and publishes commands."""
+
     def __init__(self, config: Dict[str, Any]) -> None:
         self._config = dict(config)
         logger = self._config.get("logger")
@@ -141,6 +149,7 @@ class _RosBridge:
         self._thread = None
 
     def start(self) -> bool:
+        """Initialize ROS node and start executor thread."""
         with self._lock:
             if self._started:
                 return True
@@ -190,6 +199,7 @@ class _RosBridge:
                 return False
 
     def stop(self) -> None:
+        """Stop executor and shutdown ROS node if owned."""
         self._teardown()
 
     def _teardown(self) -> None:
@@ -233,6 +243,7 @@ class _RosBridge:
         self.on_state_json(msg.data)
 
     def on_state_json(self, state_json_str: Any) -> Optional[Dict[str, Any]]:
+        """Process a JSON state payload and emit callback if valid."""
         if not self._started:
             return None
 
@@ -265,6 +276,7 @@ class _RosBridge:
         return processed
 
     def send_command(self, command_dict: Any) -> bool:
+        """Publish a JSON command dict to ROS."""
         if not self._started:
             return False
         if not isinstance(command_dict, dict):
@@ -299,14 +311,19 @@ _BRIDGE: Optional[_RosBridge] = None
 
 
 def start_bridge(config: Optional[Dict[str, Any]] = None) -> bool:
-    cfg: Dict[str, Any]
+    """Start the ROS bridge using env defaults and optional overrides."""
+    overrides: Optional[Dict[str, Any]] = None
     if config is None:
-        cfg = {}
+        overrides = None
     elif isinstance(config, dict):
-        cfg = config
+        overrides = config
     else:
         _LOGGER.warning("start_bridge expected dict config; got %s", type(config).__name__)
-        cfg = {}
+
+    cfg = resolve_config(overrides)
+    if not _is_truthy(cfg.get("enabled", True)):
+        _LOGGER.info("ROS bridge disabled by config")
+        return False
 
     global _BRIDGE
     with _BRIDGE_LOCK:
@@ -320,6 +337,7 @@ def start_bridge(config: Optional[Dict[str, Any]] = None) -> bool:
 
 
 def stop_bridge() -> bool:
+    """Stop the ROS bridge if running."""
     global _BRIDGE
     with _BRIDGE_LOCK:
         bridge = _BRIDGE
@@ -327,11 +345,16 @@ def stop_bridge() -> bool:
 
     if bridge is None:
         return False
-    bridge.stop()
+    try:
+        bridge.stop()
+    except Exception:
+        _LOGGER.exception("Failed to stop ROS bridge")
+        return False
     return True
 
 
 def on_state_json(state_json_str: Any) -> Optional[Dict[str, Any]]:
+    """Process a JSON state payload without ROS subscription."""
     bridge = _BRIDGE
     if bridge is None:
         return None
@@ -339,6 +362,7 @@ def on_state_json(state_json_str: Any) -> Optional[Dict[str, Any]]:
 
 
 def send_command(command_dict: Any) -> bool:
+    """Publish a JSON command dict without direct ROS access."""
     bridge = _BRIDGE
     if bridge is None:
         _LOGGER.warning("ROS bridge not running; command dropped")

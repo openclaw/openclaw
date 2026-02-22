@@ -37,6 +37,7 @@ ros_bridge.stop_bridge()
 - **QoS**: `qos_depth`
 - **State preprocessing**: `state_max_rate_hz` (default 10), `state_include_summary` / `include_state_summary`
 - **Callback**: `state_callback` (or `on_state`) — invoked with processed dict
+- **Env overrides**: `ROS_BRIDGE_ENABLED`, `ROS_BRIDGE_MAX_RATE`, `ROS_BRIDGE_PROFILING`
 
 ## Profiling (optional, off by default)
 Enable via config or env:
@@ -48,8 +49,19 @@ ros_bridge.start_bridge({
 Or set one of:
 - `OPENCLAW_ROS_BRIDGE_PROFILE=1`
 - `OPENCLAW_ROS_BRIDGE_PROFILING=1`
+- `ROS_BRIDGE_PROFILING=1`
 
 When enabled, the profiler logs low-frequency `rx->pre`, `pre->pub`, and `rx->pub` latency stats.
+
+## Quick Test
+Command:
+```bash
+python -m plugins.ros_bridge.self_test
+```
+Expected:
+```
+SELF TEST PASSED
+```
 
 ## Notes / Limitations
 - Requires `rclpy` and ROS2 runtime.

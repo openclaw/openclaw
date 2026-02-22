@@ -2,10 +2,31 @@ from __future__ import annotations
 
 import json
 import math
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
-_REQUIRED_FIELDS = ("position", "velocity", "acceleration", "timestamp")
+_DEFAULT_REQUIRED_FIELDS = ("position", "velocity", "acceleration", "timestamp")
+_PROTOCOL_PATH = Path(__file__).with_name("protocol_definition.json")
 _VECTOR_KEYS = ("x", "y", "z")
+
+
+def _load_required_fields() -> Tuple[str, ...]:
+    try:
+        raw = _PROTOCOL_PATH.read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except (OSError, json.JSONDecodeError):
+        return _DEFAULT_REQUIRED_FIELDS
+
+    required = data.get("required") if isinstance(data, dict) else None
+    if isinstance(required, dict):
+        fields = [name for name in required.keys() if isinstance(name, str) and name.strip()]
+        if fields:
+            return tuple(fields)
+
+    return _DEFAULT_REQUIRED_FIELDS
+
+
+_REQUIRED_FIELDS = _load_required_fields()
 
 
 def _is_finite_number(value: Any) -> bool:
@@ -30,6 +51,7 @@ def _parse_vector(value: Any) -> Optional[List[float]]:
 
 
 def _extract_state(data: Any) -> Optional[Dict[str, Any]]:
+    """Validate required fields defined by protocol_definition.json."""
     if not isinstance(data, dict):
         return None
 
@@ -67,6 +89,8 @@ def _sanitize_rate(max_rate_hz: Any) -> float:
 
 
 class StatePreprocessor:
+    """Validate and downsample JSON state messages."""
+
     def __init__(self, max_rate_hz: float = 10.0, include_summary: bool = False) -> None:
         self._max_rate_hz = _sanitize_rate(max_rate_hz)
         self._min_interval = 1.0 / self._max_rate_hz
@@ -78,6 +102,7 @@ class StatePreprocessor:
         self._dropped = 0
 
     def process(self, state_json_str: str) -> Optional[Dict[str, Any]]:
+        """Return normalized state payload or None when dropped."""
         self._received += 1
 
         if not isinstance(state_json_str, str):
