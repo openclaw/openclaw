@@ -4,7 +4,7 @@ import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
-import { queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
+import { abortEmbeddedPiRun, queueEmbeddedPiMessage } from "../../agents/pi-embedded.js";
 import { hasNonzeroUsage } from "../../agents/usage.js";
 import {
   resolveAgentIdFromSessionKey,
@@ -28,6 +28,7 @@ import {
 import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import { formatAbortReplyText, isAbortRequestText, stopSubagentsForRequester } from "./abort.js";
 import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
 import {
   createShouldEmitToolOutput,
@@ -49,7 +50,12 @@ import {
   readSessionMessages,
 } from "./post-compaction-audit.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
-import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queue.js";
+import {
+  clearSessionQueues,
+  enqueueFollowupRun,
+  type FollowupRun,
+  type QueueSettings,
+} from "./queue.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
@@ -235,6 +241,21 @@ export async function runReplyAgent(params: {
   }
 
   if (isActive && (shouldFollowup || resolvedQueue.mode === "steer")) {
+    // If the incoming message is a stop/abort command, kill the active run
+    // immediately instead of queuing it. Fixes the bug where "stop" sent via
+    // Telegram while the agent is generating gets queued and processed only
+    // after the run completes — too late to be useful. Closes #20600.
+    if (isAbortRequestText(followupRun.prompt)) {
+      const sessionId = followupRun.run.sessionId;
+      abortEmbeddedPiRun(sessionId);
+      clearSessionQueues([queueKey, sessionId ?? ""]);
+      const { stopped } = stopSubagentsForRequester({
+        cfg: followupRun.run.config,
+        requesterSessionKey: sessionKey,
+      });
+      typing.cleanup();
+      return { text: formatAbortReplyText(stopped) };
+    }
     enqueueFollowupRun(queueKey, followupRun, resolvedQueue);
     await touchActiveSessionEntry();
     typing.cleanup();
