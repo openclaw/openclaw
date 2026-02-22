@@ -1,9 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { callGatewayTool, resolveGatewayOptions } from "./gateway.js";
 
 const callGatewayMock = vi.fn();
+const configState = vi.hoisted(() => ({
+  value: {} as Record<string, unknown>,
+}));
 vi.mock("../../config/config.js", () => ({
-  loadConfig: () => ({}),
+  loadConfig: () => configState.value,
   resolveGatewayPort: () => 18789,
 }));
 vi.mock("../../gateway/call.js", () => ({
@@ -11,8 +14,29 @@ vi.mock("../../gateway/call.js", () => ({
 }));
 
 describe("gateway tool defaults", () => {
+  const envSnapshot = {
+    openclaw: process.env.OPENCLAW_GATEWAY_TOKEN,
+    clawdbot: process.env.CLAWDBOT_GATEWAY_TOKEN,
+  };
+
   beforeEach(() => {
     callGatewayMock.mockClear();
+    configState.value = {};
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+  });
+
+  afterAll(() => {
+    if (envSnapshot.openclaw === undefined) {
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    } else {
+      process.env.OPENCLAW_GATEWAY_TOKEN = envSnapshot.openclaw;
+    }
+    if (envSnapshot.clawdbot === undefined) {
+      delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+    } else {
+      process.env.CLAWDBOT_GATEWAY_TOKEN = envSnapshot.clawdbot;
+    }
   });
 
   it("leaves url undefined so callGateway can use config", () => {
@@ -35,6 +59,69 @@ describe("gateway tool defaults", () => {
         scopes: ["operator.read"],
       }),
     );
+  });
+
+  it("uses OPENCLAW_GATEWAY_TOKEN for allowlisted local overrides", () => {
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
+    const opts = resolveGatewayOptions({ gatewayUrl: "ws://127.0.0.1:18789" });
+    expect(opts.url).toBe("ws://127.0.0.1:18789");
+    expect(opts.token).toBe("env-token");
+  });
+
+  it("falls back to config gateway.auth.token when env is unset for local overrides", () => {
+    configState.value = {
+      gateway: {
+        auth: { token: "config-token" },
+      },
+    };
+    const opts = resolveGatewayOptions({ gatewayUrl: "ws://127.0.0.1:18789" });
+    expect(opts.token).toBe("config-token");
+  });
+
+  it("uses gateway.remote.token for allowlisted remote overrides", () => {
+    configState.value = {
+      gateway: {
+        remote: {
+          url: "wss://gateway.example",
+          token: "remote-token",
+        },
+      },
+    };
+    const opts = resolveGatewayOptions({ gatewayUrl: "wss://gateway.example" });
+    expect(opts.url).toBe("wss://gateway.example");
+    expect(opts.token).toBe("remote-token");
+  });
+
+  it("does not leak local env/config tokens to remote overrides", () => {
+    process.env.OPENCLAW_GATEWAY_TOKEN = "local-env-token";
+    process.env.CLAWDBOT_GATEWAY_TOKEN = "legacy-env-token";
+    configState.value = {
+      gateway: {
+        auth: { token: "local-config-token" },
+        remote: {
+          url: "wss://gateway.example",
+        },
+      },
+    };
+    const opts = resolveGatewayOptions({ gatewayUrl: "wss://gateway.example" });
+    expect(opts.token).toBeUndefined();
+  });
+
+  it("explicit gatewayToken overrides fallback token resolution", () => {
+    process.env.OPENCLAW_GATEWAY_TOKEN = "local-env-token";
+    configState.value = {
+      gateway: {
+        remote: {
+          url: "wss://gateway.example",
+          token: "remote-token",
+        },
+      },
+    };
+    const opts = resolveGatewayOptions({
+      gatewayUrl: "wss://gateway.example",
+      gatewayToken: "explicit-token",
+    });
+    expect(opts.token).toBe("explicit-token");
   });
 
   it("uses least-privilege write scope for write methods", async () => {
