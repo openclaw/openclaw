@@ -4,6 +4,7 @@ import { join, resolve } from "node:path";
 type PackageJson = {
   name?: string;
   version?: string;
+  devDependencies?: Record<string, string>;
 };
 
 const rootPackagePath = resolve("package.json");
@@ -61,12 +62,23 @@ for (const dir of dirs) {
     changelogged.push(pkg.name);
   }
 
-  if (pkg.version === targetVersion) {
+  let changed = false;
+
+  if (pkg.version !== targetVersion) {
+    pkg.version = targetVersion;
+    changed = true;
+  }
+
+  if (pkg.devDependencies && pkg.devDependencies.openclaw === "workspace:*") {
+    delete pkg.devDependencies.openclaw;
+    changed = true;
+  }
+
+  if (!changed) {
     skipped.push(pkg.name);
     continue;
   }
 
-  pkg.version = targetVersion;
   writeFileSync(packagePath, `${JSON.stringify(pkg, null, 2)}\n`);
   updated.push(pkg.name);
 }
