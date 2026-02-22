@@ -107,7 +107,7 @@ describe("fetchClaudeUsage", () => {
     expect(result.windows).toEqual([{ label: "5h", usedPercent: 12, resetAt: undefined }]);
   });
 
-  it("keeps oauth error when cookie header cannot be parsed into a session key", async () => {
+  it("parses sessionKey from CLAUDE_WEB_COOKIE for web fallback", async () => {
     vi.stubEnv("CLAUDE_WEB_COOKIE", "sessionKey=sk-ant-cookie-session");
 
     const mockFetch = createScopeFallbackFetch(async (url) => {
@@ -120,7 +120,10 @@ describe("fetchClaudeUsage", () => {
       return makeResponse(404, "not found");
     });
 
-    await expectMissingScopeWithoutFallback(mockFetch);
+    const result = await fetchClaudeUsage("token", 5000, mockFetch);
+    expect(result.error).toBeUndefined();
+    expect(result.windows).toEqual([{ label: "Opus", usedPercent: 44 }]);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
   });
 
   it("keeps oauth error when fallback session key is unavailable", async () => {

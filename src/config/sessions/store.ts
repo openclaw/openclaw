@@ -806,7 +806,7 @@ export async function updateSessionStoreEntry(params: {
 }): Promise<SessionEntry | null> {
   const { storePath, sessionKey, update } = params;
   return await withSessionStoreLock(storePath, async () => {
-    const store = loadSessionStore(storePath);
+    const store = loadSessionStore(storePath, { skipCache: true });
     const existing = store[sessionKey];
     if (!existing) {
       return null;

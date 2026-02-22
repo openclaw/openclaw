@@ -23,6 +23,7 @@ const {
   updateLastRouteMock,
   upsertPairingRequestMock,
   waitForTransportReadyMock,
+  spawnSignalDaemonMock,
 } = getSignalToolResultTestMocks();
 
 const SIGNAL_BASE_URL = "http://127.0.0.1:8080";
@@ -176,7 +177,7 @@ describe("monitorSignalProvider tool results", () => {
         logIntervalMs: 10_000,
         pollIntervalMs: 150,
         runtime,
-        abortSignal: abortController.signal,
+        abortSignal: expect.any(AbortSignal),
       }),
     );
   });
@@ -210,6 +211,39 @@ describe("monitorSignalProvider tool results", () => {
     });
 
     expectWaitForTransportReadyTimeout(120_000);
+  });
+
+  it("fails fast when auto-started signal daemon exits during startup", async () => {
+    const runtime = createMonitorRuntime();
+    setSignalAutoStartConfig();
+    spawnSignalDaemonMock.mockReturnValueOnce({
+      stop: vi.fn(),
+      exited: Promise.resolve({ code: 1, signal: null }),
+      isExited: () => true,
+    });
+    waitForTransportReadyMock.mockImplementationOnce(
+      async (params: { abortSignal?: AbortSignal | null }) => {
+        await new Promise<void>((_resolve, reject) => {
+          if (params.abortSignal?.aborted) {
+            reject(params.abortSignal.reason);
+            return;
+          }
+          params.abortSignal?.addEventListener(
+            "abort",
+            () => reject(params.abortSignal?.reason ?? new Error("aborted")),
+            { once: true },
+          );
+        });
+      },
+    );
+
+    await expect(
+      runMonitorWithMocks({
+        autoStart: true,
+        baseUrl: SIGNAL_BASE_URL,
+        runtime,
+      }),
+    ).rejects.toThrow(/signal daemon exited/i);
   });
 
   it("skips tool summaries with responsePrefix", async () => {
