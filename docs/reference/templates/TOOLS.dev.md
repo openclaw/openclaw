@@ -10,6 +10,13 @@ read_when:
 This file is for _your_ notes about external tools and conventions.
 It does not define which tools exist; OpenClaw provides built-in tools internally.
 
+## Security first
+
+OpenClaw injects `TOOLS.md` into prompt context. Do not place secrets here.
+
+- Never store API keys, passwords, tokens, private keys, or OTP/recovery codes.
+- Use placeholders and fetch secrets at runtime from a secret manager or env vars.
+
 ## Examples
 
 ### imsg

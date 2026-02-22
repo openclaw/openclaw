@@ -9,6 +9,16 @@ read_when:
 
 Skills define _how_ tools work. This file is for _your_ specifics — the stuff that's unique to your setup.
 
+## Security First (Read This)
+
+OpenClaw injects `TOOLS.md` into prompt context during runs. Treat this file as
+instructional context, not a secret vault.
+
+- Never store API keys, passwords, tokens, private keys, or recovery codes here.
+- Never paste raw `.env` values or credential files here.
+- Use placeholders and resolve secrets at runtime from a secret manager
+  (for example `op://...`) or environment variables.
+
 ## What Goes Here
 
 Things like:
@@ -31,6 +41,7 @@ Things like:
 ### SSH
 
 - home-server → 192.168.1.100, user: admin
+- auth: use keychain/agent at runtime (do not store passphrases here)
 
 ### TTS
 
