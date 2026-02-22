@@ -1,4 +1,5 @@
-import { type Bot, GrammyError, InputFile } from "grammy";
+import { type Bot, GrammyError, InputFile, InputMediaBuilder } from "grammy";
+import type { InputMediaPhoto, InputMediaVideo } from "grammy/types";
 import { chunkMarkdownTextWithMode, type ChunkMode } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ReplyToMode } from "../../config/config.js";
@@ -142,7 +143,105 @@ export async function deliverReplies(params: {
       }
       continue;
     }
-    // media with optional caption on first item
+    // ── Media group (album) path ──────────────────────────────────────
+    // Telegram sendMediaGroup supports 2-10 photos/videos as a single album.
+    // We attempt this when ALL media items resolve to photo or video (no gifs,
+    // audio, or documents) and there are at least 2 items.  If any item is
+    // non-groupable we fall through to the legacy one-at-a-time path below.
+    if (mediaList.length >= 2 && mediaList.length <= 10) {
+      const loaded: Array<{
+        media: Awaited<ReturnType<typeof loadWebMedia>>;
+        kind: string;
+        isGif: boolean;
+      }> = [];
+      let allGroupable = true;
+      for (const mediaUrl of mediaList) {
+        const media = await loadWebMedia(mediaUrl, {
+          localRoots: params.mediaLocalRoots,
+        });
+        const kind = mediaKindFromMime(media.contentType ?? undefined);
+        const isGif = isGifMedia({
+          contentType: media.contentType,
+          fileName: media.fileName,
+        });
+        if (isGif || (kind !== "image" && kind !== "video")) {
+          allGroupable = false;
+          break;
+        }
+        loaded.push({ media, kind, isGif });
+      }
+      if (allGroupable && loaded.length >= 2) {
+        // Build InputMedia array for sendMediaGroup.
+        const { caption, followUpText } = splitTelegramCaption(reply.text ?? undefined);
+        const htmlCaption = caption
+          ? renderTelegramHtmlText(caption, { tableMode: params.tableMode })
+          : undefined;
+        const inputMedia: Array<InputMediaPhoto | InputMediaVideo> = loaded.map((item, idx) => {
+          const fileName = item.media.fileName ?? "file";
+          const file = new InputFile(item.media.buffer, fileName);
+          // Caption only on the first item (Telegram shows it as shared album caption).
+          const itemCaption = idx === 0 ? htmlCaption : undefined;
+          if (item.kind === "video") {
+            return InputMediaBuilder.video(
+              file,
+              itemCaption ? { caption: itemCaption, parse_mode: "HTML" } : {},
+            );
+          }
+          return InputMediaBuilder.photo(
+            file,
+            itemCaption ? { caption: itemCaption, parse_mode: "HTML" } : {},
+          );
+        });
+        await withTelegramApiErrorLogging({
+          operation: "sendMediaGroup",
+          runtime,
+          fn: () =>
+            bot.api.sendMediaGroup(chatId, inputMedia, {
+              ...buildTelegramSendParams({
+                replyToMessageId: replyToMessageIdForPayload,
+                thread,
+              }),
+            }),
+        });
+        markDelivered();
+        if (replyToMessageIdForPayload && !hasReplied) {
+          hasReplied = true;
+        }
+        // Send follow-up text if caption was too long for the album caption.
+        if (followUpText) {
+          const chunks = chunkText(followUpText);
+          for (let i = 0; i < chunks.length; i += 1) {
+            const chunk = chunks[i];
+            await sendTelegramText(bot, chatId, chunk.html, runtime, {
+              replyToMessageId: replyToMessageIdForPayload,
+              thread,
+              textMode: "html",
+              plainText: chunk.text,
+              linkPreview,
+              replyMarkup: i === 0 ? replyMarkup : undefined,
+            });
+            markDelivered();
+          }
+        } else if (replyMarkup) {
+          // Telegram sendMediaGroup does not support reply_markup, so send
+          // buttons as a separate empty-caption message when no follow-up text.
+          await sendTelegramText(bot, chatId, "\u200B", runtime, {
+            replyToMessageId: replyToMessageIdForPayload,
+            thread,
+            textMode: "html",
+            plainText: "",
+            linkPreview: false,
+            replyMarkup,
+          });
+          markDelivered();
+        }
+        continue;
+      }
+      // If not all groupable, fall through to single-item send below.
+    }
+    // ── Single-item media send (legacy path) ───────────────────────────
+    // Used for single media, gifs, audio, documents, or when media group
+    // assembly was not possible.
     let first = true;
     // Track if we need to send a follow-up text message after media
     // (when caption exceeds Telegram's 1024-char limit)

@@ -32,6 +32,18 @@ vi.mock("grammy", () => ({
   GrammyError: class GrammyError extends Error {
     description = "";
   },
+  InputMediaBuilder: {
+    photo: (media: unknown, options?: Record<string, unknown>) => ({
+      type: "photo",
+      media,
+      ...options,
+    }),
+    video: (media: unknown, options?: Record<string, unknown>) => ({
+      type: "video",
+      media,
+      ...options,
+    }),
+  },
 }));
 
 function createRuntime(withLog = true): RuntimeStub {
@@ -338,5 +350,149 @@ describe("deliverReplies", () => {
 
     expect(sendVoice).toHaveBeenCalledTimes(1);
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  // ── Media group (album) tests ──────────────────────────────────────
+
+  it("sends multiple photos as a media group album", async () => {
+    const runtime = createRuntime();
+    const sendMediaGroup = vi.fn().mockResolvedValue([
+      { message_id: 10, chat: { id: "123" } },
+      { message_id: 11, chat: { id: "123" } },
+    ]);
+    const sendPhoto = vi.fn();
+    const bot = createBot({ sendMediaGroup, sendPhoto });
+
+    mockMediaLoad("a.jpg", "image/jpeg", "photo-a");
+    mockMediaLoad("b.jpg", "image/jpeg", "photo-b");
+
+    await deliverWith({
+      replies: [
+        {
+          mediaUrls: ["https://example.com/a.jpg", "https://example.com/b.jpg"],
+          text: "Album caption",
+        },
+      ],
+      runtime,
+      bot,
+    });
+
+    expect(sendMediaGroup).toHaveBeenCalledTimes(1);
+    // Should NOT fall back to individual sendPhoto calls.
+    expect(sendPhoto).not.toHaveBeenCalled();
+
+    const [chatId, media] = sendMediaGroup.mock.calls[0];
+    expect(chatId).toBe("123");
+    expect(media).toHaveLength(2);
+    expect(media[0].type).toBe("photo");
+    expect(media[1].type).toBe("photo");
+    // Caption only on the first item.
+    expect(media[0].caption).toContain("Album caption");
+    expect(media[1].caption).toBeUndefined();
+  });
+
+  it("sends mixed photos and videos as a media group", async () => {
+    const runtime = createRuntime();
+    const sendMediaGroup = vi.fn().mockResolvedValue([
+      { message_id: 20, chat: { id: "123" } },
+      { message_id: 21, chat: { id: "123" } },
+    ]);
+    const bot = createBot({ sendMediaGroup });
+
+    mockMediaLoad("pic.jpg", "image/jpeg", "photo");
+    mockMediaLoad("clip.mp4", "video/mp4", "video");
+
+    await deliverWith({
+      replies: [
+        {
+          mediaUrls: ["https://example.com/pic.jpg", "https://example.com/clip.mp4"],
+        },
+      ],
+      runtime,
+      bot,
+    });
+
+    expect(sendMediaGroup).toHaveBeenCalledTimes(1);
+    const media = sendMediaGroup.mock.calls[0][1];
+    expect(media[0].type).toBe("photo");
+    expect(media[1].type).toBe("video");
+  });
+
+  it("falls back to individual sends when media includes a gif", async () => {
+    const runtime = createRuntime();
+    const sendMediaGroup = vi.fn();
+    const sendPhoto = vi.fn().mockResolvedValue({ message_id: 30, chat: { id: "123" } });
+    const sendAnimation = vi.fn().mockResolvedValue({ message_id: 31, chat: { id: "123" } });
+    const bot = createBot({ sendMediaGroup, sendPhoto, sendAnimation });
+
+    // Media group path loads items until it finds a non-groupable one (gif),
+    // then falls through to single-item loop which reloads ALL items.
+    mockMediaLoad("pic.jpg", "image/jpeg", "photo"); // consumed by media group check
+    mockMediaLoad("anim.gif", "image/gif", "gif"); // consumed by media group check → break
+    mockMediaLoad("pic.jpg", "image/jpeg", "photo"); // consumed by single-item loop
+    mockMediaLoad("anim.gif", "image/gif", "gif"); // consumed by single-item loop
+
+    await deliverWith({
+      replies: [
+        {
+          mediaUrls: ["https://example.com/pic.jpg", "https://example.com/anim.gif"],
+        },
+      ],
+      runtime,
+      bot,
+    });
+
+    // Should NOT use media group because of the gif.
+    expect(sendMediaGroup).not.toHaveBeenCalled();
+    expect(sendPhoto).toHaveBeenCalledTimes(1);
+    expect(sendAnimation).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to individual sends when media includes audio", async () => {
+    const runtime = createRuntime();
+    const sendMediaGroup = vi.fn();
+    const sendPhoto = vi.fn().mockResolvedValue({ message_id: 40, chat: { id: "123" } });
+    const sendAudio = vi.fn().mockResolvedValue({ message_id: 41, chat: { id: "123" } });
+    const bot = createBot({ sendMediaGroup, sendPhoto, sendAudio });
+
+    // Media group path loads first item (photo, groupable), then second (audio, not groupable)
+    // → break → falls through to single-item loop which reloads ALL items.
+    mockMediaLoad("pic.jpg", "image/jpeg", "photo"); // consumed by media group check
+    mockMediaLoad("song.mp3", "audio/mpeg", "audio"); // consumed by media group check → break
+    mockMediaLoad("pic.jpg", "image/jpeg", "photo"); // consumed by single-item loop
+    mockMediaLoad("song.mp3", "audio/mpeg", "audio"); // consumed by single-item loop
+
+    await deliverWith({
+      replies: [
+        {
+          mediaUrls: ["https://example.com/pic.jpg", "https://example.com/song.mp3"],
+        },
+      ],
+      runtime,
+      bot,
+    });
+
+    expect(sendMediaGroup).not.toHaveBeenCalled();
+    expect(sendPhoto).toHaveBeenCalledTimes(1);
+    expect(sendAudio).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends single media via sendPhoto (not media group)", async () => {
+    const runtime = createRuntime();
+    const sendMediaGroup = vi.fn();
+    const sendPhoto = vi.fn().mockResolvedValue({ message_id: 50, chat: { id: "123" } });
+    const bot = createBot({ sendMediaGroup, sendPhoto });
+
+    mockMediaLoad("solo.jpg", "image/jpeg", "photo");
+
+    await deliverWith({
+      replies: [{ mediaUrl: "https://example.com/solo.jpg" }],
+      runtime,
+      bot,
+    });
+
+    // Single image should use sendPhoto, not media group.
+    expect(sendMediaGroup).not.toHaveBeenCalled();
+    expect(sendPhoto).toHaveBeenCalledTimes(1);
   });
 });
