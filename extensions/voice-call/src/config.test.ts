@@ -99,6 +99,60 @@ describe("validateProviderConfig", () => {
     });
   });
 
+  describe("webhook security forwarding trust", () => {
+    it("requires trustedProxyIPs when allowedHosts are configured", () => {
+      const config = createBaseConfig("twilio");
+      config.twilio = { accountSid: "AC123", authToken: "secret" };
+      config.webhookSecurity = {
+        allowedHosts: ["voice.example.com"],
+        trustForwardingHeaders: false,
+        trustedProxyIPs: [],
+      };
+
+      const result = validateProviderConfig(config);
+
+      expect(result.valid).toBe(false);
+      expect(
+        result.errors.some((error) =>
+          error.includes("webhookSecurity.trustedProxyIPs is required"),
+        ),
+      ).toBe(true);
+    });
+
+    it("requires trustedProxyIPs when trustForwardingHeaders=true", () => {
+      const config = createBaseConfig("twilio");
+      config.twilio = { accountSid: "AC123", authToken: "secret" };
+      config.webhookSecurity = {
+        allowedHosts: [],
+        trustForwardingHeaders: true,
+        trustedProxyIPs: [],
+      };
+
+      const result = validateProviderConfig(config);
+
+      expect(result.valid).toBe(false);
+      expect(
+        result.errors.some((error) =>
+          error.includes("webhookSecurity.trustedProxyIPs is required"),
+        ),
+      ).toBe(true);
+    });
+
+    it("passes when forwarding trust paths include trusted proxy IPs", () => {
+      const config = createBaseConfig("twilio");
+      config.twilio = { accountSid: "AC123", authToken: "secret" };
+      config.webhookSecurity = {
+        allowedHosts: ["voice.example.com"],
+        trustForwardingHeaders: false,
+        trustedProxyIPs: ["203.0.113.10"],
+      };
+
+      const result = validateProviderConfig(config);
+
+      expect(result).toMatchObject({ valid: true, errors: [] });
+    });
+  });
+
   describe("twilio provider", () => {
     it("passes validation with mixed config and env vars", () => {
       process.env.TWILIO_AUTH_TOKEN = "secret";

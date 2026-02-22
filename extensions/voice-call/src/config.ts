@@ -414,6 +414,16 @@ export function validateProviderConfig(config: VoiceCallConfig): {
     errors.push("plugins.entries.voice-call.config.fromNumber is required");
   }
 
+  const allowedWebhookHosts = config.webhookSecurity?.allowedHosts ?? [];
+  const trustForwardingHeaders = config.webhookSecurity?.trustForwardingHeaders ?? false;
+  const trustedProxyIPs = config.webhookSecurity?.trustedProxyIPs ?? [];
+  if ((trustForwardingHeaders || allowedWebhookHosts.length > 0) && trustedProxyIPs.length === 0) {
+    errors.push(
+      "plugins.entries.voice-call.config.webhookSecurity.trustedProxyIPs is required when " +
+        "webhookSecurity.allowedHosts or webhookSecurity.trustForwardingHeaders is set",
+    );
+  }
+
   if (config.provider === "telnyx") {
     if (!config.telnyx?.apiKey) {
       errors.push(
