@@ -115,6 +115,21 @@ export function installSessionToolResultGuard(
   getPendingIds: () => string[];
 } {
   const originalAppend = sessionManager.appendMessage.bind(sessionManager);
+  const sessionFile = (
+    sessionManager as { getSessionFile?: () => string | null }
+  ).getSessionFile?.();
+  const safeAppend = (msg: AgentMessage): unknown => {
+    try {
+      return originalAppend(msg as never);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      const path = sessionFile ?? "unknown";
+      console.error(
+        `[session-guard] session write failed (${reason}); message dropped (file: ${path})`,
+      );
+      return undefined;
+    }
+  };
   const pending = new Map<string, string | undefined>();
   const persistMessage = (message: AgentMessage) => {
     const transformer = opts?.transformMessageForPersistence;
@@ -165,7 +180,7 @@ export function installSessionToolResultGuard(
           }),
         );
         if (flushed) {
-          originalAppend(flushed as never);
+          safeAppend(flushed);
         }
       }
     }
@@ -208,7 +223,7 @@ export function installSessionToolResultGuard(
       if (!persisted) {
         return undefined;
       }
-      return originalAppend(persisted as never);
+      return safeAppend(persisted);
     }
 
     const toolCalls =
@@ -231,11 +246,8 @@ export function installSessionToolResultGuard(
     if (!finalMessage) {
       return undefined;
     }
-    const result = originalAppend(finalMessage as never);
+    const result = safeAppend(finalMessage);
 
-    const sessionFile = (
-      sessionManager as { getSessionFile?: () => string | null }
-    ).getSessionFile?.();
     if (sessionFile) {
       emitSessionTranscriptUpdate(sessionFile);
     }
