@@ -95,6 +95,28 @@ describe("extractKeywords", () => {
     expect(keywords).toContain("논의");
   });
 
+  it("extracts keywords from Japanese conversational query", () => {
+    const keywords = extractKeywords("昨日話したデプロイ戦略");
+    expect(keywords).toContain("デプロイ");
+    expect(keywords).toContain("戦略");
+    expect(keywords).not.toContain("昨日");
+  });
+
+  it("handles mixed Japanese and English query", () => {
+    const keywords = extractKeywords("昨日話したAPIのバグ");
+    expect(keywords).toContain("api");
+    expect(keywords).toContain("バグ");
+    expect(keywords).not.toContain("した");
+  });
+
+  it("filters Japanese stop words", () => {
+    const keywords = extractKeywords("これ それ そして どう");
+    expect(keywords).not.toContain("これ");
+    expect(keywords).not.toContain("それ");
+    expect(keywords).not.toContain("そして");
+    expect(keywords).not.toContain("どう");
+  });
+
   it("handles empty query", () => {
     expect(extractKeywords("")).toEqual([]);
     expect(extractKeywords("   ")).toEqual([]);
