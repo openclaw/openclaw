@@ -148,4 +148,57 @@ describe("pi tool definition adapter after_tool_call", () => {
     expect(result.details).toMatchObject({ ok: true });
     expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
   });
+
+  it("returns modified result when after_tool_call hook provides one (success path)", async () => {
+    enableAfterToolCallHook();
+    const modifiedResult = { content: [], details: { redacted: true } };
+    // oxlint-disable-next-line typescript/no-explicit-any
+    hookMocks.runner.runAfterToolCall.mockResolvedValue({ result: modifiedResult } as any);
+    const result = await executeReadTool("call-modify");
+
+    expect(result).toBe(modifiedResult);
+    expect(result.details).toMatchObject({ redacted: true });
+  });
+
+  it("returns modified result when after_tool_call hook provides one (error path)", async () => {
+    enableAfterToolCallHook();
+    const tool = {
+      name: "bash",
+      label: "Bash",
+      description: "throws",
+      parameters: Type.Object({}),
+      execute: vi.fn(async () => {
+        throw new Error("boom");
+      }),
+    } satisfies AgentTool;
+
+    const modifiedErrorResult = { content: [], details: { sanitized: true } };
+    // oxlint-disable-next-line typescript/no-explicit-any
+    hookMocks.runner.runAfterToolCall.mockResolvedValue({ result: modifiedErrorResult } as any);
+
+    const defs = toToolDefinitions([tool]);
+    const def = defs[0];
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+    const execute = (...args: Parameters<(typeof defs)[0]["execute"]>) => def.execute(...args);
+    const result = await execute(
+      "call-err-modify",
+      { cmd: "ls" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(result).toBe(modifiedErrorResult);
+    expect(result.details).toMatchObject({ sanitized: true });
+  });
+
+  it("returns original result when after_tool_call hook returns undefined", async () => {
+    enableAfterToolCallHook();
+    hookMocks.runner.runAfterToolCall.mockResolvedValue(undefined);
+    const result = await executeReadTool("call-no-modify");
+
+    expect(result.details).toMatchObject({ ok: true });
+  });
 });
