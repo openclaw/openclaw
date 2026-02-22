@@ -305,7 +305,7 @@ export class UsageOverview extends LitElement {
       return svg`
         <text x=${pad.left - 6} y=${y + 3} text-anchor="end" class="chart-axis-label">${formatCost(val)}</text>
         <line x1=${pad.left} y1=${y} x2=${pad.left + (600 - pad.left - 10)} y2=${y}
-              stroke="var(--clay-border-subtle)" stroke-dasharray="2,3" />
+              stroke="var(--vscode-panel-border)" stroke-dasharray="2,3" />
       `;
     })}`;
   }

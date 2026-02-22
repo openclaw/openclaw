@@ -7,6 +7,16 @@
     <meta name="color-scheme" content="light dark" />
   </head>
   <body>
+    <script>
+      try {
+        var t = localStorage.getItem('claw-dash:theme');
+        if (!t) { t = localStorage.getItem('openclaw.dashboard.theme'); }
+        var m = {'defaultTheme':'dark','docsTheme':'light','lightTheme':'openknot','newTheme':'openknot','landingTheme':'openknot'};
+        if (m[t]) t = m[t];
+        document.documentElement.setAttribute('data-theme',
+          t && ['dark','light','openknot','fieldmanual','openai','clawdash'].indexOf(t) !== -1 ? t : 'openknot');
+      } catch(e) { document.documentElement.setAttribute('data-theme', 'openknot'); }
+    </script>
     <dashboard-app></dashboard-app>
     <script type="module" src="/src/main.ts"></script>
   </body>

@@ -25,31 +25,42 @@ declare global {
   }
 }
 
-type ThemeMode = "defaultTheme" | "docsTheme" | "lightTheme";
-const THEME_KEY = "openclaw.dashboard.theme";
+type ThemeMode = "dark" | "light" | "openknot" | "fieldmanual" | "openai" | "clawdash";
+const THEME_KEY = "claw-dash:theme";
+const VALID_THEMES: ThemeMode[] = new Set([
+  "dark",
+  "light",
+  "openknot",
+  "fieldmanual",
+  "openai",
+  "clawdash",
+]);
 
 /** Backward-compat: map legacy localStorage theme names to current values */
 const migrateLegacyTheme = (v: string | null): ThemeMode | null => {
-  if (v === "dark" || v === "docsTheme") {
-    return "defaultTheme";
+  if (v === "defaultTheme") {
+    return "dark";
   }
-  if (v === "light") {
-    return "docsTheme";
+  if (v === "docsTheme") {
+    return "light";
   }
-  if (v === "landingTheme") {
-    return "lightTheme";
+  if (v === "lightTheme" || v === "landingTheme" || v === "newTheme") {
+    return "openknot";
   }
-  if (v === "defaultTheme" || v === "lightTheme") {
-    return v;
+  if (v != null && VALID_THEMES.has(v as ThemeMode)) {
+    return v as ThemeMode;
   }
   return null;
 };
 
 type ThemeOption = { id: ThemeMode; label: string; icon: string };
 const THEME_OPTIONS: ThemeOption[] = [
-  { id: "defaultTheme", label: "Default", icon: "moon" },
-  { id: "lightTheme", label: "Light", icon: "sun" },
-  { id: "docsTheme", label: "Docs", icon: "layoutGrid" },
+  { id: "dark", label: "Dark", icon: "monitor" },
+  { id: "light", label: "Light", icon: "book" },
+  { id: "openknot", label: "Knot", icon: "moon" },
+  { id: "fieldmanual", label: "Field", icon: "terminal" },
+  { id: "openai", label: "Ember", icon: "zap" },
+  { id: "clawdash", label: "Chrome", icon: "settings" },
 ];
 const NAV_COLLAPSED_KEY = "openclaw.dashboard.navCollapsed";
 
@@ -80,12 +91,19 @@ export class DashboardApp extends LitElement {
 
   @state() tab: Tab = "overview";
   @state() basePath = "";
-  @state() theme: ThemeMode = "defaultTheme";
+  @state() theme: ThemeMode = "openknot";
   @state() navCollapsed = false;
   @state() private isMobile = false;
   /** Button order — only updates when the toggle collapses, so the active
    *  button doesn't jump while the picker is still open. */
-  @state() private themeOrder: ThemeMode[] = ["defaultTheme", "lightTheme", "docsTheme"];
+  @state() private themeOrder: ThemeMode[] = [
+    "openknot",
+    "dark",
+    "light",
+    "fieldmanual",
+    "openai",
+    "clawdash",
+  ];
 
   /* ── Lifecycle ───────────────────────────────────── */
 
@@ -178,8 +196,12 @@ export class DashboardApp extends LitElement {
   /* ── Theme ───────────────────────────────────────── */
 
   private initTheme(): void {
-    const saved = migrateLegacyTheme(localStorage.getItem(THEME_KEY));
-    this.theme = saved ?? "defaultTheme";
+    const raw = localStorage.getItem(THEME_KEY) ?? localStorage.getItem("openclaw.dashboard.theme");
+    const saved = migrateLegacyTheme(raw);
+    this.theme = saved ?? "openknot";
+    if (saved) {
+      localStorage.setItem(THEME_KEY, saved);
+    }
     this.themeOrder = this.buildThemeOrder(this.theme);
     this.applyTheme(this.theme);
   }
