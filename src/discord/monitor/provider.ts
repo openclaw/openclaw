@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { inspect } from "node:util";
 import {
   Client,
@@ -26,6 +28,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { createDiscordRetryRunner } from "../../infra/retry-policy.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
+import { resolveConfigDir } from "../../utils.js";
 import { resolveDiscordAccount } from "../accounts.js";
 import { fetchDiscordApplicationId } from "../probe.js";
 import { normalizeDiscordToken } from "../token.js";
@@ -75,6 +78,46 @@ export type MonitorDiscordOpts = {
   historyLimit?: number;
   replyToMode?: ReplyToMode;
 };
+
+function resolveHistoryCachePath(): string {
+  return path.join(resolveConfigDir(), "discord-history-cache.json");
+}
+
+function loadGuildHistoriesFromDisk(): Map<string, HistoryEntry[]> {
+  const map = new Map<string, HistoryEntry[]>();
+  try {
+    const cachePath = resolveHistoryCachePath();
+    if (!fs.existsSync(cachePath)) {
+      return map;
+    }
+    const raw = JSON.parse(fs.readFileSync(cachePath, "utf-8")) as Record<string, HistoryEntry[]>;
+    for (const [key, entries] of Object.entries(raw)) {
+      if (Array.isArray(entries) && entries.length > 0) {
+        map.set(key, entries);
+      }
+    }
+    logVerbose(`discord: loaded ${map.size} channel histories from disk cache`);
+  } catch (err) {
+    logVerbose(`discord: failed to load history cache: ${String(err)}`);
+  }
+  return map;
+}
+
+function saveGuildHistoriesToDisk(histories: Map<string, HistoryEntry[]>): void {
+  try {
+    const cachePath = resolveHistoryCachePath();
+    const obj: Record<string, HistoryEntry[]> = {};
+    for (const [key, entries] of histories) {
+      if (entries.length > 0) {
+        obj[key] = entries.slice(-50);
+      }
+    }
+    fs.writeFileSync(cachePath, JSON.stringify(obj), "utf-8");
+    logVerbose(`discord: saved ${Object.keys(obj).length} channel histories to disk cache`);
+  } catch (err) {
+    logVerbose(`discord: failed to save history cache: ${String(err)}`);
+  }
+}
 
 function summarizeAllowList(list?: string[]) {
   if (!list || list.length === 0) {
@@ -363,6 +406,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         sessionTtlMs: threadBindingSessionTtlMs,
       })
     : createNoopThreadBindingManager(account.accountId);
+  const guildHistories = loadGuildHistoriesFromDisk();
   let lifecycleStarted = false;
   try {
     const commands: BaseCommand[] = commandSpecs.map((spec) =>
@@ -499,7 +543,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     await deployDiscordCommands({ client, runtime, enabled: nativeEnabled });
 
     const logger = createSubsystemLogger("discord/monitor");
-    const guildHistories = new Map<string, HistoryEntry[]>();
     let botUserId: string | undefined;
     let voiceManager: DiscordVoiceManager | null = null;
 
@@ -598,6 +641,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       threadBindings,
     });
   } finally {
+    saveGuildHistoriesToDisk(guildHistories);
     if (!lifecycleStarted) {
       threadBindings.stop();
     }
