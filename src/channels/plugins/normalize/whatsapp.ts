@@ -1,7 +1,8 @@
 import { normalizeWhatsAppTarget } from "../../../whatsapp/normalize.js";
+import { looksLikeHandleOrPhoneTarget, trimMessagingTarget } from "./shared.js";
 
 export function normalizeWhatsAppMessagingTarget(raw: string): string | undefined {
-  const trimmed = raw.trim();
+  const trimmed = trimMessagingTarget(raw);
   if (!trimmed) {
     return undefined;
   }
@@ -9,15 +10,8 @@ export function normalizeWhatsAppMessagingTarget(raw: string): string | undefine
 }
 
 export function looksLikeWhatsAppTargetId(raw: string): boolean {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (/^whatsapp:/i.test(trimmed)) {
-    return true;
-  }
-  if (trimmed.includes("@")) {
-    return true;
-  }
-  return /^\+?\d{3,}$/.test(trimmed);
+  return looksLikeHandleOrPhoneTarget({
+    raw,
+    prefixPattern: /^whatsapp:/i,
+  });
 }
