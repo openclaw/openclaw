@@ -42,6 +42,7 @@ async function getRunReplyAgent() {
 }
 
 vi.mock("../../agents/model-fallback.js", () => ({
+  createModelFallbackLogger: vi.fn().mockReturnValue(vi.fn()),
   runWithModelFallback: async ({
     provider,
     model,
