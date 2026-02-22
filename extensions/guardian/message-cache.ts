@@ -126,8 +126,13 @@ function pruneCache(): void {
  * tool call, tool result, then another text reply). All assistant messages
  * between two user messages are concatenated into a single string.
  *
- * Message flow: [assistant₁a, assistant₁b, user₁, assistant₂, user₂, ...]
- * → turns: [{user: user₁, assistant: "assistant₁a\nassistant₁b"}, {user: user₂, assistant: assistant₂}]
+ * Message flow: [assistant₁a, assistant₁b, user₁, assistant₂, user₂, assistant₃, assistant₃b]
+ * → turns: [{user: user₁, assistant: "assistant₁a\nassistant₁b"}, {user: user₂, assistant: "assistant₂\nassistant₃\nassistant₃b"}]
+ *
+ * Note: trailing assistant messages (after the last user message) are appended
+ * to the last turn. This is critical for autonomous iteration — when the model
+ * is calling tools in a loop without new user input, the guardian still needs
+ * to see what the model has been doing.
  */
 export function extractConversationTurns(historyMessages: unknown[]): ConversationTurn[] {
   const turns: ConversationTurn[] = [];
@@ -159,6 +164,21 @@ export function extractConversationTurns(historyMessages: unknown[]): Conversati
       });
       // Reset — start collecting assistant messages for the next turn
       assistantParts.length = 0;
+    }
+  }
+
+  // If there are trailing assistant messages after the last user message,
+  // attach them to the last turn. This happens when the main model is
+  // iterating autonomously (tool call → response → tool call → ...)
+  // without any new user input. The guardian needs to see what the model
+  // has been doing/saying in order to judge the next tool call.
+  if (assistantParts.length > 0 && turns.length > 0) {
+    const lastTurn = turns[turns.length - 1];
+    const trailingAssistant = mergeAssistantParts(assistantParts);
+    if (trailingAssistant) {
+      lastTurn.assistant = lastTurn.assistant
+        ? lastTurn.assistant + "\n" + trailingAssistant
+        : trailingAssistant;
     }
   }
 

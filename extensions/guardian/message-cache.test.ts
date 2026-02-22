@@ -104,6 +104,54 @@ describe("message-cache", () => {
       expect(turns[0].assistant).toBe("a".repeat(500) + "\n" + "b".repeat(500));
     });
 
+    it("appends trailing assistant messages to last turn", () => {
+      const history = [
+        { role: "user", content: "用subagent来检查文件" },
+        { role: "assistant", content: "好的，我来执行" },
+        { role: "assistant", content: "接下来我要启动服务" },
+      ];
+
+      const turns = extractConversationTurns(history);
+      expect(turns).toHaveLength(1);
+      expect(turns[0].user).toBe("用subagent来检查文件");
+      // Both trailing assistant messages are appended to the last turn
+      expect(turns[0].assistant).toContain("好的，我来执行");
+      expect(turns[0].assistant).toContain("接下来我要启动服务");
+    });
+
+    it("appends trailing assistant messages after multiple turns", () => {
+      const history = [
+        { role: "assistant", content: "What can I help you with?" },
+        { role: "user", content: "Check disk" },
+        { role: "assistant", content: "Sure, checking..." },
+        { role: "user", content: "Also clean up temp" },
+        { role: "assistant", content: "I'll run df first" },
+        { role: "assistant", content: "Now cleaning temp files" },
+        { role: "assistant", content: "Found 5 files to delete" },
+      ];
+
+      const turns = extractConversationTurns(history);
+      expect(turns).toHaveLength(2);
+      expect(turns[0].user).toBe("Check disk");
+      expect(turns[0].assistant).toBe("What can I help you with?");
+      expect(turns[1].user).toBe("Also clean up temp");
+      // The last turn should have all 3 trailing assistant messages
+      expect(turns[1].assistant).toContain("Sure, checking...");
+      expect(turns[1].assistant).toContain("I'll run df first");
+      expect(turns[1].assistant).toContain("Now cleaning temp files");
+      expect(turns[1].assistant).toContain("Found 5 files to delete");
+    });
+
+    it("ignores trailing assistant messages when there are no turns", () => {
+      const history = [
+        { role: "assistant", content: "Hello" },
+        { role: "assistant", content: "I'm doing something" },
+      ];
+
+      const turns = extractConversationTurns(history);
+      expect(turns).toHaveLength(0);
+    });
+
     it("handles multimodal assistant content", () => {
       const history = [
         {
@@ -258,8 +306,8 @@ describe("message-cache", () => {
 
       const turns = getRecentTurns("session-1");
       expect(turns).toEqual([
-        { user: "Previous message", assistant: undefined },
-        { user: "Current user prompt", assistant: undefined },
+        { user: "Previous message", assistant: "Response" },
+        { user: "Current user prompt" },
       ]);
     });
 
