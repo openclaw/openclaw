@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import sharp from "sharp";
 import { describe, expect, it, vi } from "vitest";
 import { monitorWebChannel } from "./auto-reply.js";
@@ -63,21 +64,106 @@ describe("web auto-reply", () => {
     };
   }
 
-  it("honors mediaMaxMb from config", async () => {
-    setLoadConfigMock(() => ({ agents: { defaults: { mediaMaxMb: 1 } } }));
-    const sendMedia = vi.fn();
-    const { reply, dispatch } = await setupSingleInboundMessage({
-      resolverValue: {
-        text: "hi",
-        mediaUrl: "https://example.com/big.png",
-      },
-      sendMedia,
-    });
+  async function withMediaCap<T>(mediaMaxMb: number, run: () => Promise<T>): Promise<T> {
+    setLoadConfigMock(() => ({ agents: { defaults: { mediaMaxMb } } }));
+    try {
+      return await run();
+    } finally {
+      resetLoadConfigMock();
+    }
+  }
 
+  function mockFetchMediaBuffer(buffer: Buffer, mime: string) {
+    return vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      body: true,
+      arrayBuffer: async () =>
+        buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength),
+      headers: { get: () => mime },
+      status: 200,
+    } as unknown as Response);
+  }
+
+  async function expectCompressedImageWithinCap(params: {
+    mediaUrl: string;
+    mime: string;
+    image: Buffer;
+    messageId: string;
+    mediaMaxMb?: number;
+  }) {
+    await withMediaCap(params.mediaMaxMb ?? 1, async () => {
+      const sendMedia = vi.fn();
+      const { reply, dispatch } = await setupSingleInboundMessage({
+        resolverValue: { text: "hi", mediaUrl: params.mediaUrl },
+        sendMedia,
+      });
+      const fetchMock = mockFetchMediaBuffer(params.image, params.mime);
+
+      await dispatch(params.messageId);
+
+      const payload = getSingleImagePayload(sendMedia);
+      expect(payload.image.length).toBeLessThanOrEqual((params.mediaMaxMb ?? 1) * 1024 * 1024);
+      expect(payload.mimetype).toBe("image/jpeg");
+      expect(reply).not.toHaveBeenCalled();
+      fetchMock.mockRestore();
+    });
+  }
+
+  it("compresses common formats to jpeg under the cap", { timeout: 45_000 }, async () => {
+    const formats = [
+      {
+        name: "png",
+        mime: "image/png",
+        make: (buf: Buffer, opts: { width: number; height: number }) =>
+          sharp(buf, {
+            raw: { width: opts.width, height: opts.height, channels: 3 },
+          })
+            .png({ compressionLevel: 0 })
+            .toBuffer(),
+      },
+      {
+        name: "jpeg",
+        mime: "image/jpeg",
+        make: (buf: Buffer, opts: { width: number; height: number }) =>
+          sharp(buf, {
+            raw: { width: opts.width, height: opts.height, channels: 3 },
+          })
+            .jpeg({ quality: 90 })
+            .toBuffer(),
+      },
+      {
+        name: "webp",
+        mime: "image/webp",
+        make: (buf: Buffer, opts: { width: number; height: number }) =>
+          sharp(buf, {
+            raw: { width: opts.width, height: opts.height, channels: 3 },
+          })
+            .webp({ quality: 100 })
+            .toBuffer(),
+      },
+    ] as const;
+
+    const width = 1150;
+    const height = 1150;
+    const sharedRaw = crypto.randomBytes(width * height * 3);
+
+    for (const fmt of formats) {
+      const big = await fmt.make(sharedRaw, { width, height });
+      expect(big.length).toBeGreaterThan(1 * 1024 * 1024);
+      await expectCompressedImageWithinCap({
+        mediaUrl: `https://example.com/big.${fmt.name}`,
+        mime: fmt.mime,
+        image: big,
+        messageId: `msg-${fmt.name}`,
+      });
+    }
+  });
+
+  it("honors mediaMaxMb from config", async () => {
     const bigPng = await sharp({
       create: {
-        width: 900,
-        height: 900,
+        width: 1200,
+        height: 1200,
         channels: 3,
         background: { r: 0, g: 0, b: 255 },
       },
@@ -85,25 +171,12 @@ describe("web auto-reply", () => {
       .png({ compressionLevel: 0 })
       .toBuffer();
     expect(bigPng.length).toBeGreaterThan(1 * 1024 * 1024);
-
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
-      ok: true,
-      body: true,
-      arrayBuffer: async () =>
-        bigPng.buffer.slice(bigPng.byteOffset, bigPng.byteOffset + bigPng.byteLength),
-      headers: { get: () => "image/png" },
-      status: 200,
-    } as unknown as Response);
-
-    await dispatch("msg-big");
-
-    const payload = getSingleImagePayload(sendMedia);
-    expect(payload.image.length).toBeLessThanOrEqual(1 * 1024 * 1024);
-    expect(payload.mimetype).toBe("image/jpeg");
-    expect(reply).not.toHaveBeenCalled();
-
-    fetchMock.mockRestore();
-    resetLoadConfigMock();
+    await expectCompressedImageWithinCap({
+      mediaUrl: "https://example.com/big.png",
+      mime: "image/png",
+      image: bigPng,
+      messageId: "msg1",
+    });
   });
   it("falls back to text when media is unsupported", async () => {
     const sendMedia = vi.fn();

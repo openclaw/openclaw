@@ -53,6 +53,15 @@ async function createCompactionSessionFixture(entry: SessionEntry) {
 }
 
 describe("history helpers", () => {
+  function createHistoryMapWithTwoEntries() {
+    const historyMap = new Map<string, { sender: string; body: string }[]>();
+    historyMap.set("group", [
+      { sender: "A", body: "one" },
+      { sender: "B", body: "two" },
+    ]);
+    return historyMap;
+  }
+
   it("returns current message when history is empty", () => {
     const result = buildHistoryContext({
       historyText: "  ",
@@ -104,11 +113,7 @@ describe("history helpers", () => {
   });
 
   it("builds context from map and appends entry", () => {
-    const historyMap = new Map<string, { sender: string; body: string }[]>();
-    historyMap.set("group", [
-      { sender: "A", body: "one" },
-      { sender: "B", body: "two" },
-    ]);
+    const historyMap = createHistoryMapWithTwoEntries();
 
     const result = buildHistoryContextFromMap({
       historyMap,
@@ -127,11 +132,7 @@ describe("history helpers", () => {
   });
 
   it("builds context from pending map without appending", () => {
-    const historyMap = new Map<string, { sender: string; body: string }[]>();
-    historyMap.set("group", [
-      { sender: "A", body: "one" },
-      { sender: "B", body: "two" },
-    ]);
+    const historyMap = createHistoryMapWithTwoEntries();
 
     const result = buildPendingHistoryContextFromMap({
       historyMap,
