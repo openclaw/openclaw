@@ -1,0 +1,68 @@
+{
+  "meta": {
+    "description": "Multi-channel config for Pi with Telegram + Slack",
+    "platform": "Raspberry Pi 5 (8GB RAM)",
+    "provider": "AWS Bedrock",
+    "channels": ["telegram", "slack"]
+  },
+  "models": {
+    "bedrockDiscovery": {
+      "enabled": true,
+      "region": "us-east-1",
+      "providerFilter": ["anthropic"]
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "amazon-bedrock/us.anthropic.claude-sonnet-4-6"
+      },
+      "maxConcurrent": 2,
+      "subagents": {
+        "maxConcurrent": 4
+      },
+      "compaction": {
+        "mode": "safeguard"
+      }
+    }
+  },
+  "channels": {
+    "telegram": {
+      "dmPolicy": "open",
+      "allowFrom": ["*"],
+      "groupPolicy": "open",
+      "streamMode": "partial",
+      "botToken": "YOUR_TELEGRAM_BOT_TOKEN"
+    },
+    "slack": {
+      "mode": "socket",
+      "dmPolicy": "open",
+      "groupPolicy": "open",
+      "allowFrom": ["*"],
+      "botToken": "YOUR_SLACK_BOT_TOKEN",
+      "appToken": "YOUR_SLACK_APP_TOKEN"
+    }
+  },
+  "gateway": {
+    "mode": "local",
+    "bind": "lan",
+    "controlUi": {
+      "allowInsecureAuth": false
+    },
+    "auth": {
+      "mode": "token",
+      "token": "GENERATE_SECURE_TOKEN_HERE"
+    },
+    "trustedProxies": ["127.0.0.1"]
+  },
+  "plugins": {
+    "entries": {
+      "telegram": {
+        "enabled": true
+      },
+      "slack": {
+        "enabled": true
+      }
+    }
+  }
+}

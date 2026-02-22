@@ -40,6 +40,27 @@ Recommended: set up a Brave Search API key so the agent can use `web_search`
 which stores `tools.web.search.apiKey`. Docs: [Web tools](/tools/web).
 </Tip>
 
+## Keyboard Navigation
+
+The wizard uses interactive menus for configuration. Understanding keyboard controls helps avoid confusion:
+
+**Navigation keys:**
+
+- **Arrow keys** (`↑`/`↓`) — Move between options
+- **Space** — Select/deselect options (multi-select menus)
+- **Enter** — Confirm selection and continue to next step
+- **ESC** — **Exit wizard completely** (does NOT go back to previous menu)
+
+<Warning>
+**ESC exits the entire wizard**, not just the current menu. If you press ESC accidentally, you'll need to restart `openclaw configure` or `openclaw onboard` from the beginning. Your previous selections will be saved if they were already committed to config.
+</Warning>
+
+**Common pitfalls:**
+
+- After making a selection in multi-select menus (like choosing models or channels), the menu may appear again to let you add more selections. Press **Enter** without selecting anything to move to the next step.
+- If you're unsure whether to press Enter or ESC, press **Enter** — it's always the safe choice for continuing.
+- To go back to a previous step, you currently need to exit and restart the wizard. Use **Ctrl+C** instead of ESC if you want to abort cleanly.
+
 ## QuickStart vs Advanced
 
 The wizard starts with **QuickStart** (defaults) vs **Advanced** (full control).

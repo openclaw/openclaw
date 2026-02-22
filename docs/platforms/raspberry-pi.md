@@ -263,6 +263,59 @@ Since the Pi is just the Gateway (models run in the cloud), use API-based models
 
 **Don't try to run local LLMs on a Pi** — even small models are too slow. Let Claude/GPT do the heavy lifting.
 
+### AWS Bedrock on Raspberry Pi
+
+AWS Bedrock works excellently on Raspberry Pi 5. Tested configuration:
+
+**Install AWS CLI (ARM64):**
+
+```bash
+curl "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o "awscliv2.zip"
+unzip awscliv2.zip
+sudo ./aws/install
+aws --version
+```
+
+**Configure credentials:**
+
+```bash
+aws configure
+# Enter your AWS Access Key ID
+# Enter your AWS Secret Access Key
+# Default region: us-east-1
+# Default output format: json
+```
+
+**Enable Bedrock discovery:**
+
+```bash
+openclaw config set models.bedrockDiscovery.enabled true
+openclaw config set models.bedrockDiscovery.region us-east-1
+```
+
+**Set primary model:**
+
+```bash
+openclaw config set agents.defaults.model.primary \
+  "amazon-bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0"
+```
+
+**Note:** Use the `us.` prefix for cross-region inference. See the [Bedrock provider docs](/providers/bedrock) for details.
+
+**Tested models on Pi 5 (all working):**
+
+- Claude Opus 4.5: `us.anthropic.claude-opus-4-5-20251101-v1:0`
+- Claude Sonnet 4.6: `us.anthropic.claude-sonnet-4-6`
+- Claude Haiku 4.5: `us.anthropic.claude-haiku-4-5-20251001-v1:0`
+
+**Performance benchmarks (Pi 5, 8GB):**
+
+- Gateway startup: 3-5 seconds
+- First response: 5-8 seconds (Claude Opus 4.5)
+- Subsequent responses: 3-5 seconds
+- Memory usage (idle): 400-600 MB
+- Memory usage (3 agents): 800-1200 MB
+
 ---
 
 ## Auto-Start on Boot
@@ -331,6 +384,25 @@ sudo iwconfig wlan0 power off
 # Make permanent
 echo 'wireless-power off' | sudo tee -a /etc/network/interfaces
 ```
+
+### Telegram Bot Not Responding
+
+If your Telegram bot receives messages but doesn't respond:
+
+```bash
+# Stop the gateway
+sudo systemctl stop openclaw
+
+# Delete the Telegram offset file
+rm ~/.openclaw/telegram/update-offset-default.json
+
+# Start the gateway
+sudo systemctl start openclaw
+
+# Test by sending a message
+```
+
+This resets Telegram's message tracking state. See [Issue #20503](https://github.com/openclaw/openclaw/issues/20503) for details.
 
 ---
 

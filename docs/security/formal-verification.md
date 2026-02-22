@@ -23,7 +23,9 @@ misconfiguration safety), under explicit assumptions.
 
 ## Where the models live
 
-Models are maintained in a separate repo: [vignesh07/openclaw-formal-models](https://github.com/vignesh07/openclaw-formal-models).
+The formal verification models are currently maintained separately from the main OpenClaw repository. The models repository is not yet publicly available.
+
+For questions about formal verification or to request access to the models, please contact the maintainer responsible for formal modeling (see [Contributing Guide](https://github.com/openclaw/openclaw/blob/main/CONTRIBUTING.md)).
 
 ## Important caveats
 
@@ -33,22 +35,19 @@ Models are maintained in a separate repo: [vignesh07/openclaw-formal-models](htt
 
 ## Reproducing results
 
-Today, results are reproduced by cloning the models repo locally and running TLC (see below). A future iteration could offer:
+The formal verification models use TLA+ with the TLC model checker. A future iteration could offer:
 
+- Public models repository with clone/run instructions
 - CI-run models with public artifacts (counterexample traces, run logs)
-- a hosted “run this model” workflow for small, bounded checks
+- A hosted “run this model” workflow for small, bounded checks
 
-Getting started:
+**Requirements** (when models are available):
 
-```bash
-git clone https://github.com/vignesh07/openclaw-formal-models
-cd openclaw-formal-models
+- Java 11+ (TLC runs on the JVM)
+- TLA+ tools (`tla2tools.jar`)
+- Make (for running model targets)
 
-# Java 11+ required (TLC runs on the JVM).
-# The repo vendors a pinned `tla2tools.jar` (TLA+ tools) and provides `bin/tlc` + Make targets.
-
-make <target>
-```
+The models below describe the intended checks and can serve as a reference for understanding OpenClaw's security properties.
 
 ### Gateway exposure and open gateway misconfiguration
 

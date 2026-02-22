@@ -1,0 +1,57 @@
+{
+  "meta": {
+    "description": "Optimized config for Raspberry Pi 5 with AWS Bedrock",
+    "platform": "Raspberry Pi 5 (8GB RAM)",
+    "provider": "AWS Bedrock",
+    "tested": "2026-02-18"
+  },
+  "models": {
+    "bedrockDiscovery": {
+      "enabled": true,
+      "region": "us-east-1",
+      "providerFilter": ["anthropic"],
+      "refreshInterval": 3600,
+      "defaultContextWindow": 200000,
+      "defaultMaxTokens": 8192
+    },
+    "providers": {
+      "amazon-bedrock": {
+        "baseUrl": "https://bedrock-runtime.us-east-1.amazonaws.com",
+        "auth": "aws-sdk",
+        "api": "bedrock-converse-stream"
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "amazon-bedrock/us.anthropic.claude-opus-4-5-20251101-v1:0"
+      },
+      "maxConcurrent": 2,
+      "subagents": {
+        "maxConcurrent": 4
+      },
+      "compaction": {
+        "mode": "safeguard"
+      }
+    }
+  },
+  "channels": {
+    "telegram": {
+      "dmPolicy": "open",
+      "allowFrom": ["*"],
+      "groupPolicy": "open",
+      "streamMode": "partial"
+    }
+  },
+  "gateway": {
+    "mode": "local",
+    "bind": "lan",
+    "controlUi": {
+      "allowInsecureAuth": false
+    },
+    "auth": {
+      "mode": "token"
+    }
+  }
+}

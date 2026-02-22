@@ -33,6 +33,7 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
   - [Where are the cloud/VPS install guides?](#where-are-the-cloudvps-install-guides)
   - [Can I ask OpenClaw to update itself?](#can-i-ask-openclaw-to-update-itself)
   - [What does the onboarding wizard actually do?](#what-does-the-onboarding-wizard-actually-do)
+  - [I pressed ESC in openclaw configure and it quit - how do I go back?](#i-pressed-esc-in-openclaw-configure-and-it-quit-how-do-i-go-back)
   - [Do I need a Claude or OpenAI subscription to run this?](#do-i-need-a-claude-or-openai-subscription-to-run-this)
   - [Can I use Claude Max subscription without an API key](#can-i-use-claude-max-subscription-without-an-api-key)
   - [How does Anthropic "setup-token" auth work?](#how-does-anthropic-setuptoken-auth-work)
@@ -664,6 +665,22 @@ Docs: [Update](/cli/update), [Updating](/install/updating).
 - **Health checks** and **skills** selection
 
 It also warns if your configured model is unknown or missing auth.
+
+### I pressed ESC in openclaw configure and it quit how do I go back
+
+**Short answer:** You can't go back — ESC exits the entire wizard.
+
+**Why:** The `openclaw configure` and `openclaw onboard` wizards use ESC to exit completely, not to return to the previous menu. This is different from some other CLI tools where ESC acts as a "back" button.
+
+**What to do:**
+
+- **To continue:** Press **Enter** to confirm selections and move to the next step
+- **To abort cleanly:** Use **Ctrl+C** instead of ESC if you want to stop
+- **If you pressed ESC accidentally:** Re-run `openclaw configure` or `openclaw onboard`. Your previous selections will be saved if they were already committed to config.
+
+**Tip:** In multi-select menus (like choosing models or channels), the menu may reappear after making a selection to let you add more. Press **Enter** without selecting anything to move to the next step — don't press ESC thinking it will continue.
+
+More details: [Onboarding Wizard](/start/wizard#keyboard-navigation)
 
 ### Do I need a Claude or OpenAI subscription to run this
 
