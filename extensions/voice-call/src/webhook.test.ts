@@ -1,3 +1,4 @@
+import type http from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema, type VoiceCallConfig } from "./config.js";
 import type { CallManager } from "./manager.js";
@@ -51,6 +52,15 @@ const createManager = (calls: CallRecord[]) => {
   } as unknown as CallManager;
 
   return { manager, endCall };
+};
+
+const getListeningPort = (server: VoiceCallWebhookServer): number => {
+  const internalServer = (server as unknown as { server: http.Server | null }).server;
+  const address = internalServer?.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Webhook server is not listening");
+  }
+  return address.port;
 };
 
 describe("VoiceCallWebhookServer stale call reaper", () => {
@@ -111,6 +121,46 @@ describe("VoiceCallWebhookServer stale call reaper", () => {
       await server.start();
       await vi.advanceTimersByTimeAsync(60_000);
       expect(endCall).not.toHaveBeenCalled();
+    } finally {
+      await server.stop();
+    }
+  });
+});
+
+describe("VoiceCallWebhookServer request path checks", () => {
+  it("accepts requests on the configured webhook path", async () => {
+    const { manager } = createManager([]);
+    const config = createConfig({ serve: { port: 0, bind: "127.0.0.1", path: "/voice/webhook" } });
+    const server = new VoiceCallWebhookServer(config, manager, provider);
+
+    try {
+      await server.start();
+      const port = getListeningPort(server);
+      const response = await fetch(`http://127.0.0.1:${port}/voice/webhook`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: "CallSid=CA123",
+      });
+      expect(response.status).toBe(200);
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("rejects prefixed paths that only start with the webhook path", async () => {
+    const { manager } = createManager([]);
+    const config = createConfig({ serve: { port: 0, bind: "127.0.0.1", path: "/voice/webhook" } });
+    const server = new VoiceCallWebhookServer(config, manager, provider);
+
+    try {
+      await server.start();
+      const port = getListeningPort(server);
+      const response = await fetch(`http://127.0.0.1:${port}/voice/webhook-attacker`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: "CallSid=CA123",
+      });
+      expect(response.status).toBe(404);
     } finally {
       await server.stop();
     }

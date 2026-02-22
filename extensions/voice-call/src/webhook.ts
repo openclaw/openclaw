@@ -18,6 +18,14 @@ import type { NormalizedEvent, WebhookContext } from "./types.js";
 
 const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024;
 
+function normalizeWebhookPath(pathname: string): string {
+  const normalized = pathname.startsWith("/") ? pathname : `/${pathname}`;
+  if (normalized.length > 1 && normalized.endsWith("/")) {
+    return normalized.slice(0, -1);
+  }
+  return normalized;
+}
+
 /**
  * HTTP server for receiving voice call webhooks from providers.
  * Supports WebSocket upgrades for media streams when streaming is enabled.
@@ -278,9 +286,11 @@ export class VoiceCallWebhookServer {
     webhookPath: string,
   ): Promise<void> {
     const url = new URL(req.url || "/", `http://${req.headers.host}`);
+    const requestPath = normalizeWebhookPath(url.pathname);
+    const expectedPath = normalizeWebhookPath(webhookPath);
 
     // Check path
-    if (!url.pathname.startsWith(webhookPath)) {
+    if (requestPath !== expectedPath) {
       res.statusCode = 404;
       res.end("Not Found");
       return;
