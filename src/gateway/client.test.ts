@@ -6,6 +6,7 @@ const wsInstances = vi.hoisted((): MockWebSocket[] => []);
 const clearDeviceAuthTokenMock = vi.hoisted(() => vi.fn());
 const clearDevicePairingMock = vi.hoisted(() => vi.fn());
 const logDebugMock = vi.hoisted(() => vi.fn());
+const loadOrCreateDeviceIdentityMock = vi.hoisted(() => vi.fn());
 
 type WsEvent = "open" | "message" | "close" | "error";
 type WsEventHandlers = {
@@ -74,6 +75,14 @@ vi.mock("../infra/device-pairing.js", async (importOriginal) => {
   return {
     ...actual,
     clearDevicePairing: (...args: unknown[]) => clearDevicePairingMock(...args),
+  };
+});
+
+vi.mock("../infra/device-identity.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../infra/device-identity.js")>();
+  return {
+    ...actual,
+    loadOrCreateDeviceIdentity: (...args: unknown[]) => loadOrCreateDeviceIdentityMock(...args),
   };
 });
 
@@ -256,6 +265,114 @@ describe("GatewayClient close handling", () => {
       expect.stringContaining("failed clearing stale device pairing"),
     );
     expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch");
+    client.stop();
+  });
+});
+
+describe("GatewayClient skipDeviceIdentity", () => {
+  const autoLoadedIdentity: DeviceIdentity = {
+    deviceId: "auto-loaded-device",
+    privateKeyPem: "auto-private-key",
+    publicKeyPem: "auto-public-key",
+  };
+
+  beforeEach(() => {
+    wsInstances.length = 0;
+    loadOrCreateDeviceIdentityMock.mockReset();
+    loadOrCreateDeviceIdentityMock.mockReturnValue(autoLoadedIdentity);
+    clearDeviceAuthTokenMock.mockReset();
+    clearDevicePairingMock.mockReset();
+    clearDevicePairingMock.mockResolvedValue(true);
+  });
+
+  it("does not auto-load device identity when skipDeviceIdentity is true", () => {
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      skipDeviceIdentity: true,
+    });
+
+    // loadOrCreateDeviceIdentity should NOT be called
+    expect(loadOrCreateDeviceIdentityMock).not.toHaveBeenCalled();
+
+    // Start the client to verify it creates a WS without device info
+    client.start();
+    expect(wsInstances.length).toBe(1);
+    client.stop();
+  });
+
+  it("auto-loads device identity when skipDeviceIdentity is not set", () => {
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+    });
+
+    // loadOrCreateDeviceIdentity should be called as fallback
+    expect(loadOrCreateDeviceIdentityMock).toHaveBeenCalledOnce();
+
+    client.start();
+    client.stop();
+  });
+
+  it("skipDeviceIdentity takes precedence over explicit deviceIdentity", () => {
+    const explicitIdentity: DeviceIdentity = {
+      deviceId: "explicit-device",
+      privateKeyPem: "explicit-private-key",
+      publicKeyPem: "explicit-public-key",
+    };
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      deviceIdentity: explicitIdentity,
+      skipDeviceIdentity: true,
+    });
+
+    // Even with explicit deviceIdentity provided, skip takes precedence
+    expect(loadOrCreateDeviceIdentityMock).not.toHaveBeenCalled();
+
+    // The client should not attempt device-token-mismatch handling
+    // on close since it has no device identity
+    const onClose = vi.fn();
+    const clientWithClose = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      deviceIdentity: explicitIdentity,
+      skipDeviceIdentity: true,
+      onClose,
+    });
+    clientWithClose.start();
+    getLatestWs().emitClose(1008, "unauthorized: device token mismatch");
+
+    // clearDeviceAuthToken should NOT be called since device identity was skipped
+    expect(clearDeviceAuthTokenMock).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch");
+    clientWithClose.stop();
+    client.stop();
+  });
+
+  it("uses explicit deviceIdentity when skipDeviceIdentity is false", () => {
+    const explicitIdentity: DeviceIdentity = {
+      deviceId: "explicit-device",
+      privateKeyPem: "explicit-private-key",
+      publicKeyPem: "explicit-public-key",
+    };
+    const onClose = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      deviceIdentity: explicitIdentity,
+      onClose,
+    });
+
+    // Should NOT call loadOrCreateDeviceIdentity because explicit identity was provided
+    expect(loadOrCreateDeviceIdentityMock).not.toHaveBeenCalled();
+
+    // Verify the explicit identity is used (device-token-mismatch uses deviceId)
+    client.start();
+    clearDeviceAuthTokenMock.mockReset();
+    clearDevicePairingMock.mockReset();
+    clearDevicePairingMock.mockResolvedValue(true);
+    getLatestWs().emitClose(1008, "unauthorized: device token mismatch");
+
+    expect(clearDeviceAuthTokenMock).toHaveBeenCalledWith({
+      deviceId: "explicit-device",
+      role: "operator",
+    });
     client.stop();
   });
 });

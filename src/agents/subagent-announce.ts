@@ -475,6 +475,9 @@ async function sendAnnounce(item: AnnounceQueueItem) {
       enqueuedAt: item.enqueuedAt,
     }),
   );
+  defaultRuntime.log(
+    `[announce] queue dispatch: method=agent sessionKey=${item.sessionKey} channel=${origin?.channel} to=${origin?.to} deliver=${!requesterIsSubagent} skipDeviceIdentity=true`,
+  );
   await callGateway({
     method: "agent",
     params: {
@@ -488,6 +491,7 @@ async function sendAnnounce(item: AnnounceQueueItem) {
       idempotencyKey,
     },
     timeoutMs: 15_000,
+    skipDeviceIdentity: true,
   });
 }
 
@@ -663,6 +667,9 @@ async function sendSubagentAnnounceDirectly(params: {
           completionDirectOrigin?.threadId != null && completionDirectOrigin.threadId !== ""
             ? String(completionDirectOrigin.threadId)
             : undefined;
+        defaultRuntime.log(
+          `[announce] completion direct send: channel=${completionChannel} to=${completionTo} threadId=${completionThreadId} skipDeviceIdentity=true`,
+        );
         await callGateway({
           method: "send",
           params: {
@@ -675,6 +682,7 @@ async function sendSubagentAnnounceDirectly(params: {
             idempotencyKey: params.directIdempotencyKey,
           },
           timeoutMs: 15_000,
+          skipDeviceIdentity: true,
         });
 
         return {
@@ -689,6 +697,9 @@ async function sendSubagentAnnounceDirectly(params: {
       directOrigin?.threadId != null && directOrigin.threadId !== ""
         ? String(directOrigin.threadId)
         : undefined;
+    defaultRuntime.log(
+      `[announce] direct agent: channel=${directOrigin?.channel} to=${directOrigin?.to} threadId=${threadId} deliver=${!params.requesterIsSubagent} skipDeviceIdentity=true`,
+    );
     await callGateway({
       method: "agent",
       params: {
@@ -703,6 +714,7 @@ async function sendSubagentAnnounceDirectly(params: {
       },
       expectFinal: true,
       timeoutMs: 15_000,
+      skipDeviceIdentity: true,
     });
 
     return {
@@ -929,6 +941,12 @@ export async function runSubagentAnnounceFlow(params: {
   expectsCompletionMessage?: boolean;
   spawnMode?: SpawnSubagentMode;
 }): Promise<boolean> {
+  defaultRuntime.log(
+    `[announce] runSubagentAnnounceFlow START: childRunId=${params.childRunId} ` +
+      `requesterSession=${params.requesterSessionKey} ` +
+      `origin.channel=${params.requesterOrigin?.channel} origin.to=${params.requesterOrigin?.to} ` +
+      `announceType=${params.announceType ?? "unknown"} expectsCompletion=${params.expectsCompletionMessage}`,
+  );
   let didAnnounce = false;
   const expectsCompletionMessage = params.expectsCompletionMessage === true;
   let shouldDeleteChildSession = params.cleanup === "delete";
@@ -1189,6 +1207,9 @@ export async function runSubagentAnnounceFlow(params: {
       directIdempotencyKey,
     });
     didAnnounce = delivery.delivered;
+    defaultRuntime.log(
+      `[announce] delivery result: delivered=${delivery.delivered} path=${delivery.path} error=${delivery.error ?? "none"}`,
+    );
     if (!delivery.delivered && delivery.path === "direct" && delivery.error) {
       defaultRuntime.error?.(
         `Subagent completion direct announce failed for run ${params.childRunId}: ${delivery.error}`,

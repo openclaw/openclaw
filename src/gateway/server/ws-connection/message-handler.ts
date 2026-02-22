@@ -458,7 +458,11 @@ export function attachGatewayWsMessageHandler(params: {
           }
         };
         const handleMissingDeviceIdentity = (): boolean => {
-          if (!device) {
+          // Preserve self-declared scopes for token-authenticated localhost
+          // connections (e.g. internal gateway-client used by cron announce).
+          // These are trusted internal callers that may not carry a device
+          // identity but still need operator.write for announce delivery.
+          if (!device && !(sharedAuthOk && isLocalClient)) {
             clearUnboundScopes();
           }
           const decision = evaluateMissingDeviceIdentity({
