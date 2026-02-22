@@ -4,6 +4,7 @@ import type {
   GatewayTailscaleConfig,
   loadConfig,
 } from "../config/config.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import {
   assertGatewayAuthConfigured,
   type ResolvedGatewayAuth,
@@ -72,6 +73,10 @@ export async function resolveGatewayRuntimeConfig(params: {
   }
   const controlUiEnabled =
     params.controlUiEnabled ?? params.cfg.gateway?.controlUi?.enabled ?? true;
+  const controlUiAllowsInsecureAuth = params.cfg.gateway?.controlUi?.allowInsecureAuth === true;
+  const controlUiDisablesDeviceAuth =
+    params.cfg.gateway?.controlUi?.dangerouslyDisableDeviceAuth === true;
+  const controlUiBypassEnabled = controlUiAllowsInsecureAuth || controlUiDisablesDeviceAuth;
   const openAiChatCompletionsEnabled =
     params.openAiChatCompletionsEnabled ??
     params.cfg.gateway?.http?.endpoints?.chatCompletions?.enabled ??
@@ -105,6 +110,33 @@ export async function resolveGatewayRuntimeConfig(params: {
     process.env.OPENCLAW_SKIP_CANVAS_HOST !== "1" && params.cfg.canvasHost?.enabled !== false;
 
   const trustedProxies = params.cfg.gateway?.trustedProxies ?? [];
+  const allowDangerousFlags = isTruthyEnvValue(process.env.OPENCLAW_I_UNDERSTAND_RISK);
+
+  if (controlUiEnabled && controlUiBypassEnabled && !allowDangerousFlags) {
+    const enabledFlags = [
+      controlUiAllowsInsecureAuth ? "gateway.controlUi.allowInsecureAuth" : null,
+      controlUiDisablesDeviceAuth ? "gateway.controlUi.dangerouslyDisableDeviceAuth" : null,
+    ]
+      .filter(Boolean)
+      .join(", ");
+    throw new Error(
+      "refusing to start gateway with insecure Control UI flags " +
+        `(${enabledFlags}). ` +
+        "Set OPENCLAW_I_UNDERSTAND_RISK=1 for short-lived break-glass use.",
+    );
+  }
+
+  if (
+    controlUiEnabled &&
+    controlUiDisablesDeviceAuth &&
+    !isTruthyEnvValue(process.env.OPENCLAW_UNSAFE_ALLOW_CONTROL_UI_BYPASS)
+  ) {
+    throw new Error(
+      "refusing to start gateway with insecure Control UI bypass flags " +
+        "(gateway.controlUi.dangerouslyDisableDeviceAuth). " +
+        "Set OPENCLAW_UNSAFE_ALLOW_CONTROL_UI_BYPASS=1 and OPENCLAW_I_UNDERSTAND_RISK=1 only for short-lived break-glass use.",
+    );
+  }
 
   assertGatewayAuthConfigured(resolvedAuth);
   if (tailscaleMode === "funnel" && authMode !== "password") {
