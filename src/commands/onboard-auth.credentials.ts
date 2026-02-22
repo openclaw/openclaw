@@ -193,6 +193,14 @@ export async function setAnthropicApiKey(key: SecretInput, agentDir?: string) {
   });
 }
 
+export async function setOpenaiApiKey(key: SecretInput, agentDir?: string) {
+  upsertAuthProfile({
+    profileId: "openai:default",
+    credential: buildApiKeyCredential("openai", key),
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
 export async function setGeminiApiKey(key: SecretInput, agentDir?: string) {
   // Write to resolved agent dir so gateway finds credentials on startup.
   upsertAuthProfile({

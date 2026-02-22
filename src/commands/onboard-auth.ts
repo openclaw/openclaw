@@ -55,6 +55,7 @@ export {
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
   LITELLM_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
+  setOpenaiApiKey,
   setAnthropicApiKey,
   setCloudflareAiGatewayConfig,
   setQianfanApiKey,
