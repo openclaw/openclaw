@@ -32,6 +32,11 @@ export type OpenClawConfig = {
     /** ISO timestamp when this config was last written. */
     lastTouchedAt?: string;
   };
+  /**
+   * Convenience aliases for model selection (migrated to agents.defaults.models.*.alias).
+   * Example: { "fast": "ollama/minimax-m2.5:cloud" } allows /model fast
+   */
+  aliases?: Record<string, string>;
   auth?: AuthConfig;
   env?: {
     /** Opt-in: import missing secrets from a login shell environment (exec `$SHELL -l -c 'env -0'`). */

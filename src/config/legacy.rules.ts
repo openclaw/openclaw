@@ -133,4 +133,8 @@ export const LEGACY_CONFIG_RULES: LegacyConfigRule[] = [
     path: ["gateway", "token"],
     message: "gateway.token is ignored; use gateway.auth.token instead (auto-migrated on load).",
   },
+  {
+    path: ["aliases"],
+    message: "aliases was replaced by agents.defaults.models.*.alias (auto-migrated on load).",
+  },
 ];
