@@ -43,10 +43,15 @@ export async function handleDiscordMessageAction(
       Boolean(rawComponents) &&
       (typeof rawComponents === "function" || typeof rawComponents === "object");
     const components = hasComponents ? rawComponents : undefined;
-    const content = readStringParam(params, "message", {
-      required: !asVoice && !hasComponents,
-      allowEmpty: true,
-    });
+    // Accept "content" as fallback for "message" — OpenAI-convention models (xAI/Grok)
+    // stubbornly send "content" instead of "message" even when instructed otherwise.
+    // This mirrors the existing media/path/filePath fallback pattern.
+    const content =
+      readStringParam(params, "message", { required: false, allowEmpty: true }) ??
+      readStringParam(params, "content", {
+        required: !asVoice && !hasComponents,
+        allowEmpty: true,
+      });
     // Support media, path, and filePath for media URL
     const mediaUrl =
       readStringParam(params, "media", { trim: false }) ??
@@ -98,7 +103,7 @@ export async function handleDiscordMessageAction(
         answers,
         allowMultiselect,
         durationHours: durationHours ?? undefined,
-        content: readStringParam(params, "message"),
+        content: readStringParam(params, "message") ?? readStringParam(params, "content"),
       },
       cfg,
     );
@@ -154,7 +159,9 @@ export async function handleDiscordMessageAction(
 
   if (action === "edit") {
     const messageId = readStringParam(params, "messageId", { required: true });
-    const content = readStringParam(params, "message", { required: true });
+    const content =
+      readStringParam(params, "message", { required: false }) ??
+      readStringParam(params, "content", { required: true });
     return await handleDiscordAction(
       {
         action: "editMessage",
@@ -208,7 +215,7 @@ export async function handleDiscordMessageAction(
   if (action === "thread-create") {
     const name = readStringParam(params, "threadName", { required: true });
     const messageId = readStringParam(params, "messageId");
-    const content = readStringParam(params, "message");
+    const content = readStringParam(params, "message") ?? readStringParam(params, "content");
     const autoArchiveMinutes = readNumberParam(params, "autoArchiveMin", {
       integer: true,
     });
@@ -238,7 +245,7 @@ export async function handleDiscordMessageAction(
         accountId: accountId ?? undefined,
         to: readStringParam(params, "to", { required: true }),
         stickerIds,
-        content: readStringParam(params, "message"),
+        content: readStringParam(params, "message") ?? readStringParam(params, "content"),
       },
       cfg,
     );
