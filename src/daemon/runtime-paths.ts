@@ -153,6 +153,27 @@ export function renderSystemNodeWarning(
   return `System Node ${versionLabel} at ${systemNode.path} is below the required Node 22+.${selectedLabel} Install Node 22+ from nodejs.org or Homebrew.`;
 }
 
+// Matches a path inside a Homebrew Cellar, e.g.:
+//   /home/linuxbrew/.linuxbrew/Cellar/node/25.6.1/bin/node
+//   /opt/homebrew/Cellar/node/25.6.1/bin/node
+//   /usr/local/Cellar/node/25.6.1/bin/node
+const HOMEBREW_CELLAR_RE = /^(.*?)\/Cellar\/node\/[^/]+\/bin\/node(\.exe)?$/;
+
+export async function resolveStableHomebrewPath(execPath: string): Promise<string> {
+  const match = HOMEBREW_CELLAR_RE.exec(execPath);
+  if (!match) {
+    return execPath;
+  }
+  const prefix = match[1];
+  const stablePath = `${prefix}/bin/node`;
+  try {
+    await fs.access(stablePath);
+    return stablePath;
+  } catch {
+    return execPath;
+  }
+}
+
 export async function resolvePreferredNodePath(params: {
   env?: Record<string, string | undefined>;
   runtime?: string;
@@ -166,8 +187,11 @@ export async function resolvePreferredNodePath(params: {
 
   // Prefer the node that is currently running `openclaw gateway install`.
   // This respects the user's active version manager (fnm/nvm/volta/etc.).
+  // If the path is a versioned Homebrew Cellar path, resolve it to the
+  // stable symlink so the daemon survives Node upgrades.
   const platform = params.platform ?? process.platform;
-  const currentExecPath = params.execPath ?? process.execPath;
+  const rawExecPath = params.execPath ?? process.execPath;
+  const currentExecPath = await resolveStableHomebrewPath(rawExecPath);
   if (currentExecPath && isNodeExecPath(currentExecPath, platform)) {
     const execFileImpl = params.execFile ?? execFileAsync;
     const version = await resolveNodeVersion(currentExecPath, execFileImpl);

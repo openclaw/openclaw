@@ -12,6 +12,7 @@ vi.mock("node:fs/promises", () => ({
 import {
   renderSystemNodeWarning,
   resolvePreferredNodePath,
+  resolveStableHomebrewPath,
   resolveSystemNodeInfo,
 } from "./runtime-paths.js";
 
@@ -155,6 +156,71 @@ describe("resolvePreferredNodePath", () => {
     });
 
     expect(result).toBeUndefined();
+  });
+});
+
+describe("resolveStableHomebrewPath", () => {
+  it("resolves Linux Homebrew Cellar path to stable symlink", async () => {
+    const cellarPath = "/home/linuxbrew/.linuxbrew/Cellar/node/25.6.1/bin/node";
+    const stablePath = "/home/linuxbrew/.linuxbrew/bin/node";
+
+    fsMocks.access.mockImplementation(async (target: string) => {
+      if (target === stablePath) {
+        return;
+      }
+      throw new Error("missing");
+    });
+
+    const result = await resolveStableHomebrewPath(cellarPath);
+    expect(result).toBe(stablePath);
+  });
+
+  it("resolves macOS Homebrew Cellar path to stable symlink", async () => {
+    const cellarPath = "/opt/homebrew/Cellar/node/25.6.1/bin/node";
+    const stablePath = "/opt/homebrew/bin/node";
+
+    fsMocks.access.mockImplementation(async (target: string) => {
+      if (target === stablePath) {
+        return;
+      }
+      throw new Error("missing");
+    });
+
+    const result = await resolveStableHomebrewPath(cellarPath);
+    expect(result).toBe(stablePath);
+  });
+
+  it("resolves Intel macOS Homebrew Cellar path to stable symlink", async () => {
+    const cellarPath = "/usr/local/Cellar/node/25.6.1/bin/node";
+    const stablePath = "/usr/local/bin/node";
+
+    fsMocks.access.mockImplementation(async (target: string) => {
+      if (target === stablePath) {
+        return;
+      }
+      throw new Error("missing");
+    });
+
+    const result = await resolveStableHomebrewPath(cellarPath);
+    expect(result).toBe(stablePath);
+  });
+
+  it("returns original path for non-Homebrew paths", async () => {
+    const fnmPath = "/Users/test/.fnm/node-versions/v24.11.1/installation/bin/node";
+
+    const result = await resolveStableHomebrewPath(fnmPath);
+
+    expect(result).toBe(fnmPath);
+    expect(fsMocks.access).not.toHaveBeenCalled();
+  });
+
+  it("falls back to original Cellar path when stable symlink does not exist", async () => {
+    const cellarPath = "/opt/homebrew/Cellar/node/25.6.1/bin/node";
+
+    fsMocks.access.mockRejectedValue(new Error("missing"));
+
+    const result = await resolveStableHomebrewPath(cellarPath);
+    expect(result).toBe(cellarPath);
   });
 });
 
