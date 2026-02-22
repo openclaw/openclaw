@@ -1,7 +1,7 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { vi } from "vitest";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { RuntimeEnv } from "../runtime.js";
 
 export function mockSessionsConfig() {
@@ -49,8 +49,9 @@ export function makeRuntime(params?: { throwOnError?: boolean }): {
 }
 
 export function writeStore(data: unknown, prefix = "sessions"): string {
+  const tmpDir = resolvePreferredOpenClawTmpDir();
   const file = path.join(
-    os.tmpdir(),
+    tmpDir,
     `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
   );
   fs.writeFileSync(file, JSON.stringify(data, null, 2));
