@@ -135,8 +135,8 @@ describe("/focus, /unfocus, /agents", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests();
     hoisted.callGatewayMock.mockReset();
-    hoisted.getThreadBindingManagerMock.mockReset();
-    hoisted.resolveThreadBindingThreadNameMock.mockReset().mockReturnValue("🤖 codex");
+    hoisted.getThreadBindingManagerMock.mockClear().mockReturnValue(null);
+    hoisted.resolveThreadBindingThreadNameMock.mockClear().mockReturnValue("🤖 codex");
   });
 
   it("/focus resolves ACP sessions and binds the current Discord thread", async () => {
