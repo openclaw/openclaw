@@ -10,7 +10,8 @@ import { resolveNodeIdFromCandidates } from "./node-match.js";
 
 describe("extractTextFromChatContent", () => {
   it("normalizes string content", () => {
-    expect(extractTextFromChatContent("  hello\nworld  ")).toBe("hello world");
+    // Preserve newlines for markdown table rendering in WebChat (#20410)
+    expect(extractTextFromChatContent("  hello\nworld  ")).toBe("hello\nworld");
   });
 
   it("extracts text blocks from array content", () => {

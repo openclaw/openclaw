@@ -6,7 +6,10 @@ export function extractTextFromChatContent(
     normalizeText?: (text: string) => string;
   },
 ): string | null {
-  const normalize = opts?.normalizeText ?? ((text: string) => text.replace(/\s+/g, " ").trim());
+  // Preserve newlines for proper markdown table/list rendering in WebChat (#20410)
+  // Only collapse non-newline whitespace, keep newlines intact
+  const normalize =
+    opts?.normalizeText ?? ((text: string) => text.replace(/[^\S\n]+/g, " ").trim());
   const joinWith = opts?.joinWith ?? " ";
 
   if (typeof content === "string") {
