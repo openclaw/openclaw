@@ -34,11 +34,13 @@ private fun CameraFlash(token: Long) {
     alpha = 0f
   }
 
-  Box(
-    modifier =
-      Modifier
-        .fillMaxSize()
-        .alpha(alpha)
-        .background(Color.White),
-  )
+  if (alpha > 0f){
+    Box(
+      modifier =
+        Modifier
+          .fillMaxSize()
+          .alpha(alpha)
+          .background(Color.White),
+    )
+  }
 }
