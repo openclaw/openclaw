@@ -72,53 +72,60 @@ export const DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS = 130_000;
 const DEFAULT_APPROVAL_RUNNING_NOTICE_MS = 10_000;
 const APPROVAL_SLUG_LENGTH = 8;
 
-export const execSchema = Type.Object({
-  command: Type.String({ description: "Shell command to execute" }),
-  workdir: Type.Optional(Type.String({ description: "Working directory (defaults to cwd)" })),
-  env: Type.Optional(Type.Record(Type.String(), Type.String())),
-  yieldMs: Type.Optional(
-    Type.Number({
-      description: "Milliseconds to wait before backgrounding (default 10000)",
-    }),
-  ),
-  background: Type.Optional(Type.Boolean({ description: "Run in background immediately" })),
-  timeout: Type.Optional(
-    Type.Number({
-      description: "Timeout in seconds (optional, kills process on expiry)",
-    }),
-  ),
-  pty: Type.Optional(
-    Type.Boolean({
-      description:
-        "Run in a pseudo-terminal (PTY) when available (TTY-required CLIs, coding agents)",
-    }),
-  ),
-  elevated: Type.Optional(
-    Type.Boolean({
-      description: "Run on the host with elevated permissions (if allowed)",
-    }),
-  ),
-  host: Type.Optional(
-    Type.String({
-      description: "Exec host (sandbox|gateway|node).",
-    }),
-  ),
-  security: Type.Optional(
-    Type.String({
-      description: "Exec security mode (deny|allowlist|full).",
-    }),
-  ),
-  ask: Type.Optional(
-    Type.String({
-      description: "Exec ask mode (off|on-miss|always).",
-    }),
-  ),
-  node: Type.Optional(
-    Type.String({
-      description: "Node id/name for host=node.",
-    }),
-  ),
-});
+export function createExecSchema(options?: { defaultHost?: ExecHost }) {
+  return Type.Object({
+    command: Type.String({ description: "Shell command to execute" }),
+    workdir: Type.Optional(Type.String({ description: "Working directory (defaults to cwd)" })),
+    env: Type.Optional(Type.Record(Type.String(), Type.String())),
+    yieldMs: Type.Optional(
+      Type.Number({
+        description: "Milliseconds to wait before backgrounding (default 10000)",
+      }),
+    ),
+    background: Type.Optional(Type.Boolean({ description: "Run in background immediately" })),
+    timeout: Type.Optional(
+      Type.Number({
+        description: "Timeout in seconds (optional, kills process on expiry)",
+      }),
+    ),
+    pty: Type.Optional(
+      Type.Boolean({
+        description:
+          "Run in a pseudo-terminal (PTY) when available (TTY-required CLIs, coding agents)",
+      }),
+    ),
+    elevated: Type.Optional(
+      Type.Boolean({
+        description: "Run on the host with elevated permissions (if allowed)",
+      }),
+    ),
+    host: Type.Optional(
+      Type.String({
+        description: "Exec host (sandbox|gateway|node).",
+        // When tools.exec.host is configured, reflect it as the tool schema default so
+        // parameter-filling models don't repeatedly request a disallowed host.
+        default: options?.defaultHost ?? "sandbox",
+      }),
+    ),
+    security: Type.Optional(
+      Type.String({
+        description: "Exec security mode (deny|allowlist|full).",
+      }),
+    ),
+    ask: Type.Optional(
+      Type.String({
+        description: "Exec ask mode (off|on-miss|always).",
+      }),
+    ),
+    node: Type.Optional(
+      Type.String({
+        description: "Node id/name for host=node.",
+      }),
+    ),
+  });
+}
+
+export const execSchema = createExecSchema();
 
 export type ExecProcessOutcome = {
   status: "completed" | "failed";

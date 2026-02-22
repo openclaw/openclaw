@@ -91,6 +91,11 @@ export const FIELD_HELP: Record<string, string> = {
     "When true (default), backgrounded exec sessions enqueue a system event and request a heartbeat on exit.",
   "tools.exec.notifyOnExitEmptySuccess":
     "When true, successful backgrounded exec exits with empty output still enqueue a completion system event (default: false).",
+  "tools.exec.host":
+    'Default exec host routing ("sandbox"|"gateway"|"node"). This is also reflected as the default in the exec tool schema shown to the model (default: "sandbox").',
+  "tools.exec.security":
+    'Default exec security mode ("deny"|"allowlist"|"full"). Default: "deny" (or "allowlist" on non-sandbox hosts).',
+  "tools.exec.ask": 'Default exec approval mode ("off"|"on-miss"|"always"). Default: "on-miss".',
   "tools.exec.pathPrepend": "Directories to prepend to PATH for exec runs (gateway/sandbox).",
   "tools.exec.safeBins":
     "Allow stdin-only safe binaries to run without explicit allowlist entries.",
