@@ -301,6 +301,7 @@ describe("createFollowupRunner messaging tool dedupe", () => {
 
 describe("createFollowupRunner passes agentDir to embedded run", () => {
   it("uses queued run agentDir when invoking runEmbeddedPiAgent", async () => {
+    runEmbeddedPiAgentMock.mockClear();
     const onBlockReply = vi.fn(async () => {});
     const agentDir = path.join("/tmp", "agent-dir");
     const queued = baseQueuedRun();
