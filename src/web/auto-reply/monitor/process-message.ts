@@ -27,6 +27,7 @@ import type { getChildLogger } from "../../../logging.js";
 import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
 import { readChannelAllowFromStore } from "../../../pairing/pairing-store.js";
 import type { resolveAgentRoute } from "../../../routing/resolve-route.js";
+import { resolveSendPolicy } from "../../../sessions/send-policy.js";
 import { jidToE164, normalizeE164 } from "../../../utils.js";
 import { resolveWhatsAppAccount } from "../../accounts.js";
 import { newConnectionId } from "../../reconnect.js";
@@ -139,6 +140,18 @@ export async function processMessage(params: {
   groupHistory?: GroupHistoryEntry[];
   suppressGroupHistoryClear?: boolean;
 }) {
+  // Gate first — skip all work if send policy denies.
+  const sendPolicy = resolveSendPolicy({
+    cfg: params.cfg,
+    sessionKey: params.route.sessionKey,
+    channel: "whatsapp",
+    chatType: params.msg.chatType,
+  });
+  if (sendPolicy === "deny") {
+    logVerbose(`Skipping auto-reply: send policy denied for ${params.route.sessionKey}`);
+    return false;
+  }
+
   const conversationId = params.msg.conversationId ?? params.msg.from;
   const storePath = resolveStorePath(params.cfg.session?.store, {
     agentId: params.route.agentId,
