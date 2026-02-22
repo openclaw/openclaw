@@ -77,6 +77,27 @@ related:
 - **결제:** 앱 유료 ₩9,900 (일회성, 7일 트라이얼)
 - **스킬:** clawhub `botalks` 스킬 (QR 페어링 + 딥링크)
 
+## App Store 배포 (2026-02-22)
+
+| 항목                     | 값                                     |
+| ------------------------ | -------------------------------------- |
+| Apple Team ID            | 54XQEMHTJU                             |
+| Bundle ID                | com.botalks.app                        |
+| ASC App ID               | 6759508239                             |
+| Distribution Certificate | AAFCFEA20F30E158... (만료: 2027-02-22) |
+| Provisioning Profile     | PF4B29M6GY                             |
+| ASC API Key              | 73SAA346TL                             |
+| EAS Project ID           | 71da9f38-678f-4fb5-973a-72b55d9d9eed   |
+| 빌드 성공 ID             | b308162e-b4a8-4043-a3e4-b9b4003cf62c   |
+| 제출 ID                  | 57d6b07f-a71b-4d93-b437-2167f53d047a   |
+
+### 배포 교훈
+
+- sharp 등 네이티브 패키지는 devDeps에서 제거 (EAS macOS 빌드 충돌)
+- 최초 빌드는 interactive 필수 (Apple 인증서 생성)
+- Apple 2FA: device 실패 시 sms로 전환
+- `ITSAppUsesNonExemptEncryption: false` 필수 설정
+
 ## 수익화
 
 - 앱 유료 ₩9,900 (일회성 구매, 무료 없음)
