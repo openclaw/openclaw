@@ -31,8 +31,14 @@ describe("isPidAlive", () => {
     });
 
     // Override platform to linux so the zombie check runs
-    const originalPlatform = process.platform;
-    Object.defineProperty(process, "platform", { value: "linux", writable: true });
+    const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    if (!originalPlatformDescriptor) {
+      throw new Error("missing process.platform descriptor");
+    }
+    Object.defineProperty(process, "platform", {
+      ...originalPlatformDescriptor,
+      value: "linux",
+    });
 
     try {
       // Re-import the module so it picks up the mocked platform and fs
@@ -40,7 +46,7 @@ describe("isPidAlive", () => {
       const { isPidAlive: freshIsPidAlive } = await import("./pid-alive.js");
       expect(freshIsPidAlive(zombiePid)).toBe(false);
     } finally {
-      Object.defineProperty(process, "platform", { value: originalPlatform, writable: true });
+      Object.defineProperty(process, "platform", originalPlatformDescriptor);
       vi.restoreAllMocks();
     }
   });

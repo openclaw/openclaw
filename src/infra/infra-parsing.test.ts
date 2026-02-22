@@ -56,6 +56,17 @@ describe("infra parsing", () => {
       ).toBe(true);
     });
 
+    it("returns true for dist/entry.js when launched via openclaw.mjs wrapper", () => {
+      expect(
+        isMainModule({
+          currentFile: "/repo/dist/entry.js",
+          argv: ["node", "/repo/openclaw.mjs"],
+          cwd: "/repo",
+          env: {},
+        }),
+      ).toBe(true);
+    });
+
     it("returns false when running under PM2 but this module is imported", () => {
       expect(
         isMainModule({
