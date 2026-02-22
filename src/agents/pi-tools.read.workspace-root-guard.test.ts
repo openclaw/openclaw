@@ -3,10 +3,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { wrapToolWorkspaceRootGuardWithOptions } from "./pi-tools.read.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
 
-const assertSandboxPath = vi.fn(async () => ({ resolved: "/tmp/root", relative: "" }));
+const mocks = vi.hoisted(() => ({
+  assertSandboxPath: vi.fn(async () => ({ resolved: "/tmp/root", relative: "" })),
+}));
 
 vi.mock("./sandbox-paths.js", () => ({
-  assertSandboxPath: (...args: unknown[]) => assertSandboxPath(...args),
+  assertSandboxPath: mocks.assertSandboxPath,
 }));
 
 function createToolHarness() {
@@ -26,7 +28,7 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
   const root = "/tmp/root";
 
   beforeEach(() => {
-    assertSandboxPath.mockClear();
+    mocks.assertSandboxPath.mockClear();
   });
 
   it("maps container workspace paths to host workspace root", async () => {
@@ -37,7 +39,7 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
 
     await wrapped.execute("tc1", { path: "/workspace/docs/readme.md" });
 
-    expect(assertSandboxPath).toHaveBeenCalledWith({
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
       filePath: path.resolve(root, "docs", "readme.md"),
       cwd: root,
       root,
@@ -52,7 +54,7 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
 
     await wrapped.execute("tc2", { path: "file:///workspace/docs/readme.md" });
 
-    expect(assertSandboxPath).toHaveBeenCalledWith({
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
       filePath: path.resolve(root, "docs", "readme.md"),
       cwd: root,
       root,
@@ -67,7 +69,7 @@ describe("wrapToolWorkspaceRootGuardWithOptions", () => {
 
     await wrapped.execute("tc3", { path: "/workspace-two/secret.txt" });
 
-    expect(assertSandboxPath).toHaveBeenCalledWith({
+    expect(mocks.assertSandboxPath).toHaveBeenCalledWith({
       filePath: "/workspace-two/secret.txt",
       cwd: root,
       root,
