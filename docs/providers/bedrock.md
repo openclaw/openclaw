@@ -162,6 +162,42 @@ source ~/.bashrc
 openclaw models list
 ```
 
+## Cross-Region Model Access
+
+When using `us-east-1` as your base region, Claude models require a region prefix for cross-region inference:
+
+| Prefix | Region               | Example                                       |
+| ------ | -------------------- | --------------------------------------------- |
+| `us.`  | US West (Oregon)     | `us.anthropic.claude-opus-4-5-20251101-v1:0`  |
+| `eu.`  | Europe (Frankfurt)   | `eu.anthropic.claude-sonnet-4-6`              |
+| `ap.`  | Asia Pacific (Tokyo) | `ap.anthropic.claude-haiku-4-5-20251001-v1:0` |
+
+**Without prefix** (e.g., `anthropic.claude-opus-4-5-20251101-v1:0`) the model must be in your configured region.
+
+**With prefix** (e.g., `us.anthropic.claude-opus-4-5-20251101-v1:0`) Bedrock uses cross-region inference.
+
+### Tested Claude Models (all regions)
+
+All Claude models verified working with OpenClaw on us-east-1 with `us.` prefix:
+
+```json
+{
+  "models": [
+    "us.anthropic.claude-opus-4-5-20251101-v1:0",
+    "us.anthropic.claude-opus-4-1-20250805-v1:0",
+    "us.anthropic.claude-sonnet-4-6",
+    "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+    "us.anthropic.claude-sonnet-4-20250514-v1:0",
+    "us.anthropic.claude-haiku-4-5-20251001-v1:0",
+    "us.anthropic.claude-3-7-sonnet-20250219-v1:0",
+    "us.anthropic.claude-3-5-sonnet-20241022-v2:0",
+    "us.anthropic.claude-3-5-haiku-20241022-v1:0"
+  ]
+}
+```
+
+**Reference:** [AWS Bedrock Cross-Region Inference](https://docs.aws.amazon.com/bedrock/latest/userguide/cross-region-inference.html)
+
 ## Notes
 
 - Bedrock requires **model access** enabled in your AWS account/region.
