@@ -32,10 +32,15 @@ export function expectSinglePayloadText(
 
 export function expectSingleToolErrorPayload(
   payloads: RunPayloads,
-  params: { title: string; detail: string },
+  params: { title: string; detail?: string; absentDetail?: string },
 ): void {
   expect(payloads).toHaveLength(1);
   expect(payloads[0]?.isError).toBe(true);
   expect(payloads[0]?.text).toContain(params.title);
-  expect(payloads[0]?.text).toContain(params.detail);
+  if (typeof params.detail === "string") {
+    expect(payloads[0]?.text).toContain(params.detail);
+  }
+  if (typeof params.absentDetail === "string") {
+    expect(payloads[0]?.text).not.toContain(params.absentDetail);
+  }
 }

@@ -113,10 +113,10 @@ describe("buildEmbeddedRunPayloads", () => {
       lastToolError: { toolName: "browser", error: "tab not found" },
     });
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.isError).toBe(true);
-    expect(payloads[0]?.text).toContain("Browser");
-    expect(payloads[0]?.text).not.toContain("tab not found");
+    expectSingleToolErrorPayload(payloads, {
+      title: "Browser",
+      absentDetail: "tab not found",
+    });
   });
 
   it("does not add tool error fallback when assistant output exists", () => {
@@ -237,18 +237,6 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads).toHaveLength(0);
   });
 
-  it("still shows mutating tool errors when messages.suppressToolErrors is enabled", () => {
-    const payloads = buildPayloads({
-      lastToolError: { toolName: "write", error: "connection timeout" },
-      config: { messages: { suppressToolErrors: true } },
-    });
-
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.isError).toBe(true);
-    expect(payloads[0]?.text).toContain("Write");
-    expect(payloads[0]?.text).not.toContain("connection timeout");
-  });
-
   it("suppresses mutating tool errors when suppressToolErrorWarnings is enabled", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "exec", error: "command not found" },
@@ -258,15 +246,35 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads).toHaveLength(0);
   });
 
-  it("shows recoverable tool errors for mutating tools", () => {
-    const payloads = buildPayloads({
-      lastToolError: { toolName: "message", meta: "reply", error: "text required" },
-    });
-
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.isError).toBe(true);
-    expect(payloads[0]?.text).toContain("Message");
-    expect(payloads[0]?.text).not.toContain("required");
+  it.each([
+    {
+      name: "still shows mutating tool errors when messages.suppressToolErrors is enabled",
+      payload: {
+        lastToolError: { toolName: "write", error: "connection timeout" },
+        config: { messages: { suppressToolErrors: true } },
+      },
+      title: "Write",
+      absentDetail: "connection timeout",
+    },
+    {
+      name: "shows recoverable tool errors for mutating tools",
+      payload: {
+        lastToolError: { toolName: "message", meta: "reply", error: "text required" },
+      },
+      title: "Message",
+      absentDetail: "required",
+    },
+    {
+      name: "shows non-recoverable tool failure summaries to the user",
+      payload: {
+        lastToolError: { toolName: "browser", error: "connection timeout" },
+      },
+      title: "Browser",
+      absentDetail: "connection timeout",
+    },
+  ])("$name", ({ payload, title, absentDetail }) => {
+    const payloads = buildPayloads(payload);
+    expectSingleToolErrorPayload(payloads, { title, absentDetail });
   });
 
   it("shows mutating tool errors even when assistant output exists", () => {
@@ -323,27 +331,15 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[0]?.text).toBe(warningText);
   });
 
-  it("shows non-recoverable tool failure summaries to the user", () => {
-    const payloads = buildPayloads({
-      lastToolError: { toolName: "browser", error: "connection timeout" },
-    });
-
-    // Non-recoverable errors should still be shown
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.isError).toBe(true);
-    expect(payloads[0]?.text).toContain("Browser");
-    expect(payloads[0]?.text).not.toContain("connection timeout");
-  });
-
   it("includes non-recoverable tool error details when verbose mode is on", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "browser", error: "connection timeout" },
       verboseLevel: "on",
     });
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.isError).toBe(true);
-    expect(payloads[0]?.text).toContain("Browser");
-    expect(payloads[0]?.text).toContain("connection timeout");
+    expectSingleToolErrorPayload(payloads, {
+      title: "Browser",
+      detail: "connection timeout",
+    });
   });
 });
