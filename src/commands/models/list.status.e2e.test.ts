@@ -118,10 +118,9 @@ vi.mock("../../config/config.js", async (importOriginal) => {
 
 import { modelsStatusCommand } from "./list.status-command.js";
 
-const defaultResolveAgentModelPrimaryImpl = mocks.resolveAgentModelPrimary.getMockImplementation();
-const defaultResolveAgentModelFallbacksOverrideImpl =
-  mocks.resolveAgentModelFallbacksOverride.getMockImplementation();
-const defaultResolveEnvApiKeyImpl = mocks.resolveEnvApiKey.getMockImplementation();
+const defaultResolveEnvApiKeyImpl:
+  | ((provider: string) => { apiKey: string; source: string } | null)
+  | undefined = mocks.resolveEnvApiKey.getMockImplementation();
 
 const runtime = {
   log: vi.fn(),
@@ -161,14 +160,12 @@ async function withAgentScopeOverrides<T>(
     if (originalPrimary) {
       mocks.resolveAgentModelPrimary.mockImplementation(originalPrimary);
     } else {
-      mocks.resolveAgentModelPrimary.mockImplementation(defaultResolveAgentModelPrimaryImpl);
+      mocks.resolveAgentModelPrimary.mockReturnValue(undefined);
     }
     if (originalFallbacks) {
       mocks.resolveAgentModelFallbacksOverride.mockImplementation(originalFallbacks);
     } else {
-      mocks.resolveAgentModelFallbacksOverride.mockImplementation(
-        defaultResolveAgentModelFallbacksOverrideImpl,
-      );
+      mocks.resolveAgentModelFallbacksOverride.mockReturnValue(undefined);
     }
     if (originalAgentDir) {
       mocks.resolveAgentDir.mockImplementation(originalAgentDir);
@@ -276,8 +273,10 @@ describe("modelsStatusCommand auth overview", () => {
       mocks.store.profiles = originalProfiles;
       if (originalEnvImpl) {
         mocks.resolveEnvApiKey.mockImplementation(originalEnvImpl);
-      } else {
+      } else if (defaultResolveEnvApiKeyImpl) {
         mocks.resolveEnvApiKey.mockImplementation(defaultResolveEnvApiKeyImpl);
+      } else {
+        mocks.resolveEnvApiKey.mockImplementation(() => null);
       }
     }
   });
