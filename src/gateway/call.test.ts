@@ -179,6 +179,18 @@ describe("callGateway url resolution", () => {
     expect(lastClientOptions?.url).toBe("ws://127.0.0.1:18800");
   });
 
+  it("uses gateway.clientUrl for local mode connections", async () => {
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "lan", clientUrl: "ws://localhost:18800" },
+    });
+    resolveGatewayPort.mockReturnValue(18800);
+
+    await callGateway({ method: "health" });
+
+    expect(lastClientOptions?.url).toBe("ws://localhost:18800");
+    expect(lastClientOptions?.token).toBeUndefined();
+  });
+
   it("falls back to loopback when bind is lan but no LAN IP found", async () => {
     loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "lan" } });
     resolveGatewayPort.mockReturnValue(18800);
@@ -301,6 +313,24 @@ describe("buildGatewayConnectionDetails", () => {
 
     expect(details.url).toBe("ws://127.0.0.1:18800");
     expect(details.urlSource).toBe("local loopback");
+  });
+
+  it("uses configured client URL for local connection details", () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        bind: "lan",
+        clientUrl: "ws://localhost:18800",
+      },
+    });
+    resolveGatewayPort.mockReturnValue(18800);
+    pickPrimaryTailnetIPv4.mockReturnValue(undefined);
+
+    const details = buildGatewayConnectionDetails();
+
+    expect(details.url).toBe("ws://localhost:18800");
+    expect(details.urlSource).toBe("gateway.clientUrl");
+    expect(details.bindDetail).toBe("Bind: lan");
   });
 
   it("prefers remote url when configured", () => {

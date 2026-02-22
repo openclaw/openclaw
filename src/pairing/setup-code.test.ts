@@ -44,6 +44,27 @@ describe("pairing setup code", () => {
     });
   });
 
+  it("uses gateway.clientUrl override for local connect URL", async () => {
+    const resolved = await resolvePairingSetupFromConfig({
+      gateway: {
+        bind: "lan",
+        clientUrl: "ws://localhost:18789",
+        auth: { mode: "token", token: "tok_123" },
+      },
+    });
+
+    expect(resolved).toEqual({
+      ok: true,
+      payload: {
+        url: "ws://localhost:18789",
+        token: "tok_123",
+        password: undefined,
+      },
+      authLabel: "token",
+      urlSource: "gateway.clientUrl",
+    });
+  });
+
   it("honors env token override", async () => {
     const resolved = await resolvePairingSetupFromConfig(
       {

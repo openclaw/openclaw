@@ -5,6 +5,7 @@ export const FIELD_HELP: Record<string, string> = {
   "meta.lastTouchedAt": "ISO timestamp of the last config write (auto-set).",
   "update.channel": 'Update channel for git + npm installs ("stable", "beta", or "dev").',
   "update.checkOnStart": "Check for npm updates when the gateway starts (default: true).",
+  "gateway.clientUrl": "Override for local client connections (ws:// or wss://).",
   "gateway.remote.url": "Remote Gateway WebSocket URL (ws:// or wss://).",
   "gateway.remote.tlsFingerprint":
     "Expected sha256 TLS fingerprint for the remote gateway (pin to avoid MITM).",

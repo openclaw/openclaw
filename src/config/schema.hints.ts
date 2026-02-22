@@ -76,6 +76,7 @@ const GROUP_ORDER: Record<string, number> = {
 };
 
 const FIELD_PLACEHOLDERS: Record<string, string> = {
+  "gateway.clientUrl": "ws://127.0.0.1:18789",
   "gateway.remote.url": "ws://host:18789",
   "gateway.remote.tlsFingerprint": "sha256:ab12cd34…",
   "gateway.remote.sshTarget": "user@host",

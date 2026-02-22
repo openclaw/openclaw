@@ -101,6 +101,15 @@ function resolveGatewayPort(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): number
   return DEFAULT_GATEWAY_PORT;
 }
 
+function resolveGatewayClientUrl(cfg: OpenClawConfig): string | null {
+  const raw = cfg.gateway?.clientUrl;
+  if (typeof raw !== "string") {
+    return null;
+  }
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
 function resolveScheme(
   cfg: OpenClawConfig,
   opts?: {
@@ -304,6 +313,15 @@ async function resolveGatewayUrl(
       : null;
   if (opts.preferRemoteUrl && remoteUrl) {
     return { url: remoteUrl, source: "gateway.remote.url" };
+  }
+
+  const clientUrl = resolveGatewayClientUrl(cfg);
+  if (clientUrl) {
+    const url = normalizeUrl(clientUrl, scheme);
+    if (!url) {
+      return { error: "gateway.clientUrl is invalid." };
+    }
+    return { url, source: "gateway.clientUrl" };
   }
 
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";

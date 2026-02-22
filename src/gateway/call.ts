@@ -117,8 +117,9 @@ export function buildGatewayConnectionDetails(
   const localPort = resolveGatewayPort(config);
   const bindMode = config.gateway?.bind ?? "loopback";
   const scheme = tlsEnabled ? "wss" : "ws";
-  // Self-connections should always target loopback; bind mode only controls listener exposure.
-  const localUrl = `${scheme}://127.0.0.1:${localPort}`;
+  const clientUrl = resolveConfiguredClientUrl(config);
+  // Self-connections should prefer an explicit client URL; bind mode only controls listener exposure.
+  const localUrl = clientUrl || `${scheme}://127.0.0.1:${localPort}`;
   const urlOverride =
     typeof options.url === "string" && options.url.trim().length > 0
       ? options.url.trim()
@@ -133,7 +134,9 @@ export function buildGatewayConnectionDetails(
       ? "config gateway.remote.url"
       : remoteMisconfigured
         ? "missing gateway.remote.url (fallback local)"
-        : "local loopback";
+        : clientUrl
+          ? "gateway.clientUrl"
+          : "local loopback";
   const remoteFallbackNote = remoteMisconfigured
     ? "Warn: gateway.mode=remote but gateway.remote.url is missing; set gateway.remote.url or switch gateway.mode=local."
     : undefined;
@@ -179,6 +182,15 @@ type GatewayRemoteSettings = {
   password?: string;
   tlsFingerprint?: string;
 };
+
+function resolveConfiguredClientUrl(config: OpenClawConfig): string | undefined {
+  const raw = config.gateway?.clientUrl;
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
 
 type ResolvedGatewayCallContext = {
   config: OpenClawConfig;
