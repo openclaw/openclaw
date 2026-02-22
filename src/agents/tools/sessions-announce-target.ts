@@ -15,7 +15,9 @@ export async function resolveAnnounceTarget(params: {
   if (fallback) {
     const normalized = normalizeChannelId(fallback.channel);
     const plugin = normalized ? getChannelPlugin(normalized) : null;
-    if (!plugin?.meta?.preferSessionLookupForAnnounceTarget) {
+    // Default to session lookup (more reliable) unless explicitly opted out
+    // Only skip session lookup if preferSessionLookupForAnnounceTarget is explicitly false
+    if (plugin?.meta?.preferSessionLookupForAnnounceTarget === false) {
       return fallback;
     }
   }
