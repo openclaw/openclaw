@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const RUNTIME_ROOTS = ["src", "extensions"];
@@ -9,78 +8,181 @@ const SKIP_PATTERNS = [
   /\.test\.tsx?$/,
   /\.test-helpers\.tsx?$/,
   /\.test-utils\.tsx?$/,
+  /\.test-harness\.tsx?$/,
   /\.e2e\.tsx?$/,
   /\.d\.ts$/,
   /[\\/](?:__tests__|tests)[\\/]/,
   /[\\/][^\\/]*test-helpers(?:\.[^\\/]+)?\.ts$/,
+  /[\\/][^\\/]*test-utils(?:\.[^\\/]+)?\.ts$/,
+  /[\\/][^\\/]*test-harness(?:\.[^\\/]+)?\.ts$/,
 ];
 
 function shouldSkip(relativePath: string): boolean {
   return SKIP_PATTERNS.some((pattern) => pattern.test(relativePath));
 }
 
-function isIdentifierNamed(node: ts.Node, name: string): node is ts.Identifier {
-  return ts.isIdentifier(node) && node.text === name;
+function stripCommentsForScan(input: string): string {
+  return input.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
 }
 
-function isPathJoinCall(expr: ts.LeftHandSideExpression): boolean {
-  return (
-    ts.isPropertyAccessExpression(expr) &&
-    expr.name.text === "join" &&
-    isIdentifierNamed(expr.expression, "path")
-  );
+function findMatchingParen(source: string, openIndex: number): number {
+  let depth = 1;
+  let quote: "'" | '"' | "`" | null = null;
+  let escaped = false;
+  for (let i = openIndex + 1; i < source.length; i += 1) {
+    const ch = source[i];
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (ch === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "(") {
+      depth += 1;
+      continue;
+    }
+    if (ch === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        return i;
+      }
+    }
+  }
+  return -1;
 }
 
-function isOsTmpdirCall(node: ts.Expression): boolean {
-  return (
-    ts.isCallExpression(node) &&
-    node.arguments.length === 0 &&
-    ts.isPropertyAccessExpression(node.expression) &&
-    node.expression.name.text === "tmpdir" &&
-    isIdentifierNamed(node.expression.expression, "os")
-  );
+function splitTopLevelArguments(source: string): string[] {
+  const out: string[] = [];
+  let current = "";
+  let parenDepth = 0;
+  let bracketDepth = 0;
+  let braceDepth = 0;
+  let quote: "'" | '"' | "`" | null = null;
+  let escaped = false;
+  for (let i = 0; i < source.length; i += 1) {
+    const ch = source[i];
+    if (quote) {
+      current += ch;
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (ch === quote) {
+        quote = null;
+      }
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") {
+      quote = ch;
+      current += ch;
+      continue;
+    }
+    if (ch === "(") {
+      parenDepth += 1;
+      current += ch;
+      continue;
+    }
+    if (ch === ")") {
+      if (parenDepth > 0) {
+        parenDepth -= 1;
+      }
+      current += ch;
+      continue;
+    }
+    if (ch === "[") {
+      bracketDepth += 1;
+      current += ch;
+      continue;
+    }
+    if (ch === "]") {
+      if (bracketDepth > 0) {
+        bracketDepth -= 1;
+      }
+      current += ch;
+      continue;
+    }
+    if (ch === "{") {
+      braceDepth += 1;
+      current += ch;
+      continue;
+    }
+    if (ch === "}") {
+      if (braceDepth > 0) {
+        braceDepth -= 1;
+      }
+      current += ch;
+      continue;
+    }
+    if (ch === "," && parenDepth === 0 && bracketDepth === 0 && braceDepth === 0) {
+      out.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+  if (current.trim()) {
+    out.push(current.trim());
+  }
+  return out;
 }
 
-function isDynamicTemplateSegment(node: ts.Expression): boolean {
-  return ts.isTemplateExpression(node);
+function isOsTmpdirExpression(argument: string): boolean {
+  return /^os\s*\.\s*tmpdir\s*\(\s*\)$/u.test(argument.trim());
 }
 
 function mightContainDynamicTmpdirJoin(source: string): boolean {
-  return source.includes("path.join") && source.includes("os.tmpdir") && source.includes("${");
+  return (
+    source.includes("path") &&
+    source.includes("join") &&
+    source.includes("tmpdir") &&
+    source.includes("${")
+  );
 }
 
-function hasDynamicTmpdirJoin(source: string, filePath = "fixture.ts"): boolean {
+function hasDynamicTmpdirJoin(source: string): boolean {
   if (!mightContainDynamicTmpdirJoin(source)) {
     return false;
   }
-  const sourceFile = ts.createSourceFile(
-    filePath,
-    source,
-    ts.ScriptTarget.Latest,
-    false,
-    filePath.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
-  );
-  let found = false;
 
-  const visit = (node: ts.Node): void => {
-    if (found) {
-      return;
+  const scanSource = stripCommentsForScan(source);
+  const joinPattern = /path\s*\.\s*join\s*\(/gu;
+  let match: RegExpExecArray | null = joinPattern.exec(scanSource);
+  while (match) {
+    const openParenIndex = scanSource.indexOf("(", match.index);
+    if (openParenIndex !== -1) {
+      const closeParenIndex = findMatchingParen(scanSource, openParenIndex);
+      if (closeParenIndex !== -1) {
+        const argsSource = scanSource.slice(openParenIndex + 1, closeParenIndex);
+        const args = splitTopLevelArguments(argsSource);
+        if (args.length >= 2 && isOsTmpdirExpression(args[0])) {
+          for (const arg of args.slice(1)) {
+            const trimmed = arg.trim();
+            if (trimmed.startsWith("`") && trimmed.includes("${")) {
+              return true;
+            }
+          }
+        }
+      }
     }
-    if (
-      ts.isCallExpression(node) &&
-      isPathJoinCall(node.expression) &&
-      node.arguments.length >= 2 &&
-      isOsTmpdirCall(node.arguments[0]) &&
-      node.arguments.slice(1).some((arg) => isDynamicTemplateSegment(arg))
-    ) {
-      found = true;
-      return;
-    }
-    ts.forEachChild(node, visit);
-  };
-
-  visit(sourceFile);
-  return found;
+    match = joinPattern.exec(scanSource);
+  }
+  return false;
 }
 
 async function listTsFiles(dir: string): Promise<string[]> {
@@ -135,13 +237,17 @@ function prefilterLikelyTmpdirJoinFiles(roots: readonly string[]): Set<string> |
     "--glob",
     "!**/*.d.ts",
     "--glob",
-    "!**/*.test-helpers.ts",
+    "!**/*test-helpers*.ts",
     "--glob",
-    "!**/*.test-helpers.tsx",
+    "!**/*test-helpers*.tsx",
     "--glob",
-    "!**/*.test-utils.ts",
+    "!**/*test-utils*.ts",
     "--glob",
-    "!**/*.test-utils.tsx",
+    "!**/*test-utils*.tsx",
+    "--glob",
+    "!**/*test-harness*.ts",
+    "--glob",
+    "!**/*test-harness*.tsx",
     "--no-messages",
   ];
   const strictDynamicCall = spawnSync(
