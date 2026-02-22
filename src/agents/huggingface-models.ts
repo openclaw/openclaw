@@ -18,6 +18,23 @@ export function isHuggingfacePolicyLocked(modelRef: string): boolean {
   return HUGGINGFACE_POLICY_SUFFIXES.some((s) => ref.endsWith(`:${s}`) || ref === s);
 }
 
+/**
+ * Model id safe for the Hugging Face Inference API (router.huggingface.co).
+ * Per HF docs, the API expects Hub-style model ids (e.g. deepseek-ai/DeepSeek-R1) with
+ * optional routing suffixes (:cheapest, :fastest, or :provider). The "huggingface/" prefix
+ * is OpenClaw-internal and must not be sent to the HF client.
+ * Returns the same string with a leading "huggingface/" stripped; other tags are preserved.
+ */
+export function modelIdForHfInferenceClient(modelRefOrId: string): string {
+  const s = String(modelRefOrId).trim();
+  const prefix = "huggingface/";
+  const lowerS = s.toLowerCase();
+  if (lowerS.startsWith(prefix)) {
+    return s.slice(lowerS.indexOf(prefix) + prefix.length).trim() || s;
+  }
+  return s;
+}
+
 /** Default cost when not in static catalog (HF pricing varies by provider). */
 const HUGGINGFACE_DEFAULT_COST = {
   input: 0,

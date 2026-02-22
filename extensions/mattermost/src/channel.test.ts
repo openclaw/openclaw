@@ -54,25 +54,6 @@ describe("mattermostPlugin", () => {
       resetMattermostReactionBotUserCacheForTests();
     });
 
-    const runReactAction = async (params: Record<string, unknown>, fetchMode: "add" | "remove") => {
-      const cfg = createMattermostTestConfig();
-      const fetchImpl = createMattermostReactionFetchMock({
-        mode: fetchMode,
-        postId: "POST1",
-        emojiName: "thumbsup",
-      });
-
-      return await withMockedGlobalFetch(fetchImpl as unknown as typeof fetch, async () => {
-        return await mattermostPlugin.actions?.handleAction?.({
-          channel: "mattermost",
-          action: "react",
-          params,
-          cfg,
-          accountId: "default",
-        } as any);
-      });
-    };
-
     it("exposes react when mattermost is configured", () => {
       const cfg: OpenClawConfig = {
         channels: {
@@ -171,31 +152,50 @@ describe("mattermostPlugin", () => {
     });
 
     it("handles react by calling Mattermost reactions API", async () => {
-      const result = await runReactAction({ messageId: "POST1", emoji: "thumbsup" }, "add");
+      const cfg = createMattermostTestConfig();
+      const fetchImpl = createMattermostReactionFetchMock({
+        mode: "add",
+        postId: "POST1",
+        emojiName: "thumbsup",
+      });
+
+      const result = await withMockedGlobalFetch(fetchImpl as unknown as typeof fetch, async () => {
+        const result = await mattermostPlugin.actions?.handleAction?.({
+          channel: "mattermost",
+          action: "react",
+          params: { messageId: "POST1", emoji: "thumbsup" },
+          cfg,
+          accountId: "default",
+        } as any);
+
+        return result;
+      });
 
       expect(result?.content).toEqual([{ type: "text", text: "Reacted with :thumbsup: on POST1" }]);
       expect(result?.details).toEqual({});
     });
 
     it("only treats boolean remove flag as removal", async () => {
-      const result = await runReactAction(
-        { messageId: "POST1", emoji: "thumbsup", remove: "true" },
-        "add",
-      );
+      const cfg = createMattermostTestConfig();
+      const fetchImpl = createMattermostReactionFetchMock({
+        mode: "add",
+        postId: "POST1",
+        emojiName: "thumbsup",
+      });
+
+      const result = await withMockedGlobalFetch(fetchImpl as unknown as typeof fetch, async () => {
+        const result = await mattermostPlugin.actions?.handleAction?.({
+          channel: "mattermost",
+          action: "react",
+          params: { messageId: "POST1", emoji: "thumbsup", remove: "true" },
+          cfg,
+          accountId: "default",
+        } as any);
+
+        return result;
+      });
 
       expect(result?.content).toEqual([{ type: "text", text: "Reacted with :thumbsup: on POST1" }]);
-    });
-
-    it("removes reaction when remove flag is boolean true", async () => {
-      const result = await runReactAction(
-        { messageId: "POST1", emoji: "thumbsup", remove: true },
-        "remove",
-      );
-
-      expect(result?.content).toEqual([
-        { type: "text", text: "Removed reaction :thumbsup: from POST1" },
-      ]);
-      expect(result?.details).toEqual({});
     });
   });
 

@@ -1,7 +1,6 @@
 import type { BaseProbeResult, MSTeamsConfig } from "openclaw/plugin-sdk";
 import { formatUnknownError } from "./errors.js";
 import { loadMSTeamsSdkWithAuth } from "./sdk.js";
-import { readAccessToken } from "./token-response.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
 export type ProbeMSTeamsResult = BaseProbeResult<string> & {
@@ -13,6 +12,18 @@ export type ProbeMSTeamsResult = BaseProbeResult<string> & {
     scopes?: string[];
   };
 };
+
+function readAccessToken(value: unknown): string | null {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value && typeof value === "object") {
+    const token =
+      (value as { accessToken?: unknown }).accessToken ?? (value as { token?: unknown }).token;
+    return typeof token === "string" ? token : null;
+  }
+  return null;
+}
 
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
   const parts = token.split(".");

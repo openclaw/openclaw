@@ -442,7 +442,7 @@ export class DiscordVoiceManager {
       this.sessions.delete(guildId);
     });
 
-    player.on("error", (err) => {
+    player.on("error", (err: unknown) => {
       logger.warn(`discord voice: playback error: ${formatErrorMessage(err)}`);
     });
 
@@ -486,13 +486,17 @@ export class DiscordVoiceManager {
   private enqueueProcessing(entry: VoiceSessionEntry, task: () => Promise<void>) {
     entry.processingQueue = entry.processingQueue
       .then(task)
-      .catch((err) => logger.warn(`discord voice: processing failed: ${formatErrorMessage(err)}`));
+      .catch((err: unknown) =>
+        logger.warn(`discord voice: processing failed: ${formatErrorMessage(err)}`),
+      );
   }
 
   private enqueuePlayback(entry: VoiceSessionEntry, task: () => Promise<void>) {
     entry.playbackQueue = entry.playbackQueue
       .then(task)
-      .catch((err) => logger.warn(`discord voice: playback failed: ${formatErrorMessage(err)}`));
+      .catch((err: unknown) =>
+        logger.warn(`discord voice: playback failed: ${formatErrorMessage(err)}`),
+      );
   }
 
   private async handleSpeakingStart(entry: VoiceSessionEntry, userId: string) {
@@ -517,7 +521,7 @@ export class DiscordVoiceManager {
         duration: SILENCE_DURATION_MS,
       },
     });
-    stream.on("error", (err) => {
+    stream.on("error", (err: unknown) => {
       logger.warn(`discord voice: receive error: ${formatErrorMessage(err)}`);
     });
 

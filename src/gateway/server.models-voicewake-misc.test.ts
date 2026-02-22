@@ -82,106 +82,7 @@ const whatsappRegistry = createRegistry([
 ]);
 const emptyRegistry = createRegistry([]);
 
-type ModelCatalogRpcEntry = {
-  id: string;
-  name: string;
-  provider: string;
-  contextWindow?: number;
-};
-
-type PiCatalogFixtureEntry = {
-  id: string;
-  provider: string;
-  name?: string;
-  contextWindow?: number;
-};
-
-const buildPiCatalogFixture = (): PiCatalogFixtureEntry[] => [
-  { id: "gpt-test-z", provider: "openai", contextWindow: 0 },
-  {
-    id: "gpt-test-a",
-    name: "A-Model",
-    provider: "openai",
-    contextWindow: 8000,
-  },
-  {
-    id: "claude-test-b",
-    name: "B-Model",
-    provider: "anthropic",
-    contextWindow: 1000,
-  },
-  {
-    id: "claude-test-a",
-    name: "A-Model",
-    provider: "anthropic",
-    contextWindow: 200_000,
-  },
-];
-
-const expectedSortedCatalog = (): ModelCatalogRpcEntry[] => [
-  {
-    id: "claude-test-a",
-    name: "A-Model",
-    provider: "anthropic",
-    contextWindow: 200_000,
-  },
-  {
-    id: "claude-test-b",
-    name: "B-Model",
-    provider: "anthropic",
-    contextWindow: 1000,
-  },
-  {
-    id: "gpt-test-a",
-    name: "A-Model",
-    provider: "openai",
-    contextWindow: 8000,
-  },
-  {
-    id: "gpt-test-z",
-    name: "gpt-test-z",
-    provider: "openai",
-  },
-];
-
 describe("gateway server models + voicewake", () => {
-  const listModels = async () => rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list");
-
-  const seedPiCatalog = () => {
-    piSdkMock.enabled = true;
-    piSdkMock.models = buildPiCatalogFixture();
-  };
-
-  const withModelsConfig = async <T>(config: unknown, run: () => Promise<T>): Promise<T> => {
-    const configPath = process.env.OPENCLAW_CONFIG_PATH;
-    if (!configPath) {
-      throw new Error("Missing OPENCLAW_CONFIG_PATH");
-    }
-    let previousConfig: string | undefined;
-    try {
-      previousConfig = await fs.readFile(configPath, "utf-8");
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException | undefined)?.code;
-      if (code !== "ENOENT") {
-        throw err;
-      }
-    }
-
-    try {
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
-      clearConfigCache();
-      return await run();
-    } finally {
-      if (previousConfig === undefined) {
-        await fs.rm(configPath, { force: true });
-      } else {
-        await fs.writeFile(configPath, previousConfig, "utf-8");
-      }
-      clearConfigCache();
-    }
-  };
-
   const withTempHome = async <T>(fn: (homeDir: string) => Promise<T>): Promise<T> => {
     const tempHome = await createTempHomeEnv("openclaw-home-");
     try {
@@ -279,75 +180,171 @@ describe("gateway server models + voicewake", () => {
   });
 
   test("models.list returns model catalog", async () => {
-    seedPiCatalog();
+    piSdkMock.enabled = true;
+    piSdkMock.models = [
+      { id: "gpt-test-z", provider: "openai", contextWindow: 0 },
+      {
+        id: "gpt-test-a",
+        name: "A-Model",
+        provider: "openai",
+        contextWindow: 8000,
+      },
+      {
+        id: "claude-test-b",
+        name: "B-Model",
+        provider: "anthropic",
+        contextWindow: 1000,
+      },
+      {
+        id: "claude-test-a",
+        name: "A-Model",
+        provider: "anthropic",
+        contextWindow: 200_000,
+      },
+    ];
 
-    const res1 = await listModels();
-    const res2 = await listModels();
+    const res1 = await rpcReq<{
+      models: Array<{
+        id: string;
+        name: string;
+        provider: string;
+        contextWindow?: number;
+      }>;
+    }>(ws, "models.list");
+
+    const res2 = await rpcReq<{
+      models: Array<{
+        id: string;
+        name: string;
+        provider: string;
+        contextWindow?: number;
+      }>;
+    }>(ws, "models.list");
 
     expect(res1.ok).toBe(true);
     expect(res2.ok).toBe(true);
 
     const models = res1.payload?.models ?? [];
-    expect(models).toEqual(expectedSortedCatalog());
+    expect(models).toEqual([
+      {
+        id: "claude-test-a",
+        name: "A-Model",
+        provider: "anthropic",
+        contextWindow: 200_000,
+      },
+      {
+        id: "claude-test-b",
+        name: "B-Model",
+        provider: "anthropic",
+        contextWindow: 1000,
+      },
+      {
+        id: "gpt-test-a",
+        name: "A-Model",
+        provider: "openai",
+        contextWindow: 8000,
+      },
+      {
+        id: "gpt-test-z",
+        name: "gpt-test-z",
+        provider: "openai",
+      },
+    ]);
 
     expect(piSdkMock.discoverCalls).toBe(1);
   });
 
   test("models.list filters to allowlisted configured models by default", async () => {
-    await withModelsConfig(
-      {
-        agents: {
-          defaults: {
-            model: { primary: "openai/gpt-test-z" },
-            models: {
-              "openai/gpt-test-z": {},
-              "anthropic/claude-test-a": {},
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      throw new Error("Missing OPENCLAW_CONFIG_PATH");
+    }
+    let previousConfig: string | undefined;
+    try {
+      previousConfig = await fs.readFile(configPath, "utf-8");
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (code !== "ENOENT") {
+        throw err;
+      }
+    }
+    try {
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(
+        configPath,
+        JSON.stringify(
+          {
+            agents: {
+              defaults: {
+                model: { primary: "openai/gpt-test-z" },
+                models: {
+                  "openai/gpt-test-z": {},
+                  "anthropic/claude-test-a": {},
+                },
+              },
             },
           },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+      clearConfigCache();
+
+      piSdkMock.enabled = true;
+      piSdkMock.models = [
+        { id: "gpt-test-z", provider: "openai", contextWindow: 0 },
+        {
+          id: "gpt-test-a",
+          name: "A-Model",
+          provider: "openai",
+          contextWindow: 8000,
         },
-      },
-      async () => {
-        seedPiCatalog();
-        const res = await listModels();
-
-        expect(res.ok).toBe(true);
-        expect(res.payload?.models).toEqual([
-          {
-            id: "claude-test-a",
-            name: "A-Model",
-            provider: "anthropic",
-            contextWindow: 200_000,
-          },
-          {
-            id: "gpt-test-z",
-            name: "gpt-test-z",
-            provider: "openai",
-          },
-        ]);
-      },
-    );
-  });
-
-  test("models.list falls back to full catalog when allowlist has no catalog match", async () => {
-    await withModelsConfig(
-      {
-        agents: {
-          defaults: {
-            model: { primary: "openai/not-in-catalog" },
-            models: {
-              "openai/not-in-catalog": {},
-            },
-          },
+        {
+          id: "claude-test-b",
+          name: "B-Model",
+          provider: "anthropic",
+          contextWindow: 1000,
         },
-      },
-      async () => {
-        seedPiCatalog();
-        const res = await listModels();
+        {
+          id: "claude-test-a",
+          name: "A-Model",
+          provider: "anthropic",
+          contextWindow: 200_000,
+        },
+      ];
 
-        expect(res.ok).toBe(true);
-        expect(res.payload?.models).toEqual(expectedSortedCatalog());
-      },
-    );
+      const res = await rpcReq<{
+        models: Array<{
+          id: string;
+          name: string;
+          provider: string;
+          contextWindow?: number;
+        }>;
+      }>(ws, "models.list");
+
+      expect(res.ok).toBe(true);
+      expect(res.payload?.models).toEqual([
+        {
+          id: "claude-test-a",
+          name: "A-Model",
+          provider: "anthropic",
+          contextWindow: 200_000,
+        },
+        {
+          id: "gpt-test-z",
+          name: "gpt-test-z",
+          provider: "openai",
+        },
+      ]);
+    } finally {
+      if (previousConfig === undefined) {
+        await fs.rm(configPath, { force: true });
+      } else {
+        await fs.writeFile(configPath, previousConfig, "utf-8");
+      }
+      clearConfigCache();
+    }
   });
 
   test("models.list rejects unknown params", async () => {

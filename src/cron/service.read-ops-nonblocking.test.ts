@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
-import { writeCronStoreSnapshot } from "./service.test-harness.js";
 
 const noopLogger = {
   debug: vi.fn(),
@@ -168,24 +167,29 @@ describe("CronService read ops while job is running", () => {
     const requestHeartbeatNow = vi.fn();
     const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
 
-    await writeCronStoreSnapshot({
-      storePath: store.storePath,
-      jobs: [
-        {
-          id: "startup-catchup",
-          name: "startup catch-up",
-          enabled: true,
-          createdAtMs: nowMs - 86_400_000,
-          updatedAtMs: nowMs - 86_400_000,
-          schedule: { kind: "at", at: new Date(nowMs - 60_000).toISOString() },
-          sessionTarget: "isolated",
-          wakeMode: "next-heartbeat",
-          payload: { kind: "agentTurn", message: "startup replay" },
-          delivery: { mode: "none" },
-          state: { nextRunAtMs: nowMs - 60_000 },
-        },
-      ],
-    });
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(
+      store.storePath,
+      JSON.stringify({
+        version: 1,
+        jobs: [
+          {
+            id: "startup-catchup",
+            name: "startup catch-up",
+            enabled: true,
+            createdAtMs: nowMs - 86_400_000,
+            updatedAtMs: nowMs - 86_400_000,
+            schedule: { kind: "at", at: new Date(nowMs - 60_000).toISOString() },
+            sessionTarget: "isolated",
+            wakeMode: "next-heartbeat",
+            payload: { kind: "agentTurn", message: "startup replay" },
+            delivery: { mode: "none" },
+            state: { nextRunAtMs: nowMs - 60_000 },
+          },
+        ],
+      }),
+      "utf-8",
+    );
 
     const isolatedRun = createDeferredIsolatedRun();
 

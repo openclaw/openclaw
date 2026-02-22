@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
+import { modelIdForHfInferenceClient } from "../huggingface-models.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
 import { normalizeModelCompat } from "../model-compat.js";
 import { resolveForwardCompatModel } from "../model-forward-compat.js";
@@ -57,14 +58,20 @@ export function resolveModel(
   const resolvedAgentDir = agentDir ?? resolveOpenClawAgentDir();
   const authStorage = discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
-  const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
-
+  // Hugging Face Inference API expects Hub model id only (no "huggingface/" prefix). Per HF docs.
+  const normalizedModelId =
+    normalizeProviderId(provider) === "huggingface"
+      ? modelIdForHfInferenceClient(modelId)
+      : modelId;
+  const model = modelRegistry.find(provider, normalizedModelId) as Model<Api> | null;
   if (!model) {
     const providers = cfg?.models?.providers ?? {};
     const inlineModels = buildInlineProviderModels(providers);
     const normalizedProvider = normalizeProviderId(provider);
     const inlineMatch = inlineModels.find(
-      (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
+      (entry) =>
+        normalizeProviderId(entry.provider) === normalizedProvider &&
+        entry.id === normalizedModelId,
     );
     if (inlineMatch) {
       const normalized = normalizeModelCompat(inlineMatch as Model<Api>);
@@ -76,15 +83,15 @@ export function resolveModel(
     }
     // Forward-compat fallbacks must be checked BEFORE the generic providerCfg fallback.
     // Otherwise, configured providers can default to a generic API and break specific transports.
-    const forwardCompat = resolveForwardCompatModel(provider, modelId, modelRegistry);
+    const forwardCompat = resolveForwardCompatModel(provider, normalizedModelId, modelRegistry);
     if (forwardCompat) {
       return { model: forwardCompat, authStorage, modelRegistry };
     }
     const providerCfg = providers[provider];
-    if (providerCfg || modelId.startsWith("mock-")) {
+    if (providerCfg || normalizedModelId.startsWith("mock-")) {
       const fallbackModel: Model<Api> = normalizeModelCompat({
-        id: modelId,
-        name: modelId,
+        id: normalizedModelId,
+        name: normalizedModelId,
         api: providerCfg?.api ?? "openai-responses",
         provider,
         baseUrl: providerCfg?.baseUrl,
@@ -97,7 +104,7 @@ export function resolveModel(
       return { model: fallbackModel, authStorage, modelRegistry };
     }
     return {
-      error: buildUnknownModelError(provider, modelId),
+      error: buildUnknownModelError(provider, normalizedModelId),
       authStorage,
       modelRegistry,
     };

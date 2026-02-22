@@ -51,32 +51,6 @@ type EndCallContext = Pick<
   | "maxDurationTimers"
 >;
 
-type ConnectedCallContext = Pick<CallManagerContext, "activeCalls" | "provider">;
-
-type ConnectedCallLookup =
-  | { kind: "error"; error: string }
-  | { kind: "ended"; call: CallRecord }
-  | {
-      kind: "ok";
-      call: CallRecord;
-      providerCallId: string;
-      provider: NonNullable<ConnectedCallContext["provider"]>;
-    };
-
-function lookupConnectedCall(ctx: ConnectedCallContext, callId: CallId): ConnectedCallLookup {
-  const call = ctx.activeCalls.get(callId);
-  if (!call) {
-    return { kind: "error", error: "Call not found" };
-  }
-  if (!ctx.provider || !call.providerCallId) {
-    return { kind: "error", error: "Call not connected" };
-  }
-  if (TerminalStates.has(call.state)) {
-    return { kind: "ended", call };
-  }
-  return { kind: "ok", call, providerCallId: call.providerCallId, provider: ctx.provider };
-}
-
 export async function initiateCall(
   ctx: InitiateContext,
   to: string,
@@ -175,25 +149,26 @@ export async function speak(
   callId: CallId,
   text: string,
 ): Promise<{ success: boolean; error?: string }> {
-  const lookup = lookupConnectedCall(ctx, callId);
-  if (lookup.kind === "error") {
-    return { success: false, error: lookup.error };
+  const call = ctx.activeCalls.get(callId);
+  if (!call) {
+    return { success: false, error: "Call not found" };
   }
-  if (lookup.kind === "ended") {
+  if (!ctx.provider || !call.providerCallId) {
+    return { success: false, error: "Call not connected" };
+  }
+  if (TerminalStates.has(call.state)) {
     return { success: false, error: "Call has ended" };
   }
-  const { call, providerCallId, provider } = lookup;
-
   try {
     transitionState(call, "speaking");
     persistCallRecord(ctx.storePath, call);
 
     addTranscriptEntry(call, "bot", text);
 
-    const voice = provider.name === "twilio" ? ctx.config.tts?.openai?.voice : undefined;
-    await provider.playTts({
+    const voice = ctx.provider?.name === "twilio" ? ctx.config.tts?.openai?.voice : undefined;
+    await ctx.provider.playTts({
       callId,
-      providerCallId,
+      providerCallId: call.providerCallId,
       text,
       voice,
     });
@@ -257,15 +232,16 @@ export async function continueCall(
   callId: CallId,
   prompt: string,
 ): Promise<{ success: boolean; transcript?: string; error?: string }> {
-  const lookup = lookupConnectedCall(ctx, callId);
-  if (lookup.kind === "error") {
-    return { success: false, error: lookup.error };
+  const call = ctx.activeCalls.get(callId);
+  if (!call) {
+    return { success: false, error: "Call not found" };
   }
-  if (lookup.kind === "ended") {
+  if (!ctx.provider || !call.providerCallId) {
+    return { success: false, error: "Call not connected" };
+  }
+  if (TerminalStates.has(call.state)) {
     return { success: false, error: "Call has ended" };
   }
-  const { call, providerCallId, provider } = lookup;
-
   if (ctx.activeTurnCalls.has(callId) || ctx.transcriptWaiters.has(callId)) {
     return { success: false, error: "Already waiting for transcript" };
   }
@@ -280,13 +256,13 @@ export async function continueCall(
     persistCallRecord(ctx.storePath, call);
 
     const listenStartedAt = Date.now();
-    await provider.startListening({ callId, providerCallId });
+    await ctx.provider.startListening({ callId, providerCallId: call.providerCallId });
 
     const transcript = await waitForFinalTranscript(ctx, callId);
     const transcriptReceivedAt = Date.now();
 
     // Best-effort: stop listening after final transcript.
-    await provider.stopListening({ callId, providerCallId });
+    await ctx.provider.stopListening({ callId, providerCallId: call.providerCallId });
 
     const lastTurnLatencyMs = transcriptReceivedAt - turnStartedAt;
     const lastTurnListenWaitMs = transcriptReceivedAt - listenStartedAt;
@@ -326,19 +302,21 @@ export async function endCall(
   ctx: EndCallContext,
   callId: CallId,
 ): Promise<{ success: boolean; error?: string }> {
-  const lookup = lookupConnectedCall(ctx, callId);
-  if (lookup.kind === "error") {
-    return { success: false, error: lookup.error };
+  const call = ctx.activeCalls.get(callId);
+  if (!call) {
+    return { success: false, error: "Call not found" };
   }
-  if (lookup.kind === "ended") {
+  if (!ctx.provider || !call.providerCallId) {
+    return { success: false, error: "Call not connected" };
+  }
+  if (TerminalStates.has(call.state)) {
     return { success: true };
   }
-  const { call, providerCallId, provider } = lookup;
 
   try {
-    await provider.hangupCall({
+    await ctx.provider.hangupCall({
       callId,
-      providerCallId,
+      providerCallId: call.providerCallId,
       reason: "hangup-bot",
     });
 
@@ -351,7 +329,9 @@ export async function endCall(
     rejectTranscriptWaiter(ctx, callId, "Call ended: hangup-bot");
 
     ctx.activeCalls.delete(callId);
-    ctx.providerCallIdMap.delete(providerCallId);
+    if (call.providerCallId) {
+      ctx.providerCallIdMap.delete(call.providerCallId);
+    }
 
     return { success: true };
   } catch (err) {

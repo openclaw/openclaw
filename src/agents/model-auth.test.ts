@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { requireApiKey, resolveAwsSdkEnvVarName, resolveModelAuthMode } from "./model-auth.js";
 
@@ -103,5 +103,24 @@ describe("requireApiKey", () => {
         "openai",
       ),
     ).toThrow('No API key resolved for provider "openai"');
+  });
+
+  it("resolveEnvApiKey('huggingface') returns HF_TOKEN when set", async () => {
+    const previous = process.env.HF_TOKEN;
+    try {
+      process.env.HF_TOKEN = "hf_abc123";
+      vi.resetModules();
+      const { resolveEnvApiKey } = await import("./model-auth.js");
+      const resolved = resolveEnvApiKey("huggingface");
+      expect(resolved?.apiKey).toBe("hf_abc123");
+      expect(resolved?.source).toContain("HF_TOKEN");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.HF_TOKEN;
+      } else {
+        process.env.HF_TOKEN = previous;
+      }
+      vi.resetModules();
+    }
   });
 });

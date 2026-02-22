@@ -22,25 +22,6 @@ async function noteMattermostSetup(prompter: WizardPrompter): Promise<void> {
   );
 }
 
-async function promptMattermostCredentials(prompter: WizardPrompter): Promise<{
-  botToken: string;
-  baseUrl: string;
-}> {
-  const botToken = String(
-    await prompter.text({
-      message: "Enter Mattermost bot token",
-      validate: (value) => (value?.trim() ? undefined : "Required"),
-    }),
-  ).trim();
-  const baseUrl = String(
-    await prompter.text({
-      message: "Enter Mattermost base URL",
-      validate: (value) => (value?.trim() ? undefined : "Required"),
-    }),
-  ).trim();
-  return { botToken, baseUrl };
-}
-
 export const mattermostOnboardingAdapter: ChannelOnboardingAdapter = {
   channel,
   getStatus: async ({ cfg }) => {
@@ -109,9 +90,18 @@ export const mattermostOnboardingAdapter: ChannelOnboardingAdapter = {
           },
         };
       } else {
-        const entered = await promptMattermostCredentials(prompter);
-        botToken = entered.botToken;
-        baseUrl = entered.baseUrl;
+        botToken = String(
+          await prompter.text({
+            message: "Enter Mattermost bot token",
+            validate: (value) => (value?.trim() ? undefined : "Required"),
+          }),
+        ).trim();
+        baseUrl = String(
+          await prompter.text({
+            message: "Enter Mattermost base URL",
+            validate: (value) => (value?.trim() ? undefined : "Required"),
+          }),
+        ).trim();
       }
     } else if (accountConfigured) {
       const keep = await prompter.confirm({
@@ -119,14 +109,32 @@ export const mattermostOnboardingAdapter: ChannelOnboardingAdapter = {
         initialValue: true,
       });
       if (!keep) {
-        const entered = await promptMattermostCredentials(prompter);
-        botToken = entered.botToken;
-        baseUrl = entered.baseUrl;
+        botToken = String(
+          await prompter.text({
+            message: "Enter Mattermost bot token",
+            validate: (value) => (value?.trim() ? undefined : "Required"),
+          }),
+        ).trim();
+        baseUrl = String(
+          await prompter.text({
+            message: "Enter Mattermost base URL",
+            validate: (value) => (value?.trim() ? undefined : "Required"),
+          }),
+        ).trim();
       }
     } else {
-      const entered = await promptMattermostCredentials(prompter);
-      botToken = entered.botToken;
-      baseUrl = entered.baseUrl;
+      botToken = String(
+        await prompter.text({
+          message: "Enter Mattermost bot token",
+          validate: (value) => (value?.trim() ? undefined : "Required"),
+        }),
+      ).trim();
+      baseUrl = String(
+        await prompter.text({
+          message: "Enter Mattermost base URL",
+          validate: (value) => (value?.trim() ? undefined : "Required"),
+        }),
+      ).trim();
     }
 
     if (botToken || baseUrl) {

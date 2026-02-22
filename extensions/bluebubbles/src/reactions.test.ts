@@ -1,10 +1,17 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { sendBlueBubblesReaction } from "./reactions.js";
 
-vi.mock("./accounts.js", async () => {
-  const { createBlueBubblesAccountsMockModule } = await import("./test-harness.js");
-  return createBlueBubblesAccountsMockModule();
-});
+vi.mock("./accounts.js", () => ({
+  resolveBlueBubblesAccount: vi.fn(({ cfg, accountId }) => {
+    const config = cfg?.channels?.bluebubbles ?? {};
+    return {
+      accountId: accountId ?? "default",
+      enabled: config.enabled !== false,
+      configured: Boolean(config.serverUrl && config.password),
+      config,
+    };
+  }),
+}));
 
 const mockFetch = vi.fn();
 
