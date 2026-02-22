@@ -22,8 +22,9 @@ type GatewayRunSignalAction = "stop" | "restart";
 export async function runGatewayLoop(params: {
   start: () => Promise<Awaited<ReturnType<typeof startGatewayServer>>>;
   runtime: typeof defaultRuntime;
+  lockPort?: number;
 }) {
-  let lock = await acquireGatewayLock();
+  let lock = await acquireGatewayLock({ port: params.lockPort });
   let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
   let shuttingDown = false;
   let restartResolver: (() => void) | null = null;
@@ -47,7 +48,7 @@ export async function runGatewayLoop(params: {
   };
   const reacquireLockForInProcessRestart = async (): Promise<boolean> => {
     try {
-      lock = await acquireGatewayLock();
+      lock = await acquireGatewayLock({ port: params.lockPort });
       return true;
     } catch (err) {
       gatewayLog.error(`failed to reacquire gateway lock for in-process restart: ${String(err)}`);
