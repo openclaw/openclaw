@@ -130,7 +130,8 @@ function toUsage(raw: Record<string, unknown>): CliUsage | undefined {
   const output = pick("output_tokens") ?? pick("outputTokens");
   const cacheRead =
     pick("cache_read_input_tokens") ?? pick("cached_input_tokens") ?? pick("cacheRead");
-  const cacheWrite = pick("cache_write_input_tokens") ?? pick("cacheWrite");
+  const cacheWrite =
+    pick("cache_write_input_tokens") ?? pick("cache_creation_input_tokens") ?? pick("cacheWrite");
   const total = pick("total_tokens") ?? pick("total");
   if (!input && !output && !cacheRead && !cacheWrite && !total) {
     return undefined;
