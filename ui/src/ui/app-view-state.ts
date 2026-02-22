@@ -46,6 +46,7 @@ export type AppViewState = {
   themeResolved: "light" | "dark";
   hello: GatewayHelloOk | null;
   lastError: string | null;
+  lastErrorCode: string | null;
   eventLog: EventLogEntry[];
   assistantName: string;
   assistantAvatar: string | null;

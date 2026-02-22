@@ -1,5 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import {
+  AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
   AUTH_RATE_LIMIT_SCOPE_SHARED_SECRET,
   type AuthRateLimiter,
   type RateLimitCheckResult,
@@ -27,6 +28,14 @@ export type ConnectAuthState = {
   sharedAuthProvided: boolean;
   deviceTokenCandidate?: string;
   deviceTokenCandidateSource?: DeviceTokenCandidateSource;
+};
+
+type VerifyDeviceTokenResult = { ok: boolean };
+
+export type ConnectAuthDecision = {
+  authResult: GatewayAuthResult;
+  authOk: boolean;
+  authMethod: GatewayAuthResult["method"];
 };
 
 function trimToUndefined(value: string | undefined): string | undefined {
@@ -138,4 +147,68 @@ export async function resolveConnectAuthState(params: {
     deviceTokenCandidate,
     deviceTokenCandidateSource,
   };
+}
+
+export async function resolveConnectAuthDecision(params: {
+  state: ConnectAuthState;
+  hasDeviceIdentity: boolean;
+  deviceId?: string;
+  role: string;
+  scopes: string[];
+  rateLimiter?: AuthRateLimiter;
+  clientIp?: string;
+  verifyDeviceToken: (params: {
+    deviceId: string;
+    token: string;
+    role: string;
+    scopes: string[];
+  }) => Promise<VerifyDeviceTokenResult>;
+}): Promise<ConnectAuthDecision> {
+  let authResult = params.state.authResult;
+  let authOk = params.state.authOk;
+  let authMethod = params.state.authMethod;
+
+  const deviceTokenCandidate = params.state.deviceTokenCandidate;
+  if (!params.hasDeviceIdentity || !params.deviceId || authOk || !deviceTokenCandidate) {
+    return { authResult, authOk, authMethod };
+  }
+
+  if (params.rateLimiter) {
+    const deviceRateCheck = params.rateLimiter.check(
+      params.clientIp,
+      AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
+    );
+    if (!deviceRateCheck.allowed) {
+      authResult = {
+        ok: false,
+        reason: "rate_limited",
+        rateLimited: true,
+        retryAfterMs: deviceRateCheck.retryAfterMs,
+      };
+    }
+  }
+  if (!authResult.rateLimited) {
+    const tokenCheck = await params.verifyDeviceToken({
+      deviceId: params.deviceId,
+      token: deviceTokenCandidate,
+      role: params.role,
+      scopes: params.scopes,
+    });
+    if (tokenCheck.ok) {
+      authOk = true;
+      authMethod = "device-token";
+      params.rateLimiter?.reset(params.clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
+    } else {
+      authResult = {
+        ok: false,
+        reason:
+          params.state.deviceTokenCandidateSource === "explicit-device-token"
+            ? "device_token_mismatch"
+            : (authResult.reason ?? "device_token_mismatch"),
+      };
+      params.rateLimiter?.recordFailure(params.clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
+    }
+  }
+
+  return { authResult, authOk, authMethod };
 }

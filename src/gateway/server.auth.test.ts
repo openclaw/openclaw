@@ -3,6 +3,7 @@ import { WebSocket } from "ws";
 import { withEnvAsync } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
+import { ConnectErrorDetailCodes } from "./protocol/connect-error-details.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
 import { getHandshakeTimeoutMs } from "./server-constants.js";
 import {
@@ -716,6 +717,9 @@ describe("gateway server auth/connect", () => {
       });
       expect(res.ok).toBe(false);
       expect(res.error?.message ?? "").toContain("secure context");
+      expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
+        ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
+      );
       ws.close();
     });
   });
@@ -898,6 +902,9 @@ describe("gateway server auth/connect", () => {
         });
         expect(res.ok).toBe(false);
         expect(res.error?.message ?? "").toContain("pairing required");
+        expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
+          ConnectErrorDetailCodes.PAIRING_REQUIRED,
+        );
         ws.close();
       });
     } finally {
@@ -1004,6 +1011,9 @@ describe("gateway server auth/connect", () => {
     expect(res2.ok).toBe(false);
     expect(res2.error?.message ?? "").toContain("gateway token mismatch");
     expect(res2.error?.message ?? "").not.toContain("device token mismatch");
+    expect((res2.error?.details as { code?: string } | undefined)?.code).toBe(
+      ConnectErrorDetailCodes.AUTH_TOKEN_MISMATCH,
+    );
 
     ws2.close();
     await server.close();
@@ -1023,6 +1033,9 @@ describe("gateway server auth/connect", () => {
     });
     expect(res2.ok).toBe(false);
     expect(res2.error?.message ?? "").toContain("device token mismatch");
+    expect((res2.error?.details as { code?: string } | undefined)?.code).toBe(
+      ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH,
+    );
 
     ws2.close();
     await server.close();
