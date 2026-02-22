@@ -336,7 +336,7 @@ describe("delivery-queue", () => {
       expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("deferred to next restart"));
     });
 
-    it("defers entries when backoff exceeds the recovery budget", async () => {
+    it("records a failed attempt when backoff exceeds the recovery budget", async () => {
       const id = await enqueueDelivery(
         { channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] },
         tmpDir,
@@ -353,12 +353,132 @@ describe("delivery-queue", () => {
 
       expect(deliver).not.toHaveBeenCalled();
       expect(delay).not.toHaveBeenCalled();
-      expect(result).toEqual({ recovered: 0, failed: 0, skipped: 0 });
+      expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
 
       const remaining = await loadPendingDeliveries(tmpDir);
       expect(remaining).toHaveLength(1);
+      expect(remaining[0].retryCount).toBe(4);
 
-      expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("deferred to next restart"));
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.stringContaining("Deferring retry for delivery"),
+      );
+    });
+
+    it("moves entries to failed when deferred retries exceed max retries", async () => {
+      const id = await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] },
+        tmpDir,
+      );
+      const filePath = path.join(tmpDir, "delivery-queue", `${id}.json`);
+      const entry = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+      entry.retryCount = MAX_RETRIES - 1;
+      fs.writeFileSync(filePath, JSON.stringify(entry), "utf-8");
+
+      const deliver = vi.fn().mockResolvedValue([]);
+      const delay = vi.fn(async () => {});
+      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+      const result = await recoverPendingDeliveries({
+        deliver,
+        log,
+        cfg: baseCfg,
+        stateDir: tmpDir,
+        delay,
+        maxRecoveryMs: 1000,
+      });
+
+      expect(deliver).not.toHaveBeenCalled();
+      expect(delay).not.toHaveBeenCalled();
+      expect(result).toEqual({ recovered: 0, failed: 0, skipped: 1 });
+
+      const remaining = await loadPendingDeliveries(tmpDir);
+      expect(remaining).toHaveLength(0);
+      expect(fs.existsSync(path.join(tmpDir, "delivery-queue", "failed", `${id}.json`))).toBe(true);
+
+      const secondPass = await recoverPendingDeliveries({
+        deliver,
+        log,
+        cfg: baseCfg,
+        stateDir: tmpDir,
+        delay,
+        maxRecoveryMs: 1000,
+      });
+      expect(secondPass).toEqual({ recovered: 0, failed: 0, skipped: 0 });
+    });
+
+    it("does not double-count max-retry send failures as failed and skipped", async () => {
+      const id = await enqueueDelivery(
+        { channel: "slack", to: "#ops", payloads: [{ text: "x" }] },
+        tmpDir,
+      );
+      const filePath = path.join(tmpDir, "delivery-queue", `${id}.json`);
+      const entry = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+      entry.retryCount = MAX_RETRIES - 1;
+      fs.writeFileSync(filePath, JSON.stringify(entry), "utf-8");
+
+      const deliver = vi.fn().mockRejectedValue(new Error("still failing"));
+      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+      const result = await recoverPendingDeliveries({
+        deliver,
+        log,
+        cfg: baseCfg,
+        stateDir: tmpDir,
+        delay: noopDelay,
+      });
+
+      expect(result).toEqual({ recovered: 0, failed: 0, skipped: 1 });
+      expect(fs.existsSync(path.join(tmpDir, "delivery-queue", `${id}.json`))).toBe(false);
+      expect(fs.existsSync(path.join(tmpDir, "delivery-queue", "failed", `${id}.json`))).toBe(true);
+    });
+
+    it("expires stale entries when ttl is exceeded", async () => {
+      const id = await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] },
+        tmpDir,
+      );
+      const filePath = path.join(tmpDir, "delivery-queue", `${id}.json`);
+      const entry = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+      entry.enqueuedAt = Date.now() - 60_000;
+      fs.writeFileSync(filePath, JSON.stringify(entry), "utf-8");
+
+      const deliver = vi.fn().mockResolvedValue([]);
+      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+      const result = await recoverPendingDeliveries({
+        deliver,
+        log,
+        cfg: baseCfg,
+        stateDir: tmpDir,
+        delay: noopDelay,
+        entryTtlMs: 1_000,
+      });
+
+      expect(deliver).not.toHaveBeenCalled();
+      expect(result).toEqual({ recovered: 0, failed: 0, skipped: 1 });
+      expect(fs.existsSync(path.join(tmpDir, "delivery-queue", "failed", `${id}.json`))).toBe(true);
+    });
+
+    it("quarantines malformed queue files instead of retrying forever", async () => {
+      await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] }, tmpDir);
+      fs.writeFileSync(path.join(tmpDir, "delivery-queue", "broken.json"), "{bad-json", "utf-8");
+
+      const deliver = vi.fn().mockResolvedValue([]);
+      const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+      const result = await recoverPendingDeliveries({
+        deliver,
+        log,
+        cfg: baseCfg,
+        stateDir: tmpDir,
+        delay: noopDelay,
+      });
+
+      expect(deliver).toHaveBeenCalledTimes(1);
+      expect(result.recovered).toBe(1);
+      expect(fs.existsSync(path.join(tmpDir, "delivery-queue", "failed", "broken.json"))).toBe(
+        true,
+      );
     });
 
     it("returns zeros when queue is empty", async () => {

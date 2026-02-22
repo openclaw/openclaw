@@ -366,6 +366,70 @@ describe("gateway server cron", () => {
     }
   });
 
+  test("acknowledges cron.run immediately even when execution is still running", async () => {
+    const prevSkipCron = process.env.OPENCLAW_SKIP_CRON;
+    process.env.OPENCLAW_SKIP_CRON = "0";
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-cron-ack-"));
+    testState.cronStorePath = path.join(dir, "cron", "jobs.json");
+    testState.cronEnabled = false;
+    await fs.mkdir(path.dirname(testState.cronStorePath), { recursive: true });
+    await fs.writeFile(testState.cronStorePath, JSON.stringify({ version: 1, jobs: [] }));
+
+    let resolveRun: ((value: { status: "ok"; summary: string }) => void) | undefined;
+    const slowRun = new Promise<{ status: "ok"; summary: string }>((resolve) => {
+      resolveRun = resolve;
+    });
+    cronIsolatedRun.mockImplementationOnce(async () => await slowRun);
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      const addRes = await rpcReq(ws, "cron.add", {
+        name: "slow manual run",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "slow run" },
+      });
+      expect(addRes.ok).toBe(true);
+      const jobIdValue = (addRes.payload as { id?: unknown } | null)?.id;
+      const jobId = typeof jobIdValue === "string" ? jobIdValue : "";
+      expect(jobId.length > 0).toBe(true);
+
+      const startedAt = process.hrtime.bigint();
+      const runRes = await rpcReq(ws, "cron.run", { id: jobId, mode: "force" }, 1_500);
+      const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+      expect(runRes.ok).toBe(true);
+      const payload = runRes.payload as {
+        accepted?: unknown;
+        jobId?: unknown;
+        mode?: unknown;
+      } | null;
+      expect(payload?.accepted).toBe(true);
+      expect(payload?.jobId).toBe(jobId);
+      expect(payload?.mode).toBe("force");
+      expect(elapsedMs).toBeLessThan(1_500);
+      expect(cronIsolatedRun).toHaveBeenCalled();
+
+      resolveRun?.({ status: "ok", summary: "done" });
+      await waitForCondition(() => true, 100);
+    } finally {
+      resolveRun?.({ status: "ok", summary: "cleanup" });
+      ws.close();
+      await server.close();
+      await rmTempDir(dir);
+      testState.cronStorePath = undefined;
+      testState.cronEnabled = undefined;
+      if (prevSkipCron === undefined) {
+        delete process.env.OPENCLAW_SKIP_CRON;
+      } else {
+        process.env.OPENCLAW_SKIP_CRON = prevSkipCron;
+      }
+    }
+  });
+
   test("writes cron run history and auto-runs due jobs", async () => {
     const prevSkipCron = process.env.OPENCLAW_SKIP_CRON;
     process.env.OPENCLAW_SKIP_CRON = "0";

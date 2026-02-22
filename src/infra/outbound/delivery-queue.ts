@@ -9,6 +9,8 @@ import type { OutboundChannel } from "./targets.js";
 const QUEUE_DIRNAME = "delivery-queue";
 const FAILED_DIRNAME = "failed";
 const MAX_RETRIES = 5;
+const DEFAULT_RECOVERY_DELIVERY_TIMEOUT_MS = 15_000;
+const DEFAULT_RECOVERY_ENTRY_TTL_MS = 24 * 60 * 60_000;
 
 /** Backoff delays in milliseconds indexed by retry count (1-based). */
 const BACKOFF_MS: readonly number[] = [
@@ -17,6 +19,104 @@ const BACKOFF_MS: readonly number[] = [
   120_000, // retry 3: 2m
   600_000, // retry 4: 10m
 ];
+
+function trimNonEmptyString(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeQueuedDeliveryForRecovery(
+  value: unknown,
+  fallbackId: string,
+): QueuedDelivery | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const raw = value as Record<string, unknown>;
+  const id = trimNonEmptyString(raw.id) ?? fallbackId;
+  const channel = trimNonEmptyString(raw.channel);
+  const to = trimNonEmptyString(raw.to);
+  const payloads = raw.payloads;
+  const enqueuedAt = raw.enqueuedAt;
+  const retryCount = raw.retryCount;
+  if (!channel || channel === "none" || !to || !Array.isArray(payloads)) {
+    return null;
+  }
+  if (typeof enqueuedAt !== "number" || !Number.isFinite(enqueuedAt)) {
+    return null;
+  }
+  if (typeof retryCount !== "number" || !Number.isFinite(retryCount) || retryCount < 0) {
+    return null;
+  }
+  const mirrorRaw = raw.mirror;
+  const mirror =
+    mirrorRaw && typeof mirrorRaw === "object" && !Array.isArray(mirrorRaw)
+      ? {
+          sessionKey: trimNonEmptyString((mirrorRaw as { sessionKey?: unknown }).sessionKey) ?? "",
+          agentId: trimNonEmptyString((mirrorRaw as { agentId?: unknown }).agentId),
+          text:
+            typeof (mirrorRaw as { text?: unknown }).text === "string"
+              ? (mirrorRaw as { text?: string }).text
+              : undefined,
+          mediaUrls: Array.isArray((mirrorRaw as { mediaUrls?: unknown }).mediaUrls)
+            ? ((mirrorRaw as { mediaUrls?: unknown[] }).mediaUrls as string[]).filter(
+                (entry): entry is string => typeof entry === "string",
+              )
+            : undefined,
+        }
+      : undefined;
+  return {
+    id,
+    enqueuedAt,
+    channel: channel as Exclude<OutboundChannel, "none">,
+    to,
+    accountId: trimNonEmptyString(raw.accountId),
+    payloads: payloads as ReplyPayload[],
+    threadId:
+      raw.threadId == null || typeof raw.threadId === "string" || typeof raw.threadId === "number"
+        ? raw.threadId
+        : undefined,
+    replyToId:
+      raw.replyToId == null || typeof raw.replyToId === "string" ? raw.replyToId : undefined,
+    bestEffort: typeof raw.bestEffort === "boolean" ? raw.bestEffort : undefined,
+    gifPlayback: typeof raw.gifPlayback === "boolean" ? raw.gifPlayback : undefined,
+    silent: typeof raw.silent === "boolean" ? raw.silent : undefined,
+    mirror: mirror?.sessionKey ? mirror : undefined,
+    retryCount: Math.floor(retryCount),
+    lastError: typeof raw.lastError === "string" ? raw.lastError : undefined,
+  };
+}
+
+function shouldExpireEntry(params: { enqueuedAt: number; now: number; ttlMs: number }): boolean {
+  if (params.ttlMs <= 0) {
+    return false;
+  }
+  return params.now - params.enqueuedAt >= params.ttlMs;
+}
+
+async function runWithTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
+  if (timeoutMs <= 0 || !Number.isFinite(timeoutMs)) {
+    return await promise;
+  }
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`delivery recovery timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
 
 type DeliveryMirrorPayload = {
   sessionKey: string;
@@ -160,6 +260,7 @@ export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDe
     if (!file.endsWith(".json")) {
       continue;
     }
+    const fileId = file.slice(0, -".json".length);
     const filePath = path.join(queueDir, file);
     try {
       const stat = await fs.promises.stat(filePath);
@@ -167,9 +268,15 @@ export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDe
         continue;
       }
       const raw = await fs.promises.readFile(filePath, "utf-8");
-      entries.push(JSON.parse(raw));
+      const normalized = normalizeQueuedDeliveryForRecovery(JSON.parse(raw), fileId);
+      if (!normalized) {
+        await moveToFailed(fileId, stateDir).catch(() => {});
+        continue;
+      }
+      entries.push(normalized);
     } catch {
-      // Skip malformed or inaccessible entries.
+      // Malformed queue entries are quarantined so recovery doesn't loop forever.
+      await moveToFailed(fileId, stateDir).catch(() => {});
     }
   }
   return entries;
@@ -220,6 +327,10 @@ export async function recoverPendingDeliveries(opts: {
   delay?: (ms: number) => Promise<void>;
   /** Maximum wall-clock time for recovery in ms. Remaining entries are deferred to next restart. Default: 60 000. */
   maxRecoveryMs?: number;
+  /** Maximum age for queue entries before forcing permanent failure. Default: 24h. */
+  entryTtlMs?: number;
+  /** Timeout per delivery attempt while recovering. Default: 15 000ms. */
+  deliveryTimeoutMs?: number;
 }): Promise<{ recovered: number; failed: number; skipped: number }> {
   const pending = await loadPendingDeliveries(opts.stateDir);
   if (pending.length === 0) {
@@ -233,17 +344,32 @@ export async function recoverPendingDeliveries(opts: {
 
   const delayFn = opts.delay ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const deadline = Date.now() + (opts.maxRecoveryMs ?? 60_000);
+  const entryTtlMs = opts.entryTtlMs ?? DEFAULT_RECOVERY_ENTRY_TTL_MS;
+  const deliveryTimeoutMs = opts.deliveryTimeoutMs ?? DEFAULT_RECOVERY_DELIVERY_TIMEOUT_MS;
 
   let recovered = 0;
   let failed = 0;
   let skipped = 0;
 
-  for (const entry of pending) {
+  for (let index = 0; index < pending.length; index += 1) {
+    const entry = pending[index];
     const now = Date.now();
     if (now >= deadline) {
-      const deferred = pending.length - recovered - failed - skipped;
+      const deferred = pending.length - index;
       opts.log.warn(`Recovery time budget exceeded — ${deferred} entries deferred to next restart`);
       break;
+    }
+    if (shouldExpireEntry({ enqueuedAt: entry.enqueuedAt, now, ttlMs: entryTtlMs })) {
+      opts.log.warn(
+        `Delivery ${entry.id} expired after ${Math.max(now - entry.enqueuedAt, 0)}ms in queue — moving to failed/`,
+      );
+      try {
+        await moveToFailed(entry.id, opts.stateDir);
+      } catch (err) {
+        opts.log.error(`Failed to move expired entry ${entry.id} to failed/: ${String(err)}`);
+      }
+      skipped += 1;
+      continue;
     }
     if (entry.retryCount >= MAX_RETRIES) {
       opts.log.warn(
@@ -260,54 +386,103 @@ export async function recoverPendingDeliveries(opts: {
 
     const backoff = computeBackoffMs(entry.retryCount + 1);
     if (backoff > 0) {
-      if (now + backoff >= deadline) {
-        const deferred = pending.length - recovered - failed - skipped;
+      const remainingBudgetMs = Math.max(deadline - now, 0);
+      if (backoff >= remainingBudgetMs) {
+        const reason = `recovery budget too small for backoff (${backoff}ms > ${remainingBudgetMs}ms)`;
+        entry.retryCount += 1;
+        entry.lastError = reason;
+        try {
+          await failDelivery(entry.id, reason, opts.stateDir);
+        } catch (err) {
+          opts.log.error(`Failed to record deferred retry for ${entry.id}: ${String(err)}`);
+        }
+        let movedToFailed = false;
+        if (entry.retryCount >= MAX_RETRIES) {
+          try {
+            await moveToFailed(entry.id, opts.stateDir);
+            movedToFailed = true;
+            skipped += 1;
+          } catch (err) {
+            opts.log.error(`Failed to move entry ${entry.id} to failed/: ${String(err)}`);
+          }
+        }
+        if (!movedToFailed) {
+          failed += 1;
+        }
         opts.log.warn(
-          `Recovery time budget exceeded — ${deferred} entries deferred to next restart`,
+          `Deferring retry for delivery ${entry.id}: ${reason} (attempt ${entry.retryCount}/${MAX_RETRIES})`,
         );
         break;
       }
       opts.log.info(`Waiting ${backoff}ms before retrying delivery ${entry.id}`);
       await delayFn(backoff);
+      if (Date.now() >= deadline) {
+        const deferred = pending.length - (index + 1);
+        opts.log.warn(
+          `Recovery time budget exceeded — ${deferred} entries deferred to next restart`,
+        );
+        break;
+      }
     }
 
     try {
-      await opts.deliver({
-        cfg: opts.cfg,
-        channel: entry.channel,
-        to: entry.to,
-        accountId: entry.accountId,
-        payloads: entry.payloads,
-        threadId: entry.threadId,
-        replyToId: entry.replyToId,
-        bestEffort: entry.bestEffort,
-        gifPlayback: entry.gifPlayback,
-        silent: entry.silent,
-        mirror: entry.mirror,
-        skipQueue: true, // Prevent re-enqueueing during recovery
-      });
+      const remainingBudgetMs = Math.max(deadline - Date.now(), 0);
+      if (remainingBudgetMs <= 0) {
+        const deferred = pending.length - (index + 1);
+        opts.log.warn(
+          `Recovery time budget exceeded — ${deferred} entries deferred to next restart`,
+        );
+        break;
+      }
+      const attemptTimeoutMs = Math.max(1_000, Math.min(deliveryTimeoutMs, remainingBudgetMs));
+      await runWithTimeout(
+        opts.deliver({
+          cfg: opts.cfg,
+          channel: entry.channel,
+          to: entry.to,
+          accountId: entry.accountId,
+          payloads: entry.payloads,
+          threadId: entry.threadId,
+          replyToId: entry.replyToId,
+          bestEffort: entry.bestEffort,
+          gifPlayback: entry.gifPlayback,
+          silent: entry.silent,
+          mirror: entry.mirror,
+          skipQueue: true, // Prevent re-enqueueing during recovery
+        }),
+        attemptTimeoutMs,
+      );
       await ackDelivery(entry.id, opts.stateDir);
       recovered += 1;
       opts.log.info(`Recovered delivery ${entry.id} to ${entry.channel}:${entry.to}`);
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      entry.retryCount += 1;
+      entry.lastError = message;
       try {
-        await failDelivery(
-          entry.id,
-          err instanceof Error ? err.message : String(err),
-          opts.stateDir,
-        );
-      } catch {
-        // Best-effort update.
+        await failDelivery(entry.id, message, opts.stateDir);
+      } catch (updateErr) {
+        opts.log.error(`Failed to update retry metadata for ${entry.id}: ${String(updateErr)}`);
       }
-      failed += 1;
-      opts.log.warn(
-        `Retry failed for delivery ${entry.id}: ${err instanceof Error ? err.message : String(err)}`,
-      );
+      let movedToFailed = false;
+      opts.log.warn(`Retry failed for delivery ${entry.id}: ${message}`);
+      if (entry.retryCount >= MAX_RETRIES) {
+        try {
+          await moveToFailed(entry.id, opts.stateDir);
+          movedToFailed = true;
+          skipped += 1;
+        } catch (moveErr) {
+          opts.log.error(`Failed to move entry ${entry.id} to failed/: ${String(moveErr)}`);
+        }
+      }
+      if (!movedToFailed) {
+        failed += 1;
+      }
     }
   }
 
   opts.log.info(
-    `Delivery recovery complete: ${recovered} recovered, ${failed} failed, ${skipped} skipped (max retries)`,
+    `Delivery recovery complete: ${recovered} recovered, ${failed} failed, ${skipped} skipped (expired/max retries)`,
   );
   return { recovered, failed, skipped };
 }

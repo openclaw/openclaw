@@ -167,7 +167,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     const result = await context.cron.remove(jobId);
     respond(true, result, undefined);
   },
-  "cron.run": async ({ params, respond, context }) => {
+  "cron.run": ({ params, respond, context }) => {
     if (!validateCronRunParams(params)) {
       respond(
         false,
@@ -189,8 +189,13 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const result = await context.cron.run(jobId, p.mode ?? "force");
-    respond(true, result, undefined);
+    const mode = p.mode ?? "force";
+    respond(true, { ok: true, accepted: true, jobId, mode }, undefined);
+    void context.cron.run(jobId, mode).catch((err) => {
+      context.logGateway.warn(
+        `cron.run background execution failed for job ${jobId}: ${String(err)}`,
+      );
+    });
   },
   "cron.runs": async ({ params, respond, context }) => {
     if (!validateCronRunsParams(params)) {
