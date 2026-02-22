@@ -729,6 +729,27 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("uses qmd.cmd on Windows when qmd command is bare", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      const { manager } = await createManager({ mode: "status" });
+      await manager.sync({ reason: "manual" });
+
+      const qmdCalls = spawnMock.mock.calls.filter((call: unknown[]) => {
+        const args = call[1] as string[] | undefined;
+        return Array.isArray(args) && args.length > 0;
+      });
+      expect(qmdCalls.length).toBeGreaterThan(0);
+      for (const call of qmdCalls) {
+        expect(call[0]).toBe("qmd.cmd");
+      }
+
+      await manager.close();
+    } finally {
+      platformSpy.mockRestore();
+    }
+  });
+
   it("normalizes mixed Han-script BM25 queries before qmd search", async () => {
     cfg = {
       ...cfg,
@@ -1192,6 +1213,47 @@ describe("QmdMemoryManager", () => {
     expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("cold-start"));
 
     await manager.close();
+  });
+
+  it("uses mcporter.cmd on Windows when mcporter bridge is enabled", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    try {
+      cfg = {
+        ...cfg,
+        memory: {
+          backend: "qmd",
+          qmd: {
+            includeDefaultMemory: false,
+            update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+            paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+            mcporter: { enabled: true, serverName: "qmd", startDaemon: false },
+          },
+        },
+      } as OpenClawConfig;
+
+      spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+        const child = createMockChild({ autoClose: false });
+        if (args[0] === "call") {
+          emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+          return child;
+        }
+        emitAndClose(child, "stdout", "[]");
+        return child;
+      });
+
+      const { manager } = await createManager();
+      await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
+
+      const mcporterCall = spawnMock.mock.calls.find(
+        (call: unknown[]) => (call[1] as string[] | undefined)?.[0] === "call",
+      );
+      expect(mcporterCall).toBeDefined();
+      expect(mcporterCall?.[0]).toBe("mcporter.cmd");
+
+      await manager.close();
+    } finally {
+      platformSpy.mockRestore();
+    }
   });
 
   it("passes manager-scoped XDG env to mcporter commands", async () => {
