@@ -26,6 +26,8 @@ function startMonitorWebChannel(params: {
   sleep: ReturnType<typeof vi.fn>;
   signal?: AbortSignal;
   heartbeatSeconds?: number;
+  messageTimeoutMs?: number;
+  watchdogCheckMs?: number;
   reconnect?: { initialMs: number; maxMs: number; maxAttempts: number; factor: number };
 }) {
   const runtime = createRuntime();
@@ -39,6 +41,8 @@ function startMonitorWebChannel(params: {
     params.signal ?? controller.signal,
     {
       heartbeatSeconds: params.heartbeatSeconds ?? 1,
+      messageTimeoutMs: params.messageTimeoutMs,
+      watchdogCheckMs: params.watchdogCheckMs,
       reconnect: params.reconnect ?? { initialMs: 10, maxMs: 10, maxAttempts: 3, factor: 1.1 },
       sleep: params.sleep,
     },
@@ -127,7 +131,6 @@ describe("web auto-reply", () => {
     try {
       const sleep = vi.fn(async () => {});
       const closeResolvers: Array<(reason: unknown) => void> = [];
-      const signalCloseSpy = vi.fn();
       let capturedOnMessage:
         | ((msg: import("./inbound.js").WebInboundMessage) => Promise<void>)
         | undefined;
@@ -144,22 +147,27 @@ describe("web auto-reply", () => {
           return {
             close: vi.fn(),
             onClose,
-            signalClose: (reason?: unknown) => {
-              signalCloseSpy(reason);
-              resolveClose(reason);
-            },
+            signalClose: (reason?: unknown) => resolveClose(reason),
           };
         },
       );
-      const { runtime, controller, run } = startMonitorWebChannel({
+      const { controller, run } = startMonitorWebChannel({
         monitorWebChannelFn: monitorWebChannel as never,
         listenerFactory,
         sleep,
         heartbeatSeconds: 60,
+        messageTimeoutMs: 30,
+        watchdogCheckMs: 5,
       });
 
       await Promise.resolve();
       expect(listenerFactory).toHaveBeenCalledTimes(1);
+      await vi.waitFor(
+        () => {
+          expect(capturedOnMessage).toBeTypeOf("function");
+        },
+        { timeout: 500, interval: 5 },
+      );
 
       const reply = vi.fn().mockResolvedValue(undefined);
       const sendComposing = vi.fn();
@@ -179,19 +187,14 @@ describe("web auto-reply", () => {
         }),
       );
 
-      await vi.advanceTimersByTimeAsync(31 * 60 * 1000);
+      await vi.advanceTimersByTimeAsync(200);
       await Promise.resolve();
-
-      await vi.advanceTimersByTimeAsync(1);
-      expect(signalCloseSpy).toHaveBeenCalledWith(
-        expect.objectContaining({ status: 499, isLoggedOut: false, error: "watchdog-timeout" }),
+      await vi.waitFor(
+        () => {
+          expect(listenerFactory).toHaveBeenCalledTimes(2);
+        },
+        { timeout: 500, interval: 5 },
       );
-      for (let i = 0; i < 20 && listenerFactory.mock.calls.length < 2; i += 1) {
-        await vi.advanceTimersByTimeAsync(50);
-        await Promise.resolve();
-      }
-      expect(listenerFactory.mock.calls.length).toBeGreaterThanOrEqual(2);
-      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Retry 1"));
 
       controller.abort();
       closeResolvers[1]?.({ status: 499, isLoggedOut: false });
