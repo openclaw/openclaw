@@ -1,16 +1,11 @@
 import * as fs from "node:fs/promises";
+import { Command } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { IOS_NODE, createIosNodeListResponse } from "./program.nodes-test-helpers.js";
-import {
-  callGateway,
-  installBaseProgramMocks,
-  installSmokeProgramMocks,
-  runTui,
-  runtime,
-} from "./program.test-mocks.js";
+import { callGateway, installBaseProgramMocks, runtime } from "./program.test-mocks.js";
 
 installBaseProgramMocks();
-installSmokeProgramMocks();
+let registerNodesCli: (program: Command) => void;
 
 function getFirstRuntimeLogLine(): string {
   const first = runtime.log.mock.calls[0]?.[0];
@@ -55,17 +50,18 @@ function mockNodeGateway(command?: string, payload?: Record<string, unknown>) {
   });
 }
 
-const { buildProgram } = await import("./program.js");
-
 describe("cli program (nodes media)", () => {
-  function createProgramWithCleanRuntimeLog() {
-    const program = buildProgram();
-    runtime.log.mockClear();
-    return program;
-  }
+  let program: Command;
+
+  beforeAll(async () => {
+    ({ registerNodesCli } = await import("./nodes-cli.js"));
+    program = new Command();
+    program.exitOverride();
+    registerNodesCli(program);
+  });
 
   async function runNodesCommand(argv: string[]) {
-    const program = createProgramWithCleanRuntimeLog();
+    runtime.log.mockClear();
     await program.parseAsync(argv, { from: "user" });
   }
 
@@ -85,7 +81,6 @@ describe("cli program (nodes media)", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    runTui.mockResolvedValue(undefined);
   });
 
   it("runs nodes camera snap and prints two MEDIA paths", async () => {
@@ -273,7 +268,9 @@ describe("cli program (nodes media)", () => {
   it("fails nodes camera snap on invalid facing", async () => {
     mockNodeGateway();
 
-    const program = buildProgram();
+    const program = new Command();
+    program.exitOverride();
+    registerNodesCli(program);
     runtime.error.mockClear();
 
     await expect(
