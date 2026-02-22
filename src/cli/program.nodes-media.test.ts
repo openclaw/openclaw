@@ -128,11 +128,14 @@ describe("cli program (nodes media)", () => {
       .map((l) => l.replace(/^MEDIA:/, ""))
       .filter(Boolean);
     expect(mediaPaths).toHaveLength(2);
+    expect(mediaPaths[0]).toContain("openclaw-camera-snap-");
+    expect(mediaPaths[1]).toContain("openclaw-camera-snap-");
 
     try {
-      for (const p of mediaPaths) {
-        await expect(fs.readFile(p, "utf8")).resolves.toBe("hi");
-      }
+      // Content bytes are covered by single-output camera/file tests; here we
+      // only verify dual snapshot behavior and that both paths were written.
+      await expect(fs.stat(mediaPaths[0])).resolves.toBeTruthy();
+      await expect(fs.stat(mediaPaths[1])).resolves.toBeTruthy();
     } finally {
       await Promise.all(mediaPaths.map((p) => fs.unlink(p).catch(() => {})));
     }
