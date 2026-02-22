@@ -70,9 +70,16 @@ describe("handleControlUiHttpRequest", () => {
         );
         expect(handled).toBe(true);
         expect(setHeader).toHaveBeenCalledWith("X-Frame-Options", "DENY");
+        expect(setHeader).toHaveBeenCalledWith("Cross-Origin-Opener-Policy", "same-origin");
+        expect(setHeader).toHaveBeenCalledWith("Cross-Origin-Resource-Policy", "same-origin");
+        expect(setHeader).toHaveBeenCalledWith(
+          "Permissions-Policy",
+          expect.stringContaining("microphone=()"),
+        );
         const csp = setHeader.mock.calls.find((call) => call[0] === "Content-Security-Policy")?.[1];
         expect(typeof csp).toBe("string");
         expect(String(csp)).toContain("frame-ancestors 'none'");
+        expect(String(csp)).toContain("form-action 'none'");
         expect(String(csp)).toContain("script-src 'self'");
         expect(String(csp)).not.toContain("script-src 'self' 'unsafe-inline'");
       },
