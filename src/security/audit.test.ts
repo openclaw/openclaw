@@ -2150,6 +2150,63 @@ description: test skill
     );
   });
 
+  it("flags open groupPolicy when runtime/filesystem tools are exposed without guards", async () => {
+    const cfg: OpenClawConfig = {
+      channels: { whatsapp: { groupPolicy: "open" } },
+      tools: { elevated: { enabled: false } },
+    };
+
+    const res = await audit(cfg);
+
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "security.exposure.open_groups_with_runtime_or_fs",
+          severity: "critical",
+        }),
+      ]),
+    );
+  });
+
+  it("does not flag runtime/filesystem exposure for open groups when sandbox mode is all", async () => {
+    const cfg: OpenClawConfig = {
+      channels: { whatsapp: { groupPolicy: "open" } },
+      tools: {
+        elevated: { enabled: false },
+        profile: "coding",
+      },
+      agents: {
+        defaults: {
+          sandbox: { mode: "all" },
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+
+    expect(
+      res.findings.some((f) => f.checkId === "security.exposure.open_groups_with_runtime_or_fs"),
+    ).toBe(false);
+  });
+
+  it("does not flag runtime/filesystem exposure for open groups when runtime is denied and fs is workspace-only", async () => {
+    const cfg: OpenClawConfig = {
+      channels: { whatsapp: { groupPolicy: "open" } },
+      tools: {
+        elevated: { enabled: false },
+        profile: "coding",
+        deny: ["group:runtime"],
+        fs: { workspaceOnly: true },
+      },
+    };
+
+    const res = await audit(cfg);
+
+    expect(
+      res.findings.some((f) => f.checkId === "security.exposure.open_groups_with_runtime_or_fs"),
+    ).toBe(false);
+  });
+
   describe("maybeProbeGateway auth selection", () => {
     let envSnapshot: ReturnType<typeof captureEnv>;
 
