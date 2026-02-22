@@ -46,7 +46,7 @@ function stubJsonFetchOk() {
 describe("fetchBrowserJson loopback auth", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
-    mocks.loadConfig.mockReset();
+    mocks.loadConfig.mockClear();
     mocks.loadConfig.mockReturnValue({
       gateway: {
         auth: {
