@@ -512,6 +512,32 @@ async function handleSendAction(ctx: ResolvedActionContext): Promise<MessageActi
   }
   const mirrorMediaUrls =
     mergedMediaUrls.length > 0 ? mergedMediaUrls : mediaUrl ? [mediaUrl] : undefined;
+
+  // Hard preflight gate: allow HexMem-backed / external policy checks to block sends.
+  // MVRSA principle: reasons must be able to stop action.
+  const { runOutboundGate } = await import("./outbound-gate.js");
+  const gate = await runOutboundGate({
+    cfg,
+    ctx: {
+      kind: "message",
+      action,
+      channel,
+      accountId: accountId ?? null,
+      target: to,
+      threadId: resolvedThreadId ?? null,
+      replyToId: replyToId ?? null,
+      text: message,
+      mediaUrl: mediaUrl ?? null,
+      agentId: agentId ?? null,
+      sessionKey: input.toolContext?.sessionKey ?? null,
+      toolContext: input.toolContext,
+      tsMs: Date.now(),
+    },
+  });
+  if (!gate.allow) {
+    throw new Error(`Outbound gate blocked send: ${gate.reason}`);
+  }
+
   throwIfAborted(abortSignal);
   const send = await executeSendAction({
     ctx: {
