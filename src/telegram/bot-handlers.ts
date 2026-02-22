@@ -17,6 +17,7 @@ import { loadConfig } from "../config/config.js";
 import { writeConfigFile } from "../config/io.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { danger, logVerbose, warn } from "../globals.js";
+import { enqueueSystemEvent } from "../infra/system-events.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
@@ -681,6 +682,72 @@ export const registerTelegramHandlers = ({
       }
     } catch (err) {
       runtime.error?.(danger(`[telegram] Group migration handler failed: ${String(err)}`));
+    }
+  });
+
+  // Handle edited messages — inject a system event so the agent sees the correction.
+  bot.on("edited_message", async (ctx) => {
+    try {
+      const msg = ctx.editedMessage;
+      if (!msg) {
+        return;
+      }
+      if (shouldSkipUpdate(ctx)) {
+        return;
+      }
+
+      const text = msg.text ?? msg.caption ?? "";
+      if (!text.trim()) {
+        logVerbose("telegram: skipping edited_message with no text content");
+        return;
+      }
+
+      const chatId = msg.chat.id;
+      const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
+      const messageThreadId = (msg as { message_thread_id?: number }).message_thread_id;
+      const isForum = (msg.chat as { is_forum?: boolean }).is_forum === true;
+      const resolvedThreadId = resolveTelegramForumThreadId({
+        isForum,
+        messageThreadId,
+      });
+
+      // Resolve session key for this chat/group
+      const peerId = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId);
+      const parentPeer = buildTelegramParentPeer({ isGroup, resolvedThreadId, chatId });
+      const route = resolveAgentRoute({
+        cfg: loadConfig(),
+        channel: "telegram",
+        accountId,
+        peer: { kind: isGroup ? "group" : "direct", id: peerId },
+        parentPeer,
+      });
+      const sessionKey = route.sessionKey;
+
+      // Build sender label
+      const senderName = msg.from
+        ? [msg.from.first_name, msg.from.last_name].filter(Boolean).join(" ").trim() ||
+          msg.from.username
+        : undefined;
+      const senderUsername = msg.from?.username ? `@${msg.from.username}` : undefined;
+      let senderLabel = senderName;
+      if (senderName && senderUsername) {
+        senderLabel = `${senderName} (${senderUsername})`;
+      } else if (!senderName && senderUsername) {
+        senderLabel = senderUsername;
+      }
+      senderLabel = senderLabel || "unknown";
+
+      const messageId = msg.message_id;
+      const eventText =
+        `[Edited message] ${senderLabel} edited message ${messageId}. ` + `New content: ${text}`;
+
+      enqueueSystemEvent(eventText, {
+        sessionKey,
+        contextKey: `telegram:edited_message:${chatId}:${messageId}:${msg.edit_date ?? Date.now()}`,
+      });
+      logVerbose(`telegram: edited_message event enqueued for msg ${messageId} in chat ${chatId}`);
+    } catch (err) {
+      runtime.error?.(danger(`telegram edited_message handler failed: ${String(err)}`));
     }
   });
 
