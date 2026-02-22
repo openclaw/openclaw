@@ -85,16 +85,16 @@ async function fetchHistoryMessages(
 describe("gateway server chat", () => {
   test("smoke: caps history payload and preserves routing metadata", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-      const historyMaxBytes = 192 * 1024;
+      const historyMaxBytes = 64 * 1024;
       __setMaxChatHistoryMessagesBytesForTest(historyMaxBytes);
       await connectOk(ws);
 
       const sessionDir = await createSessionDir();
       await writeMainSessionStore();
 
-      const bigText = "x".repeat(4_000);
+      const bigText = "x".repeat(2_000);
       const historyLines: string[] = [];
-      for (let i = 0; i < 60; i += 1) {
+      for (let i = 0; i < 45; i += 1) {
         historyLines.push(
           JSON.stringify({
             message: {
@@ -109,7 +109,7 @@ describe("gateway server chat", () => {
       const messages = await fetchHistoryMessages(ws);
       const bytes = Buffer.byteLength(JSON.stringify(messages), "utf8");
       expect(bytes).toBeLessThanOrEqual(historyMaxBytes);
-      expect(messages.length).toBeLessThan(60);
+      expect(messages.length).toBeLessThan(45);
 
       await writeSessionStore({
         entries: {
@@ -169,7 +169,7 @@ describe("gateway server chat", () => {
           () => {
             expect(spy.mock.calls.length).toBeGreaterThan(0);
           },
-          { timeout: 2_000, interval: 10 },
+          { timeout: 500, interval: 10 },
         );
 
         expect(capturedOpts?.disableBlockStreaming).toBeUndefined();
@@ -188,7 +188,7 @@ describe("gateway server chat", () => {
       const sessionDir = await createSessionDir();
       await writeMainSessionStore();
 
-      const hugeNestedText = "n".repeat(450_000);
+      const hugeNestedText = "n".repeat(120_000);
       const oversizedLine = JSON.stringify({
         message: {
           role: "assistant",
@@ -241,7 +241,7 @@ describe("gateway server chat", () => {
         );
       }
 
-      const hugeNestedText = "z".repeat(450_000);
+      const hugeNestedText = "z".repeat(120_000);
       lines.push(
         JSON.stringify({
           message: {
@@ -365,7 +365,7 @@ describe("gateway server chat", () => {
         return undefined;
       });
 
-      const sendResP = onceMessage(ws, (o) => o.type === "res" && o.id === "send-abort-1", 8_000);
+      const sendResP = onceMessage(ws, (o) => o.type === "res" && o.id === "send-abort-1", 2_000);
       sendReq(ws, "send-abort-1", "chat.send", {
         sessionKey: "main",
         message: "hello",
@@ -379,7 +379,7 @@ describe("gateway server chat", () => {
         () => {
           expect(spy.mock.calls.length).toBeGreaterThan(0);
         },
-        { timeout: 2_000, interval: 10 },
+        { timeout: 500, interval: 10 },
       );
 
       const inFlight = await rpcReq<{ status?: string }>(ws, "chat.send", {
@@ -400,7 +400,7 @@ describe("gateway server chat", () => {
         () => {
           expect(aborted).toBe(true);
         },
-        { timeout: 2_000, interval: 10 },
+        { timeout: 500, interval: 10 },
       );
 
       spy.mockClear();
@@ -423,7 +423,7 @@ describe("gateway server chat", () => {
           expect(again.ok).toBe(true);
           expect(again.payload?.status).toBe("ok");
         },
-        { timeout: 2_000, interval: 10 },
+        { timeout: 500, interval: 10 },
       );
     });
   });
