@@ -178,7 +178,7 @@
   .field select {
     padding: 8px 10px;
     border-radius: var(--radius-md);
-    font-size: 14px;
+    font-size: 16px; /* >= 16px prevents iOS Safari auto-zoom on focus */
   }
 
   /* Buttons */
@@ -236,7 +236,7 @@
     min-height: 60px;
     padding: 8px 10px;
     border-radius: var(--radius-md);
-    font-size: 14px;
+    font-size: 16px; /* >= 16px prevents iOS Safari auto-zoom on focus */
   }
 
   /* Log stream */
@@ -348,7 +348,7 @@
   .chat-compose__field textarea {
     min-height: 52px;
     padding: 8px 10px;
-    font-size: 13px;
+    font-size: 16px; /* >= 16px prevents iOS Safari auto-zoom on focus */
   }
 
   .btn {
