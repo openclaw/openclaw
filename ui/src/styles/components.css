@@ -2032,6 +2032,15 @@
 .agent-model-select {
   display: grid;
   gap: 12px;
+  margin-top: 12px;
+}
+
+.agent-model-actions {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  flex-shrink: 0;
+  padding-bottom: 2px;
 }
 
 .agent-model-meta {
@@ -2269,9 +2278,9 @@
 
 .agent-identity-card {
   display: flex;
-  gap: 16px;
+  gap: 12px;
   align-items: center;
-  padding: 16px;
+  padding: 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   background: var(--bg-elevated);
