@@ -12,7 +12,7 @@ import { readSecretFromFile } from "./secret-file.js";
 import { AcpGatewayAgent } from "./translator.js";
 import type { AcpServerOptions } from "./types.js";
 
-export function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void> {
+export async function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void> {
   const cfg = loadConfig();
   const connection = buildGatewayConnectionDetails({
     config: cfg,
@@ -80,6 +80,21 @@ export function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void> {
   process.once("SIGINT", shutdown);
   process.once("SIGTERM", shutdown);
 
+  // Start gateway first and wait for connection before processing ACP messages
+  gateway.start();
+
+  // Use a promise to wait for hello (connection established)
+  const helloReceived = new Promise<void>((resolve) => {
+    const originalOnHelloOk = gateway.opts.onHelloOk;
+    gateway.opts.onHelloOk = (hello) => {
+      originalOnHelloOk?.(hello);
+      resolve();
+    };
+  });
+
+  // Wait for gateway connection before creating AgentSideConnection
+  await helloReceived;
+
   const input = Writable.toWeb(process.stdout);
   const output = Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>;
   const stream = ndJsonStream(input, output);
@@ -90,7 +105,6 @@ export function serveAcpGateway(opts: AcpServerOptions = {}): Promise<void> {
     return agent;
   }, stream);
 
-  gateway.start();
   return closed;
 }
 
