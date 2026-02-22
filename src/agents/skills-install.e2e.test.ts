@@ -40,8 +40,8 @@ metadata: {"openclaw":{"install":[{"id":"deps","kind":"node","package":"example-
 
 describe("installSkill code safety scanning", () => {
   beforeEach(() => {
-    runCommandWithTimeoutMock.mockReset();
-    scanDirectoryWithSummaryMock.mockReset();
+    runCommandWithTimeoutMock.mockClear();
+    scanDirectoryWithSummaryMock.mockClear();
     runCommandWithTimeoutMock.mockResolvedValue({
       code: 0,
       stdout: "ok",
