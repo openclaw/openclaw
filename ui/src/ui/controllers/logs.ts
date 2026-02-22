@@ -45,6 +45,44 @@ function normalizeLevel(value: unknown): LogLevel | null {
   return LEVELS.has(lowered) ? lowered : null;
 }
 
+function formatLogValue(value: unknown, depth = 0): string {
+  if (value == null) {
+    return "";
+  }
+  if (depth > 5) {
+    return "[Max Depth]";
+  }
+  if (typeof value === "string") {
+    const parsed = parseMaybeJsonString(value);
+    if (parsed) {
+      return formatLogValue(parsed, depth + 1);
+    }
+    return value;
+  }
+  if (typeof value === "object") {
+    // If it's a simple object with a 'message' or 'text' or 'summary' field, use that.
+    const obj = value as Record<string, unknown>;
+    if (typeof obj.message === "string") {
+      return obj.message;
+    }
+    if (typeof obj.text === "string") {
+      return obj.text;
+    }
+    if (typeof obj.summary === "string") {
+      return obj.summary;
+    }
+    // Otherwise, stringify it cleanly with indentation.
+    // JSON.stringify naturally handles circular refs by throwing,
+    // but the depth limit above prevents stack overflow from nesting.
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return "[Circular or Large Object]";
+    }
+  }
+  return typeof value === "symbol" ? value.toString() : JSON.stringify(value);
+}
+
 export function parseLogLine(line: string): LogEntry {
   if (!line.trim()) {
     return { raw: line, message: line };
@@ -74,21 +112,30 @@ export function parseLogLine(line: string): LogEntry {
       subsystem = contextCandidate;
     }
 
-    let message: string | null = null;
-    if (typeof obj["1"] === "string") {
-      message = obj["1"];
-    } else if (!contextObj && typeof obj["0"] === "string") {
-      message = obj["0"];
-    } else if (typeof obj.message === "string") {
-      message = obj.message;
+    const messageParts: string[] = [];
+    if (typeof obj["1"] !== "undefined") {
+      messageParts.push(formatLogValue(obj["1"]));
     }
+    if (typeof obj["2"] !== "undefined") {
+      messageParts.push(formatLogValue(obj["2"]));
+    }
+
+    if (messageParts.length === 0) {
+      if (!contextObj && typeof obj["0"] !== "undefined") {
+        messageParts.push(formatLogValue(obj["0"]));
+      } else if (typeof obj.message === "string") {
+        messageParts.push(obj.message);
+      }
+    }
+
+    const message = messageParts.filter(Boolean).join(" ");
 
     return {
       raw: line,
       time,
       level,
       subsystem,
-      message: message ?? line,
+      message: message || line,
       meta: meta ?? undefined,
     };
   } catch {

@@ -1120,6 +1120,9 @@
   white-space: pre-wrap;
   word-break: break-word;
   font-family: var(--mono);
+  max-height: 300px;
+  overflow-y: auto;
+  display: block;
 }
 
 @container (max-width: 620px) {
