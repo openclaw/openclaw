@@ -88,10 +88,19 @@ function createSlackReplyReferencePlanner(params: {
   incomingThreadTs: string | undefined;
   messageTs: string | undefined;
   hasReplied?: boolean;
+  chatType?: "direct" | "channel" | "group";
+  isThreadReply?: boolean;
 }) {
-  // When already inside a Slack thread, always stay in it regardless of
-  // replyToMode — thread_ts is required to keep messages in the thread.
-  const effectiveMode = params.incomingThreadTs ? "all" : params.replyToMode;
+  // When already inside a Slack thread, stay in it — but for DMs where the
+  // "thread" was created by the typing indicator (not a real thread reply),
+  // respect the user's replyToMode setting.
+  // See: https://github.com/openclaw/openclaw/issues/16868
+  const effectiveMode =
+    params.chatType === "direct" && !params.isThreadReply
+      ? params.replyToMode
+      : params.incomingThreadTs
+        ? "all"
+        : params.replyToMode;
   return createReplyReferencePlanner({
     replyToMode: effectiveMode,
     existingId: params.incomingThreadTs,
@@ -105,12 +114,16 @@ export function createSlackReplyDeliveryPlan(params: {
   incomingThreadTs: string | undefined;
   messageTs: string | undefined;
   hasRepliedRef: { value: boolean };
+  chatType?: "direct" | "channel" | "group";
+  isThreadReply?: boolean;
 }): SlackReplyDeliveryPlan {
   const replyReference = createSlackReplyReferencePlanner({
     replyToMode: params.replyToMode,
     incomingThreadTs: params.incomingThreadTs,
     messageTs: params.messageTs,
     hasReplied: params.hasRepliedRef.value,
+    chatType: params.chatType,
+    isThreadReply: params.isThreadReply,
   });
   return {
     nextThreadTs: () => replyReference.use(),
