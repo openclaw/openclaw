@@ -132,6 +132,10 @@ export abstract class MemoryManagerSyncOps {
 
   protected abstract readonly cache: { enabled: boolean; maxEntries?: number };
   protected abstract db: DatabaseSync;
+  protected batchFailureCount = 0;
+  protected batchFailureLastError?: string;
+  protected batchFailureLastProvider?: string;
+  protected batchFailureLock: Promise<void> = Promise.resolve();
   protected abstract computeProviderKey(): string;
   protected abstract sync(params?: {
     reason?: string;

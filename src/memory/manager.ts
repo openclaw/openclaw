@@ -60,10 +60,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     pollIntervalMs: number;
     timeoutMs: number;
   };
-  protected batchFailureCount = 0;
-  protected batchFailureLastError?: string;
-  protected batchFailureLastProvider?: string;
-  protected batchFailureLock: Promise<void> = Promise.resolve();
   protected db: DatabaseSync;
   protected readonly sources: Set<MemorySource>;
   protected providerKey: string;
