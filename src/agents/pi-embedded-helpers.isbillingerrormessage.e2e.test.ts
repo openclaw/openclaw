@@ -377,4 +377,11 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBe("rate_limit");
   });
+  it("classifies JSON api_error internal server failures as timeout", () => {
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"api_error","message":"Internal server error"}}',
+      ),
+    ).toBe("timeout");
+  });
 });
