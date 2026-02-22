@@ -5,6 +5,7 @@ import { formatAllowlistMatchMeta } from "../../channels/allowlist-match.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import { resolveNativeCommandsEnabled, resolveNativeSkillsEnabled } from "../../config/commands.js";
 import { danger, logVerbose } from "../../globals.js";
+import { generateSecureToken } from "../../infra/secure-random.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import {
   readChannelAllowFromStore,
@@ -37,6 +38,7 @@ const SLACK_COMMAND_ARG_SELECT_OPTIONS_MAX = 100;
 const SLACK_COMMAND_ARG_SELECT_OPTION_VALUE_MAX = 75;
 const SLACK_COMMAND_ARG_EXTERNAL_PREFIX = "openclaw_cmdarg_ext:";
 const SLACK_COMMAND_ARG_EXTERNAL_TTL_MS = 10 * 60 * 1000;
+const SLACK_COMMAND_ARG_EXTERNAL_TOKEN_PATTERN = /^[A-Za-z0-9_-]{24}$/;
 const SLACK_HEADER_TEXT_MAX = 150;
 
 type EncodedMenuChoice = { label: string; value: string };
@@ -78,12 +80,21 @@ function pruneSlackExternalArgMenuStore(now = Date.now()) {
   }
 }
 
+function createSlackExternalArgMenuToken(): string {
+  // 18 bytes -> 24 base64url chars; loop avoids replacing an existing live token.
+  let token = "";
+  do {
+    token = generateSecureToken(18);
+  } while (slackExternalArgMenuStore.has(token));
+  return token;
+}
+
 function storeSlackExternalArgMenu(params: {
   choices: EncodedMenuChoice[];
   userId: string;
 }): string {
   pruneSlackExternalArgMenuStore();
-  const token = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+  const token = createSlackExternalArgMenuToken();
   slackExternalArgMenuStore.set(token, {
     choices: params.choices,
     userId: params.userId,
@@ -97,7 +108,7 @@ function readSlackExternalArgMenuToken(raw: unknown): string | undefined {
     return undefined;
   }
   const token = raw.slice(SLACK_COMMAND_ARG_EXTERNAL_PREFIX.length).trim();
-  return token.length > 0 ? token : undefined;
+  return SLACK_COMMAND_ARG_EXTERNAL_TOKEN_PATTERN.test(token) ? token : undefined;
 }
 
 type CommandsRegistry = typeof import("../../auto-reply/commands-registry.js");
@@ -783,7 +794,8 @@ export async function registerSlackMonitorSlashCommands(params: {
         await ack({ options: [] });
         return;
       }
-      if (typedBody.user?.id && typedBody.user.id !== entry.userId) {
+      const requesterUserId = typedBody.user?.id?.trim();
+      if (!requesterUserId || requesterUserId !== entry.userId) {
         await ack({ options: [] });
         return;
       }
@@ -860,7 +872,7 @@ export async function registerSlackMonitorSlashCommands(params: {
         user_name: userName,
         channel_id: body.channel?.id ?? "",
         channel_name: body.channel?.name ?? body.channel?.id ?? "",
-        trigger_id: triggerId ?? String(Date.now()),
+        trigger_id: triggerId,
       } as SlackCommandMiddlewareArgs["command"];
       await handleSlashCommand({
         command: commandPayload,

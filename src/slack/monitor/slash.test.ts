@@ -504,9 +504,10 @@ describe("Slack native command argument menus", () => {
     const element = actions?.elements?.[0];
     expect(element?.type).toBe("external_select");
     expect(element?.action_id).toBe("openclaw_cmdarg");
-    expect(payload.blocks?.find((block) => block.type === "actions")?.block_id).toContain(
-      "openclaw_cmdarg_ext:",
-    );
+    const blockId = payload.blocks?.find((block) => block.type === "actions")?.block_id;
+    expect(blockId).toContain("openclaw_cmdarg_ext:");
+    const token = (blockId ?? "").slice("openclaw_cmdarg_ext:".length);
+    expect(token).toMatch(/^[A-Za-z0-9_-]{24}$/);
   });
 
   it("serves filtered options for external_select menus", async () => {
@@ -534,6 +535,28 @@ describe("Slack native command argument menus", () => {
     };
     const optionTexts = (optionsPayload.options ?? []).map((option) => option.text?.text ?? "");
     expect(optionTexts.some((text) => text.includes("Period 12"))).toBe(true);
+  });
+
+  it("rejects external_select option requests without user identity", async () => {
+    const { respond } = await runCommandHandler(reportExternalHandler);
+
+    const payload = respond.mock.calls[0]?.[0] as {
+      blocks?: Array<{ type: string; block_id?: string }>;
+    };
+    const blockId = payload.blocks?.find((block) => block.type === "actions")?.block_id;
+    expect(blockId).toContain("openclaw_cmdarg_ext:");
+
+    const ackOptions = vi.fn().mockResolvedValue(undefined);
+    await argMenuOptionsHandler({
+      ack: ackOptions,
+      body: {
+        value: "period 1",
+        actions: [{ block_id: blockId }],
+      },
+    });
+
+    expect(ackOptions).toHaveBeenCalledTimes(1);
+    expect(ackOptions).toHaveBeenCalledWith({ options: [] });
   });
 
   it("rejects menu clicks from other users", async () => {
