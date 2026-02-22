@@ -46,6 +46,19 @@ async function checkRelayReachable(port, token) {
       return
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    
+    // Validate that we got a valid CDP /json/version response (relay endpoint)
+    // and not HTML from the gateway Control UI
+    const isJSON = res.headers.get('content-type') === 'application/json'
+    const data = isJSON ? await res.json() : null
+    if (!isJSON || typeof data !== 'object' || !('Browser' in data) || !('Protocol-Version' in data)) {
+      setStatus(
+        'error',
+        `Wrong port: this is the gateway, not the relay. Use gateway port + 3 (e.g., if gateway is 18789, use 18792).`,
+      )
+      return
+    }
+    
     setStatus('ok', `Relay reachable and authenticated at http://127.0.0.1:${port}/`)
   } catch {
     setStatus(
