@@ -1,0 +1,63 @@
+{
+  "id": "docling-rag",
+  "kind": "tool",
+  "uiHints": {
+    "doclingServeUrl": {
+      "label": "Docling Serve URL",
+      "placeholder": "http://127.0.0.1:5001",
+      "help": "URL of the docling-serve instance. Leave empty to auto-manage."
+    },
+    "autoManage": {
+      "label": "Auto-Manage Docling",
+      "help": "Start/stop docling-serve automatically with the gateway (lazy-start on first use)"
+    },
+    "watchDir": {
+      "label": "Watch Directory",
+      "placeholder": "~/.openclaw/documents",
+      "help": "Auto-ingest new files dropped in this directory"
+    },
+    "storePath": {
+      "label": "Storage Path",
+      "placeholder": "~/.openclaw/data/docling-rag",
+      "advanced": true
+    },
+    "chunkSize": {
+      "label": "Chunk Size (tokens)",
+      "placeholder": "512",
+      "advanced": true
+    },
+    "chunkOverlap": {
+      "label": "Chunk Overlap (tokens)",
+      "placeholder": "64",
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "doclingServeUrl": {
+        "type": "string"
+      },
+      "autoManage": {
+        "type": "boolean"
+      },
+      "watchDir": {
+        "type": "string"
+      },
+      "storePath": {
+        "type": "string"
+      },
+      "chunkSize": {
+        "type": "number",
+        "minimum": 64,
+        "maximum": 4096
+      },
+      "chunkOverlap": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1024
+      }
+    }
+  }
+}

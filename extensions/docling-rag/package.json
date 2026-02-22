@@ -1,0 +1,16 @@
+{
+  "name": "@openclaw/docling-rag",
+  "version": "2026.2.22",
+  "private": true,
+  "description": "Docling-powered document processing for RAG — ingest PDFs, Word, Excel, PowerPoint and query them via any channel",
+  "type": "module",
+  "dependencies": {},
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
