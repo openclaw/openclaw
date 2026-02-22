@@ -217,6 +217,23 @@ export class FeishuStreamingSession {
     this.log?.(`Closed streaming: cardId=${this.state.cardId}`);
   }
 
+  /** Discard the streaming card by deleting its message entirely. */
+  async discard(): Promise<void> {
+    if (!this.state || this.closed) {
+      return;
+    }
+    this.closed = true;
+    await this.queue;
+
+    try {
+      await this.client.im.message.delete({ path: { message_id: this.state.messageId } });
+    } catch (e) {
+      this.log?.(`Discard delete failed: ${String(e)}`);
+    }
+
+    this.log?.(`Discarded streaming: cardId=${this.state.cardId}`);
+  }
+
   isActive(): boolean {
     return this.state !== null && !this.closed;
   }

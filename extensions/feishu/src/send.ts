@@ -274,6 +274,48 @@ export function buildMarkdownCard(text: string): Record<string, unknown> {
 }
 
 /**
+ * Build a Feishu interactive card with caption-style content (grey muted text).
+ * Used as a "caption" for media messages (e.g. TTS transcript after audio).
+ */
+export function buildCaptionCard(text: string): Record<string, unknown> {
+  return {
+    schema: "2.0",
+    config: {
+      wide_screen_mode: true,
+    },
+    body: {
+      elements: [
+        {
+          tag: "markdown",
+          content: `<font color="grey">${text}</font>`,
+        },
+      ],
+    },
+  };
+}
+
+/**
+ * Send a caption-style card (grey muted text) for media messages.
+ */
+export async function sendCaptionCardFeishu(params: {
+  cfg: ClawdbotConfig;
+  to: string;
+  text: string;
+  replyToMessageId?: string;
+  /** Mention target users */
+  mentions?: MentionTarget[];
+  accountId?: string;
+}): Promise<FeishuSendResult> {
+  const { cfg, to, text, replyToMessageId, mentions, accountId } = params;
+  let cardText = text;
+  if (mentions && mentions.length > 0) {
+    cardText = buildMentionedCardContent(mentions, text);
+  }
+  const card = buildCaptionCard(cardText);
+  return sendCardFeishu({ cfg, to, card, replyToMessageId, accountId });
+}
+
+/**
  * Send a message as a markdown card (interactive message).
  * This renders markdown properly in Feishu (code blocks, tables, bold/italic, etc.)
  */
