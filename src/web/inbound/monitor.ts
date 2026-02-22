@@ -249,7 +249,20 @@ export async function monitorWebInbox(options: {
           continue;
         }
       }
-      const replyContext = describeReplyContext(msg.message as proto.IMessage | undefined);
+      let replyContext = describeReplyContext(msg.message as proto.IMessage | undefined);
+      if (replyContext?.senderJid) {
+        const resolvedReplySenderE164 = await resolveInboundJid(replyContext.senderJid);
+        if (resolvedReplySenderE164) {
+          replyContext = {
+            ...replyContext,
+            senderE164: resolvedReplySenderE164,
+            sender: resolvedReplySenderE164,
+          };
+        } else if (replyContext.senderE164 && String(replyContext.senderE164).includes("@")) {
+          // Defensive: avoid passing JID-like strings through as E.164.
+          replyContext = { ...replyContext, senderE164: undefined };
+        }
+      }
 
       let mediaPath: string | undefined;
       let mediaType: string | undefined;
