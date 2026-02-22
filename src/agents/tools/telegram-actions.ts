@@ -188,6 +188,7 @@ export async function handleTelegramAction(
       integer: true,
     });
     const quoteText = readStringParam(params, "quoteText");
+    const linkPreview = typeof params.linkPreview === "boolean" ? params.linkPreview : undefined;
     const token = resolveTelegramToken(cfg, { accountId }).token;
     if (!token) {
       throw new Error(
@@ -204,6 +205,7 @@ export async function handleTelegramAction(
       quoteText: quoteText ?? undefined,
       asVoice: typeof params.asVoice === "boolean" ? params.asVoice : undefined,
       silent: typeof params.silent === "boolean" ? params.silent : undefined,
+      linkPreview,
     });
     return jsonResult({
       ok: true,
