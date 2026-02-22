@@ -69,6 +69,29 @@ async function executeSpawnAndExpectAccepted(params: {
   return result;
 }
 
+async function emitLifecycleEndAndFlush(params: {
+  runId: string;
+  startedAt: number;
+  endedAt: number;
+}) {
+  vi.useFakeTimers();
+  try {
+    emitAgentEvent({
+      runId: params.runId,
+      stream: "lifecycle",
+      data: {
+        phase: "end",
+        startedAt: params.startedAt,
+        endedAt: params.endedAt,
+      },
+    });
+
+    await vi.runAllTimersAsync();
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
   let previousFastTestEnv: string | undefined;
 
@@ -187,22 +210,11 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     if (!child.runId) {
       throw new Error("missing child runId");
     }
-    vi.useFakeTimers();
-    try {
-      emitAgentEvent({
-        runId: child.runId,
-        stream: "lifecycle",
-        data: {
-          phase: "end",
-          startedAt: 1234,
-          endedAt: 2345,
-        },
-      });
-
-      await vi.runAllTimersAsync();
-    } finally {
-      vi.useRealTimers();
-    }
+    await emitLifecycleEndAndFlush({
+      runId: child.runId,
+      startedAt: 1234,
+      endedAt: 2345,
+    });
 
     await waitFor(() => ctx.calls.filter((call) => call.method === "agent").length >= 2);
     await waitFor(() => Boolean(deletedKey));
@@ -341,22 +353,11 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     if (!child.runId) {
       throw new Error("missing child runId");
     }
-    vi.useFakeTimers();
-    try {
-      emitAgentEvent({
-        runId: child.runId,
-        stream: "lifecycle",
-        data: {
-          phase: "end",
-          startedAt: 1000,
-          endedAt: 2000,
-        },
-      });
-
-      await vi.runAllTimersAsync();
-    } finally {
-      vi.useRealTimers();
-    }
+    await emitLifecycleEndAndFlush({
+      runId: child.runId,
+      startedAt: 1000,
+      endedAt: 2000,
+    });
 
     const agentCalls = ctx.calls.filter((call) => call.method === "agent");
     expect(agentCalls).toHaveLength(2);
