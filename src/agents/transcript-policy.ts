@@ -88,6 +88,9 @@ export function resolveTranscriptPolicy(params: {
   const isOpenRouterGemini =
     (provider === "openrouter" || provider === "opencode") &&
     modelId.toLowerCase().includes("gemini");
+  const isOpenRouterAnthropic =
+    (provider === "openrouter" || provider === "opencode") &&
+    (modelId.toLowerCase().includes("anthropic") || modelId.toLowerCase().includes("claude"));
   const isAntigravityClaudeModel = isAntigravityClaude({
     api: params.modelApi,
     provider,
@@ -103,13 +106,13 @@ export function resolveTranscriptPolicy(params: {
 
   const needsNonImageSanitize = isGoogle || isAnthropic || isMistral || isOpenRouterGemini;
 
-  const sanitizeToolCallIds = isGoogle || isMistral || isAnthropic;
+  const sanitizeToolCallIds = isGoogle || isAnthropic || isOpenRouterAnthropic || isMistral;
   const toolCallIdMode: ToolCallIdMode | undefined = isMistral
     ? "strict9"
     : sanitizeToolCallIds
       ? "strict"
       : undefined;
-  const repairToolUseResultPairing = isGoogle || isAnthropic;
+  const repairToolUseResultPairing = isGoogle || isAnthropic || isOpenRouterAnthropic;
   const sanitizeThoughtSignatures = isOpenRouterGemini
     ? { allowBase64Only: true, includeCamelCase: true }
     : undefined;

@@ -911,6 +911,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Cron: prevent one-shot `at` jobs from re-firing on gateway restart when previously skipped or errored. (#13845)
+- Agents: include Anthropic and OpenRouter Claude models in tool call ID sanitization to prevent `tool_use.id` format errors. (#13799)
 - Discord: add exec approval cleanup option to delete DMs after approval/denial/timeout. (#13205) Thanks @thewilloftheshadow.
 - Sessions: prune stale entries, cap session store size, rotate large stores, accept duration/size thresholds, default to warn-only maintenance, and prune cron run sessions after retention windows. (#13083) Thanks @skyfallsin, @Glucksberg, @gumadeiras.
 - CI: Implement pipeline and workflow order. Thanks @quotentiroler.
