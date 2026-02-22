@@ -94,7 +94,9 @@ describe("processLatexForTerminal", () => {
 
   describe("code block handling", () => {
     it("does not process LaTeX inside inline code", () => {
-      expect(processLatexForTerminal("Use `$\\alpha$` for alpha")).toBe("Use `$\\alpha$` for alpha");
+      expect(processLatexForTerminal("Use `$\\alpha$` for alpha")).toBe(
+        "Use `$\\alpha$` for alpha",
+      );
     });
 
     it("does not process LaTeX inside fenced code blocks", () => {
