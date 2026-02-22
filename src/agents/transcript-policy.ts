@@ -84,6 +84,8 @@ export function resolveTranscriptPolicy(params: {
   const isGoogle = isGoogleModelApi(params.modelApi);
   const isAnthropic = isAnthropicApi(params.modelApi, provider);
   const isOpenAi = isOpenAiProvider(provider) || (!provider && isOpenAiApi(params.modelApi));
+  const isOpenAiResponsesApi =
+    params.modelApi === "openai-responses" || params.modelApi === "openai-codex-responses";
   const isMistral = isMistralModel({ provider, modelId });
   const isOpenRouterGemini =
     (provider === "openrouter" || provider === "opencode") &&
@@ -119,7 +121,7 @@ export function resolveTranscriptPolicy(params: {
     sanitizeMode: isOpenAi ? "images-only" : needsNonImageSanitize ? "full" : "images-only",
     sanitizeToolCallIds: !isOpenAi && sanitizeToolCallIds,
     toolCallIdMode,
-    repairToolUseResultPairing: !isOpenAi && repairToolUseResultPairing,
+    repairToolUseResultPairing: repairToolUseResultPairing || (isOpenAi && !isOpenAiResponsesApi),
     preserveSignatures: isAntigravityClaudeModel,
     sanitizeThoughtSignatures: isOpenAi ? undefined : sanitizeThoughtSignatures,
     sanitizeThinkingSignatures,
