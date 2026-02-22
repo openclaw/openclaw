@@ -246,6 +246,33 @@ export function createBackspaceDeduper(params?: { dedupeWindowMs?: number; now?:
   };
 }
 
+type CtrlCAction = "clear" | "warn" | "exit";
+
+export function resolveCtrlCAction(params: {
+  hasInput: boolean;
+  now: number;
+  lastCtrlCAt: number;
+  exitWindowMs?: number;
+}): { action: CtrlCAction; nextLastCtrlCAt: number } {
+  const exitWindowMs = Math.max(1, Math.floor(params.exitWindowMs ?? 1000));
+  if (params.hasInput) {
+    return {
+      action: "clear",
+      nextLastCtrlCAt: params.now,
+    };
+  }
+  if (params.now - params.lastCtrlCAt <= exitWindowMs) {
+    return {
+      action: "exit",
+      nextLastCtrlCAt: params.lastCtrlCAt,
+    };
+  }
+  return {
+    action: "warn",
+    nextLastCtrlCAt: params.now,
+  };
+}
+
 export async function runTui(opts: TuiOptions) {
   const config = loadConfig();
   const initialSessionInput = (opts.session ?? "").trim();
@@ -272,6 +299,7 @@ export async function runTui(opts: TuiOptions) {
   let autoMessageSent = false;
   let sessionInfo: SessionInfo = {};
   let lastCtrlCAt = 0;
+  let exitRequested = false;
   let activityStatus = "idle";
   let connectionStatus = "connecting";
   let statusTimeout: NodeJS.Timeout | null = null;
@@ -736,6 +764,16 @@ export async function runTui(opts: TuiOptions) {
     clearLocalRunIds,
   });
 
+  const requestExit = () => {
+    if (exitRequested) {
+      return;
+    }
+    exitRequested = true;
+    client.stop();
+    tui.stop();
+    process.exit(0);
+  };
+
   const { handleCommand, sendMessage, openModelSelector, openAgentSelector, openSessionSelector } =
     createCommandHandlers({
       client,
@@ -756,6 +794,7 @@ export async function runTui(opts: TuiOptions) {
       formatSessionKey,
       noteLocalRunId,
       forgetLocalRunId,
+      requestExit,
     });
 
   const { runLocalShellLine } = createLocalShellRunner({
@@ -779,27 +818,32 @@ export async function runTui(opts: TuiOptions) {
   editor.onEscape = () => {
     void abortActive();
   };
-  editor.onCtrlC = () => {
+  const handleCtrlC = () => {
     const now = Date.now();
-    if (editor.getText().trim().length > 0) {
+    const decision = resolveCtrlCAction({
+      hasInput: editor.getText().trim().length > 0,
+      now,
+      lastCtrlCAt,
+    });
+    lastCtrlCAt = decision.nextLastCtrlCAt;
+    if (decision.action === "clear") {
       editor.setText("");
-      setActivityStatus("cleared input");
+      setActivityStatus("cleared input; press ctrl+c again to exit");
       tui.requestRender();
       return;
     }
-    if (now - lastCtrlCAt < 1000) {
-      client.stop();
-      tui.stop();
-      process.exit(0);
+    if (decision.action === "exit") {
+      requestExit();
+      return;
     }
-    lastCtrlCAt = now;
     setActivityStatus("press ctrl+c again to exit");
     tui.requestRender();
   };
+  editor.onCtrlC = () => {
+    handleCtrlC();
+  };
   editor.onCtrlD = () => {
-    client.stop();
-    tui.stop();
-    process.exit(0);
+    requestExit();
   };
   editor.onCtrlO = () => {
     toolsExpanded = !toolsExpanded;
@@ -874,12 +918,22 @@ export async function runTui(opts: TuiOptions) {
   updateHeader();
   setConnectionStatus("connecting");
   updateFooter();
+  const sigintHandler = () => {
+    handleCtrlC();
+  };
+  const sigtermHandler = () => {
+    requestExit();
+  };
+  process.on("SIGINT", sigintHandler);
+  process.on("SIGTERM", sigtermHandler);
   tui.start();
   client.start();
   await new Promise<void>((resolve) => {
-    const finish = () => resolve();
+    const finish = () => {
+      process.removeListener("SIGINT", sigintHandler);
+      process.removeListener("SIGTERM", sigtermHandler);
+      resolve();
+    };
     process.once("exit", finish);
-    process.once("SIGINT", finish);
-    process.once("SIGTERM", finish);
   });
 }
