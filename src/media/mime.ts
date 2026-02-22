@@ -44,6 +44,7 @@ const AUDIO_FILE_EXTENSIONS = new Set([
   ".aac",
   ".caf",
   ".flac",
+  ".m2a",
   ".m4a",
   ".mp3",
   ".oga",

@@ -1,6 +1,13 @@
 import { getFileExtension, normalizeMimeType } from "./mime.js";
 
-export const TELEGRAM_VOICE_AUDIO_EXTENSIONS = new Set([".oga", ".ogg", ".opus", ".mp3", ".m4a"]);
+export const TELEGRAM_VOICE_AUDIO_EXTENSIONS = new Set([
+  ".m2a",
+  ".m4a",
+  ".mp3",
+  ".oga",
+  ".ogg",
+  ".opus",
+]);
 
 /**
  * MIME types compatible with voice messages.

@@ -19,10 +19,11 @@ function formatMediaAttachedLine(params: {
 
 // Common audio file extensions for transcription detection
 const AUDIO_EXTENSIONS = new Set([
+  ".m2a",
+  ".m4a",
+  ".mp3",
   ".ogg",
   ".opus",
-  ".mp3",
-  ".m4a",
   ".wav",
   ".webm",
   ".flac",
