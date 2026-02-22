@@ -455,6 +455,28 @@ describe("runWithModelFallback", () => {
     expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
   });
 
+  it("falls back on bare HTTP 404 without model keyword in message", async () => {
+    // Google Gemini returns 404 with "Requested entity was not found" when quota
+    // is exhausted. The message lacks "model" so only status-code detection catches it.
+    const cfg = makeCfg();
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error("Requested entity was not found."), { status: 404 }),
+      )
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "google",
+      model: "gemini-2.0-flash",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
   it("skips providers when all profiles are in cooldown", async () => {
     await expectSkippedUnavailableProvider({
       providerPrefix: "cooldown-test",
