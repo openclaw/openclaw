@@ -469,6 +469,7 @@ export async function connectReq(
       nonce?: string;
     } | null;
     skipConnectChallengeNonce?: boolean;
+    timeoutMs?: number;
   },
 ): Promise<ConnectResponse> {
   const { randomUUID } = await import("node:crypto");
@@ -566,7 +567,7 @@ export async function connectReq(
     const rec = o as Record<string, unknown>;
     return rec.type === "res" && rec.id === id;
   };
-  return await onceMessage<ConnectResponse>(ws, isResponseForId);
+  return await onceMessage<ConnectResponse>(ws, isResponseForId, opts?.timeoutMs);
 }
 
 export async function connectOk(ws: WebSocket, opts?: Parameters<typeof connectReq>[1]) {
