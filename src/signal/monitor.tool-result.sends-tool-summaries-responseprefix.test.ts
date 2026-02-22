@@ -246,6 +246,43 @@ describe("monitorSignalProvider tool results", () => {
     ).rejects.toThrow(/signal daemon exited/i);
   });
 
+  it("treats daemon exit after user abort as clean shutdown", async () => {
+    const runtime = createMonitorRuntime();
+    setSignalAutoStartConfig();
+    const abortController = new AbortController();
+    let exited = false;
+    let resolveExit!: (value: { code: number | null; signal: NodeJS.Signals | null }) => void;
+    const exitedPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+      (resolve) => {
+        resolveExit = resolve;
+      },
+    );
+    const stop = vi.fn(() => {
+      if (exited) {
+        return;
+      }
+      exited = true;
+      resolveExit({ code: null, signal: "SIGTERM" });
+    });
+    spawnSignalDaemonMock.mockReturnValueOnce({
+      stop,
+      exited: exitedPromise,
+      isExited: () => exited,
+    });
+    streamMock.mockImplementationOnce(async () => {
+      abortController.abort(new Error("stop"));
+    });
+
+    await expect(
+      runMonitorWithMocks({
+        autoStart: true,
+        baseUrl: SIGNAL_BASE_URL,
+        runtime,
+        abortSignal: abortController.signal,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
   it("skips tool summaries with responsePrefix", async () => {
     replyMock.mockResolvedValue({ text: "final reply" });
 

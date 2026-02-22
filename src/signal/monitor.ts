@@ -330,6 +330,11 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   const daemonAbortController = new AbortController();
   const mergedAbort = mergeAbortSignals(opts.abortSignal, daemonAbortController.signal);
   let daemonHandle: ReturnType<typeof spawnSignalDaemon> | null = null;
+  let daemonStopRequested = false;
+  const stopDaemon = () => {
+    daemonStopRequested = true;
+    daemonHandle?.stop();
+  };
 
   if (autoStart) {
     const cliPath = opts.cliPath ?? accountInfo.config.cliPath ?? "signal-cli";
@@ -347,6 +352,9 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       runtime,
     });
     void daemonHandle.exited.then((exit) => {
+      if (daemonStopRequested || opts.abortSignal?.aborted) {
+        return;
+      }
       daemonExitError = new Error(
         `signal daemon exited (code=${String(exit.code ?? "null")} signal=${String(exit.signal ?? "null")})`,
       );
@@ -357,7 +365,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   }
 
   const onAbort = () => {
-    daemonHandle?.stop();
+    stopDaemon();
   };
   opts.abortSignal?.addEventListener("abort", onAbort, { once: true });
 
@@ -426,6 +434,6 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   } finally {
     mergedAbort.dispose();
     opts.abortSignal?.removeEventListener("abort", onAbort);
-    daemonHandle?.stop();
+    stopDaemon();
   }
 }
