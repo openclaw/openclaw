@@ -34,7 +34,7 @@ describe("memory search async sync", () => {
             store: { path: indexPath },
             sync: { watch: false, onSessionStart: false, onSearch: true },
             query: { minScore: 0 },
-            remote: { batch: { enabled: true, wait: true } },
+            remote: { batch: { enabled: false, wait: false } },
           },
         },
         list: [{ id: "main", default: true }],
