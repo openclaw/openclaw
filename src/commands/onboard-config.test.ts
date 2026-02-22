@@ -25,4 +25,15 @@ describe("applyOnboardingLocalWorkspaceConfig", () => {
 
     expect(result.session?.dmScope).toBe("main");
   });
+
+  it("preserves explicit non-main dmScope values", () => {
+    const baseConfig: OpenClawConfig = {
+      session: {
+        dmScope: "per-account-channel-peer",
+      },
+    };
+    const result = applyOnboardingLocalWorkspaceConfig(baseConfig, "/tmp/workspace");
+
+    expect(result.session?.dmScope).toBe("per-account-channel-peer");
+  });
 });
