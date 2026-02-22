@@ -17,6 +17,8 @@ type HandshakeConnectAuth = {
   password?: string;
 };
 
+export type DeviceTokenCandidateSource = "explicit-device-token" | "shared-token-fallback";
+
 export type ConnectAuthState = {
   authResult: GatewayAuthResult;
   authOk: boolean;
@@ -24,6 +26,7 @@ export type ConnectAuthState = {
   sharedAuthOk: boolean;
   sharedAuthProvided: boolean;
   deviceTokenCandidate?: string;
+  deviceTokenCandidateSource?: DeviceTokenCandidateSource;
 };
 
 function trimToUndefined(value: string | undefined): string | undefined {
@@ -45,14 +48,19 @@ function resolveSharedConnectAuth(
   return { token, password };
 }
 
-function resolveDeviceTokenCandidate(
-  connectAuth: HandshakeConnectAuth | null | undefined,
-): string | undefined {
+function resolveDeviceTokenCandidate(connectAuth: HandshakeConnectAuth | null | undefined): {
+  token?: string;
+  source?: DeviceTokenCandidateSource;
+} {
   const explicitDeviceToken = trimToUndefined(connectAuth?.deviceToken);
   if (explicitDeviceToken) {
-    return explicitDeviceToken;
+    return { token: explicitDeviceToken, source: "explicit-device-token" };
   }
-  return trimToUndefined(connectAuth?.token);
+  const fallbackToken = trimToUndefined(connectAuth?.token);
+  if (!fallbackToken) {
+    return {};
+  }
+  return { token: fallbackToken, source: "shared-token-fallback" };
 }
 
 export async function resolveConnectAuthState(params: {
@@ -67,9 +75,8 @@ export async function resolveConnectAuthState(params: {
 }): Promise<ConnectAuthState> {
   const sharedConnectAuth = resolveSharedConnectAuth(params.connectAuth);
   const sharedAuthProvided = Boolean(sharedConnectAuth);
-  const deviceTokenCandidate = params.hasDeviceIdentity
-    ? resolveDeviceTokenCandidate(params.connectAuth)
-    : undefined;
+  const { token: deviceTokenCandidate, source: deviceTokenCandidateSource } =
+    params.hasDeviceIdentity ? resolveDeviceTokenCandidate(params.connectAuth) : {};
   const hasDeviceTokenCandidate = Boolean(deviceTokenCandidate);
 
   let authResult: GatewayAuthResult = await authorizeWsControlUiGatewayConnect({
@@ -129,5 +136,6 @@ export async function resolveConnectAuthState(params: {
     sharedAuthOk,
     sharedAuthProvided,
     deviceTokenCandidate,
+    deviceTokenCandidateSource,
   };
 }

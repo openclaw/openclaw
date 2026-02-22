@@ -355,17 +355,23 @@ export function attachGatewayWsMessageHandler(params: {
         });
         const device = controlUiAuthPolicy.device;
 
-        let { authResult, authOk, authMethod, sharedAuthOk, deviceTokenCandidate } =
-          await resolveConnectAuthState({
-            resolvedAuth,
-            connectAuth: connectParams.auth,
-            hasDeviceIdentity: Boolean(device),
-            req: upgradeReq,
-            trustedProxies,
-            allowRealIpFallback,
-            rateLimiter,
-            clientIp,
-          });
+        let {
+          authResult,
+          authOk,
+          authMethod,
+          sharedAuthOk,
+          deviceTokenCandidate,
+          deviceTokenCandidateSource,
+        } = await resolveConnectAuthState({
+          resolvedAuth,
+          connectAuth: connectParams.auth,
+          hasDeviceIdentity: Boolean(device),
+          req: upgradeReq,
+          trustedProxies,
+          allowRealIpFallback,
+          rateLimiter,
+          clientIp,
+        });
         const rejectUnauthorized = (failedAuth: GatewayAuthResult) => {
           markHandshakeFailure("unauthorized", {
             authMode: resolvedAuth.mode,
@@ -532,7 +538,11 @@ export function attachGatewayWsMessageHandler(params: {
               authMethod = "device-token";
               rateLimiter?.reset(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
             } else {
-              authResult = { ok: false, reason: "device_token_mismatch" };
+              const mismatchReason =
+                deviceTokenCandidateSource === "explicit-device-token"
+                  ? "device_token_mismatch"
+                  : (authResult.reason ?? "device_token_mismatch");
+              authResult = { ok: false, reason: mismatchReason };
               rateLimiter?.recordFailure(clientIp, AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN);
             }
           }

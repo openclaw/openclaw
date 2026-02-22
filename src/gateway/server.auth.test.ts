@@ -993,6 +993,42 @@ describe("gateway server auth/connect", () => {
     restoreGatewayToken(prevToken);
   });
 
+  test("keeps shared token mismatch reason when token fallback device-token check fails", async () => {
+    const { server, ws, port, prevToken } = await startServerWithClient("secret");
+    await ensurePairedDeviceTokenForCurrentIdentity(ws);
+
+    ws.close();
+
+    const ws2 = await openWs(port);
+    const res2 = await connectReq(ws2, { token: "wrong" });
+    expect(res2.ok).toBe(false);
+    expect(res2.error?.message ?? "").toContain("gateway token mismatch");
+    expect(res2.error?.message ?? "").not.toContain("device token mismatch");
+
+    ws2.close();
+    await server.close();
+    restoreGatewayToken(prevToken);
+  });
+
+  test("reports device token mismatch when explicit auth.deviceToken is wrong", async () => {
+    const { server, ws, port, prevToken } = await startServerWithClient("secret");
+    await ensurePairedDeviceTokenForCurrentIdentity(ws);
+
+    ws.close();
+
+    const ws2 = await openWs(port);
+    const res2 = await connectReq(ws2, {
+      skipDefaultAuth: true,
+      deviceToken: "not-a-valid-device-token",
+    });
+    expect(res2.ok).toBe(false);
+    expect(res2.error?.message ?? "").toContain("device token mismatch");
+
+    ws2.close();
+    await server.close();
+    restoreGatewayToken(prevToken);
+  });
+
   test("keeps shared-secret lockout separate from device-token auth", async () => {
     const { server, port, prevToken, deviceToken } =
       await startRateLimitedTokenServerWithPairedDeviceToken();
