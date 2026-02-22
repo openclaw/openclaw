@@ -10,6 +10,8 @@ import {
   resolveRequestUrl,
   resolveAuthAllowedHosts,
   resolveAllowedHosts,
+  resolveAndValidateIP,
+  safeFetch,
 } from "./shared.js";
 import type {
   MSTeamsAccessTokenProvider,
@@ -91,9 +93,19 @@ async function fetchWithAuthFallback(params: {
   requestInit?: RequestInit;
   allowHosts: string[];
   authAllowHosts: string[];
+  resolveFn?: (hostname: string) => Promise<{ address: string }>;
 }): Promise<Response> {
   const fetchFn = params.fetchFn ?? fetch;
-  const firstAttempt = await fetchFn(params.url, params.requestInit);
+
+  // Use safeFetch for the initial attempt — redirect: "manual" with
+  // allowlist + DNS/IP validation on every hop (prevents SSRF via redirect).
+  const firstAttempt = await safeFetch({
+    url: params.url,
+    allowHosts: params.allowHosts,
+    fetchFn,
+    requestInit: params.requestInit,
+    resolveFn: params.resolveFn,
+  });
   if (firstAttempt.ok) {
     return firstAttempt;
   }
@@ -123,7 +135,17 @@ async function fetchWithAuthFallback(params: {
       }
       const redirectUrl = readRedirectUrl(params.url, res);
       if (redirectUrl && isUrlAllowed(redirectUrl, params.allowHosts)) {
-        const redirectRes = await fetchFn(redirectUrl, params.requestInit);
+        // Validate the redirect target's resolved IP before following
+        try {
+          const redirectHost = new URL(redirectUrl).hostname;
+          await resolveAndValidateIP(redirectHost, params.resolveFn);
+        } catch {
+          continue; // Skip this redirect — resolves to private IP
+        }
+        const redirectRes = await fetchFn(redirectUrl, {
+          ...params.requestInit,
+          redirect: "manual",
+        });
         if (redirectRes.ok) {
           return redirectRes;
         }
@@ -179,6 +201,8 @@ export async function downloadMSTeamsAttachments(params: {
   fetchFn?: typeof fetch;
   /** When true, embeds original filename in stored path for later extraction. */
   preserveFilenames?: boolean;
+  /** Override DNS resolver for testing (anti-SSRF IP validation). */
+  resolveFn?: (hostname: string) => Promise<{ address: string }>;
 }): Promise<MSTeamsInboundMedia[]> {
   const list = Array.isArray(params.attachments) ? params.attachments : [];
   if (list.length === 0) {
@@ -262,6 +286,7 @@ export async function downloadMSTeamsAttachments(params: {
             requestInit: init,
             allowHosts,
             authAllowHosts,
+            resolveFn: params.resolveFn,
           }),
       });
       out.push(media);

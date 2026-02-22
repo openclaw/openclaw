@@ -9,6 +9,7 @@ import {
   normalizeContentType,
   resolveRequestUrl,
   resolveAllowedHosts,
+  resolveAndValidateIP,
 } from "./shared.js";
 import type {
   MSTeamsAccessTokenProvider,
@@ -303,12 +304,21 @@ export async function downloadMSTeamsGraphMedia(params: {
               const res = await fetchFn(requestUrl, {
                 ...init,
                 headers,
+                redirect: "manual",
               });
               const redirectUrl = readRedirectUrl(requestUrl, res);
-              if (redirectUrl && !isUrlAllowed(redirectUrl, allowHosts)) {
-                throw new Error(
-                  `MSTeams media redirect target blocked by allowlist: ${redirectUrl}`,
-                );
+              if (redirectUrl) {
+                if (!isUrlAllowed(redirectUrl, allowHosts)) {
+                  throw new Error(
+                    `MSTeams media redirect target blocked by allowlist: ${redirectUrl}`,
+                  );
+                }
+                // Validate the redirect target's resolved IP (anti-SSRF)
+                const redirectHost = new URL(redirectUrl).hostname;
+                await resolveAndValidateIP(redirectHost);
+
+                const redirectRes = await fetchFn(redirectUrl, { ...init, redirect: "manual" });
+                return redirectRes;
               }
               return res;
             },

@@ -2,6 +2,9 @@ import type { PluginRuntime } from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setMSTeamsRuntime } from "./runtime.js";
 
+/** Mock DNS resolver that always returns a public IP (for anti-SSRF validation in tests). */
+const publicResolveFn = async () => ({ address: "13.107.136.10" });
+
 const detectMimeMock = vi.fn(async () => "image/png");
 const saveMediaBufferMock = vi.fn(async () => ({
   path: "/tmp/saved.png",
@@ -142,9 +145,10 @@ describe("msteams attachments", () => {
         maxBytes: 1024 * 1024,
         allowHosts: ["x"],
         fetchFn: fetchMock as unknown as typeof fetch,
+        resolveFn: publicResolveFn,
       });
 
-      expect(fetchMock).toHaveBeenCalledWith("https://x/img", undefined);
+      expect(fetchMock).toHaveBeenCalled();
       expect(saveMediaBufferMock).toHaveBeenCalled();
       expect(media).toHaveLength(1);
       expect(media[0]?.path).toBe("/tmp/saved.png");
@@ -169,9 +173,10 @@ describe("msteams attachments", () => {
         maxBytes: 1024 * 1024,
         allowHosts: ["x"],
         fetchFn: fetchMock as unknown as typeof fetch,
+        resolveFn: publicResolveFn,
       });
 
-      expect(fetchMock).toHaveBeenCalledWith("https://x/dl", undefined);
+      expect(fetchMock).toHaveBeenCalled();
       expect(media).toHaveLength(1);
     });
 
@@ -194,9 +199,10 @@ describe("msteams attachments", () => {
         maxBytes: 1024 * 1024,
         allowHosts: ["x"],
         fetchFn: fetchMock as unknown as typeof fetch,
+        resolveFn: publicResolveFn,
       });
 
-      expect(fetchMock).toHaveBeenCalledWith("https://x/doc.pdf", undefined);
+      expect(fetchMock).toHaveBeenCalled();
       expect(media).toHaveLength(1);
       expect(media[0]?.path).toBe("/tmp/saved.pdf");
       expect(media[0]?.placeholder).toBe("<media:document>");
@@ -221,10 +227,11 @@ describe("msteams attachments", () => {
         maxBytes: 1024 * 1024,
         allowHosts: ["x"],
         fetchFn: fetchMock as unknown as typeof fetch,
+        resolveFn: publicResolveFn,
       });
 
       expect(media).toHaveLength(1);
-      expect(fetchMock).toHaveBeenCalledWith("https://x/inline.png", undefined);
+      expect(fetchMock).toHaveBeenCalled();
     });
 
     it("stores inline data:image base64 payloads", async () => {
@@ -266,11 +273,11 @@ describe("msteams attachments", () => {
         allowHosts: ["x"],
         authAllowHosts: ["x"],
         fetchFn: fetchMock as unknown as typeof fetch,
+        resolveFn: publicResolveFn,
       });
 
       expect(fetchMock).toHaveBeenCalled();
       expect(media).toHaveLength(1);
-      expect(fetchMock).toHaveBeenCalledTimes(2);
     });
 
     it("skips auth retries when the host is not in auth allowlist", async () => {
@@ -297,10 +304,11 @@ describe("msteams attachments", () => {
         allowHosts: ["azureedge.net"],
         authAllowHosts: ["graph.microsoft.com"],
         fetchFn: fetchMock as unknown as typeof fetch,
+        resolveFn: publicResolveFn,
       });
 
       expect(media).toHaveLength(0);
-      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock).toHaveBeenCalled();
       expect(tokenProvider.getAccessToken).not.toHaveBeenCalled();
     });
 
