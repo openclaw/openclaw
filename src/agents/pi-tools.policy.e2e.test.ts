@@ -187,3 +187,70 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     expect(isToolAllowedByPolicyName("sessions_spawn", policy)).toBe(false);
   });
 });
+
+describe("resolveSubagentToolPolicy per-spawn tools merge", () => {
+  const baseCfg = {
+    agents: { defaults: { subagents: { maxSpawnDepth: 2 } } },
+  } as unknown as OpenClawConfig;
+
+  it("per-spawn allow overrides global allow", () => {
+    const cfg = {
+      ...baseCfg,
+      tools: { subagents: { tools: { allow: ["exec", "read", "write"] } } },
+    } as unknown as OpenClawConfig;
+    const policy = resolveSubagentToolPolicy(cfg, 1, { allow: ["exec"] });
+    expect(policy.allow).toEqual(["exec"]);
+    expect(isToolAllowedByPolicyName("exec", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("read", policy)).toBe(false);
+  });
+
+  it("per-spawn deny appends to global deny", () => {
+    const cfg = {
+      ...baseCfg,
+      tools: { subagents: { tools: { deny: ["browser"] } } },
+    } as unknown as OpenClawConfig;
+    const policy = resolveSubagentToolPolicy(cfg, 1, { deny: ["web_fetch"] });
+    expect(isToolAllowedByPolicyName("browser", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("web_fetch", policy)).toBe(false);
+  });
+
+  it("per-spawn deny beats per-spawn allow", () => {
+    const policy = resolveSubagentToolPolicy(baseCfg, 1, {
+      allow: ["exec", "browser"],
+      deny: ["browser"],
+    });
+    expect(isToolAllowedByPolicyName("exec", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("browser", policy)).toBe(false);
+  });
+
+  it("falls back to global allow when per-spawn has no allow", () => {
+    const cfg = {
+      ...baseCfg,
+      tools: { subagents: { tools: { allow: ["exec", "read"] } } },
+    } as unknown as OpenClawConfig;
+    const policy = resolveSubagentToolPolicy(cfg, 1, { deny: ["browser"] });
+    expect(policy.allow).toEqual(["exec", "read"]);
+  });
+
+  it("per-spawn allow can override system deny list", () => {
+    const policy = resolveSubagentToolPolicy(baseCfg, 1, { allow: ["gateway", "exec"] });
+    // Per-spawn explicitly allowing a system-denied tool re-enables it.
+    expect(isToolAllowedByPolicyName("gateway", policy)).toBe(true);
+    expect(isToolAllowedByPolicyName("exec", policy)).toBe(true);
+    // Tools not in per-spawn allow are denied.
+    expect(isToolAllowedByPolicyName("read", policy)).toBe(false);
+  });
+
+  it("system deny list applies when per-spawn does not explicitly allow denied tools", () => {
+    const policy = resolveSubagentToolPolicy(baseCfg, 1, { allow: ["exec", "read"] });
+    expect(isToolAllowedByPolicyName("gateway", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("cron", policy)).toBe(false);
+    expect(isToolAllowedByPolicyName("exec", policy)).toBe(true);
+  });
+
+  it("undefined per-spawn tools leaves policy unchanged", () => {
+    const withoutPerSpawn = resolveSubagentToolPolicy(baseCfg, 1);
+    const withPerSpawn = resolveSubagentToolPolicy(baseCfg, 1, undefined);
+    expect(withoutPerSpawn).toEqual(withPerSpawn);
+  });
+});

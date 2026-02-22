@@ -57,6 +57,8 @@ export type SessionEntry = {
   authProfileOverrideCompactionCount?: number;
   groupActivation?: "mention" | "always";
   groupActivationNeedsSystemIntro?: boolean;
+  /** Per-spawn tool policy override (set by sessions_spawn tools param). */
+  spawnToolPolicy?: { allow?: string[]; deny?: string[] };
   sendPolicy?: "allow" | "deny";
   queueMode?:
     | "steer"

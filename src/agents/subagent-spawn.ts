@@ -32,6 +32,7 @@ export type SpawnSubagentParams = {
   thread?: boolean;
   mode?: SpawnSubagentMode;
   cleanup?: "delete" | "keep";
+  tools?: { allow?: string[]; deny?: string[] };
   expectsCompletionMessage?: boolean;
 };
 
@@ -287,7 +288,11 @@ export async function spawnSubagentDirect(
   try {
     await callGateway({
       method: "sessions.patch",
-      params: { key: childSessionKey, spawnDepth: childDepth },
+      params: {
+        key: childSessionKey,
+        spawnDepth: childDepth,
+        ...(params.tools ? { spawnToolPolicy: params.tools } : {}),
+      },
       timeoutMs: 10_000,
     });
   } catch (err) {

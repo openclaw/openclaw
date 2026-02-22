@@ -72,6 +72,15 @@ export const SessionsPatchParamsSchema = Type.Object(
     model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnedBy: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     spawnDepth: Type.Optional(Type.Union([Type.Integer({ minimum: 0 }), Type.Null()])),
+    spawnToolPolicy: Type.Optional(
+      Type.Union([
+        Type.Object({
+          allow: Type.Optional(Type.Array(Type.String())),
+          deny: Type.Optional(Type.Array(Type.String())),
+        }),
+        Type.Null(),
+      ]),
+    ),
     sendPolicy: Type.Optional(
       Type.Union([Type.Literal("allow"), Type.Literal("deny"), Type.Null()]),
     ),

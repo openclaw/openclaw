@@ -82,20 +82,31 @@ function resolveSubagentDenyList(depth: number, maxSpawnDepth: number): string[]
   return [...SUBAGENT_TOOL_DENY_ALWAYS];
 }
 
-export function resolveSubagentToolPolicy(cfg?: OpenClawConfig, depth?: number): SandboxToolPolicy {
+export function resolveSubagentToolPolicy(
+  cfg?: OpenClawConfig,
+  depth?: number,
+  perSpawnTools?: { allow?: string[]; deny?: string[] },
+): SandboxToolPolicy {
   const configured = cfg?.tools?.subagents?.tools;
   const maxSpawnDepth =
     cfg?.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
   const effectiveDepth = typeof depth === "number" && depth >= 0 ? depth : 1;
   const baseDeny = resolveSubagentDenyList(effectiveDepth, maxSpawnDepth);
-  const allow = Array.isArray(configured?.allow) ? configured.allow : undefined;
+  // Per-spawn allow overrides global configured allow (per-spawn wins).
+  const allow = Array.isArray(perSpawnTools?.allow)
+    ? perSpawnTools.allow
+    : Array.isArray(configured?.allow)
+      ? configured.allow
+      : undefined;
   const alsoAllow = Array.isArray(configured?.alsoAllow) ? configured.alsoAllow : undefined;
   const explicitAllow = new Set(
     [...(allow ?? []), ...(alsoAllow ?? [])].map((toolName) => normalizeToolName(toolName)),
   );
+  // Per-spawn deny is appended to configured deny (deny beats allow).
   const deny = [
     ...baseDeny.filter((toolName) => !explicitAllow.has(normalizeToolName(toolName))),
     ...(Array.isArray(configured?.deny) ? configured.deny : []),
+    ...(Array.isArray(perSpawnTools?.deny) ? perSpawnTools.deny : []),
   ];
   const mergedAllow = allow && alsoAllow ? Array.from(new Set([...allow, ...alsoAllow])) : allow;
   return { allow: mergedAllow, deny };

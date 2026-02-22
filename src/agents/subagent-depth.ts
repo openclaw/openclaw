@@ -9,6 +9,7 @@ type SessionDepthEntry = {
   sessionId?: unknown;
   spawnDepth?: unknown;
   spawnedBy?: unknown;
+  spawnToolPolicy?: unknown;
 };
 
 function normalizeSpawnDepth(value: unknown): number | undefined {
@@ -173,4 +174,42 @@ export function getSubagentDepthFromSessionStore(
   };
 
   return depthFromStore(raw) ?? fallbackDepth;
+}
+
+export function getSpawnToolPolicyFromSessionStore(
+  sessionKey: string | undefined | null,
+  opts?: {
+    cfg?: OpenClawConfig;
+    store?: Record<string, SessionDepthEntry>;
+  },
+): { allow?: string[]; deny?: string[] } | undefined {
+  const raw = (sessionKey ?? "").trim();
+  if (!raw) {
+    return undefined;
+  }
+  const cache = new Map<string, Record<string, SessionDepthEntry>>();
+  const entry = resolveEntryForSessionKey({
+    sessionKey: raw,
+    cfg: opts?.cfg,
+    store: opts?.store,
+    cache,
+  });
+  const policy = entry?.spawnToolPolicy;
+  if (!policy || typeof policy !== "object" || Array.isArray(policy)) {
+    return undefined;
+  }
+  const obj = policy as Record<string, unknown>;
+  const allow = Array.isArray(obj.allow)
+    ? obj.allow.filter((v): v is string => typeof v === "string")
+    : undefined;
+  const deny = Array.isArray(obj.deny)
+    ? obj.deny.filter((v): v is string => typeof v === "string")
+    : undefined;
+  if (!allow && !deny) {
+    return undefined;
+  }
+  return {
+    ...(allow ? { allow } : {}),
+    ...(deny ? { deny } : {}),
+  };
 }
