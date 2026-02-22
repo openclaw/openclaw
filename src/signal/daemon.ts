@@ -16,9 +16,19 @@ export type SignalDaemonOpts = {
 export type SignalDaemonHandle = {
   pid?: number;
   stop: () => void;
-  exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
+  exited: Promise<SignalDaemonExitEvent>;
   isExited: () => boolean;
 };
+
+export type SignalDaemonExitEvent = {
+  source: "process" | "spawn-error";
+  code: number | null;
+  signal: NodeJS.Signals | null;
+};
+
+export function formatSignalDaemonExit(exit: SignalDaemonExitEvent): string {
+  return `signal daemon exited (source=${exit.source} code=${String(exit.code ?? "null")} signal=${String(exit.signal ?? "null")})`;
+}
 
 export function classifySignalCliLogLine(line: string): "log" | "error" | null {
   const trimmed = line.trim();
@@ -87,13 +97,11 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
   const error = opts.runtime?.error ?? (() => {});
   let exited = false;
   let settledExit = false;
-  let resolveExit!: (value: { code: number | null; signal: NodeJS.Signals | null }) => void;
-  const exitedPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-    (resolve) => {
-      resolveExit = resolve;
-    },
-  );
-  const settleExit = (value: { code: number | null; signal: NodeJS.Signals | null }) => {
+  let resolveExit!: (value: SignalDaemonExitEvent) => void;
+  const exitedPromise = new Promise<SignalDaemonExitEvent>((resolve) => {
+    resolveExit = resolve;
+  });
+  const settleExit = (value: SignalDaemonExitEvent) => {
     if (settledExit) {
       return;
     }
@@ -106,22 +114,24 @@ export function spawnSignalDaemon(opts: SignalDaemonOpts): SignalDaemonHandle {
   bindSignalCliOutput({ stream: child.stderr, log, error });
   child.once("exit", (code, signal) => {
     settleExit({
+      source: "process",
       code: typeof code === "number" ? code : null,
       signal: signal ?? null,
     });
     error(
-      `signal-cli daemon exited (code=${String(code ?? "null")} signal=${String(signal ?? "null")})`,
+      formatSignalDaemonExit({ source: "process", code: code ?? null, signal: signal ?? null }),
     );
   });
   child.once("close", (code, signal) => {
     settleExit({
+      source: "process",
       code: typeof code === "number" ? code : null,
       signal: signal ?? null,
     });
   });
   child.on("error", (err) => {
     error(`signal-cli spawn error: ${String(err)}`);
-    settleExit({ code: null, signal: null });
+    settleExit({ source: "spawn-error", code: null, signal: null });
   });
 
   return {

@@ -3,7 +3,9 @@ import type { OpenClawConfig } from "../config/config.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { normalizeE164 } from "../utils.js";
+import type { SignalDaemonExitEvent } from "./daemon.js";
 import {
+  createMockSignalDaemonHandle,
   config,
   flush,
   getSignalToolResultTestMocks,
@@ -216,11 +218,12 @@ describe("monitorSignalProvider tool results", () => {
   it("fails fast when auto-started signal daemon exits during startup", async () => {
     const runtime = createMonitorRuntime();
     setSignalAutoStartConfig();
-    spawnSignalDaemonMock.mockReturnValueOnce({
-      stop: vi.fn(),
-      exited: Promise.resolve({ code: 1, signal: null }),
-      isExited: () => true,
-    });
+    spawnSignalDaemonMock.mockReturnValueOnce(
+      createMockSignalDaemonHandle({
+        exited: Promise.resolve({ source: "process", code: 1, signal: null }),
+        isExited: () => true,
+      }),
+    );
     waitForTransportReadyMock.mockImplementationOnce(
       async (params: { abortSignal?: AbortSignal | null }) => {
         await new Promise<void>((_resolve, reject) => {
@@ -251,24 +254,24 @@ describe("monitorSignalProvider tool results", () => {
     setSignalAutoStartConfig();
     const abortController = new AbortController();
     let exited = false;
-    let resolveExit!: (value: { code: number | null; signal: NodeJS.Signals | null }) => void;
-    const exitedPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-      (resolve) => {
-        resolveExit = resolve;
-      },
-    );
+    let resolveExit!: (value: SignalDaemonExitEvent) => void;
+    const exitedPromise = new Promise<SignalDaemonExitEvent>((resolve) => {
+      resolveExit = resolve;
+    });
     const stop = vi.fn(() => {
       if (exited) {
         return;
       }
       exited = true;
-      resolveExit({ code: null, signal: "SIGTERM" });
+      resolveExit({ source: "process", code: null, signal: "SIGTERM" });
     });
-    spawnSignalDaemonMock.mockReturnValueOnce({
-      stop,
-      exited: exitedPromise,
-      isExited: () => exited,
-    });
+    spawnSignalDaemonMock.mockReturnValueOnce(
+      createMockSignalDaemonHandle({
+        stop,
+        exited: exitedPromise,
+        isExited: () => exited,
+      }),
+    );
     streamMock.mockImplementationOnce(async () => {
       abortController.abort(new Error("stop"));
     });
