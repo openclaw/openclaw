@@ -22,9 +22,18 @@ describe("formatSystemRunAllowlistMissMessage", () => {
     expect(formatSystemRunAllowlistMissMessage()).toBe("SYSTEM_RUN_DENIED: allowlist miss");
   });
 
+  it("adds shell-wrapper guidance when wrappers are blocked", () => {
+    expect(
+      formatSystemRunAllowlistMissMessage({
+        shellWrapperBlocked: true,
+      }),
+    ).toContain("shell wrappers like sh/bash/zsh -c require approval");
+  });
+
   it("adds Windows shell-wrapper guidance when blocked by cmd.exe policy", () => {
     expect(
       formatSystemRunAllowlistMissMessage({
+        shellWrapperBlocked: true,
         windowsShellWrapperBlocked: true,
       }),
     ).toContain("Windows shell wrappers like cmd.exe /c require approval");
@@ -42,6 +51,7 @@ describe("evaluateSystemRunPolicy", () => {
       approved: false,
       isWindows: false,
       cmdInvocation: false,
+      shellWrapperInvocation: false,
     });
     expect(decision.allowed).toBe(false);
     if (decision.allowed) {
@@ -61,6 +71,7 @@ describe("evaluateSystemRunPolicy", () => {
       approved: false,
       isWindows: false,
       cmdInvocation: false,
+      shellWrapperInvocation: false,
     });
     expect(decision.allowed).toBe(false);
     if (decision.allowed) {
@@ -80,6 +91,7 @@ describe("evaluateSystemRunPolicy", () => {
       approved: false,
       isWindows: false,
       cmdInvocation: false,
+      shellWrapperInvocation: false,
     });
     expect(decision.allowed).toBe(true);
     if (!decision.allowed) {
@@ -98,6 +110,7 @@ describe("evaluateSystemRunPolicy", () => {
       approved: false,
       isWindows: false,
       cmdInvocation: false,
+      shellWrapperInvocation: false,
     });
     expect(decision.allowed).toBe(false);
     if (decision.allowed) {
@@ -107,7 +120,27 @@ describe("evaluateSystemRunPolicy", () => {
     expect(decision.errorMessage).toBe("SYSTEM_RUN_DENIED: allowlist miss");
   });
 
-  it("treats Windows cmd.exe wrappers as allowlist misses", () => {
+  it("treats shell wrappers as allowlist misses", () => {
+    const decision = evaluateSystemRunPolicy({
+      security: "allowlist",
+      ask: "off",
+      analysisOk: true,
+      allowlistSatisfied: true,
+      approvalDecision: null,
+      approved: false,
+      isWindows: false,
+      cmdInvocation: false,
+      shellWrapperInvocation: true,
+    });
+    expect(decision.allowed).toBe(false);
+    if (decision.allowed) {
+      throw new Error("expected denied decision");
+    }
+    expect(decision.shellWrapperBlocked).toBe(true);
+    expect(decision.errorMessage).toContain("shell wrappers like sh/bash/zsh -c");
+  });
+
+  it("keeps Windows-specific guidance for cmd.exe wrappers", () => {
     const decision = evaluateSystemRunPolicy({
       security: "allowlist",
       ask: "off",
@@ -117,11 +150,13 @@ describe("evaluateSystemRunPolicy", () => {
       approved: false,
       isWindows: true,
       cmdInvocation: true,
+      shellWrapperInvocation: true,
     });
     expect(decision.allowed).toBe(false);
     if (decision.allowed) {
       throw new Error("expected denied decision");
     }
+    expect(decision.shellWrapperBlocked).toBe(true);
     expect(decision.windowsShellWrapperBlocked).toBe(true);
     expect(decision.errorMessage).toContain("Windows shell wrappers like cmd.exe /c");
   });
@@ -136,6 +171,7 @@ describe("evaluateSystemRunPolicy", () => {
       approved: false,
       isWindows: false,
       cmdInvocation: false,
+      shellWrapperInvocation: false,
     });
     expect(decision.allowed).toBe(true);
     if (!decision.allowed) {

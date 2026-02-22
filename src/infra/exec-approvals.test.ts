@@ -344,6 +344,14 @@ describe("exec approvals shell parsing", () => {
         reason: "unsupported shell token: \n",
       },
       {
+        command: 'echo "ok $\\\n(id -u)"',
+        reason: "unsupported shell token: newline",
+      },
+      {
+        command: 'echo "ok $\\\r\n(id -u)"',
+        reason: "unsupported shell token: newline",
+      },
+      {
         command: "ping 127.0.0.1 -n 1 & whoami",
         reason: "unsupported windows shell token: &",
         platform: "win32",
@@ -547,6 +555,17 @@ describe("exec approvals shell allowlist (chained commands)", () => {
       expect(result.analysisOk).toBe(true);
       expect(result.allowlistSatisfied).toBe(true);
     }
+  });
+
+  it("fails allowlist analysis for shell line continuations", () => {
+    const result = evaluateShellAllowlist({
+      command: 'echo "ok $\\\n(id -u)"',
+      allowlist: [{ pattern: "/usr/bin/echo" }],
+      safeBins: new Set(),
+      cwd: "/tmp",
+    });
+    expect(result.analysisOk).toBe(false);
+    expect(result.allowlistSatisfied).toBe(false);
   });
 });
 
