@@ -69,6 +69,7 @@ const MemoryQmdLimitsSchema = z
     maxSnippetChars: z.number().int().positive().optional(),
     maxInjectedChars: z.number().int().positive().optional(),
     timeoutMs: z.number().int().nonnegative().optional(),
+    maxOutputChars: z.number().int().positive().optional(),
   })
   .strict();
 

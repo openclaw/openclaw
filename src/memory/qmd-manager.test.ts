@@ -1813,7 +1813,7 @@ describe("QmdMemoryManager", () => {
   });
 
   it("errors when qmd output exceeds command output safety cap", async () => {
-    const noisyPayload = "x".repeat(240_000);
+    const noisyPayload = "x".repeat(2_100_000);
     spawnMock.mockImplementation((_cmd: string, args: string[]) => {
       if (args[0] === "search") {
         const child = createMockChild({ autoClose: false });
@@ -1827,6 +1827,30 @@ describe("QmdMemoryManager", () => {
 
     await expect(
       manager.search("noise", { sessionKey: "agent:main:slack:dm:u123" }),
+    ).rejects.toThrow(/too much output/);
+    await manager.close();
+  });
+
+  it("respects configured maxOutputChars limit", async () => {
+    const customCfg = {
+      ...cfg,
+      memory: {
+        ...cfg.memory,
+        qmd: { ...cfg.memory!.qmd!, limits: { maxOutputChars: 500 } },
+      },
+    } as OpenClawConfig;
+    const smallPayload = "x".repeat(600);
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "search") {
+        const child = createMockChild({ autoClose: false });
+        emitAndClose(child, "stdout", smallPayload);
+        return child;
+      }
+      return createMockChild();
+    });
+    const { manager } = await createManager({ cfg: customCfg });
+    await expect(
+      manager.search("test", { sessionKey: "agent:main:slack:dm:u123" }),
     ).rejects.toThrow(/too much output/);
     await manager.close();
   });

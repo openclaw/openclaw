@@ -64,4 +64,5 @@ export type MemoryQmdLimitsConfig = {
   maxSnippetChars?: number;
   maxInjectedChars?: number;
   timeoutMs?: number;
+  maxOutputChars?: number;
 };

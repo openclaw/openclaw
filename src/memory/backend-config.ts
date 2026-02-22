@@ -43,6 +43,7 @@ export type ResolvedQmdLimitsConfig = {
   maxSnippetChars: number;
   maxInjectedChars: number;
   timeoutMs: number;
+  maxOutputChars: number;
 };
 
 export type ResolvedQmdSessionConfig = {
@@ -86,6 +87,7 @@ const DEFAULT_QMD_LIMITS: ResolvedQmdLimitsConfig = {
   maxSnippetChars: 700,
   maxInjectedChars: 4_000,
   timeoutMs: DEFAULT_QMD_TIMEOUT_MS,
+  maxOutputChars: 2_000_000,
 };
 const DEFAULT_QMD_MCPORTER: ResolvedQmdMcporterConfig = {
   enabled: false,
@@ -190,6 +192,9 @@ function resolveLimits(raw?: MemoryQmdConfig["limits"]): ResolvedQmdLimitsConfig
   }
   if (raw?.timeoutMs && raw.timeoutMs > 0) {
     parsed.timeoutMs = Math.floor(raw.timeoutMs);
+  }
+  if (raw?.maxOutputChars && raw.maxOutputChars > 0) {
+    parsed.maxOutputChars = Math.floor(raw.maxOutputChars);
   }
   return parsed;
 }

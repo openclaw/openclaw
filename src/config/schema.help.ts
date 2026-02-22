@@ -274,6 +274,8 @@ export const FIELD_HELP: Record<string, string> = {
   "memory.qmd.limits.maxSnippetChars": "Max characters per snippet pulled from QMD (default: 700).",
   "memory.qmd.limits.maxInjectedChars": "Max total characters injected from QMD hits per turn.",
   "memory.qmd.limits.timeoutMs": "Per-query timeout for QMD searches (default: 4000).",
+  "memory.qmd.limits.maxOutputChars":
+    "Max characters captured from qmd stdout/stderr before the command is rejected (default: 2000000).",
   "memory.qmd.scope":
     "Session/channel scope for QMD recall (same syntax as session.sendPolicy; default: direct-only). Use match.rawKeyPrefix to match full agent-prefixed session keys.",
   "agents.defaults.memorySearch.cache.maxEntries":

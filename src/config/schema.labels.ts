@@ -197,6 +197,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "memory.qmd.limits.maxSnippetChars": "QMD Max Snippet Chars",
   "memory.qmd.limits.maxInjectedChars": "QMD Max Injected Chars",
   "memory.qmd.limits.timeoutMs": "QMD Search Timeout (ms)",
+  "memory.qmd.limits.maxOutputChars": "QMD Max Output Chars",
   "memory.qmd.scope": "QMD Surface Scope",
   "auth.profiles": "Auth Profiles",
   "auth.order": "Auth Profile Order",
