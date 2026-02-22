@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
+import { resolveRuntimeRedactionSecrets } from "./secret-registry.js";
 
 const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
 
@@ -40,6 +41,7 @@ const DEFAULT_REDACT_PATTERNS: string[] = [
 type RedactOptions = {
   mode?: RedactSensitiveMode;
   patterns?: string[];
+  literalSecrets?: string[];
 };
 
 function normalizeMode(value?: string): RedactSensitiveMode {
@@ -107,21 +109,39 @@ function redactText(text: string, patterns: RegExp[]): string {
   return next;
 }
 
+function redactLiteralSecrets(text: string, literalSecrets: string[] | undefined): string {
+  if (!literalSecrets?.length) {
+    return text;
+  }
+  let next = text;
+  const seen = new Set<string>();
+  for (const secret of literalSecrets) {
+    if (!secret || seen.has(secret)) {
+      continue;
+    }
+    seen.add(secret);
+    next = next.replaceAll(secret, maskToken(secret));
+  }
+  return next;
+}
+
 function resolveConfigRedaction(): RedactOptions {
-  let cfg: OpenClawConfig["logging"] | undefined;
+  let cfg: OpenClawConfig | undefined;
   try {
     const loaded = requireConfig?.("../config/config.js") as
       | {
           loadConfig?: () => OpenClawConfig;
         }
       | undefined;
-    cfg = loaded?.loadConfig?.().logging;
+    cfg = loaded?.loadConfig?.();
   } catch {
     cfg = undefined;
   }
+  const secrets = resolveRuntimeRedactionSecrets({ config: cfg, env: process.env });
   return {
-    mode: normalizeMode(cfg?.redactSensitive),
-    patterns: cfg?.redactPatterns,
+    mode: normalizeMode(cfg?.logging?.redactSensitive),
+    patterns: cfg?.logging?.redactPatterns,
+    literalSecrets: secrets,
   };
 }
 
@@ -129,15 +149,20 @@ export function redactSensitiveText(text: string, options?: RedactOptions): stri
   if (!text) {
     return text;
   }
-  const resolved = options ?? resolveConfigRedaction();
+  const fromConfig = resolveConfigRedaction();
+  const resolved: RedactOptions = options
+    ? {
+        mode: options.mode ?? fromConfig.mode,
+        patterns: options.patterns ?? fromConfig.patterns,
+        literalSecrets: options.literalSecrets ?? fromConfig.literalSecrets,
+      }
+    : fromConfig;
   if (normalizeMode(resolved.mode) === "off") {
     return text;
   }
   const patterns = resolvePatterns(resolved.patterns);
-  if (!patterns.length) {
-    return text;
-  }
-  return redactText(text, patterns);
+  const regexRedacted = patterns.length > 0 ? redactText(text, patterns) : text;
+  return redactLiteralSecrets(regexRedacted, resolved.literalSecrets);
 }
 
 export function redactToolDetail(detail: string): string {

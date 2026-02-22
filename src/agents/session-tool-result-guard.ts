@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { TextContent } from "@mariozechner/pi-ai";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
+import { redactSensitiveText } from "../logging/redact.js";
 import type {
   PluginHookBeforeMessageWriteEvent,
   PluginHookBeforeMessageWriteResult,
@@ -74,6 +75,37 @@ function capToolResultSize(msg: AgentMessage): AgentMessage {
   });
 
   return { ...msg, content: newContent } as AgentMessage;
+}
+
+function redactToolResultText(msg: AgentMessage): AgentMessage {
+  const role = (msg as { role?: string }).role;
+  if (role !== "toolResult") {
+    return msg;
+  }
+  const content = (msg as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return msg;
+  }
+  let changed = false;
+  const nextContent = content.map((block) => {
+    if (!block || typeof block !== "object" || (block as { type?: string }).type !== "text") {
+      return block;
+    }
+    const text = (block as TextContent).text;
+    if (typeof text !== "string" || !text) {
+      return block;
+    }
+    const redacted = redactSensitiveText(text, { mode: "tools" });
+    if (redacted === text) {
+      return block;
+    }
+    changed = true;
+    return { ...(block as Record<string, unknown>), text: redacted };
+  });
+  if (!changed) {
+    return msg;
+  }
+  return { ...(msg as unknown as Record<string, unknown>), content: nextContent } as AgentMessage;
 }
 
 export function installSessionToolResultGuard(
@@ -165,7 +197,7 @@ export function installSessionToolResultGuard(
           }),
         );
         if (flushed) {
-          originalAppend(flushed as never);
+          originalAppend(redactToolResultText(flushed) as never);
         }
       }
     }
@@ -208,7 +240,7 @@ export function installSessionToolResultGuard(
       if (!persisted) {
         return undefined;
       }
-      return originalAppend(persisted as never);
+      return originalAppend(redactToolResultText(persisted) as never);
     }
 
     const toolCalls =
