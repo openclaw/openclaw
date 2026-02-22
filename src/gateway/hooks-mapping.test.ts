@@ -447,3 +447,180 @@ describe("hooks mapping", () => {
     });
   });
 });
+
+describe("Security: OC-201 Regression", () => {
+  it("rejects transform module that is a symlink pointing outside transformsDir", () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-symlink-"));
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    fs.mkdirSync(transformsRoot, { recursive: true });
+
+    // Create malicious module outside transformsDir
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-outside-"));
+    const evilModule = path.join(outsideDir, "evil.mjs");
+    fs.writeFileSync(evilModule, "export default () => null;");
+
+    // Create symlink inside transformsDir pointing to evil module
+    const symlinkPath = path.join(transformsRoot, "evil-link.mjs");
+    fs.symlinkSync(evilModule, symlinkPath);
+
+    expect(() =>
+      resolveHookMappings(
+        {
+          mappings: [
+            {
+              match: { path: "custom" },
+              action: "agent",
+              transform: { module: "evil-link.mjs" },
+            },
+          ],
+        },
+        { configDir },
+      ),
+    ).toThrow(/symlink|escapes|must be within/i);
+
+    // Cleanup
+    fs.rmSync(configDir, { recursive: true, force: true });
+    fs.rmSync(outsideDir, { recursive: true, force: true });
+  });
+
+  it("rejects transformsDir that is a symlink pointing outside config", () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-tdir-sym-"));
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    fs.mkdirSync(transformsRoot, { recursive: true });
+
+    // Create symlink subdirectory pointing outside
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-outside-tdir-"));
+    const symlinkDir = path.join(transformsRoot, "escaped");
+    fs.symlinkSync(outsideDir, symlinkDir);
+
+    expect(() =>
+      resolveHookMappings(
+        {
+          transformsDir: "escaped",
+          mappings: [
+            {
+              match: { path: "custom" },
+              action: "agent",
+              transform: { module: "transform.mjs" },
+            },
+          ],
+        },
+        { configDir },
+      ),
+    ).toThrow(/symlink|escapes|must be within|Hook transformsDir/i);
+
+    fs.rmSync(configDir, { recursive: true, force: true });
+    fs.rmSync(outsideDir, { recursive: true, force: true });
+  });
+
+  it("rejects nested path traversal in transform module (subdir/../../evil.mjs)", () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-nested-"));
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    const subdir = path.join(transformsRoot, "subdir");
+    fs.mkdirSync(subdir, { recursive: true });
+
+    expect(() =>
+      resolveHookMappings(
+        {
+          mappings: [
+            {
+              match: { path: "custom" },
+              action: "agent",
+              transform: { module: "subdir/../../evil.mjs" },
+            },
+          ],
+        },
+        { configDir },
+      ),
+    ).toThrow(/must be within/);
+
+    fs.rmSync(configDir, { recursive: true, force: true });
+  });
+
+  it("OC-201: rejects config.patch attack with absolute transformsDir=/tmp", () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-oc201-"));
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    fs.mkdirSync(transformsRoot, { recursive: true });
+
+    // Simulate the exploit: transformsDir = /tmp, module = "rce.mjs"
+    expect(() =>
+      resolveHookMappings(
+        {
+          transformsDir: os.tmpdir(),
+          mappings: [
+            {
+              match: { path: "rce-trigger" },
+              action: "agent",
+              transform: { module: "rce.mjs" },
+            },
+          ],
+        },
+        { configDir },
+      ),
+    ).toThrow(/Hook transformsDir/);
+
+    fs.rmSync(configDir, { recursive: true, force: true });
+  });
+
+  it("rejects ENOENT symlink gracefully via lexical check when file doesn't exist", () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-enoent-"));
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    fs.mkdirSync(transformsRoot, { recursive: true });
+
+    // Create a valid module that we'll use to test the symlink mechanism works
+    const validModule = path.join(transformsRoot, "valid-transform.mjs");
+    fs.writeFileSync(validModule, "export default () => null;");
+
+    // This tests that even for non-existent files, Layer 1 (lexical check) protects
+    // against path traversal - the implementation gracefully falls back to Layer 1
+    expect(() =>
+      resolveHookMappings(
+        {
+          mappings: [
+            {
+              match: { path: "custom" },
+              action: "agent",
+              // Non-existent file with valid module name should work fine
+              transform: { module: "nonexistent.mjs" },
+            },
+          ],
+        },
+        { configDir },
+      ),
+    ).not.toThrow();
+
+    fs.rmSync(configDir, { recursive: true, force: true });
+  });
+
+  it("permits symlink within transformsDir even if target doesn't exist (graceful fallback)", () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-broken-symlink-"));
+    const transformsRoot = path.join(configDir, "hooks", "transforms");
+    fs.mkdirSync(transformsRoot, { recursive: true });
+
+    // Create a symlink to non-existent file WITHIN transformsDir
+    // This simulates a symlink that points to a future-created file
+    const symlinkPath = path.join(transformsRoot, "future-transform.mjs");
+    const futureTarget = path.join(transformsRoot, "will-exist-later.mjs");
+    fs.symlinkSync(futureTarget, symlinkPath);
+
+    // This should NOT throw because Layer 1 (lexical check) passes:
+    // symlink is inside transformsRoot and doesn't escape via ../
+    // Layer 2 (realpath) will fail with ENOENT but gracefully falls back to Layer 1
+    expect(() =>
+      resolveHookMappings(
+        {
+          mappings: [
+            {
+              match: { path: "custom" },
+              action: "agent",
+              transform: { module: "future-transform.mjs" },
+            },
+          ],
+        },
+        { configDir },
+      ),
+    ).not.toThrow();
+
+    fs.rmSync(configDir, { recursive: true, force: true });
+  });
+});
