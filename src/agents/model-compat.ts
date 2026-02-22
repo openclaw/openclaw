@@ -6,8 +6,12 @@ function isOpenAiCompletionsModel(model: Model<Api>): model is Model<"openai-com
 
 export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   const baseUrl = model.baseUrl ?? "";
-  const isZai = model.provider === "zai" || baseUrl.includes("api.z.ai");
-  if (!isZai || !isOpenAiCompletionsModel(model)) {
+  const isZhipuCompat =
+    model.provider === "zai" ||
+    model.provider === "zhipu" ||
+    baseUrl.includes("api.z.ai") ||
+    baseUrl.includes("bigmodel.cn");
+  if (!isZhipuCompat || !isOpenAiCompletionsModel(model)) {
     return model;
   }
 
