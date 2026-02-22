@@ -68,11 +68,18 @@ export class FeishuStreamingSession {
   private lastUpdateTime = 0;
   private pendingText: string | null = null;
   private updateThrottleMs = 100; // Throttle updates to max 10/sec
+  private replyToMessageId?: string;
 
-  constructor(client: Client, creds: Credentials, log?: (msg: string) => void) {
+  constructor(
+    client: Client,
+    creds: Credentials,
+    log?: (msg: string) => void,
+    replyToMessageId?: string,
+  ) {
     this.client = client;
     this.creds = creds;
     this.log = log;
+    this.replyToMessageId = replyToMessageId;
   }
 
   async start(
@@ -115,15 +122,26 @@ export class FeishuStreamingSession {
     }
     const cardId = createData.data.card_id;
 
-    // Send card message
-    const sendRes = await this.client.im.message.create({
-      params: { receive_id_type: receiveIdType },
-      data: {
-        receive_id: receiveId,
-        msg_type: "interactive",
-        content: JSON.stringify({ type: "card", data: { card_id: cardId } }),
-      },
-    });
+    // Send card message (reply if replyToMessageId exists, otherwise create)
+    let sendRes;
+    if (this.replyToMessageId) {
+      sendRes = await this.client.im.message.reply({
+        path: { message_id: this.replyToMessageId },
+        data: {
+          msg_type: "interactive",
+          content: JSON.stringify({ type: "card", data: { card_id: cardId } }),
+        },
+      });
+    } else {
+      sendRes = await this.client.im.message.create({
+        params: { receive_id_type: receiveIdType },
+        data: {
+          receive_id: receiveId,
+          msg_type: "interactive",
+          content: JSON.stringify({ type: "card", data: { card_id: cardId } }),
+        },
+      });
+    }
     if (sendRes.code !== 0 || !sendRes.data?.message_id) {
       throw new Error(`Send card failed: ${sendRes.msg}`);
     }
