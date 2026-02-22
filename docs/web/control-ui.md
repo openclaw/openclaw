@@ -213,13 +213,13 @@ locally but the Gateway runs elsewhere.
 2. Open a URL like:
 
 ```text
-http://localhost:5173/?gatewayUrl=ws://<gateway-host>:18789
+http://localhost:5173/?gatewayUrl=ws://127.0.0.1:18789
 ```
 
 Optional one-time auth (if needed):
 
 ```text
-http://localhost:5173/?gatewayUrl=wss://<gateway-host>:18789&token=<gateway-token>
+http://localhost:5173/?gatewayUrl=wss://localhost:18789&token=<gateway-token>
 ```
 
 Notes:
@@ -229,9 +229,13 @@ Notes:
 - When `gatewayUrl` is set, the UI does not fall back to config or environment credentials.
   Provide `token` (or `password`) explicitly. Missing explicit credentials is an error.
 - Use `wss://` when the Gateway is behind TLS (Tailscale Serve, HTTPS proxy, etc.).
+- URL-param `gatewayUrl` overrides are restricted to loopback or same-host endpoints. Cross-host
+  overrides from URL params are blocked.
 - `gatewayUrl` is only accepted in a top-level window (not embedded) to prevent clickjacking.
 - For cross-origin dev setups (e.g. `pnpm ui:dev` to a remote Gateway), add the UI
   origin to `gateway.controlUi.allowedOrigins`.
+- For sensitive deployments, rotate `gateway.auth.token` and Control UI device-auth tokens after
+  applying security hardening updates.
 
 Example:
 

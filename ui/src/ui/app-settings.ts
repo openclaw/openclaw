@@ -21,6 +21,7 @@ import { loadNodes } from "./controllers/nodes.ts";
 import { loadPresence } from "./controllers/presence.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import { loadSkills } from "./controllers/skills.ts";
+import { sanitizeGatewayUrlForUrlOverride } from "./gateway-url-security.ts";
 import {
   inferBasePathFromPathname,
   normalizeBasePath,
@@ -125,10 +126,9 @@ export function applySettingsFromUrl(host: SettingsHost) {
   }
 
   if (gatewayUrlRaw != null) {
-    const gatewayUrl = gatewayUrlRaw.trim();
-    if (gatewayUrl && gatewayUrl !== host.settings.gatewayUrl) {
-      host.pendingGatewayUrl = gatewayUrl;
-    }
+    const gatewayUrl = sanitizeGatewayUrlForUrlOverride(gatewayUrlRaw, window.location.hostname);
+    host.pendingGatewayUrl =
+      gatewayUrl && gatewayUrl !== host.settings.gatewayUrl ? gatewayUrl : null;
     params.delete("gatewayUrl");
     hashParams.delete("gatewayUrl");
     shouldCleanUrl = true;

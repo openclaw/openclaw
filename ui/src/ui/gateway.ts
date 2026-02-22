@@ -7,6 +7,7 @@ import {
 } from "../../../src/gateway/protocol/client-info.js";
 import { clearDeviceAuthToken, loadDeviceAuthToken, storeDeviceAuthToken } from "./device-auth.ts";
 import { loadOrCreateDeviceIdentity, signDevicePayload } from "./device-identity.ts";
+import { getGatewaySocketUrlSecurityError } from "./gateway-url-security.ts";
 import { generateUUID } from "./uuid.ts";
 
 export type GatewayEventFrame = {
@@ -92,6 +93,13 @@ export class GatewayBrowserClient {
 
   private connect() {
     if (this.closed) {
+      return;
+    }
+    const securityError = getGatewaySocketUrlSecurityError(this.opts.url);
+    if (securityError) {
+      this.ws = null;
+      this.flushPending(new Error(securityError));
+      this.opts.onClose?.({ code: CONNECT_FAILED_CLOSE_CODE, reason: securityError });
       return;
     }
     this.ws = new WebSocket(this.opts.url);
