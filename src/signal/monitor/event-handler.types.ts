@@ -9,6 +9,8 @@ export type SignalEnvelope = {
   sourceNumber?: string | null;
   sourceUuid?: string | null;
   sourceName?: string | null;
+  // Legacy field support
+  source?: string | null;
   timestamp?: number | null;
   dataMessage?: SignalDataMessage | null;
   editMessage?: { dataMessage?: SignalDataMessage | null } | null;

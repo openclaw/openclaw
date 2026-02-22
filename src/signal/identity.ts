@@ -30,8 +30,10 @@ function stripSignalPrefix(value: string): string {
 export function resolveSignalSender(params: {
   sourceNumber?: string | null;
   sourceUuid?: string | null;
+  // Legacy support for older signal-cli versions or raw 'source' field
+  source?: string | null;
 }): SignalSender | null {
-  const sourceNumber = params.sourceNumber?.trim();
+  const sourceNumber = (params.sourceNumber || params.source)?.trim();
   if (sourceNumber) {
     return {
       kind: "phone",
