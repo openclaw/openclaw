@@ -83,6 +83,20 @@ describe("model-selection", () => {
       expect(parseModelRef("  ", "anthropic")).toBeNull();
     });
 
+    it("should preserve openrouter/ prefix for native models", () => {
+      expect(parseModelRef("openrouter/aurora-alpha", "openai")).toEqual({
+        provider: "openrouter",
+        model: "openrouter/aurora-alpha",
+      });
+    });
+
+    it("should pass through openrouter external provider models as-is", () => {
+      expect(parseModelRef("openrouter/anthropic/claude-sonnet-4-5", "openai")).toEqual({
+        provider: "openrouter",
+        model: "anthropic/claude-sonnet-4-5",
+      });
+    });
+
     it("should handle invalid slash usage", () => {
       expect(parseModelRef("/", "anthropic")).toBeNull();
       expect(parseModelRef("anthropic/", "anthropic")).toBeNull();
