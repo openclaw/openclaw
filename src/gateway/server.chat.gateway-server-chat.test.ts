@@ -28,7 +28,7 @@ installConnectedControlUiServerSuite((started) => {
   port = started.port;
 });
 
-async function waitFor(condition: () => boolean, timeoutMs = 1500) {
+async function waitFor(condition: () => boolean, timeoutMs = 400) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (condition()) {
@@ -402,7 +402,7 @@ describe("gateway server chat", () => {
       {
         const waitP = rpcReq(webchatWs, "agent.wait", {
           runId: "run-wait-1",
-          timeoutMs: 1000,
+          timeoutMs: 200,
         });
 
         setTimeout(() => {
@@ -428,7 +428,7 @@ describe("gateway server chat", () => {
 
         const res = await rpcReq(webchatWs, "agent.wait", {
           runId: "run-wait-early",
-          timeoutMs: 1000,
+          timeoutMs: 200,
         });
         expect(res.ok).toBe(true);
         expect(res.payload?.status).toBe("ok");
@@ -447,7 +447,7 @@ describe("gateway server chat", () => {
       {
         const waitP = rpcReq(webchatWs, "agent.wait", {
           runId: "run-wait-err",
-          timeoutMs: 1000,
+          timeoutMs: 50,
         });
 
         setTimeout(() => {
@@ -466,7 +466,7 @@ describe("gateway server chat", () => {
       {
         const waitP = rpcReq(webchatWs, "agent.wait", {
           runId: "run-wait-start",
-          timeoutMs: 1000,
+          timeoutMs: 200,
         });
 
         emitAgentEvent({
