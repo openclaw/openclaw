@@ -21,7 +21,7 @@ export const isNixMode = resolveIsNixMode();
 const LEGACY_STATE_DIRNAMES = [".clawdbot", ".moldbot", ".moltbot"] as const;
 const NEW_STATE_DIRNAME = ".openclaw";
 const CONFIG_FILENAME = "openclaw.json";
-const LEGACY_CONFIG_FILENAMES = ["clawdbot.json", "moldbot.json", "moltbot.json"] as const;
+export const LEGACY_CONFIG_FILENAMES = ["clawdbot.json", "moldbot.json", "moltbot.json"] as const;
 
 function resolveDefaultHomeDir(): string {
   return resolveRequiredHomeDir(process.env, os.homedir);
@@ -153,15 +153,19 @@ export function resolveConfigPath(
   stateDir: string = resolveStateDir(env, envHomedir(env)),
   homedir: () => string = envHomedir(env),
 ): string {
-  const override = env.OPENCLAW_CONFIG_PATH?.trim();
+  const override = env.OPENCLAW_CONFIG_PATH?.trim() || env.CLAWDBOT_CONFIG_PATH?.trim();
   if (override) {
     return resolveUserPath(override, env, homedir);
   }
-  const stateOverride = env.OPENCLAW_STATE_DIR?.trim();
+
+  // Consistent legacy skipping: omit legacy filenames when openclaw.json exists
+  const primaryConfigPath = path.join(stateDir, CONFIG_FILENAME);
+  const skipLegacy = fs.existsSync(primaryConfigPath);
   const candidates = [
-    path.join(stateDir, CONFIG_FILENAME),
-    ...LEGACY_CONFIG_FILENAMES.map((name) => path.join(stateDir, name)),
+    primaryConfigPath,
+    ...(skipLegacy ? [] : LEGACY_CONFIG_FILENAMES.map((name) => path.join(stateDir, name))),
   ];
+
   const existing = candidates.find((candidate) => {
     try {
       return fs.existsSync(candidate);
@@ -172,14 +176,19 @@ export function resolveConfigPath(
   if (existing) {
     return existing;
   }
+  // When OPENCLAW_STATE_DIR is set (or stateDir was explicitly provided),
+  // return directly under stateDir rather than falling through to
+  // resolveConfigPathCandidate which checks multiple default locations
+  // and could find a config in a different directory.
+  const stateOverride = env.OPENCLAW_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
   if (stateOverride) {
     return path.join(stateDir, CONFIG_FILENAME);
   }
   const defaultStateDir = resolveStateDir(env, homedir);
-  if (path.resolve(stateDir) === path.resolve(defaultStateDir)) {
-    return resolveConfigPathCandidate(env, homedir);
+  if (path.resolve(stateDir) !== path.resolve(defaultStateDir)) {
+    return path.join(stateDir, CONFIG_FILENAME);
   }
-  return path.join(stateDir, CONFIG_FILENAME);
+  return resolveConfigPathCandidate(env, homedir);
 }
 
 export const CONFIG_PATH = resolveConfigPathCandidate();
@@ -187,10 +196,16 @@ export const CONFIG_PATH = resolveConfigPathCandidate();
 /**
  * Resolve default config path candidates across default locations.
  * Order: explicit config path → state-dir-derived paths → new default.
+ *
+ * When `skipLegacyIfNewExists` is true (default), legacy config filenames
+ * (clawdbot.json, moltbot.json, moldbot.json) are omitted for any directory
+ * where openclaw.json already exists on disk. This prevents stale legacy
+ * configs from causing validation failures and log spam (issue #11465).
  */
 export function resolveDefaultConfigCandidates(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = envHomedir(env),
+  { skipLegacyIfNewExists = true }: { skipLegacyIfNewExists?: boolean } = {},
 ): string[] {
   const effectiveHomedir = () => resolveRequiredHomeDir(env, homedir);
   const explicit = env.OPENCLAW_CONFIG_PATH?.trim() || env.CLAWDBOT_CONFIG_PATH?.trim();
@@ -199,17 +214,23 @@ export function resolveDefaultConfigCandidates(
   }
 
   const candidates: string[] = [];
+
+  const addDirCandidates = (dir: string) => {
+    candidates.push(path.join(dir, CONFIG_FILENAME));
+    const skipLegacy = skipLegacyIfNewExists && fs.existsSync(path.join(dir, CONFIG_FILENAME));
+    if (!skipLegacy) {
+      candidates.push(...LEGACY_CONFIG_FILENAMES.map((name) => path.join(dir, name)));
+    }
+  };
+
   const openclawStateDir = env.OPENCLAW_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim();
   if (openclawStateDir) {
-    const resolved = resolveUserPath(openclawStateDir, env, effectiveHomedir);
-    candidates.push(path.join(resolved, CONFIG_FILENAME));
-    candidates.push(...LEGACY_CONFIG_FILENAMES.map((name) => path.join(resolved, name)));
+    addDirCandidates(resolveUserPath(openclawStateDir, env, effectiveHomedir));
   }
 
   const defaultDirs = [newStateDir(effectiveHomedir), ...legacyStateDirs(effectiveHomedir)];
   for (const dir of defaultDirs) {
-    candidates.push(path.join(dir, CONFIG_FILENAME));
-    candidates.push(...LEGACY_CONFIG_FILENAMES.map((name) => path.join(dir, name)));
+    addDirCandidates(dir);
   }
   return candidates;
 }
