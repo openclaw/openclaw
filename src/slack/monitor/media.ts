@@ -273,8 +273,10 @@ export async function resolveSlackAttachmentContent(params: {
     const imageUrl = resolveForwardedAttachmentImageUrl(att);
     if (imageUrl) {
       try {
+        const fetchImpl = createSlackMediaFetch(params.token);
         const fetched = await fetchRemoteMedia({
           url: imageUrl,
+          fetchImpl,
           maxBytes: params.maxBytes,
         });
         if (fetched.buffer.byteLength <= params.maxBytes) {
