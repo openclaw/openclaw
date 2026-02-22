@@ -13,6 +13,7 @@ import {
   type EmbeddingProviderResult,
   type GeminiEmbeddingClient,
   type OpenAiEmbeddingClient,
+  type VertexEmbeddingClient,
   type VoyageEmbeddingClient,
 } from "./embeddings.js";
 import { isFileMissingError, statRegularFile } from "./fs-utils.js";
@@ -46,12 +47,19 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected readonly workspaceDir: string;
   protected readonly settings: ResolvedMemorySearchConfig;
   protected provider: EmbeddingProvider | null;
-  private readonly requestedProvider: "openai" | "local" | "gemini" | "voyage" | "auto";
-  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage";
+  private readonly requestedProvider:
+    | "openai"
+    | "local"
+    | "gemini"
+    | "voyage"
+    | "google-vertex"
+    | "auto";
+  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "google-vertex";
   protected fallbackReason?: string;
   private readonly providerUnavailableReason?: string;
   protected openAi?: OpenAiEmbeddingClient;
   protected gemini?: GeminiEmbeddingClient;
+  protected vertex?: VertexEmbeddingClient;
   protected voyage?: VoyageEmbeddingClient;
   protected batch: {
     enabled: boolean;
@@ -158,6 +166,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.providerUnavailableReason = params.providerResult.providerUnavailableReason;
     this.openAi = params.providerResult.openAi;
     this.gemini = params.providerResult.gemini;
+    this.vertex = params.providerResult.vertex;
     this.voyage = params.providerResult.voyage;
     this.sources = new Set(params.settings.sources);
     this.db = this.openDatabase();

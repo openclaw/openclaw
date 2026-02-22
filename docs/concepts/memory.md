@@ -114,7 +114,43 @@ resolves keys from auth profiles, `models.providers.*.apiKey`, or environment
 variables. Codex OAuth only covers chat/completions and does **not** satisfy
 embeddings for memory search. For Gemini, use `GEMINI_API_KEY` or
 `models.providers.google.apiKey`. For Voyage, use `VOYAGE_API_KEY` or
-`models.providers.voyage.apiKey`. When using a custom OpenAI-compatible endpoint,
+`models.providers.voyage.apiKey`.
+
+### Vertex AI embeddings (GCP)
+
+For enterprise users on Google Cloud, use the `google-vertex` provider. This uses
+Application Default Credentials (ADC) or a Service Account key file.
+
+```json5
+memorySearch: {
+  provider: "google-vertex",
+  model: "google-vertex/text-embedding-004",
+  remote: {
+    location: "us-central1" // Recommended for embeddings
+  }
+}
+```
+
+**Required Environment Variables:**
+
+- `GOOGLE_CLOUD_PROJECT`: Your GCP project ID.
+- `GOOGLE_APPLICATION_CREDENTIALS`: Path to your Service Account JSON key file.
+- `GOOGLE_CLOUD_LOCATION` (optional): Defaults to `us-central1`.
+
+You can set these in your shell environment or in `openclaw.json` under the
+global `env` section (or per-agent `agents.defaults.env`):
+
+```json5
+{
+  env: {
+    GOOGLE_CLOUD_PROJECT: "your-project-id",
+    GOOGLE_APPLICATION_CREDENTIALS: "/path/to/key.json",
+    GOOGLE_CLOUD_LOCATION: "us-central1"
+  }
+}
+```
+
+When using a custom OpenAI-compatible endpoint,
 set `memorySearch.remote.apiKey` (and optional `memorySearch.remote.headers`).
 
 ### QMD backend (experimental)
