@@ -475,14 +475,18 @@ export async function runReplyAgent(params: {
       activeSessionEntry?.contextTokens ??
       DEFAULT_CONTEXT_TOKENS;
 
+    // When a heartbeat uses a temporary model override, don't persist the
+    // heartbeat model to the session entry — it would overwrite the main
+    // agent's model and cause the TUI status bar to show the wrong model.
+    const isHeartbeatModelOverride = isHeartbeat && opts?.heartbeatModelOverride;
     await persistRunSessionUsage({
       storePath,
       sessionKey,
       usage,
       lastCallUsage: runResult.meta?.agentMeta?.lastCallUsage,
       promptTokens,
-      modelUsed,
-      providerUsed,
+      modelUsed: isHeartbeatModelOverride ? undefined : modelUsed,
+      providerUsed: isHeartbeatModelOverride ? undefined : providerUsed,
       contextTokensUsed,
       systemPromptReport: runResult.meta?.systemPromptReport,
       cliSessionId,
