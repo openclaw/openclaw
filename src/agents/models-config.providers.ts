@@ -357,6 +357,17 @@ export function normalizeGoogleModelId(id: string): string {
   return id;
 }
 
+/**
+ * Normalize model IDs for the google-antigravity (Google Antigravity) provider.
+ * Gemini 3 Pro was deprecated; map it to Gemini 3.1 Pro.
+ */
+export function normalizeAntigravityModelId(id: string): string {
+  if (id === "gemini-3-pro" || id === "gemini-3-pro-preview") {
+    return "gemini-3.1-pro";
+  }
+  return id;
+}
+
 function normalizeGoogleProvider(provider: ProviderConfig): ProviderConfig {
   let mutated = false;
   const models = provider.models.map((model) => {
