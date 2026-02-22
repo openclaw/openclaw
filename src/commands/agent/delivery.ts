@@ -153,7 +153,12 @@ export async function deliverAgentCommandResult(params: {
   // delivery.  This must happen before building normalizedPayloads so that JSON
   // output and the return value reflect the actually-delivered content.
   const shouldApplyTts =
-    deliver && deliveryChannel && deliveryTarget && !isInternalMessageChannel(deliveryChannel);
+    deliver &&
+    deliveryChannel &&
+    deliveryTarget &&
+    isDeliveryChannelKnown &&
+    (!resolvedTarget || resolvedTarget.ok) &&
+    !isInternalMessageChannel(deliveryChannel);
   const ttsProcessedPayloads = shouldApplyTts
     ? await Promise.all(
         payloads.map((payload) =>
