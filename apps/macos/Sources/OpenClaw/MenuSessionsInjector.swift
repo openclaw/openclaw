@@ -59,6 +59,12 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
 
     func menuWillOpen(_ menu: NSMenu) {
         self.originalDelegate?.menuWillOpen?(menu)
+
+        // Only inject into the main status item menu, not submenus.
+        // Without this guard, opening a submenu (e.g., "Usage cost (30 days)")
+        // triggers injection into that submenu, creating recursive nesting.
+        guard menu === self.statusItem?.menu else { return }
+
         self.isMenuOpen = true
         self.menuOpenWidth = self.currentMenuWidth(for: menu)
 
@@ -93,6 +99,10 @@ final class MenuSessionsInjector: NSObject, NSMenuDelegate {
 
     func menuDidClose(_ menu: NSMenu) {
         self.originalDelegate?.menuDidClose?(menu)
+
+        // Only reset state when the main status item menu closes, not submenus.
+        guard menu === self.statusItem?.menu else { return }
+
         self.isMenuOpen = false
         self.menuOpenWidth = nil
         self.loadTask?.cancel()
