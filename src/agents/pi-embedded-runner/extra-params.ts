@@ -136,10 +136,7 @@ function shouldForceResponsesStore(model: {
   if (!OPENAI_RESPONSES_APIS.has(model.api)) {
     return false;
   }
-  if (!OPENAI_RESPONSES_PROVIDERS.has(model.provider)) {
-    return false;
-  }
-  return isDirectOpenAIBaseUrl(model.baseUrl);
+  return true;
 }
 
 function createOpenAIResponsesStoreWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
