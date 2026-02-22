@@ -113,6 +113,13 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
     return undefined;
   }
   if (job.schedule.kind === "every") {
+    const everyMs = Math.max(1, Math.floor(job.schedule.everyMs));
+    if (typeof job.state.lastRunAtMs === "number" && Number.isFinite(job.state.lastRunAtMs)) {
+      const nextFromLast = job.state.lastRunAtMs + everyMs;
+      if (nextFromLast > nowMs) {
+        return nextFromLast;
+      }
+    }
     const anchorMs = resolveEveryAnchorMs({
       schedule: job.schedule,
       fallbackAnchorMs: job.createdAtMs,
