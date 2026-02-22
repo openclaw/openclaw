@@ -20,7 +20,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   vi.useRealTimers();
-  runEmbeddedAttemptMock.mockReset();
+  runEmbeddedAttemptMock.mockClear();
 });
 
 const baseUsage = {

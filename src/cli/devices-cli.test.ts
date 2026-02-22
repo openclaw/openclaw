@@ -288,7 +288,7 @@ describe("devices cli local fallback", () => {
 });
 
 afterEach(() => {
-  callGateway.mockReset();
+  callGateway.mockClear();
   buildGatewayConnectionDetails.mockClear();
   buildGatewayConnectionDetails.mockReturnValue({
     url: "ws://127.0.0.1:18789",
