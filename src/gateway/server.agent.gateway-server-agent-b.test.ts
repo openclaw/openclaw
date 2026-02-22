@@ -18,6 +18,7 @@ import {
   rpcReq,
   startServerWithClient,
   testState,
+  trackConnectChallengeNonce,
   withGatewayServer,
   writeSessionStore,
 } from "./test-helpers.js";
@@ -341,6 +342,7 @@ describe("gateway server agent", () => {
     await withGatewayServer(async ({ port }) => {
       const dial = async () => {
         const ws = new WebSocket(`ws://127.0.0.1:${port}`);
+        trackConnectChallengeNonce(ws);
         await new Promise<void>((resolve) => ws.once("open", resolve));
         await connectOk(ws);
         return ws;
