@@ -9,6 +9,11 @@
       "name": "example_plugin",
       "entry": "plugins.example_plugin.plugin:ExamplePlugin",
       "version": "0.1"
+    },
+    {
+      "name": "serial_adapter",
+      "entry": "plugins.serial_adapter.plugin:SerialAdapter",
+      "version": "0.1"
     }
   ]
 }
