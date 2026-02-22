@@ -302,6 +302,79 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
         #expect(watchService.lastSent == nil)
     }
 
+    @Test @MainActor func handleInvokeWatchNotifyAddsDefaultActionsForPrompt() async throws {
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        let params = OpenClawWatchNotifyParams(
+            title: "Task",
+            body: "Action needed",
+            priority: .passive,
+            promptId: "prompt-123")
+        let paramsData = try JSONEncoder().encode(params)
+        let paramsJSON = String(decoding: paramsData, as: UTF8.self)
+        let req = BridgeInvokeRequest(
+            id: "watch-notify-default-actions",
+            command: OpenClawWatchCommand.notify.rawValue,
+            paramsJSON: paramsJSON)
+
+        let res = await appModel._test_handleInvoke(req)
+        #expect(res.ok == true)
+        #expect(watchService.lastSent?.params.risk == .low)
+        let actionIDs = watchService.lastSent?.params.actions?.map(\.id)
+        #expect(actionIDs == ["done", "snooze_10m", "open_phone", "escalate"])
+    }
+
+    @Test @MainActor func handleInvokeWatchNotifyAddsApprovalDefaults() async throws {
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        let params = OpenClawWatchNotifyParams(
+            title: "Approval",
+            body: "Allow command?",
+            promptId: "prompt-approval",
+            kind: "approval")
+        let paramsData = try JSONEncoder().encode(params)
+        let paramsJSON = String(decoding: paramsData, as: UTF8.self)
+        let req = BridgeInvokeRequest(
+            id: "watch-notify-approval-defaults",
+            command: OpenClawWatchCommand.notify.rawValue,
+            paramsJSON: paramsJSON)
+
+        let res = await appModel._test_handleInvoke(req)
+        #expect(res.ok == true)
+        let actionIDs = watchService.lastSent?.params.actions?.map(\.id)
+        #expect(actionIDs == ["approve", "decline", "open_phone", "escalate"])
+        #expect(watchService.lastSent?.params.actions?[1].style == "destructive")
+    }
+
+    @Test @MainActor func handleInvokeWatchNotifyDerivesPriorityFromRiskAndCapsActions() async throws {
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        let params = OpenClawWatchNotifyParams(
+            title: "Urgent",
+            body: "Check now",
+            risk: .high,
+            actions: [
+                OpenClawWatchAction(id: "a1", label: "A1"),
+                OpenClawWatchAction(id: "a2", label: "A2"),
+                OpenClawWatchAction(id: "a3", label: "A3"),
+                OpenClawWatchAction(id: "a4", label: "A4"),
+                OpenClawWatchAction(id: "a5", label: "A5"),
+            ])
+        let paramsData = try JSONEncoder().encode(params)
+        let paramsJSON = String(decoding: paramsData, as: UTF8.self)
+        let req = BridgeInvokeRequest(
+            id: "watch-notify-derive-priority",
+            command: OpenClawWatchCommand.notify.rawValue,
+            paramsJSON: paramsJSON)
+
+        let res = await appModel._test_handleInvoke(req)
+        #expect(res.ok == true)
+        #expect(watchService.lastSent?.params.priority == .timeSensitive)
+        #expect(watchService.lastSent?.params.risk == .high)
+        let actionIDs = watchService.lastSent?.params.actions?.map(\.id)
+        #expect(actionIDs == ["a1", "a2", "a3", "a4"])
+    }
+
     @Test @MainActor func handleInvokeWatchNotifyReturnsUnavailableOnDeliveryFailure() async throws {
         let watchService = MockWatchMessagingService()
         watchService.sendError = NSError(
