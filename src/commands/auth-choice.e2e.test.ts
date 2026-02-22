@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice, resolvePreferredProviderForAuthChoice } from "./auth-choice.js";
@@ -22,7 +23,9 @@ vi.mock("../providers/github-copilot-auth.js", () => ({
   githubCopilotLoginCommand: vi.fn(async () => {}),
 }));
 
-const loginOpenAICodexOAuth = vi.hoisted(() => vi.fn(async () => null));
+const loginOpenAICodexOAuth = vi.hoisted(() =>
+  vi.fn<() => Promise<OAuthCredentials | null>>(async () => null),
+);
 vi.mock("./openai-codex-oauth.js", () => ({
   loginOpenAICodexOAuth,
 }));
@@ -121,6 +124,41 @@ describe("applyAuthChoice", () => {
         setDefaultModel: false,
       }),
     ).resolves.toEqual({ config: {} });
+  });
+
+  it("stores openai-codex OAuth with email profile id", async () => {
+    await setupTempState();
+
+    loginOpenAICodexOAuth.mockResolvedValueOnce({
+      email: "user@example.com",
+      refresh: "refresh-token",
+      access: "access-token",
+      expires: Date.now() + 60_000,
+    });
+
+    const prompter = createPrompter({});
+    const runtime = createExitThrowingRuntime();
+
+    const result = await applyAuthChoice({
+      authChoice: "openai-codex",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: false,
+    });
+
+    expect(result.config.auth?.profiles?.["openai-codex:user@example.com"]).toMatchObject({
+      provider: "openai-codex",
+      mode: "oauth",
+    });
+    expect(result.config.auth?.profiles?.["openai-codex:default"]).toBeUndefined();
+    expect(await readAuthProfile("openai-codex:user@example.com")).toMatchObject({
+      type: "oauth",
+      provider: "openai-codex",
+      refresh: "refresh-token",
+      access: "access-token",
+      email: "user@example.com",
+    });
   });
 
   it("prompts and writes MiniMax API key when selecting minimax-api", async () => {

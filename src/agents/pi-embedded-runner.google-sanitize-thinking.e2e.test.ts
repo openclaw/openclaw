@@ -91,7 +91,7 @@ describe("sanitizeSessionHistory (google thinking)", () => {
     expect(assistant.content?.[0]?.thinking).toBe("reasoning");
   });
 
-  it("drops unsigned thinking blocks for Antigravity Claude", async () => {
+  it("converts unsigned thinking blocks to text for Antigravity Claude", async () => {
     const out = await sanitizeSimpleSession({
       modelApi: "google-antigravity",
       modelId: "anthropic/claude-3.5-sonnet",
@@ -99,8 +99,10 @@ describe("sanitizeSessionHistory (google thinking)", () => {
       content: [{ type: "thinking", thinking: "reasoning" }],
     });
 
-    const assistant = out.find((msg) => (msg as { role?: string }).role === "assistant");
-    expect(assistant).toBeUndefined();
+    const assistant = out.find((msg) => (msg as { role?: string }).role === "assistant") as {
+      content?: Array<{ type?: string; text?: string }>;
+    };
+    expect(assistant.content).toEqual([{ type: "text", text: "reasoning" }]);
   });
 
   it("maps base64 signatures to thinkingSignature for Antigravity Claude", async () => {

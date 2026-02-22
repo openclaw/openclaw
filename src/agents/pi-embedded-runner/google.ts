@@ -25,6 +25,7 @@ import {
 import type { TranscriptPolicy } from "../transcript-policy.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { log } from "./logger.js";
+import { dropThinkingBlocks } from "./thinking.js";
 import { describeUnknownError } from "./utils.js";
 
 const GOOGLE_TURN_ORDERING_CUSTOM_TYPE = "google-turn-ordering-bootstrap";
@@ -50,6 +51,7 @@ const GOOGLE_SCHEMA_UNSUPPORTED_KEYWORDS = new Set([
   "minProperties",
   "maxProperties",
 ]);
+
 const ANTIGRAVITY_SIGNATURE_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 const INTER_SESSION_PREFIX_BASE = "[Inter-session message]";
 
@@ -101,6 +103,12 @@ export function sanitizeAntigravityThinkingBlocks(messages: AgentMessage[]): Age
       const candidate =
         rec.thinkingSignature ?? rec.signature ?? rec.thought_signature ?? rec.thoughtSignature;
       if (!isValidAntigravitySignature(candidate)) {
+        // Preserve reasoning content as plain text when signatures are invalid/missing.
+        // Antigravity Claude rejects unsigned thinking blocks, but dropping them loses context.
+        const thinkingText = (block as { thinking?: unknown }).thinking;
+        if (typeof thinkingText === "string" && thinkingText.trim()) {
+          nextContent.push({ type: "text", text: thinkingText } as AssistantContentBlock);
+        }
         contentChanged = true;
         continue;
       }
@@ -247,11 +255,11 @@ export function sanitizeToolsForGoogle<
   tools: AgentTool<TSchemaType, TResult>[];
   provider: string;
 }): AgentTool<TSchemaType, TResult>[] {
-  // google-antigravity serves Anthropic models (e.g. claude-opus-4-6-thinking),
-  // NOT Gemini. Applying Gemini schema cleaning strips JSON Schema keywords
-  // (minimum, maximum, format, etc.) that Anthropic's API requires for
-  // draft 2020-12 compliance. Only clean for actual Gemini providers.
-  if (params.provider !== "google-gemini-cli") {
+  // Cloud Code Assist uses the OpenAPI 3.03 `parameters` field for both Gemini
+  // AND Claude models.  This field does not support JSON Schema keywords such as
+  // patternProperties, additionalProperties, $ref, etc.  We must clean schemas
+  // for every provider that routes through this path.
+  if (params.provider !== "google-gemini-cli" && params.provider !== "google-antigravity") {
     return params.tools;
   }
   return params.tools.map((tool) => {
@@ -444,9 +452,12 @@ export async function sanitizeSessionHistory(params: {
       ...resolveImageSanitizationLimits(params.config),
     },
   );
-  const sanitizedThinking = policy.normalizeAntigravityThinkingBlocks
-    ? sanitizeAntigravityThinkingBlocks(sanitizedImages)
+  const droppedThinking = policy.dropThinkingBlocks
+    ? dropThinkingBlocks(sanitizedImages)
     : sanitizedImages;
+  const sanitizedThinking = policy.sanitizeThinkingSignatures
+    ? sanitizeAntigravityThinkingBlocks(droppedThinking)
+    : droppedThinking;
   const sanitizedToolCalls = sanitizeToolCallInputs(sanitizedThinking);
   const repairedTools = policy.repairToolUseResultPairing
     ? sanitizeToolUseResultPairing(sanitizedToolCalls)
