@@ -48,7 +48,17 @@ function shouldShowToolErrorWarning(params: {
   lastToolError: LastToolError;
   hasUserFacingReply: boolean;
   suppressToolErrors: boolean;
+  suppressToolErrorWarnings?: boolean;
+  verboseLevel?: VerboseLevel;
 }): boolean {
+  if (params.suppressToolErrorWarnings) {
+    return false;
+  }
+  const normalizedToolName = params.lastToolError.toolName.trim().toLowerCase();
+  const verboseEnabled = params.verboseLevel === "on" || params.verboseLevel === "full";
+  if ((normalizedToolName === "exec" || normalizedToolName === "bash") && !verboseEnabled) {
+    return false;
+  }
   const isMutatingToolError =
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {
@@ -68,9 +78,11 @@ export function buildEmbeddedRunPayloads(params: {
   config?: OpenClawConfig;
   sessionKey: string;
   provider?: string;
+  model?: string;
   verboseLevel?: VerboseLevel;
   reasoningLevel?: ReasoningLevel;
   toolResultFormat?: ToolResultFormat;
+  suppressToolErrorWarnings?: boolean;
   inlineToolResultsAllowed: boolean;
 }): Array<{
   text?: string;
@@ -99,6 +111,7 @@ export function buildEmbeddedRunPayloads(params: {
         cfg: params.config,
         sessionKey: params.sessionKey,
         provider: params.provider,
+        model: params.model,
       })
     : undefined;
   const rawErrorMessage = lastAssistantErrored
@@ -247,6 +260,8 @@ export function buildEmbeddedRunPayloads(params: {
       lastToolError: params.lastToolError,
       hasUserFacingReply: hasUserFacingAssistantReply,
       suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
+      suppressToolErrorWarnings: params.suppressToolErrorWarnings,
+      verboseLevel: params.verboseLevel,
     });
 
     // Always surface mutating tool failures so we do not silently confirm actions that did not happen.
@@ -279,7 +294,7 @@ export function buildEmbeddedRunPayloads(params: {
   }
 
   const hasAudioAsVoiceTag = replyItems.some((item) => item.audioAsVoice);
-  return replyItems
+  const payloads = replyItems
     .map((item) => ({
       text: item.text?.trim() ? item.text.trim() : undefined,
       mediaUrls: item.media?.length ? item.media : undefined,
@@ -299,4 +314,13 @@ export function buildEmbeddedRunPayloads(params: {
       }
       return true;
     });
+  if (
+    payloads.length === 0 &&
+    params.toolMetas.length > 0 &&
+    !params.lastToolError &&
+    !lastAssistantErrored
+  ) {
+    return [{ text: "✅ Done." }];
+  }
+  return payloads;
 }

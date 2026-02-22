@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
-import type { WizardPrompter } from "./prompts.js";
+import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
+import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 
 const mocks = vi.hoisted(() => ({
   randomToken: vi.fn(),
@@ -24,17 +25,14 @@ describe("configureGatewayForOnboarding", () => {
   function createPrompter(params: { selectQueue: string[]; textQueue: Array<string | undefined> }) {
     const selectQueue = [...params.selectQueue];
     const textQueue = [...params.textQueue];
+    const select = vi.fn(
+      async (_params: WizardSelectParams<unknown>) => selectQueue.shift() as unknown,
+    ) as unknown as WizardPrompter["select"];
 
-    return {
-      intro: vi.fn(async () => {}),
-      outro: vi.fn(async () => {}),
-      note: vi.fn(async () => {}),
-      select: vi.fn(async () => selectQueue.shift() as string),
-      multiselect: vi.fn(async () => []),
+    return buildWizardPrompter({
+      select,
       text: vi.fn(async () => textQueue.shift() as string),
-      confirm: vi.fn(async () => false),
-      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-    } satisfies WizardPrompter;
+    });
   }
 
   function createRuntime(): RuntimeEnv {

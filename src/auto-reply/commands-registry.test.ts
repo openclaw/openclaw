@@ -62,6 +62,20 @@ describe("commands registry", () => {
     expect(nativeDisabled.find((spec) => spec.name === "debug")).toBeFalsy();
   });
 
+  it("does not enable restricted commands from inherited flags", () => {
+    const inheritedCommands = Object.create({
+      config: true,
+      debug: true,
+      bash: true,
+    }) as Record<string, unknown>;
+    const commands = listChatCommandsForConfig({
+      commands: inheritedCommands as never,
+    });
+    expect(commands.find((spec) => spec.key === "config")).toBeFalsy();
+    expect(commands.find((spec) => spec.key === "debug")).toBeFalsy();
+    expect(commands.find((spec) => spec.key === "bash")).toBeFalsy();
+  });
+
   it("appends skill commands when provided", () => {
     const skillCommands = [
       {
@@ -255,8 +269,12 @@ describe("commands registry args", () => {
   });
 
   it("resolves function-based choices with a default provider/model context", () => {
-    let seen: { provider: string; model: string; commandKey: string; argName: string } | null =
-      null;
+    let seen: {
+      provider?: string;
+      model?: string;
+      commandKey: string;
+      argName: string;
+    } | null = null;
 
     const command: ChatCommandDefinition = {
       key: "think",
@@ -284,10 +302,16 @@ describe("commands registry args", () => {
       { label: "low", value: "low" },
       { label: "high", value: "high" },
     ]);
-    expect(seen?.commandKey).toBe("think");
-    expect(seen?.argName).toBe("level");
-    expect(seen?.provider).toBeTruthy();
-    expect(seen?.model).toBeTruthy();
+    const seenChoice = seen as {
+      provider?: string;
+      model?: string;
+      commandKey: string;
+      argName: string;
+    } | null;
+    expect(seenChoice?.commandKey).toBe("think");
+    expect(seenChoice?.argName).toBe("level");
+    expect(seenChoice?.provider).toBeTruthy();
+    expect(seenChoice?.model).toBeTruthy();
   });
 
   it("does not show menus when args were provided as raw text only", () => {

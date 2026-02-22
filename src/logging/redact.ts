@@ -1,7 +1,7 @@
-import { createRequire } from "node:module";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveNodeRequireFromMeta } from "./node-require.js";
 
-const requireConfig = createRequire(import.meta.url);
+const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
 
 export type RedactSensitiveMode = "off" | "tools";
 
@@ -110,10 +110,12 @@ function redactText(text: string, patterns: RegExp[]): string {
 function resolveConfigRedaction(): RedactOptions {
   let cfg: OpenClawConfig["logging"] | undefined;
   try {
-    const loaded = requireConfig("../config/config.js") as {
-      loadConfig?: () => OpenClawConfig;
-    };
-    cfg = loaded.loadConfig?.().logging;
+    const loaded = requireConfig?.("../config/config.js") as
+      | {
+          loadConfig?: () => OpenClawConfig;
+        }
+      | undefined;
+    cfg = loaded?.loadConfig?.().logging;
   } catch {
     cfg = undefined;
   }

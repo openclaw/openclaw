@@ -26,6 +26,14 @@ const createLocationMessage = (location: {
 });
 
 describe("deliverLineAutoReply", () => {
+  const baseDeliveryParams = {
+    to: "line:user:1",
+    replyToken: "token",
+    replyTokenUsed: false,
+    accountId: "acc",
+    textLimit: 5000,
+  };
+
   function createDeps(overrides?: Partial<LineAutoReplyDeps>) {
     const replyMessageLine = vi.fn(async () => ({}));
     const pushMessageLine = vi.fn(async () => ({}));
@@ -46,9 +54,9 @@ describe("deliverLineAutoReply", () => {
       pushMessageLine,
       pushTextMessageWithQuickReplies,
       createTextMessageWithQuickReplies,
-      createQuickReplyItems,
+      createQuickReplyItems: createQuickReplyItems as LineAutoReplyDeps["createQuickReplyItems"],
       pushMessagesLine,
-      createFlexMessage,
+      createFlexMessage: createFlexMessage as LineAutoReplyDeps["createFlexMessage"],
       createImageMessage,
       createLocationMessage,
       ...overrides,
@@ -72,13 +80,9 @@ describe("deliverLineAutoReply", () => {
     const { deps, replyMessageLine, pushMessagesLine, createQuickReplyItems } = createDeps();
 
     const result = await deliverLineAutoReply({
+      ...baseDeliveryParams,
       payload: { text: "hello", channelData: { line: lineData } },
       lineData,
-      to: "line:user:1",
-      replyToken: "token",
-      replyTokenUsed: false,
-      accountId: "acc",
-      textLimit: 5000,
       deps,
     });
 
@@ -108,13 +112,9 @@ describe("deliverLineAutoReply", () => {
     });
 
     const result = await deliverLineAutoReply({
+      ...baseDeliveryParams,
       payload: { channelData: { line: lineData } },
       lineData,
-      to: "line:user:1",
-      replyToken: "token",
-      replyTokenUsed: false,
-      accountId: "acc",
-      textLimit: 5000,
       deps,
     });
 
@@ -146,17 +146,14 @@ describe("deliverLineAutoReply", () => {
       quickReplies: ["A"],
     };
     const { deps, pushMessagesLine, replyMessageLine } = createDeps({
-      createTextMessageWithQuickReplies,
+      createTextMessageWithQuickReplies:
+        createTextMessageWithQuickReplies as LineAutoReplyDeps["createTextMessageWithQuickReplies"],
     });
 
     await deliverLineAutoReply({
+      ...baseDeliveryParams,
       payload: { text: "hello", channelData: { line: lineData } },
       lineData,
-      to: "line:user:1",
-      replyToken: "token",
-      replyTokenUsed: false,
-      accountId: "acc",
-      textLimit: 5000,
       deps,
     });
 
@@ -179,5 +176,34 @@ describe("deliverLineAutoReply", () => {
     const pushOrder = pushMessagesLine.mock.invocationCallOrder[0];
     const replyOrder = replyMessageLine.mock.invocationCallOrder[0];
     expect(pushOrder).toBeLessThan(replyOrder);
+  });
+
+  it("falls back to push when reply token delivery fails", async () => {
+    const lineData = {
+      flexMessage: { altText: "Card", contents: { type: "bubble" } },
+    };
+    const failingReplyMessageLine = vi.fn(async () => {
+      throw new Error("reply failed");
+    });
+    const { deps, pushMessagesLine } = createDeps({
+      processLineMessage: () => ({ text: "", flexMessages: [] }),
+      chunkMarkdownText: () => [],
+      replyMessageLine: failingReplyMessageLine as LineAutoReplyDeps["replyMessageLine"],
+    });
+
+    const result = await deliverLineAutoReply({
+      ...baseDeliveryParams,
+      payload: { channelData: { line: lineData } },
+      lineData,
+      deps,
+    });
+
+    expect(result.replyTokenUsed).toBe(true);
+    expect(failingReplyMessageLine).toHaveBeenCalledTimes(1);
+    expect(pushMessagesLine).toHaveBeenCalledWith(
+      "line:user:1",
+      [createFlexMessage("Card", { type: "bubble" })],
+      { accountId: "acc" },
+    );
   });
 });

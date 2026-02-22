@@ -17,8 +17,6 @@ const { handleInlineActions } = await import("./get-reply-inline-actions.js");
 
 describe("handleInlineActions", () => {
   it("skips whatsapp replies when config is empty and From !== To", async () => {
-    handleCommandsMock.mockReset();
-
     const typing: TypingController = {
       onReplyStart: async () => {},
       startTypingLoop: async () => {},
@@ -66,12 +64,12 @@ describe("handleInlineActions", () => {
       elevatedEnabled: false,
       elevatedAllowed: false,
       elevatedFailures: [],
-      defaultActivation: () => ({ enabled: true, message: "" }),
+      defaultActivation: () => "always",
       resolvedThinkLevel: undefined,
       resolvedVerboseLevel: undefined,
       resolvedReasoningLevel: "off",
       resolvedElevatedLevel: "off",
-      resolveDefaultThinkingLevel: () => "off",
+      resolveDefaultThinkingLevel: async () => "off",
       provider: "openai",
       model: "gpt-4o-mini",
       contextTokens: 0,

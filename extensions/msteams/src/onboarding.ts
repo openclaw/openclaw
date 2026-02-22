@@ -10,6 +10,7 @@ import {
   addWildcardAllowFrom,
   DEFAULT_ACCOUNT_ID,
   formatDocsLink,
+  mergeAllowFromEntries,
   promptChannelAccessConfig,
 } from "openclaw/plugin-sdk";
 import {
@@ -133,9 +134,7 @@ async function promptMSTeamsAllowFrom(params: {
         );
         continue;
       }
-      const unique = [
-        ...new Set([...existing.map((v) => String(v).trim()).filter(Boolean), ...ids]),
-      ];
+      const unique = mergeAllowFromEntries(existing, ids);
       return setMSTeamsAllowFrom(params.cfg, unique);
     }
 
@@ -149,7 +148,7 @@ async function promptMSTeamsAllowFrom(params: {
     }
 
     const ids = resolved.map((item) => item.id as string);
-    const unique = [...new Set([...existing.map((v) => String(v).trim()).filter(Boolean), ...ids])];
+    const unique = mergeAllowFromEntries(existing, ids);
     return setMSTeamsAllowFrom(params.cfg, unique);
   }
 }

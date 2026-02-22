@@ -1,32 +1,28 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
-import { note, readConfigFileSnapshot } from "./doctor.e2e-harness.js";
+import { beforeAll, describe, expect, it } from "vitest";
+import { createDoctorRuntime, mockDoctorConfigSnapshot, note } from "./doctor.e2e-harness.js";
+
+let doctorCommand: typeof import("./doctor.js").doctorCommand;
 
 describe("doctor command", () => {
+  beforeAll(async () => {
+    ({ doctorCommand } = await import("./doctor.js"));
+  });
+
   it("warns when the state directory is missing", async () => {
-    readConfigFileSnapshot.mockResolvedValue({
-      path: "/tmp/openclaw.json",
-      exists: true,
-      raw: "{}",
-      parsed: {},
-      valid: true,
-      config: {},
-      issues: [],
-      legacyIssues: [],
-    });
+    mockDoctorConfigSnapshot();
 
     const missingDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-missing-state-"));
     fs.rmSync(missingDir, { recursive: true, force: true });
     process.env.OPENCLAW_STATE_DIR = missingDir;
     note.mockClear();
 
-    const { doctorCommand } = await import("./doctor.js");
-    await doctorCommand(
-      { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      { nonInteractive: true, workspaceSuggestions: false },
-    );
+    await doctorCommand(createDoctorRuntime(), {
+      nonInteractive: true,
+      workspaceSuggestions: false,
+    });
 
     const stateNote = note.mock.calls.find((call) => call[1] === "State integrity");
     expect(stateNote).toBeTruthy();
@@ -34,12 +30,7 @@ describe("doctor command", () => {
   }, 30_000);
 
   it("warns about opencode provider overrides", async () => {
-    readConfigFileSnapshot.mockResolvedValue({
-      path: "/tmp/openclaw.json",
-      exists: true,
-      raw: "{}",
-      parsed: {},
-      valid: true,
+    mockDoctorConfigSnapshot({
       config: {
         models: {
           providers: {
@@ -50,15 +41,12 @@ describe("doctor command", () => {
           },
         },
       },
-      issues: [],
-      legacyIssues: [],
     });
 
-    const { doctorCommand } = await import("./doctor.js");
-    await doctorCommand(
-      { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      { nonInteractive: true, workspaceSuggestions: false },
-    );
+    await doctorCommand(createDoctorRuntime(), {
+      nonInteractive: true,
+      workspaceSuggestions: false,
+    });
 
     const warned = note.mock.calls.some(
       ([message, title]) =>
@@ -68,17 +56,10 @@ describe("doctor command", () => {
   });
 
   it("skips gateway auth warning when OPENCLAW_GATEWAY_TOKEN is set", async () => {
-    readConfigFileSnapshot.mockResolvedValue({
-      path: "/tmp/openclaw.json",
-      exists: true,
-      raw: "{}",
-      parsed: {},
-      valid: true,
+    mockDoctorConfigSnapshot({
       config: {
         gateway: { mode: "local" },
       },
-      issues: [],
-      legacyIssues: [],
     });
 
     const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
@@ -86,11 +67,10 @@ describe("doctor command", () => {
     note.mockClear();
 
     try {
-      const { doctorCommand } = await import("./doctor.js");
-      await doctorCommand(
-        { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-        { nonInteractive: true, workspaceSuggestions: false },
-      );
+      await doctorCommand(createDoctorRuntime(), {
+        nonInteractive: true,
+        workspaceSuggestions: false,
+      });
     } finally {
       if (prevToken === undefined) {
         delete process.env.OPENCLAW_GATEWAY_TOKEN;

@@ -1,6 +1,8 @@
+import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import {
   createStubSessionHarness,
+  emitAssistantTextDelta,
   emitMessageStartAndEndForAssistantText,
   expectSingleAgentEventText,
 } from "./pi-embedded-subscribe.e2e-harness.js";
@@ -22,30 +24,16 @@ describe("subscribeEmbeddedPiSession", () => {
     });
 
     emit({ type: "message_start", message: { role: "assistant" } });
-    emit({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: "<final>Hi there</final>",
-      },
-    });
+    emitAssistantTextDelta({ emit, delta: "<final>Hi there</final>" });
 
     expect(onPartialReply).toHaveBeenCalled();
     const firstPayload = onPartialReply.mock.calls[0][0];
     expect(firstPayload.text).toBe("Hi there");
 
-    onPartialReply.mockReset();
+    onPartialReply.mockClear();
 
     emit({ type: "message_start", message: { role: "assistant" } });
-    emit({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: "</final>Oops no start",
-      },
-    });
+    emitAssistantTextDelta({ emit, delta: "</final>Oops no start" });
 
     expect(onPartialReply).not.toHaveBeenCalled();
   });
@@ -74,14 +62,7 @@ describe("subscribeEmbeddedPiSession", () => {
       onPartialReply,
     });
 
-    emit({
-      type: "message_update",
-      message: { role: "assistant" },
-      assistantMessageEvent: {
-        type: "text_delta",
-        delta: "Hello world",
-      },
-    });
+    emitAssistantTextDelta({ emit, delta: "Hello world" });
 
     const payload = onPartialReply.mock.calls[0][0];
     expect(payload.text).toBe("Hello world");

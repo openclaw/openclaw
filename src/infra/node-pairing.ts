@@ -4,6 +4,7 @@ import {
   pruneExpiredPending,
   readJsonFile,
   resolvePairingPaths,
+  upsertPendingPairingRequest,
   writeJsonAtomic,
 } from "./pairing-files.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
@@ -123,33 +124,30 @@ export async function requestNodePairing(
       throw new Error("nodeId required");
     }
 
-    const existing = Object.values(state.pendingById).find((p) => p.nodeId === nodeId);
-    if (existing) {
-      return { status: "pending", request: existing, created: false };
-    }
-
-    const isRepair = Boolean(state.pairedByNodeId[nodeId]);
-    const request: NodePairingPendingRequest = {
-      requestId: randomUUID(),
-      nodeId,
-      displayName: req.displayName,
-      platform: req.platform,
-      version: req.version,
-      coreVersion: req.coreVersion,
-      uiVersion: req.uiVersion,
-      deviceFamily: req.deviceFamily,
-      modelIdentifier: req.modelIdentifier,
-      caps: req.caps,
-      commands: req.commands,
-      permissions: req.permissions,
-      remoteIp: req.remoteIp,
-      silent: req.silent,
-      isRepair,
-      ts: Date.now(),
-    };
-    state.pendingById[request.requestId] = request;
-    await persistState(state, baseDir);
-    return { status: "pending", request, created: true };
+    return await upsertPendingPairingRequest({
+      pendingById: state.pendingById,
+      isExisting: (pending) => pending.nodeId === nodeId,
+      isRepair: Boolean(state.pairedByNodeId[nodeId]),
+      createRequest: (isRepair) => ({
+        requestId: randomUUID(),
+        nodeId,
+        displayName: req.displayName,
+        platform: req.platform,
+        version: req.version,
+        coreVersion: req.coreVersion,
+        uiVersion: req.uiVersion,
+        deviceFamily: req.deviceFamily,
+        modelIdentifier: req.modelIdentifier,
+        caps: req.caps,
+        commands: req.commands,
+        permissions: req.permissions,
+        remoteIp: req.remoteIp,
+        silent: req.silent,
+        isRepair,
+        ts: Date.now(),
+      }),
+      persist: async () => await persistState(state, baseDir),
+    });
   });
 }
 

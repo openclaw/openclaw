@@ -18,7 +18,12 @@ export function resolveDiscordSystemLocation(params: {
 
 export function formatDiscordReactionEmoji(emoji: { id?: string | null; name?: string | null }) {
   if (emoji.id && emoji.name) {
-    return `${emoji.name}:${emoji.id}`;
+    // Custom guild emoji in Discord-renderable form.
+    return `<:${emoji.name}:${emoji.id}>`;
+  }
+  if (emoji.id) {
+    // Keep id visible even when name is missing (instead of opaque "emoji").
+    return `emoji:${emoji.id}`;
   }
   return emoji.name ?? "emoji";
 }

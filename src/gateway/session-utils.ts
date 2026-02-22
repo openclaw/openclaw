@@ -10,6 +10,7 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
+  parseModelRef,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
 } from "../agents/model-selection.js";
@@ -32,6 +33,14 @@ import {
   parseAgentSessionKey,
 } from "../routing/session-key.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import {
+  AVATAR_MAX_BYTES,
+  isAvatarDataUrl,
+  isAvatarHttpUrl,
+  isPathWithinRoot,
+  isWorkspaceRelativeAvatarPath,
+  resolveAvatarMime,
+} from "../shared/avatar-policy.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.js";
 import { readSessionTitleFieldsFromTranscript } from "./session-utils.fs.js";
 
@@ -57,41 +66,17 @@ export type {
 } from "./session-utils.types.js";
 
 const DERIVED_TITLE_MAX_LEN = 60;
-const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
 
-const AVATAR_DATA_RE = /^data:/i;
-const AVATAR_HTTP_RE = /^https?:\/\//i;
-const AVATAR_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
-const WINDOWS_ABS_RE = /^[a-zA-Z]:[\\/]/;
-
-const AVATAR_MIME_BY_EXT: Record<string, string> = {
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".webp": "image/webp",
-  ".gif": "image/gif",
-  ".svg": "image/svg+xml",
-  ".bmp": "image/bmp",
-  ".tif": "image/tiff",
-  ".tiff": "image/tiff",
-};
-
-function resolveAvatarMime(filePath: string): string {
-  const ext = path.extname(filePath).toLowerCase();
-  return AVATAR_MIME_BY_EXT[ext] ?? "application/octet-stream";
+function tryResolveExistingPath(value: string): string | null {
+  try {
+    return fs.realpathSync(value);
+  } catch {
+    return null;
+  }
 }
 
-function isWorkspaceRelativePath(value: string): boolean {
-  if (!value) {
-    return false;
-  }
-  if (value.startsWith("~")) {
-    return false;
-  }
-  if (AVATAR_SCHEME_RE.test(value) && !WINDOWS_ABS_RE.test(value)) {
-    return false;
-  }
-  return true;
+function areSameFileIdentity(preOpen: fs.Stats, opened: fs.Stats): boolean {
+  return preOpen.dev === opened.dev && preOpen.ino === opened.ino;
 }
 
 function resolveIdentityAvatarUrl(
@@ -106,29 +91,49 @@ function resolveIdentityAvatarUrl(
   if (!trimmed) {
     return undefined;
   }
-  if (AVATAR_DATA_RE.test(trimmed) || AVATAR_HTTP_RE.test(trimmed)) {
+  if (isAvatarDataUrl(trimmed) || isAvatarHttpUrl(trimmed)) {
     return trimmed;
   }
-  if (!isWorkspaceRelativePath(trimmed)) {
+  if (!isWorkspaceRelativeAvatarPath(trimmed)) {
     return undefined;
   }
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-  const workspaceRoot = path.resolve(workspaceDir);
-  const resolved = path.resolve(workspaceRoot, trimmed);
-  const relative = path.relative(workspaceRoot, resolved);
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+  const workspaceRoot = tryResolveExistingPath(workspaceDir) ?? path.resolve(workspaceDir);
+  const resolvedCandidate = path.resolve(workspaceRoot, trimmed);
+  if (!isPathWithinRoot(workspaceRoot, resolvedCandidate)) {
     return undefined;
   }
+  let fd: number | null = null;
   try {
-    const stat = fs.statSync(resolved);
-    if (!stat.isFile() || stat.size > AVATAR_MAX_BYTES) {
+    const resolvedReal = fs.realpathSync(resolvedCandidate);
+    if (!isPathWithinRoot(workspaceRoot, resolvedReal)) {
       return undefined;
     }
-    const buffer = fs.readFileSync(resolved);
-    const mime = resolveAvatarMime(resolved);
+    const preOpenStat = fs.lstatSync(resolvedReal);
+    if (!preOpenStat.isFile() || preOpenStat.size > AVATAR_MAX_BYTES) {
+      return undefined;
+    }
+    const openFlags =
+      fs.constants.O_RDONLY |
+      (typeof fs.constants.O_NOFOLLOW === "number" ? fs.constants.O_NOFOLLOW : 0);
+    fd = fs.openSync(resolvedReal, openFlags);
+    const openedStat = fs.fstatSync(fd);
+    if (
+      !openedStat.isFile() ||
+      openedStat.size > AVATAR_MAX_BYTES ||
+      !areSameFileIdentity(preOpenStat, openedStat)
+    ) {
+      return undefined;
+    }
+    const buffer = fs.readFileSync(fd);
+    const mime = resolveAvatarMime(resolvedCandidate);
     return `data:${mime};base64,${buffer.toString("base64")}`;
   } catch {
     return undefined;
+  } finally {
+    if (fd !== null) {
+      fs.closeSync(fd);
+    }
   }
 }
 
@@ -643,7 +648,9 @@ export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults
 
 export function resolveSessionModelRef(
   cfg: OpenClawConfig,
-  entry?: SessionEntry,
+  entry?:
+    | SessionEntry
+    | Pick<SessionEntry, "model" | "modelProvider" | "modelOverride" | "providerOverride">,
   agentId?: string,
 ): { provider: string; model: string } {
   const resolved = agentId
@@ -653,12 +660,41 @@ export function resolveSessionModelRef(
         defaultProvider: DEFAULT_PROVIDER,
         defaultModel: DEFAULT_MODEL,
       });
+
+  // Prefer the last runtime model recorded on the session entry.
+  // This is the actual model used by the latest run and must win over defaults.
   let provider = resolved.provider;
   let model = resolved.model;
+  const runtimeModel = entry?.model?.trim();
+  const runtimeProvider = entry?.modelProvider?.trim();
+  if (runtimeModel) {
+    const parsedRuntime = parseModelRef(
+      runtimeModel,
+      runtimeProvider || provider || DEFAULT_PROVIDER,
+    );
+    if (parsedRuntime) {
+      provider = parsedRuntime.provider;
+      model = parsedRuntime.model;
+    } else {
+      provider = runtimeProvider || provider;
+      model = runtimeModel;
+    }
+    return { provider, model };
+  }
+
+  // Fall back to explicit per-session override (set at spawn/model-patch time),
+  // then finally to configured defaults.
   const storedModelOverride = entry?.modelOverride?.trim();
   if (storedModelOverride) {
-    provider = entry?.providerOverride?.trim() || provider;
-    model = storedModelOverride;
+    const overrideProvider = entry?.providerOverride?.trim() || provider || DEFAULT_PROVIDER;
+    const parsedOverride = parseModelRef(storedModelOverride, overrideProvider);
+    if (parsedOverride) {
+      provider = parsedOverride.provider;
+      model = parsedOverride.model;
+    } else {
+      provider = overrideProvider;
+      model = storedModelOverride;
+    }
   }
   return { provider, model };
 }

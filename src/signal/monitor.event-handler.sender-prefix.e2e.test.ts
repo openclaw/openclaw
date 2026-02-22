@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SignalReactionMessage } from "./monitor/event-handler.types.js";
 
 const dispatchMock = vi.fn();
 const readAllowFromMock = vi.fn();
@@ -16,11 +17,11 @@ vi.mock("../pairing/pairing-store.js", () => ({
 
 describe("signal event handler sender prefix", () => {
   beforeEach(() => {
-    dispatchMock.mockReset().mockImplementation(async ({ dispatcher, ctx }) => {
+    dispatchMock.mockClear().mockImplementation(async ({ dispatcher, ctx }) => {
       dispatcher.sendFinalReply({ text: "ok" });
       return { queuedFinal: true, counts: { tool: 0, block: 0, final: 1 }, ctx };
     });
-    readAllowFromMock.mockReset().mockResolvedValue([]);
+    readAllowFromMock.mockClear().mockResolvedValue([]);
   });
 
   it("prefixes group bodies with sender label", async () => {
@@ -64,7 +65,7 @@ describe("signal event handler sender prefix", () => {
       fetchAttachment: async () => null,
       deliverReplies: async () => undefined,
       resolveSignalReactionTargets: () => [],
-      isSignalReactionMessage: () => false,
+      isSignalReactionMessage: (_reaction): _reaction is SignalReactionMessage => false,
       shouldEmitSignalReactionNotification: () => false,
       buildSignalReactionSystemEventText: () => "",
     });

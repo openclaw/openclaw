@@ -3,7 +3,11 @@ import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { resolveAllowedModelRef, resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import {
+  resolveAllowedModelRef,
+  resolveDefaultModelForAgent,
+  resolveSubagentConfiguredModelSelection,
+} from "../agents/model-selection.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import {
   formatThinkingLevels,
@@ -70,6 +74,9 @@ export async function applySessionsPatchToStore(params: {
   const parsedAgent = parseAgentSessionKey(storeKey);
   const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
   const resolvedDefault = resolveDefaultModelForAgent({ cfg, agentId: sessionAgentId });
+  const subagentModelHint = isSubagentSessionKey(storeKey)
+    ? resolveSubagentConfiguredModelSelection({ cfg, agentId: sessionAgentId })
+    : undefined;
 
   const existing = store[storeKey];
   const next: SessionEntry = existing
@@ -298,7 +305,7 @@ export async function applySessionsPatchToStore(params: {
         catalog,
         raw: trimmed,
         defaultProvider: resolvedDefault.provider,
-        defaultModel: resolvedDefault.model,
+        defaultModel: subagentModelHint ?? resolvedDefault.model,
       });
       if ("error" in resolved) {
         return invalid(resolved.error);

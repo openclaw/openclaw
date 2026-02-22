@@ -132,6 +132,18 @@ describe("browser chrome profile decoration", () => {
 });
 
 describe("browser chrome helpers", () => {
+  function mockExistsSync(match: (pathValue: string) => boolean) {
+    return vi.spyOn(fs, "existsSync").mockImplementation((p) => match(String(p)));
+  }
+
+  function makeProc(overrides?: Partial<{ killed: boolean; exitCode: number | null }>) {
+    return {
+      killed: overrides?.killed ?? false,
+      exitCode: overrides?.exitCode ?? null,
+      kill: vi.fn(),
+    };
+  }
+
   afterEach(() => {
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
@@ -139,11 +151,9 @@ describe("browser chrome helpers", () => {
   });
 
   it("picks the first existing Chrome candidate on macOS", () => {
-    const exists = vi
-      .spyOn(fs, "existsSync")
-      .mockImplementation((p) =>
-        String(p).includes("Google Chrome.app/Contents/MacOS/Google Chrome"),
-      );
+    const exists = mockExistsSync((pathValue) =>
+      pathValue.includes("Google Chrome.app/Contents/MacOS/Google Chrome"),
+    );
     const exe = findChromeExecutableMac();
     expect(exe?.kind).toBe("chrome");
     expect(exe?.path).toMatch(/Google Chrome\.app/);
@@ -158,8 +168,7 @@ describe("browser chrome helpers", () => {
 
   it("picks the first existing Chrome candidate on Windows", () => {
     vi.stubEnv("LOCALAPPDATA", "C:\\Users\\Test\\AppData\\Local");
-    const exists = vi.spyOn(fs, "existsSync").mockImplementation((p) => {
-      const pathStr = String(p);
+    const exists = mockExistsSync((pathStr) => {
       return (
         pathStr.includes("Google\\Chrome\\Application\\chrome.exe") ||
         pathStr.includes("BraveSoftware\\Brave-Browser\\Application\\brave.exe") ||
@@ -174,7 +183,7 @@ describe("browser chrome helpers", () => {
 
   it("finds Chrome in Program Files on Windows", () => {
     const marker = path.win32.join("Program Files", "Google", "Chrome");
-    const exists = vi.spyOn(fs, "existsSync").mockImplementation((p) => String(p).includes(marker));
+    const exists = mockExistsSync((pathValue) => pathValue.includes(marker));
     const exe = findChromeExecutableWindows();
     expect(exe?.kind).toBe("chrome");
     expect(exe?.path).toMatch(/chrome\.exe$/);
@@ -198,7 +207,7 @@ describe("browser chrome helpers", () => {
       "Application",
       "chrome.exe",
     );
-    const exists = vi.spyOn(fs, "existsSync").mockImplementation((p) => String(p).includes(marker));
+    const exists = mockExistsSync((pathValue) => pathValue.includes(marker));
     const exe = resolveBrowserExecutableForPlatform(
       {} as Parameters<typeof resolveBrowserExecutableForPlatform>[0],
       "win32",
@@ -232,7 +241,7 @@ describe("browser chrome helpers", () => {
   });
 
   it("stopOpenClawChrome no-ops when process is already killed", async () => {
-    const proc = { killed: true, exitCode: null, kill: vi.fn() };
+    const proc = makeProc({ killed: true });
     await stopOpenClawChrome(
       {
         proc,
@@ -245,7 +254,7 @@ describe("browser chrome helpers", () => {
 
   it("stopOpenClawChrome sends SIGTERM and returns once CDP is down", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
-    const proc = { killed: false, exitCode: null, kill: vi.fn() };
+    const proc = makeProc();
     await stopOpenClawChrome(
       {
         proc,
@@ -254,5 +263,25 @@ describe("browser chrome helpers", () => {
       10,
     );
     expect(proc.kill).toHaveBeenCalledWith("SIGTERM");
+  });
+
+  it("stopOpenClawChrome escalates to SIGKILL when CDP stays reachable", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ webSocketDebuggerUrl: "ws://127.0.0.1/devtools" }),
+      } as unknown as Response),
+    );
+    const proc = makeProc();
+    await stopOpenClawChrome(
+      {
+        proc,
+        cdpPort: 12345,
+      } as unknown as Parameters<typeof stopOpenClawChrome>[0],
+      1,
+    );
+    expect(proc.kill).toHaveBeenNthCalledWith(1, "SIGTERM");
+    expect(proc.kill).toHaveBeenNthCalledWith(2, "SIGKILL");
   });
 });

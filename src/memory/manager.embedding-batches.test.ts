@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
+import { useFastShortTimeouts } from "../../test/helpers/fast-short-timeouts.js";
 import { installEmbeddingManagerFixture } from "./embedding-manager.test-harness.js";
 
 const fx = installEmbeddingManagerFixture({
@@ -43,7 +44,10 @@ describe("memory embedding batches", () => {
     });
 
     const status = managerLarge.status();
-    const totalTexts = embedBatch.mock.calls.reduce((sum, call) => sum + (call[0]?.length ?? 0), 0);
+    const totalTexts = embedBatch.mock.calls.reduce(
+      (sum: number, call: unknown[]) => sum + ((call[0] as string[] | undefined)?.length ?? 0),
+      0,
+    );
     expect(totalTexts).toBe(status.chunks);
     expect(embedBatch.mock.calls.length).toBeGreaterThan(1);
     expect(updates.length).toBeGreaterThan(0);
@@ -85,22 +89,11 @@ describe("memory embedding batches", () => {
       return texts.map(() => [0, 1, 0]);
     });
 
-    const realSetTimeout = setTimeout;
-    const setTimeoutSpy = vi.spyOn(global, "setTimeout").mockImplementation(((
-      handler: TimerHandler,
-      timeout?: number,
-      ...args: unknown[]
-    ) => {
-      const delay = typeof timeout === "number" ? timeout : 0;
-      if (delay > 0 && delay <= 2000) {
-        return realSetTimeout(handler, 0, ...args);
-      }
-      return realSetTimeout(handler, delay, ...args);
-    }) as typeof setTimeout);
+    const restoreFastTimeouts = useFastShortTimeouts();
     try {
       await managerSmall.sync({ reason: "test" });
     } finally {
-      setTimeoutSpy.mockRestore();
+      restoreFastTimeouts();
     }
 
     expect(calls).toBe(3);
@@ -112,7 +105,7 @@ describe("memory embedding batches", () => {
     await fs.writeFile(path.join(memoryDir, "2026-01-07.md"), "\n\n\n");
     await managerSmall.sync({ reason: "test" });
 
-    const inputs = embedBatch.mock.calls.flatMap((call) => call[0] ?? []);
+    const inputs = embedBatch.mock.calls.flatMap((call: unknown[]) => (call[0] as string[]) ?? []);
     expect(inputs).not.toContain("");
   });
 });

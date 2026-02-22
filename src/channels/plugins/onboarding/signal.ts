@@ -13,7 +13,7 @@ import {
 } from "../../../signal/accounts.js";
 import { formatDocsLink } from "../../../terminal/links.js";
 import { normalizeE164 } from "../../../utils.js";
-import { addWildcardAllowFrom, promptAccountId } from "./helpers.js";
+import { addWildcardAllowFrom, mergeAllowFromEntries, promptAccountId } from "./helpers.js";
 
 const channel = "signal" as const;
 const MIN_E164_DIGITS = 5;
@@ -153,21 +153,22 @@ async function promptSignalAllowFrom(params: {
     },
   });
   const parts = parseSignalAllowFromInput(String(entry));
-  const normalized = parts
-    .map((part) => {
-      if (part === "*") {
-        return "*";
-      }
-      if (part.toLowerCase().startsWith("uuid:")) {
-        return `uuid:${part.slice(5).trim()}`;
-      }
-      if (isUuidLike(part)) {
-        return `uuid:${part}`;
-      }
-      return normalizeE164(part);
-    })
-    .filter(Boolean);
-  const unique = [...new Set(normalized)];
+  const normalized = parts.map((part) => {
+    if (part === "*") {
+      return "*";
+    }
+    if (part.toLowerCase().startsWith("uuid:")) {
+      return `uuid:${part.slice(5).trim()}`;
+    }
+    if (isUuidLike(part)) {
+      return `uuid:${part}`;
+    }
+    return normalizeE164(part);
+  });
+  const unique = mergeAllowFromEntries(
+    undefined,
+    normalized.filter((part): part is string => typeof part === "string" && part.trim().length > 0),
+  );
   return setSignalAllowFrom(params.cfg, accountId, unique);
 }
 

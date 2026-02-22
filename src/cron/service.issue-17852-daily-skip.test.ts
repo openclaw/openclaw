@@ -25,16 +25,39 @@ describe("issue #17852 - daily cron jobs should not skip days", () => {
       running: false,
       timer: null,
       storeLoadedAtMs: nowMs,
+      storeFileMtimeMs: null,
+      op: Promise.resolve(),
+      warnedDisabled: false,
       deps: {
         storePath: "/mock/path",
         cronEnabled: true,
         nowMs: () => nowMs,
+        enqueueSystemEvent: () => {},
+        requestHeartbeatNow: () => {},
+        runIsolatedAgentJob: async () => ({ status: "ok" }),
         log: {
           debug: () => {},
           info: () => {},
           warn: () => {},
           error: () => {},
         } as never,
+      },
+    };
+  }
+
+  function createDailyThreeAmJob(threeAM: number): CronJob {
+    return {
+      id: "daily-job",
+      name: "daily 3am",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 3 * * *", tz: "UTC" },
+      payload: { kind: "systemEvent", text: "daily task" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      createdAtMs: threeAM - DAY_MS,
+      updatedAtMs: threeAM - DAY_MS,
+      state: {
+        nextRunAtMs: threeAM,
       },
     };
   }
@@ -46,19 +69,7 @@ describe("issue #17852 - daily cron jobs should not skip days", () => {
     const threeAM = Date.parse("2026-02-16T03:00:00.000Z");
     const now = threeAM + 1_000; // 3:00:01
 
-    const job: CronJob = {
-      id: "daily-job",
-      name: "daily 3am",
-      enabled: true,
-      schedule: { kind: "cron", expr: "0 3 * * *", tz: "UTC" },
-      payload: { kind: "systemEvent", text: "daily task" },
-      sessionTarget: "main",
-      createdAtMs: threeAM - DAY_MS,
-      updatedAtMs: threeAM - DAY_MS,
-      state: {
-        nextRunAtMs: threeAM, // Past-due by 1 second
-      },
-    };
+    const job = createDailyThreeAmJob(threeAM);
 
     const state = createMockState([job], now);
     recomputeNextRunsForMaintenance(state);
@@ -75,19 +86,7 @@ describe("issue #17852 - daily cron jobs should not skip days", () => {
     const threeAM = Date.parse("2026-02-16T03:00:00.000Z");
     const now = threeAM + 1_000; // 3:00:01
 
-    const job: CronJob = {
-      id: "daily-job",
-      name: "daily 3am",
-      enabled: true,
-      schedule: { kind: "cron", expr: "0 3 * * *", tz: "UTC" },
-      payload: { kind: "systemEvent", text: "daily task" },
-      sessionTarget: "main",
-      createdAtMs: threeAM - DAY_MS,
-      updatedAtMs: threeAM - DAY_MS,
-      state: {
-        nextRunAtMs: threeAM, // Past-due by 1 second
-      },
-    };
+    const job = createDailyThreeAmJob(threeAM);
 
     const state = createMockState([job], now);
     recomputeNextRuns(state);

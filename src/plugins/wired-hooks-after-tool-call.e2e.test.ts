@@ -1,7 +1,7 @@
 /**
  * Test: after_tool_call hook wiring (pi-embedded-subscribe.handlers.tools.ts)
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hookMocks = vi.hoisted(() => ({
   runner: {
@@ -41,8 +41,10 @@ function createToolHandlerCtx(params: {
       lastToolError: undefined,
       pendingMessagingTexts: new Map<string, string>(),
       pendingMessagingTargets: new Map<string, unknown>(),
+      pendingMessagingMediaUrls: new Map<string, string[]>(),
       messagingToolSentTexts: [] as string[],
       messagingToolSentTextsNormalized: [] as string[],
+      messagingToolSentMediaUrls: [] as string[],
       messagingToolSentTargets: [] as unknown[],
       blockBuffer: "",
     },
@@ -56,21 +58,26 @@ function createToolHandlerCtx(params: {
   };
 }
 
+let handleToolExecutionStart: typeof import("../agents/pi-embedded-subscribe.handlers.tools.js").handleToolExecutionStart;
+let handleToolExecutionEnd: typeof import("../agents/pi-embedded-subscribe.handlers.tools.js").handleToolExecutionEnd;
+
 describe("after_tool_call hook wiring", () => {
+  beforeAll(async () => {
+    ({ handleToolExecutionStart, handleToolExecutionEnd } =
+      await import("../agents/pi-embedded-subscribe.handlers.tools.js"));
+  });
+
   beforeEach(() => {
-    hookMocks.runner.hasHooks.mockReset();
+    hookMocks.runner.hasHooks.mockClear();
     hookMocks.runner.hasHooks.mockReturnValue(false);
-    hookMocks.runner.runBeforeToolCall.mockReset();
+    hookMocks.runner.runBeforeToolCall.mockClear();
     hookMocks.runner.runBeforeToolCall.mockResolvedValue(undefined);
-    hookMocks.runner.runAfterToolCall.mockReset();
+    hookMocks.runner.runAfterToolCall.mockClear();
     hookMocks.runner.runAfterToolCall.mockResolvedValue(undefined);
   });
 
   it("calls runAfterToolCall in handleToolExecutionEnd when hook is registered", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
-
-    const { handleToolExecutionEnd, handleToolExecutionStart } =
-      await import("../agents/pi-embedded-subscribe.handlers.tools.js");
 
     const ctx = createToolHandlerCtx({
       runId: "test-run-1",
@@ -102,7 +109,17 @@ describe("after_tool_call hook wiring", () => {
     expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
     expect(hookMocks.runner.runBeforeToolCall).not.toHaveBeenCalled();
 
-    const [event, context] = hookMocks.runner.runAfterToolCall.mock.calls[0];
+    const firstCall = (hookMocks.runner.runAfterToolCall as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(firstCall).toBeDefined();
+    const event = firstCall?.[0] as
+      | { toolName?: string; params?: unknown; error?: unknown; durationMs?: unknown }
+      | undefined;
+    const context = firstCall?.[1] as { toolName?: string } | undefined;
+    expect(event).toBeDefined();
+    expect(context).toBeDefined();
+    if (!event || !context) {
+      throw new Error("missing hook call payload");
+    }
     expect(event.toolName).toBe("read");
     expect(event.params).toEqual({ path: "/tmp/file.txt" });
     expect(event.error).toBeUndefined();
@@ -112,9 +129,6 @@ describe("after_tool_call hook wiring", () => {
 
   it("includes error in after_tool_call event on tool failure", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
-
-    const { handleToolExecutionEnd, handleToolExecutionStart } =
-      await import("../agents/pi-embedded-subscribe.handlers.tools.js");
 
     const ctx = createToolHandlerCtx({ runId: "test-run-2" });
 
@@ -141,15 +155,18 @@ describe("after_tool_call hook wiring", () => {
 
     expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
 
-    const [event] = hookMocks.runner.runAfterToolCall.mock.calls[0];
+    const firstCall = (hookMocks.runner.runAfterToolCall as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(firstCall).toBeDefined();
+    const event = firstCall?.[0] as { error?: unknown } | undefined;
+    expect(event).toBeDefined();
+    if (!event) {
+      throw new Error("missing hook call payload");
+    }
     expect(event.error).toBeDefined();
   });
 
   it("does not call runAfterToolCall when no hooks registered", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(false);
-
-    const { handleToolExecutionEnd } =
-      await import("../agents/pi-embedded-subscribe.handlers.tools.js");
 
     const ctx = createToolHandlerCtx({ runId: "r" });
 

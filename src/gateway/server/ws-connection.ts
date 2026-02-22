@@ -7,14 +7,15 @@ import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-me
 import type { GatewayWsClient } from "./ws-types.js";
 import { resolveCanvasHostUrl } from "../../infra/canvas-host-url.js";
 import { removeRemoteNodeInfo } from "../../infra/skills-remote.js";
-import { listSystemPresence, upsertPresence } from "../../infra/system-presence.js";
+import { upsertPresence } from "../../infra/system-presence.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import { isWebchatClient } from "../../utils/message-channel.js";
 import { isLoopbackAddress } from "../net.js";
 import { getHandshakeTimeoutMs } from "../server-constants.js";
 import { formatError } from "../server-utils.js";
 import { logWs } from "../ws-log.js";
-import { getHealthVersion, getPresenceVersion, incrementPresenceVersion } from "./health-state.js";
+import { getHealthVersion, incrementPresenceVersion } from "./health-state.js";
+import { broadcastPresenceSnapshot } from "./presence-events.js";
 import { attachGatewayWsMessageHandler } from "./ws-connection/message-handler.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -227,18 +228,7 @@ export function attachGatewayWsConnectionHandler(params: {
       }
       if (client?.presenceKey) {
         upsertPresence(client.presenceKey, { reason: "disconnect" });
-        incrementPresenceVersion();
-        broadcast(
-          "presence",
-          { presence: listSystemPresence() },
-          {
-            dropIfSlow: true,
-            stateVersion: {
-              presence: getPresenceVersion(),
-              health: getHealthVersion(),
-            },
-          },
-        );
+        broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
       }
       if (client?.connect?.role === "node") {
         const context = buildRequestContext();

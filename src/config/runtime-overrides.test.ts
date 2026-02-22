@@ -48,4 +48,32 @@ describe("runtime overrides", () => {
       expect(Object.keys(getConfigOverrides()).length).toBe(0);
     }
   });
+
+  it("blocks __proto__ keys inside override object values", () => {
+    const cfg = { commands: {} } as OpenClawConfig;
+    setConfigOverride("commands", JSON.parse('{"__proto__":{"bash":true}}'));
+
+    const next = applyConfigOverrides(cfg);
+    expect(next.commands?.bash).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(next.commands ?? {}, "bash")).toBe(false);
+  });
+
+  it("blocks constructor/prototype keys inside override object values", () => {
+    const cfg = { commands: {} } as OpenClawConfig;
+    setConfigOverride("commands", JSON.parse('{"constructor":{"prototype":{"bash":true}}}'));
+
+    const next = applyConfigOverrides(cfg);
+    expect(next.commands?.bash).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(next.commands ?? {}, "bash")).toBe(false);
+  });
+
+  it("sanitizes blocked object keys when writing overrides", () => {
+    setConfigOverride("commands", JSON.parse('{"__proto__":{"bash":true},"debug":true}'));
+
+    expect(getConfigOverrides()).toEqual({
+      commands: {
+        debug: true,
+      },
+    });
+  });
 });

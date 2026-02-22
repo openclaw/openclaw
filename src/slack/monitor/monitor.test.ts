@@ -94,8 +94,24 @@ const baseParams = () => ({
   textLimit: 4000,
   ackReactionScope: "group-mentions",
   mediaMaxBytes: 1,
+  threadHistoryScope: "thread" as const,
+  threadInheritParent: false,
   removeAckAfterReply: false,
 });
+
+type ThreadStarterClient = Parameters<typeof resolveSlackThreadStarter>[0]["client"];
+
+function createThreadStarterRepliesClient(
+  response: { messages?: Array<{ text?: string; user?: string; ts?: string }> } = {
+    messages: [{ text: "root message", user: "U1", ts: "1000.1" }],
+  },
+): { replies: ReturnType<typeof vi.fn>; client: ThreadStarterClient } {
+  const replies = vi.fn(async () => response);
+  const client = {
+    conversations: { replies },
+  } as unknown as ThreadStarterClient;
+  return { replies, client };
+}
 
 describe("normalizeSlackChannelType", () => {
   it("infers channel types from ids when missing", () => {
@@ -183,12 +199,7 @@ describe("resolveSlackThreadStarter cache", () => {
   });
 
   it("returns cached thread starter without refetching within ttl", async () => {
-    const replies = vi.fn(async () => ({
-      messages: [{ text: "root message", user: "U1", ts: "1000.1" }],
-    }));
-    const client = {
-      conversations: { replies },
-    } as unknown as Parameters<typeof resolveSlackThreadStarter>[0]["client"];
+    const { replies, client } = createThreadStarterRepliesClient();
 
     const first = await resolveSlackThreadStarter({
       channelId: "C1",
@@ -209,12 +220,7 @@ describe("resolveSlackThreadStarter cache", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
 
-    const replies = vi.fn(async () => ({
-      messages: [{ text: "root message", user: "U1", ts: "1000.1" }],
-    }));
-    const client = {
-      conversations: { replies },
-    } as unknown as Parameters<typeof resolveSlackThreadStarter>[0]["client"];
+    const { replies, client } = createThreadStarterRepliesClient();
 
     await resolveSlackThreadStarter({
       channelId: "C1",
@@ -232,13 +238,29 @@ describe("resolveSlackThreadStarter cache", () => {
     expect(replies).toHaveBeenCalledTimes(2);
   });
 
+  it("does not cache empty starter text", async () => {
+    const { replies, client } = createThreadStarterRepliesClient({
+      messages: [{ text: "   ", user: "U1", ts: "1000.1" }],
+    });
+
+    const first = await resolveSlackThreadStarter({
+      channelId: "C1",
+      threadTs: "1000.1",
+      client,
+    });
+    const second = await resolveSlackThreadStarter({
+      channelId: "C1",
+      threadTs: "1000.1",
+      client,
+    });
+
+    expect(first).toBeNull();
+    expect(second).toBeNull();
+    expect(replies).toHaveBeenCalledTimes(2);
+  });
+
   it("evicts oldest entries once cache exceeds bounded size", async () => {
-    const replies = vi.fn(async () => ({
-      messages: [{ text: "root message", user: "U1", ts: "1000.1" }],
-    }));
-    const client = {
-      conversations: { replies },
-    } as unknown as Parameters<typeof resolveSlackThreadStarter>[0]["client"];
+    const { replies, client } = createThreadStarterRepliesClient();
 
     // Cache cap is 2000; add enough distinct keys to force eviction of earliest keys.
     for (let i = 0; i <= 2000; i += 1) {

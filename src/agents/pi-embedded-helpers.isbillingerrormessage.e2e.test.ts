@@ -10,6 +10,7 @@ import {
   isFailoverErrorMessage,
   isImageDimensionErrorMessage,
   isLikelyContextOverflowError,
+  isTimeoutErrorMessage,
   isTransientHttpError,
   parseImageDimensionError,
   parseImageSizeError,
@@ -34,10 +35,6 @@ describe("isAuthErrorMessage", () => {
       expect(isAuthErrorMessage(sample)).toBe(true);
     }
   });
-  it("ignores unrelated errors", () => {
-    expect(isAuthErrorMessage("rate limit exceeded")).toBe(false);
-    expect(isAuthErrorMessage("billing issue detected")).toBe(false);
-  });
 });
 
 describe("isBillingErrorMessage", () => {
@@ -52,11 +49,6 @@ describe("isBillingErrorMessage", () => {
     for (const sample of samples) {
       expect(isBillingErrorMessage(sample)).toBe(true);
     }
-  });
-  it("ignores unrelated errors", () => {
-    expect(isBillingErrorMessage("rate limit exceeded")).toBe(false);
-    expect(isBillingErrorMessage("invalid api key")).toBe(false);
-    expect(isBillingErrorMessage("context length exceeded")).toBe(false);
   });
   it("does not false-positive on issue IDs or text containing 402", () => {
     const falsePositives = [
@@ -108,14 +100,6 @@ describe("isCloudCodeAssistFormatError", () => {
     for (const sample of samples) {
       expect(isCloudCodeAssistFormatError(sample)).toBe(true);
     }
-  });
-  it("ignores unrelated errors", () => {
-    expect(isCloudCodeAssistFormatError("rate limit exceeded")).toBe(false);
-    expect(
-      isCloudCodeAssistFormatError(
-        '400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.84.content.1.image.source.base64.data: At least one of the image dimensions exceed max allowed size for many-image requests: 2000 pixels"}}',
-      ),
-    ).toBe(false);
   });
 });
 
@@ -180,19 +164,10 @@ describe("isContextOverflowError", () => {
     }
   });
 
-  it("matches Anthropic 'Request size exceeds model context window' error", () => {
-    // Anthropic returns this error format when the prompt exceeds the context window.
-    // Without this fix, auto-compaction is NOT triggered because neither
-    // isContextOverflowError nor pi-ai's isContextOverflow recognizes this pattern.
-    // The user sees: "LLM request rejected: Request size exceeds model context window"
-    // instead of automatic compaction + retry.
-    const anthropicRawError =
-      '{"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}';
-    expect(isContextOverflowError(anthropicRawError)).toBe(true);
-  });
-
   it("matches 'exceeds model context window' in various formats", () => {
     const samples = [
+      // Anthropic returns this JSON payload when prompt exceeds model context window.
+      '{"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}',
       "Request size exceeds model context window",
       "request size exceeds model context window",
       '400 {"type":"error","error":{"type":"invalid_request_error","message":"Request size exceeds model context window"}}',
@@ -203,19 +178,52 @@ describe("isContextOverflowError", () => {
     }
   });
 
-  it("ignores unrelated errors", () => {
-    expect(isContextOverflowError("rate limit exceeded")).toBe(false);
-    expect(isContextOverflowError("request size exceeds upload limit")).toBe(false);
-    expect(isContextOverflowError("model not found")).toBe(false);
-    expect(isContextOverflowError("authentication failed")).toBe(false);
-  });
-
   it("ignores normal conversation text mentioning context overflow", () => {
     // These are legitimate conversation snippets, not error messages
     expect(isContextOverflowError("Let's investigate the context overflow bug")).toBe(false);
     expect(isContextOverflowError("The mystery context overflow errors are strange")).toBe(false);
     expect(isContextOverflowError("We're debugging context overflow issues")).toBe(false);
     expect(isContextOverflowError("Something is causing context overflow messages")).toBe(false);
+  });
+});
+
+describe("error classifiers", () => {
+  it("ignore unrelated errors", () => {
+    const checks: Array<{
+      matcher: (message: string) => boolean;
+      samples: string[];
+    }> = [
+      {
+        matcher: isAuthErrorMessage,
+        samples: ["rate limit exceeded", "billing issue detected"],
+      },
+      {
+        matcher: isBillingErrorMessage,
+        samples: ["rate limit exceeded", "invalid api key", "context length exceeded"],
+      },
+      {
+        matcher: isCloudCodeAssistFormatError,
+        samples: [
+          "rate limit exceeded",
+          '400 {"type":"error","error":{"type":"invalid_request_error","message":"messages.84.content.1.image.source.base64.data: At least one of the image dimensions exceed max allowed size for many-image requests: 2000 pixels"}}',
+        ],
+      },
+      {
+        matcher: isContextOverflowError,
+        samples: [
+          "rate limit exceeded",
+          "request size exceeds upload limit",
+          "model not found",
+          "authentication failed",
+        ],
+      },
+    ];
+
+    for (const check of checks) {
+      for (const sample of check.samples) {
+        expect(check.matcher(sample)).toBe(false);
+      }
+    }
   });
 });
 
@@ -286,6 +294,15 @@ describe("isFailoverErrorMessage", () => {
       expect(isFailoverErrorMessage(sample)).toBe(true);
     }
   });
+
+  it("matches abort stop-reason timeout variants", () => {
+    const samples = ["Unhandled stop reason: abort", "stop reason: abort", "reason: abort"];
+    for (const sample of samples) {
+      expect(isTimeoutErrorMessage(sample)).toBe(true);
+      expect(classifyFailoverReason(sample)).toBe("timeout");
+      expect(isFailoverErrorMessage(sample)).toBe(true);
+    }
+  });
 });
 
 describe("parseImageSizeError", () => {
@@ -346,5 +363,25 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("You have hit your ChatGPT usage limit (plus plan)")).toBe(
       "rate_limit",
     );
+  });
+  it("classifies provider high-demand / service-unavailable messages as rate_limit", () => {
+    expect(
+      classifyFailoverReason(
+        "This model is currently experiencing high demand. Please try again later.",
+      ),
+    ).toBe("rate_limit");
+    expect(classifyFailoverReason("LLM error: service unavailable")).toBe("rate_limit");
+    expect(
+      classifyFailoverReason(
+        '{"error":{"code":503,"message":"The model is overloaded. Please try later","status":"UNAVAILABLE"}}',
+      ),
+    ).toBe("rate_limit");
+  });
+  it("classifies JSON api_error internal server failures as timeout", () => {
+    expect(
+      classifyFailoverReason(
+        '{"type":"error","error":{"type":"api_error","message":"Internal server error"}}',
+      ),
+    ).toBe("timeout");
   });
 });

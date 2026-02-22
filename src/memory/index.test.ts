@@ -198,16 +198,19 @@ describe("memory index", () => {
   it("reindexes when the embedding model changes", async () => {
     const indexModelPath = path.join(workspaceDir, `index-model-change-${Date.now()}.sqlite`);
     const base = createCfg({ storePath: indexModelPath });
+    const baseAgents = base.agents!;
+    const baseDefaults = baseAgents.defaults!;
+    const baseMemorySearch = baseDefaults.memorySearch!;
 
     const first = await getMemorySearchManager({
       cfg: {
         ...base,
         agents: {
-          ...base.agents,
+          ...baseAgents,
           defaults: {
-            ...base.agents.defaults,
+            ...baseDefaults,
             memorySearch: {
-              ...base.agents.defaults.memorySearch,
+              ...baseMemorySearch,
               model: "mock-embed-v1",
             },
           },
@@ -219,19 +222,19 @@ describe("memory index", () => {
     if (!first.manager) {
       throw new Error("manager missing");
     }
-    await first.manager.sync({ reason: "test" });
+    await first.manager.sync?.({ reason: "test" });
     const callsAfterFirstSync = embedBatchCalls;
-    await first.manager.close();
+    await first.manager.close?.();
 
     const second = await getMemorySearchManager({
       cfg: {
         ...base,
         agents: {
-          ...base.agents,
+          ...baseAgents,
           defaults: {
-            ...base.agents.defaults,
+            ...baseDefaults,
             memorySearch: {
-              ...base.agents.defaults.memorySearch,
+              ...baseMemorySearch,
               model: "mock-embed-v2",
             },
           },
@@ -243,11 +246,11 @@ describe("memory index", () => {
     if (!second.manager) {
       throw new Error("manager missing");
     }
-    await second.manager.sync({ reason: "test" });
+    await second.manager.sync?.({ reason: "test" });
     expect(embedBatchCalls).toBeGreaterThan(callsAfterFirstSync);
     const status = second.manager.status();
     expect(status.files).toBeGreaterThan(0);
-    await second.manager.close();
+    await second.manager.close?.();
   });
 
   it("reuses cached embeddings on forced reindex", async () => {

@@ -16,6 +16,27 @@ const DEFAULT_MESSAGES_CFG = {
   responsePrefix: undefined,
 } as const;
 
+function createAllowListConfig(allowFrom: string[]) {
+  return {
+    channels: {
+      whatsapp: {
+        allowFrom,
+      },
+    },
+    messages: DEFAULT_MESSAGES_CFG,
+  };
+}
+
+async function openInboxMonitor(onMessage = vi.fn()) {
+  const listener = await monitorWebInbox({
+    verbose: false,
+    accountId: DEFAULT_ACCOUNT_ID,
+    authDir: getAuthDir(),
+    onMessage,
+  });
+  return { onMessage, listener, sock: getSock() };
+}
+
 async function expectOutboundDmSkipsPairing(params: {
   selfChatMode: boolean;
   messageId: string;
@@ -73,27 +94,9 @@ describe("web monitor inbox", () => {
   installWebMonitorInboxUnitTestHooks();
 
   it("allows messages from senders in allowFrom list", async () => {
-    mockLoadConfig.mockReturnValue({
-      channels: {
-        whatsapp: {
-          // Allow +999
-          allowFrom: ["+111", "+999"],
-        },
-      },
-      messages: {
-        messagePrefix: undefined,
-        responsePrefix: undefined,
-      },
-    });
+    mockLoadConfig.mockReturnValue(createAllowListConfig(["+111", "+999"]));
 
-    const onMessage = vi.fn();
-    const listener = await monitorWebInbox({
-      verbose: false,
-      accountId: DEFAULT_ACCOUNT_ID,
-      authDir: getAuthDir(),
-      onMessage,
-    });
-    const sock = getSock();
+    const { onMessage, listener, sock } = await openInboxMonitor();
 
     const upsert = {
       type: "notify",
@@ -124,27 +127,9 @@ describe("web monitor inbox", () => {
   it("allows same-phone messages even if not in allowFrom", async () => {
     // Same-phone mode: when from === selfJid, should always be allowed
     // This allows users to message themselves even with restrictive allowFrom
-    mockLoadConfig.mockReturnValue({
-      channels: {
-        whatsapp: {
-          // Only allow +111, but self is +123
-          allowFrom: ["+111"],
-        },
-      },
-      messages: {
-        messagePrefix: undefined,
-        responsePrefix: undefined,
-      },
-    });
+    mockLoadConfig.mockReturnValue(createAllowListConfig(["+111"]));
 
-    const onMessage = vi.fn();
-    const listener = await monitorWebInbox({
-      verbose: false,
-      accountId: DEFAULT_ACCOUNT_ID,
-      authDir: getAuthDir(),
-      onMessage,
-    });
-    const sock = getSock();
+    const { onMessage, listener, sock } = await openInboxMonitor();
 
     // Message from self (sock.user.id is "123@s.whatsapp.net" in mock)
     const upsert = {
@@ -176,14 +161,7 @@ describe("web monitor inbox", () => {
       .mockResolvedValueOnce({ code: "PAIRCODE", created: true })
       .mockResolvedValueOnce({ code: "PAIRCODE", created: false });
 
-    const onMessage = vi.fn();
-    const listener = await monitorWebInbox({
-      verbose: false,
-      accountId: DEFAULT_ACCOUNT_ID,
-      authDir: getAuthDir(),
-      onMessage,
-    });
-    const sock = getSock();
+    const { onMessage, listener, sock } = await openInboxMonitor();
 
     // Message from someone else should be blocked
     const upsertBlocked = {
@@ -280,14 +258,7 @@ describe("web monitor inbox", () => {
   });
 
   it("handles append messages by marking them read but skipping auto-reply", async () => {
-    const onMessage = vi.fn();
-    const listener = await monitorWebInbox({
-      verbose: false,
-      accountId: DEFAULT_ACCOUNT_ID,
-      authDir: getAuthDir(),
-      onMessage,
-    });
-    const sock = getSock();
+    const { onMessage, listener, sock } = await openInboxMonitor();
 
     const upsert = {
       type: "append",

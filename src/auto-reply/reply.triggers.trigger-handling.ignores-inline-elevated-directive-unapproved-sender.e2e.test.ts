@@ -1,18 +1,20 @@
-import fs from "node:fs/promises";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   getRunEmbeddedPiAgentMock,
   installTriggerHandlingE2eTestHooks,
+  loadGetReplyFromConfig,
   MAIN_SESSION_KEY,
   makeCfg,
   makeWhatsAppElevatedCfg,
+  readSessionStore,
   withTempHome,
 } from "./reply.triggers.trigger-handling.test-harness.js";
 
 let getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
 beforeAll(async () => {
-  ({ getReplyFromConfig } = await import("./reply.js"));
+  getReplyFromConfig = await loadGetReplyFromConfig();
 });
 
 installTriggerHandlingE2eTestHooks();
@@ -56,7 +58,7 @@ describe("trigger handling", () => {
         },
         tools: { elevated: { allowFrom: { discord: ["steipete"] } } },
         session: { store: join(home, "sessions.json") },
-      };
+      } as OpenClawConfig;
 
       const res = await getReplyFromConfig(
         {
@@ -75,8 +77,7 @@ describe("trigger handling", () => {
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
       expect(text).toContain("Elevated mode set to ask");
 
-      const storeRaw = await fs.readFile(cfg.session.store, "utf-8");
-      const store = JSON.parse(storeRaw) as Record<string, { elevatedLevel?: string }>;
+      const store = await readSessionStore(cfg);
       expect(store[MAIN_SESSION_KEY]?.elevatedLevel).toBe("on");
     });
   });
@@ -95,7 +96,7 @@ describe("trigger handling", () => {
           },
         },
         session: { store: join(home, "sessions.json") },
-      };
+      } as OpenClawConfig;
 
       const res = await getReplyFromConfig(
         {

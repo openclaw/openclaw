@@ -22,33 +22,44 @@ function normalizeArgValue(value: unknown): string | undefined {
   return text ? text : undefined;
 }
 
-const formatConfigArgs: CommandArgsFormatter = (values) => {
+function formatActionArgs(
+  values: CommandArgValues,
+  params: {
+    formatKnownAction: (action: string, path: string | undefined) => string | undefined;
+  },
+): string | undefined {
   const action = normalizeArgValue(values.action)?.toLowerCase();
   const path = normalizeArgValue(values.path);
   const value = normalizeArgValue(values.value);
   if (!action) {
     return undefined;
   }
-  const rest = formatSetUnsetArgAction(action, { path, value });
-  if (action === "show" || action === "get") {
-    return path ? `${action} ${path}` : action;
+  const knownAction = params.formatKnownAction(action, path);
+  if (knownAction) {
+    return knownAction;
   }
-  return rest;
-};
+  return formatSetUnsetArgAction(action, { path, value });
+}
 
-const formatDebugArgs: CommandArgsFormatter = (values) => {
-  const action = normalizeArgValue(values.action)?.toLowerCase();
-  const path = normalizeArgValue(values.path);
-  const value = normalizeArgValue(values.value);
-  if (!action) {
-    return undefined;
-  }
-  const rest = formatSetUnsetArgAction(action, { path, value });
-  if (action === "show" || action === "reset") {
-    return action;
-  }
-  return rest;
-};
+const formatConfigArgs: CommandArgsFormatter = (values) =>
+  formatActionArgs(values, {
+    formatKnownAction: (action, path) => {
+      if (action === "show" || action === "get") {
+        return path ? `${action} ${path}` : action;
+      }
+      return undefined;
+    },
+  });
+
+const formatDebugArgs: CommandArgsFormatter = (values) =>
+  formatActionArgs(values, {
+    formatKnownAction: (action) => {
+      if (action === "show" || action === "reset") {
+        return action;
+      }
+      return undefined;
+    },
+  });
 
 function formatSetUnsetArgAction(
   action: string,
@@ -90,8 +101,30 @@ const formatQueueArgs: CommandArgsFormatter = (values) => {
   return parts.length > 0 ? parts.join(" ") : undefined;
 };
 
+const formatExecArgs: CommandArgsFormatter = (values) => {
+  const host = normalizeArgValue(values.host);
+  const security = normalizeArgValue(values.security);
+  const ask = normalizeArgValue(values.ask);
+  const node = normalizeArgValue(values.node);
+  const parts: string[] = [];
+  if (host) {
+    parts.push(`host=${host}`);
+  }
+  if (security) {
+    parts.push(`security=${security}`);
+  }
+  if (ask) {
+    parts.push(`ask=${ask}`);
+  }
+  if (node) {
+    parts.push(`node=${node}`);
+  }
+  return parts.length > 0 ? parts.join(" ") : undefined;
+};
+
 export const COMMAND_ARG_FORMATTERS: Record<string, CommandArgsFormatter> = {
   config: formatConfigArgs,
   debug: formatDebugArgs,
   queue: formatQueueArgs,
+  exec: formatExecArgs,
 };

@@ -1,27 +1,37 @@
 import "./run.overflow-compaction.mocks.shared.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { isCompactionFailureError, isLikelyContextOverflowError } from "../pi-embedded-helpers.js";
 
 vi.mock("../../utils.js", () => ({
   resolveUserPath: vi.fn((p: string) => p),
 }));
 
-vi.mock("../pi-embedded-helpers.js", async () => {
-  return {
-    isCompactionFailureError: (msg?: string) => {
+import type { EmbeddedRunAttemptResult } from "./run/types.js";
+import { log } from "./logger.js";
+import { runEmbeddedPiAgent } from "./run.js";
+import { makeAttemptResult, mockOverflowRetrySuccess } from "./run.overflow-compaction.fixture.js";
+import {
+  mockedCompactDirect,
+  mockedRunEmbeddedAttempt,
+  mockedSessionLikelyHasOversizedToolResults,
+  mockedTruncateOversizedToolResultsInSession,
+  overflowBaseRunParams as baseParams,
+} from "./run.overflow-compaction.shared-test.js";
+
+const mockedIsCompactionFailureError = vi.mocked(isCompactionFailureError);
+const mockedIsLikelyContextOverflowError = vi.mocked(isLikelyContextOverflowError);
+
+describe("overflow compaction in run loop", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockedIsCompactionFailureError.mockImplementation((msg?: string) => {
       if (!msg) {
         return false;
       }
       const lower = msg.toLowerCase();
       return lower.includes("request_too_large") && lower.includes("summarization failed");
-    },
-    isContextOverflowError: (msg?: string) => {
-      if (!msg) {
-        return false;
-      }
-      const lower = msg.toLowerCase();
-      return lower.includes("request_too_large") || lower.includes("request size exceeds");
-    },
-    isLikelyContextOverflowError: (msg?: string) => {
+    });
+    mockedIsLikelyContextOverflowError.mockImplementation((msg?: string) => {
       if (!msg) {
         return false;
       }
@@ -32,51 +42,12 @@ vi.mock("../pi-embedded-helpers.js", async () => {
         lower.includes("context window exceeded") ||
         lower.includes("prompt too large")
       );
-    },
-    isFailoverAssistantError: vi.fn(() => false),
-    isFailoverErrorMessage: vi.fn(() => false),
-    isAuthAssistantError: vi.fn(() => false),
-    isRateLimitAssistantError: vi.fn(() => false),
-    isBillingAssistantError: vi.fn(() => false),
-    classifyFailoverReason: vi.fn(() => null),
-    formatAssistantErrorText: vi.fn(() => ""),
-    parseImageSizeError: vi.fn(() => null),
-    pickFallbackThinkingLevel: vi.fn(() => null),
-    isTimeoutErrorMessage: vi.fn(() => false),
-    parseImageDimensionError: vi.fn(() => null),
-  };
-});
-
-import { compactEmbeddedPiSessionDirect } from "./compact.js";
-import { log } from "./logger.js";
-import { runEmbeddedPiAgent } from "./run.js";
-import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
-import { runEmbeddedAttempt } from "./run/attempt.js";
-import {
-  sessionLikelyHasOversizedToolResults,
-  truncateOversizedToolResultsInSession,
-} from "./tool-result-truncation.js";
-
-const mockedRunEmbeddedAttempt = vi.mocked(runEmbeddedAttempt);
-const mockedCompactDirect = vi.mocked(compactEmbeddedPiSessionDirect);
-const mockedSessionLikelyHasOversizedToolResults = vi.mocked(sessionLikelyHasOversizedToolResults);
-const mockedTruncateOversizedToolResultsInSession = vi.mocked(
-  truncateOversizedToolResultsInSession,
-);
-
-const baseParams = {
-  sessionId: "test-session",
-  sessionKey: "test-key",
-  sessionFile: "/tmp/session.json",
-  workspaceDir: "/tmp/workspace",
-  prompt: "hello",
-  timeoutMs: 30000,
-  runId: "run-1",
-};
-
-describe("overflow compaction in run loop", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
+    });
+    mockedCompactDirect.mockResolvedValue({
+      ok: false,
+      compacted: false,
+      reason: "nothing to compact",
+    });
     mockedSessionLikelyHasOversizedToolResults.mockReturnValue(false);
     mockedTruncateOversizedToolResultsInSession.mockResolvedValue({
       truncated: false,
@@ -86,20 +57,9 @@ describe("overflow compaction in run loop", () => {
   });
 
   it("retries after successful compaction on context overflow promptError", async () => {
-    const overflowError = new Error("request_too_large: Request size exceeds model context window");
-
-    mockedRunEmbeddedAttempt
-      .mockResolvedValueOnce(makeAttemptResult({ promptError: overflowError }))
-      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
-
-    mockedCompactDirect.mockResolvedValueOnce({
-      ok: true,
-      compacted: true,
-      result: {
-        summary: "Compacted session",
-        firstKeptEntryId: "entry-5",
-        tokensBefore: 150000,
-      },
+    mockOverflowRetrySuccess({
+      runEmbeddedAttempt: mockedRunEmbeddedAttempt,
+      compactDirect: mockedCompactDirect,
     });
 
     const result = await runEmbeddedPiAgent(baseParams);
@@ -171,7 +131,12 @@ describe("overflow compaction in run loop", () => {
       .mockResolvedValueOnce(
         makeAttemptResult({
           promptError: overflowError,
-          messagesSnapshot: [{ role: "assistant", content: "big tool output" }],
+          messagesSnapshot: [
+            {
+              role: "assistant",
+              content: "big tool output",
+            } as unknown as EmbeddedRunAttemptResult["messagesSnapshot"][number],
+          ],
         }),
       )
       .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
@@ -362,7 +327,7 @@ describe("overflow compaction in run loop", () => {
             cacheWrite: 0,
             total: 2_000,
           },
-        } as EmbeddedRunAttemptResult["lastAssistant"],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
       }),
     );
 

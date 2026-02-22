@@ -62,6 +62,39 @@ describe("buildThreadingToolContext", () => {
     expect(result.currentChannelId).toBe("chat:99");
   });
 
+  it("normalizes signal direct targets for tool context", () => {
+    const sessionCtx = {
+      Provider: "signal",
+      ChatType: "direct",
+      From: "signal:+15550001",
+      To: "signal:+15550002",
+    } as TemplateContext;
+
+    const result = buildThreadingToolContext({
+      sessionCtx,
+      config: cfg,
+      hasRepliedRef: undefined,
+    });
+
+    expect(result.currentChannelId).toBe("+15550001");
+  });
+
+  it("preserves signal group ids for tool context", () => {
+    const sessionCtx = {
+      Provider: "signal",
+      ChatType: "group",
+      To: "signal:group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=",
+    } as TemplateContext;
+
+    const result = buildThreadingToolContext({
+      sessionCtx,
+      config: cfg,
+      hasRepliedRef: undefined,
+    });
+
+    expect(result.currentChannelId).toBe("group:VWATOdKF2hc8zdOS76q9tb0+5BI522e03QLDAq/9yPg=");
+  });
+
   it("uses the sender handle for iMessage direct chats", () => {
     const sessionCtx = {
       Provider: "imessage",

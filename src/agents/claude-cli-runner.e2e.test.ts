@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { sleep } from "../utils.js";
 import { runClaudeCliAgent } from "./claude-cli-runner.js";
 
 const mocks = vi.hoisted(() => ({
@@ -17,8 +16,8 @@ vi.mock("../process/supervisor/index.js", () => ({
 }));
 
 function createDeferred<T>() {
-  let resolve: (value: T) => void;
-  let reject: (error: unknown) => void;
+  let resolve: (value: T) => void = () => {};
+  let reject: (error: unknown) => void = () => {};
   const promise = new Promise<T>((res, rej) => {
     resolve = res;
     reject = rej;
@@ -65,18 +64,17 @@ function successExit(payload: { message: string; session_id: string }) {
 }
 
 async function waitForCalls(mockFn: { mock: { calls: unknown[][] } }, count: number) {
-  for (let i = 0; i < 50; i += 1) {
-    if (mockFn.mock.calls.length >= count) {
-      return;
-    }
-    await sleep(0);
-  }
-  throw new Error(`Expected ${count} calls, got ${mockFn.mock.calls.length}`);
+  await vi.waitFor(
+    () => {
+      expect(mockFn.mock.calls.length).toBeGreaterThanOrEqual(count);
+    },
+    { timeout: 2_000, interval: 5 },
+  );
 }
 
 describe("runClaudeCliAgent", () => {
   beforeEach(() => {
-    mocks.spawn.mockReset();
+    mocks.spawn.mockClear();
   });
 
   it("starts a new session with --session-id when none is provided", async () => {

@@ -1,29 +1,116 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import type { ExecAllowlistEntry } from "./exec-approvals.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
+import { expandHomePrefix } from "./home-dir.js";
 
-export const DEFAULT_SAFE_BINS = ["jq", "grep", "cut", "sort", "uniq", "head", "tail", "tr", "wc"];
-
-function expandHome(value: string): string {
-  if (!value) {
-    return value;
-  }
-  if (value === "~") {
-    return os.homedir();
-  }
-  if (value.startsWith("~/")) {
-    return path.join(os.homedir(), value.slice(2));
-  }
-  return value;
-}
+export const DEFAULT_SAFE_BINS = ["jq", "cut", "uniq", "head", "tail", "tr", "wc"];
 
 export type CommandResolution = {
   rawExecutable: string;
   resolvedPath?: string;
   executableName: string;
 };
+
+const ENV_OPTIONS_WITH_VALUE = new Set([
+  "-u",
+  "--unset",
+  "-c",
+  "--chdir",
+  "-s",
+  "--split-string",
+  "--default-signal",
+  "--ignore-signal",
+  "--block-signal",
+]);
+const ENV_FLAG_OPTIONS = new Set(["-i", "--ignore-environment", "-0", "--null"]);
+
+function basenameLower(token: string): string {
+  const win = path.win32.basename(token);
+  const posix = path.posix.basename(token);
+  const base = win.length < posix.length ? win : posix;
+  return base.trim().toLowerCase();
+}
+
+function isEnvAssignment(token: string): boolean {
+  return /^[A-Za-z_][A-Za-z0-9_]*=.*/.test(token);
+}
+
+function unwrapEnvInvocation(argv: string[]): string[] | null {
+  let idx = 1;
+  let expectsOptionValue = false;
+  while (idx < argv.length) {
+    const token = argv[idx]?.trim() ?? "";
+    if (!token) {
+      idx += 1;
+      continue;
+    }
+    if (expectsOptionValue) {
+      expectsOptionValue = false;
+      idx += 1;
+      continue;
+    }
+    if (token === "--" || token === "-") {
+      idx += 1;
+      break;
+    }
+    if (isEnvAssignment(token)) {
+      idx += 1;
+      continue;
+    }
+    if (token.startsWith("-") && token !== "-") {
+      const lower = token.toLowerCase();
+      const [flag] = lower.split("=", 2);
+      if (ENV_FLAG_OPTIONS.has(flag)) {
+        idx += 1;
+        continue;
+      }
+      if (ENV_OPTIONS_WITH_VALUE.has(flag)) {
+        if (!lower.includes("=")) {
+          expectsOptionValue = true;
+        }
+        idx += 1;
+        continue;
+      }
+      if (
+        lower.startsWith("-u") ||
+        lower.startsWith("-c") ||
+        lower.startsWith("-s") ||
+        lower.startsWith("--unset=") ||
+        lower.startsWith("--chdir=") ||
+        lower.startsWith("--split-string=") ||
+        lower.startsWith("--default-signal=") ||
+        lower.startsWith("--ignore-signal=") ||
+        lower.startsWith("--block-signal=")
+      ) {
+        idx += 1;
+        continue;
+      }
+      return null;
+    }
+    break;
+  }
+  return idx < argv.length ? argv.slice(idx) : null;
+}
+
+function unwrapDispatchWrappersForResolution(argv: string[]): string[] {
+  let current = argv;
+  for (let depth = 0; depth < 4; depth += 1) {
+    const token0 = current[0]?.trim();
+    if (!token0) {
+      break;
+    }
+    if (basenameLower(token0) !== "env") {
+      break;
+    }
+    const unwrapped = unwrapEnvInvocation(current);
+    if (!unwrapped || unwrapped.length === 0) {
+      break;
+    }
+    current = unwrapped;
+  }
+  return current;
+}
 
 function isExecutableFile(filePath: string): boolean {
   try {
@@ -58,7 +145,7 @@ function parseFirstToken(command: string): string | null {
 }
 
 function resolveExecutablePath(rawExecutable: string, cwd?: string, env?: NodeJS.ProcessEnv) {
-  const expanded = rawExecutable.startsWith("~") ? expandHome(rawExecutable) : rawExecutable;
+  const expanded = rawExecutable.startsWith("~") ? expandHomePrefix(rawExecutable) : rawExecutable;
   if (expanded.includes("/") || expanded.includes("\\")) {
     if (path.isAbsolute(expanded)) {
       return isExecutableFile(expanded) ? expanded : undefined;
@@ -114,7 +201,8 @@ export function resolveCommandResolutionFromArgv(
   cwd?: string,
   env?: NodeJS.ProcessEnv,
 ): CommandResolution | null {
-  const rawExecutable = argv[0]?.trim();
+  const effectiveArgv = unwrapDispatchWrappersForResolution(argv);
+  const rawExecutable = effectiveArgv[0]?.trim();
   if (!rawExecutable) {
     return null;
   }
@@ -172,7 +260,7 @@ function matchesPattern(pattern: string, target: string): boolean {
   if (!trimmed) {
     return false;
   }
-  const expanded = trimmed.startsWith("~") ? expandHome(trimmed) : trimmed;
+  const expanded = trimmed.startsWith("~") ? expandHomePrefix(trimmed) : trimmed;
   const hasWildcard = /[*?]/.test(expanded);
   let normalizedPattern = expanded;
   let normalizedTarget = target;
@@ -200,7 +288,7 @@ export function resolveAllowlistCandidatePath(
   if (!raw) {
     return undefined;
   }
-  const expanded = raw.startsWith("~") ? expandHome(raw) : raw;
+  const expanded = raw.startsWith("~") ? expandHomePrefix(raw) : raw;
   if (!expanded.includes("/") && !expanded.includes("\\")) {
     return undefined;
   }
@@ -241,6 +329,78 @@ export type ExecCommandSegment = {
   resolution: CommandResolution | null;
 };
 
+export type ExecArgvToken =
+  | {
+      kind: "empty";
+      raw: string;
+    }
+  | {
+      kind: "terminator";
+      raw: string;
+    }
+  | {
+      kind: "stdin";
+      raw: string;
+    }
+  | {
+      kind: "positional";
+      raw: string;
+    }
+  | {
+      kind: "option";
+      raw: string;
+      style: "long";
+      flag: string;
+      inlineValue?: string;
+    }
+  | {
+      kind: "option";
+      raw: string;
+      style: "short-cluster";
+      cluster: string;
+      flags: string[];
+    };
+
+/**
+ * Tokenizes a single argv entry into a normalized option/positional model.
+ * Consumers can share this model to keep argv parsing behavior consistent.
+ */
+export function parseExecArgvToken(raw: string): ExecArgvToken {
+  if (!raw) {
+    return { kind: "empty", raw };
+  }
+  if (raw === "--") {
+    return { kind: "terminator", raw };
+  }
+  if (raw === "-") {
+    return { kind: "stdin", raw };
+  }
+  if (!raw.startsWith("-")) {
+    return { kind: "positional", raw };
+  }
+  if (raw.startsWith("--")) {
+    const eqIndex = raw.indexOf("=");
+    if (eqIndex > 0) {
+      return {
+        kind: "option",
+        raw,
+        style: "long",
+        flag: raw.slice(0, eqIndex),
+        inlineValue: raw.slice(eqIndex + 1),
+      };
+    }
+    return { kind: "option", raw, style: "long", flag: raw };
+  }
+  const cluster = raw.slice(1);
+  return {
+    kind: "option",
+    raw,
+    style: "short-cluster",
+    cluster,
+    flags: cluster.split("").map((entry) => `-${entry}`),
+  };
+}
+
 export type ExecCommandAnalysis = {
   ok: boolean;
   reason?: string;
@@ -279,12 +439,13 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
   type HeredocSpec = {
     delimiter: string;
     stripTabs: boolean;
+    quoted: boolean;
   };
 
   const parseHeredocDelimiter = (
     source: string,
     start: number,
-  ): { delimiter: string; end: number } | null => {
+  ): { delimiter: string; end: number; quoted: boolean } | null => {
     let i = start;
     while (i < source.length && (source[i] === " " || source[i] === "\t")) {
       i += 1;
@@ -309,7 +470,7 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
           continue;
         }
         if (ch === quote) {
-          return { delimiter, end: i + 1 };
+          return { delimiter, end: i + 1, quoted: true };
         }
         delimiter += ch;
         i += 1;
@@ -329,7 +490,7 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
     if (!delimiter) {
       return null;
     }
-    return { delimiter, end: i };
+    return { delimiter, end: i, quoted: false };
   };
 
   const segments: string[] = [];
@@ -350,6 +511,30 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
     buf = "";
   };
 
+  const isEscapedInHeredocLine = (line: string, index: number): boolean => {
+    let slashes = 0;
+    for (let i = index - 1; i >= 0 && line[i] === "\\"; i -= 1) {
+      slashes += 1;
+    }
+    return slashes % 2 === 1;
+  };
+
+  const hasUnquotedHeredocExpansionToken = (line: string): boolean => {
+    for (let i = 0; i < line.length; i += 1) {
+      const ch = line[i];
+      if (ch === "`" && !isEscapedInHeredocLine(line, i)) {
+        return true;
+      }
+      if (ch === "$" && !isEscapedInHeredocLine(line, i)) {
+        const next = line[i + 1];
+        if (next === "(" || next === "{") {
+          return true;
+        }
+      }
+    }
+    return false;
+  };
+
   for (let i = 0; i < command.length; i += 1) {
     const ch = command[i];
     const next = command[i + 1];
@@ -361,6 +546,8 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
           const line = current.stripTabs ? heredocLine.replace(/^\t+/, "") : heredocLine;
           if (line === current.delimiter) {
             pendingHeredocs.shift();
+          } else if (!current.quoted && hasUnquotedHeredocExpansionToken(heredocLine)) {
+            return { ok: false, reason: "command substitution in unquoted heredoc", segments: [] };
           }
         }
         heredocLine = "";
@@ -471,7 +658,7 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
 
       const parsed = parseHeredocDelimiter(command, scanIndex);
       if (parsed) {
-        pendingHeredocs.push({ delimiter: parsed.delimiter, stripTabs });
+        pendingHeredocs.push({ delimiter: parsed.delimiter, stripTabs, quoted: parsed.quoted });
         buf += command.slice(scanIndex, parsed.end);
         i = parsed.end - 1;
       }
@@ -492,7 +679,14 @@ function splitShellPipeline(command: string): { ok: boolean; reason?: string; se
     const line = current.stripTabs ? heredocLine.replace(/^\t+/, "") : heredocLine;
     if (line === current.delimiter) {
       pendingHeredocs.shift();
+      if (pendingHeredocs.length === 0) {
+        inHeredocBody = false;
+      }
     }
+  }
+
+  if (pendingHeredocs.length > 0 || inHeredocBody) {
+    return { ok: false, reason: "unterminated heredoc", segments: [] };
   }
 
   if (escaped || inSingle || inDouble) {

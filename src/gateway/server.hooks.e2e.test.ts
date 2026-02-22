@@ -40,7 +40,7 @@ describe("gateway server hooks", () => {
       expect(wakeEvents.some((e) => e.includes("Ping"))).toBe(true);
       drainSystemEvents(resolveMainKey());
 
-      cronIsolatedRun.mockReset();
+      cronIsolatedRun.mockClear();
       cronIsolatedRun.mockResolvedValueOnce({
         status: "ok",
         summary: "done",
@@ -58,7 +58,7 @@ describe("gateway server hooks", () => {
       expect(agentEvents.some((e) => e.includes("Hook Email: done"))).toBe(true);
       drainSystemEvents(resolveMainKey());
 
-      cronIsolatedRun.mockReset();
+      cronIsolatedRun.mockClear();
       cronIsolatedRun.mockResolvedValueOnce({
         status: "ok",
         summary: "done",
@@ -77,13 +77,13 @@ describe("gateway server hooks", () => {
       });
       expect(resAgentModel.status).toBe(202);
       await waitForSystemEvent();
-      const call = cronIsolatedRun.mock.calls[0]?.[0] as {
+      const call = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         job?: { payload?: { model?: string } };
       };
       expect(call?.job?.payload?.model).toBe("openai/gpt-4.1-mini");
       drainSystemEvents(resolveMainKey());
 
-      cronIsolatedRun.mockReset();
+      cronIsolatedRun.mockClear();
       cronIsolatedRun.mockResolvedValueOnce({
         status: "ok",
         summary: "done",
@@ -98,13 +98,13 @@ describe("gateway server hooks", () => {
       });
       expect(resAgentWithId.status).toBe(202);
       await waitForSystemEvent();
-      const routedCall = cronIsolatedRun.mock.calls[0]?.[0] as {
+      const routedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         job?: { agentId?: string };
       };
       expect(routedCall?.job?.agentId).toBe("hooks");
       drainSystemEvents(resolveMainKey());
 
-      cronIsolatedRun.mockReset();
+      cronIsolatedRun.mockClear();
       cronIsolatedRun.mockResolvedValueOnce({
         status: "ok",
         summary: "done",
@@ -119,7 +119,7 @@ describe("gateway server hooks", () => {
       });
       expect(resAgentUnknown.status).toBe(202);
       await waitForSystemEvent();
-      const fallbackCall = cronIsolatedRun.mock.calls[0]?.[0] as {
+      const fallbackCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         job?: { agentId?: string };
       };
       expect(fallbackCall?.job?.agentId).toBe("main");
@@ -237,7 +237,7 @@ describe("gateway server hooks", () => {
       ],
     };
     await withGatewayServer(async ({ port }) => {
-      cronIsolatedRun.mockReset();
+      cronIsolatedRun.mockClear();
       cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "done" });
 
       const defaultRoute = await fetch(`http://127.0.0.1:${port}/hooks/agent`, {
@@ -250,11 +250,13 @@ describe("gateway server hooks", () => {
       });
       expect(defaultRoute.status).toBe(202);
       await waitForSystemEvent();
-      const defaultCall = cronIsolatedRun.mock.calls[0]?.[0] as { sessionKey?: string } | undefined;
+      const defaultCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
+        | { sessionKey?: string }
+        | undefined;
       expect(defaultCall?.sessionKey).toBe("hook:ingress");
       drainSystemEvents(resolveMainKey());
 
-      cronIsolatedRun.mockReset();
+      cronIsolatedRun.mockClear();
       cronIsolatedRun.mockResolvedValue({ status: "ok", summary: "done" });
       const mappedOk = await fetch(`http://127.0.0.1:${port}/hooks/mapped-ok`, {
         method: "POST",
@@ -266,7 +268,9 @@ describe("gateway server hooks", () => {
       });
       expect(mappedOk.status).toBe(202);
       await waitForSystemEvent();
-      const mappedCall = cronIsolatedRun.mock.calls[0]?.[0] as { sessionKey?: string } | undefined;
+      const mappedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as
+        | { sessionKey?: string }
+        | undefined;
       expect(mappedCall?.sessionKey).toBe("hook:mapped:42");
       drainSystemEvents(resolveMainKey());
 
@@ -313,7 +317,7 @@ describe("gateway server hooks", () => {
       list: [{ id: "main", default: true }, { id: "hooks" }],
     };
     await withGatewayServer(async ({ port }) => {
-      cronIsolatedRun.mockReset();
+      cronIsolatedRun.mockClear();
       cronIsolatedRun.mockResolvedValueOnce({
         status: "ok",
         summary: "done",
@@ -328,13 +332,13 @@ describe("gateway server hooks", () => {
       });
       expect(resNoAgent.status).toBe(202);
       await waitForSystemEvent();
-      const noAgentCall = cronIsolatedRun.mock.calls[0]?.[0] as {
+      const noAgentCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         job?: { agentId?: string };
       };
       expect(noAgentCall?.job?.agentId).toBeUndefined();
       drainSystemEvents(resolveMainKey());
 
-      cronIsolatedRun.mockReset();
+      cronIsolatedRun.mockClear();
       cronIsolatedRun.mockResolvedValueOnce({
         status: "ok",
         summary: "done",
@@ -349,7 +353,7 @@ describe("gateway server hooks", () => {
       });
       expect(resAllowed.status).toBe(202);
       await waitForSystemEvent();
-      const allowedCall = cronIsolatedRun.mock.calls[0]?.[0] as {
+      const allowedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         job?: { agentId?: string };
       };
       expect(allowedCall?.job?.agentId).toBe("hooks");

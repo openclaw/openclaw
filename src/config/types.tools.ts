@@ -28,7 +28,22 @@ export type MediaUnderstandingAttachmentsConfig = {
   prefer?: "first" | "last" | "path" | "url";
 };
 
-export type MediaUnderstandingModelConfig = {
+type MediaProviderRequestConfig = {
+  /** Optional provider-specific query params (merged into requests). */
+  providerOptions?: Record<string, Record<string, string | number | boolean>>;
+  /** @deprecated Use providerOptions.deepgram instead. */
+  deepgram?: {
+    detectLanguage?: boolean;
+    punctuate?: boolean;
+    smartFormat?: boolean;
+  };
+  /** Optional base URL override for provider requests. */
+  baseUrl?: string;
+  /** Optional headers merged into provider requests. */
+  headers?: Record<string, string>;
+};
+
+export type MediaUnderstandingModelConfig = MediaProviderRequestConfig & {
   /** provider API id (e.g. openai, google). */
   provider?: string;
   /** Model id for provider-based understanding. */
@@ -51,25 +66,13 @@ export type MediaUnderstandingModelConfig = {
   timeoutSeconds?: number;
   /** Optional language hint for audio transcription. */
   language?: string;
-  /** Optional provider-specific query params (merged into requests). */
-  providerOptions?: Record<string, Record<string, string | number | boolean>>;
-  /** @deprecated Use providerOptions.deepgram instead. */
-  deepgram?: {
-    detectLanguage?: boolean;
-    punctuate?: boolean;
-    smartFormat?: boolean;
-  };
-  /** Optional base URL override for provider requests. */
-  baseUrl?: string;
-  /** Optional headers merged into provider requests. */
-  headers?: Record<string, string>;
   /** Auth profile id to use for this provider. */
   profile?: string;
   /** Preferred profile id if multiple are available. */
   preferredProfile?: string;
 };
 
-export type MediaUnderstandingConfig = {
+export type MediaUnderstandingConfig = MediaProviderRequestConfig & {
   /** Enable media understanding when models are configured. */
   enabled?: boolean;
   /** Optional scope gating for understanding. */
@@ -84,18 +87,6 @@ export type MediaUnderstandingConfig = {
   timeoutSeconds?: number;
   /** Default language hint (audio). */
   language?: string;
-  /** Optional provider-specific query params (merged into requests). */
-  providerOptions?: Record<string, Record<string, string | number | boolean>>;
-  /** @deprecated Use providerOptions.deepgram instead. */
-  deepgram?: {
-    detectLanguage?: boolean;
-    punctuate?: boolean;
-    smartFormat?: boolean;
-  };
-  /** Optional base URL override for provider requests. */
-  baseUrl?: string;
-  /** Optional headers merged into provider requests. */
-  headers?: Record<string, string>;
   /** Attachment selection policy. */
   attachments?: MediaUnderstandingAttachmentsConfig;
   /** Ordered model list (fallbacks in order). */
@@ -137,6 +128,30 @@ export type MediaToolsConfig = {
 };
 
 export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
+
+export type ToolLoopDetectionDetectorConfig = {
+  /** Enable warning/blocking for repeated identical calls to the same tool/params. */
+  genericRepeat?: boolean;
+  /** Enable warning/blocking for known no-progress polling loops. */
+  knownPollNoProgress?: boolean;
+  /** Enable warning/blocking for no-progress ping-pong alternating patterns. */
+  pingPong?: boolean;
+};
+
+export type ToolLoopDetectionConfig = {
+  /** Enable tool-loop protection (default: false). */
+  enabled?: boolean;
+  /** Maximum tool call history entries retained for loop detection (default: 30). */
+  historySize?: number;
+  /** Warning threshold before a warning-only loop classification (default: 10). */
+  warningThreshold?: number;
+  /** Critical threshold for blocking repetitive loops (default: 20). */
+  criticalThreshold?: number;
+  /** Global no-progress breaker threshold (default: 30). */
+  globalCircuitBreakerThreshold?: number;
+  /** Detector toggles. */
+  detectors?: ToolLoopDetectionDetectorConfig;
+};
 
 export type SessionsToolsVisibility = "self" | "tree" | "agent" | "all";
 
@@ -235,6 +250,8 @@ export type AgentToolsConfig = {
   exec?: ExecToolConfig;
   /** Filesystem tool path guards. */
   fs?: FsToolsConfig;
+  /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
+  loopDetection?: ToolLoopDetectionConfig;
   sandbox?: {
     tools?: {
       allow?: string[];
@@ -334,6 +351,20 @@ export type MemorySearchConfig = {
       textWeight?: number;
       /** Multiplier for candidate pool size (default: 4). */
       candidateMultiplier?: number;
+      /** Optional MMR re-ranking for result diversity. */
+      mmr?: {
+        /** Enable MMR re-ranking (default: false). */
+        enabled?: boolean;
+        /** Lambda: 0 = max diversity, 1 = max relevance (default: 0.7). */
+        lambda?: number;
+      };
+      /** Optional temporal decay to boost recency in hybrid scoring. */
+      temporalDecay?: {
+        /** Enable temporal decay (default: false). */
+        enabled?: boolean;
+        /** Half-life in days for exponential decay (default: 30). */
+        halfLifeDays?: number;
+      };
     };
   };
   /** Index cache behavior. */
@@ -481,12 +512,16 @@ export type ToolsConfig = {
   exec?: ExecToolConfig;
   /** Filesystem tool path guards. */
   fs?: FsToolsConfig;
+  /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
+  loopDetection?: ToolLoopDetectionConfig;
   /** Sub-agent tool policy defaults (deny wins). */
   subagents?: {
     /** Default model selection for spawned sub-agents (string or {primary,fallbacks}). */
     model?: string | { primary?: string; fallbacks?: string[] };
     tools?: {
       allow?: string[];
+      /** Additional allowlist entries merged into allow and/or default sub-agent denylist. */
+      alsoAllow?: string[];
       deny?: string[];
     };
   };

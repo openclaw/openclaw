@@ -170,4 +170,63 @@ describe("mattermost websocket monitor", () => {
     expect(patches.some((patch) => patch.connected === true)).toBe(true);
     expect(patches.filter((patch) => patch.connected === false)).toHaveLength(2);
   });
+
+  it("dispatches reaction events to the reaction handler", async () => {
+    const socket = new FakeWebSocket();
+    const onPosted = vi.fn(async () => {});
+    const onReaction = vi.fn(async (payload) => payload);
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "token",
+      runtime: testRuntime(),
+      nextSeq: () => 1,
+      onPosted,
+      onReaction,
+      webSocketFactory: () => socket,
+    });
+
+    const connected = connectOnce();
+    queueMicrotask(() => {
+      socket.emitOpen();
+      socket.emitMessage(
+        Buffer.from(
+          JSON.stringify({
+            event: "reaction_added",
+            data: {
+              reaction: JSON.stringify({
+                user_id: "user-1",
+                post_id: "post-1",
+                emoji_name: "thumbsup",
+              }),
+            },
+          }),
+        ),
+      );
+      socket.emitClose(1000);
+    });
+
+    await connected;
+
+    expect(onReaction).toHaveBeenCalledTimes(1);
+    expect(onPosted).not.toHaveBeenCalled();
+    const payload = onReaction.mock.calls[0]?.[0];
+    expect(payload).toMatchObject({
+      event: "reaction_added",
+      data: {
+        reaction: JSON.stringify({
+          user_id: "user-1",
+          post_id: "post-1",
+          emoji_name: "thumbsup",
+        }),
+      },
+    });
+    expect(payload.data?.reaction).toBe(
+      JSON.stringify({
+        user_id: "user-1",
+        post_id: "post-1",
+        emoji_name: "thumbsup",
+      }),
+    );
+    expect(payload.data?.reaction).toBeDefined();
+  });
 });

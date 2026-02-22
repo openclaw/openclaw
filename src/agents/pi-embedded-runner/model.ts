@@ -14,7 +14,10 @@ import {
   type ModelRegistry,
 } from "../pi-model-discovery.js";
 
-type InlineModelEntry = ModelDefinitionConfig & { provider: string; baseUrl?: string };
+type InlineModelEntry = ModelDefinitionConfig & {
+  provider: string;
+  baseUrl?: string;
+};
 type InlineProviderConfig = {
   baseUrl?: string;
   api?: ModelDefinitionConfig["api"];
@@ -93,10 +96,38 @@ export function resolveModel(
       return { model: fallbackModel, authStorage, modelRegistry };
     }
     return {
-      error: `Unknown model: ${provider}/${modelId}`,
+      error: buildUnknownModelError(provider, modelId),
       authStorage,
       modelRegistry,
     };
   }
   return { model: normalizeModelCompat(model), authStorage, modelRegistry };
+}
+
+/**
+ * Build a more helpful error when the model is not found.
+ *
+ * Local providers (ollama, vllm) need a dummy API key to be registered.
+ * Users often configure `agents.defaults.model.primary: "ollama/…"` but
+ * forget to set `OLLAMA_API_KEY`, resulting in a confusing "Unknown model"
+ * error.  This detects known providers that require opt-in auth and adds
+ * a hint.
+ *
+ * See: https://github.com/openclaw/openclaw/issues/17328
+ */
+const LOCAL_PROVIDER_HINTS: Record<string, string> = {
+  ollama:
+    "Ollama requires authentication to be registered as a provider. " +
+    'Set OLLAMA_API_KEY="ollama-local" (any value works) or run "openclaw configure". ' +
+    "See: https://docs.openclaw.ai/providers/ollama",
+  vllm:
+    "vLLM requires authentication to be registered as a provider. " +
+    'Set VLLM_API_KEY (any value works) or run "openclaw configure". ' +
+    "See: https://docs.openclaw.ai/providers/vllm",
+};
+
+function buildUnknownModelError(provider: string, modelId: string): string {
+  const base = `Unknown model: ${provider}/${modelId}`;
+  const hint = LOCAL_PROVIDER_HINTS[provider.toLowerCase()];
+  return hint ? `${base}. ${hint}` : base;
 }

@@ -26,7 +26,7 @@ function createSandbox(overrides?: Partial<SandboxContext>): SandboxContext {
 
 describe("sandbox fs bridge shell compatibility", () => {
   beforeEach(() => {
-    mockedExecDockerRaw.mockReset();
+    mockedExecDockerRaw.mockClear();
     mockedExecDockerRaw.mockImplementation(async (args) => {
       const script = args[5] ?? "";
       if (script.includes('stat -c "%F|%s|%Y"')) {

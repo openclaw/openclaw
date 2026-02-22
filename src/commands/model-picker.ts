@@ -151,6 +151,14 @@ function addModelSelectOption(params: {
   params.seen.add(key);
 }
 
+function isAnthropicLegacyModel(entry: { provider: string; id: string }): boolean {
+  return (
+    entry.provider === "anthropic" &&
+    typeof entry.id === "string" &&
+    entry.id.toLowerCase().startsWith("claude-3")
+  );
+}
+
 async function promptManualModel(params: {
   prompter: WizardPrompter;
   allowBlank: boolean;
@@ -250,7 +258,18 @@ export async function promptDefaultModel(
   }
 
   if (hasPreferredProvider && preferredProvider) {
-    models = models.filter((entry) => entry.provider === preferredProvider);
+    models = models.filter((entry) => {
+      if (preferredProvider === "volcengine") {
+        return entry.provider === "volcengine" || entry.provider === "volcengine-plan";
+      }
+      if (preferredProvider === "byteplus") {
+        return entry.provider === "byteplus" || entry.provider === "byteplus-plan";
+      }
+      return entry.provider === preferredProvider;
+    });
+    if (preferredProvider === "anthropic") {
+      models = models.filter((entry) => !isAnthropicLegacyModel(entry));
+    }
   }
 
   const agentDir = params.agentDir;
@@ -424,6 +443,7 @@ export async function promptModelAllowlist(params: {
     message: params.message ?? "Models in /model picker (multi-select)",
     options,
     initialValues: initialKeys.length > 0 ? initialKeys : undefined,
+    searchable: true,
   });
   const selected = normalizeModelKeys(selection.map((value) => String(value)));
   if (selected.length > 0) {

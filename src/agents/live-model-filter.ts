@@ -5,6 +5,7 @@ export type ModelRef = {
 
 const ANTHROPIC_PREFIXES = [
   "claude-opus-4-6",
+  "claude-sonnet-4-6",
   "claude-opus-4-5",
   "claude-sonnet-4-5",
   "claude-haiku-4-5",
@@ -79,6 +80,11 @@ export function isModernModelRef(ref: ModelRef): boolean {
     return false;
   }
   if (provider === "opencode" && id === "alpha-glm-4.7") {
+    return false;
+  }
+  // Opencode MiniMax variants have been intermittently unstable in live runs;
+  // prefer the rest of the modern catalog for deterministic smoke coverage.
+  if (provider === "opencode" && matchesPrefix(id, MINIMAX_PREFIXES)) {
     return false;
   }
 

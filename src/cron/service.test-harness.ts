@@ -4,7 +4,9 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import type { CronEvent } from "./service.js";
+import type { CronJob } from "./types.js";
 import { CronService } from "./service.js";
+import { createCronServiceState } from "./service/state.js";
 
 export type NoopLogger = {
   debug: MockFn;
@@ -110,4 +112,27 @@ export function createStartedCronServiceWithFinishedBarrier(params: {
     onEvent: finished.onEvent,
   });
   return { cron, enqueueSystemEvent, requestHeartbeatNow, finished };
+}
+
+export function createRunningCronServiceState(params: {
+  storePath: string;
+  log: ReturnType<typeof createNoopLogger>;
+  nowMs: () => number;
+  jobs: CronJob[];
+}) {
+  const state = createCronServiceState({
+    cronEnabled: true,
+    storePath: params.storePath,
+    log: params.log,
+    nowMs: params.nowMs,
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeatNow: vi.fn(),
+    runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
+  });
+  state.running = true;
+  state.store = {
+    version: 1,
+    jobs: params.jobs,
+  };
+  return state;
 }

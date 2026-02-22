@@ -7,6 +7,19 @@ import { baileys, getLastSocket, resetBaileysMocks, resetLoadConfigMock } from "
 
 const { createWaSocket, formatError, logWebSelfId, waitForWaConnection } =
   await import("./session.js");
+const useMultiFileAuthStateMock = vi.mocked(baileys.useMultiFileAuthState);
+
+async function flushCredsUpdate() {
+  await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+async function emitCredsUpdateAndReadSaveCreds() {
+  const sock = getLastSocket();
+  const saveCreds = (await useMultiFileAuthStateMock.mock.results[0]?.value)?.saveCreds;
+  sock.ev.emit("creds.update", {});
+  await flushCredsUpdate();
+  return saveCreds;
+}
 
 function mockCredsJsonSpies(readContents: string) {
   const credsSuffix = path.join(".openclaw", "credentials", "whatsapp", "default", "creds.json");
@@ -65,10 +78,10 @@ describe("web session", () => {
     expect(passedLogger?.level).toBe("silent");
     expect(typeof passedLogger?.trace).toBe("function");
     const sock = getLastSocket();
-    const saveCreds = (await baileys.useMultiFileAuthState.mock.results[0].value).saveCreds;
+    const saveCreds = (await useMultiFileAuthStateMock.mock.results[0]?.value)?.saveCreds;
     // trigger creds.update listener
     sock.ev.emit("creds.update", {});
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await flushCredsUpdate();
     expect(saveCreds).toHaveBeenCalled();
   });
 
@@ -144,11 +157,7 @@ describe("web session", () => {
     const creds = mockCredsJsonSpies("{");
 
     await createWaSocket(false, false);
-    const sock = getLastSocket();
-    const saveCreds = (await baileys.useMultiFileAuthState.mock.results[0].value).saveCreds;
-
-    sock.ev.emit("creds.update", {});
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    const saveCreds = await emitCredsUpdateAndReadSaveCreds();
 
     expect(creds.copySpy).not.toHaveBeenCalled();
     expect(saveCreds).toHaveBeenCalled();
@@ -170,8 +179,8 @@ describe("web session", () => {
       await gate;
       inFlight -= 1;
     });
-    baileys.useMultiFileAuthState.mockResolvedValueOnce({
-      state: { creds: {}, keys: {} },
+    useMultiFileAuthStateMock.mockResolvedValueOnce({
+      state: { creds: {} as never, keys: {} as never },
       saveCreds,
     });
 
@@ -181,14 +190,14 @@ describe("web session", () => {
     sock.ev.emit("creds.update", {});
     sock.ev.emit("creds.update", {});
 
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await flushCredsUpdate();
     expect(inFlight).toBe(1);
 
-    release?.();
+    (release as (() => void) | null)?.();
 
     // let both queued saves complete
-    await new Promise<void>((resolve) => setImmediate(resolve));
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await flushCredsUpdate();
+    await flushCredsUpdate();
 
     expect(saveCreds).toHaveBeenCalledTimes(2);
     expect(maxInFlight).toBe(1);
@@ -206,11 +215,7 @@ describe("web session", () => {
     );
 
     await createWaSocket(false, false);
-    const sock = getLastSocket();
-    const saveCreds = (await baileys.useMultiFileAuthState.mock.results[0].value).saveCreds;
-
-    sock.ev.emit("creds.update", {});
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    const saveCreds = await emitCredsUpdateAndReadSaveCreds();
 
     expect(creds.copySpy).toHaveBeenCalledTimes(1);
     const args = creds.copySpy.mock.calls[0] ?? [];

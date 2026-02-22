@@ -3,26 +3,14 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildWorkspaceSkillsPrompt } from "./skills.js";
+import { writeSkill } from "./skills.test-helpers.js";
 
-async function writeSkill(params: {
-  dir: string;
-  name: string;
-  description: string;
-  body?: string;
-}) {
-  const { dir, name, description, body } = params;
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(
-    path.join(dir, "SKILL.md"),
-    `---
-name: ${name}
-description: ${description}
----
+const tempDirs: string[] = [];
 
-${body ?? `# ${name}\n`}
-`,
-    "utf-8",
-  );
+async function createTempDir(prefix: string) {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+  tempDirs.push(dir);
+  return dir;
 }
 
 function buildSkillsPrompt(workspaceDir: string, managedDir: string, bundledDir: string): string {
@@ -33,7 +21,7 @@ function buildSkillsPrompt(workspaceDir: string, managedDir: string, bundledDir:
 }
 
 async function createWorkspaceSkillDirs() {
-  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
+  const workspaceDir = await createTempDir("openclaw-");
   return {
     workspaceDir,
     managedDir: path.join(workspaceDir, ".managed"),
@@ -45,12 +33,17 @@ describe("buildWorkspaceSkillsPrompt — .agents/skills/ directories", () => {
   let fakeHome: string;
 
   beforeEach(async () => {
-    fakeHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-home-"));
+    fakeHome = await createTempDir("openclaw-home-");
     vi.spyOn(os, "homedir").mockReturnValue(fakeHome);
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
+    await Promise.all(
+      tempDirs
+        .splice(0, tempDirs.length)
+        .map((dir) => fs.rm(dir, { recursive: true, force: true })),
+    );
   });
 
   it("loads project .agents/skills/ above managed and below workspace", async () => {
