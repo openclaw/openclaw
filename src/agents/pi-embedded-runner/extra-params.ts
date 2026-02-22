@@ -1,6 +1,7 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { SimpleStreamOptions } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
+import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { log } from "./logger.js";
 
@@ -290,19 +291,62 @@ function createAnthropicBetaHeadersWrapper(
 }
 
 /**
- * Create a streamFn wrapper that adds OpenRouter app attribution headers.
- * These headers allow OpenClaw to appear on OpenRouter's leaderboard.
+ * Map OpenClaw's ThinkLevel to OpenRouter's reasoning.effort values.
+ * "off" maps to "none"; all other levels pass through as-is.
  */
-function createOpenRouterHeadersWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+function mapThinkingLevelToOpenRouterReasoningEffort(
+  thinkingLevel: ThinkLevel,
+): "none" | "minimal" | "low" | "medium" | "high" | "xhigh" {
+  if (thinkingLevel === "off") {
+    return "none";
+  }
+  return thinkingLevel;
+}
+
+/**
+ * Create a streamFn wrapper that adds OpenRouter app attribution headers
+ * and injects reasoning.effort based on the configured thinking level.
+ */
+function createOpenRouterWrapper(
+  baseStreamFn: StreamFn | undefined,
+  thinkingLevel?: ThinkLevel,
+): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) =>
-    underlying(model, context, {
+  return (model, context, options) => {
+    const onPayload = options?.onPayload;
+    return underlying(model, context, {
       ...options,
       headers: {
         ...OPENROUTER_APP_HEADERS,
         ...options?.headers,
       },
+      onPayload: (payload) => {
+        if (thinkingLevel && payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          const existingReasoning = payloadObj.reasoning;
+
+          // OpenRouter treats reasoning.effort and reasoning.max_tokens as
+          // alternative controls. If max_tokens is already present, do not
+          // inject effort and do not overwrite caller-supplied reasoning.
+          if (
+            existingReasoning &&
+            typeof existingReasoning === "object" &&
+            !Array.isArray(existingReasoning)
+          ) {
+            const reasoningObj = existingReasoning as Record<string, unknown>;
+            if (!("max_tokens" in reasoningObj) && !("effort" in reasoningObj)) {
+              reasoningObj.effort = mapThinkingLevelToOpenRouterReasoningEffort(thinkingLevel);
+            }
+          } else if (!existingReasoning) {
+            payloadObj.reasoning = {
+              effort: mapThinkingLevelToOpenRouterReasoningEffort(thinkingLevel),
+            };
+          }
+        }
+        onPayload?.(payload);
+      },
     });
+  };
 }
 
 /**
@@ -350,6 +394,7 @@ export function applyExtraParamsToAgent(
   provider: string,
   modelId: string,
   extraParamsOverride?: Record<string, unknown>,
+  thinkingLevel?: ThinkLevel,
 ): void {
   const extraParams = resolveExtraParams({
     cfg,
@@ -380,7 +425,7 @@ export function applyExtraParamsToAgent(
 
   if (provider === "openrouter") {
     log.debug(`applying OpenRouter app attribution headers for ${provider}/${modelId}`);
-    agent.streamFn = createOpenRouterHeadersWrapper(agent.streamFn);
+    agent.streamFn = createOpenRouterWrapper(agent.streamFn, thinkingLevel);
   }
 
   // Enable Z.AI tool_stream for real-time tool call streaming.
