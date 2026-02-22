@@ -486,9 +486,24 @@ export function ensureAuthProfileStore(
 
 export function saveAuthProfileStore(store: AuthProfileStore, agentDir?: string): void {
   const authPath = resolveAuthStorePath(agentDir);
+  const profiles = Object.fromEntries(
+    Object.entries(store.profiles).map(([profileId, credential]) => {
+      if (credential.type === "api_key" && credential.keyRef && credential.key !== undefined) {
+        const sanitized = { ...credential } as Record<string, unknown>;
+        delete sanitized.key;
+        return [profileId, sanitized];
+      }
+      if (credential.type === "token" && credential.tokenRef && credential.token !== undefined) {
+        const sanitized = { ...credential } as Record<string, unknown>;
+        delete sanitized.token;
+        return [profileId, sanitized];
+      }
+      return [profileId, credential];
+    }),
+  ) as AuthProfileStore["profiles"];
   const payload = {
     version: AUTH_STORE_VERSION,
-    profiles: store.profiles,
+    profiles,
     order: store.order ?? undefined,
     lastGood: store.lastGood ?? undefined,
     usageStats: store.usageStats ?? undefined,
