@@ -177,22 +177,7 @@
 
   /* Chat */
   .chat-agent-bar {
-    padding: 4px 8px;
-    gap: 4px;
-  }
-
-  .chat-agent-bar__name {
-    font-size: 11px;
-  }
-
-  .chat-agent-select {
-    font-size: 11px;
-    padding: 2px 16px 2px 4px;
-  }
-
-  .chat-sessions-summary {
-    padding: 2px 4px;
-    font-size: 10px;
+    padding: 2px 6px;
   }
 
   .chat-header {

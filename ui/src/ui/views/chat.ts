@@ -604,10 +604,6 @@ export function renderChat(props: ChatProps) {
   const hasAttachments = (props.attachments?.length ?? 0) > 0;
   const tokens = tokenEstimate(props.draft);
 
-  const hasVoice =
-    typeof (window as unknown as Record<string, unknown>).webkitSpeechRecognition !== "undefined" ||
-    typeof (window as unknown as Record<string, unknown>).SpeechRecognition !== "undefined";
-
   const placeholder = props.connected
     ? hasAttachments
       ? "Add a message or paste more images..."
@@ -930,25 +926,7 @@ export function renderChat(props: ChatProps) {
               ${icons.paperclip}
             </button>
 
-            ${
-              hasVoice
-                ? html`
-                  <button
-                    class="agent-chat__input-btn ${voiceActive ? "agent-chat__input-btn--active" : ""}"
-                    @click=${() => {
-                      if (voiceActive) {
-                        stopVoice(requestUpdate);
-                      } else {
-                        startVoice(props, requestUpdate);
-                      }
-                    }}
-                    title="Voice input"
-                  >
-                    ${voiceActive ? icons.micOff : icons.mic}
-                  </button>
-                `
-                : nothing
-            }
+            ${nothing /* mic hidden for now */}
 
             ${tokens ? html`<span class="agent-chat__token-count">${tokens}</span>` : nothing}
           </div>
@@ -1003,14 +981,6 @@ function renderAgentBar(props: ChatProps) {
     return nothing;
   }
 
-  // Filter sessions for current agent
-  const agentSessions = (props.sessions?.sessions ?? []).filter((s) => {
-    const key = s.key ?? "";
-    return (
-      key.includes(`:${props.currentAgentId}:`) || key.startsWith(`agent:${props.currentAgentId}:`)
-    );
-  });
-
   return html`
     <div class="chat-agent-bar">
       <div class="chat-agent-bar__left">
@@ -1032,31 +1002,6 @@ function renderAgentBar(props: ChatProps) {
             </select>
           `
             : html`<span class="chat-agent-bar__name">${agents[0]?.identity?.name || agents[0]?.name || props.currentAgentId}</span>`
-        }
-        ${
-          agentSessions.length > 0
-            ? html`
-            <details class="chat-sessions-panel">
-              <summary class="chat-sessions-summary">
-                ${icons.fileText}
-                <span>Sessions (${agentSessions.length})</span>
-              </summary>
-              <div class="chat-sessions-list">
-                ${agentSessions.map(
-                  (s) => html`
-                  <button
-                    class="chat-session-item ${s.key === props.sessionKey ? "chat-session-item--active" : ""}"
-                    @click=${() => props.onSessionSelect?.(s.key)}
-                  >
-                    <span class="chat-session-item__name">${s.displayName || s.label || s.key}</span>
-                    <span class="chat-session-item__meta muted">${s.model ?? ""}</span>
-                  </button>
-                `,
-                )}
-              </div>
-            </details>
-          `
-            : nothing
         }
       </div>
       <div class="chat-agent-bar__right">
