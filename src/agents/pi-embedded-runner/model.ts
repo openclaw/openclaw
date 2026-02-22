@@ -58,6 +58,28 @@ export function resolveModel(
   const authStorage = discoverAuthStorage(resolvedAgentDir);
   const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
   const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
+
+  // Check if this is an openai-codex model that needs special handling
+  const normalizedProvider = normalizeProviderId(provider);
+  const trimmedModelId = modelId.trim().toLowerCase();
+  const isCodexModel =
+    normalizedProvider === "openai-codex" &&
+    (trimmedModelId === OPENAI_CODEX_GPT_53_MODEL_ID ||
+      OPENAI_CODEX_TEMPLATE_MODEL_IDS.some((id) => id === trimmedModelId));
+
+  if (model && isCodexModel) {
+    // Apply Codex-specific overrides even when model exists in registry
+    return {
+      model: normalizeModelCompat({
+        ...model,
+        api: "openai-codex-responses",
+        baseUrl: "https://chatgpt.com/backend-api",
+      } as Model<Api>),
+      authStorage,
+      modelRegistry,
+    };
+  }
+
   if (!model) {
     const providers = cfg?.models?.providers ?? {};
     const inlineModels = buildInlineProviderModels(providers);
