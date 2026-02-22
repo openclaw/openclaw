@@ -5,7 +5,11 @@ import {
   validateApiKeyInput,
 } from "./auth-choice.api-key.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
-import { buildTokenProfileId, validateAnthropicSetupToken } from "./auth-token.js";
+import {
+  buildTokenProfileId,
+  normalizeSetupToken,
+  validateAnthropicSetupToken,
+} from "./auth-token.js";
 import { applyAgentDefaultModelPrimary } from "./onboard-auth.config-shared.js";
 import { applyAuthProfileConfig, setAnthropicApiKey } from "./onboard-auth.js";
 
@@ -31,7 +35,7 @@ export async function applyAuthChoiceAnthropic(
       message: "Paste Anthropic setup-token",
       validate: (value) => validateAnthropicSetupToken(String(value ?? "")),
     });
-    const token = String(tokenRaw ?? "").trim();
+    const token = normalizeSetupToken(String(tokenRaw ?? ""));
 
     const profileNameRaw = await params.prompter.text({
       message: "Token name (blank = default)",
