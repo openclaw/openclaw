@@ -119,6 +119,18 @@ export async function createThreadDiscord(
       channelType = undefined;
     }
   }
+  // Reject thread creation in thread/voice/stage channels
+  if (
+    channelType === ChannelType.PublicThread ||
+    channelType === ChannelType.PrivateThread ||
+    channelType === ChannelType.AnnouncementThread ||
+    channelType === ChannelType.GuildVoice ||
+    channelType === ChannelType.GuildStageVoice
+  ) {
+    throw new Error(
+      `Cannot create a thread inside a ${ChannelType[channelType]} channel (${channelId}). Threads can only be created in text, announcement, or forum channels.`,
+    );
+  }
   const isForumLike =
     channelType === ChannelType.GuildForum || channelType === ChannelType.GuildMedia;
   if (isForumLike) {
