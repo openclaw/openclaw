@@ -37,6 +37,7 @@ const log = createSubsystemLogger("memory");
 const SNIPPET_HEADER_RE = /@@\s*-([0-9]+),([0-9]+)/;
 const SEARCH_PENDING_UPDATE_WAIT_MS = 500;
 const MAX_QMD_OUTPUT_CHARS = 200_000;
+const QMD_SQLITE_BUSY_TIMEOUT_MS = 5_000;
 const NUL_MARKER_RE = /(?:\^@|\\0|\\x00|\\u0000|null\s*byte|nul\s*byte)/i;
 const QMD_EMBED_BACKOFF_BASE_MS = 60_000;
 const QMD_EMBED_BACKOFF_MAX_MS = 60 * 60 * 1000;
@@ -1181,8 +1182,8 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     const { DatabaseSync } = requireNodeSqlite();
     this.db = new DatabaseSync(this.indexPath, { readOnly: true });
-    // Keep QMD recall responsive when the updater holds a write lock.
-    this.db.exec("PRAGMA busy_timeout = 1");
+    // Allow brief lock contention while qmd update is writing to avoid SQLITE_BUSY read failures.
+    this.db.exec(`PRAGMA busy_timeout = ${QMD_SQLITE_BUSY_TIMEOUT_MS}`);
     return this.db;
   }
 
