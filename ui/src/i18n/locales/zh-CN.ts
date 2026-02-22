@@ -139,7 +139,7 @@ export const zh_CN: TranslationMap = {
   },
   login: {
     subtitle: "网关仪表盘",
-    passwordPlaceholder: "可选",
+    tokenPlaceholder: "粘贴网关令牌",
   },
   chat: {
     disconnected: "已断开与网关的连接。",

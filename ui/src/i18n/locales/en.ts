@@ -140,7 +140,7 @@ export const en: TranslationMap = {
   },
   login: {
     subtitle: "Gateway Dashboard",
-    passwordPlaceholder: "optional",
+    tokenPlaceholder: "paste gateway token",
   },
   chat: {
     disconnected: "Disconnected from gateway.",

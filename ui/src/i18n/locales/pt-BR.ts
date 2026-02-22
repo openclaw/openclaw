@@ -142,7 +142,7 @@ export const pt_BR: TranslationMap = {
   },
   login: {
     subtitle: "Painel do Gateway",
-    passwordPlaceholder: "opcional",
+    tokenPlaceholder: "cole o token do gateway",
   },
   chat: {
     disconnected: "Desconectado do gateway.",
