@@ -132,9 +132,13 @@ export async function runGatewayLoop(params: {
     request("restart", "SIGUSR1");
   };
 
-  process.on("SIGTERM", onSigterm);
-  process.on("SIGINT", onSigint);
-  process.on("SIGUSR1", onSigusr1);
+  try {
+    process.on("SIGTERM", onSigterm);
+    process.on("SIGINT", onSigint);
+    process.on("SIGUSR1", onSigusr1);
+  } catch (err) {
+    gatewayLog.warn(`signal handler registration failed (run under process wrapper?): ${String(err)}`);
+  }
 
   try {
     const onIteration = createRestartIterationHook(() => {

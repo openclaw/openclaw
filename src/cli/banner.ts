@@ -42,7 +42,14 @@ export function formatCliBannerLine(version: string, options: BannerOptions = {}
   const rich = options.richTty ?? isRich();
   const title = "🦞 OpenClaw";
   const prefix = "🦞 ";
-  const columns = options.columns ?? process.stdout.columns ?? 120;
+  let columns = options.columns;
+  if (columns == null) {
+    try {
+      columns = process.stdout?.columns ?? 120;
+    } catch {
+      columns = 120;
+    }
+  }
   const plainFullLine = `${title} ${version} (${commitLabel}) — ${tagline}`;
   const fitsOnOneLine = visibleWidth(plainFullLine) <= columns;
   if (rich) {
@@ -114,7 +121,11 @@ export function emitCliBanner(version: string, options: BannerOptions = {}) {
     return;
   }
   const argv = options.argv ?? process.argv;
-  if (!process.stdout.isTTY) {
+  try {
+    if (!process.stdout?.isTTY) {
+      return;
+    }
+  } catch {
     return;
   }
   if (hasJsonFlag(argv)) {

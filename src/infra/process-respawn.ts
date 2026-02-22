@@ -16,6 +16,21 @@ const SUPERVISOR_HINT_ENV_VARS = [
   "JOURNAL_STREAM",
 ];
 
+const WRAPPER_COMPAT_ENV_VARS = [
+  "BWS_CLI_PATH",
+  "BWS_SERVER_URL",
+  "DOPPLER_TOKEN",
+  "DOPPLER_PROJECT",
+  "DOPPLER_CONFIG",
+];
+
+function isLikelyProcessWrapper(env: NodeJS.ProcessEnv = process.env): boolean {
+  return WRAPPER_COMPAT_ENV_VARS.some((key) => {
+    const value = env[key];
+    return typeof value === "string" && value.trim().length > 0;
+  });
+}
+
 function isTruthy(value: string | undefined): boolean {
   if (!value) {
     return false;
@@ -43,6 +58,9 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
   }
   if (isLikelySupervisedProcess(process.env)) {
     return { mode: "supervised" };
+  }
+  if (isLikelyProcessWrapper(process.env) || isTruthy(process.env.OPENCLAW_WRAPPER_COMPAT)) {
+    return { mode: "disabled" };
   }
 
   try {
