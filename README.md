@@ -106,6 +106,8 @@ pnpm openclaw onboard --install-daemon
 
 # Dev loop (auto-reload on TS changes)
 pnpm gateway:watch
+
+# Windows (native PowerShell/cmd, no WSL2) uses a compatible fallback automatically.
 ```
 
 Note: `pnpm openclaw ...` runs TypeScript directly (via `tsx`). `pnpm build` produces `dist/` for running via Node / the packaged `openclaw` binary.
@@ -185,21 +187,65 @@ Run `openclaw doctor` to surface risky/misconfigured DM policies.
 
 ## How it works (short)
 
-```
-WhatsApp / Telegram / Slack / Discord / Google Chat / Signal / iMessage / BlueBubbles / Microsoft Teams / Matrix / Zalo / Zalo Personal / WebChat
-               │
-               ▼
-┌───────────────────────────────┐
-│            Gateway            │
-│       (control plane)         │
-│     ws://127.0.0.1:18789      │
-└──────────────┬────────────────┘
-               │
-               ├─ Pi agent (RPC)
-               ├─ CLI (openclaw …)
-               ├─ WebChat UI
-               ├─ macOS app
-               └─ iOS / Android nodes
+```mermaid
+flowchart LR
+  subgraph Inbound["Inbound Surfaces"]
+    WA["WhatsApp"]
+    TG["Telegram"]
+    SL["Slack"]
+    DC["Discord"]
+    GC["Google Chat"]
+    SG["Signal"]
+    IM["iMessage / BlueBubbles"]
+    EX["Extension channels<br/>(Teams / Matrix / Zalo / etc)"]
+  end
+
+  subgraph Gateway["OpenClaw Gateway (Control Plane)"]
+    GW["WS + HTTP Server<br/>127.0.0.1:18789"]
+    AUTH["Auth + Pairing + Scopes"]
+    ROUTE["Routing + Session Keys + Bindings"]
+    CH["Channel Runtime Manager"]
+    AG["Agent Runtime (Pi RPC)"]
+    TOOLS["Tools (browser / canvas / cron / webhooks / skills)"]
+    PLUG["Plugin Registry + Extension Runtime"]
+  end
+
+  subgraph Clients["Operator Clients"]
+    CLI["CLI (openclaw ...)"]
+    WEB["Control UI / WebChat"]
+    MAC["macOS app"]
+  end
+
+  subgraph Nodes["Remote/Local Nodes"]
+    IOS["iOS node"]
+    AND["Android node"]
+    DESK["Desktop node"]
+  end
+
+  subgraph State["State + Persistence"]
+    CFG["Config + Profiles"]
+    SES["Sessions + Queue + Presence"]
+    CRED["Credentials + Pairing Store"]
+  end
+
+  Inbound --> GW
+  CLI <--> GW
+  WEB <--> GW
+  MAC <--> GW
+  IOS <--> GW
+  AND <--> GW
+  DESK <--> GW
+
+  GW --> AUTH
+  GW --> ROUTE
+  GW --> CH
+  GW --> AG
+  GW --> TOOLS
+  GW --> PLUG
+
+  GW --> CFG
+  GW --> SES
+  GW --> CRED
 ```
 
 ## Key subsystems
