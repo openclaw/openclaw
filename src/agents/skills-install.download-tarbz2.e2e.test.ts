@@ -89,9 +89,9 @@ vi.mock("../security/skill-scanner.js", async (importOriginal) => {
 
 describe("installSkill download extraction safety (tar.bz2)", () => {
   beforeEach(() => {
-    mocks.runCommand.mockReset();
-    mocks.scanSummary.mockReset();
-    mocks.fetchGuard.mockReset();
+    mocks.runCommand.mockClear();
+    mocks.scanSummary.mockClear();
+    mocks.fetchGuard.mockClear();
     mocks.scanSummary.mockResolvedValue({
       scannedFiles: 0,
       critical: 0,
