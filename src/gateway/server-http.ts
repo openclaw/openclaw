@@ -186,23 +186,21 @@ function writeUpgradeAuthFailure(
   if (auth.rateLimited) {
     const retryAfterSeconds =
       auth.retryAfterMs && auth.retryAfterMs > 0 ? Math.ceil(auth.retryAfterMs / 1000) : undefined;
-    socket.write(
-      [
-        "HTTP/1.1 429 Too Many Requests",
-        retryAfterSeconds ? `Retry-After: ${retryAfterSeconds}` : undefined,
-        "Content-Type: application/json; charset=utf-8",
-        "Connection: close",
-        "",
-        JSON.stringify({
-          error: {
-            message: "Too many failed authentication attempts. Please try again later.",
-            type: "rate_limited",
-          },
-        }),
-      ]
-        .filter(Boolean)
-        .join("\r\n"),
-    );
+    const headers = [
+      "HTTP/1.1 429 Too Many Requests",
+      retryAfterSeconds ? `Retry-After: ${retryAfterSeconds}` : undefined,
+      "Content-Type: application/json; charset=utf-8",
+      "Connection: close",
+    ]
+      .filter(Boolean)
+      .join("\r\n");
+    const body = JSON.stringify({
+      error: {
+        message: "Too many failed authentication attempts. Please try again later.",
+        type: "rate_limited",
+      },
+    });
+    socket.write(`${headers}\r\n\r\n${body}`);
     return;
   }
   socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
