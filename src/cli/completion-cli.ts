@@ -370,6 +370,11 @@ function generateZshCompletion(program: Command): string {
   const script = `
 #compdef ${rootCmd}
 
+if ! command -v compdef >/dev/null 2>&1; then
+  autoload -Uz compinit
+  compinit
+fi
+
 _${rootCmd}_root_completion() {
   local -a commands
   local -a options
