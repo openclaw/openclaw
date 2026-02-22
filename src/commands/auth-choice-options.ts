@@ -143,6 +143,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["together-api-key"],
   },
   {
+    value: "fal-openrouter",
+    label: "fal OpenRouter",
+    hint: "API key",
+    choices: ["fal-openrouter-api-key"],
+  },
+  {
     value: "huggingface",
     label: "Hugging Face",
     hint: "Inference API (HF token)",
@@ -199,6 +205,10 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     label: "Qianfan API key",
   },
   { value: "openrouter-api-key", label: "OpenRouter API key" },
+  {
+    value: "fal-openrouter-api-key",
+    label: "fal OpenRouter API key",
+  },
   {
     value: "litellm-api-key",
     label: "LiteLLM API key",

@@ -1,4 +1,6 @@
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
+import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { modelKey, resolveConfiguredModelRef } from "../agents/model-selection.js";
 import type { OpenClawConfig, GatewayAuthConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -126,6 +128,22 @@ export async function promptAuthConfig(
     });
     if (allowlistSelection.models) {
       next = applyModelAllowlist(next, allowlistSelection.models);
+
+      // If the user removed the current primary from the allowlist,
+      // promote the first selected model to avoid silently keeping
+      // a model the user explicitly deselected.
+      if (allowlistSelection.models.length > 0) {
+        const resolved = resolveConfiguredModelRef({
+          cfg: next,
+          defaultProvider: DEFAULT_PROVIDER,
+          defaultModel: DEFAULT_MODEL,
+        });
+        const resolvedKey = modelKey(resolved.provider, resolved.model);
+        if (!allowlistSelection.models.includes(resolvedKey)) {
+          next = applyPrimaryModel(next, allowlistSelection.models[0]);
+        }
+      }
+
       next = applyModelFallbacksFromSelection(next, allowlistSelection.models);
     }
   }

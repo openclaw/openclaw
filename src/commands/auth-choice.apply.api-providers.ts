@@ -6,6 +6,7 @@ import {
   validateApiKeyInput,
 } from "./auth-choice.api-key.js";
 import { createAuthChoiceAgentModelNoter } from "./auth-choice.apply-helpers.js";
+import { applyAuthChoiceFalOpenRouter } from "./auth-choice.apply.fal-openrouter.js";
 import { applyAuthChoiceHuggingface } from "./auth-choice.apply.huggingface.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { applyAuthChoiceOpenRouter } from "./auth-choice.apply.openrouter.js";
@@ -84,7 +85,9 @@ export async function applyAuthChoiceApiProviders(
     params.opts.tokenProvider !== "anthropic" &&
     params.opts.tokenProvider !== "openai"
   ) {
-    if (params.opts.tokenProvider === "openrouter") {
+    if (params.opts.tokenProvider === "fal-openrouter") {
+      authChoice = "fal-openrouter-api-key";
+    } else if (params.opts.tokenProvider === "openrouter") {
       authChoice = "openrouter-api-key";
     } else if (params.opts.tokenProvider === "litellm") {
       authChoice = "litellm-api-key";
@@ -147,6 +150,10 @@ export async function applyAuthChoiceApiProviders(
       });
       await setMoonshotApiKey(normalizeApiKeyInput(String(key ?? "")), params.agentDir);
     }
+  }
+
+  if (authChoice === "fal-openrouter-api-key") {
+    return applyAuthChoiceFalOpenRouter(params);
   }
 
   if (authChoice === "openrouter-api-key") {

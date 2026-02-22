@@ -281,6 +281,29 @@ function createOpenRouterHeadersWrapper(baseStreamFn: StreamFn | undefined): Str
 }
 
 /**
+ * Create a streamFn wrapper that replaces the default Bearer auth header
+ * with fal's required `Authorization: Key <fal_key>` format.
+ */
+function createFalOpenrouterAuthWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const apiKey = options?.apiKey;
+    const falHeaders: Record<string, string> = apiKey ? { Authorization: `Key ${apiKey}` } : {};
+    return underlying(model, context, {
+      ...options,
+      // Keep apiKey so pi-ai's validation passes. The OpenAI SDK merges
+      // defaultHeaders after authHeaders, so our `Authorization: Key …`
+      // header below overrides the `Authorization: Bearer …` that pi-ai
+      // would set from apiKey.
+      headers: {
+        ...falHeaders,
+        ...options?.headers,
+      },
+    });
+  };
+}
+
+/**
  * Create a streamFn wrapper that injects tool_stream=true for Z.AI providers.
  *
  * Z.AI's API supports the `tool_stream` parameter to enable real-time streaming
@@ -356,6 +379,13 @@ export function applyExtraParamsToAgent(
   if (provider === "openrouter") {
     log.debug(`applying OpenRouter app attribution headers for ${provider}/${modelId}`);
     agent.streamFn = createOpenRouterHeadersWrapper(agent.streamFn);
+  }
+
+  // fal OpenRouter requires `Authorization: Key <fal_key>` instead of Bearer.
+  // Override the Authorization header that pi-ai would set from options.apiKey.
+  if (provider === "fal-openrouter") {
+    log.debug(`applying fal Authorization: Key header for ${provider}/${modelId}`);
+    agent.streamFn = createFalOpenrouterAuthWrapper(agent.streamFn);
   }
 
   // Enable Z.AI tool_stream for real-time tool call streaming.
