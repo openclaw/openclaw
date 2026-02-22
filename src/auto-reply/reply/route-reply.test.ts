@@ -186,6 +186,20 @@ describe("routeReply", () => {
     );
   });
 
+  it("skips responsePrefix containing unresolved template variables", async () => {
+    mocks.sendMessageSlack.mockClear();
+    const cfg = {
+      messages: { responsePrefix: "[{model}]" },
+    } as unknown as OpenClawConfig;
+    await routeReply({
+      payload: { text: "hi" },
+      channel: "slack",
+      to: "channel:C123",
+      cfg,
+    });
+    expect(mocks.sendMessageSlack).toHaveBeenCalledWith("channel:C123", "hi", expect.any(Object));
+  });
+
   it("does not derive responsePrefix from agent identity when routing", async () => {
     mocks.sendMessageSlack.mockClear();
     const cfg = {
