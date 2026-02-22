@@ -643,33 +643,41 @@
 
 .callout.danger {
   border-color: color-mix(in srgb, var(--danger) 25%, transparent);
-  background: linear-gradient(135deg,
-      color-mix(in srgb, var(--danger) 8%, transparent) 0%,
-      color-mix(in srgb, var(--danger) 4%, transparent) 100%);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--danger) 8%, transparent) 0%,
+    color-mix(in srgb, var(--danger) 4%, transparent) 100%
+  );
   color: var(--danger);
 }
 
 .callout.info {
   border-color: color-mix(in srgb, var(--info) 25%, transparent);
-  background: linear-gradient(135deg,
-      color-mix(in srgb, var(--info) 8%, transparent) 0%,
-      color-mix(in srgb, var(--info) 4%, transparent) 100%);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--info) 8%, transparent) 0%,
+    color-mix(in srgb, var(--info) 4%, transparent) 100%
+  );
   color: var(--info);
 }
 
 .callout.success {
   border-color: color-mix(in srgb, var(--ok) 25%, transparent);
-  background: linear-gradient(135deg,
-      color-mix(in srgb, var(--ok) 8%, transparent) 0%,
-      color-mix(in srgb, var(--ok) 4%, transparent) 100%);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--ok) 8%, transparent) 0%,
+    color-mix(in srgb, var(--ok) 4%, transparent) 100%
+  );
   color: var(--ok);
 }
 
 .callout.warn {
   border-color: color-mix(in srgb, var(--warn) 25%, transparent);
-  background: linear-gradient(135deg,
-      color-mix(in srgb, var(--warn) 8%, transparent) 0%,
-      color-mix(in srgb, var(--warn) 4%, transparent) 100%);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--warn) 8%, transparent) 0%,
+    color-mix(in srgb, var(--warn) 4%, transparent) 100%
+  );
   color: var(--warn);
 }
 
@@ -1288,7 +1296,9 @@
   background: transparent;
   color: var(--muted);
   cursor: pointer;
-  transition: color var(--duration-fast) ease, background var(--duration-fast) ease;
+  transition:
+    color var(--duration-fast) ease,
+    background var(--duration-fast) ease;
 }
 
 .data-table-row-actions__trigger:hover {
@@ -1370,7 +1380,9 @@
   background: var(--card);
   color: var(--text);
   cursor: pointer;
-  transition: border-color var(--duration-fast) ease, background var(--duration-fast) ease;
+  transition:
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease;
 }
 
 .data-table-pagination__controls button:hover:not(:disabled) {
@@ -1662,7 +1674,6 @@
 }
 
 @keyframes chatStreamPulse {
-
   0%,
   100% {
     border-color: var(--border);
@@ -1697,7 +1708,7 @@
   height: 12px;
 }
 
-.chat-reading-indicator__dots>span {
+.chat-reading-indicator__dots > span {
   display: inline-block;
   width: 6px;
   height: 6px;
@@ -1709,16 +1720,15 @@
   will-change: transform, opacity;
 }
 
-.chat-reading-indicator__dots>span:nth-child(2) {
+.chat-reading-indicator__dots > span:nth-child(2) {
   animation-delay: 0.15s;
 }
 
-.chat-reading-indicator__dots>span:nth-child(3) {
+.chat-reading-indicator__dots > span:nth-child(3) {
   animation-delay: 0.3s;
 }
 
 @keyframes chatReadingDot {
-
   0%,
   80%,
   100% {
@@ -1733,7 +1743,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .chat-reading-indicator__dots>span {
+  .chat-reading-indicator__dots > span {
     animation: none;
     opacity: 0.6;
   }
@@ -2378,7 +2388,7 @@
   background: var(--bg-elevated);
 }
 
-.agent-kv>div {
+.agent-kv > div {
   min-width: 0;
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -2593,7 +2603,7 @@
   gap: 8px;
 }
 
-.agent-skills-header>span:last-child {
+.agent-skills-header > span:last-child {
   margin-left: auto;
 }
 
@@ -2862,7 +2872,9 @@
   border-left: 3px solid var(--ov-accent);
   background: var(--card);
   cursor: pointer;
-  box-shadow: var(--shadow-sm), inset 0 1px 0 var(--card-highlight);
+  box-shadow:
+    var(--shadow-sm),
+    inset 0 1px 0 var(--card-highlight);
   transition:
     border-color var(--duration-normal) var(--ease-out),
     box-shadow var(--duration-normal) var(--ease-out),
@@ -2873,7 +2885,9 @@
 .ov-card:hover {
   border-color: var(--border-strong);
   border-left-color: var(--ov-accent);
-  box-shadow: var(--shadow-md), inset 0 1px 0 var(--card-highlight);
+  box-shadow:
+    var(--shadow-md),
+    inset 0 1px 0 var(--card-highlight);
   transform: translateY(-2px);
 }
 
@@ -2936,7 +2950,9 @@
   border-radius: var(--radius-lg);
   background: var(--card);
   padding: 14px 16px;
-  box-shadow: var(--shadow-sm), inset 0 1px 0 var(--card-highlight);
+  box-shadow:
+    var(--shadow-sm),
+    inset 0 1px 0 var(--card-highlight);
   animation: rise 0.35s var(--ease-out) backwards;
 }
 
@@ -2956,7 +2972,7 @@
 
 .ov-recent__row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
+  grid-template-columns: minmax(0, 2fr) minmax(0, auto) auto;
   gap: 12px;
   align-items: center;
   padding: 7px 0;
@@ -2991,7 +3007,15 @@
   filter: none;
 }
 
-.ov-recent__model,
+.ov-recent__model {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 120px;
+}
+
 .ov-recent__time {
   color: var(--muted);
   font-size: 12px;

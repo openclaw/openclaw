@@ -64,7 +64,7 @@
   padding-top: 0;
 }
 
-.shell--chat-focus .content>*+* {
+.shell--chat-focus .content > * + * {
   margin-top: 0;
 }
 
@@ -387,13 +387,17 @@
 
 .sidebar--collapsed .nav-item--active::before {
   background:
-    radial-gradient(ellipse 120% 28px at 50% -2px,
+    radial-gradient(
+      ellipse 120% 28px at 50% -2px,
       color-mix(in srgb, var(--accent) 38%, transparent) 0%,
       color-mix(in srgb, var(--accent) 14%, transparent) 40%,
-      transparent 100%),
-    radial-gradient(ellipse 60% 100% at -4px 50%,
+      transparent 100%
+    ),
+    radial-gradient(
+      ellipse 60% 100% at -4px 50%,
       color-mix(in srgb, var(--accent) 28%, transparent) 0%,
-      transparent 70%);
+      transparent 70%
+    );
 }
 
 .sidebar--collapsed .sidebar-footer {
@@ -508,9 +512,10 @@
   cursor: pointer;
   color: var(--muted);
   flex-shrink: 0;
-  transition: background var(--duration-fast) ease,
-  border-color var(--duration-fast) ease,
-  color var(--duration-fast) ease;
+  transition:
+    background var(--duration-fast) ease,
+    border-color var(--duration-fast) ease,
+    color var(--duration-fast) ease;
 }
 
 .sidebar--collapsed .sidebar-collapse-btn {
@@ -709,19 +714,26 @@
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background:
-    radial-gradient(ellipse 28px 120% at -2px 50%,
-      color-mix(in srgb, var(--accent) 38%, transparent) 0%,
-      color-mix(in srgb, var(--accent) 14%, transparent) 40%,
-      transparent 100%);
+  background: radial-gradient(
+    ellipse 28px 120% at -2px 50%,
+    color-mix(in srgb, var(--accent) 38%, transparent) 0%,
+    color-mix(in srgb, var(--accent) 14%, transparent) 40%,
+    transparent 100%
+  );
   opacity: 0;
   animation: nav-glow-in 0.4s ease-out 0.05s forwards;
   pointer-events: none;
 }
 
 @keyframes nav-glow-in {
-  from { opacity: 0; transform: translateX(-6px); }
-  to   { opacity: 1; transform: translateX(0); }
+  from {
+    opacity: 0;
+    transform: translateX(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 .nav-item--active .nav-item__icon {
@@ -778,7 +790,7 @@
   overflow-x: hidden;
 }
 
-.content>*+* {
+.content > * + * {
   margin-top: 18px;
 }
 
@@ -790,7 +802,7 @@
   padding-bottom: 0;
 }
 
-.content--chat>*+* {
+.content--chat > * + * {
   margin-top: 0;
 }
 
@@ -1013,7 +1025,7 @@
     padding: 10px 12px 20px;
   }
 
-  .content>*+* {
+  .content > * + * {
     margin-top: 14px;
   }
 
