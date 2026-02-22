@@ -68,11 +68,11 @@ describe("after_tool_call hook wiring", () => {
   });
 
   beforeEach(() => {
-    hookMocks.runner.hasHooks.mockReset();
+    hookMocks.runner.hasHooks.mockClear();
     hookMocks.runner.hasHooks.mockReturnValue(false);
-    hookMocks.runner.runBeforeToolCall.mockReset();
+    hookMocks.runner.runBeforeToolCall.mockClear();
     hookMocks.runner.runBeforeToolCall.mockResolvedValue(undefined);
-    hookMocks.runner.runAfterToolCall.mockReset();
+    hookMocks.runner.runAfterToolCall.mockClear();
     hookMocks.runner.runAfterToolCall.mockResolvedValue(undefined);
   });
 
