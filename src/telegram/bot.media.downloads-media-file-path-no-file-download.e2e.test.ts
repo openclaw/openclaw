@@ -32,9 +32,9 @@ async function createBotHandlerWithOptions(options: {
   replySpy: ReturnType<typeof vi.fn>;
   runtimeError: ReturnType<typeof vi.fn>;
 }> {
-  onSpy.mockReset();
-  replySpy.mockReset();
-  sendChatActionSpy.mockReset();
+  onSpy.mockClear();
+  replySpy.mockClear();
+  sendChatActionSpy.mockClear();
 
   const runtimeError = options.runtimeError ?? vi.fn();
   const runtimeLog = options.runtimeLog ?? vi.fn();
@@ -89,7 +89,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  lookupMock.mockReset();
+  lookupMock.mockClear();
   resolvePinnedHostnameSpy?.mockRestore();
   resolvePinnedHostnameSpy = null;
 });
@@ -525,8 +525,8 @@ describe("telegram text fragments", () => {
   it(
     "buffers near-limit text and processes sequential parts as one message",
     async () => {
-      onSpy.mockReset();
-      replySpy.mockReset();
+      onSpy.mockClear();
+      replySpy.mockClear();
 
       createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
       const handler = onSpy.mock.calls.find((call) => call[0] === "message")?.[1] as (
