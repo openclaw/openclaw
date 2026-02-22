@@ -317,7 +317,9 @@ export async function monitorWebInbox(options: {
         replyToBody: replyContext?.body,
         replyToSender: replyContext?.sender,
         replyToSenderJid: replyContext?.senderJid,
-        replyToSenderE164: replyContext?.senderE164,
+        replyToSenderE164: replyContext?.senderJid?.endsWith("@lid")
+          ? ((await resolveInboundJid(replyContext.senderJid)) ?? replyContext?.senderE164)
+          : replyContext?.senderE164,
         groupSubject,
         groupParticipants,
         mentionedJids: mentionedJids ?? undefined,
