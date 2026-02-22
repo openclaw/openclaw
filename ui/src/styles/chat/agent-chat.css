@@ -814,53 +814,110 @@
 .slash-menu {
   position: absolute;
   bottom: 100%;
-  left: 18px;
-  right: 18px;
-  max-height: 240px;
+  left: 0;
+  right: 0;
+  max-height: 320px;
   overflow-y: auto;
   background: var(--popover);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
   box-shadow: var(--shadow-lg);
   z-index: 30;
   margin-bottom: 4px;
+  padding: 6px;
+  scrollbar-width: thin;
+}
+
+.slash-menu-group + .slash-menu-group {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+}
+
+.slash-menu-group__label {
+  padding: 4px 10px 2px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  opacity: 0.7;
 }
 
 .slash-menu-item {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: background var(--duration-fast) ease;
+  transition:
+    background var(--duration-fast) ease,
+    color var(--duration-fast) ease;
 }
 
 .slash-menu-item:hover,
 .slash-menu-item--active {
-  background: var(--bg-hover);
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-hover));
+}
+
+.slash-menu-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  color: var(--accent);
+  opacity: 0.7;
+}
+
+.slash-menu-icon svg {
+  width: 14px;
+  height: 14px;
+  stroke: currentColor;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.slash-menu-item--active .slash-menu-icon,
+.slash-menu-item:hover .slash-menu-icon {
+  opacity: 1;
 }
 
 .slash-menu-name {
-  font-size: 0.85rem;
+  font-size: 0.82rem;
   font-weight: 600;
+  font-family: var(--mono);
   color: var(--accent);
   white-space: nowrap;
 }
 
 .slash-menu-args {
-  font-size: 0.78rem;
+  font-size: 0.75rem;
   color: var(--muted);
-  font-style: italic;
+  font-family: var(--mono);
+  opacity: 0.65;
 }
 
 .slash-menu-desc {
-  font-size: 0.78rem;
+  font-size: 0.75rem;
   color: var(--muted);
   flex: 1;
   text-align: right;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.slash-menu-item--active .slash-menu-name {
+  color: var(--accent-hover);
+}
+
+.slash-menu-item--active .slash-menu-desc {
+  color: var(--text);
 }
 
 /* ─── Attachment Previews ─── */
@@ -1106,7 +1163,9 @@
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%237d8590' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
   background-position: right 6px center;
-  transition: border-color 150ms ease, background 150ms ease;
+  transition:
+    border-color 150ms ease,
+    background 150ms ease;
 }
 
 .chat-agent-select:hover {
@@ -1138,7 +1197,9 @@
   cursor: pointer;
   user-select: none;
   list-style: none;
-  transition: color 150ms ease, background 150ms ease;
+  transition:
+    color 150ms ease,
+    background 150ms ease;
 }
 
 .chat-sessions-summary::-webkit-details-marker {

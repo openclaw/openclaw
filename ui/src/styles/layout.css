@@ -725,7 +725,7 @@
   align-items: flex-end;
   justify-content: space-between;
   gap: 16px;
-  padding: 4px 8px;
+  padding: 4px 0;
   overflow: hidden;
   transform-origin: top center;
   transition:
