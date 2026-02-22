@@ -42,7 +42,6 @@ const openWs = async (port: number, headers?: Record<string, string>) => {
 const openTailscaleWs = async (port: number) => {
   const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
     headers: {
-      origin: "https://gateway.tailnet.ts.net",
       "x-forwarded-for": "100.64.0.1",
       "x-forwarded-proto": "https",
       "x-forwarded-host": "gateway.tailnet.ts.net",
@@ -90,6 +89,13 @@ const NODE_CLIENT = {
   version: "1.0.0",
   platform: "test",
   mode: GATEWAY_CLIENT_MODES.NODE,
+};
+
+const BROWSER_MODE_TEST_CLIENT = {
+  id: GATEWAY_CLIENT_NAMES.TEST,
+  version: "1.0.0",
+  platform: "test",
+  mode: GATEWAY_CLIENT_MODES.UI,
 };
 
 async function expectHelloOkServerVersion(port: number, expectedVersion: string) {
@@ -682,6 +688,61 @@ describe("gateway server auth/connect", () => {
       });
       expect(res.ok).toBe(false);
       expect(res.error?.message ?? "").toContain("secure context");
+      ws.close();
+    });
+
+    test("rejects browser-mode non-control client when Origin is missing", async () => {
+      const token = resolveGatewayTokenOrEnv();
+      const ws = await openWs(port);
+      const res = await connectReq(ws, {
+        token,
+        client: {
+          ...BROWSER_MODE_TEST_CLIENT,
+        },
+      });
+      expect(res.ok).toBe(false);
+      expect(res.error?.message ?? "").toContain("origin not allowed");
+      ws.close();
+    });
+
+    test("rejects browser-mode non-control client when Origin is null", async () => {
+      const token = resolveGatewayTokenOrEnv();
+      const ws = await openWs(port, { origin: "null" });
+      const res = await connectReq(ws, {
+        token,
+        client: {
+          ...BROWSER_MODE_TEST_CLIENT,
+        },
+      });
+      expect(res.ok).toBe(false);
+      expect(res.error?.message ?? "").toContain("origin not allowed");
+      ws.close();
+    });
+
+    test("rejects browser-mode non-control client when Origin is mismatched", async () => {
+      const token = resolveGatewayTokenOrEnv();
+      const ws = await openWs(port, { origin: "https://attacker.example.com" });
+      const res = await connectReq(ws, {
+        token,
+        client: {
+          ...BROWSER_MODE_TEST_CLIENT,
+        },
+      });
+      expect(res.ok).toBe(false);
+      expect(res.error?.message ?? "").toContain("origin not allowed");
+      ws.close();
+    });
+
+    test("accepts browser-mode non-control client when Origin matches request host", async () => {
+      const token = resolveGatewayTokenOrEnv();
+      const ws = await openWs(port, { origin: originForPort(port) });
+      const res = await connectReq(ws, {
+        token,
+        client: {
+          ...BROWSER_MODE_TEST_CLIENT,
+        },
+      });
+      expect(res.ok).toBe(true);
       ws.close();
     });
   });
