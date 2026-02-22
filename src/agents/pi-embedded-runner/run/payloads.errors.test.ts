@@ -2,9 +2,15 @@ import type { AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import { formatBillingErrorMessage } from "../../pi-embedded-helpers.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
-import { buildEmbeddedRunPayloads } from "./payloads.js";
+import {
+  buildPayloads,
+  expectSinglePayloadText,
+  expectSingleToolErrorPayload,
+} from "./payloads.test-helpers.js";
 
 describe("buildEmbeddedRunPayloads", () => {
+  const OVERLOADED_FALLBACK_TEXT =
+    "The AI service is temporarily overloaded. Please try again in a moment.";
   const errorJson =
     '{"type":"error","error":{"details":null,"type":"overloaded_error","message":"Overloaded"},"request_id":"req_011CX7DwS7tSvggaNHmefwWg"}';
   const errorJsonPretty = `{
@@ -22,20 +28,17 @@ describe("buildEmbeddedRunPayloads", () => {
       content: [{ type: "text", text: errorJson }],
       ...overrides,
     });
-
-  type BuildPayloadParams = Parameters<typeof buildEmbeddedRunPayloads>[0];
-  const buildPayloads = (overrides: Partial<BuildPayloadParams> = {}) =>
-    buildEmbeddedRunPayloads({
-      assistantTexts: [],
-      toolMetas: [],
-      lastAssistant: undefined,
-      sessionKey: "session:telegram",
-      inlineToolResultsAllowed: false,
-      verboseLevel: "off",
-      reasoningLevel: "off",
-      toolResultFormat: "plain",
-      ...overrides,
+  const makeStoppedAssistant = () =>
+    makeAssistant({
+      stopReason: "stop",
+      errorMessage: undefined,
+      content: [],
     });
+
+  const expectOverloadedFallback = (payloads: ReturnType<typeof buildPayloads>) => {
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe(OVERLOADED_FALLBACK_TEXT);
+  };
 
   it("suppresses raw API error JSON when the assistant errored", () => {
     const payloads = buildPayloads({
@@ -43,10 +46,7 @@ describe("buildEmbeddedRunPayloads", () => {
       lastAssistant: makeAssistant({}),
     });
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.text).toBe(
-      "The AI service is temporarily overloaded. Please try again in a moment.",
-    );
+    expectOverloadedFallback(payloads);
     expect(payloads[0]?.isError).toBe(true);
     expect(payloads.some((payload) => payload.text === errorJson)).toBe(false);
   });
@@ -59,10 +59,7 @@ describe("buildEmbeddedRunPayloads", () => {
       verboseLevel: "on",
     });
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.text).toBe(
-      "The AI service is temporarily overloaded. Please try again in a moment.",
-    );
+    expectOverloadedFallback(payloads);
     expect(payloads.some((payload) => payload.text === errorJsonPretty)).toBe(false);
   });
 
@@ -71,10 +68,7 @@ describe("buildEmbeddedRunPayloads", () => {
       lastAssistant: makeAssistant({ content: [{ type: "text", text: errorJsonPretty }] }),
     });
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.text).toBe(
-      "The AI service is temporarily overloaded. Please try again in a moment.",
-    );
+    expectOverloadedFallback(payloads);
     expect(payloads.some((payload) => payload.text?.includes("request_id"))).toBe(false);
   });
 
@@ -108,15 +102,10 @@ describe("buildEmbeddedRunPayloads", () => {
   it("does not suppress error-shaped JSON when the assistant did not error", () => {
     const payloads = buildPayloads({
       assistantTexts: [errorJsonPretty],
-      lastAssistant: makeAssistant({
-        stopReason: "stop",
-        errorMessage: undefined,
-        content: [],
-      }),
+      lastAssistant: makeStoppedAssistant(),
     });
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.text).toBe(errorJsonPretty.trim());
+    expectSinglePayloadText(payloads, errorJsonPretty.trim());
   });
 
   it("adds a fallback error when a tool fails and no assistant output exists", () => {
@@ -133,31 +122,21 @@ describe("buildEmbeddedRunPayloads", () => {
   it("does not add tool error fallback when assistant output exists", () => {
     const payloads = buildPayloads({
       assistantTexts: ["All good"],
-      lastAssistant: makeAssistant({
-        stopReason: "stop",
-        errorMessage: undefined,
-        content: [],
-      }),
+      lastAssistant: makeStoppedAssistant(),
       lastToolError: { toolName: "browser", error: "tab not found" },
     });
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.text).toBe("All good");
+    expectSinglePayloadText(payloads, "All good");
   });
 
   it("adds completion fallback when tools run successfully without final assistant text", () => {
     const payloads = buildPayloads({
       toolMetas: [{ toolName: "write", meta: "/tmp/out.md" }],
-      lastAssistant: makeAssistant({
-        stopReason: "stop",
-        errorMessage: undefined,
-        content: [],
-      }),
+      lastAssistant: makeStoppedAssistant(),
     });
 
-    expect(payloads).toHaveLength(1);
+    expectSinglePayloadText(payloads, "✅ Done.");
     expect(payloads[0]?.isError).toBeUndefined();
-    expect(payloads[0]?.text).toBe("✅ Done.");
   });
 
   it("does not add completion fallback when the run still has a tool error", () => {
@@ -171,11 +150,7 @@ describe("buildEmbeddedRunPayloads", () => {
 
   it("does not add completion fallback when no tools ran", () => {
     const payloads = buildPayloads({
-      lastAssistant: makeAssistant({
-        stopReason: "stop",
-        errorMessage: undefined,
-        content: [],
-      }),
+      lastAssistant: makeStoppedAssistant(),
     });
 
     expect(payloads).toHaveLength(0);
@@ -199,10 +174,10 @@ describe("buildEmbeddedRunPayloads", () => {
       verboseLevel: "on",
     });
 
-    expect(payloads).toHaveLength(1);
-    expect(payloads[0]?.isError).toBe(true);
-    expect(payloads[0]?.text).toContain("Exec");
-    expect(payloads[0]?.text).toContain("code 1");
+    expectSingleToolErrorPayload(payloads, {
+      title: "Exec",
+      detail: "code 1",
+    });
   });
 
   it("does not add tool error fallback when assistant text exists after tool calls", () => {
