@@ -4,7 +4,7 @@ import type { UpdateChannel } from "../infra/update-channels.js";
 import { resolveUserPath } from "../utils.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
 import { installPluginFromNpmSpec, resolvePluginInstallDir } from "./install.js";
-import { recordPluginInstall } from "./installs.js";
+import { buildNpmResolutionInstallFields, recordPluginInstall } from "./installs.js";
 import { loadPluginManifest } from "./manifest.js";
 
 export type PluginUpdateLogger = {
@@ -344,12 +344,7 @@ export async function updateNpmInstalledPlugins(params: {
       spec: record.spec,
       installPath: result.targetDir,
       version: nextVersion,
-      resolvedName: result.npmResolution?.name,
-      resolvedVersion: result.npmResolution?.version,
-      resolvedSpec: result.npmResolution?.resolvedSpec,
-      integrity: result.npmResolution?.integrity,
-      shasum: result.npmResolution?.shasum,
-      resolvedAt: result.npmResolution?.resolvedAt,
+      ...buildNpmResolutionInstallFields(result.npmResolution),
     });
     changed = true;
 
@@ -473,12 +468,7 @@ export async function syncPluginsForUpdateChannel(params: {
         spec,
         installPath: result.targetDir,
         version: result.version,
-        resolvedName: result.npmResolution?.name,
-        resolvedVersion: result.npmResolution?.version,
-        resolvedSpec: result.npmResolution?.resolvedSpec,
-        integrity: result.npmResolution?.integrity,
-        shasum: result.npmResolution?.shasum,
-        resolvedAt: result.npmResolution?.resolvedAt,
+        ...buildNpmResolutionInstallFields(result.npmResolution),
         sourcePath: undefined,
       });
       summary.switchedToNpm.push(pluginId);
