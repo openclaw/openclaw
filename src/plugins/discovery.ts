@@ -198,6 +198,27 @@ function isUnsafePluginCandidate(params: {
   return true;
 }
 
+function escapesAllowedDiscoveryRoot(params: {
+  allowedRoot: string;
+  candidatePath: string;
+  diagnostics: PluginDiagnostic[];
+}): boolean {
+  const allowedRoot = path.resolve(params.allowedRoot);
+  if (
+    isPathInsideWithRealpath(allowedRoot, params.candidatePath, {
+      requireRealpath: true,
+    })
+  ) {
+    return false;
+  }
+  params.diagnostics.push({
+    level: "warn",
+    source: params.candidatePath,
+    message: `blocked plugin discovery path: escapes allowed discovery root (${params.candidatePath}; root=${allowedRoot})`,
+  });
+  return true;
+}
+
 function isExtensionFile(filePath: string): boolean {
   const ext = path.extname(filePath);
   if (!EXTENSION_EXTS.has(ext)) {
@@ -322,11 +343,22 @@ function discoverInDirectory(params: {
   origin: PluginOrigin;
   ownershipUid?: number | null;
   workspaceDir?: string;
+  allowedRoot?: string;
   candidates: PluginCandidate[];
   diagnostics: PluginDiagnostic[];
   seen: Set<string>;
 }) {
   if (!fs.existsSync(params.dir)) {
+    return;
+  }
+  if (
+    params.allowedRoot &&
+    escapesAllowedDiscoveryRoot({
+      allowedRoot: params.allowedRoot,
+      candidatePath: params.dir,
+      diagnostics: params.diagnostics,
+    })
+  ) {
     return;
   }
   let entries: fs.Dirent[] = [];
@@ -343,6 +375,16 @@ function discoverInDirectory(params: {
 
   for (const entry of entries) {
     const fullPath = path.join(params.dir, entry.name);
+    if (
+      params.allowedRoot &&
+      escapesAllowedDiscoveryRoot({
+        allowedRoot: params.allowedRoot,
+        candidatePath: fullPath,
+        diagnostics: params.diagnostics,
+      })
+    ) {
+      continue;
+    }
     if (entry.isFile()) {
       if (!isExtensionFile(fullPath)) {
         continue;
@@ -526,6 +568,7 @@ function discoverFromPath(params: {
       origin: params.origin,
       ownershipUid: params.ownershipUid,
       workspaceDir: params.workspaceDir,
+      allowedRoot: resolved,
       candidates: params.candidates,
       diagnostics: params.diagnostics,
       seen: params.seen,
@@ -569,6 +612,7 @@ export function discoverOpenClawPlugins(params: {
     for (const dir of workspaceExtDirs) {
       discoverInDirectory({
         dir,
+        allowedRoot: workspaceRoot,
         origin: "workspace",
         ownershipUid: params.ownershipUid,
         workspaceDir: workspaceRoot,
@@ -579,9 +623,11 @@ export function discoverOpenClawPlugins(params: {
     }
   }
 
-  const globalDir = path.join(resolveConfigDir(), "extensions");
+  const stateDir = resolveConfigDir();
+  const globalDir = path.join(stateDir, "extensions");
   discoverInDirectory({
     dir: globalDir,
+    allowedRoot: stateDir,
     origin: "global",
     ownershipUid: params.ownershipUid,
     candidates,
@@ -593,6 +639,7 @@ export function discoverOpenClawPlugins(params: {
   if (bundledDir) {
     discoverInDirectory({
       dir: bundledDir,
+      allowedRoot: bundledDir,
       origin: "bundled",
       ownershipUid: params.ownershipUid,
       candidates,

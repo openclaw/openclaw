@@ -199,6 +199,69 @@ describe("discoverOpenClawPlugins", () => {
     );
   });
 
+  it("blocks workspace extension discovery when extensions dir symlink escapes workspace root", async () => {
+    const stateDir = makeTempDir();
+    const workspaceDir = path.join(stateDir, "workspace");
+    const workspaceOpenClawDir = path.join(workspaceDir, ".openclaw");
+    const workspaceExtDir = path.join(workspaceOpenClawDir, "extensions");
+    const outsideExtDir = path.join(stateDir, "outside-extensions");
+    fs.mkdirSync(workspaceOpenClawDir, { recursive: true });
+    fs.mkdirSync(outsideExtDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(outsideExtDir, "escape.ts"),
+      "export default function () {}",
+      "utf-8",
+    );
+    try {
+      fs.symlinkSync(
+        outsideExtDir,
+        workspaceExtDir,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    } catch {
+      return;
+    }
+
+    const result = await withStateDir(stateDir, async () => {
+      return discoverOpenClawPlugins({ workspaceDir });
+    });
+
+    expect(result.candidates.some((candidate) => candidate.idHint === "escape")).toBe(false);
+    expect(
+      result.diagnostics.some((diag) => diag.message.includes("escapes allowed discovery root")),
+    ).toBe(true);
+  });
+
+  it("blocks global extension discovery when state extensions dir symlink escapes state root", async () => {
+    const stateDir = makeTempDir();
+    const outsideRoot = makeTempDir();
+    const outsideExtDir = path.join(outsideRoot, "outside-extensions");
+    fs.mkdirSync(outsideExtDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(outsideExtDir, "escape.ts"),
+      "export default function () {}",
+      "utf-8",
+    );
+    try {
+      fs.symlinkSync(
+        outsideExtDir,
+        path.join(stateDir, "extensions"),
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    } catch {
+      return;
+    }
+
+    const result = await withStateDir(stateDir, async () => {
+      return discoverOpenClawPlugins({});
+    });
+
+    expect(result.candidates.some((candidate) => candidate.idHint === "escape")).toBe(false);
+    expect(
+      result.diagnostics.some((diag) => diag.message.includes("escapes allowed discovery root")),
+    ).toBe(true);
+  });
+
   it.runIf(process.platform !== "win32")("blocks world-writable plugin paths", async () => {
     const stateDir = makeTempDir();
     const globalExt = path.join(stateDir, "extensions");

@@ -120,10 +120,27 @@ function loadHookFromDir(params: {
 /**
  * Scan a directory for hooks (subdirectories containing HOOK.md)
  */
-function loadHooksFromDir(params: { dir: string; source: HookSource; pluginId?: string }): Hook[] {
-  const { dir, source, pluginId } = params;
+function loadHooksFromDir(params: {
+  dir: string;
+  source: HookSource;
+  pluginId?: string;
+  allowedRoot?: string;
+}): Hook[] {
+  const { dir, source, pluginId, allowedRoot } = params;
 
   if (!fs.existsSync(dir)) {
+    return [];
+  }
+
+  if (
+    allowedRoot &&
+    !isPathInsideWithRealpath(path.resolve(allowedRoot), dir, {
+      requireRealpath: true,
+    })
+  ) {
+    log.warn(
+      `Ignoring hook discovery dir "${dir}" because it resolves outside allowed root "${allowedRoot}"`,
+    );
     return [];
   }
 
@@ -141,6 +158,17 @@ function loadHooksFromDir(params: { dir: string; source: HookSource; pluginId?: 
     }
 
     const hookDir = path.join(dir, entry.name);
+    if (
+      !isPathInsideWithRealpath(dir, hookDir, {
+        requireRealpath: true,
+      })
+    ) {
+      log.warn(
+        `Ignoring hook directory "${hookDir}" because it resolves outside discovery root "${dir}"`,
+      );
+      continue;
+    }
+
     const manifest = readHookPackageManifest(hookDir);
     const packageHooks = manifest ? resolvePackageHooks(manifest) : [];
 
@@ -232,6 +260,7 @@ function loadHookEntries(
     ? loadHooksFromDir({
         dir: bundledHooksDir,
         source: "openclaw-bundled",
+        allowedRoot: bundledHooksDir,
       })
     : [];
   const extraHooks = extraDirs.flatMap((dir) => {
@@ -239,15 +268,18 @@ function loadHookEntries(
     return loadHooksFromDir({
       dir: resolved,
       source: "openclaw-workspace", // Extra dirs treated as workspace
+      allowedRoot: resolved,
     });
   });
   const managedHooks = loadHooksFromDir({
     dir: managedHooksDir,
     source: "openclaw-managed",
+    allowedRoot: managedHooksDir,
   });
   const workspaceHooks = loadHooksFromDir({
     dir: workspaceHooksDir,
     source: "openclaw-workspace",
+    allowedRoot: path.resolve(workspaceDir),
   });
 
   const merged = new Map<string, Hook>();
