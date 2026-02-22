@@ -49,6 +49,14 @@ type AnnounceQueueState = {
   send: (item: AnnounceQueueItem) => Promise<void>;
 };
 
+/**
+ * Maximum age (in ms) for queued announce items. Items older than this are
+ * silently dropped during drain to avoid delivering stale completions long
+ * after they occurred (e.g. a subagent result from hours ago surfacing in an
+ * unrelated conversation turn).
+ */
+const ANNOUNCE_MAX_AGE_MS = 5 * 60 * 1000; // 5 minutes
+
 const ANNOUNCE_QUEUES = new Map<string, AnnounceQueueState>();
 
 export function resetAnnounceQueuesForTests() {
@@ -108,6 +116,27 @@ function scheduleAnnounceDrain(key: string) {
       let forceIndividualCollect = false;
       while (queue.items.length > 0 || queue.droppedCount > 0) {
         await waitForQueueDebounce(queue);
+
+        // Drop stale items that have been queued longer than the TTL.
+        // This prevents old subagent/cron completions from surfacing in
+        // unrelated conversation turns minutes or hours later.
+        const now = Date.now();
+        while (queue.items.length > 0) {
+          const head = queue.items[0];
+          if (head.enqueuedAt && now - head.enqueuedAt > ANNOUNCE_MAX_AGE_MS) {
+            const ageSec = Math.round((now - head.enqueuedAt) / 1000);
+            defaultRuntime.log?.(
+              `[announce-queue] Dropping stale item for ${key} (age: ${ageSec}s, maxAge: ${ANNOUNCE_MAX_AGE_MS / 1000}s)`,
+            );
+            queue.items.shift();
+            continue;
+          }
+          break;
+        }
+        if (queue.items.length === 0 && queue.droppedCount === 0) {
+          break;
+        }
+
         if (queue.mode === "collect") {
           const isCrossChannel = hasCrossChannelItems(queue.items, (item) => {
             if (!item.origin) {
