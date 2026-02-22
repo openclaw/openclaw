@@ -22,6 +22,8 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Tests/macOS: fix `vi.mock` hoisting failures on macOS Vitest runners by wrapping module-scope `vi.fn()` in `vi.hoisted()` to ensure correct initialization order. (#21500) Thanks @irchelper.
+
 - Signal/RPC: guard malformed Signal RPC JSON responses with a clear status-scoped error and add regression coverage for invalid JSON responses. (#22995) Thanks @adhitShet.
 - Gateway/Subagents: guard gateway and subagent session-key/message trim paths against undefined inputs to prevent early `Cannot read properties of undefined (reading 'trim')` crashes during subagent spawn and wait flows.
 - Agents/Workspace: guard `resolveUserPath` against undefined/null input to prevent `Cannot read properties of undefined (reading 'trim')` crashes when workspace paths are missing in embedded runner flows.
