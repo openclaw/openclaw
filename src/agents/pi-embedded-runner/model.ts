@@ -80,6 +80,24 @@ export function resolveModel(
     if (forwardCompat) {
       return { model: forwardCompat, authStorage, modelRegistry };
     }
+    // OpenRouter is a pass-through proxy — any model ID available on OpenRouter
+    // should work without being pre-registered in the local catalog.
+    if (normalizedProvider === "openrouter") {
+      const fallbackModel: Model<Api> = normalizeModelCompat({
+        id: modelId,
+        name: modelId,
+        api: "openai-completions",
+        provider,
+        baseUrl: "https://openrouter.ai/api/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: DEFAULT_CONTEXT_TOKENS,
+        // Align with OPENROUTER_DEFAULT_MAX_TOKENS in models-config.providers.ts
+        maxTokens: 8192,
+      } as Model<Api>);
+      return { model: fallbackModel, authStorage, modelRegistry };
+    }
     const providerCfg = providers[provider];
     if (providerCfg || modelId.startsWith("mock-")) {
       const fallbackModel: Model<Api> = normalizeModelCompat({
