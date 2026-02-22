@@ -62,6 +62,7 @@ export function configureProgramHelp(program: Command, ctx: ProgramContext) {
       parseCliLogLevelOption,
     );
 
+  program.option("-q, --quiet", "Suppress the startup tagline");
   program.option("--no-color", "Disable ANSI colors", false);
   program.helpOption("-h, --help", "Display help for command");
   program.helpCommand("help [command]", "Display help for command");

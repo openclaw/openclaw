@@ -1,7 +1,8 @@
+import { isTruthyEnvValue } from "../infra/env.js";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import { visibleWidth } from "../terminal/ansi.js";
 import { isRich, theme } from "../terminal/theme.js";
-import { hasRootVersionAlias } from "./argv.js";
+import { hasFlag, hasRootVersionAlias } from "./argv.js";
 import { pickTagline, type TaglineOptions } from "./tagline.js";
 
 type BannerOptions = TaglineOptions & {
@@ -9,6 +10,7 @@ type BannerOptions = TaglineOptions & {
   commit?: string | null;
   columns?: number;
   richTty?: boolean;
+  quiet?: boolean;
 };
 
 let bannerEmitted = false;
@@ -29,6 +31,18 @@ function splitGraphemes(value: string): string[] {
   }
 }
 
+function isQuietTagline(options: BannerOptions): boolean {
+  if (options.quiet !== undefined) {
+    return options.quiet;
+  }
+  const env = options.env ?? process.env;
+  if (isTruthyEnvValue(env?.OPENCLAW_NO_TAGLINE)) {
+    return true;
+  }
+  const argv = options.argv ?? process.argv;
+  return hasFlag(argv, "--quiet") || hasFlag(argv, "-q");
+}
+
 const hasJsonFlag = (argv: string[]) =>
   argv.some((arg) => arg === "--json" || arg.startsWith("--json="));
 
@@ -38,11 +52,18 @@ const hasVersionFlag = (argv: string[]) =>
 export function formatCliBannerLine(version: string, options: BannerOptions = {}): string {
   const commit = options.commit ?? resolveCommitHash({ env: options.env });
   const commitLabel = commit ?? "unknown";
-  const tagline = pickTagline(options);
+  const quiet = isQuietTagline(options);
   const rich = options.richTty ?? isRich();
   const title = "🦞 OpenClaw";
   const prefix = "🦞 ";
   const columns = options.columns ?? process.stdout.columns ?? 120;
+  if (quiet) {
+    if (rich) {
+      return `${theme.heading(title)} ${theme.info(version)} ${theme.muted(`(${commitLabel})`)}`;
+    }
+    return `${title} ${version} (${commitLabel})`;
+  }
+  const tagline = pickTagline(options);
   const plainFullLine = `${title} ${version} (${commitLabel}) — ${tagline}`;
   const fitsOnOneLine = visibleWidth(plainFullLine) <= columns;
   if (rich) {
