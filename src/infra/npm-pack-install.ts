@@ -57,20 +57,31 @@ export type NpmSpecArchiveFinalInstallResult<TResult extends { ok: boolean }> =
       integrityDrift?: NpmIntegrityDrift;
     });
 
+function isSuccessfulInstallResult<TResult extends { ok: boolean }>(
+  result: TResult,
+): result is Extract<TResult, { ok: true }> {
+  return result.ok;
+}
+
 export function finalizeNpmSpecArchiveInstall<TResult extends { ok: boolean }>(
   flowResult: NpmSpecArchiveInstallFlowResult<TResult>,
 ): NpmSpecArchiveFinalInstallResult<TResult> {
   if (!flowResult.ok) {
     return flowResult;
   }
-  if (!flowResult.installResult.ok) {
-    return flowResult.installResult;
+  const installResult = flowResult.installResult;
+  if (!isSuccessfulInstallResult(installResult)) {
+    return installResult as Exclude<TResult, { ok: true }>;
   }
-  return {
-    ...flowResult.installResult,
+  const finalized: Extract<TResult, { ok: true }> & {
+    npmResolution: NpmSpecResolution;
+    integrityDrift?: NpmIntegrityDrift;
+  } = {
+    ...installResult,
     npmResolution: flowResult.npmResolution,
-    integrityDrift: flowResult.integrityDrift,
+    ...(flowResult.integrityDrift ? { integrityDrift: flowResult.integrityDrift } : {}),
   };
+  return finalized;
 }
 
 export async function installFromNpmSpecArchive<TResult extends { ok: boolean }>(params: {

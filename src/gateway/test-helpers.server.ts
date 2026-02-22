@@ -409,7 +409,7 @@ type ConnectResponse = {
   id: string;
   ok: boolean;
   payload?: Record<string, unknown>;
-  error?: { message?: string };
+  error?: { message?: string; code?: string; details?: unknown };
 };
 
 export async function readConnectChallengeNonce(

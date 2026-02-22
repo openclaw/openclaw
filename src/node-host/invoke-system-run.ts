@@ -8,7 +8,6 @@ import {
   evaluateExecAllowlist,
   evaluateShellAllowlist,
   recordAllowlistUse,
-  requiresExecApproval,
   resolveAllowAlwaysPatterns,
   resolveExecApprovals,
   type ExecAllowlistEntry,
@@ -20,6 +19,7 @@ import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../in
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { sanitizeSystemRunEnvOverrides } from "../infra/host-env-security.js";
 import { resolveSystemRunCommand } from "../infra/system-run-command.js";
+import { evaluateSystemRunPolicy, resolveExecApprovalDecision } from "./exec-policy.js";
 import type {
   ExecEventPayload,
   RunResult,
@@ -32,19 +32,7 @@ type SystemRunInvokeResult = {
   payloadJSON?: string | null;
   error?: { code?: string; message?: string } | null;
 };
-
-export function formatSystemRunAllowlistMissMessage(params?: {
-  windowsShellWrapperBlocked?: boolean;
-}): string {
-  if (params?.windowsShellWrapperBlocked) {
-    return (
-      "SYSTEM_RUN_DENIED: allowlist miss " +
-      "(Windows shell wrappers like cmd.exe /c require approval; " +
-      "approve once/always or run with --ask on-miss|always)"
-    );
-  }
-  return "SYSTEM_RUN_DENIED: allowlist miss";
-}
+export { formatSystemRunAllowlistMissMessage } from "./exec-policy.js";
 
 export async function handleSystemRunInvoke(opts: {
   client: GatewayClient;
@@ -122,6 +110,7 @@ export async function handleSystemRunInvoke(opts: {
   const autoAllowSkills = approvals.agent.autoAllowSkills;
   const sessionKey = opts.params.sessionKey?.trim() || "node";
   const runId = opts.params.runId?.trim() || crypto.randomUUID();
+  const approvalDecision = resolveExecApprovalDecision(opts.params.approvalDecision);
   const envOverrides = sanitizeSystemRunEnvOverrides({
     overrides: opts.params.env ?? undefined,
     shellWrapper: shellCommand !== null,
@@ -176,19 +165,9 @@ export async function handleSystemRunInvoke(opts: {
   const cmdInvocation = shellCommand
     ? opts.isCmdExeInvocation(segments[0]?.argv ?? [])
     : opts.isCmdExeInvocation(argv);
-  const windowsShellWrapperBlocked = security === "allowlist" && isWindows && cmdInvocation;
-  if (windowsShellWrapperBlocked) {
-    analysisOk = false;
-    allowlistSatisfied = false;
-  }
 
   const useMacAppExec = process.platform === "darwin";
   if (useMacAppExec) {
-    const approvalDecision =
-      opts.params.approvalDecision === "allow-once" ||
-      opts.params.approvalDecision === "allow-always"
-        ? opts.params.approvalDecision
-        : null;
     const execRequest: ExecHostRequest = {
       command: argv,
       rawCommand: rawCommand || shellCommand || null,
@@ -252,38 +231,19 @@ export async function handleSystemRunInvoke(opts: {
     }
   }
 
-  if (security === "deny") {
-    await opts.sendNodeEvent(
-      opts.client,
-      "exec.denied",
-      opts.buildExecEventPayload({
-        sessionKey,
-        runId,
-        host: "node",
-        command: cmdText,
-        reason: "security=deny",
-      }),
-    );
-    await opts.sendInvokeResult({
-      ok: false,
-      error: { code: "UNAVAILABLE", message: "SYSTEM_RUN_DISABLED: security=deny" },
-    });
-    return;
-  }
-
-  const requiresAsk = requiresExecApproval({
-    ask,
+  const policy = evaluateSystemRunPolicy({
     security,
+    ask,
     analysisOk,
     allowlistSatisfied,
+    approvalDecision,
+    approved: opts.params.approved === true,
+    isWindows,
+    cmdInvocation,
   });
-
-  const approvalDecision =
-    opts.params.approvalDecision === "allow-once" || opts.params.approvalDecision === "allow-always"
-      ? opts.params.approvalDecision
-      : null;
-  const approvedByAsk = approvalDecision !== null || opts.params.approved === true;
-  if (requiresAsk && !approvedByAsk) {
+  analysisOk = policy.analysisOk;
+  allowlistSatisfied = policy.allowlistSatisfied;
+  if (!policy.allowed) {
     await opts.sendNodeEvent(
       opts.client,
       "exec.denied",
@@ -292,17 +252,18 @@ export async function handleSystemRunInvoke(opts: {
         runId,
         host: "node",
         command: cmdText,
-        reason: "approval-required",
+        reason: policy.eventReason,
       }),
     );
     await opts.sendInvokeResult({
       ok: false,
-      error: { code: "UNAVAILABLE", message: "SYSTEM_RUN_DENIED: approval required" },
+      error: { code: "UNAVAILABLE", message: policy.errorMessage },
     });
     return;
   }
-  if (approvalDecision === "allow-always" && security === "allowlist") {
-    if (analysisOk) {
+
+  if (policy.approvalDecision === "allow-always" && security === "allowlist") {
+    if (policy.analysisOk) {
       const patterns = resolveAllowAlwaysPatterns({
         segments,
         cwd: opts.params.cwd ?? undefined,
@@ -315,28 +276,6 @@ export async function handleSystemRunInvoke(opts: {
         }
       }
     }
-  }
-
-  if (security === "allowlist" && (!analysisOk || !allowlistSatisfied) && !approvedByAsk) {
-    await opts.sendNodeEvent(
-      opts.client,
-      "exec.denied",
-      opts.buildExecEventPayload({
-        sessionKey,
-        runId,
-        host: "node",
-        command: cmdText,
-        reason: "allowlist-miss",
-      }),
-    );
-    await opts.sendInvokeResult({
-      ok: false,
-      error: {
-        code: "UNAVAILABLE",
-        message: formatSystemRunAllowlistMissMessage({ windowsShellWrapperBlocked }),
-      },
-    });
-    return;
   }
 
   if (allowlistMatches.length > 0) {
@@ -379,10 +318,10 @@ export async function handleSystemRunInvoke(opts: {
   if (
     security === "allowlist" &&
     isWindows &&
-    !approvedByAsk &&
+    !policy.approvedByAsk &&
     shellCommand &&
-    analysisOk &&
-    allowlistSatisfied &&
+    policy.analysisOk &&
+    policy.allowlistSatisfied &&
     segments.length === 1 &&
     segments[0]?.argv.length > 0
   ) {
