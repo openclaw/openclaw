@@ -14,7 +14,15 @@ function truncateText(value: string, maxChars: number): string {
   if (value.length <= maxChars) {
     return value;
   }
-  const trimmed = value.slice(0, Math.max(0, maxChars - 3)).trimEnd();
+  let end = Math.max(0, maxChars - 3);
+  // Avoid splitting a UTF-16 surrogate pair at the cut boundary.
+  if (end > 0 && end < value.length) {
+    const code = value.charCodeAt(end - 1);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      end -= 1;
+    }
+  }
+  const trimmed = value.slice(0, end).trimEnd();
   return `${trimmed}...`;
 }
 
