@@ -73,6 +73,13 @@ type ListedCollection = {
   pattern?: string;
 };
 
+type ManagedCollection = {
+  name: string;
+  path: string;
+  pattern: string;
+  kind: "memory" | "custom" | "sessions";
+};
+
 type QmdManagerMode = "full" | "status";
 
 export class QmdMemoryManager implements MemorySearchManager {
@@ -269,6 +276,8 @@ export class QmdMemoryManager implements MemorySearchManager {
       // ignore; older qmd versions might not support list --json.
     }
 
+    await this.migrateLegacyUnscopedCollections(existing);
+
     for (const collection of this.qmd.collections) {
       const listed = existing.get(collection.name);
       if (listed && !this.shouldRebindCollection(collection, listed)) {
@@ -295,6 +304,61 @@ export class QmdMemoryManager implements MemorySearchManager {
         log.warn(`qmd collection add failed for ${collection.name}: ${message}`);
       }
     }
+  }
+
+  private async migrateLegacyUnscopedCollections(
+    existing: Map<string, ListedCollection>,
+  ): Promise<void> {
+    for (const collection of this.qmd.collections) {
+      if (existing.has(collection.name)) {
+        continue;
+      }
+      const legacyName = this.deriveLegacyCollectionName(collection.name);
+      if (!legacyName) {
+        continue;
+      }
+      const listedLegacy = existing.get(legacyName);
+      if (!listedLegacy) {
+        continue;
+      }
+      if (!this.canMigrateLegacyCollection(collection, listedLegacy)) {
+        log.debug(
+          `qmd legacy collection migration skipped for ${legacyName} (path/pattern mismatch)`,
+        );
+        continue;
+      }
+      try {
+        await this.removeCollection(legacyName);
+        existing.delete(legacyName);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (!this.isCollectionMissingError(message)) {
+          log.warn(`qmd collection remove failed for ${legacyName}: ${message}`);
+        }
+      }
+    }
+  }
+
+  private deriveLegacyCollectionName(scopedName: string): string | null {
+    const agentSuffix = `-${this.sanitizeCollectionNameSegment(this.agentId)}`;
+    if (!scopedName.endsWith(agentSuffix)) {
+      return null;
+    }
+    const legacyName = scopedName.slice(0, -agentSuffix.length).trim();
+    return legacyName || null;
+  }
+
+  private canMigrateLegacyCollection(
+    collection: ManagedCollection,
+    listedLegacy: ListedCollection,
+  ): boolean {
+    if (listedLegacy.path && !this.pathsMatch(listedLegacy.path, collection.path)) {
+      return false;
+    }
+    if (typeof listedLegacy.pattern === "string" && listedLegacy.pattern !== collection.pattern) {
+      return false;
+    }
+    return true;
   }
 
   private async ensureCollectionPath(collection: {
@@ -336,10 +400,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     });
   }
 
-  private shouldRebindCollection(
-    collection: { kind: string; path: string; pattern: string },
-    listed: ListedCollection,
-  ): boolean {
+  private shouldRebindCollection(collection: ManagedCollection, listed: ListedCollection): boolean {
     if (!listed.path) {
       // Older qmd versions may only return names from `collection list --json`.
       // Rebind managed collections so stale path bindings cannot survive upgrades.
