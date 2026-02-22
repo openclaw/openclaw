@@ -9,8 +9,8 @@
  */
 
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { DocumentRecord, DocumentChunk, SearchResult } from "./types.js";
 
 export class DocumentStore {
@@ -45,7 +45,7 @@ export class DocumentStore {
       this.documents = new Map();
     }
 
-    for (const [docId] of this.documents) {
+    for (const docId of Array.from(this.documents.keys())) {
       try {
         const chunkFile = path.join(this.chunksPath, `${docId}.json`);
         if (fs.existsSync(chunkFile)) {
@@ -72,7 +72,7 @@ export class DocumentStore {
   }
 
   addDocument(
-    record: Omit<DocumentRecord, "id" | "ingestedAt">,
+    record: Omit<DocumentRecord, "id" | "ingestedAt" | "chunks">,
     chunks: Omit<DocumentChunk, "id" | "documentId">[],
   ): DocumentRecord {
     const id = randomUUID();
@@ -118,7 +118,7 @@ export class DocumentStore {
   }
 
   findDocumentByName(name: string): DocumentRecord | undefined {
-    for (const doc of this.documents.values()) {
+    for (const doc of Array.from(this.documents.values())) {
       if (doc.name === name) {
         return doc;
       }
@@ -136,7 +136,7 @@ export class DocumentStore {
 
   getAllChunks(): DocumentChunk[] {
     const all: DocumentChunk[] = [];
-    for (const chunks of this.chunks.values()) {
+    for (const chunks of Array.from(this.chunks.values())) {
       all.push(...chunks);
     }
     return all;
@@ -154,7 +154,7 @@ export class DocumentStore {
 
     const results: Array<{ chunk: DocumentChunk; score: number }> = [];
 
-    for (const chunks of this.chunks.values()) {
+    for (const chunks of Array.from(this.chunks.values())) {
       for (const chunk of chunks) {
         const text = chunk.text.toLowerCase();
         let score = 0;
@@ -196,7 +196,7 @@ export class DocumentStore {
 
   chunkCount(): number {
     let count = 0;
-    for (const chunks of this.chunks.values()) {
+    for (const chunks of Array.from(this.chunks.values())) {
       count += chunks.length;
     }
     return count;

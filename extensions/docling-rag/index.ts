@@ -279,7 +279,6 @@ const plugin = {
     if (cfg.autoManage !== false) {
       api.registerService({
         id: "docling-serve",
-        label: "Docling Document Processing",
         async start() {
           // Lazy start — don't start until first document is ingested
         },
