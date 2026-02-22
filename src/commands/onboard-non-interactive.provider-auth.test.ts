@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { MINIMAX_API_BASE_URL, MINIMAX_CN_API_BASE_URL } from "./onboard-auth.js";
@@ -17,6 +17,17 @@ type OnboardEnv = {
   configPath: string;
   runtime: NonInteractiveRuntime;
 };
+
+const ensureWorkspaceAndSessionsMock = vi.fn(async (..._args: unknown[]) => {});
+
+vi.mock("./onboard-helpers.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./onboard-helpers.js")>();
+  return {
+    ...actual,
+    ensureWorkspaceAndSessions: ensureWorkspaceAndSessionsMock,
+  };
+});
+
 let ensureAuthProfileStore: typeof import("../agents/auth-profiles.js").ensureAuthProfileStore;
 let upsertAuthProfile: typeof import("../agents/auth-profiles.js").upsertAuthProfile;
 
