@@ -10,6 +10,7 @@ import {
   summarizeMapping,
 } from "../../channels/allowlists/resolve-utils.js";
 import { loadConfig } from "../../config/config.js";
+import { resolveRuntimeGroupPolicy } from "../../config/runtime-group-policy.js";
 import type { SessionScope } from "../../config/sessions.js";
 import type { GroupPolicy } from "../../config/types.base.js";
 import { warn } from "../../globals.js";
@@ -50,15 +51,13 @@ function resolveSlackRuntimeGroupPolicy(params: {
   groupPolicy: GroupPolicy;
   providerMissingFallbackApplied: boolean;
 } {
-  const groupPolicy =
-    params.groupPolicy ??
-    params.defaultGroupPolicy ??
-    (params.providerConfigPresent ? "open" : "allowlist");
-  const providerMissingFallbackApplied =
-    !params.providerConfigPresent &&
-    params.groupPolicy === undefined &&
-    params.defaultGroupPolicy === undefined;
-  return { groupPolicy, providerMissingFallbackApplied };
+  return resolveRuntimeGroupPolicy({
+    providerConfigPresent: params.providerConfigPresent,
+    groupPolicy: params.groupPolicy,
+    defaultGroupPolicy: params.defaultGroupPolicy,
+    configuredFallbackPolicy: "open",
+    missingProviderFallbackPolicy: "allowlist",
+  });
 }
 
 function parseApiAppIdFromAppToken(raw?: string) {

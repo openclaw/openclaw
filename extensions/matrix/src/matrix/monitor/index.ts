@@ -1,5 +1,10 @@
 import { format } from "node:util";
-import { mergeAllowlist, summarizeMapping, type RuntimeEnv } from "openclaw/plugin-sdk";
+import {
+  mergeAllowlist,
+  resolveRuntimeGroupPolicy,
+  summarizeMapping,
+  type RuntimeEnv,
+} from "openclaw/plugin-sdk";
 import { resolveMatrixTargets } from "../../resolve-targets.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { CoreConfig, ReplyToMode } from "../../types.js";
@@ -243,7 +248,20 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
 
   const mentionRegexes = core.channel.mentions.buildMentionRegexes(cfg);
   const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-  const groupPolicyRaw = accountConfig.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+  const { groupPolicy: groupPolicyRaw, providerMissingFallbackApplied } = resolveRuntimeGroupPolicy(
+    {
+      providerConfigPresent: cfg.channels?.matrix !== undefined,
+      groupPolicy: accountConfig.groupPolicy,
+      defaultGroupPolicy,
+      configuredFallbackPolicy: "allowlist",
+      missingProviderFallbackPolicy: "allowlist",
+    },
+  );
+  if (providerMissingFallbackApplied) {
+    logVerboseMessage(
+      'matrix: channels.matrix is missing; defaulting groupPolicy to "allowlist" (room messages blocked until explicitly configured).',
+    );
+  }
   const groupPolicy = allowlistOnly && groupPolicyRaw === "open" ? "allowlist" : groupPolicyRaw;
   const replyToMode = opts.replyToMode ?? accountConfig.replyToMode ?? "off";
   const threadReplies = accountConfig.threadReplies ?? "inbound";

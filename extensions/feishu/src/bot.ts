@@ -2,10 +2,11 @@ import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk";
 import {
   buildAgentMediaPayload,
   buildPendingHistoryContextFromMap,
-  recordPendingHistoryEntryIfEnabled,
   clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
   type HistoryEntry,
+  recordPendingHistoryEntryIfEnabled,
+  resolveRuntimeGroupPolicy,
 } from "openclaw/plugin-sdk";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
@@ -77,6 +78,7 @@ const senderNameCache = new Map<string, { name: string; expireAt: number }>();
 // Key: appId or "default", Value: timestamp of last notification
 const permissionErrorNotifiedAt = new Map<string, number>();
 const PERMISSION_ERROR_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+const groupPolicyFallbackWarningShown = new Set<string>();
 
 type SenderNameResult = {
   name?: string;
@@ -563,7 +565,20 @@ export async function handleFeishuMessage(params: {
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
 
   if (isGroup) {
-    const groupPolicy = feishuCfg?.groupPolicy ?? "open";
+    const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
+    const { groupPolicy, providerMissingFallbackApplied } = resolveRuntimeGroupPolicy({
+      providerConfigPresent: cfg.channels?.feishu !== undefined,
+      groupPolicy: feishuCfg?.groupPolicy,
+      defaultGroupPolicy,
+      configuredFallbackPolicy: "open",
+      missingProviderFallbackPolicy: "allowlist",
+    });
+    if (providerMissingFallbackApplied && !groupPolicyFallbackWarningShown.has(account.accountId)) {
+      groupPolicyFallbackWarningShown.add(account.accountId);
+      log(
+        'feishu: channels.feishu is missing; defaulting groupPolicy to "allowlist" (group messages blocked until explicitly configured).',
+      );
+    }
     const groupAllowFrom = feishuCfg?.groupAllowFrom ?? [];
     // DEBUG: log(`feishu[${account.accountId}]: groupPolicy=${groupPolicy}`);
 

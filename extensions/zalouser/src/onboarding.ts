@@ -447,7 +447,7 @@ export const zalouserOnboardingAdapter: ChannelOnboardingAdapter = {
     const accessConfig = await promptChannelAccessConfig({
       prompter,
       label: "Zalo groups",
-      currentPolicy: account.config.groupPolicy ?? "open",
+      currentPolicy: account.config.groupPolicy ?? "allowlist",
       currentEntries: Object.keys(account.config.groups ?? {}),
       placeholder: "Family, Work, 123456789",
       updatePrompt: Boolean(account.config.groups),

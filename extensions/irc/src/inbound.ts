@@ -2,6 +2,7 @@ import {
   createReplyPrefixOptions,
   logInboundDrop,
   resolveControlCommandGate,
+  resolveRuntimeGroupPolicy,
   type OpenClawConfig,
   type RuntimeEnv,
 } from "openclaw/plugin-sdk";
@@ -19,6 +20,7 @@ import { sendMessageIrc } from "./send.js";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
 
 const CHANNEL_ID = "irc" as const;
+const warnedMissingProviderGroupPolicy = new Set<string>();
 
 const escapeIrcRegexLiteral = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -85,7 +87,19 @@ export async function handleIrcInbound(params: {
 
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const defaultGroupPolicy = config.channels?.defaults?.groupPolicy;
-  const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+  const { groupPolicy, providerMissingFallbackApplied } = resolveRuntimeGroupPolicy({
+    providerConfigPresent: config.channels?.irc !== undefined,
+    groupPolicy: account.config.groupPolicy,
+    defaultGroupPolicy,
+    configuredFallbackPolicy: "allowlist",
+    missingProviderFallbackPolicy: "allowlist",
+  });
+  if (providerMissingFallbackApplied && !warnedMissingProviderGroupPolicy.has(account.accountId)) {
+    warnedMissingProviderGroupPolicy.add(account.accountId);
+    runtime.log?.(
+      'irc: channels.irc is missing; defaulting groupPolicy to "allowlist" (channel messages blocked until explicitly configured).',
+    );
+  }
 
   const configAllowFrom = normalizeIrcAllowlist(account.config.allowFrom);
   const configGroupAllowFrom = normalizeIrcAllowlist(account.config.groupAllowFrom);
