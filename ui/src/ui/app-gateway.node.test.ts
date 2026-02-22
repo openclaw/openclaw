@@ -70,6 +70,7 @@ function createHost() {
       navGroupsCollapsed: {},
     },
     password: "",
+    clientInstanceId: "instance-test",
     client: null,
     connected: false,
     hello: null,
