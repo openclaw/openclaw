@@ -251,14 +251,23 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             // Send text as a note-style caption replying to the media message.
             // In raw mode, send plain text instead of an interactive card.
             if (renderMode === "raw") {
-              await sendMessageFeishu({
-                cfg,
-                to: chatId,
-                text: text.trim(),
-                replyToMessageId: lastMediaMessageId,
-                mentions: mentionTargets,
-                accountId,
-              });
+              const converted = core.channel.text.convertMarkdownTables(text.trim(), tableMode);
+              let first = true;
+              for (const chunk of core.channel.text.chunkTextWithMode(
+                converted,
+                textChunkLimit,
+                chunkMode,
+              )) {
+                await sendMessageFeishu({
+                  cfg,
+                  to: chatId,
+                  text: chunk,
+                  replyToMessageId: lastMediaMessageId,
+                  mentions: first ? mentionTargets : undefined,
+                  accountId,
+                });
+                first = false;
+              }
             } else {
               try {
                 await sendCaptionCardFeishu({
