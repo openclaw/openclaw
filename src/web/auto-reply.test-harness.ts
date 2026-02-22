@@ -2,7 +2,7 @@ import "./test-helpers.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, vi, type Mock } from "vitest";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 import * as ssrf from "../infra/net/ssrf.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
@@ -17,16 +17,20 @@ export { resetBaileysMocks, resetLoadConfigMock, setLoadConfigMock } from "./tes
 // Avoid exporting inferred vitest mock types (TS2742 under pnpm + d.ts emit).
 // oxlint-disable-next-line typescript/no-explicit-any
 type AnyExport = any;
-type MockWebListener = {
-  close: () => Promise<void>;
-  onClose: Promise<WebListenerCloseReason>;
-  signalClose: () => void;
-  sendMessage: () => Promise<{ messageId: string }>;
-  sendPoll: () => Promise<{ messageId: string }>;
-  sendReaction: () => Promise<void>;
-  sendComposingTo: () => Promise<void>;
-};
 
+export interface MockWebListener {
+  close: Mock<() => Promise<void>>;
+  onClose: Promise<WebListenerCloseReason>;
+  signalClose: Mock<(reason?: WebListenerCloseReason) => void>;
+  // oxlint-disable-next-line typescript/no-explicit-any
+  sendMessage: Mock<(...args: any[]) => Promise<{ messageId: string }>>;
+  // oxlint-disable-next-line typescript/no-explicit-any
+  sendPoll: Mock<(...args: any[]) => Promise<{ messageId: string }>>;
+  // oxlint-disable-next-line typescript/no-explicit-any
+  sendReaction: Mock<(...args: any[]) => Promise<void>>;
+  // oxlint-disable-next-line typescript/no-explicit-any
+  sendComposingTo: Mock<(...args: any[]) => Promise<void>>;
+}
 export const TEST_NET_IP = "203.0.113.10";
 
 vi.mock("../agents/pi-embedded.js", () => ({
