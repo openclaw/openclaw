@@ -8,6 +8,7 @@ export type SanitizeSessionHistoryFn = (params: {
   messages: AgentMessage[];
   modelApi: string;
   provider: string;
+  allowedToolNames?: Iterable<string>;
   sessionManager: SessionManager;
   sessionId: string;
   modelId?: string;
