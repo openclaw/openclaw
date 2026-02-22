@@ -64,11 +64,18 @@ def package_skill(skill_path, output_dir=None):
 
     skill_filename = output_path / f"{skill_name}.skill"
 
+    # VCS and build directories that must never appear in .skill archives.
+    EXCLUDED_DIRS = {".git", ".svn", ".hg", "__pycache__", "node_modules", ".DS_Store"}
+
     # Create the .skill file (zip format)
     try:
         with zipfile.ZipFile(skill_filename, "w", zipfile.ZIP_DEFLATED) as zipf:
             # Walk through the skill directory
             for file_path in skill_path.rglob("*"):
+                # Skip VCS internals and other excluded directories.
+                if any(part in EXCLUDED_DIRS for part in file_path.relative_to(skill_path).parts):
+                    continue
+
                 # Security: never follow or package symlinks.
                 if file_path.is_symlink():
                     print(f"[ERROR] Symlinks are not allowed in skills: {file_path}")
