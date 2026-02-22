@@ -794,6 +794,10 @@
     {
       "source": "/gateway/trusted-proxy",
       "destination": "/gateway/trusted-proxy-auth"
+    },
+    {
+      "source": "/coolify",
+      "destination": "/install/coolify"
     }
   ],
   "navigation": {
@@ -862,7 +866,8 @@
                   "install/exe-dev",
                   "install/railway",
                   "install/render",
-                  "install/northflank"
+                  "install/northflank",
+                  "install/coolify"
                 ]
               },
               {
@@ -1376,7 +1381,8 @@
                   "zh-CN/install/exe-dev",
                   "zh-CN/install/railway",
                   "zh-CN/install/render",
-                  "zh-CN/install/northflank"
+                  "zh-CN/install/northflank",
+                  "zh-CN/install/coolify"
                 ]
               },
               {
