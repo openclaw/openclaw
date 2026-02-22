@@ -253,6 +253,7 @@ function renderGroupedMessage(
     .join(" ");
 
   if (!markdown && hasToolCards && isToolResult) {
+    if (!opts.showReasoning) return nothing;
     return html`${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}`;
   }
 
@@ -276,7 +277,7 @@ function renderGroupedMessage(
           ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
           : nothing
       }
-      ${toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar))}
+      ${opts.showReasoning ? toolCards.map((card) => renderToolCardSidebar(card, onOpenSidebar)) : nothing}
     </div>
   `;
 }
