@@ -10,6 +10,26 @@ function safeTrim(value: unknown): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
+/**
+ * Extract the raw provider channel ID from context fields.
+ * Slack sets To as "user:<id>" (DM) or "channel:<id>" (group).
+ * GroupChannel may carry the raw ID for group chats.
+ */
+function extractChannelId(ctx: TemplateContext): string | undefined {
+  // GroupChannel is the raw channel name/id for group chats
+  const group = safeTrim(ctx.GroupChannel);
+  if (group) {
+    return group;
+  }
+  // Parse "user:<id>" or "channel:<id>" from To
+  const to = safeTrim(ctx.To);
+  if (!to) {
+    return undefined;
+  }
+  const match = to.match(/^(?:user|channel|slack:(?:channel|group)):(.+)$/);
+  return match?.[1] ?? to;
+}
+
 export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
   const chatType = normalizeChatType(ctx.ChatType);
   const isDirect = !chatType || chatType === "direct";
@@ -43,12 +63,17 @@ export function buildInboundMetaSystemPrompt(ctx: TemplateContext): string {
     provider: safeTrim(ctx.Provider),
     surface: safeTrim(ctx.Surface),
     chat_type: chatType ?? (isDirect ? "direct" : undefined),
+    // Thread context: surface thread_ts and message_ts so the agent can call slack_thread_context.
+    thread_ts: safeTrim(ctx.ThreadTs) || undefined,
+    message_ts: safeTrim(ctx.MessageSid) || undefined,
+    channel_id: safeTrim(ctx.ProviderChannelId) || extractChannelId(ctx),
     flags: {
       is_group_chat: !isDirect ? true : undefined,
       was_mentioned: ctx.WasMentioned === true ? true : undefined,
       has_reply_context: Boolean(ctx.ReplyToBody),
       has_forwarded_context: Boolean(ctx.ForwardedFrom),
       has_thread_starter: Boolean(safeTrim(ctx.ThreadStarterBody)),
+      is_thread_reply: Boolean(safeTrim(ctx.ThreadTs)),
       history_count: Array.isArray(ctx.InboundHistory) ? ctx.InboundHistory.length : 0,
     },
   };

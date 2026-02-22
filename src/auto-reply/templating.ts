@@ -71,7 +71,11 @@ export type MsgContext = {
   ThreadStarterBody?: string;
   /** Full thread history when starting a new thread session. */
   ThreadHistoryBody?: string;
+  /** Slack thread_ts – present when message is a thread reply. */
+  ThreadTs?: string;
   IsFirstThreadTurn?: boolean;
+  /** Raw provider channel/conversation ID (e.g. Slack channel ID like D0AD6FBJB3R). */
+  ProviderChannelId?: string;
   ThreadLabel?: string;
   MediaPath?: string;
   MediaUrl?: string;
