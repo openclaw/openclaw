@@ -736,8 +736,8 @@
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
-  gap: 16px;
-  padding: 4px 0;
+  gap: 12px;
+  padding: 2px 0;
   overflow: hidden;
   transform-origin: top center;
   transition:
@@ -745,7 +745,7 @@
     transform var(--shell-focus-duration) var(--shell-focus-ease),
     max-height var(--shell-focus-duration) var(--shell-focus-ease),
     padding var(--shell-focus-duration) var(--shell-focus-ease);
-  max-height: 80px;
+  max-height: 64px;
 }
 
 .shell--chat-focus .content-header {
@@ -757,24 +757,25 @@
 }
 
 .page-title {
-  font-size: 28px;
-  font-weight: 700;
-  letter-spacing: -0.035em;
-  line-height: 1.15;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.2;
   color: var(--text-strong);
 }
 
 .page-sub {
   color: var(--muted);
-  font-size: 15px;
+  font-size: 13px;
   font-weight: 400;
-  margin-top: 6px;
+  margin-top: 2px;
   letter-spacing: -0.01em;
 }
 
 .page-meta {
   display: flex;
-  gap: 8px;
+  gap: 6px;
+  align-items: center;
 }
 
 /* Chat view header adjustments */
@@ -782,7 +783,7 @@
   flex-direction: row;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
 }
 
 .content--chat .content-header > div:first-child {
