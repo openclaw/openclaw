@@ -18,7 +18,7 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "perplexity", "grok"] as const;
+const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "google"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -31,6 +31,8 @@ const OPENROUTER_KEY_PREFIXES = ["sk-or-"];
 
 const XAI_API_ENDPOINT = "https://api.x.ai/v1/responses";
 const DEFAULT_GROK_MODEL = "grok-4-1-fast";
+
+const GOOGLE_CSE_ENDPOINT = "https://www.googleapis.com/customsearch/v1";
 
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
@@ -133,6 +135,29 @@ type GrokSearchResponse = {
   }>;
 };
 
+type GoogleConfig = {
+  apiKey?: string;
+  searchEngineId?: string;
+};
+
+type GoogleSearchItem = {
+  title?: string;
+  link?: string;
+  snippet?: string;
+  pagemap?: {
+    metatags?: Array<{ [key: string]: string }>;
+    cse_thumbnail?: Array<{ src?: string; width?: string; height?: string }>;
+  };
+};
+
+type GoogleSearchResponse = {
+  items?: GoogleSearchItem[];
+  searchInformation?: {
+    totalResults?: string;
+    formattedSearchTime?: string;
+  };
+};
+
 type PerplexitySearchResponse = {
   choices?: Array<{
     message?: {
@@ -227,6 +252,14 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
+  if (provider === "google") {
+    return {
+      error: "missing_google_api_key",
+      message:
+        "web_search (google) needs a Google API key and Custom Search Engine ID. Set GOOGLE_API_KEY and GOOGLE_SEARCH_ENGINE_ID in the Gateway environment, or configure tools.web.search.google.apiKey and tools.web.search.google.searchEngineId.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
   return {
     error: "missing_brave_api_key",
     message: `web_search needs a Brave Search API key. Run \`${formatCliCommand("openclaw configure --section web")}\` to store it, or set BRAVE_API_KEY in the Gateway environment.`,
@@ -244,6 +277,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   }
   if (raw === "grok") {
     return "grok";
+  }
+  if (raw === "google") {
+    return "google";
   }
   if (raw === "brave") {
     return "brave";
@@ -387,6 +423,38 @@ function resolveGrokModel(grok?: GrokConfig): string {
 
 function resolveGrokInlineCitations(grok?: GrokConfig): boolean {
   return grok?.inlineCitations === true;
+}
+
+function resolveGoogleConfig(search?: WebSearchConfig): GoogleConfig {
+  if (!search || typeof search !== "object") {
+    return {};
+  }
+  const google = "google" in search ? search.google : undefined;
+  if (!google || typeof google !== "object") {
+    return {};
+  }
+  return google as GoogleConfig;
+}
+
+function resolveGoogleApiKey(google?: GoogleConfig): string | undefined {
+  const fromConfig = normalizeApiKey(google?.apiKey);
+  if (fromConfig) {
+    return fromConfig;
+  }
+  const fromEnv = normalizeApiKey(process.env.GOOGLE_API_KEY);
+  return fromEnv || undefined;
+}
+
+function resolveGoogleSearchEngineId(google?: GoogleConfig): string | undefined {
+  const fromConfig =
+    google && "searchEngineId" in google && typeof google.searchEngineId === "string"
+      ? google.searchEngineId.trim()
+      : "";
+  if (fromConfig) {
+    return fromConfig;
+  }
+  const fromEnv = process.env.GOOGLE_SEARCH_ENGINE_ID?.trim();
+  return fromEnv || undefined;
 }
 
 function resolveSearchCount(value: unknown, fallback: number): number {
@@ -573,6 +641,41 @@ async function runGrokSearch(params: {
   return { content, citations, inlineCitations };
 }
 
+async function runGoogleSearch(params: {
+  query: string;
+  apiKey: string;
+  searchEngineId: string;
+  count: number;
+  timeoutSeconds: number;
+}): Promise<{ results: Array<{ title: string; url: string; description: string }> }> {
+  const url = new URL(GOOGLE_CSE_ENDPOINT);
+  url.searchParams.set("key", params.apiKey);
+  url.searchParams.set("cx", params.searchEngineId);
+  url.searchParams.set("q", params.query);
+  url.searchParams.set("num", String(params.count));
+
+  const res = await fetch(url.toString(), {
+    method: "GET",
+    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
+  });
+
+  if (!res.ok) {
+    const detailResult = await readResponseText(res, { maxBytes: 64_000 });
+    const detail = detailResult.text;
+    throw new Error(`Google Custom Search API error (${res.status}): ${detail || res.statusText}`);
+  }
+
+  const data = (await res.json()) as GoogleSearchResponse;
+  const items = Array.isArray(data.items) ? data.items : [];
+  const results = items.map((item) => ({
+    title: item.title ? wrapWebContent(item.title, "web_search") : "",
+    url: item.link ?? "",
+    description: item.snippet ? wrapWebContent(item.snippet, "web_search") : "",
+  }));
+
+  return { results };
+}
+
 async function runWebSearch(params: {
   query: string;
   count: number;
@@ -588,13 +691,16 @@ async function runWebSearch(params: {
   perplexityModel?: string;
   grokModel?: string;
   grokInlineCitations?: boolean;
+  googleSearchEngineId?: string;
 }): Promise<Record<string, unknown>> {
   const cacheKey = normalizeCacheKey(
     params.provider === "brave"
       ? `${params.provider}:${params.query}:${params.count}:${params.country || "default"}:${params.search_lang || "default"}:${params.ui_lang || "default"}:${params.freshness || "default"}`
       : params.provider === "perplexity"
         ? `${params.provider}:${params.query}:${params.perplexityBaseUrl ?? DEFAULT_PERPLEXITY_BASE_URL}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}:${params.freshness || "default"}`
-        : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
+        : params.provider === "google"
+          ? `${params.provider}:${params.query}:${params.count}:${params.googleSearchEngineId ?? "default"}`
+          : `${params.provider}:${params.query}:${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`,
   );
   const cached = readCache(SEARCH_CACHE, cacheKey);
   if (cached) {
@@ -654,6 +760,32 @@ async function runWebSearch(params: {
       content: wrapWebContent(content),
       citations,
       inlineCitations,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
+  if (params.provider === "google") {
+    const { results } = await runGoogleSearch({
+      query: params.query,
+      apiKey: params.apiKey,
+      searchEngineId: params.googleSearchEngineId!,
+      count: params.count,
+      timeoutSeconds: params.timeoutSeconds,
+    });
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      count: results.length,
+      tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      results,
     };
     writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
     return payload;
@@ -739,13 +871,16 @@ export function createWebSearchTool(options?: {
   const provider = resolveSearchProvider(search);
   const perplexityConfig = resolvePerplexityConfig(search);
   const grokConfig = resolveGrokConfig(search);
+  const googleConfig = resolveGoogleConfig(search);
 
   const description =
     provider === "perplexity"
       ? "Search the web using Perplexity Sonar (direct or via OpenRouter). Returns AI-synthesized answers with citations from real-time web search."
       : provider === "grok"
         ? "Search the web using xAI Grok. Returns AI-synthesized answers with citations from real-time web search."
-        : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+        : provider === "google"
+          ? "Search the web using Google Custom Search Engine. Returns titles, URLs, and snippets for targeted search within your configured search engine."
+          : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",
@@ -755,16 +890,33 @@ export function createWebSearchTool(options?: {
     execute: async (_toolCallId, args) => {
       const perplexityAuth =
         provider === "perplexity" ? resolvePerplexityApiKey(perplexityConfig) : undefined;
+      const googleApiKey = provider === "google" ? resolveGoogleApiKey(googleConfig) : undefined;
+      const googleSearchEngineId =
+        provider === "google" ? resolveGoogleSearchEngineId(googleConfig) : undefined;
+
       const apiKey =
         provider === "perplexity"
           ? perplexityAuth?.apiKey
           : provider === "grok"
             ? resolveGrokApiKey(grokConfig)
-            : resolveSearchApiKey(search);
+            : provider === "google"
+              ? googleApiKey
+              : resolveSearchApiKey(search);
 
       if (!apiKey) {
         return jsonResult(missingSearchKeyPayload(provider));
       }
+
+      // Google requires both API key and search engine ID
+      if (provider === "google" && !googleSearchEngineId) {
+        return jsonResult({
+          error: "missing_google_search_engine_id",
+          message:
+            "web_search (google) needs a Custom Search Engine ID. Set GOOGLE_SEARCH_ENGINE_ID in the Gateway environment, or configure tools.web.search.google.searchEngineId.",
+          docs: "https://docs.openclaw.ai/tools/web",
+        });
+      }
+
       const params = args as Record<string, unknown>;
       const query = readStringParam(params, "query", { required: true });
       const count =
@@ -808,6 +960,7 @@ export function createWebSearchTool(options?: {
         perplexityModel: resolvePerplexityModel(perplexityConfig),
         grokModel: resolveGrokModel(grokConfig),
         grokInlineCitations: resolveGrokInlineCitations(grokConfig),
+        googleSearchEngineId,
       });
       return jsonResult(result);
     },
@@ -825,4 +978,7 @@ export const __testing = {
   resolveGrokModel,
   resolveGrokInlineCitations,
   extractGrokContent,
+  resolveGoogleConfig,
+  resolveGoogleApiKey,
+  resolveGoogleSearchEngineId,
 } as const;
