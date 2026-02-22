@@ -11,6 +11,7 @@ import {
 } from "../../channels/allowlists/resolve-utils.js";
 import { loadConfig } from "../../config/config.js";
 import type { SessionScope } from "../../config/sessions.js";
+import type { GroupPolicy } from "../../config/types.base.js";
 import { warn } from "../../globals.js";
 import { installRequestBodyLimitGuard } from "../../infra/http-body.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
@@ -40,6 +41,25 @@ const { App, HTTPReceiver } = slackBolt;
 
 const SLACK_WEBHOOK_MAX_BODY_BYTES = 1024 * 1024;
 const SLACK_WEBHOOK_BODY_TIMEOUT_MS = 30_000;
+
+function resolveSlackRuntimeGroupPolicy(params: {
+  providerConfigPresent: boolean;
+  groupPolicy?: GroupPolicy;
+  defaultGroupPolicy?: GroupPolicy;
+}): {
+  groupPolicy: GroupPolicy;
+  providerMissingFallbackApplied: boolean;
+} {
+  const groupPolicy =
+    params.groupPolicy ??
+    params.defaultGroupPolicy ??
+    (params.providerConfigPresent ? "open" : "allowlist");
+  const providerMissingFallbackApplied =
+    !params.providerConfigPresent &&
+    params.groupPolicy === undefined &&
+    params.defaultGroupPolicy === undefined;
+  return { groupPolicy, providerMissingFallbackApplied };
+}
 
 function parseApiAppIdFromAppToken(raw?: string) {
   const token = raw?.trim();
@@ -99,16 +119,16 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
   const groupDmChannels = dmConfig?.groupChannels;
   let channelsConfig = slackCfg.channels;
   const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-  const groupPolicy = slackCfg.groupPolicy ?? defaultGroupPolicy ?? "open";
-  if (
-    slackCfg.groupPolicy === undefined &&
-    slackCfg.channels === undefined &&
-    defaultGroupPolicy === undefined &&
-    groupPolicy === "open"
-  ) {
+  const providerConfigPresent = cfg.channels?.slack !== undefined;
+  const { groupPolicy, providerMissingFallbackApplied } = resolveSlackRuntimeGroupPolicy({
+    providerConfigPresent,
+    groupPolicy: slackCfg.groupPolicy,
+    defaultGroupPolicy,
+  });
+  if (providerMissingFallbackApplied) {
     runtime.log?.(
       warn(
-        'slack: groupPolicy defaults to "open" when channels.slack is missing; set channels.slack.groupPolicy (or channels.defaults.groupPolicy) or add channels.slack.channels to restrict access.',
+        'slack: channels.slack is missing; defaulting groupPolicy to "allowlist" (group messages blocked until explicitly configured).',
       ),
     );
   }
@@ -363,3 +383,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     await app.stop().catch(() => undefined);
   }
 }
+
+export const __testing = {
+  resolveSlackRuntimeGroupPolicy,
+};
