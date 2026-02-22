@@ -95,6 +95,22 @@ describe("gateway server cron", () => {
     testState.cronEnabled = false;
     await fs.mkdir(path.dirname(testState.cronStorePath), { recursive: true });
     await fs.writeFile(testState.cronStorePath, JSON.stringify({ version: 1, jobs: [] }));
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    expect(typeof configPath).toBe("string");
+    await fs.mkdir(path.dirname(configPath as string), { recursive: true });
+    await fs.writeFile(
+      configPath as string,
+      JSON.stringify(
+        {
+          cron: {
+            webhookToken: "cron-webhook-token",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
 
     const { server, ws } = await startServerWithClient();
     await connectOk(ws);
@@ -462,6 +478,48 @@ describe("gateway server cron", () => {
       }
     }
   }, 45_000);
+
+  test("rejects webhook delivery jobs when cron.webhookToken is missing", async () => {
+    const prevSkipCron = process.env.OPENCLAW_SKIP_CRON;
+    process.env.OPENCLAW_SKIP_CRON = "0";
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-cron-webhook-missing-token-"));
+    testState.cronStorePath = path.join(dir, "cron", "jobs.json");
+    testState.cronEnabled = false;
+    await fs.mkdir(path.dirname(testState.cronStorePath), { recursive: true });
+    await fs.writeFile(testState.cronStorePath, JSON.stringify({ version: 1, jobs: [] }));
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    expect(typeof configPath).toBe("string");
+    await fs.mkdir(path.dirname(configPath as string), { recursive: true });
+    await fs.writeFile(configPath as string, JSON.stringify({ cron: {} }, null, 2), "utf-8");
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      const addRes = await rpcReq(ws, "cron.add", {
+        name: "webhook missing token",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "systemEvent", text: "send webhook" },
+        delivery: { mode: "webhook", to: "https://example.invalid/cron-finished" },
+      });
+      expect(addRes.ok).toBe(false);
+      expect(String(addRes.error?.message ?? "")).toContain("cron.webhookToken");
+    } finally {
+      ws.close();
+      await server.close();
+      await rmTempDir(dir);
+      testState.cronStorePath = undefined;
+      testState.cronEnabled = undefined;
+      if (prevSkipCron === undefined) {
+        delete process.env.OPENCLAW_SKIP_CRON;
+      } else {
+        process.env.OPENCLAW_SKIP_CRON = prevSkipCron;
+      }
+    }
+  });
 
   test("posts webhooks for delivery mode and legacy notify fallback only when summary exists", async () => {
     const prevSkipCron = process.env.OPENCLAW_SKIP_CRON;

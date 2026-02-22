@@ -94,6 +94,7 @@ describe("buildGatewayCronService", () => {
       },
       cron: {
         store: path.join(tmpDir, "cron.json"),
+        webhookToken: "cron-webhook-token",
       },
     } as OpenClawConfig;
 
@@ -130,11 +131,51 @@ describe("buildGatewayCronService", () => {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
+            Authorization: "Bearer cron-webhook-token",
           },
           body: expect.stringContaining('"action":"finished"'),
           signal: expect.any(AbortSignal),
         },
       });
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("rejects webhook jobs when cron.webhookToken is missing", async () => {
+    const tmpDir = path.join(os.tmpdir(), `server-cron-no-webhook-token-${Date.now()}`);
+    const cfg = {
+      session: {
+        mainKey: "main",
+      },
+      cron: {
+        store: path.join(tmpDir, "cron.json"),
+      },
+    } as OpenClawConfig;
+
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      await expect(
+        state.cron.add({
+          name: "webhook-without-token",
+          enabled: true,
+          schedule: { kind: "at", at: new Date(1).toISOString() },
+          sessionTarget: "main",
+          wakeMode: "next-heartbeat",
+          payload: { kind: "systemEvent", text: "hello" },
+          delivery: {
+            mode: "webhook",
+            to: "https://example.invalid/cron-finished",
+          },
+        }),
+      ).rejects.toThrow("cron webhook delivery requires cron.webhookToken");
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
     } finally {
       state.cron.stop();
     }
