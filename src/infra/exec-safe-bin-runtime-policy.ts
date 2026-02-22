@@ -6,7 +6,7 @@ import {
   type SafeBinProfileFixture,
   type SafeBinProfileFixtures,
 } from "./exec-safe-bin-policy.js";
-import { getTrustedSafeBinDirs } from "./exec-safe-bin-trust.js";
+import { getTrustedSafeBinDirs, normalizeTrustedSafeBinDirs } from "./exec-safe-bin-trust.js";
 
 export type ExecSafeBinConfigScope = {
   safeBins?: string[] | null;
@@ -79,14 +79,6 @@ export function listInterpreterLikeSafeBins(entries: Iterable<string>): string[]
     .toSorted();
 }
 
-function normalizeTrustedDirs(entries?: string[] | null): string[] {
-  if (!Array.isArray(entries)) {
-    return [];
-  }
-  const normalized = entries.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
-  return Array.from(new Set(normalized));
-}
-
 export function resolveMergedSafeBinProfileFixtures(params: {
   global?: ExecSafeBinConfigScope | null;
   local?: ExecSafeBinConfigScope | null;
@@ -124,8 +116,8 @@ export function resolveExecSafeBinRuntimePolicy(params: {
     .toSorted();
   const trustedSafeBinDirs = getTrustedSafeBinDirs({
     extraDirs: [
-      ...normalizeTrustedDirs(params.global?.safeBinTrustedDirs),
-      ...normalizeTrustedDirs(params.local?.safeBinTrustedDirs),
+      ...normalizeTrustedSafeBinDirs(params.global?.safeBinTrustedDirs),
+      ...normalizeTrustedSafeBinDirs(params.local?.safeBinTrustedDirs),
     ],
   });
   return {
