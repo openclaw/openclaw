@@ -17,6 +17,12 @@ const SessionsSpawnToolSchema = Type.Object({
   thread: Type.Optional(Type.Boolean()),
   mode: optionalStringEnum(SUBAGENT_SPAWN_MODES),
   cleanup: optionalStringEnum(["delete", "keep"] as const),
+  tools: Type.Optional(
+    Type.Object({
+      allow: Type.Optional(Type.Array(Type.String())),
+      deny: Type.Optional(Type.Array(Type.String())),
+    }),
+  ),
 });
 
 export function createSessionsSpawnTool(opts?: {
@@ -60,6 +66,16 @@ export function createSessionsSpawnTool(opts?: {
           ? Math.max(0, Math.floor(timeoutSecondsCandidate))
           : undefined;
       const thread = params.thread === true;
+      const rawTools =
+        params.tools && typeof params.tools === "object" && !Array.isArray(params.tools)
+          ? (params.tools as { allow?: unknown; deny?: unknown })
+          : undefined;
+      const tools = rawTools
+        ? {
+            ...(Array.isArray(rawTools.allow) ? { allow: rawTools.allow.map(String) } : {}),
+            ...(Array.isArray(rawTools.deny) ? { deny: rawTools.deny.map(String) } : {}),
+          }
+        : undefined;
 
       const result = await spawnSubagentDirect(
         {
@@ -72,6 +88,7 @@ export function createSessionsSpawnTool(opts?: {
           thread,
           mode,
           cleanup,
+          tools: tools && (tools.allow || tools.deny) ? tools : undefined,
           expectsCompletionMessage: true,
         },
         {

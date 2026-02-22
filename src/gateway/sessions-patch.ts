@@ -129,6 +129,30 @@ export async function applySessionsPatchToStore(params: {
     }
   }
 
+  if ("spawnToolPolicy" in patch) {
+    const raw = patch.spawnToolPolicy;
+    if (raw === null) {
+      if (existing?.spawnToolPolicy) {
+        return invalid("spawnToolPolicy cannot be cleared once set");
+      }
+    } else if (raw !== undefined) {
+      if (!isSubagentSessionKey(storeKey)) {
+        return invalid("spawnToolPolicy is only supported for subagent:* sessions");
+      }
+      if (existing?.spawnToolPolicy) {
+        return invalid("spawnToolPolicy cannot be changed once set");
+      }
+      const allow = Array.isArray(raw.allow) ? raw.allow.map(String) : undefined;
+      const deny = Array.isArray(raw.deny) ? raw.deny.map(String) : undefined;
+      if (allow || deny) {
+        next.spawnToolPolicy = {
+          ...(allow ? { allow } : {}),
+          ...(deny ? { deny } : {}),
+        };
+      }
+    }
+  }
+
   if ("label" in patch) {
     const raw = patch.label;
     if (raw === null) {
