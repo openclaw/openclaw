@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import JSON5 from "json5";
 import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
+import { redactConfigObject } from "../config/redact-snapshot.js";
 import { danger, info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -227,12 +228,23 @@ function parseRequiredPath(path: string): PathSegment[] {
   return parsedPath;
 }
 
-export async function runConfigGet(opts: { path: string; json?: boolean; runtime?: RuntimeEnv }) {
+export async function runConfigGet(opts: {
+  path: string;
+  json?: boolean;
+  showSecrets?: boolean;
+  runtime?: RuntimeEnv;
+}) {
   const runtime = opts.runtime ?? defaultRuntime;
   try {
     const parsedPath = parseRequiredPath(opts.path);
     const snapshot = await loadValidConfig(runtime);
-    const res = getAtPath(snapshot.config, parsedPath);
+    const sourceConfig = opts.showSecrets ? snapshot.config : redactConfigObject(snapshot.config);
+    if (opts.showSecrets) {
+      runtime.error(
+        theme.warn("Warning: --show-secrets prints sensitive values to your terminal history."),
+      );
+    }
+    const res = getAtPath(sourceConfig, parsedPath);
     if (!res.found) {
       runtime.error(danger(`Config path not found: ${opts.path}`));
       runtime.exit(1);
@@ -307,8 +319,13 @@ export function registerConfigCli(program: Command) {
     .description("Get a config value by dot path")
     .argument("<path>", "Config path (dot or bracket notation)")
     .option("--json", "Output JSON", false)
+    .option("--show-secrets", "Show unredacted secret values (unsafe)", false)
     .action(async (path: string, opts) => {
-      await runConfigGet({ path, json: Boolean(opts.json) });
+      await runConfigGet({
+        path,
+        json: Boolean(opts.json),
+        showSecrets: Boolean(opts.showSecrets),
+      });
     });
 
   cmd
