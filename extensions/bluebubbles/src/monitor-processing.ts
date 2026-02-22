@@ -5,6 +5,8 @@ import {
   logInboundDrop,
   logTypingFailure,
   resolveAckReaction,
+  resolveDmGroupAccessDecision,
+  resolveEffectiveAllowFromLists,
   resolveControlCommandGate,
   stripMarkdown,
 } from "openclaw/plugin-sdk";
@@ -323,41 +325,51 @@ export async function processMessage(
 
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const groupPolicy = account.config.groupPolicy ?? "allowlist";
-  const configAllowFrom = (account.config.allowFrom ?? []).map((entry) => String(entry));
-  const configGroupAllowFrom = (account.config.groupAllowFrom ?? []).map((entry) => String(entry));
   const storeAllowFrom = await core.channel.pairing
     .readAllowFromStore("bluebubbles")
     .catch(() => []);
-  const effectiveAllowFrom = [...configAllowFrom, ...storeAllowFrom]
-    .map((entry) => String(entry).trim())
-    .filter(Boolean);
-  const effectiveGroupAllowFrom = [
-    ...(configGroupAllowFrom.length > 0 ? configGroupAllowFrom : configAllowFrom),
-    ...storeAllowFrom,
-  ]
-    .map((entry) => String(entry).trim())
-    .filter(Boolean);
+  const { effectiveAllowFrom, effectiveGroupAllowFrom } = resolveEffectiveAllowFromLists({
+    allowFrom: account.config.allowFrom,
+    groupAllowFrom: account.config.groupAllowFrom,
+    storeAllowFrom,
+    dmPolicy,
+  });
   const groupAllowEntry = formatGroupAllowlistEntry({
     chatGuid: message.chatGuid,
     chatId: message.chatId ?? undefined,
     chatIdentifier: message.chatIdentifier ?? undefined,
   });
   const groupName = message.chatName?.trim() || undefined;
+  const accessDecision = resolveDmGroupAccessDecision({
+    isGroup,
+    dmPolicy,
+    groupPolicy,
+    effectiveAllowFrom,
+    effectiveGroupAllowFrom,
+    isSenderAllowed: (allowFrom) =>
+      isAllowedBlueBubblesSender({
+        allowFrom,
+        sender: message.senderId,
+        chatId: message.chatId ?? undefined,
+        chatGuid: message.chatGuid ?? undefined,
+        chatIdentifier: message.chatIdentifier ?? undefined,
+      }),
+  });
 
-  if (isGroup) {
-    if (groupPolicy === "disabled") {
-      logVerbose(core, runtime, "Blocked BlueBubbles group message (groupPolicy=disabled)");
-      logGroupAllowlistHint({
-        runtime,
-        reason: "groupPolicy=disabled",
-        entry: groupAllowEntry,
-        chatName: groupName,
-        accountId: account.accountId,
-      });
-      return;
-    }
-    if (groupPolicy === "allowlist") {
-      if (effectiveGroupAllowFrom.length === 0) {
+  if (accessDecision.decision !== "allow") {
+    if (isGroup) {
+      if (accessDecision.reason === "groupPolicy=disabled") {
+        logVerbose(core, runtime, "Blocked BlueBubbles group message (groupPolicy=disabled)");
+        logGroupAllowlistHint({
+          runtime,
+          reason: "groupPolicy=disabled",
+          entry: groupAllowEntry,
+          chatName: groupName,
+          accountId: account.accountId,
+        });
+        return;
+      }
+      if (accessDecision.reason === "groupPolicy=allowlist (empty allowlist)") {
         logVerbose(core, runtime, "Blocked BlueBubbles group message (no allowlist)");
         logGroupAllowlistHint({
           runtime,
@@ -368,14 +380,7 @@ export async function processMessage(
         });
         return;
       }
-      const allowed = isAllowedBlueBubblesSender({
-        allowFrom: effectiveGroupAllowFrom,
-        sender: message.senderId,
-        chatId: message.chatId ?? undefined,
-        chatGuid: message.chatGuid ?? undefined,
-        chatIdentifier: message.chatIdentifier ?? undefined,
-      });
-      if (!allowed) {
+      if (accessDecision.reason === "groupPolicy=allowlist (not allowlisted)") {
         logVerbose(
           core,
           runtime,
@@ -395,70 +400,60 @@ export async function processMessage(
         });
         return;
       }
+      return;
     }
-  } else {
-    if (dmPolicy === "disabled") {
+
+    if (accessDecision.reason === "dmPolicy=disabled") {
       logVerbose(core, runtime, `Blocked BlueBubbles DM from ${message.senderId}`);
       logVerbose(core, runtime, `drop: dmPolicy disabled sender=${message.senderId}`);
       return;
     }
-    if (dmPolicy !== "open") {
-      const allowed = isAllowedBlueBubblesSender({
-        allowFrom: effectiveAllowFrom,
-        sender: message.senderId,
-        chatId: message.chatId ?? undefined,
-        chatGuid: message.chatGuid ?? undefined,
-        chatIdentifier: message.chatIdentifier ?? undefined,
+
+    if (accessDecision.decision === "pairing") {
+      const { code, created } = await core.channel.pairing.upsertPairingRequest({
+        channel: "bluebubbles",
+        id: message.senderId,
+        meta: { name: message.senderName },
       });
-      if (!allowed) {
-        if (dmPolicy === "pairing") {
-          const { code, created } = await core.channel.pairing.upsertPairingRequest({
-            channel: "bluebubbles",
-            id: message.senderId,
-            meta: { name: message.senderName },
-          });
-          runtime.log?.(
-            `[bluebubbles] pairing request sender=${message.senderId} created=${created}`,
+      runtime.log?.(`[bluebubbles] pairing request sender=${message.senderId} created=${created}`);
+      if (created) {
+        logVerbose(core, runtime, `bluebubbles pairing request sender=${message.senderId}`);
+        try {
+          await sendMessageBlueBubbles(
+            message.senderId,
+            core.channel.pairing.buildPairingReply({
+              channel: "bluebubbles",
+              idLine: `Your BlueBubbles sender id: ${message.senderId}`,
+              code,
+            }),
+            { cfg: config, accountId: account.accountId },
           );
-          if (created) {
-            logVerbose(core, runtime, `bluebubbles pairing request sender=${message.senderId}`);
-            try {
-              await sendMessageBlueBubbles(
-                message.senderId,
-                core.channel.pairing.buildPairingReply({
-                  channel: "bluebubbles",
-                  idLine: `Your BlueBubbles sender id: ${message.senderId}`,
-                  code,
-                }),
-                { cfg: config, accountId: account.accountId },
-              );
-              statusSink?.({ lastOutboundAt: Date.now() });
-            } catch (err) {
-              logVerbose(
-                core,
-                runtime,
-                `bluebubbles pairing reply failed for ${message.senderId}: ${String(err)}`,
-              );
-              runtime.error?.(
-                `[bluebubbles] pairing reply failed sender=${message.senderId}: ${String(err)}`,
-              );
-            }
-          }
-        } else {
+          statusSink?.({ lastOutboundAt: Date.now() });
+        } catch (err) {
           logVerbose(
             core,
             runtime,
-            `Blocked unauthorized BlueBubbles sender ${message.senderId} (dmPolicy=${dmPolicy})`,
+            `bluebubbles pairing reply failed for ${message.senderId}: ${String(err)}`,
           );
-          logVerbose(
-            core,
-            runtime,
-            `drop: dm sender not allowed sender=${message.senderId} allowFrom=${effectiveAllowFrom.join(",")}`,
+          runtime.error?.(
+            `[bluebubbles] pairing reply failed sender=${message.senderId}: ${String(err)}`,
           );
         }
-        return;
       }
+      return;
     }
+
+    logVerbose(
+      core,
+      runtime,
+      `Blocked unauthorized BlueBubbles sender ${message.senderId} (dmPolicy=${dmPolicy})`,
+    );
+    logVerbose(
+      core,
+      runtime,
+      `drop: dm sender not allowed sender=${message.senderId} allowFrom=${effectiveAllowFrom.join(",")}`,
+    );
+    return;
   }
 
   const chatId = message.chatId ?? undefined;
@@ -1106,56 +1101,32 @@ export async function processReaction(
 
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const groupPolicy = account.config.groupPolicy ?? "allowlist";
-  const configAllowFrom = (account.config.allowFrom ?? []).map((entry) => String(entry));
-  const configGroupAllowFrom = (account.config.groupAllowFrom ?? []).map((entry) => String(entry));
   const storeAllowFrom = await core.channel.pairing
     .readAllowFromStore("bluebubbles")
     .catch(() => []);
-  const effectiveAllowFrom = [...configAllowFrom, ...storeAllowFrom]
-    .map((entry) => String(entry).trim())
-    .filter(Boolean);
-  const effectiveGroupAllowFrom = [
-    ...(configGroupAllowFrom.length > 0 ? configGroupAllowFrom : configAllowFrom),
-    ...storeAllowFrom,
-  ]
-    .map((entry) => String(entry).trim())
-    .filter(Boolean);
-
-  if (reaction.isGroup) {
-    if (groupPolicy === "disabled") {
-      return;
-    }
-    if (groupPolicy === "allowlist") {
-      if (effectiveGroupAllowFrom.length === 0) {
-        return;
-      }
-      const allowed = isAllowedBlueBubblesSender({
-        allowFrom: effectiveGroupAllowFrom,
+  const { effectiveAllowFrom, effectiveGroupAllowFrom } = resolveEffectiveAllowFromLists({
+    allowFrom: account.config.allowFrom,
+    groupAllowFrom: account.config.groupAllowFrom,
+    storeAllowFrom,
+    dmPolicy,
+  });
+  const accessDecision = resolveDmGroupAccessDecision({
+    isGroup: reaction.isGroup,
+    dmPolicy,
+    groupPolicy,
+    effectiveAllowFrom,
+    effectiveGroupAllowFrom,
+    isSenderAllowed: (allowFrom) =>
+      isAllowedBlueBubblesSender({
+        allowFrom,
         sender: reaction.senderId,
         chatId: reaction.chatId ?? undefined,
         chatGuid: reaction.chatGuid ?? undefined,
         chatIdentifier: reaction.chatIdentifier ?? undefined,
-      });
-      if (!allowed) {
-        return;
-      }
-    }
-  } else {
-    if (dmPolicy === "disabled") {
-      return;
-    }
-    if (dmPolicy !== "open") {
-      const allowed = isAllowedBlueBubblesSender({
-        allowFrom: effectiveAllowFrom,
-        sender: reaction.senderId,
-        chatId: reaction.chatId ?? undefined,
-        chatGuid: reaction.chatGuid ?? undefined,
-        chatIdentifier: reaction.chatIdentifier ?? undefined,
-      });
-      if (!allowed) {
-        return;
-      }
-    }
+      }),
+  });
+  if (accessDecision.decision !== "allow") {
+    return;
   }
 
   const chatId = reaction.chatId ?? undefined;

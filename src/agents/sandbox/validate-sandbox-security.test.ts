@@ -11,6 +11,10 @@ import {
   validateSandboxSecurity,
 } from "./validate-sandbox-security.js";
 
+function expectBindMountsToThrow(binds: string[], expected: RegExp, label: string) {
+  expect(() => validateBindMounts(binds), label).toThrow(expected);
+}
+
 describe("getBlockedBindReason", () => {
   it("blocks common Docker socket directories", () => {
     expect(getBlockedBindReason("/run:/run")).toEqual(expect.objectContaining({ kind: "targets" }));
@@ -41,37 +45,56 @@ describe("validateBindMounts", () => {
     expect(() => validateBindMounts([])).not.toThrow();
   });
 
-  it("blocks /etc mount", () => {
-    expect(() => validateBindMounts(["/etc/passwd:/mnt/passwd:ro"])).toThrow(
-      /blocked path "\/etc"/,
-    );
+  it("blocks dangerous bind source paths", () => {
+    const cases = [
+      {
+        name: "etc mount",
+        binds: ["/etc/passwd:/mnt/passwd:ro"],
+        expected: /blocked path "\/etc"/,
+      },
+      {
+        name: "proc mount",
+        binds: ["/proc:/proc:ro"],
+        expected: /blocked path "\/proc"/,
+      },
+      {
+        name: "docker socket in /var/run",
+        binds: ["/var/run/docker.sock:/var/run/docker.sock"],
+        expected: /docker\.sock/,
+      },
+      {
+        name: "docker socket in /run",
+        binds: ["/run/docker.sock:/run/docker.sock"],
+        expected: /docker\.sock/,
+      },
+      {
+        name: "parent /run mount",
+        binds: ["/run:/run"],
+        expected: /blocked path/,
+      },
+      {
+        name: "parent /var/run mount",
+        binds: ["/var/run:/var/run"],
+        expected: /blocked path/,
+      },
+      {
+        name: "traversal into /etc",
+        binds: ["/home/user/../../etc/shadow:/mnt/shadow"],
+        expected: /blocked path "\/etc"/,
+      },
+      {
+        name: "double-slash normalization into /etc",
+        binds: ["//etc//passwd:/mnt/passwd"],
+        expected: /blocked path "\/etc"/,
+      },
+    ] as const;
+    for (const testCase of cases) {
+      expectBindMountsToThrow([...testCase.binds], testCase.expected, testCase.name);
+    }
   });
 
-  it("blocks /proc mount", () => {
-    expect(() => validateBindMounts(["/proc:/proc:ro"])).toThrow(/blocked path "\/proc"/);
-  });
-
-  it("blocks Docker socket mounts (/var/run + /run)", () => {
-    expect(() => validateBindMounts(["/var/run/docker.sock:/var/run/docker.sock"])).toThrow(
-      /docker\.sock/,
-    );
-    expect(() => validateBindMounts(["/run/docker.sock:/run/docker.sock"])).toThrow(/docker\.sock/);
-  });
-
-  it("blocks parent mounts that would expose the Docker socket", () => {
-    expect(() => validateBindMounts(["/run:/run"])).toThrow(/blocked path/);
-    expect(() => validateBindMounts(["/var/run:/var/run"])).toThrow(/blocked path/);
+  it("allows parent mounts that are not blocked", () => {
     expect(() => validateBindMounts(["/var:/var"])).not.toThrow();
-  });
-
-  it("blocks paths with .. traversal to dangerous directories", () => {
-    expect(() => validateBindMounts(["/home/user/../../etc/shadow:/mnt/shadow"])).toThrow(
-      /blocked path "\/etc"/,
-    );
-  });
-
-  it("blocks paths with double slashes normalizing to dangerous dirs", () => {
-    expect(() => validateBindMounts(["//etc//passwd:/mnt/passwd"])).toThrow(/blocked path "\/etc"/);
   });
 
   it("blocks symlink escapes into blocked directories", () => {
@@ -90,9 +113,10 @@ describe("validateBindMounts", () => {
   });
 
   it("rejects non-absolute source paths (relative or named volumes)", () => {
-    expect(() => validateBindMounts(["../etc/passwd:/mnt/passwd"])).toThrow(/non-absolute/);
-    expect(() => validateBindMounts(["etc/passwd:/mnt/passwd"])).toThrow(/non-absolute/);
-    expect(() => validateBindMounts(["myvol:/mnt"])).toThrow(/non-absolute/);
+    const cases = ["../etc/passwd:/mnt/passwd", "etc/passwd:/mnt/passwd", "myvol:/mnt"] as const;
+    for (const source of cases) {
+      expectBindMountsToThrow([source], /non-absolute/, source);
+    }
   });
 });
 
@@ -105,8 +129,13 @@ describe("validateNetworkMode", () => {
   });
 
   it("blocks host mode (case-insensitive)", () => {
-    expect(() => validateNetworkMode("host")).toThrow(/network mode "host" is blocked/);
-    expect(() => validateNetworkMode("HOST")).toThrow(/network mode "HOST" is blocked/);
+    const cases = [
+      { mode: "host", expected: /network mode "host" is blocked/ },
+      { mode: "HOST", expected: /network mode "HOST" is blocked/ },
+    ] as const;
+    for (const testCase of cases) {
+      expect(() => validateNetworkMode(testCase.mode), testCase.mode).toThrow(testCase.expected);
+    }
   });
 });
 
@@ -115,15 +144,6 @@ describe("validateSeccompProfile", () => {
     expect(() => validateSeccompProfile("/tmp/seccomp.json")).not.toThrow();
     expect(() => validateSeccompProfile(undefined)).not.toThrow();
   });
-
-  it("blocks unconfined (case-insensitive)", () => {
-    expect(() => validateSeccompProfile("unconfined")).toThrow(
-      /seccomp profile "unconfined" is blocked/,
-    );
-    expect(() => validateSeccompProfile("Unconfined")).toThrow(
-      /seccomp profile "Unconfined" is blocked/,
-    );
-  });
 });
 
 describe("validateApparmorProfile", () => {
@@ -131,11 +151,23 @@ describe("validateApparmorProfile", () => {
     expect(() => validateApparmorProfile("openclaw-sandbox")).not.toThrow();
     expect(() => validateApparmorProfile(undefined)).not.toThrow();
   });
+});
 
-  it("blocks unconfined (case-insensitive)", () => {
-    expect(() => validateApparmorProfile("unconfined")).toThrow(
-      /apparmor profile "unconfined" is blocked/,
-    );
+describe("profile hardening", () => {
+  it.each([
+    {
+      name: "seccomp",
+      run: (value: string) => validateSeccompProfile(value),
+      expected: /seccomp profile ".+" is blocked/,
+    },
+    {
+      name: "apparmor",
+      run: (value: string) => validateApparmorProfile(value),
+      expected: /apparmor profile ".+" is blocked/,
+    },
+  ])("blocks unconfined profiles (case-insensitive): $name", ({ run, expected }) => {
+    expect(() => run("unconfined")).toThrow(expected);
+    expect(() => run("Unconfined")).toThrow(expected);
   });
 });
 

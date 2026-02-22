@@ -10,6 +10,26 @@ describe("mergeAllowFromSources", () => {
       }),
     ).toEqual(["line:user:abc", "123", "telegram:456"]);
   });
+
+  it("excludes pairing-store entries when dmPolicy is allowlist", () => {
+    expect(
+      mergeAllowFromSources({
+        allowFrom: ["+1111"],
+        storeAllowFrom: ["+2222", "+3333"],
+        dmPolicy: "allowlist",
+      }),
+    ).toEqual(["+1111"]);
+  });
+
+  it("keeps pairing-store entries for non-allowlist policies", () => {
+    expect(
+      mergeAllowFromSources({
+        allowFrom: ["+1111"],
+        storeAllowFrom: ["+2222"],
+        dmPolicy: "pairing",
+      }),
+    ).toEqual(["+1111", "+2222"]);
+  });
 });
 
 describe("firstDefined", () => {

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import {
   addSubagentRunForTests,
   listSubagentRunsForRequester,
@@ -41,7 +41,13 @@ const waitForCalls = async (getCount: () => number, count: number, timeoutMs = 2
   );
 };
 
+let sessionsModule: typeof import("../config/sessions.js");
+
 describe("sessions tools", () => {
+  beforeAll(async () => {
+    sessionsModule = await import("../config/sessions.js");
+  });
+
   it("uses number (not integer) in tool schemas for Gemini compatibility", () => {
     const tools = createOpenClawTools();
     const byName = (name: string) => {
@@ -79,6 +85,8 @@ describe("sessions tools", () => {
     expect(schemaProp("sessions_send", "timeoutSeconds").type).toBe("number");
     expect(schemaProp("sessions_spawn", "thinking").type).toBe("string");
     expect(schemaProp("sessions_spawn", "runTimeoutSeconds").type).toBe("number");
+    expect(schemaProp("sessions_spawn", "thread").type).toBe("boolean");
+    expect(schemaProp("sessions_spawn", "mode").type).toBe("string");
     expect(schemaProp("subagents", "recentMinutes").type).toBe("number");
   });
 
@@ -765,7 +773,6 @@ describe("sessions tools", () => {
       startedAt: now - 2 * 60_000,
     });
 
-    const sessionsModule = await import("../config/sessions.js");
     const loadSessionStoreSpy = vi
       .spyOn(sessionsModule, "loadSessionStore")
       .mockImplementation(() => ({
@@ -825,7 +832,6 @@ describe("sessions tools", () => {
       startedAt: Date.now() - 60_000,
     });
 
-    const sessionsModule = await import("../config/sessions.js");
     const loadSessionStoreSpy = vi
       .spyOn(sessionsModule, "loadSessionStore")
       .mockImplementation(() => ({

@@ -223,6 +223,19 @@ enum OpenClawConfigFile {
         }
     }
 
+    static func clearRemoteGatewayUrl() {
+        self.updateGatewayDict { gateway in
+            guard var remote = gateway["remote"] as? [String: Any] else { return }
+            guard remote["url"] != nil else { return }
+            remote.removeValue(forKey: "url")
+            if remote.isEmpty {
+                gateway.removeValue(forKey: "remote")
+            } else {
+                gateway["remote"] = remote
+            }
+        }
+    }
+
     private static func remoteGatewayUrl() -> URL? {
         let root = self.loadDict()
         guard let gateway = root["gateway"] as? [String: Any],

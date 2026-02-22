@@ -43,6 +43,7 @@ final class NodeAppModel {
     private let deepLinkLogger = Logger(subsystem: "ai.openclaw.ios", category: "DeepLink")
     private let pushWakeLogger = Logger(subsystem: "ai.openclaw.ios", category: "PushWake")
     private let locationWakeLogger = Logger(subsystem: "ai.openclaw.ios", category: "LocationWake")
+    private let watchReplyLogger = Logger(subsystem: "ai.openclaw.ios", category: "WatchReply")
     enum CameraHUDKind {
         case photo
         case recording
@@ -109,6 +110,8 @@ final class NodeAppModel {
     private var backgroundReconnectSuppressed = false
     private var backgroundReconnectLeaseUntil: Date?
     private var lastSignificantLocationWakeAt: Date?
+    private var queuedWatchReplies: [WatchQuickReplyEvent] = []
+    private var seenWatchReplyIds = Set<String>()
 
     private var gatewayConnected = false
     private var operatorConnected = false
@@ -155,6 +158,11 @@ final class NodeAppModel {
         self.talkMode = talkMode
         self.apnsDeviceTokenHex = UserDefaults.standard.string(forKey: Self.apnsDeviceTokenUserDefaultsKey)
         GatewayDiagnostics.bootstrap()
+        self.watchMessagingService.setReplyHandler { [weak self] event in
+            Task { @MainActor in
+                await self?.handleWatchQuickReply(event)
+            }
+        }
 
         self.voiceWake.configure { [weak self] cmd in
             guard let self else { return }
@@ -1608,9 +1616,16 @@ private extension NodeAppModel {
             do {
                 let result = try await self.watchMessagingService.sendNotification(
                     id: req.id,
-                    title: title,
-                    body: body,
-                    priority: params.priority)
+                    params: params)
+                if result.queuedForDelivery || !result.deliveredImmediately {
+                    let invokeID = req.id
+                    Task { @MainActor in
+                        await WatchPromptNotificationBridge.scheduleMirroredWatchPromptNotificationIfNeeded(
+                            invokeID: invokeID,
+                            params: params,
+                            sendResult: result)
+                    }
+                }
                 let payload = OpenClawWatchNotifyPayload(
                     deliveredImmediately: result.deliveredImmediately,
                     queuedForDelivery: result.queuedForDelivery,
@@ -1889,6 +1904,7 @@ private extension NodeAppModel {
                             }
                             GatewayDiagnostics.log(
                                 "operator gateway connected host=\(url.host ?? "?") scheme=\(url.scheme ?? "?")")
+                            await self.talkMode.reloadConfig()
                             await self.refreshBrandingFromGateway()
                             await self.refreshAgentsFromGateway()
                             await self.refreshShareRouteFromGateway()
@@ -2255,6 +2271,90 @@ extension NodeAppModel {
     /// Back-compat hook retained for older gateway-connect flows.
     func onNodeGatewayConnected() async {
         await self.registerAPNsTokenIfNeeded()
+        await self.flushQueuedWatchRepliesIfConnected()
+    }
+
+    private func handleWatchQuickReply(_ event: WatchQuickReplyEvent) async {
+        let replyId = event.replyId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let actionId = event.actionId.trimmingCharacters(in: .whitespacesAndNewlines)
+        if replyId.isEmpty || actionId.isEmpty {
+            self.watchReplyLogger.info("watch reply dropped: missing replyId/actionId")
+            return
+        }
+
+        if self.seenWatchReplyIds.contains(replyId) {
+            self.watchReplyLogger.debug(
+                "watch reply deduped replyId=\(replyId, privacy: .public)")
+            return
+        }
+        self.seenWatchReplyIds.insert(replyId)
+
+        if await !self.isGatewayConnected() {
+            self.queuedWatchReplies.append(event)
+            self.watchReplyLogger.info(
+                "watch reply queued replyId=\(replyId, privacy: .public) action=\(actionId, privacy: .public)")
+            return
+        }
+
+        await self.forwardWatchReplyToAgent(event)
+    }
+
+    private func flushQueuedWatchRepliesIfConnected() async {
+        guard await self.isGatewayConnected() else { return }
+        guard !self.queuedWatchReplies.isEmpty else { return }
+
+        let pending = self.queuedWatchReplies
+        self.queuedWatchReplies.removeAll()
+        for event in pending {
+            await self.forwardWatchReplyToAgent(event)
+        }
+    }
+
+    private func forwardWatchReplyToAgent(_ event: WatchQuickReplyEvent) async {
+        let sessionKey = event.sessionKey?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let effectiveSessionKey = (sessionKey?.isEmpty == false) ? sessionKey : self.mainSessionKey
+        let message = Self.makeWatchReplyAgentMessage(event)
+        let link = AgentDeepLink(
+            message: message,
+            sessionKey: effectiveSessionKey,
+            thinking: "low",
+            deliver: false,
+            to: nil,
+            channel: nil,
+            timeoutSeconds: nil,
+            key: event.replyId)
+        do {
+            try await self.sendAgentRequest(link: link)
+            self.watchReplyLogger.info(
+                "watch reply forwarded replyId=\(event.replyId, privacy: .public) action=\(event.actionId, privacy: .public)")
+            self.openChatRequestID &+= 1
+        } catch {
+            self.watchReplyLogger.error(
+                "watch reply forwarding failed replyId=\(event.replyId, privacy: .public) error=\(error.localizedDescription, privacy: .public)")
+            self.queuedWatchReplies.insert(event, at: 0)
+        }
+    }
+
+    private static func makeWatchReplyAgentMessage(_ event: WatchQuickReplyEvent) -> String {
+        let actionLabel = event.actionLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let promptId = event.promptId.trimmingCharacters(in: .whitespacesAndNewlines)
+        let transport = event.transport.trimmingCharacters(in: .whitespacesAndNewlines)
+        let summary = actionLabel?.isEmpty == false ? actionLabel! : event.actionId
+        var lines: [String] = []
+        lines.append("Watch reply: \(summary)")
+        lines.append("promptId=\(promptId.isEmpty ? "unknown" : promptId)")
+        lines.append("actionId=\(event.actionId)")
+        lines.append("replyId=\(event.replyId)")
+        if !transport.isEmpty {
+            lines.append("transport=\(transport)")
+        }
+        if let sentAtMs = event.sentAtMs {
+            lines.append("sentAtMs=\(sentAtMs)")
+        }
+        if let note = event.note?.trimmingCharacters(in: .whitespacesAndNewlines), !note.isEmpty {
+            lines.append("note=\(note)")
+        }
+        return lines.joined(separator: "\n")
     }
 
     func handleSilentPushWake(_ userInfo: [AnyHashable: Any]) async -> Bool {
@@ -2460,6 +2560,12 @@ extension NodeAppModel {
     }
 }
 
+extension NodeAppModel {
+    func _bridgeConsumeMirroredWatchReply(_ event: WatchQuickReplyEvent) async {
+        await self.handleWatchQuickReply(event)
+    }
+}
+
 #if DEBUG
 extension NodeAppModel {
     func _test_handleInvoke(_ req: BridgeInvokeRequest) async -> BridgeInvokeResponse {
@@ -2496,6 +2602,10 @@ extension NodeAppModel {
 
     func _test_applyTalkModeSync(enabled: Bool, phase: String? = nil) {
         self.applyTalkModeSync(enabled: enabled, phase: phase)
+    }
+
+    func _test_queuedWatchReplyCount() -> Int {
+        self.queuedWatchReplies.count
     }
 }
 #endif

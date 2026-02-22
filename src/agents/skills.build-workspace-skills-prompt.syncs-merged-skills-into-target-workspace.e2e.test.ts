@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { withEnv } from "../test-utils/env.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
 import { buildWorkspaceSkillsPrompt, syncSkillsToWorkspace } from "./skills.js";
 
@@ -122,19 +123,16 @@ describe("buildWorkspaceSkillsPrompt", () => {
   it("filters skills based on env/config gates", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
     const skillDir = path.join(workspaceDir, "skills", "nano-banana-pro");
-    const originalEnv = process.env.GEMINI_API_KEY;
-    delete process.env.GEMINI_API_KEY;
+    await writeSkill({
+      dir: skillDir,
+      name: "nano-banana-pro",
+      description: "Generates images",
+      metadata:
+        '{"openclaw":{"requires":{"env":["GEMINI_API_KEY"]},"primaryEnv":"GEMINI_API_KEY"}}',
+      body: "# Nano Banana\n",
+    });
 
-    try {
-      await writeSkill({
-        dir: skillDir,
-        name: "nano-banana-pro",
-        description: "Generates images",
-        metadata:
-          '{"openclaw":{"requires":{"env":["GEMINI_API_KEY"]},"primaryEnv":"GEMINI_API_KEY"}}',
-        body: "# Nano Banana\n",
-      });
-
+    withEnv({ GEMINI_API_KEY: undefined }, () => {
       const missingPrompt = buildWorkspaceSkillsPrompt(workspaceDir, {
         managedSkillsDir: path.join(workspaceDir, ".managed"),
         config: { skills: { entries: { "nano-banana-pro": { apiKey: "" } } } },
@@ -148,13 +146,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
         },
       });
       expect(enabledPrompt).toContain("nano-banana-pro");
-    } finally {
-      if (originalEnv === undefined) {
-        delete process.env.GEMINI_API_KEY;
-      } else {
-        process.env.GEMINI_API_KEY = originalEnv;
-      }
-    }
+    });
   });
   it("applies skill filters, including empty lists", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
