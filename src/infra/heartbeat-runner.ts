@@ -768,7 +768,9 @@ export async function runHeartbeatOnce(opts: {
       normalized.shouldSkip = false;
     }
     const shouldSkipMain = normalized.shouldSkip && !normalized.hasMedia && !hasExecCompletion;
-    if (shouldSkipMain && reasoningPayloads.length === 0) {
+    // Also skip if showOk is false (user doesn't want HEARTBEAT_OK responses)
+    const shouldSkipDueToShowOk = !visibility.showOk;
+    if ((shouldSkipMain || shouldSkipDueToShowOk) && reasoningPayloads.length === 0) {
       await restoreHeartbeatUpdatedAt({
         storePath,
         sessionKey,
