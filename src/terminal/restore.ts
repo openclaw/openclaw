@@ -43,7 +43,13 @@ export function restoreTerminalState(
   }
 
   const stdin = process.stdin;
-  if (stdin.isTTY && typeof stdin.setRawMode === "function") {
+  let stdinIsTTY = false;
+  try {
+    stdinIsTTY = Boolean(stdin?.isTTY);
+  } catch {
+    stdinIsTTY = false;
+  }
+  if (stdinIsTTY && typeof stdin.setRawMode === "function") {
     try {
       stdin.setRawMode(false);
     } catch (err) {
@@ -58,7 +64,13 @@ export function restoreTerminalState(
     }
   }
 
-  if (process.stdout.isTTY) {
+  let stdoutIsTTY = false;
+  try {
+    stdoutIsTTY = Boolean(process.stdout?.isTTY);
+  } catch {
+    stdoutIsTTY = false;
+  }
+  if (stdoutIsTTY) {
     try {
       process.stdout.write(RESET_SEQUENCE);
     } catch (err) {

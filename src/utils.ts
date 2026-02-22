@@ -379,8 +379,18 @@ export function formatTerminalLink(
   const esc = "\u001b";
   const safeLabel = label.replaceAll(esc, "");
   const safeUrl = url.replaceAll(esc, "");
-  const allow =
-    opts?.force === true ? true : opts?.force === false ? false : Boolean(process.stdout.isTTY);
+  let allow: boolean;
+  if (opts?.force === true) {
+    allow = true;
+  } else if (opts?.force === false) {
+    allow = false;
+  } else {
+    try {
+      allow = Boolean(process.stdout?.isTTY);
+    } catch {
+      allow = false;
+    }
+  }
   if (!allow) {
     return opts?.fallback ?? `${safeLabel} (${safeUrl})`;
   }
