@@ -44,6 +44,8 @@ const DEFAULT_RELOAD_SETTINGS: GatewayReloadSettings = {
   mode: "hybrid",
   debounceMs: 300,
 };
+const MISSING_CONFIG_RETRY_DELAY_MS = 150;
+const MISSING_CONFIG_MAX_RETRIES = 2;
 
 const BASE_RELOAD_RULES: ReloadRule[] = [
   { prefix: "gateway.remote", kind: "none" },
@@ -268,18 +270,21 @@ export function startGatewayConfigReloader(opts: {
   let running = false;
   let stopped = false;
   let restartQueued = false;
+  let missingConfigRetries = 0;
 
-  const schedule = () => {
+  const scheduleAfter = (wait: number) => {
     if (stopped) {
       return;
     }
     if (debounceTimer) {
       clearTimeout(debounceTimer);
     }
-    const wait = settings.debounceMs;
     debounceTimer = setTimeout(() => {
       void runReload();
     }, wait);
+  };
+  const schedule = () => {
+    scheduleAfter(settings.debounceMs);
   };
 
   const runReload = async () => {
@@ -298,9 +303,18 @@ export function startGatewayConfigReloader(opts: {
     try {
       const snapshot = await opts.readSnapshot();
       if (!snapshot.exists) {
-        opts.log.warn("config reload skipped (config file not found; may be mid-write)");
+        if (missingConfigRetries < MISSING_CONFIG_MAX_RETRIES) {
+          missingConfigRetries += 1;
+          opts.log.info(
+            `config reload retry (${missingConfigRetries}/${MISSING_CONFIG_MAX_RETRIES}): config file not found`,
+          );
+          scheduleAfter(MISSING_CONFIG_RETRY_DELAY_MS);
+          return;
+        }
+        opts.log.warn("config reload skipped (config file not found)");
         return;
       }
+      missingConfigRetries = 0;
       if (!snapshot.valid) {
         const issues = snapshot.issues.map((issue) => `${issue.path}: ${issue.message}`).join(", ");
         opts.log.warn(`config reload skipped (invalid config): ${issues}`);
