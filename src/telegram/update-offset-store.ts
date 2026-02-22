@@ -19,7 +19,7 @@ function normalizeAccountId(accountId?: string) {
   return trimmed.replace(/[^a-z0-9._-]+/gi, "_");
 }
 
-function resolveTelegramUpdateOffsetPath(
+export function resolveTelegramUpdateOffsetPath(
   accountId?: string,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
