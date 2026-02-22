@@ -139,7 +139,7 @@ export const zh_TW: TranslationMap = {
   },
   login: {
     subtitle: "閘道儀表板",
-    passwordPlaceholder: "可選",
+    tokenPlaceholder: "貼上閘道令牌",
   },
   chat: {
     disconnected: "已斷開與網關的連接。",
