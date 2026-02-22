@@ -11,6 +11,22 @@ const noopLogger = {
   error: vi.fn(),
 };
 
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 async function makeStorePath() {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-"));
   return {
@@ -132,6 +148,88 @@ describe("CronService read ops while job is running", () => {
       cron.stop();
       vi.clearAllTimers();
       vi.useRealTimers();
+      await store.cleanup();
+    }
+  });
+
+  it("keeps list and status responsive during startup catch-up runs", async () => {
+    const store = await makeStorePath();
+    const enqueueSystemEvent = vi.fn();
+    const requestHeartbeatNow = vi.fn();
+    const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
+
+    await fs.mkdir(path.dirname(store.storePath), { recursive: true });
+    await fs.writeFile(
+      store.storePath,
+      JSON.stringify({
+        version: 1,
+        jobs: [
+          {
+            id: "startup-catchup",
+            name: "startup catch-up",
+            enabled: true,
+            createdAtMs: nowMs - 86_400_000,
+            updatedAtMs: nowMs - 86_400_000,
+            schedule: { kind: "at", at: new Date(nowMs - 60_000).toISOString() },
+            sessionTarget: "isolated",
+            wakeMode: "next-heartbeat",
+            payload: { kind: "agentTurn", message: "startup replay" },
+            delivery: { mode: "none" },
+            state: { nextRunAtMs: nowMs - 60_000 },
+          },
+        ],
+      }),
+      "utf-8",
+    );
+
+    let resolveRun:
+      | ((value: { status: "ok" | "error" | "skipped"; summary?: string; error?: string }) => void)
+      | undefined;
+    let resolveRunStarted: (() => void) | undefined;
+    const runStarted = new Promise<void>((resolve) => {
+      resolveRunStarted = resolve;
+    });
+
+    const runIsolatedAgentJob = vi.fn(async () => {
+      resolveRunStarted?.();
+      return await new Promise<{
+        status: "ok" | "error" | "skipped";
+        summary?: string;
+        error?: string;
+      }>((resolve) => {
+        resolveRun = resolve;
+      });
+    });
+
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      nowMs: () => nowMs,
+      enqueueSystemEvent,
+      requestHeartbeatNow,
+      runIsolatedAgentJob,
+    });
+
+    try {
+      const startPromise = cron.start();
+      await runStarted;
+
+      await expect(
+        withTimeout(cron.list({ includeDisabled: true }), 300, "cron.list during startup"),
+      ).resolves.toBeTypeOf("object");
+      await expect(withTimeout(cron.status(), 300, "cron.status during startup")).resolves.toEqual(
+        expect.objectContaining({ enabled: true, storePath: store.storePath }),
+      );
+
+      resolveRun?.({ status: "ok", summary: "done" });
+      await startPromise;
+
+      const jobs = await cron.list({ includeDisabled: true });
+      expect(jobs[0]?.state.lastStatus).toBe("ok");
+      expect(jobs[0]?.state.runningAtMs).toBeUndefined();
+    } finally {
+      cron.stop();
       await store.cleanup();
     }
   });
