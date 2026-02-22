@@ -87,6 +87,26 @@ Successfully processed 1 files`;
       expect(entries).toHaveLength(0);
     });
 
+    it("skips localized (non-English) status lines that have no parenthesised token", () => {
+      const output =
+        "C:\\Users\\karte\\.openclaw NT AUTHORITY\\\u0421\u0418\u0421\u0422\u0415\u041c\u0410:(OI)(CI)(F)\n" +
+        "\u0423\u0441\u043f\u0435\u0448\u043d\u043e \u043e\u0431\u0440\u0430\u0431\u043e\u0442\u0430\u043d\u043e 1 \u0444\u0430\u0439\u043b\u043e\u0432; " +
+        "\u043d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0431\u0440\u0430\u0431\u043e\u0442\u0430\u0442\u044c 0 \u0444\u0430\u0439\u043b\u043e\u0432";
+      const entries = parseIcaclsOutput(output, "C:\\Users\\karte\\.openclaw");
+      expect(entries).toHaveLength(1);
+      expect(entries[0].principal).toBe("NT AUTHORITY\\\u0421\u0418\u0421\u0422\u0415\u041c\u0410");
+    });
+
+    it("parses SID-format principals", () => {
+      const output =
+        "C:\\test\\file.txt S-1-5-18:(F)\n" +
+        "                  S-1-5-21-1824257776-4070701511-781240313-1001:(F)";
+      const entries = parseIcaclsOutput(output, "C:\\test\\file.txt");
+      expect(entries).toHaveLength(2);
+      expect(entries[0].principal).toBe("S-1-5-18");
+      expect(entries[1].principal).toBe("S-1-5-21-1824257776-4070701511-781240313-1001");
+    });
+
     it("handles quoted target paths", () => {
       const output = `"C:\\path with spaces\\file.txt" BUILTIN\\Administrators:(F)`;
       const entries = parseIcaclsOutput(output, "C:\\path with spaces\\file.txt");
@@ -192,6 +212,97 @@ Successfully processed 1 files`;
       const env = { USERNAME: "TestUser", USERDOMAIN: "WORKGROUP" };
       const summary = summarizeWindowsAcl(entries, env);
       expect(summary.untrustedGroup).toHaveLength(1);
+    });
+  });
+
+  describe("summarizeWindowsAcl — SID-based classification", () => {
+    it("classifies SYSTEM SID (S-1-5-18) as trusted", () => {
+      const entries: WindowsAclEntry[] = [
+        {
+          principal: "S-1-5-18",
+          rights: ["F"],
+          rawRights: "(F)",
+          canRead: true,
+          canWrite: true,
+        },
+      ];
+      const summary = summarizeWindowsAcl(entries);
+      expect(summary.trusted).toHaveLength(1);
+      expect(summary.untrustedWorld).toHaveLength(0);
+      expect(summary.untrustedGroup).toHaveLength(0);
+    });
+
+    it("classifies BUILTIN\\Administrators SID (S-1-5-32-544) as trusted", () => {
+      const entries: WindowsAclEntry[] = [
+        {
+          principal: "S-1-5-32-544",
+          rights: ["F"],
+          rawRights: "(F)",
+          canRead: true,
+          canWrite: true,
+        },
+      ];
+      const summary = summarizeWindowsAcl(entries);
+      expect(summary.trusted).toHaveLength(1);
+      expect(summary.untrustedGroup).toHaveLength(0);
+    });
+
+    it("classifies caller SID from USERSID env var as trusted", () => {
+      const callerSid = "S-1-5-21-1824257776-4070701511-781240313-1001";
+      const entries: WindowsAclEntry[] = [
+        {
+          principal: callerSid,
+          rights: ["F"],
+          rawRights: "(F)",
+          canRead: true,
+          canWrite: true,
+        },
+      ];
+      const env = { USERSID: callerSid };
+      const summary = summarizeWindowsAcl(entries, env);
+      expect(summary.trusted).toHaveLength(1);
+      expect(summary.untrustedGroup).toHaveLength(0);
+    });
+
+    it("classifies unknown SID as group (not world)", () => {
+      const entries: WindowsAclEntry[] = [
+        {
+          principal: "S-1-5-21-9999-9999-9999-500",
+          rights: ["R"],
+          rawRights: "(R)",
+          canRead: true,
+          canWrite: false,
+        },
+      ];
+      const summary = summarizeWindowsAcl(entries);
+      expect(summary.untrustedGroup).toHaveLength(1);
+      expect(summary.untrustedWorld).toHaveLength(0);
+      expect(summary.trusted).toHaveLength(0);
+    });
+
+    it("full scenario: SYSTEM SID + owner SID only → no findings", () => {
+      const ownerSid = "S-1-5-21-1824257776-4070701511-781240313-1001";
+      const entries: WindowsAclEntry[] = [
+        {
+          principal: "S-1-5-18",
+          rights: ["F"],
+          rawRights: "(OI)(CI)(F)",
+          canRead: true,
+          canWrite: true,
+        },
+        {
+          principal: ownerSid,
+          rights: ["F"],
+          rawRights: "(OI)(CI)(F)",
+          canRead: true,
+          canWrite: true,
+        },
+      ];
+      const env = { USERSID: ownerSid };
+      const summary = summarizeWindowsAcl(entries, env);
+      expect(summary.trusted).toHaveLength(2);
+      expect(summary.untrustedWorld).toHaveLength(0);
+      expect(summary.untrustedGroup).toHaveLength(0);
     });
   });
 

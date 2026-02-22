@@ -37,6 +37,13 @@ const TRUSTED_BASE = new Set([
 const WORLD_SUFFIXES = ["\\users", "\\authenticated users"];
 const TRUSTED_SUFFIXES = ["\\administrators", "\\system"];
 
+const SID_RE = /^s-\d+-\d+(-\d+)+$/i;
+const TRUSTED_SIDS = new Set([
+  "s-1-5-18",
+  "s-1-5-32-544",
+  "s-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464",
+]);
+
 const normalize = (value: string) => value.trim().toLowerCase();
 
 export function resolveWindowsUserPrincipal(env?: NodeJS.ProcessEnv): string | null {
@@ -59,6 +66,10 @@ function buildTrustedPrincipals(env?: NodeJS.ProcessEnv): Set<string> {
       trusted.add(normalize(userOnly));
     }
   }
+  const userSid = env?.USERSID?.trim().toLowerCase();
+  if (userSid && SID_RE.test(userSid)) {
+    trusted.add(userSid);
+  }
   return trusted;
 }
 
@@ -68,6 +79,11 @@ function classifyPrincipal(
 ): "trusted" | "world" | "group" {
   const normalized = normalize(principal);
   const trusted = buildTrustedPrincipals(env);
+
+  if (SID_RE.test(normalized)) {
+    return TRUSTED_SIDS.has(normalized) || trusted.has(normalized) ? "trusted" : "group";
+  }
+
   if (trusted.has(normalized) || TRUSTED_SUFFIXES.some((s) => normalized.endsWith(s))) {
     return "trusted";
   }
@@ -115,6 +131,10 @@ export function parseIcaclsOutput(output: string, targetPath: string): WindowsAc
       entry = trimmed.slice(quotedTarget.length).trim();
     }
     if (!entry) {
+      continue;
+    }
+
+    if (!entry.includes("(")) {
       continue;
     }
 
