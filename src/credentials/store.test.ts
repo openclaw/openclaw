@@ -272,6 +272,187 @@ describe("CredentialStore", () => {
       });
       expect(value).toBe("vault-value");
     });
+
+    it("resolves via Azure Key Vault provider (${azure:...})", async () => {
+      const secrets = { ...DEFAULT_SECRETS, "${azure:myvault/db-password}": "azure-value" };
+      const config: CredentialStoreConfig = {
+        credentials: [
+          {
+            slot: "azdb",
+            source: "${azure:myvault/db-password}",
+            pinnedDomains: ["portal.azure.com"],
+          },
+        ],
+      };
+      const store = new CredentialStore(config, mockResolver(secrets));
+      const value = await store.resolve({
+        slot: "azdb",
+        currentUrl: "https://portal.azure.com/resource",
+        selector: "#pw",
+      });
+      expect(value).toBe("azure-value");
+    });
+  });
+
+  // =========================================================================
+  // resolve — multi-field credentials
+  // =========================================================================
+
+  describe("resolve — multi-field credentials", () => {
+    const MULTI_FIELD_CONFIG: CredentialStoreConfig = {
+      credentials: [
+        {
+          slot: "work-email",
+          source: "${bw:work-email/password}",
+          usernameSource: "${bw:work-email/username}",
+          totpSource: "${bw:work-email/totp}",
+          pinnedDomains: ["login.microsoftonline.com"],
+        },
+      ],
+    };
+    const multiSecrets = {
+      "${bw:work-email/password}": "secret-pass",
+      "${bw:work-email/username}": "user@work.com",
+      "${bw:work-email/totp}": "123456",
+    };
+
+    it("resolves password field by default", async () => {
+      const store = new CredentialStore(MULTI_FIELD_CONFIG, mockResolver(multiSecrets));
+      const value = await store.resolve({
+        slot: "work-email",
+        currentUrl: "https://login.microsoftonline.com/",
+        selector: "#password",
+      });
+      expect(value).toBe("secret-pass");
+    });
+
+    it("resolves username field when field='username'", async () => {
+      const store = new CredentialStore(MULTI_FIELD_CONFIG, mockResolver(multiSecrets));
+      const value = await store.resolve({
+        slot: "work-email",
+        currentUrl: "https://login.microsoftonline.com/",
+        selector: "#email",
+        field: "username",
+      });
+      expect(value).toBe("user@work.com");
+    });
+
+    it("resolves totp field when field='totp'", async () => {
+      const store = new CredentialStore(MULTI_FIELD_CONFIG, mockResolver(multiSecrets));
+      const value = await store.resolve({
+        slot: "work-email",
+        currentUrl: "https://login.microsoftonline.com/",
+        selector: "#mfa-code",
+        field: "totp",
+      });
+      expect(value).toBe("123456");
+    });
+
+    it("throws RESOLVE_FAILED when username source not configured", async () => {
+      const noUsername: CredentialStoreConfig = {
+        credentials: [{ slot: "pw-only", source: "pw", pinnedDomains: ["example.com"] }],
+      };
+      const store = new CredentialStore(noUsername, mockResolver({ pw: "val" }));
+      try {
+        await store.resolve({
+          slot: "pw-only",
+          currentUrl: "https://example.com",
+          selector: "#user",
+          field: "username",
+        });
+        expect.unreachable("should have thrown");
+      } catch (err) {
+        expect((err as CredentialFirewallError).code).toBe("RESOLVE_FAILED");
+        expect((err as CredentialFirewallError).message).toContain("no username source");
+      }
+    });
+
+    it("throws RESOLVE_FAILED when totp source not configured", async () => {
+      const noTotp: CredentialStoreConfig = {
+        credentials: [{ slot: "no-totp", source: "pw", pinnedDomains: ["example.com"] }],
+      };
+      const store = new CredentialStore(noTotp, mockResolver({ pw: "val" }));
+      try {
+        await store.resolve({
+          slot: "no-totp",
+          currentUrl: "https://example.com",
+          selector: "#mfa",
+          field: "totp",
+        });
+        expect.unreachable("should have thrown");
+      } catch (err) {
+        expect((err as CredentialFirewallError).code).toBe("RESOLVE_FAILED");
+        expect((err as CredentialFirewallError).message).toContain("no totp source");
+      }
+    });
+  });
+
+  // =========================================================================
+  // resolve — security invariants
+  // =========================================================================
+
+  describe("resolve — security invariants", () => {
+    it("credential value never appears in error.message on domain block", async () => {
+      const store = new CredentialStore(GMAIL_CRED, mockResolver(DEFAULT_SECRETS));
+      try {
+        await store.resolve({ slot: "gmail", currentUrl: "https://evil.com", selector: "#pw" });
+        expect.unreachable("should have thrown");
+      } catch (err) {
+        const msg = (err as CredentialFirewallError).message;
+        expect(msg).not.toContain("gmail-secret-pass-123");
+      }
+    });
+
+    it("credential value never appears in JSON.stringify(error) on domain block", async () => {
+      const store = new CredentialStore(GMAIL_CRED, mockResolver(DEFAULT_SECRETS));
+      try {
+        await store.resolve({ slot: "gmail", currentUrl: "https://evil.com", selector: "#pw" });
+        expect.unreachable("should have thrown");
+      } catch (err) {
+        const serialized = JSON.stringify(err);
+        expect(serialized).not.toContain("gmail-secret-pass-123");
+      }
+    });
+
+    it("credential value never appears in JSON.stringify(error) on selector block", async () => {
+      const store = new CredentialStore(GMAIL_CRED, mockResolver(DEFAULT_SECRETS));
+      try {
+        await store.resolve({
+          slot: "gmail",
+          currentUrl: "https://accounts.google.com",
+          selector: "#wrong",
+        });
+        expect.unreachable("should have thrown");
+      } catch (err) {
+        const serialized = JSON.stringify(err);
+        expect(serialized).not.toContain("gmail-secret-pass-123");
+      }
+    });
+
+    it("multiple slots on same domain resolve independently", async () => {
+      const config: CredentialStoreConfig = {
+        credentials: [
+          { slot: "user-a", source: "pass-a", pinnedDomains: ["shared.example.com"] },
+          { slot: "user-b", source: "pass-b", pinnedDomains: ["shared.example.com"] },
+        ],
+      };
+      const store = new CredentialStore(
+        config,
+        mockResolver({ "pass-a": "a-val", "pass-b": "b-val" }),
+      );
+      const a = await store.resolve({
+        slot: "user-a",
+        currentUrl: "https://shared.example.com",
+        selector: "#pw",
+      });
+      const b = await store.resolve({
+        slot: "user-b",
+        currentUrl: "https://shared.example.com",
+        selector: "#pw",
+      });
+      expect(a).toBe("a-val");
+      expect(b).toBe("b-val");
+    });
   });
 
   // =========================================================================
@@ -590,6 +771,14 @@ describe("CredentialStore", () => {
 
     it("handles undefined credentials", () => {
       const store = new CredentialStore({ credentials: undefined }, mockResolver({}));
+      expect(store.listSlots()).toEqual([]);
+    });
+
+    it("skips entries with empty slot name", () => {
+      const config: CredentialStoreConfig = {
+        credentials: [{ slot: "", source: "pw", pinnedDomains: ["example.com"] }],
+      };
+      const store = new CredentialStore(config, mockResolver({}));
       expect(store.listSlots()).toEqual([]);
     });
   });
