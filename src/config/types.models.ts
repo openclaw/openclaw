@@ -46,6 +46,11 @@ export type ModelProviderConfig = {
   apiKey?: string;
   auth?: ModelProviderAuthMode;
   api?: ModelApi;
+  /**
+   * Extra headers sent on outgoing provider requests.
+   * Supports {{sessionKey}} template for per-conversation identifiers (reverse proxy sticky routing).
+   * @see https://github.com/openclaw/openclaw/issues/22885
+   */
   headers?: Record<string, string>;
   authHeader?: boolean;
   models: ModelDefinitionConfig[];

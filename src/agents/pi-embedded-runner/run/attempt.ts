@@ -23,6 +23,7 @@ import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
 import { resolveTelegramInlineButtonsScope } from "../../../telegram/inline-buttons.js";
 import { resolveTelegramReactionLevel } from "../../../telegram/reaction-level.js";
 import { buildTtsSystemPromptHint } from "../../../tts/tts.js";
+import { resolveHeaderTemplates } from "../../../utils/header-templates.js";
 import { resolveUserPath } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
@@ -705,6 +706,29 @@ export async function runEmbeddedAttempt(
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
           activeSession.agent.streamFn,
         );
+      }
+
+      // Forward session key and resolve provider header templates (e.g. {{sessionKey}}).
+      // Enables reverse proxies (e.g. CLIProxyAPI) to implement session-affine routing.
+      // See https://github.com/openclaw/openclaw/issues/22885
+      const sessionKey = params.sessionKey?.trim() ?? "";
+      const providerHeaders =
+        params.config?.models?.providers?.[params.provider ?? ""]?.headers ?? {};
+      const shouldWrap =
+        sessionKey || Object.keys(providerHeaders).length > 0;
+      if (shouldWrap) {
+        const inner = activeSession.agent.streamFn;
+        activeSession.agent.streamFn = (model, context, options) => {
+          const resolved = resolveHeaderTemplates(providerHeaders, { sessionKey });
+          const merged: Record<string, string> = {
+            ...options?.headers,
+            ...resolved,
+          };
+          if (sessionKey && !Object.hasOwn(merged, "X-Session-Key")) {
+            merged["X-Session-Key"] = sessionKey;
+          }
+          return inner(model, context, { ...options, headers: merged });
+        };
       }
 
       try {
