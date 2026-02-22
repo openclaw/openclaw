@@ -66,6 +66,11 @@ describe("profile CRUD endpoints", () => {
     state.prevGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
     process.env.OPENCLAW_GATEWAY_PORT = String(state.testPort - 2);
 
+    state.prevGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    state.prevGatewayPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+
     vi.stubGlobal(
       "fetch",
       vi.fn(async (url: string) => {
@@ -82,6 +87,16 @@ describe("profile CRUD endpoints", () => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
     restoreGatewayPortEnv(state.prevGatewayPort);
+    if (state.prevGatewayToken !== undefined) {
+      process.env.OPENCLAW_GATEWAY_TOKEN = state.prevGatewayToken;
+    } else {
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    }
+    if (state.prevGatewayPassword !== undefined) {
+      process.env.OPENCLAW_GATEWAY_PASSWORD = state.prevGatewayPassword;
+    } else {
+      delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    }
     await stopBrowserControlServer();
   });
 

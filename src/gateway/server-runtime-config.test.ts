@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 
 describe("resolveGatewayRuntimeConfig", () => {
@@ -146,6 +146,19 @@ describe("resolveGatewayRuntimeConfig", () => {
   });
 
   describe("token/password auth modes", () => {
+    let originalToken: string | undefined;
+
+    beforeEach(() => {
+      originalToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    });
+
+    afterEach(() => {
+      if (originalToken !== undefined) {
+        process.env.OPENCLAW_GATEWAY_TOKEN = originalToken;
+      }
+    });
+
     it("should reject token mode without token configured", async () => {
       const cfg = {
         gateway: {
@@ -161,7 +174,9 @@ describe("resolveGatewayRuntimeConfig", () => {
           cfg,
           port: 18789,
         }),
-      ).rejects.toThrow("gateway auth mode is token, but no token was configured");
+      ).rejects.toThrow(
+        "gateway auth mode is token, but no token was configured (set gateway.auth.token or OPENCLAW_GATEWAY_TOKEN)",
+      );
     });
 
     it("should allow lan binding with token", async () => {
