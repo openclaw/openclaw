@@ -328,6 +328,7 @@ type RequiredParamGroup = {
   keys: readonly string[];
   allowEmpty?: boolean;
   label?: string;
+  unescape?: boolean;
 };
 
 const RETRY_GUIDANCE_SUFFIX = " Supply correct parameters before retrying.";
@@ -340,17 +341,19 @@ export const CLAUDE_PARAM_GROUPS = {
   read: [{ keys: ["path", "file_path"], label: "path (path or file_path)" }],
   write: [
     { keys: ["path", "file_path"], label: "path (path or file_path)" },
-    { keys: ["content"], label: "content" },
+    { keys: ["content"], label: "content", unescape: true },
   ],
   edit: [
     { keys: ["path", "file_path"], label: "path (path or file_path)" },
     {
       keys: ["oldText", "old_string"],
       label: "oldText (oldText or old_string)",
+      unescape: true,
     },
     {
       keys: ["newText", "new_string"],
       label: "newText (newText or new_string)",
+      unescape: true,
     },
   ],
 } as const;
@@ -539,10 +542,29 @@ export function wrapToolParamNormalization(
       const record =
         normalized ??
         (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
+
+      if (record && requiredParamGroups) {
+        for (const group of requiredParamGroups) {
+          if (group.unescape) {
+            for (const key of group.keys) {
+              const value = record[key];
+              if (typeof value === "string") {
+                record[key] = value
+                  .replaceAll("\\r\\n", "\n")
+                  .replaceAll("\\r", "\n")
+                  .replaceAll("\\n", "\n")
+                  .replaceAll("\r\n", "\n")
+                  .replaceAll("\r", "\n");
+              }
+            }
+          }
+        }
+      }
+
       if (requiredParamGroups?.length) {
         assertRequiredParams(record, requiredParamGroups, tool.name);
       }
-      return tool.execute(toolCallId, normalized ?? params, signal, onUpdate);
+      return tool.execute(toolCallId, record ?? params, signal, onUpdate);
     },
   };
 }
