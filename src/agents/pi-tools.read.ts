@@ -336,6 +336,75 @@ function parameterValidationError(message: string): Error {
   return new Error(`${message}.${RETRY_GUIDANCE_SUFFIX}`);
 }
 
+/**
+ * Detect paths that were likely truncated by partial JSON parsing during streaming.
+ * When streaming tool call arguments, the partial-json library may silently close
+ * an unterminated string value, producing a truncated path (e.g. "README.md" → "README.m").
+ * This leads to confusing "file not found" errors instead of a clear retry signal.
+ *
+ * Heuristic: a path ending with a single letter after a dot (e.g. ".m", ".t", ".j")
+ * is almost certainly truncated — real extensions are 2+ chars (.md, .ts, .js, .py, etc.)
+ * unless the path has no dot at all (which is fine — directories, Makefile, etc.)
+ *
+ * @see https://github.com/openclaw/openclaw/issues/23622
+ */
+// Single-character file extensions that are legitimate and should NOT trigger
+// truncation detection. Covers common programming languages and file types.
+const VALID_SINGLE_CHAR_EXTENSIONS = new Set([
+  "c", // C language
+  "h", // C/C++ header
+  "r", // R language
+  "R", // R language (case-sensitive)
+  "d", // D language / dtrace
+  "v", // Verilog / Coq
+  "o", // Object file
+  "a", // Archive / static library
+  "s", // Assembly
+  "S", // Assembly (preprocessed)
+]);
+
+function detectTruncatedPath(filePath: string): boolean {
+  if (typeof filePath !== "string" || !filePath.trim()) {
+    return false;
+  }
+  // Detect paths with leaked JSON structure (trailing comma from partial parsing)
+  // e.g. "README.m, " — the partial parser included the JSON comma
+  if (/,\s*$/.test(filePath)) {
+    return true;
+  }
+  const basename = filePath.split("/").pop() ?? filePath;
+  // Match patterns like ".m", ".t", ".j" at end of basename — likely truncated extensions
+  // Exclude known valid single-char extensions (.c, .h, .r, etc.)
+  const singleCharExtMatch = basename.match(/\.([a-zA-Z])$/);
+  if (singleCharExtMatch) {
+    const ext = singleCharExtMatch[1];
+    if (!VALID_SINGLE_CHAR_EXTENSIONS.has(ext)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Validate that a file path parameter hasn't been corrupted by partial JSON streaming.
+ * Throws a descriptive error that guides the model to retry with the full path.
+ */
+function assertPathIntegrity(record: Record<string, unknown> | undefined, _toolName: string): void {
+  if (!record || typeof record !== "object") {
+    return;
+  }
+  const filePath = record.path ?? record.file_path;
+  if (typeof filePath !== "string") {
+    return;
+  }
+  if (detectTruncatedPath(filePath)) {
+    throw parameterValidationError(
+      `The "path" parameter "${filePath}" appears to have been truncated during streaming. ` +
+        `This can happen with long file paths. Please retry with the complete file path`,
+    );
+  }
+}
+
 export const CLAUDE_PARAM_GROUPS = {
   read: [{ keys: ["path", "file_path"], label: "path (path or file_path)" }],
   write: [
@@ -542,6 +611,7 @@ export function wrapToolParamNormalization(
       if (requiredParamGroups?.length) {
         assertRequiredParams(record, requiredParamGroups, tool.name);
       }
+      assertPathIntegrity(record, tool.name);
       return tool.execute(toolCallId, normalized ?? params, signal, onUpdate);
     },
   };
@@ -555,6 +625,7 @@ export function wrapToolWorkspaceRootGuard(tool: AnyAgentTool, root: string): An
       const record =
         normalized ??
         (args && typeof args === "object" ? (args as Record<string, unknown>) : undefined);
+      assertPathIntegrity(record, tool.name);
       const filePath = record?.path;
       if (typeof filePath === "string" && filePath.trim()) {
         await assertSandboxPath({ filePath, cwd: root, root });
@@ -608,6 +679,7 @@ export function createOpenClawReadTool(
         normalized ??
         (params && typeof params === "object" ? (params as Record<string, unknown>) : undefined);
       assertRequiredParams(record, CLAUDE_PARAM_GROUPS.read, base.name);
+      assertPathIntegrity(record, base.name);
       const result = await executeReadWithAdaptivePaging({
         base,
         toolCallId,
