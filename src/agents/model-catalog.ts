@@ -101,7 +101,10 @@ export async function loadModelCatalog(params?: {
       const piSdk = await importPiSdk();
       const agentDir = resolveOpenClawAgentDir();
       const { join } = await import("node:path");
-      const authStorage = piSdk.AuthStorage.create(join(agentDir, "auth.json"));
+      // pi-coding-agent AuthStorage constructor became private; keep compatibility with
+      // older mocks/tests by falling back to direct construction via `any`.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const authStorage = new (piSdk.AuthStorage as any)(join(agentDir, "auth.json"));
       const registry = new piSdk.ModelRegistry(authStorage, join(agentDir, "models.json")) as
         | {
             getAll: () => Array<DiscoveredModel>;
