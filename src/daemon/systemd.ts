@@ -249,6 +249,17 @@ export async function uninstallSystemdService({
   } catch {
     stdout.write(`Systemd service not found at ${unitPath}\n`);
   }
+
+  // Reload systemd daemon to pick up the removed unit file
+  const reload = await execSystemctl(["--user", "daemon-reload"]);
+  if (reload.code !== 0) {
+    stdout.write(`Warning: systemctl daemon-reload failed: ${reload.stderr || reload.stdout}\n`);
+  }
+  // Reset failure state to clear any crash loops
+  const reset = await execSystemctl(["--user", "reset-failed"]);
+  if (reset.code !== 0) {
+    stdout.write(`Warning: systemctl reset-failed failed: ${reset.stderr || reset.stdout}\n`);
+  }
 }
 
 async function runSystemdServiceAction(params: {
@@ -403,6 +414,18 @@ export async function uninstallLegacySystemdUnits({
       stdout.write(`${formatLine("Removed legacy systemd service", unit.unitPath)}\n`);
     } catch {
       stdout.write(`Legacy systemd unit not found at ${unit.unitPath}\n`);
+    }
+  }
+
+  if (systemctlAvailable) {
+    const reload = await execSystemctl(["--user", "daemon-reload"]);
+    if (reload.code !== 0) {
+      stdout.write(`Warning: systemctl daemon-reload failed: ${reload.stderr || reload.stdout}\n`);
+    }
+
+    const reset = await execSystemctl(["--user", "reset-failed"]);
+    if (reset.code !== 0) {
+      stdout.write(`Warning: systemctl reset-failed failed: ${reset.stderr || reset.stdout}\n`);
     }
   }
 
