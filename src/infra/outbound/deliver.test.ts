@@ -79,6 +79,27 @@ async function deliverWhatsAppPayload(params: {
   });
 }
 
+async function runChunkedWhatsAppDelivery(params?: {
+  mirror?: Parameters<typeof deliverOutboundPayloads>[0]["mirror"];
+}) {
+  const sendWhatsApp = vi
+    .fn()
+    .mockResolvedValueOnce({ messageId: "w1", toJid: "jid" })
+    .mockResolvedValueOnce({ messageId: "w2", toJid: "jid" });
+  const cfg: OpenClawConfig = {
+    channels: { whatsapp: { textChunkLimit: 2 } },
+  };
+  const results = await deliverOutboundPayloads({
+    cfg,
+    channel: "whatsapp",
+    to: "+1555",
+    payloads: [{ text: "abcd" }],
+    deps: { sendWhatsApp },
+    ...(params?.mirror ? { mirror: params.mirror } : {}),
+  });
+  return { sendWhatsApp, results };
+}
+
 describe("deliverOutboundPayloads", () => {
   beforeEach(() => {
     setActivePluginRegistry(defaultRegistry);
@@ -238,21 +259,7 @@ describe("deliverOutboundPayloads", () => {
   });
 
   it("chunks WhatsApp text and returns all results", async () => {
-    const sendWhatsApp = vi
-      .fn()
-      .mockResolvedValueOnce({ messageId: "w1", toJid: "jid" })
-      .mockResolvedValueOnce({ messageId: "w2", toJid: "jid" });
-    const cfg: OpenClawConfig = {
-      channels: { whatsapp: { textChunkLimit: 2 } },
-    };
-
-    const results = await deliverOutboundPayloads({
-      cfg,
-      channel: "whatsapp",
-      to: "+1555",
-      payloads: [{ text: "abcd" }],
-      deps: { sendWhatsApp },
-    });
+    const { sendWhatsApp, results } = await runChunkedWhatsAppDelivery();
 
     expect(sendWhatsApp).toHaveBeenCalledTimes(2);
     expect(results.map((r) => r.messageId)).toEqual(["w1", "w2"]);
@@ -447,24 +454,12 @@ describe("deliverOutboundPayloads", () => {
   });
 
   it("emits internal message:sent hook with success=true for chunked payload delivery", async () => {
-    const sendWhatsApp = vi
-      .fn()
-      .mockResolvedValueOnce({ messageId: "w1", toJid: "jid" })
-      .mockResolvedValueOnce({ messageId: "w2", toJid: "jid" });
-    const cfg: OpenClawConfig = {
-      channels: { whatsapp: { textChunkLimit: 2 } },
-    };
-
-    await deliverOutboundPayloads({
-      cfg,
-      channel: "whatsapp",
-      to: "+1555",
-      payloads: [{ text: "abcd" }],
-      deps: { sendWhatsApp },
+    const { sendWhatsApp } = await runChunkedWhatsAppDelivery({
       mirror: {
         sessionKey: "agent:main:main",
       },
     });
+    expect(sendWhatsApp).toHaveBeenCalledTimes(2);
 
     expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledTimes(1);
     expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledWith(

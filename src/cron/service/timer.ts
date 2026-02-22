@@ -153,6 +153,33 @@ function applyJobResult(
   return shouldDelete;
 }
 
+function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOutcome): void {
+  const store = state.store;
+  if (!store) {
+    return;
+  }
+  const jobs = store.jobs;
+  const job = jobs.find((entry) => entry.id === result.jobId);
+  if (!job) {
+    return;
+  }
+
+  const shouldDelete = applyJobResult(state, job, {
+    status: result.status,
+    error: result.error,
+    delivered: result.delivered,
+    startedAt: result.startedAt,
+    endedAt: result.endedAt,
+  });
+
+  emitJobFinished(state, job, result, result.startedAt);
+
+  if (shouldDelete) {
+    store.jobs = jobs.filter((entry) => entry.id !== job.id);
+    emit(state, { jobId: job.id, action: "removed" });
+  }
+}
+
 export function armTimer(state: CronServiceState) {
   if (state.timer) {
     clearTimeout(state.timer);
@@ -333,25 +360,7 @@ export async function onTimer(state: CronServiceState) {
         await ensureLoaded(state, { forceReload: true, skipRecompute: true });
 
         for (const result of completedResults) {
-          const job = state.store?.jobs.find((j) => j.id === result.jobId);
-          if (!job) {
-            continue;
-          }
-
-          const shouldDelete = applyJobResult(state, job, {
-            status: result.status,
-            error: result.error,
-            delivered: result.delivered,
-            startedAt: result.startedAt,
-            endedAt: result.endedAt,
-          });
-
-          emitJobFinished(state, job, result, result.startedAt);
-
-          if (shouldDelete && state.store) {
-            state.store.jobs = state.store.jobs.filter((j) => j.id !== job.id);
-            emit(state, { jobId: job.id, action: "removed" });
-          }
+          applyOutcomeToStoredJob(state, result);
         }
 
         // Use maintenance-only recompute to avoid advancing past-due
@@ -525,24 +534,7 @@ export async function runMissedJobs(
     }
 
     for (const result of outcomes) {
-      const job = state.store.jobs.find((entry) => entry.id === result.jobId);
-      if (!job) {
-        continue;
-      }
-      const shouldDelete = applyJobResult(state, job, {
-        status: result.status,
-        error: result.error,
-        delivered: result.delivered,
-        startedAt: result.startedAt,
-        endedAt: result.endedAt,
-      });
-
-      emitJobFinished(state, job, result, result.startedAt);
-
-      if (shouldDelete) {
-        state.store.jobs = state.store.jobs.filter((entry) => entry.id !== job.id);
-        emit(state, { jobId: job.id, action: "removed" });
-      }
+      applyOutcomeToStoredJob(state, result);
     }
 
     // Preserve any new past-due nextRunAtMs values that became due while

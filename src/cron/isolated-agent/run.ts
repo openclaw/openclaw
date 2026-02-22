@@ -611,8 +611,7 @@ export async function runCronIsolatedAgentTurn(params: {
       logWarn(`[cron:${params.job.id}] ${resolvedDelivery.error.message}`);
       return withRunSession({ status: "ok", summary, outputText, ...telemetry });
     }
-    if (!resolvedDelivery.channel) {
-      const message = "cron delivery channel is missing";
+    const failOrWarnMissingDeliveryField = (message: string) => {
       if (!deliveryBestEffort) {
         return withRunSession({
           status: "error",
@@ -624,20 +623,12 @@ export async function runCronIsolatedAgentTurn(params: {
       }
       logWarn(`[cron:${params.job.id}] ${message}`);
       return withRunSession({ status: "ok", summary, outputText, ...telemetry });
+    };
+    if (!resolvedDelivery.channel) {
+      return failOrWarnMissingDeliveryField("cron delivery channel is missing");
     }
     if (!resolvedDelivery.to) {
-      const message = "cron delivery target is missing";
-      if (!deliveryBestEffort) {
-        return withRunSession({
-          status: "error",
-          error: message,
-          summary,
-          outputText,
-          ...telemetry,
-        });
-      }
-      logWarn(`[cron:${params.job.id}] ${message}`);
-      return withRunSession({ status: "ok", summary, outputText, ...telemetry });
+      return failOrWarnMissingDeliveryField("cron delivery target is missing");
     }
     const identity = resolveAgentOutboundIdentity(cfgWithAgentDefaults, agentId);
 

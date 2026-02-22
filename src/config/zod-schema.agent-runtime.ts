@@ -440,13 +440,17 @@ export const AgentSandboxSchema = z
   .strict()
   .optional();
 
+const CommonToolPolicyFields = {
+  profile: ToolProfileSchema,
+  allow: z.array(z.string()).optional(),
+  alsoAllow: z.array(z.string()).optional(),
+  deny: z.array(z.string()).optional(),
+  byProvider: z.record(z.string(), ToolPolicyWithProfileSchema).optional(),
+};
+
 export const AgentToolsSchema = z
   .object({
-    profile: ToolProfileSchema,
-    allow: z.array(z.string()).optional(),
-    alsoAllow: z.array(z.string()).optional(),
-    deny: z.array(z.string()).optional(),
-    byProvider: z.record(z.string(), ToolPolicyWithProfileSchema).optional(),
+    ...CommonToolPolicyFields,
     elevated: z
       .object({
         enabled: z.boolean().optional(),
@@ -641,11 +645,7 @@ export const AgentEntrySchema = z
 
 export const ToolsSchema = z
   .object({
-    profile: ToolProfileSchema,
-    allow: z.array(z.string()).optional(),
-    alsoAllow: z.array(z.string()).optional(),
-    deny: z.array(z.string()).optional(),
-    byProvider: z.record(z.string(), ToolPolicyWithProfileSchema).optional(),
+    ...CommonToolPolicyFields,
     web: ToolsWebSchema,
     media: ToolsMediaSchema,
     links: ToolsLinksSchema,
