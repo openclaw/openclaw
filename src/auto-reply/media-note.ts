@@ -1,12 +1,16 @@
 import type { MsgContext } from "./templating.js";
 
-function formatMediaAttachedLine(params: {
+function formatMediaLine(params: {
   path: string;
   url?: string;
   type?: string;
   index?: number;
   total?: number;
+  suppressed?: boolean;
 }): string {
+  if (params.suppressed) {
+    return `[media source: ${params.path}]`;
+  }
   const prefix =
     typeof params.index === "number" && typeof params.total === "number"
       ? `[media attached ${params.index}/${params.total}: `
@@ -97,58 +101,78 @@ export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
   // when there is a single attachment to avoid stripping unrelated audio files.
   const canStripSingleAttachmentByTranscript = hasTranscript && paths.length === 1;
 
-  const entries = paths
-    .map((entry, index) => ({
-      path: entry ?? "",
-      type: types?.[index] ?? ctx.MediaType,
-      url: urls?.[index] ?? ctx.MediaUrl,
-      index,
-    }))
-    .filter((entry) => {
-      if (suppressed.has(entry.index)) {
-        return false;
-      }
-      // Strip audio attachments when transcription succeeded - the transcript is already
-      // available in the context, raw audio binary would only waste tokens (issue #4197)
-      // Note: Only trust MIME type from per-entry types array, not fallback ctx.MediaType
-      // which could misclassify non-audio attachments (greptile review feedback)
-      const hasPerEntryType = types !== undefined;
-      const isAudioByMime = hasPerEntryType && entry.type?.toLowerCase().startsWith("audio/");
-      const isAudioEntry = isAudioPath(entry.path) || isAudioByMime;
-      if (!isAudioEntry) {
-        return true;
-      }
+  const allEntries = paths.map((entry, index) => ({
+    path: entry ?? "",
+    type: types?.[index] ?? ctx.MediaType,
+    url: urls?.[index] ?? ctx.MediaUrl,
+    index,
+    suppressed: suppressed.has(index),
+  }));
+  if (allEntries.length === 0) {
+    return undefined;
+  }
+
+  const unsuppressed = allEntries.filter((e) => {
+    if (e.suppressed) {
+      return false;
+    }
+    // Strip audio attachments when transcription succeeded - the transcript is already
+    // available in the context, raw audio binary would only waste tokens (issue #4197)
+    // Note: Only trust MIME type from per-entry types array, not fallback ctx.MediaType
+    // which could misclassify non-audio attachments (greptile review feedback)
+    const hasPerEntryType = types !== undefined;
+    const isAudioByMime = hasPerEntryType && e.type?.toLowerCase().startsWith("audio/");
+    const isAudioEntry = isAudioPath(e.path) || isAudioByMime;
+    if (isAudioEntry) {
       if (
-        transcribedAudioIndices.has(entry.index) ||
-        (canStripSingleAttachmentByTranscript && entry.index === 0)
+        transcribedAudioIndices.has(e.index) ||
+        (canStripSingleAttachmentByTranscript && e.index === 0)
       ) {
         return false;
       }
-      return true;
-    });
-  if (entries.length === 0) {
+    }
+    return true;
+  });
+  // Emit [media source: ...] for suppressed entries (preserves file paths for image tool),
+  // but not for transcribed audio (transcript already covers it).
+  const suppressedEntries = allEntries.filter(
+    (e) => e.suppressed && !transcribedAudioIndices.has(e.index),
+  );
+
+  if (unsuppressed.length === 0 && suppressedEntries.length === 0) {
     return undefined;
   }
-  if (entries.length === 1) {
-    return formatMediaAttachedLine({
-      path: entries[0]?.path ?? "",
-      type: entries[0]?.type,
-      url: entries[0]?.url,
+
+  const lines: string[] = [];
+
+  if (unsuppressed.length === 1 && suppressedEntries.length === 0) {
+    return formatMediaLine({
+      path: unsuppressed[0]?.path ?? "",
+      type: unsuppressed[0]?.type,
+      url: unsuppressed[0]?.url,
     });
   }
 
-  const count = entries.length;
-  const lines: string[] = [`[media attached: ${count} files]`];
-  for (const [idx, entry] of entries.entries()) {
-    lines.push(
-      formatMediaAttachedLine({
-        path: entry.path,
-        index: idx + 1,
-        total: count,
-        type: entry.type,
-        url: entry.url,
-      }),
-    );
+  if (unsuppressed.length > 0) {
+    if (unsuppressed.length > 1) {
+      lines.push(`[media attached: ${unsuppressed.length} files]`);
+    }
+    for (const [idx, entry] of unsuppressed.entries()) {
+      lines.push(
+        formatMediaLine({
+          path: entry.path,
+          index: unsuppressed.length > 1 ? idx + 1 : undefined,
+          total: unsuppressed.length > 1 ? unsuppressed.length : undefined,
+          type: entry.type,
+          url: entry.url,
+        }),
+      );
+    }
   }
-  return lines.join("\n");
+
+  for (const entry of suppressedEntries) {
+    lines.push(formatMediaLine({ path: entry.path, suppressed: true }));
+  }
+
+  return lines.length > 0 ? lines.join("\n") : undefined;
 }

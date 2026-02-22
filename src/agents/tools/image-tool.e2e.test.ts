@@ -431,6 +431,40 @@ describe("image tool implicit imageModel config", () => {
   });
 });
 
+describe("image tool input validation", () => {
+  beforeEach(() => {
+    vi.stubEnv("OPENAI_API_KEY", "openai-test");
+    vi.stubEnv("ANTHROPIC_API_KEY", "");
+    vi.stubEnv("ANTHROPIC_OAUTH_TOKEN", "");
+    vi.stubEnv("MINIMAX_API_KEY", "");
+    vi.stubEnv("COPILOT_GITHUB_TOKEN", "");
+    vi.stubEnv("GH_TOKEN", "");
+    vi.stubEnv("GITHUB_TOKEN", "");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("returns graceful error for bare numeric strings (message IDs)", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-"));
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.2" } } },
+    };
+    const tool = createImageTool({ config: cfg, agentDir });
+    expect(tool).not.toBeNull();
+    if (!tool) {
+      throw new Error("expected image tool");
+    }
+
+    const res = await tool.execute("t1", { image: "1470100649822781611" });
+    const text = res.content?.find((b) => b.type === "text")?.text ?? "";
+    expect(text).toContain("This looks like a message ID");
+    expect(text).not.toContain("ENOENT");
+    expect((res.details as { error?: string }).error).toBe("invalid_image_reference");
+  });
+});
+
 describe("image tool data URL support", () => {
   it("decodes base64 image data URLs", () => {
     const pngB64 =
