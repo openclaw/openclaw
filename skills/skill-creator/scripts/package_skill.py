@@ -64,6 +64,8 @@ def package_skill(skill_path, output_dir=None):
 
     skill_filename = output_path / f"{skill_name}.skill"
 
+    EXCLUDED_DIRS = {".git", ".svn", ".hg", "__pycache__", "node_modules"}
+
     # Create the .skill file (zip format)
     try:
         with zipfile.ZipFile(skill_filename, "w", zipfile.ZIP_DEFLATED) as zipf:
@@ -74,6 +76,10 @@ def package_skill(skill_path, output_dir=None):
                     print(f"[ERROR] Symlinks are not allowed in skills: {file_path}")
                     print("   This is a security restriction to prevent including arbitrary files.")
                     return None
+
+                rel_parts = file_path.relative_to(skill_path).parts
+                if any(part in EXCLUDED_DIRS for part in rel_parts):
+                    continue
 
                 if file_path.is_file():
                     # Calculate the relative path within the zip
