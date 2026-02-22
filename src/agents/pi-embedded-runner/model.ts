@@ -1,6 +1,7 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.js";
+import type { ModelApi } from "../../config/types.models.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildModelAliasLines } from "../model-alias-lines.js";
@@ -25,6 +26,26 @@ type InlineProviderConfig = {
 };
 
 export { buildModelAliasLines };
+
+/**
+ * Infer the correct API transport for a provider when no explicit `api` is
+ * configured.  Without this mapping the generic fallback defaults to
+ * "openai-responses", which breaks providers that use a different wire
+ * protocol (e.g. Anthropic OAT tokens route to /v1/responses instead of
+ * /v1/messages, causing HTTP 404).
+ *
+ * See: https://github.com/openclaw/openclaw/issues/20107
+ */
+const PROVIDER_API_MAP: Record<string, ModelApi> = {
+  anthropic: "anthropic-messages",
+  "amazon-bedrock": "bedrock-converse-stream",
+  google: "google-generative-ai",
+  ollama: "ollama",
+};
+
+export function inferApiForProvider(provider: string): ModelApi {
+  return PROVIDER_API_MAP[normalizeProviderId(provider)] ?? "openai-responses";
+}
 
 export function buildInlineProviderModels(
   providers: Record<string, InlineProviderConfig>,
@@ -84,7 +105,7 @@ export function resolveModel(
       const fallbackModel: Model<Api> = normalizeModelCompat({
         id: modelId,
         name: modelId,
-        api: providerCfg?.api ?? "openai-responses",
+        api: providerCfg?.api ?? inferApiForProvider(provider),
         provider,
         baseUrl: providerCfg?.baseUrl,
         reasoning: false,

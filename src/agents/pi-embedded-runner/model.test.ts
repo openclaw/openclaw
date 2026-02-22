@@ -6,7 +6,7 @@ vi.mock("../pi-model-discovery.js", () => ({
 }));
 
 import type { OpenClawConfig } from "../../config/config.js";
-import { buildInlineProviderModels, resolveModel } from "./model.js";
+import { buildInlineProviderModels, inferApiForProvider, resolveModel } from "./model.js";
 import {
   makeModel,
   mockDiscoveredModel,
@@ -390,5 +390,116 @@ describe("resolveModel", () => {
 
     expect(result.model).toBeUndefined();
     expect(result.error).toBe("Unknown model: google-antigravity/some-model");
+  });
+
+  it("uses anthropic-messages for anthropic provider fallback (#20107)", () => {
+    // When an Anthropic provider is configured but the model is not found
+    // in the registry or forward-compat, the generic fallback must use
+    // "anthropic-messages" (→ /v1/messages) instead of "openai-responses"
+    // (→ /v1/responses which returns 404 on the Anthropic API).
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          anthropic: {
+            baseUrl: "https://api.anthropic.com",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("anthropic", "claude-unknown-future-model", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "anthropic",
+      id: "claude-unknown-future-model",
+      api: "anthropic-messages",
+    });
+  });
+
+  it("uses bedrock-converse-stream for amazon-bedrock provider fallback", () => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          "amazon-bedrock": {
+            baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("amazon-bedrock", "some-model", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "amazon-bedrock",
+      id: "some-model",
+      api: "bedrock-converse-stream",
+    });
+  });
+
+  it("uses google-generative-ai for google provider fallback", () => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("google", "gemini-future-model", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "google",
+      id: "gemini-future-model",
+      api: "google-generative-ai",
+    });
+  });
+
+  it("defaults to openai-responses for unknown providers", () => {
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          "custom-provider": {
+            baseUrl: "https://custom.example.com",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("custom-provider", "custom-model", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      provider: "custom-provider",
+      id: "custom-model",
+      api: "openai-responses",
+    });
+  });
+});
+
+describe("inferApiForProvider", () => {
+  it("returns anthropic-messages for anthropic", () => {
+    expect(inferApiForProvider("anthropic")).toBe("anthropic-messages");
+  });
+
+  it("returns bedrock-converse-stream for amazon-bedrock", () => {
+    expect(inferApiForProvider("amazon-bedrock")).toBe("bedrock-converse-stream");
+  });
+
+  it("returns google-generative-ai for google", () => {
+    expect(inferApiForProvider("google")).toBe("google-generative-ai");
+  });
+
+  it("returns ollama for ollama", () => {
+    expect(inferApiForProvider("ollama")).toBe("ollama");
+  });
+
+  it("returns openai-responses for unknown providers", () => {
+    expect(inferApiForProvider("openai")).toBe("openai-responses");
+    expect(inferApiForProvider("some-custom")).toBe("openai-responses");
   });
 });
