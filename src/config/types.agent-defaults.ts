@@ -247,6 +247,8 @@ export type AgentDefaultsConfig = {
     model?: AgentModelConfig;
     /** Default thinking level for spawned sub-agents (e.g. "off", "low", "medium", "high"). */
     thinking?: string;
+    /** Gateway timeout in ms for sub-agent announce delivery calls (default: 60000). */
+    announceTimeoutMs?: number;
   };
   /** Optional sandbox settings for non-main sessions. */
   sandbox?: AgentSandboxConfig;
