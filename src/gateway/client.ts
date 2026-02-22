@@ -179,10 +179,14 @@ export class GatewayClient {
     this.ws.on("close", (code, reason) => {
       const reasonText = rawDataToString(reason);
       this.ws = null;
-      // If closed due to device token mismatch, clear the stored token and pairing so next attempt can get a fresh one
+      // Clear persisted device auth state only when device-token auth was active.
+      // Shared token/password failures can return the same close reason but should
+      // not erase a valid cached device token.
       if (
         code === 1008 &&
         reasonText.toLowerCase().includes("device token mismatch") &&
+        !this.opts.token &&
+        !this.opts.password &&
         this.opts.deviceIdentity
       ) {
         const deviceId = this.opts.deviceIdentity.deviceId;
