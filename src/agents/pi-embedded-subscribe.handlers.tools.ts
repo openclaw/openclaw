@@ -1,4 +1,5 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
+import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
@@ -394,15 +395,19 @@ export async function handleToolExecutionEnd(
 
   // Run after_tool_call plugin hook (fire-and-forget)
   const hookRunnerAfter = ctx.hookRunner ?? getGlobalHookRunner();
+  const afterCallDurationMs =
+    startData?.startTime != null ? Date.now() - startData.startTime : undefined;
+  const afterCallArgs = startData?.args;
   if (hookRunnerAfter?.hasHooks("after_tool_call")) {
-    const durationMs = startData?.startTime != null ? Date.now() - startData.startTime : undefined;
-    const toolArgs = startData?.args;
     const hookEvent: PluginHookAfterToolCallEvent = {
       toolName,
-      params: (toolArgs && typeof toolArgs === "object" ? toolArgs : {}) as Record<string, unknown>,
+      params: (afterCallArgs && typeof afterCallArgs === "object" ? afterCallArgs : {}) as Record<
+        string,
+        unknown
+      >,
       result: sanitizedResult,
       error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
-      durationMs,
+      durationMs: afterCallDurationMs,
     };
     void hookRunnerAfter
       .runAfterToolCall(hookEvent, {
@@ -414,4 +419,20 @@ export async function handleToolExecutionEnd(
         ctx.log.warn(`after_tool_call hook failed: tool=${toolName} error=${String(err)}`);
       });
   }
+
+  // Bridge to internal hook handler system (fire-and-forget)
+  // Allows ~/.openclaw/hooks/<plugin>/handler.ts to observe tool executions
+  // via event.type === "tool" && event.action === "after_call"
+  void triggerInternalHook(
+    createInternalHookEvent("tool", "after_call", ctx.params.runId ?? "", {
+      toolName,
+      params: (afterCallArgs && typeof afterCallArgs === "object" ? afterCallArgs : {}) as Record<
+        string,
+        unknown
+      >,
+      result: sanitizedResult,
+      error: isToolError ? extractToolErrorMessage(sanitizedResult) : undefined,
+      durationMs: afterCallDurationMs,
+    }),
+  );
 }
