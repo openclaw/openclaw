@@ -604,7 +604,7 @@ export function attachGatewayWsMessageHandler(params: {
               deviceId: device.id,
               publicKey: devicePublicKey,
               ...clientAccessMetadata,
-              silent: isLocalClient && reason === "not-paired",
+              silent: isLocalClient && (reason === "not-paired" || reason === "scope-upgrade"),
             });
             const context = buildRequestContext();
             if (pairing.request.silent === true) {
