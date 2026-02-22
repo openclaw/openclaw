@@ -23,15 +23,18 @@ Terminal Manager uses a dedicated tmux socket (`$TMPDIR/openclaw-term.sock`) to 
 
 ## Commands
 
-| Command                      | Description                                         |
-| ---------------------------- | --------------------------------------------------- |
-| `/term`                      | List all active sessions with windows and status    |
-| `/term <session>`            | Show last 50 lines of output from a session         |
-| `/term <session> screenshot` | Render session output as a macOS-style terminal PNG |
-| `/term <session> send <cmd>` | Send a command to a running session                 |
-| `/term <session> kill`       | Kill a specific session                             |
-| `/term new <name> [cmd]`     | Create a new session, optionally run a command      |
-| `/term clear`                | Kill all managed sessions                           |
+| Command                             | Description                                         |
+| ----------------------------------- | --------------------------------------------------- |
+| `/term help`                        | Show command reference                              |
+| `/term`                             | List all active sessions with windows and status    |
+| `/term <session>`                   | Show last 50 lines of output from a session         |
+| `/term <session> screenshot`        | Render session output as a macOS-style terminal PNG |
+| `/term <session> send <cmd>`        | Send a command to a running session                 |
+| `/term <session> kill`              | Kill a specific session                             |
+| `/term <session> rename <newname>`  | Rename a session                                    |
+| `/term <session> window <n>`        | Show output of window n                             |
+| `/term new <name> [cmd]`            | Create a new session, optionally run a command      |
+| `/term clear`                       | Kill all managed sessions                           |
 
 ## Usage Examples
 
@@ -74,6 +77,30 @@ Sends `ls -la` to the `devserver` session and shows the resulting output.
 ```
 
 Displays a table of all active sessions with their window count, status, and current command.
+
+### Get help
+
+```
+/term help
+```
+
+Shows the full command reference.
+
+### Rename a session
+
+```
+/term devserver rename backend
+```
+
+Renames the `devserver` session to `backend`.
+
+### View a specific window
+
+```
+/term devserver window 1
+```
+
+Shows the last 50 lines of output from window 1 of the `devserver` session.
 
 ### Attach from Terminal.app
 
