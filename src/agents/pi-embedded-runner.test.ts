@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { SessionManager as PiSessionManager } from "@mariozechner/pi-coding-agent";
 import "./test-helpers/fast-coding-tools.js";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -116,7 +115,7 @@ vi.mock("@mariozechner/pi-ai", async () => {
 });
 
 let runEmbeddedPiAgent: typeof import("./pi-embedded-runner/run.js").runEmbeddedPiAgent;
-let SessionManager: PiSessionManager;
+let SessionManager: typeof import("@mariozechner/pi-coding-agent").SessionManager;
 let tempRoot: string | undefined;
 let agentDir: string;
 let workspaceDir: string;

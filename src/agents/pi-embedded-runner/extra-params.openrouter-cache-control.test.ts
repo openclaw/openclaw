@@ -1,6 +1,6 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model } from "@mariozechner/pi-ai";
-import { AssistantMessageEventStream } from "@mariozechner/pi-ai";
+import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import { applyExtraParamsToAgent } from "./extra-params.js";
 
@@ -14,7 +14,7 @@ describe("extra-params: OpenRouter Anthropic cache_control", () => {
     };
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       options?.onPayload?.(payload);
-      return new AssistantMessageEventStream();
+      return createAssistantMessageEventStream();
     };
     const agent = { streamFn: baseStreamFn };
 
@@ -49,7 +49,7 @@ describe("extra-params: OpenRouter Anthropic cache_control", () => {
     };
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       options?.onPayload?.(payload);
-      return new AssistantMessageEventStream();
+      return createAssistantMessageEventStream();
     };
     const agent = { streamFn: baseStreamFn };
 
@@ -79,7 +79,7 @@ describe("extra-params: OpenRouter Anthropic cache_control", () => {
     };
     const baseStreamFn: StreamFn = (_model, _context, options) => {
       options?.onPayload?.(payload);
-      return new AssistantMessageEventStream();
+      return createAssistantMessageEventStream();
     };
     const agent = { streamFn: baseStreamFn };
 
