@@ -1,0 +1,26 @@
+{
+  "id": "notification-intelligence",
+  "name": "Notification Intelligence",
+  "description": "AI-powered notification triage and digest from Android phone nodes. Receives notification batches, classifies urgency, and provides digest summaries.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "triageMode": {
+        "type": "string",
+        "enum": ["heuristic", "ai", "hybrid"],
+        "default": "heuristic"
+      },
+      "maxStoredNotifications": {
+        "type": "integer",
+        "minimum": 10,
+        "default": 500
+      },
+      "retentionMinutes": {
+        "type": "integer",
+        "minimum": 5,
+        "default": 60
+      }
+    }
+  }
+}

@@ -11,6 +11,7 @@ import ai.openclaw.android.protocol.OpenClawCanvasA2UICommand
 import ai.openclaw.android.protocol.OpenClawCanvasCommand
 import ai.openclaw.android.protocol.OpenClawCameraCommand
 import ai.openclaw.android.protocol.OpenClawLocationCommand
+import ai.openclaw.android.protocol.OpenClawNotificationCommand
 import ai.openclaw.android.protocol.OpenClawScreenCommand
 import ai.openclaw.android.protocol.OpenClawSmsCommand
 import ai.openclaw.android.protocol.OpenClawCapability
@@ -24,6 +25,7 @@ class ConnectionManager(
   private val voiceWakeMode: () -> VoiceWakeMode,
   private val smsAvailable: () -> Boolean,
   private val hasRecordAudioPermission: () -> Boolean,
+  private val notificationsEnabled: () -> Boolean,
   private val manualTls: () -> Boolean,
 ) {
   companion object {
@@ -100,6 +102,10 @@ class ConnectionManager(
       if (smsAvailable()) {
         add(OpenClawSmsCommand.Send.rawValue)
       }
+      if (notificationsEnabled()) {
+        add(OpenClawNotificationCommand.Dismiss.rawValue)
+        add(OpenClawNotificationCommand.List.rawValue)
+      }
       if (BuildConfig.DEBUG) {
         add("debug.logs")
         add("debug.ed25519")
@@ -118,6 +124,9 @@ class ConnectionManager(
       }
       if (locationMode() != LocationMode.Off) {
         add(OpenClawCapability.Location.rawValue)
+      }
+      if (notificationsEnabled()) {
+        add(OpenClawCapability.Notifications.rawValue)
       }
     }
 

@@ -57,6 +57,15 @@
             </intent-filter>
         </activity>
 
+        <service
+            android:name=".notification.OpenClawNotificationListener"
+            android:exported="true"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
+        </service>
+
         <receiver
             android:name=".InstallResultReceiver"
             android:exported="false" />

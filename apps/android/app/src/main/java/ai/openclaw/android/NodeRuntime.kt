@@ -134,6 +134,34 @@ class NodeRuntime(context: Context) {
     sms = sms,
   )
 
+  private val notificationFilter: ai.openclaw.android.notification.NotificationFilter =
+    ai.openclaw.android.notification.NotificationFilter(
+      ownPackageName = appContext.packageName,
+      allowedPackages = { emptySet() },
+      blockedPackages = { emptySet() },
+    )
+
+  val notificationBridge: NotificationListenerBridge by lazy {
+    NotificationListenerBridge(
+      scope = scope,
+      isFeatureEnabled = { notificationsEnabled.value },
+      nodeId = { prefs.instanceId.value },
+      filter = notificationFilter,
+      sendBatch = { json ->
+        try {
+          nodeSession.request("notifications.batch", json, timeoutMs = 10_000)
+        } catch (err: Throwable) {
+          android.util.Log.w("OpenClawNotif", "batch send failed: ${err.message}")
+        }
+      },
+      batchWindowMs = (prefs.notificationsBatchWindowSec.value * 1000L),
+    )
+  }
+
+  private val notificationHandler: NotificationHandler = NotificationHandler(
+    bridge = notificationBridge,
+  )
+
   private val a2uiHandler: A2UIHandler = A2UIHandler(
     canvas = canvas,
     json = json,
@@ -148,6 +176,7 @@ class NodeRuntime(context: Context) {
     voiceWakeMode = { voiceWakeMode.value },
     smsAvailable = { sms.canSendSms() },
     hasRecordAudioPermission = { hasRecordAudioPermission() },
+    notificationsEnabled = { notificationsEnabled.value },
     manualTls = { manualTls.value },
   )
 
@@ -160,9 +189,11 @@ class NodeRuntime(context: Context) {
     a2uiHandler = a2uiHandler,
     debugHandler = debugHandler,
     appUpdateHandler = appUpdateHandler,
+    notificationHandler = notificationHandler,
     isForeground = { _isForeground.value },
     cameraEnabled = { cameraEnabled.value },
     locationEnabled = { locationMode.value != LocationMode.Off },
+    notificationsEnabled = { notificationsEnabled.value },
   )
 
   private lateinit var gatewayEventHandler: GatewayEventHandler
@@ -348,6 +379,7 @@ class NodeRuntime(context: Context) {
   fun setGatewayToken(value: String) = prefs.setGatewayToken(value)
   val lastDiscoveredStableId: StateFlow<String> = prefs.lastDiscoveredStableId
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
+  val notificationsEnabled: StateFlow<Boolean> = prefs.notificationsEnabled
 
   private var didAutoConnect = false
 
@@ -408,6 +440,16 @@ class NodeRuntime(context: Context) {
       talkEnabled.collect { enabled ->
         talkMode.setEnabled(enabled)
         externalAudioCaptureActive.value = enabled
+      }
+    }
+
+    scope.launch {
+      notificationsEnabled.collect { enabled ->
+        if (enabled) {
+          notificationBridge.activate()
+        } else {
+          notificationBridge.deactivate()
+        }
       }
     }
 
@@ -480,6 +522,11 @@ class NodeRuntime(context: Context) {
 
   fun setCameraEnabled(value: Boolean) {
     prefs.setCameraEnabled(value)
+  }
+
+  fun setNotificationsEnabled(value: Boolean) {
+    // The init-block collector on notificationsEnabled handles activate/deactivate.
+    prefs.setNotificationsEnabled(value)
   }
 
   fun setLocationMode(mode: LocationMode) {

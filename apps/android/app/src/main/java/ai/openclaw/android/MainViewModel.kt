@@ -54,6 +54,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val manualTls: StateFlow<Boolean> = runtime.manualTls
   val gatewayToken: StateFlow<String> = runtime.gatewayToken
   val canvasDebugStatusEnabled: StateFlow<Boolean> = runtime.canvasDebugStatusEnabled
+  val notificationsEnabled: StateFlow<Boolean> = runtime.notificationsEnabled
+  val notificationsListenerConnected: StateFlow<Boolean> = runtime.notificationBridge.isListenerConnected
 
   val chatSessionKey: StateFlow<String> = runtime.chatSessionKey
   val chatSessionId: StateFlow<String?> = runtime.chatSessionId
@@ -128,6 +130,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun setTalkEnabled(enabled: Boolean) {
     runtime.setTalkEnabled(enabled)
+  }
+
+  fun setNotificationsEnabled(value: Boolean) {
+    runtime.setNotificationsEnabled(value)
   }
 
   fun refreshGatewayConnection() {
