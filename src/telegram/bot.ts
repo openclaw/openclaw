@@ -155,8 +155,11 @@ export function createTelegramBot(opts: TelegramBotOptions) {
   });
 
   const recentUpdates = createTelegramUpdateDedupe();
-  let lastUpdateId =
+  // The persisted offset from the previous session is safe for crash-recovery
+  // dedup: any update_id <= this value was already processed before this session.
+  const initialLastUpdateId =
     typeof opts.updateOffset?.lastUpdateId === "number" ? opts.updateOffset.lastUpdateId : null;
+  let lastUpdateId = initialLastUpdateId;
 
   const recordUpdateId = (ctx: TelegramUpdateKeyContext) => {
     const updateId = resolveTelegramUpdateId(ctx);
@@ -172,8 +175,14 @@ export function createTelegramBot(opts: TelegramBotOptions) {
 
   const shouldSkipUpdate = (ctx: TelegramUpdateKeyContext) => {
     const updateId = resolveTelegramUpdateId(ctx);
-    if (typeof updateId === "number" && lastUpdateId !== null) {
-      if (updateId <= lastUpdateId) {
+    if (typeof updateId === "number" && initialLastUpdateId !== null) {
+      // Only compare against the persisted offset from before this session.
+      // Using the runtime-advancing `lastUpdateId` is incorrect because
+      // @grammyjs/runner processes updates concurrently across different
+      // sequentialize keys.  A fast-completing update from chat B can advance
+      // the high-water mark past a still-queued serialised update in chat A,
+      // causing that update to be incorrectly skipped.
+      if (updateId <= initialLastUpdateId) {
         return true;
       }
     }
