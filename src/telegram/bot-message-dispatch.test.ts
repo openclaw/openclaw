@@ -404,6 +404,37 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.stop).toHaveBeenCalled();
   });
 
+  it("keeps streamed preview visible when final text regresses after a tool warning", async () => {
+    const draftStream = createDraftStream(999);
+    createTelegramDraftStream.mockReturnValue(draftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Recovered final answer." });
+        await dispatcherOptions.deliver(
+          { text: "⚠️ Recovered tool error details", isError: true },
+          { kind: "tool" },
+        );
+        await dispatcherOptions.deliver({ text: "Recovered final answer" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({ context: createContext(), streamMode: "partial" });
+
+    // Regressive final ("answer." -> "answer") should keep the preview instead
+    // of clearing it and leaving only the tool warning visible.
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: "⚠️ Recovered tool error details" })],
+      }),
+    );
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(draftStream.stop).toHaveBeenCalled();
+  });
+
   it("falls back to normal delivery when preview final is too long to edit", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
