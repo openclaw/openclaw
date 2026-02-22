@@ -141,10 +141,13 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       });
     },
   };
+  const statusReactionsConfig = cfg.messages?.statusReactions;
   const statusReactions = createStatusReactionController({
     enabled: statusReactionsEnabled,
     adapter: discordAdapter,
     initialEmoji: ackReaction,
+    emojis: statusReactionsConfig?.emojis,
+    timing: statusReactionsConfig?.timing,
     onError: (err) => {
       logAckFailure({
         log: logVerbose,
