@@ -1,3 +1,4 @@
+import path from "path";
 import { z } from "zod";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
@@ -338,7 +339,16 @@ export const OpenClawSchema = z
         allowedAgentIds: z.array(z.string()).optional(),
         maxBodyBytes: z.number().int().positive().optional(),
         presets: z.array(z.string()).optional(),
-        transformsDir: z.string().optional(),
+        transformsDir: z.string()
+          .refine(
+            (val) => !path.isAbsolute(val),
+            { message: "hooks.transformsDir must be a relative path" },
+          )
+          .refine(
+            (val) => !val.includes(".."),
+            { message: "hooks.transformsDir must not contain path traversal" },
+          )
+          .optional(),
         mappings: z.array(HookMappingSchema).optional(),
         gmail: HooksGmailSchema,
         internal: InternalHooksSchema,

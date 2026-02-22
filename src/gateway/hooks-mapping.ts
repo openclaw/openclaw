@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { CONFIG_PATH, type HookMappingConfig, type HooksConfig } from "../config/config.js";
@@ -352,6 +353,15 @@ function resolvePath(baseDir: string, target: string): string {
   return path.isAbsolute(target) ? path.resolve(target) : path.resolve(baseDir, target);
 }
 
+/**
+ * Resolves a path that must be contained within baseDir.
+ * Uses two-layer validation: lexical check + symlink resolution check (CWE-94).
+ *
+ * @security Two-layer validation prevents symlink-based path escape:
+ *   - Layer 1: Lexical check on normalized path (catches ../ traversal)
+ *   - Layer 2: fs.realpathSync() resolves symlinks, then re-validates
+ *   - Graceful fallback: if file doesn't exist, Layer 1 is sufficient
+ */
 function resolveContainedPath(baseDir: string, target: string, label: string): string {
   const base = path.resolve(baseDir);
   const trimmed = target?.trim();
@@ -359,10 +369,41 @@ function resolveContainedPath(baseDir: string, target: string, label: string): s
     throw new Error(`${label} module path is required`);
   }
   const resolved = resolvePath(base, trimmed);
+
+  // Defense-in-depth: reject absolute paths that don't start with baseDir
+  if (path.isAbsolute(trimmed) && !trimmed.startsWith(base)) {
+    throw new Error(`${label} absolute path must be within ${base}: ${target}`);
+  }
+
+  // Layer 1: Lexical containment check (catches ../traversal)
   const relative = path.relative(base, resolved);
   if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
     throw new Error(`${label} module path must be within ${base}: ${target}`);
   }
+
+  // Layer 2: Symlink resolution -- prevent symlink-based escape (CWE-94)
+  try {
+    const realBase = fs.realpathSync(base);
+    const realResolved = fs.realpathSync(resolved);
+    const realRelative = path.relative(realBase, realResolved);
+    if (
+      realRelative === ".." ||
+      realRelative.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(realRelative)
+    ) {
+      throw new Error(
+        `${label} module path resolves outside base directory (symlink): ${target}`,
+      );
+    }
+  } catch (err: unknown) {
+    // ENOENT: file doesn't exist yet -- Layer 1 check is sufficient
+    if (err instanceof Error && "code" in err && (err as NodeJS.ErrnoException).code === "ENOENT") {
+      // File doesn't exist; normalized path check above is sufficient
+    } else {
+      throw err; // Re-throw symlink escape errors and unexpected errors
+    }
+  }
+
   return resolved;
 }
 
