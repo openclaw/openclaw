@@ -98,12 +98,8 @@ describe("memory watcher config", () => {
     expect(options.ignoreInitial).toBe(true);
     expect(options.awaitWriteFinish).toEqual({ stabilityThreshold: 25, pollInterval: 100 });
 
-    const ignored = options.ignored as ((watchPath: string) => boolean) | undefined;
-    expect(ignored).toBeTypeOf("function");
-    expect(ignored?.(path.join(workspaceDir, "memory", "node_modules", "pkg", "index.md"))).toBe(
-      true,
-    );
-    expect(ignored?.(path.join(workspaceDir, "memory", ".venv", "lib", "python.md"))).toBe(true);
-    expect(ignored?.(path.join(workspaceDir, "memory", "project", "notes.md"))).toBe(false);
+    const ignored = options.ignored as string[];
+    expect(Array.isArray(ignored)).toBe(true);
+    expect(ignored).toEqual(expect.arrayContaining(["**/node_modules/**", "**/.venv/**"]));
   });
 });
