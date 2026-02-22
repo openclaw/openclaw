@@ -227,6 +227,50 @@ describe("monitorTelegramProvider (grammY)", () => {
     expect(runSpy).toHaveBeenCalledTimes(2);
   });
 
+  it("deletes webhook before starting polling", async () => {
+    const order: string[] = [];
+    api.deleteWebhook.mockReset();
+    api.deleteWebhook.mockImplementationOnce(async () => {
+      order.push("deleteWebhook");
+      return true;
+    });
+    runSpy.mockImplementationOnce(() => {
+      order.push("run");
+      return {
+        task: () => Promise.resolve(),
+        stop: vi.fn(),
+        isRunning: () => false,
+      };
+    });
+
+    await monitorTelegramProvider({ token: "tok" });
+
+    expect(api.deleteWebhook).toHaveBeenCalledWith({ drop_pending_updates: false });
+    expect(order).toEqual(["deleteWebhook", "run"]);
+  });
+
+  it("retries recoverable deleteWebhook failures before polling", async () => {
+    const cleanupError = Object.assign(new TypeError("fetch failed"), {
+      cause: Object.assign(new Error("connect timeout"), {
+        code: "UND_ERR_CONNECT_TIMEOUT",
+      }),
+    });
+    api.deleteWebhook.mockReset();
+    api.deleteWebhook.mockRejectedValueOnce(cleanupError).mockResolvedValueOnce(true);
+    runSpy.mockImplementationOnce(() => ({
+      task: () => Promise.resolve(),
+      stop: vi.fn(),
+      isRunning: () => false,
+    }));
+
+    await monitorTelegramProvider({ token: "tok" });
+
+    expect(api.deleteWebhook).toHaveBeenCalledTimes(2);
+    expect(computeBackoff).toHaveBeenCalled();
+    expect(sleepWithAbort).toHaveBeenCalled();
+    expect(runSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("retries setup-time recoverable errors before starting polling", async () => {
     const setupError = Object.assign(new TypeError("fetch failed"), {
       cause: Object.assign(new Error("connect timeout"), {
