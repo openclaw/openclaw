@@ -701,6 +701,12 @@ export const ToolsSchema = z
       })
       .strict()
       .optional(),
+    subagentProgress: z
+      .object({
+        throttleMs: z.number().int().positive().optional(),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((value, ctx) => {

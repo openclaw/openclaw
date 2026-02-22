@@ -530,4 +530,9 @@ export type ToolsConfig = {
       deny?: string[];
     };
   };
+  /** Sub-agent progress tool configuration. */
+  subagentProgress?: {
+    /** Rate limiting throttle in milliseconds (default: 30000ms = 30s). */
+    throttleMs?: number;
+  };
 };
