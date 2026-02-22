@@ -204,7 +204,7 @@ export async function rejectNodePairing(
       idKey: "nodeId",
       loadState: () => loadState(baseDir),
       persistState: (state) => persistState(state, baseDir),
-      getId: (pending) => pending.nodeId,
+      getId: (pending: NodePairingPendingRequest) => pending.nodeId,
     });
   });
 }
