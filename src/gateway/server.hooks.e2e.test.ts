@@ -461,4 +461,38 @@ describe("gateway server hooks", () => {
       expect(failAfterSuccess.status).toBe(401);
     });
   });
+
+  test("rejects unsupported hook content-types", async () => {
+    testState.hooksConfig = { enabled: true, token: "hook-secret" };
+    await withGatewayServer(async ({ port }) => {
+      const res = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "text/plain",
+          Authorization: "Bearer hook-secret",
+        },
+        body: JSON.stringify({ text: "Ping" }),
+      });
+      expect(res.status).toBe(415);
+      const payload = (await res.json()) as { error?: string };
+      expect(payload.error).toContain("unsupported content-type");
+    });
+  });
+
+  test("rejects oversized hook payloads with 413", async () => {
+    testState.hooksConfig = { enabled: true, token: "hook-secret", maxBodyBytes: 32 };
+    await withGatewayServer(async ({ port }) => {
+      const res = await fetch(`http://127.0.0.1:${port}/hooks/wake`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: "Bearer hook-secret",
+        },
+        body: JSON.stringify({ text: "This payload is intentionally larger than 32 bytes." }),
+      });
+      expect(res.status).toBe(413);
+      const payload = (await res.json()) as { error?: string };
+      expect(payload.error).toBe("payload too large");
+    });
+  });
 });

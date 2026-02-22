@@ -94,13 +94,7 @@ export async function readRequestBodyWithLimit(
 
   const declaredLength = parseContentLengthHeader(req);
   if (declaredLength !== null && declaredLength > maxBytes) {
-    const error = new RequestBodyLimitError({ code: "PAYLOAD_TOO_LARGE" });
-    if (!req.destroyed) {
-      // Limit violations are expected user input; destroying with an Error causes
-      // an async 'error' event which can crash the process if no listener remains.
-      req.destroy();
-    }
-    throw error;
+    throw new RequestBodyLimitError({ code: "PAYLOAD_TOO_LARGE" });
   }
 
   return await new Promise((resolve, reject) => {
