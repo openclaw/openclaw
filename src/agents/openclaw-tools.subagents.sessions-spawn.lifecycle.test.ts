@@ -3,7 +3,9 @@ import { emitAgentEvent } from "../infra/agent-events.js";
 import "./test-helpers/fast-core-tools.js";
 import {
   getCallGatewayMock,
+  getSessionsSpawnTool,
   resetSessionsSpawnConfigOverride,
+  setupSessionsSpawnGatewayMock,
   setSessionsSpawnConfigOverride,
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
 import { resetSubagentRegistryForTests } from "./subagent-registry.js";
@@ -18,22 +20,6 @@ vi.mock("./pi-embedded.js", () => ({
 const callGatewayMock = getCallGatewayMock();
 const RUN_TIMEOUT_SECONDS = 1;
 
-type CreateOpenClawTools = (typeof import("./openclaw-tools.js"))["createOpenClawTools"];
-type CreateOpenClawToolsOpts = Parameters<CreateOpenClawTools>[0];
-
-async function getSessionsSpawnTool(opts: CreateOpenClawToolsOpts) {
-  // Dynamic import: ensure harness mocks are installed before tool modules load.
-  const { createOpenClawTools } = await import("./openclaw-tools.js");
-  const tool = createOpenClawTools(opts).find((candidate) => candidate.name === "sessions_spawn");
-  if (!tool) {
-    throw new Error("missing sessions_spawn tool");
-  }
-  return tool;
-}
-
-type GatewayRequest = { method?: string; params?: unknown };
-type AgentWaitCall = { runId?: string; timeoutMs?: number };
-
 function buildDiscordCleanupHooks(onDelete: (key: string | undefined) => void) {
   return {
     onAgentSubagentSpawn: (params: unknown) => {
@@ -45,98 +31,6 @@ function buildDiscordCleanupHooks(onDelete: (key: string | undefined) => void) {
       const rec = params as { key?: string } | undefined;
       onDelete(rec?.key);
     },
-  };
-}
-
-function setupSessionsSpawnGatewayMock(opts: {
-  includeSessionsList?: boolean;
-  includeChatHistory?: boolean;
-  onAgentSubagentSpawn?: (params: unknown) => void;
-  onSessionsPatch?: (params: unknown) => void;
-  onSessionsDelete?: (params: unknown) => void;
-  agentWaitResult?: { status: "ok" | "timeout"; startedAt: number; endedAt: number };
-}): {
-  calls: Array<GatewayRequest>;
-  waitCalls: Array<AgentWaitCall>;
-  getChild: () => { runId?: string; sessionKey?: string };
-} {
-  const calls: Array<GatewayRequest> = [];
-  const waitCalls: Array<AgentWaitCall> = [];
-  let agentCallCount = 0;
-  let childRunId: string | undefined;
-  let childSessionKey: string | undefined;
-
-  callGatewayMock.mockImplementation(async (optsUnknown: unknown) => {
-    const request = optsUnknown as GatewayRequest;
-    calls.push(request);
-
-    if (request.method === "sessions.list" && opts.includeSessionsList) {
-      return {
-        sessions: [
-          {
-            key: "main",
-            lastChannel: "whatsapp",
-            lastTo: "+123",
-          },
-        ],
-      };
-    }
-
-    if (request.method === "agent") {
-      agentCallCount += 1;
-      const runId = `run-${agentCallCount}`;
-      const params = request.params as { lane?: string; sessionKey?: string } | undefined;
-      // Only capture the first agent call (subagent spawn, not main agent trigger)
-      if (params?.lane === "subagent") {
-        childRunId = runId;
-        childSessionKey = params?.sessionKey ?? "";
-        opts.onAgentSubagentSpawn?.(params);
-      }
-      return {
-        runId,
-        status: "accepted",
-        acceptedAt: 1000 + agentCallCount,
-      };
-    }
-
-    if (request.method === "agent.wait") {
-      const params = request.params as AgentWaitCall | undefined;
-      waitCalls.push(params ?? {});
-      const res = opts.agentWaitResult ?? { status: "ok", startedAt: 1000, endedAt: 2000 };
-      return {
-        runId: params?.runId ?? "run-1",
-        ...res,
-      };
-    }
-
-    if (request.method === "sessions.patch") {
-      opts.onSessionsPatch?.(request.params);
-      return { ok: true };
-    }
-
-    if (request.method === "sessions.delete") {
-      opts.onSessionsDelete?.(request.params);
-      return { ok: true };
-    }
-
-    if (request.method === "chat.history" && opts.includeChatHistory) {
-      return {
-        messages: [
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "done" }],
-          },
-        ],
-      };
-    }
-
-    return {};
-  });
-
-  return {
-    calls,
-    waitCalls,
-    getChild: () => ({ runId: childRunId, sessionKey: childSessionKey }),
   };
 }
 
