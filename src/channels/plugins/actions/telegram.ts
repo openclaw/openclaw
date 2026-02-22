@@ -3,6 +3,7 @@ import {
   readStringArrayParam,
   readStringOrNumberParam,
   readStringParam,
+  jsonResult,
 } from "../../../agents/tools/common.js";
 import { handleTelegramAction } from "../../../agents/tools/telegram-actions.js";
 import type { TelegramActionConfig } from "../../../config/types.telegram.js";
@@ -12,6 +13,7 @@ import {
   listEnabledTelegramAccounts,
 } from "../../../telegram/accounts.js";
 import { isTelegramInlineButtonsEnabled } from "../../../telegram/inline-buttons.js";
+import { sendPollTelegram } from "../../../telegram/send.js";
 import type { ChannelMessageActionAdapter, ChannelMessageActionName } from "../types.js";
 
 const providerId = "telegram";
@@ -68,6 +70,9 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
     if (gate("sticker", false)) {
       actions.add("sticker");
       actions.add("sticker-search");
+    }
+    if (gate("polls")) {
+      actions.add("poll");
     }
     if (gate("createForumTopic")) {
       actions.add("topic-create");
@@ -221,6 +226,31 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
         },
         cfg,
       );
+    }
+
+    if (action === "poll") {
+      const to = readStringParam(params, "to", { required: true });
+      const question = readStringParam(params, "pollQuestion", { required: true });
+      const options = readStringArrayParam(params, "pollOption", { required: true }) ?? [];
+      const allowMultiselect = typeof params.pollMulti === "boolean" ? params.pollMulti : undefined;
+      const durationSeconds = readNumberParam(params, "pollDurationSeconds", {
+        integer: true,
+      });
+      const messageThreadId = readNumberParam(params, "threadId", { integer: true });
+      const result = await sendPollTelegram(
+        to,
+        {
+          question,
+          options,
+          maxSelections: allowMultiselect ? Math.max(2, options.length) : 1,
+          durationSeconds: durationSeconds ?? undefined,
+        },
+        {
+          accountId: accountId ?? undefined,
+          messageThreadId: messageThreadId ?? undefined,
+        },
+      );
+      return jsonResult({ ok: true, ...result });
     }
 
     throw new Error(`Action ${action} is not supported for provider ${providerId}.`);
