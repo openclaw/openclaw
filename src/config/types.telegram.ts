@@ -25,6 +25,12 @@ export type TelegramActionConfig = {
 export type TelegramNetworkConfig = {
   /** Override Node's autoSelectFamily behavior (true = enable, false = disable). */
   autoSelectFamily?: boolean;
+  /**
+   * DNS result order for network requests ("ipv4first" | "verbatim").
+   * Set to "ipv4first" to prioritize IPv4 addresses and work around IPv6 issues.
+   * Default: "ipv4first" on Node 22+ to avoid common fetch failures.
+   */
+  dnsResultOrder?: "ipv4first" | "verbatim";
 };
 
 export type TelegramInlineButtonsScope = "off" | "dm" | "group" | "all" | "allowlist";

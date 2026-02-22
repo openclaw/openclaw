@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   resetTelegramNetworkConfigStateForTests,
   resolveTelegramAutoSelectFamilyDecision,
+  resolveTelegramDnsResultOrderDecision,
 } from "./network-config.js";
 
 // Mock isWSL2Sync at the top level
@@ -127,5 +128,36 @@ describe("resolveTelegramAutoSelectFamilyDecision", () => {
       resolveTelegramAutoSelectFamilyDecision({ env: {}, nodeMajor: 22 });
       expect(isWSL2Sync).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe("resolveTelegramDnsResultOrderDecision", () => {
+  it("uses env override when provided", () => {
+    const decision = resolveTelegramDnsResultOrderDecision({
+      env: { OPENCLAW_TELEGRAM_DNS_RESULT_ORDER: "verbatim" },
+      nodeMajor: 22,
+    });
+    expect(decision).toEqual({
+      value: "verbatim",
+      source: "env:OPENCLAW_TELEGRAM_DNS_RESULT_ORDER",
+    });
+  });
+
+  it("uses config override when provided", () => {
+    const decision = resolveTelegramDnsResultOrderDecision({
+      network: { dnsResultOrder: "ipv4first" },
+      nodeMajor: 20,
+    });
+    expect(decision).toEqual({ value: "ipv4first", source: "config" });
+  });
+
+  it("defaults to ipv4first on Node 22", () => {
+    const decision = resolveTelegramDnsResultOrderDecision({ nodeMajor: 22 });
+    expect(decision).toEqual({ value: "ipv4first", source: "default-node22" });
+  });
+
+  it("returns null when no dns decision applies", () => {
+    const decision = resolveTelegramDnsResultOrderDecision({ nodeMajor: 20 });
+    expect(decision).toEqual({ value: null });
   });
 });
