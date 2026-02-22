@@ -190,6 +190,7 @@ export const OpenClawSchema = z
           ])
           .optional(),
         file: z.string().optional(),
+        maxFileBytes: z.number().int().positive().optional(),
         consoleLevel: z
           .union([
             z.literal("silent"),
