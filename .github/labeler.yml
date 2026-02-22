@@ -252,3 +252,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/talk-voice/**"
+"extensions: canvas-lms":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/canvas-lms/**"

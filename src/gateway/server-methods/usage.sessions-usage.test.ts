@@ -3,6 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../../test-utils/env.js";
+import {
+  recordGatewayToolInvocation,
+  resetGatewayToolMetricsForTests,
+} from "../tool-observability.js";
 
 vi.mock("../../config/config.js", () => {
   return {
@@ -113,6 +117,7 @@ describe("sessions.usage", () => {
   beforeEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();
+    resetGatewayToolMetricsForTests();
   });
 
   it("discovers sessions across configured agents and keeps agentId in key", async () => {
@@ -244,5 +249,35 @@ describe("sessions.usage", () => {
         message: expect.stringContaining("Invalid session key"),
       }),
     );
+  });
+
+  it("returns gateway tool metrics snapshot", async () => {
+    recordGatewayToolInvocation({
+      tool: "browser_open",
+      channel: "telegram",
+      ok: true,
+      latencyMs: 123,
+    });
+    recordGatewayToolInvocation({
+      tool: "browser_open",
+      channel: "telegram",
+      ok: false,
+      latencyMs: 450,
+    });
+
+    const respond = vi.fn();
+    await usageHandlers["usage.gatewayToolMetrics"]({
+      respond,
+      params: { topTools: 5, topChannels: 5 },
+    } as unknown as Parameters<(typeof usageHandlers)["usage.gatewayToolMetrics"]>[0]);
+
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+    const payload = respond.mock.calls[0]?.[1] as {
+      tools: Array<{ tool: string; calls: number; errors: number }>;
+      channels: Array<{ channel: string; calls: number; errors: number }>;
+    };
+    expect(payload.tools[0]).toMatchObject({ tool: "browser_open", calls: 2, errors: 1 });
+    expect(payload.channels[0]).toMatchObject({ channel: "telegram", calls: 2, errors: 1 });
   });
 });

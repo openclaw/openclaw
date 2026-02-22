@@ -108,6 +108,9 @@ pnpm openclaw onboard --install-daemon
 pnpm gateway:watch
 ```
 
+Windows native (PowerShell, no WSL): `pnpm gateway:watch` now auto-runs a Windows-safe flow
+(`openclaw gateway stop` best-effort, then `gateway run --bind loopback --port 18789 --allow-unconfigured`).
+
 Note: `pnpm openclaw ...` runs TypeScript directly (via `tsx`). `pnpm build` produces `dist/` for running via Node / the packaged `openclaw` binary.
 
 ## Security defaults (DM access)
@@ -210,6 +213,26 @@ WhatsApp / Telegram / Slack / Discord / Google Chat / Signal / iMessage / BlueBu
 - **[Canvas + A2UI](https://docs.openclaw.ai/platforms/mac/canvas)** — agent‑driven visual workspace (A2UI host: [Canvas/A2UI](https://docs.openclaw.ai/platforms/mac/canvas#canvas-a2ui)).
 - **[Voice Wake](https://docs.openclaw.ai/nodes/voicewake) + [Talk Mode](https://docs.openclaw.ai/nodes/talk)** — always‑on speech and continuous conversation.
 - **[Nodes](https://docs.openclaw.ai/nodes)** — Canvas, camera snap/clip, screen record, `location.get`, notifications, plus macOS‑only `system.run`/`system.notify`.
+
+## Architecture map (tools + routing + channels + extensions)
+
+```mermaid
+flowchart TD
+    U[User surfaces]
+    U --> C1[Core channels]
+    U --> C2[Extension channels]
+    C1 --> G[Gateway]
+    C2 --> G
+    A[Web/CLI/macOS/iOS/Android clients] --> G
+    G --> R[Routing + Session keys]
+    R --> AG[Agent runtime]
+    AG --> TP[Tool policy pipeline]
+    TP --> T1[Core tools]
+    TP --> T2[Plugin tools]
+    T2 --> EX[Extensions/*]
+    G --> OBS[Tool and channel observability]
+    OBS --> API[usage.gatewayToolMetrics]
+```
 
 ## Tailscale access (Gateway dashboard)
 

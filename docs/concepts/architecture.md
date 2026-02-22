@@ -26,6 +26,52 @@ Last updated: 2026-01-22
 
 ## Components and flows
 
+### End-to-end architecture map
+
+```mermaid
+flowchart LR
+    subgraph Surfaces[Messaging surfaces]
+      WA[WhatsApp]
+      TG[Telegram]
+      SL[Slack]
+      DC[Discord]
+      GC[Google Chat]
+      SG[Signal]
+      IM[iMessage]
+      WEB[WebChat]
+    end
+
+    subgraph ExtCh[Extension channels]
+      MT[Microsoft Teams]
+      MX[Matrix]
+      ZA[Zalo and Zalo Personal]
+      BB[BlueBubbles]
+      MM[Mattermost]
+    end
+
+    Surfaces --> GW[Gateway server]
+    ExtCh --> GW
+
+    subgraph Clients[Control clients]
+      CLI[CLI]
+      MAC[macOS app]
+      IOS[iOS node]
+      AND[Android node]
+      UI[Control UI]
+    end
+
+    Clients --> GW
+    GW --> ROUTE[Session key routing and channel/account policies]
+    ROUTE --> AGENT[Agent runtime]
+    AGENT --> POLICY[Tool policy pipeline]
+    POLICY --> CORE[Core tools]
+    POLICY --> PLUG[Plugin tools]
+    PLUG --> EXT[extensions/* packages]
+    AGENT --> EVT[Event streams: agent chat presence health]
+    GW --> OBS[Gateway observability]
+    OBS --> METRICS[Tool usage and latency by tool/channel]
+```
+
 ### Gateway (daemon)
 
 - Maintains provider connections.

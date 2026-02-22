@@ -96,6 +96,28 @@ To help group policies resolve context, you can optionally set:
 - `405` → method not allowed
 - `500` → `{ ok: false, error: { type, message } }` (unexpected tool execution error; sanitized message)
 
+## Observability metrics
+
+Gateway tracks `tools/invoke` usage and latency by:
+
+- `tool`
+- `channel` (from `x-openclaw-message-channel` or session key prefix fallback)
+
+Read the in-memory snapshot with Gateway RPC:
+
+- `usage.gatewayToolMetrics`
+
+Example request:
+
+```json
+{
+  "type": "req",
+  "id": "m1",
+  "method": "usage.gatewayToolMetrics",
+  "params": { "topTools": 25, "topChannels": 25 }
+}
+```
+
 ## Example
 
 ```bash

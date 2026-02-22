@@ -33,6 +33,7 @@ import {
   sendMethodNotAllowed,
 } from "./http-common.js";
 import { getBearerToken, getHeader } from "./http-utils.js";
+import { recordGatewayToolInvocation, resolveGatewayMetricChannel } from "./tool-observability.js";
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
@@ -304,6 +305,12 @@ export async function handleToolsInvokeHttpRequest(
     return true;
   }
 
+  const metricChannel = resolveGatewayMetricChannel({
+    messageChannel,
+    sessionKey,
+  });
+
+  const startedAt = Date.now();
   try {
     const toolArgs = mergeActionIntoArgsIfSupported({
       // oxlint-disable-next-line typescript/no-explicit-any
@@ -313,8 +320,20 @@ export async function handleToolsInvokeHttpRequest(
     });
     // oxlint-disable-next-line typescript/no-explicit-any
     const result = await (tool as any).execute?.(`http-${Date.now()}`, toolArgs);
+    recordGatewayToolInvocation({
+      tool: toolName,
+      channel: metricChannel,
+      ok: true,
+      latencyMs: Date.now() - startedAt,
+    });
     sendJson(res, 200, { ok: true, result });
   } catch (err) {
+    recordGatewayToolInvocation({
+      tool: toolName,
+      channel: metricChannel,
+      ok: false,
+      latencyMs: Date.now() - startedAt,
+    });
     const inputStatus = resolveToolInputErrorStatus(err);
     if (inputStatus !== null) {
       sendJson(res, inputStatus, {

@@ -247,6 +247,12 @@ importers:
         specifier: workspace:*
         version: link:../..
 
+  extensions/canvas-lms:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/copilot-proxy:
     devDependencies:
       openclaw:

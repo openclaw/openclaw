@@ -40,11 +40,16 @@ pnpm gateway:watch
 This maps to:
 
 ```bash
-node --watch-path src --watch-path tsconfig.json --watch-path package.json --watch-preserve-output scripts/run-node.mjs gateway --force
+node scripts/gateway-watch.mjs
 ```
 
 Add any gateway CLI flags after `gateway:watch` and they will be passed through
 on each restart.
+
+On native Windows (PowerShell, non-WSL), `gateway:watch` automatically:
+
+1. Runs `openclaw gateway stop` (best-effort) to clear scheduled-daemon port conflicts.
+2. Starts watch mode with `gateway run --bind loopback --port 18789 --allow-unconfigured`.
 
 ## Dev profile + dev gateway (--dev)
 

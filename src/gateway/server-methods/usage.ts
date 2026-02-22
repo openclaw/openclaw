@@ -36,6 +36,7 @@ import {
   loadCombinedSessionStoreForGateway,
   loadSessionEntry,
 } from "../session-utils.js";
+import { getGatewayToolMetricsSnapshot } from "../tool-observability.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 const COST_USAGE_CACHE_TTL_MS = 30_000;
@@ -411,6 +412,18 @@ export const usageHandlers: GatewayRequestHandlers = {
     });
     const summary = await loadCostUsageSummaryCached({ startMs, endMs, config });
     respond(true, summary, undefined);
+  },
+  "usage.gatewayToolMetrics": async ({ respond, params }) => {
+    const topToolsRaw = params?.topTools;
+    const topChannelsRaw = params?.topChannels;
+    const topTools =
+      typeof topToolsRaw === "number" && Number.isFinite(topToolsRaw) ? topToolsRaw : undefined;
+    const topChannels =
+      typeof topChannelsRaw === "number" && Number.isFinite(topChannelsRaw)
+        ? topChannelsRaw
+        : undefined;
+    const snapshot = getGatewayToolMetricsSnapshot({ topTools, topChannels });
+    respond(true, snapshot, undefined);
   },
   "sessions.usage": async ({ respond, params }) => {
     if (!validateSessionsUsageParams(params)) {

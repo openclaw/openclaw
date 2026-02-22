@@ -97,6 +97,8 @@ pnpm gateway:watch
 ```
 
 `gateway:watch` runs the gateway in watch mode and reloads on TypeScript changes.
+On native Windows (PowerShell, non-WSL), it also stops any running daemon first
+and uses a Windows-safe run command to avoid `--force`/`lsof` issues.
 
 ### 2) Point the macOS app at your running Gateway
 
