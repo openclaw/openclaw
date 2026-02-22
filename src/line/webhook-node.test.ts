@@ -37,6 +37,20 @@ function createPostWebhookTestHarness(rawBody: string, secret = "secret") {
   return { bot, handler, secret };
 }
 
+const runSignedPost = async (params: {
+  handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+  rawBody: string;
+  secret: string;
+  res: ServerResponse;
+}) =>
+  await params.handler(
+    {
+      method: "POST",
+      headers: { "x-line-signature": sign(params.rawBody, params.secret) },
+    } as unknown as IncomingMessage,
+    params.res,
+  );
+
 describe("createLineNodeWebhookHandler", () => {
   it("returns 200 for GET", async () => {
     const bot = { handleWebhook: vi.fn(async () => {}) };
@@ -65,6 +79,17 @@ describe("createLineNodeWebhookHandler", () => {
     expect(res.statusCode).toBe(200);
     expect(headers["content-type"]).toBe("application/json");
     expect(res.body).toBe(JSON.stringify({ status: "ok" }));
+    expect(bot.handleWebhook).not.toHaveBeenCalled();
+  });
+
+  it("returns 405 for non-GET/non-POST methods", async () => {
+    const { bot, handler } = createPostWebhookTestHarness(JSON.stringify({ events: [] }));
+
+    const { res, headers } = createRes();
+    await handler({ method: "PUT", headers: {} } as unknown as IncomingMessage, res);
+
+    expect(res.statusCode).toBe(405);
+    expect(headers.allow).toBe("GET, POST");
     expect(bot.handleWebhook).not.toHaveBeenCalled();
   });
 
@@ -98,13 +123,7 @@ describe("createLineNodeWebhookHandler", () => {
     const { bot, handler, secret } = createPostWebhookTestHarness(rawBody);
 
     const { res } = createRes();
-    await handler(
-      {
-        method: "POST",
-        headers: { "x-line-signature": sign(rawBody, secret) },
-      } as unknown as IncomingMessage,
-      res,
-    );
+    await runSignedPost({ handler, rawBody, secret, res });
 
     expect(res.statusCode).toBe(200);
     expect(bot.handleWebhook).toHaveBeenCalledWith(
@@ -117,13 +136,7 @@ describe("createLineNodeWebhookHandler", () => {
     const { bot, handler, secret } = createPostWebhookTestHarness(rawBody);
 
     const { res } = createRes();
-    await handler(
-      {
-        method: "POST",
-        headers: { "x-line-signature": sign(rawBody, secret) },
-      } as unknown as IncomingMessage,
-      res,
-    );
+    await runSignedPost({ handler, rawBody, secret, res });
 
     expect(res.statusCode).toBe(400);
     expect(bot.handleWebhook).not.toHaveBeenCalled();

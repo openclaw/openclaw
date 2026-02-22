@@ -21,7 +21,7 @@ Status: production-ready via WhatsApp Web (Baileys). Gateway owns linked session
   </Card>
 </CardGroup>
 
-## Onboarding
+## Quick setup
 
 <Steps>
   <Step title="Configure WhatsApp access policy">
@@ -422,7 +422,7 @@ Behavior notes:
   </Accordion>
 </AccordionGroup>
 
-## Configuration
+## Configuration reference pointers
 
 Primary reference:
 

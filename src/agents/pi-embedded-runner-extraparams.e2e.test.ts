@@ -278,40 +278,49 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.store).toBe(false);
   });
 
-  it("does not force store=true for Codex responses (Codex requires store=false)", () => {
-    const payload = runStoreMutationCase({
-      applyProvider: "openai-codex",
-      applyModelId: "codex-mini-latest",
-      model: {
-        api: "openai-codex-responses",
-        provider: "openai-codex",
-        id: "codex-mini-latest",
-        baseUrl: "https://chatgpt.com/backend-api/codex/responses",
-      } as Model<"openai-codex-responses">,
-    });
-    expect(payload.store).toBe(false);
-  });
+  it.each([
+    {
+      name: "with openai-codex provider config",
+      run: () =>
+        runStoreMutationCase({
+          applyProvider: "openai-codex",
+          applyModelId: "codex-mini-latest",
+          model: {
+            api: "openai-codex-responses",
+            provider: "openai-codex",
+            id: "codex-mini-latest",
+            baseUrl: "https://chatgpt.com/backend-api/codex/responses",
+          } as Model<"openai-codex-responses">,
+        }),
+    },
+    {
+      name: "without config via provider/model hints",
+      run: () => {
+        const payload = { store: false };
+        const baseStreamFn: StreamFn = (_model, _context, options) => {
+          options?.onPayload?.(payload);
+          return {} as ReturnType<StreamFn>;
+        };
+        const agent = { streamFn: baseStreamFn };
 
-  it("does not force store=true for Codex responses (Codex requires store=false)", () => {
-    const payload = { store: false };
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      options?.onPayload?.(payload);
-      return {} as ReturnType<StreamFn>;
-    };
-    const agent = { streamFn: baseStreamFn };
+        applyExtraParamsToAgent(agent, undefined, "openai-codex", "codex-mini-latest");
 
-    applyExtraParamsToAgent(agent, undefined, "openai-codex", "codex-mini-latest");
+        const model = {
+          api: "openai-codex-responses",
+          provider: "openai-codex",
+          id: "codex-mini-latest",
+          baseUrl: "https://chatgpt.com/backend-api/codex/responses",
+        } as Model<"openai-codex-responses">;
+        const context: Context = { messages: [] };
 
-    const model = {
-      api: "openai-codex-responses",
-      provider: "openai-codex",
-      id: "codex-mini-latest",
-      baseUrl: "https://chatgpt.com/backend-api/codex/responses",
-    } as Model<"openai-codex-responses">;
-    const context: Context = { messages: [] };
-
-    void agent.streamFn?.(model, context, {});
-
-    expect(payload.store).toBe(false);
-  });
+        void agent.streamFn?.(model, context, {});
+        return payload;
+      },
+    },
+  ])(
+    "does not force store=true for Codex responses (Codex requires store=false) ($name)",
+    ({ run }) => {
+      expect(run().store).toBe(false);
+    },
+  );
 });

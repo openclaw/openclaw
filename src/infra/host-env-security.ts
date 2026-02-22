@@ -1,28 +1,61 @@
-const HOST_DANGEROUS_ENV_KEY_VALUES = [
-  "NODE_OPTIONS",
-  "NODE_PATH",
-  "PYTHONHOME",
-  "PYTHONPATH",
-  "PERL5LIB",
-  "PERL5OPT",
-  "RUBYLIB",
-  "RUBYOPT",
-  "BASH_ENV",
-  "ENV",
-  "GCONV_PATH",
-  "IFS",
-  "SSLKEYLOGFILE",
-] as const;
+import HOST_ENV_SECURITY_POLICY_JSON from "./host-env-security-policy.json" with { type: "json" };
 
+const PORTABLE_ENV_VAR_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+type HostEnvSecurityPolicy = {
+  blockedKeys: string[];
+  blockedOverrideKeys?: string[];
+  blockedPrefixes: string[];
+};
+
+const HOST_ENV_SECURITY_POLICY = HOST_ENV_SECURITY_POLICY_JSON as HostEnvSecurityPolicy;
+
+export const HOST_DANGEROUS_ENV_KEY_VALUES: readonly string[] = Object.freeze(
+  HOST_ENV_SECURITY_POLICY.blockedKeys.map((key) => key.toUpperCase()),
+);
+export const HOST_DANGEROUS_ENV_PREFIXES: readonly string[] = Object.freeze(
+  HOST_ENV_SECURITY_POLICY.blockedPrefixes.map((prefix) => prefix.toUpperCase()),
+);
+export const HOST_DANGEROUS_OVERRIDE_ENV_KEY_VALUES: readonly string[] = Object.freeze(
+  (HOST_ENV_SECURITY_POLICY.blockedOverrideKeys ?? []).map((key) => key.toUpperCase()),
+);
 export const HOST_DANGEROUS_ENV_KEYS = new Set<string>(HOST_DANGEROUS_ENV_KEY_VALUES);
-export const HOST_DANGEROUS_ENV_PREFIXES = ["DYLD_", "LD_", "BASH_FUNC_"] as const;
+export const HOST_DANGEROUS_OVERRIDE_ENV_KEYS = new Set<string>(
+  HOST_DANGEROUS_OVERRIDE_ENV_KEY_VALUES,
+);
 
-export function isDangerousHostEnvVarName(key: string): boolean {
+export function normalizeEnvVarKey(
+  rawKey: string,
+  options?: { portable?: boolean },
+): string | null {
+  const key = rawKey.trim();
+  if (!key) {
+    return null;
+  }
+  if (options?.portable && !PORTABLE_ENV_VAR_KEY.test(key)) {
+    return null;
+  }
+  return key;
+}
+
+export function isDangerousHostEnvVarName(rawKey: string): boolean {
+  const key = normalizeEnvVarKey(rawKey);
+  if (!key) {
+    return false;
+  }
   const upper = key.toUpperCase();
   if (HOST_DANGEROUS_ENV_KEYS.has(upper)) {
     return true;
   }
   return HOST_DANGEROUS_ENV_PREFIXES.some((prefix) => upper.startsWith(prefix));
+}
+
+export function isDangerousHostEnvOverrideVarName(rawKey: string): boolean {
+  const key = normalizeEnvVarKey(rawKey);
+  if (!key) {
+    return false;
+  }
+  return HOST_DANGEROUS_OVERRIDE_ENV_KEYS.has(key.toUpperCase());
 }
 
 export function sanitizeHostExecEnv(params?: {
@@ -39,7 +72,7 @@ export function sanitizeHostExecEnv(params?: {
     if (typeof value !== "string") {
       continue;
     }
-    const key = rawKey.trim();
+    const key = normalizeEnvVarKey(rawKey, { portable: true });
     if (!key || isDangerousHostEnvVarName(key)) {
       continue;
     }
@@ -54,7 +87,7 @@ export function sanitizeHostExecEnv(params?: {
     if (typeof value !== "string") {
       continue;
     }
-    const key = rawKey.trim();
+    const key = normalizeEnvVarKey(rawKey, { portable: true });
     if (!key) {
       continue;
     }
@@ -64,7 +97,7 @@ export function sanitizeHostExecEnv(params?: {
     if (blockPathOverrides && upper === "PATH") {
       continue;
     }
-    if (isDangerousHostEnvVarName(upper)) {
+    if (isDangerousHostEnvVarName(upper) || isDangerousHostEnvOverrideVarName(upper)) {
       continue;
     }
     merged[key] = value;

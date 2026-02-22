@@ -204,42 +204,50 @@ describe("roundtrip encoding", () => {
 // ─── extractDiscordChannelId ──────────────────────────────────────────────────
 
 describe("extractDiscordChannelId", () => {
-  it("extracts channel ID from standard session key", () => {
-    expect(extractDiscordChannelId("agent:main:discord:channel:123456789")).toBe("123456789");
-  });
+  it("extracts channel IDs and rejects invalid session key inputs", () => {
+    const cases: Array<{
+      name: string;
+      input: string | null | undefined;
+      expected: string | null;
+    }> = [
+      {
+        name: "standard session key",
+        input: "agent:main:discord:channel:123456789",
+        expected: "123456789",
+      },
+      {
+        name: "agent-specific session key",
+        input: "agent:test-agent:discord:channel:999888777",
+        expected: "999888777",
+      },
+      {
+        name: "group session key",
+        input: "agent:main:discord:group:222333444",
+        expected: "222333444",
+      },
+      {
+        name: "longer session key",
+        input: "agent:my-agent:discord:channel:111222333:thread:444555",
+        expected: "111222333",
+      },
+      {
+        name: "non-discord session key",
+        input: "agent:main:telegram:channel:123456789",
+        expected: null,
+      },
+      {
+        name: "missing channel/group segment",
+        input: "agent:main:discord:dm:123456789",
+        expected: null,
+      },
+      { name: "null input", input: null, expected: null },
+      { name: "undefined input", input: undefined, expected: null },
+      { name: "empty input", input: "", expected: null },
+    ];
 
-  it("extracts channel ID from agent session key", () => {
-    expect(extractDiscordChannelId("agent:test-agent:discord:channel:999888777")).toBe("999888777");
-  });
-
-  it("extracts channel ID from group session key", () => {
-    expect(extractDiscordChannelId("agent:main:discord:group:222333444")).toBe("222333444");
-  });
-
-  it("returns null for non-discord session key", () => {
-    expect(extractDiscordChannelId("agent:main:telegram:channel:123456789")).toBeNull();
-  });
-
-  it("returns null for session key without channel segment", () => {
-    expect(extractDiscordChannelId("agent:main:discord:dm:123456789")).toBeNull();
-  });
-
-  it("returns null for null input", () => {
-    expect(extractDiscordChannelId(null)).toBeNull();
-  });
-
-  it("returns null for undefined input", () => {
-    expect(extractDiscordChannelId(undefined)).toBeNull();
-  });
-
-  it("returns null for empty string", () => {
-    expect(extractDiscordChannelId("")).toBeNull();
-  });
-
-  it("extracts from longer session keys", () => {
-    expect(extractDiscordChannelId("agent:my-agent:discord:channel:111222333:thread:444555")).toBe(
-      "111222333",
-    );
+    for (const testCase of cases) {
+      expect(extractDiscordChannelId(testCase.input), testCase.name).toBe(testCase.expected);
+    }
   });
 });
 
@@ -353,19 +361,29 @@ describe("DiscordExecApprovalHandler.shouldHandle", () => {
 // ─── DiscordExecApprovalHandler.getApprovers ──────────────────────────────────
 
 describe("DiscordExecApprovalHandler.getApprovers", () => {
-  it("returns configured approvers", () => {
-    const handler = createHandler({ enabled: true, approvers: ["111", "222"] });
-    expect(handler.getApprovers()).toEqual(["111", "222"]);
-  });
+  it("returns approvers for configured, empty, and undefined lists", () => {
+    const cases = [
+      {
+        name: "configured approvers",
+        config: { enabled: true, approvers: ["111", "222"] } as DiscordExecApprovalConfig,
+        expected: ["111", "222"],
+      },
+      {
+        name: "empty approvers",
+        config: { enabled: true, approvers: [] } as DiscordExecApprovalConfig,
+        expected: [],
+      },
+      {
+        name: "undefined approvers",
+        config: { enabled: true } as DiscordExecApprovalConfig,
+        expected: [],
+      },
+    ] as const;
 
-  it("returns empty array when no approvers configured", () => {
-    const handler = createHandler({ enabled: true, approvers: [] });
-    expect(handler.getApprovers()).toEqual([]);
-  });
-
-  it("returns empty array when approvers is undefined", () => {
-    const handler = createHandler({ enabled: true } as DiscordExecApprovalConfig);
-    expect(handler.getApprovers()).toEqual([]);
+    for (const testCase of cases) {
+      const handler = createHandler(testCase.config);
+      expect(handler.getApprovers(), testCase.name).toEqual(testCase.expected);
+    }
   });
 });
 
@@ -525,49 +543,51 @@ describe("ExecApprovalButton", () => {
 
 describe("DiscordExecApprovalHandler target config", () => {
   beforeEach(() => {
-    mockRestPost.mockReset();
-    mockRestPatch.mockReset();
-    mockRestDelete.mockReset();
+    mockRestPost.mockClear().mockResolvedValue({ id: "mock-message", channel_id: "mock-channel" });
+    mockRestPatch.mockClear().mockResolvedValue({});
+    mockRestDelete.mockClear().mockResolvedValue({});
   });
 
-  it("defaults target to dm when not specified", () => {
-    const config: DiscordExecApprovalConfig = {
-      enabled: true,
-      approvers: ["123"],
-    };
-    // target should be undefined, handler defaults to "dm"
-    expect(config.target).toBeUndefined();
+  it("accepts all target modes and defaults to dm when target is omitted", () => {
+    const cases = [
+      {
+        name: "default target",
+        config: { enabled: true, approvers: ["123"] } as DiscordExecApprovalConfig,
+        expectedTarget: undefined,
+      },
+      {
+        name: "channel target",
+        config: {
+          enabled: true,
+          approvers: ["123"],
+          target: "channel",
+        } as DiscordExecApprovalConfig,
+      },
+      {
+        name: "both target",
+        config: {
+          enabled: true,
+          approvers: ["123"],
+          target: "both",
+        } as DiscordExecApprovalConfig,
+      },
+      {
+        name: "dm target",
+        config: {
+          enabled: true,
+          approvers: ["123"],
+          target: "dm",
+        } as DiscordExecApprovalConfig,
+      },
+    ] as const;
 
-    const handler = createHandler(config);
-    // Handler should still handle requests (no crash on missing target)
-    expect(handler.shouldHandle(createRequest())).toBe(true);
-  });
-
-  it("accepts target=channel in config", () => {
-    const handler = createHandler({
-      enabled: true,
-      approvers: ["123"],
-      target: "channel",
-    });
-    expect(handler.shouldHandle(createRequest())).toBe(true);
-  });
-
-  it("accepts target=both in config", () => {
-    const handler = createHandler({
-      enabled: true,
-      approvers: ["123"],
-      target: "both",
-    });
-    expect(handler.shouldHandle(createRequest())).toBe(true);
-  });
-
-  it("accepts target=dm in config", () => {
-    const handler = createHandler({
-      enabled: true,
-      approvers: ["123"],
-      target: "dm",
-    });
-    expect(handler.shouldHandle(createRequest())).toBe(true);
+    for (const testCase of cases) {
+      if ("expectedTarget" in testCase) {
+        expect(testCase.config.target, testCase.name).toBe(testCase.expectedTarget);
+      }
+      const handler = createHandler(testCase.config);
+      expect(handler.shouldHandle(createRequest()), testCase.name).toBe(true);
+    }
   });
 });
 
@@ -575,9 +595,9 @@ describe("DiscordExecApprovalHandler target config", () => {
 
 describe("DiscordExecApprovalHandler timeout cleanup", () => {
   beforeEach(() => {
-    mockRestPost.mockReset();
-    mockRestPatch.mockReset();
-    mockRestDelete.mockReset();
+    mockRestPost.mockClear().mockResolvedValue({ id: "mock-message", channel_id: "mock-channel" });
+    mockRestPatch.mockClear().mockResolvedValue({});
+    mockRestDelete.mockClear().mockResolvedValue({});
   });
 
   it("cleans up request cache for the exact approval id", async () => {
@@ -619,9 +639,9 @@ describe("DiscordExecApprovalHandler timeout cleanup", () => {
 
 describe("DiscordExecApprovalHandler delivery routing", () => {
   beforeEach(() => {
-    mockRestPost.mockReset();
-    mockRestPatch.mockReset();
-    mockRestDelete.mockReset();
+    mockRestPost.mockClear().mockResolvedValue({ id: "mock-message", channel_id: "mock-channel" });
+    mockRestPatch.mockClear().mockResolvedValue({});
+    mockRestDelete.mockClear().mockResolvedValue({});
   });
 
   it("falls back to DM delivery when channel target has no channel id", async () => {

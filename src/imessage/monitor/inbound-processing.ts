@@ -138,7 +138,8 @@ export function resolveIMessageInboundDecision(params: {
   }
 
   const groupId = isGroup ? groupIdCandidate : undefined;
-  const effectiveDmAllowFrom = Array.from(new Set([...params.allowFrom, ...params.storeAllowFrom]))
+  const storeAllowFrom = params.dmPolicy === "allowlist" ? [] : params.storeAllowFrom;
+  const effectiveDmAllowFrom = Array.from(new Set([...params.allowFrom, ...storeAllowFrom]))
     .map((v) => String(v).trim())
     .filter(Boolean);
   // Keep DM pairing-store authorization scoped to DMs; group access must come from explicit group allowlist config.

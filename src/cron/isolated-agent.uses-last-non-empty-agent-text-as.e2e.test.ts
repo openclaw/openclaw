@@ -1,10 +1,10 @@
+import "./isolated-agent.mocks.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import type { CliDeps } from "../cli/deps.js";
-import "./isolated-agent.mocks.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import { makeCfg, makeJob, withTempCronHome } from "./isolated-agent.test-harness.js";
 import type { CronJob } from "./types.js";
@@ -101,7 +101,7 @@ async function runCronTurn(home: string, options: RunCronTurnOptions = {}) {
   const storePath = options.storePath ?? (await writeSessionStore(home, options.storeEntries));
   const deps = options.deps ?? makeDeps();
   if (options.mockTexts === null) {
-    vi.mocked(runEmbeddedPiAgent).mockReset();
+    vi.mocked(runEmbeddedPiAgent).mockClear();
   } else {
     mockEmbeddedTexts(options.mockTexts ?? ["ok"]);
   }
@@ -158,7 +158,7 @@ async function runTurnWithStoredModelOverride(
 
 describe("runCronIsolatedAgentTurn", () => {
   beforeEach(() => {
-    vi.mocked(runEmbeddedPiAgent).mockReset();
+    vi.mocked(runEmbeddedPiAgent).mockClear();
     vi.mocked(loadModelCatalog).mockResolvedValue([]);
   });
 

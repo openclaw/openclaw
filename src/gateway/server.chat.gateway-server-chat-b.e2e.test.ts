@@ -67,6 +67,21 @@ async function writeMainSessionStore() {
   });
 }
 
+async function writeMainSessionTranscript(sessionDir: string, lines: string[]) {
+  await fs.writeFile(path.join(sessionDir, "sess-main.jsonl"), `${lines.join("\n")}\n`, "utf-8");
+}
+
+async function fetchHistoryMessages(
+  ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"],
+): Promise<unknown[]> {
+  const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+    sessionKey: "main",
+    limit: 1000,
+  });
+  expect(historyRes.ok).toBe(true);
+  return historyRes.payload?.messages ?? [];
+}
+
 describe("gateway server chat", () => {
   test("smoke: caps history payload and preserves routing metadata", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
@@ -90,18 +105,8 @@ describe("gateway server chat", () => {
           }),
         );
       }
-      await fs.writeFile(
-        path.join(sessionDir, "sess-main.jsonl"),
-        historyLines.join("\n"),
-        "utf-8",
-      );
-
-      const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
-        sessionKey: "main",
-        limit: 1000,
-      });
-      expect(historyRes.ok).toBe(true);
-      const messages = historyRes.payload?.messages ?? [];
+      await writeMainSessionTranscript(sessionDir, historyLines);
+      const messages = await fetchHistoryMessages(ws);
       const bytes = Buffer.byteLength(JSON.stringify(messages), "utf8");
       expect(bytes).toBeLessThanOrEqual(historyMaxBytes);
       expect(messages.length).toBeLessThan(60);
@@ -146,7 +151,7 @@ describe("gateway server chat", () => {
       await writeMainSessionStore();
       testState.agentConfig = { blockStreamingDefault: "on" };
       try {
-        spy.mockReset();
+        spy.mockClear();
         let capturedOpts: GetReplyOptions | undefined;
         spy.mockImplementationOnce(async (_ctx: unknown, opts?: GetReplyOptions) => {
           capturedOpts = opts;
@@ -201,14 +206,8 @@ describe("gateway server chat", () => {
           ],
         },
       });
-      await fs.writeFile(path.join(sessionDir, "sess-main.jsonl"), `${oversizedLine}\n`, "utf-8");
-
-      const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
-        sessionKey: "main",
-        limit: 1000,
-      });
-      expect(historyRes.ok).toBe(true);
-      const messages = historyRes.payload?.messages ?? [];
+      await writeMainSessionTranscript(sessionDir, [oversizedLine]);
+      const messages = await fetchHistoryMessages(ws);
       expect(messages.length).toBe(1);
 
       const serialized = JSON.stringify(messages);
@@ -263,19 +262,8 @@ describe("gateway server chat", () => {
         }),
       );
 
-      await fs.writeFile(
-        path.join(sessionDir, "sess-main.jsonl"),
-        `${lines.join("\n")}\n`,
-        "utf-8",
-      );
-
-      const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
-        sessionKey: "main",
-        limit: 1000,
-      });
-      expect(historyRes.ok).toBe(true);
-
-      const messages = historyRes.payload?.messages ?? [];
+      await writeMainSessionTranscript(sessionDir, lines);
+      const messages = await fetchHistoryMessages(ws);
       const serialized = JSON.stringify(messages);
       const bytes = Buffer.byteLength(serialized, "utf8");
 
@@ -284,6 +272,65 @@ describe("gateway server chat", () => {
       expect(serialized).toContain("small-29:");
       expect(serialized).toContain("[chat.history omitted: message too large]");
       expect(serialized.includes(hugeNestedText.slice(0, 256))).toBe(false);
+    });
+  });
+
+  test("chat.history strips inline directives from displayed message text", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+
+      const sessionDir = await createSessionDir();
+      await writeMainSessionStore();
+
+      const lines = [
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [
+              { type: "text", text: "Hello [[reply_to_current]] world [[audio_as_voice]]" },
+            ],
+            timestamp: Date.now(),
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: "A [[reply_to:abc-123]] B",
+            timestamp: Date.now() + 1,
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            text: "[[ reply_to : 456 ]] C",
+            timestamp: Date.now() + 2,
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "  keep padded  " }],
+            timestamp: Date.now() + 3,
+          },
+        }),
+      ];
+      await writeMainSessionTranscript(sessionDir, lines);
+      const messages = await fetchHistoryMessages(ws);
+      expect(messages.length).toBe(4);
+
+      const serialized = JSON.stringify(messages);
+      expect(serialized.includes("[[reply_to")).toBe(false);
+      expect(serialized.includes("[[audio_as_voice]]")).toBe(false);
+
+      const first = messages[0] as { content?: Array<{ text?: string }> };
+      const second = messages[1] as { content?: string };
+      const third = messages[2] as { text?: string };
+      const fourth = messages[3] as { content?: Array<{ text?: string }> };
+
+      expect(first.content?.[0]?.text?.replace(/\s+/g, " ").trim()).toBe("Hello world");
+      expect(second.content?.replace(/\s+/g, " ").trim()).toBe("A B");
+      expect(third.text?.replace(/\s+/g, " ").trim()).toBe("C");
+      expect(fourth.content?.[0]?.text).toBe("  keep padded  ");
     });
   });
 
@@ -296,7 +343,7 @@ describe("gateway server chat", () => {
       await createSessionDir();
       await writeMainSessionStore();
 
-      spy.mockReset();
+      spy.mockClear();
       spy.mockImplementationOnce(async (_ctx, opts) => {
         opts?.onAgentRunStart?.(opts.runId ?? "idem-abort-1");
         const signal = opts?.abortSignal;
@@ -356,7 +403,7 @@ describe("gateway server chat", () => {
         { timeout: 2_000, interval: 10 },
       );
 
-      spy.mockReset();
+      spy.mockClear();
       spy.mockResolvedValueOnce(undefined);
 
       const completeRes = await rpcReq<{ status?: string }>(ws, "chat.send", {

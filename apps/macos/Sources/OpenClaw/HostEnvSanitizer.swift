@@ -1,6 +1,8 @@
 import Foundation
 
 enum HostEnvSanitizer {
+    /// Keep in sync with src/infra/host-env-security-policy.json.
+    /// Parity is validated by src/infra/host-env-security.policy-parity.test.ts.
     private static let blockedKeys: Set<String> = [
         "NODE_OPTIONS",
         "NODE_PATH",
@@ -12,6 +14,7 @@ enum HostEnvSanitizer {
         "RUBYOPT",
         "BASH_ENV",
         "ENV",
+        "SHELL",
         "GCONV_PATH",
         "IFS",
         "SSLKEYLOGFILE",
@@ -21,6 +24,10 @@ enum HostEnvSanitizer {
         "DYLD_",
         "LD_",
         "BASH_FUNC_",
+    ]
+    private static let blockedOverrideKeys: Set<String> = [
+        "HOME",
+        "ZDOTDIR",
     ]
 
     private static func isBlocked(_ upperKey: String) -> Bool {
@@ -46,6 +53,7 @@ enum HostEnvSanitizer {
             // PATH is part of the security boundary (command resolution + safe-bin checks). Never
             // allow request-scoped PATH overrides from agents/gateways.
             if upper == "PATH" { continue }
+            if self.blockedOverrideKeys.contains(upper) { continue }
             if self.isBlocked(upper) { continue }
             merged[key] = value
         }
