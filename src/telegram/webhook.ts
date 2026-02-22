@@ -126,20 +126,48 @@ export async function startTelegramWebhook(opts: {
     guard.dispose();
   });
 
-  const publicUrl =
-    opts.publicUrl ?? `http://${host === "0.0.0.0" ? "localhost" : host}:${port}${path}`;
-
-  await withTelegramApiErrorLogging({
-    operation: "setWebhook",
-    runtime,
-    fn: () =>
-      bot.api.setWebhook(publicUrl, {
-        secret_token: secret,
-        allowed_updates: resolveTelegramAllowedUpdates(),
-      }),
+  runtime.log?.(`starting telegram webhook listener on ${host}:${port}${path}`);
+  await new Promise<void>((resolve, reject) => {
+    const onError = (err: Error) => {
+      server.removeListener("listening", onListening);
+      reject(err);
+    };
+    const onListening = () => {
+      server.removeListener("error", onError);
+      resolve();
+    };
+    server.once("error", onError);
+    server.once("listening", onListening);
+    server.listen(port, host);
   });
+  const resolvedAddress = server.address();
+  const resolvedPort =
+    typeof resolvedAddress === "object" && resolvedAddress ? resolvedAddress.port : port;
+  const publicUrl =
+    opts.publicUrl ?? `http://${host === "0.0.0.0" ? "localhost" : host}:${resolvedPort}${path}`;
 
-  await new Promise<void>((resolve) => server.listen(port, host, resolve));
+  try {
+    await withTelegramApiErrorLogging({
+      operation: "setWebhook",
+      runtime,
+      fn: () =>
+        bot.api.setWebhook(publicUrl, {
+          secret_token: secret,
+          allowed_updates: resolveTelegramAllowedUpdates(),
+        }),
+    });
+  } catch (err) {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    void bot.stop();
+    if (diagnosticsEnabled) {
+      stopDiagnosticHeartbeat();
+    }
+    throw new Error(
+      `failed to register telegram webhook (${publicUrl}): ${formatErrorMessage(err)}`,
+      { cause: err },
+    );
+  }
+
   runtime.log?.(`webhook listening on ${publicUrl}`);
 
   const shutdown = () => {

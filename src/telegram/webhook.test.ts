@@ -60,6 +60,10 @@ describe("startTelegramWebhook", () => {
     const health = await fetch(`${url}/healthz`);
     expect(health.status).toBe(200);
     expect(setWebhookSpy).toHaveBeenCalled();
+    const webhookUrl = setWebhookSpy.mock.calls[0]?.[0];
+    expect(webhookUrl).toBeTypeOf("string");
+    expect(String(webhookUrl)).toContain(`${address.port}`);
+    expect(String(webhookUrl)).not.toContain(":0/");
     expect(webhookCallbackSpy).toHaveBeenCalledWith(
       expect.objectContaining({
         api: expect.objectContaining({
