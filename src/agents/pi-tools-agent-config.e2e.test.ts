@@ -602,7 +602,6 @@ describe("Agent-specific tool filtering", () => {
       tools: {
         deny: ["process"],
         exec: {
-          host: "gateway",
           security: "full",
           ask: "off",
         },

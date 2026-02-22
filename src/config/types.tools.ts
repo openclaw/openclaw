@@ -178,7 +178,7 @@ export type GroupToolPolicyConfig = {
 export type GroupToolPolicyBySenderConfig = Record<string, GroupToolPolicyConfig>;
 
 export type ExecToolConfig = {
-  /** Exec host routing (default: sandbox). */
+  /** Exec host routing (default: sandbox with sandbox runtime, otherwise gateway). */
   host?: "sandbox" | "gateway" | "node";
   /** Exec security mode (default: deny). */
   security?: "deny" | "allowlist" | "full";
