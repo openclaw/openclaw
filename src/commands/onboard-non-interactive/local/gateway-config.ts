@@ -49,7 +49,10 @@ export function applyNonInteractiveGatewayConfig(params: {
   }
 
   let nextConfig = params.nextConfig;
-  let gatewayToken = opts.gatewayToken?.trim() || undefined;
+  let gatewayToken =
+    opts.gatewayToken?.trim() ||
+    process.env.OPENCLAW_GATEWAY_TOKEN?.trim() ||
+    undefined;
 
   if (authMode === "token") {
     if (!gatewayToken) {

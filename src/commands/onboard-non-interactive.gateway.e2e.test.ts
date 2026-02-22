@@ -206,6 +206,43 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
     });
   }, 60_000);
 
+  it("respects OPENCLAW_GATEWAY_TOKEN env var when no --gateway-token is given", async () => {
+    const stateDir = await initStateDir("state-env-token-");
+    const envToken = "env_tok_docker_setup_64chars_aaaa";
+    const workspace = path.join(stateDir, "openclaw");
+
+    process.env.OPENCLAW_GATEWAY_TOKEN = envToken;
+
+    const { runNonInteractiveOnboarding } = await import("./onboard-non-interactive.js");
+    await runNonInteractiveOnboarding(
+      {
+        nonInteractive: true,
+        mode: "local",
+        workspace,
+        authChoice: "skip",
+        skipSkills: true,
+        skipHealth: true,
+        installDaemon: false,
+        gatewayBind: "loopback",
+        gatewayAuth: "token",
+        // no gatewayToken — should fall back to env var
+      },
+      runtime,
+    );
+
+    const { resolveConfigPath } = await import("../config/paths.js");
+    const configPath = resolveConfigPath(process.env, stateDir);
+    const cfg = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+      gateway?: { auth?: { mode?: string; token?: string } };
+    };
+
+    expect(cfg?.gateway?.auth?.mode).toBe("token");
+    expect(cfg?.gateway?.auth?.token).toBe(envToken);
+
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }, 60_000);
+
   it("auto-generates token auth when binding LAN and persists the token", async () => {
     if (process.platform === "win32") {
       // Windows runner occasionally drops the temp config write in this flow; skip to keep CI green.
