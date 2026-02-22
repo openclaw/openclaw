@@ -27,6 +27,9 @@ async function ensureLoadedForRead(state: CronServiceState) {
   }
 }
 
+/** Must match timer.ts DEFAULT_JOB_TIMEOUT_MS. */
+const DEFAULT_JOB_TIMEOUT_MS = 10 * 60_000; // 10 minutes
+
 export async function start(state: CronServiceState) {
   if (!state.deps.cronEnabled) {
     state.deps.log.info({ enabled: false }, "cron: disabled");
@@ -206,7 +209,24 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
     await ensureLoaded(state, { skipRecompute: true });
     const job = findJobOrThrow(state, id);
     if (typeof job.state.runningAtMs === "number") {
-      return { ok: true, ran: false, reason: "already-running" as const };
+      // Check if the running marker is stale (2× job timeout or 2× default 10min).
+      // This is intentionally tighter than the tick-based STUCK_RUN_MS (2h) in
+      // jobs.ts, since the user is explicitly requesting execution via manual trigger.
+      const jobTimeoutMs =
+        job.payload.kind === "agentTurn" && typeof job.payload.timeoutSeconds === "number"
+          ? job.payload.timeoutSeconds * 1_000
+          : DEFAULT_JOB_TIMEOUT_MS;
+      const staleThresholdMs = jobTimeoutMs * 2;
+      const now = state.deps.nowMs();
+      if (now - job.state.runningAtMs > staleThresholdMs) {
+        state.deps.log.warn(
+          { jobId: job.id, runningAtMs: job.state.runningAtMs, staleThresholdMs },
+          "cron: clearing stale running marker before manual run",
+        );
+        job.state.runningAtMs = undefined;
+      } else {
+        return { ok: true, ran: false, reason: "already-running" as const };
+      }
     }
     const now = state.deps.nowMs();
     const due = isJobDue(job, now, { forced: mode === "force" });
