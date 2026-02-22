@@ -13,6 +13,9 @@ import type { CronJobCreate, CronJobPatch } from "./types.js";
 
 type UnknownRecord = Record<string, unknown>;
 
+/** Loose match for 5- or 6-field cron expressions (min hour dom mon dow [year]). */
+const CRON_EXPR_RE = /^[*\d/,-]+(\s+[*\d/,-]+){4,5}$/;
+
 type NormalizeOptions = {
   applyDefaults?: boolean;
 };
@@ -356,10 +359,36 @@ export function normalizeCronJobInput(
     }
   }
 
-  if (isRecord(base.schedule)) {
+  if (typeof base.schedule === "string") {
+    const trimmed = base.schedule.trim();
+    let parsed = false;
+    if (trimmed) {
+      if (CRON_EXPR_RE.test(trimmed)) {
+        next.schedule = coerceSchedule({ kind: "cron", expr: trimmed });
+        parsed = true;
+      } else {
+        const parsedMs = parseAbsoluteTimeMs(trimmed);
+        if (parsedMs !== null) {
+          next.schedule = coerceSchedule({ kind: "at", at: new Date(parsedMs).toISOString() });
+          parsed = true;
+        }
+      }
+    }
+    if (!parsed) {
+      delete next.schedule;
+    }
+  } else if (isRecord(base.schedule)) {
     next.schedule = coerceSchedule(base.schedule);
   }
 
+  if (typeof base.payload === "string") {
+    const trimmed = base.payload.trim();
+    if (trimmed) {
+      next.payload = coercePayload({ kind: "systemEvent", text: trimmed });
+    } else {
+      delete next.payload;
+    }
+  }
   if (!("payload" in next) || !isRecord(next.payload)) {
     const message = typeof next.message === "string" ? next.message.trim() : "";
     const text = typeof next.text === "string" ? next.text.trim() : "";
