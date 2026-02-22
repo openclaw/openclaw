@@ -16,10 +16,9 @@ services:
       - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
     init: true
     restart: unless-stopped
+    entrypoint: ["node", "dist/index.js"]
     command:
       [
-        "node",
-        "dist/index.js",
         "gateway",
         "--bind",
         "${OPENCLAW_GATEWAY_BIND:-lan}",
