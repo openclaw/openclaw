@@ -39,4 +39,121 @@ describe("stripEnvelopeFromMessage", () => {
     const result = stripEnvelopeFromMessage(input) as { content?: string };
     expect(result.content).toBe("note\n[message_id: 123]");
   });
+
+  test("removes Conversation info metadata block", () => {
+    const input = {
+      role: "user",
+      content: `Conversation info (untrusted metadata):
+\`\`\`json
+{ "message_id": "123", "sender": "user" }
+\`\`\`
+
+Hello!`,
+    };
+    const result = stripEnvelopeFromMessage(input) as { content?: string };
+    expect(result.content).toBe("Hello!");
+  });
+
+  test("removes Sender metadata block", () => {
+    const input = {
+      role: "user",
+      content: `Sender (untrusted metadata):
+\`\`\`json
+{ "name": "Alice" }
+\`\`\`
+
+Test message`,
+    };
+    const result = stripEnvelopeFromMessage(input) as { content?: string };
+    expect(result.content).toBe("Test message");
+  });
+
+  test("removes Thread starter metadata block", () => {
+    const input = {
+      role: "user",
+      content: `Thread starter (untrusted, for context):
+\`\`\`json
+{ "thread_id": "456" }
+\`\`\`
+
+Reply text`,
+    };
+    const result = stripEnvelopeFromMessage(input) as { content?: string };
+    expect(result.content).toBe("Reply text");
+  });
+
+  test("removes Replied message metadata block", () => {
+    const input = {
+      role: "user",
+      content: `Replied message (untrusted, for context):
+\`\`\`json
+{ "original": "hi" }
+\`\`\`
+
+My reply`,
+    };
+    const result = stripEnvelopeFromMessage(input) as { content?: string };
+    expect(result.content).toBe("My reply");
+  });
+
+  test("removes Forwarded message context metadata block", () => {
+    const input = {
+      role: "user",
+      content: `Forwarded message context (untrusted metadata):
+\`\`\`json
+{ "from": "Bob" }
+\`\`\`
+
+Forwarded content`,
+    };
+    const result = stripEnvelopeFromMessage(input) as { content?: string };
+    expect(result.content).toBe("Forwarded content");
+  });
+
+  test("removes Chat history metadata block", () => {
+    const input = {
+      role: "user",
+      content: `Chat history since last reply (untrusted, for context):
+\`\`\`json
+[{ "msg": "previous" }]
+\`\`\`
+
+New message`,
+    };
+    const result = stripEnvelopeFromMessage(input) as { content?: string };
+    expect(result.content).toBe("New message");
+  });
+
+  test("removes multiple metadata blocks", () => {
+    const input = {
+      role: "user",
+      content: `Conversation info (untrusted metadata):
+\`\`\`json
+{ "id": "1" }
+\`\`\`
+
+Sender (untrusted metadata):
+\`\`\`json
+{ "name": "User" }
+\`\`\`
+
+Final message`,
+    };
+    const result = stripEnvelopeFromMessage(input) as { content?: string };
+    expect(result.content).toBe("Final message");
+  });
+
+  test("removes envelope prefix and metadata block together", () => {
+    const input = {
+      role: "user",
+      content: `[WebChat 2026-02-21 10:00] Conversation info (untrusted metadata):
+\`\`\`json
+{ "message_id": "999" }
+\`\`\`
+
+Actual text`,
+    };
+    const result = stripEnvelopeFromMessage(input) as { content?: string };
+    expect(result.content).toBe("Actual text");
+  });
 });

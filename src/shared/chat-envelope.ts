@@ -27,16 +27,23 @@ function looksLikeEnvelopeHeader(header: string): boolean {
   return ENVELOPE_CHANNELS.some((label) => header.startsWith(`${label} `));
 }
 
+const UNTRUSTED_METADATA_BLOCK =
+  /^(?:Conversation info|Sender|Thread starter|Replied message|Forwarded message context|Chat history since last reply) \(untrusted[^)]*\):[\s\S]*?```\n\n/gm;
+
 export function stripEnvelope(text: string): string {
+  // First, strip [Channel ...] style envelopes
   const match = text.match(ENVELOPE_PREFIX);
-  if (!match) {
-    return text;
+  if (match) {
+    const header = match[1] ?? "";
+    if (looksLikeEnvelopeHeader(header)) {
+      text = text.slice(match[0].length);
+    }
   }
-  const header = match[1] ?? "";
-  if (!looksLikeEnvelopeHeader(header)) {
-    return text;
-  }
-  return text.slice(match[0].length);
+
+  // Then, strip untrusted metadata blocks
+  text = text.replace(UNTRUSTED_METADATA_BLOCK, "");
+
+  return text;
 }
 
 export function stripMessageIdHints(text: string): string {
