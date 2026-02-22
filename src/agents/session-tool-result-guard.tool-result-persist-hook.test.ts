@@ -125,8 +125,10 @@ describe("tool_result_persist hook", () => {
     const toolResult = getPersistedToolResult(sm);
     expect(toolResult).toBeTruthy();
 
-    // Hook registration should not break baseline persistence semantics.
-    expect(toolResult.details).toBeTruthy();
+    // Hook registration should preserve a valid toolResult message shape.
+    expect(toolResult.role).toBe("toolResult");
+    expect(toolResult.toolCallId).toBe("call_1");
+    expect(Array.isArray(toolResult.content)).toBe(true);
   });
 });
 
