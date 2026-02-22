@@ -18,7 +18,7 @@ Related:
 
 ## Common flags
 
-- `--url <gatewayWsUrl>`: Gateway WebSocket URL (defaults to config).
+- `--gateway-url <gatewayWsUrl>`: Gateway WebSocket URL (defaults to config).
 - `--token <token>`: Gateway token (if required).
 - `--timeout <ms>`: request timeout (ms).
 - `--browser-profile <name>`: choose a browser profile (default from config).

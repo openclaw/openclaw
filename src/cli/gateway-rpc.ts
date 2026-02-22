@@ -4,7 +4,7 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-cha
 import { withProgress } from "./progress.js";
 
 export type GatewayRpcOpts = {
-  url?: string;
+  gatewayUrl?: string;
   token?: string;
   timeout?: string;
   expectFinal?: boolean;
@@ -13,7 +13,10 @@ export type GatewayRpcOpts = {
 
 export function addGatewayClientOptions(cmd: Command) {
   return cmd
-    .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
+    .option(
+      "--gateway-url <url>",
+      "Gateway WebSocket URL (defaults to gateway.remote.url when configured)",
+    )
     .option("--token <token>", "Gateway token (if required)")
     .option("--timeout <ms>", "Timeout in ms", "30000")
     .option("--expect-final", "Wait for final response (agent)", false);
@@ -34,7 +37,7 @@ export async function callGatewayFromCli(
     },
     async () =>
       await callGateway({
-        url: opts.url,
+        url: opts.gatewayUrl,
         token: opts.token,
         method,
         params,

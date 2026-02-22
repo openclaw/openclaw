@@ -28,7 +28,7 @@ type LogsCliOptions = {
   plain?: boolean;
   color?: boolean;
   localTime?: boolean;
-  url?: string;
+  gatewayUrl?: string;
   token?: string;
   timeout?: string;
   expectFinal?: boolean;
@@ -163,7 +163,7 @@ function emitGatewayError(
   emitJsonLine: (payload: Record<string, unknown>, toStdErr?: boolean) => boolean,
   errorLine: (text: string) => boolean,
 ) {
-  const details = buildGatewayConnectionDetails({ url: opts.url });
+  const details = buildGatewayConnectionDetails({ url: opts.gatewayUrl });
   const message = "Gateway not reachable. Is it running and accessible?";
   const hint = `Hint: run \`${formatCliCommand("openclaw doctor")}\`.`;
   const errorText = err instanceof Error ? err.message : String(err);
