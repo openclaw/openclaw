@@ -3,9 +3,10 @@ import path from "node:path";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
-import type { SecretInput, SecretRef } from "../config/types.secrets.js";
 import { resolveStateDir } from "../config/paths.js";
+import { isSecretRef, type SecretInput, type SecretRef } from "../config/types.secrets.js";
 import { KILOCODE_DEFAULT_MODEL_REF } from "../providers/kilocode-shared.js";
+import { PROVIDER_ENV_VARS } from "../secrets/provider-env-vars.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
 export { CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF } from "../agents/cloudflare-ai-gateway.js";
 export { MISTRAL_DEFAULT_MODEL_REF, XAI_DEFAULT_MODEL_REF } from "./onboard-auth.models.js";
@@ -14,40 +15,6 @@ export { KILOCODE_DEFAULT_MODEL_REF };
 const resolveAuthAgentDir = (agentDir?: string) => agentDir ?? resolveOpenClawAgentDir();
 
 const ENV_REF_PATTERN = /^\$\{([A-Z][A-Z0-9_]*)\}$/;
-
-const PROVIDER_ENV_VARS: Record<string, readonly string[]> = {
-  anthropic: ["ANTHROPIC_API_KEY"],
-  google: ["GEMINI_API_KEY"],
-  minimax: ["MINIMAX_API_KEY"],
-  "minimax-cn": ["MINIMAX_API_KEY"],
-  moonshot: ["MOONSHOT_API_KEY"],
-  "kimi-coding": ["KIMI_API_KEY", "KIMICODE_API_KEY"],
-  synthetic: ["SYNTHETIC_API_KEY"],
-  venice: ["VENICE_API_KEY"],
-  zai: ["ZAI_API_KEY", "Z_AI_API_KEY"],
-  xiaomi: ["XIAOMI_API_KEY"],
-  openrouter: ["OPENROUTER_API_KEY"],
-  "cloudflare-ai-gateway": ["CLOUDFLARE_AI_GATEWAY_API_KEY"],
-  litellm: ["LITELLM_API_KEY"],
-  "vercel-ai-gateway": ["AI_GATEWAY_API_KEY"],
-  opencode: ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"],
-  together: ["TOGETHER_API_KEY"],
-  huggingface: ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"],
-  qianfan: ["QIANFAN_API_KEY"],
-  xai: ["XAI_API_KEY"],
-};
-
-function isSecretRef(value: unknown): value is SecretRef {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    (value as SecretRef).source !== undefined &&
-    (value as SecretRef).id !== undefined &&
-    ((value as SecretRef).source === "env" || (value as SecretRef).source === "file") &&
-    typeof (value as SecretRef).id === "string"
-  );
-}
-
 function buildEnvSecretRef(id: string): SecretRef {
   return { source: "env", id };
 }
