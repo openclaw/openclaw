@@ -399,7 +399,169 @@ export function collectSecretsInConfigFindings(cfg: OpenClawConfig): SecurityAud
     });
   }
 
+  // Model provider API keys
+  const plaintextKeys = collectPlaintextProviderKeys(cfg);
+  if (plaintextKeys.length > 0) {
+    findings.push({
+      checkId: "credentials.plaintext_api_keys",
+      severity: "warn",
+      title: `${plaintextKeys.length} API key(s) stored as plain text in config`,
+      detail: `Plain-text API keys found at: ${plaintextKeys.join(", ")}. These are readable by any process running as your user.`,
+      remediation:
+        "Use a secret provider reference (e.g. ${keyring:...}, ${bw:...}, ${op:...}) or an environment variable (${ENV_VAR}) instead of storing keys directly in config.",
+    });
+  }
+
+  // Channel tokens (Telegram, Discord, Slack, Signal, MS Teams, etc.)
+  const plaintextTokens = collectPlaintextChannelTokens(cfg);
+  if (plaintextTokens.length > 0) {
+    findings.push({
+      checkId: "credentials.plaintext_channel_tokens",
+      severity: "warn",
+      title: `${plaintextTokens.length} channel token(s) stored as plain text in config`,
+      detail: `Plain-text channel tokens at: ${plaintextTokens.join(", ")}. Bot tokens grant full access to your messaging accounts.`,
+      remediation:
+        "Move channel tokens to environment variables or a secret provider. Example: channels.telegram.botToken = ${TELEGRAM_BOT_TOKEN}",
+    });
+  }
+
+  // TTS API keys
+  const plaintextTtsKeys = collectPlaintextTtsKeys(cfg);
+  if (plaintextTtsKeys.length > 0) {
+    findings.push({
+      checkId: "credentials.plaintext_tts_keys",
+      severity: "warn",
+      title: `${plaintextTtsKeys.length} TTS API key(s) stored as plain text in config`,
+      detail: `Plain-text TTS keys at: ${plaintextTtsKeys.join(", ")}.`,
+      remediation: "Use environment variables or a secret provider for TTS API keys.",
+    });
+  }
+
+  // Webhook secrets
+  const plaintextWebhookSecrets = collectPlaintextWebhookSecrets(cfg);
+  if (plaintextWebhookSecrets.length > 0) {
+    findings.push({
+      checkId: "credentials.plaintext_webhook_secrets",
+      severity: "warn",
+      title: `${plaintextWebhookSecrets.length} webhook secret(s) stored as plain text in config`,
+      detail: `Plain-text webhook secrets at: ${plaintextWebhookSecrets.join(", ")}.`,
+      remediation: "Move webhook secrets to environment variables or a secret provider.",
+    });
+  }
+
+  // No secret provider configured at all
+  const hasSecretProvider = cfg.secrets?.providers && Object.keys(cfg.secrets.providers).length > 0;
+  const hasAnyPlaintext =
+    plaintextKeys.length > 0 ||
+    plaintextTokens.length > 0 ||
+    plaintextTtsKeys.length > 0 ||
+    plaintextWebhookSecrets.length > 0;
+  if (!hasSecretProvider && hasAnyPlaintext) {
+    findings.push({
+      checkId: "credentials.no_secret_provider",
+      severity: "info",
+      title: "No secret provider configured",
+      detail:
+        "All credentials are stored as plain text. Consider configuring a secret provider to protect API keys and tokens at rest.",
+      remediation:
+        "Add a secrets.providers section to your config. Options: keyring (OS keychain), bw (Bitwarden), op (1Password), gcp/aws/azure (cloud), or env (environment variables). See: https://docs.openclaw.ai/gateway/secrets",
+    });
+  }
+
   return findings;
+}
+
+function isPlaintextSecret(value: unknown): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const v = value.trim();
+  return v.length > 0 && !looksLikeEnvRef(v);
+}
+
+function collectPlaintextProviderKeys(cfg: OpenClawConfig): string[] {
+  const paths: string[] = [];
+  const providers = cfg.models?.providers;
+  if (providers && typeof providers === "object") {
+    for (const [name, provider] of Object.entries(providers)) {
+      if (provider && typeof provider === "object" && "apiKey" in provider) {
+        if (isPlaintextSecret((provider as Record<string, unknown>).apiKey)) {
+          paths.push(`models.providers.${name}.apiKey`);
+        }
+      }
+    }
+  }
+  return paths;
+}
+
+function collectPlaintextChannelTokens(cfg: OpenClawConfig): string[] {
+  const paths: string[] = [];
+  const channels = cfg.channels;
+  if (!channels || typeof channels !== "object") {
+    return paths;
+  }
+
+  const channelSecretFields: Array<{ channel: string; fields: string[] }> = [
+    { channel: "telegram", fields: ["botToken", "webhookSecret"] },
+    { channel: "discord", fields: ["token"] },
+    { channel: "slack", fields: ["botToken", "appToken", "userToken", "signingSecret"] },
+    { channel: "signal", fields: ["password"] },
+    { channel: "msteams", fields: ["appPassword"] },
+    { channel: "mattermost", fields: ["password"] },
+    { channel: "irc", fields: ["password"] },
+  ];
+
+  for (const { channel, fields } of channelSecretFields) {
+    const channelCfg = (channels as Record<string, unknown>)[channel];
+    if (channelCfg && typeof channelCfg === "object") {
+      for (const field of fields) {
+        if (isPlaintextSecret((channelCfg as Record<string, unknown>)[field])) {
+          paths.push(`channels.${channel}.${field}`);
+        }
+      }
+    }
+  }
+
+  return paths;
+}
+
+function collectPlaintextTtsKeys(cfg: OpenClawConfig): string[] {
+  const paths: string[] = [];
+  const tts = cfg.tts;
+  if (!tts || typeof tts !== "object") {
+    return paths;
+  }
+  const ttsObj = tts as Record<string, unknown>;
+  for (const provider of ["elevenlabs", "openai"]) {
+    const providerCfg = ttsObj[provider];
+    if (providerCfg && typeof providerCfg === "object") {
+      if (isPlaintextSecret((providerCfg as Record<string, unknown>).apiKey)) {
+        paths.push(`tts.${provider}.apiKey`);
+      }
+    }
+  }
+  return paths;
+}
+
+function collectPlaintextWebhookSecrets(cfg: OpenClawConfig): string[] {
+  const paths: string[] = [];
+
+  const controlUiToken = cfg.gateway?.controlUi?.webhookToken;
+  if (isPlaintextSecret(controlUiToken)) {
+    paths.push("gateway.controlUi.webhookToken");
+  }
+
+  const remoteToken = cfg.gateway?.remote?.token;
+  if (isPlaintextSecret(remoteToken)) {
+    paths.push("gateway.remote.token");
+  }
+
+  const remotePassword = cfg.gateway?.remote?.password;
+  if (isPlaintextSecret(remotePassword)) {
+    paths.push("gateway.remote.password");
+  }
+
+  return paths;
 }
 
 export function collectHooksHardeningFindings(
