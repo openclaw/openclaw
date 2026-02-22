@@ -1,0 +1,155 @@
+replicaCount: 1
+
+image:
+  repository: northamerica-northeast1-docker.pkg.dev/syslens/openclaw/openclaw
+  tag: latest
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  name: ""
+  automountServiceAccountToken: false
+
+namespace:
+  name: openclaw
+  create: true
+
+podAnnotations: {}
+
+podSecurityContext:
+  runAsUser: 1000
+  runAsGroup: 1000
+  runAsNonRoot: true
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  type: ClusterIP
+  port: 18789
+  bridgePort: 18790
+
+httpRoute:
+  enabled: false
+  name: ""
+  annotations: {}
+  labels: {}
+  parentRefs: []
+  hostnames: []
+  rules: []
+  # Used only when rules=[].
+  matches:
+    - path:
+        type: PathPrefix
+        value: /
+  filters: []
+  backendRefs: []
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 512Mi
+  limits:
+    # cpu: 1000m
+    memory: 4Gi
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+persistence:
+  enabled: true
+  accessMode: ReadWriteOnce
+  size: 10Gi
+  storageClass: ""
+
+config:
+  create: true
+  json: |-
+    {
+      "gateway": {
+        "mode": "local",
+        "auth": {
+          "mode": "{{ .Values.gatewayAuth.mode }}",
+          "password": "${OPENCLAW_GATEWAY_PASSWORD}",
+          "token": "${OPENCLAW_GATEWAY_TOKEN}"
+        }
+      }
+    }
+  secretName: ""
+
+secrets:
+  create: false
+  name: ""
+  data: {}
+  # Example keys (set when create=true or provide an existing secret name):
+  # OPENCLAW_GATEWAY_TOKEN: "replace-me"
+  # CLAUDE_AI_SESSION_KEY: ""
+  # CLAUDE_WEB_SESSION_KEY: ""
+  # CLAUDE_WEB_COOKIE: ""
+
+gatewayAuth:
+  create: true
+  mode: password
+  secretName: ""
+  username: openclaw
+  token: ""
+  password: ""
+  usernameKey: OPENCLAW_GATEWAY_USERNAME
+  tokenKey: OPENCLAW_GATEWAY_TOKEN
+  passwordKey: OPENCLAW_GATEWAY_PASSWORD
+
+env:
+  HOME: /home/node
+  TERM: xterm-256color
+
+envFrom: []
+
+extraEnv: []
+
+command: ["node", "dist/index.js"]
+args:
+  - gateway
+  - --bind
+  - lan
+  - --port
+  - "18789"
+
+probes:
+  enabled: false
+  liveness:
+    tcpSocket:
+      port: 18789
+    initialDelaySeconds: 20
+    periodSeconds: 10
+    timeoutSeconds: 2
+    failureThreshold: 6
+  readiness:
+    tcpSocket:
+      port: 18789
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 2
+    failureThreshold: 6
+
+networkPolicy:
+  enabled: true
+  allowAllIngress: true
+  allowAllEgress: true
+
+extraVolumes: []
+extraVolumeMounts: []
