@@ -778,9 +778,20 @@ export function createBrowserTool(opts?: {
           );
         }
         case "act": {
-          const request = params.request as Record<string, unknown> | undefined;
+          const request = { ...(params.request as Record<string, unknown> | undefined) };
           if (!request || typeof request !== "object") {
             throw new Error("request required");
+          }
+          // Merge top-level ref/targetId into the request body when the LLM
+          // passes them as separate tool parameters instead of nesting them
+          // inside `request`.  The /act endpoint expects both fields in the
+          // request body, and the BrowserToolSchema exposes `ref` and
+          // `targetId` at the top level, so LLMs commonly place them there.
+          if (typeof params.ref === "string" && !request.ref) {
+            request.ref = params.ref;
+          }
+          if (typeof params.targetId === "string" && !request.targetId) {
+            request.targetId = params.targetId;
           }
           try {
             const result = proxyRequest
