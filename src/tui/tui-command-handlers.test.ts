@@ -46,7 +46,7 @@ describe("tui command handlers", () => {
     const renderOrders = requestRender.mock.invocationCallOrder;
     expect(renderOrders.some((order) => order > sendingOrder)).toBe(true);
 
-    resolveSend?.({ runId: "r1" });
+    (resolveSend as ((v: { runId: string }) => void) | null)?.({ runId: "r1" });
     await pending;
     expect(setActivityStatus).toHaveBeenCalledWith("waiting");
   });
