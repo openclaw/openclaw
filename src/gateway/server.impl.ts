@@ -245,11 +245,11 @@ export async function startGatewayServer(
   if (authBootstrap.generatedToken) {
     if (authBootstrap.persistedGeneratedToken) {
       log.info(
-        "Gateway auth token was missing. Generated a new token and saved it to config (gateway.auth.token).",
+        "Gateway auth token was missing. Generated a new token, stored it in ~/.openclaw/.env (OPENCLAW_GATEWAY_TOKEN), and updated config to reference it.",
       );
     } else {
       log.warn(
-        "Gateway auth token was missing. Generated a runtime token for this startup without changing config; restart will generate a different token. Persist one with `openclaw config set gateway.auth.mode token` and `openclaw config set gateway.auth.token <token>`.",
+        "Gateway auth token was missing. Generated a runtime token for this startup without changing config; restart will generate a different token. Persist one with `openclaw doctor --fix` or set OPENCLAW_GATEWAY_TOKEN.",
       );
     }
   }

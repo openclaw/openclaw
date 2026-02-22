@@ -15,6 +15,12 @@ import { logConfigUpdated } from "../config/logging.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
+import {
+  isGatewayTokenEnvReference,
+  resolveGatewayTokenForStorage,
+  upsertGatewayTokenDotEnv,
+  withGatewayTokenEnvReference,
+} from "../gateway/gateway-token-env.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -285,11 +291,44 @@ export async function doctorCommand(
     healthOk,
   });
 
+  let cfgToWrite = cfg;
+  let movedGatewayTokenToDotEnv = false;
+  const gatewayTokenForStorage = resolveGatewayTokenForStorage(cfg, process.env);
+  const shouldOfferGatewayTokenMigration =
+    cfg.gateway?.auth?.mode === "token" &&
+    Boolean(gatewayTokenForStorage) &&
+    !isGatewayTokenEnvReference(cfg.gateway?.auth?.token);
+  if (shouldOfferGatewayTokenMigration && gatewayTokenForStorage) {
+    const shouldMigrateGatewayToken = await prompter.confirmSkipInNonInteractive({
+      message: "Move gateway token from config into ~/.openclaw/.env now?",
+      initialValue: true,
+    });
+    if (shouldMigrateGatewayToken) {
+      const { dotenvPath } = await upsertGatewayTokenDotEnv({
+        token: gatewayTokenForStorage,
+        env: process.env,
+      });
+      cfgToWrite = withGatewayTokenEnvReference(cfg, gatewayTokenForStorage);
+      movedGatewayTokenToDotEnv = true;
+      note(
+        [
+          "- Stored gateway token in state dotenv (OPENCLAW_GATEWAY_TOKEN).",
+          `- Updated gateway.auth.token to \${OPENCLAW_GATEWAY_TOKEN}.`,
+          `- Dotenv: ${shortenHomePath(dotenvPath)}`,
+        ].join("\n"),
+        "Doctor changes",
+      );
+    }
+  }
+
   const shouldWriteConfig =
-    configResult.shouldWriteConfig || JSON.stringify(cfg) !== JSON.stringify(cfgForPersistence);
+    configResult.shouldWriteConfig ||
+    movedGatewayTokenToDotEnv ||
+    JSON.stringify(cfg) !== JSON.stringify(cfgForPersistence);
   if (shouldWriteConfig) {
-    cfg = applyWizardMetadata(cfg, { command: "doctor", mode: resolveMode(cfg) });
-    await writeConfigFile(cfg);
+    cfgToWrite = applyWizardMetadata(cfgToWrite, { command: "doctor", mode: resolveMode(cfg) });
+    await writeConfigFile(cfgToWrite);
+    cfg = cfgToWrite;
     logConfigUpdated(runtime);
     const backupPath = `${CONFIG_PATH}.bak`;
     if (fs.existsSync(backupPath)) {

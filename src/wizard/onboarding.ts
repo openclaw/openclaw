@@ -12,6 +12,10 @@ import {
   resolveGatewayPort,
   writeConfigFile,
 } from "../config/config.js";
+import {
+  upsertGatewayTokenDotEnv,
+  withGatewayTokenEnvReference,
+} from "../gateway/gateway-token-env.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
@@ -408,6 +412,17 @@ export async function runOnboardingWizard(
   });
   nextConfig = gateway.nextConfig;
   const settings = gateway.settings;
+  if (settings.authMode === "token" && settings.gatewayToken) {
+    await upsertGatewayTokenDotEnv({
+      token: settings.gatewayToken,
+      env: process.env,
+    });
+  }
+  const cfgForWrite = (cfg: OpenClawConfig) =>
+    withGatewayTokenEnvReference(
+      cfg,
+      settings.authMode === "token" ? settings.gatewayToken : undefined,
+    );
 
   if (opts.skipChannels ?? opts.skipProviders) {
     await prompter.note("Skipping channel setup.", "Channels");
@@ -429,7 +444,7 @@ export async function runOnboardingWizard(
     });
   }
 
-  await writeConfigFile(nextConfig);
+  await writeConfigFile(cfgForWrite(nextConfig));
   const { logConfigUpdated } = await import("../config/logging.js");
   logConfigUpdated(runtime);
   await onboardHelpers.ensureWorkspaceAndSessions(workspaceDir, runtime, {
@@ -448,7 +463,7 @@ export async function runOnboardingWizard(
   nextConfig = await setupInternalHooks(nextConfig, runtime, prompter);
 
   nextConfig = onboardHelpers.applyWizardMetadata(nextConfig, { command: "onboard", mode });
-  await writeConfigFile(nextConfig);
+  await writeConfigFile(cfgForWrite(nextConfig));
 
   const { finalizeOnboardingWizard } = await import("./onboarding.finalize.js");
   const { launchedTui } = await finalizeOnboardingWizard({
