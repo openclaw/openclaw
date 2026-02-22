@@ -21,7 +21,7 @@ Status: production-ready for bot DMs + groups via grammY. Long polling is the de
   </Card>
 </CardGroup>
 
-## Onboarding
+## Quick setup
 
 <Steps>
   <Step title="Create the bot token in BotFather">
@@ -226,8 +226,9 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     Requirement:
 
-    - `channels.telegram.streaming` is `true` (default)
-    - legacy `channels.telegram.streamMode` values are auto-mapped to `streaming`
+    - `channels.telegram.streaming` is `off | partial | block | progress` (default: `off`)
+    - `progress` maps to `partial` on Telegram (compat with cross-channel naming)
+    - legacy `channels.telegram.streamMode` and boolean `streaming` values are auto-mapped
 
     This works in direct chats and groups/topics.
 
@@ -708,7 +709,7 @@ Primary reference:
 - `channels.telegram.textChunkLimit`: outbound chunk size (chars).
 - `channels.telegram.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.telegram.linkPreview`: toggle link previews for outbound messages (default: true).
-- `channels.telegram.streaming`: `true | false` (live stream preview; default: true).
+- `channels.telegram.streaming`: `off | partial | block | progress` (live stream preview; default: `off`; `progress` maps to `partial`).
 - `channels.telegram.mediaMaxMb`: inbound/outbound media cap (MB).
 - `channels.telegram.retry`: retry policy for outbound Telegram API calls (attempts, minDelayMs, maxDelayMs, jitter).
 - `channels.telegram.network.autoSelectFamily`: override Node autoSelectFamily (true=enable, false=disable). Defaults to disabled on Node 22 to avoid Happy Eyeballs timeouts.

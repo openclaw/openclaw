@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { captureEnv, withEnvAsync } from "../test-utils/env.js";
 import { collectPluginsCodeSafetyFindings } from "./audit-extra.js";
 import type { SecurityAuditOptions, SecurityAuditReport } from "./audit.js";
 import { runSecurityAudit } from "./audit.js";
@@ -91,6 +92,14 @@ function hasFinding(res: SecurityAuditReport, checkId: string, severity?: string
   );
 }
 
+function expectFinding(res: SecurityAuditReport, checkId: string, severity?: string): void {
+  expect(hasFinding(res, checkId, severity)).toBe(true);
+}
+
+function expectNoFinding(res: SecurityAuditReport, checkId: string): void {
+  expect(hasFinding(res, checkId)).toBe(false);
+}
+
 describe("security audit", () => {
   let fixtureRoot = "";
   let caseId = 0;
@@ -102,19 +111,9 @@ describe("security audit", () => {
   };
 
   const withStateDir = async (label: string, fn: (tmp: string) => Promise<void>) => {
-    const prevStateDir = process.env.OPENCLAW_STATE_DIR;
     const tmp = await makeTmpDir(label);
-    process.env.OPENCLAW_STATE_DIR = tmp;
     await fs.mkdir(path.join(tmp, "credentials"), { recursive: true, mode: 0o700 });
-    try {
-      await fn(tmp);
-    } finally {
-      if (prevStateDir == null) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = prevStateDir;
-      }
-    }
+    await withEnvAsync({ OPENCLAW_STATE_DIR: tmp }, async () => await fn(tmp));
   };
 
   beforeAll(async () => {
@@ -191,32 +190,42 @@ describe("security audit", () => {
     expect(hasFinding(res, "gateway.auth_no_rate_limit", "warn")).toBe(true);
   });
 
-  it("warns when gateway.tools.allow re-enables dangerous HTTP /tools/invoke tools (loopback)", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        bind: "loopback",
-        auth: { token: "secret" },
-        tools: { allow: ["sessions_spawn"] },
+  it("scores dangerous gateway.tools.allow over HTTP by exposure", async () => {
+    const cases: Array<{
+      name: string;
+      cfg: OpenClawConfig;
+      expectedSeverity: "warn" | "critical";
+    }> = [
+      {
+        name: "loopback bind",
+        cfg: {
+          gateway: {
+            bind: "loopback",
+            auth: { token: "secret" },
+            tools: { allow: ["sessions_spawn"] },
+          },
+        },
+        expectedSeverity: "warn",
       },
-    };
-
-    const res = await audit(cfg, { env: {} });
-
-    expect(hasFinding(res, "gateway.tools_invoke_http.dangerous_allow", "warn")).toBe(true);
-  });
-
-  it("flags dangerous gateway.tools.allow over HTTP as critical when gateway binds beyond loopback", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        bind: "lan",
-        auth: { token: "secret" },
-        tools: { allow: ["sessions_spawn", "gateway"] },
+      {
+        name: "non-loopback bind",
+        cfg: {
+          gateway: {
+            bind: "lan",
+            auth: { token: "secret" },
+            tools: { allow: ["sessions_spawn", "gateway"] },
+          },
+        },
+        expectedSeverity: "critical",
       },
-    };
-
-    const res = await audit(cfg, { env: {} });
-
-    expect(hasFinding(res, "gateway.tools_invoke_http.dangerous_allow", "critical")).toBe(true);
+    ];
+    for (const testCase of cases) {
+      const res = await audit(testCase.cfg, { env: {} });
+      expect(
+        hasFinding(res, "gateway.tools_invoke_http.dangerous_allow", testCase.expectedSeverity),
+        testCase.name,
+      ).toBe(true);
+    }
   });
 
   it("does not warn for auth rate limiting when configured", async () => {
@@ -297,14 +306,7 @@ describe("security audit", () => {
 
     const res = await audit(cfg);
 
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "gateway.trusted_proxies_missing",
-          severity: "warn",
-        }),
-      ]),
-    );
+    expectFinding(res, "gateway.trusted_proxies_missing", "warn");
   });
 
   it("flags loopback control UI without auth as critical", async () => {
@@ -318,14 +320,7 @@ describe("security audit", () => {
 
     const res = await audit(cfg, { env: {} });
 
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "gateway.loopback_no_auth",
-          severity: "critical",
-        }),
-      ]),
-    );
+    expectFinding(res, "gateway.loopback_no_auth", "critical");
   });
 
   it("flags logging.redactSensitive=off", async () => {
@@ -335,11 +330,7 @@ describe("security audit", () => {
 
     const res = await audit(cfg);
 
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ checkId: "logging.redact_off", severity: "warn" }),
-      ]),
-    );
+    expectFinding(res, "logging.redact_off", "warn");
   });
 
   it("treats Windows ACL-only perms as secure", async () => {
@@ -581,88 +572,88 @@ describe("security audit", () => {
     expect(res.findings.some((f) => f.checkId === "fs.config.perms_group_readable")).toBe(false);
   });
 
-  it("warns when small models are paired with web/browser tools", async () => {
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { model: { primary: "ollama/mistral-8b" } } },
-      tools: {
-        web: {
-          search: { enabled: true },
-          fetch: { enabled: true },
+  it("scores small-model risk by tool/sandbox exposure", async () => {
+    const cases: Array<{
+      name: string;
+      cfg: OpenClawConfig;
+      expectedSeverity: "info" | "critical";
+      detailIncludes: string[];
+    }> = [
+      {
+        name: "small model with web and browser enabled",
+        cfg: {
+          agents: { defaults: { model: { primary: "ollama/mistral-8b" } } },
+          tools: { web: { search: { enabled: true }, fetch: { enabled: true } } },
+          browser: { enabled: true },
         },
+        expectedSeverity: "critical",
+        detailIncludes: ["mistral-8b", "web_search", "web_fetch", "browser"],
       },
-      browser: { enabled: true },
-    };
-
-    const res = await audit(cfg);
-
-    const finding = res.findings.find((f) => f.checkId === "models.small_params");
-    expect(finding?.severity).toBe("critical");
-    expect(finding?.detail).toContain("mistral-8b");
-    expect(finding?.detail).toContain("web_search");
-    expect(finding?.detail).toContain("web_fetch");
-    expect(finding?.detail).toContain("browser");
+      {
+        name: "small model with sandbox all and web/browser disabled",
+        cfg: {
+          agents: {
+            defaults: { model: { primary: "ollama/mistral-8b" }, sandbox: { mode: "all" } },
+          },
+          tools: { web: { search: { enabled: false }, fetch: { enabled: false } } },
+          browser: { enabled: false },
+        },
+        expectedSeverity: "info",
+        detailIncludes: ["mistral-8b", "sandbox=all"],
+      },
+    ];
+    for (const testCase of cases) {
+      const res = await audit(testCase.cfg);
+      const finding = res.findings.find((f) => f.checkId === "models.small_params");
+      expect(finding?.severity, testCase.name).toBe(testCase.expectedSeverity);
+      for (const text of testCase.detailIncludes) {
+        expect(finding?.detail, `${testCase.name}:${text}`).toContain(text);
+      }
+    }
   });
 
-  it("treats small models as safe when sandbox is on and web tools are disabled", async () => {
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { model: { primary: "ollama/mistral-8b" }, sandbox: { mode: "all" } } },
-      tools: {
-        web: {
-          search: { enabled: false },
-          fetch: { enabled: false },
-        },
-      },
-      browser: { enabled: false },
-    };
-
-    const res = await audit(cfg);
-
-    const finding = res.findings.find((f) => f.checkId === "models.small_params");
-    expect(finding?.severity).toBe("info");
-    expect(finding?.detail).toContain("mistral-8b");
-    expect(finding?.detail).toContain("sandbox=all");
-  });
-
-  it("flags sandbox docker config when sandbox mode is off", async () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "off",
-            docker: { image: "ghcr.io/example/sandbox:latest" },
+  it("checks sandbox docker mode-off findings with/without agent override", async () => {
+    const cases: Array<{
+      name: string;
+      cfg: OpenClawConfig;
+      expectedPresent: boolean;
+    }> = [
+      {
+        name: "mode off with docker config only",
+        cfg: {
+          agents: {
+            defaults: {
+              sandbox: {
+                mode: "off",
+                docker: { image: "ghcr.io/example/sandbox:latest" },
+              },
+            },
           },
         },
+        expectedPresent: true,
       },
-    };
-
-    const res = await audit(cfg);
-
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "sandbox.docker_config_mode_off",
-          severity: "warn",
-        }),
-      ]),
-    );
-  });
-
-  it("does not flag global sandbox docker config when an agent enables sandbox mode", async () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "off",
-            docker: { image: "ghcr.io/example/sandbox:latest" },
+      {
+        name: "agent enables sandbox mode",
+        cfg: {
+          agents: {
+            defaults: {
+              sandbox: {
+                mode: "off",
+                docker: { image: "ghcr.io/example/sandbox:latest" },
+              },
+            },
+            list: [{ id: "ops", sandbox: { mode: "all" } }],
           },
         },
-        list: [{ id: "ops", sandbox: { mode: "all" } }],
+        expectedPresent: false,
       },
-    };
-
-    const res = await audit(cfg);
-
-    expect(hasFinding(res, "sandbox.docker_config_mode_off")).toBe(false);
+    ];
+    for (const testCase of cases) {
+      const res = await audit(testCase.cfg);
+      expect(hasFinding(res, "sandbox.docker_config_mode_off"), testCase.name).toBe(
+        testCase.expectedPresent,
+      );
+    }
   });
 
   it("flags dangerous sandbox docker config (binds/network/seccomp/apparmor)", async () => {
@@ -703,45 +694,58 @@ describe("security audit", () => {
     );
   });
 
-  it("warns when sandbox browser uses bridge network without cdpSourceRange", async () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-            browser: {
-              enabled: true,
-              network: "bridge",
+  it("checks sandbox browser bridge-network restrictions", async () => {
+    const cases: Array<{
+      name: string;
+      cfg: OpenClawConfig;
+      expectedPresent: boolean;
+      expectedSeverity?: "warn";
+      detailIncludes?: string;
+    }> = [
+      {
+        name: "bridge without cdpSourceRange",
+        cfg: {
+          agents: {
+            defaults: {
+              sandbox: {
+                mode: "all",
+                browser: { enabled: true, network: "bridge" },
+              },
             },
           },
         },
+        expectedPresent: true,
+        expectedSeverity: "warn",
+        detailIncludes: "agents.defaults.sandbox.browser",
       },
-    };
-
-    const res = await audit(cfg);
-    const finding = res.findings.find(
-      (f) => f.checkId === "sandbox.browser_cdp_bridge_unrestricted",
-    );
-    expect(finding?.severity).toBe("warn");
-    expect(finding?.detail).toContain("agents.defaults.sandbox.browser");
-  });
-
-  it("does not warn when sandbox browser uses dedicated default network", async () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-            browser: {
-              enabled: true,
+      {
+        name: "dedicated default network",
+        cfg: {
+          agents: {
+            defaults: {
+              sandbox: {
+                mode: "all",
+                browser: { enabled: true },
+              },
             },
           },
         },
+        expectedPresent: false,
       },
-    };
-
-    const res = await audit(cfg);
-    expect(hasFinding(res, "sandbox.browser_cdp_bridge_unrestricted")).toBe(false);
+    ];
+    for (const testCase of cases) {
+      const res = await audit(testCase.cfg);
+      const finding = res.findings.find(
+        (f) => f.checkId === "sandbox.browser_cdp_bridge_unrestricted",
+      );
+      expect(Boolean(finding), testCase.name).toBe(testCase.expectedPresent);
+      if (testCase.expectedPresent) {
+        expect(finding?.severity, testCase.name).toBe(testCase.expectedSeverity);
+        if (testCase.detailIncludes) {
+          expect(finding?.detail, testCase.name).toContain(testCase.detailIncludes);
+        }
+      }
+    }
   });
 
   it("flags ineffective gateway.nodes.denyCommands entries", async () => {
@@ -780,14 +784,7 @@ describe("security audit", () => {
 
     const res = await audit(cfg);
 
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "tools.profile_minimal_overridden",
-          severity: "warn",
-        }),
-      ]),
-    );
+    expectFinding(res, "tools.profile_minimal_overridden", "warn");
   });
 
   it("flags tools.elevated allowFrom wildcard as critical", async () => {
@@ -801,14 +798,7 @@ describe("security audit", () => {
 
     const res = await audit(cfg);
 
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "tools.elevated.allowFrom.whatsapp.wildcard",
-          severity: "critical",
-        }),
-      ]),
-    );
+    expectFinding(res, "tools.elevated.allowFrom.whatsapp.wildcard", "critical");
   });
 
   it("flags browser control without auth when browser is enabled", async () => {
@@ -824,11 +814,7 @@ describe("security audit", () => {
 
     const res = await audit(cfg, { env: {} });
 
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ checkId: "browser.control_no_auth", severity: "critical" }),
-      ]),
-    );
+    expectFinding(res, "browser.control_no_auth", "critical");
   });
 
   it("does not flag browser control auth when gateway token is configured", async () => {
@@ -844,7 +830,7 @@ describe("security audit", () => {
 
     const res = await audit(cfg, { env: {} });
 
-    expect(hasFinding(res, "browser.control_no_auth")).toBe(false);
+    expectNoFinding(res, "browser.control_no_auth");
   });
 
   it("warns when remote CDP uses HTTP", async () => {
@@ -858,11 +844,7 @@ describe("security audit", () => {
 
     const res = await audit(cfg);
 
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ checkId: "browser.remote_cdp_http", severity: "warn" }),
-      ]),
-    );
+    expectFinding(res, "browser.remote_cdp_http", "warn");
   });
 
   it("warns when control UI allows insecure auth", async () => {
@@ -938,109 +920,91 @@ describe("security audit", () => {
     expect(finding?.detail).toContain("tools.exec.applyPatch.workspaceOnly=false");
   });
 
-  it("flags trusted-proxy auth mode without generic shared-secret findings", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        bind: "lan",
-        trustedProxies: ["10.0.0.1"],
-        auth: {
-          mode: "trusted-proxy",
-          trustedProxy: {
-            userHeader: "x-forwarded-user",
+  it("evaluates trusted-proxy auth guardrails", async () => {
+    const cases: Array<{
+      name: string;
+      cfg: OpenClawConfig;
+      expectedCheckId: string;
+      expectedSeverity: "warn" | "critical";
+      suppressesGenericSharedSecretFindings?: boolean;
+    }> = [
+      {
+        name: "trusted-proxy base mode",
+        cfg: {
+          gateway: {
+            bind: "lan",
+            trustedProxies: ["10.0.0.1"],
+            auth: {
+              mode: "trusted-proxy",
+              trustedProxy: { userHeader: "x-forwarded-user" },
+            },
           },
         },
+        expectedCheckId: "gateway.trusted_proxy_auth",
+        expectedSeverity: "critical",
+        suppressesGenericSharedSecretFindings: true,
       },
-    };
-
-    const res = await audit(cfg);
-
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "gateway.trusted_proxy_auth",
-          severity: "critical",
-        }),
-      ]),
-    );
-    expect(hasFinding(res, "gateway.bind_no_auth")).toBe(false);
-    expect(hasFinding(res, "gateway.auth_no_rate_limit")).toBe(false);
-  });
-
-  it("flags trusted-proxy auth without trustedProxies configured", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        bind: "lan",
-        trustedProxies: [],
-        auth: {
-          mode: "trusted-proxy",
-          trustedProxy: {
-            userHeader: "x-forwarded-user",
+      {
+        name: "missing trusted proxies",
+        cfg: {
+          gateway: {
+            bind: "lan",
+            trustedProxies: [],
+            auth: {
+              mode: "trusted-proxy",
+              trustedProxy: { userHeader: "x-forwarded-user" },
+            },
           },
         },
+        expectedCheckId: "gateway.trusted_proxy_no_proxies",
+        expectedSeverity: "critical",
       },
-    };
-
-    const res = await audit(cfg);
-
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "gateway.trusted_proxy_no_proxies",
-          severity: "critical",
-        }),
-      ]),
-    );
-  });
-
-  it("flags trusted-proxy auth without userHeader configured", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        bind: "lan",
-        trustedProxies: ["10.0.0.1"],
-        auth: {
-          mode: "trusted-proxy",
-          trustedProxy: {} as never,
-        },
-      },
-    };
-
-    const res = await audit(cfg);
-
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "gateway.trusted_proxy_no_user_header",
-          severity: "critical",
-        }),
-      ]),
-    );
-  });
-
-  it("warns when trusted-proxy auth allows all users", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        bind: "lan",
-        trustedProxies: ["10.0.0.1"],
-        auth: {
-          mode: "trusted-proxy",
-          trustedProxy: {
-            userHeader: "x-forwarded-user",
-            allowUsers: [],
+      {
+        name: "missing user header",
+        cfg: {
+          gateway: {
+            bind: "lan",
+            trustedProxies: ["10.0.0.1"],
+            auth: {
+              mode: "trusted-proxy",
+              trustedProxy: {} as never,
+            },
           },
         },
+        expectedCheckId: "gateway.trusted_proxy_no_user_header",
+        expectedSeverity: "critical",
       },
-    };
+      {
+        name: "missing user allowlist",
+        cfg: {
+          gateway: {
+            bind: "lan",
+            trustedProxies: ["10.0.0.1"],
+            auth: {
+              mode: "trusted-proxy",
+              trustedProxy: {
+                userHeader: "x-forwarded-user",
+                allowUsers: [],
+              },
+            },
+          },
+        },
+        expectedCheckId: "gateway.trusted_proxy_no_allowlist",
+        expectedSeverity: "warn",
+      },
+    ];
 
-    const res = await audit(cfg);
-
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "gateway.trusted_proxy_no_allowlist",
-          severity: "warn",
-        }),
-      ]),
-    );
+    for (const testCase of cases) {
+      const res = await audit(testCase.cfg);
+      expect(
+        hasFinding(res, testCase.expectedCheckId, testCase.expectedSeverity),
+        testCase.name,
+      ).toBe(true);
+      if (testCase.suppressesGenericSharedSecretFindings) {
+        expect(hasFinding(res, "gateway.bind_no_auth"), testCase.name).toBe(false);
+        expect(hasFinding(res, "gateway.auth_no_rate_limit"), testCase.name).toBe(false);
+      }
+    }
   });
 
   it("warns when multiple DM senders share the main session", async () => {
@@ -1161,6 +1125,99 @@ describe("security audit", () => {
           expect.objectContaining({
             checkId: "channels.discord.commands.native.no_allowlists",
           }),
+        ]),
+      );
+    });
+  });
+
+  it("warns when Discord allowlists contain name-based entries", async () => {
+    await withStateDir("discord-name-based-allowlist", async (tmp) => {
+      await fs.writeFile(
+        path.join(tmp, "credentials", "discord-allowFrom.json"),
+        JSON.stringify({ version: 1, allowFrom: ["team.owner"] }),
+      );
+      const cfg: OpenClawConfig = {
+        channels: {
+          discord: {
+            enabled: true,
+            token: "t",
+            allowFrom: ["Alice#1234", "<@123456789012345678>"],
+            guilds: {
+              "123": {
+                users: ["trusted.operator"],
+                channels: {
+                  general: {
+                    users: ["987654321098765432", "security-team"],
+                  },
+                },
+              },
+            },
+          },
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [discordPlugin],
+      });
+
+      const finding = res.findings.find(
+        (entry) => entry.checkId === "channels.discord.allowFrom.name_based_entries",
+      );
+      expect(finding).toBeDefined();
+      expect(finding?.severity).toBe("warn");
+      expect(finding?.detail).toContain("channels.discord.allowFrom:Alice#1234");
+      expect(finding?.detail).toContain("channels.discord.guilds.123.users:trusted.operator");
+      expect(finding?.detail).toContain(
+        "channels.discord.guilds.123.channels.general.users:security-team",
+      );
+      expect(finding?.detail).toContain(
+        "~/.openclaw/credentials/discord-allowFrom.json:team.owner",
+      );
+      expect(finding?.detail).not.toContain("<@123456789012345678>");
+    });
+  });
+
+  it("does not warn when Discord allowlists use ID-style entries only", async () => {
+    await withStateDir("discord-id-only-allowlist", async () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          discord: {
+            enabled: true,
+            token: "t",
+            allowFrom: [
+              "123456789012345678",
+              "<@223456789012345678>",
+              "user:323456789012345678",
+              "discord:423456789012345678",
+              "pk:member-123",
+            ],
+            guilds: {
+              "123": {
+                users: ["523456789012345678", "<@623456789012345678>", "pk:member-456"],
+                channels: {
+                  general: {
+                    users: ["723456789012345678", "user:823456789012345678"],
+                  },
+                },
+              },
+            },
+          },
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [discordPlugin],
+      });
+
+      expect(res.findings).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ checkId: "channels.discord.allowFrom.name_based_entries" }),
         ]),
       );
     });
@@ -1332,91 +1389,84 @@ describe("security audit", () => {
     });
   });
 
-  it("adds a warning when deep probe fails", async () => {
+  it("adds probe_failed warnings for deep probe failure modes", async () => {
     const cfg: OpenClawConfig = { gateway: { mode: "local" } };
-
-    const res = await audit(cfg, {
-      deep: true,
-      deepTimeoutMs: 50,
-      probeGatewayFn: async () => ({
-        ok: false,
-        url: "ws://127.0.0.1:18789",
-        connectLatencyMs: null,
-        error: "connect failed",
-        close: null,
-        health: null,
-        status: null,
-        presence: null,
-        configSnapshot: null,
-      }),
-    });
-
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ checkId: "gateway.probe_failed", severity: "warn" }),
-      ]),
-    );
-  });
-
-  it("adds a warning when deep probe throws", async () => {
-    const cfg: OpenClawConfig = { gateway: { mode: "local" } };
-
-    const res = await audit(cfg, {
-      deep: true,
-      deepTimeoutMs: 50,
-      probeGatewayFn: async () => {
-        throw new Error("probe boom");
+    const cases: Array<{
+      name: string;
+      probeGatewayFn: NonNullable<SecurityAuditOptions["probeGatewayFn"]>;
+      assertDeep?: (res: SecurityAuditReport) => void;
+    }> = [
+      {
+        name: "probe returns failed result",
+        probeGatewayFn: async () => ({
+          ok: false,
+          url: "ws://127.0.0.1:18789",
+          connectLatencyMs: null,
+          error: "connect failed",
+          close: null,
+          health: null,
+          status: null,
+          presence: null,
+          configSnapshot: null,
+        }),
       },
-    });
-
-    expect(res.deep?.gateway?.ok).toBe(false);
-    expect(res.deep?.gateway?.error).toContain("probe boom");
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ checkId: "gateway.probe_failed", severity: "warn" }),
-      ]),
-    );
+      {
+        name: "probe throws",
+        probeGatewayFn: async () => {
+          throw new Error("probe boom");
+        },
+        assertDeep: (res) => {
+          expect(res.deep?.gateway?.ok).toBe(false);
+          expect(res.deep?.gateway?.error).toContain("probe boom");
+        },
+      },
+    ];
+    for (const testCase of cases) {
+      const res = await audit(cfg, {
+        deep: true,
+        deepTimeoutMs: 50,
+        probeGatewayFn: testCase.probeGatewayFn,
+      });
+      testCase.assertDeep?.(res);
+      expect(hasFinding(res, "gateway.probe_failed", "warn"), testCase.name).toBe(true);
+    }
   });
 
-  it("warns on legacy model configuration", async () => {
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { model: { primary: "openai/gpt-3.5-turbo" } } },
-    };
-
-    const res = await audit(cfg);
-
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ checkId: "models.legacy", severity: "warn" }),
-      ]),
-    );
-  });
-
-  it("warns on weak model tiers", async () => {
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { model: { primary: "anthropic/claude-haiku-4-5" } } },
-    };
-
-    const res = await audit(cfg);
-
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ checkId: "models.weak_tier", severity: "warn" }),
-      ]),
-    );
-  });
-
-  it("does not warn on Venice-style opus-45 model names", async () => {
-    // Venice uses "claude-opus-45" format (no dash between 4 and 5)
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { model: { primary: "venice/claude-opus-45" } } },
-    };
-
-    const res = await audit(cfg);
-
-    // Should NOT contain weak_tier warning for opus-45
-    const weakTierFinding = res.findings.find((f) => f.checkId === "models.weak_tier");
-    expect(weakTierFinding).toBeUndefined();
+  it("classifies legacy and weak-tier model identifiers", async () => {
+    const cases: Array<{
+      name: string;
+      model: string;
+      expectedFindings?: Array<{ checkId: string; severity: "warn" }>;
+      expectedAbsentCheckId?: string;
+    }> = [
+      {
+        name: "legacy model",
+        model: "openai/gpt-3.5-turbo",
+        expectedFindings: [{ checkId: "models.legacy", severity: "warn" }],
+      },
+      {
+        name: "weak-tier model",
+        model: "anthropic/claude-haiku-4-5",
+        expectedFindings: [{ checkId: "models.weak_tier", severity: "warn" }],
+      },
+      {
+        // Venice uses "claude-opus-45" format (no dash between 4 and 5).
+        name: "venice opus-45",
+        model: "venice/claude-opus-45",
+        expectedAbsentCheckId: "models.weak_tier",
+      },
+    ];
+    for (const testCase of cases) {
+      const res = await audit({
+        agents: { defaults: { model: { primary: testCase.model } } },
+      });
+      for (const expected of testCase.expectedFindings ?? []) {
+        expect(hasFinding(res, expected.checkId, expected.severity), testCase.name).toBe(true);
+      }
+      if (testCase.expectedAbsentCheckId) {
+        expect(hasFinding(res, testCase.expectedAbsentCheckId), testCase.name).toBe(false);
+      }
+    }
   });
 
   it("warns when hooks token looks short", async () => {
@@ -1426,11 +1476,7 @@ describe("security audit", () => {
 
     const res = await audit(cfg);
 
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ checkId: "hooks.token_too_short", severity: "warn" }),
-      ]),
-    );
+    expectFinding(res, "hooks.token_too_short", "warn");
   });
 
   it("flags hooks token reuse of the gateway env token as critical", async () => {
@@ -1442,15 +1488,7 @@ describe("security audit", () => {
 
     try {
       const res = await audit(cfg);
-
-      expect(res.findings).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            checkId: "hooks.token_reuse_gateway_token",
-            severity: "critical",
-          }),
-        ]),
-      );
+      expectFinding(res, "hooks.token_reuse_gateway_token", "critical");
     } finally {
       if (prevToken === undefined) {
         delete process.env.OPENCLAW_GATEWAY_TOKEN;
@@ -1467,114 +1505,88 @@ describe("security audit", () => {
 
     const res = await audit(cfg);
 
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ checkId: "hooks.default_session_key_unset", severity: "warn" }),
-      ]),
-    );
+    expectFinding(res, "hooks.default_session_key_unset", "warn");
   });
 
-  it("flags hooks request sessionKey override when enabled", async () => {
-    const cfg: OpenClawConfig = {
-      hooks: {
-        enabled: true,
-        token: "shared-gateway-token-1234567890",
-        defaultSessionKey: "hook:ingress",
-        allowRequestSessionKey: true,
+  it("scores hooks request sessionKey override by gateway exposure", async () => {
+    const baseHooks = {
+      enabled: true,
+      token: "shared-gateway-token-1234567890",
+      defaultSessionKey: "hook:ingress",
+      allowRequestSessionKey: true,
+    } satisfies NonNullable<OpenClawConfig["hooks"]>;
+    const cases: Array<{
+      name: string;
+      cfg: OpenClawConfig;
+      expectedSeverity: "warn" | "critical";
+      expectsPrefixesMissing?: boolean;
+    }> = [
+      {
+        name: "local exposure",
+        cfg: { hooks: baseHooks },
+        expectedSeverity: "warn",
+        expectsPrefixesMissing: true,
       },
-    };
-
-    const res = await audit(cfg);
-
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ checkId: "hooks.request_session_key_enabled", severity: "warn" }),
-        expect.objectContaining({
-          checkId: "hooks.request_session_key_prefixes_missing",
-          severity: "warn",
-        }),
-      ]),
-    );
-  });
-
-  it("escalates hooks request sessionKey override when gateway is remotely exposed", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: { bind: "lan" },
-      hooks: {
-        enabled: true,
-        token: "shared-gateway-token-1234567890",
-        defaultSessionKey: "hook:ingress",
-        allowRequestSessionKey: true,
+      {
+        name: "remote exposure",
+        cfg: { gateway: { bind: "lan" }, hooks: baseHooks },
+        expectedSeverity: "critical",
       },
-    };
-
-    const res = await audit(cfg);
-
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "hooks.request_session_key_enabled",
-          severity: "critical",
-        }),
-      ]),
-    );
+    ];
+    for (const testCase of cases) {
+      const res = await audit(testCase.cfg);
+      expect(
+        hasFinding(res, "hooks.request_session_key_enabled", testCase.expectedSeverity),
+        testCase.name,
+      ).toBe(true);
+      if (testCase.expectsPrefixesMissing) {
+        expect(hasFinding(res, "hooks.request_session_key_prefixes_missing", "warn")).toBe(true);
+      }
+    }
   });
 
-  it("warns when gateway HTTP APIs run with auth.mode=none on loopback", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        bind: "loopback",
-        auth: { mode: "none" },
-        http: {
-          endpoints: {
-            chatCompletions: { enabled: true },
+  it("scores gateway HTTP no-auth findings by exposure", async () => {
+    const cases: Array<{
+      name: string;
+      cfg: OpenClawConfig;
+      expectedSeverity: "warn" | "critical";
+      detailIncludes?: string[];
+    }> = [
+      {
+        name: "loopback no-auth",
+        cfg: {
+          gateway: {
+            bind: "loopback",
+            auth: { mode: "none" },
+            http: { endpoints: { chatCompletions: { enabled: true } } },
           },
         },
+        expectedSeverity: "warn",
+        detailIncludes: ["/tools/invoke", "/v1/chat/completions"],
       },
-    };
-
-    const res = await runSecurityAudit({
-      config: cfg,
-      env: {},
-      includeFilesystem: false,
-      includeChannelSecurity: false,
-    });
-
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ checkId: "gateway.http.no_auth", severity: "warn" }),
-      ]),
-    );
-    const finding = res.findings.find((entry) => entry.checkId === "gateway.http.no_auth");
-    expect(finding?.detail).toContain("/tools/invoke");
-    expect(finding?.detail).toContain("/v1/chat/completions");
-  });
-
-  it("flags gateway HTTP APIs with auth.mode=none as critical when remotely exposed", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        bind: "lan",
-        auth: { mode: "none" },
-        http: {
-          endpoints: {
-            responses: { enabled: true },
+      {
+        name: "remote no-auth",
+        cfg: {
+          gateway: {
+            bind: "lan",
+            auth: { mode: "none" },
+            http: { endpoints: { responses: { enabled: true } } },
           },
         },
+        expectedSeverity: "critical",
       },
-    };
+    ];
 
-    const res = await runSecurityAudit({
-      config: cfg,
-      env: {},
-      includeFilesystem: false,
-      includeChannelSecurity: false,
-    });
-
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ checkId: "gateway.http.no_auth", severity: "critical" }),
-      ]),
-    );
+    for (const testCase of cases) {
+      const res = await audit(testCase.cfg, { env: {} });
+      expectFinding(res, "gateway.http.no_auth", testCase.expectedSeverity);
+      if (testCase.detailIncludes) {
+        const finding = res.findings.find((entry) => entry.checkId === "gateway.http.no_auth");
+        for (const text of testCase.detailIncludes) {
+          expect(finding?.detail, `${testCase.name}:${text}`).toContain(text);
+        }
+      }
+    }
   });
 
   it("does not report gateway.http.no_auth when auth mode is token", async () => {
@@ -1591,14 +1603,8 @@ describe("security audit", () => {
       },
     };
 
-    const res = await runSecurityAudit({
-      config: cfg,
-      env: {},
-      includeFilesystem: false,
-      includeChannelSecurity: false,
-    });
-
-    expect(res.findings.some((entry) => entry.checkId === "gateway.http.no_auth")).toBe(false);
+    const res = await audit(cfg, { env: {} });
+    expectNoFinding(res, "gateway.http.no_auth");
   });
 
   it("reports HTTP API session-key override surfaces when enabled", async () => {
@@ -1615,14 +1621,7 @@ describe("security audit", () => {
 
     const res = await audit(cfg);
 
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          checkId: "gateway.http.session_key_override_enabled",
-          severity: "info",
-        }),
-      ]),
-    );
+    expectFinding(res, "gateway.http.session_key_override_enabled", "info");
   });
 
   it("warns when state/config look like a synced folder", async () => {
@@ -1633,11 +1632,7 @@ describe("security audit", () => {
       configPath: "/Users/test/Dropbox/.openclaw/openclaw.json",
     });
 
-    expect(res.findings).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ checkId: "fs.synced_dir", severity: "warn" }),
-      ]),
-    );
+    expectFinding(res, "fs.synced_dir", "warn");
   });
 
   it("flags group/world-readable config include files", async () => {
@@ -2156,25 +2151,16 @@ description: test skill
   });
 
   describe("maybeProbeGateway auth selection", () => {
-    const originalEnvToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-    const originalEnvPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
+    let envSnapshot: ReturnType<typeof captureEnv>;
 
     beforeEach(() => {
+      envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"]);
       delete process.env.OPENCLAW_GATEWAY_TOKEN;
       delete process.env.OPENCLAW_GATEWAY_PASSWORD;
     });
 
     afterEach(() => {
-      if (originalEnvToken == null) {
-        delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      } else {
-        process.env.OPENCLAW_GATEWAY_TOKEN = originalEnvToken;
-      }
-      if (originalEnvPassword == null) {
-        delete process.env.OPENCLAW_GATEWAY_PASSWORD;
-      } else {
-        process.env.OPENCLAW_GATEWAY_PASSWORD = originalEnvPassword;
-      }
+      envSnapshot.restore();
     });
 
     const makeProbeCapture = () => {
@@ -2191,135 +2177,120 @@ description: test skill
       };
     };
 
-    it("uses local auth when gateway.mode is local", async () => {
-      const { probeGatewayFn, getAuth } = makeProbeCapture();
-      const cfg: OpenClawConfig = {
-        gateway: {
-          mode: "local",
-          auth: { token: "local-token-abc123" },
+    const setProbeEnv = (env?: { token?: string; password?: string }) => {
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+      if (env?.token !== undefined) {
+        process.env.OPENCLAW_GATEWAY_TOKEN = env.token;
+      }
+      if (env?.password !== undefined) {
+        process.env.OPENCLAW_GATEWAY_PASSWORD = env.password;
+      }
+    };
+
+    it("applies token precedence across local/remote gateway modes", async () => {
+      const cases: Array<{
+        name: string;
+        cfg: OpenClawConfig;
+        env?: { token?: string };
+        expectedToken: string;
+      }> = [
+        {
+          name: "uses local auth when gateway.mode is local",
+          cfg: { gateway: { mode: "local", auth: { token: "local-token-abc123" } } },
+          expectedToken: "local-token-abc123",
         },
-      };
-
-      await audit(cfg, { deep: true, deepTimeoutMs: 50, probeGatewayFn });
-
-      expect(getAuth()?.token).toBe("local-token-abc123");
-    });
-
-    it("prefers env token over local config token", async () => {
-      process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
-      const { probeGatewayFn, getAuth } = makeProbeCapture();
-      const cfg: OpenClawConfig = {
-        gateway: {
-          mode: "local",
-          auth: { token: "local-token" },
+        {
+          name: "prefers env token over local config token",
+          cfg: { gateway: { mode: "local", auth: { token: "local-token" } } },
+          env: { token: "env-token" },
+          expectedToken: "env-token",
         },
-      };
-
-      await audit(cfg, { deep: true, deepTimeoutMs: 50, probeGatewayFn });
-
-      expect(getAuth()?.token).toBe("env-token");
-    });
-
-    it("uses local auth when gateway.mode is undefined (default)", async () => {
-      const { probeGatewayFn, getAuth } = makeProbeCapture();
-      const cfg: OpenClawConfig = {
-        gateway: {
-          auth: { token: "default-local-token" },
+        {
+          name: "uses local auth when gateway.mode is undefined (default)",
+          cfg: { gateway: { auth: { token: "default-local-token" } } },
+          expectedToken: "default-local-token",
         },
-      };
-
-      await audit(cfg, { deep: true, deepTimeoutMs: 50, probeGatewayFn });
-
-      expect(getAuth()?.token).toBe("default-local-token");
-    });
-
-    it("uses remote auth when gateway.mode is remote with URL", async () => {
-      const { probeGatewayFn, getAuth } = makeProbeCapture();
-      const cfg: OpenClawConfig = {
-        gateway: {
-          mode: "remote",
-          auth: { token: "local-token-should-not-use" },
-          remote: {
-            url: "wss://remote.example.com:18789",
-            token: "remote-token-xyz789",
+        {
+          name: "uses remote auth when gateway.mode is remote with URL",
+          cfg: {
+            gateway: {
+              mode: "remote",
+              auth: { token: "local-token-should-not-use" },
+              remote: { url: "wss://remote.example.com:18789", token: "remote-token-xyz789" },
+            },
           },
+          expectedToken: "remote-token-xyz789",
         },
-      };
+        {
+          name: "ignores env token when gateway.mode is remote",
+          cfg: {
+            gateway: {
+              mode: "remote",
+              auth: { token: "local-token-should-not-use" },
+              remote: { url: "wss://remote.example.com:18789", token: "remote-token" },
+            },
+          },
+          env: { token: "env-token" },
+          expectedToken: "remote-token",
+        },
+        {
+          name: "falls back to local auth when gateway.mode is remote but URL is missing",
+          cfg: {
+            gateway: {
+              mode: "remote",
+              auth: { token: "fallback-local-token" },
+              remote: { token: "remote-token-should-not-use" },
+            },
+          },
+          expectedToken: "fallback-local-token",
+        },
+      ];
 
-      await audit(cfg, { deep: true, deepTimeoutMs: 50, probeGatewayFn });
-
-      expect(getAuth()?.token).toBe("remote-token-xyz789");
+      for (const testCase of cases) {
+        setProbeEnv(testCase.env);
+        const { probeGatewayFn, getAuth } = makeProbeCapture();
+        await audit(testCase.cfg, { deep: true, deepTimeoutMs: 50, probeGatewayFn });
+        expect(getAuth()?.token, testCase.name).toBe(testCase.expectedToken);
+      }
     });
 
-    it("ignores env token when gateway.mode is remote", async () => {
-      process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
-      const { probeGatewayFn, getAuth } = makeProbeCapture();
-      const cfg: OpenClawConfig = {
-        gateway: {
-          mode: "remote",
-          auth: { token: "local-token-should-not-use" },
-          remote: {
-            url: "wss://remote.example.com:18789",
-            token: "remote-token",
+    it("applies password precedence for remote gateways", async () => {
+      const cases: Array<{
+        name: string;
+        cfg: OpenClawConfig;
+        env?: { password?: string };
+        expectedPassword: string;
+      }> = [
+        {
+          name: "uses remote password when env is unset",
+          cfg: {
+            gateway: {
+              mode: "remote",
+              remote: { url: "wss://remote.example.com:18789", password: "remote-pass" },
+            },
           },
+          expectedPassword: "remote-pass",
         },
-      };
-
-      await audit(cfg, { deep: true, deepTimeoutMs: 50, probeGatewayFn });
-
-      expect(getAuth()?.token).toBe("remote-token");
-    });
-
-    it("uses remote password when env is unset", async () => {
-      const { probeGatewayFn, getAuth } = makeProbeCapture();
-      const cfg: OpenClawConfig = {
-        gateway: {
-          mode: "remote",
-          remote: {
-            url: "wss://remote.example.com:18789",
-            password: "remote-pass",
+        {
+          name: "prefers env password over remote password",
+          cfg: {
+            gateway: {
+              mode: "remote",
+              remote: { url: "wss://remote.example.com:18789", password: "remote-pass" },
+            },
           },
+          env: { password: "env-pass" },
+          expectedPassword: "env-pass",
         },
-      };
+      ];
 
-      await audit(cfg, { deep: true, deepTimeoutMs: 50, probeGatewayFn });
-
-      expect(getAuth()?.password).toBe("remote-pass");
-    });
-
-    it("prefers env password over remote password", async () => {
-      process.env.OPENCLAW_GATEWAY_PASSWORD = "env-pass";
-      const { probeGatewayFn, getAuth } = makeProbeCapture();
-      const cfg: OpenClawConfig = {
-        gateway: {
-          mode: "remote",
-          remote: {
-            url: "wss://remote.example.com:18789",
-            password: "remote-pass",
-          },
-        },
-      };
-
-      await audit(cfg, { deep: true, deepTimeoutMs: 50, probeGatewayFn });
-
-      expect(getAuth()?.password).toBe("env-pass");
-    });
-
-    it("falls back to local auth when gateway.mode is remote but URL is missing", async () => {
-      const { probeGatewayFn, getAuth } = makeProbeCapture();
-      const cfg: OpenClawConfig = {
-        gateway: {
-          mode: "remote",
-          auth: { token: "fallback-local-token" },
-          remote: {
-            token: "remote-token-should-not-use",
-          },
-        },
-      };
-
-      await audit(cfg, { deep: true, deepTimeoutMs: 50, probeGatewayFn });
-
-      expect(getAuth()?.token).toBe("fallback-local-token");
+      for (const testCase of cases) {
+        setProbeEnv(testCase.env);
+        const { probeGatewayFn, getAuth } = makeProbeCapture();
+        await audit(testCase.cfg, { deep: true, deepTimeoutMs: 50, probeGatewayFn });
+        expect(getAuth()?.password, testCase.name).toBe(testCase.expectedPassword);
+      }
     });
   });
 });

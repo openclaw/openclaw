@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
-import { captureEnv } from "../test-utils/env.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { MINIMAX_API_BASE_URL, MINIMAX_CN_API_BASE_URL } from "./onboard-auth.js";
 import {
   createThrowingRuntime,
@@ -17,6 +17,8 @@ type OnboardEnv = {
   configPath: string;
   runtime: NonInteractiveRuntime;
 };
+let ensureAuthProfileStore: typeof import("../agents/auth-profiles.js").ensureAuthProfileStore;
+let upsertAuthProfile: typeof import("../agents/auth-profiles.js").upsertAuthProfile;
 
 type ProviderAuthConfigSnapshot = {
   auth?: { profiles?: Record<string, { provider?: string; mode?: string }> };
@@ -54,42 +56,31 @@ async function withOnboardEnv(
   prefix: string,
   run: (ctx: OnboardEnv) => Promise<void>,
 ): Promise<void> {
-  const prev = captureEnv([
-    "HOME",
-    "OPENCLAW_STATE_DIR",
-    "OPENCLAW_CONFIG_PATH",
-    "OPENCLAW_SKIP_CHANNELS",
-    "OPENCLAW_SKIP_GMAIL_WATCHER",
-    "OPENCLAW_SKIP_CRON",
-    "OPENCLAW_SKIP_CANVAS_HOST",
-    "OPENCLAW_GATEWAY_TOKEN",
-    "OPENCLAW_GATEWAY_PASSWORD",
-    "CUSTOM_API_KEY",
-    "OPENCLAW_DISABLE_CONFIG_CACHE",
-  ]);
-
-  process.env.OPENCLAW_SKIP_CHANNELS = "1";
-  process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
-  process.env.OPENCLAW_SKIP_CRON = "1";
-  process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
-  process.env.OPENCLAW_DISABLE_CONFIG_CACHE = "1";
-  delete process.env.OPENCLAW_GATEWAY_TOKEN;
-  delete process.env.OPENCLAW_GATEWAY_PASSWORD;
-  delete process.env.CUSTOM_API_KEY;
-
   const tempHome = await makeTempWorkspace(prefix);
   const configPath = path.join(tempHome, "openclaw.json");
-  process.env.HOME = tempHome;
-  process.env.OPENCLAW_STATE_DIR = tempHome;
-  process.env.OPENCLAW_CONFIG_PATH = configPath;
-
   const runtime = createThrowingRuntime();
 
   try {
-    await run({ configPath, runtime });
+    await withEnvAsync(
+      {
+        HOME: tempHome,
+        OPENCLAW_STATE_DIR: tempHome,
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+        OPENCLAW_SKIP_CRON: "1",
+        OPENCLAW_SKIP_CANVAS_HOST: "1",
+        OPENCLAW_GATEWAY_TOKEN: undefined,
+        OPENCLAW_GATEWAY_PASSWORD: undefined,
+        CUSTOM_API_KEY: undefined,
+        OPENCLAW_DISABLE_CONFIG_CACHE: "1",
+      },
+      async () => {
+        await run({ configPath, runtime });
+      },
+    );
   } finally {
     await removeDirWithRetry(tempHome);
-    prev.restore();
   }
 }
 
@@ -132,7 +123,6 @@ async function expectApiKeyProfile(params: {
   key: string;
   metadata?: Record<string, string>;
 }): Promise<void> {
-  const { ensureAuthProfileStore } = await import("../agents/auth-profiles.js");
   const store = ensureAuthProfileStore();
   const profile = store.profiles[params.profileId];
   expect(profile?.type).toBe("api_key");
@@ -146,6 +136,10 @@ async function expectApiKeyProfile(params: {
 }
 
 describe("onboard (non-interactive): provider auth", () => {
+  beforeAll(async () => {
+    ({ ensureAuthProfileStore, upsertAuthProfile } = await import("../agents/auth-profiles.js"));
+  });
+
   it("stores MiniMax API key and uses global baseUrl by default", async () => {
     await withOnboardEnv("openclaw-onboard-minimax-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
@@ -285,7 +279,6 @@ describe("onboard (non-interactive): provider auth", () => {
       expect(cfg.auth?.profiles?.["anthropic:default"]?.provider).toBe("anthropic");
       expect(cfg.auth?.profiles?.["anthropic:default"]?.mode).toBe("token");
 
-      const { ensureAuthProfileStore } = await import("../agents/auth-profiles.js");
       const store = ensureAuthProfileStore();
       const profile = store.profiles["anthropic:default"];
       expect(profile?.type).toBe("token");
@@ -476,7 +469,6 @@ describe("onboard (non-interactive): provider auth", () => {
     await withOnboardEnv(
       "openclaw-onboard-custom-provider-profile-fallback-",
       async ({ configPath, runtime }) => {
-        const { upsertAuthProfile } = await import("../agents/auth-profiles.js");
         upsertAuthProfile({
           profileId: `${CUSTOM_LOCAL_PROVIDER_ID}:default`,
           credential: {

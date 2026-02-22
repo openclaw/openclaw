@@ -9,6 +9,7 @@ export type CronRunLogEntry = {
   status?: CronRunStatus;
   error?: string;
   summary?: string;
+  delivered?: boolean;
   sessionId?: string;
   sessionKey?: string;
   runAtMs?: number;
@@ -127,6 +128,9 @@ export async function readCronRunLogEntries(
             }
           : undefined,
       };
+      if (typeof obj.delivered === "boolean") {
+        entry.delivered = obj.delivered;
+      }
       if (typeof obj.sessionId === "string" && obj.sessionId.trim().length > 0) {
         entry.sessionId = obj.sessionId;
       }

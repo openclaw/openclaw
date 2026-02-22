@@ -1,5 +1,6 @@
 import type { Chat, Message, MessageOrigin, User } from "@grammyjs/types";
 import { formatLocationText, type NormalizedLocation } from "../../channels/location.js";
+import { resolveTelegramPreviewStreamMode } from "../../config/discord-preview-streaming.js";
 import type { TelegramGroupConfig, TelegramTopicConfig } from "../../config/types.js";
 import { readChannelAllowFromStore } from "../../pairing/pairing-store.js";
 import {
@@ -19,6 +20,7 @@ export type TelegramThreadSpec = {
 export async function resolveTelegramGroupAllowFromContext(params: {
   chatId: string | number;
   accountId?: string;
+  dmPolicy?: string;
   isForum?: boolean;
   messageThreadId?: number | null;
   groupAllowFrom?: Array<string | number>;
@@ -52,6 +54,7 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   const effectiveGroupAllow = normalizeAllowFromWithStore({
     allowFrom: groupAllowOverride ?? params.groupAllowFrom,
     storeAllowFrom,
+    dmPolicy: params.dmPolicy,
   });
   const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
   return {
@@ -154,20 +157,10 @@ export function buildTypingThreadParams(messageThreadId?: number) {
 }
 
 export function resolveTelegramStreamMode(telegramCfg?: {
-  streaming?: boolean;
-  streamMode?: TelegramStreamMode;
+  streaming?: unknown;
+  streamMode?: unknown;
 }): TelegramStreamMode {
-  if (typeof telegramCfg?.streaming === "boolean") {
-    return telegramCfg.streaming ? "partial" : "off";
-  }
-  const raw = telegramCfg?.streamMode?.trim().toLowerCase();
-  if (raw === "off") {
-    return "off";
-  }
-  if (raw === "partial" || raw === "block") {
-    return "partial";
-  }
-  return "off";
+  return resolveTelegramPreviewStreamMode(telegramCfg);
 }
 
 export function buildTelegramGroupPeerId(chatId: number | string, messageThreadId?: number) {
