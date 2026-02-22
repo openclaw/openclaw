@@ -428,6 +428,20 @@ export function buildStatusMessage(args: StatusArgs): string {
   let cacheWrite = entry?.cacheWrite;
   let totalTokens = entry?.totalTokens ?? (entry?.inputTokens ?? 0) + (entry?.outputTokens ?? 0);
 
+  // Guard against stale/incorrect session totals that can occasionally mirror the
+  // context window (e.g. 150k/150k) while per-turn usage remains much lower.
+  // Prefer concrete per-turn usage when it is clearly below context capacity.
+  if (typeof contextTokens === "number" && contextTokens > 0 && totalTokens >= contextTokens) {
+    const input = typeof inputTokens === "number" ? inputTokens : 0;
+    const output = typeof outputTokens === "number" ? outputTokens : 0;
+    const combined = input + output;
+    if (combined > 0 && combined < contextTokens) {
+      totalTokens = combined;
+    } else if (input > 0 && input < contextTokens) {
+      totalTokens = input;
+    }
+  }
+
   // Prefer prompt-size tokens from the session transcript when it looks larger
   // (cached prompt tokens are often missing from agent meta/store).
   if (args.includeTranscriptUsage) {

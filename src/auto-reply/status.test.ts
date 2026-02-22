@@ -387,6 +387,25 @@ describe("buildStatusMessage", () => {
     expect(lines[contextIndex + 1]).toContain("Usage: Claude 80% left (5h)");
   });
 
+  it("avoids showing full context when stored total mirrors context window", () => {
+    const text = buildStatusMessage({
+      agent: { model: "anthropic/claude-opus-4-5", contextTokens: 150_000 },
+      sessionEntry: {
+        sessionId: "ctx-mirror",
+        updatedAt: 0,
+        contextTokens: 150_000,
+        totalTokens: 150_000,
+        inputTokens: 33_139,
+        outputTokens: 13_028,
+      },
+      sessionKey: "agent:main:main",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    expect(normalizeTestText(text)).toContain("Context: 46k/150k (31%)");
+  });
+
   it("hides cost when not using an API key", () => {
     const text = buildStatusMessage({
       config: {
