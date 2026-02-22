@@ -141,7 +141,7 @@ htmlEscapeRenderer.code = ({
 }: {
   text: string;
   lang?: string;
-  escaped: boolean;
+  escaped?: boolean;
 }) => {
   const langClass = lang ? ` class="language-${lang}"` : "";
   const safeText = escaped ? text : escapeHtml(text);
