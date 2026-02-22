@@ -101,7 +101,7 @@ async function runCronTurn(home: string, options: RunCronTurnOptions = {}) {
   const storePath = options.storePath ?? (await writeSessionStore(home, options.storeEntries));
   const deps = options.deps ?? makeDeps();
   if (options.mockTexts === null) {
-    vi.mocked(runEmbeddedPiAgent).mockReset();
+    vi.mocked(runEmbeddedPiAgent).mockClear();
   } else {
     mockEmbeddedTexts(options.mockTexts ?? ["ok"]);
   }
@@ -158,7 +158,7 @@ async function runTurnWithStoredModelOverride(
 
 describe("runCronIsolatedAgentTurn", () => {
   beforeEach(() => {
-    vi.mocked(runEmbeddedPiAgent).mockReset();
+    vi.mocked(runEmbeddedPiAgent).mockClear();
     vi.mocked(loadModelCatalog).mockResolvedValue([]);
   });
 
