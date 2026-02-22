@@ -2,10 +2,13 @@ import {
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
+  logAckFailure,
   logInboundDrop,
   recordPendingHistoryEntryIfEnabled,
+  resolveAckReaction,
   resolveControlCommandGate,
   resolveMentionGating,
+  shouldAckReaction,
   formatAllowlistMatchMeta,
   type HistoryEntry,
 } from "openclaw/plugin-sdk";
@@ -529,11 +532,43 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       // Best effort — typing indicators are non-critical.
     });
 
-    // Tool status messages: show interim "Using <tool>..." messages that get
-    // deleted once the actual reply starts streaming.
-    // Controlled by messages.statusReactions.enabled (default: true).
+    // Ack reaction: send the configured emoji as a brief status message so the
+    // user knows their message was received (Teams has no native bot reaction API,
+    // so we emulate it with a temporary message that gets deleted on reply start).
+    // Controlled by messages.ackReaction (emoji) and messages.ackReactionScope.
     const statusEnabled = cfg.messages?.statusReactions?.enabled !== false;
     let statusActivityId: string | null = null;
+
+    const ackReactionScope = cfg.messages?.ackReactionScope ?? "group-mentions";
+    const ackEmoji = resolveAckReaction(cfg, route.agentId, { channel: "msteams" });
+    const showAckReaction =
+      statusEnabled &&
+      Boolean(ackEmoji) &&
+      shouldAckReaction({
+        scope: ackReactionScope,
+        isDirect: isDirectMessage,
+        isGroup: isGroupChat || isChannel,
+        isMentionableGroup: isChannel || isGroupChat,
+        requireMention: Boolean(requireMention),
+        canDetectMention: true,
+        effectiveWasMentioned: isDirectMessage || params.wasMentioned || params.implicitMention,
+      });
+
+    if (showAckReaction) {
+      try {
+        const response = (await context.sendActivity(ackEmoji)) as { id?: string } | undefined;
+        if (response?.id) {
+          statusActivityId = response.id;
+        }
+      } catch (err) {
+        logAckFailure({
+          log: (msg) => log.debug?.(msg),
+          channel: "msteams",
+          target: conversationId,
+          error: err,
+        });
+      }
+    }
     const TOOL_LABELS: Record<string, string> = {
       email: "Checking email",
       web_search: "Searching the web",
