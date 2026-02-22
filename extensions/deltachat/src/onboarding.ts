@@ -1,7 +1,7 @@
 import type { ChannelOnboardingAdapter, WizardPrompter } from "openclaw/plugin-sdk";
 import { formatDocsLink } from "openclaw/plugin-sdk";
-import type { CoreConfig } from "./types.js";
 import { resolveDeltaChatAccount } from "./accounts.js";
+import type { CoreConfig } from "./types.js";
 
 const channel = "deltachat" as const;
 

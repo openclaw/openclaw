@@ -1,10 +1,10 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk";
-import type { CoreConfig } from "./types.js";
 import { resolveDeltaChatAccount } from "./accounts.js";
 import { rpcServerManager } from "./rpc-server.js";
 import { getDeltaChatRuntime } from "./runtime.js";
 import { parseDeltaChatTarget } from "./targets.js";
+import type { CoreConfig } from "./types.js";
 import { DEFAULT_DATA_DIR } from "./types.js";
 import { ensureDataDir } from "./utils.js";
 

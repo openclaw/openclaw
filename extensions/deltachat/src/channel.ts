@@ -9,7 +9,6 @@ import {
   type ChannelPlugin,
   type ChannelSetupInput,
 } from "openclaw/plugin-sdk";
-import type { CoreConfig } from "./types.js";
 import {
   listDeltaChatAccountIds,
   resolveDefaultDeltaChatAccountId,
@@ -29,6 +28,7 @@ import {
   looksLikeDeltaChatTargetId,
   normalizeDeltaChatHandle,
 } from "./targets.js";
+import type { CoreConfig } from "./types.js";
 import { DEFAULT_DATA_DIR } from "./types.js";
 import { ensureDataDir } from "./utils.js";
 

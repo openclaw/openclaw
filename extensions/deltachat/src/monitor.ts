@@ -1,5 +1,5 @@
-import type { RuntimeEnv, OpenClawConfig, HistoryEntry } from "openclaw/plugin-sdk";
 import { C } from "@deltachat/jsonrpc-client";
+import type { RuntimeEnv, OpenClawConfig, HistoryEntry } from "openclaw/plugin-sdk";
 import {
   mergeAllowlist,
   summarizeMapping,
@@ -13,13 +13,13 @@ import {
   resolveControlCommandGate,
   resolveMentionGatingWithBypass,
 } from "openclaw/plugin-sdk";
-import type { CoreConfig } from "./types.js";
 import { extractErrorMessage } from "./error-utils.js";
 import { PairingQrCodeStorage } from "./pairing-storage.js";
 import { resolveDeltaChatReactionLevel } from "./reactions.js";
 import { rpcServerManager } from "./rpc-server.js";
 import { getDeltaChatRuntime, updateDeltaChatRuntimeState } from "./runtime.js";
 import { deliverReplies } from "./send.js";
+import type { CoreConfig } from "./types.js";
 import { DEFAULT_DATA_DIR } from "./types.js";
 import { ensureDataDir, copyAvatarToDataDir } from "./utils.js";
 
