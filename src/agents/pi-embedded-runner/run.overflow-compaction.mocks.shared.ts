@@ -143,6 +143,11 @@ vi.mock("../context-window-guard.js", () => ({
 
 vi.mock("../../process/command-queue.js", () => ({
   enqueueCommandInLane: vi.fn((_lane: string, task: () => unknown) => task()),
+  setCommandLaneConcurrency: vi.fn(),
+}));
+
+vi.mock("../../config/agent-limits.js", () => ({
+  resolveAgentMaxConcurrentPerConversation: vi.fn(() => 1),
 }));
 
 vi.mock("../../utils/message-channel.js", () => ({
@@ -167,6 +172,7 @@ vi.mock("../failover-error.js", () => ({
 vi.mock("./lanes.js", () => ({
   resolveSessionLane: vi.fn(() => "session-lane"),
   resolveGlobalLane: vi.fn(() => "global-lane"),
+  resolveConversationLane: vi.fn(() => null),
 }));
 
 vi.mock("./logger.js", () => ({
