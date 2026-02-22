@@ -103,6 +103,11 @@ export type ChatProps = {
   // Queue event handler
   onQueueExpandedChange?: (expanded: boolean) => void;
   onChatScroll?: (event: Event) => void;
+  // Compat: upstream props not yet used in this PR's implementation
+  onClearHistory?: () => void;
+  agentsList?: unknown;
+  currentAgentId?: string;
+  onAgentChange?: (agentId: string) => void;
 };
 
 const COMPACTION_TOAST_DURATION_MS = 5000;
@@ -817,7 +822,7 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
     // Detect system events and render as dividers
     const systemDividerLabel = detectSystemDivider({
       ...normalized,
-      content: normalized.content[0]?.type === "text" ? normalized.content[0].text : "",
+      content: normalized.content[0]?.type === "text" ? (normalized.content[0].text ?? "") : "",
     });
     if (systemDividerLabel) {
       items.push({
