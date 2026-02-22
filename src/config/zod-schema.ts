@@ -248,7 +248,13 @@ export const OpenClawSchema = z
                 cdpPort: z.number().int().min(1).max(65535).optional(),
                 cdpUrl: z.string().optional(),
                 driver: z.union([z.literal("clawd"), z.literal("extension")]).optional(),
-                color: HexColorSchema,
+                color: HexColorSchema.optional(),
+                userDataDir: z
+                  .string()
+                  .refine((p) => /^([a-zA-Z]:[/\\]|\/)/.test(p), {
+                    message: "userDataDir must be an absolute path",
+                  })
+                  .optional(),
               })
               .strict()
               .refine((value) => value.cdpPort || value.cdpUrl, {

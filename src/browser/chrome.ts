@@ -176,7 +176,12 @@ export async function launchOpenClawChrome(
     );
   }
 
-  const userDataDir = resolveOpenClawUserDataDir(profile.name);
+  const userDataDir = profile.userDataDir ?? resolveOpenClawUserDataDir(profile.name);
+  if (!path.isAbsolute(userDataDir)) {
+    throw new Error(
+      `Profile "${profile.name}" userDataDir must be an absolute path, got: ${userDataDir}`,
+    );
+  }
   fs.mkdirSync(userDataDir, { recursive: true });
 
   const needsDecorate = !isProfileDecorated(

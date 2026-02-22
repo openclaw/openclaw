@@ -44,6 +44,7 @@ export type ResolvedBrowserProfile = {
   cdpIsLoopback: boolean;
   color: string;
   driver: "openclaw" | "extension";
+  userDataDir?: string;
 };
 
 function normalizeHexColor(raw: string | undefined) {
@@ -134,6 +135,15 @@ function ensureDefaultProfile(
       cdpPort: legacyCdpPort ?? derivedDefaultCdpPort ?? CDP_PORT_RANGE_START,
       color: defaultColor,
     };
+  } else {
+    // Merge defaults into an existing partial profile (e.g. user only set userDataDir).
+    const existing = result[DEFAULT_OPENCLAW_BROWSER_PROFILE_NAME]!;
+    if (!existing.cdpPort && !existing.cdpUrl) {
+      existing.cdpPort = legacyCdpPort ?? derivedDefaultCdpPort ?? CDP_PORT_RANGE_START;
+    }
+    if (!existing.color) {
+      existing.color = defaultColor;
+    }
   }
   return result;
 }
@@ -291,8 +301,9 @@ export function resolveProfile(
     cdpUrl,
     cdpHost,
     cdpIsLoopback: isLoopbackHost(cdpHost),
-    color: profile.color,
+    color: profile.color ?? resolved.color,
     driver,
+    userDataDir: profile.userDataDir,
   };
 }
 
