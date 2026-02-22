@@ -167,7 +167,7 @@ export async function handleToolExecutionStart(
   const meta = extendExecMeta(toolName, args, inferToolMetaFromArgs(toolName, args));
   ctx.state.toolMetaById.set(toolCallId, buildToolCallSummary(toolName, args, meta));
   ctx.log.debug(
-    `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} toolCallId=${toolCallId}`,
+    `embedded run tool start: runId=${ctx.params.runId} tool=${toolName} args=${JSON.stringify(args)} toolCallId=${toolCallId}`,
   );
 
   const shouldEmitToolEvents = ctx.shouldEmitToolResult();
