@@ -448,9 +448,11 @@ describe("createTelegramBot", () => {
 
   it("does not persist update offset past pending updates", async () => {
     // For this test we need sequentialize(...) to behave like a normal middleware and call next().
-    sequentializeSpy.mockImplementationOnce(() => async (_ctx, next) => {
-      await next();
-    });
+    sequentializeSpy.mockImplementationOnce(
+      () => async (_ctx: unknown, next: () => Promise<void>) => {
+        await next();
+      },
+    );
 
     const onUpdateId = vi.fn();
     loadConfig.mockReturnValue({
