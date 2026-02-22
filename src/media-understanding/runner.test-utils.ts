@@ -15,12 +15,13 @@ export async function withAudioFixture(
   filePrefix: string,
   run: (params: AudioFixtureParams) => Promise<void>,
 ) {
-  const tmpPath = path.join(os.tmpdir(), `${filePrefix}-${Date.now()}.wav`);
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-audio-fixture-"));
+  const tmpPath = path.join(tmpDir, `${filePrefix}-${Date.now()}.wav`);
   await fs.writeFile(tmpPath, Buffer.from("RIFF"));
   const ctx: MsgContext = { MediaPath: tmpPath, MediaType: "audio/wav" };
   const media = normalizeMediaAttachments(ctx);
   const cache = createMediaAttachmentCache(media, {
-    localPathRoots: [path.dirname(tmpPath)],
+    localPathRoots: [tmpDir],
   });
 
   try {
@@ -30,5 +31,6 @@ export async function withAudioFixture(
   } finally {
     await cache.cleanup();
     await fs.unlink(tmpPath).catch(() => {});
+    await fs.rmdir(tmpDir).catch(() => {});
   }
 }
