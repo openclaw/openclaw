@@ -155,7 +155,41 @@ export async function scanStatus(
           return null;
         }
         if (memoryPlugin.slot !== "memory-core") {
-          return null;
+          // Third-party memory plugin — probe via gateway RPC if available
+          const agentId = agentStatus.defaultId ?? "main";
+          if (gatewayReachable) {
+            try {
+              const result = await callGateway<Record<string, unknown>>({
+                method: "memory.status",
+                params: {},
+                timeoutMs: 3000,
+              });
+              if (result && typeof result === "object") {
+                return {
+                  agentId,
+                  backend: "builtin",
+                  provider: typeof result.provider === "string" ? result.provider : (memoryPlugin.slot ?? "unknown"),
+                  model: typeof result.model === "string" ? result.model : undefined,
+                  files: 0,
+                  chunks: typeof result.entries === "number" ? result.entries : 0,
+                  dirty: false,
+                  custom: { pluginProbed: true },
+                };
+              }
+            } catch {
+              // Gateway method not available — fall through to unprobed status
+            }
+          }
+          // Gateway not reachable or method not implemented — report as active but unprobed
+          return {
+            agentId,
+            backend: "builtin",
+            provider: memoryPlugin.slot ?? "unknown",
+            files: 0,
+            chunks: 0,
+            dirty: false,
+            custom: { pluginProbed: false },
+          };
         }
         const agentId = agentStatus.defaultId ?? "main";
         const { manager } = await getMemorySearchManager({ cfg, agentId, purpose: "status" });
