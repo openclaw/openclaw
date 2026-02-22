@@ -333,6 +333,23 @@ export async function runOnboardingWizard(
 
   const workspaceDir = resolveUserPath(workspaceInput.trim() || onboardHelpers.DEFAULT_WORKSPACE);
 
+  try {
+    await onboardHelpers.ensureWorkspaceAndSessions(workspaceDir, runtime, {
+      skipBootstrap: Boolean(baseConfig.agents?.defaults?.skipBootstrap),
+    });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "EACCES" || code === "EPERM") {
+      const msg = err instanceof Error ? err.message : "Permission denied";
+      await prompter.outro(
+        `Workspace not writable: ${workspaceDir}\n${msg}\nFix directory permissions, then re-run onboarding.`,
+      );
+      runtime.exit(1);
+      return;
+    }
+    throw err;
+  }
+
   const { applyOnboardingLocalWorkspaceConfig } = await import("../commands/onboard-config.js");
   let nextConfig: OpenClawConfig = applyOnboardingLocalWorkspaceConfig(baseConfig, workspaceDir);
 
@@ -432,9 +449,6 @@ export async function runOnboardingWizard(
   await writeConfigFile(nextConfig);
   const { logConfigUpdated } = await import("../config/logging.js");
   logConfigUpdated(runtime);
-  await onboardHelpers.ensureWorkspaceAndSessions(workspaceDir, runtime, {
-    skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
-  });
 
   if (opts.skipSkills) {
     await prompter.note("Skipping skills setup.", "Skills");
