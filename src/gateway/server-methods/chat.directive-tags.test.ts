@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const mockState = vi.hoisted(() => ({
@@ -108,10 +109,7 @@ function createChatContext(): Pick<
     removeChatRun: vi.fn(),
     dedupe: new Map(),
     registerToolEventRecipient: vi.fn(),
-    logGateway: {
-      warn: vi.fn(),
-      debug: vi.fn(),
-    } as GatewayRequestContext["logGateway"],
+    logGateway: createSubsystemLogger("gateway/server-methods/chat.directive-tags.test"),
   };
 }
 
