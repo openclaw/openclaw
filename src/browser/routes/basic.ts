@@ -142,6 +142,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
       | "openclaw"
       | "extension"
       | "";
+    const language = toStringOrEmpty((req.body as { language?: unknown })?.language);
 
     if (!name) {
       return jsonError(res, 400, "name is required");
@@ -154,6 +155,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
         color: color || undefined,
         cdpUrl: cdpUrl || undefined,
         driver: driver === "extension" ? "extension" : undefined,
+        language: language || undefined,
       });
       res.json(result);
     } catch (err) {

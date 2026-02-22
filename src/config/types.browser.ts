@@ -7,6 +7,8 @@ export type BrowserProfileConfig = {
   driver?: "openclaw" | "extension";
   /** Profile color (hex). Auto-assigned at creation. */
   color: string;
+  /** Profile language (e.g., "en-US", "zh-CN"). Overrides browser.language. */
+  language?: string;
 };
 export type BrowserSnapshotDefaults = {
   /** Default snapshot mode (applies when mode is not provided). */
@@ -38,6 +40,8 @@ export type BrowserConfig = {
   remoteCdpHandshakeTimeoutMs?: number;
   /** Accent color for the openclaw browser profile (hex). Default: #FF4500 */
   color?: string;
+  /** Browser UI language (e.g., "en-US", "zh-CN"). Can be overridden per profile. */
+  language?: string;
   /** Override the browser executable path (all platforms). */
   executablePath?: string;
   /** Start Chrome headless (best-effort). Default: false */

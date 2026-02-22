@@ -224,6 +224,7 @@ export const OpenClawSchema = z
         remoteCdpTimeoutMs: z.number().int().nonnegative().optional(),
         remoteCdpHandshakeTimeoutMs: z.number().int().nonnegative().optional(),
         color: z.string().optional(),
+        language: z.string().optional(),
         executablePath: z.string().optional(),
         headless: z.boolean().optional(),
         noSandbox: z.boolean().optional(),
@@ -249,6 +250,7 @@ export const OpenClawSchema = z
                 cdpUrl: z.string().optional(),
                 driver: z.union([z.literal("clawd"), z.literal("extension")]).optional(),
                 color: HexColorSchema,
+                language: z.string().optional(),
               })
               .strict()
               .refine((value) => value.cdpPort || value.cdpUrl, {

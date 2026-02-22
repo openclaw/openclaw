@@ -66,6 +66,7 @@ openclaw browser --browser-profile openclaw snapshot
     remoteCdpHandshakeTimeoutMs: 3000, // remote CDP WebSocket handshake timeout (ms)
     defaultProfile: "chrome",
     color: "#FF4500",
+    language: "en-US",
     headless: false,
     noSandbox: false,
     attachOnly: false,

@@ -201,6 +201,11 @@ export async function launchOpenClawChrome(
       "--password-store=basic",
     ];
 
+    // Set browser UI language (profile overrides global)
+    if (profile.language) {
+      args.push(`--lang=${profile.language}`);
+    }
+
     if (resolved.headless) {
       // Best-effort; older Chromes may ignore.
       args.push("--headless=new");
