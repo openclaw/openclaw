@@ -33,6 +33,11 @@ const INSTALL_INSTRUCTIONS = [
   "Docs: https://github.com/docling-project/docling-serve",
 ].join("\n");
 
+function isLoopback(host: string): boolean {
+  const h = host.toLowerCase();
+  return h === "127.0.0.1" || h === "localhost" || h === "::1" || h === "0.0.0.0";
+}
+
 export class DoclingServerManager {
   private child: ChildProcess | null = null;
   private started = false;
@@ -46,6 +51,14 @@ export class DoclingServerManager {
       const parsed = new URL(this.url);
       this.host = parsed.hostname || "127.0.0.1";
       this.port = parsed.port ? Number.parseInt(parsed.port, 10) : 5001;
+
+      if (!isLoopback(this.host) && parsed.protocol === "http:") {
+        console.warn(
+          `[docling-rag] WARNING: doclingServeUrl uses HTTP to a non-loopback address (${this.host}). ` +
+            "Documents will be sent over the network in plain text. " +
+            "Use HTTPS or a loopback address (127.0.0.1 / localhost) for secure operation.",
+        );
+      }
     } catch {
       this.host = "127.0.0.1";
       this.port = 5001;
@@ -58,6 +71,10 @@ export class DoclingServerManager {
 
   isStarted(): boolean {
     return this.started;
+  }
+
+  isRemote(): boolean {
+    return !isLoopback(this.host);
   }
 
   async ensureRunning(): Promise<void> {

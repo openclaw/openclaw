@@ -157,6 +157,43 @@ describe("DoclingServerManager", () => {
     expect(manager.isStarted()).toBe(false);
   });
 
+  it("reports loopback URL as not remote", () => {
+    const manager = new DoclingServerManager("http://127.0.0.1:5001");
+    expect(manager.isRemote()).toBe(false);
+  });
+
+  it("reports localhost URL as not remote", () => {
+    const manager = new DoclingServerManager("http://localhost:5001");
+    expect(manager.isRemote()).toBe(false);
+  });
+
+  it("reports non-loopback URL as remote", () => {
+    const manager = new DoclingServerManager("http://docling.internal:5001");
+    expect(manager.isRemote()).toBe(true);
+  });
+
+  it("warns on HTTP to non-loopback host", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    new DoclingServerManager("http://remote-server:5001");
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("WARNING"));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("HTTPS"));
+    warnSpy.mockRestore();
+  });
+
+  it("does not warn on HTTPS to non-loopback host", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    new DoclingServerManager("https://remote-server:5001");
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it("does not warn on HTTP to loopback", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    new DoclingServerManager("http://127.0.0.1:5001");
+    expect(warnSpy).not.toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
   it("detects already running server", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("ok", { status: 200 }));
     const manager = new DoclingServerManager();
