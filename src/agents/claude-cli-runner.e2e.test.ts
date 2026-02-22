@@ -74,7 +74,7 @@ async function waitForCalls(mockFn: { mock: { calls: unknown[][] } }, count: num
 
 describe("runClaudeCliAgent", () => {
   beforeEach(() => {
-    mocks.spawn.mockReset();
+    mocks.spawn.mockClear();
   });
 
   it("starts a new session with --session-id when none is provided", async () => {
