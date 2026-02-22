@@ -285,7 +285,8 @@ describe("createTelegramBot", () => {
         channels: { telegram: { dmPolicy: "pairing" } },
       });
       readChannelAllowFromStore.mockResolvedValue([]);
-      upsertChannelPairingRequest.mockReset();
+      upsertChannelPairingRequest.mockClear();
+      upsertChannelPairingRequest.mockResolvedValue({ code: "PAIRCODE", created: true });
       for (const result of testCase.upsertResults) {
         upsertChannelPairingRequest.mockResolvedValueOnce(result);
       }
