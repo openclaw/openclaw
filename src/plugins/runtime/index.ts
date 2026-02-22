@@ -236,7 +236,24 @@ function loadWhatsAppActions() {
   return whatsappActionsPromise;
 }
 
-export function createPluginRuntime(): PluginRuntime {
+function createUnavailableSubagentRuntime(): PluginRuntime["subagent"] {
+  const unavailable = () => {
+    throw new Error("Plugin runtime subagent methods are only available during a gateway request.");
+  };
+  return {
+    run: unavailable,
+    waitForRun: unavailable,
+    getSessionMessages: unavailable,
+    getSession: unavailable,
+    deleteSession: unavailable,
+  };
+}
+
+export type CreatePluginRuntimeOptions = {
+  subagent?: PluginRuntime["subagent"];
+};
+
+export function createPluginRuntime(options: CreatePluginRuntimeOptions = {}): PluginRuntime {
   return {
     version: resolveVersion(),
     config: createRuntimeConfig(),
@@ -247,6 +264,7 @@ export function createPluginRuntime(): PluginRuntime {
     channel: createRuntimeChannel(),
     logging: createRuntimeLogging(),
     state: { resolveStateDir },
+    subagent: options.subagent ?? createUnavailableSubagentRuntime(),
   };
 }
 
