@@ -101,7 +101,7 @@ docker compose -f docker-compose.yml -f docker-compose.extra.yml <command>
 
 ### Control UI token + pairing (Docker)
 
-If you see “unauthorized” or “disconnected (1008): pairing required”, fetch a
+If you see "unauthorized" or "disconnected (1008): pairing required", fetch a
 fresh dashboard link and approve the browser device:
 
 ```bash
@@ -111,6 +111,45 @@ docker compose run --rm openclaw-cli devices approve <requestId>
 ```
 
 More detail: [Dashboard](/web/dashboard), [Devices](/cli/devices).
+
+#### Internal tool/cron pairing in Docker
+
+When using internal tools, cron jobs, or automations in Docker, the internal
+`gateway-client` device may fail to pair automatically. This happens because
+the Docker bridge IP (e.g., `172.17.0.1`) doesn't count as loopback/local for
+automatic pairing approval.
+
+**Symptoms:**
+- Cron jobs fail with: `gateway closed (1008): pairing required`
+- Internal tool calls stuck in pairing loop
+
+**Solutions:**
+
+1. **Use `trustedProxies` (recommended):** Add the Docker bridge IP to your
+   gateway config to treat it as a trusted local address:
+
+   ```json5
+   {
+     gateway: {
+       trustedProxies: ["172.17.0.1"]
+     }
+   }
+   ```
+
+   Find your Docker bridge IP with: `docker network inspect bridge --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}'`
+
+2. **Manual approve with CLI:** Approve the pending device before running cron:
+
+   ```bash
+   # First, start gateway and check for pending requests
+   docker compose up -d
+   docker compose run --rm openclaw-cli devices list
+
+   # Approve the gateway-client device
+   docker compose run --rm openclaw-cli devices approve <requestId>
+   ```
+
+   You can automate this by running `devices approve` immediately after gateway starts.
 
 ### Extra mounts (optional)
 

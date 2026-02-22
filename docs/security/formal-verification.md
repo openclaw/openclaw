@@ -23,7 +23,10 @@ misconfiguration safety), under explicit assumptions.
 
 ## Where the models live
 
-Models are maintained in a separate repo: [vignesh07/openclaw-formal-models](https://github.com/vignesh07/openclaw-formal-models).
+> Note: The formal models repository is currently unavailable. If you have questions about
+> the formal verification work or need access to the models, please open an issue on GitHub.
+
+Models were previously maintained in a separate repo (github.com/vignesh07/openclaw-formal-models).
 
 ## Important caveats
 
@@ -33,22 +36,7 @@ Models are maintained in a separate repo: [vignesh07/openclaw-formal-models](htt
 
 ## Reproducing results
 
-Today, results are reproduced by cloning the models repo locally and running TLC (see below). A future iteration could offer:
-
-- CI-run models with public artifacts (counterexample traces, run logs)
-- a hosted “run this model” workflow for small, bounded checks
-
-Getting started:
-
-```bash
-git clone https://github.com/vignesh07/openclaw-formal-models
-cd openclaw-formal-models
-
-# Java 11+ required (TLC runs on the JVM).
-# The repo vendors a pinned `tla2tools.jar` (TLA+ tools) and provides `bin/tlc` + Make targets.
-
-make <target>
-```
+> Note: The formal models repository is currently unavailable.
 
 ### Gateway exposure and open gateway misconfiguration
 
