@@ -4,6 +4,7 @@ import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { BreakPreferenceType } from "../../config/types.base.js";
 import { listChatCommands, shouldHandleTextCommands } from "../commands-registry.js";
 import { listSkillCommandsForWorkspace } from "../skill-commands.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
@@ -45,7 +46,8 @@ export type ReplyDirectiveContinuation = {
   blockReplyChunking?: {
     minChars: number;
     maxChars: number;
-    breakPreference: "paragraph" | "newline" | "sentence";
+    breakPreference: BreakPreferenceType;
+    breakFallbacks?: BreakPreferenceType[];
     flushOnParagraph?: boolean;
   };
   resolvedBlockStreamingBreak: "text_end" | "message_end";

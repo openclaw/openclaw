@@ -18,6 +18,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import type { BreakPreferenceType } from "../../config/types.base.js";
 import { logVerbose } from "../../globals.js";
 import { emitAgentEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -75,7 +76,8 @@ export async function runAgentTurnWithFallback(params: {
   blockReplyChunking?: {
     minChars: number;
     maxChars: number;
-    breakPreference: "paragraph" | "newline" | "sentence";
+    breakPreference: BreakPreferenceType;
+    breakFallbacks?: BreakPreferenceType[];
     flushOnParagraph?: boolean;
   };
   resolvedBlockStreamingBreak: "text_end" | "message_end";

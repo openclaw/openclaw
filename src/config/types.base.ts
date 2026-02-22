@@ -25,10 +25,14 @@ export type BlockStreamingCoalesceConfig = {
   idleMs?: number;
 };
 
+export type BreakPreferenceType = "paragraph" | "newline" | "sentence";
+
 export type BlockStreamingChunkConfig = {
   minChars?: number;
   maxChars?: number;
-  breakPreference?: "paragraph" | "newline" | "sentence";
+  breakPreference?: BreakPreferenceType;
+  /** Additional break types to try (in order) before whitespace fallback. */
+  breakFallbacks?: BreakPreferenceType[];
 };
 
 export type MarkdownTableMode = "off" | "bullets" | "code";

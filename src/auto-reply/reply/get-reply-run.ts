@@ -16,6 +16,7 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import type { BreakPreferenceType } from "../../config/types.base.js";
 import { logVerbose } from "../../globals.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
@@ -77,7 +78,8 @@ type RunPreparedReplyParams = {
   blockReplyChunking?: {
     minChars: number;
     maxChars: number;
-    breakPreference: "paragraph" | "newline" | "sentence";
+    breakPreference: BreakPreferenceType;
+    breakFallbacks?: BreakPreferenceType[];
     flushOnParagraph?: boolean;
   };
   resolvedBlockStreamingBreak: "text_end" | "message_end";

@@ -1,10 +1,15 @@
+import type { BreakPreferenceType } from "../config/types.base.js";
 import type { FenceSpan } from "../markdown/fences.js";
 import { findFenceSpanAt, isSafeFenceBreak, parseFenceSpans } from "../markdown/fences.js";
+
+export type BreakType = BreakPreferenceType;
 
 export type BlockReplyChunking = {
   minChars: number;
   maxChars: number;
-  breakPreference?: "paragraph" | "newline" | "sentence";
+  breakPreference?: BreakType;
+  /** Additional break types to try (in order) before whitespace fallback. */
+  breakFallbacks?: BreakType[];
   /** When true, flush eagerly on \n\n paragraph boundaries regardless of minChars. */
   flushOnParagraph?: boolean;
 };
@@ -91,12 +96,58 @@ function findSafeNewlineBreakIndex(params: {
   return -1;
 }
 
+/** Default fallback chains that match the pre-refactor hardcoded behavior. */
+function defaultFallbacksFor(primary: BreakType): BreakType[] {
+  switch (primary) {
+    case "paragraph":
+      return ["newline", "sentence"];
+    case "sentence":
+    case "newline":
+      return [];
+  }
+}
+
+function findBreakByType(
+  type: BreakType,
+  text: string,
+  fenceSpans: FenceSpan[],
+  minChars: number,
+  reverse: boolean,
+): number {
+  switch (type) {
+    case "sentence":
+      // Sentence detection always returns the last (rightmost) match in range,
+      // so the `reverse` flag is effectively always true for this type.
+      return findSafeSentenceBreakIndex(text, fenceSpans, minChars);
+    case "newline":
+      return findSafeNewlineBreakIndex({ text, fenceSpans, minChars, reverse });
+    case "paragraph":
+      return findSafeParagraphBreakIndex({ text, fenceSpans, minChars, reverse });
+  }
+}
+
 export class EmbeddedBlockChunker {
   #buffer = "";
   readonly #chunking: BlockReplyChunking;
 
   constructor(chunking: BlockReplyChunking) {
     this.#chunking = chunking;
+  }
+
+  /** Returns the ordered list of break types: preference first, then fallbacks. */
+  #breakTypeOrder(): BreakType[] {
+    const primary = this.#chunking.breakPreference ?? "paragraph";
+    const fallbacks = this.#chunking.breakFallbacks ?? defaultFallbacksFor(primary);
+    // Deduplicate: skip fallbacks that duplicate the primary.
+    const seen = new Set<BreakType>([primary]);
+    const result: BreakType[] = [primary];
+    for (const fb of fallbacks) {
+      if (!seen.has(fb)) {
+        seen.add(fb);
+        result.push(fb);
+      }
+    }
+    return result;
   }
 
   append(text: string) {
@@ -246,36 +297,12 @@ export class EmbeddedBlockChunker {
       return { index: -1 };
     }
     const fenceSpans = parseFenceSpans(buffer);
-    const preference = this.#chunking.breakPreference ?? "paragraph";
+    const types = this.#breakTypeOrder();
 
-    if (preference === "paragraph") {
-      const paragraphIdx = findSafeParagraphBreakIndex({
-        text: buffer,
-        fenceSpans,
-        minChars,
-        reverse: false,
-      });
-      if (paragraphIdx !== -1) {
-        return { index: paragraphIdx };
-      }
-    }
-
-    if (preference === "paragraph" || preference === "newline") {
-      const newlineIdx = findSafeNewlineBreakIndex({
-        text: buffer,
-        fenceSpans,
-        minChars,
-        reverse: false,
-      });
-      if (newlineIdx !== -1) {
-        return { index: newlineIdx };
-      }
-    }
-
-    if (preference !== "newline") {
-      const sentenceIdx = findSafeSentenceBreakIndex(buffer, fenceSpans, minChars);
-      if (sentenceIdx !== -1) {
-        return { index: sentenceIdx };
+    for (const type of types) {
+      const idx = findBreakByType(type, buffer, fenceSpans, minChars, false);
+      if (idx !== -1) {
+        return { index: idx };
       }
     }
 
@@ -291,66 +318,43 @@ export class EmbeddedBlockChunker {
     const window = buffer.slice(0, Math.min(maxChars, buffer.length));
     const fenceSpans = parseFenceSpans(buffer);
 
-    const preference = this.#chunking.breakPreference ?? "paragraph";
-    if (preference === "paragraph") {
-      const paragraphIdx = findSafeParagraphBreakIndex({
-        text: window,
-        fenceSpans,
-        minChars,
-        reverse: true,
-      });
-      if (paragraphIdx !== -1) {
-        return { index: paragraphIdx };
+    // Try each configured break type in order (preference first, then fallbacks).
+    const types = this.#breakTypeOrder();
+    for (const type of types) {
+      const idx = findBreakByType(type, window, fenceSpans, minChars, true);
+      if (idx !== -1) {
+        return { index: idx };
       }
     }
 
-    if (preference === "paragraph" || preference === "newline") {
-      const newlineIdx = findSafeNewlineBreakIndex({
-        text: window,
-        fenceSpans,
-        minChars,
-        reverse: true,
-      });
-      if (newlineIdx !== -1) {
-        return { index: newlineIdx };
-      }
-    }
-
-    if (preference !== "newline") {
-      const sentenceIdx = findSafeSentenceBreakIndex(window, fenceSpans, minChars);
-      if (sentenceIdx !== -1) {
-        return { index: sentenceIdx };
-      }
-    }
-
-    if (preference === "newline" && buffer.length < maxChars) {
+    // No structural break found.  If the buffer hasn't reached maxChars yet,
+    // wait for more content rather than splitting at arbitrary whitespace.
+    if (buffer.length < maxChars) {
       return { index: -1 };
     }
 
+    // Buffer is at or past maxChars — must break now.  Try whitespace first,
+    // then hard-break at maxChars as the absolute last resort.
     for (let i = window.length - 1; i >= minChars; i--) {
       if (/\s/.test(window[i]) && isSafeFenceBreak(fenceSpans, i)) {
         return { index: i };
       }
     }
 
-    if (buffer.length >= maxChars) {
-      if (isSafeFenceBreak(fenceSpans, maxChars)) {
-        return { index: maxChars };
-      }
-      const fence = findFenceSpanAt(fenceSpans, maxChars);
-      if (fence) {
-        return {
-          index: maxChars,
-          fenceSplit: {
-            closeFenceLine: `${fence.indent}${fence.marker}`,
-            reopenFenceLine: fence.openLine,
-          },
-        };
-      }
+    if (isSafeFenceBreak(fenceSpans, maxChars)) {
       return { index: maxChars };
     }
-
-    return { index: -1 };
+    const fence = findFenceSpanAt(fenceSpans, maxChars);
+    if (fence) {
+      return {
+        index: maxChars,
+        fenceSplit: {
+          closeFenceLine: `${fence.indent}${fence.marker}`,
+          reopenFenceLine: fence.openLine,
+        },
+      };
+    }
+    return { index: maxChars };
   }
 }
 
