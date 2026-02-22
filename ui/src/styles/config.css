@@ -41,7 +41,7 @@
 
 .config-sidebar__title {
   font-weight: 600;
-  font-size: 14px;
+  font-size: 15px;
   letter-spacing: -0.01em;
 }
 
@@ -75,7 +75,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-elevated);
-  font-size: 13px;
+  font-size: 14px;
   outline: none;
   transition:
     border-color var(--duration-fast) ease,
@@ -145,7 +145,7 @@
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   text-align: left;
   cursor: pointer;
@@ -160,7 +160,7 @@
 }
 
 :root[data-theme="light"] .config-nav__item:hover {
-  background: rgba(0, 0, 0, 0.04);
+  background: var(--bg-hover);
 }
 
 .config-nav__item.active {
@@ -275,7 +275,7 @@
   padding: 6px 14px;
   border-radius: var(--radius-full);
   background: var(--accent-subtle);
-  border: 1px solid rgba(255, 77, 77, 0.3);
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
   color: var(--accent);
   font-size: 12px;
   font-weight: 600;
@@ -289,7 +289,7 @@
 /* Diff Panel */
 .config-diff {
   margin: 18px 22px 0;
-  border: 1px solid rgba(255, 77, 77, 0.25);
+  border: 1px solid color-mix(in srgb, var(--danger) 25%, transparent);
   border-radius: var(--radius-lg);
   background: var(--accent-subtle);
   overflow: hidden;
@@ -411,7 +411,7 @@
 }
 
 .config-section-hero__title {
-  font-size: 16px;
+  font-size: 17px;
   font-weight: 600;
   letter-spacing: -0.01em;
   white-space: nowrap;
@@ -420,7 +420,7 @@
 }
 
 .config-section-hero__desc {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--muted);
 }
 
@@ -587,7 +587,7 @@
 
 .config-section-card__title {
   margin: 0;
-  font-size: 17px;
+  font-size: 18px;
   font-weight: 600;
   letter-spacing: -0.01em;
   white-space: nowrap;
@@ -597,7 +597,7 @@
 
 .config-section-card__desc {
   margin: 5px 0 0;
-  font-size: 13px;
+  font-size: 14px;
   color: var(--muted);
   line-height: 1.45;
 }
@@ -624,23 +624,23 @@
   padding: 14px;
   border-radius: var(--radius-md);
   background: var(--danger-subtle);
-  border: 1px solid rgba(239, 68, 68, 0.3);
+  border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent);
 }
 
 .cfg-field__label {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--text);
 }
 
 .cfg-field__help {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
   line-height: 1.45;
 }
 
 .cfg-field__error {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--danger);
 }
 
@@ -848,7 +848,7 @@
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--muted);
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   cursor: pointer;
   transition:
@@ -913,7 +913,7 @@
 
 .cfg-toggle-row__label {
   display: block;
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 500;
   color: var(--text);
 }
@@ -921,7 +921,7 @@
 .cfg-toggle-row__help {
   display: block;
   margin-top: 3px;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--muted);
   line-height: 1.45;
 }
@@ -973,7 +973,7 @@
 
 .cfg-toggle input:checked + .cfg-toggle__track {
   background: var(--ok-subtle);
-  border-color: rgba(34, 197, 94, 0.4);
+  border-color: color-mix(in srgb, var(--ok) 40%, transparent);
 }
 
 .cfg-toggle input:checked + .cfg-toggle__track::after {
@@ -1320,7 +1320,7 @@
 }
 
 .pill--ok {
-  border-color: rgba(34, 197, 94, 0.35);
+  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
   color: var(--ok);
 }
 
@@ -1443,4 +1443,76 @@
     flex: 1 0 auto;
     min-width: 70px;
   }
+}
+
+/* ===========================================
+   Environment Values Blur + Peek Toggle
+   =========================================== */
+
+.config-env-values--blurred .cfg-input,
+.config-env-values--blurred .cfg-number__input,
+.config-env-values--blurred textarea {
+  color: transparent;
+  text-shadow: 0 0 8px var(--text);
+}
+
+.config-env-values--blurred .cfg-input::placeholder,
+.config-env-values--blurred textarea::placeholder {
+  text-shadow: none;
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+.config-env-values--blurred .cfg-input:focus,
+.config-env-values--blurred .cfg-number__input:focus,
+.config-env-values--blurred textarea:focus {
+  color: transparent;
+  text-shadow: 0 0 8px var(--text);
+}
+
+.config-env-values--visible.config-env-values--blurred .cfg-input,
+.config-env-values--visible.config-env-values--blurred .cfg-number__input,
+.config-env-values--visible.config-env-values--blurred textarea {
+  color: var(--text);
+  text-shadow: none;
+}
+
+.config-env-values--visible.config-env-values--blurred .cfg-input:focus,
+.config-env-values--visible.config-env-values--blurred .cfg-number__input:focus,
+.config-env-values--visible.config-env-values--blurred textarea:focus {
+  color: var(--text);
+  text-shadow: none;
+}
+
+.config-env-peek-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--duration-fast) ease;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.config-env-peek-btn:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+  background: var(--bg-hover);
+}
+
+.config-env-peek-btn--active {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.config-env-peek-btn svg {
+  flex-shrink: 0;
 }
