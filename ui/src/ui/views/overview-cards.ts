@@ -1,4 +1,5 @@
-import { html, nothing } from "lit";
+import { html, nothing, type TemplateResult } from "lit";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { t } from "../../i18n/index.ts";
 import { formatCost, formatTokens, formatRelativeTimestamp } from "../format.ts";
 import { icons } from "../icons.ts";
@@ -24,6 +25,14 @@ export type OverviewCardsProps = {
 
 function redact(value: string, redacted: boolean) {
   return redacted ? "••••••" : value;
+}
+
+const DIGIT_RUN = /\d{3,}/g;
+
+function blurDigits(value: string): TemplateResult {
+  const escaped = value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const blurred = escaped.replace(DIGIT_RUN, (m) => `<span class="blur-digits">${m}</span>`);
+  return html`${unsafeHTML(blurred)}`;
 }
 
 export function renderOverviewCards(props: OverviewCardsProps) {
@@ -97,7 +106,7 @@ export function renderOverviewCards(props: OverviewCardsProps) {
             ${props.sessionsResult.sessions.slice(0, 5).map(
               (s) => html`
                 <div class="ov-session-row ${props.redacted ? "redacted" : ""}">
-                  <span class="ov-session-key">${redact(s.displayName || s.label || s.key, props.redacted)}</span>
+                  <span class="ov-session-key">${props.redacted ? redact(s.displayName || s.label || s.key, true) : blurDigits(s.displayName || s.label || s.key)}</span>
                   <span class="muted">${s.model ?? ""}</span>
                   <span class="muted">${s.updatedAt ? formatRelativeTimestamp(s.updatedAt) : ""}</span>
                 </div>

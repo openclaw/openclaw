@@ -10,7 +10,12 @@ import {
 import { InputHistory } from "../chat/input-history.ts";
 import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer.ts";
 import { PinnedMessages } from "../chat/pinned-messages.ts";
-import { getSlashCommandCompletions, type SlashCommandDef } from "../chat/slash-commands.ts";
+import {
+  CATEGORY_LABELS,
+  getSlashCommandCompletions,
+  type SlashCommandCategory,
+  type SlashCommandDef,
+} from "../chat/slash-commands.ts";
 import { icons } from "../icons.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type { SessionsListResult } from "../types.ts";
@@ -75,7 +80,7 @@ export type ChatProps = {
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onNewSession: () => void;
-  onClearHistory: () => void;
+  onClearHistory?: () => void;
   agentsList: {
     agents: Array<{ id: string; name?: string; identity?: { name?: string; avatarUrl?: string } }>;
     defaultId?: string;
@@ -377,12 +382,12 @@ function startVoice(props: ChatProps, requestUpdate: () => void): void {
     }
     props.onDraftChange(transcript);
   };
-  rec.addEventListener("end", () => {
+  (rec as unknown as EventTarget).addEventListener("end", () => {
     voiceActive = false;
     recognition = null;
     requestUpdate();
   });
-  rec.addEventListener("error", () => {
+  (rec as unknown as EventTarget).addEventListener("error", () => {
     voiceActive = false;
     recognition = null;
     requestUpdate();
@@ -537,26 +542,49 @@ function renderSlashMenu(
   if (!slashMenuOpen || slashMenuItems.length === 0) {
     return nothing;
   }
-  return html`
-    <div class="slash-menu">
-      ${slashMenuItems.map(
-        (cmd, i) => html`
-          <div
-            class="slash-menu-item ${i === slashMenuIndex ? "slash-menu-item--active" : ""}"
-            @click=${() => selectSlashCommand(cmd, props, requestUpdate)}
-            @mouseenter=${() => {
-              slashMenuIndex = i;
-              requestUpdate();
-            }}
-          >
-            <span class="slash-menu-name">/${cmd.name}</span>
-            ${cmd.args ? html`<span class="slash-menu-args">${cmd.args}</span>` : nothing}
-            <span class="slash-menu-desc">${cmd.description}</span>
-          </div>
-        `,
-      )}
-    </div>
-  `;
+
+  const grouped = new Map<
+    SlashCommandCategory,
+    Array<{ cmd: SlashCommandDef; globalIdx: number }>
+  >();
+  for (let i = 0; i < slashMenuItems.length; i++) {
+    const cmd = slashMenuItems[i];
+    const cat = cmd.category ?? "session";
+    let list = grouped.get(cat);
+    if (!list) {
+      list = [];
+      grouped.set(cat, list);
+    }
+    list.push({ cmd, globalIdx: i });
+  }
+
+  const sections: TemplateResult[] = [];
+  for (const [cat, entries] of grouped) {
+    sections.push(html`
+      <div class="slash-menu-group">
+        <div class="slash-menu-group__label">${CATEGORY_LABELS[cat]}</div>
+        ${entries.map(
+          ({ cmd, globalIdx }) => html`
+            <div
+              class="slash-menu-item ${globalIdx === slashMenuIndex ? "slash-menu-item--active" : ""}"
+              @click=${() => selectSlashCommand(cmd, props, requestUpdate)}
+              @mouseenter=${() => {
+                slashMenuIndex = globalIdx;
+                requestUpdate();
+              }}
+            >
+              ${cmd.icon ? html`<span class="slash-menu-icon">${icons[cmd.icon]}</span>` : nothing}
+              <span class="slash-menu-name">/${cmd.name}</span>
+              ${cmd.args ? html`<span class="slash-menu-args">${cmd.args}</span>` : nothing}
+              <span class="slash-menu-desc">${cmd.description}</span>
+            </div>
+          `,
+        )}
+      </div>
+    `);
+  }
+
+  return html`<div class="slash-menu">${sections}</div>`;
 }
 
 export function renderChat(props: ChatProps) {
