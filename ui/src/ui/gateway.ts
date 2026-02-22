@@ -129,6 +129,11 @@ export class GatewayBrowserClient {
     if (this.connectSent) {
       return;
     }
+    const nonce = this.connectNonce?.trim() ?? "";
+    if (!nonce) {
+      this.ws?.close(CONNECT_FAILED_CLOSE_CODE, "connect challenge missing nonce");
+      return;
+    }
     this.connectSent = true;
     if (this.connectTimer !== null) {
       window.clearTimeout(this.connectTimer);
@@ -169,13 +174,12 @@ export class GatewayBrowserClient {
           publicKey: string;
           signature: string;
           signedAt: number;
-          nonce: string | undefined;
+          nonce: string;
         }
       | undefined;
 
     if (isSecureContext && deviceIdentity) {
       const signedAtMs = Date.now();
-      const nonce = this.connectNonce ?? undefined;
       const payload = buildDeviceAuthPayload({
         deviceId: deviceIdentity.deviceId,
         clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.CONTROL_UI,
@@ -249,10 +253,12 @@ export class GatewayBrowserClient {
       if (evt.event === "connect.challenge") {
         const payload = evt.payload as { nonce?: unknown } | undefined;
         const nonce = payload && typeof payload.nonce === "string" ? payload.nonce : null;
-        if (nonce) {
-          this.connectNonce = nonce;
-          void this.sendConnect();
+        if (!nonce || nonce.trim().length === 0) {
+          this.ws?.close(CONNECT_FAILED_CLOSE_CODE, "connect challenge missing nonce");
+          return;
         }
+        this.connectNonce = nonce.trim();
+        void this.sendConnect();
         return;
       }
       const seq = typeof evt.seq === "number" ? evt.seq : null;
@@ -306,7 +312,10 @@ export class GatewayBrowserClient {
       window.clearTimeout(this.connectTimer);
     }
     this.connectTimer = window.setTimeout(() => {
-      void this.sendConnect();
-    }, 750);
+      if (this.connectSent || this.ws?.readyState !== WebSocket.OPEN) {
+        return;
+      }
+      this.ws?.close(CONNECT_FAILED_CLOSE_CODE, "connect challenge timeout");
+    }, 2_000);
   }
 }
