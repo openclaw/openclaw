@@ -43,10 +43,14 @@ export async function runChannelLogin(
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const { channelInput, plugin } = resolveChannelPluginForMode(opts, "login");
+  const login = plugin.auth?.login;
+  if (!login) {
+    throw new Error(`Channel ${channelInput} does not support login`);
+  }
   // Auth-only flow: do not mutate channel config here.
   setVerbose(Boolean(opts.verbose));
   const { cfg, accountId } = resolveAccountContext(plugin, opts);
-  await plugin.auth!.login({
+  await login({
     cfg,
     accountId,
     runtime,
@@ -59,11 +63,15 @@ export async function runChannelLogout(
   opts: ChannelAuthOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const { plugin } = resolveChannelPluginForMode(opts, "logout");
+  const { channelInput, plugin } = resolveChannelPluginForMode(opts, "logout");
+  const logoutAccount = plugin.gateway?.logoutAccount;
+  if (!logoutAccount) {
+    throw new Error(`Channel ${channelInput} does not support logout`);
+  }
   // Auth-only flow: resolve account + clear session state only.
   const { cfg, accountId } = resolveAccountContext(plugin, opts);
   const account = plugin.config.resolveAccount(cfg, accountId);
-  await plugin.gateway!.logoutAccount({
+  await logoutAccount({
     cfg,
     accountId,
     account,

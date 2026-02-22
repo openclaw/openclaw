@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { packNpmSpecToArchive, withTempDir } from "./install-source-utils.js";
+import type { NpmIntegrityDriftPayload } from "./npm-integrity.js";
 import { installFromNpmSpecArchive } from "./npm-pack-install.js";
 
 vi.mock("./install-source-utils.js", async (importOriginal) => {
@@ -37,12 +38,7 @@ describe("installFromNpmSpecArchive", () => {
 
   const runInstall = async (overrides: {
     expectedIntegrity?: string;
-    onIntegrityDrift?: (payload: {
-      spec: string;
-      expectedIntegrity: string;
-      actualIntegrity: string;
-      resolvedSpec: string;
-    }) => boolean | Promise<boolean>;
+    onIntegrityDrift?: (payload: NpmIntegrityDriftPayload) => boolean | Promise<boolean>;
     warn?: (message: string) => void;
     installFromArchive: (params: {
       archivePath: string;
