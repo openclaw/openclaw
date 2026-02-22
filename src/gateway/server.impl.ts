@@ -46,6 +46,7 @@ import {
 } from "../infra/skills-remote.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { scheduleGatewayUpdateCheck } from "../infra/update-startup.js";
+import type { VoiceWakeRoutingConfig } from "../infra/voicewake-routing.js";
 import { startDiagnosticHeartbeat, stopDiagnosticHeartbeat } from "../logging/diagnostic.js";
 import { createSubsystemLogger, runtimeForLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner, runGlobalGatewayStopSafely } from "../plugins/hook-runner-global.js";

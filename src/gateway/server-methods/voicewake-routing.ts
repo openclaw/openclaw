@@ -15,7 +15,12 @@ export const voicewakeRoutingHandlers: GatewayRequestHandlers = {
     }
   },
   "voicewake.routing.set": async ({ params, respond, context }) => {
-    if (!params || typeof params.config !== "object" || Array.isArray(params.config)) {
+    if (
+      !params ||
+      params.config === null ||
+      typeof params.config !== "object" ||
+      Array.isArray(params.config)
+    ) {
       respond(
         false,
         undefined,
