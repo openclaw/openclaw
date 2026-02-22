@@ -7,6 +7,7 @@ import {
   type RuntimeEnv,
 } from "openclaw/plugin-sdk";
 import { resolveFeishuAccount } from "./accounts.js";
+import { createFeishuAgentCardRenderer } from "./agent-card.js";
 import { createFeishuClient } from "./client.js";
 import type { MentionTarget } from "./mention.js";
 import { buildMentionedCardContent } from "./mention.js";
@@ -74,11 +75,25 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const chunkMode = core.channel.text.resolveChunkMode(cfg, "feishu");
   const tableMode = core.channel.text.resolveMarkdownTableMode({ cfg, channel: "feishu" });
   const renderMode = account.config?.renderMode ?? "auto";
-  const streamingEnabled = account.config?.streaming !== false && renderMode !== "raw";
+  const cardRenderer = account.config?.cardRenderer ?? "default";
+  const useAgentCardRenderer = renderMode === "card" && cardRenderer === "agent";
+  const streamingEnabled =
+    !useAgentCardRenderer && account.config?.streaming !== false && renderMode !== "raw";
+
+  const agentCardRenderer = useAgentCardRenderer
+    ? createFeishuAgentCardRenderer({
+        cfg,
+        chatId,
+        replyToMessageId,
+        mentionTargets,
+        accountId,
+      })
+    : null;
 
   let streaming: FeishuStreamingSession | null = null;
   let streamText = "";
   let lastPartial = "";
+  let fallbackStreamText = "";
   let partialUpdateQueue: Promise<void> = Promise.resolve();
   let streamingStartPromise: Promise<void> | null = null;
 
@@ -123,6 +138,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     streamingStartPromise = null;
     streamText = "";
     lastPartial = "";
+    fallbackStreamText = "";
   };
 
   const { dispatcher, replyOptions, markDispatchIdle } =
@@ -137,6 +153,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         void typingCallbacks.onReplyStart?.();
       },
       deliver: async (payload: ReplyPayload, info) => {
+        if (agentCardRenderer) {
+          await agentCardRenderer.deliver(payload, info);
+          return;
+        }
+
         const text = payload.text ?? "";
         if (!text.trim()) {
           return;
@@ -157,6 +178,32 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             await closeStreaming();
           }
           return;
+        }
+
+        // If card streaming is expected but unavailable (for example CardKit permission/config
+        // issue), avoid emitting one card per block. Buffer block text and only send a single
+        // final card once we reach `final`.
+        if (streamingEnabled && useCard) {
+          if (info?.kind === "block") {
+            fallbackStreamText = text;
+            return;
+          }
+          if (info?.kind === "final") {
+            const finalText = text || fallbackStreamText;
+            if (!finalText.trim()) {
+              return;
+            }
+            await sendMarkdownCardFeishu({
+              cfg,
+              to: chatId,
+              text: finalText,
+              replyToMessageId,
+              mentions: mentionTargets,
+              accountId,
+            });
+            fallbackStreamText = "";
+            return;
+          }
         }
 
         let first = true;
@@ -199,10 +246,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         params.runtime.error?.(
           `feishu[${account.accountId}] ${info.kind} reply failed: ${String(error)}`,
         );
+        await agentCardRenderer?.onError();
         await closeStreaming();
         typingCallbacks.onIdle?.();
       },
       onIdle: async () => {
+        await agentCardRenderer?.finalize();
         await closeStreaming();
         typingCallbacks.onIdle?.();
       },
@@ -211,28 +260,36 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       },
     });
 
+  let partialReplyHandler: ((payload: ReplyPayload) => void) | undefined;
+  if (streamingEnabled) {
+    partialReplyHandler = (payload: ReplyPayload) => {
+      if (!payload.text || payload.text === lastPartial) {
+        return;
+      }
+      lastPartial = payload.text;
+      streamText = payload.text;
+      fallbackStreamText = payload.text;
+      partialUpdateQueue = partialUpdateQueue.then(async () => {
+        if (streamingStartPromise) {
+          await streamingStartPromise;
+        }
+        if (streaming?.isActive()) {
+          await streaming.update(streamText);
+        }
+      });
+    };
+  } else if (agentCardRenderer) {
+    partialReplyHandler = (payload: ReplyPayload) => {
+      void agentCardRenderer.onPartialReply(payload);
+    };
+  }
+
   return {
     dispatcher,
     replyOptions: {
       ...replyOptions,
       onModelSelected: prefixContext.onModelSelected,
-      onPartialReply: streamingEnabled
-        ? (payload: ReplyPayload) => {
-            if (!payload.text || payload.text === lastPartial) {
-              return;
-            }
-            lastPartial = payload.text;
-            streamText = payload.text;
-            partialUpdateQueue = partialUpdateQueue.then(async () => {
-              if (streamingStartPromise) {
-                await streamingStartPromise;
-              }
-              if (streaming?.isActive()) {
-                await streaming.update(streamText);
-              }
-            });
-          }
-        : undefined,
+      onPartialReply: partialReplyHandler,
     },
     markDispatchIdle,
   };
