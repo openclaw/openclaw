@@ -7,6 +7,10 @@ export type CliProfileParseResult =
   | { ok: true; profile: string | null; argv: string[] }
   | { ok: false; error: string };
 
+export type EffectiveCliProfileResult =
+  | { ok: true; profile: string | null }
+  | { ok: false; error: string };
+
 function takeValue(
   raw: string,
   next: string | undefined,
@@ -40,7 +44,7 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
       continue;
     }
 
-    if (sawCommand) {
+    if (sawCommand && arg !== "--profile" && !arg.startsWith("--profile=")) {
       out.push(arg);
       continue;
     }
@@ -88,6 +92,27 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
   return { ok: true, profile, argv: out };
 }
 
+export function resolveEffectiveCliProfile(params: {
+  parsedProfile: string | null;
+  envProfile?: string;
+}): EffectiveCliProfileResult {
+  if (params.parsedProfile) {
+    return { ok: true, profile: params.parsedProfile };
+  }
+  const envProfile = params.envProfile?.trim() || "";
+  if (!envProfile) {
+    return { ok: true, profile: null };
+  }
+  if (!isValidProfileName(envProfile)) {
+    return {
+      ok: false,
+      error:
+        'Invalid OPENCLAW_PROFILE (use letters, numbers, "_", "-" only, or unset the variable)',
+    };
+  }
+  return { ok: true, profile: envProfile };
+}
+
 function resolveProfileStateDir(
   profile: string,
   env: Record<string, string | undefined>,
@@ -110,7 +135,12 @@ export function applyCliProfileEnv(params: {
   }
 
   // Convenience only: fill defaults, never override explicit env values.
+  // Exception: clear inherited service-scoped env vars for profile isolation.
   env.OPENCLAW_PROFILE = profile;
+  delete env.OPENCLAW_GATEWAY_PORT;
+  delete env.OPENCLAW_LAUNCHD_LABEL;
+  delete env.OPENCLAW_SYSTEMD_UNIT;
+  delete env.OPENCLAW_SERVICE_VERSION;
 
   const stateDir = env.OPENCLAW_STATE_DIR?.trim() || resolveProfileStateDir(profile, env, homedir);
   if (!env.OPENCLAW_STATE_DIR?.trim()) {
@@ -121,7 +151,7 @@ export function applyCliProfileEnv(params: {
     env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
   }
 
-  if (profile === "dev" && !env.OPENCLAW_GATEWAY_PORT?.trim()) {
+  if (profile === "dev") {
     env.OPENCLAW_GATEWAY_PORT = "19001";
   }
 }
