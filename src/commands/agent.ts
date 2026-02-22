@@ -964,10 +964,19 @@ async function agentCommandInternal(
       if (overrideModel) {
         const normalizedOverride = normalizeModelRef(overrideProvider, overrideModel);
         const key = modelKey(normalizedOverride.provider, normalizedOverride.model);
+        // Allow overrides for providers explicitly configured in openclaw.json even
+        // if they don't appear in the pi-sdk model catalog (e.g. openrouter, groq).
+        const configuredProviderKeys = Object.keys(cfg.models?.providers ?? {}).map(
+          normalizeProviderId,
+        );
+        const isConfiguredProvider = configuredProviderKeys.includes(
+          normalizeProviderId(normalizedOverride.provider),
+        );
         if (
           !isCliProvider(normalizedOverride.provider, cfg) &&
           !allowAnyModel &&
-          !allowedModelKeys.has(key)
+          !allowedModelKeys.has(key) &&
+          !isConfiguredProvider
         ) {
           const { updated } = applyModelOverrideToSessionEntry({
             entry,
@@ -991,10 +1000,17 @@ async function agentCommandInternal(
       const candidateProvider = storedProviderOverride || defaultProvider;
       const normalizedStored = normalizeModelRef(candidateProvider, storedModelOverride);
       const key = modelKey(normalizedStored.provider, normalizedStored.model);
+      const configuredProviderKeysForStored = Object.keys(cfg.models?.providers ?? {}).map(
+        normalizeProviderId,
+      );
+      const isConfiguredProviderForStored = configuredProviderKeysForStored.includes(
+        normalizeProviderId(normalizedStored.provider),
+      );
       if (
         isCliProvider(normalizedStored.provider, cfg) ||
         allowAnyModel ||
-        allowedModelKeys.has(key)
+        allowedModelKeys.has(key) ||
+        isConfiguredProviderForStored
       ) {
         provider = normalizedStored.provider;
         model = normalizedStored.model;
