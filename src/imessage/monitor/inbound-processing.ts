@@ -129,9 +129,9 @@ export function resolveIMessageInboundDecision(params: {
 
   // If the owner explicitly configures a chat_id under imessage.groups, treat that thread as a
   // "group" for permission gating + session isolation, even when is_group=false.
-  const treatAsGroupByConfig = Boolean(
-    groupIdCandidate && groupListPolicy.allowlistEnabled && groupListPolicy.groupConfig,
-  );
+  // Note: We check for groupConfig regardless of allowlistEnabled — an explicit group entry is
+  // an admin declaration that the chat is a group, independent of the groupPolicy mode.
+  const treatAsGroupByConfig = Boolean(groupIdCandidate && groupListPolicy.groupConfig);
   const isGroup = Boolean(params.message.is_group) || treatAsGroupByConfig;
   if (isGroup && !chatId) {
     return { kind: "drop", reason: "group without chat_id" };
