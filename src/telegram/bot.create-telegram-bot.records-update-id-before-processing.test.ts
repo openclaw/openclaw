@@ -23,9 +23,10 @@ describe("createTelegramBot", () => {
 
     // Find the middleware that calls recordUpdateId.
     // It is the middleware registered via bot.use that accepts (ctx, next).
+    type MiddlewareFn = (ctx: unknown, next: () => Promise<void>) => Promise<void>;
     const middlewares = middlewareUseSpy.mock.calls
       .map((call) => call[0])
-      .filter((fn) => typeof fn === "function" && fn.length === 2);
+      .filter((fn): fn is MiddlewareFn => typeof fn === "function" && fn.length === 2);
 
     // Track the order of operations
     const order: string[] = [];
