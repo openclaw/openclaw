@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_CHAT_CHANNEL } from "../channels/registry.js";
 import { runChannelLogin, runChannelLogout } from "./channel-auth.js";
 
 const mocks = vi.hoisted(() => ({
@@ -7,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn(),
   normalizeChannelId: vi.fn(),
   loadConfig: vi.fn(),
+  resolveMessageChannelSelection: vi.fn(),
   setVerbose: vi.fn(),
   login: vi.fn(),
   logoutAccount: vi.fn(),
@@ -26,6 +26,10 @@ vi.mock("../config/config.js", () => ({
   loadConfig: mocks.loadConfig,
 }));
 
+vi.mock("../infra/outbound/channel-selection.js", () => ({
+  resolveMessageChannelSelection: mocks.resolveMessageChannelSelection,
+}));
+
 vi.mock("../globals.js", () => ({
   setVerbose: mocks.setVerbose,
 }));
@@ -43,6 +47,10 @@ describe("channel-auth", () => {
     mocks.normalizeChannelId.mockReturnValue("whatsapp");
     mocks.getChannelPlugin.mockReturnValue(plugin);
     mocks.loadConfig.mockReturnValue({ channels: {} });
+    mocks.resolveMessageChannelSelection.mockResolvedValue({
+      channel: "whatsapp",
+      configured: ["whatsapp"],
+    });
     mocks.resolveChannelDefaultAccountId.mockReturnValue("default-account");
     mocks.resolveAccount.mockReturnValue({ id: "resolved-account" });
     mocks.login.mockResolvedValue(undefined);
@@ -65,20 +73,25 @@ describe("channel-auth", () => {
     );
   });
 
-  it("runs login with default channel/account when opts are empty", async () => {
+  it("auto-picks the single configured channel when opts are empty", async () => {
     await runChannelLogin({}, runtime);
 
-    expect(mocks.normalizeChannelId).toHaveBeenCalledWith(DEFAULT_CHAT_CHANNEL);
-    expect(mocks.resolveChannelDefaultAccountId).toHaveBeenCalledWith({
-      plugin,
-      cfg: { channels: {} },
-    });
+    expect(mocks.resolveMessageChannelSelection).toHaveBeenCalledWith({ cfg: { channels: {} } });
+    expect(mocks.normalizeChannelId).toHaveBeenCalledWith("whatsapp");
     expect(mocks.login).toHaveBeenCalledWith(
       expect.objectContaining({
-        accountId: "default-account",
-        channelInput: DEFAULT_CHAT_CHANNEL,
+        channelInput: "whatsapp",
       }),
     );
+  });
+
+  it("propagates channel ambiguity when channel is omitted", async () => {
+    mocks.resolveMessageChannelSelection.mockRejectedValueOnce(
+      new Error("Channel is required when multiple channels are configured: telegram, slack"),
+    );
+
+    await expect(runChannelLogin({}, runtime)).rejects.toThrow("Channel is required");
+    expect(mocks.login).not.toHaveBeenCalled();
   });
 
   it("throws for unsupported channel aliases", async () => {
