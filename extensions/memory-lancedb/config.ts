@@ -7,6 +7,7 @@ export type MemoryConfig = {
     provider: "openai";
     model?: string;
     apiKey: string;
+    baseUrl?: string;
   };
   dbPath?: string;
   autoCapture?: boolean;
@@ -101,7 +102,7 @@ export const memoryConfigSchema = {
     if (!embedding || typeof embedding.apiKey !== "string") {
       throw new Error("embedding.apiKey is required");
     }
-    assertAllowedKeys(embedding, ["apiKey", "model"], "embedding config");
+    assertAllowedKeys(embedding, ["apiKey", "model", "baseUrl"], "embedding config");
 
     const model = resolveEmbeddingModel(embedding);
 
@@ -119,6 +120,8 @@ export const memoryConfigSchema = {
         provider: "openai",
         model,
         apiKey: resolveEnvVars(embedding.apiKey),
+        baseUrl:
+          typeof embedding.baseUrl === "string" ? resolveEnvVars(embedding.baseUrl) : undefined,
       },
       dbPath: typeof cfg.dbPath === "string" ? cfg.dbPath : DEFAULT_DB_PATH,
       autoCapture: cfg.autoCapture === true,
@@ -137,6 +140,12 @@ export const memoryConfigSchema = {
       label: "Embedding Model",
       placeholder: DEFAULT_MODEL,
       help: "OpenAI embedding model to use",
+    },
+    "embedding.baseUrl": {
+      label: "Embedding Base URL",
+      placeholder: "https://api.openai.com/v1",
+      help: "Optional OpenAI-compatible embeddings endpoint",
+      advanced: true,
     },
     dbPath: {
       label: "Database Path",
