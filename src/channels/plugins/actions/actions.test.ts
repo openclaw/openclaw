@@ -114,6 +114,65 @@ function expectModerationActions(actions: string[]) {
   expect(actions).toContain("ban");
 }
 
+function expectChannelCreateAction(actions: string[], expected: boolean) {
+  if (expected) {
+    expect(actions).toContain("channel-create");
+    return;
+  }
+  expect(actions).not.toContain("channel-create");
+}
+
+function createSignalAccountOverrideCfg(): OpenClawConfig {
+  return {
+    channels: {
+      signal: {
+        actions: { reactions: false },
+        accounts: {
+          work: { account: "+15550001111", actions: { reactions: true } },
+        },
+      },
+    },
+  } as OpenClawConfig;
+}
+
+function createDiscordModerationOverrideCfg(params?: {
+  channelsEnabled?: boolean;
+}): OpenClawConfig {
+  const accountActions = params?.channelsEnabled
+    ? { moderation: true, channels: true }
+    : { moderation: true };
+  return {
+    channels: {
+      discord: {
+        actions: { channels: false },
+        accounts: {
+          vime: { token: "d1", actions: accountActions },
+        },
+      },
+    },
+  } as OpenClawConfig;
+}
+
+async function expectSignalActionRejected(
+  params: Record<string, unknown>,
+  error: RegExp,
+  cfg: OpenClawConfig,
+) {
+  const handleAction = signalMessageActions.handleAction;
+  if (!handleAction) {
+    throw new Error("signal handleAction unavailable");
+  }
+  await expect(
+    handleAction({
+      channel: "signal",
+      action: "react",
+      params,
+      cfg,
+      accountId: undefined,
+    }),
+  ).rejects.toThrow(error);
+}
+
 async function expectSlackSendRejected(params: Record<string, unknown>, error: RegExp) {
   const { cfg, actions } = slackHarness();
   await expect(
@@ -200,37 +259,19 @@ describe("discord message actions", () => {
   });
 
   it("inherits top-level channel gate when account overrides moderation only", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          actions: { channels: false },
-          accounts: {
-            vime: { token: "d1", actions: { moderation: true } },
-          },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = createDiscordModerationOverrideCfg();
     const actions = discordMessageActions.listActions?.({ cfg }) ?? [];
 
     expect(actions).toContain("timeout");
-    expect(actions).not.toContain("channel-create");
+    expectChannelCreateAction(actions, false);
   });
 
   it("allows account to explicitly re-enable top-level disabled channels", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          actions: { channels: false },
-          accounts: {
-            vime: { token: "d1", actions: { moderation: true, channels: true } },
-          },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg = createDiscordModerationOverrideCfg({ channelsEnabled: true });
     const actions = discordMessageActions.listActions?.({ cfg }) ?? [];
 
     expect(actions).toContain("timeout");
-    expect(actions).toContain("channel-create");
+    expectChannelCreateAction(actions, true);
   });
 });
 
@@ -609,16 +650,7 @@ describe("signalMessageActions", () => {
       },
       {
         name: "account-level reactions enabled",
-        cfg: {
-          channels: {
-            signal: {
-              actions: { reactions: false },
-              accounts: {
-                work: { account: "+15550001111", actions: { reactions: true } },
-              },
-            },
-          },
-        } as OpenClawConfig,
+        cfg: createSignalAccountOverrideCfg(),
         expected: ["send", "react"],
       },
     ] as const;
@@ -640,36 +672,18 @@ describe("signalMessageActions", () => {
     const cfg = {
       channels: { signal: { account: "+15550001111", actions: { reactions: false } } },
     } as OpenClawConfig;
-    const handleAction = signalMessageActions.handleAction;
-    if (!handleAction) {
-      throw new Error("signal handleAction unavailable");
-    }
-
-    await expect(
-      handleAction({
-        channel: "signal",
-        action: "react",
-        params: { to: "+15550001111", messageId: "123", emoji: "✅" },
-        cfg,
-        accountId: undefined,
-      }),
-    ).rejects.toThrow(/actions\.reactions/);
+    await expectSignalActionRejected(
+      { to: "+15550001111", messageId: "123", emoji: "✅" },
+      /actions\.reactions/,
+      cfg,
+    );
   });
 
   it("maps reaction targets into signal sendReaction calls", async () => {
     const cases = [
       {
         name: "uses account-level actions when enabled",
-        cfg: {
-          channels: {
-            signal: {
-              actions: { reactions: false },
-              accounts: {
-                work: { account: "+15550001111", actions: { reactions: true } },
-              },
-            },
-          },
-        } as OpenClawConfig,
+        cfg: createSignalAccountOverrideCfg(),
         accountId: "work",
         params: { to: "+15550001111", messageId: "123", emoji: "👍" },
         expectedArgs: ["+15550001111", 123, "👍", { accountId: "work" }],
@@ -723,20 +737,11 @@ describe("signalMessageActions", () => {
     const cfg = {
       channels: { signal: { account: "+15550001111" } },
     } as OpenClawConfig;
-    const handleAction = signalMessageActions.handleAction;
-    if (!handleAction) {
-      throw new Error("signal handleAction unavailable");
-    }
-
-    await expect(
-      handleAction({
-        channel: "signal",
-        action: "react",
-        params: { to: "signal:group:group-id", messageId: "123", emoji: "✅" },
-        cfg,
-        accountId: undefined,
-      }),
-    ).rejects.toThrow(/targetAuthor/);
+    await expectSignalActionRejected(
+      { to: "signal:group:group-id", messageId: "123", emoji: "✅" },
+      /targetAuthor/,
+      cfg,
+    );
   });
 });
 

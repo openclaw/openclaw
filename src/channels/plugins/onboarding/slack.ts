@@ -1,5 +1,4 @@
 import type { OpenClawConfig } from "../../../config/config.js";
-import type { DmPolicy } from "../../../config/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../../../routing/session-key.js";
 import {
   listSlackAccountIds,
@@ -11,45 +10,21 @@ import { resolveSlackUserAllowlist } from "../../../slack/resolve-users.js";
 import { formatDocsLink } from "../../../terminal/links.js";
 import type { WizardPrompter } from "../../../wizard/prompts.js";
 import type { ChannelOnboardingAdapter, ChannelOnboardingDmPolicy } from "../onboarding-types.js";
-import { promptChannelAccessConfig } from "./channel-access.js";
+import { configureChannelAccessWithAllowlist } from "./channel-access-configure.js";
 import {
-  addWildcardAllowFrom,
-  promptResolvedAllowFrom,
+  parseMentionOrPrefixedId,
+  noteChannelLookupFailure,
+  noteChannelLookupSummary,
+  patchChannelConfigForAccount,
+  promptLegacyChannelAllowFrom,
   resolveAccountIdForConfigure,
   resolveOnboardingAccountId,
-  splitOnboardingEntries,
+  setAccountGroupPolicyForChannel,
+  setLegacyChannelDmPolicyWithAllowFrom,
+  setOnboardingChannelEnabled,
 } from "./helpers.js";
 
 const channel = "slack" as const;
-
-function patchSlackConfigWithDm(
-  cfg: OpenClawConfig,
-  patch: Record<string, unknown>,
-): OpenClawConfig {
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      slack: {
-        ...cfg.channels?.slack,
-        ...patch,
-        dm: {
-          ...cfg.channels?.slack?.dm,
-          enabled: cfg.channels?.slack?.dm?.enabled ?? true,
-        },
-      },
-    },
-  };
-}
-
-function setSlackDmPolicy(cfg: OpenClawConfig, dmPolicy: DmPolicy) {
-  const existingAllowFrom = cfg.channels?.slack?.allowFrom ?? cfg.channels?.slack?.dm?.allowFrom;
-  const allowFrom = dmPolicy === "open" ? addWildcardAllowFrom(existingAllowFrom) : undefined;
-  return patchSlackConfigWithDm(cfg, {
-    dmPolicy,
-    ...(allowFrom ? { allowFrom } : {}),
-  });
-}
 
 function buildSlackManifest(botName: string) {
   const safeName = botName.trim() || "OpenClaw";
@@ -158,63 +133,18 @@ async function promptSlackTokens(prompter: WizardPrompter): Promise<{
   return { botToken, appToken };
 }
 
-function patchSlackConfigForAccount(
-  cfg: OpenClawConfig,
-  accountId: string,
-  patch: Record<string, unknown>,
-): OpenClawConfig {
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    return {
-      ...cfg,
-      channels: {
-        ...cfg.channels,
-        slack: {
-          ...cfg.channels?.slack,
-          enabled: true,
-          ...patch,
-        },
-      },
-    };
-  }
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      slack: {
-        ...cfg.channels?.slack,
-        enabled: true,
-        accounts: {
-          ...cfg.channels?.slack?.accounts,
-          [accountId]: {
-            ...cfg.channels?.slack?.accounts?.[accountId],
-            enabled: cfg.channels?.slack?.accounts?.[accountId]?.enabled ?? true,
-            ...patch,
-          },
-        },
-      },
-    },
-  };
-}
-
-function setSlackGroupPolicy(
-  cfg: OpenClawConfig,
-  accountId: string,
-  groupPolicy: "open" | "allowlist" | "disabled",
-): OpenClawConfig {
-  return patchSlackConfigForAccount(cfg, accountId, { groupPolicy });
-}
-
 function setSlackChannelAllowlist(
   cfg: OpenClawConfig,
   accountId: string,
   channelKeys: string[],
 ): OpenClawConfig {
   const channels = Object.fromEntries(channelKeys.map((key) => [key, { allow: true }]));
-  return patchSlackConfigForAccount(cfg, accountId, { channels });
-}
-
-function setSlackAllowFrom(cfg: OpenClawConfig, allowFrom: string[]): OpenClawConfig {
-  return patchSlackConfigWithDm(cfg, { allowFrom });
+  return patchChannelConfigForAccount({
+    cfg,
+    channel: "slack",
+    accountId,
+    patch: { channels },
+  });
 }
 
 async function promptSlackAllowFrom(params: {
@@ -230,42 +160,32 @@ async function promptSlackAllowFrom(params: {
   const token = resolved.config.userToken ?? resolved.config.botToken ?? "";
   const existing =
     params.cfg.channels?.slack?.allowFrom ?? params.cfg.channels?.slack?.dm?.allowFrom ?? [];
-  await params.prompter.note(
-    [
+  const parseId = (value: string) =>
+    parseMentionOrPrefixedId({
+      value,
+      mentionPattern: /^<@([A-Z0-9]+)>$/i,
+      prefixPattern: /^(slack:|user:)/i,
+      idPattern: /^[A-Z][A-Z0-9]+$/i,
+      normalizeId: (id) => id.toUpperCase(),
+    });
+
+  return promptLegacyChannelAllowFrom({
+    cfg: params.cfg,
+    channel: "slack",
+    prompter: params.prompter,
+    existing,
+    token,
+    noteTitle: "Slack allowlist",
+    noteLines: [
       "Allowlist Slack DMs by username (we resolve to user ids).",
       "Examples:",
       "- U12345678",
       "- @alice",
       "Multiple entries: comma-separated.",
       `Docs: ${formatDocsLink("/slack", "slack")}`,
-    ].join("\n"),
-    "Slack allowlist",
-  );
-  const parseInputs = (value: string) => splitOnboardingEntries(value);
-  const parseId = (value: string) => {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return null;
-    }
-    const mention = trimmed.match(/^<@([A-Z0-9]+)>$/i);
-    if (mention) {
-      return mention[1]?.toUpperCase();
-    }
-    const prefixed = trimmed.replace(/^(slack:|user:)/i, "");
-    if (/^[A-Z][A-Z0-9]+$/i.test(prefixed)) {
-      return prefixed.toUpperCase();
-    }
-    return null;
-  };
-
-  const unique = await promptResolvedAllowFrom({
-    prompter: params.prompter,
-    existing,
-    token,
+    ],
     message: "Slack allowFrom (usernames or ids)",
     placeholder: "@alice, U12345678",
-    label: "Slack allowlist",
-    parseInputs,
     parseId,
     invalidWithoutTokenNote: "Slack token missing; use user ids (or mention form) only.",
     resolveEntries: ({ token, entries }) =>
@@ -274,7 +194,6 @@ async function promptSlackAllowFrom(params: {
         entries,
       }),
   });
-  return setSlackAllowFrom(params.cfg, unique);
 }
 
 const dmPolicy: ChannelOnboardingDmPolicy = {
@@ -284,7 +203,12 @@ const dmPolicy: ChannelOnboardingDmPolicy = {
   allowFromKey: "channels.slack.allowFrom",
   getCurrent: (cfg) =>
     cfg.channels?.slack?.dmPolicy ?? cfg.channels?.slack?.dm?.policy ?? "pairing",
-  setPolicy: (cfg, policy) => setSlackDmPolicy(cfg, policy),
+  setPolicy: (cfg, policy) =>
+    setLegacyChannelDmPolicyWithAllowFrom({
+      cfg,
+      channel: "slack",
+      dmPolicy: policy,
+    }),
   promptAllowFrom: promptSlackAllowFrom,
 };
 
@@ -347,13 +271,12 @@ export const slackOnboardingAdapter: ChannelOnboardingAdapter = {
         initialValue: true,
       });
       if (keepEnv) {
-        next = {
-          ...next,
-          channels: {
-            ...next.channels,
-            slack: { ...next.channels?.slack, enabled: true },
-          },
-        };
+        next = patchChannelConfigForAccount({
+          cfg: next,
+          channel: "slack",
+          accountId: slackAccountId,
+          patch: {},
+        });
       } else {
         ({ botToken, appToken } = await promptSlackTokens(prompter));
       }
@@ -370,43 +293,16 @@ export const slackOnboardingAdapter: ChannelOnboardingAdapter = {
     }
 
     if (botToken && appToken) {
-      if (slackAccountId === DEFAULT_ACCOUNT_ID) {
-        next = {
-          ...next,
-          channels: {
-            ...next.channels,
-            slack: {
-              ...next.channels?.slack,
-              enabled: true,
-              botToken,
-              appToken,
-            },
-          },
-        };
-      } else {
-        next = {
-          ...next,
-          channels: {
-            ...next.channels,
-            slack: {
-              ...next.channels?.slack,
-              enabled: true,
-              accounts: {
-                ...next.channels?.slack?.accounts,
-                [slackAccountId]: {
-                  ...next.channels?.slack?.accounts?.[slackAccountId],
-                  enabled: next.channels?.slack?.accounts?.[slackAccountId]?.enabled ?? true,
-                  botToken,
-                  appToken,
-                },
-              },
-            },
-          },
-        };
-      }
+      next = patchChannelConfigForAccount({
+        cfg: next,
+        channel: "slack",
+        accountId: slackAccountId,
+        patch: { botToken, appToken },
+      });
     }
 
-    const accessConfig = await promptChannelAccessConfig({
+    next = await configureChannelAccessWithAllowlist({
+      cfg: next,
       prompter,
       label: "Slack channels",
       currentPolicy: resolvedAccount.config.groupPolicy ?? "allowlist",
@@ -415,21 +311,24 @@ export const slackOnboardingAdapter: ChannelOnboardingAdapter = {
         .map(([key]) => key),
       placeholder: "#general, #private, C123",
       updatePrompt: Boolean(resolvedAccount.config.channels),
-    });
-    if (accessConfig) {
-      if (accessConfig.policy !== "allowlist") {
-        next = setSlackGroupPolicy(next, slackAccountId, accessConfig.policy);
-      } else {
-        let keys = accessConfig.entries;
+      setPolicy: (cfg, policy) =>
+        setAccountGroupPolicyForChannel({
+          cfg,
+          channel: "slack",
+          accountId: slackAccountId,
+          groupPolicy: policy,
+        }),
+      resolveAllowlist: async ({ cfg, entries }) => {
+        let keys = entries;
         const accountWithTokens = resolveSlackAccount({
-          cfg: next,
+          cfg,
           accountId: slackAccountId,
         });
-        if (accountWithTokens.botToken && accessConfig.entries.length > 0) {
+        if (accountWithTokens.botToken && entries.length > 0) {
           try {
             const resolved = await resolveSlackChannelAllowlist({
               token: accountWithTokens.botToken,
-              entries: accessConfig.entries,
+              entries,
             });
             const resolvedKeys = resolved
               .filter((entry) => entry.resolved && entry.id)
@@ -438,39 +337,29 @@ export const slackOnboardingAdapter: ChannelOnboardingAdapter = {
               .filter((entry) => !entry.resolved)
               .map((entry) => entry.input);
             keys = [...resolvedKeys, ...unresolved.map((entry) => entry.trim()).filter(Boolean)];
-            if (resolvedKeys.length > 0 || unresolved.length > 0) {
-              await prompter.note(
-                [
-                  resolvedKeys.length > 0 ? `Resolved: ${resolvedKeys.join(", ")}` : undefined,
-                  unresolved.length > 0
-                    ? `Unresolved (kept as typed): ${unresolved.join(", ")}`
-                    : undefined,
-                ]
-                  .filter(Boolean)
-                  .join("\n"),
-                "Slack channels",
-              );
-            }
+            await noteChannelLookupSummary({
+              prompter,
+              label: "Slack channels",
+              resolvedSections: [{ title: "Resolved", values: resolvedKeys }],
+              unresolved,
+            });
           } catch (err) {
-            await prompter.note(
-              `Channel lookup failed; keeping entries as typed. ${String(err)}`,
-              "Slack channels",
-            );
+            await noteChannelLookupFailure({
+              prompter,
+              label: "Slack channels",
+              error: err,
+            });
           }
         }
-        next = setSlackGroupPolicy(next, slackAccountId, "allowlist");
-        next = setSlackChannelAllowlist(next, slackAccountId, keys);
-      }
-    }
+        return keys;
+      },
+      applyAllowlist: ({ cfg, resolved }) => {
+        return setSlackChannelAllowlist(cfg, slackAccountId, resolved);
+      },
+    });
 
     return { cfg: next, accountId: slackAccountId };
   },
   dmPolicy,
-  disable: (cfg) => ({
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      slack: { ...cfg.channels?.slack, enabled: false },
-    },
-  }),
+  disable: (cfg) => setOnboardingChannelEnabled(cfg, channel, false),
 };
