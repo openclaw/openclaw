@@ -84,8 +84,8 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  state.runEmbeddedPiAgentMock.mockReset();
-  state.runCliAgentMock.mockReset();
+  state.runEmbeddedPiAgentMock.mockClear();
+  state.runCliAgentMock.mockClear();
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
 });
 
