@@ -134,7 +134,7 @@ describe("extractAssistantText", () => {
 
 describe("resolveAnnounceTarget", () => {
   beforeEach(async () => {
-    callGatewayMock.mockReset();
+    callGatewayMock.mockClear();
     await installRegistry();
   });
 
@@ -179,7 +179,7 @@ describe("resolveAnnounceTarget", () => {
 
 describe("sessions_list gating", () => {
   beforeEach(() => {
-    callGatewayMock.mockReset();
+    callGatewayMock.mockClear();
     callGatewayMock.mockResolvedValue({
       path: "/tmp/sessions.json",
       sessions: [
@@ -201,7 +201,7 @@ describe("sessions_list gating", () => {
 
 describe("sessions_send gating", () => {
   beforeEach(() => {
-    callGatewayMock.mockReset();
+    callGatewayMock.mockClear();
   });
 
   it("blocks cross-agent sends when tools.agentToAgent.enabled is false", async () => {
