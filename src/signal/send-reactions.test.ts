@@ -21,8 +21,8 @@ vi.mock("./accounts.js", () => ({
   }),
 }));
 
-vi.mock("./client.js", () => ({
-  signalRpcRequest: (...args: unknown[]) => rpcMock(...args),
+vi.mock("./client-adapter.js", () => ({
+  adapterRpcRequest: (...args: unknown[]) => rpcMock(...args),
 }));
 
 describe("sendReactionSignal", () => {

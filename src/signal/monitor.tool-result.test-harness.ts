@@ -83,6 +83,12 @@ vi.mock("./client.js", () => ({
   signalRpcRequest: (...args: unknown[]) => signalRpcRequestMock(...args),
 }));
 
+vi.mock("./client-adapter.js", () => ({
+  streamSignalEventsAdapter: (...args: unknown[]) => streamMock(...args),
+  checkAdapter: (...args: unknown[]) => signalCheckMock(...args),
+  adapterRpcRequest: (...args: unknown[]) => signalRpcRequestMock(...args),
+}));
+
 vi.mock("./daemon.js", () => ({
   spawnSignalDaemon: vi.fn(() => ({ stop: vi.fn() })),
 }));
