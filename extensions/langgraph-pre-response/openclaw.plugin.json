@@ -1,0 +1,5 @@
+{
+  "id": "langgraph-pre-response",
+  "entry": "./index.ts",
+  "bundled": false
+}

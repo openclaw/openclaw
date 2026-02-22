@@ -1,0 +1,20 @@
+{
+  "name": "@openclaw/langgraph-pre-response",
+  "version": "0.1.0",
+  "description": "LangGraph-powered context enrichment before agent responses",
+  "type": "module",
+  "main": "index.ts",
+  "dependencies": {
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": "^2.0.0"
+  },
+  "keywords": [
+    "openclaw",
+    "plugin",
+    "langgraph",
+    "context-enrichment",
+    "pre-response"
+  ]
+}
