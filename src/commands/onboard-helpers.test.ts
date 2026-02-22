@@ -1,7 +1,9 @@
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   normalizeGatewayTokenInput,
   openUrl,
+  resolveResetTargets,
   resolveBrowserOpenCommand,
   resolveControlUiLinks,
   validateGatewayPasswordInput,
@@ -151,5 +153,33 @@ describe("validateGatewayPasswordInput", () => {
 
   it("accepts a normal password", () => {
     expect(validateGatewayPasswordInput(" secret ")).toBeUndefined();
+  });
+});
+
+describe("resolveResetTargets", () => {
+  it("derives reset targets from the active OPENCLAW_STATE_DIR", () => {
+    const env = {
+      OPENCLAW_STATE_DIR: "/tmp/custom-openclaw",
+    } as NodeJS.ProcessEnv;
+    const targets = resolveResetTargets(env);
+
+    const expectedStateDir = path.resolve("/tmp/custom-openclaw");
+    expect(targets.stateDir).toBe(expectedStateDir);
+    expect(targets.configPath).toBe(path.join(expectedStateDir, "openclaw.json"));
+    expect(targets.credentialsPath).toBe(path.join(expectedStateDir, "credentials"));
+    expect(targets.sessionsDir).toBe(path.join(expectedStateDir, "agents", "main", "sessions"));
+  });
+
+  it("respects OPENCLAW_CONFIG_PATH override at runtime", () => {
+    const env = {
+      OPENCLAW_STATE_DIR: "/tmp/custom-openclaw",
+      OPENCLAW_CONFIG_PATH: "/tmp/alternate/openclaw.json",
+    } as NodeJS.ProcessEnv;
+    const targets = resolveResetTargets(env);
+
+    expect(targets.stateDir).toBe(path.resolve("/tmp/custom-openclaw"));
+    expect(targets.configPath).toBe(path.resolve("/tmp/alternate/openclaw.json"));
+    expect(targets.credentialsPath).toBe(path.resolve("/tmp/custom-openclaw/credentials"));
+    expect(targets.sessionsDir).toBe(path.resolve("/tmp/custom-openclaw/agents/main/sessions"));
   });
 });

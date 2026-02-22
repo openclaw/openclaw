@@ -5,7 +5,7 @@ import { inspect } from "node:util";
 import { cancel, isCancel } from "@clack/prompts";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { CONFIG_PATH } from "../config/config.js";
+import { resolveConfigPath, resolveStateDir } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
@@ -17,13 +17,7 @@ import { isWSL } from "../infra/wsl.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { stylePromptTitle } from "../terminal/prompt-style.js";
-import {
-  CONFIG_DIR,
-  resolveUserPath,
-  shortenHomeInString,
-  shortenHomePath,
-  sleep,
-} from "../utils.js";
+import { resolveUserPath, shortenHomeInString, shortenHomePath, sleep } from "../utils.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
 import type { NodeManagerChoice, OnboardMode, ResetScope } from "./onboard-types.js";
@@ -329,13 +323,32 @@ export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promis
   }
 }
 
+export function resolveResetTargets(
+  env: NodeJS.ProcessEnv = process.env,
+  agentId?: string,
+): {
+  stateDir: string;
+  configPath: string;
+  credentialsPath: string;
+  sessionsDir: string;
+} {
+  const stateDir = resolveStateDir(env);
+  return {
+    stateDir,
+    configPath: resolveConfigPath(env, stateDir),
+    credentialsPath: path.join(stateDir, "credentials"),
+    sessionsDir: resolveSessionTranscriptsDirForAgent(agentId, env),
+  };
+}
+
 export async function handleReset(scope: ResetScope, workspaceDir: string, runtime: RuntimeEnv) {
-  await moveToTrash(CONFIG_PATH, runtime);
+  const targets = resolveResetTargets(process.env);
+  await moveToTrash(targets.configPath, runtime);
   if (scope === "config") {
     return;
   }
-  await moveToTrash(path.join(CONFIG_DIR, "credentials"), runtime);
-  await moveToTrash(resolveSessionTranscriptsDirForAgent(), runtime);
+  await moveToTrash(targets.credentialsPath, runtime);
+  await moveToTrash(targets.sessionsDir, runtime);
   if (scope === "full") {
     await moveToTrash(workspaceDir, runtime);
   }
