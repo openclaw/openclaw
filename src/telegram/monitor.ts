@@ -90,15 +90,28 @@ const isGrammyHttpError = (err: unknown): boolean => {
 
 export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
   const log = opts.runtime?.error ?? console.error;
+  let activeRunner: ReturnType<typeof run> | undefined;
+  let forceRestarted = false;
 
   // Register handler for Grammy HttpError unhandled rejections.
   // This catches network errors that escape the polling loop's try-catch
   // (e.g., from setMyCommands during bot setup).
   // We gate on isGrammyHttpError to avoid suppressing non-Telegram errors.
   const unregisterHandler = registerUnhandledRejectionHandler((err) => {
-    if (isGrammyHttpError(err) && isRecoverableTelegramNetworkError(err, { context: "polling" })) {
+    const isNetworkError = isRecoverableTelegramNetworkError(err, { context: "polling" });
+    if (isGrammyHttpError(err) && isNetworkError) {
       log(`[telegram] Suppressed network error: ${formatErrorMessage(err)}`);
       return true; // handled - don't crash
+    }
+    // Network failures can surface outside the runner task promise and leave
+    // polling stuck; force-stop the active runner so the loop can recover.
+    if (isNetworkError && activeRunner && activeRunner.isRunning()) {
+      forceRestarted = true;
+      void activeRunner.stop().catch(() => {});
+      log(
+        `[telegram] Restarting polling after unhandled network error: ${formatErrorMessage(err)}`,
+      );
+      return true; // handled
     }
     return false;
   });
@@ -173,6 +186,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
 
     while (!opts.abortSignal?.aborted) {
       const runner = run(bot, createTelegramRunnerOptions(cfg));
+      activeRunner = runner;
       const stopOnAbort = () => {
         if (opts.abortSignal?.aborted) {
           void runner.stop();
@@ -182,8 +196,19 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       try {
         // runner.task() returns a promise that resolves when the runner stops
         await runner.task();
-        return;
+        if (!forceRestarted) {
+          return;
+        }
+        forceRestarted = false;
+        restartAttempts += 1;
+        const delayMs = computeBackoff(TELEGRAM_POLL_RESTART_POLICY, restartAttempts);
+        log(
+          `Telegram polling runner restarted after unhandled network error; retrying in ${formatDurationPrecise(delayMs)}.`,
+        );
+        await sleepWithAbort(delayMs, opts.abortSignal);
+        continue;
       } catch (err) {
+        forceRestarted = false;
         if (opts.abortSignal?.aborted) {
           throw err;
         }
