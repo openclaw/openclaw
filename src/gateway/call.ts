@@ -149,7 +149,12 @@ export function buildGatewayConnectionDetails(
         "Both credentials and chat data would be exposed to network interception.",
         `Source: ${urlSource}`,
         `Config: ${configPath}`,
-        "Fix: Use wss:// for the gateway URL, or connect via SSH tunnel to localhost.",
+        "Fix: Use wss:// for remote gateway URLs.",
+        "Safe remote access defaults:",
+        "- keep gateway.bind=loopback and use an SSH tunnel (ssh -N -L 18789:127.0.0.1:18789 user@gateway-host)",
+        "- or use Tailscale Serve/Funnel for HTTPS remote access",
+        "Doctor: openclaw doctor --fix",
+        "Docs: https://docs.openclaw.ai/gateway/remote",
       ].join("\n"),
     );
   }

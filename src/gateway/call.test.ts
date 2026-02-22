@@ -334,6 +334,8 @@ describe("buildGatewayConnectionDetails", () => {
     expect((thrown as Error).message).toContain("SECURITY ERROR");
     expect((thrown as Error).message).toContain("plaintext ws://");
     expect((thrown as Error).message).toContain("wss://");
+    expect((thrown as Error).message).toContain("Tailscale Serve/Funnel");
+    expect((thrown as Error).message).toContain("openclaw doctor --fix");
   });
 
   it("allows ws:// for loopback addresses in local mode", () => {
