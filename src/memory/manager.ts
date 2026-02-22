@@ -50,6 +50,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage";
   protected fallbackReason?: string;
   private readonly providerUnavailableReason?: string;
+  readonly purpose: "default" | "status";
   protected openAi?: OpenAiEmbeddingClient;
   protected gemini?: GeminiEmbeddingClient;
   protected voyage?: VoyageEmbeddingClient;
@@ -156,6 +157,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.fallbackFrom = params.providerResult.fallbackFrom;
     this.fallbackReason = params.providerResult.fallbackReason;
     this.providerUnavailableReason = params.providerResult.providerUnavailableReason;
+    this.purpose = params.purpose ?? "default";
     this.openAi = params.providerResult.openAi;
     this.gemini = params.providerResult.gemini;
     this.voyage = params.providerResult.voyage;
