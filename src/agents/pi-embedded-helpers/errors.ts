@@ -382,6 +382,21 @@ export function parseApiErrorInfo(raw?: string): ApiErrorInfo | null {
   };
 }
 
+/**
+ * Strip model identifiers from user-facing text to avoid leaking internal model names.
+ * Matches patterns like "for model gemini-3-flash", "model: gpt-5.2", provider/model paths.
+ */
+const MODEL_ID_PATTERN =
+  /(?<=\bfor model\s)[\w./-]+|(?<=\bmodel[:\s]["']?)[\w./-]+(?=["']?\s|["']?$)/gi;
+const PROVIDER_MODEL_PATH_PATTERN = /\b[a-z][\w-]*\/[a-z][\w.*/-]+/gi;
+
+export function redactModelIdentifiers(text: string): string {
+  if (!text) {
+    return text;
+  }
+  return text.replace(MODEL_ID_PATTERN, "***").replace(PROVIDER_MODEL_PATH_PATTERN, "***");
+}
+
 export function formatRawAssistantErrorForUi(raw?: string): string {
   const trimmed = (raw ?? "").trim();
   if (!trimmed) {
@@ -397,7 +412,7 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
   if (httpMatch) {
     const rest = httpMatch[2].trim();
     if (!rest.startsWith("{")) {
-      return `HTTP ${httpMatch[1]}: ${rest}`;
+      return redactModelIdentifiers(`HTTP ${httpMatch[1]}: ${rest}`);
     }
   }
 
@@ -406,10 +421,11 @@ export function formatRawAssistantErrorForUi(raw?: string): string {
     const prefix = info.httpCode ? `HTTP ${info.httpCode}` : "LLM error";
     const type = info.type ? ` ${info.type}` : "";
     const requestId = info.requestId ? ` (request_id: ${info.requestId})` : "";
-    return `${prefix}${type}: ${info.message}${requestId}`;
+    return redactModelIdentifiers(`${prefix}${type}: ${info.message}${requestId}`);
   }
 
-  return trimmed.length > 600 ? `${trimmed.slice(0, 600)}…` : trimmed;
+  const result = trimmed.length > 600 ? `${trimmed.slice(0, 600)}…` : trimmed;
+  return redactModelIdentifiers(result);
 }
 
 export function formatAssistantErrorText(
@@ -468,7 +484,7 @@ export function formatAssistantErrorText(
 
   const invalidRequest = raw.match(/"type":"invalid_request_error".*?"message":"([^"]+)"/);
   if (invalidRequest?.[1]) {
-    return `LLM request rejected: ${invalidRequest[1]}`;
+    return redactModelIdentifiers(`LLM request rejected: ${invalidRequest[1]}`);
   }
 
   const transientCopy = formatRateLimitOrOverloadedErrorCopy(raw);
@@ -492,7 +508,8 @@ export function formatAssistantErrorText(
   if (raw.length > 600) {
     log.warn(`Long error truncated: ${raw.slice(0, 200)}`);
   }
-  return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
+  const truncated = raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
+  return redactModelIdentifiers(truncated);
 }
 
 export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boolean }): string {
