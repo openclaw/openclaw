@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
@@ -760,5 +761,56 @@ describe("update-cli", () => {
       const call = vi.mocked(runGatewayUpdate).mock.calls[0]?.[0];
       expect(call?.channel).toBe("dev");
     });
+  });
+
+  it("updateWizardCommand uses ~/openclaw as default git checkout path", async () => {
+    const previousGitDir = process.env.OPENCLAW_GIT_DIR;
+    try {
+      setTty(true);
+      delete process.env.OPENCLAW_GIT_DIR;
+
+      const { checkUpdateStatus } = await import("../infra/update-check.js");
+      const { runGatewayUpdate } = await import("../infra/update-runner.js");
+      const { updateWizardCommand } = await import("./update-cli.js");
+
+      vi.mocked(checkUpdateStatus).mockResolvedValue({
+        root: "/test/path",
+        installKind: "package",
+        packageManager: "npm",
+        deps: {
+          manager: "npm",
+          status: "ok",
+          lockfilePath: null,
+          markerPath: null,
+        },
+      });
+      select.mockResolvedValue("dev");
+      confirm.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+      vi.mocked(runGatewayUpdate).mockResolvedValue({
+        status: "ok",
+        mode: "git",
+        steps: [],
+        durationMs: 100,
+      });
+
+      await updateWizardCommand({});
+
+      const expectedGitDir = path.join(os.homedir(), "openclaw");
+      const createCheckoutPrompt = vi
+        .mocked(confirm)
+        .mock.calls.map((call) => call[0] as { initialValue?: boolean; message?: string })
+        .find((arg) => arg.message?.includes(expectedGitDir));
+
+      expect(createCheckoutPrompt).toBeDefined();
+      expect(createCheckoutPrompt).toMatchObject({
+        initialValue: true,
+      });
+    } finally {
+      if (previousGitDir === undefined) {
+        delete process.env.OPENCLAW_GIT_DIR;
+      } else {
+        process.env.OPENCLAW_GIT_DIR = previousGitDir;
+      }
+    }
   });
 });
