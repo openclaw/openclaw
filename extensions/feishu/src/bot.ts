@@ -620,13 +620,19 @@ export async function handleFeishuMessage(params: {
         `feishu[${account.accountId}]: message in group ${ctx.chatId} did not mention bot, recording to history`,
       );
       if (chatHistories) {
+        // For media messages, record a human-readable placeholder instead of
+        // the raw `{"image_key":"…"}` JSON which is useless to the model (#22872).
+        const mediaHistoryTypes = ["image", "file", "audio", "video", "sticker"];
+        const historyBody = mediaHistoryTypes.includes(ctx.contentType)
+          ? `${ctx.senderName ?? ctx.senderOpenId}: [sent ${ctx.contentType === "image" ? "an" : "a"} ${ctx.contentType}]`
+          : `${ctx.senderName ?? ctx.senderOpenId}: ${ctx.content}`;
         recordPendingHistoryEntryIfEnabled({
           historyMap: chatHistories,
           historyKey: ctx.chatId,
           limit: historyLimit,
           entry: {
             sender: ctx.senderOpenId,
-            body: `${ctx.senderName ?? ctx.senderOpenId}: ${ctx.content}`,
+            body: historyBody,
             timestamp: Date.now(),
             messageId: ctx.messageId,
           },
@@ -786,9 +792,10 @@ export async function handleFeishuMessage(params: {
       log,
       accountId: account.accountId,
     });
-    const mediaPayload = buildAgentMediaPayload(mediaList);
-
-    // Fetch quoted/replied message content if parentId exists
+    // Fetch quoted/replied message content if parentId exists.
+    // For media messages (image, file, audio, video, sticker), download the
+    // actual media so the model can see it — otherwise the agent only receives
+    // a useless `{"image_key":"…"}` JSON string (#22872).
     let quotedContent: string | undefined;
     if (ctx.parentId) {
       try {
@@ -798,15 +805,39 @@ export async function handleFeishuMessage(params: {
           accountId: account.accountId,
         });
         if (quotedMsg) {
-          quotedContent = quotedMsg.content;
-          log(
-            `feishu[${account.accountId}]: fetched quoted message: ${quotedContent?.slice(0, 100)}`,
-          );
+          const quotedMediaTypes = ["image", "file", "audio", "video", "sticker", "post"];
+          if (quotedMediaTypes.includes(quotedMsg.contentType)) {
+            const quotedMedia = await resolveFeishuMediaList({
+              cfg,
+              messageId: ctx.parentId,
+              messageType: quotedMsg.contentType,
+              content: quotedMsg.rawContent ?? quotedMsg.content,
+              maxBytes: mediaMaxBytes,
+              log,
+              accountId: account.accountId,
+            });
+            if (quotedMedia.length > 0) {
+              mediaList.push(...quotedMedia);
+              log(
+                `feishu[${account.accountId}]: downloaded ${quotedMedia.length} media from quoted message ${ctx.parentId}`,
+              );
+            } else {
+              quotedContent = quotedMsg.content;
+            }
+          } else {
+            quotedContent = quotedMsg.content;
+            log(
+              `feishu[${account.accountId}]: fetched quoted message: ${quotedContent?.slice(0, 100)}`,
+            );
+          }
         }
       } catch (err) {
         log(`feishu[${account.accountId}]: failed to fetch quoted message: ${String(err)}`);
       }
     }
+
+    // Build media payload AFTER quoted media has been appended to mediaList.
+    const mediaPayload = buildAgentMediaPayload(mediaList);
 
     const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
 

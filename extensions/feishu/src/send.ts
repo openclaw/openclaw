@@ -14,6 +14,9 @@ export type FeishuMessageInfo = {
   senderId?: string;
   senderOpenId?: string;
   content: string;
+  /** Raw JSON content from the API before text extraction. Needed by
+   *  `resolveFeishuMediaList` to parse media keys from quoted messages. */
+  rawContent?: string;
   contentType: string;
   createTime?: number;
 };
@@ -67,7 +70,8 @@ export async function getMessageFeishu(params: {
     }
 
     // Parse content based on message type
-    let content = item.body?.content ?? "";
+    const rawContent = item.body?.content ?? "";
+    let content = rawContent;
     try {
       const parsed = JSON.parse(content);
       if (item.msg_type === "text" && parsed.text) {
@@ -83,6 +87,7 @@ export async function getMessageFeishu(params: {
       senderId: item.sender?.id,
       senderOpenId: item.sender?.id_type === "open_id" ? item.sender?.id : undefined,
       content,
+      rawContent,
       contentType: item.msg_type ?? "text",
       createTime: item.create_time ? parseInt(item.create_time, 10) : undefined,
     };
