@@ -13,6 +13,32 @@ const TOKEN_AUTH = {
   token: "test-token-123",
 };
 
+async function withEnv<T>(
+  env: Record<string, string | undefined>,
+  run: () => Promise<T>,
+): Promise<T> {
+  const previous: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(env)) {
+    previous[key] = process.env[key];
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+  try {
+    return await run();
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
 describe("resolveGatewayRuntimeConfig", () => {
   describe("trusted-proxy auth mode", () => {
     // This test validates BOTH validation layers:
@@ -45,7 +71,11 @@ describe("resolveGatewayRuntimeConfig", () => {
       {
         name: "loopback binding with ::1 proxy",
         cfg: {
-          gateway: { bind: "loopback" as const, auth: TRUSTED_PROXY_AUTH, trustedProxies: ["::1"] },
+          gateway: {
+            bind: "loopback" as const,
+            auth: TRUSTED_PROXY_AUTH,
+            trustedProxies: ["::1"],
+          },
         },
         expectedBindHost: "127.0.0.1",
       },
@@ -170,6 +200,82 @@ describe("resolveGatewayRuntimeConfig", () => {
     ])("rejects $name", async ({ cfg, host, expectedMessage }) => {
       await expect(resolveGatewayRuntimeConfig({ cfg, port: 18789, host })).rejects.toThrow(
         expectedMessage,
+      );
+    });
+
+    it("rejects allowInsecureAuth without risk acknowledgement", async () => {
+      const cfg = {
+        gateway: {
+          bind: "loopback" as const,
+          auth: TOKEN_AUTH,
+          controlUi: {
+            allowInsecureAuth: true,
+          },
+        },
+      };
+
+      await expect(resolveGatewayRuntimeConfig({ cfg, port: 18789 })).rejects.toThrow(
+        "OPENCLAW_I_UNDERSTAND_RISK=1",
+      );
+    });
+
+    it("allows allowInsecureAuth with risk acknowledgement", async () => {
+      await withEnv({ OPENCLAW_I_UNDERSTAND_RISK: "1" }, async () => {
+        const cfg = {
+          gateway: {
+            bind: "loopback" as const,
+            auth: TOKEN_AUTH,
+            controlUi: {
+              allowInsecureAuth: true,
+            },
+          },
+        };
+
+        const result = await resolveGatewayRuntimeConfig({ cfg, port: 18789 });
+        expect(result.authMode).toBe("token");
+        expect(result.bindHost).toBe("127.0.0.1");
+      });
+    });
+
+    it("rejects dangerouslyDisableDeviceAuth without explicit bypass env", async () => {
+      await withEnv({ OPENCLAW_I_UNDERSTAND_RISK: "1" }, async () => {
+        const cfg = {
+          gateway: {
+            bind: "loopback" as const,
+            auth: TOKEN_AUTH,
+            controlUi: {
+              dangerouslyDisableDeviceAuth: true,
+            },
+          },
+        };
+
+        await expect(resolveGatewayRuntimeConfig({ cfg, port: 18789 })).rejects.toThrow(
+          "OPENCLAW_UNSAFE_ALLOW_CONTROL_UI_BYPASS=1",
+        );
+      });
+    });
+
+    it("allows dangerouslyDisableDeviceAuth with explicit break-glass env", async () => {
+      await withEnv(
+        {
+          OPENCLAW_I_UNDERSTAND_RISK: "1",
+          OPENCLAW_UNSAFE_ALLOW_CONTROL_UI_BYPASS: "1",
+        },
+        async () => {
+          const cfg = {
+            gateway: {
+              bind: "loopback" as const,
+              auth: TOKEN_AUTH,
+              controlUi: {
+                dangerouslyDisableDeviceAuth: true,
+              },
+            },
+          };
+
+          const result = await resolveGatewayRuntimeConfig({ cfg, port: 18789 });
+          expect(result.authMode).toBe("token");
+          expect(result.bindHost).toBe("127.0.0.1");
+        },
       );
     });
   });
