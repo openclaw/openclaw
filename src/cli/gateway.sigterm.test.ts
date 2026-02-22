@@ -95,14 +95,12 @@ describe("gateway SIGTERM", () => {
     };
     const bootstrapPath = path.join(stateDir, "openclaw-entry-bootstrap.cjs");
     const runLoopPath = path.resolve("src/cli/gateway-cli/run-loop.ts");
-    const runtimePath = path.resolve("src/runtime.ts");
     const jitiPath = require.resolve("jiti");
     fs.writeFileSync(
       bootstrapPath,
       [
         `const jiti = require(${JSON.stringify(jitiPath)})(__filename);`,
         `const { runGatewayLoop } = jiti(${JSON.stringify(runLoopPath)});`,
-        `const { defaultRuntime } = jiti(${JSON.stringify(runtimePath)});`,
         "(async () => {",
         "  await runGatewayLoop({",
         "    start: async () => {",
@@ -111,7 +109,7 @@ describe("gateway SIGTERM", () => {
         "      const keepAlive = setInterval(() => {}, 1000);",
         "      return { close: async () => clearInterval(keepAlive) };",
         "    },",
-        "    runtime: defaultRuntime,",
+        "    runtime: { exit: (code) => process.exit(code) },",
         "  });",
         "})().catch((err) => {",
         "  console.error(err);",
