@@ -216,7 +216,7 @@ describe("callGateway url resolution", () => {
     {
       label: "keeps legacy admin scopes for explicit CLI callers",
       call: () => callGatewayCli({ method: "health" }),
-      expectedScopes: ["operator.admin", "operator.approvals", "operator.pairing"],
+      expectedScopes: ["operator.admin", "operator.read", "operator.approvals", "operator.pairing"],
     },
   ])("scope selection: $label", async ({ call, expectedScopes }) => {
     setLocalLoopbackGatewayConfig();
