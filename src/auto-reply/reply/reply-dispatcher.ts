@@ -1,4 +1,5 @@
 import type { HumanDelayConfig } from "../../config/types.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { sleep } from "../../utils.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { registerDispatcher } from "./dispatcher-registry.js";
@@ -54,6 +55,12 @@ export type ReplyDispatcherOptions = {
   onSkip?: ReplyDispatchSkipHandler;
   /** Human-like delay between block replies for natural rhythm. */
   humanDelay?: HumanDelayConfig;
+  /** Channel/routing context for message_sent hook (optional). */
+  hookContext?: {
+    channelId?: string;
+    accountId?: string;
+    conversationId?: string;
+  };
 };
 
 export type ReplyDispatcherWithTypingOptions = Omit<ReplyDispatcherOptions, "onIdle"> & {
@@ -154,6 +161,27 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         // Safe: deliver is called inside an async .then() callback, so even a synchronous
         // throw becomes a rejection that flows through .catch()/.finally(), ensuring cleanup.
         await options.deliver(normalized, { kind });
+
+        // Fire message_sent hook after successful delivery (all channels).
+        // Skip when hookContext is missing — callers must opt in with valid context.
+        const hookRunner = getGlobalHookRunner();
+        const hctx = options.hookContext;
+        if (hookRunner?.hasHooks("message_sent") && normalized.text && hctx?.channelId) {
+          void hookRunner
+            .runMessageSent(
+              {
+                to: hctx.conversationId ?? "",
+                content: normalized.text,
+                success: true,
+              },
+              {
+                channelId: hctx.channelId,
+                accountId: hctx.accountId,
+                conversationId: hctx.conversationId,
+              },
+            )
+            .catch(() => {});
+        }
       })
       .catch((err) => {
         options.onError?.(err, { kind });

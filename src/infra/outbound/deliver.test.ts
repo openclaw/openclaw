@@ -14,7 +14,9 @@ import { createInternalHookEventPayload } from "../../test-utils/internal-hook-e
 
 const mocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
+  getGlobalHookRunner: vi.fn(),
 }));
+
 const hookMocks = vi.hoisted(() => ({
   runner: {
     hasHooks: vi.fn(() => false),
@@ -99,6 +101,7 @@ describe("deliverOutboundPayloads", () => {
 
   afterEach(() => {
     setActivePluginRegistry(emptyRegistry);
+    mocks.getGlobalHookRunner.mockReturnValue(undefined);
   });
   it("chunks telegram markdown and passes through accountId", async () => {
     const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
@@ -569,6 +572,69 @@ describe("deliverOutboundPayloads", () => {
       expect.any(Error),
       expect.objectContaining({ text: "hi", mediaUrls: ["https://x.test/a.jpg"] }),
     );
+  });
+
+  it("calls runMessageSent per payload after successful delivery", async () => {
+    const mockRunMessageSent = vi.fn().mockResolvedValue(undefined);
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    hookMocks.runner.runMessageSent = mockRunMessageSent;
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    const cfg: OpenClawConfig = {};
+
+    await deliverOutboundPayloads({
+      cfg,
+      channel: "whatsapp",
+      to: "+1555",
+      accountId: "acct-1",
+      payloads: [{ text: "Hello" }, { text: "World" }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(mockRunMessageSent).toHaveBeenCalledTimes(2);
+    expect(mockRunMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "+1555",
+        content: "Hello",
+        success: true,
+      }),
+      expect.objectContaining({
+        channelId: "whatsapp",
+        accountId: "acct-1",
+        conversationId: "+1555",
+      }),
+    );
+    expect(mockRunMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "+1555",
+        content: "World",
+        success: true,
+      }),
+      expect.objectContaining({
+        channelId: "whatsapp",
+        accountId: "acct-1",
+        conversationId: "+1555",
+      }),
+    );
+  });
+
+  it("runMessageSent errors don't propagate to caller", async () => {
+    const mockRunMessageSent = vi.fn().mockRejectedValue(new Error("hook boom"));
+    hookMocks.runner.hasHooks.mockReturnValue(true);
+    hookMocks.runner.runMessageSent = mockRunMessageSent;
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+    const cfg: OpenClawConfig = {};
+
+    // Should not throw despite the hook rejection
+    const results = await deliverOutboundPayloads({
+      cfg,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "safe" }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(results).toHaveLength(1);
+    expect(mockRunMessageSent).toHaveBeenCalledTimes(1);
   });
 
   it("mirrors delivered output when mirror options are provided", async () => {
