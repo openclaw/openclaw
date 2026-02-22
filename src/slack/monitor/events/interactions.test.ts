@@ -1117,7 +1117,7 @@ describe("registerSlackInteractionEvents", () => {
   });
 
   it("defaults modal close isCleared to false when Slack omits the flag", async () => {
-    enqueueSystemEventMock.mockReset();
+    enqueueSystemEventMock.mockClear();
     const { ctx, getViewClosedHandler } = createContext();
     registerSlackInteractionEvents({ ctx: ctx as never });
     const viewClosedHandler = getViewClosedHandler();

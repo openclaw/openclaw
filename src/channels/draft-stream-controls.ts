@@ -19,7 +19,10 @@ type ClearFinalizableDraftMessageParams<T> = StopAndClearMessageIdParams<T> & {
   warnPrefix: string;
 };
 
-type FinalizableDraftLifecycleParams<T> = ClearFinalizableDraftMessageParams<T> & {
+type FinalizableDraftLifecycleParams<T> = Omit<
+  ClearFinalizableDraftMessageParams<T>,
+  "stopForClear"
+> & {
   throttleMs: number;
   state: FinalizableDraftStreamState;
   sendOrEditStreamMessage: (text: string) => Promise<boolean>;

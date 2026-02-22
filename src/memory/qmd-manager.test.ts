@@ -118,11 +118,11 @@ describe("QmdMemoryManager", () => {
   });
 
   beforeEach(async () => {
-    spawnMock.mockReset();
+    spawnMock.mockClear();
     spawnMock.mockImplementation(() => createMockChild());
-    logWarnMock.mockReset();
-    logDebugMock.mockReset();
-    logInfoMock.mockReset();
+    logWarnMock.mockClear();
+    logDebugMock.mockClear();
+    logInfoMock.mockClear();
     tmpRoot = path.join(fixtureRoot, `case-${fixtureCount++}`);
     await fs.mkdir(tmpRoot);
     workspaceDir = path.join(tmpRoot, "workspace");
@@ -1666,7 +1666,7 @@ describe("QmdMemoryManager", () => {
     ] as const;
 
     for (const testCase of cases) {
-      spawnMock.mockReset();
+      spawnMock.mockClear();
       spawnMock.mockImplementation(() => createMockChild());
       const { manager } = await createManager();
       try {
@@ -1957,7 +1957,7 @@ describe("QmdMemoryManager", () => {
         await fs.rm(customModelsDir, { recursive: true, force: true });
         await fs.mkdir(defaultModelsDir, { recursive: true });
         await fs.writeFile(path.join(defaultModelsDir, "model.bin"), "fake-model");
-        logWarnMock.mockReset();
+        logWarnMock.mockClear();
         await testCase.setup?.();
         const { manager } = await createManager({ mode: "full" });
         expect(manager, testCase.name).toBeTruthy();

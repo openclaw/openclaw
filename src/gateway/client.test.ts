@@ -185,10 +185,11 @@ describe("GatewayClient security checks", () => {
 describe("GatewayClient close handling", () => {
   beforeEach(() => {
     wsInstances.length = 0;
-    clearDeviceAuthTokenMock.mockReset();
-    clearDevicePairingMock.mockReset();
+    clearDeviceAuthTokenMock.mockClear();
+    clearDeviceAuthTokenMock.mockImplementation(() => undefined);
+    clearDevicePairingMock.mockClear();
     clearDevicePairingMock.mockResolvedValue(true);
-    logDebugMock.mockReset();
+    logDebugMock.mockClear();
   });
 
   it("clears stale token on device token mismatch close", () => {

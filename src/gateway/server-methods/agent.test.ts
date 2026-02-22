@@ -223,7 +223,7 @@ describe("gateway agent handler", () => {
   it("injects a timestamp into the message passed to agentCommand", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-29T01:30:00.000Z")); // Wed Jan 28, 8:30 PM EST
-    mocks.agentCommand.mockReset();
+    mocks.agentCommand.mockClear();
 
     mocks.loadConfigReturn = {
       agents: {
@@ -358,7 +358,7 @@ describe("gateway agent handler", () => {
   it("uses /reset suffix as the post-reset message and still injects timestamp", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-29T01:30:00.000Z")); // Wed Jan 28, 8:30 PM EST
-    mocks.agentCommand.mockReset();
+    mocks.agentCommand.mockClear();
     mocks.loadConfigReturn = {
       agents: {
         defaults: {

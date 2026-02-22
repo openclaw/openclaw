@@ -1,4 +1,4 @@
-import { createServer } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -8,7 +8,7 @@ import {
 import { getFreePort } from "./test-port.js";
 
 async function withRelayServer(
-  handler: Parameters<typeof createServer>[0],
+  handler: (req: IncomingMessage, res: ServerResponse) => void,
   run: (params: { port: number }) => Promise<void>,
 ) {
   const port = await getFreePort();

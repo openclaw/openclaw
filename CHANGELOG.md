@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 
 ### Breaking
 
+- **BREAKING:** remove legacy Gateway device-auth signature `v1`. Device-auth clients must now sign `v2` payloads with the per-connection `connect.challenge` nonce and send `device.nonce`; nonce-less connects are rejected.
 - **BREAKING:** unify channel preview-streaming config to `channels.<channel>.streaming` with enum values `off | partial | block | progress`, and move Slack native stream toggle to `channels.slack.nativeStreaming`. Legacy keys (`streamMode`, Slack boolean `streaming`) are still read and migrated by `openclaw doctor --fix`, but canonical saved config/docs now use the unified names.
 
 ### Fixes
@@ -33,6 +34,7 @@ Docs: https://docs.openclaw.ai
 - Agents/Fallbacks: treat JSON payloads with `type: "api_error"` + `"Internal server error"` as transient failover errors so Anthropic 500-style failures trigger model fallback. (#23193) Thanks @jarvis-lane.
 - Agents/Transcripts: validate assistant tool-call names (syntax/length + registered tool allowlist) before transcript persistence and during replay sanitization so malformed failover tool names no longer poison sessions with repeated provider HTTP 400 errors. (#23324) Thanks @johnsantry.
 - Agents/Compaction: strip stale assistant usage snapshots from pre-compaction turns when replaying history after a compaction summary so context-token estimation no longer reuses pre-compaction totals and immediately re-triggers destructive follow-up compactions. (#19127) Thanks @tedwatson.
+- Agents/Replies: emit a default completion acknowledgement (`✅ Done.`) when runs execute tools successfully but return no final assistant text, preventing silent no-reply turns after tool-only completions. (#22834) Thanks @Oldshue.
 - Agents/Diagnostics: include resolved lifecycle error text in `embedded run agent end` warnings so UI/TUI “Connection error” runs expose actionable provider failure reasons in gateway logs. (#23054) Thanks @Raize.
 - Plugins/Hooks: run legacy `before_agent_start` once per agent turn and reuse that result across model-resolve and prompt-build compatibility paths, preventing duplicate hook side effects (for example duplicate external API calls). (#23289) Thanks @ksato8710.
 - Models/Config: default missing Anthropic provider/model `api` fields to `anthropic-messages` during config validation so custom relay model entries are preserved instead of being dropped by runtime model registry validation. (#23332) Thanks @bigbigmonkey123.
@@ -61,6 +63,7 @@ Docs: https://docs.openclaw.ai
 - Security/Media: enforce inbound media byte limits during download/read across Discord, Telegram, Zalo, Microsoft Teams, and BlueBubbles to prevent oversized payload memory spikes before rejection. This ships in the next npm release. Thanks @tdjackey for reporting.
 - Media/Understanding: preserve `application/pdf` MIME classification during text-like file heuristics so PDF uploads use PDF extraction paths instead of being inlined as raw text. (#23191) Thanks @claudeplay2026-byte.
 - Security/Control UI: block symlink-based out-of-root static file reads by enforcing realpath containment and file-identity checks when serving Control UI assets and SPA fallback `index.html`. This ships in the next npm release. Thanks @tdjackey for reporting.
+- Security/Gateway avatars: block symlink traversal during local avatar `data:` URL resolution by enforcing realpath containment and file-identity checks before reads. This ships in the next npm release. Thanks @aether-ai-agent for reporting.
 - Security/Control UI: centralize avatar URL/path validation across gateway/config helpers and enforce a 2 MB max size for local agent avatar files before `/avatar` resolution, reducing oversized-avatar memory risk without changing supported avatar formats.
 - Security/MSTeams media: enforce allowlist checks for SharePoint reference attachment URLs and redirect targets during Graph-backed media fetches so redirect chains cannot escape configured media host boundaries. This ships in the next npm release. Thanks @tdjackey for reporting.
 - Security/macOS discovery: fail closed for unresolved discovery endpoints by clearing stale remote selection values, use resolved service host only for SSH target derivation, and keep remote URL config aligned with resolved endpoint availability. (#21618) Thanks @bmendonca3.

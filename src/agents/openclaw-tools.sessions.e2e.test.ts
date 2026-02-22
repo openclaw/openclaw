@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   addSubagentRunForTests,
   listSubagentRunsForRequester,
@@ -48,6 +48,10 @@ describe("sessions tools", () => {
     sessionsModule = await import("../config/sessions.js");
   });
 
+  beforeEach(() => {
+    callGatewayMock.mockReset();
+  });
+
   it("uses number (not integer) in tool schemas for Gemini compatibility", () => {
     const tools = createOpenClawTools();
     const byName = (name: string) => {
@@ -91,7 +95,6 @@ describe("sessions tools", () => {
   });
 
   it("sessions_list filters kinds and includes messages", async () => {
-    callGatewayMock.mockReset();
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "sessions.list") {
@@ -167,7 +170,6 @@ describe("sessions tools", () => {
   });
 
   it("sessions_history filters tool messages by default", async () => {
-    callGatewayMock.mockReset();
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "chat.history") {
@@ -201,7 +203,6 @@ describe("sessions tools", () => {
   });
 
   it("sessions_history caps oversized payloads and strips heavy fields", async () => {
-    callGatewayMock.mockReset();
     const oversized = Array.from({ length: 80 }, (_, idx) => ({
       role: "assistant",
       content: [
@@ -277,7 +278,6 @@ describe("sessions tools", () => {
   });
 
   it("sessions_history enforces a hard byte cap even when a single message is huge", async () => {
-    callGatewayMock.mockReset();
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "chat.history") {
@@ -323,7 +323,6 @@ describe("sessions tools", () => {
   });
 
   it("sessions_history resolves sessionId inputs", async () => {
-    callGatewayMock.mockReset();
     const sessionId = "sess-group";
     const targetKey = "agent:main:discord:channel:1457165743010611293";
     callGatewayMock.mockImplementation(async (opts: unknown) => {
@@ -363,7 +362,6 @@ describe("sessions tools", () => {
   });
 
   it("sessions_history errors on missing sessionId", async () => {
-    callGatewayMock.mockReset();
     const sessionId = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa";
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
@@ -386,7 +384,6 @@ describe("sessions tools", () => {
   });
 
   it("sessions_send supports fire-and-forget and wait", async () => {
-    callGatewayMock.mockReset();
     const calls: Array<{ method?: string; params?: unknown }> = [];
     let agentCallCount = 0;
     let _historyCallCount = 0;
@@ -530,7 +527,6 @@ describe("sessions tools", () => {
   });
 
   it("sessions_send resolves sessionId inputs", async () => {
-    callGatewayMock.mockReset();
     const sessionId = "sess-send";
     const targetKey = "agent:main:discord:channel:123";
     callGatewayMock.mockImplementation(async (opts: unknown) => {
@@ -579,7 +575,6 @@ describe("sessions tools", () => {
   });
 
   it("sessions_send runs ping-pong then announces", async () => {
-    callGatewayMock.mockReset();
     const calls: Array<{ method?: string; params?: unknown }> = [];
     let agentCallCount = 0;
     let lastWaitedRunId: string | undefined;
@@ -698,7 +693,6 @@ describe("sessions tools", () => {
 
   it("subagents lists active and recent runs", async () => {
     resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
     const now = Date.now();
     addSubagentRunForTests({
       runId: "run-active",
@@ -755,12 +749,10 @@ describe("sessions tools", () => {
     expect(details.recent).toHaveLength(1);
     expect(details.text).toContain("active subagents:");
     expect(details.text).toContain("recent (last 30m):");
-    resetSubagentRegistryForTests();
   });
 
   it("subagents list usage separates io tokens from prompt/cache", async () => {
     resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
     const now = Date.now();
     addSubagentRunForTests({
       runId: "run-usage-active",
@@ -807,13 +799,11 @@ describe("sessions tools", () => {
       expect(details.text).not.toContain("1.0k io");
     } finally {
       loadSessionStoreSpy.mockRestore();
-      resetSubagentRegistryForTests();
     }
   });
 
   it("subagents steer sends guidance to a running run", async () => {
     resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string };
       if (request.method === "agent") {
@@ -891,13 +881,11 @@ describe("sessions tools", () => {
       expect(trackedRuns[0].endedAt).toBeUndefined();
     } finally {
       loadSessionStoreSpy.mockRestore();
-      resetSubagentRegistryForTests();
     }
   });
 
   it("subagents numeric targets follow active-first list ordering", async () => {
     resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
     addSubagentRunForTests({
       runId: "run-active",
       childSessionKey: "agent:main:subagent:active",
@@ -937,13 +925,10 @@ describe("sessions tools", () => {
     expect(details.status).toBe("ok");
     expect(details.runId).toBe("run-active");
     expect(details.text).toContain("killed");
-
-    resetSubagentRegistryForTests();
   });
 
   it("subagents kill stops a running run", async () => {
     resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
     addSubagentRunForTests({
       runId: "run-kill",
       childSessionKey: "agent:main:subagent:kill",
@@ -970,12 +955,10 @@ describe("sessions tools", () => {
     const details = result.details as { status?: string; text?: string };
     expect(details.status).toBe("ok");
     expect(details.text).toContain("killed");
-    resetSubagentRegistryForTests();
   });
 
   it("subagents kill-all cascades through ended parents to active descendants", async () => {
     resetSubagentRegistryForTests();
-    callGatewayMock.mockReset();
     const now = Date.now();
     const endedParentKey = "agent:main:subagent:parent-ended";
     const activeChildKey = "agent:main:subagent:parent-ended:subagent:worker";
@@ -1022,6 +1005,5 @@ describe("sessions tools", () => {
     const descendants = listSubagentRunsForRequester(endedParentKey);
     const worker = descendants.find((entry) => entry.runId === "run-worker-active");
     expect(worker?.endedAt).toBeTypeOf("number");
-    resetSubagentRegistryForTests();
   });
 });
