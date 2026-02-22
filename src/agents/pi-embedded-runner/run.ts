@@ -4,6 +4,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
+import { resolveAgentModelFallbacksOverride } from "../agent-scope.js";
 import {
   isProfileInCooldown,
   markAuthProfileFailure,
@@ -226,8 +227,17 @@ export async function runEmbeddedPiAgent(
       let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
       let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
       const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
+
+      const agentFallbacksOverride = params.config
+        ? resolveAgentModelFallbacksOverride(params.config, workspaceResolution.agentId)
+        : undefined;
+      const defaultFallbacks = params.config?.agents?.defaults?.model?.fallbacks;
+
       const fallbackConfigured =
-        (params.config?.agents?.defaults?.model?.fallbacks?.length ?? 0) > 0;
+        agentFallbacksOverride !== undefined
+          ? agentFallbacksOverride.length > 0
+          : (defaultFallbacks?.length ?? 0) > 0;
+
       await ensureOpenClawModelsJson(params.config, agentDir);
 
       // Run before_model_resolve hooks early so plugins can override the
