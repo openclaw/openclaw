@@ -11,7 +11,13 @@
     "embedding.model": {
       "label": "Embedding Model",
       "placeholder": "text-embedding-3-small",
-      "help": "OpenAI embedding model to use"
+      "help": "Embedding model to use (OpenAI or Gemini)"
+    },
+    "embedding.baseUrl": {
+      "label": "Base URL",
+      "placeholder": "https://api.openai.com/v1",
+      "help": "Custom base URL for OpenAI-compatible embedding APIs",
+      "advanced": true
     },
     "dbPath": {
       "label": "Database Path",
@@ -46,7 +52,10 @@
           },
           "model": {
             "type": "string",
-            "enum": ["text-embedding-3-small", "text-embedding-3-large"]
+            "enum": ["text-embedding-3-small", "text-embedding-3-large", "gemini-embedding-001"]
+          },
+          "baseUrl": {
+            "type": "string"
           }
         },
         "required": ["apiKey"]

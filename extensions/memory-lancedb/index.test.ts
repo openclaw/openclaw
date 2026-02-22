@@ -120,6 +120,46 @@ describe("memory plugin e2e", () => {
     expect(config?.captureMaxChars).toBe(1800);
   });
 
+  test("config schema accepts gemini-embedding-001 with baseUrl", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+
+    const config = memoryPlugin.configSchema?.parse?.({
+      embedding: {
+        apiKey: OPENAI_API_KEY,
+        model: "gemini-embedding-001",
+        baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+      },
+      dbPath,
+    });
+
+    expect(config).toBeDefined();
+    expect(config?.embedding?.model).toBe("gemini-embedding-001");
+    expect(config?.embedding?.baseUrl).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/openai",
+    );
+  });
+
+  test("config schema resolves env vars in baseUrl", async () => {
+    const { default: memoryPlugin } = await import("./index.js");
+
+    process.env.TEST_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai";
+
+    const config = memoryPlugin.configSchema?.parse?.({
+      embedding: {
+        apiKey: OPENAI_API_KEY,
+        model: "gemini-embedding-001",
+        baseUrl: "${TEST_BASE_URL}",
+      },
+      dbPath,
+    });
+
+    expect(config?.embedding?.baseUrl).toBe(
+      "https://generativelanguage.googleapis.com/v1beta/openai",
+    );
+
+    delete process.env.TEST_BASE_URL;
+  });
+
   test("config schema keeps autoCapture disabled by default", async () => {
     const { default: memoryPlugin } = await import("./index.js");
 
