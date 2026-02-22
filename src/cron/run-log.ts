@@ -27,6 +27,10 @@ export function resolveCronRunLogPath(params: { storePath: string; jobId: string
 
 const writesByPath = new Map<string, Promise<void>>();
 
+export function getPendingCronRunLogWriteCountForTests() {
+  return writesByPath.size;
+}
+
 async function pruneIfNeeded(filePath: string, opts: { maxBytes: number; keepLines: number }) {
   const stat = await fs.stat(filePath).catch(() => null);
   if (!stat || stat.size <= opts.maxBytes) {
@@ -63,7 +67,13 @@ export async function appendCronRunLog(
       });
     });
   writesByPath.set(resolved, next);
-  await next;
+  try {
+    await next;
+  } finally {
+    if (writesByPath.get(resolved) === next) {
+      writesByPath.delete(resolved);
+    }
+  }
 }
 
 export async function readCronRunLogEntries(
