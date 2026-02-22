@@ -29,37 +29,50 @@ function createOpenAiAudioCfg(extra?: Partial<OpenClawConfig>): OpenClawConfig {
   } as unknown as OpenClawConfig;
 }
 
+async function runAutoAudioCase(params: {
+  transcribeAudio: (req: { model?: string }) => Promise<{ text: string; model: string }>;
+  cfgExtra?: Partial<OpenClawConfig>;
+}) {
+  let runResult: Awaited<ReturnType<typeof runCapability>> | undefined;
+  await withAudioFixture("openclaw-auto-audio", async ({ ctx, media, cache }) => {
+    const providerRegistry = createOpenAiAudioProvider(params.transcribeAudio);
+    const cfg = createOpenAiAudioCfg(params.cfgExtra);
+    runResult = await runCapability({
+      capability: "audio",
+      cfg,
+      ctx,
+      attachments: cache,
+      media,
+      providerRegistry,
+    });
+  });
+  if (!runResult) {
+    throw new Error("Expected auto audio case result");
+  }
+  return runResult;
+}
+
 describe("runCapability auto audio entries", () => {
   it("uses provider keys to auto-enable audio transcription", async () => {
-    await withAudioFixture("openclaw-auto-audio", async ({ ctx, media, cache }) => {
-      let seenModel: string | undefined;
-      const providerRegistry = createOpenAiAudioProvider(async (req) => {
+    let seenModel: string | undefined;
+    const result = await runAutoAudioCase({
+      transcribeAudio: async (req) => {
         seenModel = req.model;
         return { text: "ok", model: req.model ?? "unknown" };
-      });
-      const cfg = createOpenAiAudioCfg();
-
-      const result = await runCapability({
-        capability: "audio",
-        cfg,
-        ctx,
-        attachments: cache,
-        media,
-        providerRegistry,
-      });
-      expect(result.outputs[0]?.text).toBe("ok");
-      expect(seenModel).toBe("gpt-4o-mini-transcribe");
-      expect(result.decision.outcome).toBe("success");
+      },
     });
+    expect(result.outputs[0]?.text).toBe("ok");
+    expect(seenModel).toBe("gpt-4o-mini-transcribe");
+    expect(result.decision.outcome).toBe("success");
   });
 
   it("skips auto audio when disabled", async () => {
-    await withAudioFixture("openclaw-auto-audio", async ({ ctx, media, cache }) => {
-      const providerRegistry = createOpenAiAudioProvider(async () => ({
+    const result = await runAutoAudioCase({
+      transcribeAudio: async () => ({
         text: "ok",
         model: "whisper-1",
-      }));
-      const cfg = createOpenAiAudioCfg({
+      }),
+      cfgExtra: {
         tools: {
           media: {
             audio: {
@@ -67,29 +80,20 @@ describe("runCapability auto audio entries", () => {
             },
           },
         },
-      });
-
-      const result = await runCapability({
-        capability: "audio",
-        cfg,
-        ctx,
-        attachments: cache,
-        media,
-        providerRegistry,
-      });
-      expect(result.outputs).toHaveLength(0);
-      expect(result.decision.outcome).toBe("disabled");
+      },
     });
+    expect(result.outputs).toHaveLength(0);
+    expect(result.decision.outcome).toBe("disabled");
   });
 
   it("prefers explicitly configured audio model entries", async () => {
-    await withAudioFixture("openclaw-auto-audio", async ({ ctx, media, cache }) => {
-      let seenModel: string | undefined;
-      const providerRegistry = createOpenAiAudioProvider(async (req) => {
+    let seenModel: string | undefined;
+    const result = await runAutoAudioCase({
+      transcribeAudio: async (req) => {
         seenModel = req.model;
         return { text: "ok", model: req.model ?? "unknown" };
-      });
-      const cfg = createOpenAiAudioCfg({
+      },
+      cfgExtra: {
         tools: {
           media: {
             audio: {
@@ -97,19 +101,10 @@ describe("runCapability auto audio entries", () => {
             },
           },
         },
-      });
-
-      const result = await runCapability({
-        capability: "audio",
-        cfg,
-        ctx,
-        attachments: cache,
-        media,
-        providerRegistry,
-      });
-
-      expect(result.outputs[0]?.text).toBe("ok");
-      expect(seenModel).toBe("whisper-1");
+      },
     });
+
+    expect(result.outputs[0]?.text).toBe("ok");
+    expect(seenModel).toBe("whisper-1");
   });
 });

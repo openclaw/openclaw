@@ -138,6 +138,68 @@ function createDefaultThreadConfig(): LoadedConfig {
   } as LoadedConfig;
 }
 
+function createMentionRequiredGuildConfig(
+  params: {
+    messages?: LoadedConfig["messages"];
+  } = {},
+): LoadedConfig {
+  return {
+    agents: {
+      defaults: {
+        model: "anthropic/claude-opus-4-5",
+        workspace: "/tmp/openclaw",
+      },
+    },
+    session: { store: "/tmp/openclaw-sessions.json" },
+    channels: {
+      discord: {
+        dm: { enabled: true, policy: "open" },
+        groupPolicy: "open",
+        guilds: { "*": { requireMention: true } },
+      },
+    },
+    ...(params.messages ? { messages: params.messages } : {}),
+  } as LoadedConfig;
+}
+
+function createGuildTextClient() {
+  return {
+    fetchChannel: vi.fn().mockResolvedValue({
+      type: ChannelType.GuildText,
+      name: "general",
+    }),
+  } as unknown as Client;
+}
+
+function createGuildMessageEvent(params: {
+  messageId: string;
+  content: string;
+  messagePatch?: Record<string, unknown>;
+  eventPatch?: Record<string, unknown>;
+}) {
+  return {
+    message: {
+      id: params.messageId,
+      content: params.content,
+      channelId: "c1",
+      timestamp: new Date().toISOString(),
+      type: MessageType.Default,
+      attachments: [],
+      embeds: [],
+      mentionedEveryone: false,
+      mentionedUsers: [],
+      mentionedRoles: [],
+      author: { id: "u1", bot: false, username: "Ada" },
+      ...params.messagePatch,
+    },
+    author: { id: "u1", bot: false, username: "Ada" },
+    member: { nickname: "Ada" },
+    guild: { id: "g1", name: "Guild" },
+    guild_id: "g1",
+    ...params.eventPatch,
+  };
+}
+
 function createThreadChannel(params: { includeStarter?: boolean } = {}) {
   return {
     type: ChannelType.GuildText,
@@ -209,56 +271,18 @@ describe("discord tool result dispatch", () => {
   it(
     "accepts guild messages when mentionPatterns match",
     async () => {
-      const cfg = {
-        agents: {
-          defaults: {
-            model: "anthropic/claude-opus-4-5",
-            workspace: "/tmp/openclaw",
-          },
-        },
-        session: { store: "/tmp/openclaw-sessions.json" },
-        channels: {
-          discord: {
-            dm: { enabled: true, policy: "open" },
-            groupPolicy: "open",
-            guilds: { "*": { requireMention: true } },
-          },
-        },
+      const cfg = createMentionRequiredGuildConfig({
         messages: {
           responsePrefix: "PFX",
           groupChat: { mentionPatterns: ["\\bopenclaw\\b"] },
         },
-      } as ReturnType<typeof import("../config/config.js").loadConfig>;
+      });
 
       const handler = await createHandler(cfg);
-
-      const client = {
-        fetchChannel: vi.fn().mockResolvedValue({
-          type: ChannelType.GuildText,
-          name: "general",
-        }),
-      } as unknown as Client;
+      const client = createGuildTextClient();
 
       await handler(
-        {
-          message: {
-            id: "m2",
-            content: "openclaw: hello",
-            channelId: "c1",
-            timestamp: new Date().toISOString(),
-            type: MessageType.Default,
-            attachments: [],
-            embeds: [],
-            mentionedEveryone: false,
-            mentionedUsers: [],
-            mentionedRoles: [],
-            author: { id: "u1", bot: false, username: "Ada" },
-          },
-          author: { id: "u1", bot: false, username: "Ada" },
-          member: { nickname: "Ada" },
-          guild: { id: "g1", name: "Guild" },
-          guild_id: "g1",
-        },
+        createGuildMessageEvent({ messageId: "m2", content: "openclaw: hello" }),
         client,
       );
 
@@ -323,46 +347,16 @@ describe("discord tool result dispatch", () => {
   );
 
   it("accepts guild reply-to-bot messages as implicit mentions", async () => {
-    const cfg = {
-      agents: {
-        defaults: {
-          model: "anthropic/claude-opus-4-5",
-          workspace: "/tmp/openclaw",
-        },
-      },
-      session: { store: "/tmp/openclaw-sessions.json" },
-      channels: {
-        discord: {
-          dm: { enabled: true, policy: "open" },
-          groupPolicy: "open",
-          guilds: { "*": { requireMention: true } },
-        },
-      },
-    } as ReturnType<typeof import("../config/config.js").loadConfig>;
+    const cfg = createMentionRequiredGuildConfig();
 
     const handler = await createHandler(cfg);
-
-    const client = {
-      fetchChannel: vi.fn().mockResolvedValue({
-        type: ChannelType.GuildText,
-        name: "general",
-      }),
-    } as unknown as Client;
+    const client = createGuildTextClient();
 
     await handler(
-      {
-        message: {
-          id: "m3",
-          content: "following up",
-          channelId: "c1",
-          timestamp: new Date().toISOString(),
-          type: MessageType.Default,
-          attachments: [],
-          embeds: [],
-          mentionedEveryone: false,
-          mentionedUsers: [],
-          mentionedRoles: [],
-          author: { id: "u1", bot: false, username: "Ada" },
+      createGuildMessageEvent({
+        messageId: "m3",
+        content: "following up",
+        messagePatch: {
           referencedMessage: {
             id: "m2",
             channelId: "c1",
@@ -377,21 +371,19 @@ describe("discord tool result dispatch", () => {
             author: { id: "bot-id", bot: true, username: "OpenClaw" },
           },
         },
-        author: { id: "u1", bot: false, username: "Ada" },
-        member: { nickname: "Ada" },
-        guild: { id: "g1", name: "Guild" },
-        guild_id: "g1",
-        channel: { id: "c1", type: ChannelType.GuildText },
-        client,
-        data: {
-          id: "m3",
-          content: "following up",
-          channel_id: "c1",
-          guild_id: "g1",
-          type: MessageType.Default,
-          mentions: [],
+        eventPatch: {
+          channel: { id: "c1", type: ChannelType.GuildText },
+          client,
+          data: {
+            id: "m3",
+            content: "following up",
+            channel_id: "c1",
+            guild_id: "g1",
+            type: MessageType.Default,
+            mentions: [],
+          },
         },
-      },
+      }),
       client,
     );
 

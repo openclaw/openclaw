@@ -70,6 +70,7 @@ import { resolveDiscordAllowlistConfig } from "./provider.allowlist.js";
 import { runDiscordGatewayLifecycle } from "./provider.lifecycle.js";
 import { resolveDiscordRestFetch } from "./rest-fetch.js";
 import { createNoopThreadBindingManager, createThreadBindingManager } from "./thread-bindings.js";
+import { formatThreadBindingTtlLabel } from "./thread-bindings.messages.js";
 
 export type MonitorDiscordOpts = {
   token?: string;
@@ -143,17 +144,8 @@ function resolveThreadBindingsEnabled(params: {
 }
 
 function formatThreadBindingSessionTtlLabel(ttlMs: number): string {
-  if (ttlMs <= 0) {
-    return "off";
-  }
-  if (ttlMs < 60_000) {
-    return "<1m";
-  }
-  const totalMinutes = Math.floor(ttlMs / 60_000);
-  if (totalMinutes % 60 === 0) {
-    return `${Math.floor(totalMinutes / 60)}h`;
-  }
-  return `${totalMinutes}m`;
+  const label = formatThreadBindingTtlLabel(ttlMs);
+  return label === "disabled" ? "off" : label;
 }
 
 function dedupeSkillCommandsForDiscord(

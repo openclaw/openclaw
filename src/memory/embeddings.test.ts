@@ -20,6 +20,13 @@ const createFetchMock = () =>
     json: async () => ({ data: [{ embedding: [1, 2, 3] }] }),
   }));
 
+const createGeminiFetchMock = () =>
+  vi.fn(async (_input?: unknown, _init?: unknown) => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ embedding: { values: [1, 2, 3] } }),
+  }));
+
 afterEach(() => {
   vi.resetAllMocks();
   vi.unstubAllGlobals();
@@ -54,6 +61,25 @@ function createLocalProvider(options?: { fallback?: "none" | "openai" }) {
     provider: "local",
     model: "text-embedding-3-small",
     fallback: options?.fallback ?? "none",
+  });
+}
+
+function expectAutoSelectedProvider(
+  result: Awaited<ReturnType<typeof createEmbeddingProvider>>,
+  expectedId: "openai" | "gemini",
+) {
+  expect(result.requestedProvider).toBe("auto");
+  const provider = requireProvider(result);
+  expect(provider.id).toBe(expectedId);
+  return provider;
+}
+
+function createAutoProvider(model = "") {
+  return createEmbeddingProvider({
+    config: {} as never,
+    provider: "auto",
+    model,
+    fallback: "none",
   });
 }
 
@@ -143,11 +169,7 @@ describe("embedding provider remote overrides", () => {
   });
 
   it("builds Gemini embeddings requests with api key header", async () => {
-    const fetchMock = vi.fn(async (_input?: unknown, _init?: unknown) => ({
-      ok: true,
-      status: 200,
-      json: async () => ({ embedding: { values: [1, 2, 3] } }),
-    }));
+    const fetchMock = createGeminiFetchMock();
     vi.stubGlobal("fetch", fetchMock);
     mockResolvedProviderKey("provider-key");
 
@@ -194,24 +216,12 @@ describe("embedding provider auto selection", () => {
       throw new Error(`No API key found for provider "${provider}".`);
     });
 
-    const result = await createEmbeddingProvider({
-      config: {} as never,
-      provider: "auto",
-      model: "",
-      fallback: "none",
-    });
-
-    expect(result.requestedProvider).toBe("auto");
-    const provider = requireProvider(result);
-    expect(provider.id).toBe("openai");
+    const result = await createAutoProvider();
+    expectAutoSelectedProvider(result, "openai");
   });
 
   it("uses gemini when openai is missing", async () => {
-    const fetchMock = vi.fn(async (_input?: unknown, _init?: unknown) => ({
-      ok: true,
-      status: 200,
-      json: async () => ({ embedding: { values: [1, 2, 3] } }),
-    }));
+    const fetchMock = createGeminiFetchMock();
     vi.stubGlobal("fetch", fetchMock);
     vi.mocked(authModule.resolveApiKeyForProvider).mockImplementation(async ({ provider }) => {
       if (provider === "openai") {
@@ -223,16 +233,8 @@ describe("embedding provider auto selection", () => {
       throw new Error(`Unexpected provider ${provider}`);
     });
 
-    const result = await createEmbeddingProvider({
-      config: {} as never,
-      provider: "auto",
-      model: "",
-      fallback: "none",
-    });
-
-    expect(result.requestedProvider).toBe("auto");
-    const provider = requireProvider(result);
-    expect(provider.id).toBe("gemini");
+    const result = await createAutoProvider();
+    const provider = expectAutoSelectedProvider(result, "gemini");
     await provider.embedQuery("hello");
     const [url] = fetchMock.mock.calls[0] ?? [];
     expect(url).toBe(

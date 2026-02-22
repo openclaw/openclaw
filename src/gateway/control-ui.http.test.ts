@@ -40,6 +40,32 @@ describe("handleControlUiHttpRequest", () => {
     expect(params.end).toHaveBeenCalledWith("Not Found");
   }
 
+  function runControlUiRequest(params: {
+    url: string;
+    method: "GET" | "HEAD";
+    rootPath: string;
+    basePath?: string;
+  }) {
+    const { res, end } = makeMockHttpResponse();
+    const handled = handleControlUiHttpRequest(
+      { url: params.url, method: params.method } as IncomingMessage,
+      res,
+      {
+        ...(params.basePath ? { basePath: params.basePath } : {}),
+        root: { kind: "resolved", path: params.rootPath },
+      },
+    );
+    return { res, end, handled };
+  }
+
+  async function writeAssetFile(rootPath: string, filename: string, contents: string) {
+    const assetsDir = path.join(rootPath, "assets");
+    await fs.mkdir(assetsDir, { recursive: true });
+    const filePath = path.join(assetsDir, filename);
+    await fs.writeFile(filePath, contents);
+    return { assetsDir, filePath };
+  }
+
   async function withBasePathRootFixture<T>(params: {
     siblingDir: string;
     fn: (paths: { root: string; sibling: string }) => Promise<T>;
@@ -183,19 +209,14 @@ describe("handleControlUiHttpRequest", () => {
   it("allows symlinked assets that resolve inside control-ui root", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
-        const assetsDir = path.join(tmp, "assets");
-        await fs.mkdir(assetsDir, { recursive: true });
-        await fs.writeFile(path.join(assetsDir, "actual.txt"), "inside-ok\n");
-        await fs.symlink(path.join(assetsDir, "actual.txt"), path.join(assetsDir, "linked.txt"));
+        const { assetsDir, filePath } = await writeAssetFile(tmp, "actual.txt", "inside-ok\n");
+        await fs.symlink(filePath, path.join(assetsDir, "linked.txt"));
 
-        const { res, end } = makeMockHttpResponse();
-        const handled = handleControlUiHttpRequest(
-          { url: "/assets/linked.txt", method: "GET" } as IncomingMessage,
-          res,
-          {
-            root: { kind: "resolved", path: tmp },
-          },
-        );
+        const { res, end, handled } = runControlUiRequest({
+          url: "/assets/linked.txt",
+          method: "GET",
+          rootPath: tmp,
+        });
 
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
@@ -207,18 +228,13 @@ describe("handleControlUiHttpRequest", () => {
   it("serves HEAD for in-root assets without writing a body", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
-        const assetsDir = path.join(tmp, "assets");
-        await fs.mkdir(assetsDir, { recursive: true });
-        await fs.writeFile(path.join(assetsDir, "actual.txt"), "inside-ok\n");
+        await writeAssetFile(tmp, "actual.txt", "inside-ok\n");
 
-        const { res, end } = makeMockHttpResponse();
-        const handled = handleControlUiHttpRequest(
-          { url: "/assets/actual.txt", method: "HEAD" } as IncomingMessage,
-          res,
-          {
-            root: { kind: "resolved", path: tmp },
-          },
-        );
+        const { res, end, handled } = runControlUiRequest({
+          url: "/assets/actual.txt",
+          method: "HEAD",
+          rootPath: tmp,
+        });
 
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
@@ -237,14 +253,11 @@ describe("handleControlUiHttpRequest", () => {
           await fs.rm(path.join(tmp, "index.html"));
           await fs.symlink(outsideIndex, path.join(tmp, "index.html"));
 
-          const { res, end } = makeMockHttpResponse();
-          const handled = handleControlUiHttpRequest(
-            { url: "/app/route", method: "GET" } as IncomingMessage,
-            res,
-            {
-              root: { kind: "resolved", path: tmp },
-            },
-          );
+          const { res, end, handled } = runControlUiRequest({
+            url: "/app/route",
+            method: "GET",
+            rootPath: tmp,
+          });
           expectNotFoundResponse({ handled, res, end });
         } finally {
           await fs.rm(outsideDir, { recursive: true, force: true });
@@ -262,16 +275,12 @@ describe("handleControlUiHttpRequest", () => {
 
         const secretPathUrl = secretPath.split(path.sep).join("/");
         const absolutePathUrl = secretPathUrl.startsWith("/") ? secretPathUrl : `/${secretPathUrl}`;
-        const { res, end } = makeMockHttpResponse();
-
-        const handled = handleControlUiHttpRequest(
-          { url: `/openclaw/${absolutePathUrl}`, method: "GET" } as IncomingMessage,
-          res,
-          {
-            basePath: "/openclaw",
-            root: { kind: "resolved", path: root },
-          },
-        );
+        const { res, end, handled } = runControlUiRequest({
+          url: `/openclaw/${absolutePathUrl}`,
+          method: "GET",
+          rootPath: root,
+          basePath: "/openclaw",
+        });
         expectNotFoundResponse({ handled, res, end });
       },
     });
@@ -295,15 +304,12 @@ describe("handleControlUiHttpRequest", () => {
           throw error;
         }
 
-        const { res, end } = makeMockHttpResponse();
-        const handled = handleControlUiHttpRequest(
-          { url: "/openclaw/assets/leak.txt", method: "GET" } as IncomingMessage,
-          res,
-          {
-            basePath: "/openclaw",
-            root: { kind: "resolved", path: root },
-          },
-        );
+        const { res, end, handled } = runControlUiRequest({
+          url: "/openclaw/assets/leak.txt",
+          method: "GET",
+          rootPath: root,
+          basePath: "/openclaw",
+        });
         expectNotFoundResponse({ handled, res, end });
       },
     });

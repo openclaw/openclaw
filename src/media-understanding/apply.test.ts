@@ -92,6 +92,21 @@ function createMediaDisabledConfig(): OpenClawConfig {
   };
 }
 
+function createMediaDisabledConfigWithAllowedMimes(allowedMimes: string[]): OpenClawConfig {
+  return {
+    ...createMediaDisabledConfig(),
+    gateway: {
+      http: {
+        endpoints: {
+          responses: {
+            files: { allowedMimes },
+          },
+        },
+      },
+    },
+  };
+}
+
 async function createTempMediaFile(params: { fileName: string; content: Buffer | string }) {
   const dir = await createTempMediaDir();
   const mediaPath = path.join(dir, params.fileName);
@@ -133,6 +148,16 @@ async function applyWithDisabledMedia(params: {
     cfg: params.cfg ?? createMediaDisabledConfig(),
   });
   return { ctx, result };
+}
+
+function expectFileNotApplied(params: {
+  ctx: MsgContext;
+  result: { appliedFile: boolean };
+  body: string;
+}) {
+  expect(params.result.appliedFile).toBe(false);
+  expect(params.ctx.Body).toBe(params.body);
+  expect(params.ctx.Body).not.toContain("<file");
 }
 
 describe("applyMediaUnderstanding", () => {
@@ -627,9 +652,7 @@ describe("applyMediaUnderstanding", () => {
       mediaType: "audio/mpeg",
     });
 
-    expect(result.appliedFile).toBe(false);
-    expect(ctx.Body).toBe("<media:audio>");
-    expect(ctx.Body).not.toContain("<file");
+    expectFileNotApplied({ ctx, result, body: "<media:audio>" });
   });
 
   it("does not reclassify PDF attachments as text/plain", async () => {
@@ -639,18 +662,7 @@ describe("applyMediaUnderstanding", () => {
       content: pseudoPdf,
     });
 
-    const cfg: OpenClawConfig = {
-      ...createMediaDisabledConfig(),
-      gateway: {
-        http: {
-          endpoints: {
-            responses: {
-              files: { allowedMimes: ["text/plain"] },
-            },
-          },
-        },
-      },
-    };
+    const cfg = createMediaDisabledConfigWithAllowedMimes(["text/plain"]);
 
     const { ctx, result } = await applyWithDisabledMedia({
       body: "<media:file>",
@@ -659,9 +671,7 @@ describe("applyMediaUnderstanding", () => {
       cfg,
     });
 
-    expect(result.appliedFile).toBe(false);
-    expect(ctx.Body).toBe("<media:file>");
-    expect(ctx.Body).not.toContain("<file");
+    expectFileNotApplied({ ctx, result, body: "<media:file>" });
   });
 
   it("respects configured allowedMimes for text-like attachments", async () => {
@@ -671,27 +681,14 @@ describe("applyMediaUnderstanding", () => {
       content: tsvText,
     });
 
-    const cfg: OpenClawConfig = {
-      ...createMediaDisabledConfig(),
-      gateway: {
-        http: {
-          endpoints: {
-            responses: {
-              files: { allowedMimes: ["text/plain"] },
-            },
-          },
-        },
-      },
-    };
+    const cfg = createMediaDisabledConfigWithAllowedMimes(["text/plain"]);
     const { ctx, result } = await applyWithDisabledMedia({
       body: "<media:file>",
       mediaPath: tsvPath,
       cfg,
     });
 
-    expect(result.appliedFile).toBe(false);
-    expect(ctx.Body).toBe("<media:file>");
-    expect(ctx.Body).not.toContain("<file");
+    expectFileNotApplied({ ctx, result, body: "<media:file>" });
   });
 
   it("escapes XML special characters in filenames to prevent injection", async () => {
@@ -824,9 +821,7 @@ describe("applyMediaUnderstanding", () => {
       mediaType: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     });
 
-    expect(result.appliedFile).toBe(false);
-    expect(ctx.Body).toBe("<media:file>");
-    expect(ctx.Body).not.toContain("<file");
+    expectFileNotApplied({ ctx, result, body: "<media:file>" });
   });
 
   it("keeps vendor +json attachments eligible for text extraction", async () => {

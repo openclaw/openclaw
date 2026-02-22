@@ -22,6 +22,24 @@ import {
 } from "./thread-bindings.state.js";
 import type { ThreadBindingRecord, ThreadBindingTargetKind } from "./thread-bindings.types.js";
 
+function resolveBindingIdsForTargetSession(params: {
+  targetSessionKey: string;
+  accountId?: string;
+  targetKind?: ThreadBindingTargetKind;
+}) {
+  ensureBindingsLoaded();
+  const targetSessionKey = params.targetSessionKey.trim();
+  if (!targetSessionKey) {
+    return [];
+  }
+  const accountId = params.accountId ? normalizeAccountId(params.accountId) : undefined;
+  return resolveBindingIdsForSession({
+    targetSessionKey,
+    accountId,
+    targetKind: params.targetKind,
+  });
+}
+
 export function listThreadBindingsForAccount(accountId?: string): ThreadBindingRecord[] {
   const manager = getThreadBindingManager(accountId);
   if (!manager) {
@@ -35,17 +53,7 @@ export function listThreadBindingsBySessionKey(params: {
   accountId?: string;
   targetKind?: ThreadBindingTargetKind;
 }): ThreadBindingRecord[] {
-  ensureBindingsLoaded();
-  const targetSessionKey = params.targetSessionKey.trim();
-  if (!targetSessionKey) {
-    return [];
-  }
-  const accountId = params.accountId ? normalizeAccountId(params.accountId) : undefined;
-  const ids = resolveBindingIdsForSession({
-    targetSessionKey,
-    accountId,
-    targetKind: params.targetKind,
-  });
+  const ids = resolveBindingIdsForTargetSession(params);
   return ids
     .map((bindingKey) => BINDINGS_BY_THREAD_ID.get(bindingKey))
     .filter((entry): entry is ThreadBindingRecord => Boolean(entry));
@@ -136,17 +144,7 @@ export function unbindThreadBindingsBySessionKey(params: {
   sendFarewell?: boolean;
   farewellText?: string;
 }): ThreadBindingRecord[] {
-  ensureBindingsLoaded();
-  const targetSessionKey = params.targetSessionKey.trim();
-  if (!targetSessionKey) {
-    return [];
-  }
-  const accountId = params.accountId ? normalizeAccountId(params.accountId) : undefined;
-  const ids = resolveBindingIdsForSession({
-    targetSessionKey,
-    accountId,
-    targetKind: params.targetKind,
-  });
+  const ids = resolveBindingIdsForTargetSession(params);
   if (ids.length === 0) {
     return [];
   }
@@ -188,16 +186,7 @@ export function setThreadBindingTtlBySessionKey(params: {
   accountId?: string;
   ttlMs: number;
 }): ThreadBindingRecord[] {
-  ensureBindingsLoaded();
-  const targetSessionKey = params.targetSessionKey.trim();
-  if (!targetSessionKey) {
-    return [];
-  }
-  const accountId = params.accountId ? normalizeAccountId(params.accountId) : undefined;
-  const ids = resolveBindingIdsForSession({
-    targetSessionKey,
-    accountId,
-  });
+  const ids = resolveBindingIdsForTargetSession(params);
   if (ids.length === 0) {
     return [];
   }
