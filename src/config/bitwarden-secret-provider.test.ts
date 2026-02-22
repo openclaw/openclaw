@@ -167,6 +167,19 @@ describe("BitwardenSecretProvider", () => {
       expect(value).toBe("123456");
     });
 
+    it("does not cache TOTP for the full provider TTL", async () => {
+      stubBw({ "get totp totp-item": "111111" });
+      const provider = new BitwardenSecretProvider({ cacheTtlSeconds: 300 });
+      await provider.getSecret("totp-item/totp");
+      // Advance time past TOTP cap (25s) but within provider TTL (300s)
+      vi.useFakeTimers();
+      vi.advanceTimersByTime(26_000);
+      stubBw({ "get totp totp-item": "222222" });
+      const second = await provider.getSecret("totp-item/totp");
+      vi.useRealTimers();
+      expect(second).toBe("222222");
+    });
+
     it("returns empty string for notes when item has no notes", async () => {
       const noNotes = { ...LOGIN_ITEM, notes: null };
       stubBw({ "get item no-notes": JSON.stringify(noNotes) });
@@ -280,6 +293,35 @@ describe("BitwardenSecretProvider", () => {
       const decoded = JSON.parse(Buffer.from(capturedCreateArgs[2], "base64").toString("utf-8"));
       expect(decoded.fields).toEqual([{ name: "my-field", value: "field-value", type: 0 }]);
       expect(decoded.login.password).toBeNull();
+    });
+
+    it("re-throws non-not-found errors instead of swallowing them", async () => {
+      stubBw({ "get item broken": new Error("Vault is locked") });
+      const provider = createProvider();
+      await expect(provider.setSecret("broken/password", "val")).rejects.toThrow(/locked/i);
+    });
+
+    it("does not duplicate notes into custom fields on create", async () => {
+      let capturedArgs: string[] = [];
+      mockExecFile.mockImplementation(
+        (_cmd: unknown, args: unknown, _opts: unknown, callback: unknown) => {
+          const argv = args as string[];
+          if (argv[0] === "get" && argv[1] === "item") {
+            (callback as ExecCallback)(new Error("Not found"), { stdout: "", stderr: "" });
+          } else if (argv[0] === "create") {
+            capturedArgs = [...argv];
+            (callback as ExecCallback)(null, { stdout: "{}", stderr: "" });
+          } else {
+            (callback as ExecCallback)(null, { stdout: "{}", stderr: "" });
+          }
+          return undefined as never;
+        },
+      );
+      const provider = createProvider();
+      await provider.setSecret("note-item/notes", "my note content");
+      const decoded = JSON.parse(Buffer.from(capturedArgs[2], "base64").toString("utf-8"));
+      expect(decoded.notes).toBe("my note content");
+      expect(decoded.fields).toEqual([]);
     });
   });
 

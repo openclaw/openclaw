@@ -229,7 +229,9 @@ export class BitwardenSecretProvider implements SecretProvider {
 
     if (field === "totp") {
       const totp = await this.runBw(["get", "totp", itemQuery]);
-      localCache.set(cacheKey, { value: totp, expiresAt: Date.now() + this.cacheTtlMs });
+      // TOTP codes rotate every ~30s; cap cache to avoid returning stale codes
+      const totpTtl = Math.min(this.cacheTtlMs, 25_000);
+      localCache.set(cacheKey, { value: totp, expiresAt: Date.now() + totpTtl });
       return totp;
     }
 
@@ -248,8 +250,11 @@ export class BitwardenSecretProvider implements SecretProvider {
     try {
       const raw = await this.runBw(["get", "item", itemQuery]);
       existingItem = JSON.parse(raw);
-    } catch {
-      // Item doesn't exist yet
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.includes("not found") && !msg.includes("Not found")) {
+        throw err;
+      }
     }
 
     if (existingItem) {
@@ -268,7 +273,9 @@ export class BitwardenSecretProvider implements SecretProvider {
           uris: [],
         },
         fields:
-          field !== "password" && field !== "username" ? [{ name: field, value, type: 0 }] : [],
+          field !== "password" && field !== "username" && field !== "notes"
+            ? [{ name: field, value, type: 0 }]
+            : [],
         notes: field === "notes" ? value : null,
       };
       if (field === "username") {
