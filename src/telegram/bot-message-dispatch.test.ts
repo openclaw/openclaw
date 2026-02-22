@@ -46,8 +46,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
     dispatchReplyWithBufferedBlockDispatcher.mockReset();
     deliverReplies.mockReset();
     editMessageTelegram.mockReset();
-    loadSessionStore.mockReset();
-    resolveStorePath.mockReset();
+    loadSessionStore.mockClear();
+    resolveStorePath.mockClear();
     resolveStorePath.mockReturnValue("/tmp/sessions.json");
     loadSessionStore.mockReturnValue({});
   });
