@@ -49,6 +49,17 @@ describe("resolveGatewayRuntimeConfig", () => {
         },
         expectedBindHost: "127.0.0.1",
       },
+      {
+        name: "loopback binding with loopback cidr proxy",
+        cfg: {
+          gateway: {
+            bind: "loopback" as const,
+            auth: TRUSTED_PROXY_AUTH,
+            trustedProxies: ["127.0.0.0/8"],
+          },
+        },
+        expectedBindHost: "127.0.0.1",
+      },
     ])("allows $name", async ({ cfg, expectedBindHost }) => {
       const result = await resolveGatewayRuntimeConfig({ cfg, port: 18789 });
       expect(result.authMode).toBe("trusted-proxy");

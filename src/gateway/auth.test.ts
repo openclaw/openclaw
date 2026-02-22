@@ -46,6 +46,46 @@ function createTailscaleWhois() {
 }
 
 describe("gateway auth", () => {
+  async function expectTokenMismatchWithLimiter(params: {
+    reqHeaders: Record<string, string>;
+    allowRealIpFallback?: boolean;
+  }) {
+    const limiter = createLimiterSpy();
+    const res = await authorizeGatewayConnect({
+      auth: { mode: "token", token: "secret", allowTailscale: false },
+      connectAuth: { token: "wrong" },
+      req: {
+        socket: { remoteAddress: "127.0.0.1" },
+        headers: params.reqHeaders,
+      } as never,
+      trustedProxies: ["127.0.0.1"],
+      ...(params.allowRealIpFallback ? { allowRealIpFallback: true } : {}),
+      rateLimiter: limiter,
+    });
+    expect(res.ok).toBe(false);
+    expect(res.reason).toBe("token_mismatch");
+    return limiter;
+  }
+
+  async function expectTailscaleHeaderAuthResult(params: {
+    authorize: typeof authorizeHttpGatewayConnect | typeof authorizeWsControlUiGatewayConnect;
+    expected: { ok: false; reason: string } | { ok: true; method: string; user: string };
+  }) {
+    const res = await params.authorize({
+      auth: { mode: "token", token: "secret", allowTailscale: true },
+      connectAuth: null,
+      tailscaleWhois: createTailscaleWhois(),
+      req: createTailscaleForwardedReq(),
+    });
+    expect(res.ok).toBe(params.expected.ok);
+    if (!params.expected.ok) {
+      expect(res.reason).toBe(params.expected.reason);
+      return;
+    }
+    expect(res.method).toBe(params.expected.method);
+    expect(res.user).toBe(params.expected.user);
+  }
+
   it("resolves token/password from OPENCLAW gateway env vars", () => {
     expect(
       resolveGatewayAuth({
@@ -238,82 +278,40 @@ describe("gateway auth", () => {
   });
 
   it("keeps tailscale header auth disabled on HTTP auth wrapper", async () => {
-    const res = await authorizeHttpGatewayConnect({
-      auth: { mode: "token", token: "secret", allowTailscale: true },
-      connectAuth: null,
-      tailscaleWhois: createTailscaleWhois(),
-      req: createTailscaleForwardedReq(),
+    await expectTailscaleHeaderAuthResult({
+      authorize: authorizeHttpGatewayConnect,
+      expected: { ok: false, reason: "token_missing" },
     });
-    expect(res.ok).toBe(false);
-    expect(res.reason).toBe("token_missing");
   });
 
   it("enables tailscale header auth on ws control-ui auth wrapper", async () => {
-    const res = await authorizeWsControlUiGatewayConnect({
-      auth: { mode: "token", token: "secret", allowTailscale: true },
-      connectAuth: null,
-      tailscaleWhois: createTailscaleWhois(),
-      req: createTailscaleForwardedReq(),
+    await expectTailscaleHeaderAuthResult({
+      authorize: authorizeWsControlUiGatewayConnect,
+      expected: { ok: true, method: "tailscale", user: "peter" },
     });
-    expect(res.ok).toBe(true);
-    expect(res.method).toBe("tailscale");
-    expect(res.user).toBe("peter");
   });
 
   it("uses proxy-aware request client IP by default for rate-limit checks", async () => {
-    const limiter = createLimiterSpy();
-    const res = await authorizeGatewayConnect({
-      auth: { mode: "token", token: "secret", allowTailscale: false },
-      connectAuth: { token: "wrong" },
-      req: {
-        socket: { remoteAddress: "127.0.0.1" },
-        headers: { "x-forwarded-for": "203.0.113.10" },
-      } as never,
-      trustedProxies: ["127.0.0.1"],
-      rateLimiter: limiter,
+    const limiter = await expectTokenMismatchWithLimiter({
+      reqHeaders: { "x-forwarded-for": "203.0.113.10" },
     });
-
-    expect(res.ok).toBe(false);
-    expect(res.reason).toBe("token_mismatch");
     expect(limiter.check).toHaveBeenCalledWith("203.0.113.10", "shared-secret");
     expect(limiter.recordFailure).toHaveBeenCalledWith("203.0.113.10", "shared-secret");
   });
 
   it("ignores X-Real-IP fallback by default for rate-limit checks", async () => {
-    const limiter = createLimiterSpy();
-    const res = await authorizeGatewayConnect({
-      auth: { mode: "token", token: "secret", allowTailscale: false },
-      connectAuth: { token: "wrong" },
-      req: {
-        socket: { remoteAddress: "127.0.0.1" },
-        headers: { "x-real-ip": "203.0.113.77" },
-      } as never,
-      trustedProxies: ["127.0.0.1"],
-      rateLimiter: limiter,
+    const limiter = await expectTokenMismatchWithLimiter({
+      reqHeaders: { "x-real-ip": "203.0.113.77" },
     });
-
-    expect(res.ok).toBe(false);
-    expect(res.reason).toBe("token_mismatch");
     expect(limiter.check).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
     expect(limiter.recordFailure).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
   });
 
   it("uses X-Real-IP when fallback is explicitly enabled", async () => {
-    const limiter = createLimiterSpy();
-    const res = await authorizeGatewayConnect({
-      auth: { mode: "token", token: "secret", allowTailscale: false },
-      connectAuth: { token: "wrong" },
-      req: {
-        socket: { remoteAddress: "127.0.0.1" },
-        headers: { "x-real-ip": "203.0.113.77" },
-      } as never,
-      trustedProxies: ["127.0.0.1"],
+    const limiter = await expectTokenMismatchWithLimiter({
+      reqHeaders: { "x-real-ip": "203.0.113.77" },
       allowRealIpFallback: true,
-      rateLimiter: limiter,
     });
-
-    expect(res.ok).toBe(false);
-    expect(res.reason).toBe("token_mismatch");
     expect(limiter.check).toHaveBeenCalledWith("203.0.113.77", "shared-secret");
     expect(limiter.recordFailure).toHaveBeenCalledWith("203.0.113.77", "shared-secret");
   });

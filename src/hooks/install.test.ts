@@ -71,6 +71,19 @@ async function expectUnsupportedNpmSpec(
   expect(result.error).toContain("unsupported npm spec");
 }
 
+function expectInstallFailureContains(
+  result: Awaited<ReturnType<typeof installHooksFromArchive>>,
+  snippets: string[],
+) {
+  expect(result.ok).toBe(false);
+  if (result.ok) {
+    throw new Error("expected install failure");
+  }
+  for (const snippet of snippets) {
+    expect(result.error).toContain(snippet);
+  }
+}
+
 describe("installHooksFromArchive", () => {
   it.each([
     {
@@ -125,13 +138,7 @@ describe("installHooksFromArchive", () => {
       archivePath: fixture.archivePath,
       hooksDir: fixture.hooksDir,
     });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      return;
-    }
-    expect(result.error).toContain("failed to extract archive");
-    expect(result.error).toContain(tc.expectedDetail);
+    expectInstallFailureContains(result, ["failed to extract archive", tc.expectedDetail]);
   });
 
   it.each([
@@ -149,12 +156,7 @@ describe("installHooksFromArchive", () => {
       archivePath: fixture.archivePath,
       hooksDir: fixture.hooksDir,
     });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      return;
-    }
-    expect(result.error).toContain("reserved path segment");
+    expectInstallFailureContains(result, ["reserved path segment"]);
   });
 });
 
