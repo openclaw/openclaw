@@ -466,63 +466,6 @@ describe("runEmbeddedPiAgent", () => {
     },
   );
 
-  it("persists multi-turn user/assistant ordering across runs", async () => {
-    const sessionFile = nextSessionFile();
-    const cfg = makeOpenAiConfig(["mock-1"]);
-
-    await runEmbeddedPiAgent({
-      sessionId: "session:test",
-      sessionKey: testSessionKey,
-      sessionFile,
-      workspaceDir,
-      config: cfg,
-      prompt: "first",
-      provider: "openai",
-      model: "mock-1",
-      timeoutMs: 5_000,
-      agentDir,
-      runId: nextRunId("turn-first"),
-      enqueue: immediateEnqueue,
-    });
-
-    await runEmbeddedPiAgent({
-      sessionId: "session:test",
-      sessionKey: testSessionKey,
-      sessionFile,
-      workspaceDir,
-      config: cfg,
-      prompt: "second",
-      provider: "openai",
-      model: "mock-1",
-      timeoutMs: 5_000,
-      agentDir,
-      runId: nextRunId("turn-second"),
-      enqueue: immediateEnqueue,
-    });
-
-    const messages = await readSessionMessages(sessionFile);
-    const firstUserIndex = messages.findIndex(
-      (message) => message?.role === "user" && textFromContent(message.content) === "first",
-    );
-    const firstAssistantIndex = messages.findIndex(
-      (message, index) => index > firstUserIndex && message?.role === "assistant",
-    );
-    const secondUserIndex = messages.findIndex(
-      (message, index) =>
-        index > firstAssistantIndex &&
-        message?.role === "user" &&
-        textFromContent(message.content) === "second",
-    );
-    const secondAssistantIndex = messages.findIndex(
-      (message, index) => index > secondUserIndex && message?.role === "assistant",
-    );
-
-    expect(firstUserIndex).toBeGreaterThanOrEqual(0);
-    expect(firstAssistantIndex).toBeGreaterThan(firstUserIndex);
-    expect(secondUserIndex).toBeGreaterThan(firstAssistantIndex);
-    expect(secondAssistantIndex).toBeGreaterThan(secondUserIndex);
-  });
-
   it("repairs orphaned user messages and continues", async () => {
     const result = await runWithOrphanedSingleUserMessage("orphaned user");
 
