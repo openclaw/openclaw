@@ -91,7 +91,7 @@ describe("subagent registry steer restarts", () => {
   };
 
   afterEach(async () => {
-    announceSpy.mockReset();
+    announceSpy.mockClear();
     announceSpy.mockResolvedValue(true);
     runSubagentEndedHookMock.mockClear();
     lifecycleHandler = undefined;

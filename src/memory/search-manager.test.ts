@@ -113,7 +113,7 @@ beforeEach(() => {
   fallbackManager.probeEmbeddingAvailability.mockClear();
   fallbackManager.probeVectorAvailability.mockClear();
   fallbackManager.close.mockClear();
-  mockMemoryIndexGet.mockReset();
+  mockMemoryIndexGet.mockClear();
   mockMemoryIndexGet.mockResolvedValue(fallbackManager);
   createQmdManagerMock.mockClear();
 });
