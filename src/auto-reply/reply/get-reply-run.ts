@@ -274,14 +274,19 @@ export async function runPreparedReply(
     lastTimeSentAt: sessionEntry?.lastInboundTimeSentAt,
     lastDateSentAt: sessionEntry?.lastInboundTimeDateSentAt,
   };
+  // Pin the timestamp once so the prompt and session tracking use the same value,
+  // even when sessionCtx.Timestamp is undefined and we fall back to Date.now().
+  const currentTimestamp = sessionCtx.Timestamp ?? Date.now();
+  const inboundMetaCtx = isNewSession
+    ? sessionCtx
+    : { ...sessionCtx, ThreadStarterBody: undefined };
   const inboundMetaResult = buildInboundMetaSystemPrompt(
-    isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
+    { ...inboundMetaCtx, Timestamp: currentTimestamp },
     inboundTimeParams,
   );
 
   // Update session entry with inbound time tracking
-  // Reuse the timeResult from buildInboundMetaSystemPrompt to avoid duplicate Date.now() calls
-  const currentTimestamp = sessionCtx.Timestamp ?? Date.now();
+  // Reuse the timeResult from buildInboundMetaSystemPrompt to avoid a second resolveInboundTime call.
   const inboundTimeResult = inboundMetaResult.timeResult;
   if (inboundTimeResult?.value && sessionEntry && sessionStore && sessionKey) {
     sessionEntry.lastInboundTimeSentAt = currentTimestamp;
@@ -297,7 +302,12 @@ export async function runPreparedReply(
       });
     }
   }
-  const extraSystemPrompt = [inboundMetaResult.prompt, groupChatContext, groupIntro, groupSystemPrompt]
+  const extraSystemPrompt = [
+    inboundMetaResult.prompt,
+    groupChatContext,
+    groupIntro,
+    groupSystemPrompt,
+  ]
     .filter(Boolean)
     .join("\n\n");
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
