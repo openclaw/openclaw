@@ -15,6 +15,7 @@ export const DEFAULT_LOG_FILE = path.join(DEFAULT_LOG_DIR, "openclaw.log"); // l
 const LOG_PREFIX = "openclaw";
 const LOG_SUFFIX = ".log";
 const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
+const MAX_LOG_FILE_BYTES = 500 * 1024 * 1024; // 500 MB per file
 
 const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
 
@@ -23,6 +24,7 @@ export type LoggerSettings = {
   file?: string;
   consoleLevel?: LogLevel;
   consoleStyle?: ConsoleStyle;
+  maxFileBytes?: number;
 };
 
 type LogObj = { date?: Date } & Record<string, unknown>;
@@ -30,6 +32,7 @@ type LogObj = { date?: Date } & Record<string, unknown>;
 type ResolvedSettings = {
   level: LogLevel;
   file: string;
+  maxFileBytes: number;
 };
 export type LoggerResolvedSettings = ResolvedSettings;
 export type LogTransportRecord = Record<string, unknown>;
@@ -69,14 +72,18 @@ function resolveSettings(): ResolvedSettings {
     process.env.VITEST === "true" && process.env.OPENCLAW_TEST_FILE_LOG !== "1" ? "silent" : "info";
   const level = normalizeLogLevel(cfg?.level, defaultLevel);
   const file = cfg?.file ?? defaultRollingPathForToday();
-  return { level, file };
+  const maxFileBytes =
+    cfg && "maxFileBytes" in cfg && typeof cfg.maxFileBytes === "number" && cfg.maxFileBytes > 0
+      ? cfg.maxFileBytes
+      : MAX_LOG_FILE_BYTES;
+  return { level, file, maxFileBytes };
 }
 
 function settingsChanged(a: ResolvedSettings | null, b: ResolvedSettings) {
   if (!a) {
     return true;
   }
-  return a.level !== b.level || a.file !== b.file;
+  return a.level !== b.level || a.file !== b.file || a.maxFileBytes !== b.maxFileBytes;
 }
 
 export function isFileLogLevelEnabled(level: LogLevel): boolean {
@@ -102,11 +109,36 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
     type: "hidden", // no ansi formatting
   });
 
+  // Track file size in memory to enforce a per-file cap without stat() on every write.
+  let currentFileBytes = 0;
+  try {
+    currentFileBytes = fs.statSync(settings.file).size;
+  } catch {
+    // file may not exist yet
+  }
+  let capWarningEmitted = false;
+
   logger.attachTransport((logObj: LogObj) => {
     try {
+      if (currentFileBytes >= settings.maxFileBytes) {
+        if (!capWarningEmitted) {
+          capWarningEmitted = true;
+          const msg = JSON.stringify({
+            _meta: "openclaw",
+            level: "warn",
+            msg: `Log file size cap reached (${settings.maxFileBytes} bytes). Further entries will be suppressed until the next rolling log file.`,
+            time: new Date().toISOString(),
+          });
+          fs.appendFileSync(settings.file, `${msg}\n`, { encoding: "utf8" });
+          currentFileBytes += Buffer.byteLength(msg, "utf8") + 1;
+        }
+        return;
+      }
       const time = logObj.date?.toISOString?.() ?? new Date().toISOString();
       const line = JSON.stringify({ ...logObj, time });
+      const bytes = Buffer.byteLength(line, "utf8") + 1; // +1 for newline
       fs.appendFileSync(settings.file, `${line}\n`, { encoding: "utf8" });
+      currentFileBytes += bytes;
     } catch {
       // never block on logging failures
     }
