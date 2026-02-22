@@ -301,9 +301,18 @@ export type { PollInput } from "../polls.js";
 
 export { buildChannelConfigSchema } from "../channels/plugins/config-schema.js";
 export {
+  buildSimpleChannelConfigSchema,
+  buildSimpleZodChannelConfigSchema,
+} from "../channels/plugins/simple-config-helpers.js";
+export type {
+  SimpleChannelAccountConfig,
+  BuildSimpleChannelConfigSchemaOptions,
+} from "../channels/plugins/simple-config-helpers.js";
+export {
   deleteAccountFromConfigSection,
   setAccountEnabledInConfigSection,
 } from "../channels/plugins/config-helpers.js";
+export type { ChannelDiscoveryMeta } from "../channels/plugins/types.plugin.js";
 export {
   applyAccountNameToChannelSection,
   migrateBaseNameToDefaultAccount,

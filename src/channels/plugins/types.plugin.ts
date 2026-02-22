@@ -44,10 +44,42 @@ export type ChannelConfigSchema = {
   uiHints?: Record<string, ChannelConfigUiHint>;
 };
 
+export type ChannelDiscoveryMeta = {
+  /**
+   * Category of the channel (e.g., "email", "messaging", "social", "voice").
+   * Used for organization and filtering in the UI.
+   */
+  category?: string;
+  /**
+   * Keywords for search and discovery.
+   */
+  keywords?: string[];
+  /**
+   * Maturity level of the channel implementation.
+   * - "stable": Production-ready, well-tested
+   * - "beta": Feature-complete but may have issues
+   * - "experimental": Early stage, expect breaking changes
+   */
+  maturity?: "stable" | "beta" | "experimental";
+  /**
+   * Link to documentation or repository.
+   */
+  docsLink?: string;
+  /**
+   * Author or maintainer of the channel plugin.
+   */
+  author?: string;
+};
+
 // oxlint-disable-next-line typescript/no-explicit-any
 export type ChannelPlugin<ResolvedAccount = any, Probe = unknown, Audit = unknown> = {
   id: ChannelId;
-  meta: ChannelMeta;
+  meta: ChannelMeta & {
+    /**
+     * Optional discovery metadata for plugin catalogs and UI.
+     */
+    discovery?: ChannelDiscoveryMeta;
+  };
   capabilities: ChannelCapabilities;
   defaults?: {
     queue?: {
