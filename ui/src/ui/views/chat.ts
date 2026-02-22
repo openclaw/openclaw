@@ -612,7 +612,7 @@ export function renderChat(props: ChatProps) {
             `;
           }
           if (item.kind === "reading-indicator") {
-            return renderReadingIndicatorGroup(assistantIdentity);
+            return renderReadingIndicatorGroup(assistantIdentity, props.basePath);
           }
           if (item.kind === "stream") {
             return renderStreamingGroup(
@@ -620,6 +620,7 @@ export function renderChat(props: ChatProps) {
               item.startedAt,
               props.onOpenSidebar,
               assistantIdentity,
+              props.basePath,
             );
           }
           if (item.kind === "group") {
@@ -631,6 +632,7 @@ export function renderChat(props: ChatProps) {
               showReasoning,
               assistantName: props.assistantName,
               assistantAvatar: assistantIdentity.avatar,
+              basePath: props.basePath,
               onDelete: () => {
                 deleted.delete(item.key);
                 requestUpdate();
