@@ -54,7 +54,9 @@ export function resolveSessionFilePathOptions(params: {
   return undefined;
 }
 
-export const SAFE_SESSION_ID_RE = /^[a-z0-9][a-z0-9._-]{0,127}$/i;
+// Allow session IDs starting with `-` for negative Telegram group IDs,
+// and `:` as a separator for forum topic IDs (e.g., `-1003110470591:91088`).
+export const SAFE_SESSION_ID_RE = /^-?[a-z0-9][a-z0-9._:-]{0,127}$/i;
 
 export function validateSessionId(sessionId: string): string {
   const trimmed = sessionId.trim();
