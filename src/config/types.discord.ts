@@ -50,6 +50,8 @@ export type DiscordGuildChannelConfig = {
 
 export type DiscordReactionNotificationMode = "off" | "own" | "all" | "allowlist";
 
+export type DiscordMemberJoinNotificationMode = "off" | "on";
+
 export type DiscordGuildEntry = {
   slug?: string;
   requireMention?: boolean;
@@ -58,6 +60,8 @@ export type DiscordGuildEntry = {
   toolsBySender?: GroupToolPolicyBySenderConfig;
   /** Reaction notification mode (off|own|all|allowlist). Default: own. */
   reactionNotifications?: DiscordReactionNotificationMode;
+  /** Member join notification mode (off|on). Requires intents.guildMembers=true. Default: off. */
+  memberJoinNotifications?: DiscordMemberJoinNotificationMode;
   /** Optional allowlist for guild senders (ids or names). */
   users?: string[];
   /** Optional allowlist for guild senders by role ID. */
