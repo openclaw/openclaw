@@ -126,7 +126,9 @@ export class GatewayClient {
       const error = new Error(
         `SECURITY ERROR: Cannot connect to "${displayHost}" over plaintext ws://. ` +
           "Both credentials and chat data would be exposed to network interception. " +
-          "Use wss:// for the gateway URL, or connect via SSH tunnel to localhost.",
+          "Use wss:// for remote URLs. Safe defaults: keep gateway.bind=loopback and connect via SSH tunnel " +
+          "(ssh -N -L 18789:127.0.0.1:18789 user@gateway-host), or use Tailscale Serve/Funnel. " +
+          "Run `openclaw doctor --fix` for guidance.",
       );
       this.opts.onConnectError?.(error);
       return;
