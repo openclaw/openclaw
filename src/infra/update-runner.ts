@@ -875,12 +875,22 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
     const channel = opts.channel ?? DEFAULT_PACKAGE_CHANNEL;
     const tag = normalizeTag(opts.tag ?? channelToNpmTag(channel));
     const spec = `${packageName}@${tag}`;
+    // Configure git to use HTTPS instead of SSH for GitHub URLs.
+    // This fixes "Permission denied (publickey)" errors when npm tries to
+    // install packages with git dependencies (e.g., libsignal-node).
+    const gitHttpsEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      GIT_CONFIG_PARAMETERS:
+        "'url.https://github.com/.insteadOf=git@github.com:' 'url.https://github.com/.insteadOf=ssh://git@github.com/'",
+    };
+
     const updateStep = await runStep({
       runCommand,
       name: "global update",
       argv: globalInstallArgs(globalManager, spec),
       cwd: pkgRoot,
       timeoutMs,
+      env: gitHttpsEnv,
       progress,
       stepIndex: 0,
       totalSteps: 1,
