@@ -12,9 +12,9 @@ const defaultShell = isWin
   ? undefined
   : process.env.OPENCLAW_TEST_SHELL || resolveShellFromPath("bash") || process.env.SHELL || "sh";
 // PowerShell: Start-Sleep for delays, ; for command separation, $null for null device
-const shortDelayCmd = isWin ? "Start-Sleep -Milliseconds 30" : "sleep 0.03";
-const yieldDelayCmd = isWin ? "Start-Sleep -Milliseconds 120" : "sleep 0.12";
-const longDelayCmd = isWin ? "Start-Sleep -Seconds 1" : "sleep 1";
+const shortDelayCmd = isWin ? "Start-Sleep -Milliseconds 20" : "sleep 0.02";
+const yieldDelayCmd = isWin ? "Start-Sleep -Milliseconds 90" : "sleep 0.09";
+const longDelayCmd = isWin ? "Start-Sleep -Milliseconds 700" : "sleep 0.7";
 const POLL_INTERVAL_MS = 15;
 // Both PowerShell and bash use ; for command separation
 const joinCommands = (commands: string[]) => commands.join("; ");
@@ -41,7 +41,7 @@ async function waitForCompletion(sessionId: string) {
         status = (poll.details as { status: string }).status;
         return status;
       },
-      { timeout: process.platform === "win32" ? 8000 : 1500, interval: POLL_INTERVAL_MS },
+      { timeout: process.platform === "win32" ? 8000 : 1200, interval: POLL_INTERVAL_MS },
     )
     .not.toBe("running");
   return status;
@@ -100,7 +100,7 @@ describe("exec tool backgrounding", () => {
             output = textBlock?.text ?? "";
             return status;
           },
-          { timeout: process.platform === "win32" ? 8000 : 1500, interval: POLL_INTERVAL_MS },
+          { timeout: process.platform === "win32" ? 8000 : 1200, interval: POLL_INTERVAL_MS },
         )
         .toBe("completed");
 
@@ -138,13 +138,13 @@ describe("exec tool backgrounding", () => {
           ).sessions;
           return sessions.find((s) => s.sessionId === sessionId)?.name;
         },
-        { timeout: process.platform === "win32" ? 8000 : 1500, interval: POLL_INTERVAL_MS },
+        { timeout: process.platform === "win32" ? 8000 : 1200, interval: POLL_INTERVAL_MS },
       )
       .toBe("echo hello");
   });
 
   it("uses default timeout when timeout is omitted", async () => {
-    const customBash = createExecTool({ timeoutSec: 0.12, backgroundMs: 10 });
+    const customBash = createExecTool({ timeoutSec: 0.1, backgroundMs: 10 });
     const customProcess = createProcessTool();
 
     const result = await customBash.execute("call1", {
@@ -162,7 +162,7 @@ describe("exec tool backgrounding", () => {
           });
           return (poll.details as { status: string }).status;
         },
-        { timeout: 5000, interval: POLL_INTERVAL_MS },
+        { timeout: 3000, interval: POLL_INTERVAL_MS },
       )
       .toBe("failed");
   });
