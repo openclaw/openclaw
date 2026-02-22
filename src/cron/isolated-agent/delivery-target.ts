@@ -14,6 +14,7 @@ import {
 import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
 import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { parseTelegramTarget } from "../../telegram/targets.js";
 import { resolveWhatsAppAccount } from "../../web/accounts.js";
 import { normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 
@@ -87,6 +88,10 @@ export async function resolveDeliveryTarget(
   const channel = resolved.channel ?? fallbackChannel;
   const mode = resolved.mode as "explicit" | "implicit";
   let toCandidate = resolved.to;
+  const threadIdFromTarget =
+    channel === "telegram" && toCandidate
+      ? parseTelegramTarget(toCandidate).messageThreadId
+      : undefined;
 
   // When the session has no lastAccountId (e.g. first-run isolated cron
   // session), fall back to the agent's bound account from bindings config.
@@ -107,10 +112,11 @@ export async function resolveDeliveryTarget(
   // Session-derived threadIds are dropped when the target differs to prevent
   // stale thread IDs from leaking to a different chat.
   const threadId =
-    resolved.threadId &&
+    threadIdFromTarget ??
+    (resolved.threadId &&
     (resolved.threadIdExplicit || (resolved.to && resolved.to === resolved.lastTo))
       ? resolved.threadId
-      : undefined;
+      : undefined);
 
   if (!channel) {
     return {

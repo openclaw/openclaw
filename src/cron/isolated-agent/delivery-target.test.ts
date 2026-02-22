@@ -1,10 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_CHAT_CHANNEL } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 
 vi.mock("../../config/sessions.js", () => ({
-  loadSessionStore: vi.fn().mockReturnValue({}),
-  resolveAgentMainSessionKey: vi.fn().mockReturnValue("agent:test:main"),
-  resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
+  loadSessionStore: vi.fn(),
+  resolveAgentMainSessionKey: vi.fn(() => "agent:main:main"),
+  resolveStorePath: vi.fn(() => "/tmp/session-store.json"),
 }));
 
 vi.mock("../../infra/outbound/channel-selection.js", () => ({
@@ -44,7 +48,7 @@ const DEFAULT_TARGET = {
 type SessionStore = ReturnType<typeof loadSessionStore>;
 
 function setMainSessionEntry(entry?: SessionStore[string]) {
-  const store = entry ? ({ "agent:test:main": entry } as SessionStore) : ({} as SessionStore);
+  const store = entry ? ({ "agent:main:main": entry } as SessionStore) : ({} as SessionStore);
   vi.mocked(loadSessionStore).mockReturnValue(store);
 }
 
@@ -71,6 +75,12 @@ async function resolveForAgent(params: {
 }
 
 describe("resolveDeliveryTarget", () => {
+  beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", plugin: telegramPlugin, source: "test" }]),
+    );
+  });
+
   it("reroutes implicit whatsapp delivery to authorized allowFrom recipient", async () => {
     setMainSessionEntry({
       sessionId: "sess-w1",
@@ -290,5 +300,26 @@ describe("resolveDeliveryTarget", () => {
     expect(result.channel).toBe("telegram");
     expect(result.to).toBe("987654");
     expect(result.error).toBeUndefined();
+  });
+
+  it("keeps telegram topic thread ids for explicit announce targets", async () => {
+    vi.mocked(loadSessionStore).mockReturnValue({
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "-1001111111111:topic:999",
+        lastThreadId: 999,
+      },
+    });
+
+    const resolved = await resolveDeliveryTarget({} as OpenClawConfig, "main", {
+      channel: "telegram",
+      to: "-1001234567890:topic:123",
+    });
+
+    expect(resolved.channel).toBe("telegram");
+    expect(resolved.to).toBe("-1001234567890:topic:123");
+    expect(resolved.threadId).toBe(123);
   });
 });
