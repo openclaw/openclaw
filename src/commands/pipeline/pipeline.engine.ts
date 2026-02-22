@@ -313,7 +313,9 @@ export async function runPipeline(spec: PipelineSpecZ, opts: PipelineRunOptions)
       while (!filesExist(workspaceRoot, produces)) {
         if (now() - startWait > 30 * 60 * 1000) {
           rec.error = `Timeout waiting for outputs: ${produces.join(", ")}`;
-          break;
+          rec.endedAt = now();
+          // Don't mark as completed — downstream dependsOn gates should block.
+          return;
         }
         sleep(1000);
       }
@@ -507,8 +509,9 @@ export async function runPipeline(spec: PipelineSpecZ, opts: PipelineRunOptions)
     }
   }
 
+  const hasErrors = records.some((r) => r.error);
   const summary: PipelineRunSummary = {
-    ok: true,
+    ok: !hasErrors,
     name: spec.name,
     runDir: spec.runDir,
     stepsPlanned: steps.filter((s) => phaseAllowed(s.phase)).length,
