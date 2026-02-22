@@ -74,10 +74,15 @@ final class DevicePairingApprovalPrompter {
             guard let self else { return }
             _ = try? await GatewayConnection.shared.refresh()
             await self.loadPendingRequestsFromGateway()
-            let stream = await GatewayConnection.shared.subscribe(bufferingNewest: 200)
-            for await push in stream {
+            while !Task.isCancelled {
+                let stream = await GatewayConnection.shared.subscribe(bufferingNewest: 200)
+                for await push in stream {
+                    if Task.isCancelled { return }
+                    await MainActor.run { [weak self] in self?.handle(push: push) }
+                }
                 if Task.isCancelled { return }
-                await MainActor.run { [weak self] in self?.handle(push: push) }
+                self.logger.info("device pairing gateway stream ended; re-subscribing")
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
             }
         }
     }

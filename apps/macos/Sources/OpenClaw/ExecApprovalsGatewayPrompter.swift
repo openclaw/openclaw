@@ -31,10 +31,19 @@ final class ExecApprovalsGatewayPrompter {
     }
 
     private func run() async {
-        let stream = await GatewayConnection.shared.subscribe(bufferingNewest: 200)
-        for await push in stream {
+        // Re-subscribe in a loop: when the GatewayConnection replaces its underlying
+        // GatewayChannelActor (e.g. after a gateway restart), the old AsyncStream ends.
+        // Without this loop the prompter would silently stop receiving approval broadcasts.
+        while !Task.isCancelled {
+            let stream = await GatewayConnection.shared.subscribe(bufferingNewest: 200)
+            for await push in stream {
+                if Task.isCancelled { return }
+                await self.handle(push: push)
+            }
+            // Stream ended — the connection was reconfigured. Back off briefly, then re-subscribe.
             if Task.isCancelled { return }
-            await self.handle(push: push)
+            self.logger.info("exec approvals gateway stream ended; re-subscribing")
+            try? await Task.sleep(nanoseconds: 1_000_000_000) // 1s
         }
     }
 
