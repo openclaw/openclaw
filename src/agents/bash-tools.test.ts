@@ -169,7 +169,6 @@ describe("exec tool backgrounding", () => {
       backgroundMs: 10,
       allowBackground: false,
     });
-
     await expect(
       customBash.execute("call1", {
         command: longDelayCmd,
