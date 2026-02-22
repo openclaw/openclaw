@@ -370,6 +370,62 @@ describe("Slack native command argument menus", () => {
     harness.postEphemeral.mockClear();
   });
 
+  it("registers options handlers without losing app receiver binding", async () => {
+    const commands = new Map<string, (args: unknown) => Promise<void>>();
+    const actions = new Map<string, (args: unknown) => Promise<void>>();
+    const options = new Map<string, (args: unknown) => Promise<void>>();
+    const postEphemeral = vi.fn().mockResolvedValue({ ok: true });
+    const app = {
+      client: { chat: { postEphemeral } },
+      command: (name: string, handler: (args: unknown) => Promise<void>) => {
+        commands.set(name, handler);
+      },
+      action: (id: string, handler: (args: unknown) => Promise<void>) => {
+        actions.set(id, handler);
+      },
+      options: function (this: unknown, id: string, handler: (args: unknown) => Promise<void>) {
+        expect(this).toBe(app);
+        options.set(id, handler);
+      },
+    };
+    const ctx = {
+      cfg: { commands: { native: true, nativeSkills: false } },
+      runtime: {},
+      botToken: "bot-token",
+      botUserId: "bot",
+      teamId: "T1",
+      allowFrom: ["*"],
+      dmEnabled: true,
+      dmPolicy: "open",
+      groupDmEnabled: false,
+      groupDmChannels: [],
+      defaultRequireMention: true,
+      groupPolicy: "open",
+      useAccessGroups: false,
+      channelsConfig: undefined,
+      slashCommand: {
+        enabled: true,
+        name: "openclaw",
+        ephemeral: true,
+        sessionPrefix: "slack:slash",
+      },
+      textLimit: 4000,
+      app,
+      isChannelAllowed: () => true,
+      resolveChannelName: async () => ({ name: "dm", type: "im" }),
+      resolveUserName: async () => ({ name: "Ada" }),
+    } as unknown;
+    const account = {
+      accountId: "acct",
+      config: { commands: { native: true, nativeSkills: false } },
+    } as unknown;
+
+    await registerCommands(ctx, account);
+    expect(commands.size).toBeGreaterThan(0);
+    expect(actions.has("openclaw_cmdarg")).toBe(true);
+    expect(options.has("openclaw_cmdarg")).toBe(true);
+  });
+
   it("shows a button menu when required args are omitted", async () => {
     const { respond } = await runCommandHandler(usageHandler);
     const actions = expectArgMenuLayout(respond);
