@@ -209,6 +209,45 @@ describe("sendMediaFeishu msg_type routing", () => {
     expect(messageReplyMock).not.toHaveBeenCalled();
   });
 
+  it("forwards mediaLocalRoots to loadWebMedia as localRoots", async () => {
+    const localRoots = ["/home/state/agents", "/workspace/ppt"];
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer: Buffer.from("pdf-content"),
+      fileName: "report.pdf",
+      kind: "document",
+      contentType: "application/pdf",
+    });
+
+    await sendMediaFeishu({
+      cfg: {} as any,
+      to: "user:ou_target",
+      mediaUrl: "file:///workspace/ppt/output/report.pdf",
+      mediaLocalRoots: localRoots,
+    });
+
+    expect(loadWebMediaMock).toHaveBeenCalledWith(
+      "file:///workspace/ppt/output/report.pdf",
+      expect.objectContaining({
+        localRoots,
+      }),
+    );
+  });
+
+  it("does not pass localRoots when mediaLocalRoots is omitted", async () => {
+    await sendMediaFeishu({
+      cfg: {} as any,
+      to: "user:ou_target",
+      mediaUrl: "https://example.com/image.png",
+    });
+
+    expect(loadWebMediaMock).toHaveBeenCalledWith(
+      "https://example.com/image.png",
+      expect.objectContaining({
+        localRoots: undefined,
+      }),
+    );
+  });
+
   it("uses isolated temp paths for image downloads", async () => {
     const imageKey = "img_v3_01abc123";
     let capturedPath: string | undefined;

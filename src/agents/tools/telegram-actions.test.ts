@@ -13,7 +13,16 @@ const sendStickerTelegram = vi.fn(async () => ({
   chatId: "123",
 }));
 const deleteMessageTelegram = vi.fn(async () => ({ ok: true }));
+const getAgentScopedMediaLocalRoots = vi.fn(
+  () => ["/tmp/openclaw", "/home/state/agents"] as readonly string[],
+);
 let envSnapshot: ReturnType<typeof captureEnv>;
+
+vi.mock("../../media/local-roots.js", () => ({
+  getAgentScopedMediaLocalRoots: (...args: Parameters<typeof getAgentScopedMediaLocalRoots>) =>
+    getAgentScopedMediaLocalRoots(...args),
+  getDefaultMediaLocalRoots: () => ["/tmp/openclaw"] as readonly string[],
+}));
 
 vi.mock("../../telegram/send.js", () => ({
   reactMessageTelegram: (...args: Parameters<typeof reactMessageTelegram>) =>
@@ -67,6 +76,7 @@ describe("handleTelegramAction", () => {
     sendMessageTelegram.mockClear();
     sendStickerTelegram.mockClear();
     deleteMessageTelegram.mockClear();
+    getAgentScopedMediaLocalRoots.mockClear();
     process.env.TELEGRAM_BOT_TOKEN = "tok";
   });
 
@@ -241,6 +251,56 @@ describe("handleTelegramAction", () => {
       type: "text",
       text: expect.stringContaining('"ok": true'),
     });
+  });
+
+  it("passes mediaLocalRoots from __agentId to sendMessageTelegram", async () => {
+    const mockRoots = ["/tmp/openclaw", "/home/state/agents", "/workspace/my-agent"];
+    getAgentScopedMediaLocalRoots.mockReturnValueOnce(mockRoots);
+
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "@testchannel",
+        content: "Here is a file",
+        mediaUrl: "file:///workspace/my-agent/output.pdf",
+        __agentId: "my-agent",
+      },
+      telegramConfig(),
+    );
+
+    expect(getAgentScopedMediaLocalRoots).toHaveBeenCalledWith(
+      expect.objectContaining({ channels: expect.any(Object) }),
+      "my-agent",
+    );
+    expect(sendMessageTelegram).toHaveBeenCalledWith(
+      "@testchannel",
+      "Here is a file",
+      expect.objectContaining({
+        token: "tok",
+        mediaUrl: "file:///workspace/my-agent/output.pdf",
+        mediaLocalRoots: mockRoots,
+      }),
+    );
+  });
+
+  it("does not resolve mediaLocalRoots when __agentId is absent", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "@testchannel",
+        content: "Hello",
+      },
+      telegramConfig(),
+    );
+
+    expect(getAgentScopedMediaLocalRoots).not.toHaveBeenCalled();
+    expect(sendMessageTelegram).toHaveBeenCalledWith(
+      "@testchannel",
+      "Hello",
+      expect.objectContaining({
+        mediaLocalRoots: undefined,
+      }),
+    );
   });
 
   it.each([

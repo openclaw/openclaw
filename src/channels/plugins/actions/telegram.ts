@@ -115,6 +115,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
           action: "sendMessage",
           ...sendParams,
           accountId: accountId ?? undefined,
+          __agentId: params.__agentId as string | undefined,
         },
         cfg,
       );
