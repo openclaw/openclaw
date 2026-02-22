@@ -17,6 +17,13 @@ const SKIP_PATTERNS = [
   /[\\/][^\\/]*test-harness(?:\.[^\\/]+)?\.ts$/,
 ];
 
+type QuoteChar = "'" | '"' | "`";
+
+type QuoteScanState = {
+  quote: QuoteChar | null;
+  escaped: boolean;
+};
+
 function shouldSkip(relativePath: string): boolean {
   return SKIP_PATTERNS.some((pattern) => pattern.test(relativePath));
 }
@@ -27,26 +34,13 @@ function stripCommentsForScan(input: string): string {
 
 function findMatchingParen(source: string, openIndex: number): number {
   let depth = 1;
-  let quote: "'" | '"' | "`" | null = null;
-  let escaped = false;
+  const quoteState: QuoteScanState = { quote: null, escaped: false };
   for (let i = openIndex + 1; i < source.length; i += 1) {
     const ch = source[i];
-    if (quote) {
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-      if (ch === "\\") {
-        escaped = true;
-        continue;
-      }
-      if (ch === quote) {
-        quote = null;
-      }
+    if (consumeQuotedChar(quoteState, ch)) {
       continue;
     }
-    if (ch === "'" || ch === '"' || ch === "`") {
-      quote = ch;
+    if (beginQuotedSection(quoteState, ch)) {
       continue;
     }
     if (ch === "(") {
@@ -69,27 +63,15 @@ function splitTopLevelArguments(source: string): string[] {
   let parenDepth = 0;
   let bracketDepth = 0;
   let braceDepth = 0;
-  let quote: "'" | '"' | "`" | null = null;
-  let escaped = false;
+  const quoteState: QuoteScanState = { quote: null, escaped: false };
   for (let i = 0; i < source.length; i += 1) {
     const ch = source[i];
-    if (quote) {
+    if (quoteState.quote) {
       current += ch;
-      if (escaped) {
-        escaped = false;
-        continue;
-      }
-      if (ch === "\\") {
-        escaped = true;
-        continue;
-      }
-      if (ch === quote) {
-        quote = null;
-      }
+      consumeQuotedChar(quoteState, ch);
       continue;
     }
-    if (ch === "'" || ch === '"' || ch === "`") {
-      quote = ch;
+    if (beginQuotedSection(quoteState, ch)) {
       current += ch;
       continue;
     }
@@ -140,6 +122,32 @@ function splitTopLevelArguments(source: string): string[] {
     out.push(current.trim());
   }
   return out;
+}
+
+function beginQuotedSection(state: QuoteScanState, ch: string): boolean {
+  if (ch !== "'" && ch !== '"' && ch !== "`") {
+    return false;
+  }
+  state.quote = ch;
+  return true;
+}
+
+function consumeQuotedChar(state: QuoteScanState, ch: string): boolean {
+  if (!state.quote) {
+    return false;
+  }
+  if (state.escaped) {
+    state.escaped = false;
+    return true;
+  }
+  if (ch === "\\") {
+    state.escaped = true;
+    return true;
+  }
+  if (ch === state.quote) {
+    state.quote = null;
+  }
+  return true;
 }
 
 function isOsTmpdirExpression(argument: string): boolean {

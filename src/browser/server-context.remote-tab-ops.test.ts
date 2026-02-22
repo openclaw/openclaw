@@ -64,6 +64,16 @@ function createRemoteRouteHarness(fetchMock?: ReturnType<typeof vi.fn>) {
   return { state, remote: ctx.forProfile("remote"), fetchMock: activeFetchMock };
 }
 
+function createSequentialPageLister<T>(responses: T[]) {
+  return vi.fn(async () => {
+    const next = responses.shift();
+    if (!next) {
+      throw new Error("no more responses");
+    }
+    return next;
+  });
+}
+
 describe("browser server-context remote profile tab operations", () => {
   it("uses Playwright tab operations when available", async () => {
     const listPagesViaPlaywright = vi.fn(async () => [
@@ -158,13 +168,7 @@ describe("browser server-context remote profile tab operations", () => {
       [{ targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" }],
       [{ targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" }],
     ];
-    const listPagesViaPlaywright = vi.fn(async () => {
-      const next = responses.shift();
-      if (!next) {
-        throw new Error("no more responses");
-      }
-      return next;
-    });
+    const listPagesViaPlaywright = createSequentialPageLister(responses);
 
     vi.spyOn(pwAiModule, "getPwAiModule").mockResolvedValue({
       listPagesViaPlaywright,
@@ -186,13 +190,7 @@ describe("browser server-context remote profile tab operations", () => {
         { targetId: "B", title: "B", url: "https://b.example", type: "page" },
       ],
     ];
-    const listPagesViaPlaywright = vi.fn(async () => {
-      const next = responses.shift();
-      if (!next) {
-        throw new Error("no more responses");
-      }
-      return next;
-    });
+    const listPagesViaPlaywright = createSequentialPageLister(responses);
 
     vi.spyOn(pwAiModule, "getPwAiModule").mockResolvedValue({
       listPagesViaPlaywright,
