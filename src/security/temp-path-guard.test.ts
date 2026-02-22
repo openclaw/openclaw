@@ -7,6 +7,7 @@ const RUNTIME_ROOTS = ["src", "extensions"];
 const SKIP_PATTERNS = [
   /\.test\.tsx?$/,
   /\.test-utils\.tsx?$/,
+  /\.test-helpers\.tsx?$/,
   /\.e2e\.tsx?$/,
   /\.d\.ts$/,
   /[\\/](?:__tests__|tests)[\\/]/,

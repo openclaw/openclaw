@@ -93,12 +93,17 @@ describe("QmdMemoryManager", () => {
   let cfg: OpenClawConfig;
   const agentId = "main";
 
-  async function createManager(params?: { mode?: "full" | "status"; cfg?: OpenClawConfig }) {
+  async function createManager(params?: {
+    mode?: "full" | "status";
+    cfg?: OpenClawConfig;
+    agentId?: string;
+  }) {
     const cfgToUse = params?.cfg ?? cfg;
-    const resolved = resolveMemoryBackendConfig({ cfg: cfgToUse, agentId });
+    const managerAgentId = params?.agentId ?? agentId;
+    const resolved = resolveMemoryBackendConfig({ cfg: cfgToUse, agentId: managerAgentId });
     const manager = await QmdMemoryManager.create({
       cfg: cfgToUse,
-      agentId,
+      agentId: managerAgentId,
       resolved,
       mode: params?.mode ?? "status",
     });
@@ -1344,6 +1349,75 @@ describe("QmdMemoryManager", () => {
     await vi.advanceTimersByTimeAsync(20);
     await resolvedSync;
     await manager.close();
+  });
+
+  it("does not serialize qmd embed across separate manager instances", async () => {
+    const agentA = "agent-a";
+    const agentB = "agent-b";
+    const workspaceA = path.join(tmpRoot, "workspace-agent-a");
+    const workspaceB = path.join(tmpRoot, "workspace-agent-b");
+    await fs.mkdir(workspaceA, { recursive: true });
+    await fs.mkdir(workspaceB, { recursive: true });
+    const multiAgentCfg = {
+      ...cfg,
+      agents: {
+        list: [
+          { id: agentA, default: true, workspace: workspaceA },
+          { id: agentB, workspace: workspaceB },
+        ],
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 0, onBoot: false },
+          paths: [
+            { path: workspaceA, pattern: "**/*.md", name: "workspace-a" },
+            { path: workspaceB, pattern: "**/*.md", name: "workspace-b" },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+
+    const releaseEmbeds = createDeferred<void>();
+    let embedCalls = 0;
+    spawnMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args[0] === "embed") {
+        embedCalls += 1;
+        const child = createMockChild({ autoClose: false });
+        void releaseEmbeds.promise.then(() => child.closeWith(0));
+        return child;
+      }
+      return createMockChild();
+    });
+
+    const { manager: managerA } = await createManager({
+      mode: "status",
+      cfg: multiAgentCfg,
+      agentId: agentA,
+    });
+    const { manager: managerB } = await createManager({
+      mode: "status",
+      cfg: multiAgentCfg,
+      agentId: agentB,
+    });
+
+    const syncA = managerA.sync({ reason: "manual", force: true });
+    const syncB = managerB.sync({ reason: "manual", force: true });
+    try {
+      // Both embed commands should start while the first one is still in-flight.
+      await vi.waitFor(() => {
+        expect(embedCalls).toBe(2);
+      });
+      releaseEmbeds.resolve();
+      await Promise.all([syncA, syncB]);
+    } finally {
+      releaseEmbeds.resolve();
+      await Promise.allSettled([syncA, syncB]);
+      await managerA.close();
+      await managerB.close();
+    }
   });
 
   it("skips qmd embed in search mode even for forced sync", async () => {
