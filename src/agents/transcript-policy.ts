@@ -55,12 +55,12 @@ function isOpenAiProvider(provider?: string | null): boolean {
 }
 
 function isAnthropicApi(modelApi?: string | null, provider?: string | null): boolean {
-  if (modelApi === "anthropic-messages") {
+  if (modelApi === "anthropic-messages" || modelApi === "bedrock-converse-stream") {
     return true;
   }
   const normalized = normalizeProviderId(provider ?? "");
   // MiniMax now uses openai-completions API, not anthropic-messages
-  return normalized === "anthropic";
+  return normalized === "anthropic" || normalized === "amazon-bedrock";
 }
 
 function isMistralModel(params: { provider?: string | null; modelId?: string | null }): boolean {
