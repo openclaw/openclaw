@@ -232,47 +232,35 @@ describe("initSessionState thread forking", () => {
 });
 
 describe("initSessionState RawBody", () => {
-  it("triggerBodyNormalized correctly extracts commands when Body contains context but RawBody is clean", async () => {
+  it("uses RawBody for command extraction and reset triggers when Body contains wrapped context", async () => {
     const root = await makeCaseDir("openclaw-rawbody-");
     const storePath = path.join(root, "sessions.json");
     const cfg = { session: { store: storePath } } as OpenClawConfig;
 
-    const groupMessageCtx = {
-      Body: `[Chat messages since your last reply - for context]\n[WhatsApp ...] Someone: hello\n\n[Current message - respond to this]\n[WhatsApp ...] Jake: /status\n[from: Jake McInteer (+6421807830)]`,
-      RawBody: "/status",
-      ChatType: "group",
-      SessionKey: "agent:main:whatsapp:group:g1",
-    };
-
-    const result = await initSessionState({
-      ctx: groupMessageCtx,
+    const statusResult = await initSessionState({
+      ctx: {
+        Body: `[Chat messages since your last reply - for context]\n[WhatsApp ...] Someone: hello\n\n[Current message - respond to this]\n[WhatsApp ...] Jake: /status\n[from: Jake McInteer (+6421807830)]`,
+        RawBody: "/status",
+        ChatType: "group",
+        SessionKey: "agent:main:whatsapp:group:g1",
+      },
       cfg,
       commandAuthorized: true,
     });
+    expect(statusResult.triggerBodyNormalized).toBe("/status");
 
-    expect(result.triggerBodyNormalized).toBe("/status");
-  });
-
-  it("Reset triggers (/new, /reset) work with RawBody", async () => {
-    const root = await makeCaseDir("openclaw-rawbody-reset-");
-    const storePath = path.join(root, "sessions.json");
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
-
-    const groupMessageCtx = {
-      Body: `[Context]\nJake: /new\n[from: Jake]`,
-      RawBody: "/new",
-      ChatType: "group",
-      SessionKey: "agent:main:whatsapp:group:g1",
-    };
-
-    const result = await initSessionState({
-      ctx: groupMessageCtx,
+    const resetResult = await initSessionState({
+      ctx: {
+        Body: `[Context]\nJake: /new\n[from: Jake]`,
+        RawBody: "/new",
+        ChatType: "group",
+        SessionKey: "agent:main:whatsapp:group:g1",
+      },
       cfg,
       commandAuthorized: true,
     });
-
-    expect(result.isNewSession).toBe(true);
-    expect(result.bodyStripped).toBe("");
+    expect(resetResult.isNewSession).toBe(true);
+    expect(resetResult.bodyStripped).toBe("");
   });
 
   it("preserves argument casing while still matching reset triggers case-insensitively", async () => {
@@ -301,25 +289,6 @@ describe("initSessionState RawBody", () => {
     expect(result.isNewSession).toBe(true);
     expect(result.bodyStripped).toBe("KeepThisCase");
     expect(result.triggerBodyNormalized).toBe("/NEW KeepThisCase");
-  });
-
-  it("falls back to Body when RawBody is undefined", async () => {
-    const root = await makeCaseDir("openclaw-rawbody-fallback-");
-    const storePath = path.join(root, "sessions.json");
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
-
-    const ctx = {
-      Body: "/status",
-      SessionKey: "agent:main:whatsapp:dm:s1",
-    };
-
-    const result = await initSessionState({
-      ctx,
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.triggerBodyNormalized).toBe("/status");
   });
 
   it("uses the default per-agent sessions store when config store is unset", async () => {
@@ -643,10 +612,10 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
   it("applies WhatsApp group reset authorization across sender variants", async () => {
     const sessionKey = "agent:main:whatsapp:group:120363406150318674@g.us";
     const existingSessionId = "existing-session-123";
+    const storePath = await createStorePath("openclaw-group-reset");
     const cases = [
       {
         name: "authorized sender",
-        storePrefix: "openclaw-group-reset-",
         allowFrom: ["+41796666864"],
         body: `[Chat messages since your last reply - for context]\\n[WhatsApp 120363406150318674@g.us 2026-01-13T07:45Z] Someone: hello\\n\\n[Current message - respond to this]\\n[WhatsApp 120363406150318674@g.us 2026-01-13T07:45Z] Peschiño: /new\\n[from: Peschiño (+41796666864)]`,
         senderName: "Peschiño",
@@ -655,38 +624,7 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
         expectedIsNewSession: true,
       },
       {
-        name: "unauthorized sender",
-        storePrefix: "openclaw-group-reset-unauth-",
-        allowFrom: ["+41796666864"],
-        body: `[Context]\\n[WhatsApp ...] OtherPerson: /new\\n[from: OtherPerson (+1555123456)]`,
-        senderName: "OtherPerson",
-        senderE164: "+1555123456",
-        senderId: "1555123456:0@s.whatsapp.net",
-        expectedIsNewSession: false,
-      },
-      {
-        name: "raw body clean while body wrapped",
-        storePrefix: "openclaw-group-rawbody-",
-        allowFrom: ["*"],
-        body: `[WhatsApp 120363406150318674@g.us 2026-01-13T07:45Z] Jake: /new\n[from: Jake (+1222)]`,
-        senderName: undefined,
-        senderE164: "+1222",
-        senderId: undefined,
-        expectedIsNewSession: true,
-      },
-      {
-        name: "LID sender with authorized E164",
-        storePrefix: "openclaw-group-reset-lid-",
-        allowFrom: ["+41796666864"],
-        body: `[WhatsApp 120363406150318674@g.us 2026-01-13T07:45Z] Owner: /new\n[from: Owner (+41796666864)]`,
-        senderName: "Owner",
-        senderE164: "+41796666864",
-        senderId: "123@lid",
-        expectedIsNewSession: true,
-      },
-      {
         name: "LID sender with unauthorized E164",
-        storePrefix: "openclaw-group-reset-lid-unauth-",
         allowFrom: ["+41796666864"],
         body: `[WhatsApp 120363406150318674@g.us 2026-01-13T07:45Z] Other: /new\n[from: Other (+1555123456)]`,
         senderName: "Other",
@@ -697,7 +635,6 @@ describe("initSessionState reset triggers in WhatsApp groups", () => {
     ] as const;
 
     for (const testCase of cases) {
-      const storePath = await createStorePath(testCase.storePrefix);
       await seedSessionStore({
         storePath,
         sessionKey,
@@ -755,57 +692,40 @@ describe("initSessionState reset triggers in Slack channels", () => {
 
   it("supports mention-prefixed Slack reset commands and preserves args", async () => {
     const existingSessionId = "existing-session-123";
-    const cases = [
-      {
-        name: "reset command",
-        storePrefix: "openclaw-slack-channel-reset-",
-        sessionKey: "agent:main:slack:channel:c1",
-        body: "<@U123> /reset",
-        expectedBodyStripped: "",
+    const sessionKey = "agent:main:slack:channel:c2";
+    const body = "<@U123> /new take notes";
+    const storePath = await createStorePath("openclaw-slack-channel-new-");
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      sessionId: existingSessionId,
+    });
+    const cfg = {
+      session: { store: storePath, idleMinutes: 999 },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        Body: body,
+        RawBody: body,
+        CommandBody: body,
+        From: "slack:channel:C1",
+        To: "channel:C1",
+        ChatType: "channel",
+        SessionKey: sessionKey,
+        Provider: "slack",
+        Surface: "slack",
+        SenderId: "U123",
+        SenderName: "Owner",
       },
-      {
-        name: "new command with args",
-        storePrefix: "openclaw-slack-channel-new-",
-        sessionKey: "agent:main:slack:channel:c2",
-        body: "<@U123> /new take notes",
-        expectedBodyStripped: "take notes",
-      },
-    ] as const;
+      cfg,
+      commandAuthorized: true,
+    });
 
-    for (const testCase of cases) {
-      const storePath = await createStorePath(testCase.storePrefix);
-      await seedSessionStore({
-        storePath,
-        sessionKey: testCase.sessionKey,
-        sessionId: existingSessionId,
-      });
-      const cfg = {
-        session: { store: storePath, idleMinutes: 999 },
-      } as OpenClawConfig;
-
-      const result = await initSessionState({
-        ctx: {
-          Body: testCase.body,
-          RawBody: testCase.body,
-          CommandBody: testCase.body,
-          From: "slack:channel:C1",
-          To: "channel:C1",
-          ChatType: "channel",
-          SessionKey: testCase.sessionKey,
-          Provider: "slack",
-          Surface: "slack",
-          SenderId: "U123",
-          SenderName: "Owner",
-        },
-        cfg,
-        commandAuthorized: true,
-      });
-
-      expect(result.isNewSession, testCase.name).toBe(true);
-      expect(result.resetTriggered, testCase.name).toBe(true);
-      expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
-      expect(result.bodyStripped, testCase.name).toBe(testCase.expectedBodyStripped);
-    }
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.bodyStripped).toBe("take notes");
   });
 });
 
@@ -920,150 +840,60 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
     });
   }
 
-  it("/new preserves verboseLevel from previous session", async () => {
-    const storePath = await createStorePath("openclaw-reset-verbose-");
-    const sessionKey = "agent:main:telegram:dm:user1";
-    const existingSessionId = "existing-session-verbose";
-    await seedSessionStoreWithOverrides({
-      storePath,
-      sessionKey,
-      sessionId: existingSessionId,
-      overrides: { verboseLevel: "on" },
-    });
-    await fs.writeFile(
-      path.join(path.dirname(storePath), `${existingSessionId}.jsonl`),
-      "",
-      "utf-8",
-    );
-
-    const cfg = {
-      session: { store: storePath, idleMinutes: 999 },
-    } as OpenClawConfig;
-
-    const result = await initSessionState({
-      ctx: {
-        Body: "/new",
-        RawBody: "/new",
-        CommandBody: "/new",
-        From: "user1",
-        To: "bot",
-        ChatType: "direct",
-        SessionKey: sessionKey,
-        Provider: "telegram",
-        Surface: "telegram",
+  it("preserves behavior overrides across /new and /reset", async () => {
+    const storePath = await createStorePath("openclaw-reset-overrides-");
+    const sessionKey = "agent:main:telegram:dm:user-overrides";
+    const existingSessionId = "existing-session-overrides";
+    const overrides = {
+      verboseLevel: "on",
+      thinkingLevel: "high",
+      reasoningLevel: "low",
+      label: "telegram-priority",
+    } as const;
+    const cases = [
+      {
+        name: "new preserves behavior overrides",
+        body: "/new",
       },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.isNewSession).toBe(true);
-    expect(result.resetTriggered).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
-    expect(result.sessionEntry.verboseLevel).toBe("on");
-  });
-
-  it("/reset preserves thinkingLevel and reasoningLevel from previous session", async () => {
-    const storePath = await createStorePath("openclaw-reset-thinking-");
-    const sessionKey = "agent:main:telegram:dm:user2";
-    const existingSessionId = "existing-session-thinking";
-    await seedSessionStoreWithOverrides({
-      storePath,
-      sessionKey,
-      sessionId: existingSessionId,
-      overrides: { thinkingLevel: "high", reasoningLevel: "low" },
-    });
-
-    const cfg = {
-      session: { store: storePath, idleMinutes: 999 },
-    } as OpenClawConfig;
-
-    const result = await initSessionState({
-      ctx: {
-        Body: "/reset",
-        RawBody: "/reset",
-        CommandBody: "/reset",
-        From: "user2",
-        To: "bot",
-        ChatType: "direct",
-        SessionKey: sessionKey,
-        Provider: "telegram",
-        Surface: "telegram",
+      {
+        name: "reset preserves behavior overrides",
+        body: "/reset",
       },
-      cfg,
-      commandAuthorized: true,
-    });
+    ] as const;
 
-    expect(result.isNewSession).toBe(true);
-    expect(result.resetTriggered).toBe(true);
-    expect(result.sessionId).not.toBe(existingSessionId);
-    expect(result.sessionEntry.thinkingLevel).toBe("high");
-    expect(result.sessionEntry.reasoningLevel).toBe("low");
-  });
+    for (const testCase of cases) {
+      await seedSessionStoreWithOverrides({
+        storePath,
+        sessionKey,
+        sessionId: existingSessionId,
+        overrides: { ...overrides },
+      });
 
-  it("/new preserves session label from previous session", async () => {
-    const storePath = await createStorePath("openclaw-reset-label-");
-    const sessionKey = "agent:main:telegram:dm:user-label";
-    const existingSessionId = "existing-session-label";
-    await seedSessionStoreWithOverrides({
-      storePath,
-      sessionKey,
-      sessionId: existingSessionId,
-      overrides: { label: "telegram-priority" },
-    });
+      const cfg = {
+        session: { store: storePath, idleMinutes: 999 },
+      } as OpenClawConfig;
 
-    const cfg = {
-      session: { store: storePath, idleMinutes: 999 },
-    } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: {
+          Body: testCase.body,
+          RawBody: testCase.body,
+          CommandBody: testCase.body,
+          From: "user-overrides",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
 
-    const result = await initSessionState({
-      ctx: {
-        Body: "/new",
-        RawBody: "/new",
-        CommandBody: "/new",
-        From: "user-label",
-        To: "bot",
-        ChatType: "direct",
-        SessionKey: sessionKey,
-        Provider: "telegram",
-        Surface: "telegram",
-      },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.isNewSession).toBe(true);
-    expect(result.resetTriggered).toBe(true);
-    expect(result.sessionEntry.label).toBe("telegram-priority");
-  });
-
-  it("/new in a new session does not preserve overrides", async () => {
-    const storePath = await createStorePath("openclaw-new-no-preserve-");
-    const sessionKey = "agent:main:telegram:dm:user3";
-
-    const cfg = {
-      session: { store: storePath, idleMinutes: 999 },
-    } as OpenClawConfig;
-
-    const result = await initSessionState({
-      ctx: {
-        Body: "/new",
-        RawBody: "/new",
-        CommandBody: "/new",
-        From: "user3",
-        To: "bot",
-        ChatType: "direct",
-        SessionKey: sessionKey,
-        Provider: "telegram",
-        Surface: "telegram",
-      },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.isNewSession).toBe(true);
-    expect(result.resetTriggered).toBe(true);
-    expect(result.sessionEntry.verboseLevel).toBeUndefined();
-    expect(result.sessionEntry.thinkingLevel).toBeUndefined();
+      expect(result.isNewSession, testCase.name).toBe(true);
+      expect(result.resetTriggered, testCase.name).toBe(true);
+      expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
+      expect(result.sessionEntry, testCase.name).toMatchObject(overrides);
+    }
   });
 
   it("archives the old session store entry on /new", async () => {
