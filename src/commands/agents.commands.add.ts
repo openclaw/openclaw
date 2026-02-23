@@ -7,6 +7,7 @@ import {
 } from "../agents/agent-scope.js";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { writeConfigFile } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
@@ -38,6 +39,14 @@ type AgentsAddOptions = {
   nonInteractive?: boolean;
   json?: boolean;
 };
+
+function resolveGlobalModelPrimary(cfg: OpenClawConfig): string | undefined {
+  const raw = cfg.agents?.defaults?.model;
+  if (typeof raw === "string") {
+    return raw.trim() || undefined;
+  }
+  return raw?.primary?.trim() || undefined;
+}
 
 async function fileExists(pathname: string): Promise<boolean> {
   try {
@@ -279,10 +288,17 @@ export async function agentsAddCommand(
       });
       nextConfig = authResult.config;
       if (authResult.agentModelOverride) {
-        nextConfig = applyAgentConfig(nextConfig, {
-          agentId,
-          model: authResult.agentModelOverride,
-        });
+        // Only bake the provider default model into the agent entry when no
+        // global primary is configured.  When agents.defaults.model.primary
+        // already exists the agent should inherit it — writing the provider
+        // default would silently override the user's intended primary (#24170).
+        const globalPrimary = resolveGlobalModelPrimary(nextConfig);
+        if (!globalPrimary) {
+          nextConfig = applyAgentConfig(nextConfig, {
+            agentId,
+            model: authResult.agentModelOverride,
+          });
+        }
       }
     }
 
