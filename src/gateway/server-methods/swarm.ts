@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../../agents/workspace.js";
 import { ErrorCodes, errorShape } from "../protocol/index.js";
@@ -7,11 +8,12 @@ import type { GatewayRequestHandlers } from "./types.js";
 /**
  * Swarm RPC handlers — expose swarm state to the dashboard.
  *
- * Reads from the tasks.sqlite DB and /tmp/swarm/ directories
+ * Reads from the tasks.sqlite DB and swarm state directories
  * to provide a real-time view of worker agents.
  */
 
 const _DB_NAME = "tasks.sqlite";
+const SWARM_BASE_DIR = path.join(os.tmpdir(), "swarm");
 
 type SwarmWorker = {
   id: string;
@@ -137,7 +139,7 @@ async function readAgentProfiles(): Promise<SwarmAgentNode> {
 
   // Overlay active swarm workers
   try {
-    const swarmDir = "/tmp/swarm";
+    const swarmDir = SWARM_BASE_DIR;
     const swarmEntries = await fs.readdir(swarmDir, { withFileTypes: true });
     for (const entry of swarmEntries) {
       if (!entry.isDirectory()) {
@@ -171,20 +173,20 @@ async function readAgentProfiles(): Promise<SwarmAgentNode> {
       }
     }
   } catch {
-    // /tmp/swarm doesn't exist — no active swarms
+    // Swarm base dir doesn't exist — no active swarms
   }
 
   return root;
 }
 
-// Read swarm data from /tmp/swarm and tasks.sqlite
+// Read swarm data from swarm dir and tasks.sqlite
 async function readSwarmData(): Promise<SwarmSnapshot> {
   const swarms: SwarmGroup[] = [];
   let totalWorkers = 0;
   let activeWorkers = 0;
 
-  // Check /tmp/swarm/ for active swarm directories
-  const swarmBase = "/tmp/swarm";
+  // Check swarm directory for active swarm directories
+  const swarmBase = SWARM_BASE_DIR;
   try {
     const entries = await fs.readdir(swarmBase, { withFileTypes: true });
     for (const entry of entries) {
@@ -256,7 +258,7 @@ async function readSwarmData(): Promise<SwarmSnapshot> {
       }
     }
   } catch {
-    // /tmp/swarm doesn't exist — no swarms
+    // Swarm base dir doesn't exist — no swarms
   }
 
   return {
