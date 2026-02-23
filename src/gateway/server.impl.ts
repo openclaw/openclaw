@@ -686,7 +686,7 @@ export async function startGatewayServer(
       }
       skillsChangeUnsub();
       stallAgentErrorUnsub();
-      replyEnforcer.stop();
+      replyEnforcer.stopAll();
       await close(opts);
     },
   };
