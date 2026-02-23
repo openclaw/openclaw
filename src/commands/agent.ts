@@ -631,8 +631,11 @@ async function prepareAgentCommandExecution(
     sessionKey,
   });
   // Internal callers (for example subagent spawns) may pin workspace inheritance.
+  // Session entry workspace override takes precedence over config and spawned metadata.
   const workspaceDirRaw =
-    normalizedSpawned.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
+    sessionEntryRaw?.workspace ??
+    normalizedSpawned.workspaceDir ??
+    resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const agentDir = resolveAgentDir(cfg, sessionAgentId);
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
