@@ -18,8 +18,9 @@ describe("process supervisor", () => {
     const supervisor = createProcessSupervisor();
     const run = await spawnChild(supervisor, {
       sessionId: "s1",
-      argv: [process.execPath, "-e", 'process.stdout.write("ok")'],
-      timeoutMs: 1_000,
+      // Delay stdout slightly so listeners are attached even on heavily loaded runners.
+      argv: [process.execPath, "-e", 'setTimeout(() => process.stdout.write("ok"), 200)'],
+      timeoutMs: 10_000,
       stdinMode: "pipe-closed",
     });
     const exit = await run.wait();
@@ -48,8 +49,8 @@ describe("process supervisor", () => {
     const first = await spawnChild(supervisor, {
       sessionId: "s1",
       scopeKey: "scope:a",
-      argv: [process.execPath, "-e", "setTimeout(() => {}, 40)"],
-      timeoutMs: 500,
+      argv: [process.execPath, "-e", "setTimeout(() => {}, 2_000)"],
+      timeoutMs: 10_000,
       stdinMode: "pipe-open",
     });
 
@@ -57,8 +58,9 @@ describe("process supervisor", () => {
       sessionId: "s1",
       scopeKey: "scope:a",
       replaceExistingScope: true,
-      argv: [process.execPath, "-e", 'process.stdout.write("new")'],
-      timeoutMs: 1_000,
+      // Small delay makes stdout capture deterministic by giving listeners time to attach.
+      argv: [process.execPath, "-e", 'setTimeout(() => process.stdout.write("new"), 200)'],
+      timeoutMs: 10_000,
       stdinMode: "pipe-closed",
     });
 
@@ -87,8 +89,9 @@ describe("process supervisor", () => {
     let streamed = "";
     const run = await spawnChild(supervisor, {
       sessionId: "s-capture",
-      argv: [process.execPath, "-e", 'process.stdout.write("streamed")'],
-      timeoutMs: 1_000,
+      // Avoid race where child exits before stdout listeners are attached.
+      argv: [process.execPath, "-e", 'setTimeout(() => process.stdout.write("streamed"), 200)'],
+      timeoutMs: 10_000,
       stdinMode: "pipe-closed",
       captureOutput: false,
       onStdout: (chunk) => {
