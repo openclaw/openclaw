@@ -1,32 +1,44 @@
-import { normalizeTelegramLookupTarget } from "../../../telegram/targets.js";
+import { normalizeTelegramLookupTarget, parseTelegramTarget } from "../../../telegram/targets.js";
 
-export function normalizeTelegramMessagingTarget(raw: string): string | undefined {
+const TELEGRAM_PREFIX_RE = /^(telegram|tg):/i;
+
+function normalizeTelegramTargetBody(raw: string): string | undefined {
   const trimmed = raw.trim();
   if (!trimmed) {
     return undefined;
   }
 
-  const normalized = normalizeTelegramLookupTarget(trimmed);
-  if (!normalized) {
-    // Keep legacy prefixed targets (including :topic: suffixes) valid.
-    if (/^(telegram|tg):/i.test(trimmed)) {
-      const stripped = trimmed.replace(/^(telegram|tg):/i, "").trim();
-      if (stripped) {
-        return `telegram:${stripped}`.toLowerCase();
-      }
-    }
+  const prefixStripped = trimmed.replace(TELEGRAM_PREFIX_RE, "").trim();
+  if (!prefixStripped) {
     return undefined;
   }
-  return `telegram:${normalized}`.toLowerCase();
+
+  const parsed = parseTelegramTarget(trimmed);
+  const normalizedChatId = normalizeTelegramLookupTarget(parsed.chatId);
+  if (!normalizedChatId) {
+    return undefined;
+  }
+
+  const keepLegacyGroupPrefix = /^group:/i.test(prefixStripped);
+  const hasTopicSuffix = /:topic:\d+$/i.test(prefixStripped);
+  const chatSegment = keepLegacyGroupPrefix ? `group:${normalizedChatId}` : normalizedChatId;
+  if (parsed.messageThreadId == null) {
+    return chatSegment;
+  }
+  const threadSuffix = hasTopicSuffix
+    ? `:topic:${parsed.messageThreadId}`
+    : `:${parsed.messageThreadId}`;
+  return `${chatSegment}${threadSuffix}`;
+}
+
+export function normalizeTelegramMessagingTarget(raw: string): string | undefined {
+  const normalizedBody = normalizeTelegramTargetBody(raw);
+  if (!normalizedBody) {
+    return undefined;
+  }
+  return `telegram:${normalizedBody}`.toLowerCase();
 }
 
 export function looksLikeTelegramTargetId(raw: string): boolean {
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (normalizeTelegramLookupTarget(trimmed)) {
-    return true;
-  }
-  return /^(telegram|tg):/i.test(trimmed);
+  return normalizeTelegramTargetBody(raw) !== undefined;
 }
