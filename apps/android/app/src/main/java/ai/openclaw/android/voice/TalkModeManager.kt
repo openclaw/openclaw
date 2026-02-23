@@ -24,6 +24,7 @@ import androidx.core.content.ContextCompat
 import ai.openclaw.android.gateway.GatewaySession
 import ai.openclaw.android.isCanonicalMainSessionKey
 import ai.openclaw.android.normalizeMainKey
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.UUID
@@ -726,16 +727,14 @@ class TalkModeManager(
       }
     }
 
-    // When falling back from PCM, rewrite the format to MP3 so ElevenLabs returns
-    // data that MediaPlayer can actually decode. Without this the fallback request
-    // still carries outputFormat=pcm_24000, ElevenLabs streams raw PCM, and
-    // MediaPlayer fails immediately with a codec error.
+    // When falling back from PCM, rewrite format to MP3 and download to file.
+    // File-based playback avoids custom DataSource races and is reliable across OEMs.
     val mp3Request = if (request.outputFormat?.startsWith("pcm_") == true) {
       request.copy(outputFormat = "mp3_44100_128")
     } else {
       request
     }
-    streamAndPlayMp3(voiceId = voiceId, apiKey = apiKey, request = mp3Request)
+    streamAndPlayViaFile(voiceId = voiceId, apiKey = apiKey, request = mp3Request)
   }
 
   private suspend fun streamAndPlayMp3(voiceId: String, apiKey: String, request: ElevenLabsRequest) {
@@ -793,6 +792,61 @@ class TalkModeManager(
       cleanupPlayer()
     }
     Log.d(tag, "play done")
+  }
+
+  /**
+   * Download ElevenLabs audio to a temp file, then play from disk via MediaPlayer.
+   * Simpler and more reliable than streaming: avoids custom DataSource races and
+   * AudioTrack underrun issues on OxygenOS/OnePlus.
+   */
+  private suspend fun streamAndPlayViaFile(voiceId: String, apiKey: String, request: ElevenLabsRequest) {
+    val tempFile = withContext(Dispatchers.IO) {
+      val file = File.createTempFile("tts_", ".mp3", context.cacheDir)
+      val conn = openTtsConnection(voiceId = voiceId, apiKey = apiKey, request = request)
+      try {
+        val payload = buildRequestPayload(request)
+        conn.outputStream.use { it.write(payload.toByteArray()) }
+        val code = conn.responseCode
+        if (code >= 400) {
+          val body = conn.errorStream?.readBytes()?.toString(Charsets.UTF_8) ?: ""
+          file.delete()
+          throw IllegalStateException("ElevenLabs failed: $code $body")
+        }
+        Log.d(tag, "elevenlabs http code=$code voiceId=$voiceId format=${request.outputFormat}")
+        conn.inputStream.use { input -> file.outputStream().use { out -> input.copyTo(out) } }
+      } catch (err: Throwable) {
+        file.delete()
+        throw err
+      } finally {
+        conn.disconnect()
+      }
+      file
+    }
+    try {
+      val player = MediaPlayer()
+      this.player = player
+      val finished = CompletableDeferred<Unit>()
+      player.setAudioAttributes(
+        AudioAttributes.Builder()
+          .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+          .setUsage(AudioAttributes.USAGE_MEDIA)
+          .build(),
+      )
+      player.setOnCompletionListener { finished.complete(Unit) }
+      player.setOnErrorListener { _, what, extra ->
+        finished.completeExceptionally(IllegalStateException("MediaPlayer error what=$what extra=$extra"))
+        true
+      }
+      player.setDataSource(tempFile.absolutePath)
+      withContext(Dispatchers.IO) { player.prepare() }
+      Log.d(tag, "file play start bytes=${tempFile.length()}")
+      player.start()
+      finished.await()
+      Log.d(tag, "file play done")
+    } finally {
+      cleanupPlayer()
+      tempFile.delete()
+    }
   }
 
   private suspend fun streamAndPlayPcm(
