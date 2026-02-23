@@ -271,6 +271,70 @@ describe("resolvePathWithinRoot", () => {
       expect(result.error).toContain("must stay within uploads directory");
     }
   });
+
+  it.runIf(process.platform !== "win32")(
+    "accepts absolute paths through a symlinked parent directory (macOS /tmp scenario)",
+    async () => {
+      await withFixtureRoot(async ({ baseDir }) => {
+        const realDir = path.join(baseDir, "real");
+        const uploadsDir = path.join(realDir, "uploads");
+        await fs.mkdir(uploadsDir, { recursive: true });
+
+        const aliasLink = path.join(baseDir, "alias");
+        await fs.symlink(realDir, aliasLink);
+        const aliasedUploadsDir = path.join(aliasLink, "uploads");
+
+        await fs.writeFile(path.join(uploadsDir, "photo.jpg"), "img", "utf8");
+
+        // rootDir uses the symlink alias, requestedPath uses the real path
+        const result = resolvePathWithinRoot({
+          rootDir: aliasedUploadsDir,
+          requestedPath: path.join(uploadsDir, "photo.jpg"),
+          scopeLabel: "uploads directory",
+        });
+        expect(result.ok).toBe(true);
+        if (result.ok) {
+          expect(result.path).toBe(path.join(aliasedUploadsDir, "photo.jpg"));
+        }
+
+        // Vice-versa: rootDir uses the real path, requestedPath uses the alias
+        const result2 = resolvePathWithinRoot({
+          rootDir: uploadsDir,
+          requestedPath: path.join(aliasedUploadsDir, "photo.jpg"),
+          scopeLabel: "uploads directory",
+        });
+        expect(result2.ok).toBe(true);
+        if (result2.ok) {
+          expect(result2.path).toBe(path.join(uploadsDir, "photo.jpg"));
+        }
+      });
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "still rejects paths outside root even when both go through symlinks",
+    async () => {
+      await withFixtureRoot(async ({ baseDir }) => {
+        const realDir = path.join(baseDir, "real");
+        const uploadsDir = path.join(realDir, "uploads");
+        const outsideDir = path.join(realDir, "outside");
+        await fs.mkdir(uploadsDir, { recursive: true });
+        await fs.mkdir(outsideDir, { recursive: true });
+        await fs.writeFile(path.join(outsideDir, "secret.txt"), "nope", "utf8");
+
+        const aliasLink = path.join(baseDir, "alias");
+        await fs.symlink(realDir, aliasLink);
+        const aliasedUploadsDir = path.join(aliasLink, "uploads");
+
+        const result = resolvePathWithinRoot({
+          rootDir: aliasedUploadsDir,
+          requestedPath: path.join(realDir, "outside", "secret.txt"),
+          scopeLabel: "uploads directory",
+        });
+        expect(result.ok).toBe(false);
+      });
+    },
+  );
 });
 
 describe("resolveWritablePathWithinRoot", () => {
