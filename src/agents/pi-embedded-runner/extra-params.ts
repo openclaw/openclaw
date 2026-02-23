@@ -376,6 +376,13 @@ function createOpenRouterWrapper(
       onPayload: (payload) => {
         if (thinkingLevel && payload && typeof payload === "object") {
           const payloadObj = payload as Record<string, unknown>;
+
+          // pi-ai may inject a top-level reasoning_effort (OpenAI flat format).
+          // OpenRouter expects the nested reasoning.effort format instead, and
+          // rejects payloads containing both fields. Remove the flat field so
+          // only the nested one is sent.
+          delete payloadObj.reasoning_effort;
+
           const existingReasoning = payloadObj.reasoning;
 
           // OpenRouter treats reasoning.effort and reasoning.max_tokens as
