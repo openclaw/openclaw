@@ -297,7 +297,10 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
       emit(state, { jobId: job.id, action: "removed" });
     }
 
-    recomputeNextRuns(state);
+    // Manual runs should not advance other due jobs without executing them.
+    // Use maintenance-only recompute to repair missing values while
+    // preserving existing past-due nextRunAtMs entries for future timer ticks.
+    recomputeNextRunsForMaintenance(state);
     await persist(state);
     armTimer(state);
   });
