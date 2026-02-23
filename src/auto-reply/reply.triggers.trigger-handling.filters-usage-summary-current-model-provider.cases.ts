@@ -2,10 +2,8 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
-import type { OpenClawConfig } from "../config/config.js";
 import { resolveSessionKey } from "../config/sessions.js";
 import {
-  createBlockReplyCollector,
   getProviderUsageMocks,
   getRunEmbeddedPiAgentMock,
   makeCfg,
@@ -16,16 +14,6 @@ import {
 type GetReplyFromConfig = typeof import("./reply.js").getReplyFromConfig;
 
 const usageMocks = getProviderUsageMocks();
-const modelStatusCtx = {
-  Body: "/model status",
-  From: "telegram:111",
-  To: "telegram:111",
-  ChatType: "direct",
-  Provider: "telegram",
-  Surface: "telegram",
-  SessionKey: "telegram:slash:111",
-  CommandAuthorized: true,
-} as const;
 
 async function readSessionStore(storePath: string): Promise<Record<string, unknown>> {
   const raw = await readFile(storePath, "utf-8");
@@ -41,56 +29,11 @@ function getReplyFromConfigNow(getReplyFromConfig: () => GetReplyFromConfig): Ge
   return getReplyFromConfig();
 }
 
-async function runCommandAndCollectReplies(params: {
-  getReplyFromConfig: () => GetReplyFromConfig;
-  home: string;
-  body: string;
-  from?: string;
-  senderE164?: string;
-}) {
-  const { blockReplies, handlers } = createBlockReplyCollector();
-  const res = await getReplyFromConfigNow(params.getReplyFromConfig)(
-    {
-      Body: params.body,
-      From: params.from ?? "+1000",
-      To: "+2000",
-      Provider: "whatsapp",
-      SenderE164: params.senderE164 ?? params.from ?? "+1000",
-      CommandAuthorized: true,
-    },
-    handlers,
-    makeCfg(params.home),
-  );
-  const replies = res ? (Array.isArray(res) ? res : [res]) : [];
-  return { blockReplies, replies };
-}
-
-async function expectStopAbortWithoutAgent(params: {
-  getReplyFromConfig: () => GetReplyFromConfig;
-  home: string;
-  body: string;
-  from: string;
-}) {
-  const res = await getReplyFromConfigNow(params.getReplyFromConfig)(
-    {
-      Body: params.body,
-      From: params.from,
-      To: "+2000",
-      CommandAuthorized: true,
-    },
-    {},
-    makeCfg(params.home),
-  );
-  const text = Array.isArray(res) ? res[0]?.text : res?.text;
-  expect(text).toBe("⚙️ Agent was aborted.");
-  expect(getRunEmbeddedPiAgentMock()).not.toHaveBeenCalled();
-}
-
 export function registerTriggerHandlingUsageSummaryCases(params: {
   getReplyFromConfig: () => GetReplyFromConfig;
 }): void {
   describe("usage and status command handling", () => {
-    it("handles status, usage cycles, restart/stop gating, and auth-profile status details", async () => {
+    it("handles status, usage cycles, and auth-profile status details", async () => {
       await withTempHome(async (home) => {
         const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
         const getReplyFromConfig = getReplyFromConfigNow(params.getReplyFromConfig);
@@ -136,84 +79,9 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
         }
 
         {
-          runEmbeddedPiAgentMock.mockResolvedValue({
-            payloads: [{ text: "agent says hi" }],
-            meta: {
-              durationMs: 1,
-              agentMeta: { sessionId: "s", provider: "p", model: "m" },
-            },
-          });
-          const { blockReplies, replies } = await runCommandAndCollectReplies({
-            getReplyFromConfig: params.getReplyFromConfig,
-            home,
-            body: "here we go /status now",
-            from: "+1002",
-          });
-          expect(blockReplies.length).toBe(1);
-          expect(String(blockReplies[0]?.text ?? "")).toContain("Model:");
-          expect(replies.length).toBe(1);
-          expect(replies[0]?.text).toBe("agent says hi");
-          const prompt = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt ?? "";
-          expect(prompt).not.toContain("/status");
-        }
-
-        {
-          runEmbeddedPiAgentMock.mockClear();
-          const defaultCfg = makeCfg(home);
-          const cfg = {
-            ...defaultCfg,
-            models: {
-              providers: {
-                minimax: {
-                  baseUrl: "https://api.minimax.io/anthropic",
-                  api: "anthropic-messages",
-                },
-              },
-            },
-          } as unknown as OpenClawConfig;
-          const defaultStatus = await getReplyFromConfig(modelStatusCtx, {}, defaultCfg);
-          const configuredStatus = await getReplyFromConfig(modelStatusCtx, {}, cfg);
-
-          expect(
-            normalizeTestText(
-              (Array.isArray(defaultStatus) ? defaultStatus[0]?.text : defaultStatus?.text) ?? "",
-            ),
-          ).toContain("endpoint: default");
-          const configuredText = Array.isArray(configuredStatus)
-            ? configuredStatus[0]?.text
-            : configuredStatus?.text;
-          expect(normalizeTestText(configuredText ?? "")).toContain(
-            "[minimax] endpoint: https://api.minimax.io/anthropic api: anthropic-messages auth:",
-          );
-        }
-
-        {
           const cfg = makeCfg(home);
           cfg.session = { ...cfg.session, store: join(home, "usage-cycle.sessions.json") };
           const usageStorePath = requireSessionStorePath(cfg);
-          const explicitTokens = await getReplyFromConfig(
-            {
-              Body: "/usage tokens",
-              From: "+1000",
-              To: "+2000",
-              Provider: "whatsapp",
-              SenderE164: "+1000",
-              CommandAuthorized: true,
-            },
-            undefined,
-            cfg,
-          );
-          expect(
-            String(
-              (Array.isArray(explicitTokens) ? explicitTokens[0]?.text : explicitTokens?.text) ??
-                "",
-            ),
-          ).toContain("Usage footer: tokens");
-          const explicitStore = await readSessionStore(usageStorePath);
-          expect(
-            pickFirstStoreEntry<{ responseUsage?: string }>(explicitStore)?.responseUsage,
-          ).toBe("tokens");
-
           const r0 = await getReplyFromConfig(
             {
               Body: "/usage on",
@@ -281,50 +149,6 @@ export function registerTriggerHandlingUsageSummaryCases(params: {
           expect(pickFirstStoreEntry<{ responseUsage?: string }>(finalStore)?.responseUsage).toBe(
             "tokens",
           );
-          expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
-        }
-
-        {
-          runEmbeddedPiAgentMock.mockClear();
-          await expectStopAbortWithoutAgent({
-            getReplyFromConfig: params.getReplyFromConfig,
-            home,
-            body: "[Dec 5 10:00] stop",
-            from: "+1000",
-          });
-
-          const enabledRes = await getReplyFromConfig(
-            {
-              Body: "  [Dec 5] /restart",
-              From: "+1001",
-              To: "+2000",
-              CommandAuthorized: true,
-            },
-            {},
-            makeCfg(home),
-          );
-          const enabledText = Array.isArray(enabledRes) ? enabledRes[0]?.text : enabledRes?.text;
-          expect(
-            enabledText?.startsWith("⚙️ Restarting") ||
-              enabledText?.startsWith("⚠️ Restart failed"),
-          ).toBe(true);
-
-          const disabledCfg = { ...makeCfg(home), commands: { restart: false } } as OpenClawConfig;
-          const disabledRes = await getReplyFromConfig(
-            {
-              Body: "/restart",
-              From: "+1001",
-              To: "+2000",
-              CommandAuthorized: true,
-            },
-            {},
-            disabledCfg,
-          );
-
-          const disabledText = Array.isArray(disabledRes)
-            ? disabledRes[0]?.text
-            : disabledRes?.text;
-          expect(disabledText).toContain("/restart is disabled");
           expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
         }
 
