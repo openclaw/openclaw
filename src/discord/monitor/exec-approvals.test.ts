@@ -309,6 +309,15 @@ describe("DiscordExecApprovalHandler.shouldHandle", () => {
     );
   });
 
+  it("rejects unsafe nested-repetition regex in session filter", () => {
+    const handler = createHandler({
+      enabled: true,
+      approvers: ["123"],
+      sessionFilter: ["(a+)+$"],
+    });
+    expect(handler.shouldHandle(createRequest({ sessionKey: `${"a".repeat(28)}!` }))).toBe(false);
+  });
+
   it("filters by discord account when session store includes account", () => {
     writeStore({
       "agent:test-agent:discord:channel:999888777": {

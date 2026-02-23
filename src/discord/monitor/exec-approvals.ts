@@ -24,6 +24,7 @@ import type {
 import { logDebug, logError } from "../../logger.js";
 import { normalizeAccountId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { compileSafeRegex } from "../../security/safe-regex.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -364,11 +365,11 @@ export class DiscordExecApprovalHandler {
         return false;
       }
       const matches = config.sessionFilter.some((p) => {
-        try {
-          return session.includes(p) || new RegExp(p).test(session);
-        } catch {
-          return session.includes(p);
+        if (session.includes(p)) {
+          return true;
         }
+        const regex = compileSafeRegex(p);
+        return regex ? regex.test(session) : false;
       });
       if (!matches) {
         return false;
