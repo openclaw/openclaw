@@ -124,34 +124,23 @@ function makeCommandMessage(body: string, from = "+1222") {
 describe("directive behavior", () => {
   installDirectiveBehaviorE2EHooks();
 
-  it("shows current verbose level when /verbose has no argument", async () => {
+  it("reports current directive defaults when no arguments are provided", async () => {
     await withTempHome(async (home) => {
-      const text = await runCommand(home, "/verbose", { defaults: { verboseDefault: "on" } });
-      expect(text).toContain("Current verbose level: on");
-      expect(text).toContain("Options: on, full, off.");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
-    });
-  });
-  it("shows current reasoning level when /reasoning has no argument", async () => {
-    await withTempHome(async (home) => {
-      const text = await runCommand(home, "/reasoning");
-      expect(text).toContain("Current reasoning level: off");
-      expect(text).toContain("Options: on, off, stream.");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
-    });
-  });
-  it("shows current elevated level when /elevated has no argument", async () => {
-    await withTempHome(async (home) => {
-      const res = await runElevatedCommand(home, "/elevated");
-      const text = replyText(res);
-      expect(text).toContain("Current elevated level: on");
-      expect(text).toContain("Options: on, off, ask, full.");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
-    });
-  });
-  it("shows current exec defaults when /exec has no argument", async () => {
-    await withTempHome(async (home) => {
-      const text = await runCommand(home, "/exec", {
+      const verboseText = await runCommand(home, "/verbose", {
+        defaults: { verboseDefault: "on" },
+      });
+      expect(verboseText).toContain("Current verbose level: on");
+      expect(verboseText).toContain("Options: on, full, off.");
+
+      const reasoningText = await runCommand(home, "/reasoning");
+      expect(reasoningText).toContain("Current reasoning level: off");
+      expect(reasoningText).toContain("Options: on, off, stream.");
+
+      const elevatedText = replyText(await runElevatedCommand(home, "/elevated"));
+      expect(elevatedText).toContain("Current elevated level: on");
+      expect(elevatedText).toContain("Options: on, off, ask, full.");
+
+      const execText = await runCommand(home, "/exec", {
         extra: {
           tools: {
             exec: {
@@ -163,45 +152,30 @@ describe("directive behavior", () => {
           },
         },
       });
-      expect(text).toContain(
+      expect(execText).toContain(
         "Current exec defaults: host=gateway, security=allowlist, ask=always, node=mac-1.",
       );
-      expect(text).toContain(
+      expect(execText).toContain(
         "Options: host=sandbox|gateway|node, security=deny|allowlist|full, ask=off|on-miss|always, node=<id>.",
       );
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
-  it("persists elevated off and reflects it in /status (even when default is on)", async () => {
+  it("persists elevated toggles across /status and /elevated", async () => {
     await withTempHome(async (home) => {
       const storePath = sessionStorePath(home);
-      const res = await runElevatedCommand(home, "/elevated off\n/status");
-      const text = replyText(res);
-      expect(text).toContain("Session: agent:main:main");
-      assertElevatedOffStatusReply(text);
 
-      const store = loadSessionStore(storePath);
-      expect(store["agent:main:main"]?.elevatedLevel).toBe("off");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
-    });
-  });
-  it("shows current elevated level as off after toggling it off", async () => {
-    await withTempHome(async (home) => {
-      await runElevatedCommand(home, "/elevated off");
-      const res = await runElevatedCommand(home, "/elevated");
-      const text = replyText(res);
-      expect(text).toContain("Current elevated level: off");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
-    });
-  });
-  it("can toggle elevated off then back on (status reflects on)", async () => {
-    await withTempHome(async (home) => {
-      const storePath = sessionStorePath(home);
-      await runElevatedCommand(home, "/elevated off");
+      const offStatusText = replyText(await runElevatedCommand(home, "/elevated off\n/status"));
+      expect(offStatusText).toContain("Session: agent:main:main");
+      assertElevatedOffStatusReply(offStatusText);
+
+      const offLevelText = replyText(await runElevatedCommand(home, "/elevated"));
+      expect(offLevelText).toContain("Current elevated level: off");
+      expect(loadSessionStore(storePath)["agent:main:main"]?.elevatedLevel).toBe("off");
+
       await runElevatedCommand(home, "/elevated on");
-      const res = await runElevatedCommand(home, "/status");
-      const text = replyText(res);
-      const optionsLine = text?.split("\n").find((line) => line.trim().startsWith("⚙️"));
+      const onStatusText = replyText(await runElevatedCommand(home, "/status"));
+      const optionsLine = onStatusText?.split("\n").find((line) => line.trim().startsWith("⚙️"));
       expect(optionsLine).toBeTruthy();
       expect(optionsLine).toContain("elevated");
 
@@ -330,47 +304,36 @@ describe("directive behavior", () => {
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
-  it("acks queue directive and persists override", async () => {
+  it("persists queue overrides and reset behavior", async () => {
     await withTempHome(async (home) => {
       const storePath = sessionStorePath(home);
 
-      const text = await runQueueDirective(home, "/queue interrupt");
-
-      expect(text).toMatch(/^⚙️ Queue mode set to interrupt\./);
-      const store = loadSessionStore(storePath);
-      const entry = Object.values(store)[0];
+      const interruptText = await runQueueDirective(home, "/queue interrupt");
+      expect(interruptText).toMatch(/^⚙️ Queue mode set to interrupt\./);
+      let store = loadSessionStore(storePath);
+      let entry = Object.values(store)[0];
       expect(entry?.queueMode).toBe("interrupt");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
-    });
-  });
-  it("persists queue options when directive is standalone", async () => {
-    await withTempHome(async (home) => {
-      const storePath = sessionStorePath(home);
 
-      const text = await runQueueDirective(home, "/queue collect debounce:2s cap:5 drop:old");
+      const collectText = await runQueueDirective(
+        home,
+        "/queue collect debounce:2s cap:5 drop:old",
+      );
 
-      expect(text).toMatch(/^⚙️ Queue mode set to collect\./);
-      expect(text).toMatch(/Queue debounce set to 2000ms/);
-      expect(text).toMatch(/Queue cap set to 5/);
-      expect(text).toMatch(/Queue drop set to old/);
-      const store = loadSessionStore(storePath);
-      const entry = Object.values(store)[0];
+      expect(collectText).toMatch(/^⚙️ Queue mode set to collect\./);
+      expect(collectText).toMatch(/Queue debounce set to 2000ms/);
+      expect(collectText).toMatch(/Queue cap set to 5/);
+      expect(collectText).toMatch(/Queue drop set to old/);
+      store = loadSessionStore(storePath);
+      entry = Object.values(store)[0];
       expect(entry?.queueMode).toBe("collect");
       expect(entry?.queueDebounceMs).toBe(2000);
       expect(entry?.queueCap).toBe(5);
       expect(entry?.queueDrop).toBe("old");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
-    });
-  });
-  it("resets queue mode to default", async () => {
-    await withTempHome(async (home) => {
-      const storePath = sessionStorePath(home);
 
-      await runQueueDirective(home, "/queue interrupt");
-      const text = await runQueueDirective(home, "/queue reset");
-      expect(text).toMatch(/^⚙️ Queue mode reset to default\./);
-      const store = loadSessionStore(storePath);
-      const entry = Object.values(store)[0];
+      const resetText = await runQueueDirective(home, "/queue reset");
+      expect(resetText).toMatch(/^⚙️ Queue mode reset to default\./);
+      store = loadSessionStore(storePath);
+      entry = Object.values(store)[0];
       expect(entry?.queueMode).toBeUndefined();
       expect(entry?.queueDebounceMs).toBeUndefined();
       expect(entry?.queueCap).toBeUndefined();
