@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { TemplateContext } from "../templating.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -16,6 +16,10 @@ vi.mock("./commands.js", () => ({
 const { handleInlineActions } = await import("./get-reply-inline-actions.js");
 
 describe("handleInlineActions", () => {
+  beforeEach(() => {
+    handleCommandsMock.mockReset();
+  });
+
   it("skips whatsapp replies when config is empty and From !== To", async () => {
     const typing: TypingController = {
       onReplyStart: async () => {},
@@ -80,5 +84,78 @@ describe("handleInlineActions", () => {
     expect(result).toEqual({ kind: "reply", reply: undefined });
     expect(typing.cleanup).toHaveBeenCalled();
     expect(handleCommandsMock).not.toHaveBeenCalled();
+  });
+
+  it("forwards agentDir into handleCommands", async () => {
+    const typing: TypingController = {
+      onReplyStart: async () => {},
+      startTypingLoop: async () => {},
+      startTypingOnText: async () => {},
+      refreshTypingTtl: () => {},
+      isActive: () => false,
+      markRunComplete: () => {},
+      markDispatchIdle: () => {},
+      cleanup: vi.fn(),
+    };
+
+    handleCommandsMock.mockResolvedValue({ shouldContinue: false, reply: { text: "done" } });
+
+    const ctx = buildTestCtx({
+      Body: "/status",
+      CommandBody: "/status",
+    });
+    const agentDir = "/tmp/inline-agent";
+
+    const result = await handleInlineActions({
+      ctx,
+      sessionCtx: ctx as unknown as TemplateContext,
+      cfg: { commands: { text: true } },
+      agentId: "main",
+      agentDir,
+      sessionKey: "s:main",
+      workspaceDir: "/tmp",
+      isGroup: false,
+      typing,
+      allowTextCommands: false,
+      inlineStatusRequested: false,
+      command: {
+        surface: "whatsapp",
+        channel: "whatsapp",
+        channelId: "whatsapp",
+        ownerList: [],
+        senderIsOwner: false,
+        isAuthorizedSender: true,
+        senderId: "sender-1",
+        abortKey: "sender-1",
+        rawBodyNormalized: "/status",
+        commandBodyNormalized: "/status",
+        from: "whatsapp:+999",
+        to: "whatsapp:+999",
+      },
+      directives: clearInlineDirectives("/status"),
+      cleanedBody: "/status",
+      elevatedEnabled: false,
+      elevatedAllowed: false,
+      elevatedFailures: [],
+      defaultActivation: () => "always",
+      resolvedThinkLevel: undefined,
+      resolvedVerboseLevel: undefined,
+      resolvedReasoningLevel: "off",
+      resolvedElevatedLevel: "off",
+      resolveDefaultThinkingLevel: async () => "off",
+      provider: "openai",
+      model: "gpt-4o-mini",
+      contextTokens: 0,
+      abortedLastRun: false,
+      sessionScope: "per-sender",
+    });
+
+    expect(result).toEqual({ kind: "reply", reply: { text: "done" } });
+    expect(handleCommandsMock).toHaveBeenCalledTimes(1);
+    expect(handleCommandsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir,
+      }),
+    );
   });
 });

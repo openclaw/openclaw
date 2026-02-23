@@ -389,6 +389,7 @@ describe("/compact command", () => {
       From: "+15550001",
       To: "+15550002",
     });
+    const agentDir = "/tmp/openclaw-agent-compact";
     vi.mocked(compactEmbeddedPiSession).mockResolvedValueOnce({
       ok: true,
       compacted: false,
@@ -397,6 +398,7 @@ describe("/compact command", () => {
     const result = await handleCompactCommand(
       {
         ...params,
+        agentDir,
         sessionEntry: {
           sessionId: "session-1",
           updatedAt: Date.now(),
@@ -423,6 +425,7 @@ describe("/compact command", () => {
         groupChannel: "#general",
         groupSpace: "workspace-1",
         spawnedBy: "agent:main:parent",
+        agentDir,
       }),
     );
   });
