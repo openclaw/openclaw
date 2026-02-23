@@ -177,17 +177,42 @@ describe("security audit", () => {
     }
   });
 
-  it("warns when non-loopback bind has auth but no auth rate limit", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        bind: "lan",
-        auth: { token: "secret" },
+  it("evaluates gateway auth rate-limit warning based on configuration", async () => {
+    const cases: Array<{
+      name: string;
+      cfg: OpenClawConfig;
+      expectWarn: boolean;
+    }> = [
+      {
+        name: "no rate limit",
+        cfg: {
+          gateway: {
+            bind: "lan",
+            auth: { token: "secret" },
+          },
+        },
+        expectWarn: true,
       },
-    };
-
-    const res = await audit(cfg, { env: {} });
-
-    expect(hasFinding(res, "gateway.auth_no_rate_limit", "warn")).toBe(true);
+      {
+        name: "rate limit configured",
+        cfg: {
+          gateway: {
+            bind: "lan",
+            auth: {
+              token: "secret",
+              rateLimit: { maxAttempts: 10, windowMs: 60_000, lockoutMs: 300_000 },
+            },
+          },
+        },
+        expectWarn: false,
+      },
+    ];
+    for (const testCase of cases) {
+      const res = await audit(testCase.cfg, { env: {} });
+      expect(hasFinding(res, "gateway.auth_no_rate_limit", "warn"), testCase.name).toBe(
+        testCase.expectWarn,
+      );
+    }
   });
 
   it("scores dangerous gateway.tools.allow over HTTP by exposure", async () => {
@@ -228,173 +253,187 @@ describe("security audit", () => {
     }
   });
 
-  it("does not warn for auth rate limiting when configured", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        bind: "lan",
-        auth: {
-          token: "secret",
-          rateLimit: { maxAttempts: 10, windowMs: 60_000, lockoutMs: 300_000 },
-        },
-      },
-    };
-
-    const res = await audit(cfg, { env: {} });
-
-    expect(hasFinding(res, "gateway.auth_no_rate_limit")).toBe(false);
-  });
-
-  it("warns when exec host is explicitly sandbox while sandbox mode is off", async () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        exec: {
-          host: "sandbox",
-        },
-      },
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "off",
+  it("warns when sandbox exec host is selected while sandbox mode is off", async () => {
+    const cases: Array<{
+      name: string;
+      cfg: OpenClawConfig;
+      checkId:
+        | "tools.exec.host_sandbox_no_sandbox_defaults"
+        | "tools.exec.host_sandbox_no_sandbox_agents";
+    }> = [
+      {
+        name: "defaults host is sandbox",
+        cfg: {
+          tools: {
+            exec: {
+              host: "sandbox",
+            },
           },
-        },
-      },
-    };
-
-    const res = await audit(cfg);
-
-    expect(hasFinding(res, "tools.exec.host_sandbox_no_sandbox_defaults", "warn")).toBe(true);
-  });
-
-  it("warns when an agent sets exec host=sandbox with sandbox mode off", async () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        exec: {
-          host: "gateway",
-        },
-      },
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "off",
-          },
-        },
-        list: [
-          {
-            id: "ops",
-            tools: {
-              exec: {
-                host: "sandbox",
+          agents: {
+            defaults: {
+              sandbox: {
+                mode: "off",
               },
             },
           },
-        ],
-      },
-    };
-
-    const res = await audit(cfg);
-
-    expect(hasFinding(res, "tools.exec.host_sandbox_no_sandbox_agents", "warn")).toBe(true);
-  });
-
-  it("warns for interpreter safeBins entries without explicit profiles", async () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        exec: {
-          safeBins: ["python3"],
         },
+        checkId: "tools.exec.host_sandbox_no_sandbox_defaults",
       },
-      agents: {
-        list: [
-          {
-            id: "ops",
-            tools: {
-              exec: {
-                safeBins: ["node"],
+      {
+        name: "agent override host is sandbox",
+        cfg: {
+          tools: {
+            exec: {
+              host: "gateway",
+            },
+          },
+          agents: {
+            defaults: {
+              sandbox: {
+                mode: "off",
               },
             },
-          },
-        ],
-      },
-    };
-
-    const res = await audit(cfg);
-
-    expect(hasFinding(res, "tools.exec.safe_bins_interpreter_unprofiled", "warn")).toBe(true);
-  });
-
-  it("does not warn for interpreter safeBins when explicit profiles are present", async () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        exec: {
-          safeBins: ["python3"],
-          safeBinProfiles: {
-            python3: {
-              maxPositional: 0,
-            },
-          },
-        },
-      },
-      agents: {
-        list: [
-          {
-            id: "ops",
-            tools: {
-              exec: {
-                safeBins: ["node"],
-                safeBinProfiles: {
-                  node: {
-                    maxPositional: 0,
+            list: [
+              {
+                id: "ops",
+                tools: {
+                  exec: {
+                    host: "sandbox",
                   },
+                },
+              },
+            ],
+          },
+        },
+        checkId: "tools.exec.host_sandbox_no_sandbox_agents",
+      },
+    ];
+    for (const testCase of cases) {
+      const res = await audit(testCase.cfg);
+      expect(hasFinding(res, testCase.checkId, "warn"), testCase.name).toBe(true);
+    }
+  });
+
+  it("warns for interpreter safeBins only when explicit profiles are missing", async () => {
+    const cases: Array<{
+      name: string;
+      cfg: OpenClawConfig;
+      expected: boolean;
+    }> = [
+      {
+        name: "missing profiles",
+        cfg: {
+          tools: {
+            exec: {
+              safeBins: ["python3"],
+            },
+          },
+          agents: {
+            list: [
+              {
+                id: "ops",
+                tools: {
+                  exec: {
+                    safeBins: ["node"],
+                  },
+                },
+              },
+            ],
+          },
+        },
+        expected: true,
+      },
+      {
+        name: "profiles configured",
+        cfg: {
+          tools: {
+            exec: {
+              safeBins: ["python3"],
+              safeBinProfiles: {
+                python3: {
+                  maxPositional: 0,
                 },
               },
             },
           },
-        ],
+          agents: {
+            list: [
+              {
+                id: "ops",
+                tools: {
+                  exec: {
+                    safeBins: ["node"],
+                    safeBinProfiles: {
+                      node: {
+                        maxPositional: 0,
+                      },
+                    },
+                  },
+                },
+              },
+            ],
+          },
+        },
+        expected: false,
       },
-    };
-
-    const res = await audit(cfg);
-
-    expect(
-      res.findings.some((f) => f.checkId === "tools.exec.safe_bins_interpreter_unprofiled"),
-    ).toBe(false);
+    ];
+    for (const testCase of cases) {
+      const res = await audit(testCase.cfg);
+      expect(
+        hasFinding(res, "tools.exec.safe_bins_interpreter_unprofiled", "warn"),
+        testCase.name,
+      ).toBe(testCase.expected);
+    }
   });
 
-  it("warns when loopback control UI lacks trusted proxies", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        bind: "loopback",
-        controlUi: { enabled: true },
+  it("evaluates loopback control UI and logging exposure findings", async () => {
+    const cases: Array<{
+      name: string;
+      cfg: OpenClawConfig;
+      checkId:
+        | "gateway.trusted_proxies_missing"
+        | "gateway.loopback_no_auth"
+        | "logging.redact_off";
+      severity: "warn" | "critical";
+      opts?: Omit<SecurityAuditOptions, "config">;
+    }> = [
+      {
+        name: "loopback control UI without trusted proxies",
+        cfg: {
+          gateway: {
+            bind: "loopback",
+            controlUi: { enabled: true },
+          },
+        },
+        checkId: "gateway.trusted_proxies_missing",
+        severity: "warn",
       },
-    };
-
-    const res = await audit(cfg);
-
-    expectFinding(res, "gateway.trusted_proxies_missing", "warn");
-  });
-
-  it("flags loopback control UI without auth as critical", async () => {
-    const cfg: OpenClawConfig = {
-      gateway: {
-        bind: "loopback",
-        controlUi: { enabled: true },
-        auth: {},
+      {
+        name: "loopback control UI without auth",
+        cfg: {
+          gateway: {
+            bind: "loopback",
+            controlUi: { enabled: true },
+            auth: {},
+          },
+        },
+        checkId: "gateway.loopback_no_auth",
+        severity: "critical",
+        opts: { env: {} },
       },
-    };
-
-    const res = await audit(cfg, { env: {} });
-
-    expectFinding(res, "gateway.loopback_no_auth", "critical");
-  });
-
-  it("flags logging.redactSensitive=off", async () => {
-    const cfg: OpenClawConfig = {
-      logging: { redactSensitive: "off" },
-    };
-
-    const res = await audit(cfg);
-
-    expectFinding(res, "logging.redact_off", "warn");
+      {
+        name: "logging redactSensitive off",
+        cfg: {
+          logging: { redactSensitive: "off" },
+        },
+        checkId: "logging.redact_off",
+        severity: "warn",
+      },
+    ];
+    for (const testCase of cases) {
+      const res = await audit(testCase.cfg, testCase.opts);
+      expect(hasFinding(res, testCase.checkId, testCase.severity), testCase.name).toBe(true);
+    }
   });
 
   it("treats Windows ACL-only perms as secure", async () => {
