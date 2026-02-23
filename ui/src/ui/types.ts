@@ -516,6 +516,20 @@ export type CronSortDir = "asc" | "desc";
 export type CronRunsStatusFilter = "all" | "ok" | "error" | "skipped";
 export type CronRunsStatusValue = "ok" | "error" | "skipped";
 export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
+export type CronDeliveryOutcomeReason =
+  | "not-requested"
+  | "messaging-tool-delivered"
+  | "heartbeat-only"
+  | "target-resolution-failed"
+  | "target-resolution-failed-best-effort"
+  | "direct-delivered"
+  | "announce-delivered"
+  | "silent-reply"
+  | "interim-suppressed"
+  | "subagent-still-running"
+  | "announce-failed"
+  | "direct-send-failed"
+  | "no-deliverable-payload";
 export type CronRunScope = "job" | "all";
 
 export type CronRunLogEntry = {
@@ -527,6 +541,7 @@ export type CronRunLogEntry = {
   error?: string;
   summary?: string;
   deliveryStatus?: CronDeliveryStatus;
+  deliveryOutcomeReason?: CronDeliveryOutcomeReason;
   deliveryError?: string;
   delivered?: boolean;
   runAtMs?: number;

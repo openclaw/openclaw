@@ -1751,6 +1751,11 @@ function renderRun(entry: CronRunLogEntry, basePath: string) {
             : nothing
         }
         ${entry.error ? html`<div class="muted">${entry.error}</div>` : nothing}
+        ${
+          entry.deliveryOutcomeReason
+            ? html`<div class="muted">Delivery reason: ${entry.deliveryOutcomeReason}</div>`
+            : nothing
+        }
         ${entry.deliveryError ? html`<div class="muted">${entry.deliveryError}</div>` : nothing}
       </div>
     </div>

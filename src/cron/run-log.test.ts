@@ -167,6 +167,7 @@ describe("cron run log", () => {
             status: "ok",
             delivered: true,
             deliveryStatus: "not-delivered",
+            deliveryOutcomeReason: "announce-failed",
             deliveryError: "announce failed",
           }),
         ].join("\n") + "\n",
@@ -178,6 +179,7 @@ describe("cron run log", () => {
       expect(entries[0]?.ts).toBe(2);
       expect(entries[0]?.delivered).toBe(true);
       expect(entries[0]?.deliveryStatus).toBe("not-delivered");
+      expect(entries[0]?.deliveryOutcomeReason).toBe("announce-failed");
       expect(entries[0]?.deliveryError).toBe("announce failed");
     });
   });

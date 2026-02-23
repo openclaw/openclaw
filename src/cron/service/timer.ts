@@ -6,6 +6,7 @@ import { resolveCronDeliveryPlan } from "../delivery.js";
 import { shouldEnqueueCronMainSummary } from "../heartbeat-policy.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import type {
+  CronDeliveryOutcomeReason,
   CronDeliveryStatus,
   CronJob,
   CronMessageChannel,
@@ -46,6 +47,7 @@ type TimedCronRunOutcome = CronRunOutcome &
     jobId: string;
     delivered?: boolean;
     deliveryAttempted?: boolean;
+    deliveryOutcomeReason?: CronDeliveryOutcomeReason;
     startedAt: number;
     endedAt: number;
   };
@@ -272,6 +274,20 @@ function emitFailureAlert(
   }
 }
 
+function resolveDeliveryError(params: {
+  deliveryStatus: CronDeliveryStatus;
+  deliveryOutcomeReason?: CronDeliveryOutcomeReason;
+  error?: string;
+}): string | undefined {
+  if (params.deliveryStatus !== "not-delivered") {
+    return undefined;
+  }
+  if (typeof params.error === "string" && params.error.trim()) {
+    return params.error;
+  }
+  return params.deliveryOutcomeReason;
+}
+
 /**
  * Apply the result of a job execution to the job's state.
  * Handles consecutive error tracking, exponential backoff, one-shot disable,
@@ -284,6 +300,7 @@ export function applyJobResult(
     status: CronRunStatus;
     error?: string;
     delivered?: boolean;
+    deliveryOutcomeReason?: CronDeliveryOutcomeReason;
     startedAt: number;
     endedAt: number;
   },
@@ -311,8 +328,12 @@ export function applyJobResult(
   job.state.lastDelivered = result.delivered;
   const deliveryStatus = resolveDeliveryStatus({ job, delivered: result.delivered });
   job.state.lastDeliveryStatus = deliveryStatus;
-  job.state.lastDeliveryError =
-    deliveryStatus === "not-delivered" && result.error ? result.error : undefined;
+  job.state.lastDeliveryOutcomeReason = result.deliveryOutcomeReason;
+  job.state.lastDeliveryError = resolveDeliveryError({
+    deliveryStatus,
+    deliveryOutcomeReason: result.deliveryOutcomeReason,
+    error: result.error,
+  });
   job.updatedAtMs = result.endedAt;
 
   // Track consecutive errors for backoff / auto-disable.
@@ -473,6 +494,7 @@ function applyOutcomeToStoredJob(state: CronServiceState, result: TimedCronRunOu
     status: result.status,
     error: result.error,
     delivered: result.delivered,
+    deliveryOutcomeReason: result.deliveryOutcomeReason,
     startedAt: result.startedAt,
     endedAt: result.endedAt,
   });
@@ -869,6 +891,7 @@ export async function runMissedJobs(
         error: result.error,
         summary: result.summary,
         delivered: result.delivered,
+        deliveryOutcomeReason: result.deliveryOutcomeReason,
         sessionId: result.sessionId,
         sessionKey: result.sessionKey,
         model: result.model,
@@ -922,7 +945,12 @@ export async function executeJobCore(
   job: CronJob,
   abortSignal?: AbortSignal,
 ): Promise<
-  CronRunOutcome & CronRunTelemetry & { delivered?: boolean; deliveryAttempted?: boolean }
+  CronRunOutcome &
+    CronRunTelemetry & {
+      delivered?: boolean;
+      deliveryAttempted?: boolean;
+      deliveryOutcomeReason?: CronDeliveryOutcomeReason;
+    }
 > {
   const resolveAbortError = () => ({
     status: "error" as const,
@@ -1101,6 +1129,7 @@ export async function executeJobCore(
     summary: res.summary,
     delivered: res.delivered,
     deliveryAttempted: res.deliveryAttempted,
+    deliveryOutcomeReason: res.deliveryOutcomeReason,
     sessionId: res.sessionId,
     sessionKey: res.sessionKey,
     model: res.model,
@@ -1130,6 +1159,7 @@ export async function executeJob(
   let coreResult: {
     status: CronRunStatus;
     delivered?: boolean;
+    deliveryOutcomeReason?: CronDeliveryOutcomeReason;
   } & CronRunOutcome &
     CronRunTelemetry;
   try {
@@ -1143,6 +1173,7 @@ export async function executeJob(
     status: coreResult.status,
     error: coreResult.error,
     delivered: coreResult.delivered,
+    deliveryOutcomeReason: coreResult.deliveryOutcomeReason,
     startedAt,
     endedAt,
   });
@@ -1161,6 +1192,7 @@ function emitJobFinished(
   result: {
     status: CronRunStatus;
     delivered?: boolean;
+    deliveryOutcomeReason?: CronDeliveryOutcomeReason;
   } & CronRunOutcome &
     CronRunTelemetry,
   runAtMs: number,
@@ -1173,6 +1205,7 @@ function emitJobFinished(
     summary: result.summary,
     delivered: result.delivered,
     deliveryStatus: job.state.lastDeliveryStatus,
+    deliveryOutcomeReason: job.state.lastDeliveryOutcomeReason,
     deliveryError: job.state.lastDeliveryError,
     sessionId: result.sessionId,
     sessionKey: result.sessionKey,

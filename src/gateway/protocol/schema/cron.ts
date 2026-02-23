@@ -56,6 +56,21 @@ const CronDeliveryStatusSchema = Type.Union([
   Type.Literal("unknown"),
   Type.Literal("not-requested"),
 ]);
+const CronDeliveryOutcomeReasonSchema = Type.Union([
+  Type.Literal("not-requested"),
+  Type.Literal("messaging-tool-delivered"),
+  Type.Literal("heartbeat-only"),
+  Type.Literal("target-resolution-failed"),
+  Type.Literal("target-resolution-failed-best-effort"),
+  Type.Literal("direct-delivered"),
+  Type.Literal("announce-delivered"),
+  Type.Literal("silent-reply"),
+  Type.Literal("interim-suppressed"),
+  Type.Literal("subagent-still-running"),
+  Type.Literal("announce-failed"),
+  Type.Literal("direct-send-failed"),
+  Type.Literal("no-deliverable-payload"),
+]);
 const CronCommonOptionalFields = {
   agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   sessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
@@ -223,6 +238,7 @@ export const CronJobStateSchema = Type.Object(
     consecutiveErrors: Type.Optional(Type.Integer({ minimum: 0 })),
     lastDelivered: Type.Optional(Type.Boolean()),
     lastDeliveryStatus: Type.Optional(CronDeliveryStatusSchema),
+    lastDeliveryOutcomeReason: Type.Optional(CronDeliveryOutcomeReasonSchema),
     lastDeliveryError: Type.Optional(Type.String()),
     lastFailureAlertAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
   },
@@ -334,6 +350,7 @@ export const CronRunLogEntrySchema = Type.Object(
     summary: Type.Optional(Type.String()),
     delivered: Type.Optional(Type.Boolean()),
     deliveryStatus: Type.Optional(CronDeliveryStatusSchema),
+    deliveryOutcomeReason: Type.Optional(CronDeliveryOutcomeReasonSchema),
     deliveryError: Type.Optional(Type.String()),
     sessionId: Type.Optional(NonEmptyString),
     sessionKey: Type.Optional(NonEmptyString),

@@ -2,7 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import type { CronConfig } from "../config/types.cron.js";
-import type { CronDeliveryStatus, CronRunStatus, CronRunTelemetry } from "./types.js";
+import type {
+  CronDeliveryOutcomeReason,
+  CronDeliveryStatus,
+  CronRunStatus,
+  CronRunTelemetry,
+} from "./types.js";
 
 export type CronRunLogEntry = {
   ts: number;
@@ -13,6 +18,7 @@ export type CronRunLogEntry = {
   summary?: string;
   delivered?: boolean;
   deliveryStatus?: CronDeliveryStatus;
+  deliveryOutcomeReason?: CronDeliveryOutcomeReason;
   deliveryError?: string;
   sessionId?: string;
   sessionKey?: string;
@@ -295,6 +301,23 @@ function parseAllRunLogEntries(raw: string, opts?: { jobId?: string }): CronRunL
         obj.deliveryStatus === "not-requested"
       ) {
         entry.deliveryStatus = obj.deliveryStatus;
+      }
+      if (
+        obj.deliveryOutcomeReason === "not-requested" ||
+        obj.deliveryOutcomeReason === "messaging-tool-delivered" ||
+        obj.deliveryOutcomeReason === "heartbeat-only" ||
+        obj.deliveryOutcomeReason === "target-resolution-failed" ||
+        obj.deliveryOutcomeReason === "target-resolution-failed-best-effort" ||
+        obj.deliveryOutcomeReason === "direct-delivered" ||
+        obj.deliveryOutcomeReason === "announce-delivered" ||
+        obj.deliveryOutcomeReason === "silent-reply" ||
+        obj.deliveryOutcomeReason === "interim-suppressed" ||
+        obj.deliveryOutcomeReason === "subagent-still-running" ||
+        obj.deliveryOutcomeReason === "announce-failed" ||
+        obj.deliveryOutcomeReason === "direct-send-failed" ||
+        obj.deliveryOutcomeReason === "no-deliverable-payload"
+      ) {
+        entry.deliveryOutcomeReason = obj.deliveryOutcomeReason;
       }
       if (typeof obj.deliveryError === "string") {
         entry.deliveryError = obj.deliveryError;
