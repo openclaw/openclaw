@@ -37,6 +37,21 @@ import {
   resolveUpdateAvailability,
 } from "./status.update.js";
 
+function resolvePairingRecoveryContext(params: {
+  error?: string | null;
+  closeReason?: string | null;
+}): { requestId: string | null } | null {
+  const source = [params.error, params.closeReason]
+    .filter((part) => typeof part === "string" && part.trim().length > 0)
+    .join(" ");
+  if (!source || !/pairing required/i.test(source)) {
+    return null;
+  }
+  const requestIdMatch = source.match(/requestId:\s*([^\s)]+)/i);
+  const requestId = requestIdMatch && requestIdMatch[1] ? requestIdMatch[1].trim() : "";
+  return { requestId: requestId || null };
+}
+
 export async function statusCommand(
   opts: {
     json?: boolean;
@@ -230,6 +245,10 @@ export async function statusCommand(
     const suffix = self ? ` · ${self}` : "";
     return `${gatewayMode} · ${target} · ${reach}${auth}${suffix}`;
   })();
+  const pairingRecovery = resolvePairingRecoveryContext({
+    error: gatewayProbe?.error ?? null,
+    closeReason: gatewayProbe?.close?.reason ?? null,
+  });
 
   const agentsValue = (() => {
     const pending =
@@ -398,6 +417,20 @@ export async function statusCommand(
       rows: overviewRows,
     }).trimEnd(),
   );
+
+  if (pairingRecovery) {
+    runtime.log("");
+    runtime.log(theme.warn("Gateway pairing approval required."));
+    if (pairingRecovery.requestId) {
+      runtime.log(
+        theme.muted(
+          `Recovery: ${formatCliCommand(`openclaw devices approve ${pairingRecovery.requestId}`)}`,
+        ),
+      );
+    }
+    runtime.log(theme.muted(`Fallback: ${formatCliCommand("openclaw devices approve --latest")}`));
+    runtime.log(theme.muted(`Inspect: ${formatCliCommand("openclaw devices list")}`));
+  }
 
   runtime.log("");
   runtime.log(theme.heading("Security audit"));
