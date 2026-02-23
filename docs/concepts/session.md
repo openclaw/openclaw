@@ -49,6 +49,7 @@ Use `session.dmScope` to control how **direct messages** are grouped:
 Notes:
 
 - Default is `dmScope: "main"` for continuity (all DMs share the main session). This is fine for single-user setups.
+- Local CLI onboarding writes `session.dmScope: "per-channel-peer"` by default when unset (existing explicit values are preserved).
 - For multi-account inboxes on the same channel, prefer `per-account-channel-peer`.
 - If the same person contacts you on multiple channels, use `session.identityLinks` to collapse their DM sessions into one canonical identity.
 - You can verify your DM settings with `openclaw security audit` (see [security](/cli/security)).
@@ -123,6 +124,8 @@ Block delivery for specific session types without listing individual ids.
       rules: [
         { action: "deny", match: { channel: "discord", chatType: "group" } },
         { action: "deny", match: { keyPrefix: "cron:" } },
+        // Match the raw session key (including the `agent:<id>:` prefix).
+        { action: "deny", match: { rawKeyPrefix: "agent:main:discord:" } },
       ],
       default: "allow",
     },

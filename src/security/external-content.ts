@@ -1,3 +1,5 @@
+import { randomBytes } from "node:crypto";
+
 /**
  * Security utilities for handling untrusted external content.
  *
@@ -43,9 +45,23 @@ export function detectSuspiciousPatterns(content: string): string[] {
 /**
  * Unique boundary markers for external content.
  * Using XML-style tags that are unlikely to appear in legitimate content.
+ * Each wrapper gets a unique random ID to prevent spoofing attacks where
+ * malicious content injects fake boundary markers.
  */
-const EXTERNAL_CONTENT_START = "<<<EXTERNAL_UNTRUSTED_CONTENT>>>";
-const EXTERNAL_CONTENT_END = "<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>";
+const EXTERNAL_CONTENT_START_NAME = "EXTERNAL_UNTRUSTED_CONTENT";
+const EXTERNAL_CONTENT_END_NAME = "END_EXTERNAL_UNTRUSTED_CONTENT";
+
+function createExternalContentMarkerId(): string {
+  return randomBytes(8).toString("hex");
+}
+
+function createExternalContentStartMarker(id: string): string {
+  return `<<<${EXTERNAL_CONTENT_START_NAME} id="${id}">>>`;
+}
+
+function createExternalContentEndMarker(id: string): string {
+  return `<<<${EXTERNAL_CONTENT_END_NAME} id="${id}">>>`;
+}
 
 /**
  * Security warning prepended to external content.
@@ -85,8 +101,22 @@ const EXTERNAL_SOURCE_LABELS: Record<ExternalContentSource, string> = {
 };
 
 const FULLWIDTH_ASCII_OFFSET = 0xfee0;
-const FULLWIDTH_LEFT_ANGLE = 0xff1c;
-const FULLWIDTH_RIGHT_ANGLE = 0xff1e;
+
+// Map of Unicode angle bracket homoglyphs to their ASCII equivalents.
+const ANGLE_BRACKET_MAP: Record<number, string> = {
+  0xff1c: "<", // fullwidth <
+  0xff1e: ">", // fullwidth >
+  0x2329: "<", // left-pointing angle bracket
+  0x232a: ">", // right-pointing angle bracket
+  0x3008: "<", // CJK left angle bracket
+  0x3009: ">", // CJK right angle bracket
+  0x2039: "<", // single left-pointing angle quotation mark
+  0x203a: ">", // single right-pointing angle quotation mark
+  0x27e8: "<", // mathematical left angle bracket
+  0x27e9: ">", // mathematical right angle bracket
+  0xfe64: "<", // small less-than sign
+  0xfe65: ">", // small greater-than sign
+};
 
 function foldMarkerChar(char: string): string {
   const code = char.charCodeAt(0);
@@ -96,17 +126,18 @@ function foldMarkerChar(char: string): string {
   if (code >= 0xff41 && code <= 0xff5a) {
     return String.fromCharCode(code - FULLWIDTH_ASCII_OFFSET);
   }
-  if (code === FULLWIDTH_LEFT_ANGLE) {
-    return "<";
-  }
-  if (code === FULLWIDTH_RIGHT_ANGLE) {
-    return ">";
+  const bracket = ANGLE_BRACKET_MAP[code];
+  if (bracket) {
+    return bracket;
   }
   return char;
 }
 
 function foldMarkerText(input: string): string {
-  return input.replace(/[\uFF21-\uFF3A\uFF41-\uFF5A\uFF1C\uFF1E]/g, (char) => foldMarkerChar(char));
+  return input.replace(
+    /[\uFF21-\uFF3A\uFF41-\uFF5A\uFF1C\uFF1E\u2329\u232A\u3008\u3009\u2039\u203A\u27E8\u27E9\uFE64\uFE65]/g,
+    (char) => foldMarkerChar(char),
+  );
 }
 
 function replaceMarkers(content: string): string {
@@ -115,9 +146,16 @@ function replaceMarkers(content: string): string {
     return content;
   }
   const replacements: Array<{ start: number; end: number; value: string }> = [];
+  // Match markers with or without id attribute (handles both legacy and spoofed markers)
   const patterns: Array<{ regex: RegExp; value: string }> = [
-    { regex: /<<<EXTERNAL_UNTRUSTED_CONTENT>>>/gi, value: "[[MARKER_SANITIZED]]" },
-    { regex: /<<<END_EXTERNAL_UNTRUSTED_CONTENT>>>/gi, value: "[[END_MARKER_SANITIZED]]" },
+    {
+      regex: /<<<EXTERNAL_UNTRUSTED_CONTENT(?:\s+id="[^"]{1,128}")?\s*>>>/gi,
+      value: "[[MARKER_SANITIZED]]",
+    },
+    {
+      regex: /<<<END_EXTERNAL_UNTRUSTED_CONTENT(?:\s+id="[^"]{1,128}")?\s*>>>/gi,
+      value: "[[END_MARKER_SANITIZED]]",
+    },
   ];
 
   for (const pattern of patterns) {
@@ -194,14 +232,15 @@ export function wrapExternalContent(content: string, options: WrapExternalConten
 
   const metadata = metadataLines.join("\n");
   const warningBlock = includeWarning ? `${EXTERNAL_CONTENT_WARNING}\n\n` : "";
+  const markerId = createExternalContentMarkerId();
 
   return [
     warningBlock,
-    EXTERNAL_CONTENT_START,
+    createExternalContentStartMarker(markerId),
     metadata,
     "---",
     sanitized,
-    EXTERNAL_CONTENT_END,
+    createExternalContentEndMarker(markerId),
   ].join("\n");
 }
 

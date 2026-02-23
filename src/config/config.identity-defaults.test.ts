@@ -1,19 +1,27 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
 import { loadConfig } from "./config.js";
-import { withTempHome } from "./test-helpers.js";
+import { withTempHome } from "./home-env.test-harness.js";
 
 describe("config identity defaults", () => {
-  let previousHome: string | undefined;
+  const defaultIdentity = {
+    name: "Samantha",
+    theme: "helpful sloth",
+    emoji: "🦥",
+  };
 
-  beforeEach(() => {
-    previousHome = process.env.HOME;
-  });
-
-  afterEach(() => {
-    process.env.HOME = previousHome;
+  const configWithDefaultIdentity = (messages: Record<string, unknown>) => ({
+    agents: {
+      list: [
+        {
+          id: "main",
+          identity: defaultIdentity,
+        },
+      ],
+    },
+    messages,
   });
 
   const writeAndLoadConfig = async (home: string, config: Record<string, unknown>) => {
@@ -28,22 +36,8 @@ describe("config identity defaults", () => {
   };
 
   it("does not derive mention defaults and only sets ackReactionScope when identity is present", async () => {
-    await withTempHome(async (home) => {
-      const cfg = await writeAndLoadConfig(home, {
-        agents: {
-          list: [
-            {
-              id: "main",
-              identity: {
-                name: "Samantha",
-                theme: "helpful sloth",
-                emoji: "🦥",
-              },
-            },
-          ],
-        },
-        messages: {},
-      });
+    await withTempHome("openclaw-config-identity-", async (home) => {
+      const cfg = await writeAndLoadConfig(home, configWithDefaultIdentity({}));
 
       expect(cfg.messages?.responsePrefix).toBeUndefined();
       expect(cfg.messages?.groupChat?.mentionPatterns).toBeUndefined();
@@ -53,7 +47,7 @@ describe("config identity defaults", () => {
   });
 
   it("keeps ackReaction unset and does not synthesize agent/session defaults when identity is missing", async () => {
-    await withTempHome(async (home) => {
+    await withTempHome("openclaw-config-identity-", async (home) => {
       const cfg = await writeAndLoadConfig(home, { messages: {} });
 
       expect(cfg.messages?.ackReaction).toBeUndefined();
@@ -68,7 +62,7 @@ describe("config identity defaults", () => {
   });
 
   it("does not override explicit values", async () => {
-    await withTempHome(async (home) => {
+    await withTempHome("openclaw-config-identity-", async (home) => {
       const cfg = await writeAndLoadConfig(home, {
         agents: {
           list: [
@@ -94,7 +88,7 @@ describe("config identity defaults", () => {
   });
 
   it("supports provider textChunkLimit config", async () => {
-    await withTempHome(async (home) => {
+    await withTempHome("openclaw-config-identity-", async (home) => {
       const cfg = await writeAndLoadConfig(home, {
         messages: {
           messagePrefix: "[openclaw]",
@@ -126,7 +120,7 @@ describe("config identity defaults", () => {
   });
 
   it("accepts blank model provider apiKey values", async () => {
-    await withTempHome(async (home) => {
+    await withTempHome("openclaw-config-identity-", async (home) => {
       const cfg = await writeAndLoadConfig(home, {
         models: {
           mode: "merge",
@@ -161,46 +155,10 @@ describe("config identity defaults", () => {
   });
 
   it("respects empty responsePrefix to disable identity defaults", async () => {
-    await withTempHome(async (home) => {
-      const cfg = await writeAndLoadConfig(home, {
-        agents: {
-          list: [
-            {
-              id: "main",
-              identity: {
-                name: "Samantha",
-                theme: "helpful sloth",
-                emoji: "🦥",
-              },
-            },
-          ],
-        },
-        messages: { responsePrefix: "" },
-      });
+    await withTempHome("openclaw-config-identity-", async (home) => {
+      const cfg = await writeAndLoadConfig(home, configWithDefaultIdentity({ responsePrefix: "" }));
 
       expect(cfg.messages?.responsePrefix).toBe("");
-    });
-  });
-
-  it("does not derive responsePrefix from identity emoji", async () => {
-    await withTempHome(async (home) => {
-      const cfg = await writeAndLoadConfig(home, {
-        agents: {
-          list: [
-            {
-              id: "main",
-              identity: {
-                name: "OpenClaw",
-                theme: "space lobster",
-                emoji: "🦞",
-              },
-            },
-          ],
-        },
-        messages: {},
-      });
-
-      expect(cfg.messages?.responsePrefix).toBeUndefined();
     });
   });
 });

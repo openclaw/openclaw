@@ -16,10 +16,11 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
   beforeEach(() => {
     exitCalls = [];
 
-    vi.spyOn(process, "exit").mockImplementation((code: string | number | null | undefined) => {
+    vi.spyOn(process, "exit").mockImplementation((code?: string | number | null): never => {
       if (code !== undefined && code !== null) {
         exitCalls.push(code);
       }
+      return undefined as never;
     });
 
     consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
@@ -36,126 +37,93 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
     process.exit = originalExit;
   });
 
+  function emitUnhandled(reason: unknown): void {
+    process.emit("unhandledRejection", reason, Promise.resolve());
+  }
+
+  function expectExitCodeFromUnhandled(reason: unknown, expected: number[]): void {
+    exitCalls = [];
+    emitUnhandled(reason);
+    expect(exitCalls).toEqual(expected);
+  }
+
   describe("fatal errors", () => {
-    it("exits on ERR_OUT_OF_MEMORY", () => {
-      const oomErr = Object.assign(new Error("Out of memory"), {
-        code: "ERR_OUT_OF_MEMORY",
-      });
+    it("exits on fatal runtime codes", () => {
+      const fatalCases = [
+        { code: "ERR_OUT_OF_MEMORY", message: "Out of memory" },
+        { code: "ERR_SCRIPT_EXECUTION_TIMEOUT", message: "Script execution timeout" },
+        { code: "ERR_WORKER_OUT_OF_MEMORY", message: "Worker out of memory" },
+      ] as const;
 
-      process.emit("unhandledRejection", oomErr, Promise.resolve());
+      for (const { code, message } of fatalCases) {
+        expectExitCodeFromUnhandled(Object.assign(new Error(message), { code }), [1]);
+      }
 
-      expect(exitCalls).toEqual([1]);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         "[openclaw] FATAL unhandled rejection:",
         expect.stringContaining("Out of memory"),
       );
     });
-
-    it("exits on ERR_SCRIPT_EXECUTION_TIMEOUT", () => {
-      const timeoutErr = Object.assign(new Error("Script execution timeout"), {
-        code: "ERR_SCRIPT_EXECUTION_TIMEOUT",
-      });
-
-      process.emit("unhandledRejection", timeoutErr, Promise.resolve());
-
-      expect(exitCalls).toEqual([1]);
-    });
-
-    it("exits on ERR_WORKER_OUT_OF_MEMORY", () => {
-      const workerOomErr = Object.assign(new Error("Worker out of memory"), {
-        code: "ERR_WORKER_OUT_OF_MEMORY",
-      });
-
-      process.emit("unhandledRejection", workerOomErr, Promise.resolve());
-
-      expect(exitCalls).toEqual([1]);
-    });
   });
 
   describe("configuration errors", () => {
-    it("exits on INVALID_CONFIG", () => {
-      const configErr = Object.assign(new Error("Invalid config"), {
-        code: "INVALID_CONFIG",
-      });
+    it("exits on configuration error codes", () => {
+      const configurationCases = [
+        { code: "INVALID_CONFIG", message: "Invalid config" },
+        { code: "MISSING_API_KEY", message: "Missing API key" },
+      ] as const;
 
-      process.emit("unhandledRejection", configErr, Promise.resolve());
+      for (const { code, message } of configurationCases) {
+        expectExitCodeFromUnhandled(Object.assign(new Error(message), { code }), [1]);
+      }
 
-      expect(exitCalls).toEqual([1]);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         "[openclaw] CONFIGURATION ERROR - requires fix:",
         expect.stringContaining("Invalid config"),
       );
     });
-
-    it("exits on MISSING_API_KEY", () => {
-      const missingKeyErr = Object.assign(new Error("Missing API key"), {
-        code: "MISSING_API_KEY",
-      });
-
-      process.emit("unhandledRejection", missingKeyErr, Promise.resolve());
-
-      expect(exitCalls).toEqual([1]);
-    });
   });
 
   describe("non-fatal errors", () => {
-    it("does NOT exit on undici fetch failures", () => {
-      const fetchErr = Object.assign(new TypeError("fetch failed"), {
-        cause: { code: "UND_ERR_CONNECT_TIMEOUT", syscall: "connect" },
-      });
+    it("does not exit on known transient network errors", () => {
+      const transientCases = [
+        Object.assign(new TypeError("fetch failed"), {
+          cause: { code: "UND_ERR_CONNECT_TIMEOUT", syscall: "connect" },
+        }),
+        Object.assign(new Error("DNS resolve failed"), { code: "UND_ERR_DNS_RESOLVE_FAILED" }),
+        Object.assign(new Error("Connection reset"), { code: "ECONNRESET" }),
+        Object.assign(new Error("Timeout"), { code: "ETIMEDOUT" }),
+      ];
 
-      process.emit("unhandledRejection", fetchErr, Promise.resolve());
+      for (const transientErr of transientCases) {
+        expectExitCodeFromUnhandled(transientErr, []);
+      }
 
-      expect(exitCalls).toEqual([]);
       expect(consoleWarnSpy).toHaveBeenCalledWith(
         "[openclaw] Non-fatal unhandled rejection (continuing):",
         expect.stringContaining("fetch failed"),
       );
     });
 
-    it("does NOT exit on DNS resolution failures", () => {
-      const dnsErr = Object.assign(new Error("DNS resolve failed"), {
-        code: "UND_ERR_DNS_RESOLVE_FAILED",
-      });
-
-      process.emit("unhandledRejection", dnsErr, Promise.resolve());
-
-      expect(exitCalls).toEqual([]);
-      expect(consoleWarnSpy).toHaveBeenCalled();
-    });
-
     it("exits on generic errors without code", () => {
       const genericErr = new Error("Something went wrong");
 
-      process.emit("unhandledRejection", genericErr, Promise.resolve());
-
-      expect(exitCalls).toEqual([1]);
+      expectExitCodeFromUnhandled(genericErr, [1]);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         "[openclaw] Unhandled promise rejection:",
         expect.stringContaining("Something went wrong"),
       );
     });
 
-    it("does NOT exit on connection reset errors", () => {
-      const connResetErr = Object.assign(new Error("Connection reset"), {
-        code: "ECONNRESET",
-      });
+    it("does not exit on AbortError and logs suppression warning", () => {
+      const abortErr = new Error("This operation was aborted");
+      abortErr.name = "AbortError";
 
-      process.emit("unhandledRejection", connResetErr, Promise.resolve());
-
-      expect(exitCalls).toEqual([]);
-      expect(consoleWarnSpy).toHaveBeenCalled();
-    });
-
-    it("does NOT exit on timeout errors", () => {
-      const timeoutErr = Object.assign(new Error("Timeout"), {
-        code: "ETIMEDOUT",
-      });
-
-      process.emit("unhandledRejection", timeoutErr, Promise.resolve());
-
-      expect(exitCalls).toEqual([]);
-      expect(consoleWarnSpy).toHaveBeenCalled();
+      expectExitCodeFromUnhandled(abortErr, []);
+      expect(consoleWarnSpy).toHaveBeenCalledWith(
+        "[openclaw] Suppressed AbortError:",
+        expect.stringContaining("This operation was aborted"),
+      );
     });
   });
 });

@@ -3,14 +3,20 @@ import type { ChannelId } from "../channels/plugins/types.js";
 export type CronSchedule =
   | { kind: "at"; at: string }
   | { kind: "every"; everyMs: number; anchorMs?: number }
-  | { kind: "cron"; expr: string; tz?: string };
+  | {
+      kind: "cron";
+      expr: string;
+      tz?: string;
+      /** Optional deterministic stagger window in milliseconds (0 keeps exact schedule). */
+      staggerMs?: number;
+    };
 
 export type CronSessionTarget = "main" | "isolated";
 export type CronWakeMode = "next-heartbeat" | "now";
 
 export type CronMessageChannel = ChannelId | "last";
 
-export type CronDeliveryMode = "none" | "announce";
+export type CronDeliveryMode = "none" | "announce" | "webhook";
 
 export type CronDelivery = {
   mode: CronDeliveryMode;
@@ -20,6 +26,33 @@ export type CronDelivery = {
 };
 
 export type CronDeliveryPatch = Partial<CronDelivery>;
+
+export type CronRunStatus = "ok" | "error" | "skipped";
+export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
+
+export type CronUsageSummary = {
+  input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
+};
+
+export type CronRunTelemetry = {
+  model?: string;
+  provider?: string;
+  usage?: CronUsageSummary;
+};
+
+export type CronRunOutcome = {
+  status: CronRunStatus;
+  error?: string;
+  /** Optional classifier for execution errors to guide fallback behavior. */
+  errorKind?: "delivery-target";
+  summary?: string;
+  sessionId?: string;
+  sessionKey?: string;
+};
 
 export type CronPayload =
   | { kind: "systemEvent"; text: string }
@@ -56,6 +89,9 @@ export type CronJobState = {
   nextRunAtMs?: number;
   runningAtMs?: number;
   lastRunAtMs?: number;
+  /** Preferred execution outcome field. */
+  lastRunStatus?: CronRunStatus;
+  /** Back-compat alias for lastRunStatus. */
   lastStatus?: "ok" | "error" | "skipped";
   lastError?: string;
   lastDurationMs?: number;
@@ -63,11 +99,19 @@ export type CronJobState = {
   consecutiveErrors?: number;
   /** Number of consecutive schedule computation errors. Auto-disables job after threshold. */
   scheduleErrorCount?: number;
+  /** Explicit delivery outcome, separate from execution outcome. */
+  lastDeliveryStatus?: CronDeliveryStatus;
+  /** Delivery-specific error text when available. */
+  lastDeliveryError?: string;
+  /** Whether the last run's output was delivered to the target channel. */
+  lastDelivered?: boolean;
 };
 
 export type CronJob = {
   id: string;
   agentId?: string;
+  /** Origin session namespace for reminder delivery and wake routing. */
+  sessionKey?: string;
   name: string;
   description?: string;
   enabled: boolean;

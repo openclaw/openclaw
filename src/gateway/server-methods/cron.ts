@@ -1,7 +1,6 @@
-import type { CronJobCreate, CronJobPatch } from "../../cron/types.js";
-import type { GatewayRequestHandlers } from "./types.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import { readCronRunLogEntries, resolveCronRunLogPath } from "../../cron/run-log.js";
+import type { CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import {
   ErrorCodes,
@@ -16,6 +15,7 @@ import {
   validateCronUpdateParams,
   validateWakeParams,
 } from "../protocol/index.js";
+import type { GatewayRequestHandlers } from "./types.js";
 
 export const cronHandlers: GatewayRequestHandlers = {
   wake: ({ params, respond, context }) => {
@@ -214,10 +214,20 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const logPath = resolveCronRunLogPath({
-      storePath: context.cronStorePath,
-      jobId,
-    });
+    let logPath: string;
+    try {
+      logPath = resolveCronRunLogPath({
+        storePath: context.cronStorePath,
+        jobId,
+      });
+    } catch {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid cron.runs params: invalid id"),
+      );
+      return;
+    }
     const entries = await readCronRunLogEntries(logPath, {
       limit: p.limit,
       jobId,

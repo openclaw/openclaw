@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 let testPort = 0;
 let prevGatewayPort: string | undefined;
+let prevGatewayToken: string | undefined;
+let prevGatewayPassword: string | undefined;
 
 const pwMocks = vi.hoisted(() => ({
   cookiesGetViaPlaywright: vi.fn(async () => ({
@@ -63,6 +65,9 @@ vi.mock("./server-context.js", async (importOriginal) => {
   };
 });
 
+const { startBrowserControlServerFromConfig, stopBrowserControlServer } =
+  await import("./server.js");
+
 async function getFreePort(): Promise<number> {
   const probe = createServer();
   await new Promise<void>((resolve, reject) => {
@@ -79,6 +84,10 @@ describe("browser control evaluate gating", () => {
     testPort = await getFreePort();
     prevGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
     process.env.OPENCLAW_GATEWAY_PORT = String(testPort - 2);
+    prevGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+    prevGatewayPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
 
     pwMocks.cookiesGetViaPlaywright.mockClear();
     pwMocks.storageGetViaPlaywright.mockClear();
@@ -94,13 +103,21 @@ describe("browser control evaluate gating", () => {
     } else {
       process.env.OPENCLAW_GATEWAY_PORT = prevGatewayPort;
     }
+    if (prevGatewayToken === undefined) {
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    } else {
+      process.env.OPENCLAW_GATEWAY_TOKEN = prevGatewayToken;
+    }
+    if (prevGatewayPassword === undefined) {
+      delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    } else {
+      process.env.OPENCLAW_GATEWAY_PASSWORD = prevGatewayPassword;
+    }
 
-    const { stopBrowserControlServer } = await import("./server.js");
     await stopBrowserControlServer();
   });
 
   it("blocks act:evaluate but still allows cookies/storage reads", async () => {
-    const { startBrowserControlServerFromConfig } = await import("./server.js");
     await startBrowserControlServerFromConfig();
 
     const base = `http://127.0.0.1:${testPort}`;

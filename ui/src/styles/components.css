@@ -1,6 +1,35 @@
 @import "./chat.css";
 
 /* ===========================================
+   Update Banner
+   =========================================== */
+
+.update-banner {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  margin: 0 calc(-1 * var(--shell-pad)) 0;
+  border-radius: 0;
+  border-left: none;
+  border-right: none;
+  text-align: center;
+  font-weight: 500;
+  padding: 10px 16px;
+}
+
+.update-banner__btn {
+  margin-left: 8px;
+  border-color: var(--danger);
+  color: var(--danger);
+  font-size: 12px;
+  padding: 4px 12px;
+}
+
+.update-banner__btn:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.15);
+}
+
+/* ===========================================
    Cards - Refined with depth
    =========================================== */
 
@@ -513,6 +542,12 @@
   background: var(--bg-hover);
 }
 
+:root[data-theme="light"] .btn.active {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+  color: var(--accent);
+}
+
 :root[data-theme="light"] .btn.primary {
   background: var(--accent);
   border-color: var(--accent);
@@ -602,6 +637,16 @@
 }
 
 .compaction-indicator--complete {
+  color: var(--ok);
+  border-color: rgba(34, 197, 94, 0.35);
+}
+
+.compaction-indicator--fallback {
+  color: #d97706;
+  border-color: rgba(217, 119, 6, 0.35);
+}
+
+.compaction-indicator--fallback-cleared {
   color: var(--ok);
   border-color: rgba(34, 197, 94, 0.35);
 }

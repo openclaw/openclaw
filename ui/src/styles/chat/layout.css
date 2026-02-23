@@ -333,7 +333,7 @@
 
 .chat-controls__session {
   min-width: 140px;
-  max-width: 420px;
+  max-width: 300px;
 }
 
 .chat-controls__thinking {
@@ -386,6 +386,27 @@
   color: var(--text);
 }
 
+/* Light theme icon button overrides */
+:root[data-theme="light"] .btn--icon {
+  background: #ffffff;
+  border-color: var(--border);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.05);
+  color: var(--muted);
+}
+
+:root[data-theme="light"] .btn--icon:hover {
+  background: #ffffff;
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+:root[data-theme="light"] .chat-controls .btn--icon.active {
+  border-color: var(--accent);
+  background: var(--accent-subtle);
+  color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-subtle);
+}
+
 .btn--icon svg {
   display: block;
   width: 18px;
@@ -400,7 +421,7 @@
 .chat-controls__session select {
   padding: 6px 10px;
   font-size: 13px;
-  max-width: 420px;
+  max-width: 300px;
   overflow: hidden;
   text-overflow: ellipsis;
 }

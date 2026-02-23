@@ -51,7 +51,13 @@ export type SessionSendPolicyAction = "allow" | "deny";
 export type SessionSendPolicyMatch = {
   channel?: string;
   chatType?: ChatType;
+  /**
+   * Session key prefix match.
+   * Note: some consumers match against a normalized key (for example, stripping `agent:<id>:`).
+   */
   keyPrefix?: string;
+  /** Optional raw session-key prefix match for consumers that normalize session keys. */
+  rawKeyPrefix?: string;
 };
 export type SessionSendPolicyRule = {
   action: SessionSendPolicyAction;
@@ -78,6 +84,19 @@ export type SessionResetByTypeConfig = {
   thread?: SessionResetConfig;
 };
 
+export type SessionThreadBindingsConfig = {
+  /**
+   * Master switch for thread-bound session routing features.
+   * Channel/provider keys can override this default.
+   */
+  enabled?: boolean;
+  /**
+   * Auto-unfocus TTL for thread-bound sessions (hours).
+   * Set to 0 to disable. Default: 24.
+   */
+  ttlHours?: number;
+};
+
 export type SessionConfig = {
   scope?: SessionScope;
   /** DM session scoping (default: "main"). */
@@ -99,6 +118,8 @@ export type SessionConfig = {
     /** Max ping-pong turns between requester/target (0–5). Default: 5. */
     maxPingPongTurns?: number;
   };
+  /** Shared defaults for thread-bound session routing across channels/providers. */
+  threadBindings?: SessionThreadBindingsConfig;
   /** Automatic session store maintenance (pruning, capping, file rotation). */
   maintenance?: SessionMaintenanceConfig;
 };
@@ -121,6 +142,8 @@ export type SessionMaintenanceConfig = {
 export type LoggingConfig = {
   level?: "silent" | "fatal" | "error" | "warn" | "info" | "debug" | "trace";
   file?: string;
+  /** Maximum size of a single log file in bytes before writes are suppressed. Default: 500 MB. */
+  maxFileBytes?: number;
   consoleLevel?: "silent" | "fatal" | "error" | "warn" | "info" | "debug" | "trace";
   consoleStyle?: "pretty" | "compact" | "json";
   /** Redact sensitive tokens in tool summaries. Default: "tools". */

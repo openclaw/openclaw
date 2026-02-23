@@ -48,7 +48,11 @@ export type SandboxBrowserSettings = {
   enabled?: boolean;
   image?: string;
   containerPrefix?: string;
+  /** Docker network for sandbox browser containers (default: openclaw-sandbox-browser). */
+  network?: string;
   cdpPort?: number;
+  /** Optional CIDR allowlist for CDP ingress at the container edge (for example: 172.21.0.1/32). */
+  cdpSourceRange?: string;
   vncPort?: number;
   noVncPort?: number;
   headless?: boolean;
@@ -65,6 +69,8 @@ export type SandboxBrowserSettings = {
   autoStart?: boolean;
   /** Max time to wait for CDP to become reachable after auto-start (ms). */
   autoStartTimeoutMs?: number;
+  /** Additional bind mounts for the browser container only. When set, replaces docker.binds for the browser container. */
+  binds?: string[];
 };
 
 export type SandboxPruneSettings = {

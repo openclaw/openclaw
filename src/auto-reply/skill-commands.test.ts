@@ -1,24 +1,72 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { listSkillCommandsForAgents, resolveSkillCommandInvocation } from "./skill-commands.js";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
-async function writeSkill(params: {
-  workspaceDir: string;
-  dirName: string;
-  name: string;
-  description: string;
-}) {
-  const { workspaceDir, dirName, name, description } = params;
-  const skillDir = path.join(workspaceDir, "skills", dirName);
-  await fs.mkdir(skillDir, { recursive: true });
-  await fs.writeFile(
-    path.join(skillDir, "SKILL.md"),
-    `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n`,
-    "utf-8",
-  );
-}
+// Avoid importing the full chat command registry for reserved-name calculation.
+vi.mock("./commands-registry.js", () => ({
+  listChatCommands: () => [],
+}));
+
+vi.mock("../infra/skills-remote.js", () => ({
+  getRemoteSkillEligibility: () => ({}),
+}));
+
+// Avoid filesystem-driven skill scanning for these unit tests; we only need command naming semantics.
+vi.mock("../agents/skills.js", () => {
+  function resolveUniqueName(base: string, used: Set<string>): string {
+    let name = base;
+    let suffix = 2;
+    while (used.has(name.toLowerCase())) {
+      name = `${base}_${suffix}`;
+      suffix += 1;
+    }
+    used.add(name.toLowerCase());
+    return name;
+  }
+
+  function resolveWorkspaceSkills(
+    workspaceDir: string,
+  ): Array<{ skillName: string; description: string }> {
+    const dirName = path.basename(workspaceDir);
+    if (dirName === "main") {
+      return [{ skillName: "demo-skill", description: "Demo skill" }];
+    }
+    if (dirName === "research") {
+      return [
+        { skillName: "demo-skill", description: "Demo skill 2" },
+        { skillName: "extra-skill", description: "Extra skill" },
+      ];
+    }
+    return [];
+  }
+
+  return {
+    buildWorkspaceSkillCommandSpecs: (
+      workspaceDir: string,
+      opts?: { reservedNames?: Set<string> },
+    ) => {
+      const used = new Set<string>();
+      for (const reserved of opts?.reservedNames ?? []) {
+        used.add(String(reserved).toLowerCase());
+      }
+
+      return resolveWorkspaceSkills(workspaceDir).map((entry) => {
+        const base = entry.skillName.replace(/-/g, "_");
+        const name = resolveUniqueName(base, used);
+        return { name, skillName: entry.skillName, description: entry.description };
+      });
+    },
+  };
+});
+
+let listSkillCommandsForAgents: typeof import("./skill-commands.js").listSkillCommandsForAgents;
+let resolveSkillCommandInvocation: typeof import("./skill-commands.js").resolveSkillCommandInvocation;
+
+beforeAll(async () => {
+  ({ listSkillCommandsForAgents, resolveSkillCommandInvocation } =
+    await import("./skill-commands.js"));
+});
 
 describe("resolveSkillCommandInvocation", () => {
   it("matches skill commands and parses args", () => {
@@ -62,24 +110,8 @@ describe("listSkillCommandsForAgents", () => {
     const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-"));
     const mainWorkspace = path.join(baseDir, "main");
     const researchWorkspace = path.join(baseDir, "research");
-    await writeSkill({
-      workspaceDir: mainWorkspace,
-      dirName: "demo",
-      name: "demo-skill",
-      description: "Demo skill",
-    });
-    await writeSkill({
-      workspaceDir: researchWorkspace,
-      dirName: "demo2",
-      name: "demo-skill",
-      description: "Demo skill 2",
-    });
-    await writeSkill({
-      workspaceDir: researchWorkspace,
-      dirName: "extra",
-      name: "extra-skill",
-      description: "Extra skill",
-    });
+    await fs.mkdir(mainWorkspace, { recursive: true });
+    await fs.mkdir(researchWorkspace, { recursive: true });
 
     const commands = listSkillCommandsForAgents({
       cfg: {

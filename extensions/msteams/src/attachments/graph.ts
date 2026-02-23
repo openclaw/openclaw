@@ -1,18 +1,22 @@
+import { getMSTeamsRuntime } from "../runtime.js";
+import { downloadMSTeamsAttachments } from "./download.js";
+import { downloadAndStoreMSTeamsRemoteMedia } from "./remote-media.js";
+import {
+  GRAPH_ROOT,
+  inferPlaceholder,
+  isRecord,
+  isUrlAllowed,
+  normalizeContentType,
+  resolveRequestUrl,
+  resolveAllowedHosts,
+  safeFetch,
+} from "./shared.js";
 import type {
   MSTeamsAccessTokenProvider,
   MSTeamsAttachmentLike,
   MSTeamsGraphMediaResult,
   MSTeamsInboundMedia,
 } from "./types.js";
-import { getMSTeamsRuntime } from "../runtime.js";
-import { downloadMSTeamsAttachments } from "./download.js";
-import {
-  GRAPH_ROOT,
-  inferPlaceholder,
-  isRecord,
-  normalizeContentType,
-  resolveAllowedHosts,
-} from "./shared.js";
 
 type GraphHostedContent = {
   id?: string | null;
@@ -262,38 +266,35 @@ export async function downloadMSTeamsGraphMedia(params: {
         try {
           // SharePoint URLs need to be accessed via Graph shares API
           const shareUrl = att.contentUrl!;
+          if (!isUrlAllowed(shareUrl, allowHosts)) {
+            continue;
+          }
           const encodedUrl = Buffer.from(shareUrl).toString("base64url");
           const sharesUrl = `${GRAPH_ROOT}/shares/u!${encodedUrl}/driveItem/content`;
 
-          const spRes = await fetchFn(sharesUrl, {
-            headers: { Authorization: `Bearer ${accessToken}` },
-            redirect: "follow",
+          const media = await downloadAndStoreMSTeamsRemoteMedia({
+            url: sharesUrl,
+            filePathHint: name,
+            maxBytes: params.maxBytes,
+            contentTypeHint: "application/octet-stream",
+            preserveFilenames: params.preserveFilenames,
+            fetchImpl: async (input, init) => {
+              const requestUrl = resolveRequestUrl(input);
+              const headers = new Headers(init?.headers);
+              headers.set("Authorization", `Bearer ${accessToken}`);
+              return await safeFetch({
+                url: requestUrl,
+                allowHosts,
+                fetchFn,
+                requestInit: {
+                  ...init,
+                  headers,
+                },
+              });
+            },
           });
-
-          if (spRes.ok) {
-            const buffer = Buffer.from(await spRes.arrayBuffer());
-            if (buffer.byteLength <= params.maxBytes) {
-              const mime = await getMSTeamsRuntime().media.detectMime({
-                buffer,
-                headerMime: spRes.headers.get("content-type") ?? undefined,
-                filePath: name,
-              });
-              const originalFilename = params.preserveFilenames ? name : undefined;
-              const saved = await getMSTeamsRuntime().channel.media.saveMediaBuffer(
-                buffer,
-                mime ?? "application/octet-stream",
-                "inbound",
-                params.maxBytes,
-                originalFilename,
-              );
-              sharePointMedia.push({
-                path: saved.path,
-                contentType: saved.contentType,
-                placeholder: inferPlaceholder({ contentType: saved.contentType, fileName: name }),
-              });
-              downloadedReferenceUrls.add(shareUrl);
-            }
-          }
+          sharePointMedia.push(media);
+          downloadedReferenceUrls.add(shareUrl);
         } catch {
           // Ignore SharePoint download failures.
         }

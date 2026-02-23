@@ -1,16 +1,17 @@
-import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
-import { resolveEnvApiKey } from "../agents/model-auth.js";
+import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
 import {
-  formatApiKeyPreview,
-  normalizeApiKeyInput,
-  validateApiKeyInput,
-} from "./auth-choice.api-key.js";
+  createAuthChoiceDefaultModelApplier,
+  createAuthChoiceModelStateBridge,
+  ensureApiKeyFromOptionEnvOrPrompt,
+} from "./auth-choice.apply-helpers.js";
+import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { applyAuthChoicePluginProvider } from "./auth-choice.apply.plugin-provider.js";
-import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 import {
   applyAuthProfileConfig,
   applyMinimaxApiConfig,
+  applyMinimaxApiConfigCn,
   applyMinimaxApiProviderConfig,
+  applyMinimaxApiProviderConfigCn,
   applyMinimaxConfig,
   applyMinimaxProviderConfig,
   setMinimaxApiKey,
@@ -21,14 +22,63 @@ export async function applyAuthChoiceMiniMax(
 ): Promise<ApplyAuthChoiceResult | null> {
   let nextConfig = params.config;
   let agentModelOverride: string | undefined;
-  const noteAgentModel = async (model: string) => {
-    if (!params.agentId) {
-      return;
-    }
-    await params.prompter.note(
-      `Default model set to ${model} for agent "${params.agentId}".`,
-      "Model configured",
-    );
+  const applyProviderDefaultModel = createAuthChoiceDefaultModelApplier(
+    params,
+    createAuthChoiceModelStateBridge({
+      getConfig: () => nextConfig,
+      setConfig: (config) => (nextConfig = config),
+      getAgentModelOverride: () => agentModelOverride,
+      setAgentModelOverride: (model) => (agentModelOverride = model),
+    }),
+  );
+  const ensureMinimaxApiKey = async (opts: {
+    profileId: string;
+    promptMessage: string;
+  }): Promise<void> => {
+    await ensureApiKeyFromOptionEnvOrPrompt({
+      token: params.opts?.token,
+      tokenProvider: params.opts?.tokenProvider,
+      expectedProviders: ["minimax", "minimax-cn"],
+      provider: "minimax",
+      envLabel: "MINIMAX_API_KEY",
+      promptMessage: opts.promptMessage,
+      normalize: normalizeApiKeyInput,
+      validate: validateApiKeyInput,
+      prompter: params.prompter,
+      setCredential: async (apiKey) => setMinimaxApiKey(apiKey, params.agentDir, opts.profileId),
+    });
+  };
+  const applyMinimaxApiVariant = async (opts: {
+    profileId: string;
+    provider: "minimax" | "minimax-cn";
+    promptMessage: string;
+    modelRefPrefix: "minimax" | "minimax-cn";
+    modelId: string;
+    applyDefaultConfig: (
+      config: ApplyAuthChoiceParams["config"],
+      modelId: string,
+    ) => ApplyAuthChoiceParams["config"];
+    applyProviderConfig: (
+      config: ApplyAuthChoiceParams["config"],
+      modelId: string,
+    ) => ApplyAuthChoiceParams["config"];
+  }): Promise<ApplyAuthChoiceResult> => {
+    await ensureMinimaxApiKey({
+      profileId: opts.profileId,
+      promptMessage: opts.promptMessage,
+    });
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: opts.profileId,
+      provider: opts.provider,
+      mode: "api_key",
+    });
+    const modelRef = `${opts.modelRefPrefix}/${opts.modelId}`;
+    await applyProviderDefaultModel({
+      defaultModel: modelRef,
+      applyDefaultConfig: (config) => opts.applyDefaultConfig(config, opts.modelId),
+      applyProviderConfig: (config) => opts.applyProviderConfig(config, opts.modelId),
+    });
+    return { config: nextConfig, agentModelOverride };
   };
   if (params.authChoice === "minimax-portal") {
     // Let user choose between Global/CN endpoints
@@ -54,61 +104,36 @@ export async function applyAuthChoiceMiniMax(
     params.authChoice === "minimax-api" ||
     params.authChoice === "minimax-api-lightning"
   ) {
-    const modelId =
-      params.authChoice === "minimax-api-lightning" ? "MiniMax-M2.5-Lightning" : "MiniMax-M2.5";
-    let hasCredential = false;
-    const envKey = resolveEnvApiKey("minimax");
-    if (envKey) {
-      const useExisting = await params.prompter.confirm({
-        message: `Use existing MINIMAX_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
-        initialValue: true,
-      });
-      if (useExisting) {
-        await setMinimaxApiKey(envKey.apiKey, params.agentDir);
-        hasCredential = true;
-      }
-    }
-    if (!hasCredential) {
-      const key = await params.prompter.text({
-        message: "Enter MiniMax API key",
-        validate: validateApiKeyInput,
-      });
-      await setMinimaxApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
-    }
-    nextConfig = applyAuthProfileConfig(nextConfig, {
+    return await applyMinimaxApiVariant({
       profileId: "minimax:default",
       provider: "minimax",
-      mode: "api_key",
+      promptMessage: "Enter MiniMax API key",
+      modelRefPrefix: "minimax",
+      modelId:
+        params.authChoice === "minimax-api-lightning" ? "MiniMax-M2.5-Lightning" : "MiniMax-M2.5",
+      applyDefaultConfig: applyMinimaxApiConfig,
+      applyProviderConfig: applyMinimaxApiProviderConfig,
     });
-    {
-      const modelRef = `minimax/${modelId}`;
-      const applied = await applyDefaultModelChoice({
-        config: nextConfig,
-        setDefaultModel: params.setDefaultModel,
-        defaultModel: modelRef,
-        applyDefaultConfig: (config) => applyMinimaxApiConfig(config, modelId),
-        applyProviderConfig: (config) => applyMinimaxApiProviderConfig(config, modelId),
-        noteAgentModel,
-        prompter: params.prompter,
-      });
-      nextConfig = applied.config;
-      agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
-    }
-    return { config: nextConfig, agentModelOverride };
+  }
+
+  if (params.authChoice === "minimax-api-key-cn") {
+    return await applyMinimaxApiVariant({
+      profileId: "minimax-cn:default",
+      provider: "minimax-cn",
+      promptMessage: "Enter MiniMax China API key",
+      modelRefPrefix: "minimax-cn",
+      modelId: "MiniMax-M2.5",
+      applyDefaultConfig: applyMinimaxApiConfigCn,
+      applyProviderConfig: applyMinimaxApiProviderConfigCn,
+    });
   }
 
   if (params.authChoice === "minimax") {
-    const applied = await applyDefaultModelChoice({
-      config: nextConfig,
-      setDefaultModel: params.setDefaultModel,
+    await applyProviderDefaultModel({
       defaultModel: "lmstudio/minimax-m2.1-gs32",
       applyDefaultConfig: applyMinimaxConfig,
       applyProviderConfig: applyMinimaxProviderConfig,
-      noteAgentModel,
-      prompter: params.prompter,
     });
-    nextConfig = applied.config;
-    agentModelOverride = applied.agentModelOverride ?? agentModelOverride;
     return { config: nextConfig, agentModelOverride };
   }
 

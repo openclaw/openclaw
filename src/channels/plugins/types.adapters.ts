@@ -2,6 +2,7 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { OutboundDeliveryResult, OutboundSendDeps } from "../../infra/outbound/deliver.js";
+import type { OutboundIdentity } from "../../infra/outbound/identity.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type {
   ChannelAccountSnapshot,
@@ -56,12 +57,16 @@ export type ChannelConfigAdapter<ResolvedAccount> = {
   resolveAllowFrom?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
-  }) => string[] | undefined;
+  }) => Array<string | number> | undefined;
   formatAllowFrom?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
     allowFrom: Array<string | number>;
   }) => string[];
+  resolveDefaultTo?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) => string | undefined;
 };
 
 export type ChannelGroupAdapter = {
@@ -75,11 +80,14 @@ export type ChannelOutboundContext = {
   to: string;
   text: string;
   mediaUrl?: string;
+  mediaLocalRoots?: readonly string[];
   gifPlayback?: boolean;
   replyToId?: string | null;
   threadId?: string | number | null;
   accountId?: string | null;
+  identity?: OutboundIdentity;
   deps?: OutboundSendDeps;
+  silent?: boolean;
 };
 
 export type ChannelOutboundPayloadContext = ChannelOutboundContext & {
@@ -229,47 +237,37 @@ export type ChannelHeartbeatAdapter = {
   };
 };
 
+type ChannelDirectorySelfParams = {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  runtime: RuntimeEnv;
+};
+
+type ChannelDirectoryListParams = {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  query?: string | null;
+  limit?: number | null;
+  runtime: RuntimeEnv;
+};
+
+type ChannelDirectoryListGroupMembersParams = {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  groupId: string;
+  limit?: number | null;
+  runtime: RuntimeEnv;
+};
+
 export type ChannelDirectoryAdapter = {
-  self?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    runtime: RuntimeEnv;
-  }) => Promise<ChannelDirectoryEntry | null>;
-  listPeers?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    query?: string | null;
-    limit?: number | null;
-    runtime: RuntimeEnv;
-  }) => Promise<ChannelDirectoryEntry[]>;
-  listPeersLive?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    query?: string | null;
-    limit?: number | null;
-    runtime: RuntimeEnv;
-  }) => Promise<ChannelDirectoryEntry[]>;
-  listGroups?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    query?: string | null;
-    limit?: number | null;
-    runtime: RuntimeEnv;
-  }) => Promise<ChannelDirectoryEntry[]>;
-  listGroupsLive?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    query?: string | null;
-    limit?: number | null;
-    runtime: RuntimeEnv;
-  }) => Promise<ChannelDirectoryEntry[]>;
-  listGroupMembers?: (params: {
-    cfg: OpenClawConfig;
-    accountId?: string | null;
-    groupId: string;
-    limit?: number | null;
-    runtime: RuntimeEnv;
-  }) => Promise<ChannelDirectoryEntry[]>;
+  self?: (params: ChannelDirectorySelfParams) => Promise<ChannelDirectoryEntry | null>;
+  listPeers?: (params: ChannelDirectoryListParams) => Promise<ChannelDirectoryEntry[]>;
+  listPeersLive?: (params: ChannelDirectoryListParams) => Promise<ChannelDirectoryEntry[]>;
+  listGroups?: (params: ChannelDirectoryListParams) => Promise<ChannelDirectoryEntry[]>;
+  listGroupsLive?: (params: ChannelDirectoryListParams) => Promise<ChannelDirectoryEntry[]>;
+  listGroupMembers?: (
+    params: ChannelDirectoryListGroupMembersParams,
+  ) => Promise<ChannelDirectoryEntry[]>;
 };
 
 export type ChannelResolveKind = "user" | "group";

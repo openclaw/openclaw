@@ -1,3 +1,9 @@
+const DOUBLE_QUOTE_ESCAPES = new Set(["\\", '"', "$", "`", "\n", "\r"]);
+
+function isDoubleQuoteEscape(next: string | undefined): next is string {
+  return Boolean(next && DOUBLE_QUOTE_ESCAPES.has(next));
+}
+
 export function splitShellArgs(raw: string): string[] | null {
   const tokens: string[] = [];
   let buf = "";
@@ -32,6 +38,12 @@ export function splitShellArgs(raw: string): string[] | null {
       continue;
     }
     if (inDouble) {
+      const next = raw[i + 1];
+      if (ch === "\\" && isDoubleQuoteEscape(next)) {
+        buf += next;
+        i += 1;
+        continue;
+      }
       if (ch === '"') {
         inDouble = false;
       } else {

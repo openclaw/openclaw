@@ -9,10 +9,14 @@
     "test": "vitest run --config vitest.config.ts"
   },
   "dependencies": {
+    "@lit-labs/signals": "^0.2.0",
+    "@lit/context": "^1.1.6",
     "@noble/ed25519": "3.0.0",
     "dompurify": "^3.3.1",
     "lit": "^3.3.2",
-    "marked": "^17.0.2",
+    "marked": "^17.0.3",
+    "signal-polyfill": "^0.2.2",
+    "signal-utils": "^0.21.1",
     "vite": "7.3.1"
   },
   "devDependencies": {

@@ -2,10 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { captureEnv } from "../test-utils/env.js";
 import { hasAnyWhatsAppAuth, listWhatsAppAuthDirs } from "./accounts.js";
 
 describe("hasAnyWhatsAppAuth", () => {
-  let previousOauthDir: string | undefined;
+  let envSnapshot: ReturnType<typeof captureEnv>;
   let tempOauthDir: string | undefined;
 
   const writeCreds = (dir: string) => {
@@ -14,17 +15,13 @@ describe("hasAnyWhatsAppAuth", () => {
   };
 
   beforeEach(() => {
-    previousOauthDir = process.env.OPENCLAW_OAUTH_DIR;
+    envSnapshot = captureEnv(["OPENCLAW_OAUTH_DIR"]);
     tempOauthDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-oauth-"));
     process.env.OPENCLAW_OAUTH_DIR = tempOauthDir;
   });
 
   afterEach(() => {
-    if (previousOauthDir === undefined) {
-      delete process.env.OPENCLAW_OAUTH_DIR;
-    } else {
-      process.env.OPENCLAW_OAUTH_DIR = previousOauthDir;
-    }
+    envSnapshot.restore();
     if (tempOauthDir) {
       fs.rmSync(tempOauthDir, { recursive: true, force: true });
       tempOauthDir = undefined;

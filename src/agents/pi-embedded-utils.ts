@@ -1,7 +1,13 @@
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { AssistantMessage } from "@mariozechner/pi-ai";
+import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { stripReasoningTagsFromText } from "../shared/text/reasoning-tags.js";
 import { sanitizeUserFacingText } from "./pi-embedded-helpers.js";
 import { formatToolDetail, resolveToolDisplay } from "./tool-display.js";
+
+export function isAssistantMessage(msg: AgentMessage | undefined): msg is AssistantMessage {
+  return msg?.role === "assistant";
+}
 
 /**
  * Strip malformed Minimax tool invocations that leak into text content.
@@ -202,25 +208,15 @@ export function stripThinkingTagsFromText(text: string): string {
 }
 
 export function extractAssistantText(msg: AssistantMessage): string {
-  const isTextBlock = (block: unknown): block is { type: "text"; text: string } => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const rec = block as Record<string, unknown>;
-    return rec.type === "text" && typeof rec.text === "string";
-  };
-
-  const blocks = Array.isArray(msg.content)
-    ? msg.content
-        .filter(isTextBlock)
-        .map((c) =>
-          stripThinkingTagsFromText(
-            stripDowngradedToolCallText(stripMinimaxToolCallXml(c.text)),
-          ).trim(),
-        )
-        .filter(Boolean)
-    : [];
-  const extracted = blocks.join("\n").trim();
+  const extracted =
+    extractTextFromChatContent(msg.content, {
+      sanitizeText: (text) =>
+        stripThinkingTagsFromText(
+          stripDowngradedToolCallText(stripMinimaxToolCallXml(text)),
+        ).trim(),
+      joinWith: "\n",
+      normalizeText: (text) => text.trim(),
+    }) ?? "";
   // Only apply keyword-based error rewrites when the assistant message is actually an error.
   // Otherwise normal prose that *mentions* errors (e.g. "context overflow") can get clobbered.
   const errorContext = msg.stopReason === "error" || Boolean(msg.errorMessage?.trim());

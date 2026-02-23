@@ -1,15 +1,15 @@
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ChatType } from "../../channels/chat-type.js";
+import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import type { ResolvedMessagingTarget } from "./target-resolver.js";
-import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { recordSessionMetaFromInbound, resolveStorePath } from "../../config/sessions.js";
 import { parseDiscordTarget } from "../../discord/targets.js";
 import { parseIMessageTarget, normalizeIMessageHandle } from "../../imessage/targets.js";
 import { buildAgentSessionKey, type RoutePeer } from "../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../routing/session-key.js";
 import {
+  looksLikeUuid,
   resolveSignalPeerId,
   resolveSignalRecipient,
   resolveSignalSender,
@@ -22,6 +22,7 @@ import { buildTelegramGroupPeerId } from "../../telegram/bot/helpers.js";
 import { resolveTelegramTargetChatType } from "../../telegram/inline-buttons.js";
 import { parseTelegramTarget } from "../../telegram/targets.js";
 import { isWhatsAppGroupJid, normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
+import type { ResolvedMessagingTarget } from "./target-resolver.js";
 
 export type OutboundSessionRoute = {
   sessionKey: string;
@@ -44,21 +45,8 @@ export type ResolveOutboundSessionRouteParams = {
   threadId?: string | number | null;
 };
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const UUID_COMPACT_RE = /^[0-9a-f]{32}$/i;
 // Cache Slack channel type lookups to avoid repeated API calls.
 const SLACK_CHANNEL_TYPE_CACHE = new Map<string, "channel" | "group" | "dm" | "unknown">();
-
-function looksLikeUuid(value: string): boolean {
-  if (UUID_RE.test(value) || UUID_COMPACT_RE.test(value)) {
-    return true;
-  }
-  const compact = value.replace(/-/g, "");
-  if (!/^[0-9a-f]+$/i.test(compact)) {
-    return false;
-  }
-  return /[a-f]/i.test(compact);
-}
 
 function normalizeThreadId(value?: string | number | null): string | undefined {
   if (value == null) {
@@ -669,9 +657,15 @@ function resolveNextcloudTalkSession(
 function resolveZaloSession(
   params: ResolveOutboundSessionRouteParams,
 ): OutboundSessionRoute | null {
-  const trimmed = stripProviderPrefix(params.target, "zalo")
-    .replace(/^(zl):/i, "")
-    .trim();
+  return resolveZaloLikeSession(params, "zalo", /^(zl):/i);
+}
+
+function resolveZaloLikeSession(
+  params: ResolveOutboundSessionRouteParams,
+  channel: "zalo" | "zalouser",
+  aliasPrefix: RegExp,
+): OutboundSessionRoute | null {
+  const trimmed = stripProviderPrefix(params.target, channel).replace(aliasPrefix, "").trim();
   if (!trimmed) {
     return null;
   }
@@ -681,7 +675,7 @@ function resolveZaloSession(
   const baseSessionKey = buildBaseSessionKey({
     cfg: params.cfg,
     agentId: params.agentId,
-    channel: "zalo",
+    channel,
     accountId: params.accountId,
     peer,
   });
@@ -690,39 +684,16 @@ function resolveZaloSession(
     baseSessionKey,
     peer,
     chatType: isGroup ? "group" : "direct",
-    from: isGroup ? `zalo:group:${peerId}` : `zalo:${peerId}`,
-    to: `zalo:${peerId}`,
+    from: isGroup ? `${channel}:group:${peerId}` : `${channel}:${peerId}`,
+    to: `${channel}:${peerId}`,
   };
 }
 
 function resolveZalouserSession(
   params: ResolveOutboundSessionRouteParams,
 ): OutboundSessionRoute | null {
-  const trimmed = stripProviderPrefix(params.target, "zalouser")
-    .replace(/^(zlu):/i, "")
-    .trim();
-  if (!trimmed) {
-    return null;
-  }
-  const isGroup = trimmed.toLowerCase().startsWith("group:");
-  const peerId = stripKindPrefix(trimmed);
   // Keep DM vs group aligned with inbound sessions for Zalo Personal.
-  const peer: RoutePeer = { kind: isGroup ? "group" : "direct", id: peerId };
-  const baseSessionKey = buildBaseSessionKey({
-    cfg: params.cfg,
-    agentId: params.agentId,
-    channel: "zalouser",
-    accountId: params.accountId,
-    peer,
-  });
-  return {
-    sessionKey: baseSessionKey,
-    baseSessionKey,
-    peer,
-    chatType: isGroup ? "group" : "direct",
-    from: isGroup ? `zalouser:group:${peerId}` : `zalouser:${peerId}`,
-    to: `zalouser:${peerId}`,
-  };
+  return resolveZaloLikeSession(params, "zalouser", /^(zlu):/i);
 }
 
 function resolveNostrSession(

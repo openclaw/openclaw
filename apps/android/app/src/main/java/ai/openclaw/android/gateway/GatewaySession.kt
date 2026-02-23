@@ -178,7 +178,7 @@ class GatewaySession(
     private val connectDeferred = CompletableDeferred<Unit>()
     private val closedDeferred = CompletableDeferred<Unit>()
     private val isClosed = AtomicBoolean(false)
-    private val connectNonceDeferred = CompletableDeferred<String?>()
+    private val connectNonceDeferred = CompletableDeferred<String>()
     private val client: OkHttpClient = buildClient()
     private var socket: WebSocket? = null
     private val loggerTag = "OpenClawGateway"
@@ -193,7 +193,9 @@ class GatewaySession(
     suspend fun connect() {
       val scheme = if (tls != null) "wss" else "ws"
       val url = "$scheme://${endpoint.host}:${endpoint.port}"
-      val request = Request.Builder().url(url).build()
+      val httpScheme = if (tls != null) "https" else "http"
+      val origin = "$httpScheme://${endpoint.host}:${endpoint.port}"
+      val request = Request.Builder().url(url).header("Origin", origin).build()
       socket = client.newWebSocket(request, Listener())
       try {
         connectDeferred.await()
@@ -241,6 +243,9 @@ class GatewaySession(
 
     private fun buildClient(): OkHttpClient {
       val builder = OkHttpClient.Builder()
+        .writeTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(0, java.util.concurrent.TimeUnit.SECONDS)
+        .pingInterval(30, java.util.concurrent.TimeUnit.SECONDS)
       val tlsConfig = buildGatewayTlsConfig(tls) { fingerprint ->
         onTlsFingerprint?.invoke(tls?.stableId ?: endpoint.stableId, fingerprint)
       }
@@ -291,7 +296,7 @@ class GatewaySession(
       }
     }
 
-    private suspend fun sendConnect(connectNonce: String?) {
+    private suspend fun sendConnect(connectNonce: String) {
       val identity = identityStore.loadOrCreate()
       val storedToken = deviceAuthStore.loadToken(identity.deviceId, options.role)
       val trimmedToken = token?.trim().orEmpty()
@@ -327,7 +332,7 @@ class GatewaySession(
 
     private fun buildConnectParams(
       identity: DeviceIdentity,
-      connectNonce: String?,
+      connectNonce: String,
       authToken: String,
       authPassword: String?,
     ): JsonObject {
@@ -380,9 +385,7 @@ class GatewaySession(
             put("publicKey", JsonPrimitive(publicKey))
             put("signature", JsonPrimitive(signature))
             put("signedAt", JsonPrimitive(signedAtMs))
-            if (!connectNonce.isNullOrBlank()) {
-              put("nonce", JsonPrimitive(connectNonce))
-            }
+            put("nonce", JsonPrimitive(connectNonce))
           }
         } else {
           null
@@ -442,8 +445,8 @@ class GatewaySession(
         frame["payload"]?.let { it.toString() } ?: frame["payloadJSON"].asStringOrNull()
       if (event == "connect.challenge") {
         val nonce = extractConnectNonce(payloadJson)
-        if (!connectNonceDeferred.isCompleted) {
-          connectNonceDeferred.complete(nonce)
+        if (!connectNonceDeferred.isCompleted && !nonce.isNullOrBlank()) {
+          connectNonceDeferred.complete(nonce.trim())
         }
         return
       }
@@ -454,12 +457,11 @@ class GatewaySession(
       onEvent(event, payloadJson)
     }
 
-    private suspend fun awaitConnectNonce(): String? {
-      if (isLoopbackHost(endpoint.host)) return null
+    private suspend fun awaitConnectNonce(): String {
       return try {
         withTimeout(2_000) { connectNonceDeferred.await() }
-      } catch (_: Throwable) {
-        null
+      } catch (err: Throwable) {
+        throw IllegalStateException("connect challenge timeout", err)
       }
     }
 
@@ -590,14 +592,13 @@ class GatewaySession(
     scopes: List<String>,
     signedAtMs: Long,
     token: String?,
-    nonce: String?,
+    nonce: String,
   ): String {
     val scopeString = scopes.joinToString(",")
     val authToken = token.orEmpty()
-    val version = if (nonce.isNullOrBlank()) "v1" else "v2"
     val parts =
       mutableListOf(
-        version,
+        "v2",
         deviceId,
         clientId,
         clientMode,
@@ -605,10 +606,8 @@ class GatewaySession(
         scopeString,
         signedAtMs.toString(),
         authToken,
+        nonce,
       )
-    if (!nonce.isNullOrBlank()) {
-      parts.add(nonce)
-    }
     return parts.joinToString("|")
   }
 
@@ -619,7 +618,18 @@ class GatewaySession(
     val port = parsed?.port ?: -1
     val scheme = parsed?.scheme?.trim().orEmpty().ifBlank { "http" }
 
+    // Detect TLS reverse proxy: endpoint on port 443, or domain-based host
+    val tls = endpoint.port == 443 || endpoint.host.contains(".")
+
+    // If raw URL is a non-loopback address AND we're behind TLS reverse proxy,
+    // fix the port (gateway sends its internal port like 18789, but we need 443 via Caddy)
     if (trimmed.isNotBlank() && !isLoopbackHost(host)) {
+      if (tls && port > 0 && port != 443) {
+        // Rewrite the URL to use the reverse proxy port instead of the raw gateway port
+        val fixedScheme = "https"
+        val formattedHost = if (host.contains(":")) "[${host}]" else host
+        return "$fixedScheme://$formattedHost"
+      }
       return trimmed
     }
 
@@ -629,9 +639,14 @@ class GatewaySession(
         ?: endpoint.host.trim()
     if (fallbackHost.isEmpty()) return trimmed.ifBlank { null }
 
-    val fallbackPort = endpoint.canvasPort ?: if (port > 0) port else 18793
+    // When connecting through a reverse proxy (TLS on standard port), use the
+    // connection endpoint's scheme and port instead of the raw canvas port.
+    val fallbackScheme = if (tls) "https" else scheme
+    // Behind reverse proxy, always use the proxy port (443), not the raw canvas port
+    val fallbackPort = if (tls) endpoint.port else (endpoint.canvasPort ?: endpoint.port)
     val formattedHost = if (fallbackHost.contains(":")) "[${fallbackHost}]" else fallbackHost
-    return "$scheme://$formattedHost:$fallbackPort"
+    val portSuffix = if ((fallbackScheme == "https" && fallbackPort == 443) || (fallbackScheme == "http" && fallbackPort == 80)) "" else ":$fallbackPort"
+    return "$fallbackScheme://$formattedHost$portSuffix"
   }
 
   private fun isLoopbackHost(raw: String?): Boolean {

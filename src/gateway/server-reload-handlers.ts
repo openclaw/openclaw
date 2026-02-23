@@ -1,17 +1,22 @@
+import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
+import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CliDeps } from "../cli/deps.js";
-import type { loadConfig } from "../config/config.js";
-import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
-import type { ChannelKind, GatewayReloadPlan } from "./config-reload.js";
 import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
-import { startGmailWatcher, stopGmailWatcher } from "../hooks/gmail-watcher.js";
+import { isRestartEnabled } from "../config/commands.js";
+import type { loadConfig } from "../config/config.js";
+import { startGmailWatcherWithLogs } from "../hooks/gmail-watcher-lifecycle.js";
+import { stopGmailWatcher } from "../hooks/gmail-watcher.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
 import {
-  authorizeGatewaySigusr1Restart,
+  deferGatewayRestartUntilIdle,
+  emitGatewayRestart,
   setGatewaySigusr1RestartPolicy,
 } from "../infra/restart.js";
-import { setCommandLaneConcurrency } from "../process/command-queue.js";
+import { setCommandLaneConcurrency, getTotalQueueSize } from "../process/command-queue.js";
 import { CommandLane } from "../process/lanes.js";
+import type { ChannelKind, GatewayReloadPlan } from "./config-reload.js";
 import { resolveHooksConfig } from "./hooks.js";
 import { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { buildGatewayCronService, type GatewayCronState } from "./server-cron.js";
@@ -44,7 +49,7 @@ export function createGatewayReloadHandlers(params: {
     plan: GatewayReloadPlan,
     nextConfig: ReturnType<typeof loadConfig>,
   ) => {
-    setGatewaySigusr1RestartPolicy({ allowExternal: nextConfig.commands?.restart === true });
+    setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
     const state = params.getState();
     const nextState = { ...state };
 
@@ -87,24 +92,12 @@ export function createGatewayReloadHandlers(params: {
 
     if (plan.restartGmailWatcher) {
       await stopGmailWatcher().catch(() => {});
-      if (!isTruthyEnvValue(process.env.OPENCLAW_SKIP_GMAIL_WATCHER)) {
-        try {
-          const gmailResult = await startGmailWatcher(nextConfig);
-          if (gmailResult.started) {
-            params.logHooks.info("gmail watcher started");
-          } else if (
-            gmailResult.reason &&
-            gmailResult.reason !== "hooks not enabled" &&
-            gmailResult.reason !== "no gmail account configured"
-          ) {
-            params.logHooks.warn(`gmail watcher not started: ${gmailResult.reason}`);
-          }
-        } catch (err) {
-          params.logHooks.error(`gmail watcher failed to start: ${String(err)}`);
-        }
-      } else {
-        params.logHooks.info("skipping gmail watcher restart (OPENCLAW_SKIP_GMAIL_WATCHER=1)");
-      }
+      await startGmailWatcherWithLogs({
+        cfg: nextConfig,
+        log: params.logHooks,
+        onSkipped: () =>
+          params.logHooks.info("skipping gmail watcher restart (OPENCLAW_SKIP_GMAIL_WATCHER=1)"),
+      });
     }
 
     if (plan.restartChannels.size > 0) {
@@ -140,21 +133,92 @@ export function createGatewayReloadHandlers(params: {
     params.setState(nextState);
   };
 
+  let restartPending = false;
+
   const requestGatewayRestart = (
     plan: GatewayReloadPlan,
     nextConfig: ReturnType<typeof loadConfig>,
   ) => {
-    setGatewaySigusr1RestartPolicy({ allowExternal: nextConfig.commands?.restart === true });
+    setGatewaySigusr1RestartPolicy({ allowExternal: isRestartEnabled(nextConfig) });
     const reasons = plan.restartReasons.length
       ? plan.restartReasons.join(", ")
       : plan.changedPaths.join(", ");
-    params.logReload.warn(`config change requires gateway restart (${reasons})`);
+
     if (process.listenerCount("SIGUSR1") === 0) {
       params.logReload.warn("no SIGUSR1 listener found; restart skipped");
       return;
     }
-    authorizeGatewaySigusr1Restart();
-    process.emit("SIGUSR1");
+
+    const getActiveCounts = () => {
+      const queueSize = getTotalQueueSize();
+      const pendingReplies = getTotalPendingReplies();
+      const embeddedRuns = getActiveEmbeddedRunCount();
+      return {
+        queueSize,
+        pendingReplies,
+        embeddedRuns,
+        totalActive: queueSize + pendingReplies + embeddedRuns,
+      };
+    };
+    const formatActiveDetails = (counts: ReturnType<typeof getActiveCounts>) => {
+      const details = [];
+      if (counts.queueSize > 0) {
+        details.push(`${counts.queueSize} operation(s)`);
+      }
+      if (counts.pendingReplies > 0) {
+        details.push(`${counts.pendingReplies} reply(ies)`);
+      }
+      if (counts.embeddedRuns > 0) {
+        details.push(`${counts.embeddedRuns} embedded run(s)`);
+      }
+      return details;
+    };
+    const active = getActiveCounts();
+
+    if (active.totalActive > 0) {
+      // Avoid spinning up duplicate polling loops from repeated config changes.
+      if (restartPending) {
+        params.logReload.info(
+          `config change requires gateway restart (${reasons}) — already waiting for operations to complete`,
+        );
+        return;
+      }
+      restartPending = true;
+      const initialDetails = formatActiveDetails(active);
+      params.logReload.warn(
+        `config change requires gateway restart (${reasons}) — deferring until ${initialDetails.join(", ")} complete`,
+      );
+
+      deferGatewayRestartUntilIdle({
+        getPendingCount: () => getActiveCounts().totalActive,
+        hooks: {
+          onReady: () => {
+            restartPending = false;
+            params.logReload.info("all operations and replies completed; restarting gateway now");
+          },
+          onTimeout: (_pending, elapsedMs) => {
+            const remaining = formatActiveDetails(getActiveCounts());
+            restartPending = false;
+            params.logReload.warn(
+              `restart timeout after ${elapsedMs}ms with ${remaining.join(", ")} still active; restarting anyway`,
+            );
+          },
+          onCheckError: (err) => {
+            restartPending = false;
+            params.logReload.warn(
+              `restart deferral check failed (${String(err)}); restarting gateway now`,
+            );
+          },
+        },
+      });
+    } else {
+      // No active operations or pending replies, restart immediately
+      params.logReload.warn(`config change requires gateway restart (${reasons})`);
+      const emitted = emitGatewayRestart();
+      if (!emitted) {
+        params.logReload.info("gateway restart already scheduled; skipping duplicate signal");
+      }
+    }
   };
 
   return { applyHotReload, requestGatewayRestart };

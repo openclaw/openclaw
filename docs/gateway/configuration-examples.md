@@ -363,7 +363,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
     path: "/hooks",
     token: "shared-secret",
     presets: ["gmail"],
-    transformsDir: "~/.openclaw/hooks",
+    transformsDir: "~/.openclaw/hooks/transforms",
     mappings: [
       {
         id: "gmail-hook",
@@ -380,7 +380,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
         thinking: "low",
         timeoutSeconds: 300,
         transform: {
-          module: "./transforms/gmail.js",
+          module: "gmail.js",
           export: "transformGmail",
         },
       },

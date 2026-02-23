@@ -101,6 +101,20 @@ You can persist a remote target so CLI commands use it by default:
 
 When the gateway is loopback-only, keep the URL at `ws://127.0.0.1:18789` and open the SSH tunnel first.
 
+## Credential precedence
+
+Gateway call/probe credential resolution now follows one shared contract:
+
+- Explicit credentials (`--token`, `--password`, or tool `gatewayToken`) always win.
+- Local mode defaults:
+  - token: `OPENCLAW_GATEWAY_TOKEN` -> `gateway.auth.token`
+  - password: `OPENCLAW_GATEWAY_PASSWORD` -> `gateway.auth.password`
+- Remote mode defaults:
+  - token: `gateway.remote.token` -> `OPENCLAW_GATEWAY_TOKEN` -> `gateway.auth.token`
+  - password: `OPENCLAW_GATEWAY_PASSWORD` -> `gateway.remote.password` -> `gateway.auth.password`
+- Remote probe/status token checks are strict by default: they use `gateway.remote.token` only (no local token fallback) when targeting remote mode.
+- Legacy `CLAWDBOT_GATEWAY_*` env vars are only used by compatibility call paths; probe/status/auth resolution uses `OPENCLAW_GATEWAY_*` only.
+
 ## Chat UI over SSH
 
 WebChat no longer uses a separate HTTP port. The SwiftUI chat UI connects directly to the Gateway WebSocket.
@@ -122,8 +136,10 @@ Short version: **keep the Gateway loopback-only** unless you’re sure you need 
 - **Non-loopback binds** (`lan`/`tailnet`/`custom`, or `auto` when loopback is unavailable) must use auth tokens/passwords.
 - `gateway.remote.token` is **only** for remote CLI calls — it does **not** enable local auth.
 - `gateway.remote.tlsFingerprint` pins the remote TLS cert when using `wss://`.
-- **Tailscale Serve** can authenticate via identity headers when `gateway.auth.allowTailscale: true`.
-  Set it to `false` if you want tokens/passwords instead.
+- **Tailscale Serve** can authenticate Control UI/WebSocket traffic via identity
+  headers when `gateway.auth.allowTailscale: true`; HTTP API endpoints still
+  require token/password auth. This tokenless flow assumes the gateway host is
+  trusted. Set it to `false` if you want tokens/passwords everywhere.
 - Treat browser control like operator access: tailnet-only + deliberate node pairing.
 
 Deep dive: [Security](/gateway/security).

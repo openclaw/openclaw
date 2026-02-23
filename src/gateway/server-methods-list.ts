@@ -1,4 +1,5 @@
 import { listChannelPlugins } from "../channels/plugins/index.js";
+import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "./events.js";
 
 const BASE_METHODS = [
   "health",
@@ -24,11 +25,13 @@ const BASE_METHODS = [
   "exec.approvals.node.get",
   "exec.approvals.node.set",
   "exec.approval.request",
+  "exec.approval.waitDecision",
   "exec.approval.resolve",
   "wizard.start",
   "wizard.next",
   "wizard.cancel",
   "wizard.status",
+  "talk.config",
   "talk.mode",
   "models.list",
   "agents.list",
@@ -62,6 +65,7 @@ const BASE_METHODS = [
   "device.pair.list",
   "device.pair.approve",
   "device.pair.reject",
+  "device.pair.remove",
   "device.token.rotate",
   "device.token.revoke",
   "node.rename",
@@ -114,4 +118,5 @@ export const GATEWAY_EVENTS = [
   "voicewake.changed",
   "exec.approval.requested",
   "exec.approval.resolved",
+  GATEWAY_EVENT_UPDATE_AVAILABLE,
 ];

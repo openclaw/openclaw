@@ -19,6 +19,8 @@ describe("agent delivery helpers", () => {
   it("builds a delivery plan from session delivery context", () => {
     const plan = resolveAgentDeliveryPlan({
       sessionEntry: {
+        sessionId: "s1",
+        updatedAt: 1,
         deliveryContext: { channel: "whatsapp", to: "+1555", accountId: "work" },
       },
       requestedChannel: "last",
@@ -36,6 +38,8 @@ describe("agent delivery helpers", () => {
   it("resolves fallback targets when no explicit destination is provided", () => {
     const plan = resolveAgentDeliveryPlan({
       sessionEntry: {
+        sessionId: "s2",
+        updatedAt: 2,
         deliveryContext: { channel: "whatsapp" },
       },
       requestedChannel: "last",
@@ -55,9 +59,24 @@ describe("agent delivery helpers", () => {
     expect(resolved.resolvedTo).toBe("+1999");
   });
 
+  it("does not inject a default deliverable channel when session has none", () => {
+    const plan = resolveAgentDeliveryPlan({
+      sessionEntry: undefined,
+      requestedChannel: "last",
+      explicitTo: undefined,
+      accountId: undefined,
+      wantsDelivery: true,
+    });
+
+    expect(plan.resolvedChannel).toBe("webchat");
+    expect(plan.deliveryTargetMode).toBeUndefined();
+  });
+
   it("skips outbound target resolution when explicit target validation is disabled", () => {
     const plan = resolveAgentDeliveryPlan({
       sessionEntry: {
+        sessionId: "s3",
+        updatedAt: 3,
         deliveryContext: { channel: "whatsapp", to: "+1555" },
       },
       requestedChannel: "last",

@@ -92,6 +92,31 @@ function getIndentLevel(line: string): number {
   return match ? Math.floor(match[1].length / 2) : 0;
 }
 
+function matchInteractiveSnapshotLine(
+  line: string,
+  options: RoleSnapshotOptions,
+): { roleRaw: string; role: string; name?: string; suffix: string } | null {
+  const depth = getIndentLevel(line);
+  if (options.maxDepth !== undefined && depth > options.maxDepth) {
+    return null;
+  }
+  const match = line.match(/^(\s*-\s*)(\w+)(?:\s+"([^"]*)")?(.*)$/);
+  if (!match) {
+    return null;
+  }
+  const [, , roleRaw, name, suffix] = match;
+  if (roleRaw.startsWith("/")) {
+    return null;
+  }
+  const role = roleRaw.toLowerCase();
+  return {
+    roleRaw,
+    role,
+    ...(name ? { name } : {}),
+    suffix,
+  };
+}
+
 type RoleNameTracker = {
   counts: Map<string, number>;
   refsByKey: Map<string, string[]>;
@@ -271,21 +296,11 @@ export function buildRoleSnapshotFromAriaSnapshot(
   if (options.interactive) {
     const result: string[] = [];
     for (const line of lines) {
-      const depth = getIndentLevel(line);
-      if (options.maxDepth !== undefined && depth > options.maxDepth) {
+      const parsed = matchInteractiveSnapshotLine(line, options);
+      if (!parsed) {
         continue;
       }
-
-      const match = line.match(/^(\s*-\s*)(\w+)(?:\s+"([^"]*)")?(.*)$/);
-      if (!match) {
-        continue;
-      }
-      const [, , roleRaw, name, suffix] = match;
-      if (roleRaw.startsWith("/")) {
-        continue;
-      }
-
-      const role = roleRaw.toLowerCase();
+      const { roleRaw, role, name, suffix } = parsed;
       if (!INTERACTIVE_ROLES.has(role)) {
         continue;
       }
@@ -357,19 +372,11 @@ export function buildRoleSnapshotFromAiSnapshot(
   if (options.interactive) {
     const out: string[] = [];
     for (const line of lines) {
-      const depth = getIndentLevel(line);
-      if (options.maxDepth !== undefined && depth > options.maxDepth) {
+      const parsed = matchInteractiveSnapshotLine(line, options);
+      if (!parsed) {
         continue;
       }
-      const match = line.match(/^(\s*-\s*)(\w+)(?:\s+"([^"]*)")?(.*)$/);
-      if (!match) {
-        continue;
-      }
-      const [, , roleRaw, name, suffix] = match;
-      if (roleRaw.startsWith("/")) {
-        continue;
-      }
-      const role = roleRaw.toLowerCase();
+      const { roleRaw, role, name, suffix } = parsed;
       if (!INTERACTIVE_ROLES.has(role)) {
         continue;
       }

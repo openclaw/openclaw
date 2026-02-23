@@ -12,7 +12,7 @@ const describeLive = LIVE && OPENAI_KEY ? describe : describe.skip;
 
 describeLive("pi embedded extra params (live)", () => {
   it("applies config maxTokens to openai streamFn", async () => {
-    const model = getModel("openai", "gpt-5.2") as Model<"openai-completions">;
+    const model = getModel("openai", "gpt-5.2") as unknown as Model<"openai-completions">;
 
     const cfg: OpenClawConfig = {
       agents: {

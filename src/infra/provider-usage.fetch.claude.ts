@@ -1,6 +1,6 @@
-import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
-import { fetchJson } from "./provider-usage.fetch.shared.js";
+import { buildUsageHttpErrorSnapshot, fetchJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
+import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
 type ClaudeUsageResponse = {
   five_hour?: { utilization?: number; resets_at?: string };
@@ -16,6 +16,36 @@ type ClaudeWebOrganizationsResponse = Array<{
 
 type ClaudeWebUsageResponse = ClaudeUsageResponse;
 
+function buildClaudeUsageWindows(data: ClaudeUsageResponse): UsageWindow[] {
+  const windows: UsageWindow[] = [];
+
+  if (data.five_hour?.utilization !== undefined) {
+    windows.push({
+      label: "5h",
+      usedPercent: clampPercent(data.five_hour.utilization),
+      resetAt: data.five_hour.resets_at ? new Date(data.five_hour.resets_at).getTime() : undefined,
+    });
+  }
+
+  if (data.seven_day?.utilization !== undefined) {
+    windows.push({
+      label: "Week",
+      usedPercent: clampPercent(data.seven_day.utilization),
+      resetAt: data.seven_day.resets_at ? new Date(data.seven_day.resets_at).getTime() : undefined,
+    });
+  }
+
+  const modelWindow = data.seven_day_sonnet || data.seven_day_opus;
+  if (modelWindow?.utilization !== undefined) {
+    windows.push({
+      label: data.seven_day_sonnet ? "Sonnet" : "Opus",
+      usedPercent: clampPercent(modelWindow.utilization),
+    });
+  }
+
+  return windows;
+}
+
 function resolveClaudeWebSessionKey(): string | undefined {
   const direct =
     process.env.CLAUDE_AI_SESSION_KEY?.trim() ?? process.env.CLAUDE_WEB_SESSION_KEY?.trim();
@@ -27,8 +57,8 @@ function resolveClaudeWebSessionKey(): string | undefined {
   if (!cookieHeader) {
     return undefined;
   }
-  const stripped = cookieHeader.replace(/^cookie:\\s*/i, "");
-  const match = stripped.match(/(?:^|;\\s*)sessionKey=([^;\\s]+)/i);
+  const stripped = cookieHeader.replace(/^cookie:\s*/i, "");
+  const match = stripped.match(/(?:^|;\s*)sessionKey=([^;\s]+)/i);
   const value = match?.[1]?.trim();
   return value?.startsWith("sk-ant-") ? value : undefined;
 }
@@ -70,31 +100,7 @@ async function fetchClaudeWebUsage(
   }
 
   const data = (await usageRes.json()) as ClaudeWebUsageResponse;
-  const windows: UsageWindow[] = [];
-
-  if (data.five_hour?.utilization !== undefined) {
-    windows.push({
-      label: "5h",
-      usedPercent: clampPercent(data.five_hour.utilization),
-      resetAt: data.five_hour.resets_at ? new Date(data.five_hour.resets_at).getTime() : undefined,
-    });
-  }
-
-  if (data.seven_day?.utilization !== undefined) {
-    windows.push({
-      label: "Week",
-      usedPercent: clampPercent(data.seven_day.utilization),
-      resetAt: data.seven_day.resets_at ? new Date(data.seven_day.resets_at).getTime() : undefined,
-    });
-  }
-
-  const modelWindow = data.seven_day_sonnet || data.seven_day_opus;
-  if (modelWindow?.utilization !== undefined) {
-    windows.push({
-      label: data.seven_day_sonnet ? "Sonnet" : "Opus",
-      usedPercent: clampPercent(modelWindow.utilization),
-    });
-  }
+  const windows = buildClaudeUsageWindows(data);
 
   if (windows.length === 0) {
     return null;
@@ -153,41 +159,15 @@ export async function fetchClaudeUsage(
       }
     }
 
-    const suffix = message ? `: ${message}` : "";
-    return {
+    return buildUsageHttpErrorSnapshot({
       provider: "anthropic",
-      displayName: PROVIDER_LABELS.anthropic,
-      windows: [],
-      error: `HTTP ${res.status}${suffix}`,
-    };
+      status: res.status,
+      message,
+    });
   }
 
   const data = (await res.json()) as ClaudeUsageResponse;
-  const windows: UsageWindow[] = [];
-
-  if (data.five_hour?.utilization !== undefined) {
-    windows.push({
-      label: "5h",
-      usedPercent: clampPercent(data.five_hour.utilization),
-      resetAt: data.five_hour.resets_at ? new Date(data.five_hour.resets_at).getTime() : undefined,
-    });
-  }
-
-  if (data.seven_day?.utilization !== undefined) {
-    windows.push({
-      label: "Week",
-      usedPercent: clampPercent(data.seven_day.utilization),
-      resetAt: data.seven_day.resets_at ? new Date(data.seven_day.resets_at).getTime() : undefined,
-    });
-  }
-
-  const modelWindow = data.seven_day_sonnet || data.seven_day_opus;
-  if (modelWindow?.utilization !== undefined) {
-    windows.push({
-      label: data.seven_day_sonnet ? "Sonnet" : "Opus",
-      usedPercent: clampPercent(modelWindow.utilization),
-    });
-  }
+  const windows = buildClaudeUsageWindows(data);
 
   return {
     provider: "anthropic",

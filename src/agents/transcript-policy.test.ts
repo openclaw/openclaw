@@ -19,6 +19,10 @@ describe("resolveTranscriptPolicy", () => {
       modelApi: "google-generative-ai",
     });
     expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.sanitizeThoughtSignatures).toEqual({
+      allowBase64Only: true,
+      includeCamelCase: true,
+    });
   });
 
   it("enables sanitizeToolCallIds for Mistral provider", () => {
@@ -30,13 +34,13 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.toolCallIdMode).toBe("strict9");
   });
 
-  it("enables sanitizeToolCallIds for OpenAI provider", () => {
+  it("disables sanitizeToolCallIds for OpenAI provider", () => {
     const policy = resolveTranscriptPolicy({
       provider: "openai",
       modelId: "gpt-4o",
       modelApi: "openai",
     });
-    expect(policy.sanitizeToolCallIds).toBe(true);
-    expect(policy.toolCallIdMode).toBe("strict");
+    expect(policy.sanitizeToolCallIds).toBe(false);
+    expect(policy.toolCallIdMode).toBeUndefined();
   });
 });

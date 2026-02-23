@@ -1,12 +1,18 @@
-import { DisconnectReason } from "@whiskeysockets/baileys";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { DisconnectReason } from "@whiskeysockets/baileys";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { loginWeb } from "./login.js";
+import { createWaSocket, formatError, waitForWaConnection } from "./session.js";
 
 const rmMock = vi.spyOn(fs, "rm");
 
-const authDir = path.join(os.tmpdir(), "wa-creds");
+function resolveTestAuthDir() {
+  return path.join(os.tmpdir(), "wa-creds");
+}
+
+const authDir = resolveTestAuthDir();
 
 vi.mock("../config/config.js", () => ({
   loadConfig: () =>
@@ -14,7 +20,7 @@ vi.mock("../config/config.js", () => ({
       channels: {
         whatsapp: {
           accounts: {
-            default: { enabled: true, authDir },
+            default: { enabled: true, authDir: resolveTestAuthDir() },
           },
         },
       },
@@ -22,6 +28,7 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("./session.js", () => {
+  const authDir = resolveTestAuthDir();
   const sockA = { ws: { close: vi.fn() } };
   const sockB = { ws: { close: vi.fn() } };
   let call = 0;
@@ -43,8 +50,9 @@ vi.mock("./session.js", () => {
   };
 });
 
-const { createWaSocket, waitForWaConnection, formatError } = await import("./session.js");
-const { loginWeb } = await import("./login.js");
+const createWaSocketMock = vi.mocked(createWaSocket);
+const waitForWaConnectionMock = vi.mocked(waitForWaConnection);
+const formatErrorMock = vi.mocked(formatError);
 
 describe("loginWeb coverage", () => {
   beforeEach(() => {
@@ -57,27 +65,29 @@ describe("loginWeb coverage", () => {
   });
 
   it("restarts once when WhatsApp requests code 515", async () => {
-    waitForWaConnection
+    waitForWaConnectionMock
       .mockRejectedValueOnce({ output: { statusCode: 515 } })
       .mockResolvedValueOnce(undefined);
 
     const runtime = { log: vi.fn(), error: vi.fn() } as never;
-    await loginWeb(false, waitForWaConnection as never, runtime);
+    await loginWeb(false, waitForWaConnectionMock as never, runtime);
 
-    expect(createWaSocket).toHaveBeenCalledTimes(2);
-    const firstSock = await createWaSocket.mock.results[0].value;
+    expect(createWaSocketMock).toHaveBeenCalledTimes(2);
+    const firstSock = await createWaSocketMock.mock.results[0]?.value;
     expect(firstSock.ws.close).toHaveBeenCalled();
     vi.runAllTimers();
-    const secondSock = await createWaSocket.mock.results[1].value;
+    const secondSock = await createWaSocketMock.mock.results[1]?.value;
     expect(secondSock.ws.close).toHaveBeenCalled();
   });
 
   it("clears creds and throws when logged out", async () => {
-    waitForWaConnection.mockRejectedValueOnce({
+    waitForWaConnectionMock.mockRejectedValueOnce({
       output: { statusCode: DisconnectReason.loggedOut },
     });
 
-    await expect(loginWeb(false, waitForWaConnection as never)).rejects.toThrow(/cache cleared/i);
+    await expect(loginWeb(false, waitForWaConnectionMock as never)).rejects.toThrow(
+      /cache cleared/i,
+    );
     expect(rmMock).toHaveBeenCalledWith(authDir, {
       recursive: true,
       force: true,
@@ -85,10 +95,10 @@ describe("loginWeb coverage", () => {
   });
 
   it("formats and rethrows generic errors", async () => {
-    waitForWaConnection.mockRejectedValueOnce(new Error("boom"));
-    await expect(loginWeb(false, waitForWaConnection as never)).rejects.toThrow(
+    waitForWaConnectionMock.mockRejectedValueOnce(new Error("boom"));
+    await expect(loginWeb(false, waitForWaConnectionMock as never)).rejects.toThrow(
       "formatted:Error: boom",
     );
-    expect(formatError).toHaveBeenCalled();
+    expect(formatErrorMock).toHaveBeenCalled();
   });
 });

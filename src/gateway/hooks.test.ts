@@ -1,9 +1,9 @@
 import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
-import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { createIMessageTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createMSTeamsTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createIMessageTestPlugin } from "../test-utils/imessage-test-plugin.js";
 import {
   extractHookToken,
   isHookAgentAllowed,
@@ -15,6 +15,27 @@ import {
 } from "./hooks.js";
 
 describe("gateway hooks helpers", () => {
+  const resolveHooksConfigOrThrow = (cfg: OpenClawConfig) => {
+    const resolved = resolveHooksConfig(cfg);
+    expect(resolved).not.toBeNull();
+    if (!resolved) {
+      throw new Error("hooks config missing");
+    }
+    return resolved;
+  };
+
+  const buildHookAgentConfig = (allowedAgentIds: string[]) =>
+    ({
+      hooks: {
+        enabled: true,
+        token: "secret",
+        allowedAgentIds,
+      },
+      agents: {
+        list: [{ id: "main", default: true }, { id: "hooks" }],
+      },
+    }) as OpenClawConfig;
+
   beforeEach(() => {
     setActivePluginRegistry(emptyRegistry);
   });
@@ -108,7 +129,7 @@ describe("gateway hooks helpers", () => {
         {
           pluginId: "msteams",
           source: "test",
-          plugin: createMSTeamsPlugin({ aliases: ["teams"] }),
+          plugin: createMSTeamsTestPlugin({ aliases: ["teams"] }),
         },
       ]),
     );
@@ -154,63 +175,21 @@ describe("gateway hooks helpers", () => {
   });
 
   test("isHookAgentAllowed honors hooks.allowedAgentIds for explicit routing", () => {
-    const cfg = {
-      hooks: {
-        enabled: true,
-        token: "secret",
-        allowedAgentIds: ["hooks"],
-      },
-      agents: {
-        list: [{ id: "main", default: true }, { id: "hooks" }],
-      },
-    } as OpenClawConfig;
-    const resolved = resolveHooksConfig(cfg);
-    expect(resolved).not.toBeNull();
-    if (!resolved) {
-      return;
-    }
+    const resolved = resolveHooksConfigOrThrow(buildHookAgentConfig(["hooks"]));
     expect(isHookAgentAllowed(resolved, undefined)).toBe(true);
     expect(isHookAgentAllowed(resolved, "hooks")).toBe(true);
     expect(isHookAgentAllowed(resolved, "missing-agent")).toBe(false);
   });
 
   test("isHookAgentAllowed treats empty allowlist as deny-all for explicit agentId", () => {
-    const cfg = {
-      hooks: {
-        enabled: true,
-        token: "secret",
-        allowedAgentIds: [],
-      },
-      agents: {
-        list: [{ id: "main", default: true }, { id: "hooks" }],
-      },
-    } as OpenClawConfig;
-    const resolved = resolveHooksConfig(cfg);
-    expect(resolved).not.toBeNull();
-    if (!resolved) {
-      return;
-    }
+    const resolved = resolveHooksConfigOrThrow(buildHookAgentConfig([]));
     expect(isHookAgentAllowed(resolved, undefined)).toBe(true);
     expect(isHookAgentAllowed(resolved, "hooks")).toBe(false);
     expect(isHookAgentAllowed(resolved, "main")).toBe(false);
   });
 
   test("isHookAgentAllowed treats wildcard allowlist as allow-all", () => {
-    const cfg = {
-      hooks: {
-        enabled: true,
-        token: "secret",
-        allowedAgentIds: ["*"],
-      },
-      agents: {
-        list: [{ id: "main", default: true }, { id: "hooks" }],
-      },
-    } as OpenClawConfig;
-    const resolved = resolveHooksConfig(cfg);
-    expect(resolved).not.toBeNull();
-    if (!resolved) {
-      return;
-    }
+    const resolved = resolveHooksConfigOrThrow(buildHookAgentConfig(["*"]));
     expect(isHookAgentAllowed(resolved, undefined)).toBe(true);
     expect(isHookAgentAllowed(resolved, "hooks")).toBe(true);
     expect(isHookAgentAllowed(resolved, "missing-agent")).toBe(true);
@@ -328,20 +307,3 @@ describe("gateway hooks helpers", () => {
 });
 
 const emptyRegistry = createTestRegistry([]);
-
-const createMSTeamsPlugin = (params: { aliases?: string[] }): ChannelPlugin => ({
-  id: "msteams",
-  meta: {
-    id: "msteams",
-    label: "Microsoft Teams",
-    selectionLabel: "Microsoft Teams (Bot Framework)",
-    docsPath: "/channels/msteams",
-    blurb: "Bot Framework; enterprise support.",
-    aliases: params.aliases,
-  },
-  capabilities: { chatTypes: ["direct"] },
-  config: {
-    listAccountIds: () => [],
-    resolveAccount: () => ({}),
-  },
-});

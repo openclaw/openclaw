@@ -1,4 +1,3 @@
-import type { SessionScope } from "./types.js";
 import {
   buildAgentMainSessionKey,
   DEFAULT_AGENT_ID,
@@ -7,6 +6,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { loadConfig } from "../config.js";
+import type { SessionScope } from "./types.js";
 
 export function resolveMainSessionKey(cfg?: {
   session?: { scope?: SessionScope; mainKey?: string };

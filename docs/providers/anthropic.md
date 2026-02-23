@@ -79,6 +79,28 @@ We recommend migrating to the new `cacheRetention` parameter.
 OpenClaw includes the `extended-cache-ttl-2025-04-11` beta flag for Anthropic API
 requests; keep it if you override provider headers (see [/gateway/configuration](/gateway/configuration)).
 
+## 1M context window (Anthropic beta)
+
+Anthropic's 1M context window is beta-gated. In OpenClaw, enable it per model
+with `params.context1m: true` for supported Opus/Sonnet models.
+
+```json5
+{
+  agents: {
+    defaults: {
+      models: {
+        "anthropic/claude-opus-4-6": {
+          params: { context1m: true },
+        },
+      },
+    },
+  },
+}
+```
+
+OpenClaw maps this to `anthropic-beta: context-1m-2025-08-07` on Anthropic
+requests.
+
 ## Option B: Claude setup-token
 
 **Best for:** using your Claude subscription.

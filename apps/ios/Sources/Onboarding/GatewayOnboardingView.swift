@@ -21,6 +21,7 @@ struct GatewayOnboardingView: View {
             }
             .navigationTitle("Connect Gateway")
         }
+        .gatewayTrustPromptAlert()
     }
 }
 
@@ -256,15 +257,6 @@ private struct ManualEntryStep: View {
         self.manualPassword = ""
     }
 
-    private struct SetupPayload: Codable {
-        var url: String?
-        var host: String?
-        var port: Int?
-        var tls: Bool?
-        var token: String?
-        var password: String?
-    }
-
     private func applySetupCode() {
         let raw = self.setupCode.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else {
@@ -272,7 +264,7 @@ private struct ManualEntryStep: View {
             return
         }
 
-        guard let payload = self.decodeSetupPayload(raw: raw) else {
+        guard let payload = GatewaySetupCode.decode(raw: raw) else {
             self.setupStatusText = "Setup code not recognized."
             return
         }
@@ -322,34 +314,7 @@ private struct ManualEntryStep: View {
         }
     }
 
-    private func decodeSetupPayload(raw: String) -> SetupPayload? {
-        if let payload = decodeSetupPayloadFromJSON(raw) {
-            return payload
-        }
-        if let decoded = decodeBase64Payload(raw),
-           let payload = decodeSetupPayloadFromJSON(decoded)
-        {
-            return payload
-        }
-        return nil
-    }
-
-    private func decodeSetupPayloadFromJSON(_ json: String) -> SetupPayload? {
-        guard let data = json.data(using: .utf8) else { return nil }
-        return try? JSONDecoder().decode(SetupPayload.self, from: data)
-    }
-
-    private func decodeBase64Payload(_ raw: String) -> String? {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return nil }
-        let normalized = trimmed
-            .replacingOccurrences(of: "-", with: "+")
-            .replacingOccurrences(of: "_", with: "/")
-        let padding = normalized.count % 4
-        let padded = padding == 0 ? normalized : normalized + String(repeating: "=", count: 4 - padding)
-        guard let data = Data(base64Encoded: padded) else { return nil }
-        return String(data: data, encoding: .utf8)
-    }
+    // (GatewaySetupCode) decode raw setup codes.
 }
 
 private struct ConnectionStatusBox: View {

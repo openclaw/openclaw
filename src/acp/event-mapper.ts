@@ -6,25 +6,84 @@ export type GatewayAttachment = {
   content: string;
 };
 
-export function extractTextFromPrompt(prompt: ContentBlock[]): string {
-  const parts: string[] = [];
-  for (const block of prompt) {
-    if (block.type === "text") {
-      parts.push(block.text);
+const INLINE_CONTROL_ESCAPE_MAP: Readonly<Record<string, string>> = {
+  "\0": "\\0",
+  "\r": "\\r",
+  "\n": "\\n",
+  "\t": "\\t",
+  "\v": "\\v",
+  "\f": "\\f",
+  "\u2028": "\\u2028",
+  "\u2029": "\\u2029",
+};
+
+function escapeInlineControlChars(value: string): string {
+  let escaped = "";
+  for (const char of value) {
+    const codePoint = char.codePointAt(0);
+    if (codePoint === undefined) {
+      escaped += char;
       continue;
     }
-    if (block.type === "resource") {
+
+    const isInlineControl =
+      codePoint <= 0x1f ||
+      (codePoint >= 0x7f && codePoint <= 0x9f) ||
+      codePoint === 0x2028 ||
+      codePoint === 0x2029;
+    if (!isInlineControl) {
+      escaped += char;
+      continue;
+    }
+
+    const mapped = INLINE_CONTROL_ESCAPE_MAP[char];
+    if (mapped) {
+      escaped += mapped;
+      continue;
+    }
+
+    // Keep escaped control bytes readable and stable in logs/prompts.
+    escaped +=
+      codePoint <= 0xff
+        ? `\\x${codePoint.toString(16).padStart(2, "0")}`
+        : `\\u${codePoint.toString(16).padStart(4, "0")}`;
+  }
+  return escaped;
+}
+
+function escapeResourceTitle(value: string): string {
+  // Keep title content, but escape characters that can break the resource-link annotation shape.
+  return escapeInlineControlChars(value).replace(/[()[\]]/g, (char) => `\\${char}`);
+}
+
+export function extractTextFromPrompt(prompt: ContentBlock[], maxBytes?: number): string {
+  const parts: string[] = [];
+  // Track accumulated byte count per block to catch oversized prompts before full concatenation
+  let totalBytes = 0;
+  for (const block of prompt) {
+    let blockText: string | undefined;
+    if (block.type === "text") {
+      blockText = block.text;
+    } else if (block.type === "resource") {
       const resource = block.resource as { text?: string } | undefined;
       if (resource?.text) {
-        parts.push(resource.text);
+        blockText = resource.text;
       }
-      continue;
+    } else if (block.type === "resource_link") {
+      const title = block.title ? ` (${escapeResourceTitle(block.title)})` : "";
+      const uri = block.uri ? escapeInlineControlChars(block.uri) : "";
+      blockText = uri ? `[Resource link${title}] ${uri}` : `[Resource link${title}]`;
     }
-    if (block.type === "resource_link") {
-      const title = block.title ? ` (${block.title})` : "";
-      const uri = block.uri ?? "";
-      const line = uri ? `[Resource link${title}] ${uri}` : `[Resource link${title}]`;
-      parts.push(line);
+    if (blockText !== undefined) {
+      // Guard: reject before allocating the full concatenated string
+      if (maxBytes !== undefined) {
+        const separatorBytes = parts.length > 0 ? 1 : 0; // "\n" added by join() between blocks
+        totalBytes += separatorBytes + Buffer.byteLength(blockText, "utf-8");
+        if (totalBytes > maxBytes) {
+          throw new Error(`Prompt exceeds maximum allowed size of ${maxBytes} bytes`);
+        }
+      }
+      parts.push(blockText);
     }
   }
   return parts.join("\n");

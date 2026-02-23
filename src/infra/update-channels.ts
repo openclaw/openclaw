@@ -81,3 +81,29 @@ export function formatUpdateChannelLabel(params: {
   }
   return `${params.channel} (default)`;
 }
+
+export function resolveUpdateChannelDisplay(params: {
+  configChannel?: UpdateChannel | null;
+  installKind: "git" | "package" | "unknown";
+  gitTag?: string | null;
+  gitBranch?: string | null;
+}): { channel: UpdateChannel; source: UpdateChannelSource; label: string } {
+  const channelInfo = resolveEffectiveUpdateChannel({
+    configChannel: params.configChannel,
+    installKind: params.installKind,
+    git:
+      params.gitTag || params.gitBranch
+        ? { tag: params.gitTag ?? null, branch: params.gitBranch ?? null }
+        : undefined,
+  });
+  return {
+    channel: channelInfo.channel,
+    source: channelInfo.source,
+    label: formatUpdateChannelLabel({
+      channel: channelInfo.channel,
+      source: channelInfo.source,
+      gitTag: params.gitTag ?? null,
+      gitBranch: params.gitBranch ?? null,
+    }),
+  };
+}

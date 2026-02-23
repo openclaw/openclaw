@@ -1,9 +1,9 @@
-import type { RuntimeEnv } from "../runtime.js";
 import {
   enableSystemdUserLinger,
   isSystemdUserServiceAvailable,
   readSystemdUserLingerStatus,
 } from "../daemon/systemd.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
 
 export type LingerPrompter = {

@@ -66,24 +66,19 @@ export function migrateTelegramGroupConfig(params: {
   let migrated = false;
   let skippedExisting = false;
 
-  const accountGroups = resolveAccountGroups(params.cfg, params.accountId).groups;
-  if (accountGroups) {
-    const result = migrateTelegramGroupsInPlace(accountGroups, params.oldChatId, params.newChatId);
-    if (result.migrated) {
-      migrated = true;
-      scopes.push("account");
-    }
-    if (result.skippedExisting) {
-      skippedExisting = true;
-    }
-  }
+  const migrationTargets: Array<{
+    scope: MigrationScope;
+    groups: TelegramGroups | undefined;
+  }> = [
+    { scope: "account", groups: resolveAccountGroups(params.cfg, params.accountId).groups },
+    { scope: "global", groups: params.cfg.channels?.telegram?.groups },
+  ];
 
-  const globalGroups = params.cfg.channels?.telegram?.groups;
-  if (globalGroups) {
-    const result = migrateTelegramGroupsInPlace(globalGroups, params.oldChatId, params.newChatId);
+  for (const target of migrationTargets) {
+    const result = migrateTelegramGroupsInPlace(target.groups, params.oldChatId, params.newChatId);
     if (result.migrated) {
       migrated = true;
-      scopes.push("global");
+      scopes.push(target.scope);
     }
     if (result.skippedExisting) {
       skippedExisting = true;

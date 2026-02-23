@@ -19,7 +19,10 @@ Last updated: 2026-01-22
 - **Nodes** (macOS/iOS/Android/headless) also connect over **WebSocket**, but
   declare `role: node` with explicit caps/commands.
 - One Gateway per host; it is the only place that opens a WhatsApp session.
-- A **canvas host** (default `18793`) serves agent‑editable HTML and A2UI.
+- The **canvas host** is served by the Gateway HTTP server under:
+  - `/__openclaw__/canvas/` (agent-editable HTML/CSS/JS)
+  - `/__openclaw__/a2ui/` (A2UI host)
+    It uses the same port as the Gateway (default `18789`).
 
 ## Components and flows
 
@@ -94,8 +97,8 @@ sequenceDiagram
   for subsequent connects.
 - **Local** connects (loopback or the gateway host’s own tailnet address) can be
   auto‑approved to keep same‑host UX smooth.
-- **Non‑local** connects must sign the `connect.challenge` nonce and require
-  explicit approval.
+- All connects must sign the `connect.challenge` nonce.
+- **Non‑local** connects still require explicit approval.
 - Gateway auth (`gateway.auth.*`) still applies to **all** connections, local or
   remote.
 

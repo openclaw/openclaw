@@ -64,10 +64,12 @@ Invoke flags:
 Flags:
 
 - `--cwd <path>`: working directory.
-- `--env <key=val>`: env override (repeatable).
+- `--env <key=val>`: env override (repeatable). Note: node hosts ignore `PATH` overrides (and `tools.exec.pathPrepend` is not applied to node hosts).
 - `--command-timeout <ms>`: command timeout.
 - `--invoke-timeout <ms>`: node invoke timeout (default `30000`).
 - `--needs-screen-recording`: require screen recording permission.
 - `--raw <command>`: run a shell string (`/bin/sh -lc` or `cmd.exe /c`).
+  In allowlist mode on Windows node hosts, `cmd.exe /c` shell-wrapper runs require approval
+  (allowlist entry alone does not auto-allow the wrapper form).
 - `--agent <id>`: agent-scoped approvals/allowlists (defaults to configured agent).
 - `--ask <off|on-miss|always>`, `--security <deny|allowlist|full>`: overrides.

@@ -18,7 +18,7 @@ OpenClaw assembles its own system prompt on every run. It includes:
 - Tool list + short descriptions
 - Skills list (only metadata; instructions are loaded on demand with `read`)
 - Self-update instructions
-- Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` when new, plus `MEMORY.md` and/or `memory.md` when present). Large files are truncated by `agents.defaults.bootstrapMaxChars` (default: 20000). `memory/*.md` files are on-demand via memory tools and are not auto-injected.
+- Workspace + bootstrap files (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md` when new, plus `MEMORY.md` and/or `memory.md` when present). Large files are truncated by `agents.defaults.bootstrapMaxChars` (default: 20000), and total bootstrap injection is capped by `agents.defaults.bootstrapTotalMaxChars` (default: 150000). `memory/*.md` files are on-demand via memory tools and are not auto-injected.
 - Time (UTC + user timezone)
 - Reply tags + heartbeat behavior
 - Runtime metadata (host/OS/model/thinking)
@@ -35,6 +35,12 @@ Everything the model receives counts toward the context limit:
 - Attachments/transcripts (images, audio, files)
 - Compaction summaries and pruning artifacts
 - Provider wrappers or safety headers (not visible, but still counted)
+
+For images, OpenClaw downscales transcript/tool image payloads before provider calls.
+Use `agents.defaults.imageMaxDimensionPx` (default: `1200`) to tune this:
+
+- Lower values usually reduce vision-token usage and payload size.
+- Higher values preserve more visual detail for OCR/UI-heavy screenshots.
 
 For a practical breakdown (per injected file, tools, skills, and system prompt size), use `/context list` or `/context detail`. See [Context](/concepts/context).
 
@@ -102,10 +108,28 @@ agents:
       every: "55m"
 ```
 
+### Example: enable Anthropic 1M context beta header
+
+Anthropic's 1M context window is currently beta-gated. OpenClaw can inject the
+required `anthropic-beta` value when you enable `context1m` on supported Opus
+or Sonnet models.
+
+```yaml
+agents:
+  defaults:
+    models:
+      "anthropic/claude-opus-4-6":
+        params:
+          context1m: true
+```
+
+This maps to Anthropic's `context-1m-2025-08-07` beta header.
+
 ## Tips for reducing token pressure
 
 - Use `/compact` to summarize long sessions.
 - Trim large tool outputs in your workflows.
+- Lower `agents.defaults.imageMaxDimensionPx` for screenshot-heavy sessions.
 - Keep skill descriptions short (skill list is injected into the prompt).
 - Prefer smaller models for verbose, exploratory work.
 

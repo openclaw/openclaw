@@ -1,4 +1,3 @@
-import type { RuntimeEnv } from "../../runtime.js";
 import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   type AuthProfileStore,
@@ -7,6 +6,7 @@ import {
 } from "../../agents/auth-profiles.js";
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import { loadConfig } from "../../config/config.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
 import { resolveKnownAgentId } from "./shared.js";
 
@@ -28,18 +28,22 @@ function describeOrder(store: AuthProfileStore, provider: string): string[] {
   return Array.isArray(order) ? order : [];
 }
 
-export async function modelsAuthOrderGetCommand(
-  opts: { provider: string; agent?: string; json?: boolean },
-  runtime: RuntimeEnv,
-) {
+function resolveAuthOrderContext(opts: { provider: string; agent?: string }) {
   const rawProvider = opts.provider?.trim();
   if (!rawProvider) {
     throw new Error("Missing --provider.");
   }
   const provider = normalizeProviderId(rawProvider);
-
   const cfg = loadConfig();
   const { agentId, agentDir } = resolveTargetAgent(cfg, opts.agent);
+  return { cfg, agentId, agentDir, provider };
+}
+
+export async function modelsAuthOrderGetCommand(
+  opts: { provider: string; agent?: string; json?: boolean },
+  runtime: RuntimeEnv,
+) {
+  const { agentId, agentDir, provider } = resolveAuthOrderContext(opts);
   const store = ensureAuthProfileStore(agentDir, {
     allowKeychainPrompt: false,
   });
@@ -72,14 +76,7 @@ export async function modelsAuthOrderClearCommand(
   opts: { provider: string; agent?: string },
   runtime: RuntimeEnv,
 ) {
-  const rawProvider = opts.provider?.trim();
-  if (!rawProvider) {
-    throw new Error("Missing --provider.");
-  }
-  const provider = normalizeProviderId(rawProvider);
-
-  const cfg = loadConfig();
-  const { agentId, agentDir } = resolveTargetAgent(cfg, opts.agent);
+  const { agentId, agentDir, provider } = resolveAuthOrderContext(opts);
   const updated = await setAuthProfileOrder({
     agentDir,
     provider,
@@ -98,19 +95,12 @@ export async function modelsAuthOrderSetCommand(
   opts: { provider: string; agent?: string; order: string[] },
   runtime: RuntimeEnv,
 ) {
-  const rawProvider = opts.provider?.trim();
-  if (!rawProvider) {
-    throw new Error("Missing --provider.");
-  }
-  const provider = normalizeProviderId(rawProvider);
-
-  const cfg = loadConfig();
-  const { agentId, agentDir } = resolveTargetAgent(cfg, opts.agent);
+  const { agentId, agentDir, provider } = resolveAuthOrderContext(opts);
 
   const store = ensureAuthProfileStore(agentDir, {
     allowKeychainPrompt: false,
   });
-  const providerKey = normalizeProviderId(provider);
+  const providerKey = provider;
   const requested = (opts.order ?? []).map((entry) => String(entry).trim()).filter(Boolean);
   if (requested.length === 0) {
     throw new Error("Missing profile ids. Provide one or more profile ids.");

@@ -8,9 +8,11 @@ import type {
 } from "playwright-core";
 import { chromium } from "playwright-core";
 import { formatErrorMessage } from "../infra/errors.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { appendCdpPath, fetchJson, getHeadersWithAuth, withCdpSocket } from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
 import { getChromeWebSocketUrl } from "./chrome.js";
+import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
 
 export type BrowserConsoleMessage = {
   type: string;
@@ -105,6 +107,16 @@ let connecting: Promise<ConnectedBrowser> | null = null;
 
 function normalizeCdpUrl(raw: string) {
   return raw.replace(/\/$/, "");
+}
+
+function findNetworkRequestById(state: PageState, id: string): BrowserNetworkRequest | undefined {
+  for (let i = state.requests.length - 1; i >= 0; i -= 1) {
+    const candidate = state.requests[i];
+    if (candidate && candidate.id === id) {
+      return candidate;
+    }
+  }
+  return undefined;
 }
 
 function roleRefsKey(cdpUrl: string, targetId: string) {
@@ -246,14 +258,7 @@ export function ensurePageState(page: Page): PageState {
       if (!id) {
         return;
       }
-      let rec: BrowserNetworkRequest | undefined;
-      for (let i = state.requests.length - 1; i >= 0; i -= 1) {
-        const candidate = state.requests[i];
-        if (candidate && candidate.id === id) {
-          rec = candidate;
-          break;
-        }
-      }
+      const rec = findNetworkRequestById(state, id);
       if (!rec) {
         return;
       }
@@ -265,14 +270,7 @@ export function ensurePageState(page: Page): PageState {
       if (!id) {
         return;
       }
-      let rec: BrowserNetworkRequest | undefined;
-      for (let i = state.requests.length - 1; i >= 0; i -= 1) {
-        const candidate = state.requests[i];
-        if (candidate && candidate.id === id) {
-          rec = candidate;
-          break;
-        }
-      }
+      const rec = findNetworkRequestById(state, id);
       if (!rec) {
         return;
       }
@@ -388,12 +386,24 @@ async function findPageByTargetId(
   cdpUrl?: string,
 ): Promise<Page | null> {
   const pages = await getAllPages(browser);
+  let resolvedViaCdp = false;
   // First, try the standard CDP session approach
   for (const page of pages) {
-    const tid = await pageTargetId(page).catch(() => null);
+    let tid: string | null = null;
+    try {
+      tid = await pageTargetId(page);
+      resolvedViaCdp = true;
+    } catch {
+      tid = null;
+    }
     if (tid && tid === targetId) {
       return page;
     }
+  }
+  // Extension relays can block CDP attachment APIs entirely. If that happens and
+  // Playwright only exposes one page, return it as the best available mapping.
+  if (!resolvedViaCdp && pages.length === 1) {
+    return pages[0];
   }
   // If CDP sessions fail (e.g., extension relay blocks Target.attachToBrowserTarget),
   // fall back to URL-based matching using the /json/list endpoint
@@ -708,7 +718,11 @@ export async function listPagesViaPlaywright(opts: { cdpUrl: string }): Promise<
  * Used for remote profiles where HTTP-based /json/new is ephemeral.
  * Returns the new page's targetId and metadata.
  */
-export async function createPageViaPlaywright(opts: { cdpUrl: string; url: string }): Promise<{
+export async function createPageViaPlaywright(opts: {
+  cdpUrl: string;
+  url: string;
+  ssrfPolicy?: SsrFPolicy;
+}): Promise<{
   targetId: string;
   title: string;
   url: string;
@@ -724,6 +738,10 @@ export async function createPageViaPlaywright(opts: { cdpUrl: string; url: strin
   // Navigate to the URL
   const targetUrl = opts.url.trim() || "about:blank";
   if (targetUrl !== "about:blank") {
+    await assertBrowserNavigationAllowed({
+      url: targetUrl,
+      ...withBrowserNavigationPolicy(opts.ssrfPolicy),
+    });
     await page.goto(targetUrl, { timeout: 30_000 }).catch(() => {
       // Navigation might fail for some URLs, but page is still created
     });

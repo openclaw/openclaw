@@ -1,9 +1,14 @@
 const HELP_FLAGS = new Set(["-h", "--help"]);
-const VERSION_FLAGS = new Set(["-v", "-V", "--version"]);
+const VERSION_FLAGS = new Set(["-V", "--version"]);
+const ROOT_VERSION_ALIAS_FLAG = "-v";
+const ROOT_BOOLEAN_FLAGS = new Set(["--dev", "--no-color"]);
+const ROOT_VALUE_FLAGS = new Set(["--profile", "--log-level"]);
 const FLAG_TERMINATOR = "--";
 
 export function hasHelpOrVersion(argv: string[]): boolean {
-  return argv.some((arg) => HELP_FLAGS.has(arg) || VERSION_FLAGS.has(arg));
+  return (
+    argv.some((arg) => HELP_FLAGS.has(arg) || VERSION_FLAGS.has(arg)) || hasRootVersionAlias(argv)
+  );
 }
 
 function isValueToken(arg: string | undefined): boolean {
@@ -38,6 +43,42 @@ export function hasFlag(argv: string[], name: string): boolean {
     }
   }
   return false;
+}
+
+export function hasRootVersionAlias(argv: string[]): boolean {
+  const args = argv.slice(2);
+  let hasAlias = false;
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (!arg) {
+      continue;
+    }
+    if (arg === FLAG_TERMINATOR) {
+      break;
+    }
+    if (arg === ROOT_VERSION_ALIAS_FLAG) {
+      hasAlias = true;
+      continue;
+    }
+    if (ROOT_BOOLEAN_FLAGS.has(arg)) {
+      continue;
+    }
+    if (arg.startsWith("--profile=")) {
+      continue;
+    }
+    if (ROOT_VALUE_FLAGS.has(arg)) {
+      const next = args[i + 1];
+      if (isValueToken(next)) {
+        i += 1;
+      }
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      continue;
+    }
+    return false;
+  }
+  return hasAlias;
 }
 
 export function getFlagValue(argv: string[], name: string): string | null | undefined {
@@ -153,6 +194,12 @@ export function shouldMigrateStateFromPath(path: string[]): boolean {
   }
   const [primary, secondary] = path;
   if (primary === "health" || primary === "status" || primary === "sessions") {
+    return false;
+  }
+  if (primary === "config" && (secondary === "get" || secondary === "unset")) {
+    return false;
+  }
+  if (primary === "models" && (secondary === "list" || secondary === "status")) {
     return false;
   }
   if (primary === "memory" && secondary === "status") {

@@ -1,16 +1,17 @@
 import { Type } from "@sinclair/typebox";
-import type { OpenClawConfig } from "../../config/config.js";
-import type { AnyAgentTool } from "./common.js";
 import { BLUEBUBBLES_GROUP_ACTIONS } from "../../channels/plugins/bluebubbles-actions.js";
 import {
   listChannelMessageActions,
   supportsChannelMessageButtons,
+  supportsChannelMessageButtonsForChannel,
   supportsChannelMessageCards,
+  supportsChannelMessageCardsForChannel,
 } from "../../channels/plugins/message-actions.js";
 import {
   CHANNEL_MESSAGE_ACTION_NAMES,
   type ChannelMessageActionName,
 } from "../../channels/plugins/types.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../gateway/protocol/client-info.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
@@ -21,7 +22,9 @@ import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { listChannelSupportedActions } from "../channel-tools.js";
 import { channelTargetSchema, channelTargetsSchema, stringEnum } from "../schema/typebox.js";
+import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readNumberParam, readStringParam } from "./common.js";
+import { resolveGatewayOptions } from "./gateway.js";
 
 const AllMessageActions = CHANNEL_MESSAGE_ACTION_NAMES;
 const EXPLICIT_TARGET_ACTIONS = new Set<ChannelMessageActionName>([
@@ -46,7 +49,121 @@ function buildRoutingSchema() {
   };
 }
 
-function buildSendSchema(options: { includeButtons: boolean; includeCards: boolean }) {
+const discordComponentEmojiSchema = Type.Object({
+  name: Type.String(),
+  id: Type.Optional(Type.String()),
+  animated: Type.Optional(Type.Boolean()),
+});
+
+const discordComponentOptionSchema = Type.Object({
+  label: Type.String(),
+  value: Type.String(),
+  description: Type.Optional(Type.String()),
+  emoji: Type.Optional(discordComponentEmojiSchema),
+  default: Type.Optional(Type.Boolean()),
+});
+
+const discordComponentButtonSchema = Type.Object({
+  label: Type.String(),
+  style: Type.Optional(stringEnum(["primary", "secondary", "success", "danger", "link"])),
+  url: Type.Optional(Type.String()),
+  emoji: Type.Optional(discordComponentEmojiSchema),
+  disabled: Type.Optional(Type.Boolean()),
+  allowedUsers: Type.Optional(
+    Type.Array(
+      Type.String({
+        description: "Discord user ids or names allowed to interact with this button.",
+      }),
+    ),
+  ),
+});
+
+const discordComponentSelectSchema = Type.Object({
+  type: Type.Optional(stringEnum(["string", "user", "role", "mentionable", "channel"])),
+  placeholder: Type.Optional(Type.String()),
+  minValues: Type.Optional(Type.Number()),
+  maxValues: Type.Optional(Type.Number()),
+  options: Type.Optional(Type.Array(discordComponentOptionSchema)),
+});
+
+const discordComponentBlockSchema = Type.Object({
+  type: Type.String(),
+  text: Type.Optional(Type.String()),
+  texts: Type.Optional(Type.Array(Type.String())),
+  accessory: Type.Optional(
+    Type.Object({
+      type: Type.String(),
+      url: Type.Optional(Type.String()),
+      button: Type.Optional(discordComponentButtonSchema),
+    }),
+  ),
+  spacing: Type.Optional(stringEnum(["small", "large"])),
+  divider: Type.Optional(Type.Boolean()),
+  buttons: Type.Optional(Type.Array(discordComponentButtonSchema)),
+  select: Type.Optional(discordComponentSelectSchema),
+  items: Type.Optional(
+    Type.Array(
+      Type.Object({
+        url: Type.String(),
+        description: Type.Optional(Type.String()),
+        spoiler: Type.Optional(Type.Boolean()),
+      }),
+    ),
+  ),
+  file: Type.Optional(Type.String()),
+  spoiler: Type.Optional(Type.Boolean()),
+});
+
+const discordComponentModalFieldSchema = Type.Object({
+  type: Type.String(),
+  name: Type.Optional(Type.String()),
+  label: Type.String(),
+  description: Type.Optional(Type.String()),
+  placeholder: Type.Optional(Type.String()),
+  required: Type.Optional(Type.Boolean()),
+  options: Type.Optional(Type.Array(discordComponentOptionSchema)),
+  minValues: Type.Optional(Type.Number()),
+  maxValues: Type.Optional(Type.Number()),
+  minLength: Type.Optional(Type.Number()),
+  maxLength: Type.Optional(Type.Number()),
+  style: Type.Optional(stringEnum(["short", "paragraph"])),
+});
+
+const discordComponentModalSchema = Type.Object({
+  title: Type.String(),
+  triggerLabel: Type.Optional(Type.String()),
+  triggerStyle: Type.Optional(stringEnum(["primary", "secondary", "success", "danger", "link"])),
+  fields: Type.Array(discordComponentModalFieldSchema),
+});
+
+const discordComponentMessageSchema = Type.Object(
+  {
+    text: Type.Optional(Type.String()),
+    reusable: Type.Optional(
+      Type.Boolean({
+        description: "Allow components to be used multiple times until they expire.",
+      }),
+    ),
+    container: Type.Optional(
+      Type.Object({
+        accentColor: Type.Optional(Type.String()),
+        spoiler: Type.Optional(Type.Boolean()),
+      }),
+    ),
+    blocks: Type.Optional(Type.Array(discordComponentBlockSchema)),
+    modal: Type.Optional(discordComponentModalSchema),
+  },
+  {
+    description:
+      "Discord components v2 payload. Set reusable=true to keep buttons, selects, and forms active until expiry.",
+  },
+);
+
+function buildSendSchema(options: {
+  includeButtons: boolean;
+  includeCards: boolean;
+  includeComponents: boolean;
+}) {
   const props: Record<string, unknown> = {
     message: Type.Optional(Type.String()),
     effectId: Type.Optional(
@@ -88,6 +205,7 @@ function buildSendSchema(options: { includeButtons: boolean; includeCards: boole
           Type.Object({
             text: Type.String(),
             callback_data: Type.String(),
+            style: Type.Optional(stringEnum(["danger", "success", "primary"])),
           }),
         ),
         {
@@ -104,12 +222,16 @@ function buildSendSchema(options: { includeButtons: boolean; includeCards: boole
         },
       ),
     ),
+    components: Type.Optional(discordComponentMessageSchema),
   };
   if (!options.includeButtons) {
     delete props.buttons;
   }
   if (!options.includeCards) {
     delete props.card;
+  }
+  if (!options.includeComponents) {
+    delete props.components;
   }
   return props;
 }
@@ -257,7 +379,11 @@ function buildChannelManagementSchema() {
   };
 }
 
-function buildMessageToolSchemaProps(options: { includeButtons: boolean; includeCards: boolean }) {
+function buildMessageToolSchemaProps(options: {
+  includeButtons: boolean;
+  includeCards: boolean;
+  includeComponents: boolean;
+}) {
   return {
     ...buildRoutingSchema(),
     ...buildSendSchema(options),
@@ -277,7 +403,7 @@ function buildMessageToolSchemaProps(options: { includeButtons: boolean; include
 
 function buildMessageToolSchemaFromActions(
   actions: readonly string[],
-  options: { includeButtons: boolean; includeCards: boolean },
+  options: { includeButtons: boolean; includeCards: boolean; includeComponents: boolean },
 ) {
   const props = buildMessageToolSchemaProps(options);
   return Type.Object({
@@ -289,6 +415,7 @@ function buildMessageToolSchemaFromActions(
 const MessageToolSchema = buildMessageToolSchemaFromActions(AllMessageActions, {
   includeButtons: true,
   includeCards: true,
+  includeComponents: true,
 });
 
 type MessageToolOptions = {
@@ -302,15 +429,61 @@ type MessageToolOptions = {
   hasRepliedRef?: { value: boolean };
   sandboxRoot?: string;
   requireExplicitTarget?: boolean;
+  requesterSenderId?: string;
 };
 
-function buildMessageToolSchema(cfg: OpenClawConfig) {
-  const actions = listChannelMessageActions(cfg);
-  const includeButtons = supportsChannelMessageButtons(cfg);
-  const includeCards = supportsChannelMessageCards(cfg);
+function resolveMessageToolSchemaActions(params: {
+  cfg: OpenClawConfig;
+  currentChannelProvider?: string;
+  currentChannelId?: string;
+}): string[] {
+  const currentChannel = normalizeMessageChannel(params.currentChannelProvider);
+  if (currentChannel) {
+    const scopedActions = filterActionsForContext({
+      actions: listChannelSupportedActions({
+        cfg: params.cfg,
+        channel: currentChannel,
+      }),
+      channel: currentChannel,
+      currentChannelId: params.currentChannelId,
+    });
+    const withSend = new Set<string>(["send", ...scopedActions]);
+    return Array.from(withSend);
+  }
+  const actions = listChannelMessageActions(params.cfg);
+  return actions.length > 0 ? actions : ["send"];
+}
+
+function resolveIncludeComponents(params: {
+  cfg: OpenClawConfig;
+  currentChannelProvider?: string;
+}): boolean {
+  const currentChannel = normalizeMessageChannel(params.currentChannelProvider);
+  if (currentChannel) {
+    return currentChannel === "discord";
+  }
+  // Components are currently Discord-specific.
+  return listChannelSupportedActions({ cfg: params.cfg, channel: "discord" }).length > 0;
+}
+
+function buildMessageToolSchema(params: {
+  cfg: OpenClawConfig;
+  currentChannelProvider?: string;
+  currentChannelId?: string;
+}) {
+  const currentChannel = normalizeMessageChannel(params.currentChannelProvider);
+  const actions = resolveMessageToolSchemaActions(params);
+  const includeButtons = currentChannel
+    ? supportsChannelMessageButtonsForChannel({ cfg: params.cfg, channel: currentChannel })
+    : supportsChannelMessageButtons(params.cfg);
+  const includeCards = currentChannel
+    ? supportsChannelMessageCardsForChannel({ cfg: params.cfg, channel: currentChannel })
+    : supportsChannelMessageCards(params.cfg);
+  const includeComponents = resolveIncludeComponents(params);
   return buildMessageToolSchemaFromActions(actions.length > 0 ? actions : ["send"], {
     includeButtons,
     includeCards,
+    includeComponents,
   });
 }
 
@@ -387,7 +560,13 @@ function buildMessageToolDescription(options?: {
 
 export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   const agentAccountId = resolveAgentAccountId(options?.agentAccountId);
-  const schema = options?.config ? buildMessageToolSchema(options.config) : MessageToolSchema;
+  const schema = options?.config
+    ? buildMessageToolSchema({
+        cfg: options.config,
+        currentChannelProvider: options.currentChannelProvider,
+        currentChannelId: options.currentChannelId,
+      })
+    : MessageToolSchema;
   const description = buildMessageToolDescription({
     config: options?.config,
     currentChannel: options?.currentChannelProvider,
@@ -441,10 +620,15 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         params.accountId = accountId;
       }
 
-      const gateway = {
-        url: readStringParam(params, "gatewayUrl", { trim: false }),
-        token: readStringParam(params, "gatewayToken", { trim: false }),
+      const gatewayResolved = resolveGatewayOptions({
+        gatewayUrl: readStringParam(params, "gatewayUrl", { trim: false }),
+        gatewayToken: readStringParam(params, "gatewayToken", { trim: false }),
         timeoutMs: readNumberParam(params, "timeoutMs"),
+      });
+      const gateway = {
+        url: gatewayResolved.url,
+        token: gatewayResolved.token,
+        timeoutMs: gatewayResolved.timeoutMs,
         clientName: GATEWAY_CLIENT_IDS.GATEWAY_CLIENT,
         clientDisplayName: "agent",
         mode: GATEWAY_CLIENT_MODES.BACKEND,
@@ -473,8 +657,10 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         action,
         params,
         defaultAccountId: accountId ?? undefined,
+        requesterSenderId: options?.requesterSenderId,
         gateway,
         toolContext,
+        sessionKey: options?.agentSessionKey,
         agentId: options?.agentSessionKey
           ? resolveSessionAgentId({ sessionKey: options.agentSessionKey, config: cfg })
           : undefined,

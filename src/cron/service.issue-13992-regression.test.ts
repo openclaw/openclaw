@@ -1,29 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { CronServiceState } from "./service/state.js";
-import type { CronJob } from "./types.js";
+import { createMockCronStateForJobs } from "./service.test-harness.js";
 import { recomputeNextRunsForMaintenance } from "./service/jobs.js";
+import type { CronJob } from "./types.js";
 
 describe("issue #13992 regression - cron jobs skip execution", () => {
-  function createMockState(jobs: CronJob[]): CronServiceState {
-    return {
-      store: { version: 1, jobs },
-      running: false,
-      timer: null,
-      storeLoadedAtMs: Date.now(),
-      deps: {
-        storePath: "/mock/path",
-        cronEnabled: true,
-        nowMs: () => Date.now(),
-        log: {
-          debug: () => {},
-          info: () => {},
-          warn: () => {},
-          error: () => {},
-        } as never,
-      },
-    };
-  }
-
   it("should NOT recompute nextRunAtMs for past-due jobs during maintenance", () => {
     const now = Date.now();
     const pastDue = now - 60_000; // 1 minute ago
@@ -35,6 +15,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
       schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
       payload: { kind: "systemEvent", text: "test" },
       sessionTarget: "main",
+      wakeMode: "next-heartbeat",
       createdAtMs: now - 3600_000,
       updatedAtMs: now - 3600_000,
       state: {
@@ -42,7 +23,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
       },
     };
 
-    const state = createMockState([job]);
+    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
     recomputeNextRunsForMaintenance(state);
 
     // Should not have changed the past-due nextRunAtMs
@@ -59,6 +40,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
       schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
       payload: { kind: "systemEvent", text: "test" },
       sessionTarget: "main",
+      wakeMode: "next-heartbeat",
       createdAtMs: now,
       updatedAtMs: now,
       state: {
@@ -66,7 +48,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
       },
     };
 
-    const state = createMockState([job]);
+    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
     recomputeNextRunsForMaintenance(state);
 
     // Should have computed a nextRunAtMs
@@ -85,6 +67,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
       schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
       payload: { kind: "systemEvent", text: "test" },
       sessionTarget: "main",
+      wakeMode: "next-heartbeat",
       createdAtMs: now,
       updatedAtMs: now,
       state: {
@@ -92,7 +75,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
       },
     };
 
-    const state = createMockState([job]);
+    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
     recomputeNextRunsForMaintenance(state);
 
     // Should have cleared nextRunAtMs for disabled job
@@ -111,6 +94,7 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
       schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
       payload: { kind: "systemEvent", text: "test" },
       sessionTarget: "main",
+      wakeMode: "next-heartbeat",
       createdAtMs: now,
       updatedAtMs: now,
       state: {
@@ -119,12 +103,55 @@ describe("issue #13992 regression - cron jobs skip execution", () => {
       },
     };
 
-    const state = createMockState([job]);
+    const state = createMockCronStateForJobs({ jobs: [job], nowMs: now });
     recomputeNextRunsForMaintenance(state);
 
     // Should have cleared stuck running marker
     expect(job.state.runningAtMs).toBeUndefined();
     // But should NOT have changed nextRunAtMs (it's still future)
     expect(job.state.nextRunAtMs).toBe(futureTime);
+  });
+
+  it("isolates schedule errors while filling missing nextRunAtMs", () => {
+    const now = Date.now();
+    const pastDue = now - 1_000;
+
+    const dueJob: CronJob = {
+      id: "due-job",
+      name: "due job",
+      enabled: true,
+      schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
+      payload: { kind: "systemEvent", text: "due" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      createdAtMs: now - 3600_000,
+      updatedAtMs: now - 3600_000,
+      state: {
+        nextRunAtMs: pastDue,
+      },
+    };
+
+    const malformedJob: CronJob = {
+      id: "bad-job",
+      name: "bad job",
+      enabled: true,
+      schedule: { kind: "cron", expr: "not a valid cron", tz: "UTC" },
+      payload: { kind: "systemEvent", text: "bad" },
+      sessionTarget: "main",
+      wakeMode: "next-heartbeat",
+      createdAtMs: now - 3600_000,
+      updatedAtMs: now - 3600_000,
+      state: {
+        // missing nextRunAtMs
+      },
+    };
+
+    const state = createMockCronStateForJobs({ jobs: [dueJob, malformedJob], nowMs: now });
+
+    expect(() => recomputeNextRunsForMaintenance(state)).not.toThrow();
+    expect(dueJob.state.nextRunAtMs).toBe(pastDue);
+    expect(malformedJob.state.nextRunAtMs).toBeUndefined();
+    expect(malformedJob.state.scheduleErrorCount).toBe(1);
+    expect(malformedJob.state.lastError).toMatch(/^schedule error:/);
   });
 });

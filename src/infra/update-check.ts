@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
+import { detectPackageManager as detectPackageManagerImpl } from "./detect-package-manager.js";
 import { parseSemver } from "./runtime-guard.js";
 import { channelToNpmTag, type UpdateChannel } from "./update-channels.js";
 
@@ -48,6 +49,21 @@ export type UpdateCheckResult = {
   registry?: RegistryStatus;
 };
 
+export function formatGitInstallLabel(update: UpdateCheckResult): string | null {
+  if (update.installKind !== "git") {
+    return null;
+  }
+  const shortSha = update.git?.sha ? update.git.sha.slice(0, 8) : null;
+  const branch = update.git?.branch && update.git.branch !== "HEAD" ? update.git.branch : null;
+  const tag = update.git?.tag ?? null;
+  const parts = [
+    branch ?? (tag ? "detached" : "git"),
+    tag ? `tag ${tag}` : null,
+    shortSha ? `@ ${shortSha}` : null,
+  ].filter(Boolean);
+  return parts.join(" · ");
+}
+
 async function exists(p: string): Promise<boolean> {
   try {
     await fs.access(p);
@@ -58,28 +74,7 @@ async function exists(p: string): Promise<boolean> {
 }
 
 async function detectPackageManager(root: string): Promise<PackageManager> {
-  try {
-    const raw = await fs.readFile(path.join(root, "package.json"), "utf-8");
-    const parsed = JSON.parse(raw) as { packageManager?: string };
-    const pm = parsed?.packageManager?.split("@")[0]?.trim();
-    if (pm === "pnpm" || pm === "bun" || pm === "npm") {
-      return pm;
-    }
-  } catch {
-    // ignore
-  }
-
-  const files = await fs.readdir(root).catch((): string[] => []);
-  if (files.includes("pnpm-lock.yaml")) {
-    return "pnpm";
-  }
-  if (files.includes("bun.lockb")) {
-    return "bun";
-  }
-  if (files.includes("package-lock.json")) {
-    return "npm";
-  }
-  return "unknown";
+  return (await detectPackageManagerImpl(root)) ?? "unknown";
 }
 
 async function detectGitRoot(root: string): Promise<string | null> {

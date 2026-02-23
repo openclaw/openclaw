@@ -5,6 +5,7 @@ import {
   type GatewayClientMode,
   type GatewayClientName,
 } from "../../../src/gateway/protocol/client-info.js";
+import { readConnectErrorDetailCode } from "../../../src/gateway/protocol/connect-error-details.js";
 import { clearDeviceAuthToken, loadDeviceAuthToken, storeDeviceAuthToken } from "./device-auth.ts";
 import { loadOrCreateDeviceIdentity, signDevicePayload } from "./device-identity.ts";
 import { generateUUID } from "./uuid.ts";
@@ -24,6 +25,30 @@ export type GatewayResponseFrame = {
   payload?: unknown;
   error?: { code: string; message: string; details?: unknown };
 };
+
+export type GatewayErrorInfo = {
+  code: string;
+  message: string;
+  details?: unknown;
+};
+
+export class GatewayRequestError extends Error {
+  readonly gatewayCode: string;
+  readonly details?: unknown;
+
+  constructor(error: GatewayErrorInfo) {
+    super(error.message);
+    this.name = "GatewayRequestError";
+    this.gatewayCode = error.code;
+    this.details = error.details;
+  }
+}
+
+export function resolveGatewayErrorDetailCode(
+  error: { details?: unknown } | null | undefined,
+): string | null {
+  return readConnectErrorDetailCode(error?.details);
+}
 
 export type GatewayHelloOk = {
   type: "hello-ok";
@@ -55,7 +80,7 @@ export type GatewayBrowserClientOptions = {
   instanceId?: string;
   onHello?: (hello: GatewayHelloOk) => void;
   onEvent?: (evt: GatewayEventFrame) => void;
-  onClose?: (info: { code: number; reason: string }) => void;
+  onClose?: (info: { code: number; reason: string; error?: GatewayErrorInfo }) => void;
   onGap?: (info: { expected: number; received: number }) => void;
 };
 
@@ -71,6 +96,7 @@ export class GatewayBrowserClient {
   private connectSent = false;
   private connectTimer: number | null = null;
   private backoffMs = 800;
+  private pendingConnectError: GatewayErrorInfo | undefined;
 
   constructor(private opts: GatewayBrowserClientOptions) {}
 
@@ -83,6 +109,7 @@ export class GatewayBrowserClient {
     this.closed = true;
     this.ws?.close();
     this.ws = null;
+    this.pendingConnectError = undefined;
     this.flushPending(new Error("gateway client stopped"));
   }
 
@@ -99,9 +126,11 @@ export class GatewayBrowserClient {
     this.ws.addEventListener("message", (ev) => this.handleMessage(String(ev.data ?? "")));
     this.ws.addEventListener("close", (ev) => {
       const reason = String(ev.reason ?? "");
+      const connectError = this.pendingConnectError;
+      this.pendingConnectError = undefined;
       this.ws = null;
       this.flushPending(new Error(`gateway closed (${ev.code}): ${reason}`));
-      this.opts.onClose?.({ code: ev.code, reason });
+      this.opts.onClose?.({ code: ev.code, reason, error: connectError });
       this.scheduleReconnect();
     });
     this.ws.addEventListener("error", () => {
@@ -169,13 +198,13 @@ export class GatewayBrowserClient {
           publicKey: string;
           signature: string;
           signedAt: number;
-          nonce: string | undefined;
+          nonce: string;
         }
       | undefined;
 
     if (isSecureContext && deviceIdentity) {
       const signedAtMs = Date.now();
-      const nonce = this.connectNonce ?? undefined;
+      const nonce = this.connectNonce ?? "";
       const payload = buildDeviceAuthPayload({
         deviceId: deviceIdentity.deviceId,
         clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.CONTROL_UI,
@@ -227,7 +256,16 @@ export class GatewayBrowserClient {
         this.backoffMs = 800;
         this.opts.onHello?.(hello);
       })
-      .catch(() => {
+      .catch((err: unknown) => {
+        if (err instanceof GatewayRequestError) {
+          this.pendingConnectError = {
+            code: err.gatewayCode,
+            message: err.message,
+            details: err.details,
+          };
+        } else {
+          this.pendingConnectError = undefined;
+        }
         if (canFallbackToShared && deviceIdentity) {
           clearDeviceAuthToken({ deviceId: deviceIdentity.deviceId, role });
         }
@@ -280,7 +318,13 @@ export class GatewayBrowserClient {
       if (res.ok) {
         pending.resolve(res.payload);
       } else {
-        pending.reject(new Error(res.error?.message ?? "request failed"));
+        pending.reject(
+          new GatewayRequestError({
+            code: res.error?.code ?? "UNAVAILABLE",
+            message: res.error?.message ?? "request failed",
+            details: res.error?.details,
+          }),
+        );
       }
       return;
     }

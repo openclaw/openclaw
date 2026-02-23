@@ -1,24 +1,16 @@
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
+import {
+  diagnosticSessionStates,
+  getDiagnosticSessionState,
+  getDiagnosticSessionStateCountForTest as getDiagnosticSessionStateCountForTestImpl,
+  pruneDiagnosticSessionStates,
+  resetDiagnosticSessionStateForTest,
+  type SessionRef,
+  type SessionStateValue,
+} from "./diagnostic-session-state.js";
 import { createSubsystemLogger } from "./subsystem.js";
 
 const diag = createSubsystemLogger("diagnostic");
-
-type SessionStateValue = "idle" | "processing" | "waiting";
-
-type SessionState = {
-  sessionId?: string;
-  sessionKey?: string;
-  lastActivity: number;
-  state: SessionStateValue;
-  queueDepth: number;
-};
-
-type SessionRef = {
-  sessionId?: string;
-  sessionKey?: string;
-};
-
-const sessionStates = new Map<string, SessionState>();
 
 const webhookStats = {
   received: 0,
@@ -33,33 +25,6 @@ function markActivity() {
   lastActivityAt = Date.now();
 }
 
-function resolveSessionKey({ sessionKey, sessionId }: SessionRef) {
-  return sessionKey ?? sessionId ?? "unknown";
-}
-
-function getSessionState(ref: SessionRef): SessionState {
-  const key = resolveSessionKey(ref);
-  const existing = sessionStates.get(key);
-  if (existing) {
-    if (ref.sessionId) {
-      existing.sessionId = ref.sessionId;
-    }
-    if (ref.sessionKey) {
-      existing.sessionKey = ref.sessionKey;
-    }
-    return existing;
-  }
-  const created: SessionState = {
-    sessionId: ref.sessionId,
-    sessionKey: ref.sessionKey,
-    lastActivity: Date.now(),
-    state: "idle",
-    queueDepth: 0,
-  };
-  sessionStates.set(key, created);
-  return created;
-}
-
 export function logWebhookReceived(params: {
   channel: string;
   updateType?: string;
@@ -67,11 +32,13 @@ export function logWebhookReceived(params: {
 }) {
   webhookStats.received += 1;
   webhookStats.lastReceived = Date.now();
-  diag.debug(
-    `webhook received: channel=${params.channel} type=${params.updateType ?? "unknown"} chatId=${
-      params.chatId ?? "unknown"
-    } total=${webhookStats.received}`,
-  );
+  if (diag.isEnabled("debug")) {
+    diag.debug(
+      `webhook received: channel=${params.channel} type=${params.updateType ?? "unknown"} chatId=${
+        params.chatId ?? "unknown"
+      } total=${webhookStats.received}`,
+    );
+  }
   emitDiagnosticEvent({
     type: "webhook.received",
     channel: params.channel,
@@ -88,13 +55,15 @@ export function logWebhookProcessed(params: {
   durationMs?: number;
 }) {
   webhookStats.processed += 1;
-  diag.debug(
-    `webhook processed: channel=${params.channel} type=${
-      params.updateType ?? "unknown"
-    } chatId=${params.chatId ?? "unknown"} duration=${params.durationMs ?? 0}ms processed=${
-      webhookStats.processed
-    }`,
-  );
+  if (diag.isEnabled("debug")) {
+    diag.debug(
+      `webhook processed: channel=${params.channel} type=${
+        params.updateType ?? "unknown"
+      } chatId=${params.chatId ?? "unknown"} duration=${params.durationMs ?? 0}ms processed=${
+        webhookStats.processed
+      }`,
+    );
+  }
   emitDiagnosticEvent({
     type: "webhook.processed",
     channel: params.channel,
@@ -133,14 +102,16 @@ export function logMessageQueued(params: {
   channel?: string;
   source: string;
 }) {
-  const state = getSessionState(params);
+  const state = getDiagnosticSessionState(params);
   state.queueDepth += 1;
   state.lastActivity = Date.now();
-  diag.debug(
-    `message queued: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
-      state.sessionKey ?? "unknown"
-    } source=${params.source} queueDepth=${state.queueDepth} sessionState=${state.state}`,
-  );
+  if (diag.isEnabled("debug")) {
+    diag.debug(
+      `message queued: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
+        state.sessionKey ?? "unknown"
+      } source=${params.source} queueDepth=${state.queueDepth} sessionState=${state.state}`,
+    );
+  }
   emitDiagnosticEvent({
     type: "message.queued",
     sessionId: state.sessionId,
@@ -163,21 +134,22 @@ export function logMessageProcessed(params: {
   reason?: string;
   error?: string;
 }) {
-  const payload = `message processed: channel=${params.channel} chatId=${
-    params.chatId ?? "unknown"
-  } messageId=${params.messageId ?? "unknown"} sessionId=${
-    params.sessionId ?? "unknown"
-  } sessionKey=${params.sessionKey ?? "unknown"} outcome=${params.outcome} duration=${
-    params.durationMs ?? 0
-  }ms${params.reason ? ` reason=${params.reason}` : ""}${
-    params.error ? ` error="${params.error}"` : ""
-  }`;
-  if (params.outcome === "error") {
-    diag.error(payload);
-  } else if (params.outcome === "skipped") {
-    diag.debug(payload);
-  } else {
-    diag.debug(payload);
+  const wantsLog = params.outcome === "error" ? diag.isEnabled("error") : diag.isEnabled("debug");
+  if (wantsLog) {
+    const payload = `message processed: channel=${params.channel} chatId=${
+      params.chatId ?? "unknown"
+    } messageId=${params.messageId ?? "unknown"} sessionId=${
+      params.sessionId ?? "unknown"
+    } sessionKey=${params.sessionKey ?? "unknown"} outcome=${params.outcome} duration=${
+      params.durationMs ?? 0
+    }ms${params.reason ? ` reason=${params.reason}` : ""}${
+      params.error ? ` error="${params.error}"` : ""
+    }`;
+    if (params.outcome === "error") {
+      diag.error(payload);
+    } else {
+      diag.debug(payload);
+    }
   }
   emitDiagnosticEvent({
     type: "message.processed",
@@ -200,7 +172,7 @@ export function logSessionStateChange(
     reason?: string;
   },
 ) {
-  const state = getSessionState(params);
+  const state = getDiagnosticSessionState(params);
   const isProbeSession = state.sessionId?.startsWith("probe-") ?? false;
   const prevState = state.state;
   state.state = params.state;
@@ -208,7 +180,7 @@ export function logSessionStateChange(
   if (params.state === "idle") {
     state.queueDepth = Math.max(0, state.queueDepth - 1);
   }
-  if (!isProbeSession) {
+  if (!isProbeSession && diag.isEnabled("debug")) {
     diag.debug(
       `session state: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
         state.sessionKey ?? "unknown"
@@ -230,7 +202,7 @@ export function logSessionStateChange(
 }
 
 export function logSessionStuck(params: SessionRef & { state: SessionStateValue; ageMs: number }) {
-  const state = getSessionState(params);
+  const state = getDiagnosticSessionState(params);
   diag.warn(
     `stuck session: sessionId=${state.sessionId ?? "unknown"} sessionKey=${
       state.sessionKey ?? "unknown"
@@ -284,8 +256,44 @@ export function logRunAttempt(params: SessionRef & { runId: string; attempt: num
   markActivity();
 }
 
+export function logToolLoopAction(
+  params: SessionRef & {
+    toolName: string;
+    level: "warning" | "critical";
+    action: "warn" | "block";
+    detector: "generic_repeat" | "known_poll_no_progress" | "global_circuit_breaker" | "ping_pong";
+    count: number;
+    message: string;
+    pairedToolName?: string;
+  },
+) {
+  const payload = `tool loop: sessionId=${params.sessionId ?? "unknown"} sessionKey=${
+    params.sessionKey ?? "unknown"
+  } tool=${params.toolName} level=${params.level} action=${params.action} detector=${
+    params.detector
+  } count=${params.count}${params.pairedToolName ? ` pairedTool=${params.pairedToolName}` : ""} message="${params.message}"`;
+  if (params.level === "critical") {
+    diag.error(payload);
+  } else {
+    diag.warn(payload);
+  }
+  emitDiagnosticEvent({
+    type: "tool.loop",
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    toolName: params.toolName,
+    level: params.level,
+    action: params.action,
+    detector: params.detector,
+    count: params.count,
+    message: params.message,
+    pairedToolName: params.pairedToolName,
+  });
+  markActivity();
+}
+
 export function logActiveRuns() {
-  const activeSessions = Array.from(sessionStates.entries())
+  const activeSessions = Array.from(diagnosticSessionStates.entries())
     .filter(([, s]) => s.state === "processing")
     .map(
       ([id, s]) =>
@@ -303,13 +311,14 @@ export function startDiagnosticHeartbeat() {
   }
   heartbeatInterval = setInterval(() => {
     const now = Date.now();
-    const activeCount = Array.from(sessionStates.values()).filter(
+    pruneDiagnosticSessionStates(now, true);
+    const activeCount = Array.from(diagnosticSessionStates.values()).filter(
       (s) => s.state === "processing",
     ).length;
-    const waitingCount = Array.from(sessionStates.values()).filter(
+    const waitingCount = Array.from(diagnosticSessionStates.values()).filter(
       (s) => s.state === "waiting",
     ).length;
-    const totalQueued = Array.from(sessionStates.values()).reduce(
+    const totalQueued = Array.from(diagnosticSessionStates.values()).reduce(
       (sum, s) => sum + s.queueDepth,
       0,
     );
@@ -341,7 +350,17 @@ export function startDiagnosticHeartbeat() {
       queued: totalQueued,
     });
 
-    for (const [, state] of sessionStates) {
+    import("../agents/command-poll-backoff.js")
+      .then(({ pruneStaleCommandPolls }) => {
+        for (const [, state] of diagnosticSessionStates) {
+          pruneStaleCommandPolls(state);
+        }
+      })
+      .catch((err) => {
+        diag.debug(`command-poll-backoff prune failed: ${String(err)}`);
+      });
+
+    for (const [, state] of diagnosticSessionStates) {
       const ageMs = now - state.lastActivity;
       if (state.state === "processing" && ageMs > 120_000) {
         logSessionStuck({
@@ -361,6 +380,20 @@ export function stopDiagnosticHeartbeat() {
     clearInterval(heartbeatInterval);
     heartbeatInterval = null;
   }
+}
+
+export function getDiagnosticSessionStateCountForTest(): number {
+  return getDiagnosticSessionStateCountForTestImpl();
+}
+
+export function resetDiagnosticStateForTest(): void {
+  resetDiagnosticSessionStateForTest();
+  webhookStats.received = 0;
+  webhookStats.processed = 0;
+  webhookStats.errors = 0;
+  webhookStats.lastReceived = 0;
+  lastActivityAt = 0;
+  stopDiagnosticHeartbeat();
 }
 
 export { diag as diagnosticLogger };

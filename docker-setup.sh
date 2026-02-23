@@ -8,10 +8,53 @@ IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw:local}"
 EXTRA_MOUNTS="${OPENCLAW_EXTRA_MOUNTS:-}"
 HOME_VOLUME_NAME="${OPENCLAW_HOME_VOLUME:-}"
 
+fail() {
+  echo "ERROR: $*" >&2
+  exit 1
+}
+
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
     echo "Missing dependency: $1" >&2
     exit 1
+  fi
+}
+
+contains_disallowed_chars() {
+  local value="$1"
+  [[ "$value" == *$'\n'* || "$value" == *$'\r'* || "$value" == *$'\t'* ]]
+}
+
+validate_mount_path_value() {
+  local label="$1"
+  local value="$2"
+  if [[ -z "$value" ]]; then
+    fail "$label cannot be empty."
+  fi
+  if contains_disallowed_chars "$value"; then
+    fail "$label contains unsupported control characters."
+  fi
+  if [[ "$value" =~ [[:space:]] ]]; then
+    fail "$label cannot contain whitespace."
+  fi
+}
+
+validate_named_volume() {
+  local value="$1"
+  if [[ ! "$value" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*$ ]]; then
+    fail "OPENCLAW_HOME_VOLUME must match [A-Za-z0-9][A-Za-z0-9_.-]* when using a named volume."
+  fi
+}
+
+validate_mount_spec() {
+  local mount="$1"
+  if contains_disallowed_chars "$mount"; then
+    fail "OPENCLAW_EXTRA_MOUNTS entries cannot contain control characters."
+  fi
+  # Keep mount specs strict to avoid YAML structure injection.
+  # Expected format: source:target[:options]
+  if [[ ! "$mount" =~ ^[^[:space:],:]+:[^[:space:],:]+(:[^[:space:],:]+)?$ ]]; then
+    fail "Invalid mount format '$mount'. Expected source:target[:options] without spaces."
   fi
 }
 
@@ -24,8 +67,24 @@ fi
 OPENCLAW_CONFIG_DIR="${OPENCLAW_CONFIG_DIR:-$HOME/.openclaw}"
 OPENCLAW_WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
 
+validate_mount_path_value "OPENCLAW_CONFIG_DIR" "$OPENCLAW_CONFIG_DIR"
+validate_mount_path_value "OPENCLAW_WORKSPACE_DIR" "$OPENCLAW_WORKSPACE_DIR"
+if [[ -n "$HOME_VOLUME_NAME" ]]; then
+  if [[ "$HOME_VOLUME_NAME" == *"/"* ]]; then
+    validate_mount_path_value "OPENCLAW_HOME_VOLUME" "$HOME_VOLUME_NAME"
+  else
+    validate_named_volume "$HOME_VOLUME_NAME"
+  fi
+fi
+if contains_disallowed_chars "$EXTRA_MOUNTS"; then
+  fail "OPENCLAW_EXTRA_MOUNTS cannot contain control characters."
+fi
+
 mkdir -p "$OPENCLAW_CONFIG_DIR"
 mkdir -p "$OPENCLAW_WORKSPACE_DIR"
+# Seed device-identity parent eagerly for Docker Desktop/Windows bind mounts
+# that reject creating new subdirectories from inside the container.
+mkdir -p "$OPENCLAW_CONFIG_DIR/identity"
 
 export OPENCLAW_CONFIG_DIR
 export OPENCLAW_WORKSPACE_DIR
@@ -57,6 +116,9 @@ write_extra_compose() {
   local home_volume="$1"
   shift
   local mount
+  local gateway_home_mount
+  local gateway_config_mount
+  local gateway_workspace_mount
 
   cat >"$EXTRA_COMPOSE_FILE" <<'YAML'
 services:
@@ -65,12 +127,19 @@ services:
 YAML
 
   if [[ -n "$home_volume" ]]; then
-    printf '      - %s:/home/node\n' "$home_volume" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - %s:/home/node/.openclaw\n' "$OPENCLAW_CONFIG_DIR" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - %s:/home/node/.openclaw/workspace\n' "$OPENCLAW_WORKSPACE_DIR" >>"$EXTRA_COMPOSE_FILE"
+    gateway_home_mount="${home_volume}:/home/node"
+    gateway_config_mount="${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw"
+    gateway_workspace_mount="${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace"
+    validate_mount_spec "$gateway_home_mount"
+    validate_mount_spec "$gateway_config_mount"
+    validate_mount_spec "$gateway_workspace_mount"
+    printf '      - %s\n' "$gateway_home_mount" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$gateway_config_mount" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$gateway_workspace_mount" >>"$EXTRA_COMPOSE_FILE"
   fi
 
   for mount in "$@"; do
+    validate_mount_spec "$mount"
     printf '      - %s\n' "$mount" >>"$EXTRA_COMPOSE_FILE"
   done
 
@@ -80,16 +149,18 @@ YAML
 YAML
 
   if [[ -n "$home_volume" ]]; then
-    printf '      - %s:/home/node\n' "$home_volume" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - %s:/home/node/.openclaw\n' "$OPENCLAW_CONFIG_DIR" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - %s:/home/node/.openclaw/workspace\n' "$OPENCLAW_WORKSPACE_DIR" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$gateway_home_mount" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$gateway_config_mount" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$gateway_workspace_mount" >>"$EXTRA_COMPOSE_FILE"
   fi
 
   for mount in "$@"; do
+    validate_mount_spec "$mount"
     printf '      - %s\n' "$mount" >>"$EXTRA_COMPOSE_FILE"
   done
 
   if [[ -n "$home_volume" && "$home_volume" != *"/"* ]]; then
+    validate_named_volume "$home_volume"
     cat >>"$EXTRA_COMPOSE_FILE" <<YAML
 volumes:
   ${home_volume}:

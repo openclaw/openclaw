@@ -1,7 +1,6 @@
+import { chunkMarkdownTextWithMode, type ChunkMode } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
-import type { WebInboundMsg } from "./types.js";
-import { chunkMarkdownTextWithMode, type ChunkMode } from "../../auto-reply/chunk.js";
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { convertMarkdownTables } from "../../markdown/tables.js";
 import { markdownToWhatsApp } from "../../markdown/whatsapp.js";
@@ -10,11 +9,13 @@ import { loadWebMedia } from "../media.js";
 import { newConnectionId } from "../reconnect.js";
 import { formatError } from "../session.js";
 import { whatsappOutboundLog } from "./loggers.js";
+import type { WebInboundMsg } from "./types.js";
 import { elide } from "./util.js";
 
 export async function deliverWebReply(params: {
   replyResult: ReplyPayload;
   msg: WebInboundMsg;
+  mediaLocalRoots?: readonly string[];
   maxMediaBytes: number;
   textLimit: number;
   chunkMode?: ChunkMode;
@@ -49,7 +50,7 @@ export async function deliverWebReply(params: {
         lastErr = err;
         const errText = formatError(err);
         const isLast = attempt === maxAttempts;
-        const shouldRetry = /closed|reset|timed\\s*out|disconnect/i.test(errText);
+        const shouldRetry = /closed|reset|timed\s*out|disconnect/i.test(errText);
         if (!shouldRetry || isLast) {
           throw err;
         }
@@ -99,7 +100,10 @@ export async function deliverWebReply(params: {
   for (const [index, mediaUrl] of mediaList.entries()) {
     const caption = index === 0 ? remainingText.shift() || undefined : undefined;
     try {
-      const media = await loadWebMedia(mediaUrl, maxMediaBytes);
+      const media = await loadWebMedia(mediaUrl, {
+        maxBytes: maxMediaBytes,
+        localRoots: params.mediaLocalRoots,
+      });
       if (shouldLogVerbose()) {
         logVerbose(
           `Web auto-reply media size: ${(media.buffer.length / (1024 * 1024)).toFixed(2)}MB`,

@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { loadConfig, resolveGatewayPort } from "../config/config.js";
-import { ensureExplicitGatewayAuth, resolveExplicitGatewayAuth } from "../gateway/call.js";
+import { loadConfig } from "../config/config.js";
+import {
+  buildGatewayConnectionDetails,
+  ensureExplicitGatewayAuth,
+  resolveExplicitGatewayAuth,
+} from "../gateway/call.js";
 import { GatewayClient } from "../gateway/client.js";
 import { GATEWAY_CLIENT_CAPS } from "../gateway/protocol/client-info.js";
 import {
@@ -12,6 +16,7 @@ import {
 } from "../gateway/protocol/index.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { VERSION } from "../version.js";
+import type { ResponseUsageMode, SessionInfo, SessionScope } from "./tui-types.js";
 
 export type GatewayConnectionOptions = {
   url?: string;
@@ -43,40 +48,44 @@ export type GatewaySessionList = {
     modelProvider?: string | null;
     contextTokens?: number | null;
   };
-  sessions: Array<{
-    key: string;
-    sessionId?: string;
-    updatedAt?: number | null;
-    thinkingLevel?: string;
-    verboseLevel?: string;
-    reasoningLevel?: string;
-    sendPolicy?: string;
-    model?: string;
-    contextTokens?: number | null;
-    inputTokens?: number | null;
-    outputTokens?: number | null;
-    totalTokens?: number | null;
-    responseUsage?: "on" | "off" | "tokens" | "full";
-    modelProvider?: string;
-    label?: string;
-    displayName?: string;
-    provider?: string;
-    groupChannel?: string;
-    space?: string;
-    subject?: string;
-    chatType?: string;
-    lastProvider?: string;
-    lastTo?: string;
-    lastAccountId?: string;
-    derivedTitle?: string;
-    lastMessagePreview?: string;
-  }>;
+  sessions: Array<
+    Pick<
+      SessionInfo,
+      | "thinkingLevel"
+      | "verboseLevel"
+      | "reasoningLevel"
+      | "model"
+      | "contextTokens"
+      | "inputTokens"
+      | "outputTokens"
+      | "totalTokens"
+      | "modelProvider"
+      | "displayName"
+    > & {
+      key: string;
+      sessionId?: string;
+      updatedAt?: number | null;
+      sendPolicy?: string;
+      responseUsage?: ResponseUsageMode;
+      label?: string;
+      provider?: string;
+      groupChannel?: string;
+      space?: string;
+      subject?: string;
+      chatType?: string;
+      lastProvider?: string;
+      lastTo?: string;
+      lastAccountId?: string;
+      derivedTitle?: string;
+      lastMessagePreview?: string;
+    }
+  >;
 };
 
 export type GatewayAgentsList = {
   defaultId: string;
   mainKey: string;
-  scope: "per-sender" | "global";
+  scope: SessionScope;
   agents: Array<{
     id: string;
     name?: string;
@@ -204,8 +213,11 @@ export class GatewayChatClient {
     return await this.client.request<SessionsPatchResult>("sessions.patch", opts);
   }
 
-  async resetSession(key: string) {
-    return await this.client.request("sessions.reset", { key });
+  async resetSession(key: string, reason?: "new" | "reset") {
+    return await this.client.request("sessions.reset", {
+      key,
+      ...(reason ? { reason } : {}),
+    });
   }
 
   async getStatus() {
@@ -224,7 +236,6 @@ export function resolveGatewayConnection(opts: GatewayConnectionOptions) {
   const remote = isRemoteMode ? config.gateway?.remote : undefined;
   const authToken = config.gateway?.auth?.token;
 
-  const localPort = resolveGatewayPort(config);
   const urlOverride =
     typeof opts.url === "string" && opts.url.trim().length > 0 ? opts.url.trim() : undefined;
   const explicitAuth = resolveExplicitGatewayAuth({ token: opts.token, password: opts.password });
@@ -233,12 +244,10 @@ export function resolveGatewayConnection(opts: GatewayConnectionOptions) {
     auth: explicitAuth,
     errorHint: "Fix: pass --token or --password when using --url.",
   });
-  const url =
-    urlOverride ||
-    (typeof remote?.url === "string" && remote.url.trim().length > 0
-      ? remote.url.trim()
-      : undefined) ||
-    `ws://127.0.0.1:${localPort}`;
+  const url = buildGatewayConnectionDetails({
+    config,
+    ...(urlOverride ? { url: urlOverride } : {}),
+  }).url;
 
   const token =
     explicitAuth.token ||

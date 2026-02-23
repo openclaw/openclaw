@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { createWizardPrompter as buildWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { RuntimeEnv } from "../runtime.js";
-import type { WizardPrompter } from "./prompts.js";
+import type { WizardPrompter, WizardSelectParams } from "./prompts.js";
 
 const mocks = vi.hoisted(() => ({
   randomToken: vi.fn(),
@@ -21,44 +22,56 @@ vi.mock("../infra/tailscale.js", () => ({
 import { configureGatewayForOnboarding } from "./onboarding.gateway-config.js";
 
 describe("configureGatewayForOnboarding", () => {
-  it("generates a token when the prompt returns undefined", async () => {
-    mocks.randomToken.mockReturnValue("generated-token");
+  function createPrompter(params: { selectQueue: string[]; textQueue: Array<string | undefined> }) {
+    const selectQueue = [...params.selectQueue];
+    const textQueue = [...params.textQueue];
+    const select = vi.fn(
+      async (_params: WizardSelectParams<unknown>) => selectQueue.shift() as unknown,
+    ) as unknown as WizardPrompter["select"];
 
-    const selectQueue = ["loopback", "token", "off"];
-    const textQueue = ["18789", undefined];
-    const prompter: WizardPrompter = {
-      intro: vi.fn(async () => {}),
-      outro: vi.fn(async () => {}),
-      note: vi.fn(async () => {}),
-      select: vi.fn(async () => selectQueue.shift() as string),
-      multiselect: vi.fn(async () => []),
+    return buildWizardPrompter({
+      select,
       text: vi.fn(async () => textQueue.shift() as string),
-      confirm: vi.fn(async () => false),
-      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-    };
+    });
+  }
 
-    const runtime: RuntimeEnv = {
+  function createRuntime(): RuntimeEnv {
+    return {
       log: vi.fn(),
       error: vi.fn(),
       exit: vi.fn(),
     };
+  }
+
+  function createQuickstartGateway(authMode: "token" | "password") {
+    return {
+      hasExisting: false,
+      port: 18789,
+      bind: "loopback" as const,
+      authMode,
+      tailscaleMode: "off" as const,
+      token: undefined,
+      password: undefined,
+      customBindHost: undefined,
+      tailscaleResetOnExit: false,
+    };
+  }
+
+  it("generates a token when the prompt returns undefined", async () => {
+    mocks.randomToken.mockReturnValue("generated-token");
+
+    const prompter = createPrompter({
+      selectQueue: ["loopback", "token", "off"],
+      textQueue: ["18789", undefined],
+    });
+    const runtime = createRuntime();
 
     const result = await configureGatewayForOnboarding({
       flow: "advanced",
       baseConfig: {},
       nextConfig: {},
       localPort: 18789,
-      quickstartGateway: {
-        hasExisting: false,
-        port: 18789,
-        bind: "loopback",
-        authMode: "token",
-        tailscaleMode: "off",
-        token: undefined,
-        password: undefined,
-        customBindHost: undefined,
-        tailscaleResetOnExit: false,
-      },
+      quickstartGateway: createQuickstartGateway("token"),
       prompter,
       runtime,
     });
@@ -77,42 +90,18 @@ describe("configureGatewayForOnboarding", () => {
     mocks.randomToken.mockReturnValue("unused");
 
     // Flow: loopback bind → password auth → tailscale off
-    const selectQueue = ["loopback", "password", "off"];
-    // Port prompt → OK, then password prompt → returns undefined
-    const textQueue = ["18789", undefined];
-    const prompter: WizardPrompter = {
-      intro: vi.fn(async () => {}),
-      outro: vi.fn(async () => {}),
-      note: vi.fn(async () => {}),
-      select: vi.fn(async () => selectQueue.shift() as string),
-      multiselect: vi.fn(async () => []),
-      text: vi.fn(async () => textQueue.shift() as string),
-      confirm: vi.fn(async () => false),
-      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-    };
-
-    const runtime: RuntimeEnv = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
+    const prompter = createPrompter({
+      selectQueue: ["loopback", "password", "off"],
+      textQueue: ["18789", undefined],
+    });
+    const runtime = createRuntime();
 
     const result = await configureGatewayForOnboarding({
       flow: "advanced",
       baseConfig: {},
       nextConfig: {},
       localPort: 18789,
-      quickstartGateway: {
-        hasExisting: false,
-        port: 18789,
-        bind: "loopback",
-        authMode: "password",
-        tailscaleMode: "off",
-        token: undefined,
-        password: undefined,
-        customBindHost: undefined,
-        tailscaleResetOnExit: false,
-      },
+      quickstartGateway: createQuickstartGateway("password"),
       prompter,
       runtime,
     });

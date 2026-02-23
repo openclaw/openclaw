@@ -26,35 +26,35 @@ function readPackageNameSync(dir: string): string | null {
 }
 
 async function findPackageRoot(startDir: string, maxDepth = 12): Promise<string | null> {
-  let current = path.resolve(startDir);
-  for (let i = 0; i < maxDepth; i += 1) {
+  for (const current of iterAncestorDirs(startDir, maxDepth)) {
     const name = await readPackageName(current);
     if (name && CORE_PACKAGE_NAMES.has(name)) {
       return current;
     }
-    const parent = path.dirname(current);
-    if (parent === current) {
-      break;
-    }
-    current = parent;
   }
   return null;
 }
 
 function findPackageRootSync(startDir: string, maxDepth = 12): string | null {
-  let current = path.resolve(startDir);
-  for (let i = 0; i < maxDepth; i += 1) {
+  for (const current of iterAncestorDirs(startDir, maxDepth)) {
     const name = readPackageNameSync(current);
     if (name && CORE_PACKAGE_NAMES.has(name)) {
       return current;
     }
+  }
+  return null;
+}
+
+function* iterAncestorDirs(startDir: string, maxDepth: number): Generator<string> {
+  let current = path.resolve(startDir);
+  for (let i = 0; i < maxDepth; i += 1) {
+    yield current;
     const parent = path.dirname(current);
     if (parent === current) {
       break;
     }
     current = parent;
   }
-  return null;
 }
 
 function candidateDirsFromArgv1(argv1: string): string[] {
@@ -87,19 +87,7 @@ export async function resolveOpenClawPackageRoot(opts: {
   argv1?: string;
   moduleUrl?: string;
 }): Promise<string | null> {
-  const candidates: string[] = [];
-
-  if (opts.moduleUrl) {
-    candidates.push(path.dirname(fileURLToPath(opts.moduleUrl)));
-  }
-  if (opts.argv1) {
-    candidates.push(...candidateDirsFromArgv1(opts.argv1));
-  }
-  if (opts.cwd) {
-    candidates.push(opts.cwd);
-  }
-
-  for (const candidate of candidates) {
+  for (const candidate of buildCandidates(opts)) {
     const found = await findPackageRoot(candidate);
     if (found) {
       return found;
@@ -114,6 +102,17 @@ export function resolveOpenClawPackageRootSync(opts: {
   argv1?: string;
   moduleUrl?: string;
 }): string | null {
+  for (const candidate of buildCandidates(opts)) {
+    const found = findPackageRootSync(candidate);
+    if (found) {
+      return found;
+    }
+  }
+
+  return null;
+}
+
+function buildCandidates(opts: { cwd?: string; argv1?: string; moduleUrl?: string }): string[] {
   const candidates: string[] = [];
 
   if (opts.moduleUrl) {
@@ -126,12 +125,5 @@ export function resolveOpenClawPackageRootSync(opts: {
     candidates.push(opts.cwd);
   }
 
-  for (const candidate of candidates) {
-    const found = findPackageRootSync(candidate);
-    if (found) {
-      return found;
-    }
-  }
-
-  return null;
+  return candidates;
 }

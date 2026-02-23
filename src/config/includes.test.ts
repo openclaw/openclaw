@@ -1,8 +1,11 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   CircularIncludeError,
   ConfigIncludeError,
+  deepMerge,
   type IncludeResolver,
   resolveConfigIncludes,
 } from "./includes.js";
@@ -42,6 +45,23 @@ function resolve(obj: unknown, files: Record<string, unknown> = {}, basePath = D
   return resolveConfigIncludes(obj, basePath, createMockResolver(files));
 }
 
+function expectResolveIncludeError(
+  run: () => unknown,
+  expectedPattern?: RegExp,
+): ConfigIncludeError {
+  let thrown: unknown;
+  try {
+    run();
+  } catch (error) {
+    thrown = error;
+  }
+  expect(thrown).toBeInstanceOf(ConfigIncludeError);
+  if (expectedPattern) {
+    expect((thrown as Error).message).toMatch(expectedPattern);
+  }
+  return thrown as ConfigIncludeError;
+}
+
 describe("resolveConfigIncludes", () => {
   it("passes through primitives unchanged", () => {
     expect(resolve("hello")).toBe("hello");
@@ -67,13 +87,11 @@ describe("resolveConfigIncludes", () => {
     });
   });
 
-  it("resolves absolute path $include", () => {
+  it("rejects absolute path outside config directory (CWE-22)", () => {
     const absolute = etcOpenClawPath("agents.json");
     const files = { [absolute]: { list: [{ id: "main" }] } };
     const obj = { agents: { $include: absolute } };
-    expect(resolve(obj, files)).toEqual({
-      agents: { list: [{ id: "main" }] },
-    });
+    expectResolveIncludeError(() => resolve(obj, files), /escapes config directory/);
   });
 
   it("resolves array $include with deep merge", () => {
@@ -117,21 +135,18 @@ describe("resolveConfigIncludes", () => {
   });
 
   it("throws when sibling keys are used with non-object includes", () => {
-    const files = { [configPath("list.json")]: ["a", "b"] };
-    const obj = { $include: "./list.json", extra: true };
-    expect(() => resolve(obj, files)).toThrow(ConfigIncludeError);
-    expect(() => resolve(obj, files)).toThrow(
-      /Sibling keys require included content to be an object/,
-    );
-  });
-
-  it("throws when sibling keys are used with primitive includes", () => {
-    const files = { [configPath("value.json")]: "hello" };
-    const obj = { $include: "./value.json", extra: true };
-    expect(() => resolve(obj, files)).toThrow(ConfigIncludeError);
-    expect(() => resolve(obj, files)).toThrow(
-      /Sibling keys require included content to be an object/,
-    );
+    const cases = [
+      { includeFile: "list.json", included: ["a", "b"] },
+      { includeFile: "value.json", included: "hello" },
+    ] as const;
+    for (const testCase of cases) {
+      const files = { [configPath(testCase.includeFile)]: testCase.included };
+      const obj = { $include: `./${testCase.includeFile}`, extra: true };
+      expectResolveIncludeError(
+        () => resolve(obj, files),
+        /Sibling keys require included content to be an object/,
+      );
+    }
   });
 
   it("resolves nested includes", () => {
@@ -147,8 +162,7 @@ describe("resolveConfigIncludes", () => {
 
   it("throws ConfigIncludeError for missing file", () => {
     const obj = { $include: "./missing.json" };
-    expect(() => resolve(obj)).toThrow(ConfigIncludeError);
-    expect(() => resolve(obj)).toThrow(/Failed to read include file/);
+    expectResolveIncludeError(() => resolve(obj), /Failed to read include file/);
   });
 
   it("throws ConfigIncludeError for invalid JSON", () => {
@@ -157,10 +171,8 @@ describe("resolveConfigIncludes", () => {
       parseJson: JSON.parse,
     };
     const obj = { $include: "./bad.json" };
-    expect(() => resolveConfigIncludes(obj, DEFAULT_BASE_PATH, resolver)).toThrow(
-      ConfigIncludeError,
-    );
-    expect(() => resolveConfigIncludes(obj, DEFAULT_BASE_PATH, resolver)).toThrow(
+    expectResolveIncludeError(
+      () => resolveConfigIncludes(obj, DEFAULT_BASE_PATH, resolver),
       /Failed to parse include file/,
     );
   });
@@ -194,31 +206,29 @@ describe("resolveConfigIncludes", () => {
     }
   });
 
-  it("throws ConfigIncludeError for invalid $include value type", () => {
-    const obj = { $include: 123 };
-    expect(() => resolve(obj)).toThrow(ConfigIncludeError);
-    expect(() => resolve(obj)).toThrow(/expected string or array/);
-  });
-
-  it("throws ConfigIncludeError for invalid array item type", () => {
-    const files = { [configPath("valid.json")]: { valid: true } };
-    const obj = { $include: ["./valid.json", 123] };
-    expect(() => resolve(obj, files)).toThrow(ConfigIncludeError);
-    expect(() => resolve(obj, files)).toThrow(/expected string, got number/);
-  });
-
-  it("throws ConfigIncludeError for null/boolean include items", () => {
+  it("throws on invalid include value/item types", () => {
     const files = { [configPath("valid.json")]: { valid: true } };
     const cases = [
-      { value: null, expected: "object" },
-      { value: false, expected: "boolean" },
-    ];
-    for (const item of cases) {
-      const obj = { $include: ["./valid.json", item.value] };
-      expect(() => resolve(obj, files)).toThrow(ConfigIncludeError);
-      expect(() => resolve(obj, files)).toThrow(
-        new RegExp(`expected string, got ${item.expected}`),
-      );
+      {
+        obj: { $include: 123 },
+        expectedPattern: /expected string or array/,
+      },
+      {
+        obj: { $include: ["./valid.json", 123] },
+        expectedPattern: /expected string, got number/,
+      },
+      {
+        obj: { $include: ["./valid.json", null] },
+        expectedPattern: /expected string, got object/,
+      },
+      {
+        obj: { $include: ["./valid.json", false] },
+        expectedPattern: /expected string, got boolean/,
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      expectResolveIncludeError(() => resolve(testCase.obj, files), testCase.expectedPattern);
     }
   });
 
@@ -232,8 +242,7 @@ describe("resolveConfigIncludes", () => {
     files[configPath("level15.json")] = { done: true };
 
     const obj = { $include: "./level0.json" };
-    expect(() => resolve(obj, files)).toThrow(ConfigIncludeError);
-    expect(() => resolve(obj, files)).toThrow(/Maximum include depth/);
+    expectResolveIncludeError(() => resolve(obj, files), /Maximum include depth/);
   });
 
   it("allows depth 10 but rejects depth 11", () => {
@@ -253,8 +262,10 @@ describe("resolveConfigIncludes", () => {
       };
     }
     failFiles[configPath("fail10.json")] = { done: true };
-    expect(() => resolve({ $include: "./fail0.json" }, failFiles)).toThrow(ConfigIncludeError);
-    expect(() => resolve({ $include: "./fail0.json" }, failFiles)).toThrow(/Maximum include depth/);
+    expectResolveIncludeError(
+      () => resolve({ $include: "./fail0.json" }, failFiles),
+      /Maximum include depth/,
+    );
   });
 
   it("handles relative paths correctly", () => {
@@ -278,84 +289,323 @@ describe("resolveConfigIncludes", () => {
     });
   });
 
-  it("resolves parent directory references", () => {
+  it("rejects parent directory traversal escaping config directory (CWE-22)", () => {
     const files = { [sharedPath("common.json")]: { shared: true } };
     const obj = { $include: "../../shared/common.json" };
-    expect(resolve(obj, files, configPath("sub", "openclaw.json"))).toEqual({
+    expectResolveIncludeError(
+      () => resolve(obj, files, configPath("sub", "openclaw.json")),
+      /escapes config directory/,
+    );
+  });
+
+  it("allows nested parent traversal when path stays under top-level config directory", () => {
+    const files = {
+      [configPath("sub", "child.json")]: { $include: "../shared/common.json" },
+      [configPath("shared", "common.json")]: { shared: true },
+    };
+    const obj = { $include: "./sub/child.json" };
+    expect(resolve(obj, files)).toEqual({
       shared: true,
     });
   });
 });
 
 describe("real-world config patterns", () => {
-  it("supports per-client agent includes", () => {
-    const files = {
-      [configPath("clients", "mueller.json")]: {
-        agents: [
-          {
-            id: "mueller-screenshot",
-            workspace: "~/clients/mueller/screenshot",
+  it("supports common modular include layouts", () => {
+    const cases = [
+      {
+        name: "per-client agent includes",
+        files: {
+          [configPath("clients", "mueller.json")]: {
+            agents: [
+              {
+                id: "mueller-screenshot",
+                workspace: "~/clients/mueller/screenshot",
+              },
+              {
+                id: "mueller-transcribe",
+                workspace: "~/clients/mueller/transcribe",
+              },
+            ],
+            broadcast: {
+              "group-mueller": ["mueller-screenshot", "mueller-transcribe"],
+            },
           },
-          {
-            id: "mueller-transcribe",
-            workspace: "~/clients/mueller/transcribe",
+          [configPath("clients", "schmidt.json")]: {
+            agents: [
+              {
+                id: "schmidt-screenshot",
+                workspace: "~/clients/schmidt/screenshot",
+              },
+            ],
+            broadcast: { "group-schmidt": ["schmidt-screenshot"] },
           },
-        ],
-        broadcast: {
-          "group-mueller": ["mueller-screenshot", "mueller-transcribe"],
+        },
+        obj: {
+          gateway: { port: 18789 },
+          $include: ["./clients/mueller.json", "./clients/schmidt.json"],
+        },
+        expected: {
+          gateway: { port: 18789 },
+          agents: [
+            { id: "mueller-screenshot", workspace: "~/clients/mueller/screenshot" },
+            { id: "mueller-transcribe", workspace: "~/clients/mueller/transcribe" },
+            { id: "schmidt-screenshot", workspace: "~/clients/schmidt/screenshot" },
+          ],
+          broadcast: {
+            "group-mueller": ["mueller-screenshot", "mueller-transcribe"],
+            "group-schmidt": ["schmidt-screenshot"],
+          },
         },
       },
-      [configPath("clients", "schmidt.json")]: {
-        agents: [
-          {
-            id: "schmidt-screenshot",
-            workspace: "~/clients/schmidt/screenshot",
+      {
+        name: "modular config structure",
+        files: {
+          [configPath("gateway.json")]: {
+            gateway: { port: 18789, bind: "loopback" },
           },
-        ],
-        broadcast: { "group-schmidt": ["schmidt-screenshot"] },
+          [configPath("channels", "whatsapp.json")]: {
+            channels: { whatsapp: { dmPolicy: "pairing", allowFrom: ["+49123"] } },
+          },
+          [configPath("agents", "defaults.json")]: {
+            agents: { defaults: { sandbox: { mode: "all" } } },
+          },
+        },
+        obj: {
+          $include: ["./gateway.json", "./channels/whatsapp.json", "./agents/defaults.json"],
+        },
+        expected: {
+          gateway: { port: 18789, bind: "loopback" },
+          channels: { whatsapp: { dmPolicy: "pairing", allowFrom: ["+49123"] } },
+          agents: { defaults: { sandbox: { mode: "all" } } },
+        },
       },
-    };
+    ] as const;
 
-    const obj = {
-      gateway: { port: 18789 },
-      $include: ["./clients/mueller.json", "./clients/schmidt.json"],
-    };
+    for (const testCase of cases) {
+      expect(resolve(testCase.obj, testCase.files), testCase.name).toEqual(testCase.expected);
+    }
+  });
+});
+describe("security: path traversal protection (CWE-22)", () => {
+  function expectRejectedTraversalPaths(
+    cases: ReadonlyArray<{ includePath: string; expectEscapesMessage: boolean }>,
+  ) {
+    for (const testCase of cases) {
+      const obj = { $include: testCase.includePath };
+      expect(() => resolve(obj, {}), testCase.includePath).toThrow(ConfigIncludeError);
+      if (testCase.expectEscapesMessage) {
+        expect(() => resolve(obj, {}), testCase.includePath).toThrow(/escapes config directory/);
+      }
+    }
+  }
 
-    expect(resolve(obj, files)).toEqual({
-      gateway: { port: 18789 },
-      agents: [
-        { id: "mueller-screenshot", workspace: "~/clients/mueller/screenshot" },
-        { id: "mueller-transcribe", workspace: "~/clients/mueller/transcribe" },
-        { id: "schmidt-screenshot", workspace: "~/clients/schmidt/screenshot" },
-      ],
-      broadcast: {
-        "group-mueller": ["mueller-screenshot", "mueller-transcribe"],
-        "group-schmidt": ["schmidt-screenshot"],
-      },
+  describe("absolute path attacks", () => {
+    it("rejects absolute path attack variants", () => {
+      const cases = [
+        { includePath: "/etc/passwd", expectEscapesMessage: true },
+        { includePath: "/etc/shadow", expectEscapesMessage: true },
+        { includePath: `${process.env.HOME}/.ssh/id_rsa`, expectEscapesMessage: false },
+        { includePath: "/tmp/malicious.json", expectEscapesMessage: false },
+        { includePath: "/", expectEscapesMessage: false },
+      ] as const;
+      expectRejectedTraversalPaths(cases);
     });
   });
 
-  it("supports modular config structure", () => {
-    const files = {
-      [configPath("gateway.json")]: {
-        gateway: { port: 18789, bind: "loopback" },
-      },
-      [configPath("channels", "whatsapp.json")]: {
-        channels: { whatsapp: { dmPolicy: "pairing", allowFrom: ["+49123"] } },
-      },
-      [configPath("agents", "defaults.json")]: {
-        agents: { defaults: { sandbox: { mode: "all" } } },
-      },
-    };
+  describe("relative traversal attacks", () => {
+    it("rejects relative traversal path variants", () => {
+      const cases = [
+        { includePath: "../../etc/passwd", expectEscapesMessage: true },
+        { includePath: "../../../etc/shadow", expectEscapesMessage: false },
+        { includePath: "../../../../../../../../etc/passwd", expectEscapesMessage: false },
+        { includePath: "../sibling-dir/secret.json", expectEscapesMessage: false },
+        { includePath: "/config/../../../etc/passwd", expectEscapesMessage: false },
+      ] as const;
+      expectRejectedTraversalPaths(cases);
+    });
+  });
 
-    const obj = {
-      $include: ["./gateway.json", "./channels/whatsapp.json", "./agents/defaults.json"],
-    };
+  describe("legitimate includes (should work)", () => {
+    it("allows legitimate include paths under config root", () => {
+      const cases = [
+        {
+          name: "same-directory with ./ prefix",
+          includePath: "./sub.json",
+          files: { [configPath("sub.json")]: { key: "value" } },
+          expected: { key: "value" },
+        },
+        {
+          name: "same-directory without ./ prefix",
+          includePath: "sub.json",
+          files: { [configPath("sub.json")]: { key: "value" } },
+          expected: { key: "value" },
+        },
+        {
+          name: "subdirectory",
+          includePath: "./sub/nested.json",
+          files: { [configPath("sub", "nested.json")]: { nested: true } },
+          expected: { nested: true },
+        },
+        {
+          name: "deep subdirectory",
+          includePath: "./a/b/c/deep.json",
+          files: { [configPath("a", "b", "c", "deep.json")]: { deep: true } },
+          expected: { deep: true },
+        },
+      ] as const;
 
-    expect(resolve(obj, files)).toEqual({
-      gateway: { port: 18789, bind: "loopback" },
-      channels: { whatsapp: { dmPolicy: "pairing", allowFrom: ["+49123"] } },
-      agents: { defaults: { sandbox: { mode: "all" } } },
+      for (const testCase of cases) {
+        const obj = { $include: testCase.includePath };
+        expect(resolve(obj, testCase.files), testCase.name).toEqual(testCase.expected);
+      }
+    });
+
+    // Note: Upward traversal from nested configs is restricted for security.
+    // Each config file can only include files from its own directory and subdirectories.
+    // This prevents potential path traversal attacks even in complex nested scenarios.
+  });
+
+  describe("error properties", () => {
+    it("preserves error type/path/message details", () => {
+      const cases = [
+        {
+          includePath: "/etc/passwd",
+          expectedMessageIncludes: ["escapes config directory", "/etc/passwd"],
+        },
+        {
+          includePath: "/etc/shadow",
+          expectedMessageIncludes: ["/etc/shadow"],
+        },
+        {
+          includePath: "../../etc/passwd",
+          expectedMessageIncludes: ["escapes config directory", "../../etc/passwd"],
+        },
+      ] as const;
+
+      for (const testCase of cases) {
+        const obj = { $include: testCase.includePath };
+        try {
+          resolve(obj, {});
+          expect.fail("Should have thrown");
+        } catch (err) {
+          expect(err, testCase.includePath).toBeInstanceOf(ConfigIncludeError);
+          expect(err, testCase.includePath).toHaveProperty("name", "ConfigIncludeError");
+          expect((err as ConfigIncludeError).includePath, testCase.includePath).toBe(
+            testCase.includePath,
+          );
+          for (const messagePart of testCase.expectedMessageIncludes) {
+            expect((err as Error).message, `${testCase.includePath}: ${messagePart}`).toContain(
+              messagePart,
+            );
+          }
+        }
+      }
+    });
+  });
+
+  describe("array includes with malicious paths", () => {
+    it("rejects arrays that contain malicious include paths", () => {
+      const cases = [
+        {
+          name: "one malicious path",
+          files: { [configPath("good.json")]: { good: true } },
+          includePaths: ["./good.json", "/etc/passwd"],
+        },
+        {
+          name: "multiple malicious paths",
+          files: {},
+          includePaths: ["/etc/passwd", "/etc/shadow"],
+        },
+      ] as const;
+
+      for (const testCase of cases) {
+        const obj = { $include: testCase.includePaths };
+        expect(() => resolve(obj, testCase.files), testCase.name).toThrow(ConfigIncludeError);
+      }
+    });
+
+    it("allows array with all legitimate paths", () => {
+      const files = {
+        [configPath("a.json")]: { a: 1 },
+        [configPath("b.json")]: { b: 2 },
+      };
+      const obj = { $include: ["./a.json", "./b.json"] };
+      expect(resolve(obj, files)).toEqual({ a: 1, b: 2 });
+    });
+  });
+
+  describe("prototype pollution protection", () => {
+    it("blocks __proto__ keys from polluting Object.prototype", () => {
+      const result = deepMerge({}, JSON.parse('{"__proto__":{"polluted":true}}'));
+      expect((Object.prototype as Record<string, unknown>).polluted).toBeUndefined();
+      expect(result).toEqual({});
+    });
+
+    it("blocks prototype and constructor keys", () => {
+      const result = deepMerge(
+        { safe: 1 },
+        { prototype: { x: 1 }, constructor: { y: 2 }, normal: 3 },
+      );
+      expect(result).toEqual({ safe: 1, normal: 3 });
+    });
+
+    it("blocks __proto__ in nested merges", () => {
+      const result = deepMerge(
+        { nested: { a: 1 } },
+        { nested: JSON.parse('{"__proto__":{"polluted":true}}') },
+      );
+      expect((Object.prototype as Record<string, unknown>).polluted).toBeUndefined();
+      expect(result).toEqual({ nested: { a: 1 } });
+    });
+  });
+
+  describe("edge cases", () => {
+    it("rejects malformed include paths", () => {
+      const cases = [
+        { includePath: "./file\x00.json", expectedError: undefined },
+        { includePath: "//etc/passwd", expectedError: ConfigIncludeError },
+      ] as const;
+      for (const testCase of cases) {
+        const obj = { $include: testCase.includePath };
+        if (testCase.expectedError) {
+          expectResolveIncludeError(() => resolve(obj, {}));
+          continue;
+        }
+        // Path with null byte should be rejected or handled safely.
+        expect(() => resolve(obj, {}), testCase.includePath).toThrow();
+      }
+    });
+
+    it("allows child include when config is at filesystem root", () => {
+      const rootConfigPath = path.join(path.parse(process.cwd()).root, "test.json");
+      const childPath = path.join(path.parse(process.cwd()).root, "child.json");
+      const files = { [childPath]: { root: true } };
+      const obj = { $include: childPath };
+      expect(resolve(obj, files, rootConfigPath)).toEqual({ root: true });
+    });
+
+    it("allows include files when the config root path is a symlink", async () => {
+      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-includes-symlink-"));
+      try {
+        const realRoot = path.join(tempRoot, "real");
+        const linkRoot = path.join(tempRoot, "link");
+        await fs.mkdir(path.join(realRoot, "includes"), { recursive: true });
+        await fs.writeFile(
+          path.join(realRoot, "includes", "extra.json5"),
+          "{ logging: { redactSensitive: 'tools' } }\n",
+          "utf-8",
+        );
+        await fs.symlink(realRoot, linkRoot);
+
+        const result = resolveConfigIncludes(
+          { $include: "./includes/extra.json5" },
+          path.join(linkRoot, "openclaw.json"),
+        );
+        expect(result).toEqual({ logging: { redactSensitive: "tools" } });
+      } finally {
+        await fs.rm(tempRoot, { recursive: true, force: true });
+      }
     });
   });
 });

@@ -12,6 +12,10 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
     private let manager = CLLocationManager()
     private var authContinuation: CheckedContinuation<CLAuthorizationStatus, Never>?
     private var locationContinuation: CheckedContinuation<CLLocation, Swift.Error>?
+    private var updatesContinuation: AsyncStream<CLLocation>.Continuation?
+    private var isStreaming = false
+    private var significantLocationCallback: (@Sendable (CLLocation) -> Void)?
+    private var isMonitoringSignificantChanges = false
 
     override init() {
         super.init()
@@ -104,6 +108,56 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
         }
     }
 
+    func startLocationUpdates(
+        desiredAccuracy: OpenClawLocationAccuracy,
+        significantChangesOnly: Bool) -> AsyncStream<CLLocation>
+    {
+        self.stopLocationUpdates()
+
+        self.manager.desiredAccuracy = Self.accuracyValue(desiredAccuracy)
+        self.manager.pausesLocationUpdatesAutomatically = true
+        self.manager.allowsBackgroundLocationUpdates = true
+
+        self.isStreaming = true
+        if significantChangesOnly {
+            self.manager.startMonitoringSignificantLocationChanges()
+        } else {
+            self.manager.startUpdatingLocation()
+        }
+
+        return AsyncStream(bufferingPolicy: .bufferingNewest(1)) { continuation in
+            self.updatesContinuation = continuation
+            continuation.onTermination = { @Sendable _ in
+                Task { @MainActor in
+                    self.stopLocationUpdates()
+                }
+            }
+        }
+    }
+
+    func stopLocationUpdates() {
+        guard self.isStreaming else { return }
+        self.isStreaming = false
+        self.manager.stopUpdatingLocation()
+        self.manager.stopMonitoringSignificantLocationChanges()
+        self.updatesContinuation?.finish()
+        self.updatesContinuation = nil
+    }
+
+    func startMonitoringSignificantLocationChanges(onUpdate: @escaping @Sendable (CLLocation) -> Void) {
+        self.significantLocationCallback = onUpdate
+        guard !self.isMonitoringSignificantChanges else { return }
+        self.isMonitoringSignificantChanges = true
+        self.manager.startMonitoringSignificantLocationChanges()
+    }
+
+    func stopMonitoringSignificantLocationChanges() {
+        guard self.isMonitoringSignificantChanges else { return }
+        self.isMonitoringSignificantChanges = false
+        self.significantLocationCallback = nil
+        self.manager.stopMonitoringSignificantLocationChanges()
+    }
+
     nonisolated func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         let status = manager.authorizationStatus
         Task { @MainActor in
@@ -117,12 +171,22 @@ final class LocationService: NSObject, CLLocationManagerDelegate {
     nonisolated func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         let locs = locations
         Task { @MainActor in
-            guard let cont = self.locationContinuation else { return }
-            self.locationContinuation = nil
-            if let latest = locs.last {
-                cont.resume(returning: latest)
-            } else {
-                cont.resume(throwing: Error.unavailable)
+            // Resolve the one-shot continuation first (if any).
+            if let cont = self.locationContinuation {
+                self.locationContinuation = nil
+                if let latest = locs.last {
+                    cont.resume(returning: latest)
+                } else {
+                    cont.resume(throwing: Error.unavailable)
+                }
+                // Don't return — also forward to significant-change callback below
+                // so both consumers receive updates when both are active.
+            }
+            if let callback = self.significantLocationCallback, let latest = locs.last {
+                callback(latest)
+            }
+            if let latest = locs.last, let updates = self.updatesContinuation {
+                updates.yield(latest)
             }
         }
     }

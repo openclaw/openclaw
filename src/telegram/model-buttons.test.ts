@@ -10,99 +10,89 @@ import {
 } from "./model-buttons.js";
 
 describe("parseModelCallbackData", () => {
-  it("parses mdl_prov callback", () => {
-    const result = parseModelCallbackData("mdl_prov");
-    expect(result).toEqual({ type: "providers" });
+  it("parses supported callback variants", () => {
+    const cases = [
+      ["mdl_prov", { type: "providers" }],
+      ["mdl_back", { type: "back" }],
+      ["mdl_list_anthropic_2", { type: "list", provider: "anthropic", page: 2 }],
+      ["mdl_list_open-ai_1", { type: "list", provider: "open-ai", page: 1 }],
+      [
+        "mdl_sel_anthropic/claude-sonnet-4-5",
+        { type: "select", provider: "anthropic", model: "claude-sonnet-4-5" },
+      ],
+      ["mdl_sel_openai/gpt-4/turbo", { type: "select", provider: "openai", model: "gpt-4/turbo" }],
+      ["  mdl_prov  ", { type: "providers" }],
+    ] as const;
+    for (const [input, expected] of cases) {
+      expect(parseModelCallbackData(input), input).toEqual(expected);
+    }
   });
 
-  it("parses mdl_back callback", () => {
-    const result = parseModelCallbackData("mdl_back");
-    expect(result).toEqual({ type: "back" });
-  });
-
-  it("parses mdl_list callback with provider and page", () => {
-    const result = parseModelCallbackData("mdl_list_anthropic_2");
-    expect(result).toEqual({ type: "list", provider: "anthropic", page: 2 });
-  });
-
-  it("parses mdl_list callback with hyphenated provider", () => {
-    const result = parseModelCallbackData("mdl_list_open-ai_1");
-    expect(result).toEqual({ type: "list", provider: "open-ai", page: 1 });
-  });
-
-  it("parses mdl_sel callback with provider/model", () => {
-    const result = parseModelCallbackData("mdl_sel_anthropic/claude-sonnet-4-5");
-    expect(result).toEqual({
-      type: "select",
-      provider: "anthropic",
-      model: "claude-sonnet-4-5",
-    });
-  });
-
-  it("parses mdl_sel callback with nested model path", () => {
-    const result = parseModelCallbackData("mdl_sel_openai/gpt-4/turbo");
-    expect(result).toEqual({
-      type: "select",
-      provider: "openai",
-      model: "gpt-4/turbo",
-    });
-  });
-
-  it("returns null for non-model callback data", () => {
-    expect(parseModelCallbackData("commands_page_1")).toBeNull();
-    expect(parseModelCallbackData("other_callback")).toBeNull();
-    expect(parseModelCallbackData("")).toBeNull();
-  });
-
-  it("returns null for invalid mdl_ patterns", () => {
-    expect(parseModelCallbackData("mdl_invalid")).toBeNull();
-    expect(parseModelCallbackData("mdl_list_")).toBeNull();
-    expect(parseModelCallbackData("mdl_sel_noslash")).toBeNull();
-  });
-
-  it("handles whitespace in callback data", () => {
-    expect(parseModelCallbackData("  mdl_prov  ")).toEqual({ type: "providers" });
+  it("returns null for unsupported callback variants", () => {
+    const invalid = [
+      "commands_page_1",
+      "other_callback",
+      "",
+      "mdl_invalid",
+      "mdl_list_",
+      "mdl_sel_noslash",
+    ];
+    for (const input of invalid) {
+      expect(parseModelCallbackData(input), input).toBeNull();
+    }
   });
 });
 
 describe("buildProviderKeyboard", () => {
-  it("returns empty array for no providers", () => {
-    const result = buildProviderKeyboard([]);
-    expect(result).toEqual([]);
-  });
+  it("lays out providers in two-column rows", () => {
+    const cases = [
+      {
+        name: "empty input",
+        input: [],
+        expected: [],
+      },
+      {
+        name: "single provider",
+        input: [{ id: "anthropic", count: 5 }],
+        expected: [[{ text: "anthropic (5)", callback_data: "mdl_list_anthropic_1" }]],
+      },
+      {
+        name: "exactly one full row",
+        input: [
+          { id: "anthropic", count: 5 },
+          { id: "openai", count: 8 },
+        ],
+        expected: [
+          [
+            { text: "anthropic (5)", callback_data: "mdl_list_anthropic_1" },
+            { text: "openai (8)", callback_data: "mdl_list_openai_1" },
+          ],
+        ],
+      },
+      {
+        name: "wraps overflow to second row",
+        input: [
+          { id: "anthropic", count: 5 },
+          { id: "openai", count: 8 },
+          { id: "google", count: 3 },
+        ],
+        expected: [
+          [
+            { text: "anthropic (5)", callback_data: "mdl_list_anthropic_1" },
+            { text: "openai (8)", callback_data: "mdl_list_openai_1" },
+          ],
+          [{ text: "google (3)", callback_data: "mdl_list_google_1" }],
+        ],
+      },
+    ] as const satisfies Array<{
+      name: string;
+      input: ProviderInfo[];
+      expected: ReturnType<typeof buildProviderKeyboard>;
+    }>;
 
-  it("builds single provider as one row", () => {
-    const providers: ProviderInfo[] = [{ id: "anthropic", count: 5 }];
-    const result = buildProviderKeyboard(providers);
-    expect(result).toHaveLength(1);
-    expect(result[0]).toHaveLength(1);
-    expect(result[0]?.[0]?.text).toBe("anthropic (5)");
-    expect(result[0]?.[0]?.callback_data).toBe("mdl_list_anthropic_1");
-  });
-
-  it("builds two providers per row", () => {
-    const providers: ProviderInfo[] = [
-      { id: "anthropic", count: 5 },
-      { id: "openai", count: 8 },
-    ];
-    const result = buildProviderKeyboard(providers);
-    expect(result).toHaveLength(1);
-    expect(result[0]).toHaveLength(2);
-    expect(result[0]?.[0]?.text).toBe("anthropic (5)");
-    expect(result[0]?.[1]?.text).toBe("openai (8)");
-  });
-
-  it("wraps to next row after two providers", () => {
-    const providers: ProviderInfo[] = [
-      { id: "anthropic", count: 5 },
-      { id: "openai", count: 8 },
-      { id: "google", count: 3 },
-    ];
-    const result = buildProviderKeyboard(providers);
-    expect(result).toHaveLength(2);
-    expect(result[0]).toHaveLength(2);
-    expect(result[1]).toHaveLength(1);
-    expect(result[1]?.[0]?.text).toBe("google (3)");
+    for (const testCase of cases) {
+      expect(buildProviderKeyboard(testCase.input), testCase.name).toEqual(testCase.expected);
+    }
   });
 });
 
@@ -119,112 +109,105 @@ describe("buildModelsKeyboard", () => {
     expect(result[0]?.[0]?.callback_data).toBe("mdl_back");
   });
 
-  it("shows models with one per row", () => {
-    const result = buildModelsKeyboard({
-      provider: "anthropic",
-      models: ["claude-sonnet-4", "claude-opus-4"],
-      currentPage: 1,
-      totalPages: 1,
-    });
-    // 2 model rows + back button
-    expect(result).toHaveLength(3);
-    expect(result[0]?.[0]?.text).toBe("claude-sonnet-4");
-    expect(result[0]?.[0]?.callback_data).toBe("mdl_sel_anthropic/claude-sonnet-4");
-    expect(result[1]?.[0]?.text).toBe("claude-opus-4");
-    expect(result[2]?.[0]?.text).toBe("<< Back");
+  it("renders model rows and optional current-model indicator", () => {
+    const cases = [
+      {
+        name: "no current model",
+        currentModel: undefined,
+        firstText: "claude-sonnet-4",
+      },
+      {
+        name: "current model marked",
+        currentModel: "anthropic/claude-sonnet-4",
+        firstText: "claude-sonnet-4 ✓",
+      },
+    ] as const;
+    for (const testCase of cases) {
+      const result = buildModelsKeyboard({
+        provider: "anthropic",
+        models: ["claude-sonnet-4", "claude-opus-4"],
+        currentModel: testCase.currentModel,
+        currentPage: 1,
+        totalPages: 1,
+      });
+      // 2 model rows + back button
+      expect(result, testCase.name).toHaveLength(3);
+      expect(result[0]?.[0]?.text).toBe(testCase.firstText);
+      expect(result[0]?.[0]?.callback_data).toBe("mdl_sel_anthropic/claude-sonnet-4");
+      expect(result[1]?.[0]?.text).toBe("claude-opus-4");
+      expect(result[2]?.[0]?.text).toBe("<< Back");
+    }
   });
 
-  it("marks current model with checkmark", () => {
-    const result = buildModelsKeyboard({
-      provider: "anthropic",
-      models: ["claude-sonnet-4", "claude-opus-4"],
-      currentModel: "anthropic/claude-sonnet-4",
-      currentPage: 1,
-      totalPages: 1,
-    });
-    expect(result[0]?.[0]?.text).toBe("claude-sonnet-4 ✓");
-    expect(result[1]?.[0]?.text).toBe("claude-opus-4");
+  it("renders pagination controls for first, middle, and last pages", () => {
+    const cases = [
+      {
+        name: "first page",
+        params: { currentPage: 1, models: ["model1", "model2"] },
+        expectedPagination: ["1/3", "Next ▶"],
+      },
+      {
+        name: "middle page",
+        params: {
+          currentPage: 2,
+          models: ["model1", "model2", "model3", "model4", "model5", "model6"],
+        },
+        expectedPagination: ["◀ Prev", "2/3", "Next ▶"],
+      },
+      {
+        name: "last page",
+        params: {
+          currentPage: 3,
+          models: ["model1", "model2", "model3", "model4", "model5", "model6"],
+        },
+        expectedPagination: ["◀ Prev", "3/3"],
+      },
+    ] as const;
+    for (const testCase of cases) {
+      const result = buildModelsKeyboard({
+        provider: "anthropic",
+        models: [...testCase.params.models],
+        currentPage: testCase.params.currentPage,
+        totalPages: 3,
+        pageSize: 2,
+      });
+      // 2 model rows + pagination row + back button
+      expect(result, testCase.name).toHaveLength(4);
+      expect(result[2]?.map((button) => button.text)).toEqual(testCase.expectedPagination);
+    }
   });
 
-  it("shows pagination when multiple pages", () => {
-    const result = buildModelsKeyboard({
-      provider: "anthropic",
-      models: ["model1", "model2"],
-      currentPage: 1,
-      totalPages: 3,
-      pageSize: 2,
-    });
-    // 2 model rows + pagination row + back button
-    expect(result).toHaveLength(4);
-    const paginationRow = result[2];
-    expect(paginationRow).toHaveLength(2); // no prev on first page
-    expect(paginationRow?.[0]?.text).toBe("1/3");
-    expect(paginationRow?.[1]?.text).toBe("Next ▶");
-  });
-
-  it("shows prev and next on middle pages", () => {
-    // 6 models with pageSize 2 = 3 pages
-    const result = buildModelsKeyboard({
-      provider: "anthropic",
-      models: ["model1", "model2", "model3", "model4", "model5", "model6"],
-      currentPage: 2,
-      totalPages: 3,
-      pageSize: 2,
-    });
-    // 2 model rows + pagination row + back button
-    expect(result).toHaveLength(4);
-    const paginationRow = result[2];
-    expect(paginationRow).toHaveLength(3);
-    expect(paginationRow?.[0]?.text).toBe("◀ Prev");
-    expect(paginationRow?.[1]?.text).toBe("2/3");
-    expect(paginationRow?.[2]?.text).toBe("Next ▶");
-  });
-
-  it("shows only prev on last page", () => {
-    // 6 models with pageSize 2 = 3 pages
-    const result = buildModelsKeyboard({
-      provider: "anthropic",
-      models: ["model1", "model2", "model3", "model4", "model5", "model6"],
-      currentPage: 3,
-      totalPages: 3,
-      pageSize: 2,
-    });
-    // 2 model rows + pagination row + back button
-    expect(result).toHaveLength(4);
-    const paginationRow = result[2];
-    expect(paginationRow).toHaveLength(2);
-    expect(paginationRow?.[0]?.text).toBe("◀ Prev");
-    expect(paginationRow?.[1]?.text).toBe("3/3");
-  });
-
-  it("truncates long model IDs for display", () => {
-    // Model ID that's long enough to truncate display but still fits in callback_data
-    // callback_data = "mdl_sel_anthropic/" (18) + model (<=46) = 64 max
-    const longModel = "claude-3-5-sonnet-20241022-with-suffix";
-    const result = buildModelsKeyboard({
-      provider: "anthropic",
-      models: [longModel],
-      currentPage: 1,
-      totalPages: 1,
-    });
-    const text = result[0]?.[0]?.text;
-    // Model is 38 chars, fits exactly in 38-char display limit
-    expect(text).toBe(longModel);
-  });
-
-  it("truncates display text for very long model names", () => {
-    // Use short provider to allow longer model in callback_data (64 byte limit)
-    // "mdl_sel_a/" = 10 bytes, leaving 54 for model
-    const longModel = "this-model-name-is-long-enough-to-need-truncation-abcd";
-    const result = buildModelsKeyboard({
-      provider: "a",
-      models: [longModel],
-      currentPage: 1,
-      totalPages: 1,
-    });
-    const text = result[0]?.[0]?.text;
-    expect(text?.startsWith("…")).toBe(true);
-    expect(text?.length).toBeLessThanOrEqual(38);
+  it("keeps short display IDs untouched and truncates overly long IDs", () => {
+    const cases = [
+      {
+        name: "max-length display",
+        provider: "anthropic",
+        model: "claude-3-5-sonnet-20241022-with-suffix",
+        expected: "claude-3-5-sonnet-20241022-with-suffix",
+      },
+      {
+        name: "overly long display",
+        provider: "a",
+        model: "this-model-name-is-long-enough-to-need-truncation-abcd",
+        startsWith: "…",
+        maxLength: 38,
+      },
+    ] as const;
+    for (const testCase of cases) {
+      const result = buildModelsKeyboard({
+        provider: testCase.provider,
+        models: [testCase.model],
+        currentPage: 1,
+        totalPages: 1,
+      });
+      const text = result[0]?.[0]?.text;
+      if ("expected" in testCase) {
+        expect(text, testCase.name).toBe(testCase.expected);
+      } else {
+        expect(text?.startsWith(testCase.startsWith), testCase.name).toBe(true);
+        expect(text?.length, testCase.name).toBeLessThanOrEqual(testCase.maxLength);
+      }
+    }
   });
 });
 
