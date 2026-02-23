@@ -87,26 +87,30 @@ sessions_spawn task:"C:\TEST\{프로젝트} 에서 claude -p --agent quality-eng
 
 ### Claude Code CLI 주요 플래그
 
-| 플래그                                | 용도                                   |
-| ------------------------------------- | -------------------------------------- |
-| `-p` (--print)                        | 비대화형, 응답 출력 후 종료 — **필수** |
-| `--model sonnet/opus`                 | 모델 선택                              |
-| `--agent {name}`                      | 전문 에이전트 지정                     |
-| `--permission-mode bypassPermissions` | 자동 승인 (sandboxed)                  |
-| `--dangerously-skip-permissions`      | 모든 권한 체크 스킵                    |
-| `--fallback-model sonnet`             | rate limit 시 자동 전환                |
-| `--no-session-persistence`            | 세션 저장 안 함 (토큰 절약)            |
-| `--max-budget-usd N`                  | 비용 제한 (아래 가이드라인 참고)       |
+| 플래그                                | 용도                                     |
+| ------------------------------------- | ---------------------------------------- |
+| `-p` (--print)                        | 비대화형, 응답 출력 후 종료 — **필수**   |
+| `--model sonnet/opus`                 | 모델 선택                                |
+| `--agent {name}`                      | 전문 에이전트 지정                       |
+| `--permission-mode bypassPermissions` | 자동 승인 (sandboxed)                    |
+| `--dangerously-skip-permissions`      | 모든 권한 체크 스킵                      |
+| `--fallback-model sonnet`             | rate limit 시 자동 전환                  |
+| `--no-session-persistence`            | 세션 저장 안 함 (토큰 절약)              |
+| `--max-budget-usd N`                  | 비용 제한 (API Key 사용 시만, 아래 참고) |
 
 ### 예산 가이드라인 (--max-budget-usd)
 
-| 작업 유형               | 예산              | 예시                           |
-| ----------------------- | ----------------- | ------------------------------ |
-| 단순 (파일 1~2개 생성)  | `$1`              | 설정 파일, 간단한 유틸리티     |
-| 중간 (문서 참조 + 구현) | `$3` ← **기본값** | 기능 구현, DB 스키마, API      |
-| 복잡 (설계 + 다중 파일) | `$5`              | 아키텍처 설계, 대규모 리팩토링 |
+**Max/Pro 구독 (OAuth) 사용 시:** `--max-budget-usd` **사용하지 않음**.
+월정액 구독은 토큰별 과금 없음. 이 플래그는 추정 API 비용 기반 가상 안전장치일 뿐,
+구독 사용자에게는 불필요한 중단을 유발함 (실측: $1 가상 한도 초과로 에이전트 강제 종료됨).
 
-> ⚠️ $1은 문서 읽기+코드 생성 시 초과됨 (실측). 기본 $3 권장.
+**API Key 사용 시만** 설정:
+
+| 작업 유형               | 예산 | 예시                           |
+| ----------------------- | ---- | ------------------------------ |
+| 단순 (파일 1~2개 생성)  | `$1` | 설정 파일, 간단한 유틸리티     |
+| 중간 (문서 참조 + 구현) | `$3` | 기능 구현, DB 스키마, API      |
+| 복잡 (설계 + 다중 파일) | `$5` | 아키텍처 설계, 대규모 리팩토링 |
 
 ### MCP 전략
 
@@ -331,7 +335,7 @@ MAIBOT 검증 (Layer 1)
 
 ```bash
 # MAIBOT에서 직접 Claude Code 호출
-exec pty:true workdir:"C:\TEST\MAITOK" command:"claude -p --model sonnet --max-budget-usd 3 --agent backend-architect 'src/api/comments.ts에 페이지네이션 추가해줘'"
+exec pty:true workdir:"C:\TEST\MAITOK" command:"claude -p --model sonnet --dangerously-skip-permissions --agent backend-architect 'src/api/comments.ts에 페이지네이션 추가해줘'"
 
 # 검증
 exec workdir:"C:\TEST\MAITOK" command:"npx tsc --noEmit"
@@ -342,14 +346,14 @@ exec workdir:"C:\TEST\MAITOK" command:"npx vitest run"
 
 ```bash
 # Sub-agent A: 프론트엔드 (Slot 1)
-sessions_spawn task:"cd C:\TEST\MAITOK && claude -p --model sonnet --max-budget-usd 3 --agent frontend-architect 'CommentList 컴포넌트에 무한스크롤 구현'"
+sessions_spawn task:"cd C:\TEST\MAITOK && claude -p --model sonnet --dangerously-skip-permissions --agent frontend-architect 'CommentList 컴포넌트에 무한스크롤 구현'"
 
 # Sub-agent B: 백엔드 (Slot 2, 동시 실행)
-sessions_spawn task:"cd C:\TEST\MAITOK && claude -p --model sonnet --max-budget-usd 3 --agent backend-architect 'GET /api/comments에 cursor 기반 페이지네이션 추가'"
+sessions_spawn task:"cd C:\TEST\MAITOK && claude -p --model sonnet --dangerously-skip-permissions --agent backend-architect 'GET /api/comments에 cursor 기반 페이지네이션 추가'"
 
 # A, B 완료 대기 → MAIBOT 검증 (tsc + vitest) → 수정 → 그 다음:
 # Sub-agent C: 테스트
-sessions_spawn task:"cd C:\TEST\MAITOK && claude -p --model sonnet --max-budget-usd 3 --agent quality-engineer '페이지네이션 관련 테스트 작성'"
+sessions_spawn task:"cd C:\TEST\MAITOK && claude -p --model sonnet --dangerously-skip-permissions --agent quality-engineer '페이지네이션 관련 테스트 작성'"
 ```
 
 > ⚠️ 동시 실행: **Sonnet 2개까지 검증 완료** (실측 2026-02-24). 3개 이상은 rate limit 위험.
