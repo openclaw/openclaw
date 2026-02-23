@@ -46,4 +46,11 @@ describe("cron protocol validators", () => {
     expect(validateCronRunsParams({ id: "job-1", limit: 0 })).toBe(false);
     expect(validateCronRunsParams({ jobId: "job-2", limit: 0 })).toBe(false);
   });
+
+  it("rejects cron.runs path traversal ids", () => {
+    expect(validateCronRunsParams({ id: "../job-1" })).toBe(false);
+    expect(validateCronRunsParams({ id: "nested/job-1" })).toBe(false);
+    expect(validateCronRunsParams({ jobId: "..\\job-2" })).toBe(false);
+    expect(validateCronRunsParams({ jobId: "nested\\job-2" })).toBe(false);
+  });
 });
