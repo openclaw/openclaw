@@ -39,6 +39,7 @@ Docs: https://docs.openclaw.ai
 - Providers/OpenRouter: remove conflicting top-level `reasoning_effort` when injecting nested `reasoning.effort`, preventing OpenRouter 400 payload-validation failures for reasoning models. (#24120) thanks @tenequm.
 - Providers/Groq: avoid classifying Groq TPM limit errors as context overflow so throttling paths no longer trigger overflow recovery logic. (#16176) Thanks @dddabtc.
 - Gateway/WS: close repeated post-handshake `unauthorized role:*` request floods per connection and sample duplicate rejection logs, preventing a single misbehaving client from degrading gateway responsiveness. (#20168) Thanks @acy103, @vibecodooor, and @vincentkoc.
+- Gateway/Restart: treat child listener PIDs as owned by the service runtime PID during restart health checks to avoid false stale-process kills and restart timeouts on launchd/systemd. (#24696) Thanks @gumadeiras.
 - Config/Write: apply `unsetPaths` with immutable path-copy updates so config writes never mutate caller-provided objects, and harden `openclaw config get/set/unset` path traversal by rejecting prototype-key segments and inherited-property traversal. (#24134) thanks @frankekn.
 - Security/Exec: detect obfuscated commands before exec allowlist decisions and require explicit approval for obfuscation patterns. (#8592) Thanks @CornBrother0x and @vincentkoc.
 - Security/Skills: escape user-controlled prompt, filename, and output-path values in `openai-image-gen` HTML gallery generation to prevent stored XSS in generated `index.html` output. (#12538) Thanks @CornBrother0x.
