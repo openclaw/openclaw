@@ -104,7 +104,10 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
       actions.add("sticker");
       actions.add("sticker-search");
     }
-    if (isEnabled("createForumTopic")) {
+    if (gate("sendPoll")) {
+      actions.add("poll");
+    }
+    if (gate("createForumTopic")) {
       actions.add("topic-create");
     }
     return Array.from(actions);
@@ -279,6 +282,38 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
         },
         cfg,
         { mediaLocalRoots },
+      );
+    }
+
+    if (action === "poll") {
+      const to =
+        readStringOrNumberParam(params, "chatId") ??
+        readStringOrNumberParam(params, "channelId") ??
+        readStringParam(params, "target") ??
+        readStringParam(params, "to", { required: true });
+      const question =
+        readStringParam(params, "pollQuestion") ??
+        readStringParam(params, "question", { required: true });
+      const options =
+        readStringArrayParam(params, "pollOption") ?? (params.options as string[] | undefined);
+      const pollMulti = typeof params.pollMulti === "boolean" ? params.pollMulti : undefined;
+      const durationSeconds = readNumberParam(params, "pollDurationSeconds", { integer: true });
+      const silent = typeof params.silent === "boolean" ? params.silent : undefined;
+      const threadId = readStringOrNumberParam(params, "threadId");
+      return await handleTelegramAction(
+        {
+          action: "sendPoll",
+          to: String(to),
+          question,
+          options,
+          maxSelections: pollMulti ? (options?.length ?? 10) : undefined,
+          durationSeconds: durationSeconds ?? undefined,
+          isAnonymous: typeof params.pollAnonymous === "boolean" ? params.pollAnonymous : undefined,
+          silent,
+          messageThreadId: threadId != null ? String(threadId) : undefined,
+          accountId: accountId ?? undefined,
+        },
+        cfg,
       );
     }
 
