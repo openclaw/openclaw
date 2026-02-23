@@ -129,39 +129,43 @@ tail -n 120 /tmp/moltbot-gateway.log
 
 ---
 
-### 🔧 개발 방식: MAIBOT 직접 구현 (2026-02-07 변경)
+### 🏗️ 개발 방식: 3-Layer 멀티에이전트 (2026-02-24 도입)
 
 **모든 프로젝트에 적용** — 지니님 지시
 
 ```
 지니님 (Discord)
-    ↓ 지시/브레인스토밍
-MAIBOT (직접 구현)
-    ├── 코드 읽기/쓰기/편집 (Read/Write/Edit 도구)
-    ├── 셸 명령 실행 (exec)
-    ├── git 커밋/푸시
-    ├── 문서화
-    └── Discord 알림
+    ↓
+Layer 1: MAIBOT (OpenClaw, Opus 4.6) ← 오케스트레이터
+    ├── 단순 작업 → MAIBOT 직접 처리 (Read/Write/Edit/exec)
+    │
+    ├── 중간 작업 → Sub-agent + Claude Code Sonnet 4.6
+    │     claude -p --model sonnet --agent {에이전트명} 'task'
+    │
+    └── 복잡한 작업 → Sub-agent + Claude Code Opus 4.6
+          claude -p --model opus --agent {에이전트명} 'task'
 ```
 
-**MAIBOT이 전부 직접 처리:**
-| 역할 | MAIBOT |
-|------|--------|
-| 지시 수신 (Discord) | ✅ |
-| 요구사항 분석 | ✅ |
-| **코딩/디버깅** | ✅ 직접 |
-| **대규모 리팩토링** | ✅ 직접 |
-| **테스트** | ✅ 직접 |
-| 문서화 | ✅ |
-| git 커밋/푸시 | ✅ |
-| Discord 노티 | ✅ |
-| 메모리 관리 | ✅ |
+**태스크 라우팅:**
+| 작업 유형 | 실행 위치 | 모델 | 동시 실행 |
+|---|---|---|---|
+| 단순 (설정, 문서, 편집) | MAIBOT 직접 | Opus (기존) | 무제한 |
+| 중간 (구현, 버그수정, 테스트) | Claude Code CLI | Sonnet 4.6 | 2~3개 |
+| 복잡 (설계, 리팩토링) | Claude Code CLI | Opus 4.6 | 1개 |
 
-**이전 방식 (폐기):** 하이브리드 (MAIBOT + Claude Code CLI)
+**Claude Code CLI 상태:**
 
-- 2026-02-06 도입 → 2026-02-07 폐기
-- 폐기 사유: Claude Code CLI의 MCP 서버/plugins 로딩 충돌로 hang 발생
-- .claude/agents/, .mcp.json, CLAUDE.md 파일은 프로젝트에 남아있음 (향후 재활용 가능)
+- Version: 2.1.50
+- Auth: Claude Max ($200/월), jini92.lee@gmail.com
+- 에이전트: 69개 (User 17 + Plugin 47 + Built-in 5)
+
+**MCP 충돌 해결:** `--strict-mcp-config` 또는 `-p` (print 모드)로 hang 방지
+
+**이력:**
+
+- 2026-02-06: 하이브리드 v1 도입
+- 2026-02-07: v1 폐기 (MCP 충돌)
+- 2026-02-24: **v2 도입** — 3-Layer 멀티에이전트 (모델 혼합 + 슬롯 시스템)
 
 ---
 
