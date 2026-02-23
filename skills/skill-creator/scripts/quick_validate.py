@@ -39,7 +39,6 @@ def validate_skill(skill_path):
     frontmatter_text = _extract_frontmatter(content)
     if frontmatter_text is None:
         return False, "Invalid frontmatter format"
-
     try:
         frontmatter = yaml.safe_load(frontmatter_text)
         if not isinstance(frontmatter, dict):
