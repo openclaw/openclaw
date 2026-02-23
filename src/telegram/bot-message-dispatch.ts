@@ -631,6 +631,27 @@ export const dispatchTelegramMessage = async ({
         onModelSelected,
       },
     }));
+  } catch (err) {
+    // Catch any error that escapes dispatchReplyWithBufferedBlockDispatcher
+    // This handles cases where the error occurs outside the agent runner
+    // (e.g., transport errors, dispatch machinery failures)
+    runtime.error?.(danger(`telegram dispatch failed: ${String(err)}`));
+    // Send error notification to user
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    const userMessage = errorMessage.includes("timed out")
+      ? "⚠️ 요청 시간이 초과되었습니다. 잠시 후 다시 시도해주세요."
+      : errorMessage.includes("not found") || errorMessage.includes("404")
+        ? "⚠️ 모델을 찾을 수 없습니다. 설정을 확인해주세요."
+        : "⚠️ 요청 처리 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.\nLogs: openclaw logs --follow";
+    try {
+      await deliverReplies({
+        replies: [{ text: userMessage }],
+        ...deliveryBaseOptions,
+      });
+    } catch (deliverErr) {
+      logVerbose(`telegram: failed to deliver error notification: ${String(deliverErr)}`);
+    }
+    throw err; // Re-throw to let upstream handlers know
   } finally {
     // Must stop() first to flush debounced content before clear() wipes state.
     const streamCleanupStates = new Map<

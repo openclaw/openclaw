@@ -1271,6 +1271,31 @@ export async function runEmbeddedPiAgent(
             };
           }
 
+          // Non-timeout aborts can also leave the run without any assistant payloads.
+          // Emit an explicit abort message so channel dispatchers don't interpret this
+          // turn as an intentional NO_REPLY.
+          if (aborted && payloads.length === 0) {
+            return {
+              payloads: [
+                {
+                  text: "Request was aborted before a response was generated. Please try again.",
+                  isError: true,
+                },
+              ],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta,
+                aborted,
+                systemPromptReport: attempt.systemPromptReport,
+              },
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+              messagingToolSentTargets: attempt.messagingToolSentTargets,
+              successfulCronAdds: attempt.successfulCronAdds,
+            };
+          }
+
           log.debug(
             `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
           );

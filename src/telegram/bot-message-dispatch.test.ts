@@ -1446,10 +1446,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
   });
 
-  it("clears preview when dispatcher throws before fallback phase", async () => {
+  it("clears preview and sends error notification when dispatcher throws", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockRejectedValue(new Error("dispatcher exploded"));
+
+    // Error notification delivery succeeds
+    deliverReplies.mockResolvedValueOnce({ delivered: true });
 
     await expect(dispatchWithContext({ context: createContext() })).rejects.toThrow(
       "dispatcher exploded",
@@ -1457,7 +1460,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     expect(draftStream.stop).toHaveBeenCalledTimes(1);
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
-    expect(deliverReplies).not.toHaveBeenCalled();
+    // Error notification is sent to user when dispatcher throws
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expect(deliverReplies).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replies: [expect.objectContaining({ text: expect.stringContaining("⚠️") })],
+      }),
+    );
   });
 
   it("supports concurrent dispatches with independent previews", async () => {
