@@ -98,13 +98,17 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     process.env.BOT_GATEWAY_PASSWORD?.trim() ||
     (isRemoteMode ? cfg.gateway?.remote?.password : cfg.gateway?.auth?.password);
 
-  // In remote mode, prefer gateway.remote.url from config (e.g. wss://gw.hanzo.bot)
-  // Fall back to constructed URL from host/port/tls CLI options
+  // Gateway URL resolution priority:
+  // 1. BOT_NODE_GATEWAY_URL env var (cloud pods set this for unified gateway)
+  // 2. gateway.remote.url from config (remote mode, e.g. wss://gw.hanzo.bot)
+  // 3. Constructed from CLI --host/--port/--tls options
+  const envGatewayUrl = process.env.BOT_NODE_GATEWAY_URL?.trim();
   const remoteUrl = isRemoteMode ? cfg.gateway?.remote?.url : undefined;
   const host = gateway.host ?? "127.0.0.1";
   const port = gateway.port ?? 18789;
   const scheme = gateway.tls ? "wss" : "ws";
-  const url = remoteUrl && !gateway.host ? remoteUrl : `${scheme}://${host}:${port}`;
+  const url =
+    envGatewayUrl || (remoteUrl && !gateway.host ? remoteUrl : `${scheme}://${host}:${port}`);
   const pathEnv = ensureNodePathEnv();
   // eslint-disable-next-line no-console
   console.log(`node host PATH: ${pathEnv}`);
