@@ -43,7 +43,6 @@ const unitIsolatedFilesRaw = [
   "src/agents/subagent-announce.format.test.ts",
   "src/infra/archive.test.ts",
   "src/cli/daemon-cli.coverage.test.ts",
-  "test/media-understanding.auto.test.ts",
   // Model normalization test imports config/model discovery stack; keep off unit-fast critical path.
   "src/agents/models-config.normalizes-gemini-3-ids-preview-google-providers.test.ts",
   // Auth profile rotation suite is retry-heavy and high-variance under vmForks contention.
