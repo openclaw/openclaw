@@ -80,6 +80,7 @@ vi.mock("./typing-mode.js", () => ({
 }));
 
 import { runReplyAgent } from "./agent-runner.js";
+import { routeReply } from "./route-reply.js";
 
 function baseParams(
   overrides: Partial<Parameters<typeof runPreparedReply>[0]> = {},
@@ -203,5 +204,21 @@ describe("runPreparedReply media-only handling", () => {
       text: "I didn't receive any text in your message. Please resend or add a caption.",
     });
     expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+  });
+
+  it("omits auth key labels from /new and /reset confirmation messages", async () => {
+    await runPreparedReply(
+      baseParams({
+        resetTriggered: true,
+      }),
+    );
+
+    const resetNoticeCall = vi.mocked(routeReply).mock.calls[0]?.[0] as
+      | { payload?: { text?: string } }
+      | undefined;
+    expect(resetNoticeCall?.payload?.text).toContain("✅ New session started · model:");
+    expect(resetNoticeCall?.payload?.text).not.toContain("🔑");
+    expect(resetNoticeCall?.payload?.text).not.toContain("api-key");
+    expect(resetNoticeCall?.payload?.text).not.toContain("env:");
   });
 });
