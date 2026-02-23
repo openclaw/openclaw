@@ -72,6 +72,18 @@ describe("trigger handling", () => {
     });
   });
 
+  it("handles inline /help and strips it before the agent", async () => {
+    await withTempHome(async (home) => {
+      await expectInlineCommandHandledAndStripped({
+        home,
+        getReplyFromConfig,
+        body: "please /help now",
+        stripToken: "/help",
+        blockReplyContains: "Help",
+      });
+    });
+  });
+
   it("drops /status for unauthorized senders", async () => {
     await withTempHome(async (home) => {
       await expectUnauthorizedCommandDropped(home, "/status");

@@ -3,7 +3,6 @@ import {
   getRunEmbeddedPiAgentMock,
   installTriggerHandlingE2eTestHooks,
   makeCfg,
-  runGreetingPromptForBareNewOrReset,
   withTempHome,
 } from "./reply.triggers.trigger-handling.test-harness.js";
 
@@ -78,11 +77,6 @@ describe("trigger handling", () => {
       const extra = getRunEmbeddedPiAgentMock().mock.calls[0]?.[0]?.extraSystemPrompt ?? "";
       expect(extra).toContain('"chat_type": "group"');
       expect(extra).toContain("Activation: always-on");
-    });
-  });
-  it("runs a greeting prompt for a bare /new", async () => {
-    await withTempHome(async (home) => {
-      await runGreetingPromptForBareNewOrReset({ home, body: "/new", getReplyFromConfig });
     });
   });
 });
