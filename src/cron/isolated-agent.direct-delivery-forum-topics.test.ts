@@ -1,14 +1,12 @@
 import "./isolated-agent.mocks.js";
 import { beforeEach, describe, expect, it } from "vitest";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
-import { createCliDeps, mockAgentPayloads } from "./isolated-agent.delivery.test-helpers.js";
-import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
-  makeCfg,
-  makeJob,
-  withTempCronHome,
-  writeSessionStore,
-} from "./isolated-agent.test-harness.js";
+  createCliDeps,
+  mockAgentPayloads,
+  runTelegramAnnounceTurn,
+} from "./isolated-agent.delivery.test-helpers.js";
+import { withTempCronHome, writeSessionStore } from "./isolated-agent.test-harness.js";
 import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
 
 describe("runCronIsolatedAgentTurn forum topic delivery", () => {
@@ -22,18 +20,11 @@ describe("runCronIsolatedAgentTurn forum topic delivery", () => {
       const deps = createCliDeps();
       mockAgentPayloads([{ text: "forum message" }]);
 
-      const res = await runCronIsolatedAgentTurn({
-        cfg: makeCfg(home, storePath, {
-          channels: { telegram: { botToken: "t-1" } },
-        }),
+      const res = await runTelegramAnnounceTurn({
+        home,
+        storePath,
         deps,
-        job: {
-          ...makeJob({ kind: "agentTurn", message: "do it" }),
-          delivery: { mode: "announce", channel: "telegram", to: "123:topic:42" },
-        },
-        message: "do it",
-        sessionKey: "cron:job-1",
-        lane: "cron",
+        delivery: { mode: "announce", channel: "telegram", to: "123:topic:42" },
       });
 
       expect(res.status).toBe("ok");
@@ -56,18 +47,11 @@ describe("runCronIsolatedAgentTurn forum topic delivery", () => {
       const deps = createCliDeps();
       mockAgentPayloads([{ text: "plain message" }]);
 
-      const res = await runCronIsolatedAgentTurn({
-        cfg: makeCfg(home, storePath, {
-          channels: { telegram: { botToken: "t-1" } },
-        }),
+      const res = await runTelegramAnnounceTurn({
+        home,
+        storePath,
         deps,
-        job: {
-          ...makeJob({ kind: "agentTurn", message: "do it" }),
-          delivery: { mode: "announce", channel: "telegram", to: "123" },
-        },
-        message: "do it",
-        sessionKey: "cron:job-1",
-        lane: "cron",
+        delivery: { mode: "announce", channel: "telegram", to: "123" },
       });
 
       expect(res.status).toBe("ok");

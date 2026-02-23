@@ -85,6 +85,28 @@ async function waitForCondition(check: () => boolean, timeoutMs = 2000) {
   }
 }
 
+async function cleanupCronTestRun(params: {
+  ws: { close: () => void };
+  server: { close: () => Promise<void> };
+  dir: string;
+  prevSkipCron: string | undefined;
+  clearSessionConfig?: boolean;
+}) {
+  params.ws.close();
+  await params.server.close();
+  await rmTempDir(params.dir);
+  testState.cronStorePath = undefined;
+  if (params.clearSessionConfig) {
+    testState.sessionConfig = undefined;
+  }
+  testState.cronEnabled = undefined;
+  if (params.prevSkipCron === undefined) {
+    delete process.env.OPENCLAW_SKIP_CRON;
+    return;
+  }
+  process.env.OPENCLAW_SKIP_CRON = params.prevSkipCron;
+}
+
 describe("gateway server cron", () => {
   test("handles cron CRUD, normalization, and patch semantics", { timeout: 120_000 }, async () => {
     const prevSkipCron = process.env.OPENCLAW_SKIP_CRON;
@@ -352,17 +374,13 @@ describe("gateway server cron", () => {
       const disabled = disableUpdateRes.payload as { enabled?: unknown } | undefined;
       expect(disabled?.enabled).toBe(false);
     } finally {
-      ws.close();
-      await server.close();
-      await rmTempDir(dir);
-      testState.cronStorePath = undefined;
-      testState.sessionConfig = undefined;
-      testState.cronEnabled = undefined;
-      if (prevSkipCron === undefined) {
-        delete process.env.OPENCLAW_SKIP_CRON;
-      } else {
-        process.env.OPENCLAW_SKIP_CRON = prevSkipCron;
-      }
+      await cleanupCronTestRun({
+        ws,
+        server,
+        dir,
+        prevSkipCron,
+        clearSessionConfig: true,
+      });
     }
   });
 
@@ -466,16 +484,7 @@ describe("gateway server cron", () => {
       const runs = autoEntries?.entries ?? [];
       expect(runs.at(-1)?.jobId).toBe(autoJobId);
     } finally {
-      ws.close();
-      await server.close();
-      await rmTempDir(dir);
-      testState.cronStorePath = undefined;
-      testState.cronEnabled = undefined;
-      if (prevSkipCron === undefined) {
-        delete process.env.OPENCLAW_SKIP_CRON;
-      } else {
-        process.env.OPENCLAW_SKIP_CRON = prevSkipCron;
-      }
+      await cleanupCronTestRun({ ws, server, dir, prevSkipCron });
     }
   }, 45_000);
 
@@ -650,16 +659,7 @@ describe("gateway server cron", () => {
       await yieldToEventLoop();
       expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
     } finally {
-      ws.close();
-      await server.close();
-      await rmTempDir(dir);
-      testState.cronStorePath = undefined;
-      testState.cronEnabled = undefined;
-      if (prevSkipCron === undefined) {
-        delete process.env.OPENCLAW_SKIP_CRON;
-      } else {
-        process.env.OPENCLAW_SKIP_CRON = prevSkipCron;
-      }
+      await cleanupCronTestRun({ ws, server, dir, prevSkipCron });
     }
   }, 60_000);
 });
