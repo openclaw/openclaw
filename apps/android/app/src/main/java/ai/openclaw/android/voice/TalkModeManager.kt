@@ -139,7 +139,10 @@ class TalkModeManager(
   private var defaultOutputFormat: String? = null
   private var apiKey: String? = null
   private var voiceAliases: Map<String, String> = emptyMap()
-  private var interruptOnSpeech: Boolean = true
+  // Interrupt-on-speech is disabled by default: starting a SpeechRecognizer during
+  // TTS creates an audio session conflict on OxygenOS/OnePlus that causes AudioTrack
+  // write to return 0 and MediaPlayer to error. Can be enabled via gateway talk config.
+  private var interruptOnSpeech: Boolean = false
   private var voiceOverrideActive = false
   private var modelOverrideActive = false
   private var mainSessionKey: String = "main"
@@ -1331,9 +1334,13 @@ class TalkModeManager(
   }
 
   private fun ensureInterruptListener() {
-    if (!interruptOnSpeech || !_isEnabled.value) return
+    if (!interruptOnSpeech || !_isEnabled.value || !shouldAllowSpeechInterrupt()) return
+    // Don't create a new recognizer when we just destroyed one for TTS (finalizeInFlight=true).
+    // Starting a new recognizer mid-TTS causes audio session conflict that kills AudioTrack
+    // writes (returns 0) and MediaPlayer on OxygenOS/OnePlus devices.
+    if (finalizeInFlight) return
     mainHandler.post {
-      if (stopRequested) return@post
+      if (stopRequested || finalizeInFlight) return@post
       if (!SpeechRecognizer.isRecognitionAvailable(context)) return@post
       try {
         if (recognizer == null) {
