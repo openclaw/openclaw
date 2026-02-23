@@ -1,18 +1,23 @@
 import fs from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadSessionStore } from "../config/sessions.js";
+import { loadSessionStore, resolveSessionKey } from "../config/sessions.js";
 import {
   getAbortEmbeddedPiRunMock,
+  getCompactEmbeddedPiSessionMock,
   getRunEmbeddedPiAgentMock,
   installTriggerHandlingE2eTestHooks,
   MAIN_SESSION_KEY,
   makeCfg,
+  mockRunEmbeddedPiAgentOk,
+  requireSessionStorePath,
   withTempHome,
 } from "./reply.triggers.trigger-handling.test-harness.js";
 import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./reply/queue.js";
+import { HEARTBEAT_TOKEN } from "./tokens.js";
 
 let getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
 let previousFastTestEnv: string | undefined;
@@ -32,14 +37,11 @@ afterAll(() => {
 installTriggerHandlingE2eTestHooks();
 
 const DEFAULT_SESSION_KEY = "telegram:slash:111";
-
-function requireSessionStorePath(cfg: { session?: { store?: string } }): string {
-  const storePath = cfg.session?.store;
-  if (!storePath) {
-    throw new Error("expected session store path");
-  }
-  return storePath;
-}
+const BASE_MESSAGE = {
+  Body: "hello",
+  From: "+1002",
+  To: "+2000",
+} as const;
 
 function makeTelegramModelCommand(body: string, sessionKey = DEFAULT_SESSION_KEY) {
   return {
@@ -70,27 +72,257 @@ async function runModelCommand(home: string, body: string, sessionKey = DEFAULT_
   };
 }
 
-describe("trigger handling", () => {
-  it("shows a /model summary and points to /models", async () => {
-    await withTempHome(async (home) => {
-      const { normalized } = await runModelCommand(home, "/model");
+function maybeReplyText(reply: Awaited<ReturnType<typeof getReplyFromConfig>>) {
+  return Array.isArray(reply) ? reply[0]?.text : reply?.text;
+}
 
-      expect(normalized).toContain("Current: anthropic/claude-opus-4-5");
-      expect(normalized).toContain("/model <provider/model> to switch");
-      expect(normalized).toContain("Tap below to browse models");
-      expect(normalized).toContain("/model status for details");
-      expect(normalized).not.toContain("reasoning");
-      expect(normalized).not.toContain("image");
+function mockEmbeddedOkPayload() {
+  return mockRunEmbeddedPiAgentOk("ok");
+}
+
+async function writeStoredModelOverride(cfg: ReturnType<typeof makeCfg>): Promise<void> {
+  await fs.writeFile(
+    requireSessionStorePath(cfg),
+    JSON.stringify({
+      [MAIN_SESSION_KEY]: {
+        sessionId: "main",
+        updatedAt: Date.now(),
+        providerOverride: "openai",
+        modelOverride: "gpt-5.2",
+      },
+    }),
+    "utf-8",
+  );
+}
+
+function mockSuccessfulCompaction() {
+  getCompactEmbeddedPiSessionMock().mockResolvedValue({
+    ok: true,
+    compacted: true,
+    result: {
+      summary: "summary",
+      firstKeptEntryId: "x",
+      tokensBefore: 12000,
+    },
+  });
+}
+
+describe("trigger handling", () => {
+  it("includes the error cause when the embedded agent throws", async () => {
+    await withTempHome(async (home) => {
+      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+      runEmbeddedPiAgentMock.mockRejectedValue(new Error("sandbox is not defined."));
+
+      const res = await getReplyFromConfig(BASE_MESSAGE, {}, makeCfg(home));
+
+      expect(maybeReplyText(res)).toBe(
+        "⚠️ Agent failed before reply: sandbox is not defined.\nLogs: openclaw logs --follow",
+      );
+      expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
     });
   });
 
-  it("aliases /model list to /models", async () => {
+  it("uses heartbeat model override for heartbeat runs", async () => {
     await withTempHome(async (home) => {
-      const { normalized } = await runModelCommand(home, "/model list");
+      const runEmbeddedPiAgentMock = mockEmbeddedOkPayload();
+      const cfg = makeCfg(home);
+      await writeStoredModelOverride(cfg);
+      cfg.agents = {
+        ...cfg.agents,
+        defaults: {
+          ...cfg.agents?.defaults,
+          heartbeat: { model: "anthropic/claude-haiku-4-5-20251001" },
+        },
+      };
 
-      expect(normalized).toContain("Providers:");
-      expect(normalized).toContain("Use: /models <provider>");
-      expect(normalized).toContain("Switch: /model <provider/model>");
+      await getReplyFromConfig(BASE_MESSAGE, { isHeartbeat: true }, cfg);
+
+      const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
+      expect(call?.provider).toBe("anthropic");
+      expect(call?.model).toBe("claude-haiku-4-5-20251001");
+    });
+  });
+
+  it("keeps stored model override for heartbeat runs when heartbeat model is not configured", async () => {
+    await withTempHome(async (home) => {
+      const runEmbeddedPiAgentMock = mockEmbeddedOkPayload();
+      const cfg = makeCfg(home);
+      await writeStoredModelOverride(cfg);
+      await getReplyFromConfig(BASE_MESSAGE, { isHeartbeat: true }, cfg);
+
+      const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
+      expect(call?.provider).toBe("openai");
+      expect(call?.model).toBe("gpt-5.2");
+    });
+  });
+
+  it("suppresses HEARTBEAT_OK replies outside heartbeat runs", async () => {
+    await withTempHome(async (home) => {
+      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+      runEmbeddedPiAgentMock.mockResolvedValue({
+        payloads: [{ text: HEARTBEAT_TOKEN }],
+        meta: {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      const res = await getReplyFromConfig(BASE_MESSAGE, {}, makeCfg(home));
+
+      expect(res).toBeUndefined();
+      expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
+    });
+  });
+
+  it("strips HEARTBEAT_OK at edges outside heartbeat runs", async () => {
+    await withTempHome(async (home) => {
+      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+      runEmbeddedPiAgentMock.mockResolvedValue({
+        payloads: [{ text: `${HEARTBEAT_TOKEN} hello` }],
+        meta: {
+          durationMs: 1,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      const res = await getReplyFromConfig(BASE_MESSAGE, {}, makeCfg(home));
+
+      expect(maybeReplyText(res)).toBe("hello");
+    });
+  });
+
+  it("updates group activation when the owner sends /activation", async () => {
+    await withTempHome(async (home) => {
+      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+      const cfg = makeCfg(home);
+      const res = await getReplyFromConfig(
+        {
+          Body: "/activation always",
+          From: "123@g.us",
+          To: "+2000",
+          ChatType: "group",
+          Provider: "whatsapp",
+          SenderE164: "+2000",
+          CommandAuthorized: true,
+        },
+        {},
+        cfg,
+      );
+      expect(maybeReplyText(res)).toContain("Group activation set to always");
+      const store = JSON.parse(await fs.readFile(requireSessionStorePath(cfg), "utf-8")) as Record<
+        string,
+        { groupActivation?: string }
+      >;
+      expect(store["agent:main:whatsapp:group:123@g.us"]?.groupActivation).toBe("always");
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("runs /compact as a gated command", async () => {
+    await withTempHome(async (home) => {
+      const storePath = join(tmpdir(), `openclaw-session-test-${Date.now()}.json`);
+      const cfg = makeCfg(home);
+      cfg.session = { ...cfg.session, store: storePath };
+      mockSuccessfulCompaction();
+
+      const request = {
+        Body: "/compact focus on decisions",
+        From: "+1003",
+        To: "+2000",
+      };
+
+      const res = await getReplyFromConfig(
+        {
+          ...request,
+          CommandAuthorized: true,
+        },
+        {},
+        cfg,
+      );
+      const text = maybeReplyText(res);
+      expect(text?.startsWith("⚙️ Compacted")).toBe(true);
+      expect(getCompactEmbeddedPiSessionMock()).toHaveBeenCalledOnce();
+      expect(getRunEmbeddedPiAgentMock()).not.toHaveBeenCalled();
+      const store = loadSessionStore(storePath);
+      const sessionKey = resolveSessionKey("per-sender", request);
+      expect(store[sessionKey]?.compactionCount).toBe(1);
+    });
+  });
+
+  it("runs /compact for non-default agents without transcript path validation failures", async () => {
+    await withTempHome(async (home) => {
+      getCompactEmbeddedPiSessionMock().mockClear();
+      mockSuccessfulCompaction();
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/compact",
+          From: "+1004",
+          To: "+2000",
+          SessionKey: "agent:worker1:telegram:12345",
+          CommandAuthorized: true,
+        },
+        {},
+        makeCfg(home),
+      );
+
+      const text = maybeReplyText(res);
+      expect(text?.startsWith("⚙️ Compacted")).toBe(true);
+      expect(getCompactEmbeddedPiSessionMock()).toHaveBeenCalledOnce();
+      expect(getCompactEmbeddedPiSessionMock().mock.calls[0]?.[0]?.sessionFile).toContain(
+        join("agents", "worker1", "sessions"),
+      );
+      expect(getRunEmbeddedPiAgentMock()).not.toHaveBeenCalled();
+    });
+  });
+
+  it("ignores think directives that only appear in the context wrapper", async () => {
+    await withTempHome(async (home) => {
+      mockRunEmbeddedPiAgentOk();
+
+      const res = await getReplyFromConfig(
+        {
+          Body: [
+            "[Chat messages since your last reply - for context]",
+            "Peter: /thinking high [2025-12-05T21:45:00.000Z]",
+            "",
+            "[Current message - respond to this]",
+            "Give me the status",
+          ].join("\n"),
+          From: "+1002",
+          To: "+2000",
+        },
+        {},
+        makeCfg(home),
+      );
+
+      expect(maybeReplyText(res)).toBe("ok");
+      expect(getRunEmbeddedPiAgentMock()).toHaveBeenCalledOnce();
+      const prompt = getRunEmbeddedPiAgentMock().mock.calls[0]?.[0]?.prompt ?? "";
+      expect(prompt).toContain("Give me the status");
+      expect(prompt).not.toContain("/thinking high");
+      expect(prompt).not.toContain("/think high");
+    });
+  });
+
+  it("does not emit directive acks for heartbeats with /think", async () => {
+    await withTempHome(async (home) => {
+      mockRunEmbeddedPiAgentOk();
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "HEARTBEAT /think:high",
+          From: "+1003",
+          To: "+1003",
+        },
+        { isHeartbeat: true },
+        makeCfg(home),
+      );
+
+      const text = maybeReplyText(res);
+      expect(text).toBe("ok");
+      expect(text).not.toMatch(/Thinking level set/i);
+      expect(getRunEmbeddedPiAgentMock()).toHaveBeenCalledOnce();
     });
   });
 

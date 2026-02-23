@@ -49,15 +49,9 @@ const unitIsolatedFilesRaw = [
   "src/agents/pi-embedded-runner.run-embedded-pi-agent.auth-profile-rotation.test.ts",
   // Heavy trigger command scenarios; keep off unit-fast critical path to reduce contention noise.
   "src/auto-reply/reply.triggers.trigger-handling.filters-usage-summary-current-model-provider.test.ts",
-  "src/auto-reply/reply.triggers.trigger-handling.includes-error-cause-embedded-agent-throws.test.ts",
-  "src/auto-reply/reply.triggers.trigger-handling.runs-greeting-prompt-bare-reset.test.ts",
-  "src/auto-reply/reply.triggers.trigger-handling.runs-compact-as-gated-command.test.ts",
-  "src/auto-reply/reply.triggers.trigger-handling.allows-activation-from-allowfrom-groups.test.ts",
+  "src/auto-reply/reply.triggers.trigger-handling.targets-active-session-native-stop.test.ts",
   "src/auto-reply/reply.triggers.group-intro-prompts.test.ts",
   "src/auto-reply/reply.triggers.trigger-handling.handles-inline-commands-strips-it-before-agent.test.ts",
-  "src/auto-reply/reply.triggers.trigger-handling.ignores-inline-elevated-directive-unapproved-sender.test.ts",
-  "src/auto-reply/reply.triggers.trigger-handling.keeps-inline-status-unauthorized-senders.test.ts",
-  "src/auto-reply/reply.triggers.trigger-handling.shows-endpoint-default-model-status-not-configured.test.ts",
   "src/web/auto-reply.web-auto-reply.compresses-common-formats-jpeg-cap.test.ts",
   // Setup-heavy bot bootstrap suite.
   "src/telegram/bot.create-telegram-bot.test.ts",
