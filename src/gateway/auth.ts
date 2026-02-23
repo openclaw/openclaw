@@ -368,7 +368,9 @@ export async function authorizeGatewayConnect(params: {
     return { ok: false, reason: result.reason };
   }
 
-  // IAM (OIDC/JWT) auth — validate token from connect params against IAM JWKS
+  // IAM (OIDC/JWT) auth — validate token from connect params against IAM JWKS.
+  // Falls back to shared-secret token if JWT validation fails (e.g. cloud pods
+  // authenticate with the gateway's BOT_GATEWAY_TOKEN, not an IAM JWT).
   if (auth.mode === "iam") {
     if (!auth.iam) {
       return { ok: false, reason: "iam_config_missing" };
@@ -379,6 +381,10 @@ export async function authorizeGatewayConnect(params: {
     }
     const iamResult = await validateIamToken(jwtToken, auth.iam);
     if (!iamResult.ok) {
+      // Fallback: accept the gateway's shared token for internal nodes (cloud pods).
+      if (auth.token && safeEqualSecret(jwtToken, auth.token)) {
+        return { ok: true, method: "token" };
+      }
       return { ok: false, reason: iamResult.reason };
     }
     return {
