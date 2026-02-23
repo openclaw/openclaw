@@ -361,8 +361,8 @@ class TalkModeManager(
           if (stopRequested) return@post
           try {
             recognizer?.cancel()
-            val shouldListen = listeningMode
-            val shouldInterrupt = _isSpeaking.value && interruptOnSpeech
+            val shouldListen = listeningMode && !finalizeInFlight
+            val shouldInterrupt = _isSpeaking.value && interruptOnSpeech && shouldAllowSpeechInterrupt()
             if (!shouldListen && !shouldInterrupt) return@post
             startListeningInternal(markListening = shouldListen)
           } catch (_: Throwable) {
@@ -1426,7 +1426,12 @@ class TalkModeManager(
       override fun onBufferReceived(buffer: ByteArray?) {}
 
       override fun onEndOfSpeech() {
-        scheduleRestart()
+        clearListenWatchdog()
+        // Don't restart while a transcript is being processed — the recognizer
+        // competing for audio resources kills AudioTrack PCM playback.
+        if (!finalizeInFlight) {
+          scheduleRestart()
+        }
       }
 
       override fun onError(error: Int) {
