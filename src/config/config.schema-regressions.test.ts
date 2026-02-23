@@ -105,7 +105,6 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(false);
   });
 
-
   it("accepts safe iMessage remoteHost", () => {
     const res = validateConfigObject({
       channels: {
