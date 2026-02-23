@@ -32,13 +32,25 @@ def _parse_simple_frontmatter(frontmatter_text: str) -> Optional[dict[str, str]]
     Supports simple `key: value` mappings used by SKILL.md frontmatter.
     """
     parsed: dict[str, str] = {}
+    current_key: Optional[str] = None
     for raw_line in frontmatter_text.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#"):
             continue
-        if ":" not in line:
+
+        is_indented = raw_line[:1].isspace()
+        if is_indented:
+            if current_key is None:
+                return None
+            current_value = parsed[current_key]
+            parsed[current_key] = (
+                f"{current_value}\n{stripped}" if current_value else stripped
+            )
+            continue
+
+        if ":" not in stripped:
             return None
-        key, value = line.split(":", 1)
+        key, value = stripped.split(":", 1)
         key = key.strip()
         value = value.strip()
         if not key:
@@ -48,6 +60,7 @@ def _parse_simple_frontmatter(frontmatter_text: str) -> Optional[dict[str, str]]
         ):
             value = value[1:-1]
         parsed[key] = value
+        current_key = key
     return parsed
 
 
