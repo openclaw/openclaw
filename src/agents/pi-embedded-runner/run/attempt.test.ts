@@ -1,6 +1,10 @@
+import type { AgentSession } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { ImageContent } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
+  applyPromptBuildHookResultToSession,
   composeSystemPromptWithHookContext,
   isOllamaCompatProvider,
   resolveAttemptFsWorkspaceOnly,
@@ -43,6 +47,7 @@ describe("resolvePromptBuildHookResult", () => {
 
   it("reuses precomputed legacy before_agent_start result without invoking hook again", async () => {
     const hookRunner = createLegacyOnlyHookRunner();
+
     const result = await resolvePromptBuildHookResult({
       prompt: "hello",
       messages: [],
@@ -62,7 +67,8 @@ describe("resolvePromptBuildHookResult", () => {
 
   it("calls legacy hook when precomputed result is absent", async () => {
     const hookRunner = createLegacyOnlyHookRunner();
-    const messages = [{ role: "user", content: "ctx" }];
+    const messages: AgentMessage[] = [{ role: "user", content: "ctx" } as AgentMessage];
+
     const result = await resolvePromptBuildHookResult({
       prompt: "hello",
       messages,
@@ -546,5 +552,60 @@ describe("decodeHtmlEntitiesInObject", () => {
   it("decodes numeric character references", () => {
     expect(decodeHtmlEntitiesInObject("&#39;hello&#39;")).toBe("'hello'");
     expect(decodeHtmlEntitiesInObject("&#x27;world&#x27;")).toBe("'world'");
+  });
+});
+
+describe("applyPromptBuildHookResultToSession", () => {
+  it("prepends multiple contexts in-order and appends system prompt", () => {
+    const agent = { setSystemPrompt: vi.fn() };
+    const session = { agent } as unknown as AgentSession;
+
+    const result = applyPromptBuildHookResultToSession({
+      prompt: "user prompt",
+      systemPromptText: "BASE",
+      hookResult: {
+        actions: [
+          { kind: "prependContext", text: "ctx A" },
+          { kind: "prependContext", text: "ctx B" },
+          { kind: "appendSystemPrompt", text: "sys X" },
+          { kind: "appendSystemPrompt", text: "sys Y" },
+        ],
+      },
+      session,
+    });
+
+    expect(result.effectivePrompt).toBe("ctx A\n\nctx B\n\nuser prompt");
+    expect(result.systemPromptText).toBe("BASE\n\nsys X\n\nsys Y");
+    expect(result.prependContextChars).toBe("ctx A".length + "ctx B".length);
+    expect(result.appendedSystemPromptChars).toBe("sys X\n\nsys Y".length);
+    expect(agent.setSystemPrompt).toHaveBeenCalledWith("BASE\n\nsys X\n\nsys Y");
+  });
+
+  it("preserves legacy system prompt override and wraps it with system context", () => {
+    const agent = { setSystemPrompt: vi.fn() };
+    const session = { agent } as unknown as AgentSession;
+
+    const result = applyPromptBuildHookResultToSession({
+      prompt: "user prompt",
+      systemPromptText: "BASE",
+      hookResult: {
+        prependContext: "legacy ctx",
+        systemPrompt: "legacy sys",
+        prependSystemContext: "prepend ctx",
+        appendSystemContext: "append ctx",
+        actions: [{ kind: "appendSystemPrompt", text: "sys tail" }],
+      },
+      session,
+    });
+
+    expect(result.effectivePrompt).toBe("legacy ctx\n\nuser prompt");
+    expect(result.systemPromptText).toBe("prepend ctx\n\nlegacy sys\n\nsys tail\n\nappend ctx");
+    expect(result.systemPromptOverrideChars).toBe("legacy sys".length);
+    expect(result.prependSystemContextChars).toBe("prepend ctx".length);
+    expect(result.appendSystemContextChars).toBe("append ctx".length);
+    expect(result.appendedSystemPromptChars).toBe("sys tail".length);
+    expect(agent.setSystemPrompt).toHaveBeenCalledWith(
+      "prepend ctx\n\nlegacy sys\n\nsys tail\n\nappend ctx",
+    );
   });
 });

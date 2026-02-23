@@ -415,8 +415,25 @@ export type PluginHookBeforePromptBuildEvent = {
   messages: unknown[];
 };
 
+export type PluginHookPromptAction =
+  | {
+      kind: "prependContext";
+      text: string;
+    }
+  | {
+      kind: "appendSystemPrompt";
+      text: string;
+    };
+
 export type PluginHookBeforePromptBuildResult = {
+  /**
+   * Preferred: return explicit actions so OpenClaw can apply prompt changes
+   * deterministically and preserve hook ordering.
+   */
+  actions?: PluginHookPromptAction[];
+  /** Legacy compatibility: prefer returning actions instead. */
   systemPrompt?: string;
+  /** Legacy compatibility: prefer returning actions instead. */
   prependContext?: string;
   /**
    * Prepended to the agent system prompt so providers can cache it (e.g. prompt caching).

@@ -6,6 +6,8 @@ import {
   createAgentSession,
   DefaultResourceLoader,
   SessionManager,
+  SettingsManager,
+  type AgentSession,
 } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
@@ -18,6 +20,7 @@ import type {
   PluginHookAgentContext,
   PluginHookBeforeAgentStartResult,
   PluginHookBeforePromptBuildResult,
+  PluginHookPromptAction,
 } from "../../../plugins/types.js";
 import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
@@ -567,7 +570,12 @@ export async function resolvePromptBuildHookResult(params: {
             return undefined;
           })
       : undefined);
+  const actions = [
+    ...(promptBuildResult?.actions ?? []),
+    ...(legacyResult?.actions ?? []),
+  ] satisfies PluginHookPromptAction[];
   return {
+    ...(actions.length > 0 ? { actions } : {}),
     systemPrompt: promptBuildResult?.systemPrompt ?? legacyResult?.systemPrompt,
     prependContext: joinPresentTextSegments([
       promptBuildResult?.prependContext,
@@ -615,6 +623,110 @@ export function resolveAttemptFsWorkspaceOnly(params: {
     cfg: params.config,
     agentId: params.sessionAgentId,
   });
+}
+
+function normalizePromptBuildHookActions(
+  result: PluginHookBeforePromptBuildResult | undefined,
+): PluginHookPromptAction[] {
+  if (!result) {
+    return [];
+  }
+
+  const actions: PluginHookPromptAction[] = [];
+
+  if (Array.isArray(result.actions)) {
+    actions.push(...result.actions);
+  }
+
+  // Legacy compatibility: treat legacy fields as shorthand actions.
+  if (typeof result.prependContext === "string" && result.prependContext.trim()) {
+    actions.push({ kind: "prependContext", text: result.prependContext });
+  }
+
+  return actions;
+}
+
+export function applyPromptBuildHookResultToSession(params: {
+  prompt: string;
+  systemPromptText: string;
+  hookResult?: PluginHookBeforePromptBuildResult;
+  session?: AgentSession;
+}): {
+  effectivePrompt: string;
+  systemPromptText: string;
+  prependContextChars: number;
+  systemPromptOverrideChars: number;
+  prependSystemContextChars: number;
+  appendSystemContextChars: number;
+  appendedSystemPromptChars: number;
+} {
+  const actions = normalizePromptBuildHookActions(params.hookResult);
+  const systemPromptOverride = params.hookResult?.systemPrompt?.trim() ?? "";
+  const prependSystemContext = params.hookResult?.prependSystemContext?.trim() ?? "";
+  const appendSystemContext = params.hookResult?.appendSystemContext?.trim() ?? "";
+  const hasSystemPromptMutations =
+    Boolean(systemPromptOverride) ||
+    Boolean(prependSystemContext) ||
+    Boolean(appendSystemContext);
+  if (actions.length === 0 && !hasSystemPromptMutations) {
+    return {
+      effectivePrompt: params.prompt,
+      systemPromptText: params.systemPromptText,
+      prependContextChars: 0,
+      systemPromptOverrideChars: 0,
+      prependSystemContextChars: 0,
+      appendSystemContextChars: 0,
+      appendedSystemPromptChars: 0,
+    };
+  }
+
+  const prependParts: string[] = [];
+  const systemPromptAppends: string[] = [];
+
+  for (const action of actions) {
+    if (action.kind === "prependContext") {
+      const text = action.text.trim();
+      if (text) {
+        prependParts.push(text);
+      }
+      continue;
+    }
+    if (action.kind === "appendSystemPrompt") {
+      const text = action.text.trim();
+      if (text) {
+        systemPromptAppends.push(text);
+      }
+      continue;
+    }
+  }
+
+  const effectivePrompt =
+    prependParts.length > 0 ? `${prependParts.join("\n\n")}\n\n${params.prompt}` : params.prompt;
+  const prependContextChars = prependParts.reduce((sum, part) => sum + part.length, 0);
+  const appendText = systemPromptAppends.join("\n\n");
+  const baseSystemPrompt = joinPresentTextSegments(
+    [systemPromptOverride || params.systemPromptText, appendText],
+    { trim: true },
+  );
+  const patchedSystemPrompt =
+    composeSystemPromptWithHookContext({
+      baseSystemPrompt,
+      prependSystemContext,
+      appendSystemContext,
+    }) ?? baseSystemPrompt;
+  if (params.session && (hasSystemPromptMutations || appendText.length > 0)) {
+    applySystemPromptOverrideToSession(params.session, patchedSystemPrompt);
+  }
+
+  return {
+    effectivePrompt,
+    systemPromptText: patchedSystemPrompt,
+    prependContextChars,
+    systemPromptOverrideChars: systemPromptOverride.length,
+    prependSystemContextChars: prependSystemContext.length,
+    appendSystemContextChars: appendSystemContext.length,
+    appendedSystemPromptChars: appendText.length,
+  };
 }
 
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
@@ -958,7 +1070,7 @@ export async function runEmbeddedAttempt(
       bootstrapTruncationWarningLines: bootstrapPromptWarning.lines,
       memoryCitationsMode: params.config?.memory?.citations,
     });
-    const systemPromptReport = buildSystemPromptReport({
+    let systemPromptReport = buildSystemPromptReport({
       source: "run",
       generatedAt: Date.now(),
       sessionId: params.sessionId,
@@ -1537,39 +1649,59 @@ export async function runEmbeddedAttempt(
           hookRunner,
           legacyBeforeAgentStartResult: params.legacyBeforeAgentStartResult,
         });
-        {
-          if (hookResult?.prependContext) {
-            effectivePrompt = `${hookResult.prependContext}\n\n${params.prompt}`;
-            log.debug(
-              `hooks: prepended context to prompt (${hookResult.prependContext.length} chars)`,
-            );
-          }
-          const legacySystemPrompt =
-            typeof hookResult?.systemPrompt === "string" ? hookResult.systemPrompt.trim() : "";
-          if (legacySystemPrompt) {
-            applySystemPromptOverrideToSession(activeSession, legacySystemPrompt);
-            systemPromptText = legacySystemPrompt;
-            log.debug(`hooks: applied systemPrompt override (${legacySystemPrompt.length} chars)`);
-          }
-          const prependedOrAppendedSystemPrompt = composeSystemPromptWithHookContext({
-            baseSystemPrompt: systemPromptText,
-            prependSystemContext: hookResult?.prependSystemContext,
-            appendSystemContext: hookResult?.appendSystemContext,
+        const appliedHookResult = applyPromptBuildHookResultToSession({
+          prompt: params.prompt,
+          systemPromptText,
+          hookResult,
+          session: activeSession,
+        });
+        effectivePrompt = appliedHookResult.effectivePrompt;
+        systemPromptText = appliedHookResult.systemPromptText;
+        if (appliedHookResult.prependContextChars > 0) {
+          log.debug(
+            `hooks: prepended context to prompt (${appliedHookResult.prependContextChars} chars)`,
+          );
+        }
+        if (appliedHookResult.appendedSystemPromptChars > 0) {
+          log.debug(
+            `hooks: appended system prompt (${appliedHookResult.appendedSystemPromptChars} chars)`,
+          );
+          systemPromptReport = buildSystemPromptReport({
+            source: "run",
+            generatedAt: systemPromptReport.generatedAt,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            provider: params.provider,
+            model: params.modelId,
+            workspaceDir: effectiveWorkspace,
+            bootstrapMaxChars: resolveBootstrapMaxChars(params.config),
+            bootstrapTotalMaxChars: resolveBootstrapTotalMaxChars(params.config),
+            sandbox: systemPromptReport.sandbox,
+            systemPrompt: systemPromptText,
+            bootstrapFiles: hookAdjustedBootstrapFiles,
+            injectedFiles: contextFiles,
+            skillsPrompt,
+            tools,
           });
-          if (prependedOrAppendedSystemPrompt) {
-            const prependSystemLen = hookResult?.prependSystemContext?.trim().length ?? 0;
-            const appendSystemLen = hookResult?.appendSystemContext?.trim().length ?? 0;
-            applySystemPromptOverrideToSession(activeSession, prependedOrAppendedSystemPrompt);
-            systemPromptText = prependedOrAppendedSystemPrompt;
-            log.debug(
-              `hooks: applied prependSystemContext/appendSystemContext (${prependSystemLen}+${appendSystemLen} chars)`,
-            );
-          }
+        }
+        if (appliedHookResult.systemPromptOverrideChars > 0) {
+          log.debug(
+            `hooks: applied systemPrompt override (${appliedHookResult.systemPromptOverrideChars} chars)`,
+          );
+        }
+        if (
+          appliedHookResult.prependSystemContextChars > 0 ||
+          appliedHookResult.appendSystemContextChars > 0
+        ) {
+          log.debug(
+            `hooks: applied prependSystemContext/appendSystemContext (${appliedHookResult.prependSystemContextChars}+${appliedHookResult.appendSystemContextChars} chars)`,
+          );
         }
 
         log.debug(`embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`);
         cacheTrace?.recordStage("prompt:before", {
           prompt: effectivePrompt,
+          system: systemPromptText,
           messages: activeSession.messages,
         });
 
