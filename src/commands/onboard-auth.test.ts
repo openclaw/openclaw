@@ -319,6 +319,44 @@ describe("applyAuthProfileConfig", () => {
 
     expect(next.auth?.order?.anthropic).toEqual(["anthropic:work", "anthropic:default"]);
   });
+
+  it("creates provider order when switching from legacy oauth to api_key without explicit order", () => {
+    const next = applyAuthProfileConfig(
+      {
+        auth: {
+          profiles: {
+            "kilocode:legacy": { provider: "kilocode", mode: "oauth" },
+          },
+        },
+      },
+      {
+        profileId: "kilocode:default",
+        provider: "kilocode",
+        mode: "api_key",
+      },
+    );
+
+    expect(next.auth?.order?.kilocode).toEqual(["kilocode:default", "kilocode:legacy"]);
+  });
+
+  it("keeps implicit round-robin when no mixed provider modes are present", () => {
+    const next = applyAuthProfileConfig(
+      {
+        auth: {
+          profiles: {
+            "kilocode:legacy": { provider: "kilocode", mode: "api_key" },
+          },
+        },
+      },
+      {
+        profileId: "kilocode:default",
+        provider: "kilocode",
+        mode: "api_key",
+      },
+    );
+
+    expect(next.auth?.order).toBeUndefined();
+  });
 });
 
 describe("applyMinimaxApiConfig", () => {

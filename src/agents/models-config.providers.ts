@@ -5,6 +5,14 @@ import {
   DEFAULT_COPILOT_API_BASE_URL,
   resolveCopilotApiToken,
 } from "../providers/github-copilot-token.js";
+import {
+  KILOCODE_BASE_URL,
+  KILOCODE_DEFAULT_CONTEXT_WINDOW,
+  KILOCODE_DEFAULT_COST,
+  KILOCODE_DEFAULT_MAX_TOKENS,
+  KILOCODE_DEFAULT_MODEL_ID,
+  KILOCODE_DEFAULT_MODEL_NAME,
+} from "../providers/kilocode-shared.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
 import {
@@ -764,18 +772,6 @@ export function buildNvidiaProvider(): ProviderConfig {
   };
 }
 
-// Kilo Gateway provider
-const KILOCODE_BASE_URL = "https://api.kilo.ai/api/gateway/";
-const KILOCODE_DEFAULT_MODEL_ID = "anthropic/claude-opus-4.6";
-const KILOCODE_DEFAULT_CONTEXT_WINDOW = 200000;
-const KILOCODE_DEFAULT_MAX_TOKENS = 8192;
-const KILOCODE_DEFAULT_COST = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-};
-
 export function buildKilocodeProvider(): ProviderConfig {
   return {
     baseUrl: KILOCODE_BASE_URL,
@@ -783,7 +779,7 @@ export function buildKilocodeProvider(): ProviderConfig {
     models: [
       {
         id: KILOCODE_DEFAULT_MODEL_ID,
-        name: "Claude Opus 4.6",
+        name: KILOCODE_DEFAULT_MODEL_NAME,
         reasoning: true,
         input: ["text", "image"],
         cost: KILOCODE_DEFAULT_COST,
