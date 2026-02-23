@@ -130,7 +130,7 @@ export function buildMoonshotModelDefinition(): ModelDefinitionConfig {
     id: MOONSHOT_DEFAULT_MODEL_ID,
     name: "Kimi K2.5",
     reasoning: false,
-    input: ["text"],
+    input: ["text", "image"],
     cost: MOONSHOT_DEFAULT_COST,
     contextWindow: MOONSHOT_DEFAULT_CONTEXT_WINDOW,
     maxTokens: MOONSHOT_DEFAULT_MAX_TOKENS,
