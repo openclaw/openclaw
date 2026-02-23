@@ -122,7 +122,11 @@ describe("initSessionState thread forking", () => {
     const parsedHeader = JSON.parse(headerLine) as {
       parentSession?: string;
     };
-    expect(parsedHeader.parentSession).toBe(parentSessionFile);
+    const expectedParentSession = await fs.realpath(parentSessionFile);
+    const actualParentSession = parsedHeader.parentSession
+      ? await fs.realpath(parsedHeader.parentSession)
+      : undefined;
+    expect(actualParentSession).toBe(expectedParentSession);
     warn.mockRestore();
   });
 
@@ -1302,54 +1306,6 @@ describe("persistSessionUsageUpdate", () => {
 });
 
 describe("initSessionState stale threadId fallback", () => {
-  async function seedSessionStore(params: {
-    storePath: string;
-    sessionKey: string;
-    entry: Record<string, unknown>;
-  }) {
-    await fs.mkdir(path.dirname(params.storePath), { recursive: true });
-    await fs.writeFile(
-      params.storePath,
-      JSON.stringify({ [params.sessionKey]: params.entry }, null, 2),
-      "utf-8",
-    );
-  }
-
-  it("ignores persisted lastThreadId on main sessions for non-thread messages", async () => {
-    const storePath = await createStorePath("stale-main-thread-");
-    const sessionKey = "agent:main:main";
-    await seedSessionStore({
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId: "s1",
-        updatedAt: Date.now(),
-        lastChannel: "telegram",
-        lastTo: "telegram:123",
-        lastThreadId: 42,
-        deliveryContext: {
-          channel: "telegram",
-          to: "telegram:123",
-          threadId: 42,
-        },
-      },
-    });
-
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
-
-    const result = await initSessionState({
-      ctx: {
-        Body: "hello from DM",
-        SessionKey: sessionKey,
-      },
-      cfg,
-      commandAuthorized: true,
-    });
-
-    expect(result.sessionEntry.lastThreadId).toBeUndefined();
-    expect(result.sessionEntry.deliveryContext?.threadId).toBeUndefined();
-  });
-
   it("does not inherit lastThreadId from a previous thread interaction in non-thread sessions", async () => {
     const storePath = await createStorePath("stale-thread-");
     const cfg = { session: { store: storePath } } as OpenClawConfig;
@@ -1377,6 +1333,7 @@ describe("initSessionState stale threadId fallback", () => {
       commandAuthorized: true,
     });
     expect(mainResult.sessionEntry.lastThreadId).toBeUndefined();
+    expect(mainResult.sessionEntry.deliveryContext?.threadId).toBeUndefined();
   });
 
   it("preserves lastThreadId within the same thread session", async () => {
