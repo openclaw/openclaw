@@ -117,6 +117,27 @@ describe("formatAssistantErrorText", () => {
     const msg = makeAssistantError("request ended without sending any chunks");
     expect(formatAssistantErrorText(msg)).toBe("LLM request timed out.");
   });
+
+  it("returns a safe generic message for unrecognized errors instead of leaking raw text", () => {
+    const msg = makeAssistantError(
+      "No tool call found for function call output with call_id call_abc123",
+    );
+    const result = formatAssistantErrorText(msg);
+    expect(result).toBe(
+      "Something went wrong. Please try again, or use /new to start a fresh session.",
+    );
+    expect(result).not.toContain("call_id");
+    expect(result).not.toContain("tool call");
+  });
+
+  it("returns a safe generic message for long unrecognized errors", () => {
+    const msg = makeAssistantError("x".repeat(800));
+    const result = formatAssistantErrorText(msg);
+    expect(result).toBe(
+      "Something went wrong. Please try again, or use /new to start a fresh session.",
+    );
+    expect(result).not.toContain("x".repeat(100));
+  });
 });
 
 describe("formatRawAssistantErrorForUi", () => {
