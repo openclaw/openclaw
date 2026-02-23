@@ -830,8 +830,13 @@ export async function runWithModelFallback<T>(params: {
   // When all candidates failed exclusively due to cooldowns, wait for the
   // soonest cooldown to expire and retry once rather than failing immediately.
   // This prevents transient rate limits from surfacing as hard errors when
-  // the wait is short enough to be acceptable (≤90 seconds).
-  const MAX_COOLDOWN_WAIT_MS = 90_000;
+  // the wait is short enough to be acceptable.
+  // Configurable via auth.cooldowns.rateLimitWaitSeconds (default: 90, 0 to disable).
+  const configuredWaitSeconds = params.cfg?.auth?.cooldowns?.rateLimitWaitSeconds;
+  const MAX_COOLDOWN_WAIT_MS =
+    typeof configuredWaitSeconds === "number" && Number.isFinite(configuredWaitSeconds)
+      ? configuredWaitSeconds * 1000
+      : 90_000;
   const allCooldownSkips =
     authStore &&
     attempts.length > 0 &&

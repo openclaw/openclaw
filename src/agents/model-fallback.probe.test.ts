@@ -391,6 +391,11 @@ describe("runWithModelFallback – probe logic", () => {
     mockedGetSoonestCooldownExpiry.mockReturnValue(NOW + 30 * 1000);
     mockedResolveProfilesUnavailableReason.mockReturnValue("rate_limit");
 
+    // All profiles in cooldown; set beyond the 90s wait-and-retry threshold
+    // so the test exercises the immediate-skip path without blocking on real timers.
+    const almostExpired = NOW + 120 * 1000;
+    mockedGetSoonestCooldownExpiry.mockReturnValue(almostExpired);
+
     // Simulate Google Vertex abort-wrapped RESOURCE_EXHAUSTED (the shape that was
     // previously swallowed by shouldRethrowAbort before the fallback loop could continue)
     const primaryAbort = Object.assign(new Error("request aborted"), {

@@ -456,6 +456,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "auth.cooldowns.billingBackoffHoursByProvider": "Billing Backoff Overrides",
   "auth.cooldowns.billingMaxHours": "Billing Backoff Cap (hours)",
   "auth.cooldowns.failureWindowHours": "Failover Window (hours)",
+  "auth.cooldowns.rateLimitWaitSeconds": "Rate Limit Wait (seconds)",
   "agents.defaults.models": "Models",
   "agents.defaults.model.primary": "Primary Model",
   "agents.defaults.model.fallbacks": "Model Fallbacks",

@@ -782,6 +782,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional per-provider overrides for billing backoff (hours).",
   "auth.cooldowns.billingMaxHours": "Cap (hours) for billing backoff (default: 24).",
   "auth.cooldowns.failureWindowHours": "Failure window (hours) for backoff counters (default: 24).",
+  "auth.cooldowns.rateLimitWaitSeconds":
+    "Max seconds to wait when all auth profiles are rate-limited before retrying (default: 90, 0 to disable).",
   "agents.defaults.workspace":
     "Default workspace path exposed to agent runtime tools for filesystem context and repo-aware behavior. Set this explicitly when running from wrappers so path resolution stays deterministic.",
   "agents.defaults.bootstrapMaxChars":
