@@ -126,19 +126,25 @@ describe("exec host env validation", () => {
     ).rejects.toThrow(/Security Violation: Environment variable 'LD_DEBUG' is forbidden/);
   });
 
-  it("defaults to gateway when sandbox runtime is unavailable", async () => {
+  it("defaults to sandbox when sandbox runtime is unavailable", async () => {
     const tool = createExecTool({ security: "full", ask: "off" });
 
+    const result = await tool.execute("call1", {
+      command: "echo ok",
+    });
+    const text = normalizeText(result.content.find((c) => c.type === "text")?.text);
+    expect(text).toContain("ok");
+
     const err = await tool
-      .execute("call1", {
+      .execute("call2", {
         command: "echo ok",
-        host: "sandbox",
+        host: "gateway",
       })
       .then(() => null)
       .catch((error: unknown) => (error instanceof Error ? error : new Error(String(error))));
     expect(err).toBeTruthy();
     expect(err?.message).toMatch(/exec host not allowed/);
-    expect(err?.message).toMatch(/tools\.exec\.host=gateway/);
+    expect(err?.message).toMatch(/tools\.exec\.host=sandbox/);
   });
 
   it("fails closed when sandbox host is explicitly configured without sandbox runtime", async () => {
