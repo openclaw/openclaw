@@ -89,6 +89,46 @@ describe("resolveChannelGroupPolicy", () => {
     expect(policy.allowlistEnabled).toBe(true);
     expect(policy.allowed).toBe(false);
   });
+
+  it("allows groups when groupPolicy=allowlist with hasGroupAllowFrom but no groups", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          groupPolicy: "allowlist",
+        },
+      },
+    } as OpenClawConfig;
+
+    const policy = resolveChannelGroupPolicy({
+      cfg,
+      channel: "whatsapp",
+      groupId: "123@g.us",
+      hasGroupAllowFrom: true,
+    });
+
+    expect(policy.allowlistEnabled).toBe(true);
+    expect(policy.allowed).toBe(true);
+  });
+
+  it("still fails closed when groupPolicy=allowlist without groups or groupAllowFrom", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          groupPolicy: "allowlist",
+        },
+      },
+    } as OpenClawConfig;
+
+    const policy = resolveChannelGroupPolicy({
+      cfg,
+      channel: "whatsapp",
+      groupId: "123@g.us",
+      hasGroupAllowFrom: false,
+    });
+
+    expect(policy.allowlistEnabled).toBe(true);
+    expect(policy.allowed).toBe(false);
+  });
 });
 
 describe("resolveToolsBySender", () => {
