@@ -4,12 +4,40 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   appendCronRunLog,
+  DEFAULT_CRON_RUN_LOG_KEEP_LINES,
+  DEFAULT_CRON_RUN_LOG_MAX_BYTES,
   getPendingCronRunLogWriteCountForTests,
   readCronRunLogEntries,
+  resolveCronRunLogPruneOptions,
   resolveCronRunLogPath,
 } from "./run-log.js";
 
 describe("cron run log", () => {
+  it("resolves prune options from config with defaults", () => {
+    expect(resolveCronRunLogPruneOptions()).toEqual({
+      maxBytes: DEFAULT_CRON_RUN_LOG_MAX_BYTES,
+      keepLines: DEFAULT_CRON_RUN_LOG_KEEP_LINES,
+    });
+    expect(
+      resolveCronRunLogPruneOptions({
+        maxBytes: "5mb",
+        keepLines: 123,
+      }),
+    ).toEqual({
+      maxBytes: 5 * 1024 * 1024,
+      keepLines: 123,
+    });
+    expect(
+      resolveCronRunLogPruneOptions({
+        maxBytes: "invalid",
+        keepLines: -1,
+      }),
+    ).toEqual({
+      maxBytes: DEFAULT_CRON_RUN_LOG_MAX_BYTES,
+      keepLines: DEFAULT_CRON_RUN_LOG_KEEP_LINES,
+    });
+  });
+
   async function withRunLogDir(prefix: string, run: (dir: string) => Promise<void>) {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
     try {
