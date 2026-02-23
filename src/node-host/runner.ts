@@ -98,10 +98,13 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     process.env.BOT_GATEWAY_PASSWORD?.trim() ||
     (isRemoteMode ? cfg.gateway?.remote?.password : cfg.gateway?.auth?.password);
 
+  // In remote mode, prefer gateway.remote.url from config (e.g. wss://gw.hanzo.bot)
+  // Fall back to constructed URL from host/port/tls CLI options
+  const remoteUrl = isRemoteMode ? cfg.gateway?.remote?.url : undefined;
   const host = gateway.host ?? "127.0.0.1";
   const port = gateway.port ?? 18789;
   const scheme = gateway.tls ? "wss" : "ws";
-  const url = `${scheme}://${host}:${port}`;
+  const url = remoteUrl && !gateway.host ? remoteUrl : `${scheme}://${host}:${port}`;
   const pathEnv = ensureNodePathEnv();
   // eslint-disable-next-line no-console
   console.log(`node host PATH: ${pathEnv}`);

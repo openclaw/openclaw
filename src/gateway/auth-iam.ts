@@ -84,7 +84,33 @@ export async function validateIamToken(
   token: string,
   config: GatewayIamConfig,
 ): Promise<GatewayIamAuthResult> {
-  const sdkResult = await validateToken(token, toIamConfig(config));
+  let sdkResult = await validateToken(token, toIamConfig(config));
+
+  // Application tokens may lack a standard `sub` claim but carry `owner`/`name`
+  // (e.g. "admin/app-hanzobot").  Construct sub from those fields so the token
+  // is still accepted after signature verification passed.
+  if (!sdkResult.ok && sdkResult.reason === "iam_subject_missing") {
+    try {
+      const parts = token.split(".");
+      if (parts.length === 3) {
+        const payload = JSON.parse(Buffer.from(parts[1], "base64url").toString());
+        if (typeof payload.owner === "string" && typeof payload.name === "string") {
+          const sub = `${payload.owner}/${payload.name}`;
+          sdkResult = {
+            ok: true,
+            userId: sub,
+            email: typeof payload.email === "string" ? payload.email : undefined,
+            name: payload.name,
+            avatar: typeof payload.picture === "string" ? payload.picture : undefined,
+            owner: payload.owner,
+            claims: payload as IamJwtClaims,
+          };
+        }
+      }
+    } catch {
+      // Fall through to error return below
+    }
+  }
 
   if (!sdkResult.ok) {
     return { ok: false, reason: sdkResult.reason };
