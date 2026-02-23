@@ -351,15 +351,20 @@ jobs:
         with:
           submodules: false
 
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Install detect-secrets
+      - name: Install pre-commit
         run: |
           python -m pip install --upgrade pip
-          python -m pip install detect-secrets==1.5.0
+          python -m pip install pre-commit detect-secrets==1.5.0
 
       - name: Detect secrets
         run: |
@@ -367,6 +372,30 @@ jobs:
             echo "::error::Secret scanning failed. See docs/gateway/security.md#secret-scanning-detect-secrets"
             exit 1
           fi
+
+      - name: Detect committed private keys
+        run: pre-commit run --all-files detect-private-key
+
+      - name: Audit changed GitHub workflows with zizmor
+        run: |
+          set -euo pipefail
+
+          if [ "${{ github.event_name }}" = "push" ]; then
+            BASE="${{ github.event.before }}"
+          else
+            BASE="${{ github.event.pull_request.base.sha }}"
+          fi
+
+          mapfile -t workflow_files < <(git diff --name-only "$BASE" HEAD -- '.github/workflows/*.yml' '.github/workflows/*.yaml')
+          if [ "${#workflow_files[@]}" -eq 0 ]; then
+            echo "No workflow changes detected; skipping zizmor."
+            exit 0
+          fi
+
+          pre-commit run zizmor --files "${workflow_files[@]}"
+
+      - name: Audit production dependencies
+        run: pre-commit run --all-files pnpm-audit-prod
 
   checks-windows:
     needs: [docs-scope, changed-scope, build-artifacts, check]
