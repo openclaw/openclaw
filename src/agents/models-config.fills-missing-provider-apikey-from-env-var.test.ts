@@ -133,4 +133,68 @@ describe("models-config", () => {
       expect(parsed.providers["custom-proxy"]?.baseUrl).toBe("http://localhost:4000/v1");
     });
   });
+
+  it("refreshes stale explicit moonshot model capabilities from implicit catalog", async () => {
+    await withTempHome(async () => {
+      const prevKey = process.env.MOONSHOT_API_KEY;
+      process.env.MOONSHOT_API_KEY = "sk-moonshot-test";
+      try {
+        const cfg: OpenClawConfig = {
+          models: {
+            providers: {
+              moonshot: {
+                baseUrl: "https://api.moonshot.ai/v1",
+                api: "openai-completions",
+                models: [
+                  {
+                    id: "kimi-k2.5",
+                    name: "Kimi K2.5",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 123, output: 456, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 1024,
+                    maxTokens: 256,
+                  },
+                ],
+              },
+            },
+          },
+        };
+
+        await ensureOpenClawModelsJson(cfg);
+
+        const modelPath = path.join(resolveOpenClawAgentDir(), "models.json");
+        const raw = await fs.readFile(modelPath, "utf8");
+        const parsed = JSON.parse(raw) as {
+          providers: Record<
+            string,
+            {
+              models?: Array<{
+                id: string;
+                input?: string[];
+                reasoning?: boolean;
+                contextWindow?: number;
+                maxTokens?: number;
+                cost?: { input?: number; output?: number };
+              }>;
+            }
+          >;
+        };
+        const kimi = parsed.providers.moonshot?.models?.find((model) => model.id === "kimi-k2.5");
+        expect(kimi?.input).toEqual(["text", "image"]);
+        expect(kimi?.reasoning).toBe(false);
+        expect(kimi?.contextWindow).toBe(256000);
+        expect(kimi?.maxTokens).toBe(8192);
+        // Preserve explicit user pricing overrides when refreshing capabilities.
+        expect(kimi?.cost?.input).toBe(123);
+        expect(kimi?.cost?.output).toBe(456);
+      } finally {
+        if (prevKey === undefined) {
+          delete process.env.MOONSHOT_API_KEY;
+        } else {
+          process.env.MOONSHOT_API_KEY = prevKey;
+        }
+      }
+    });
+  });
 });
