@@ -69,18 +69,20 @@ describe("loadJsonFile", () => {
     expect(result).toEqual({ version: 1, profiles: { "ollama:local": {} } });
   });
 
-  it("restores .bak content to the primary file after fallback", () => {
+  it("does NOT write backup data back to the primary file (avoids lock bypass)", () => {
     const p = filePath("auth.json");
     const bak = `${p}.bak`;
     const data = { version: 1, profiles: { "test:default": {} } };
     fs.writeFileSync(p, "CORRUPT");
     fs.writeFileSync(bak, JSON.stringify(data));
 
-    loadJsonFile(p);
+    const result = loadJsonFile(p);
+    expect(result).toEqual(data);
 
-    // Primary should now contain the restored data.
-    const restored = JSON.parse(fs.readFileSync(p, "utf8"));
-    expect(restored).toEqual(data);
+    // Primary must still contain the original corrupt content — loadJsonFile
+    // intentionally does NOT restore the backup to the primary file because
+    // callers use withFileLock; a bare writeFileSync here would race.
+    expect(fs.readFileSync(p, "utf8")).toBe("CORRUPT");
   });
 
   it("returns undefined when both primary and backup are missing", () => {
