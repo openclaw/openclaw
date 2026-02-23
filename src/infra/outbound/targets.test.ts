@@ -281,3 +281,79 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.to).toBe("63448508");
   });
 });
+
+describe("resolveSessionDeliveryTarget — cross-channel reply guard (#24152)", () => {
+  it("uses turnSourceChannel over session lastChannel when provided", () => {
+    // Simulate: WhatsApp message originated the turn, but a Slack message
+    // arrived concurrently and updated lastChannel to "slack"
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-shared",
+        updatedAt: 1,
+        lastChannel: "slack",       // <- concurrently overwritten
+        lastTo: "U0AEMECNCBV",     // <- Slack user (wrong target)
+      },
+      requestedChannel: "last",
+      turnSourceChannel: "whatsapp",    // <- originated from WhatsApp
+      turnSourceTo: "+66972796305",     // <- WhatsApp user (correct target)
+    });
+
+    expect(resolved.channel).toBe("whatsapp");
+    expect(resolved.to).toBe("+66972796305");
+  });
+
+  it("falls back to session lastChannel when turnSourceChannel is not set", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-normal",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "8587265585",
+      },
+      requestedChannel: "last",
+    });
+
+    expect(resolved.channel).toBe("telegram");
+    expect(resolved.to).toBe("8587265585");
+  });
+
+  it("respects explicit requestedChannel over turnSourceChannel", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-explicit",
+        updatedAt: 1,
+        lastChannel: "slack",
+        lastTo: "U12345",
+      },
+      requestedChannel: "telegram",
+      explicitTo: "8587265585",
+      turnSourceChannel: "whatsapp",
+      turnSourceTo: "+66972796305",
+    });
+
+    // Explicit requestedChannel "telegram" is not "last", so it takes priority
+    expect(resolved.channel).toBe("telegram");
+  });
+
+  it("preserves turnSourceAccountId and turnSourceThreadId", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-meta",
+        updatedAt: 1,
+        lastChannel: "slack",
+        lastTo: "U_WRONG",
+        lastAccountId: "wrong-account",
+      },
+      requestedChannel: "last",
+      turnSourceChannel: "telegram",
+      turnSourceTo: "8587265585",
+      turnSourceAccountId: "bot-123",
+      turnSourceThreadId: 42,
+    });
+
+    expect(resolved.channel).toBe("telegram");
+    expect(resolved.to).toBe("8587265585");
+    expect(resolved.accountId).toBe("bot-123");
+    expect(resolved.threadId).toBe(42);
+  });
+});
