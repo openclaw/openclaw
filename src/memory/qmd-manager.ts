@@ -735,7 +735,7 @@ export class QmdMemoryManager implements MemorySearchManager {
         path: doc.rel,
         startLine: lines.startLine,
         endLine: lines.endLine,
-      score,
+        score,
         snippet,
         source: doc.source,
       });
