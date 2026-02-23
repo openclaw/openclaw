@@ -17,9 +17,17 @@ function asObjectRecord(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>;
 }
 
+function normalizeTelegramLookupTargetForMatch(raw: string): string | undefined {
+  const normalized = normalizeTelegramLookupTarget(raw);
+  if (!normalized) {
+    return undefined;
+  }
+  return normalized.startsWith("@") ? normalized.toLowerCase() : normalized;
+}
+
 function normalizeTelegramTargetForMatch(raw: string): string | undefined {
   const parsed = parseTelegramTarget(raw);
-  const normalized = normalizeTelegramLookupTarget(parsed.chatId);
+  const normalized = normalizeTelegramLookupTargetForMatch(parsed.chatId);
   if (!normalized) {
     return undefined;
   }
@@ -49,7 +57,7 @@ function resolveLegacyRewrite(params: {
   if (normalizeTelegramChatId(parsed.chatId)) {
     return null;
   }
-  const normalized = normalizeTelegramLookupTarget(parsed.chatId);
+  const normalized = normalizeTelegramLookupTargetForMatch(parsed.chatId);
   if (!normalized) {
     return null;
   }

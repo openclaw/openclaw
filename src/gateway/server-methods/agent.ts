@@ -192,6 +192,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       extraSystemPrompt?: string;
       idempotencyKey: string;
       timeout?: number;
+      bestEffortDeliver?: boolean;
       label?: string;
       spawnedBy?: string;
       inputProvenance?: InputProvenance;
@@ -216,6 +217,8 @@ export const agentHandlers: GatewayRequestHandlers = {
       return;
     }
     const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(request.attachments);
+    const requestedBestEffortDeliver =
+      typeof request.bestEffortDeliver === "boolean" ? request.bestEffortDeliver : undefined;
 
     let message = (request.message ?? "").trim();
     let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
@@ -310,7 +313,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
     let resolvedSessionId = request.sessionId?.trim() || undefined;
     let sessionEntry: SessionEntry | undefined;
-    let bestEffortDeliver = false;
+    let bestEffortDeliver = requestedBestEffortDeliver ?? false;
     let cfgForAgent: ReturnType<typeof loadConfig> | undefined;
     let resolvedSessionKey = requestedSessionKey;
     let skipTimestampInjection = false;
@@ -448,7 +451,9 @@ export const agentHandlers: GatewayRequestHandlers = {
           sessionKey: canonicalSessionKey,
           clientRunId: idem,
         });
-        bestEffortDeliver = true;
+        if (requestedBestEffortDeliver === undefined) {
+          bestEffortDeliver = true;
+        }
       }
       registerAgentRunContext(idem, { sessionKey: canonicalSessionKey });
     }

@@ -143,4 +143,46 @@ describe("maybePersistResolvedTelegramTarget", () => {
       expect.any(Object),
     );
   });
+
+  it("matches username targets case-insensitively", async () => {
+    readConfigFileSnapshotForWrite.mockResolvedValue({
+      snapshot: {
+        config: {
+          channels: {
+            telegram: {
+              defaultTo: "https://t.me/mychannel",
+            },
+          },
+        },
+      },
+      writeOptions: {},
+    });
+    loadCronStore.mockResolvedValue({
+      version: 1,
+      jobs: [{ id: "a", delivery: { channel: "telegram", to: "https://t.me/mychannel" } }],
+    });
+
+    await maybePersistResolvedTelegramTarget({
+      cfg: {} as OpenClawConfig,
+      rawTarget: "@MyChannel",
+      resolvedChatId: "-100123",
+    });
+
+    expect(writeConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channels: {
+          telegram: {
+            defaultTo: "-100123",
+          },
+        },
+      }),
+      expect.any(Object),
+    );
+    expect(saveCronStore).toHaveBeenCalledWith(
+      "/tmp/cron/jobs.json",
+      expect.objectContaining({
+        jobs: [{ id: "a", delivery: { channel: "telegram", to: "-100123" } }],
+      }),
+    );
+  });
 });
