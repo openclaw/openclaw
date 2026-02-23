@@ -145,39 +145,20 @@ async function runInFlightVerboseToggleCase(params: {
 describe("directive behavior", () => {
   installDirectiveBehaviorE2EHooks();
 
-  it("applies inline reasoning in mixed messages and acks immediately", async () => {
+  it("keeps reasoning acks out of mixed messages, including rapid repeats", async () => {
     await withTempHome(async (home) => {
       mockEmbeddedResponse("done");
 
       const blockReplies: string[] = [];
       const storePath = sessionStorePath(home);
 
-      const res = await runInlineReasoningMessage({
+      const firstRes = await runInlineReasoningMessage({
         home,
         body: "please reply\n/reasoning on",
         storePath,
         blockReplies,
       });
-
-      const texts = replyTexts(res);
-      expect(texts).toContain("done");
-
-      expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
-    });
-  });
-  it("keeps reasoning acks for rapid mixed directives", async () => {
-    await withTempHome(async (home) => {
-      mockEmbeddedResponse("ok");
-
-      const blockReplies: string[] = [];
-      const storePath = sessionStorePath(home);
-
-      await runInlineReasoningMessage({
-        home,
-        body: "do it\n/reasoning on",
-        storePath,
-        blockReplies,
-      });
+      expect(replyTexts(firstRes)).toContain("done");
 
       await runInlineReasoningMessage({
         home,
