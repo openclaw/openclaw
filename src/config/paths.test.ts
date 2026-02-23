@@ -70,38 +70,21 @@ describe("state + config path candidates", () => {
     expect(candidates[0]).toBe(path.join(resolvedHome, ".bot", "bot.json"));
   });
 
-  it("orders default config candidates in a stable order", () => {
+  it("returns single canonical config candidate", () => {
     const home = "/home/test";
     const resolvedHome = path.resolve(home);
     const candidates = resolveDefaultConfigCandidates({} as NodeJS.ProcessEnv, () => home);
-    const expected = [
-      path.join(resolvedHome, ".bot", "bot.json"),
-      path.join(resolvedHome, ".bot", "bot.json"),
-      path.join(resolvedHome, ".bot", "moldbot.json"),
-      path.join(resolvedHome, ".bot", "moltbot.json"),
-      path.join(resolvedHome, ".bot", "bot.json"),
-      path.join(resolvedHome, ".bot", "bot.json"),
-      path.join(resolvedHome, ".bot", "moldbot.json"),
-      path.join(resolvedHome, ".bot", "moltbot.json"),
-      path.join(resolvedHome, ".moldbot", "bot.json"),
-      path.join(resolvedHome, ".moldbot", "bot.json"),
-      path.join(resolvedHome, ".moldbot", "moldbot.json"),
-      path.join(resolvedHome, ".moldbot", "moltbot.json"),
-      path.join(resolvedHome, ".moltbot", "bot.json"),
-      path.join(resolvedHome, ".moltbot", "bot.json"),
-      path.join(resolvedHome, ".moltbot", "moldbot.json"),
-      path.join(resolvedHome, ".moltbot", "moltbot.json"),
-    ];
+    const expected = [path.join(resolvedHome, ".bot", "bot.json")];
     expect(candidates).toEqual(expected);
   });
 
-  it("prefers ~/.bot when it exists and legacy dir is missing", async () => {
+  it("prefers ~/.bot when it exists", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "bot-state-"));
     try {
-      const newDir = path.join(root, ".bot");
-      await fs.mkdir(newDir, { recursive: true });
+      const botDir = path.join(root, ".bot");
+      await fs.mkdir(botDir, { recursive: true });
       const resolved = resolveStateDir({} as NodeJS.ProcessEnv, () => root);
-      expect(resolved).toBe(newDir);
+      expect(resolved).toBe(botDir);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -110,13 +93,13 @@ describe("state + config path candidates", () => {
   it("CONFIG_PATH prefers existing config when present", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "bot-config-"));
     try {
-      const legacyDir = path.join(root, ".bot");
-      await fs.mkdir(legacyDir, { recursive: true });
-      const legacyPath = path.join(legacyDir, "bot.json");
-      await fs.writeFile(legacyPath, "{}", "utf-8");
+      const botDir = path.join(root, ".bot");
+      await fs.mkdir(botDir, { recursive: true });
+      const configPath = path.join(botDir, "bot.json");
+      await fs.writeFile(configPath, "{}", "utf-8");
 
       const resolved = resolveConfigPathCandidate({} as NodeJS.ProcessEnv, () => root);
-      expect(resolved).toBe(legacyPath);
+      expect(resolved).toBe(configPath);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
@@ -125,10 +108,10 @@ describe("state + config path candidates", () => {
   it("respects state dir overrides when config is missing", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "bot-config-override-"));
     try {
-      const legacyDir = path.join(root, ".bot");
-      await fs.mkdir(legacyDir, { recursive: true });
-      const legacyConfig = path.join(legacyDir, "bot.json");
-      await fs.writeFile(legacyConfig, "{}", "utf-8");
+      const botDir = path.join(root, ".bot");
+      await fs.mkdir(botDir, { recursive: true });
+      const botConfig = path.join(botDir, "bot.json");
+      await fs.writeFile(botConfig, "{}", "utf-8");
 
       const overrideDir = path.join(root, "override");
       const env = { BOT_STATE_DIR: overrideDir } as NodeJS.ProcessEnv;

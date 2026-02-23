@@ -24,17 +24,13 @@ afterEach(async () => {
   tempRoot = null;
 });
 
-describe("legacy state dir auto-migration", () => {
-  it("skips migration when canonical state dir symlink points at another legacy dir", async () => {
+describe("state dir auto-migration", () => {
+  it("skips migration when state dir already exists", async () => {
     const root = await makeTempRoot();
-    const legacySymlink = path.join(root, ".bot");
-    const legacyDir = path.join(root, ".moltbot");
+    const botDir = path.join(root, ".bot");
 
-    fs.mkdirSync(legacyDir, { recursive: true });
-    fs.writeFileSync(path.join(legacyDir, "marker.txt"), "ok", "utf-8");
-
-    const dirLinkType = process.platform === "win32" ? "junction" : "dir";
-    fs.symlinkSync(legacyDir, legacySymlink, dirLinkType);
+    fs.mkdirSync(botDir, { recursive: true });
+    fs.writeFileSync(path.join(botDir, "marker.txt"), "ok", "utf-8");
 
     const result = await autoMigrateLegacyStateDir({
       env: {} as NodeJS.ProcessEnv,
@@ -42,11 +38,6 @@ describe("legacy state dir auto-migration", () => {
     });
 
     expect(result.migrated).toBe(false);
-    expect(result.warnings).toEqual([expect.stringContaining("target already exists")]);
-
-    const targetMarker = path.join(root, ".bot", "marker.txt");
-    expect(fs.readFileSync(targetMarker, "utf-8")).toBe("ok");
-    expect(fs.readFileSync(path.join(root, ".moltbot", "marker.txt"), "utf-8")).toBe("ok");
     expect(fs.readFileSync(path.join(root, ".bot", "marker.txt"), "utf-8")).toBe("ok");
   });
 });

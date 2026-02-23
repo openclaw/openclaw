@@ -17,16 +17,8 @@ export function resolveIsNixMode(env: NodeJS.ProcessEnv = process.env): boolean 
 
 export const isNixMode = resolveIsNixMode();
 
-// Support historical (and occasionally misspelled) legacy state dirs.
-const LEGACY_STATE_DIRNAMES = [".bot", ".openclaw", ".moldbot", ".moltbot"] as const;
-const NEW_STATE_DIRNAME = ".bot";
+const STATE_DIRNAME = ".bot";
 const CONFIG_FILENAME = "bot.json";
-const LEGACY_CONFIG_FILENAMES = [
-  "bot.json",
-  "openclaw.json",
-  "moldbot.json",
-  "moltbot.json",
-] as const;
 
 function resolveDefaultHomeDir(): string {
   return resolveRequiredHomeDir(process.env, os.homedir);
@@ -37,24 +29,20 @@ function envHomedir(env: NodeJS.ProcessEnv): () => string {
   return () => resolveRequiredHomeDir(env, os.homedir);
 }
 
-function legacyStateDirs(homedir: () => string = resolveDefaultHomeDir): string[] {
-  return LEGACY_STATE_DIRNAMES.map((dir) => path.join(homedir(), dir));
-}
-
-function newStateDir(homedir: () => string = resolveDefaultHomeDir): string {
-  return path.join(homedir(), NEW_STATE_DIRNAME);
+function stateDir(homedir: () => string = resolveDefaultHomeDir): string {
+  return path.join(homedir(), STATE_DIRNAME);
 }
 
 export function resolveLegacyStateDir(homedir: () => string = resolveDefaultHomeDir): string {
-  return legacyStateDirs(homedir)[0] ?? newStateDir(homedir);
+  return stateDir(homedir);
 }
 
 export function resolveLegacyStateDirs(homedir: () => string = resolveDefaultHomeDir): string[] {
-  return legacyStateDirs(homedir);
+  return [stateDir(homedir)];
 }
 
 export function resolveNewStateDir(homedir: () => string = resolveDefaultHomeDir): string {
-  return newStateDir(homedir);
+  return stateDir(homedir);
 }
 
 /**
@@ -67,27 +55,11 @@ export function resolveStateDir(
   homedir: () => string = envHomedir(env),
 ): string {
   const effectiveHomedir = () => resolveRequiredHomeDir(env, homedir);
-  const override = env.BOT_STATE_DIR?.trim() || env.BOT_STATE_DIR?.trim();
+  const override = env.BOT_STATE_DIR?.trim();
   if (override) {
     return resolveUserPath(override, env, effectiveHomedir);
   }
-  const newDir = newStateDir(effectiveHomedir);
-  const legacyDirs = legacyStateDirs(effectiveHomedir);
-  const hasNew = fs.existsSync(newDir);
-  if (hasNew) {
-    return newDir;
-  }
-  const existingLegacy = legacyDirs.find((dir) => {
-    try {
-      return fs.existsSync(dir);
-    } catch {
-      return false;
-    }
-  });
-  if (existingLegacy) {
-    return existingLegacy;
-  }
-  return newDir;
+  return stateDir(effectiveHomedir);
 }
 
 function resolveUserPath(
@@ -113,24 +85,23 @@ function resolveUserPath(
 export const STATE_DIR = resolveStateDir();
 
 /**
- * Config file path (JSON5).
+ * Config file path.
  * Can be overridden via BOT_CONFIG_PATH.
  * Default: ~/.bot/bot.json (or $BOT_STATE_DIR/bot.json)
  */
 export function resolveCanonicalConfigPath(
   env: NodeJS.ProcessEnv = process.env,
-  stateDir: string = resolveStateDir(env, envHomedir(env)),
+  dir: string = resolveStateDir(env, envHomedir(env)),
 ): string {
-  const override = env.BOT_CONFIG_PATH?.trim() || env.BOT_CONFIG_PATH?.trim();
+  const override = env.BOT_CONFIG_PATH?.trim();
   if (override) {
     return resolveUserPath(override, env, envHomedir(env));
   }
-  return path.join(stateDir, CONFIG_FILENAME);
+  return path.join(dir, CONFIG_FILENAME);
 }
 
 /**
- * Resolve the active config path by preferring existing config candidates
- * before falling back to the canonical path.
+ * Resolve the active config path, checking if it exists on disk.
  */
 export function resolveConfigPathCandidate(
   env: NodeJS.ProcessEnv = process.env,
@@ -151,46 +122,39 @@ export function resolveConfigPathCandidate(
 }
 
 /**
- * Active config path (prefers existing config files).
+ * Active config path.
  */
 export function resolveConfigPath(
   env: NodeJS.ProcessEnv = process.env,
-  stateDir: string = resolveStateDir(env, envHomedir(env)),
+  dir: string = resolveStateDir(env, envHomedir(env)),
   homedir: () => string = envHomedir(env),
 ): string {
   const override = env.BOT_CONFIG_PATH?.trim();
   if (override) {
     return resolveUserPath(override, env, homedir);
   }
-  const stateOverride = env.BOT_STATE_DIR?.trim();
-  const candidates = [
-    path.join(stateDir, CONFIG_FILENAME),
-    ...LEGACY_CONFIG_FILENAMES.map((name) => path.join(stateDir, name)),
-  ];
-  const existing = candidates.find((candidate) => {
-    try {
-      return fs.existsSync(candidate);
-    } catch {
-      return false;
+  const configPath = path.join(dir, CONFIG_FILENAME);
+  try {
+    if (fs.existsSync(configPath)) {
+      return configPath;
     }
-  });
-  if (existing) {
-    return existing;
+  } catch {
+    // fall through
   }
+  const stateOverride = env.BOT_STATE_DIR?.trim();
   if (stateOverride) {
-    return path.join(stateDir, CONFIG_FILENAME);
+    return configPath;
   }
-  const defaultStateDir = resolveStateDir(env, homedir);
-  if (path.resolve(stateDir) === path.resolve(defaultStateDir)) {
+  const defaultDir = resolveStateDir(env, homedir);
+  if (path.resolve(dir) === path.resolve(defaultDir)) {
     return resolveConfigPathCandidate(env, homedir);
   }
-  return path.join(stateDir, CONFIG_FILENAME);
+  return configPath;
 }
 
 /**
  * @deprecated Use resolveConfigPathCandidate() instead. This constant is evaluated
  * at module load time and does not respect BOT_HOME set after import.
- * Kept for backwards compatibility but should be avoided in new code.
  */
 export const CONFIG_PATH = resolveConfigPathCandidate();
 
@@ -203,32 +167,27 @@ export function getConfigPath(env: NodeJS.ProcessEnv = process.env): string {
 }
 
 /**
- * Resolve default config path candidates across default locations.
- * Order: explicit config path → state-dir-derived paths → new default.
+ * Resolve default config path candidates.
+ * Order: explicit config path → state dir config → default.
  */
 export function resolveDefaultConfigCandidates(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = envHomedir(env),
 ): string[] {
   const effectiveHomedir = () => resolveRequiredHomeDir(env, homedir);
-  const explicit = env.BOT_CONFIG_PATH?.trim() || env.BOT_CONFIG_PATH?.trim();
+  const explicit = env.BOT_CONFIG_PATH?.trim();
   if (explicit) {
     return [resolveUserPath(explicit, env, effectiveHomedir)];
   }
 
   const candidates: string[] = [];
-  const botStateDir = env.BOT_STATE_DIR?.trim() || env.BOT_STATE_DIR?.trim();
+  const botStateDir = env.BOT_STATE_DIR?.trim();
   if (botStateDir) {
     const resolved = resolveUserPath(botStateDir, env, effectiveHomedir);
     candidates.push(path.join(resolved, CONFIG_FILENAME));
-    candidates.push(...LEGACY_CONFIG_FILENAMES.map((name) => path.join(resolved, name)));
   }
 
-  const defaultDirs = [newStateDir(effectiveHomedir), ...legacyStateDirs(effectiveHomedir)];
-  for (const dir of defaultDirs) {
-    candidates.push(path.join(dir, CONFIG_FILENAME));
-    candidates.push(...LEGACY_CONFIG_FILENAMES.map((name) => path.join(dir, name)));
-  }
+  candidates.push(path.join(stateDir(effectiveHomedir), CONFIG_FILENAME));
   return candidates;
 }
 
@@ -252,32 +211,29 @@ const OAUTH_FILENAME = "oauth.json";
  *
  * Precedence:
  * - `BOT_OAUTH_DIR` (explicit override)
- * - `$*_STATE_DIR/credentials` (canonical server/default)
+ * - `$BOT_STATE_DIR/credentials` (canonical default)
  */
 export function resolveOAuthDir(
   env: NodeJS.ProcessEnv = process.env,
-  stateDir: string = resolveStateDir(env, envHomedir(env)),
+  dir: string = resolveStateDir(env, envHomedir(env)),
 ): string {
   const override = env.BOT_OAUTH_DIR?.trim();
   if (override) {
     return resolveUserPath(override, env, envHomedir(env));
   }
-  return path.join(stateDir, "credentials");
+  return path.join(dir, "credentials");
 }
 
 export function resolveOAuthPath(
   env: NodeJS.ProcessEnv = process.env,
-  stateDir: string = resolveStateDir(env, envHomedir(env)),
+  dir: string = resolveStateDir(env, envHomedir(env)),
 ): string {
-  return path.join(resolveOAuthDir(env, stateDir), OAUTH_FILENAME);
+  return path.join(resolveOAuthDir(env, dir), OAUTH_FILENAME);
 }
 
 export function resolveGatewayPort(cfg?: BotConfig, env: NodeJS.ProcessEnv = process.env): number {
-  // When BOT_HOME is set (isolated instance), prefer config over inherited env vars.
-  // This prevents a parent gateway's BOT_GATEWAY_PORT from bleeding through.
   const isIsolatedInstance = Boolean(env.BOT_HOME?.trim());
 
-  // Config port takes precedence for isolated instances
   const configPort = cfg?.gateway?.port;
   if (
     isIsolatedInstance &&
@@ -288,8 +244,7 @@ export function resolveGatewayPort(cfg?: BotConfig, env: NodeJS.ProcessEnv = pro
     return configPort;
   }
 
-  // Check env vars (for non-isolated or when config doesn't specify port)
-  const envRaw = env.BOT_GATEWAY_PORT?.trim() || env.BOT_GATEWAY_PORT?.trim();
+  const envRaw = env.BOT_GATEWAY_PORT?.trim();
   if (envRaw) {
     const parsed = Number.parseInt(envRaw, 10);
     if (Number.isFinite(parsed) && parsed > 0) {
@@ -297,7 +252,6 @@ export function resolveGatewayPort(cfg?: BotConfig, env: NodeJS.ProcessEnv = pro
     }
   }
 
-  // Fall back to config for non-isolated instances
   if (typeof configPort === "number" && Number.isFinite(configPort) && configPort > 0) {
     return configPort;
   }
