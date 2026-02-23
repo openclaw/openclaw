@@ -148,6 +148,60 @@ describe("createOpenClawCodingTools", () => {
         /Supply correct parameters before retrying\./,
       );
     });
+
+    it("adds cmd alias to exec tool schema without dropping metadata", () => {
+      const base: AgentTool = {
+        name: "exec",
+        label: "exec",
+        description: "test",
+        parameters: Type.Object({
+          command: Type.String({ description: "Shell command to execute" }),
+          workdir: Type.Optional(Type.String({ description: "Working directory" })),
+        }),
+        execute: vi.fn(),
+      };
+
+      const patched = __testing.patchToolSchemaForClaudeCompatibility(base);
+      const params = patched.parameters as {
+        properties?: Record<string, unknown>;
+        required?: string[];
+      };
+      const props = params.properties ?? {};
+
+      expect(props.cmd).toEqual(props.command);
+      expect(params.required ?? []).not.toContain("command");
+      expect(params.required ?? []).not.toContain("cmd");
+    });
+
+    it("normalizes cmd to command and enforces required groups at runtime", async () => {
+      const execute = vi.fn(async (_id, args) => args);
+      const tool: AgentTool = {
+        name: "exec",
+        label: "exec",
+        description: "test",
+        parameters: Type.Object({
+          command: Type.String(),
+        }),
+        execute,
+      };
+
+      const wrapped = __testing.wrapToolParamNormalization(tool, [
+        { keys: ["command", "cmd"], label: "command (command or cmd)" },
+      ]);
+
+      await wrapped.execute("tool-1", { cmd: "ls -la" });
+      expect(execute).toHaveBeenCalledWith("tool-1", { command: "ls -la" }, undefined, undefined);
+
+      await wrapped.execute("tool-2", { command: "echo hi" });
+      expect(execute).toHaveBeenCalledWith("tool-2", { command: "echo hi" }, undefined, undefined);
+
+      await expect(wrapped.execute("tool-3", {})).rejects.toThrow(
+        /Missing required parameter: command \(command or cmd\)/,
+      );
+      await expect(wrapped.execute("tool-4", { cmd: "   " })).rejects.toThrow(
+        /Missing required parameter/,
+      );
+    });
   });
 
   it("keeps browser tool schema OpenAI-compatible without normalization", () => {

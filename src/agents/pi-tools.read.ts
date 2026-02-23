@@ -358,6 +358,7 @@ export const CLAUDE_PARAM_GROUPS = {
       allowEmpty: true,
     },
   ],
+  exec: [{ keys: ["command", "cmd"], label: "command (command or cmd)" }],
 } as const;
 
 function extractStructuredText(value: unknown, depth = 0): string | undefined {
@@ -434,6 +435,11 @@ export function normalizeToolParams(params: unknown): Record<string, unknown> | 
     normalized.newText = normalized.new_string;
     delete normalized.new_string;
   }
+  // cmd → command (exec)
+  if ("cmd" in normalized && !("command" in normalized)) {
+    normalized.command = normalized.cmd;
+    delete normalized.cmd;
+  }
   // Some providers/models emit text payloads as structured blocks instead of raw strings.
   // Normalize these for write/edit so content matching and writes stay deterministic.
   normalizeTextLikeParam(normalized, "content");
@@ -462,6 +468,7 @@ export function patchToolSchemaForClaudeCompatibility(tool: AnyAgentTool): AnyAg
     { original: "path", alias: "file_path" },
     { original: "oldText", alias: "old_string" },
     { original: "newText", alias: "new_string" },
+    { original: "command", alias: "cmd" },
   ];
 
   for (const { original, alias } of aliasPairs) {
