@@ -366,12 +366,12 @@ describe("resolveSessionDeliveryTarget — cross-channel reply guard (#24152)", 
       entry: {
         sessionId: "sess-shared",
         updatedAt: 1,
-        lastChannel: "slack",       // <- concurrently overwritten
-        lastTo: "U0AEMECNCBV",     // <- Slack user (wrong target)
+        lastChannel: "slack", // <- concurrently overwritten
+        lastTo: "U0AEMECNCBV", // <- Slack user (wrong target)
       },
       requestedChannel: "last",
-      turnSourceChannel: "whatsapp",    // <- originated from WhatsApp
-      turnSourceTo: "+66000000000",     // <- WhatsApp user (correct target)
+      turnSourceChannel: "whatsapp", // <- originated from WhatsApp
+      turnSourceTo: "+66000000000", // <- WhatsApp user (correct target)
     });
 
     expect(resolved.channel).toBe("whatsapp");
