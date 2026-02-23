@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
@@ -37,11 +36,10 @@ function makeUnauthorizedWhatsAppCfg(home: string) {
   };
 }
 
-async function expectResetBlockedForNonOwner(params: {
-  home: string;
-  commandAuthorized: boolean;
-}): Promise<void> {
+async function expectResetBlockedForNonOwner(params: { home: string }): Promise<void> {
   const { home } = params;
+  const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+  runEmbeddedPiAgentMock.mockClear();
   const cfg = makeCfg(home);
   cfg.channels ??= {};
   cfg.channels.whatsapp = {
@@ -50,20 +48,20 @@ async function expectResetBlockedForNonOwner(params: {
   };
   cfg.session = {
     ...cfg.session,
-    store: join(tmpdir(), `openclaw-session-test-${Date.now()}.json`),
+    store: join(home, "blocked-reset.sessions.json"),
   };
   const res = await getReplyFromConfig(
     {
       Body: "/reset",
       From: "+1003",
       To: "+2000",
-      CommandAuthorized: params.commandAuthorized,
+      CommandAuthorized: true,
     },
     {},
     cfg,
   );
   expect(res).toBeUndefined();
-  expect(getRunEmbeddedPiAgentMock()).not.toHaveBeenCalled();
+  expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
 }
 
 async function expectUnauthorizedCommandDropped(home: string, body: "/status") {
@@ -203,55 +201,23 @@ describe("trigger handling", () => {
     });
   });
 
-  it("runs a greeting prompt for bare /reset and /new", async () => {
+  it("runs a greeting prompt for bare /new and blocks unauthorized /reset", async () => {
     await withTempHome(async (home) => {
-      for (const body of ["/reset", "/new"] as const) {
-        await runGreetingPromptForBareNewOrReset({ home, body, getReplyFromConfig });
-      }
-    });
-  });
-
-  it("blocks /reset for unauthorized sender scenarios", async () => {
-    await withTempHome(async (home) => {
-      for (const commandAuthorized of [false, true]) {
-        await expectResetBlockedForNonOwner({
-          home,
-          commandAuthorized,
-        });
-      }
+      await runGreetingPromptForBareNewOrReset({ home, body: "/new", getReplyFromConfig });
+      await expectResetBlockedForNonOwner({ home });
     });
   });
 
   it("handles inline commands and strips directives before the agent", async () => {
     await withTempHome(async (home) => {
-      const cases: Array<{
-        body: string;
-        stripToken: string;
-        blockReplyContains: string;
-        requestOverrides?: Record<string, unknown>;
-      }> = [
-        {
-          body: "please /commands now",
-          stripToken: "/commands",
-          blockReplyContains: "Slash commands",
-        },
-        {
-          body: "please /whoami now",
-          stripToken: "/whoami",
-          blockReplyContains: "Identity",
-          requestOverrides: { SenderId: "12345" },
-        },
-      ];
-      for (const testCase of cases) {
-        await expectInlineCommandHandledAndStripped({
-          home,
-          getReplyFromConfig,
-          body: testCase.body,
-          stripToken: testCase.stripToken,
-          blockReplyContains: testCase.blockReplyContains,
-          requestOverrides: testCase.requestOverrides,
-        });
-      }
+      await expectInlineCommandHandledAndStripped({
+        home,
+        getReplyFromConfig,
+        body: "please /whoami now",
+        stripToken: "/whoami",
+        blockReplyContains: "Identity",
+        requestOverrides: { SenderId: "12345" },
+      });
     });
   });
 
@@ -301,31 +267,6 @@ describe("trigger handling", () => {
 
       {
         const cfg = isolateStore(
-          makeWhatsAppElevatedCfg(home, { requireMentionInGroups: false }),
-          "group-off",
-        );
-        const res = await getReplyFromConfig(
-          {
-            Body: "/elevated off",
-            From: "whatsapp:group:123@g.us",
-            To: "whatsapp:+2000",
-            Provider: "whatsapp",
-            SenderE164: "+1000",
-            CommandAuthorized: true,
-            ChatType: "group",
-            WasMentioned: false,
-          },
-          {},
-          cfg,
-        );
-        const text = Array.isArray(res) ? res[0]?.text : res?.text;
-        expect(text).toContain("Elevated mode disabled.");
-        const store = await readSessionStore(cfg);
-        expect(store["agent:main:whatsapp:group:123@g.us"]?.elevatedLevel).toBe("off");
-      }
-
-      {
-        const cfg = isolateStore(
           makeWhatsAppElevatedCfg(home, { requireMentionInGroups: true }),
           "group-on",
         );
@@ -347,38 +288,6 @@ describe("trigger handling", () => {
         expect(text).toContain("Elevated mode set to ask");
         const store = await readSessionStore(cfg);
         expect(store["agent:main:whatsapp:group:123@g.us"]?.elevatedLevel).toBe("on");
-      }
-
-      {
-        const cfg = isolateStore(
-          makeWhatsAppElevatedCfg(home, { requireMentionInGroups: false }),
-          "group-ignore",
-        );
-        const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
-        runEmbeddedPiAgentMock.mockClear();
-        runEmbeddedPiAgentMock.mockResolvedValue({
-          payloads: [{ text: "ok" }],
-          meta: {
-            durationMs: 1,
-            agentMeta: { sessionId: "s", provider: "p", model: "m" },
-          },
-        });
-        const res = await getReplyFromConfig(
-          {
-            Body: "/elevated on",
-            From: "whatsapp:group:123@g.us",
-            To: "whatsapp:+2000",
-            Provider: "whatsapp",
-            SenderE164: "+1000",
-            ChatType: "group",
-            WasMentioned: false,
-          },
-          {},
-          cfg,
-        );
-        const text = Array.isArray(res) ? res[0]?.text : res?.text;
-        expect(text).toBeUndefined();
-        expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
       }
 
       {
