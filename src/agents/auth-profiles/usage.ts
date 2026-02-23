@@ -3,6 +3,20 @@ import { normalizeProviderId } from "../model-selection.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
 import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
+const FAILURE_REASON_PRIORITY: AuthProfileFailureReason[] = [
+  "auth",
+  "billing",
+  "format",
+  "model_not_found",
+  "timeout",
+  "rate_limit",
+  "unknown",
+];
+const FAILURE_REASON_SET = new Set<AuthProfileFailureReason>(FAILURE_REASON_PRIORITY);
+const FAILURE_REASON_ORDER = new Map<AuthProfileFailureReason, number>(
+  FAILURE_REASON_PRIORITY.map((reason, index) => [reason, index]),
+);
+
 export function resolveProfileUnusableUntil(
   stats: Pick<ProfileUsageStats, "cooldownUntil" | "disabledUntil">,
 ): number | null {
@@ -25,6 +39,85 @@ export function isProfileInCooldown(store: AuthProfileStore, profileId: string):
   }
   const unusableUntil = resolveProfileUnusableUntil(stats);
   return unusableUntil ? Date.now() < unusableUntil : false;
+}
+
+function isActiveUnusableWindow(until: number | undefined, now: number): boolean {
+  return typeof until === "number" && Number.isFinite(until) && until > 0 && now < until;
+}
+
+/**
+ * Infer the most likely reason all candidate profiles are currently unavailable.
+ *
+ * We prefer explicit active `disabledReason` values (for example billing/auth)
+ * over generic cooldown buckets, then fall back to failure-count signals.
+ */
+export function resolveProfilesUnavailableReason(params: {
+  store: AuthProfileStore;
+  profileIds: string[];
+  now?: number;
+}): AuthProfileFailureReason | null {
+  const now = params.now ?? Date.now();
+  const scores = new Map<AuthProfileFailureReason, number>();
+  const addScore = (reason: AuthProfileFailureReason, value: number) => {
+    if (!FAILURE_REASON_SET.has(reason) || value <= 0 || !Number.isFinite(value)) {
+      return;
+    }
+    scores.set(reason, (scores.get(reason) ?? 0) + value);
+  };
+
+  for (const profileId of params.profileIds) {
+    const stats = params.store.usageStats?.[profileId];
+    if (!stats) {
+      continue;
+    }
+
+    const disabledActive = isActiveUnusableWindow(stats.disabledUntil, now);
+    if (disabledActive && stats.disabledReason && FAILURE_REASON_SET.has(stats.disabledReason)) {
+      // Disabled reasons are explicit and high-signal; weight heavily.
+      addScore(stats.disabledReason, 1_000);
+      continue;
+    }
+
+    const cooldownActive = isActiveUnusableWindow(stats.cooldownUntil, now);
+    if (!cooldownActive) {
+      continue;
+    }
+
+    let recordedReason = false;
+    for (const [rawReason, rawCount] of Object.entries(stats.failureCounts ?? {})) {
+      const reason = rawReason as AuthProfileFailureReason;
+      const count = typeof rawCount === "number" ? rawCount : 0;
+      if (!FAILURE_REASON_SET.has(reason) || count <= 0) {
+        continue;
+      }
+      addScore(reason, count);
+      recordedReason = true;
+    }
+    if (!recordedReason) {
+      addScore("rate_limit", 1);
+    }
+  }
+
+  if (scores.size === 0) {
+    return null;
+  }
+
+  let best: AuthProfileFailureReason | null = null;
+  let bestScore = -1;
+  let bestPriority = Number.MAX_SAFE_INTEGER;
+  for (const reason of FAILURE_REASON_PRIORITY) {
+    const score = scores.get(reason);
+    if (typeof score !== "number") {
+      continue;
+    }
+    const priority = FAILURE_REASON_ORDER.get(reason) ?? Number.MAX_SAFE_INTEGER;
+    if (score > bestScore || (score === bestScore && priority < bestPriority)) {
+      best = reason;
+      bestScore = score;
+      bestPriority = priority;
+    }
+  }
+  return best;
 }
 
 /**
