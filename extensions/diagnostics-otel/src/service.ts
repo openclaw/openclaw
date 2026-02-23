@@ -10,7 +10,7 @@ import { NodeSDK } from "@opentelemetry/sdk-node";
 import { ParentBasedSampler, TraceIdRatioBasedSampler } from "@opentelemetry/sdk-trace-base";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
 import type { DiagnosticEventPayload, OpenClawPluginService } from "openclaw/plugin-sdk";
-import { onDiagnosticEvent, registerLogTransport } from "openclaw/plugin-sdk";
+import { onDiagnosticEvent, redactSensitiveText, registerLogTransport } from "openclaw/plugin-sdk";
 
 const DEFAULT_SERVICE_NAME = "openclaw";
 
@@ -52,6 +52,14 @@ function formatError(err: unknown): string {
   } catch {
     return String(err);
   }
+}
+
+function redactOtelAttributes(attributes: Record<string, string | number | boolean>) {
+  const redactedAttributes: Record<string, string | number | boolean> = {};
+  for (const [key, value] of Object.entries(attributes)) {
+    redactedAttributes[key] = typeof value === "string" ? redactSensitiveText(value) : value;
+  }
+  return redactedAttributes;
 }
 
 export function createDiagnosticsOtelService(): OpenClawPluginService {
@@ -336,11 +344,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               attributes["openclaw.code.location"] = meta.path.filePathWithLine;
             }
 
+            // OTLP can leave the host boundary, so redact string fields before export.
             otelLogger.emit({
-              body: message,
+              body: redactSensitiveText(message),
               severityText: logLevelName,
               severityNumber,
-              attributes,
+              attributes: redactOtelAttributes(attributes),
               timestamp: meta?.date ?? new Date(),
             });
           } catch (err) {
@@ -469,9 +478,10 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         if (!tracesEnabled) {
           return;
         }
+        const redactedError = redactSensitiveText(evt.error);
         const spanAttrs: Record<string, string | number> = {
           ...attrs,
-          "openclaw.error": evt.error,
+          "openclaw.error": redactedError,
         };
         if (evt.chatId !== undefined) {
           spanAttrs["openclaw.chatId"] = String(evt.chatId);
@@ -479,7 +489,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         const span = tracer.startSpan("openclaw.webhook.error", {
           attributes: spanAttrs,
         });
-        span.setStatus({ code: SpanStatusCode.ERROR, message: evt.error });
+        span.setStatus({ code: SpanStatusCode.ERROR, message: redactedError });
         span.end();
       };
 
@@ -524,11 +534,11 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           spanAttrs["openclaw.messageId"] = String(evt.messageId);
         }
         if (evt.reason) {
-          spanAttrs["openclaw.reason"] = evt.reason;
+          spanAttrs["openclaw.reason"] = redactSensitiveText(evt.reason);
         }
         const span = spanWithDuration("openclaw.message.processed", spanAttrs, evt.durationMs);
-        if (evt.outcome === "error") {
-          span.setStatus({ code: SpanStatusCode.ERROR, message: evt.error });
+        if (evt.outcome === "error" && evt.error) {
+          span.setStatus({ code: SpanStatusCode.ERROR, message: redactSensitiveText(evt.error) });
         }
         span.end();
       };
@@ -557,7 +567,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       ) => {
         const attrs: Record<string, string> = { "openclaw.state": evt.state };
         if (evt.reason) {
-          attrs["openclaw.reason"] = evt.reason;
+          attrs["openclaw.reason"] = redactSensitiveText(evt.reason);
         }
         sessionStateCounter.add(1, attrs);
       };
