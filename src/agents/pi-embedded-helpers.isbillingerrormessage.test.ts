@@ -201,6 +201,20 @@ describe("isContextOverflowError", () => {
     }
   });
 
+  it("matches Chinese context overflow error messages from proxy providers", () => {
+    const samples = [
+      "上下文过长",
+      "错误：上下文过长，请减少输入",
+      "上下文超出限制",
+      "上下文长度超出模型最大限制",
+      "超出最大上下文长度",
+      "请压缩上下文后重试",
+    ];
+    for (const sample of samples) {
+      expect(isContextOverflowError(sample)).toBe(true);
+    }
+  });
+
   it("ignores normal conversation text mentioning context overflow", () => {
     // These are legitimate conversation snippets, not error messages
     expect(isContextOverflowError("Let's investigate the context overflow bug")).toBe(false);
