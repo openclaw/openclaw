@@ -44,6 +44,34 @@ export type CronListPageResult = {
   hasMore: boolean;
   nextOffset: number | null;
 };
+function mergeManualRunSnapshotAfterReload(params: {
+  state: CronServiceState;
+  jobId: string;
+  snapshot: {
+    enabled: boolean;
+    updatedAtMs: number;
+    state: CronJob["state"];
+  } | null;
+  removed: boolean;
+}) {
+  if (!params.state.store) {
+    return;
+  }
+  if (params.removed) {
+    params.state.store.jobs = params.state.store.jobs.filter((job) => job.id !== params.jobId);
+    return;
+  }
+  if (!params.snapshot) {
+    return;
+  }
+  const reloaded = params.state.store.jobs.find((job) => job.id === params.jobId);
+  if (!reloaded) {
+    return;
+  }
+  reloaded.enabled = params.snapshot.enabled;
+  reloaded.updatedAtMs = params.snapshot.updatedAtMs;
+  reloaded.state = params.snapshot.state;
+}
 
 async function ensureLoadedForRead(state: CronServiceState) {
   await ensureLoaded(state, { skipRecompute: true });
@@ -397,6 +425,23 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
     // Manual runs should not advance other due jobs without executing them.
     // Use maintenance-only recompute to repair missing values while
     // preserving existing past-due nextRunAtMs entries for future timer ticks.
+    const postRunSnapshot = shouldDelete
+      ? null
+      : {
+          enabled: job.enabled,
+          updatedAtMs: job.updatedAtMs,
+          state: structuredClone(job.state),
+        };
+    const postRunRemoved = shouldDelete;
+    // Isolated Telegram send can persist target writeback directly to disk.
+    // Reload before final persist so manual `cron run` keeps those changes.
+    await ensureLoaded(state, { forceReload: true, skipRecompute: true });
+    mergeManualRunSnapshotAfterReload({
+      state,
+      jobId,
+      snapshot: postRunSnapshot,
+      removed: postRunRemoved,
+    });
     recomputeNextRunsForMaintenance(state);
     await persist(state);
     armTimer(state);
