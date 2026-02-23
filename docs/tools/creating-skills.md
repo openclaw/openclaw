@@ -43,6 +43,25 @@ When the user asks for a greeting, use the `echo` tool to say "Hello from your c
 
 You can define custom tools in the frontmatter or instruct the agent to use existing system tools (like `bash` or `browser`).
 
+### Tool-call shorthand in skill examples
+
+Some skills use shorthand text like:
+
+```text
+process action:list
+process action:log sessionId:<id>
+```
+
+This means “call the `process` tool with named args”, for example:
+
+```json
+{ "tool": "process", "action": "list" }
+```
+
+`process` is an OpenClaw built-in tool for managing background `exec` sessions
+(not Node.js global `process`). See [Exec Tool](/tools/exec) and
+[Background Exec and Process Tool](/gateway/background-process).
+
 ### 4. Refresh OpenClaw
 
 Ask your agent to "refresh skills" or restart the gateway. OpenClaw will discover the new directory and index the `SKILL.md`.

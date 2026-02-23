@@ -10,6 +10,9 @@ title: "Skills"
 
 OpenClaw uses **[AgentSkills](https://agentskills.io)-compatible** skill folders to teach the agent how to use tools. Each skill is a directory containing a `SKILL.md` with YAML frontmatter and instructions. OpenClaw loads **bundled skills** plus optional local overrides, and filters them at load time based on environment, config, and binary presence.
 
+Looking for authoring guidance and tool-call examples? See
+[Creating Skills](/tools/creating-skills).
+
 ## Locations and precedence
 
 Skills are loaded from **three** places:
@@ -91,6 +94,10 @@ Notes:
 - The parser used by the embedded agent supports **single-line** frontmatter keys only.
 - `metadata` should be a **single-line JSON object**.
 - Use `{baseDir}` in instructions to reference the skill folder path.
+- Skill body text is plain Markdown instructions. Example lines like
+  `process action:list` are shorthand guidance for tool name + params (not
+  frontmatter keys). See [Exec Tool](/tools/exec) and
+  [Background Exec and Process Tool](/gateway/background-process).
 - Optional frontmatter keys:
   - `homepage` — URL surfaced as “Website” in the macOS Skills UI (also supported via `metadata.openclaw.homepage`).
   - `user-invocable` — `true|false` (default: `true`). When `true`, the skill is exposed as a user slash command.

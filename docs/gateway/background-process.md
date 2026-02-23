@@ -51,6 +51,9 @@ Config (preferred):
 
 ## process tool
 
+`process` is the OpenClaw tool name for background session management. It is
+not Node.js global `process` and not an npm package.
+
 Actions:
 
 - `list`: running + finished sessions
@@ -67,6 +70,8 @@ Notes:
 - Sessions are lost on process restart (no disk persistence).
 - Session logs are only saved to chat history if you run `process poll/log` and the tool result is recorded.
 - `process` is scoped per agent; it only sees sessions started by that agent.
+- Skill examples often use shorthand like `process action:list`, which maps to
+  the structured tool call `{ "tool": "process", "action": "list" }`.
 - `process list` includes a derived `name` (command verb + target) for quick scans.
 - `process log` uses line-based `offset`/`limit`.
 - When both `offset` and `limit` are omitted, it returns the last 200 lines and includes a paging hint.

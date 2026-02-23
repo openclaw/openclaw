@@ -12,6 +12,27 @@ Run shell commands in the workspace. Supports foreground + background execution 
 If `process` is disallowed, `exec` runs synchronously and ignores `yieldMs`/`background`.
 Background sessions are scoped per agent; `process` only sees sessions from the same agent.
 
+## What `process` Means Here
+
+- `process` is an OpenClaw built-in tool that manages background sessions started by `exec`.
+- It is not Node.js global `process`.
+- It is not an npm package or OS syscall API.
+- Canonical reference: [Background Exec and Process Tool](/gateway/background-process).
+
+Skill examples often use shorthand text such as:
+
+```text
+process action:list
+```
+
+That corresponds to the structured tool call:
+
+```json
+{ "tool": "process", "action": "list" }
+```
+
+For more skill-authoring guidance, see [Creating Skills](/tools/creating-skills).
+
 ## Parameters
 
 - `command` (required)
@@ -26,6 +47,21 @@ Background sessions are scoped per agent; `process` only sees sessions from the 
 - `ask` (`off | on-miss | always`): approval prompts for `gateway`/`node`
 - `node` (string): node id/name for `host=node`
 - `elevated` (bool): request elevated mode (gateway host); `security=full` is only forced when elevated resolves to `full`
+
+## `process` Actions (Quick Reference)
+
+- `list`: list running and recent sessions.
+- `poll`: drain new output and return current status for a session.
+- `log`: read aggregated output with optional line paging (`offset`, `limit`).
+- `write`: send raw stdin data (`data`, optional `eof`).
+- `send-keys`: send key tokens/bytes for PTY sessions.
+- `submit`: send carriage return only (equivalent to pressing Enter in many CLIs).
+- `paste`: send text in bracketed paste mode by default.
+- `kill`: terminate a running background session.
+- `clear`: remove a finished session from memory.
+- `remove`: kill if running, otherwise clear if finished.
+
+Full behavior and examples: [Background Exec and Process Tool](/gateway/background-process#process-tool).
 
 Notes:
 
