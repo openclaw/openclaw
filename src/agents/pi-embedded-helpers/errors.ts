@@ -39,6 +39,12 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     return false;
   }
   const lower = errorMessage.toLowerCase();
+
+  // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context overflow.
+  if (lower.includes("tpm") || lower.includes("tokens per minute")) {
+    return false;
+  }
+
   const hasRequestSizeExceeds = lower.includes("request size exceeds");
   const hasContextWindow =
     lower.includes("context window") ||
@@ -72,6 +78,13 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
   }
+
+  // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context overflow.
+  const lower = errorMessage.toLowerCase();
+  if (lower.includes("tpm") || lower.includes("tokens per minute")) {
+    return false;
+  }
+
   if (CONTEXT_WINDOW_TOO_SMALL_RE.test(errorMessage)) {
     return false;
   }
@@ -571,6 +584,8 @@ const ERROR_PATTERNS = {
     "quota exceeded",
     "resource_exhausted",
     "usage limit",
+    "tpm",
+    "tokens per minute",
   ],
   overloaded: [
     /overloaded_error|"type"\s*:\s*"overloaded_error"/i,
