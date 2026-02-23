@@ -303,7 +303,7 @@ describe("QmdMemoryManager", () => {
 
   it("rebinds sessions collection when existing collection path targets another agent", async () => {
     const devAgentId = "dev";
-    const devWorkspaceDir = path.join(tmpRoot, "workspace/dev");
+    const devWorkspaceDir = path.join(tmpRoot, "workspace-dev");
     await fs.mkdir(devWorkspaceDir);
     cfg = {
       ...cfg,
@@ -390,7 +390,7 @@ describe("QmdMemoryManager", () => {
         emitAndClose(
           child,
           "stdout",
-          JSON.stringify([`workspace/${agentId}`, sessionCollectionName]),
+          JSON.stringify([`workspace-${agentId}`, sessionCollectionName]),
         );
         return child;
       }
@@ -408,7 +408,7 @@ describe("QmdMemoryManager", () => {
     expect(removeSessions).toBeDefined();
     const removeWorkspace = commands.find(
       (args) =>
-        args[0] === "collection" && args[1] === "remove" && args[2] === `workspace/${agentId}`,
+        args[0] === "collection" && args[1] === "remove" && args[2] === `workspace-${agentId}`,
     );
     expect(removeWorkspace).toBeDefined();
 

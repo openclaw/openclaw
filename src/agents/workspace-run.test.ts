@@ -94,7 +94,7 @@ describe("resolveRunWorkspaceDir", () => {
     expect(result.agentId).toBe("research");
     expect(result.agentIdSource).toBe("explicit");
     expect(result.workspaceDir).toBe(
-      path.resolve(resolveStateDir(process.env), "workspace/research"),
+      path.resolve(resolveStateDir(process.env), "workspace-research"),
     );
   });
 

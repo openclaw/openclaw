@@ -46,7 +46,7 @@ describe("agents helpers", () => {
 
     expect(main).toBeTruthy();
     expect(main?.workspace).toBe(
-      path.join(resolveStateDir(process.env, os.homedir), "workspace/main"),
+      path.join(resolveStateDir(process.env, os.homedir), "workspace-main"),
     );
     expect(main?.bindings).toBe(1);
     expect(main?.model).toBe("anthropic/claude");
