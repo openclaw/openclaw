@@ -28,6 +28,7 @@ import {
   ensureProfileCleanExit,
   isProfileDecorated,
 } from "./chrome.profile-decoration.js";
+import { effectiveHeadless } from "./config.js";
 import type { ResolvedBrowserConfig, ResolvedBrowserProfile } from "./config.js";
 import {
   DEFAULT_OPENCLAW_BROWSER_COLOR,
@@ -253,8 +254,7 @@ export async function launchOpenClawChrome(
       "--password-store=basic",
     ];
 
-    const headless = profile.headless !== undefined ? profile.headless : resolved.headless;
-    if (headless) {
+    if (effectiveHeadless(profile, resolved)) {
       // Best-effort; older Chromes may ignore.
       args.push("--headless=new");
       args.push("--disable-gpu");

@@ -312,18 +312,18 @@ describe("browser config", () => {
 
   it("resolveProfile passes headless:true from profile config", () => {
     const resolved = resolveBrowserConfig({
-      profiles: { headless_profile: { cdpPort: 19201, color: "#FF4500", headless: true } },
+      profiles: { "headless-profile": { cdpPort: 19201, color: "#FF4500", headless: true } },
     });
-    const profile = resolveProfile(resolved, "headless_profile");
+    const profile = resolveProfile(resolved, "headless-profile");
     expect(profile?.headless).toBe(true);
   });
 
   it("resolveProfile passes headless:false from profile config, enabling headed override", () => {
     const resolved = resolveBrowserConfig({
       headless: true,
-      profiles: { headed_profile: { cdpPort: 19202, color: "#FF4500", headless: false } },
+      profiles: { "headed-profile": { cdpPort: 19202, color: "#FF4500", headless: false } },
     });
-    const profile = resolveProfile(resolved, "headed_profile");
+    const profile = resolveProfile(resolved, "headed-profile");
     expect(profile?.headless).toBe(false);
   });
 });
