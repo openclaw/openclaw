@@ -20,17 +20,12 @@ export function loadJsonFile(pathname: string): unknown {
   const backupPath = `${pathname}.bak`;
   const backup = tryParseJsonFile(backupPath);
   if (backup !== undefined) {
-    // Restore the backup so subsequent reads don't keep hitting the fallback.
-    try {
-      fs.writeFileSync(pathname, fs.readFileSync(backupPath));
-      try {
-        fs.chmodSync(pathname, 0o600);
-      } catch {
-        // chmod may fail on some platforms; non-critical.
-      }
-    } catch {
-      // Best-effort restore; the caller still gets the data.
-    }
+    // We intentionally do NOT write the backup back to the primary file here.
+    // Callers such as the auth-profiles store wrap their writes in
+    // `withFileLock`; a bare `writeFileSync` here would bypass that lock and
+    // could race with a concurrent `saveJsonFile` call.  Instead we return the
+    // backup data as-is — the next regular (lock-safe, atomic) `saveJsonFile`
+    // will recreate a healthy primary file automatically.
     return backup;
   }
 
