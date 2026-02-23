@@ -53,6 +53,19 @@ describe("resolveTranscriptPolicy", () => {
     expect(policy.validateAnthropicTurns).toBe(true);
   });
 
+  it("enables Anthropic-compatible policies for Bedrock provider", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "amazon-bedrock",
+      modelId: "us.anthropic.claude-opus-4-6-v1",
+      modelApi: "bedrock-converse-stream",
+    });
+    expect(policy.repairToolUseResultPairing).toBe(true);
+    expect(policy.validateAnthropicTurns).toBe(true);
+    expect(policy.allowSyntheticToolResults).toBe(true);
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.sanitizeMode).toBe("full");
+  });
+
   it("keeps OpenRouter on its existing turn-validation path", () => {
     const policy = resolveTranscriptPolicy({
       provider: "openrouter",
