@@ -536,6 +536,22 @@ const FINAL_BACKLOG_TARGET_KEYS = [
 ] as const;
 
 describe("config help copy quality", () => {
+  function expectOperationalGuidance(
+    keys: readonly string[],
+    guidancePattern: RegExp,
+    minLength = 80,
+  ) {
+    for (const key of keys) {
+      const help = FIELD_HELP[key];
+      expect(help, `missing help for ${key}`).toBeDefined();
+      expect(help.length, `help too short for ${key}`).toBeGreaterThanOrEqual(minLength);
+      expect(
+        guidancePattern.test(help),
+        `help should include operational guidance for ${key}`,
+      ).toBe(true);
+    }
+  }
+
   it("keeps root section labels and help complete", () => {
     for (const key of ROOT_SECTIONS) {
       expect(FIELD_LABELS[key], `missing root label for ${key}`).toBeDefined();
@@ -550,57 +566,31 @@ describe("config help copy quality", () => {
   });
 
   it("covers the target confusing fields with non-trivial explanations", () => {
-    for (const key of TARGET_KEYS) {
-      const help = FIELD_HELP[key];
-      expect(help, `missing help for ${key}`).toBeDefined();
-      expect(help.length, `help too short for ${key}`).toBeGreaterThanOrEqual(80);
-      expect(
-        /(default|keep|use|enable|disable|controls|selects|sets|defines)/i.test(help),
-        `help should include operational guidance for ${key}`,
-      ).toBe(true);
-    }
+    expectOperationalGuidance(
+      TARGET_KEYS,
+      /(default|keep|use|enable|disable|controls|selects|sets|defines)/i,
+    );
   });
 
   it("covers tools/hooks help keys with non-trivial operational guidance", () => {
-    for (const key of TOOLS_HOOKS_TARGET_KEYS) {
-      const help = FIELD_HELP[key];
-      expect(help, `missing help for ${key}`).toBeDefined();
-      expect(help.length, `help too short for ${key}`).toBeGreaterThanOrEqual(80);
-      expect(
-        /(default|keep|use|enable|disable|controls|set|sets|increase|lower|prefer|tune|avoid|choose|when)/i.test(
-          help,
-        ),
-        `help should include operational guidance for ${key}`,
-      ).toBe(true);
-    }
+    expectOperationalGuidance(
+      TOOLS_HOOKS_TARGET_KEYS,
+      /(default|keep|use|enable|disable|controls|set|sets|increase|lower|prefer|tune|avoid|choose|when)/i,
+    );
   });
 
   it("covers channels/agents help keys with non-trivial operational guidance", () => {
-    for (const key of CHANNELS_AGENTS_TARGET_KEYS) {
-      const help = FIELD_HELP[key];
-      expect(help, `missing help for ${key}`).toBeDefined();
-      expect(help.length, `help too short for ${key}`).toBeGreaterThanOrEqual(80);
-      expect(
-        /(default|keep|use|enable|disable|controls|set|sets|increase|lower|prefer|tune|avoid|choose|when)/i.test(
-          help,
-        ),
-        `help should include operational guidance for ${key}`,
-      ).toBe(true);
-    }
+    expectOperationalGuidance(
+      CHANNELS_AGENTS_TARGET_KEYS,
+      /(default|keep|use|enable|disable|controls|set|sets|increase|lower|prefer|tune|avoid|choose|when)/i,
+    );
   });
 
   it("covers final backlog help keys with non-trivial operational guidance", () => {
-    for (const key of FINAL_BACKLOG_TARGET_KEYS) {
-      const help = FIELD_HELP[key];
-      expect(help, `missing help for ${key}`).toBeDefined();
-      expect(help.length, `help too short for ${key}`).toBeGreaterThanOrEqual(80);
-      expect(
-        /(default|keep|use|enable|disable|controls|set|sets|increase|lower|prefer|tune|avoid|choose|when)/i.test(
-          help,
-        ),
-        `help should include operational guidance for ${key}`,
-      ).toBe(true);
-    }
+    expectOperationalGuidance(
+      FINAL_BACKLOG_TARGET_KEYS,
+      /(default|keep|use|enable|disable|controls|set|sets|increase|lower|prefer|tune|avoid|choose|when)/i,
+    );
   });
 
   it("documents option behavior for enum-style fields", () => {

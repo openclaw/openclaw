@@ -59,106 +59,92 @@ vi.mock("./subagent-registry.js", () => ({
 
 import { runSubagentAnnounceFlow } from "./subagent-announce.js";
 
+type AnnounceFlowParams = Parameters<typeof runSubagentAnnounceFlow>[0];
+
+const defaultSessionConfig = {
+  mainKey: "main",
+  scope: "per-sender",
+} as const;
+
+const baseAnnounceFlowParams = {
+  childSessionKey: "agent:main:subagent:worker",
+  requesterSessionKey: "agent:main:main",
+  requesterDisplayKey: "main",
+  task: "do thing",
+  timeoutMs: 1_000,
+  cleanup: "keep",
+  roundOneReply: "done",
+  waitForCompletion: false,
+  outcome: { status: "ok" as const },
+} satisfies Omit<AnnounceFlowParams, "childRunId">;
+
+function setConfiguredAnnounceTimeout(timeoutMs: number): void {
+  configOverride = {
+    session: defaultSessionConfig,
+    agents: {
+      defaults: {
+        subagents: {
+          announceTimeoutMs: timeoutMs,
+        },
+      },
+    },
+  };
+}
+
+async function runAnnounceFlowForTest(
+  childRunId: string,
+  overrides: Partial<AnnounceFlowParams> = {},
+): Promise<void> {
+  await runSubagentAnnounceFlow({
+    ...baseAnnounceFlowParams,
+    childRunId,
+    ...overrides,
+  });
+}
+
+function findGatewayCall(predicate: (call: GatewayCall) => boolean): GatewayCall | undefined {
+  return gatewayCalls.find(predicate);
+}
+
 describe("subagent announce timeout config", () => {
   beforeEach(() => {
     gatewayCalls.length = 0;
     sessionStore = {};
     configOverride = {
-      session: {
-        mainKey: "main",
-        scope: "per-sender",
-      },
+      session: defaultSessionConfig,
     };
   });
 
   it("uses 60s timeout by default for direct announce agent call", async () => {
-    await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:worker",
-      childRunId: "run-default-timeout",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "do thing",
-      timeoutMs: 1_000,
-      cleanup: "keep",
-      roundOneReply: "done",
-      waitForCompletion: false,
-      outcome: { status: "ok" },
-    });
+    await runAnnounceFlowForTest("run-default-timeout");
 
-    const directAgentCall = gatewayCalls.find(
+    const directAgentCall = findGatewayCall(
       (call) => call.method === "agent" && call.expectFinal === true,
     );
     expect(directAgentCall?.timeoutMs).toBe(60_000);
   });
 
   it("honors configured announce timeout for direct announce agent call", async () => {
-    configOverride = {
-      session: {
-        mainKey: "main",
-        scope: "per-sender",
-      },
-      agents: {
-        defaults: {
-          subagents: {
-            announceTimeoutMs: 90_000,
-          },
-        },
-      },
-    };
+    setConfiguredAnnounceTimeout(90_000);
+    await runAnnounceFlowForTest("run-config-timeout-agent");
 
-    await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:worker",
-      childRunId: "run-config-timeout-agent",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "do thing",
-      timeoutMs: 1_000,
-      cleanup: "keep",
-      roundOneReply: "done",
-      waitForCompletion: false,
-      outcome: { status: "ok" },
-    });
-
-    const directAgentCall = gatewayCalls.find(
+    const directAgentCall = findGatewayCall(
       (call) => call.method === "agent" && call.expectFinal === true,
     );
     expect(directAgentCall?.timeoutMs).toBe(90_000);
   });
 
   it("honors configured announce timeout for completion direct send call", async () => {
-    configOverride = {
-      session: {
-        mainKey: "main",
-        scope: "per-sender",
-      },
-      agents: {
-        defaults: {
-          subagents: {
-            announceTimeoutMs: 90_000,
-          },
-        },
-      },
-    };
-
-    await runSubagentAnnounceFlow({
-      childSessionKey: "agent:main:subagent:worker",
-      childRunId: "run-config-timeout-send",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
+    setConfiguredAnnounceTimeout(90_000);
+    await runAnnounceFlowForTest("run-config-timeout-send", {
       requesterOrigin: {
         channel: "discord",
         to: "12345",
       },
-      task: "do thing",
-      timeoutMs: 1_000,
-      cleanup: "keep",
-      roundOneReply: "done",
-      waitForCompletion: false,
-      outcome: { status: "ok" },
       expectsCompletionMessage: true,
     });
 
-    const sendCall = gatewayCalls.find((call) => call.method === "send");
+    const sendCall = findGatewayCall((call) => call.method === "send");
     expect(sendCall?.timeoutMs).toBe(90_000);
   });
 });

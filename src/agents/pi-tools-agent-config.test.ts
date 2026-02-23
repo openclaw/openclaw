@@ -113,6 +113,34 @@ describe("Agent-specific tool filtering", () => {
     };
   }
 
+  function createExecHostDefaultsConfig(
+    agents: Array<{ id: string; execHost?: "gateway" | "sandbox" }>,
+  ): OpenClawConfig {
+    return {
+      tools: {
+        exec: {
+          host: "sandbox",
+          security: "full",
+          ask: "off",
+        },
+      },
+      agents: {
+        list: agents.map((agent) => ({
+          id: agent.id,
+          ...(agent.execHost
+            ? {
+                tools: {
+                  exec: {
+                    host: agent.execHost,
+                  },
+                },
+              }
+            : {}),
+        })),
+      },
+    };
+  }
+
   it("should apply global tool policy when no agent-specific policy exists", () => {
     const cfg = createMainAgentConfig({
       tools: {
@@ -646,30 +674,10 @@ describe("Agent-specific tool filtering", () => {
   });
 
   it("should apply agent-specific exec host defaults over global defaults", async () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        exec: {
-          host: "sandbox",
-          security: "full",
-          ask: "off",
-        },
-      },
-      agents: {
-        list: [
-          {
-            id: "main",
-            tools: {
-              exec: {
-                host: "gateway",
-              },
-            },
-          },
-          {
-            id: "helper",
-          },
-        ],
-      },
-    };
+    const cfg = createExecHostDefaultsConfig([
+      { id: "main", execHost: "gateway" },
+      { id: "helper" },
+    ]);
 
     const mainTools = createOpenClawCodingTools({
       config: cfg,
@@ -716,27 +724,7 @@ describe("Agent-specific tool filtering", () => {
   });
 
   it("applies explicit agentId exec defaults when sessionKey is opaque", async () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        exec: {
-          host: "sandbox",
-          security: "full",
-          ask: "off",
-        },
-      },
-      agents: {
-        list: [
-          {
-            id: "main",
-            tools: {
-              exec: {
-                host: "gateway",
-              },
-            },
-          },
-        ],
-      },
-    };
+    const cfg = createExecHostDefaultsConfig([{ id: "main", execHost: "gateway" }]);
 
     const tools = createOpenClawCodingTools({
       config: cfg,

@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
-
-const loadConfig = vi.fn();
-const resolveGatewayPort = vi.fn();
-const pickPrimaryTailnetIPv4 = vi.fn();
-const pickPrimaryLanIPv4 = vi.fn();
+import {
+  loadConfigMock as loadConfig,
+  pickPrimaryLanIPv4Mock as pickPrimaryLanIPv4,
+  pickPrimaryTailnetIPv4Mock as pickPrimaryTailnetIPv4,
+  resolveGatewayPortMock as resolveGatewayPort,
+} from "./gateway-connection.test-mocks.js";
 
 let lastClientOptions: {
   url?: string;
@@ -18,27 +19,6 @@ type StartMode = "hello" | "close" | "silent";
 let startMode: StartMode = "hello";
 let closeCode = 1006;
 let closeReason = "";
-
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig,
-    resolveGatewayPort,
-  };
-});
-
-vi.mock("../infra/tailnet.js", () => ({
-  pickPrimaryTailnetIPv4,
-}));
-
-vi.mock("./net.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./net.js")>();
-  return {
-    ...actual,
-    pickPrimaryLanIPv4,
-  };
-});
 
 vi.mock("./client.js", () => ({
   describeGatewayCloseCode: (code: number) => {

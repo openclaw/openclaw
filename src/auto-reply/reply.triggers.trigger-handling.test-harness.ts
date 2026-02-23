@@ -222,6 +222,17 @@ export async function loadGetReplyFromConfig() {
   return (await import("./reply.js")).getReplyFromConfig;
 }
 
+export function installTriggerHandlingReplyHarness(
+  setGetReplyFromConfig: (
+    getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig,
+  ) => void,
+): void {
+  beforeAll(async () => {
+    setGetReplyFromConfig(await loadGetReplyFromConfig());
+  });
+  installTriggerHandlingE2eTestHooks();
+}
+
 export function requireSessionStorePath(cfg: { session?: { store?: string } }): string {
   const storePath = cfg.session?.store;
   if (!storePath) {
