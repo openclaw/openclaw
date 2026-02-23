@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, test, vi } from "vitest";
+import { setImmediate as setImmediatePromise } from "node:timers/promises";
+import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 import {
   connectOk,
@@ -35,8 +36,7 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
 installGatewayTestHooks({ scope: "suite" });
 
 async function yieldToEventLoop() {
-  // Avoid relying on timers (fake timers can leak between tests).
-  await fs.stat(process.cwd()).catch(() => {});
+  await setImmediatePromise();
 }
 
 async function rmTempDir(dir: string) {
@@ -56,33 +56,16 @@ async function rmTempDir(dir: string) {
   await fs.rm(dir, { recursive: true, force: true });
 }
 
-async function waitForNonEmptyFile(pathname: string, timeoutMs = 2000) {
-  const startedAt = process.hrtime.bigint();
-  for (;;) {
-    const raw = await fs.readFile(pathname, "utf-8").catch(() => "");
-    if (raw.trim().length > 0) {
-      return raw;
-    }
-    const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
-    if (elapsedMs >= timeoutMs) {
-      throw new Error(`timeout waiting for file ${pathname}`);
-    }
-    await yieldToEventLoop();
-  }
-}
-
-async function waitForCondition(check: () => boolean, timeoutMs = 2000) {
-  const startedAt = process.hrtime.bigint();
-  for (;;) {
-    if (check()) {
-      return;
-    }
-    const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
-    if (elapsedMs >= timeoutMs) {
-      throw new Error("timeout waiting for condition");
-    }
-    await yieldToEventLoop();
-  }
+async function waitForCondition(check: () => boolean | Promise<boolean>, timeoutMs = 2000) {
+  await vi.waitFor(
+    async () => {
+      const ok = await check();
+      if (!ok) {
+        throw new Error("condition not met");
+      }
+    },
+    { timeout: timeoutMs, interval: 10 },
+  );
 }
 
 async function cleanupCronTestRun(params: {
@@ -128,6 +111,11 @@ async function setupCronTestRun(params: {
 }
 
 describe("gateway server cron", () => {
+  beforeEach(() => {
+    // Keep polling helpers deterministic even if other tests left fake timers enabled.
+    vi.useRealTimers();
+  });
+
   test("handles cron CRUD, normalization, and patch semantics", { timeout: 120_000 }, async () => {
     const { prevSkipCron, dir } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-",
@@ -427,7 +415,11 @@ describe("gateway server cron", () => {
       const runRes = await rpcReq(ws, "cron.run", { id: jobId, mode: "force" }, 20_000);
       expect(runRes.ok).toBe(true);
       const logPath = path.join(dir, "cron", "runs", `${jobId}.jsonl`);
-      const raw = await waitForNonEmptyFile(logPath, 5000);
+      let raw = "";
+      await waitForCondition(async () => {
+        raw = await fs.readFile(logPath, "utf-8").catch(() => "");
+        return raw.trim().length > 0;
+      }, 5000);
       const line = raw
         .split("\n")
         .map((l) => l.trim())
@@ -489,7 +481,11 @@ describe("gateway server cron", () => {
       const autoJobId = typeof autoJobIdValue === "string" ? autoJobIdValue : "";
       expect(autoJobId.length > 0).toBe(true);
 
-      await waitForNonEmptyFile(path.join(dir, "cron", "runs", `${autoJobId}.jsonl`), 5000);
+      await waitForCondition(async () => {
+        const runsRes = await rpcReq(ws, "cron.runs", { id: autoJobId, limit: 10 });
+        const runsPayload = runsRes.payload as { entries?: unknown } | undefined;
+        return Array.isArray(runsPayload?.entries) && runsPayload.entries.length > 0;
+      }, 5000);
       const autoEntries = (await rpcReq(ws, "cron.runs", { id: autoJobId, limit: 10 })).payload as
         | { entries?: Array<{ jobId?: unknown }> }
         | undefined;
