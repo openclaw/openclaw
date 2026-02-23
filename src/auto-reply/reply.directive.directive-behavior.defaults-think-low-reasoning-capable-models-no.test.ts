@@ -32,53 +32,46 @@ async function runReplyToCurrentCase(home: string, text: string) {
   return Array.isArray(res) ? res[0] : res;
 }
 
+async function expectThinkStatusForReasoningModel(params: {
+  reasoning: boolean;
+  expectedLevel: "low" | "off";
+}): Promise<void> {
+  await withTempHome(async (home) => {
+    vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+      {
+        id: "claude-opus-4-5",
+        name: "Opus 4.5",
+        provider: "anthropic",
+        reasoning: params.reasoning,
+      },
+    ]);
+
+    const res = await getReplyFromConfig(
+      { Body: "/think", From: "+1222", To: "+1222", CommandAuthorized: true },
+      {},
+      makeWhatsAppDirectiveConfig(home, { model: "anthropic/claude-opus-4-5" }),
+    );
+
+    const text = replyText(res);
+    expect(text).toContain(`Current thinking level: ${params.expectedLevel}`);
+    expect(text).toContain("Options: off, minimal, low, medium, high.");
+    expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+  });
+}
+
 describe("directive behavior", () => {
   installDirectiveBehaviorE2EHooks();
 
   it("defaults /think to low for reasoning-capable models when no default set", async () => {
-    await withTempHome(async (home) => {
-      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
-        {
-          id: "claude-opus-4-5",
-          name: "Opus 4.5",
-          provider: "anthropic",
-          reasoning: true,
-        },
-      ]);
-
-      const res = await getReplyFromConfig(
-        { Body: "/think", From: "+1222", To: "+1222", CommandAuthorized: true },
-        {},
-        makeWhatsAppDirectiveConfig(home, { model: "anthropic/claude-opus-4-5" }),
-      );
-
-      const text = replyText(res);
-      expect(text).toContain("Current thinking level: low");
-      expect(text).toContain("Options: off, minimal, low, medium, high.");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    await expectThinkStatusForReasoningModel({
+      reasoning: true,
+      expectedLevel: "low",
     });
   });
   it("shows off when /think has no argument and model lacks reasoning", async () => {
-    await withTempHome(async (home) => {
-      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
-        {
-          id: "claude-opus-4-5",
-          name: "Opus 4.5",
-          provider: "anthropic",
-          reasoning: false,
-        },
-      ]);
-
-      const res = await getReplyFromConfig(
-        { Body: "/think", From: "+1222", To: "+1222", CommandAuthorized: true },
-        {},
-        makeWhatsAppDirectiveConfig(home, { model: "anthropic/claude-opus-4-5" }),
-      );
-
-      const text = replyText(res);
-      expect(text).toContain("Current thinking level: off");
-      expect(text).toContain("Options: off, minimal, low, medium, high.");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    await expectThinkStatusForReasoningModel({
+      reasoning: false,
+      expectedLevel: "off",
     });
   });
   it("persists /reasoning off on discord even when model defaults reasoning on", async () => {
