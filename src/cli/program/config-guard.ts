@@ -39,14 +39,27 @@ async function getConfigSnapshot() {
 export async function ensureConfigReady(params: {
   runtime: RuntimeEnv;
   commandPath?: string[];
+  suppressDoctorStdout?: boolean;
 }): Promise<void> {
   const commandPath = params.commandPath ?? [];
   if (!didRunDoctorConfigFlow && shouldMigrateStateFromPath(commandPath)) {
     didRunDoctorConfigFlow = true;
-    await loadAndMaybeMigrateDoctorConfig({
-      options: { nonInteractive: true },
-      confirm: async () => false,
-    });
+    const runDoctorConfigFlow = async () =>
+      loadAndMaybeMigrateDoctorConfig({
+        options: { nonInteractive: true },
+        confirm: async () => false,
+      });
+    if (!params.suppressDoctorStdout) {
+      await runDoctorConfigFlow();
+    } else {
+      const originalStdoutWrite = process.stdout.write;
+      process.stdout.write = ((() => true) as unknown) as typeof process.stdout.write;
+      try {
+        await runDoctorConfigFlow();
+      } finally {
+        process.stdout.write = originalStdoutWrite;
+      }
+    }
   }
 
   const snapshot = await getConfigSnapshot();
