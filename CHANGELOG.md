@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Control UI/Cron: add full web cron edit parity (including clone and richer validation/help text), plus all-jobs run history with pagination/search/sort/multi-filter controls and improved cron page layout for cleaner scheduling and failure triage workflows.
 - Provider/Mistral: add support for the Mistral provider, including memory embeddings and voice support. (#23845) Thanks @vincentkoc.
 - Update/Core: add an optional built-in auto-updater for package installs (`update.auto.*`), default-off, with stable rollout delay+jitter and beta hourly cadence.
 - CLI/Update: add `openclaw update --dry-run` to preview channel/tag/target/restart actions without mutating config, installing, syncing plugins, or restarting.

@@ -1,5 +1,6 @@
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
+import type { CronFieldErrors } from "./controllers/cron.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
 import type { ExecApprovalRequest } from "./controllers/exec-approval.ts";
 import type { ExecApprovalsFile, ExecApprovalsSnapshot } from "./controllers/exec-approvals.ts";
@@ -17,6 +18,13 @@ import type {
   ConfigSnapshot,
   ConfigUiHints,
   CronJob,
+  CronJobsEnabledFilter,
+  CronJobsSortBy,
+  CronDeliveryStatus,
+  CronRunScope,
+  CronSortDir,
+  CronRunsStatusValue,
+  CronRunsStatusFilter,
   CronRunLogEntry,
   CronStatus,
   HealthSnapshot,
@@ -187,12 +195,35 @@ export type AppViewState = {
   usageLogFilterHasTools: boolean;
   usageLogFilterQuery: string;
   cronLoading: boolean;
+  cronJobsLoadingMore: boolean;
   cronJobs: CronJob[];
+  cronJobsTotal: number;
+  cronJobsHasMore: boolean;
+  cronJobsNextOffset: number | null;
+  cronJobsLimit: number;
+  cronJobsQuery: string;
+  cronJobsEnabledFilter: CronJobsEnabledFilter;
+  cronJobsSortBy: CronJobsSortBy;
+  cronJobsSortDir: CronSortDir;
   cronStatus: CronStatus | null;
   cronError: string | null;
   cronForm: CronFormState;
+  cronFieldErrors: CronFieldErrors;
+  cronEditingJobId: string | null;
   cronRunsJobId: string | null;
+  cronRunsLoadingMore: boolean;
   cronRuns: CronRunLogEntry[];
+  cronRunsTotal: number;
+  cronRunsHasMore: boolean;
+  cronRunsNextOffset: number | null;
+  cronRunsLimit: number;
+  cronRunsScope: CronRunScope;
+  cronRunsStatuses: CronRunsStatusValue[];
+  cronRunsDeliveryStatuses: CronDeliveryStatus[];
+  cronRunsStatusFilter: CronRunsStatusFilter;
+  cronRunsQuery: string;
+  cronRunsSortDir: CronSortDir;
+  cronModelSuggestions: string[];
   cronBusy: boolean;
   skillsLoading: boolean;
   skillsReport: SkillStatusReport | null;
