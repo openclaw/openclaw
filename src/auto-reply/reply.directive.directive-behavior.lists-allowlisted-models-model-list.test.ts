@@ -37,6 +37,18 @@ describe("directive behavior", () => {
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
+  it("lists allowlisted models on /model status", async () => {
+    await withTempHome(async (home) => {
+      const text = await runModelDirectiveText(home, "/model status", {
+        includeSessionStore: false,
+      });
+      expect(text).toContain("anthropic/claude-opus-4-5");
+      expect(text).toContain("openai/gpt-4.1-mini");
+      expect(text).not.toContain("claude-sonnet-4-1");
+      expect(text).toContain("auth:");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
   it("includes catalog providers when no allowlist is set", async () => {
     await withTempHome(async (home) => {
       vi.mocked(loadModelCatalog).mockResolvedValue([
