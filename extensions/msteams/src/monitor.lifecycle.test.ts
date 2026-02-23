@@ -78,7 +78,7 @@ const loadMSTeamsSdkWithAuth = vi.hoisted(() =>
 );
 
 vi.mock("./monitor-handler.js", () => ({
-  registerMSTeamsHandlers: (...args: unknown[]) => registerMSTeamsHandlers(...args),
+  registerMSTeamsHandlers: () => registerMSTeamsHandlers(),
 }));
 
 vi.mock("./resolve-allowlist.js", () => ({
@@ -87,8 +87,8 @@ vi.mock("./resolve-allowlist.js", () => ({
 }));
 
 vi.mock("./sdk.js", () => ({
-  createMSTeamsAdapter: (...args: unknown[]) => createMSTeamsAdapter(...args),
-  loadMSTeamsSdkWithAuth: (...args: unknown[]) => loadMSTeamsSdkWithAuth(...args),
+  createMSTeamsAdapter: () => createMSTeamsAdapter(),
+  loadMSTeamsSdkWithAuth: () => loadMSTeamsSdkWithAuth(),
 }));
 
 vi.mock("./runtime.js", () => ({
