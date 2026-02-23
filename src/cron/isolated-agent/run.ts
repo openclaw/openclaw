@@ -798,7 +798,7 @@ export async function runCronIsolatedAgentTurn(params: {
       summary: "needs_replan",
       outputText,
       outcome: criticOutcome,
-      critic: criticEvaluation,
+      critic: criticEvaluation ?? undefined,
       ...telemetry,
     });
   }
