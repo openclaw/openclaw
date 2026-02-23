@@ -34,6 +34,19 @@ function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
   return undefined;
 }
 
+function isReasoningConstraintErrorMessage(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const lower = raw.toLowerCase();
+  return (
+    lower.includes("reasoning is mandatory") ||
+    lower.includes("reasoning is required") ||
+    lower.includes("requires reasoning") ||
+    (lower.includes("reasoning") && lower.includes("cannot be disabled"))
+  );
+}
+
 export function isContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
@@ -42,6 +55,10 @@ export function isContextOverflowError(errorMessage?: string): boolean {
 
   // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context overflow.
   if (lower.includes("tpm") || lower.includes("tokens per minute")) {
+    return false;
+  }
+
+  if (isReasoningConstraintErrorMessage(errorMessage)) {
     return false;
   }
 
@@ -82,6 +99,10 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context overflow.
   const lower = errorMessage.toLowerCase();
   if (lower.includes("tpm") || lower.includes("tokens per minute")) {
+    return false;
+  }
+
+  if (isReasoningConstraintErrorMessage(errorMessage)) {
     return false;
   }
 
@@ -461,6 +482,13 @@ export function formatAssistantErrorText(
     return (
       "Context overflow: prompt too large for the model. " +
       "Try /reset (or /new) to start a fresh session, or use a larger-context model."
+    );
+  }
+
+  if (isReasoningConstraintErrorMessage(raw)) {
+    return (
+      "Reasoning is required for this model endpoint. " +
+      "Use /think minimal (or any non-off level) and try again."
     );
   }
 
