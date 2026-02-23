@@ -132,6 +132,26 @@ export class FeishuStreamingSession {
     this.log?.(`Started streaming: cardId=${cardId}, messageId=${sendRes.data.message_id}`);
   }
 
+  private async updateCardContent(text: string, onError?: (error: unknown) => void): Promise<void> {
+    if (!this.state) {
+      return;
+    }
+    const apiBase = resolveApiBase(this.creds.domain);
+    this.state.sequence += 1;
+    await fetch(`${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/content/content`, {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${await getToken(this.creds)}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        content: text,
+        sequence: this.state.sequence,
+        uuid: `s_${this.state.cardId}_${this.state.sequence}`,
+      }),
+    }).catch((error) => onError?.(error));
+  }
+
   async update(text: string): Promise<void> {
     if (!this.state || this.closed) {
       return;
@@ -150,20 +170,7 @@ export class FeishuStreamingSession {
         return;
       }
       this.state.currentText = text;
-      this.state.sequence += 1;
-      const apiBase = resolveApiBase(this.creds.domain);
-      await fetch(`${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/content/content`, {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${await getToken(this.creds)}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          content: text,
-          sequence: this.state.sequence,
-          uuid: `s_${this.state.cardId}_${this.state.sequence}`,
-        }),
-      }).catch((e) => this.log?.(`Update failed: ${String(e)}`));
+      await this.updateCardContent(text, (e) => this.log?.(`Update failed: ${String(e)}`));
     });
     await this.queue;
   }
@@ -181,19 +188,7 @@ export class FeishuStreamingSession {
 
     // Only send final update if content differs from what's already displayed
     if (text && text !== this.state.currentText) {
-      this.state.sequence += 1;
-      await fetch(`${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/content/content`, {
-        method: "PUT",
-        headers: {
-          Authorization: `Bearer ${await getToken(this.creds)}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          content: text,
-          sequence: this.state.sequence,
-          uuid: `s_${this.state.cardId}_${this.state.sequence}`,
-        }),
-      }).catch(() => {});
+      await this.updateCardContent(text);
       this.state.currentText = text;
     }
 

@@ -320,6 +320,29 @@ async function resolveProviderExecutionAuth(params: {
   };
 }
 
+async function resolveProviderExecutionContext(params: {
+  providerId: string;
+  cfg: OpenClawConfig;
+  entry: MediaUnderstandingModelConfig;
+  config?: MediaUnderstandingConfig;
+  agentDir?: string;
+}) {
+  const { apiKeys, providerConfig } = await resolveProviderExecutionAuth({
+    providerId: params.providerId,
+    cfg: params.cfg,
+    entry: params.entry,
+    agentDir: params.agentDir,
+  });
+  const baseUrl = params.entry.baseUrl ?? params.config?.baseUrl ?? providerConfig?.baseUrl;
+  const mergedHeaders = {
+    ...providerConfig?.headers,
+    ...params.config?.headers,
+    ...params.entry.headers,
+  };
+  const headers = Object.keys(mergedHeaders).length > 0 ? mergedHeaders : undefined;
+  return { apiKeys, baseUrl, headers };
+}
+
 export function formatDecisionSummary(decision: MediaUnderstandingDecision): string {
   const total = decision.attachments.length;
   const success = decision.attachments.filter(
@@ -428,19 +451,13 @@ export async function runProviderEntry(params: {
       maxBytes,
       timeoutMs,
     });
-    const { apiKeys, providerConfig } = await resolveProviderExecutionAuth({
+    const { apiKeys, baseUrl, headers } = await resolveProviderExecutionContext({
       providerId,
       cfg,
       entry,
+      config: params.config,
       agentDir: params.agentDir,
     });
-    const baseUrl = entry.baseUrl ?? params.config?.baseUrl ?? providerConfig?.baseUrl;
-    const mergedHeaders = {
-      ...providerConfig?.headers,
-      ...params.config?.headers,
-      ...entry.headers,
-    };
-    const headers = Object.keys(mergedHeaders).length > 0 ? mergedHeaders : undefined;
     const providerQuery = resolveProviderQuery({
       providerId,
       config: params.config,
@@ -491,19 +508,13 @@ export async function runProviderEntry(params: {
       `Video attachment ${params.attachmentIndex + 1} base64 payload ${estimatedBase64Bytes} exceeds ${maxBase64Bytes}`,
     );
   }
-  const { apiKeys, providerConfig } = await resolveProviderExecutionAuth({
+  const { apiKeys, baseUrl, headers } = await resolveProviderExecutionContext({
     providerId,
     cfg,
     entry,
+    config: params.config,
     agentDir: params.agentDir,
   });
-  const baseUrl = entry.baseUrl ?? params.config?.baseUrl ?? providerConfig?.baseUrl;
-  const mergedHeaders = {
-    ...providerConfig?.headers,
-    ...params.config?.headers,
-    ...entry.headers,
-  };
-  const headers = Object.keys(mergedHeaders).length > 0 ? mergedHeaders : undefined;
   const result = await executeWithApiKeyRotation({
     provider: providerId,
     apiKeys,

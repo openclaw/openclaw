@@ -278,6 +278,32 @@ function parseAllRunLogEntries(raw: string, opts?: { jobId?: string }): CronRunL
   return parsed;
 }
 
+function filterRunLogEntries(
+  entries: CronRunLogEntry[],
+  opts: {
+    statuses: CronRunStatus[] | null;
+    deliveryStatuses: CronDeliveryStatus[] | null;
+    query: string;
+    queryTextForEntry: (entry: CronRunLogEntry) => string;
+  },
+): CronRunLogEntry[] {
+  return entries.filter((entry) => {
+    if (opts.statuses && (!entry.status || !opts.statuses.includes(entry.status))) {
+      return false;
+    }
+    if (opts.deliveryStatuses) {
+      const deliveryStatus = entry.deliveryStatus ?? "not-requested";
+      if (!opts.deliveryStatuses.includes(deliveryStatus)) {
+        return false;
+      }
+    }
+    if (!opts.query) {
+      return true;
+    }
+    return opts.queryTextForEntry(entry).toLowerCase().includes(opts.query);
+  });
+}
+
 export async function readCronRunLogEntriesPage(
   filePath: string,
   opts?: ReadCronRunLogPageOptions,
@@ -289,21 +315,11 @@ export async function readCronRunLogEntriesPage(
   const query = opts?.query?.trim().toLowerCase() ?? "";
   const sortDir: CronRunLogSortDir = opts?.sortDir === "asc" ? "asc" : "desc";
   const all = parseAllRunLogEntries(raw, { jobId: opts?.jobId });
-  const filtered = all.filter((entry) => {
-    if (statuses && (!entry.status || !statuses.includes(entry.status))) {
-      return false;
-    }
-    if (deliveryStatuses) {
-      const deliveryStatus = entry.deliveryStatus ?? "not-requested";
-      if (!deliveryStatuses.includes(deliveryStatus)) {
-        return false;
-      }
-    }
-    if (!query) {
-      return true;
-    }
-    const haystack = [entry.summary ?? "", entry.error ?? "", entry.jobId].join(" ").toLowerCase();
-    return haystack.includes(query);
+  const filtered = filterRunLogEntries(all, {
+    statuses,
+    deliveryStatuses,
+    query,
+    queryTextForEntry: (entry) => [entry.summary ?? "", entry.error ?? "", entry.jobId].join(" "),
   });
   const sorted =
     sortDir === "asc"
@@ -353,24 +369,14 @@ export async function readCronRunLogEntriesPageAll(
     }),
   );
   const all = chunks.flat();
-  const filtered = all.filter((entry) => {
-    if (statuses && (!entry.status || !statuses.includes(entry.status))) {
-      return false;
-    }
-    if (deliveryStatuses) {
-      const deliveryStatus = entry.deliveryStatus ?? "not-requested";
-      if (!deliveryStatuses.includes(deliveryStatus)) {
-        return false;
-      }
-    }
-    if (!query) {
-      return true;
-    }
-    const jobName = opts.jobNameById?.[entry.jobId] ?? "";
-    const haystack = [entry.summary ?? "", entry.error ?? "", entry.jobId, jobName]
-      .join(" ")
-      .toLowerCase();
-    return haystack.includes(query);
+  const filtered = filterRunLogEntries(all, {
+    statuses,
+    deliveryStatuses,
+    query,
+    queryTextForEntry: (entry) => {
+      const jobName = opts.jobNameById?.[entry.jobId] ?? "";
+      return [entry.summary ?? "", entry.error ?? "", entry.jobId, jobName].join(" ");
+    },
   });
   const sorted =
     sortDir === "asc"

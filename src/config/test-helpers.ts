@@ -51,3 +51,24 @@ export async function withEnvOverride<T>(
     }
   }
 }
+
+export function buildWebSearchProviderConfig(params: {
+  provider: string;
+  enabled?: boolean;
+  providerConfig?: Record<string, unknown>;
+}): Record<string, unknown> {
+  const search: Record<string, unknown> = { provider: params.provider };
+  if (params.enabled !== undefined) {
+    search.enabled = params.enabled;
+  }
+  if (params.providerConfig) {
+    search[params.provider] = params.providerConfig;
+  }
+  return {
+    tools: {
+      web: {
+        search,
+      },
+    },
+  };
+}
