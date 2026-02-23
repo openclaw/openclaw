@@ -26,7 +26,7 @@ import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import { logAcceptedEnvOption } from "../infra/env.js";
 import { createExecApprovalForwarder } from "../infra/exec-approval-forwarder.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
-import { startHeartbeatRunner, runHeartbeatOnce } from "../infra/heartbeat-runner.js";
+import { startHeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
 import { ReplyChainEnforcer } from "../infra/reply-chain-enforcer.js";
@@ -43,6 +43,7 @@ import type { PluginServicesHandle } from "../plugins/services.js";
 import type { RuntimeEnv } from "../runtime.js";
 // -- Watchdog Imports --
 import { runOnboardingWizard } from "../wizard/onboarding.js";
+import { callGateway } from "./call.js";
 import { startGatewayConfigReloader } from "./config-reload.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import {
@@ -442,14 +443,31 @@ export async function startGatewayServer(
     },
     {
       nowMs: () => Date.now(),
-      runHeartbeatOnce: async (opts) => {
-        const runtimeConfig = loadConfig();
-        return await runHeartbeatOnce({
-          cfg: runtimeConfig,
-          reason: opts.reason,
-          prompt: opts.prompt,
-          sessionKey: opts.sessionKey,
-        });
+      injectSystemMessage: async (opts) => {
+        try {
+          await callGateway({
+            method: "agent",
+            params: {
+              message: opts.message,
+              sessionKey: opts.sessionKey,
+              channel: "internal",
+              deliver: false,
+              idempotencyKey: `watchdog-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+              inputProvenance: {
+                kind: "internal_system",
+                sourceChannel: "watchdog",
+              },
+            },
+            timeoutMs: 10_000,
+          });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.error(`watchdog: failed to inject system message: ${msg}`, {
+            sessionKey: opts.sessionKey,
+            reason: opts.reason,
+            error: msg,
+          });
+        }
       },
     },
   );

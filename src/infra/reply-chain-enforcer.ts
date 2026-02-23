@@ -26,11 +26,14 @@ export class ReplyChainEnforcer {
     },
     private runtime: {
       nowMs: () => number;
-      runHeartbeatOnce: (opts: {
-        reason: string;
-        prompt: string;
+      /**
+       * Inject a system message into a specific session and trigger an agent turn.
+       * This is NOT a heartbeat — it's a targeted nudge to recover a stalled reply chain.
+       */
+      injectSystemMessage: (opts: {
         sessionKey: SessionKey;
-        noFallback?: boolean;
+        message: string;
+        reason: string;
       }) => Promise<void>;
     },
   ) {}
@@ -208,13 +211,12 @@ export class ReplyChainEnforcer {
     // so onChatFinal won't re-arm when the response arrives
     this.recoveryRuns.add(key);
 
-    // Fire recovery — noFallback prevents redirecting to main session
-    // if the target session isn't in the store (avoids spamming wrong session)
-    void this.runtime.runHeartbeatOnce({
-      reason: "watchdog-stall",
-      prompt: this.config.prompt,
+    // Fire recovery — inject a system message directly into the stalled session.
+    // This does NOT go through the heartbeat runner — it's a targeted nudge only.
+    void this.runtime.injectSystemMessage({
       sessionKey: key,
-      noFallback: true,
+      message: this.config.prompt,
+      reason: "watchdog-stall",
     });
   }
 }
