@@ -273,9 +273,21 @@ export async function monitorMSTeamsProvider(
     fallback: "/api/messages",
   });
 
-  // Start listening and capture the HTTP server handle
-  const httpServer = expressApp.listen(port, () => {
-    log.info(`msteams provider started on port ${port}`);
+  // Start listening and fail fast if bind/listen fails.
+  const httpServer = expressApp.listen(port);
+  await new Promise<void>((resolve, reject) => {
+    const onListening = () => {
+      httpServer.off("error", onError);
+      log.info(`msteams provider started on port ${port}`);
+      resolve();
+    };
+    const onError = (err: unknown) => {
+      httpServer.off("listening", onListening);
+      log.error("msteams server error", { error: String(err) });
+      reject(err);
+    };
+    httpServer.once("listening", onListening);
+    httpServer.once("error", onError);
   });
 
   httpServer.on("error", (err) => {
@@ -295,11 +307,24 @@ export async function monitorMSTeamsProvider(
   };
 
   // Handle abort signal
+  const onAbort = () => {
+    void shutdown();
+  };
   if (opts.abortSignal) {
-    opts.abortSignal.addEventListener("abort", () => {
-      void shutdown();
-    });
+    if (opts.abortSignal.aborted) {
+      onAbort();
+    } else {
+      opts.abortSignal.addEventListener("abort", onAbort, { once: true });
+    }
   }
+
+  // Keep this task alive until shutdown/close so gateway runtime does not treat startup as exit.
+  await new Promise<void>((resolve) => {
+    httpServer.once("close", () => {
+      resolve();
+    });
+  });
+  opts.abortSignal?.removeEventListener("abort", onAbort);
 
   return { app: expressApp, shutdown };
 }
