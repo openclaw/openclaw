@@ -673,6 +673,83 @@ describe("telegramMessageActions", () => {
     expect(String(callPayload.messageId)).toBe("456");
     expect(callPayload.emoji).toBe("ok");
   });
+
+  it("accepts snake_case message_id for reactions", async () => {
+    const cfg = telegramCfg();
+
+    await telegramMessageActions.handleAction?.({
+      channel: "telegram",
+      action: "react",
+      params: {
+        channelId: 123,
+        message_id: "456",
+        emoji: "ok",
+      },
+      cfg,
+      accountId: undefined,
+    });
+
+    expect(handleTelegramAction).toHaveBeenCalledTimes(1);
+    const call = handleTelegramAction.mock.calls[0]?.[0];
+    if (!call) {
+      throw new Error("missing telegram action call");
+    }
+    const callPayload = call as Record<string, unknown>;
+    expect(callPayload.action).toBe("react");
+    expect(String(callPayload.chatId)).toBe("123");
+    expect(String(callPayload.messageId)).toBe("456");
+  });
+
+  it("falls back to toolContext.currentMessageId for reactions when messageId is omitted", async () => {
+    const cfg = telegramCfg();
+
+    await telegramMessageActions.handleAction?.({
+      channel: "telegram",
+      action: "react",
+      params: {
+        chatId: "123",
+        emoji: "ok",
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: { currentMessageId: "9001" },
+    });
+
+    expect(handleTelegramAction).toHaveBeenCalledTimes(1);
+    const call = handleTelegramAction.mock.calls[0]?.[0];
+    if (!call) {
+      throw new Error("missing telegram action call");
+    }
+    const callPayload = call as Record<string, unknown>;
+    expect(callPayload.action).toBe("react");
+    expect(String(callPayload.messageId)).toBe("9001");
+  });
+
+  it("forwards missing reaction messageId to telegram-actions for soft-fail handling", async () => {
+    const cfg = telegramCfg();
+
+    await expect(
+      telegramMessageActions.handleAction?.({
+        channel: "telegram",
+        action: "react",
+        params: {
+          chatId: "123",
+          emoji: "ok",
+        },
+        cfg,
+        accountId: undefined,
+      }),
+    ).resolves.toBeDefined();
+
+    expect(handleTelegramAction).toHaveBeenCalledTimes(1);
+    const call = handleTelegramAction.mock.calls[0]?.[0];
+    if (!call) {
+      throw new Error("missing telegram action call");
+    }
+    const callPayload = call as Record<string, unknown>;
+    expect(callPayload.action).toBe("react");
+    expect(callPayload.messageId).toBeUndefined();
+  });
 });
 
 describe("signalMessageActions", () => {

@@ -14,7 +14,12 @@ describe("channels dock", () => {
 
     const telegramContext = telegramDock?.threading?.buildToolContext?.({
       cfg: emptyConfig(),
-      context: { To: " room-1 ", MessageThreadId: 42, ReplyToId: "fallback" },
+      context: {
+        To: " room-1 ",
+        MessageThreadId: 42,
+        ReplyToId: "fallback",
+        CurrentMessageId: "9001",
+      },
       hasRepliedRef,
     });
     const googleChatContext = googleChatDock?.threading?.buildToolContext?.({
@@ -26,11 +31,29 @@ describe("channels dock", () => {
     expect(telegramContext).toEqual({
       currentChannelId: "room-1",
       currentThreadTs: "42",
+      currentMessageId: "9001",
       hasRepliedRef,
     });
     expect(googleChatContext).toEqual({
       currentChannelId: "space-1",
       currentThreadTs: "thread-abc",
+      hasRepliedRef,
+    });
+  });
+
+  it("telegram threading does not treat ReplyToId as thread id in DMs", () => {
+    const hasRepliedRef = { value: false };
+    const telegramDock = getChannelDock("telegram");
+    const context = telegramDock?.threading?.buildToolContext?.({
+      cfg: emptyConfig(),
+      context: { To: " dm-1 ", ReplyToId: "12345", CurrentMessageId: "12345" },
+      hasRepliedRef,
+    });
+
+    expect(context).toEqual({
+      currentChannelId: "dm-1",
+      currentThreadTs: undefined,
+      currentMessageId: "12345",
       hasRepliedRef,
     });
   });
