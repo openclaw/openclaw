@@ -388,22 +388,17 @@ describe("compaction-safeguard extension model fallback", () => {
       model: undefined, // ctx.model is undefined (simulates compact.ts workflow)
       sessionManager,
       modelRegistry: {
-        getApiKey: getApiKeyMock, // No API key, should use fallback
+        getApiKey: getApiKeyMock, // No API key should now cancel compaction
       },
     } as unknown as Partial<ExtensionContext>;
 
     // Call the handler and wait for result
     // oxlint-disable-next-line typescript/no-non-null-assertion
     const result = (await compactionHandler!(mockEvent, mockContext)) as {
-      compaction?: { summary?: string; firstKeptEntryId?: string };
+      cancel?: boolean;
     };
-    const compactionResult = result?.compaction;
 
-    // Verify that compaction returned a result (even with null API key, should use fallback)
-    expect(compactionResult).toBeDefined();
-    expect(compactionResult?.summary).toBeDefined();
-    expect(compactionResult?.summary).toContain("Summary unavailable");
-    expect(compactionResult?.firstKeptEntryId).toBe("entry-1");
+    expect(result).toEqual({ cancel: true });
 
     // KEY ASSERTION: Prove the fallback path was exercised
     // The handler should have called getApiKey with runtime.model (via ctx.model ?? runtime?.model)
@@ -414,7 +409,7 @@ describe("compaction-safeguard extension model fallback", () => {
     expect(retrieved?.model).toEqual(model);
   });
 
-  it("returns fallback summary when both ctx.model and runtime.model are undefined", async () => {
+  it("cancels compaction when both ctx.model and runtime.model are undefined", async () => {
     const sessionManager = stubSessionManager();
 
     // Do NOT set runtime.model (both ctx.model and runtime.model will be undefined)
@@ -464,15 +459,10 @@ describe("compaction-safeguard extension model fallback", () => {
 
     // oxlint-disable-next-line typescript/no-non-null-assertion
     const result = (await compactionHandler!(mockEvent, mockContext)) as {
-      compaction?: { summary?: string; firstKeptEntryId?: string };
+      cancel?: boolean;
     };
-    const compactionResult = result?.compaction;
 
-    expect(compactionResult).toBeDefined();
-    expect(compactionResult?.summary).toBe(
-      "Summary unavailable due to context limits. Older messages were truncated.",
-    );
-    expect(compactionResult?.firstKeptEntryId).toBe("entry-1");
+    expect(result).toEqual({ cancel: true });
 
     // Verify early return: getApiKey should NOT have been called when both models are missing
     expect(getApiKeyMock).not.toHaveBeenCalled();
