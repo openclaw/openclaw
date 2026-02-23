@@ -298,14 +298,10 @@ services:
 
 所有 Skills 所需的外部二进制文件必须在镜像构建时安装。
 
-以下示例仅显示三个常见的二进制文件：
+以下部分展示了安装 Skill 二进制文件的 Dockerfile 模式。
 
-- `gog` 用于 Gmail 访问
-- `goplaces` 用于 Google Places
-- `wacli` 用于 WhatsApp
-
-这些是示例，不是完整列表。
-你可以使用相同的模式安装任意数量的二进制文件。
+将占位符 `RUN` 行替换为你的 Skills 所需的实际二进制文件。
+查看每个 Skill 的文档以获取下载地址和安装说明。
 
 如果你以后添加依赖额外二进制文件的新 Skills，你必须：
 
@@ -320,19 +316,11 @@ FROM node:22-bookworm
 
 RUN apt-get update && apt-get install -y socat && rm -rf /var/lib/apt/lists/*
 
-# 示例二进制文件 1：Gmail CLI
-RUN curl -L https://github.com/steipete/gog/releases/latest/download/gog_Linux_x86_64.tar.gz \
-  | tar -xz -C /usr/local/bin && chmod +x /usr/local/bin/gog
-
-# 示例二进制文件 2：Google Places CLI
-RUN curl -L https://github.com/steipete/goplaces/releases/latest/download/goplaces_Linux_x86_64.tar.gz \
-  | tar -xz -C /usr/local/bin && chmod +x /usr/local/bin/goplaces
-
-# 示例二进制文件 3：WhatsApp CLI
-RUN curl -L https://github.com/steipete/wacli/releases/latest/download/wacli_Linux_x86_64.tar.gz \
-  | tar -xz -C /usr/local/bin && chmod +x /usr/local/bin/wacli
-
-# 使用相同的模式在下面添加更多二进制文件
+# 在此处安装 Skill 二进制文件。示例模式：
+# RUN curl -L https://github.com/OWNER/REPO/releases/latest/download/BINARY_Linux_x86_64.tar.gz \
+#   | tar -xz -C /usr/local/bin && chmod +x /usr/local/bin/BINARY
+#
+# 为你的 Skills 需要的每个二进制文件添加一行 RUN 命令。
 
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
@@ -361,20 +349,16 @@ docker compose build
 docker compose up -d openclaw-gateway
 ```
 
-验证二进制文件：
+验证二进制文件（将 `BINARY` 替换为你安装的实际二进制文件名）：
 
 ```bash
-docker compose exec openclaw-gateway which gog
-docker compose exec openclaw-gateway which goplaces
-docker compose exec openclaw-gateway which wacli
+docker compose exec openclaw-gateway which BINARY
 ```
 
 预期输出：
 
 ```
-/usr/local/bin/gog
-/usr/local/bin/goplaces
-/usr/local/bin/wacli
+/usr/local/bin/BINARY
 ```
 
 ---
