@@ -496,7 +496,15 @@ Notes:
 
 ### Prompt Hooks
 
-For typed runtime lifecycle hooks, use `api.on(...)`:
+To modify what the agent sees at runtime, prefer `before_prompt_build`:
+
+- `before_prompt_build` runs after session load and receives `{ prompt, messages }`.
+- Return `actions` to deterministically modify the user prompt and/or the system prompt.
+- Actions are applied in order; multiple actions are joined with blank lines (`\n\n`).
+- `prependContext` is capped at 8000 chars (UTF-16 code units).
+- `appendSystemPrompt` is capped at 4000 chars (UTF-16 code units) and is appended to the base system prompt (it does not replace it).
+
+Example: prepend context to the user prompt and append instructions to the system prompt:
 
 ```ts
 export default function register(api) {

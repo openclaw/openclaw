@@ -2,13 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import type { AgentMessage, StreamFn } from "@mariozechner/pi-agent-core";
 import { streamSimple } from "@mariozechner/pi-ai";
-import {
-  createAgentSession,
-  DefaultResourceLoader,
-  SessionManager,
-  SettingsManager,
-  type AgentSession,
-} from "@mariozechner/pi-coding-agent";
+import { createAgentSession, SessionManager, SettingsManager } from "@mariozechner/pi-coding-agent";
 import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
@@ -28,7 +22,7 @@ import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
 import { resolveTelegramInlineButtonsScope } from "../../../telegram/inline-buttons.js";
 import { resolveTelegramReactionLevel } from "../../../telegram/reaction-level.js";
 import { buildTtsSystemPromptHint } from "../../../tts/tts.js";
-import { resolveUserPath } from "../../../utils.js";
+import { resolveUserPath, truncateUtf16Safe } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveOpenClawAgentDir } from "../../agent-paths.js";
@@ -93,6 +87,7 @@ import { resolveTranscriptPolicy } from "../../transcript-policy.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { appendCacheTtlTimestamp, isCacheTtlEligibleProvider } from "../cache-ttl.js";
+import { createEmbeddedResourceLoader } from "../embedded-resource-loader.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { applyExtraParamsToAgent } from "../extra-params.js";
 import {
@@ -112,11 +107,7 @@ import { buildEmbeddedSandboxInfo } from "../sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "../session-manager-cache.js";
 import { prepareSessionManagerForRun } from "../session-manager-init.js";
 import { resolveEmbeddedRunSkillEntries } from "../skills-runtime.js";
-import {
-  applySystemPromptOverrideToSession,
-  buildEmbeddedSystemPrompt,
-  createSystemPromptOverride,
-} from "../system-prompt.js";
+import { buildEmbeddedSystemPrompt } from "../system-prompt.js";
 import { dropThinkingBlocks } from "../thinking.js";
 import { collectAllowedToolNames } from "../tool-name-allowlist.js";
 import { installToolResultContextGuard } from "../tool-result-context-guard.js";
@@ -668,11 +659,24 @@ function normalizePromptBuildHookActions(
   return actions;
 }
 
-export function applyPromptBuildHookResultToSession(params: {
+const PROMPT_HOOK_PREPEND_CONTEXT_MAX_CHARS = 8_000;
+const PROMPT_HOOK_APPEND_SYSTEM_PROMPT_MAX_CHARS = 4_000;
+
+function capPromptHookText(params: { text: string; maxChars: number; label: string }): string {
+  const trimmed = params.text.trim();
+  if (trimmed.length <= params.maxChars) {
+    return trimmed;
+  }
+
+  const suffix = `\n…(truncated ${params.label})…`;
+  const safeMax = Math.max(0, params.maxChars - suffix.length);
+  return `${truncateUtf16Safe(trimmed, safeMax).trimEnd()}${suffix}`;
+}
+
+export function applyPromptBuildHookResult(params: {
   prompt: string;
   systemPromptText: string;
   hookResult?: PluginHookBeforePromptBuildResult;
-  session?: AgentSession;
 }): {
   effectivePrompt: string;
   systemPromptText: string;
@@ -722,7 +726,11 @@ export function applyPromptBuildHookResultToSession(params: {
     }
   }
 
-  const prependContextText = prependParts.join("\n\n");
+  const prependContextText = capPromptHookText({
+    text: prependParts.join("\n\n"),
+    maxChars: PROMPT_HOOK_PREPEND_CONTEXT_MAX_CHARS,
+    label: "prependContext",
+  });
   const effectivePrompt =
     prependContextText.length > 0 ? `${prependContextText}\n\n${params.prompt}` : params.prompt;
   const prependContextChars = prependContextText.length;
@@ -738,8 +746,13 @@ export function applyPromptBuildHookResultToSession(params: {
       appendedSystemPromptChars: 0,
     };
   }
+  const cappedAppendText = capPromptHookText({
+    text: appendText,
+    maxChars: PROMPT_HOOK_APPEND_SYSTEM_PROMPT_MAX_CHARS,
+    label: "appendSystemPrompt",
+  });
   const baseSystemPrompt = joinPresentTextSegments(
-    [systemPromptOverride || params.systemPromptText, appendText],
+    [systemPromptOverride || params.systemPromptText, cappedAppendText],
     { trim: true },
   );
   const patchedSystemPrompt =
@@ -748,9 +761,6 @@ export function applyPromptBuildHookResultToSession(params: {
       prependSystemContext,
       appendSystemContext,
     }) ?? baseSystemPrompt;
-  if (params.session && (hasSystemPromptMutations || appendText.length > 0)) {
-    applySystemPromptOverrideToSession(params.session, patchedSystemPrompt);
-  }
 
   return {
     effectivePrompt,
@@ -759,7 +769,7 @@ export function applyPromptBuildHookResultToSession(params: {
     systemPromptOverrideChars: systemPromptOverride.length,
     prependSystemContextChars: prependSystemContext.length,
     appendSystemContextChars: appendSystemContext.length,
-    appendedSystemPromptChars: appendText.length,
+    appendedSystemPromptChars: cappedAppendText.length,
   };
 }
 
@@ -1132,8 +1142,11 @@ export async function runEmbeddedAttempt(
       skillsPrompt,
       tools,
     });
-    const systemPromptOverride = createSystemPromptOverride(appendPrompt);
-    let systemPromptText = systemPromptOverride();
+    let systemPromptText = appendPrompt.trim();
+    let effectivePrompt = params.prompt;
+    let promptHookResult: PluginHookBeforePromptBuildResult | undefined;
+    let sanitizedMessages: AgentMessage[] = [];
+    let preparedMessages: AgentMessage[] = [];
 
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
@@ -1194,21 +1207,110 @@ export async function runEmbeddedAttempt(
         modelId: params.modelId,
         model: params.model,
       });
-      // Only create an explicit resource loader when there are extension factories
-      // to register; otherwise let createAgentSession use its built-in default.
-      let resourceLoader: DefaultResourceLoader | undefined;
-      if (extensionFactories.length > 0) {
-        resourceLoader = new DefaultResourceLoader({
-          cwd: resolvedWorkspace,
-          agentDir,
-          settingsManager,
-          extensionFactories,
-        });
-        await resourceLoader.reload();
+
+      // Get hook runner early so it's available when creating tools and prompt hooks.
+      const hookRunner = getGlobalHookRunner();
+
+      // Repair orphaned trailing user messages so new prompts don't violate role ordering.
+      const leafEntry = sessionManager.getLeafEntry();
+      if (leafEntry?.type === "message" && leafEntry.message.role === "user") {
+        if (leafEntry.parentId) {
+          sessionManager.branch(leafEntry.parentId);
+        } else {
+          sessionManager.resetLeaf();
+        }
+        log.warn(
+          `Removed orphaned user message to prevent consecutive user turns. ` +
+            `runId=${params.runId} sessionId=${params.sessionId}`,
+        );
       }
 
-      // Get hook runner early so it's available when creating tools
-      const hookRunner = getGlobalHookRunner();
+      sanitizedMessages = await sanitizeSessionHistory({
+        messages: sessionManager.buildSessionContext().messages,
+        modelApi: params.model.api,
+        modelId: params.modelId,
+        provider: params.provider,
+        allowedToolNames,
+        config: params.config,
+        sessionManager,
+        sessionId: params.sessionId,
+        policy: transcriptPolicy,
+      });
+      const validatedGemini = transcriptPolicy.validateGeminiTurns
+        ? validateGeminiTurns(sanitizedMessages)
+        : sanitizedMessages;
+      const validated = transcriptPolicy.validateAnthropicTurns
+        ? validateAnthropicTurns(validatedGemini)
+        : validatedGemini;
+      const truncated = limitHistoryTurns(
+        validated,
+        getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
+      );
+      // Re-run tool_use/tool_result pairing repair after truncation, since
+      // limitHistoryTurns can orphan tool_result blocks by removing the
+      // assistant message that contained the matching tool_use.
+      preparedMessages = transcriptPolicy.repairToolUseResultPairing
+        ? sanitizeToolUseResultPairing(truncated)
+        : truncated;
+
+      // Run before_prompt_build hooks (after session load, before AgentSession is created).
+      const hookCtx = {
+        agentId: sessionAgentId,
+        sessionKey: params.sessionKey,
+        sessionId: params.sessionId,
+        workspaceDir: params.workspaceDir,
+        messageProvider: params.messageProvider ?? undefined,
+      };
+      promptHookResult = await resolvePromptBuildHookResult({
+        prompt: params.prompt,
+        messages: preparedMessages,
+        hookCtx,
+        hookRunner,
+        legacyBeforeAgentStartResult: params.legacyBeforeAgentStartResult,
+      });
+      const appliedHookResult = applyPromptBuildHookResult({
+        prompt: params.prompt,
+        systemPromptText,
+        hookResult: promptHookResult,
+      });
+      effectivePrompt = appliedHookResult.effectivePrompt;
+      systemPromptText = appliedHookResult.systemPromptText;
+      if (appliedHookResult.prependContextChars > 0) {
+        log.debug(
+          `hooks: prepended context to prompt (${appliedHookResult.prependContextChars} chars)`,
+        );
+      }
+      if (
+        appliedHookResult.appendedSystemPromptChars > 0 ||
+        appliedHookResult.systemPromptOverrideChars > 0 ||
+        appliedHookResult.prependSystemContextChars > 0 ||
+        appliedHookResult.appendSystemContextChars > 0
+      ) {
+        log.debug(
+          `hooks: updated system prompt (${appliedHookResult.appendedSystemPromptChars} appended chars)`,
+        );
+      }
+      if (appliedHookResult.systemPromptOverrideChars > 0) {
+        log.debug(
+          `hooks: applied systemPrompt override (${appliedHookResult.systemPromptOverrideChars} chars)`,
+        );
+      }
+      if (
+        appliedHookResult.prependSystemContextChars > 0 ||
+        appliedHookResult.appendSystemContextChars > 0
+      ) {
+        log.debug(
+          `hooks: applied prependSystemContext/appendSystemContext (${appliedHookResult.prependSystemContextChars}+${appliedHookResult.appendSystemContextChars} chars)`,
+        );
+      }
+
+      const resourceLoader = await createEmbeddedResourceLoader({
+        cwd: resolvedWorkspace,
+        agentDir,
+        settingsManager,
+        extensionFactories,
+        systemPrompt: systemPromptText,
+      });
 
       const { builtInTools, customTools } = splitSdkTools({
         tools,
@@ -1252,11 +1354,31 @@ export async function runEmbeddedAttempt(
         settingsManager,
         resourceLoader,
       }));
-      applySystemPromptOverrideToSession(session, systemPromptText);
       if (!session) {
         throw new Error("Embedded agent session missing");
       }
       const activeSession = session;
+      if (preparedMessages.length > 0) {
+        activeSession.agent.replaceMessages(preparedMessages);
+      }
+      systemPromptText = activeSession.systemPrompt;
+      systemPromptReport = buildSystemPromptReport({
+        source: "run",
+        generatedAt: systemPromptReport.generatedAt,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        provider: params.provider,
+        model: params.modelId,
+        workspaceDir: effectiveWorkspace,
+        bootstrapMaxChars: resolveBootstrapMaxChars(params.config),
+        bootstrapTotalMaxChars: resolveBootstrapTotalMaxChars(params.config),
+        sandbox: systemPromptReport.sandbox,
+        systemPrompt: systemPromptText,
+        bootstrapFiles: hookAdjustedBootstrapFiles,
+        injectedFiles: contextFiles,
+        skillsPrompt,
+        tools,
+      });
       removeToolResultContextGuard = installToolResultContextGuard({
         agent: activeSession.agent,
         contextWindowTokens: Math.max(
@@ -1354,6 +1476,11 @@ export async function runEmbeddedAttempt(
           system: systemPromptText,
           note: "after session create",
         });
+        cacheTrace.recordStage("prompt:hooks", {
+          prompt: effectivePrompt,
+          system: systemPromptText,
+          messages: activeSession.messages,
+        });
         activeSession.agent.streamFn = cacheTrace.wrapStreamFn(activeSession.agent.streamFn);
       }
 
@@ -1449,48 +1576,8 @@ export async function runEmbeddedAttempt(
         );
       }
 
-      try {
-        const prior = await sanitizeSessionHistory({
-          messages: activeSession.messages,
-          modelApi: params.model.api,
-          modelId: params.modelId,
-          provider: params.provider,
-          allowedToolNames,
-          config: params.config,
-          sessionManager,
-          sessionId: params.sessionId,
-          policy: transcriptPolicy,
-        });
-        cacheTrace?.recordStage("session:sanitized", { messages: prior });
-        const validatedGemini = transcriptPolicy.validateGeminiTurns
-          ? validateGeminiTurns(prior)
-          : prior;
-        const validated = transcriptPolicy.validateAnthropicTurns
-          ? validateAnthropicTurns(validatedGemini)
-          : validatedGemini;
-        const truncated = limitHistoryTurns(
-          validated,
-          getDmHistoryLimitFromSessionKey(params.sessionKey, params.config),
-        );
-        // Re-run tool_use/tool_result pairing repair after truncation, since
-        // limitHistoryTurns can orphan tool_result blocks by removing the
-        // assistant message that contained the matching tool_use.
-        const limited = transcriptPolicy.repairToolUseResultPairing
-          ? sanitizeToolUseResultPairing(truncated)
-          : truncated;
-        cacheTrace?.recordStage("session:limited", { messages: limited });
-        if (limited.length > 0) {
-          activeSession.agent.replaceMessages(limited);
-        }
-      } catch (err) {
-        await flushPendingToolResultsAfterIdle({
-          agent: activeSession?.agent,
-          sessionManager,
-          clearPendingOnTimeout: true,
-        });
-        activeSession.dispose();
-        throw err;
-      }
+      cacheTrace?.recordStage("session:sanitized", { messages: sanitizedMessages });
+      cacheTrace?.recordStage("session:limited", { messages: preparedMessages });
 
       let aborted = Boolean(params.abortSignal?.aborted);
       let timedOut = false;
@@ -1656,90 +1743,10 @@ export async function runEmbeddedAttempt(
         }
       }
 
-      // Hook runner was already obtained earlier before tool creation
-      const hookAgentId = sessionAgentId;
-
       let promptError: unknown = null;
       let promptErrorSource: "prompt" | "compaction" | null = null;
       try {
         const promptStartedAt = Date.now();
-
-        // Run before_prompt_build hooks to allow plugins to inject prompt context.
-        // Legacy compatibility: before_agent_start is also checked for context fields.
-        let effectivePrompt = params.prompt;
-        const hookCtx = {
-          agentId: hookAgentId,
-          sessionKey: params.sessionKey,
-          sessionId: params.sessionId,
-          workspaceDir: params.workspaceDir,
-          messageProvider: params.messageProvider ?? undefined,
-          trigger: params.trigger,
-          channelId: params.messageChannel ?? params.messageProvider ?? undefined,
-        };
-        const hookResult = await resolvePromptBuildHookResult({
-          prompt: params.prompt,
-          messages: activeSession.messages,
-          hookCtx,
-          hookRunner,
-          legacyBeforeAgentStartResult: params.legacyBeforeAgentStartResult,
-        });
-        const appliedHookResult = applyPromptBuildHookResultToSession({
-          prompt: params.prompt,
-          systemPromptText,
-          hookResult,
-          session: activeSession,
-        });
-        effectivePrompt = appliedHookResult.effectivePrompt;
-        systemPromptText = appliedHookResult.systemPromptText;
-        if (appliedHookResult.prependContextChars > 0) {
-          log.debug(
-            `hooks: prepended context to prompt (${appliedHookResult.prependContextChars} chars)`,
-          );
-        }
-        if (
-          appliedHookResult.appendedSystemPromptChars > 0 ||
-          appliedHookResult.systemPromptOverrideChars > 0 ||
-          appliedHookResult.prependSystemContextChars > 0 ||
-          appliedHookResult.appendSystemContextChars > 0
-        ) {
-          log.debug(
-            `hooks: updated system prompt (${appliedHookResult.appendedSystemPromptChars} appended chars)`,
-          );
-          systemPromptReport = buildSystemPromptReport({
-            source: "run",
-            generatedAt: systemPromptReport.generatedAt,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            provider: params.provider,
-            model: params.modelId,
-            workspaceDir: effectiveWorkspace,
-            bootstrapMaxChars: resolveBootstrapMaxChars(params.config),
-            bootstrapTotalMaxChars: resolveBootstrapTotalMaxChars(params.config),
-            sandbox: systemPromptReport.sandbox,
-            systemPrompt: systemPromptText,
-            bootstrapFiles: hookAdjustedBootstrapFiles,
-            injectedFiles: contextFiles,
-            skillsPrompt,
-            tools,
-          });
-        }
-        if (appliedHookResult.systemPromptOverrideChars > 0) {
-          log.debug(
-            `hooks: applied systemPrompt override (${appliedHookResult.systemPromptOverrideChars} chars)`,
-          );
-        }
-        if (
-          appliedHookResult.prependSystemContextChars > 0 ||
-          appliedHookResult.appendSystemContextChars > 0
-        ) {
-          log.debug(
-            `hooks: applied prependSystemContext/appendSystemContext (${appliedHookResult.prependSystemContextChars}+${appliedHookResult.appendSystemContextChars} chars)`,
-          );
-        }
-        cacheTrace?.recordStage("prompt:hooks", {
-          prompt: effectivePrompt,
-          system: systemPromptText,
-        });
 
         log.debug(`embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`);
         cacheTrace?.recordStage("prompt:before", {
@@ -1747,23 +1754,6 @@ export async function runEmbeddedAttempt(
           system: systemPromptText,
           messages: activeSession.messages,
         });
-
-        // Repair orphaned trailing user messages so new prompts don't violate role ordering.
-        const leafEntry = sessionManager.getLeafEntry();
-        if (leafEntry?.type === "message" && leafEntry.message.role === "user") {
-          if (leafEntry.parentId) {
-            sessionManager.branch(leafEntry.parentId);
-          } else {
-            sessionManager.resetLeaf();
-          }
-          const sessionContext = sessionManager.buildSessionContext();
-          activeSession.agent.replaceMessages(sessionContext.messages);
-          log.warn(
-            `Removed orphaned user message to prevent consecutive user turns. ` +
-              `runId=${params.runId} sessionId=${params.sessionId}`,
-          );
-        }
-
         try {
           // Idempotent cleanup for legacy sessions with persisted image payloads.
           // Called each run; only mutates already-answered user turns that still carry image blocks.
@@ -1827,7 +1817,7 @@ export async function runEmbeddedAttempt(
                   imagesCount: imageResult.images.length,
                 },
                 {
-                  agentId: hookAgentId,
+                  agentId: sessionAgentId,
                   sessionKey: params.sessionKey,
                   sessionId: params.sessionId,
                   workspaceDir: params.workspaceDir,
@@ -1970,7 +1960,7 @@ export async function runEmbeddedAttempt(
                 durationMs: Date.now() - promptStartedAt,
               },
               {
-                agentId: hookAgentId,
+                agentId: sessionAgentId,
                 sessionKey: params.sessionKey,
                 sessionId: params.sessionId,
                 workspaceDir: params.workspaceDir,
@@ -2030,7 +2020,7 @@ export async function runEmbeddedAttempt(
               usage: getUsageTotals(),
             },
             {
-              agentId: hookAgentId,
+              agentId: sessionAgentId,
               sessionKey: params.sessionKey,
               sessionId: params.sessionId,
               workspaceDir: params.workspaceDir,

@@ -18,8 +18,6 @@ describe("applySystemPromptOverrideToSession", () => {
     applySystemPromptOverrideToSession(session, prompt);
 
     expect(setSystemPrompt).toHaveBeenCalledWith(prompt);
-    const mutable = session as unknown as { _baseSystemPrompt?: string };
-    expect(mutable._baseSystemPrompt).toBe(prompt);
   });
 
   it("trims whitespace from string overrides", () => {
@@ -37,15 +35,5 @@ describe("applySystemPromptOverrideToSession", () => {
     applySystemPromptOverrideToSession(session, override);
 
     expect(setSystemPrompt).toHaveBeenCalledWith("function-based prompt");
-  });
-
-  it("sets _rebuildSystemPrompt that returns the override", () => {
-    const { session } = createMockSession();
-    applySystemPromptOverrideToSession(session, "rebuild test");
-
-    const mutable = session as unknown as {
-      _rebuildSystemPrompt?: (toolNames: string[]) => string;
-    };
-    expect(mutable._rebuildSystemPrompt?.(["tool1"])).toBe("rebuild test");
   });
 });

@@ -3,7 +3,6 @@ import os from "node:os";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import {
   createAgentSession,
-  DefaultResourceLoader,
   estimateTokens,
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
@@ -62,6 +61,7 @@ import {
   compactWithSafetyTimeout,
   EMBEDDED_COMPACTION_TIMEOUT_MS,
 } from "./compaction-safety-timeout.js";
+import { createEmbeddedResourceLoader } from "./embedded-resource-loader.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
 import {
   logToolSchemasForGoogle,
@@ -75,11 +75,7 @@ import { buildModelAliasLines, resolveModel } from "./model.js";
 import { buildEmbeddedSandboxInfo } from "./sandbox-info.js";
 import { prewarmSessionFile, trackSessionManagerAccess } from "./session-manager-cache.js";
 import { resolveEmbeddedRunSkillEntries } from "./skills-runtime.js";
-import {
-  applySystemPromptOverrideToSession,
-  buildEmbeddedSystemPrompt,
-  createSystemPromptOverride,
-} from "./system-prompt.js";
+import { buildEmbeddedSystemPrompt } from "./system-prompt.js";
 import { collectAllowedToolNames } from "./tool-name-allowlist.js";
 import { splitSdkTools } from "./tool-split.js";
 import type { EmbeddedPiCompactResult } from "./types.js";
@@ -520,7 +516,7 @@ export async function compactEmbeddedPiSessionDirect(
       contextFiles,
       memoryCitationsMode: params.config?.memory?.citations,
     });
-    const systemPromptOverride = createSystemPromptOverride(appendPrompt);
+    const systemPromptText = appendPrompt.trim();
 
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
@@ -560,18 +556,13 @@ export async function compactEmbeddedPiSessionDirect(
         modelId,
         model,
       });
-      // Only create an explicit resource loader when there are extension factories
-      // to register; otherwise let createAgentSession use its built-in default.
-      let resourceLoader: DefaultResourceLoader | undefined;
-      if (extensionFactories.length > 0) {
-        resourceLoader = new DefaultResourceLoader({
-          cwd: resolvedWorkspace,
-          agentDir,
-          settingsManager,
-          extensionFactories,
-        });
-        await resourceLoader.reload();
-      }
+      const resourceLoader = await createEmbeddedResourceLoader({
+        cwd: resolvedWorkspace,
+        agentDir,
+        settingsManager,
+        extensionFactories,
+        systemPrompt: systemPromptText,
+      });
 
       const { builtInTools, customTools } = splitSdkTools({
         tools,
@@ -591,7 +582,6 @@ export async function compactEmbeddedPiSessionDirect(
         settingsManager,
         resourceLoader,
       });
-      applySystemPromptOverrideToSession(session, systemPromptOverride());
 
       try {
         const prior = await sanitizeSessionHistory({

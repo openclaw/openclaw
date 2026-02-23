@@ -1,10 +1,9 @@
-import type { AgentSession } from "@mariozechner/pi-coding-agent";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
-  applyPromptBuildHookResultToSession,
+  applyPromptBuildHookResult,
   composeSystemPromptWithHookContext,
   isOllamaCompatProvider,
   resolveAttemptFsWorkspaceOnly,
@@ -555,12 +554,9 @@ describe("decodeHtmlEntitiesInObject", () => {
   });
 });
 
-describe("applyPromptBuildHookResultToSession", () => {
+describe("applyPromptBuildHookResult", () => {
   it("prepends multiple contexts in-order and appends system prompt", () => {
-    const agent = { setSystemPrompt: vi.fn() };
-    const session = { agent } as unknown as AgentSession;
-
-    const result = applyPromptBuildHookResultToSession({
+    const result = applyPromptBuildHookResult({
       prompt: "user prompt",
       systemPromptText: "BASE",
       hookResult: {
@@ -571,21 +567,16 @@ describe("applyPromptBuildHookResultToSession", () => {
           { kind: "appendSystemPrompt", text: "sys Y" },
         ],
       },
-      session,
     });
 
     expect(result.effectivePrompt).toBe("ctx A\n\nctx B\n\nuser prompt");
     expect(result.systemPromptText).toBe("BASE\n\nsys X\n\nsys Y");
     expect(result.prependContextChars).toBe("ctx A\n\nctx B".length);
     expect(result.appendedSystemPromptChars).toBe("sys X\n\nsys Y".length);
-    expect(agent.setSystemPrompt).toHaveBeenCalledWith("BASE\n\nsys X\n\nsys Y");
   });
 
   it("combines explicit actions with legacy system prompt fields without double-applying prompt text", () => {
-    const agent = { setSystemPrompt: vi.fn() };
-    const session = { agent } as unknown as AgentSession;
-
-    const result = applyPromptBuildHookResultToSession({
+    const result = applyPromptBuildHookResult({
       prompt: "user prompt",
       systemPromptText: "BASE",
       hookResult: {
@@ -598,7 +589,6 @@ describe("applyPromptBuildHookResultToSession", () => {
           { kind: "appendSystemPrompt", text: "sys tail" },
         ],
       },
-      session,
     });
 
     expect(result.effectivePrompt).toBe("action ctx\n\nuser prompt");
@@ -608,8 +598,29 @@ describe("applyPromptBuildHookResultToSession", () => {
     expect(result.prependSystemContextChars).toBe("prepend ctx".length);
     expect(result.appendSystemContextChars).toBe("append ctx".length);
     expect(result.appendedSystemPromptChars).toBe("sys tail".length);
-    expect(agent.setSystemPrompt).toHaveBeenCalledWith(
-      "prepend ctx\n\nlegacy sys\n\nsys tail\n\nappend ctx",
-    );
+  });
+
+  it("caps prependContext and appendSystemPrompt budgets", () => {
+    const base = "BASE";
+    const longCtx = "x".repeat(9_000);
+    const longSys = "y".repeat(5_000);
+    const prompt = "user prompt";
+
+    const result = applyPromptBuildHookResult({
+      prompt,
+      systemPromptText: base,
+      hookResult: {
+        actions: [
+          { kind: "prependContext", text: longCtx },
+          { kind: "appendSystemPrompt", text: longSys },
+        ],
+      },
+    });
+
+    const contextPart = result.effectivePrompt.slice(0, -`\n\n${prompt}`.length);
+    expect(contextPart.length).toBeLessThanOrEqual(8_000);
+
+    const appendedPart = result.systemPromptText.slice(`${base}\n\n`.length);
+    expect(appendedPart.length).toBeLessThanOrEqual(4_000);
   });
 });
