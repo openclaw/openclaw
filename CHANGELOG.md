@@ -9,6 +9,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Providers/Vercel AI Gateway: accept Claude shorthand model refs (`vercel-ai-gateway/claude-*`) by normalizing to canonical Anthropic-routed model ids. (#23985) Thanks @sallyom, @markbooch, and @vincentkoc.
+- Docs/Prompt caching: add a dedicated prompt-caching reference covering `cacheRetention`, per-agent `params` merge precedence, Bedrock/OpenRouter behavior, and cache-ttl + heartbeat tuning. Thanks @svenssonaxel.
 
 ### Breaking
 
