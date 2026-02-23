@@ -513,7 +513,12 @@ export function createGatewayHttpServer(opts: {
           sendGatewayAuthFailure(res, authResult);
           return;
         }
-        const origin = opts.gatewayOrigin ?? `http://${req.headers.host ?? "localhost"}`;
+        // Prefer the Host header + X-Forwarded-Proto so the noVNC viewer
+        // connects to the public URL (e.g. wss://gw.hanzo.bot/vnc) instead of
+        // the internal bind address (ws://0.0.0.0:18789/vnc).
+        const host = req.headers.host;
+        const proto = getHeader(req, "x-forwarded-proto") ?? (opts.tlsOptions ? "https" : "http");
+        const origin = host ? `${proto}://${host}` : (opts.gatewayOrigin ?? "http://localhost");
         res.statusCode = 200;
         res.setHeader("Content-Type", "text/html; charset=utf-8");
         res.end(vncViewerHtml(origin));
