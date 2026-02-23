@@ -180,4 +180,65 @@ describe("runCronIsolatedAgentTurn", () => {
       expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
     });
   });
+
+  it("uses a unique announce childRunId for each cron run", async () => {
+    await withTempCronHome(async (home) => {
+      const storePath = await writeSessionStore(home, {
+        lastProvider: "telegram",
+        lastChannel: "telegram",
+        lastTo: "123",
+      });
+      const deps: CliDeps = {
+        sendMessageSlack: vi.fn(),
+        sendMessageWhatsApp: vi.fn(),
+        sendMessageTelegram: vi.fn(),
+        sendMessageDiscord: vi.fn(),
+        sendMessageSignal: vi.fn(),
+        sendMessageIMessage: vi.fn(),
+      };
+
+      vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
+        payloads: [{ text: "final summary" }],
+        meta: {
+          durationMs: 5,
+          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        },
+      });
+
+      const cfg = makeCfg(home, storePath);
+      const job = {
+        ...makeJob({ kind: "agentTurn", message: "do it" }),
+        delivery: { mode: "announce", channel: "last" as const },
+      };
+
+      await runCronIsolatedAgentTurn({
+        cfg,
+        deps,
+        job,
+        message: "do it",
+        sessionKey: "cron:job-1",
+        lane: "cron",
+      });
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      await runCronIsolatedAgentTurn({
+        cfg,
+        deps,
+        job,
+        message: "do it",
+        sessionKey: "cron:job-1",
+        lane: "cron",
+      });
+
+      expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
+      const firstArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[0]?.[0] as
+        | { childRunId?: string }
+        | undefined;
+      const secondArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[1]?.[0] as
+        | { childRunId?: string }
+        | undefined;
+      expect(firstArgs?.childRunId).toBeTruthy();
+      expect(secondArgs?.childRunId).toBeTruthy();
+      expect(secondArgs?.childRunId).not.toBe(firstArgs?.childRunId);
+    });
+  });
 });

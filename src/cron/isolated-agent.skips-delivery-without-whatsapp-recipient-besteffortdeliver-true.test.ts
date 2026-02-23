@@ -81,11 +81,13 @@ async function expectExplicitTelegramTargetAnnounce(params: {
       | {
           requesterOrigin?: { channel?: string; to?: string };
           roundOneReply?: string;
+          bestEffortDeliver?: boolean;
         }
       | undefined;
     expect(announceArgs?.requesterOrigin?.channel).toBe("telegram");
     expect(announceArgs?.requesterOrigin?.to).toBe("123");
     expect(announceArgs?.roundOneReply).toBe(params.expectedText);
+    expect(announceArgs?.bestEffortDeliver).toBe(false);
     expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
   });
 }
