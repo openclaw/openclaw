@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 - Update/Core: add an optional built-in auto-updater for package installs (`update.auto.*`), default-off, with stable rollout delay+jitter and beta hourly cadence.
 - CLI/Update: add `openclaw update --dry-run` to preview channel/tag/target/restart actions without mutating config, installing, syncing plugins, or restarting.
 - Config/UI: add tag-aware settings filtering and broaden config labels/help copy so fields are easier to discover and understand in the dashboard config screen.
+- Channels/Synology Chat: add a native Synology Chat channel plugin with webhook ingress, direct-message routing, outbound send/media support, per-account config, and DM policy controls. (#23012)
 - iOS/Talk: prefetch TTS segments and suppress expected speech-cancellation errors for smoother talk playback. (#22833) Thanks @ngutman.
 - Memory/FTS: add Spanish and Portuguese stop-word filtering for query expansion in FTS-only search mode, improving conversational recall for both languages. Thanks @vincentkoc.
 - Memory/FTS: add Japanese-aware query expansion tokenization and stop-word filtering (including mixed-script terms like ASCII + katakana) for FTS-only search mode. Thanks @vincentkoc.
@@ -190,7 +191,7 @@ Docs: https://docs.openclaw.ai
 - Agents/Mistral: sanitize tool-call IDs in the embedded agent loop and generate strict provider-safe pending tool-call IDs, preventing Mistral strict9 `HTTP 400` failures on tool continuations. (#23698) Thanks @echoVic.
 - Agents/Compaction: strip stale assistant usage snapshots from pre-compaction turns when replaying history after a compaction summary so context-token estimation no longer reuses pre-compaction totals and immediately re-triggers destructive follow-up compactions. (#19127) Thanks @tedwatson.
 - Agents/Hooks: honor legacy `before_agent_start` `systemPrompt` values in the embedded prompt-build path so plugin-provided system-prompt overrides are applied instead of being silently ignored. (#13475, #14583) Thanks @yinghaosang and @mushuiyu422.
-- Agents/Replies: emit a default completion acknowledgement (`✅ Done.`) only for direct/private tool-only completions with no final assistant text, while suppressing synthetic acknowledgements for channel/group sessions and runs that already delivered output via messaging tools. (#22834) Thanks @Oldshue.
+- Agents/Replies: stop emitting synthetic completion acknowledgements for tool-only runs with no final assistant text, so no extra `✅ Done.` message is injected.
 - Agents/Subagents: honor `tools.subagents.tools.alsoAllow` and explicit subagent `allow` entries when resolving built-in subagent deny defaults, so explicitly granted tools (for example `sessions_send`) are no longer blocked unless re-denied in `tools.subagents.tools.deny`. (#23359) Thanks @goren-beehero.
 - Agents/Subagents: make announce call timeouts configurable via `agents.defaults.subagents.announceTimeoutMs` and restore a 60s default to prevent false timeout failures on slower announce paths. (#22719) Thanks @Valadon.
 - Agents/Diagnostics: include resolved lifecycle error text in `embedded run agent end` warnings so UI/TUI “Connection error” runs expose actionable provider failure reasons in gateway logs. (#23054) Thanks @Raize.
