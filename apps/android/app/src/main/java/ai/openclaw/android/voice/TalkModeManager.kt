@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioAttributes
+import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioTrack
@@ -155,6 +156,25 @@ class TalkModeManager(
   private var systemTtsPending: CompletableDeferred<Unit>? = null
   private var systemTtsPendingId: String? = null
 
+  private var audioFocusRequest: AudioFocusRequest? = null
+  private val audioFocusListener = AudioManager.OnAudioFocusChangeListener { focusChange ->
+    when (focusChange) {
+      AudioManager.AUDIOFOCUS_LOSS,
+      AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> {
+        if (_isSpeaking.value) {
+          Log.d(tag, "audio focus lost; stopping TTS")
+          stopSpeaking(resetInterrupt = true, markIntentionalStop = false)
+        }
+      }
+      else -> { /* regained or duck — ignore */ }
+    }
+  }
+
+  fun setElevenLabsConfig(apiKey: String?, voiceId: String?) {
+    this.apiKey = apiKey?.trim()?.takeIf { it.isNotEmpty() }
+    this.defaultVoiceId = voiceId?.trim()?.takeIf { it.isNotEmpty() }
+  }
+
   fun setMainSessionKey(sessionKey: String?) {
     val trimmed = sessionKey?.trim().orEmpty()
     if (trimmed.isEmpty()) return
@@ -187,11 +207,19 @@ class TalkModeManager(
     val runId = obj["runId"].asStringOrNull() ?: return
     if (runId != pending) return
     val state = obj["state"].asStringOrNull() ?: return
-    if (state == "final") {
-      pendingFinal?.complete(true)
-      pendingFinal = null
-      pendingRunId = null
-    }
+    Log.d(tag, "chat event arrived runId=$runId state=$state pendingRunId=$pendingRunId")
+    val terminal =
+      when (state) {
+        "final" -> true
+        "aborted", "error" -> false
+        else -> null
+      } ?: return
+    cacheRunCompletion(runId, terminal)
+
+    if (runId != pendingRunId) return
+    pendingFinal?.complete(terminal)
+    pendingFinal = null
+    pendingRunId = null
   }
 
   private fun start() {
@@ -531,6 +559,7 @@ class TalkModeManager(
     _isSpeaking.value = true
     lastSpokenText = cleaned
     ensureInterruptListener()
+    requestAudioFocusForTts()
 
     try {
       val canUseElevenLabs = !voiceId.isNullOrBlank() && !apiKey.isNullOrEmpty()
@@ -577,6 +606,10 @@ class TalkModeManager(
         _statusText.value = "Speak failed: ${fallbackErr.message ?: fallbackErr::class.simpleName}"
         Log.w(tag, "system voice failed: ${fallbackErr.message ?: fallbackErr::class.simpleName}")
       }
+    } finally {
+      abandonAudioFocus()
+      stopSpeakingRequested = false
+      _isSpeaking.value = false
     }
 
     _isSpeaking.value = false
@@ -818,6 +851,52 @@ class TalkModeManager(
     systemTtsPending = null
     systemTtsPendingId = null
     _isSpeaking.value = false
+  }
+
+  private fun isIntentionalSpeechStop(err: Throwable): Boolean {
+    if (stopSpeakingRequested || pcmStopRequested) return true
+    return err is CancellationException
+  }
+
+  private fun requestAudioFocusForTts(): Boolean {
+    val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return true
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+        .setAudioAttributes(
+          AudioAttributes.Builder()
+            .setUsage(AudioAttributes.USAGE_ASSISTANT)
+            .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+            .build()
+        )
+        .setOnAudioFocusChangeListener(audioFocusListener)
+        .build()
+      audioFocusRequest = req
+      val result = am.requestAudioFocus(req)
+      Log.d(tag, "audio focus request result=$result")
+      result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED || result == AudioManager.AUDIOFOCUS_REQUEST_DELAYED
+    } else {
+      @Suppress("DEPRECATION")
+      val result = am.requestAudioFocus(
+        audioFocusListener,
+        AudioManager.STREAM_MUSIC,
+        AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK,
+      )
+      result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+    }
+  }
+
+  private fun abandonAudioFocus() {
+    val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+      audioFocusRequest?.let {
+        am.abandonAudioFocusRequest(it)
+        Log.d(tag, "audio focus abandoned")
+      }
+      audioFocusRequest = null
+    } else {
+      @Suppress("DEPRECATION")
+      am.abandonAudioFocus(audioFocusListener)
+    }
   }
 
   private fun cleanupPlayer() {
