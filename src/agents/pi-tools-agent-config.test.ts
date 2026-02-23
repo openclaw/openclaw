@@ -616,7 +616,6 @@ describe("Agent-specific tool filtering", () => {
 
     const result = await execTool!.execute("call-implicit-sandbox-default", {
       command: "echo done",
-      yieldMs: 10,
     });
     const details = result?.details as { status?: string } | undefined;
     expect(details?.status).toBe("completed");
