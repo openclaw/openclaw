@@ -72,6 +72,8 @@ describe("web search provider auto-detection", () => {
     delete process.env.PERPLEXITY_API_KEY;
     delete process.env.OPENROUTER_API_KEY;
     delete process.env.XAI_API_KEY;
+    delete process.env.KIMI_API_KEY;
+    delete process.env.MOONSHOT_API_KEY;
   });
 
   afterEach(() => {
@@ -101,6 +103,16 @@ describe("web search provider auto-detection", () => {
   it("auto-detects grok when only XAI_API_KEY is set", () => {
     process.env.XAI_API_KEY = "test-xai-key";
     expect(resolveSearchProvider({})).toBe("grok");
+  });
+
+  it("auto-detects kimi when only KIMI_API_KEY is set", () => {
+    process.env.KIMI_API_KEY = "test-kimi-key";
+    expect(resolveSearchProvider({})).toBe("kimi");
+  });
+
+  it("auto-detects kimi when only MOONSHOT_API_KEY is set", () => {
+    process.env.MOONSHOT_API_KEY = "test-moonshot-key";
+    expect(resolveSearchProvider({})).toBe("kimi");
   });
 
   it("follows priority order — brave wins when multiple keys available", () => {
