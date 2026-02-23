@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -91,72 +90,66 @@ describe("trigger handling", () => {
     });
   });
 
-  it("uses heartbeat model override for heartbeat runs", async () => {
+  it("uses heartbeat override when configured and falls back to stored model override", async () => {
     await withTempHome(async (home) => {
       const runEmbeddedPiAgentMock = mockEmbeddedOkPayload();
-      const cfg = makeCfg(home);
-      await writeStoredModelOverride(cfg);
-      cfg.agents = {
-        ...cfg.agents,
-        defaults: {
-          ...cfg.agents?.defaults,
-          heartbeat: { model: "anthropic/claude-haiku-4-5-20251001" },
+      const cases = [
+        {
+          label: "heartbeat-override",
+          setup: (cfg: ReturnType<typeof makeCfg>) => {
+            cfg.agents = {
+              ...cfg.agents,
+              defaults: {
+                ...cfg.agents?.defaults,
+                heartbeat: { model: "anthropic/claude-haiku-4-5-20251001" },
+              },
+            };
+          },
+          expected: { provider: "anthropic", model: "claude-haiku-4-5-20251001" },
         },
-      };
-
-      await getReplyFromConfig(BASE_MESSAGE, { isHeartbeat: true }, cfg);
-
-      const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
-      expect(call?.provider).toBe("anthropic");
-      expect(call?.model).toBe("claude-haiku-4-5-20251001");
-    });
-  });
-
-  it("keeps stored model override for heartbeat runs when heartbeat model is not configured", async () => {
-    await withTempHome(async (home) => {
-      const runEmbeddedPiAgentMock = mockEmbeddedOkPayload();
-      const cfg = makeCfg(home);
-      await writeStoredModelOverride(cfg);
-      await getReplyFromConfig(BASE_MESSAGE, { isHeartbeat: true }, cfg);
-
-      const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
-      expect(call?.provider).toBe("openai");
-      expect(call?.model).toBe("gpt-5.2");
-    });
-  });
-
-  it("suppresses HEARTBEAT_OK replies outside heartbeat runs", async () => {
-    await withTempHome(async (home) => {
-      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
-      runEmbeddedPiAgentMock.mockResolvedValue({
-        payloads: [{ text: HEARTBEAT_TOKEN }],
-        meta: {
-          durationMs: 1,
-          agentMeta: { sessionId: "s", provider: "p", model: "m" },
+        {
+          label: "stored-override",
+          setup: () => undefined,
+          expected: { provider: "openai", model: "gpt-5.2" },
         },
-      });
+      ] as const;
 
-      const res = await getReplyFromConfig(BASE_MESSAGE, {}, makeCfg(home));
+      for (const testCase of cases) {
+        runEmbeddedPiAgentMock.mockClear();
+        const cfg = makeCfg(home);
+        cfg.session = { ...cfg.session, store: join(home, `${testCase.label}.sessions.json`) };
+        await writeStoredModelOverride(cfg);
+        testCase.setup(cfg);
+        await getReplyFromConfig(BASE_MESSAGE, { isHeartbeat: true }, cfg);
 
-      expect(res).toBeUndefined();
-      expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
+        const call = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
+        expect(call?.provider).toBe(testCase.expected.provider);
+        expect(call?.model).toBe(testCase.expected.model);
+      }
     });
   });
 
-  it("strips HEARTBEAT_OK at edges outside heartbeat runs", async () => {
+  it("suppresses or strips HEARTBEAT_OK replies outside heartbeat runs", async () => {
     await withTempHome(async (home) => {
       const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
-      runEmbeddedPiAgentMock.mockResolvedValue({
-        payloads: [{ text: `${HEARTBEAT_TOKEN} hello` }],
-        meta: {
-          durationMs: 1,
-          agentMeta: { sessionId: "s", provider: "p", model: "m" },
-        },
-      });
+      const cases = [
+        { text: HEARTBEAT_TOKEN, expected: undefined },
+        { text: `${HEARTBEAT_TOKEN} hello`, expected: "hello" },
+      ] as const;
 
-      const res = await getReplyFromConfig(BASE_MESSAGE, {}, makeCfg(home));
-
-      expect(maybeReplyText(res)).toBe("hello");
+      for (const testCase of cases) {
+        runEmbeddedPiAgentMock.mockClear();
+        runEmbeddedPiAgentMock.mockResolvedValue({
+          payloads: [{ text: testCase.text }],
+          meta: {
+            durationMs: 1,
+            agentMeta: { sessionId: "s", provider: "p", model: "m" },
+          },
+        });
+        const res = await getReplyFromConfig(BASE_MESSAGE, {}, makeCfg(home));
+        expect(maybeReplyText(res)).toBe(testCase.expected);
+        expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
+      }
     });
   });
 
@@ -187,60 +180,59 @@ describe("trigger handling", () => {
     });
   });
 
-  it("runs /compact as a gated command", async () => {
+  it("runs /compact for main and non-default agents without invoking the embedded run path", async () => {
     await withTempHome(async (home) => {
-      const storePath = join(tmpdir(), `openclaw-session-test-${Date.now()}.json`);
-      const cfg = makeCfg(home);
-      cfg.session = { ...cfg.session, store: storePath };
-      mockSuccessfulCompaction();
+      {
+        const storePath = join(home, "compact-main.sessions.json");
+        const cfg = makeCfg(home);
+        cfg.session = { ...cfg.session, store: storePath };
+        mockSuccessfulCompaction();
 
-      const request = {
-        Body: "/compact focus on decisions",
-        From: "+1003",
-        To: "+2000",
-      };
-
-      const res = await getReplyFromConfig(
-        {
-          ...request,
-          CommandAuthorized: true,
-        },
-        {},
-        cfg,
-      );
-      const text = maybeReplyText(res);
-      expect(text?.startsWith("⚙️ Compacted")).toBe(true);
-      expect(getCompactEmbeddedPiSessionMock()).toHaveBeenCalledOnce();
-      expect(getRunEmbeddedPiAgentMock()).not.toHaveBeenCalled();
-      const store = loadSessionStore(storePath);
-      const sessionKey = resolveSessionKey("per-sender", request);
-      expect(store[sessionKey]?.compactionCount).toBe(1);
-    });
-  });
-
-  it("runs /compact for non-default agents without transcript path validation failures", async () => {
-    await withTempHome(async (home) => {
-      getCompactEmbeddedPiSessionMock().mockClear();
-      mockSuccessfulCompaction();
-
-      const res = await getReplyFromConfig(
-        {
-          Body: "/compact",
-          From: "+1004",
+        const request = {
+          Body: "/compact focus on decisions",
+          From: "+1003",
           To: "+2000",
-          SessionKey: "agent:worker1:telegram:12345",
-          CommandAuthorized: true,
-        },
-        {},
-        makeCfg(home),
-      );
+        };
 
-      const text = maybeReplyText(res);
-      expect(text?.startsWith("⚙️ Compacted")).toBe(true);
-      expect(getCompactEmbeddedPiSessionMock()).toHaveBeenCalledOnce();
-      expect(getCompactEmbeddedPiSessionMock().mock.calls[0]?.[0]?.sessionFile).toContain(
-        join("agents", "worker1", "sessions"),
-      );
+        const res = await getReplyFromConfig(
+          {
+            ...request,
+            CommandAuthorized: true,
+          },
+          {},
+          cfg,
+        );
+        const text = maybeReplyText(res);
+        expect(text?.startsWith("⚙️ Compacted")).toBe(true);
+        expect(getCompactEmbeddedPiSessionMock()).toHaveBeenCalledOnce();
+        const store = loadSessionStore(storePath);
+        const sessionKey = resolveSessionKey("per-sender", request);
+        expect(store[sessionKey]?.compactionCount).toBe(1);
+      }
+
+      {
+        getCompactEmbeddedPiSessionMock().mockClear();
+        mockSuccessfulCompaction();
+        const res = await getReplyFromConfig(
+          {
+            Body: "/compact",
+            From: "+1004",
+            To: "+2000",
+            SessionKey: "agent:worker1:telegram:12345",
+            CommandAuthorized: true,
+          },
+          {},
+          makeCfg(home),
+        );
+
+        const text = maybeReplyText(res);
+        expect(text?.startsWith("⚙️ Compacted")).toBe(true);
+        expect(getCompactEmbeddedPiSessionMock()).toHaveBeenCalledOnce();
+        expect(getCompactEmbeddedPiSessionMock().mock.calls[0]?.[0]?.sessionFile).toContain(
+          join("agents", "worker1", "sessions"),
+        );
+      }
+
       expect(getRunEmbeddedPiAgentMock()).not.toHaveBeenCalled();
     });
   });
