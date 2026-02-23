@@ -70,6 +70,25 @@ describe("web search provider config", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("accepts kimi provider and config", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          search: {
+            provider: "kimi",
+            kimi: {
+              apiKey: "test-key",
+              baseUrl: "https://api.moonshot.ai/v1",
+              model: "moonshot-v1-128k",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });
 
 describe("talk.voiceAliases", () => {
