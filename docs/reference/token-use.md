@@ -88,6 +88,9 @@ Heartbeat can keep the cache **warm** across idle gaps. If your model cache TTL
 is `1h`, setting the heartbeat interval just under that (e.g., `55m`) can avoid
 re-caching the full prompt, reducing cache write costs.
 
+In multi-agent setups, you can keep one shared model config and tune cache behavior
+per agent with `agents.list[].params.cacheRetention`.
+
 For Anthropic API pricing, cache reads are significantly cheaper than input
 tokens, while cache writes are billed at a higher multiplier. See Anthropic’s
 prompt caching pricing for the latest rates and TTL multipliers:
@@ -107,6 +110,30 @@ agents:
     heartbeat:
       every: "55m"
 ```
+
+### Example: mixed traffic with per-agent cache strategy
+
+```yaml
+agents:
+  defaults:
+    model:
+      primary: "anthropic/claude-opus-4-6"
+    models:
+      "anthropic/claude-opus-4-6":
+        params:
+          cacheRetention: "long" # default baseline for most agents
+  list:
+    - id: "research"
+      default: true
+      heartbeat:
+        every: "55m" # keep long cache warm for deep sessions
+    - id: "alerts"
+      params:
+        cacheRetention: "none" # avoid cache writes for bursty notifications
+```
+
+`agents.list[].params` merges on top of the selected model's `params`, so you can
+override only `cacheRetention` and inherit other model defaults unchanged.
 
 ### Example: enable Anthropic 1M context beta header
 
