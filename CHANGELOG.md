@@ -34,6 +34,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Security/CLI: redact sensitive values in `openclaw config get` output before printing config paths, preventing credential leakage to terminal output/history. (#13683) Thanks @SleuthCo.
 - Install/Discord Voice: make `@discordjs/opus` an optional dependency so `openclaw` install/update no longer hard-fails when native Opus builds fail, while keeping `opusscript` as the runtime fallback decoder for Discord voice flows. (#23737, #23733, #23703) Thanks @jeadland, @Sheetaa, and @Breakyman.
 - Docker/Setup: precreate `$OPENCLAW_CONFIG_DIR/identity` during `docker-setup.sh` so CLI commands that need device identity (for example `devices list`) avoid `EACCES ... /home/node/.openclaw/identity` failures on restrictive bind mounts. (#23948) Thanks @ackson-beep.
 - Exec/Background: stop applying the default exec timeout to background sessions (`background: true` or explicit `yieldMs`) when no explicit timeout is set, so long-running background jobs are no longer terminated at the default timeout boundary. (#23303)
