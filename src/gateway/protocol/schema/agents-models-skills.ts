@@ -207,3 +207,64 @@ export const SkillsUpdateParamsSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+export const ToolsCatalogParamsSchema = Type.Object(
+  {
+    agentId: Type.Optional(NonEmptyString),
+    includePlugins: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+export const ToolCatalogProfileSchema = Type.Object(
+  {
+    id: Type.Union([
+      Type.Literal("minimal"),
+      Type.Literal("coding"),
+      Type.Literal("messaging"),
+      Type.Literal("full"),
+    ]),
+    label: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const ToolCatalogEntrySchema = Type.Object(
+  {
+    id: NonEmptyString,
+    label: NonEmptyString,
+    description: Type.String(),
+    source: Type.Union([Type.Literal("core"), Type.Literal("plugin")]),
+    pluginId: Type.Optional(NonEmptyString),
+    optional: Type.Optional(Type.Boolean()),
+    defaultProfiles: Type.Array(
+      Type.Union([
+        Type.Literal("minimal"),
+        Type.Literal("coding"),
+        Type.Literal("messaging"),
+        Type.Literal("full"),
+      ]),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+export const ToolCatalogGroupSchema = Type.Object(
+  {
+    id: NonEmptyString,
+    label: NonEmptyString,
+    source: Type.Union([Type.Literal("core"), Type.Literal("plugin")]),
+    pluginId: Type.Optional(NonEmptyString),
+    tools: Type.Array(ToolCatalogEntrySchema),
+  },
+  { additionalProperties: false },
+);
+
+export const ToolsCatalogResultSchema = Type.Object(
+  {
+    agentId: NonEmptyString,
+    profiles: Type.Array(ToolCatalogProfileSchema),
+    groups: Type.Array(ToolCatalogGroupSchema),
+  },
+  { additionalProperties: false },
+);
