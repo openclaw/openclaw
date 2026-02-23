@@ -1,4 +1,4 @@
-import { buildRelayWsUrl, isRetryableReconnectError, reconnectDelayMs } from './background-utils.js'
+import { buildRelayWsUrl, deriveRelayToken, isRetryableReconnectError, reconnectDelayMs } from './background-utils.js'
 
 const DEFAULT_PORT = 18792
 
@@ -128,7 +128,7 @@ async function ensureRelayConnection() {
     const port = await getRelayPort()
     const gatewayToken = await getGatewayToken()
     const httpBase = `http://127.0.0.1:${port}`
-    const wsUrl = buildRelayWsUrl(port, gatewayToken)
+    const wsUrl = await buildRelayWsUrl(port, gatewayToken)
 
     // Fast preflight: is the relay server up?
     try {
@@ -798,3 +798,16 @@ async function whenReady(fn) {
   await initPromise
   return fn()
 }
+
+// Relay check handler for the options page. The service worker has
+// host_permissions and bypasses CORS preflight, so the options page
+// delegates token-validation requests here.
+chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  if (msg?.type !== 'relayCheck') return false
+  const { url, token } = msg
+  const headers = token ? { 'x-openclaw-relay-token': token } : {}
+  fetch(url, { method: 'GET', headers, signal: AbortSignal.timeout(2000) })
+    .then((res) => sendResponse({ status: res.status, ok: res.ok }))
+    .catch((err) => sendResponse({ status: 0, ok: false, error: String(err) }))
+  return true
+})
