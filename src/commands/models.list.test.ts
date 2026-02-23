@@ -389,6 +389,99 @@ describe("models list/status", () => {
     },
   );
 
+  it.each([
+    {
+      name: "high",
+      configuredModelId: "gemini-3-1-pro-high",
+      templateId: "gemini-3-pro-high",
+      templateName: "Gemini 3 Pro High",
+      expectedKey: "google-antigravity/gemini-3-1-pro-high",
+    },
+    {
+      name: "low",
+      configuredModelId: "gemini-3-1-pro-low",
+      templateId: "gemini-3-pro-low",
+      templateName: "Gemini 3 Pro Low",
+      expectedKey: "google-antigravity/gemini-3-1-pro-low",
+    },
+  ] as const)(
+    "models list resolves antigravity gemini 3.1 $name from gemini 3 template",
+    async ({ configuredModelId, templateId, templateName, expectedKey }) => {
+      const payload = await runGoogleAntigravityListCase({
+        configuredModelId,
+        templateId,
+        templateName,
+      });
+      expectAntigravityModel(payload, {
+        key: expectedKey,
+        available: false,
+        includesTags: true,
+      });
+    },
+  );
+
+  it.each([
+    {
+      name: "high",
+      configuredModelId: "gemini-3-1-pro-high",
+      templateId: "gemini-3-pro-high",
+      templateName: "Gemini 3 Pro High",
+      expectedKey: "google-antigravity/gemini-3-1-pro-high",
+    },
+    {
+      name: "low",
+      configuredModelId: "gemini-3-1-pro-low",
+      templateId: "gemini-3-pro-low",
+      templateName: "Gemini 3 Pro Low",
+      expectedKey: "google-antigravity/gemini-3-1-pro-low",
+    },
+  ] as const)(
+    "models list marks synthesized antigravity gemini 3.1 $name as available when template is available",
+    async ({ configuredModelId, templateId, templateName, expectedKey }) => {
+      const payload = await runGoogleAntigravityListCase({
+        configuredModelId,
+        templateId,
+        templateName,
+        available: true,
+      });
+      expectAntigravityModel(payload, {
+        key: expectedKey,
+        available: true,
+      });
+    },
+  );
+
+  it.each([
+    {
+      name: "high",
+      configuredModelId: "gemini-3.1-pro-high",
+      templateId: "gemini-3-pro-high",
+      templateName: "Gemini 3 Pro High",
+      expectedKey: "google-antigravity/gemini-3.1-pro-high",
+    },
+    {
+      name: "low",
+      configuredModelId: "gemini-3.1-pro-low",
+      templateId: "gemini-3-pro-low",
+      templateName: "Gemini 3 Pro Low",
+      expectedKey: "google-antigravity/gemini-3.1-pro-low",
+    },
+  ] as const)(
+    "models list marks dot-notation antigravity gemini 3.1 $name as available when template is available",
+    async ({ configuredModelId, templateId, templateName, expectedKey }) => {
+      const payload = await runGoogleAntigravityListCase({
+        configuredModelId,
+        templateId,
+        templateName,
+        available: true,
+      });
+      expectAntigravityModel(payload, {
+        key: expectedKey,
+        available: true,
+      });
+    },
+  );
+
   it("models list prefers registry availability over provider auth heuristics", async () => {
     const payload = await runGoogleAntigravityListCase({
       configuredModelId: "claude-opus-4-6-thinking",
