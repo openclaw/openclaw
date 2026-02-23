@@ -209,6 +209,65 @@ describe("telegram inbound media", () => {
 
     fetchSpy.mockRestore();
   });
+
+  it("captures pin and venue location payload fields", async () => {
+    const { handler, replySpy } = await createBotHandler();
+
+    const cases = [
+      {
+        message: {
+          chat: { id: 42, type: "private" as const },
+          message_id: 5,
+          caption: "Meet here",
+          date: 1736380800,
+          location: {
+            latitude: 48.858844,
+            longitude: 2.294351,
+            horizontal_accuracy: 12,
+          },
+        },
+        assert: (payload: Record<string, unknown>) => {
+          expect(payload.Body).toContain("Meet here");
+          expect(payload.Body).toContain("48.858844");
+          expect(payload.LocationLat).toBe(48.858844);
+          expect(payload.LocationLon).toBe(2.294351);
+          expect(payload.LocationSource).toBe("pin");
+          expect(payload.LocationIsLive).toBe(false);
+        },
+      },
+      {
+        message: {
+          chat: { id: 42, type: "private" as const },
+          message_id: 6,
+          date: 1736380800,
+          venue: {
+            title: "Eiffel Tower",
+            address: "Champ de Mars, Paris",
+            location: { latitude: 48.858844, longitude: 2.294351 },
+          },
+        },
+        assert: (payload: Record<string, unknown>) => {
+          expect(payload.Body).toContain("Eiffel Tower");
+          expect(payload.LocationName).toBe("Eiffel Tower");
+          expect(payload.LocationAddress).toBe("Champ de Mars, Paris");
+          expect(payload.LocationSource).toBe("place");
+        },
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      replySpy.mockClear();
+      await handler({
+        message: testCase.message,
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ file_path: "unused" }),
+      });
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = replySpy.mock.calls[0][0] as Record<string, unknown>;
+      testCase.assert(payload);
+    }
+  });
 });
 
 describe("telegram media groups", () => {

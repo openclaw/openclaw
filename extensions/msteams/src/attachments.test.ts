@@ -2,6 +2,10 @@ import type { PluginRuntime } from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setMSTeamsRuntime } from "./runtime.js";
 
+vi.mock("openclaw/plugin-sdk", () => ({
+  isPrivateIpAddress: () => false,
+}));
+
 /** Mock DNS resolver that always returns a public IP (for anti-SSRF validation in tests). */
 const publicResolveFn = async () => ({ address: "13.107.136.10" });
 
