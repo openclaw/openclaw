@@ -1,4 +1,5 @@
 import { resolveBrowserExecutableForPlatform } from "../chrome.executables.js";
+import { effectiveHeadless } from "../config.js";
 import { toBrowserErrorResponse } from "../errors.js";
 import { createBrowserProfilesService } from "../profiles-service.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
@@ -88,7 +89,7 @@ export function registerBrowserBasicRoutes(app: BrowserRouteRegistrar, ctx: Brow
       detectError,
       userDataDir: profileState?.running?.userDataDir ?? null,
       color: profileCtx.profile.color,
-      headless: current.resolved.headless,
+      headless: effectiveHeadless(profileCtx.profile, current.resolved),
       noSandbox: current.resolved.noSandbox,
       executablePath: current.resolved.executablePath ?? null,
       attachOnly: profileCtx.profile.attachOnly,
