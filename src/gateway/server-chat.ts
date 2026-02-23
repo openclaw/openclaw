@@ -355,7 +355,7 @@ export function createAgentEventHandler({
       };
       broadcast("chat", payload);
       nodeSendToSession(sessionKey, "chat", payload);
-      onChatFinal?.({ sessionKey, text, role: "assistant" });
+      onChatFinal?.({ sessionKey, text: shouldSuppressSilent ? "" : text, role: "assistant" });
       return;
     }
     const payload = {
