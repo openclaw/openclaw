@@ -63,6 +63,20 @@ describe("systemd availability", () => {
 
     await expect(isSystemdUserServiceAvailable({ USER: "debian" })).resolves.toBe(true);
   });
+
+  it("returns true when systemd user manager is degraded", async () => {
+    execFileMock.mockImplementation((_cmd, _args, _opts, cb) => {
+      const err = new Error("degraded") as Error & {
+        stderr?: string;
+        stdout?: string;
+        code?: number;
+      };
+      err.stdout = "State: degraded";
+      err.code = 1;
+      cb(err, "State: degraded", "");
+    });
+    await expect(isSystemdUserServiceAvailable()).resolves.toBe(true);
+  });
 });
 
 describe("isSystemdServiceEnabled", () => {
