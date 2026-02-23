@@ -152,7 +152,7 @@ export function computeAdaptiveChunkRatio(messages: AgentMessage[], contextWindo
  * If single message > 50% of context, it can't be summarized safely.
  */
 export function isOversizedForSummary(msg: AgentMessage, contextWindow: number): boolean {
-  const tokens = estimateTokens(msg) * SAFETY_MARGIN;
+  const tokens = estimateCompactionMessageTokens(msg) * SAFETY_MARGIN;
   return tokens > contextWindow * 0.5;
 }
 
@@ -240,7 +240,7 @@ export async function summarizeWithFallback(params: {
   for (const msg of messages) {
     if (isOversizedForSummary(msg, contextWindow)) {
       const role = (msg as { role?: string }).role ?? "message";
-      const tokens = estimateTokens(msg);
+      const tokens = estimateCompactionMessageTokens(msg);
       oversizedNotes.push(
         `[Large ${role} (~${Math.round(tokens / 1000)}K tokens) omitted from summary]`,
       );
