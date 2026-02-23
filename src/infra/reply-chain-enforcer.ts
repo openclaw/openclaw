@@ -14,8 +14,8 @@ type EnforcerState = {
 
 export class ReplyChainEnforcer {
   private states = new Map<SessionKey, EnforcerState>();
+  private timers = new Map<SessionKey, NodeJS.Timeout>();
   private recoveryRuns = new Set<SessionKey>();
-  private timer: NodeJS.Timeout | null = null;
   private logger = createSubsystemLogger("watchdog");
 
   constructor(
@@ -36,27 +36,19 @@ export class ReplyChainEnforcer {
   ) {}
 
   public updateConfig(newConfig: Partial<typeof this.config>) {
+    const wasEnabled = this.config.enabled;
     this.config = { ...this.config, ...newConfig };
-    if (!this.config.enabled) {
-      this.stop();
+    if (!this.config.enabled && wasEnabled) {
+      this.stopAll();
       this.states.clear();
-    } else if (!this.timer) {
-      this.start();
     }
   }
 
-  public start() {
-    if (this.timer) {
-      return;
+  public stopAll() {
+    for (const timer of this.timers.values()) {
+      clearTimeout(timer);
     }
-    this.timer = setInterval(() => this.check(), 5000); // Check every 5s
-  }
-
-  public stop() {
-    if (this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
-    }
+    this.timers.clear();
   }
 
   /**
@@ -116,13 +108,13 @@ export class ReplyChainEnforcer {
         textPreview: trimmed.slice(0, 120),
         timeoutMs: this.config.timeoutMs,
       });
-      this.states.set(sessionKey, {
-        status: "armed",
-        lastActivityMs: now,
-        reason: "Agent finished (awaiting follow-up)",
-        armingText: trimmed.slice(0, 200),
-        armedAtMs: now,
-      });
+      this.setState(
+        sessionKey,
+        "armed",
+        "Agent finished (awaiting follow-up)",
+        trimmed.slice(0, 200),
+        now,
+      );
     }
   }
 
@@ -141,61 +133,88 @@ export class ReplyChainEnforcer {
     // phase === "end" → do nothing. onChatFinal already handled arm/disarm.
   }
 
-  private setState(key: SessionKey, status: "armed" | "disarmed", reason: string) {
+  private setState(
+    key: SessionKey,
+    status: "armed" | "disarmed",
+    reason: string,
+    armingText?: string,
+    armedAtMs?: number,
+  ) {
+    const now = this.runtime.nowMs();
     this.states.set(key, {
       status,
-      lastActivityMs: this.runtime.nowMs(),
+      lastActivityMs: now,
       reason,
+      armingText,
+      armedAtMs,
     });
+
+    const existingTimer = this.timers.get(key);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+      this.timers.delete(key);
+    }
+
+    if (status === "armed") {
+      const timer = setTimeout(() => this.trigger(key), this.config.timeoutMs);
+      this.timers.set(key, timer);
+    }
   }
 
   private touchActivity(key: SessionKey) {
     const state = this.states.get(key);
-    if (state) {
+    if (state && state.status === "armed") {
       state.lastActivityMs = this.runtime.nowMs();
+      // Reset the timer since we touched activity
+      const existingTimer = this.timers.get(key);
+      if (existingTimer) {
+        clearTimeout(existingTimer);
+      }
+      const timer = setTimeout(() => this.trigger(key), this.config.timeoutMs);
+      this.timers.set(key, timer);
     }
   }
 
-  private check() {
+  private trigger(key: SessionKey) {
     if (!this.config.enabled) {
       return;
     }
-    const now = this.runtime.nowMs();
 
-    for (const [key, state] of this.states.entries()) {
-      if (state.status !== "armed") {
-        continue;
-      }
+    this.timers.delete(key);
+    const state = this.states.get(key);
 
-      const elapsed = now - state.lastActivityMs;
-      if (elapsed > this.config.timeoutMs) {
-        this.logger.warn("TRIGGER — stall detected", {
-          key,
-          elapsed,
-          timeout: this.config.timeoutMs,
-          armedAtMs: state.armedAtMs,
-          armedAtISO: state.armedAtMs ? new Date(state.armedAtMs).toISOString() : undefined,
-          armingReason: state.reason,
-          armingText: state.armingText,
-          targetSession: key,
-        });
-
-        // Disarm to prevent immediate re-trigger
-        this.setState(key, "disarmed", "Watchdog Triggered");
-
-        // Mark this session as having an active recovery run
-        // so onChatFinal won't re-arm when the response arrives
-        this.recoveryRuns.add(key);
-
-        // Fire recovery — noFallback prevents redirecting to main session
-        // if the target session isn't in the store (avoids spamming wrong session)
-        void this.runtime.runHeartbeatOnce({
-          reason: "watchdog-stall",
-          prompt: this.config.prompt,
-          sessionKey: key,
-          noFallback: true,
-        });
-      }
+    if (!state || state.status !== "armed") {
+      return; // Should not happen if timers are managed correctly, but safe
     }
+
+    const now = this.runtime.nowMs();
+    const elapsed = now - state.lastActivityMs;
+
+    this.logger.warn("TRIGGER — stall detected", {
+      key,
+      elapsed,
+      timeout: this.config.timeoutMs,
+      armedAtMs: state.armedAtMs,
+      armedAtISO: state.armedAtMs ? new Date(state.armedAtMs).toISOString() : undefined,
+      armingReason: state.reason,
+      armingText: state.armingText,
+      targetSession: key,
+    });
+
+    // Disarm to prevent immediate re-trigger
+    this.setState(key, "disarmed", "Watchdog Triggered");
+
+    // Mark this session as having an active recovery run
+    // so onChatFinal won't re-arm when the response arrives
+    this.recoveryRuns.add(key);
+
+    // Fire recovery — noFallback prevents redirecting to main session
+    // if the target session isn't in the store (avoids spamming wrong session)
+    void this.runtime.runHeartbeatOnce({
+      reason: "watchdog-stall",
+      prompt: this.config.prompt,
+      sessionKey: key,
+      noFallback: true,
+    });
   }
 }
