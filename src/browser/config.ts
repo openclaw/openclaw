@@ -48,6 +48,8 @@ export type ResolvedBrowserProfile = {
   color: string;
   driver: "openclaw" | "extension";
   attachOnly: boolean;
+  /** Per-profile headless override. undefined = use global setting. */
+  headless: boolean | undefined;
 };
 
 function normalizeHexColor(raw: string | undefined) {
@@ -357,6 +359,7 @@ export function resolveProfile(
     color: profile.color,
     driver,
     attachOnly: profile.attachOnly ?? resolved.attachOnly,
+    headless: profile.headless,
   };
 }
 
