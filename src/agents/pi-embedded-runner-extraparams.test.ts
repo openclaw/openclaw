@@ -215,7 +215,14 @@ describe("applyExtraParamsToAgent", () => {
     };
     const agent = { streamFn: baseStreamFn };
 
-    applyExtraParamsToAgent(agent, undefined, "openrouter", "deepseek/deepseek-r1", undefined, "off");
+    applyExtraParamsToAgent(
+      agent,
+      undefined,
+      "openrouter",
+      "deepseek/deepseek-r1",
+      undefined,
+      "off",
+    );
 
     const model = {
       api: "openai-completions",
