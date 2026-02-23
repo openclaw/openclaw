@@ -204,3 +204,26 @@ export function buildXaiModelDefinition(): ModelDefinitionConfig {
     maxTokens: XAI_DEFAULT_MAX_TOKENS,
   };
 }
+
+// Kilo Gateway model definitions
+export const KILOCODE_DEFAULT_MODEL_ID = "anthropic/claude-opus-4.6";
+export const KILOCODE_DEFAULT_CONTEXT_WINDOW = 200000;
+export const KILOCODE_DEFAULT_MAX_TOKENS = 8192;
+export const KILOCODE_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
+export function buildKilocodeModelDefinition(): ModelDefinitionConfig {
+  return {
+    id: KILOCODE_DEFAULT_MODEL_ID,
+    name: "Claude Opus 4.6",
+    reasoning: true,
+    input: ["text", "image"],
+    cost: KILOCODE_DEFAULT_COST,
+    contextWindow: KILOCODE_DEFAULT_CONTEXT_WINDOW,
+    maxTokens: KILOCODE_DEFAULT_MAX_TOKENS,
+  };
+}

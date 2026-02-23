@@ -764,6 +764,36 @@ export function buildNvidiaProvider(): ProviderConfig {
   };
 }
 
+// Kilo Gateway provider
+const KILOCODE_BASE_URL = "https://api.kilo.ai/api/gateway/";
+const KILOCODE_DEFAULT_MODEL_ID = "anthropic/claude-opus-4.6";
+const KILOCODE_DEFAULT_CONTEXT_WINDOW = 200000;
+const KILOCODE_DEFAULT_MAX_TOKENS = 8192;
+const KILOCODE_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
+export function buildKilocodeProvider(): ProviderConfig {
+  return {
+    baseUrl: KILOCODE_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: KILOCODE_DEFAULT_MODEL_ID,
+        name: "Claude Opus 4.6",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: KILOCODE_DEFAULT_COST,
+        contextWindow: KILOCODE_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: KILOCODE_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 export async function resolveImplicitProviders(params: {
   agentDir: string;
   explicitProviders?: Record<string, ProviderConfig> | null;
@@ -949,6 +979,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "nvidia", store: authStore });
   if (nvidiaKey) {
     providers.nvidia = { ...buildNvidiaProvider(), apiKey: nvidiaKey };
+  }
+
+  const kilocodeKey =
+    resolveEnvApiKeyVarName("kilocode") ??
+    resolveApiKeyFromProfiles({ provider: "kilocode", store: authStore });
+  if (kilocodeKey) {
+    providers.kilocode = { ...buildKilocodeProvider(), apiKey: kilocodeKey };
   }
 
   return providers;
