@@ -38,6 +38,7 @@ const OPENAI_MODEL_APIS = new Set([
   "openai-codex-responses",
 ]);
 const OPENAI_PROVIDERS = new Set(["openai", "openai-codex"]);
+const OPENAI_COMPAT_TURN_MERGE_EXCLUDED_PROVIDERS = new Set(["openrouter", "opencode"]);
 
 function isOpenAiApi(modelApi?: string | null): boolean {
   if (!modelApi) {
@@ -84,6 +85,10 @@ export function resolveTranscriptPolicy(params: {
   const isGoogle = isGoogleModelApi(params.modelApi);
   const isAnthropic = isAnthropicApi(params.modelApi, provider);
   const isOpenAi = isOpenAiProvider(provider) || (!provider && isOpenAiApi(params.modelApi));
+  const isStrictOpenAiCompatible =
+    params.modelApi === "openai-completions" &&
+    !isOpenAi &&
+    !OPENAI_COMPAT_TURN_MERGE_EXCLUDED_PROVIDERS.has(provider);
   const isMistral = isMistralModel({ provider, modelId });
   const isOpenRouterGemini =
     (provider === "openrouter" || provider === "opencode") &&
@@ -118,7 +123,7 @@ export function resolveTranscriptPolicy(params: {
     dropThinkingBlocks,
     applyGoogleTurnOrdering: !isOpenAi && isGoogle,
     validateGeminiTurns: !isOpenAi && isGoogle,
-    validateAnthropicTurns: !isOpenAi && isAnthropic,
+    validateAnthropicTurns: !isOpenAi && (isAnthropic || isStrictOpenAiCompatible),
     allowSyntheticToolResults: !isOpenAi && (isGoogle || isAnthropic),
   };
 }
