@@ -91,6 +91,8 @@ re-caching the full prompt, reducing cache write costs.
 In multi-agent setups, you can keep one shared model config and tune cache behavior
 per agent with `agents.list[].params.cacheRetention`.
 
+For a full knob-by-knob guide, see [Prompt Caching](/reference/prompt-caching).
+
 For Anthropic API pricing, cache reads are significantly cheaper than input
 tokens, while cache writes are billed at a higher multiplier. See Anthropic’s
 prompt caching pricing for the latest rates and TTL multipliers:
