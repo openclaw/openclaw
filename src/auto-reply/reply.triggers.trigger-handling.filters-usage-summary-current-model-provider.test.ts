@@ -122,15 +122,19 @@ describe("trigger handling", () => {
       );
     });
   });
-  it("emits /status once (no duplicate inline + final)", async () => {
+  it("reports /status once without invoking the agent", async () => {
     await withTempHome(async (home) => {
+      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
       const { blockReplies, replies } = await runCommandAndCollectReplies({
         home,
         body: "/status",
       });
       expect(blockReplies.length).toBe(0);
       expect(replies.length).toBe(1);
-      expect(String(replies[0]?.text ?? "")).toContain("Model:");
+      const text = String(replies[0]?.text ?? "");
+      expect(text).toContain("Model:");
+      expect(text).toContain("OpenClaw");
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
   it("sets per-response usage footer via /usage", async () => {
@@ -255,39 +259,22 @@ describe("trigger handling", () => {
       expect(prompt).not.toContain("/status");
     });
   });
-  it("aborts even with timestamp prefix", async () => {
+  it("handles /stop command variants without invoking the agent", async () => {
     await withTempHome(async (home) => {
-      await expectStopAbortWithoutAgent({
-        home,
-        body: "[Dec 5 10:00] stop",
-        from: "+1000",
-      });
-    });
-  });
-  it("handles /stop without invoking the agent", async () => {
-    await withTempHome(async (home) => {
-      await expectStopAbortWithoutAgent({
-        home,
-        body: "/stop",
-        from: "+1003",
-      });
+      for (const testCase of [
+        { body: "[Dec 5 10:00] stop", from: "+1000" },
+        { body: "/stop", from: "+1003" },
+      ] as const) {
+        await expectStopAbortWithoutAgent({ home, body: testCase.body, from: testCase.from });
+      }
     });
   });
 
-  it("shows endpoint default in /model status when not configured", async () => {
+  it("shows model status defaults and configured endpoint details", async () => {
     await withTempHome(async (home) => {
-      const cfg = makeCfg(home);
-      const res = await getReplyFromConfig(modelStatusCtx, {}, cfg);
-
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(normalizeTestText(text ?? "")).toContain("endpoint: default");
-    });
-  });
-
-  it("includes endpoint details in /model status when configured", async () => {
-    await withTempHome(async (home) => {
+      const defaultCfg = makeCfg(home);
       const cfg = {
-        ...makeCfg(home),
+        ...defaultCfg,
         models: {
           providers: {
             minimax: {
@@ -297,20 +284,27 @@ describe("trigger handling", () => {
           },
         },
       } as unknown as OpenClawConfig;
-      const res = await getReplyFromConfig(modelStatusCtx, {}, cfg);
+      const defaultStatus = await getReplyFromConfig(modelStatusCtx, {}, defaultCfg);
+      const configuredStatus = await getReplyFromConfig(modelStatusCtx, {}, cfg);
 
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      const normalized = normalizeTestText(text ?? "");
-      expect(normalized).toContain(
+      expect(
+        normalizeTestText(
+          (Array.isArray(defaultStatus) ? defaultStatus[0]?.text : defaultStatus?.text) ?? "",
+        ),
+      ).toContain("endpoint: default");
+      const configuredText = Array.isArray(configuredStatus)
+        ? configuredStatus[0]?.text
+        : configuredStatus?.text;
+      expect(normalizeTestText(configuredText ?? "")).toContain(
         "[minimax] endpoint: https://api.minimax.io/anthropic api: anthropic-messages auth:",
       );
     });
   });
 
-  it("restarts by default", async () => {
+  it("restarts by default and rejects /restart when disabled", async () => {
     await withTempHome(async (home) => {
       const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
-      const res = await getReplyFromConfig(
+      const enabledRes = await getReplyFromConfig(
         {
           Body: "  [Dec 5] /restart",
           From: "+1001",
@@ -320,17 +314,13 @@ describe("trigger handling", () => {
         {},
         makeCfg(home),
       );
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text?.startsWith("⚙️ Restarting") || text?.startsWith("⚠️ Restart failed")).toBe(true);
-      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
-    });
-  });
+      const enabledText = Array.isArray(enabledRes) ? enabledRes[0]?.text : enabledRes?.text;
+      expect(
+        enabledText?.startsWith("⚙️ Restarting") || enabledText?.startsWith("⚠️ Restart failed"),
+      ).toBe(true);
 
-  it("rejects /restart when explicitly disabled", async () => {
-    await withTempHome(async (home) => {
-      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
-      const cfg = { ...makeCfg(home), commands: { restart: false } } as OpenClawConfig;
-      const res = await getReplyFromConfig(
+      const disabledCfg = { ...makeCfg(home), commands: { restart: false } } as OpenClawConfig;
+      const disabledRes = await getReplyFromConfig(
         {
           Body: "/restart",
           From: "+1001",
@@ -338,29 +328,11 @@ describe("trigger handling", () => {
           CommandAuthorized: true,
         },
         {},
-        cfg,
+        disabledCfg,
       );
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("/restart is disabled");
-      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
-    });
-  });
 
-  it("reports status without invoking the agent", async () => {
-    await withTempHome(async (home) => {
-      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
-      const res = await getReplyFromConfig(
-        {
-          Body: "/status",
-          From: "+1002",
-          To: "+2000",
-          CommandAuthorized: true,
-        },
-        {},
-        makeCfg(home),
-      );
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("OpenClaw");
+      const disabledText = Array.isArray(disabledRes) ? disabledRes[0]?.text : disabledRes?.text;
+      expect(disabledText).toContain("/restart is disabled");
       expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
