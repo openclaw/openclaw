@@ -131,6 +131,42 @@ agents:
 - Enable `contextPruning.mode: "cache-ttl"`.
 - Keep heartbeat below your TTL only for agents that benefit from warm caches.
 
+## Cache diagnostics
+
+OpenClaw exposes dedicated cache-trace diagnostics for embedded agent runs.
+
+### `diagnostics.cacheTrace` config
+
+```yaml
+diagnostics:
+  cacheTrace:
+    enabled: true
+    filePath: "~/.openclaw/logs/cache-trace.jsonl" # optional
+    includeMessages: false # default true
+    includePrompt: false # default true
+    includeSystem: false # default true
+```
+
+Defaults:
+
+- `filePath`: `$OPENCLAW_STATE_DIR/logs/cache-trace.jsonl`
+- `includeMessages`: `true`
+- `includePrompt`: `true`
+- `includeSystem`: `true`
+
+### Env toggles (one-off debugging)
+
+- `OPENCLAW_CACHE_TRACE=1` enables cache tracing.
+- `OPENCLAW_CACHE_TRACE_FILE=/path/to/cache-trace.jsonl` overrides output path.
+- `OPENCLAW_CACHE_TRACE_MESSAGES=0|1` toggles full message payload capture.
+- `OPENCLAW_CACHE_TRACE_PROMPT=0|1` toggles prompt text capture.
+- `OPENCLAW_CACHE_TRACE_SYSTEM=0|1` toggles system prompt capture.
+
+### What to inspect
+
+- Cache trace events are JSONL and include staged snapshots like `session:loaded`, `prompt:before`, `stream:context`, and `session:after`.
+- Per-turn cache token impact is visible in normal usage surfaces via `cacheRead` and `cacheWrite` (for example `/usage full` and session usage summaries).
+
 ## Quick troubleshooting
 
 - High `cacheWrite` on most turns: check for volatile system-prompt inputs and verify model/provider supports your cache settings.
