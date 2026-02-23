@@ -42,6 +42,7 @@ import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.j
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveBlockStreamingCoalescing } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
+import { applyPersonaPrefix, resolvePersonaIcon } from "./persona.js";
 import {
   auditPostCompactionReads,
   extractReadPaths,
@@ -530,8 +531,15 @@ export async function runReplyAgent(params: {
       hasReminderCommitment && successfulCronAdds === 0
         ? appendUnscheduledReminderNote(replyPayloads)
         : replyPayloads;
+    const personaIcon = resolvePersonaIcon({
+      toolMetas: runResult.toolMetas,
+      summaryLine: followupRun.summaryLine,
+      commandBody,
+      payloads: guardedReplyPayloads,
+    });
+    const personaReplyPayloads = applyPersonaPrefix(guardedReplyPayloads, personaIcon);
 
-    await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
+    await signalTypingIfNeeded(personaReplyPayloads, typingSignals);
 
     if (isDiagnosticsEnabled(cfg) && hasNonzeroUsage(usage)) {
       const input = usage.input ?? 0;
@@ -599,7 +607,7 @@ export async function runReplyAgent(params: {
     }
 
     // If verbose is enabled, prepend operational run notices.
-    let finalPayloads = guardedReplyPayloads;
+    let finalPayloads = personaReplyPayloads;
     const verboseNotices: ReplyPayload[] = [];
 
     if (verboseEnabled && activeIsNewSession) {
