@@ -63,28 +63,22 @@ function expectResolveIncludeError(
 }
 
 describe("resolveConfigIncludes", () => {
-  it("passes through primitives unchanged", () => {
-    expect(resolve("hello")).toBe("hello");
-    expect(resolve(42)).toBe(42);
-    expect(resolve(true)).toBe(true);
-    expect(resolve(null)).toBe(null);
-  });
+  it("passes through non-include values unchanged", () => {
+    const cases = [
+      { value: "hello", expected: "hello" },
+      { value: 42, expected: 42 },
+      { value: true, expected: true },
+      { value: null, expected: null },
+      { value: [1, 2, { a: 1 }], expected: [1, 2, { a: 1 }] },
+      {
+        value: { foo: "bar", nested: { x: 1 } },
+        expected: { foo: "bar", nested: { x: 1 } },
+      },
+    ] as const;
 
-  it("passes through arrays with recursion", () => {
-    expect(resolve([1, 2, { a: 1 }])).toEqual([1, 2, { a: 1 }]);
-  });
-
-  it("passes through objects without $include", () => {
-    const obj = { foo: "bar", nested: { x: 1 } };
-    expect(resolve(obj)).toEqual(obj);
-  });
-
-  it("resolves single file $include", () => {
-    const files = { [configPath("agents.json")]: { list: [{ id: "main" }] } };
-    const obj = { agents: { $include: "./agents.json" } };
-    expect(resolve(obj, files)).toEqual({
-      agents: { list: [{ id: "main" }] },
-    });
+    for (const { value, expected } of cases) {
+      expect(resolve(value)).toEqual(expected);
+    }
   });
 
   it("rejects absolute path outside config directory (CWE-22)", () => {
@@ -94,44 +88,66 @@ describe("resolveConfigIncludes", () => {
     expectResolveIncludeError(() => resolve(obj, files), /escapes config directory/);
   });
 
-  it("resolves array $include with deep merge", () => {
-    const files = {
-      [configPath("a.json")]: { "group-a": ["agent1"] },
-      [configPath("b.json")]: { "group-b": ["agent2"] },
-    };
-    const obj = { broadcast: { $include: ["./a.json", "./b.json"] } };
-    expect(resolve(obj, files)).toEqual({
-      broadcast: {
-        "group-a": ["agent1"],
-        "group-b": ["agent2"],
+  it("resolves single and array include merges", () => {
+    const cases = [
+      {
+        name: "single file include",
+        files: { [configPath("agents.json")]: { list: [{ id: "main" }] } },
+        obj: { agents: { $include: "./agents.json" } },
+        expected: {
+          agents: { list: [{ id: "main" }] },
+        },
       },
-    });
-  });
-
-  it("deep merges overlapping keys in array $include", () => {
-    const files = {
-      [configPath("a.json")]: { agents: { defaults: { workspace: "~/a" } } },
-      [configPath("b.json")]: { agents: { list: [{ id: "main" }] } },
-    };
-    const obj = { $include: ["./a.json", "./b.json"] };
-    expect(resolve(obj, files)).toEqual({
-      agents: {
-        defaults: { workspace: "~/a" },
-        list: [{ id: "main" }],
+      {
+        name: "array include deep merge",
+        files: {
+          [configPath("a.json")]: { "group-a": ["agent1"] },
+          [configPath("b.json")]: { "group-b": ["agent2"] },
+        },
+        obj: { broadcast: { $include: ["./a.json", "./b.json"] } },
+        expected: {
+          broadcast: {
+            "group-a": ["agent1"],
+            "group-b": ["agent2"],
+          },
+        },
       },
-    });
+      {
+        name: "array include overlapping keys",
+        files: {
+          [configPath("a.json")]: { agents: { defaults: { workspace: "~/a" } } },
+          [configPath("b.json")]: { agents: { list: [{ id: "main" }] } },
+        },
+        obj: { $include: ["./a.json", "./b.json"] },
+        expected: {
+          agents: {
+            defaults: { workspace: "~/a" },
+            list: [{ id: "main" }],
+          },
+        },
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      expect(resolve(testCase.obj, testCase.files), testCase.name).toEqual(testCase.expected);
+    }
   });
 
-  it("merges $include with sibling keys", () => {
+  it("merges include content with sibling keys and sibling overrides", () => {
     const files = { [configPath("base.json")]: { a: 1, b: 2 } };
-    const obj = { $include: "./base.json", c: 3 };
-    expect(resolve(obj, files)).toEqual({ a: 1, b: 2, c: 3 });
-  });
-
-  it("sibling keys override included values", () => {
-    const files = { [configPath("base.json")]: { a: 1, b: 2 } };
-    const obj = { $include: "./base.json", b: 99 };
-    expect(resolve(obj, files)).toEqual({ a: 1, b: 99 });
+    const cases = [
+      {
+        obj: { $include: "./base.json", c: 3 },
+        expected: { a: 1, b: 2, c: 3 },
+      },
+      {
+        obj: { $include: "./base.json", b: 99 },
+        expected: { a: 1, b: 99 },
+      },
+    ] as const;
+    for (const testCase of cases) {
+      expect(resolve(testCase.obj, files)).toEqual(testCase.expected);
+    }
   });
 
   it("throws when sibling keys are used with non-object includes", () => {
@@ -160,21 +176,25 @@ describe("resolveConfigIncludes", () => {
     });
   });
 
-  it("throws ConfigIncludeError for missing file", () => {
-    const obj = { $include: "./missing.json" };
-    expectResolveIncludeError(() => resolve(obj), /Failed to read include file/);
-  });
+  it("surfaces include read and parse failures", () => {
+    const cases = [
+      {
+        run: () => resolve({ $include: "./missing.json" }),
+        pattern: /Failed to read include file/,
+      },
+      {
+        run: () =>
+          resolveConfigIncludes({ $include: "./bad.json" }, DEFAULT_BASE_PATH, {
+            readFile: () => "{ invalid json }",
+            parseJson: JSON.parse,
+          }),
+        pattern: /Failed to parse include file/,
+      },
+    ] as const;
 
-  it("throws ConfigIncludeError for invalid JSON", () => {
-    const resolver: IncludeResolver = {
-      readFile: () => "{ invalid json }",
-      parseJson: JSON.parse,
-    };
-    const obj = { $include: "./bad.json" };
-    expectResolveIncludeError(
-      () => resolveConfigIncludes(obj, DEFAULT_BASE_PATH, resolver),
-      /Failed to parse include file/,
-    );
+    for (const testCase of cases) {
+      expectResolveIncludeError(testCase.run, testCase.pattern);
+    }
   });
 
   it("throws CircularIncludeError for circular includes", () => {
@@ -268,43 +288,53 @@ describe("resolveConfigIncludes", () => {
     );
   });
 
-  it("handles relative paths correctly", () => {
-    const files = {
-      [configPath("clients", "mueller", "agents.json")]: { id: "mueller" },
-    };
-    const obj = { agent: { $include: "./clients/mueller/agents.json" } };
-    expect(resolve(obj, files)).toEqual({
-      agent: { id: "mueller" },
-    });
+  it("handles relative paths and nested-include override ordering", () => {
+    const cases = [
+      {
+        files: {
+          [configPath("clients", "mueller", "agents.json")]: { id: "mueller" },
+        },
+        obj: { agent: { $include: "./clients/mueller/agents.json" } },
+        expected: {
+          agent: { id: "mueller" },
+        },
+      },
+      {
+        files: {
+          [configPath("base.json")]: { nested: { $include: "./nested.json" } },
+          [configPath("nested.json")]: { a: 1, b: 2 },
+        },
+        obj: { $include: "./base.json", nested: { b: 9 } },
+        expected: {
+          nested: { a: 1, b: 9 },
+        },
+      },
+    ] as const;
+    for (const testCase of cases) {
+      expect(resolve(testCase.obj, testCase.files)).toEqual(testCase.expected);
+    }
   });
 
-  it("applies nested includes before sibling overrides", () => {
-    const files = {
-      [configPath("base.json")]: { nested: { $include: "./nested.json" } },
-      [configPath("nested.json")]: { a: 1, b: 2 },
-    };
-    const obj = { $include: "./base.json", nested: { b: 9 } };
-    expect(resolve(obj, files)).toEqual({
-      nested: { a: 1, b: 9 },
-    });
-  });
-
-  it("rejects parent directory traversal escaping config directory (CWE-22)", () => {
-    const files = { [sharedPath("common.json")]: { shared: true } };
-    const obj = { $include: "../../shared/common.json" };
+  it("enforces traversal boundaries while allowing safe nested-parent paths", () => {
     expectResolveIncludeError(
-      () => resolve(obj, files, configPath("sub", "openclaw.json")),
+      () =>
+        resolve(
+          { $include: "../../shared/common.json" },
+          { [sharedPath("common.json")]: { shared: true } },
+          configPath("sub", "openclaw.json"),
+        ),
       /escapes config directory/,
     );
-  });
 
-  it("allows nested parent traversal when path stays under top-level config directory", () => {
-    const files = {
-      [configPath("sub", "child.json")]: { $include: "../shared/common.json" },
-      [configPath("shared", "common.json")]: { shared: true },
-    };
-    const obj = { $include: "./sub/child.json" };
-    expect(resolve(obj, files)).toEqual({
+    expect(
+      resolve(
+        { $include: "./sub/child.json" },
+        {
+          [configPath("sub", "child.json")]: { $include: "../shared/common.json" },
+          [configPath("shared", "common.json")]: { shared: true },
+        },
+      ),
+    ).toEqual({
       shared: true,
     });
   });
@@ -536,27 +566,30 @@ describe("security: path traversal protection (CWE-22)", () => {
   });
 
   describe("prototype pollution protection", () => {
-    it("blocks __proto__ keys from polluting Object.prototype", () => {
-      const result = deepMerge({}, JSON.parse('{"__proto__":{"polluted":true}}'));
-      expect((Object.prototype as Record<string, unknown>).polluted).toBeUndefined();
-      expect(result).toEqual({});
-    });
+    it("blocks prototype pollution vectors in shallow and nested merges", () => {
+      const cases = [
+        {
+          base: {},
+          incoming: JSON.parse('{"__proto__":{"polluted":true}}'),
+          expected: {},
+        },
+        {
+          base: { safe: 1 },
+          incoming: { prototype: { x: 1 }, constructor: { y: 2 }, normal: 3 },
+          expected: { safe: 1, normal: 3 },
+        },
+        {
+          base: { nested: { a: 1 } },
+          incoming: { nested: JSON.parse('{"__proto__":{"polluted":true}}') },
+          expected: { nested: { a: 1 } },
+        },
+      ] as const;
 
-    it("blocks prototype and constructor keys", () => {
-      const result = deepMerge(
-        { safe: 1 },
-        { prototype: { x: 1 }, constructor: { y: 2 }, normal: 3 },
-      );
-      expect(result).toEqual({ safe: 1, normal: 3 });
-    });
-
-    it("blocks __proto__ in nested merges", () => {
-      const result = deepMerge(
-        { nested: { a: 1 } },
-        { nested: JSON.parse('{"__proto__":{"polluted":true}}') },
-      );
-      expect((Object.prototype as Record<string, unknown>).polluted).toBeUndefined();
-      expect(result).toEqual({ nested: { a: 1 } });
+      for (const testCase of cases) {
+        const result = deepMerge(testCase.base, testCase.incoming);
+        expect((Object.prototype as Record<string, unknown>).polluted).toBeUndefined();
+        expect(result).toEqual(testCase.expected);
+      }
     });
   });
 
