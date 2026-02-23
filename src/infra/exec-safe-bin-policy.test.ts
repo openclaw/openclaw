@@ -48,11 +48,31 @@ describe("exec safe bin policy sort", () => {
   it("allows stdin-only sort flags", () => {
     expect(validateSafeBinArgv(["-S", "1M"], sortProfile)).toBe(true);
     expect(validateSafeBinArgv(["--key=1,1"], sortProfile)).toBe(true);
+    expect(validateSafeBinArgv(["--ke=1,1"], sortProfile)).toBe(true);
   });
 
   it("blocks sort --compress-program in safe-bin mode", () => {
     expect(validateSafeBinArgv(["--compress-program=sh"], sortProfile)).toBe(false);
     expect(validateSafeBinArgv(["--compress-program", "sh"], sortProfile)).toBe(false);
+  });
+
+  it("blocks denied long-option abbreviations in safe-bin mode", () => {
+    expect(validateSafeBinArgv(["--compress-prog=sh"], sortProfile)).toBe(false);
+    expect(validateSafeBinArgv(["--files0-fro=list.txt"], sortProfile)).toBe(false);
+  });
+
+  it("rejects unknown or ambiguous long options in safe-bin mode", () => {
+    expect(validateSafeBinArgv(["--totally-unknown=1"], sortProfile)).toBe(false);
+    expect(validateSafeBinArgv(["--f=1"], sortProfile)).toBe(false);
+  });
+});
+
+describe("exec safe bin policy wc", () => {
+  const wcProfile = SAFE_BIN_PROFILES.wc;
+
+  it("blocks wc --files0-from abbreviations in safe-bin mode", () => {
+    expect(validateSafeBinArgv(["--files0-fro=list.txt"], wcProfile)).toBe(false);
+    expect(validateSafeBinArgv(["--files0-fro", "list.txt"], wcProfile)).toBe(false);
   });
 });
 
