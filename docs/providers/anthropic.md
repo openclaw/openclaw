@@ -101,6 +101,10 @@ with `params.context1m: true` for supported Opus/Sonnet models.
 OpenClaw maps this to `anthropic-beta: context-1m-2025-08-07` on Anthropic
 requests.
 
+Note: Anthropic currently rejects `context-1m-*` beta requests when using
+OAuth/subscription tokens (`sk-ant-oat-*`). OpenClaw automatically skips the
+context1m beta header for OAuth auth and keeps the required OAuth betas.
+
 ## Option B: Claude setup-token
 
 **Best for:** using your Claude subscription.

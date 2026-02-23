@@ -125,6 +125,10 @@ agents:
 
 This maps to Anthropic's `context-1m-2025-08-07` beta header.
 
+If you authenticate Anthropic with OAuth/subscription tokens (`sk-ant-oat-*`),
+OpenClaw skips the `context-1m-*` beta header because Anthropic currently
+rejects that combination with HTTP 401.
+
 ## Tips for reducing token pressure
 
 - Use `/compact` to summarize long sessions.
