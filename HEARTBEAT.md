@@ -42,6 +42,18 @@
 
 ---
 
+## Weekly (크론으로 실행)
+
+### 🎯 주간 기회 리뷰 (매주 월요일 07:30 KST)
+
+- Mnemo 지식그래프 + 외부 지식에서 기회 자동 탐지
+- 기존 16개 프로젝트 기여-수익 스코어링 갱신
+- 황금지대(🟢) 기회 발견 시 Discord DM 브리핑
+- Stage 이동 필요 프로젝트 식별 (BUILD → DEPLOY 등)
+- Obsidian 리포트: `{날짜}_Weekly_Opportunity_Review.md`
+
+---
+
 ## Daily (크론으로 실행)
 
 ### AI 수익화 브리핑 (매일 03:00 KST)
@@ -75,10 +87,11 @@
 
 - 고혈압약 복용 알림
 
-### 🧠 Mnemo 볼트 보강 (매일 05:00 KST)
+### 🧠 Mnemo 볼트 보강 + 기회 탐지 (매일 05:00 KST)
 
 - `cd C:\TEST\MAISECONDBRAIN; $env:PYTHONIOENCODING="utf-8"; python scripts/daily_enrich.py`
-- 새 노트 자동: type/project/related/태그/백링크 + 그래프 재빌드 + 임베딩 갱신
+- 10단계 파이프라인: 파싱 → 보강(type/project/related/태그/백링크) → 그래프 재빌드 → 스텁 → 임베딩 → 외부 지식 수집 → 대시보드 싱크 → **기회 스캔**
+- 기회 스캔: 외부 지식에서 기여-수익 매트릭스 자동 스코어링 → Obsidian 리포트 저장
 - **이슈 있을 때만 알림**
 
 ### 🌅 모닝 브리핑 (매일 06:00 KST)
@@ -97,8 +110,6 @@
 - **이슈 있을 때만 알림** (정상이면 조용히)
 
 ---
-
-## Weekly (크론으로 실행)
 
 ### 📊 주간 리뷰 (매주 월요일 07:00 KST)
 
