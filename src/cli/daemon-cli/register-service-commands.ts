@@ -94,6 +94,11 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
   parent
     .command("restart")
     .description("Restart the Gateway service (launchd/systemd/schtasks)")
+    .option(
+      "--hard",
+      "Force a full service restart via systemd/launchd (kills and respawns process). " +
+        "Use when the gateway is unresponsive or after a binary upgrade.",
+    )
     .option("--json", "Output JSON", false)
     .action(async (cmdOpts) => {
       await runDaemonRestart(cmdOpts);

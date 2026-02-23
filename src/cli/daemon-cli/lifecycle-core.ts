@@ -1,10 +1,13 @@
 import type { Writable } from "node:stream";
+import { isRestartEnabled } from "../../config/commands.js";
 import { loadConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { resolveIsNixMode } from "../../config/paths.js";
 import { checkTokenDrift } from "../../daemon/service-audit.js";
 import type { GatewayService } from "../../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../../daemon/systemd.js";
+import { buildGatewayConnectionDetails } from "../../gateway/call.js";
 import { resolveGatewayCredentialsFromConfig } from "../../gateway/credentials.js";
 import { isWSL } from "../../infra/wsl.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -15,10 +18,8 @@ import {
   type DaemonActionResponse,
   emitDaemonActionJson,
 } from "./response.js";
-
-type DaemonLifecycleOptions = {
-  json?: boolean;
-};
+import { resolveGatewayPid, pollUntilGatewayHealthy } from "./sigusr1-restart.js";
+import type { DaemonLifecycleOptions } from "./types.js";
 
 type RestartPostCheckContext = {
   json: boolean;
@@ -274,13 +275,26 @@ export async function runServiceRestart(params: {
     return false;
   }
 
+  // Hoist config load — used for restart-enabled check, token drift, and credential resolution.
   const warnings: string[] = [];
+
+  let cfg: OpenClawConfig;
+  try {
+    cfg = loadConfig();
+  } catch (cfgErr) {
+    if (!json) {
+      defaultRuntime.log(
+        `\nℹ️  Config load failed — falling back to service restart. (${String(cfgErr)})\n`,
+      );
+    }
+    return runHardServiceRestart({ params, json, stdout, emit, fail, warnings });
+  }
+
+  // Token drift check: runs before any restart attempt (both graceful and hard paths).
   if (params.checkTokenDrift) {
-    // Check for token drift before restart (service token vs config token)
     try {
       const command = await params.service.readCommand(process.env);
       const serviceToken = command?.environment?.OPENCLAW_GATEWAY_TOKEN;
-      const cfg = loadConfig();
       const configToken = resolveGatewayCredentialsFromConfig({
         cfg,
         env: process.env,
@@ -288,10 +302,9 @@ export async function runServiceRestart(params: {
       }).token;
       const driftIssue = checkTokenDrift({ serviceToken, configToken });
       if (driftIssue) {
-        const warning = driftIssue.detail
-          ? `${driftIssue.message} ${driftIssue.detail}`
-          : driftIssue.message;
-        warnings.push(warning);
+        warnings.push(
+          driftIssue.detail ? `${driftIssue.message} ${driftIssue.detail}` : driftIssue.message,
+        );
         if (!json) {
           defaultRuntime.log(`\n⚠️  ${driftIssue.message}`);
           if (driftIssue.detail) {
@@ -300,31 +313,168 @@ export async function runServiceRestart(params: {
         }
       }
     } catch {
-      // Non-fatal: token drift check is best-effort
+      // Non-fatal: best-effort
     }
   }
 
+  // --hard: bypass graceful path entirely. isRestartEnabled is NOT checked here.
+  // ORDERING IS LOAD-BEARING: this check MUST remain before isRestartEnabled().
+  if (params.opts?.hard) {
+    if (!json) {
+      defaultRuntime.log(
+        "\n⚠️  Hard restart requested — using systemctl (kills process, no task drain).\n",
+      );
+    }
+    return runHardServiceRestart({ params, json, stdout, emit, fail, warnings });
+  }
+
+  // Check restart is enabled before sending signal.
+  if (!isRestartEnabled(cfg)) {
+    emit({
+      ok: false,
+      error: "Gateway restart is disabled (commands.restart=false).",
+      hints: [
+        "Set commands.restart=true in your config to re-enable.",
+        "Use --hard to force a service restart via systemctl (bypasses this setting).",
+      ],
+    });
+    if (!json) {
+      defaultRuntime.log("\n❌ Gateway restart is disabled (commands.restart=false).");
+      defaultRuntime.log("   Use --hard to force a service restart via systemctl.\n");
+    }
+    return false;
+  }
+
+  // TODO(remove-migration-notice): Remove this block after 2 releases.
+  // Track: openclaw/openclaw#REPLACE_BEFORE_COMMIT
+  const migrationNotice =
+    "`openclaw gateway restart` now defaults to graceful restart (SIGUSR1). " +
+    "For the old behaviour (systemctl kill + respawn), use --hard. " +
+    "This notice will be removed after the next release.";
+  if (!json) {
+    defaultRuntime.log(`ℹ️  ${migrationNotice}`);
+  }
+
+  // Resolve gateway PID and send SIGUSR1 directly.
+  const pid = await resolveGatewayPid(params.service);
+  if (pid === null) {
+    if (!json) {
+      defaultRuntime.log(
+        "\nℹ️  Could not resolve gateway PID — falling back to service restart.\n",
+      );
+    }
+    return runHardServiceRestart({ params, json, stdout, emit, fail, warnings });
+  }
+
   try {
-    await params.service.restart({ env: process.env, stdout });
-    if (params.postRestartCheck) {
-      await params.postRestartCheck({ json, stdout, warnings, fail });
+    process.kill(pid, "SIGUSR1");
+  } catch (err) {
+    if (!json) {
+      defaultRuntime.log(
+        `\nℹ️  SIGUSR1 delivery failed — falling back to service restart. (${String(err)})\n`,
+      );
+    }
+    return runHardServiceRestart({ params, json, stdout, emit, fail, warnings });
+  }
+
+  // SIGUSR1 sent — restart is in motion. No more hard-restart fallback (would double-restart).
+  let gatewayUrl: string;
+  let gatewayToken: string | undefined;
+  let gatewayPassword: string | undefined;
+
+  try {
+    const connectionDetails = buildGatewayConnectionDetails({ config: cfg });
+    gatewayUrl = connectionDetails.url;
+
+    const auth = resolveGatewayCredentialsFromConfig({ cfg });
+    gatewayToken = auth.token;
+    gatewayPassword = auth.password;
+  } catch (setupErr) {
+    const errMsg = String(setupErr);
+    emit({
+      ok: true,
+      result: "restarted-unverified",
+      message: `Restart signal sent; health check setup failed: ${errMsg}`,
+      notice: migrationNotice,
+      warnings: warnings.length ? warnings : undefined,
+    });
+    if (!json) {
+      defaultRuntime.log(`⚠️  Restart signal sent but health check could not be set up: ${errMsg}`);
+    }
+    return true;
+  }
+
+  // 45s budget: covers up to 30s task drain + gateway respawn + WS reconnect.
+  // postRestartCheck is intentionally NOT called on the graceful path.
+  const healthy = await pollUntilGatewayHealthy({
+    url: gatewayUrl,
+    token: gatewayToken,
+    password: gatewayPassword,
+    timeoutMs: 45_000,
+  });
+
+  emit({
+    ok: true,
+    result: healthy ? "restarted" : "restarted-unverified",
+    message: healthy
+      ? "Gateway restarted (graceful)."
+      : "Restart signal sent; health check timed out.",
+    notice: migrationNotice,
+    warnings: warnings.length ? warnings : undefined,
+  });
+  if (!json) {
+    defaultRuntime.log(
+      healthy
+        ? "✅ Gateway restarted successfully."
+        : "⚠️  Restart signal sent but gateway did not confirm healthy within timeout.",
+    );
+  }
+  return true;
+}
+
+type HardRestartCtx = {
+  params: {
+    serviceNoun: string;
+    service: GatewayService;
+    renderStartHints: () => string[];
+    opts?: DaemonLifecycleOptions;
+    checkTokenDrift?: boolean;
+    postRestartCheck?: (ctx: RestartPostCheckContext) => Promise<void>;
+  };
+  json: boolean;
+  stdout: Writable;
+  emit: ReturnType<typeof createActionIO>["emit"];
+  fail: ReturnType<typeof createActionIO>["fail"];
+  warnings: string[];
+};
+
+async function runHardServiceRestart(ctx: HardRestartCtx): Promise<boolean> {
+  try {
+    await ctx.params.service.restart({ env: process.env, stdout: ctx.stdout });
+    if (ctx.params.postRestartCheck) {
+      await ctx.params.postRestartCheck({
+        json: ctx.json,
+        stdout: ctx.stdout,
+        warnings: ctx.warnings,
+        fail: ctx.fail,
+      });
     }
     let restarted = true;
     try {
-      restarted = await params.service.isLoaded({ env: process.env });
+      restarted = await ctx.params.service.isLoaded({ env: process.env });
     } catch {
       restarted = true;
     }
-    emit({
+    ctx.emit({
       ok: true,
       result: "restarted",
-      service: buildDaemonServiceSnapshot(params.service, restarted),
-      warnings: warnings.length ? warnings : undefined,
+      service: buildDaemonServiceSnapshot(ctx.params.service, restarted),
+      warnings: ctx.warnings.length ? ctx.warnings : undefined,
     });
     return true;
   } catch (err) {
-    const hints = params.renderStartHints();
-    fail(`${params.serviceNoun} restart failed: ${String(err)}`, hints);
+    const hints = ctx.params.renderStartHints();
+    ctx.fail(`${ctx.params.serviceNoun} restart failed: ${String(err)}`, hints);
     return false;
   }
 }
