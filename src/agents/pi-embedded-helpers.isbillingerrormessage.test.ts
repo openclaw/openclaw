@@ -178,6 +178,17 @@ describe("isContextOverflowError", () => {
     }
   });
 
+  it("matches Kimi 'model token limit' context overflow errors", () => {
+    const samples = [
+      "Invalid request: Your request exceeded model token limit: 262144 (requested: 291351)",
+      "error, status code: 400, message: Invalid request: Your request exceeded model token limit: 262144 (requested: 291351)",
+      "Your request exceeded model token limit",
+    ];
+    for (const sample of samples) {
+      expect(isContextOverflowError(sample)).toBe(true);
+    }
+  });
+
   it("ignores normal conversation text mentioning context overflow", () => {
     // These are legitimate conversation snippets, not error messages
     expect(isContextOverflowError("Let's investigate the context overflow bug")).toBe(false);
