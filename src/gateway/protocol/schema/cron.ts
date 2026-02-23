@@ -59,6 +59,31 @@ function cronIdOrJobIdParams(extraFields: Record<string, TSchema>) {
   ]);
 }
 
+const CronRunLogJobIdSchema = Type.String({
+  minLength: 1,
+  // Prevent path traversal via separators in cron.runs id/jobId.
+  pattern: "^[^/\\\\]+$",
+});
+
+function cronRunsIdOrJobIdParams(extraFields: Record<string, TSchema>) {
+  return Type.Union([
+    Type.Object(
+      {
+        id: CronRunLogJobIdSchema,
+        ...extraFields,
+      },
+      { additionalProperties: false },
+    ),
+    Type.Object(
+      {
+        jobId: CronRunLogJobIdSchema,
+        ...extraFields,
+      },
+      { additionalProperties: false },
+    ),
+  ]);
+}
+
 export const CronScheduleSchema = Type.Union([
   Type.Object(
     {
@@ -241,7 +266,7 @@ export const CronRunParamsSchema = cronIdOrJobIdParams({
   mode: Type.Optional(Type.Union([Type.Literal("due"), Type.Literal("force")])),
 });
 
-export const CronRunsParamsSchema = cronIdOrJobIdParams({
+export const CronRunsParamsSchema = cronRunsIdOrJobIdParams({
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 5000 })),
 });
 
