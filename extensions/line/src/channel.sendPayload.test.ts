@@ -267,6 +267,92 @@ describe("linePlugin outbound.sendPayload", () => {
     });
     expect(mocks.chunkMarkdownText).toHaveBeenCalledWith("Hello world", 123);
   });
+
+  it("sends processed flex messages (tables) before template message", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+
+    // Markdown table triggers processLineMessage to produce flexMessages
+    const tableText = "| Col1 | Col2 |\n|------|------|\n| A    | B    |";
+    const payload = {
+      text: tableText,
+      channelData: {
+        line: {
+          templateMessage: {
+            type: "confirm",
+            text: "Next page?",
+            confirmLabel: "Yes",
+            confirmData: "yes",
+            cancelLabel: "No",
+            cancelData: "no",
+          },
+        },
+      },
+    };
+
+    await linePlugin.outbound!.sendPayload!({
+      to: "line:user:4",
+      text: payload.text,
+      payload,
+      accountId: "default",
+      cfg,
+    });
+
+    // Both should have been called
+    expect(mocks.pushFlexMessage).toHaveBeenCalled();
+    expect(mocks.pushTemplateMessage).toHaveBeenCalled();
+
+    // Flex (table detail) must be sent BEFORE template (buttons/pagination)
+    const flexOrder = mocks.pushFlexMessage.mock.invocationCallOrder[0];
+    const templateOrder = mocks.pushTemplateMessage.mock.invocationCallOrder[0];
+    expect(flexOrder).toBeLessThan(templateOrder);
+  });
+
+  it("orders processed flex before template in quick-reply batch", async () => {
+    const { runtime, mocks } = createRuntime();
+    setLineRuntime(runtime);
+    const cfg = { channels: { line: {} } } as OpenClawConfig;
+
+    // Table-only text with quick replies triggers the inline quick-reply batch path
+    const tableText = "| Col1 | Col2 |\n|------|------|\n| A    | B    |";
+    const payload = {
+      text: tableText,
+      channelData: {
+        line: {
+          quickReplies: ["Next", "Back"],
+          templateMessage: {
+            type: "confirm",
+            text: "Navigate?",
+            confirmLabel: "Next",
+            confirmData: "next",
+            cancelLabel: "Back",
+            cancelData: "back",
+          },
+        },
+      },
+    };
+
+    await linePlugin.outbound!.sendPayload!({
+      to: "line:user:5",
+      text: payload.text,
+      payload,
+      accountId: "default",
+      cfg,
+    });
+
+    // In the quick-reply batch path, messages are batched via pushMessagesLine
+    expect(mocks.pushMessagesLine).toHaveBeenCalled();
+    const batchCall = mocks.pushMessagesLine.mock.calls[0];
+    const messages = batchCall[1] as Array<Record<string, unknown>>;
+
+    // Find positions of flex (table) and template (buttons) in the batch
+    const flexIndex = messages.findIndex((m) => m.type === "flex");
+    const templateIndex = messages.findIndex((m) => m.type === "buttons");
+    expect(flexIndex).toBeGreaterThanOrEqual(0);
+    expect(templateIndex).toBeGreaterThanOrEqual(0);
+    expect(flexIndex).toBeLessThan(templateIndex);
+  });
 });
 
 describe("linePlugin config.formatAllowFrom", () => {
