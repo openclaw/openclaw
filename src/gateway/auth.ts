@@ -371,6 +371,10 @@ export async function authorizeGatewayConnect(params: {
     }
     const iamResult = await validateIamToken(jwtToken, auth.iam);
     if (!iamResult.ok) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[gateway/auth] IAM validation failed: reason=${iamResult.reason} serverUrl=${auth.iam.serverUrl} clientId=${auth.iam.clientId} tokenLen=${jwtToken.length}`,
+      );
       return { ok: false, reason: iamResult.reason };
     }
     return {
