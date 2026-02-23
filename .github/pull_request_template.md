@@ -32,6 +32,26 @@ Describe the problem and fix in 2–5 bullets:
 - Closes #
 - Related #
 
+## AI Assistance (if used)
+
+<!--
+AI/Vibe-Coded PRs Welcome! 🤖
+Built with Codex, Claude, or other AI tools? Awesome — just mark it.
+AI PRs are first-class citizens here. We just want transparency so reviewers know what to look for.
+-->
+
+- [ ] AI-assisted PR
+- [ ] I confirm I understand what the code does
+
+<details>
+<summary>AI prompts / session logs (optional, but super helpful)</summary>
+
+```text
+
+```
+
+</details>
+
 ## User-visible / Behavior Changes
 
 List user-visible changes (including defaults/config).  
