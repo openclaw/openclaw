@@ -234,16 +234,11 @@ describe("trigger handling", () => {
     });
   });
 
-  it("drops top-level restricted commands for unauthorized senders", async () => {
+  it("enforces top-level command auth but keeps inline text for unauthorized senders", async () => {
     await withTempHome(async (home) => {
       for (const command of ["/status", "/whoami"] as const) {
         await expectUnauthorizedCommandDropped(home, command);
       }
-    });
-  });
-
-  it("keeps inline commands for unauthorized senders", async () => {
-    await withTempHome(async (home) => {
       for (const command of ["/status", "/help"] as const) {
         const runEmbeddedPiAgentMock = mockEmbeddedOk();
         const res = await runInlineUnauthorizedCommand({
@@ -305,109 +300,115 @@ describe("trigger handling", () => {
     });
   });
 
-  it("rejects elevated toggles when disabled", async () => {
+  it("enforces elevated toggles across enabled and mention scenarios", async () => {
     await withTempHome(async (home) => {
-      const cfg = makeWhatsAppElevatedCfg(home, { elevatedEnabled: false });
+      const isolateStore = (cfg: ReturnType<typeof makeWhatsAppElevatedCfg>, label: string) => {
+        cfg.session = { ...cfg.session, store: join(home, `${label}.sessions.json`) };
+        return cfg;
+      };
 
-      const res = await getReplyFromConfig(
-        {
-          Body: "/elevated on",
-          From: "+1000",
-          To: "+2000",
-          Provider: "whatsapp",
-          SenderE164: "+1000",
-        },
-        {},
-        cfg,
-      );
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("tools.elevated.enabled");
+      {
+        const cfg = isolateStore(makeWhatsAppElevatedCfg(home, { elevatedEnabled: false }), "off");
+        const res = await getReplyFromConfig(
+          {
+            Body: "/elevated on",
+            From: "+1000",
+            To: "+2000",
+            Provider: "whatsapp",
+            SenderE164: "+1000",
+          },
+          {},
+          cfg,
+        );
+        const text = Array.isArray(res) ? res[0]?.text : res?.text;
+        expect(text).toContain("tools.elevated.enabled");
 
-      const storeRaw = await fs.readFile(requireSessionStorePath(cfg), "utf-8");
-      const store = JSON.parse(storeRaw) as Record<string, { elevatedLevel?: string }>;
-      expect(store[MAIN_SESSION_KEY]?.elevatedLevel).toBeUndefined();
-    });
-  });
+        const storeRaw = await fs.readFile(requireSessionStorePath(cfg), "utf-8");
+        const store = JSON.parse(storeRaw) as Record<string, { elevatedLevel?: string }>;
+        expect(store[MAIN_SESSION_KEY]?.elevatedLevel).toBeUndefined();
+      }
 
-  it("allows elevated off in groups without mention", async () => {
-    await withTempHome(async (home) => {
-      const cfg = makeWhatsAppElevatedCfg(home, { requireMentionInGroups: false });
+      {
+        const cfg = isolateStore(
+          makeWhatsAppElevatedCfg(home, { requireMentionInGroups: false }),
+          "group-off",
+        );
+        const res = await getReplyFromConfig(
+          {
+            Body: "/elevated off",
+            From: "whatsapp:group:123@g.us",
+            To: "whatsapp:+2000",
+            Provider: "whatsapp",
+            SenderE164: "+1000",
+            CommandAuthorized: true,
+            ChatType: "group",
+            WasMentioned: false,
+          },
+          {},
+          cfg,
+        );
+        const text = Array.isArray(res) ? res[0]?.text : res?.text;
+        expect(text).toContain("Elevated mode disabled.");
+        const store = await readSessionStore(cfg);
+        expect(store["agent:main:whatsapp:group:123@g.us"]?.elevatedLevel).toBe("off");
+      }
 
-      const res = await getReplyFromConfig(
-        {
-          Body: "/elevated off",
-          From: "whatsapp:group:123@g.us",
-          To: "whatsapp:+2000",
-          Provider: "whatsapp",
-          SenderE164: "+1000",
-          CommandAuthorized: true,
-          ChatType: "group",
-          WasMentioned: false,
-        },
-        {},
-        cfg,
-      );
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("Elevated mode disabled.");
+      {
+        const cfg = isolateStore(
+          makeWhatsAppElevatedCfg(home, { requireMentionInGroups: true }),
+          "group-on",
+        );
+        const res = await getReplyFromConfig(
+          {
+            Body: "/elevated on",
+            From: "whatsapp:group:123@g.us",
+            To: "whatsapp:+2000",
+            Provider: "whatsapp",
+            SenderE164: "+1000",
+            CommandAuthorized: true,
+            ChatType: "group",
+            WasMentioned: true,
+          },
+          {},
+          cfg,
+        );
+        const text = Array.isArray(res) ? res[0]?.text : res?.text;
+        expect(text).toContain("Elevated mode set to ask");
+        const store = await readSessionStore(cfg);
+        expect(store["agent:main:whatsapp:group:123@g.us"]?.elevatedLevel).toBe("on");
+      }
 
-      const store = await readSessionStore(cfg);
-      expect(store["agent:main:whatsapp:group:123@g.us"]?.elevatedLevel).toBe("off");
-    });
-  });
-
-  it("allows elevated directive in groups when mentioned", async () => {
-    await withTempHome(async (home) => {
-      const cfg = makeWhatsAppElevatedCfg(home, { requireMentionInGroups: true });
-
-      const res = await getReplyFromConfig(
-        {
-          Body: "/elevated on",
-          From: "whatsapp:group:123@g.us",
-          To: "whatsapp:+2000",
-          Provider: "whatsapp",
-          SenderE164: "+1000",
-          CommandAuthorized: true,
-          ChatType: "group",
-          WasMentioned: true,
-        },
-        {},
-        cfg,
-      );
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("Elevated mode set to ask");
-
-      const store = await readSessionStore(cfg);
-      expect(store["agent:main:whatsapp:group:123@g.us"]?.elevatedLevel).toBe("on");
-    });
-  });
-
-  it("ignores elevated directive in groups when not mentioned", async () => {
-    await withTempHome(async (home) => {
-      getRunEmbeddedPiAgentMock().mockResolvedValue({
-        payloads: [{ text: "ok" }],
-        meta: {
-          durationMs: 1,
-          agentMeta: { sessionId: "s", provider: "p", model: "m" },
-        },
-      });
-      const cfg = makeWhatsAppElevatedCfg(home, { requireMentionInGroups: false });
-
-      const res = await getReplyFromConfig(
-        {
-          Body: "/elevated on",
-          From: "whatsapp:group:123@g.us",
-          To: "whatsapp:+2000",
-          Provider: "whatsapp",
-          SenderE164: "+1000",
-          ChatType: "group",
-          WasMentioned: false,
-        },
-        {},
-        cfg,
-      );
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toBeUndefined();
-      expect(getRunEmbeddedPiAgentMock()).not.toHaveBeenCalled();
+      {
+        const cfg = isolateStore(
+          makeWhatsAppElevatedCfg(home, { requireMentionInGroups: false }),
+          "group-ignore",
+        );
+        const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+        runEmbeddedPiAgentMock.mockClear();
+        runEmbeddedPiAgentMock.mockResolvedValue({
+          payloads: [{ text: "ok" }],
+          meta: {
+            durationMs: 1,
+            agentMeta: { sessionId: "s", provider: "p", model: "m" },
+          },
+        });
+        const res = await getReplyFromConfig(
+          {
+            Body: "/elevated on",
+            From: "whatsapp:group:123@g.us",
+            To: "whatsapp:+2000",
+            Provider: "whatsapp",
+            SenderE164: "+1000",
+            ChatType: "group",
+            WasMentioned: false,
+          },
+          {},
+          cfg,
+        );
+        const text = Array.isArray(res) ? res[0]?.text : res?.text;
+        expect(text).toBeUndefined();
+        expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+      }
     });
   });
 
@@ -439,56 +440,57 @@ describe("trigger handling", () => {
     });
   });
 
-  it("uses tools.elevated.allowFrom.discord for elevated approval", async () => {
+  it("handles discord elevated allowlist and override behavior", async () => {
     await withTempHome(async (home) => {
-      const cfg = makeCfg(home);
-      cfg.tools = { elevated: { allowFrom: { discord: ["123"] } } };
+      {
+        const cfg = makeCfg(home);
+        cfg.session = { ...cfg.session, store: join(home, "discord-allow.sessions.json") };
+        cfg.tools = { elevated: { allowFrom: { discord: ["123"] } } };
 
-      const res = await getReplyFromConfig(
-        {
-          Body: "/elevated on",
-          From: "discord:123",
-          To: "user:123",
-          Provider: "discord",
-          SenderName: "Peter Steinberger",
-          SenderUsername: "steipete",
-          SenderTag: "steipete",
-          CommandAuthorized: true,
-        },
-        {},
-        cfg,
-      );
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("Elevated mode set to ask");
+        const res = await getReplyFromConfig(
+          {
+            Body: "/elevated on",
+            From: "discord:123",
+            To: "user:123",
+            Provider: "discord",
+            SenderName: "Peter Steinberger",
+            SenderUsername: "steipete",
+            SenderTag: "steipete",
+            CommandAuthorized: true,
+          },
+          {},
+          cfg,
+        );
+        const text = Array.isArray(res) ? res[0]?.text : res?.text;
+        expect(text).toContain("Elevated mode set to ask");
+        const store = await readSessionStore(cfg);
+        expect(store[MAIN_SESSION_KEY]?.elevatedLevel).toBe("on");
+      }
 
-      const store = await readSessionStore(cfg);
-      expect(store[MAIN_SESSION_KEY]?.elevatedLevel).toBe("on");
-    });
-  });
+      {
+        const cfg = makeCfg(home);
+        cfg.session = { ...cfg.session, store: join(home, "discord-deny.sessions.json") };
+        cfg.tools = {
+          elevated: {
+            allowFrom: { discord: [] },
+          },
+        };
 
-  it("treats explicit discord elevated allowlist as override", async () => {
-    await withTempHome(async (home) => {
-      const cfg = makeCfg(home);
-      cfg.tools = {
-        elevated: {
-          allowFrom: { discord: [] },
-        },
-      };
-
-      const res = await getReplyFromConfig(
-        {
-          Body: "/elevated on",
-          From: "discord:123",
-          To: "user:123",
-          Provider: "discord",
-          SenderName: "steipete",
-        },
-        {},
-        cfg,
-      );
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("tools.elevated.allowFrom.discord");
-      expect(getRunEmbeddedPiAgentMock()).not.toHaveBeenCalled();
+        const res = await getReplyFromConfig(
+          {
+            Body: "/elevated on",
+            From: "discord:123",
+            To: "user:123",
+            Provider: "discord",
+            SenderName: "steipete",
+          },
+          {},
+          cfg,
+        );
+        const text = Array.isArray(res) ? res[0]?.text : res?.text;
+        expect(text).toContain("tools.elevated.allowFrom.discord");
+        expect(getRunEmbeddedPiAgentMock()).not.toHaveBeenCalled();
+      }
     });
   });
 
