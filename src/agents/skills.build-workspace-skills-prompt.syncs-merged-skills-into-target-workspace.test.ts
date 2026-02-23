@@ -86,7 +86,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
     expect(prompt).not.toContain("Managed version");
     expect(prompt).not.toContain("Bundled version");
     expect(prompt).not.toContain("Extra version");
-    expect(prompt).toContain("demo-skill/SKILL.md");
+    expect(prompt.replaceAll("\\", "/")).toContain("demo-skill/SKILL.md");
   });
   it("keeps synced skills confined under target workspace when frontmatter name uses traversal", async () => {
     const sourceWorkspace = await createCaseDir("source");
