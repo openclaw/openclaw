@@ -243,4 +243,33 @@ describe("getMemorySearchManager caching", () => {
 
     await expect(firstManager.search("hello")).rejects.toThrow("qmd query failed");
   });
+
+  it("initializes fallback once under concurrent fallback requests", async () => {
+    const agentId = "retry-agent-concurrent-fallback";
+    const cfg = createQmdCfg(agentId);
+    let releaseFallback: (() => void) | undefined;
+    const fallbackGate = new Promise<void>((resolve) => {
+      releaseFallback = resolve;
+    });
+
+    mockPrimary.search.mockRejectedValue(new Error("qmd query failed"));
+    mockMemoryIndexGet.mockImplementation(async () => {
+      await fallbackGate;
+      return fallbackManager;
+    });
+
+    const first = await getMemorySearchManager({ cfg, agentId });
+    const manager = requireManager(first);
+
+    const firstSearch = manager.search("hello-1");
+    const secondSearch = manager.search("hello-2");
+
+    await vi.waitFor(() => {
+      expect(mockMemoryIndexGet).toHaveBeenCalledTimes(1);
+    });
+
+    releaseFallback?.();
+    await Promise.all([firstSearch, secondSearch]);
+    expect(fallbackSearch).toHaveBeenCalledTimes(2);
+  });
 });

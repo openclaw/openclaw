@@ -74,6 +74,7 @@ export async function getMemorySearchManager(params: {
 
 class FallbackMemoryManager implements MemorySearchManager {
   private fallback: MemorySearchManager | null = null;
+  private fallbackInitPromise: Promise<MemorySearchManager | null> | null = null;
   private primaryFailed = false;
   private lastError?: string;
   private cacheEvicted = false;
@@ -191,20 +192,30 @@ class FallbackMemoryManager implements MemorySearchManager {
     if (this.fallback) {
       return this.fallback;
     }
-    let fallback: MemorySearchManager | null;
-    try {
-      fallback = await this.deps.fallbackFactory();
-      if (!fallback) {
-        log.warn("memory fallback requested but builtin index is unavailable");
+    if (this.fallbackInitPromise) {
+      return await this.fallbackInitPromise;
+    }
+    this.fallbackInitPromise = (async () => {
+      let fallback: MemorySearchManager | null;
+      try {
+        fallback = await this.deps.fallbackFactory();
+        if (!fallback) {
+          log.warn("memory fallback requested but builtin index is unavailable");
+          return null;
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log.warn(`memory fallback unavailable: ${message}`);
         return null;
       }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      log.warn(`memory fallback unavailable: ${message}`);
-      return null;
+      this.fallback = fallback;
+      return this.fallback;
+    })();
+    try {
+      return await this.fallbackInitPromise;
+    } finally {
+      this.fallbackInitPromise = null;
     }
-    this.fallback = fallback;
-    return this.fallback;
   }
 
   private evictCacheEntry(): void {
