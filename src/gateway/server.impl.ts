@@ -450,7 +450,6 @@ export async function startGatewayServer(
             params: {
               message: opts.message,
               sessionKey: opts.sessionKey,
-              channel: "internal",
               deliver: false,
               idempotencyKey: `watchdog-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
               inputProvenance: {
