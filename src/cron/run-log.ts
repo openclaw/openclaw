@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { parseByteSize } from "../cli/parse-bytes.js";
+import type { CronConfig } from "../config/types.cron.js";
 import type { CronDeliveryStatus, CronRunStatus, CronRunTelemetry } from "./types.js";
 
 export type CronRunLogEntry = {
@@ -73,6 +75,30 @@ export function resolveCronRunLogPath(params: { storePath: string; jobId: string
 
 const writesByPath = new Map<string, Promise<void>>();
 
+export const DEFAULT_CRON_RUN_LOG_MAX_BYTES = 2_000_000;
+export const DEFAULT_CRON_RUN_LOG_KEEP_LINES = 2_000;
+
+export function resolveCronRunLogPruneOptions(cfg?: CronConfig["runLog"]): {
+  maxBytes: number;
+  keepLines: number;
+} {
+  let maxBytes = DEFAULT_CRON_RUN_LOG_MAX_BYTES;
+  if (cfg?.maxBytes !== undefined) {
+    try {
+      maxBytes = parseByteSize(String(cfg.maxBytes).trim(), { defaultUnit: "b" });
+    } catch {
+      maxBytes = DEFAULT_CRON_RUN_LOG_MAX_BYTES;
+    }
+  }
+
+  let keepLines = DEFAULT_CRON_RUN_LOG_KEEP_LINES;
+  if (typeof cfg?.keepLines === "number" && Number.isFinite(cfg.keepLines) && cfg.keepLines > 0) {
+    keepLines = Math.floor(cfg.keepLines);
+  }
+
+  return { maxBytes, keepLines };
+}
+
 export function getPendingCronRunLogWriteCountForTests() {
   return writesByPath.size;
 }
@@ -108,8 +134,8 @@ export async function appendCronRunLog(
       await fs.mkdir(path.dirname(resolved), { recursive: true });
       await fs.appendFile(resolved, `${JSON.stringify(entry)}\n`, "utf-8");
       await pruneIfNeeded(resolved, {
-        maxBytes: opts?.maxBytes ?? 2_000_000,
-        keepLines: opts?.keepLines ?? 2_000,
+        maxBytes: opts?.maxBytes ?? DEFAULT_CRON_RUN_LOG_MAX_BYTES,
+        keepLines: opts?.keepLines ?? DEFAULT_CRON_RUN_LOG_KEEP_LINES,
       });
     });
   writesByPath.set(resolved, next);
