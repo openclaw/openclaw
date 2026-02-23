@@ -58,7 +58,7 @@ describe("subagent registry persistence", () => {
     const storePath = resolveSessionStorePath(tempStateDir, agentId);
     const store = await readSessionStore(storePath);
     store[params.sessionKey] = {
-      ...(store[params.sessionKey] ?? {}),
+      ...store[params.sessionKey],
       sessionId: params.sessionId ?? `sess-${agentId}-${Date.now()}`,
       updatedAt: params.updatedAt ?? Date.now(),
     };

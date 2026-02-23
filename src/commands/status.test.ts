@@ -388,6 +388,7 @@ describe("statusCommand", () => {
     expect(logs.some((l: string) => l.includes("Memory"))).toBe(true);
     expect(logs.some((l: string) => l.includes("Channels"))).toBe(true);
     expect(logs.some((l: string) => l.includes("WhatsApp"))).toBe(true);
+    expect(logs.some((l: string) => l.includes("bootstrap files"))).toBe(true);
     expect(logs.some((l: string) => l.includes("Sessions"))).toBe(true);
     expect(logs.some((l: string) => l.includes("+1000"))).toBe(true);
     expect(logs.some((l: string) => l.includes("50%"))).toBe(true);
