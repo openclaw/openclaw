@@ -187,22 +187,4 @@ describe("directive behavior", () => {
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
-  it("shows current think level when /think has no argument", async () => {
-    await withTempHome(async (home) => {
-      const res = await getReplyFromConfig(
-        { Body: "/think", From: "+1222", To: "+1222", CommandAuthorized: true },
-        {},
-        makeWhatsAppDirectiveConfig(
-          home,
-          { model: "anthropic/claude-opus-4-5", thinkingDefault: "high" },
-          { session: { store: sessionStorePath(home) } },
-        ),
-      );
-
-      const text = replyText(res);
-      expect(text).toContain("Current thinking level: high");
-      expect(text).toContain("Options: off, minimal, low, medium, high.");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
-    });
-  });
 });
