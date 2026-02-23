@@ -5,6 +5,16 @@ import "./test-helpers/fast-coding-tools.js";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 
+type PiAiMockState = {
+  lastModel: { provider?: string; id?: string; compat?: unknown } | null;
+};
+
+const piAiMockState = vi.hoisted(
+  (): PiAiMockState => ({
+    lastModel: null,
+  }),
+);
+
 function createMockUsage(input: number, output: number) {
   return {
     input,
@@ -88,6 +98,7 @@ vi.mock("@mariozechner/pi-ai", async () => {
       return buildAssistantMessage(model);
     },
     streamSimple: (model: { api: string; provider: string; id: string }) => {
+      piAiMockState.lastModel = model as { provider?: string; id?: string; compat?: unknown };
       const stream = actual.createAssistantMessageEventStream();
       queueMicrotask(() => {
         stream.push({
@@ -233,7 +244,63 @@ const runDefaultEmbeddedTurn = async (sessionFile: string, prompt: string, sessi
   });
 };
 
+const makeMoonshotConfig = (modelIds: string[]) =>
+  ({
+    models: {
+      providers: {
+        moonshot: {
+          api: "openai-completions",
+          apiKey: "sk-test",
+          baseUrl: "https://api.moonshot.ai/v1",
+          models: modelIds.map((id) => ({
+            id,
+            name: `Moonshot ${id}`,
+            reasoning: false,
+            input: ["text", "image"],
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            contextWindow: 256_000,
+            maxTokens: 8_192,
+          })),
+        },
+      },
+    },
+  }) satisfies OpenClawConfig;
+
 describe("runEmbeddedPiAgent", () => {
+  it("normalizes moonshot models to disable developer-role payloads in runner calls", async () => {
+    piAiMockState.lastModel = null;
+    const sessionFile = nextSessionFile();
+    const sessionKey = nextSessionKey();
+    const cfg = makeMoonshotConfig(["kimi-k2.5"]);
+
+    await runEmbeddedPiAgent({
+      sessionId: "session:test",
+      sessionKey,
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "reply with ok",
+      provider: "moonshot",
+      model: "kimi-k2.5",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: nextRunId("moonshot-compat"),
+      enqueue: immediateEnqueue,
+    });
+
+    const capturedModel = piAiMockState.lastModel as {
+      provider?: string;
+      id?: string;
+      compat?: unknown;
+    } | null;
+    expect(capturedModel?.provider).toBe("moonshot");
+    expect(capturedModel?.id).toBe("kimi-k2.5");
+    expect(
+      (capturedModel?.compat as { supportsDeveloperRole?: boolean } | undefined)
+        ?.supportsDeveloperRole,
+    ).toBe(false);
+  });
+
   it("handles prompt error paths without dropping user state", async () => {
     for (const testCase of [
       {
