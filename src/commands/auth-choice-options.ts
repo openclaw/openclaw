@@ -71,6 +71,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["xai-api-key"],
   },
   {
+    value: "mistral",
+    label: "Mistral AI",
+    hint: "API key",
+    choices: ["mistral-api-key"],
+  },
+  {
     value: "volcengine",
     label: "Volcano Engine",
     hint: "API key",
@@ -191,6 +197,7 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     hint: "Local/self-hosted OpenAI-compatible server",
   },
   { value: "openai-api-key", label: "OpenAI API key" },
+  { value: "mistral-api-key", label: "Mistral API key" },
   { value: "xai-api-key", label: "xAI (Grok) API key" },
   { value: "volcengine-api-key", label: "Volcano Engine API key" },
   { value: "byteplus-api-key", label: "BytePlus API key" },

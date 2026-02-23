@@ -107,4 +107,55 @@ describe("runCapability auto audio entries", () => {
     expect(result.outputs[0]?.text).toBe("ok");
     expect(seenModel).toBe("whisper-1");
   });
+
+  it("uses mistral when only mistral key is configured", async () => {
+    let runResult: Awaited<ReturnType<typeof runCapability>> | undefined;
+    await withAudioFixture("openclaw-auto-audio-mistral", async ({ ctx, media, cache }) => {
+      const providerRegistry = buildProviderRegistry({
+        openai: {
+          id: "openai",
+          capabilities: ["audio"],
+          transcribeAudio: async () => ({ text: "openai", model: "gpt-4o-mini-transcribe" }),
+        },
+        mistral: {
+          id: "mistral",
+          capabilities: ["audio"],
+          transcribeAudio: async (req) => ({ text: "mistral", model: req.model ?? "unknown" }),
+        },
+      });
+      const cfg = {
+        models: {
+          providers: {
+            mistral: {
+              apiKey: "mistral-test-key",
+              models: [],
+            },
+          },
+        },
+        tools: {
+          media: {
+            audio: {
+              enabled: true,
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      runResult = await runCapability({
+        capability: "audio",
+        cfg,
+        ctx,
+        attachments: cache,
+        media,
+        providerRegistry,
+      });
+    });
+    if (!runResult) {
+      throw new Error("Expected auto audio mistral result");
+    }
+    expect(runResult.decision.outcome).toBe("success");
+    expect(runResult.outputs[0]?.provider).toBe("mistral");
+    expect(runResult.outputs[0]?.model).toBe("voxtral-mini-latest");
+    expect(runResult.outputs[0]?.text).toBe("mistral");
+  });
 });

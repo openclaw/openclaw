@@ -253,6 +253,23 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   }, 60_000);
 
+  it("infers Mistral auth choice from --mistral-api-key and sets default model", async () => {
+    await withOnboardEnv("openclaw-onboard-mistral-infer-", async (env) => {
+      const cfg = await runOnboardingAndReadConfig(env, {
+        mistralApiKey: "mistral-test-key",
+      });
+
+      expect(cfg.auth?.profiles?.["mistral:default"]?.provider).toBe("mistral");
+      expect(cfg.auth?.profiles?.["mistral:default"]?.mode).toBe("api_key");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("mistral/mistral-large-latest");
+      await expectApiKeyProfile({
+        profileId: "mistral:default",
+        provider: "mistral",
+        key: "mistral-test-key",
+      });
+    });
+  }, 60_000);
+
   it("stores Volcano Engine API key and sets default model", async () => {
     await withOnboardEnv("openclaw-onboard-volcengine-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {
