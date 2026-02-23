@@ -193,14 +193,22 @@ export async function spawnSubagentDirect(
     threadId: ctx.agentThreadId,
   });
   const hookRunner = getGlobalHookRunner();
+  const cfg = loadConfig();
+
+  // When agent omits runTimeoutSeconds, use the config default.
+  // Falls back to 0 (no timeout) if config key is also unset,
+  // preserving current behavior for existing deployments.
+  const cfgSubagentTimeout =
+    typeof cfg?.agents?.defaults?.subagents?.runTimeoutSeconds === "number" &&
+    Number.isFinite(cfg.agents.defaults.subagents.runTimeoutSeconds)
+      ? Math.max(0, Math.floor(cfg.agents.defaults.subagents.runTimeoutSeconds))
+      : 0;
   const runTimeoutSeconds =
     typeof params.runTimeoutSeconds === "number" && Number.isFinite(params.runTimeoutSeconds)
       ? Math.max(0, Math.floor(params.runTimeoutSeconds))
-      : 0;
+      : cfgSubagentTimeout;
   let modelApplied = false;
   let threadBindingReady = false;
-
-  const cfg = loadConfig();
   const { mainKey, alias } = resolveMainSessionAlias(cfg);
   const requesterSessionKey = ctx.agentSessionKey;
   const requesterInternalKey = requesterSessionKey
