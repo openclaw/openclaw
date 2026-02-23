@@ -479,6 +479,52 @@ describe("statusCommand", () => {
     expect(logs.join("\n")).toMatch(/WARN/);
   });
 
+  it("prints requestId-aware recovery guidance when gateway pairing is required", async () => {
+    mocks.probeGateway.mockResolvedValueOnce({
+      ok: false,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: null,
+      error: "connect failed: pairing required (requestId: req-123)",
+      close: { code: 1008, reason: "pairing required (requestId: req-123)" },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+
+    runtimeLogMock.mockClear();
+    await statusCommand({}, runtime as never);
+    const logs = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0]));
+    const joined = logs.join("\n");
+    expect(joined).toContain("Gateway pairing approval required.");
+    expect(joined).toContain("devices approve req-123");
+    expect(joined).toContain("devices approve --latest");
+    expect(joined).toContain("devices list");
+  });
+
+  it("prints fallback recovery guidance when pairing requestId is unavailable", async () => {
+    mocks.probeGateway.mockResolvedValueOnce({
+      ok: false,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: null,
+      error: "connect failed: pairing required",
+      close: { code: 1008, reason: "connect failed" },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+
+    runtimeLogMock.mockClear();
+    await statusCommand({}, runtime as never);
+    const logs = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0]));
+    const joined = logs.join("\n");
+    expect(joined).toContain("Gateway pairing approval required.");
+    expect(joined).not.toContain("devices approve req-");
+    expect(joined).toContain("devices approve --latest");
+    expect(joined).toContain("devices list");
+  });
+
   it("includes sessions across agents in JSON output", async () => {
     const originalAgents = mocks.listAgentsForGateway.getMockImplementation();
     const originalResolveStorePath = mocks.resolveStorePath.getMockImplementation();
