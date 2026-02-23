@@ -62,13 +62,41 @@ export function resolveSessionDeliveryTarget(params: {
   fallbackChannel?: DeliverableMessageChannel;
   allowMismatchedLastTo?: boolean;
   mode?: ChannelOutboundTargetMode;
+  /**
+   * When set, this overrides the session-level `lastChannel` for "last"
+   * resolution.  This prevents cross-channel reply routing when multiple
+   * channels share the same session (dmScope = "main") and an inbound
+   * message from a different channel updates `lastChannel` while an agent
+   * turn is still in flight.
+   *
+   * Callers should set this to the channel that originated the current
+   * agent turn so the reply always routes back to the correct channel.
+   *
+   * @see https://github.com/openclaw/openclaw/issues/24152
+   */
+  turnSourceChannel?: DeliverableMessageChannel;
+  /** Turn-source `to` — paired with `turnSourceChannel`. */
+  turnSourceTo?: string;
+  /** Turn-source `accountId` — paired with `turnSourceChannel`. */
+  turnSourceAccountId?: string;
+  /** Turn-source `threadId` — paired with `turnSourceChannel`. */
+  turnSourceThreadId?: string | number;
 }): SessionDeliveryTarget {
   const context = deliveryContextFromSession(params.entry);
-  const lastChannel =
+  const sessionLastChannel =
     context?.channel && isDeliverableMessageChannel(context.channel) ? context.channel : undefined;
-  const lastTo = context?.to;
-  const lastAccountId = context?.accountId;
-  const lastThreadId = context?.threadId;
+
+  // When a turn-source channel is provided, use it instead of the session's
+  // mutable lastChannel.  This prevents a concurrent inbound from a different
+  // channel from hijacking the reply target (cross-channel privacy leak).
+  const lastChannel = params.turnSourceChannel ?? sessionLastChannel;
+  const lastTo = params.turnSourceChannel ? (params.turnSourceTo ?? context?.to) : context?.to;
+  const lastAccountId = params.turnSourceChannel
+    ? (params.turnSourceAccountId ?? context?.accountId)
+    : context?.accountId;
+  const lastThreadId = params.turnSourceChannel
+    ? (params.turnSourceThreadId ?? context?.threadId)
+    : context?.threadId;
 
   const rawRequested = params.requestedChannel ?? "last";
   const requested = rawRequested === "last" ? "last" : normalizeMessageChannel(rawRequested);
