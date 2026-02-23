@@ -202,16 +202,25 @@ export const dispatchTelegramMessage = async ({
   let splitReasoningOnNextStream = false;
   const reasoningStepState = createTelegramReasoningStepState();
   type SplitLaneSegment = { lane: LaneName; text: string };
-  const splitTextIntoLaneSegments = (text?: string): SplitLaneSegment[] => {
+  type SplitLaneSegmentsResult = {
+    segments: SplitLaneSegment[];
+    suppressedReasoningOnly: boolean;
+  };
+  const splitTextIntoLaneSegments = (text?: string): SplitLaneSegmentsResult => {
     const split = splitTelegramReasoningText(text);
     const segments: SplitLaneSegment[] = [];
-    if (split.reasoningText) {
+    const suppressReasoning = resolvedReasoningLevel === "off";
+    if (split.reasoningText && !suppressReasoning) {
       segments.push({ lane: "reasoning", text: split.reasoningText });
     }
     if (split.answerText) {
       segments.push({ lane: "answer", text: split.answerText });
     }
-    return segments;
+    return {
+      segments,
+      suppressedReasoningOnly:
+        Boolean(split.reasoningText) && suppressReasoning && !split.answerText,
+    };
   };
   const resetDraftLaneState = (lane: DraftLaneState) => {
     lane.lastPartialText = "";
@@ -241,7 +250,8 @@ export const dispatchTelegramMessage = async ({
     laneStream.update(text);
   };
   const ingestDraftLaneSegments = (text: string | undefined) => {
-    for (const segment of splitTextIntoLaneSegments(text)) {
+    const split = splitTextIntoLaneSegments(text);
+    for (const segment of split.segments) {
       if (segment.lane === "reasoning") {
         reasoningStepState.noteReasoningHint();
         reasoningStepState.noteReasoningDelivered();
@@ -418,7 +428,8 @@ export const dispatchTelegramMessage = async ({
           const previewButtons = (
             payload.channelData?.telegram as { buttons?: TelegramInlineButtons } | undefined
           )?.buttons;
-          const segments = splitTextIntoLaneSegments(payload.text);
+          const split = splitTextIntoLaneSegments(payload.text);
+          const segments = split.segments;
           const hasMedia = Boolean(payload.mediaUrl) || (payload.mediaUrls?.length ?? 0) > 0;
 
           const flushBufferedFinalAnswer = async () => {
@@ -476,6 +487,17 @@ export const dispatchTelegramMessage = async ({
             }
           }
           if (segments.length > 0) {
+            return;
+          }
+          if (split.suppressedReasoningOnly) {
+            if (hasMedia) {
+              const payloadWithoutSuppressedReasoning =
+                typeof payload.text === "string" ? { ...payload, text: "" } : payload;
+              await sendPayload(payloadWithoutSuppressedReasoning);
+            }
+            if (info.kind === "final") {
+              await flushBufferedFinalAnswer();
+            }
             return;
           }
 
