@@ -1063,7 +1063,7 @@ skills-hub install <skill-slug>
 skills-hub update --all
 ```
 
-Hanzo Skills Hub 安装到当前目录下的 `./skills`（或回退到你配置的 Hanzo Bot 工作区）；Hanzo Bot 在下一个会话中将其视为 `<workspace>/skills`。对于跨智能体共享的 Skills，将它们放在 `~/.hanzo/bot/skills/<name>/SKILL.md`。某些 Skills 期望通过 Homebrew 安装二进制文件；在 Linux 上意味着 Linuxbrew（参阅上面的 Homebrew Linux 常见问题条目）。参阅[Skills](/tools/skills)和 [Hanzo Skills Hub](/tools/skills-hub)。
+Hanzo Skills Hub 安装到当前目录下的 `./skills`（或回退到你配置的 Hanzo Bot 工作区）；Hanzo Bot 在下一个会话中将其视为 `<workspace>/skills`。对于跨智能体共享的 Skills，将它们放在 `~/.hanzo/bot/skills/<name>/SKILL.md`。某些 Skills 期望通过 Homebrew 安装二进制文件；在 Linux 上意味着 Linuxbrew（参阅上面的 Homebrew Linux 常见问题条目）。参阅[Skills](/tools/skills)和 [Hanzo Skills Hub](/tools/hanzo-skills)。
 
 ### 如何安装用于浏览器接管的 Chrome 扩展
 

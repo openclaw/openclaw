@@ -9,7 +9,7 @@ title: "Clawnet Refactor"
 
 Esta página ainda não possui tradução completa para pt-BR.
 
-- Ver versão em inglês: [Open English doc](/refactor/clawnet)
+- Ver versão em inglês: [Open English doc](/refactor/hanzonet)
 - Voltar para a página inicial em português: [Hanzo Bot PT-BR](/pt-BR)
 
 > Status: tradução em andamento.

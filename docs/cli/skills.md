@@ -14,7 +14,7 @@ Related:
 
 - Skills system: [Skills](/tools/skills)
 - Skills config: [Skills config](/tools/skills-config)
-- Hanzo Skills Hub installs: [Hanzo Skills Hub](/tools/skills-hub)
+- Hanzo Skills Hub installs: [Hanzo Skills Hub](/tools/hanzo-skills)
 
 ## Commands
 

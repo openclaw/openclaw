@@ -31,14 +31,53 @@ vi.mock("../pairing/pairing-store.js", () => ({
   upsertChannelPairingRequest: (...args: unknown[]) => upsertPairingRequestMock(...args),
 }));
 
-vi.mock("../media/store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../media/store.js")>();
+vi.mock("../media/store.js", () => {
+  const nodeCrypto = require("node:crypto") as typeof import("node:crypto");
+  const nodeFs = require("node:fs/promises") as typeof import("node:fs/promises");
+  const nodePath = require("node:path") as typeof import("node:path");
+  const nodeOs = require("node:os") as typeof import("node:os");
+
+  // Inline extension lookup to avoid importing the real module (which can fail
+  // to intercept on Windows due to path-separator differences in vi.mock).
+  const EXT_MAP: Record<string, string> = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+    "audio/ogg": ".ogg",
+    "audio/mpeg": ".mp3",
+    "video/mp4": ".mp4",
+    "application/pdf": ".pdf",
+  };
+
   return {
-    ...actual,
-    saveMediaBuffer: vi.fn(async (...args: Parameters<typeof actual.saveMediaBuffer>) => {
-      saveMediaBufferSpy(...args);
-      return actual.saveMediaBuffer(...args);
-    }),
+    saveMediaBuffer: vi.fn(
+      async (
+        buffer: Buffer,
+        contentType?: string,
+        subdir?: string,
+        _maxBytes?: number,
+        originalFilename?: string,
+      ) => {
+        saveMediaBufferSpy(buffer, contentType, subdir, _maxBytes, originalFilename);
+        const home = process.env.HOME ?? process.env.USERPROFILE ?? nodeOs.homedir();
+        const dir = nodePath.join(home, ".bot", "media", subdir ?? "inbound");
+        await nodeFs.mkdir(dir, { recursive: true });
+        const uuid = nodeCrypto.randomUUID();
+        const mime = contentType?.split(";")[0]?.trim() ?? "";
+        const ext = EXT_MAP[mime] ?? "";
+        const id = ext ? `${uuid}${ext}` : uuid;
+        const dest = nodePath.join(dir, id);
+        await nodeFs.writeFile(dest, buffer);
+        return { id, path: dest, size: buffer.byteLength, contentType: mime || undefined };
+      },
+    ),
+    ensureMediaDir: vi.fn(async () => ""),
+    getMediaDir: vi.fn(() => ""),
+    cleanOldMedia: vi.fn(async () => {}),
+    saveMediaSource: vi.fn(async () => ({ id: "", path: "", size: 0 })),
+    extractOriginalFilename: vi.fn((fp: string) => require("node:path").basename(fp)),
+    MEDIA_MAX_BYTES: 5 * 1024 * 1024,
   };
 });
 

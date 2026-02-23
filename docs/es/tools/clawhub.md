@@ -9,7 +9,7 @@ title: "BotHub"
 
 Esta página aún no tiene traducción completa al español.
 
-- Ver la versión en inglés: [Open English doc](/tools/bot-hub)
+- Ver la versión en inglés: [Open English doc](/tools/hanzo-skills)
 - Volver al inicio en español: [Hanzo Bot ES](/es)
 
 > Estado: traducción en progreso.

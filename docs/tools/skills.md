@@ -51,7 +51,7 @@ tool surface those skills teach.
 
 Hanzo Skills Hub is the public skills registry for Hanzo Bot. Browse at
 [https://skills.hanzo.bot](https://skills.hanzo.bot). Use it to discover, install, update, and back up skills.
-Full guide: [Hanzo Skills Hub](/tools/skills-hub).
+Full guide: [Hanzo Skills Hub](/tools/hanzo-skills).
 
 Common flows:
 

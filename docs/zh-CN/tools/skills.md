@@ -47,7 +47,7 @@ Skills 从**三个**位置加载：
 
 ## Hanzo Skills Hub（安装 + 同步）
 
-Hanzo Skills Hub 是 Hanzo Bot 的公共 Skills 注册表。浏览 https://skills.hanzo.bot。使用它来发现、安装、更新和备份 Skills。完整指南：[Hanzo Skills Hub](/tools/skills-hub)。
+Hanzo Skills Hub 是 Hanzo Bot 的公共 Skills 注册表。浏览 https://skills.hanzo.bot。使用它来发现、安装、更新和备份 Skills。完整指南：[Hanzo Skills Hub](/tools/hanzo-skills)。
 
 常见流程：
 

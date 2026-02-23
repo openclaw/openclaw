@@ -9,7 +9,7 @@ title: "Lobster"
 
 Esta página ainda não possui tradução completa para pt-BR.
 
-- Ver versão em inglês: [Open English doc](/tools/lobster)
+- Ver versão em inglês: [Open English doc](/tools)
 - Voltar para a página inicial em português: [Hanzo Bot PT-BR](/pt-BR)
 
 > Status: tradução em andamento.

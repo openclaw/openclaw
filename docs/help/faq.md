@@ -1144,7 +1144,7 @@ skills-hub install <skill-slug>
 skills-hub update --all
 ```
 
-Hanzo Skills Hub installs into `./skills` under your current directory (or falls back to your configured Hanzo Bot workspace); Hanzo Bot treats that as `<workspace>/skills` on the next session. For shared skills across agents, place them in `~/.hanzo/bot/skills/<name>/SKILL.md`. Some skills expect binaries installed via Homebrew; on Linux that means Linuxbrew (see the Homebrew Linux FAQ entry above). See [Skills](/tools/skills) and [Hanzo Skills Hub](/tools/skills-hub).
+Hanzo Skills Hub installs into `./skills` under your current directory (or falls back to your configured Hanzo Bot workspace); Hanzo Bot treats that as `<workspace>/skills` on the next session. For shared skills across agents, place them in `~/.hanzo/bot/skills/<name>/SKILL.md`. Some skills expect binaries installed via Homebrew; on Linux that means Linuxbrew (see the Homebrew Linux FAQ entry above). See [Skills](/tools/skills) and [Hanzo Skills Hub](/tools/hanzo-skills).
 
 ### How do I install the Chrome extension for browser takeover
 

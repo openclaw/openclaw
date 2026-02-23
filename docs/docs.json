@@ -996,7 +996,7 @@
                   "tools/slash-commands",
                   "tools/skills",
                   "tools/skills-config",
-                  "tools/skills-hub",
+                  "tools/hanzo-skills",
                   "tools/plugin"
                 ]
               },
@@ -1489,7 +1489,7 @@
                   "es/tools/slash-commands",
                   "es/tools/skills",
                   "es/tools/skills-config",
-                  "es/tools/bot-hub",
+                  "es/tools/clawhub",
                   "es/plugin",
                   "es/plugins/voice-call",
                   "es/plugins/zalouser"
@@ -1975,7 +1975,7 @@
                   "pt-BR/tools/slash-commands",
                   "pt-BR/tools/skills",
                   "pt-BR/tools/skills-config",
-                  "pt-BR/tools/bot-hub",
+                  "pt-BR/tools/clawhub",
                   "pt-BR/plugin",
                   "pt-BR/plugins/voice-call",
                   "pt-BR/plugins/zalouser"
@@ -2477,7 +2477,7 @@
                   "zh-CN/tools/slash-commands",
                   "zh-CN/tools/skills",
                   "zh-CN/tools/skills-config",
-                  "zh-CN/tools/skills-hub",
+                  "zh-CN/tools/hanzo-skills",
                   "zh-CN/tools/plugin"
                 ]
               },

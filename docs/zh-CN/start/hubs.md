@@ -170,7 +170,7 @@ x-i18n:
 ## 工作区 + 模板
 
 - [Skills](/tools/skills)
-- [Hanzo Skills Hub](/tools/skills-hub)
+- [Hanzo Skills Hub](/tools/hanzo-skills)
 - [Skills 配置](/tools/skills-config)
 - [默认 AGENTS](/reference/AGENTS.default)
 - [模板：AGENTS](/reference/templates/AGENTS)
