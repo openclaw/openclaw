@@ -112,6 +112,75 @@ describe("/model chat UX", () => {
     });
     expect(resolved.errorText).toBeUndefined();
   });
+
+  it("rejects numeric /model selections with a guided error", () => {
+    const directives = parseInlineDirectives("/model 99");
+    const cfg = { commands: { text: true } } as unknown as OpenClawConfig;
+
+    const resolved = resolveModelSelectionFromDirective({
+      directives,
+      cfg,
+      agentDir: "/tmp/agent",
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      aliasIndex: baseAliasIndex(),
+      allowedModelKeys: new Set(["anthropic/claude-opus-4-5", "openai/gpt-4o"]),
+      allowedModelCatalog: [],
+      provider: "anthropic",
+    });
+
+    expect(resolved.modelSelection).toBeUndefined();
+    expect(resolved.errorText).toContain("Numeric model selection is not supported in chat.");
+    expect(resolved.errorText).toContain("Browse: /models or /models <provider>");
+  });
+
+  it("treats explicit default /model selection as resettable default", () => {
+    const directives = parseInlineDirectives("/model anthropic/claude-opus-4-5");
+    const cfg = { commands: { text: true } } as unknown as OpenClawConfig;
+
+    const resolved = resolveModelSelectionFromDirective({
+      directives,
+      cfg,
+      agentDir: "/tmp/agent",
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      aliasIndex: baseAliasIndex(),
+      allowedModelKeys: new Set(["anthropic/claude-opus-4-5", "openai/gpt-4o"]),
+      allowedModelCatalog: [],
+      provider: "anthropic",
+    });
+
+    expect(resolved.errorText).toBeUndefined();
+    expect(resolved.modelSelection).toEqual({
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      isDefault: true,
+    });
+  });
+
+  it("keeps openrouter provider/model split for exact selections", () => {
+    const directives = parseInlineDirectives("/model openrouter/anthropic/claude-opus-4-5");
+    const cfg = { commands: { text: true } } as unknown as OpenClawConfig;
+
+    const resolved = resolveModelSelectionFromDirective({
+      directives,
+      cfg,
+      agentDir: "/tmp/agent",
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      aliasIndex: baseAliasIndex(),
+      allowedModelKeys: new Set(["openrouter/anthropic/claude-opus-4-5"]),
+      allowedModelCatalog: [],
+      provider: "anthropic",
+    });
+
+    expect(resolved.errorText).toBeUndefined();
+    expect(resolved.modelSelection).toEqual({
+      provider: "openrouter",
+      model: "anthropic/claude-opus-4-5",
+      isDefault: false,
+    });
+  });
 });
 
 describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
