@@ -8,6 +8,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   createEmbeddingProvider,
+  type BedrockEmbeddingClient,
   type EmbeddingProvider,
   type EmbeddingProviderRequest,
   type EmbeddingProviderResult,
@@ -84,12 +85,20 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   private readonly requestedProvider: EmbeddingProviderRequest;
   private providerInitPromise: Promise<void> | null = null;
   private providerInitialized = false;
-  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama";
+  protected fallbackFrom?:
+    | "openai"
+    | "local"
+    | "gemini"
+    | "voyage"
+    | "bedrock"
+    | "mistral"
+    | "ollama";
   protected fallbackReason?: string;
   private providerUnavailableReason?: string;
   protected openAi?: OpenAiEmbeddingClient;
   protected gemini?: GeminiEmbeddingClient;
   protected voyage?: VoyageEmbeddingClient;
+  protected bedrock?: BedrockEmbeddingClient;
   protected mistral?: MistralEmbeddingClient;
   protected ollama?: OllamaEmbeddingClient;
   protected batch: {
@@ -282,6 +291,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     this.openAi = providerResult.openAi;
     this.gemini = providerResult.gemini;
     this.voyage = providerResult.voyage;
+    this.bedrock = providerResult.bedrock;
     this.mistral = providerResult.mistral;
     this.ollama = providerResult.ollama;
     this.providerInitialized = true;

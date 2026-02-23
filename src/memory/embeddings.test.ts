@@ -43,6 +43,7 @@ beforeEach(async () => {
 afterEach(() => {
   vi.resetAllMocks();
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 function requireProvider(result: Awaited<ReturnType<EmbeddingsModule["createEmbeddingProvider"]>>) {
@@ -212,7 +213,8 @@ describe("embedding provider remote overrides", () => {
     const provider = requireProvider(result);
     await provider.embedQuery("hello");
 
-    const { url, init } = readFirstFetchRequest(fetchMock);
+    const url = fetchMock.mock.calls[0]?.[0];
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
     expect(url).toBe(
       "https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent",
     );
@@ -288,7 +290,8 @@ describe("embedding provider remote overrides", () => {
     const provider = requireProvider(result);
     await provider.embedQuery("hello");
 
-    const { url, init } = readFirstFetchRequest(fetchMock);
+    const url = fetchMock.mock.calls[0]?.[0];
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
     expect(url).toBe("https://api.mistral.ai/v1/embeddings");
     const headers = (init?.headers ?? {}) as Record<string, string>;
     expect(headers.Authorization).toBe("Bearer mistral-key");

@@ -1898,6 +1898,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       },
                       {
                         type: "string",
+                        const: "bedrock",
+                      },
+                      {
+                        type: "string",
                         const: "mistral",
                       },
                       {
@@ -2034,6 +2038,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                       {
                         type: "string",
                         const: "voyage",
+                      },
+                      {
+                        type: "string",
+                        const: "bedrock",
                       },
                       {
                         type: "string",
@@ -3515,6 +3523,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         },
                         {
                           type: "string",
+                          const: "bedrock",
+                        },
+                        {
+                          type: "string",
                           const: "mistral",
                         },
                         {
@@ -3651,6 +3663,10 @@ export const GENERATED_BASE_CONFIG_SCHEMA = {
                         {
                           type: "string",
                           const: "voyage",
+                        },
+                        {
+                          type: "string",
+                          const: "bedrock",
                         },
                         {
                           type: "string",
