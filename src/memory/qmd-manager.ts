@@ -49,7 +49,7 @@ const QMD_EMBED_BACKOFF_MAX_MS = 60 * 60 * 1000;
 const HAN_SCRIPT_RE = /[\u3400-\u9fff]/u;
 const QMD_BM25_HAN_KEYWORD_LIMIT = 12;
 
-let qmdEmbedQueueTail: Promise<void> = Promise.resolve();
+const qmdEmbedQueueTails = new Map<string, Promise<void>>();
 
 function resolveWindowsCommandShim(command: string): string {
   if (process.platform !== "win32") {
@@ -121,17 +121,22 @@ function normalizeHanBm25Query(query: string): string {
   return normalizedKeywords.length > 0 ? normalizedKeywords.join(" ") : trimmed;
 }
 
-async function runWithQmdEmbedLock<T>(task: () => Promise<T>): Promise<T> {
-  const previous = qmdEmbedQueueTail;
+async function runWithQmdEmbedLock<T>(agentId: string, task: () => Promise<T>): Promise<T> {
+  const key = agentId.trim() || "main";
+  const previous = qmdEmbedQueueTails.get(key) ?? Promise.resolve();
   let release: (() => void) | undefined;
-  qmdEmbedQueueTail = new Promise<void>((resolve) => {
+  const current = new Promise<void>((resolve) => {
     release = resolve;
   });
+  qmdEmbedQueueTails.set(key, current);
   await previous.catch(() => undefined);
   try {
     return await task();
   } finally {
     release?.();
+    if (qmdEmbedQueueTails.get(key) === current) {
+      qmdEmbedQueueTails.delete(key);
+    }
   }
 }
 
@@ -912,7 +917,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       await this.runQmdUpdateWithRetry(reason);
       if (this.shouldRunEmbed(force)) {
         try {
-          await runWithQmdEmbedLock(async () => {
+          await runWithQmdEmbedLock(this.agentId, async () => {
             await this.runQmd(["embed"], {
               timeoutMs: this.qmd.update.embedTimeoutMs,
               discardOutput: true,

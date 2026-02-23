@@ -1703,6 +1703,86 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
+  it("isolates qmd embed queue per agent so one blocked embed does not stall others", async () => {
+    const devAgentId = "dev";
+    const devWorkspaceDir = path.join(tmpRoot, "workspace-dev");
+    await fs.mkdir(devWorkspaceDir);
+    cfg = {
+      ...cfg,
+      agents: {
+        list: [
+          { id: agentId, default: true, workspace: workspaceDir },
+          { id: devAgentId, workspace: devWorkspaceDir },
+        ],
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          searchMode: "query",
+          update: { interval: "0s", debounceMs: 0, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    let sawMainEmbed = false;
+    let releaseMainEmbed: (() => void) | null = null;
+    spawnMock.mockImplementation((_cmd: string, args: string[], options?: unknown) => {
+      if (args[0] === "embed") {
+        const xdgCacheHome =
+          (options as { env?: NodeJS.ProcessEnv } | undefined)?.env?.XDG_CACHE_HOME ?? "";
+        if (xdgCacheHome.includes(`${path.sep}agents${path.sep}${agentId}${path.sep}qmd`)) {
+          const child = createMockChild({ autoClose: false });
+          sawMainEmbed = true;
+          releaseMainEmbed = () => child.closeWith(0);
+          return child;
+        }
+      }
+      return createMockChild();
+    });
+
+    const mainResolved = resolveMemoryBackendConfig({ cfg, agentId });
+    const devResolved = resolveMemoryBackendConfig({ cfg, agentId: devAgentId });
+    const mainManager = await QmdMemoryManager.create({
+      cfg,
+      agentId,
+      resolved: mainResolved,
+      mode: "status",
+    });
+    const devManager = await QmdMemoryManager.create({
+      cfg,
+      agentId: devAgentId,
+      resolved: devResolved,
+      mode: "status",
+    });
+    expect(mainManager).toBeTruthy();
+    expect(devManager).toBeTruthy();
+    if (!mainManager || !devManager) {
+      throw new Error("manager missing");
+    }
+
+    let mainSync: Promise<void> | null = null;
+    let devSync: Promise<void> | null = null;
+    try {
+      mainSync = mainManager.sync({ reason: "manual" });
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      devSync = devManager.sync({ reason: "manual" });
+      const devProgress = await Promise.race([
+        devSync.then(() => "resolved" as const),
+        new Promise<"pending">((resolve) => setTimeout(() => resolve("pending"), 500)),
+      ]);
+      expect(devProgress).toBe("resolved");
+      expect(sawMainEmbed).toBe(true);
+    } finally {
+      (releaseMainEmbed as (() => void) | null)?.();
+      await devSync?.catch(() => undefined);
+      await mainSync?.catch(() => undefined);
+      await devManager.close();
+      await mainManager.close();
+    }
+  });
+
   it("skips qmd embed in search mode even for forced sync", async () => {
     cfg = {
       ...cfg,
