@@ -47,7 +47,7 @@ When a provider has multiple profiles, OpenClaw chooses an order like this:
 2. **Configured profiles**: `auth.profiles` filtered by provider.
 3. **Stored profiles**: entries in `auth-profiles.json` for the provider.
 
-If no explicit order is configured, OpenClaw uses a round‑robin order:
+If no explicit order is configured, OpenClaw uses a round-robin order:
 
 - **Primary key:** profile type (**OAuth before API keys**).
 - **Secondary key:** `usageStats.lastUsed` (oldest first, within each type).
@@ -63,26 +63,26 @@ It does **not** rotate on every request. The pinned profile is reused until:
 - the profile is in cooldown/disabled
 
 Manual selection via `/model …@<profileId>` sets a **user override** for that session
-and is not auto‑rotated until a new session starts.
+and is not auto-rotated until a new session starts.
 
-Auto‑pinned profiles (selected by the session router) are treated as a **preference**:
+Auto-pinned profiles (selected by the session router) are treated as a **preference**:
 they are tried first, but OpenClaw may rotate to another profile on rate limits/timeouts.
-User‑pinned profiles stay locked to that profile; if it fails and model fallbacks
+User-pinned profiles stay locked to that profile; if it fails and model fallbacks
 are configured, OpenClaw moves to the next model instead of switching profiles.
 
-### Why OAuth can “look lost”
+### Why OAuth can "look lost"
 
-If you have both an OAuth profile and an API key profile for the same provider, round‑robin can switch between them across messages unless pinned. To force a single profile:
+If you have both an OAuth profile and an API key profile for the same provider, round-robin can switch between them across messages unless pinned. To force a single profile:
 
 - Pin with `auth.order[provider] = ["provider:profileId"]`, or
 - Use a per-session override via `/model …` with a profile override (when supported by your UI/chat surface).
 
 ## Cooldowns
 
-When a profile fails due to auth/rate‑limit errors (or a timeout that looks
+When a profile fails due to auth/rate-limit errors (or a timeout that looks
 like rate limiting), OpenClaw marks it in cooldown and moves to the next profile.
-Format/invalid‑request errors (for example Cloud Code Assist tool call ID
-validation failures) are treated as failover‑worthy and use the same cooldowns.
+Format/invalid-request errors (for example Cloud Code Assist tool call ID
+validation failures) are treated as failover-worthy and use the same cooldowns.
 
 Cooldowns use exponential backoff:
 
@@ -107,7 +107,9 @@ State is stored in `auth-profiles.json` under `usageStats`:
 
 ## Billing disables
 
-Billing/credit failures (for example “insufficient credits” / “credit balance too low”) are treated as failover‑worthy, but they’re usually not transient. Instead of a short cooldown, OpenClaw marks the profile as **disabled** (with a longer backoff) and rotates to the next profile/provider.
+Billing/credit failures (for example "insufficient credits" / "credit balance too low") are treated as failover‑worthy, but they're usually not transient. Instead of a short cooldown, OpenClaw marks the profile as **disabled** (with a longer backoff) and rotates to the next profile/provider.
+
+Subscription and plan‑tier feature gating errors are also classified as billing failures. For example, if a provider returns "not available for this subscription" or "feature is not available for your plan", OpenClaw treats these the same as credit/billing errors and advances to the next profile or fallback model.
 
 State is stored in `auth-profiles.json`:
 
@@ -125,7 +127,7 @@ State is stored in `auth-profiles.json`:
 Defaults:
 
 - Billing backoff starts at **5 hours**, doubles per billing failure, and caps at **24 hours**.
-- Backoff counters reset if the profile hasn’t failed for **24 hours** (configurable).
+- Backoff counters reset if the profile hasn't failed for **24 hours** (configurable).
 
 ## Model fallback
 
