@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { saveAuthProfileStore } from "./auth-profiles.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
+import { isAnthropicBillingError } from "./live-auth-keys.js";
 import { runWithModelFallback } from "./model-fallback.js";
 import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixture.js";
 
@@ -654,5 +655,38 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledTimes(2);
     expect(result.provider).toBe("openai");
     expect(result.model).toBe("gpt-4.1-mini");
+  });
+});
+
+describe("isAnthropicBillingError", () => {
+  it("does not false-positive on plain 'a 402' prose", () => {
+    const samples = [
+      "Use a 402 stainless bolt",
+      "Book a 402 room",
+      "There is a 402 near me",
+      "The building at 402 Main Street",
+    ];
+
+    for (const sample of samples) {
+      expect(isAnthropicBillingError(sample)).toBe(false);
+    }
+  });
+
+  it("matches real 402 billing payload contexts including JSON keys", () => {
+    const samples = [
+      "HTTP 402 Payment Required",
+      "status: 402",
+      "error code 402",
+      '{"status":402,"type":"error"}',
+      '{"code":402,"message":"payment required"}',
+      '{"error":{"code":402,"message":"billing hard limit reached"}}',
+      "got a 402 from the API",
+      "returned 402",
+      "received a 402 response",
+    ];
+
+    for (const sample of samples) {
+      expect(isAnthropicBillingError(sample)).toBe(true);
+    }
   });
 });
