@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type {
+  ConfigWriteOptions,
   GatewayAuthConfig,
   GatewayTailscaleConfig,
   OpenClawConfig,
@@ -94,6 +95,7 @@ export async function ensureGatewayStartupAuth(params: {
   authOverride?: GatewayAuthConfig;
   tailscaleOverride?: GatewayTailscaleConfig;
   persist?: boolean;
+  configWriteOptions?: ConfigWriteOptions;
 }): Promise<{
   cfg: OpenClawConfig;
   auth: ReturnType<typeof resolveGatewayAuth>;
@@ -130,7 +132,7 @@ export async function ensureGatewayStartupAuth(params: {
     resolvedAuth: resolved,
   });
   if (persist) {
-    await writeConfigFile(nextCfg);
+    await writeConfigFile(nextCfg, params.configWriteOptions ?? {});
   }
 
   const nextAuth = resolveGatewayAuthFromConfig({

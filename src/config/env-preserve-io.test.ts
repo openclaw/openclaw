@@ -142,6 +142,79 @@ describe("env snapshot TOCTOU via createConfigIO", () => {
   });
 });
 
+describe("gateway startup config write preserves env refs (issue #23307)", () => {
+  it("preserves ${VAR} when config.env defines the referenced variable", async () => {
+    // Simulates the gateway startup scenario: config.env sets a variable
+    // that is also referenced via ${VAR} elsewhere in the same config.
+    // The readConfigFileSnapshot flow applies config.env to process.env,
+    // then resolves ${VAR} references. When writing back, the env snapshot
+    // from read time must be used to correctly match and restore the ref.
+    const configContent = JSON.stringify(
+      {
+        env: { MY_BOT_TOKEN: "secret-bot-token-123" },
+        channels: { telegram: { botToken: "${MY_BOT_TOKEN}" } },
+      },
+      null,
+      2,
+    );
+
+    await withTempConfig(configContent, async (configPath) => {
+      const env = { OPENCLAW_DISABLE_CONFIG_CACHE: "1" } as Record<string, string | undefined>;
+      // Ensure MY_BOT_TOKEN is NOT in the env before reading — it comes from config.env
+      delete env.MY_BOT_TOKEN;
+
+      const io = createConfigIO({ configPath, env: env as unknown as NodeJS.ProcessEnv });
+      const readResult = await io.readConfigFileSnapshotForWrite();
+
+      // After reading, config.env should have applied MY_BOT_TOKEN to the env object
+      expect(env.MY_BOT_TOKEN).toBe("secret-bot-token-123");
+      // The resolved config should have the token value
+      expect(readResult.snapshot.config.channels?.telegram?.botToken).toBe("secret-bot-token-123");
+
+      // Simulate gateway writing back the resolved config (e.g., after plugin auto-enable)
+      await io.writeConfigFile(readResult.snapshot.config, readResult.writeOptions);
+
+      // The written file must preserve ${MY_BOT_TOKEN}, not the resolved value
+      const written = await fs.readFile(configPath, "utf-8");
+      const parsed = JSON.parse(written);
+      expect(parsed.channels.telegram.botToken).toBe("${MY_BOT_TOKEN}");
+    });
+  });
+
+  it("leaks env var when writeOptions is not passed (demonstrates the bug)", async () => {
+    const configContent = JSON.stringify(
+      {
+        env: { MY_BOT_TOKEN: "secret-bot-token-123" },
+        channels: { telegram: { botToken: "${MY_BOT_TOKEN}" } },
+      },
+      null,
+      2,
+    );
+
+    await withTempConfig(configContent, async (configPath) => {
+      const env = { OPENCLAW_DISABLE_CONFIG_CACHE: "1" } as Record<string, string | undefined>;
+      delete env.MY_BOT_TOKEN;
+
+      const io = createConfigIO({ configPath, env: env as unknown as NodeJS.ProcessEnv });
+      const readResult = await io.readConfigFileSnapshotForWrite();
+
+      // Mutate the env to simulate a TOCTOU race (e.g., another config read
+      // applied different config.env values, or the user changed the env var)
+      env.MY_BOT_TOKEN = "different-token-456";
+
+      // Write WITHOUT passing writeOptions — falls back to live env
+      await io.writeConfigFile(readResult.snapshot.config);
+
+      // Without the env snapshot, restoreEnvVarRefs uses live env where
+      // MY_BOT_TOKEN="different-token-456", which doesn't match the incoming
+      // value "secret-bot-token-123" — so the resolved value leaks to disk
+      const written = await fs.readFile(configPath, "utf-8");
+      const parsed = JSON.parse(written);
+      expect(parsed.channels.telegram.botToken).toBe("secret-bot-token-123");
+    });
+  });
+});
+
 describe("env snapshot TOCTOU via wrapper APIs", () => {
   it("uses explicit read context even if another read interleaves", async () => {
     await withWrapperGatewayTokenContext(async (configPath) => {

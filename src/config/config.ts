@@ -11,6 +11,7 @@ export {
   setRuntimeConfigSnapshot,
   writeConfigFile,
 } from "./io.js";
+export type { ConfigWriteOptions } from "./io.js";
 export { migrateLegacyConfig } from "./legacy-migrate.js";
 export * from "./paths.js";
 export * from "./runtime-overrides.js";
