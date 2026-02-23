@@ -15,20 +15,8 @@ import {
 
 export const AgentDefaultsSchema = z
   .object({
-    model: z
-      .object({
-        primary: z.string().optional(),
-        fallbacks: z.array(z.string()).optional(),
-      })
-      .strict()
-      .optional(),
-    imageModel: z
-      .object({
-        primary: z.string().optional(),
-        fallbacks: z.array(z.string()).optional(),
-      })
-      .strict()
-      .optional(),
+    model: AgentModelSchema.optional(),
+    imageModel: AgentModelSchema.optional(),
     models: z
       .record(
         z.string(),
