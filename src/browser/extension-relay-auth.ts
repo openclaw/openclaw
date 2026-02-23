@@ -27,14 +27,22 @@ function deriveRelayAuthToken(gatewayToken: string, port: number): string {
   return createHmac("sha256", gatewayToken).update(`${RELAY_TOKEN_CONTEXT}:${port}`).digest("hex");
 }
 
-export function resolveRelayAuthTokenForPort(port: number): string {
+export function resolveRelayAcceptedTokensForPort(port: number): string[] {
   const gatewayToken = resolveGatewayAuthToken();
-  if (gatewayToken) {
-    return deriveRelayAuthToken(gatewayToken, port);
+  if (!gatewayToken) {
+    throw new Error(
+      "extension relay requires gateway auth token (set gateway.auth.token or OPENCLAW_GATEWAY_TOKEN)",
+    );
   }
-  throw new Error(
-    "extension relay requires gateway auth token (set gateway.auth.token or OPENCLAW_GATEWAY_TOKEN)",
-  );
+  const relayToken = deriveRelayAuthToken(gatewayToken, port);
+  if (relayToken === gatewayToken) {
+    return [relayToken];
+  }
+  return [relayToken, gatewayToken];
+}
+
+export function resolveRelayAuthTokenForPort(port: number): string {
+  return resolveRelayAcceptedTokensForPort(port)[0];
 }
 
 export async function probeAuthenticatedOpenClawRelay(params: {
