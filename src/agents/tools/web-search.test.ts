@@ -13,6 +13,10 @@ const {
   resolveGrokModel,
   resolveGrokInlineCitations,
   extractGrokContent,
+  resolveKimiApiKey,
+  resolveKimiModel,
+  resolveKimiBaseUrl,
+  extractKimiCitations,
 } = __testing;
 
 describe("web_search perplexity baseUrl defaults", () => {
@@ -240,5 +244,58 @@ describe("web_search grok response parsing", () => {
     } as Parameters<typeof extractGrokContent>[0]);
     expect(result.text).toBe("direct output text");
     expect(result.annotationCitations).toEqual(["https://example.com/direct"]);
+  });
+});
+
+describe("web_search kimi config resolution", () => {
+  it("uses config apiKey when provided", () => {
+    expect(resolveKimiApiKey({ apiKey: "kimi-test-key" })).toBe("kimi-test-key");
+  });
+
+  it("falls back to KIMI_API_KEY, then MOONSHOT_API_KEY", () => {
+    withEnv({ KIMI_API_KEY: "kimi-env", MOONSHOT_API_KEY: "moonshot-env" }, () => {
+      expect(resolveKimiApiKey({})).toBe("kimi-env");
+    });
+    withEnv({ KIMI_API_KEY: undefined, MOONSHOT_API_KEY: "moonshot-env" }, () => {
+      expect(resolveKimiApiKey({})).toBe("moonshot-env");
+    });
+  });
+
+  it("returns undefined when no Kimi key is configured", () => {
+    withEnv({ KIMI_API_KEY: undefined, MOONSHOT_API_KEY: undefined }, () => {
+      expect(resolveKimiApiKey({})).toBeUndefined();
+      expect(resolveKimiApiKey(undefined)).toBeUndefined();
+    });
+  });
+
+  it("resolves default model and baseUrl", () => {
+    expect(resolveKimiModel({})).toBe("moonshot-v1-128k");
+    expect(resolveKimiBaseUrl({})).toBe("https://api.moonshot.ai/v1");
+  });
+});
+
+describe("extractKimiCitations", () => {
+  it("collects unique URLs from search_results and tool arguments", () => {
+    expect(
+      extractKimiCitations({
+        search_results: [{ url: "https://example.com/a" }, { url: "https://example.com/a" }],
+        choices: [
+          {
+            message: {
+              tool_calls: [
+                {
+                  function: {
+                    arguments: JSON.stringify({
+                      search_results: [{ url: "https://example.com/b" }],
+                      url: "https://example.com/c",
+                    }),
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      }).toSorted(),
+    ).toEqual(["https://example.com/a", "https://example.com/b", "https://example.com/c"]);
   });
 });
