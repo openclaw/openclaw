@@ -424,8 +424,11 @@ class TalkModeManager(
     lastTranscript = ""
     lastHeardAtMs = null
     // Release SpeechRecognizer before making the API call and playing TTS.
-    // Leaving it live causes MediaPlayer to fail — both compete for the audio session.
-    mainHandler.post {
+    // Must use withContext(Main) — not post() — so we WAIT for destruction before
+    // proceeding. A fire-and-forget post() races with TTS startup: the recognizer
+    // stays alive, picks up TTS audio as speech (onBeginningOfSpeech), and the
+    // OS kills the AudioTrack write (returns 0) on OxygenOS/OnePlus devices.
+    withContext(Dispatchers.Main) {
       recognizer?.cancel()
       recognizer?.destroy()
       recognizer = null
@@ -723,7 +726,16 @@ class TalkModeManager(
       }
     }
 
-    streamAndPlayMp3(voiceId = voiceId, apiKey = apiKey, request = request)
+    // When falling back from PCM, rewrite the format to MP3 so ElevenLabs returns
+    // data that MediaPlayer can actually decode. Without this the fallback request
+    // still carries outputFormat=pcm_24000, ElevenLabs streams raw PCM, and
+    // MediaPlayer fails immediately with a codec error.
+    val mp3Request = if (request.outputFormat?.startsWith("pcm_") == true) {
+      request.copy(outputFormat = "mp3_44100_128")
+    } else {
+      request
+    }
+    streamAndPlayMp3(voiceId = voiceId, apiKey = apiKey, request = mp3Request)
   }
 
   private suspend fun streamAndPlayMp3(voiceId: String, apiKey: String, request: ElevenLabsRequest) {
