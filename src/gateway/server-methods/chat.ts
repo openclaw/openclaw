@@ -24,7 +24,7 @@ import {
   resolveChatRunExpiresAtMs,
 } from "../chat-abort.js";
 import { type ChatImageContent, parseMessageWithAttachments } from "../chat-attachments.js";
-import { stripEnvelopeFromMessages } from "../chat-sanitize.js";
+import { stripEnvelopeFromMessage, stripEnvelopeFromMessages } from "../chat-sanitize.js";
 import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
 import {
   ErrorCodes,
@@ -495,12 +495,15 @@ function broadcastChatFinal(params: {
   message?: Record<string, unknown>;
 }) {
   const seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.runId);
+  const strippedEnvelopeMessage = stripEnvelopeFromMessage(params.message) as
+    | Record<string, unknown>
+    | undefined;
   const payload = {
     runId: params.runId,
     sessionKey: params.sessionKey,
     seq,
     state: "final" as const,
-    message: stripInlineDirectiveTagsFromMessageForDisplay(params.message),
+    message: stripInlineDirectiveTagsFromMessageForDisplay(strippedEnvelopeMessage),
   };
   params.context.broadcast("chat", payload);
   params.context.nodeSendToSession(params.sessionKey, "chat", payload);
@@ -1031,7 +1034,9 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey: rawSessionKey,
       seq: 0,
       state: "final" as const,
-      message: stripInlineDirectiveTagsFromMessageForDisplay(appended.message),
+      message: stripInlineDirectiveTagsFromMessageForDisplay(
+        stripEnvelopeFromMessage(appended.message) as Record<string, unknown>,
+      ),
     };
     context.broadcast("chat", chatPayload);
     context.nodeSendToSession(rawSessionKey, "chat", chatPayload);
