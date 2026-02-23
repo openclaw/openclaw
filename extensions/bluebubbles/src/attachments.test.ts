@@ -268,6 +268,49 @@ describe("downloadBlueBubblesAttachment", () => {
     expect(calledUrl).toContain("password=config-password");
     expect(result.buffer).toEqual(new Uint8Array([1]));
   });
+
+  it("passes ssrfPolicy with allowPrivateNetwork when config enables it", async () => {
+    const mockBuffer = new Uint8Array([1]);
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers(),
+      arrayBuffer: () => Promise.resolve(mockBuffer.buffer),
+    });
+
+    const attachment: BlueBubblesAttachment = { guid: "att-ssrf" };
+    await downloadBlueBubblesAttachment(attachment, {
+      cfg: {
+        channels: {
+          bluebubbles: {
+            serverUrl: "http://localhost:1234",
+            password: "test",
+            allowPrivateNetwork: true,
+          },
+        },
+      },
+    });
+
+    const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(fetchMediaArgs.ssrfPolicy).toEqual({ allowPrivateNetwork: true });
+  });
+
+  it("does not pass ssrfPolicy when allowPrivateNetwork is not set", async () => {
+    const mockBuffer = new Uint8Array([1]);
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers(),
+      arrayBuffer: () => Promise.resolve(mockBuffer.buffer),
+    });
+
+    const attachment: BlueBubblesAttachment = { guid: "att-no-ssrf" };
+    await downloadBlueBubblesAttachment(attachment, {
+      serverUrl: "http://localhost:1234",
+      password: "test",
+    });
+
+    const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(fetchMediaArgs.ssrfPolicy).toBeUndefined();
+  });
 });
 
 describe("sendBlueBubblesAttachment", () => {
