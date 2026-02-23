@@ -301,4 +301,29 @@ describe("browser config", () => {
       expect(resolved.defaultProfile).toBe("custom");
     });
   });
+
+  it("resolveProfile passes headless:undefined when profile has no headless setting", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: { work: { cdpPort: 19200, color: "#FF4500" } },
+    });
+    const profile = resolveProfile(resolved, "work");
+    expect(profile?.headless).toBeUndefined();
+  });
+
+  it("resolveProfile passes headless:true from profile config", () => {
+    const resolved = resolveBrowserConfig({
+      profiles: { headless_profile: { cdpPort: 19201, color: "#FF4500", headless: true } },
+    });
+    const profile = resolveProfile(resolved, "headless_profile");
+    expect(profile?.headless).toBe(true);
+  });
+
+  it("resolveProfile passes headless:false from profile config, enabling headed override", () => {
+    const resolved = resolveBrowserConfig({
+      headless: true,
+      profiles: { headed_profile: { cdpPort: 19202, color: "#FF4500", headless: false } },
+    });
+    const profile = resolveProfile(resolved, "headed_profile");
+    expect(profile?.headless).toBe(false);
+  });
 });
