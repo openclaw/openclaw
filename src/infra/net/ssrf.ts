@@ -290,7 +290,18 @@ export async function resolvePinnedHostnameWithPolicy(
     assertAllowedResolvedAddressesOrThrow(results, params.policy);
   }
 
-  const addresses = Array.from(new Set(results.map((entry) => entry.address)));
+  // Sort IPv4 addresses before IPv6 so that Happy Eyeballs (autoSelectFamily) and
+  // round-robin pinned lookups try IPv4 first.  This avoids connection failures on
+  // hosts where IPv6 is configured but not routed (common on cloud VMs and WSL2).
+  // See: https://github.com/openclaw/openclaw/issues/23975
+  const addresses = Array.from(new Set(results.map((entry) => entry.address))).toSorted((a, b) => {
+    const aIsV6 = a.includes(":");
+    const bIsV6 = b.includes(":");
+    if (aIsV6 === bIsV6) {
+      return 0;
+    }
+    return aIsV6 ? 1 : -1;
+  });
   if (addresses.length === 0) {
     throw new Error(`Unable to resolve hostname: ${hostname}`);
   }
