@@ -30,6 +30,7 @@ import type {
   ResolvedQmdConfig,
   ResolvedQmdMcporterConfig,
 } from "./backend-config.js";
+import { appendOutputWithCap } from "./output-cap.js";
 import { parseQmdQueryJson, type QmdQueryResult } from "./qmd-query-parser.js";
 import { extractKeywords } from "./query-expansion.js";
 
@@ -1885,16 +1886,4 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     return [command, normalizedQuery, "--json", "-n", String(limit)];
   }
-}
-
-function appendOutputWithCap(
-  current: string,
-  chunk: string,
-  maxChars: number,
-): { text: string; truncated: boolean } {
-  const appended = current + chunk;
-  if (appended.length <= maxChars) {
-    return { text: appended, truncated: false };
-  }
-  return { text: appended.slice(-maxChars), truncated: true };
 }
