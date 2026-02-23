@@ -67,7 +67,7 @@ you revoke it with `openclaw devices revoke --device <id> --role <role>`. See
 - Channels: WhatsApp/Telegram/Discord/Slack + plugin channels (Mattermost, etc.) status + QR login + per-channel config (`channels.status`, `web.login.*`, `config.patch`)
 - Instances: presence list + refresh (`system-presence`)
 - Sessions: list + per-session thinking/verbose overrides (`sessions.list`, `sessions.patch`)
-- Cron jobs: list/add/run/enable/disable + run history (`cron.*`)
+- Cron jobs: list/add/edit/run/enable/disable + run history (`cron.*`)
 - Skills: status, enable/disable, install, API key updates (`skills.*`)
 - Nodes: list + caps (`node.list`)
 - Exec approvals: edit gateway or node allowlists + ask policy for `exec host=gateway/node` (`exec.approvals.*`)
@@ -85,6 +85,9 @@ Cron jobs panel notes:
 - Channel/target fields appear when announce is selected.
 - Webhook mode uses `delivery.mode = "webhook"` with `delivery.to` set to a valid HTTP(S) webhook URL.
 - For main-session jobs, webhook and none delivery modes are available.
+- Advanced edit controls include delete-after-run, clear agent override, cron exact/stagger options,
+  agent model/thinking overrides, and best-effort delivery toggles.
+- Form validation is inline with field-level errors; invalid values disable the save button until fixed.
 - Set `cron.webhookToken` to send a dedicated bearer token, if omitted the webhook is sent without an auth header.
 - Deprecated fallback: stored legacy jobs with `notify: true` can still use `cron.webhook` until migrated.
 
