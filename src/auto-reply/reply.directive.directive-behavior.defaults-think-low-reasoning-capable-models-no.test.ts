@@ -86,6 +86,7 @@ async function runReasoningDefaultCase(params: {
   expectedReasoningLevel: "off" | "on";
   thinkingDefault?: "off" | "low" | "medium" | "high";
 }) {
+  vi.mocked(runEmbeddedPiAgent).mockClear();
   mockEmbeddedTextResult("done");
   mockReasoningCapableCatalog();
 
@@ -244,11 +245,11 @@ describe("directive behavior", () => {
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
-  it("ignores inline /model and uses the default model", async () => {
+  it("ignores inline /model and /think directives while still running agent content", async () => {
     await withTempHome(async (home) => {
       mockEmbeddedTextResult("done");
 
-      const res = await getReplyFromConfig(
+      const inlineModelRes = await getReplyFromConfig(
         {
           Body: "please sync /model openai/gpt-4.1-mini now",
           From: "+1004",
@@ -258,31 +259,47 @@ describe("directive behavior", () => {
         makeDefaultModelConfig(home),
       );
 
-      const texts = replyTexts(res);
+      const texts = replyTexts(inlineModelRes);
       expect(texts).toContain("done");
       expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
       const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0];
       expect(call?.provider).toBe("anthropic");
       expect(call?.model).toBe("claude-opus-4-5");
+      vi.mocked(runEmbeddedPiAgent).mockClear();
+
+      mockEmbeddedTextResult("done");
+      const inlineThinkRes = await getReplyFromConfig(
+        {
+          Body: "please sync /think:high now",
+          From: "+1004",
+          To: "+2000",
+        },
+        {},
+        makeWhatsAppDirectiveConfig(home, { model: { primary: "anthropic/claude-opus-4-5" } }),
+      );
+
+      expect(replyTexts(inlineThinkRes)).toContain("done");
+      expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
     });
   });
-  it("defaults thinking to low for reasoning-capable models without auto-enabling reasoning", async () => {
+  it("applies reasoning defaults based on thinkingDefault configuration", async () => {
     await withTempHome(async (home) => {
-      await runReasoningDefaultCase({
-        home,
-        expectedThinkLevel: "low",
-        expectedReasoningLevel: "off",
-      });
-    });
-  });
-  it("keeps auto-reasoning enabled when thinking is explicitly off", async () => {
-    await withTempHome(async (home) => {
-      await runReasoningDefaultCase({
-        home,
-        expectedThinkLevel: "off",
-        expectedReasoningLevel: "on",
-        thinkingDefault: "off",
-      });
+      for (const scenario of [
+        {
+          expectedThinkLevel: "low" as const,
+          expectedReasoningLevel: "off" as const,
+        },
+        {
+          expectedThinkLevel: "off" as const,
+          expectedReasoningLevel: "on" as const,
+          thinkingDefault: "off" as const,
+        },
+      ]) {
+        await runReasoningDefaultCase({
+          home,
+          ...scenario,
+        });
+      }
     });
   });
   it("passes elevated defaults when sender is approved", async () => {
@@ -384,17 +401,14 @@ describe("directive behavior", () => {
       expect(call?.reasoningLevel).toBe("off");
     });
   });
-  for (const replyTag of ["[[reply_to_current]]", "[[ reply_to_current ]]"]) {
-    it(`strips ${replyTag} and maps reply_to_current to MessageSid`, async () => {
-      await withTempHome(async (home) => {
+  it("handles reply_to_current tags and explicit reply_to precedence", async () => {
+    await withTempHome(async (home) => {
+      for (const replyTag of ["[[reply_to_current]]", "[[ reply_to_current ]]"]) {
         const payload = await runReplyToCurrentCase(home, `hello ${replyTag}`);
         expect(payload?.text).toBe("hello");
         expect(payload?.replyToId).toBe("msg-123");
-      });
-    });
-  }
-  it("prefers explicit reply_to id over reply_to_current", async () => {
-    await withTempHome(async (home) => {
+      }
+
       vi.mocked(runEmbeddedPiAgent).mockResolvedValue(
         makeEmbeddedTextResult("hi [[reply_to_current]] [[reply_to:abc-456]]"),
       );
@@ -413,25 +427,6 @@ describe("directive behavior", () => {
       const payload = Array.isArray(res) ? res[0] : res;
       expect(payload?.text).toBe("hi");
       expect(payload?.replyToId).toBe("abc-456");
-    });
-  });
-  it("applies inline think and still runs agent content", async () => {
-    await withTempHome(async (home) => {
-      mockEmbeddedTextResult("done");
-
-      const res = await getReplyFromConfig(
-        {
-          Body: "please sync /think:high now",
-          From: "+1004",
-          To: "+2000",
-        },
-        {},
-        makeWhatsAppDirectiveConfig(home, { model: { primary: "anthropic/claude-opus-4-5" } }),
-      );
-
-      const texts = replyTexts(res);
-      expect(texts).toContain("done");
-      expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
     });
   });
 });
