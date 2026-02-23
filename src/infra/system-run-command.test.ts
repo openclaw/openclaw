@@ -106,6 +106,27 @@ describe("system run command helpers", () => {
     expect(res.ok).toBe(true);
   });
 
+  test("validateSystemRunCommandConsistency rejects shell-only rawCommand for env assignment prelude", () => {
+    expectRawCommandMismatch({
+      argv: ["/usr/bin/env", "BASH_ENV=/tmp/payload.sh", "bash", "-lc", "echo hi"],
+      rawCommand: "echo hi",
+    });
+  });
+
+  test("validateSystemRunCommandConsistency accepts full rawCommand for env assignment prelude", () => {
+    const raw = '/usr/bin/env BASH_ENV=/tmp/payload.sh bash -lc "echo hi"';
+    const res = validateSystemRunCommandConsistency({
+      argv: ["/usr/bin/env", "BASH_ENV=/tmp/payload.sh", "bash", "-lc", "echo hi"],
+      rawCommand: raw,
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      throw new Error("unreachable");
+    }
+    expect(res.shellCommand).toBe("echo hi");
+    expect(res.cmdText).toBe(raw);
+  });
+
   test("validateSystemRunCommandConsistency rejects cmd.exe /c trailing-arg smuggling", () => {
     expectRawCommandMismatch({
       argv: ["cmd.exe", "/d", "/s", "/c", "echo", "SAFE&&whoami"],
@@ -142,5 +163,17 @@ describe("system run command helpers", () => {
     expect(res.argv).toEqual(["cmd.exe", "/d", "/s", "/c", "echo", "SAFE&&whoami"]);
     expect(res.shellCommand).toBe("echo SAFE&&whoami");
     expect(res.cmdText).toBe("echo SAFE&&whoami");
+  });
+
+  test("resolveSystemRunCommand binds cmdText to full argv when env prelude modifies shell wrapper", () => {
+    const res = resolveSystemRunCommand({
+      command: ["/usr/bin/env", "BASH_ENV=/tmp/payload.sh", "bash", "-lc", "echo hi"],
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      throw new Error("unreachable");
+    }
+    expect(res.shellCommand).toBe("echo hi");
+    expect(res.cmdText).toBe('/usr/bin/env BASH_ENV=/tmp/payload.sh bash -lc "echo hi"');
   });
 });
