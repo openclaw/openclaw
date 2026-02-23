@@ -48,13 +48,13 @@ export type ModelDefinitionConfig = {
 };
 
 export type ModelProviderConfig = {
-  baseUrl: string;
+  baseUrl?: string;
   apiKey?: SecretInput;
   auth?: ModelProviderAuthMode;
   api?: ModelApi;
   headers?: Record<string, string>;
   authHeader?: boolean;
-  models: ModelDefinitionConfig[];
+  models?: ModelDefinitionConfig[];
 };
 
 export type BedrockDiscoveryConfig = {

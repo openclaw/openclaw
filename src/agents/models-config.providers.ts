@@ -404,6 +404,9 @@ function normalizeProviderModels(
   provider: ProviderConfig,
   normalizeId: (id: string) => string,
 ): ProviderConfig {
+  if (!provider.models) {
+    return provider;
+  }
   let mutated = false;
   const models = provider.models.map((model) => {
     const nextId = normalizeId(model.id);
