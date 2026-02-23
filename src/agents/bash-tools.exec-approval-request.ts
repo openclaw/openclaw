@@ -42,3 +42,27 @@ export async function requestExecApprovalDecision(
       : undefined;
   return typeof decisionValue === "string" ? decisionValue : null;
 }
+
+export async function requestExecApprovalDecisionForHost(params: {
+  approvalId: string;
+  command: string;
+  workdir: string;
+  host: "gateway" | "node";
+  security: ExecSecurity;
+  ask: ExecAsk;
+  agentId?: string;
+  resolvedPath?: string;
+  sessionKey?: string;
+}): Promise<string | null> {
+  return await requestExecApprovalDecision({
+    id: params.approvalId,
+    command: params.command,
+    cwd: params.workdir,
+    host: params.host,
+    security: params.security,
+    ask: params.ask,
+    agentId: params.agentId,
+    resolvedPath: params.resolvedPath,
+    sessionKey: params.sessionKey,
+  });
+}
