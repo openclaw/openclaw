@@ -14,6 +14,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/Context pruning: extend `cache-ttl` eligibility to Moonshot/Kimi and ZAI/GLM providers (including OpenRouter model refs), so `contextPruning.mode: "cache-ttl"` is no longer silently skipped for those sessions. (#24497) Thanks @lailoo.
 - Sessions/Store: canonicalize inbound mixed-case session keys for metadata and route updates, and migrate legacy case-variant entries to a single lowercase key to prevent duplicate sessions and missing TUI/WebUI history. (#9561) Thanks @hillghost86.
 - Telegram/Reactions: soft-fail reaction action errors (policy/token/emoji/API), accept snake_case `message_id`, and fallback to inbound message-id context when explicit `messageId` is omitted so DM reactions stay stable without regeneration loops. (#20236, #21001) Thanks @PeterShanxin and @vincentkoc.
 - Telegram/Polling: scope persisted polling offsets to bot identity and reuse a single awaited runner-stop path on abort/retry, preventing cross-token offset bleed and overlapping pollers during restart/error recovery. (#10850, #11347) Thanks @talhaorak, @anooprdawar, and @vincentkoc.
