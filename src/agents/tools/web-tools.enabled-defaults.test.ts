@@ -239,7 +239,7 @@ describe("web_search kimi provider", () => {
   });
 
   it("runs the Kimi web_search tool flow and echoes tool results", async () => {
-    const mockFetch = vi.fn(async (_input: RequestInfo | URL) => {
+    const mockFetch = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
       const idx = mockFetch.mock.calls.length;
       if (idx === 1) {
         return new Response(
