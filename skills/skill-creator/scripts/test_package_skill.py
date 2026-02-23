@@ -10,6 +10,10 @@ import zipfile
 from pathlib import Path
 from unittest import TestCase, main
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
 
 fake_quick_validate = types.ModuleType("quick_validate")
 fake_quick_validate.validate_skill = lambda _path: (True, "Skill is valid!")

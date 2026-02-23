@@ -317,6 +317,32 @@ jobs:
       - name: Check docs
         run: pnpm check:docs
 
+  skills-python:
+    needs: [docs-scope, changed-scope]
+    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest ruff
+
+      - name: Lint Python skill scripts
+        run: python -m ruff check skills
+
+      - name: Test skill Python scripts
+        run: python -m pytest -q skills
+
   secrets:
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
