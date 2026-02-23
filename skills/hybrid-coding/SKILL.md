@@ -96,22 +96,41 @@ sessions_spawn task:"C:\TEST\{프로젝트} 에서 claude -p --agent quality-eng
 | `--dangerously-skip-permissions`      | 모든 권한 체크 스킵                    |
 | `--fallback-model sonnet`             | rate limit 시 자동 전환                |
 | `--no-session-persistence`            | 세션 저장 안 함 (토큰 절약)            |
-| `--max-budget-usd N`                  | 비용 제한                              |
+| `--max-budget-usd N`                  | 비용 제한 (아래 가이드라인 참고)       |
 
-### MCP 충돌 회피
+### 예산 가이드라인 (--max-budget-usd)
+
+| 작업 유형               | 예산              | 예시                           |
+| ----------------------- | ----------------- | ------------------------------ |
+| 단순 (파일 1~2개 생성)  | `$1`              | 설정 파일, 간단한 유틸리티     |
+| 중간 (문서 참조 + 구현) | `$3` ← **기본값** | 기능 구현, DB 스키마, API      |
+| 복잡 (설계 + 다중 파일) | `$5`              | 아키텍처 설계, 대규모 리팩토링 |
+
+> ⚠️ $1은 문서 읽기+코드 생성 시 초과됨 (실측). 기본 $3 권장.
+
+### MCP 전략
 
 이전 폐기 원인: MCP 서버/plugins 로딩 충돌로 hang.
 
+**MCP 로딩 오버헤드: ~10초** (서버 4~5개 시작). 작업 유형별 전략:
+
+| 작업 유형      | MCP 전략                    | 이유                        |
+| -------------- | --------------------------- | --------------------------- |
+| 코드 생성/편집 | 기본 로드 (감수)            | 10초 대기 but 안정적        |
+| 웹 참조 필요   | 기본 로드                   | fetcher, context7 활용      |
+| 빠른 원샷      | 프로젝트 `.mcp.json` 최소화 | 불필요 MCP 줄여서 시간 단축 |
+
 ```bash
-# 방법 1: 프로젝트 .mcp.json만 사용 (다른 MCP 무시)
-claude -p --strict-mcp-config --mcp-config .mcp.json "task"
-
-# 방법 2: MCP 없이 실행 (가장 빠름, MCP 불필요한 작업)
-claude -p --strict-mcp-config --mcp-config "{}" "task"
-
-# 방법 3: 기본 MCP 로드 (충돌 없으면)
+# 권장: 기본 MCP 로드 (가장 안정적, ~10초 대기)
 claude -p "task"
+
+# 프로젝트 MCP만 사용 (글로벌 MCP 제외)
+claude -p --strict-mcp-config --mcp-config .mcp.json "task"
 ```
+
+> ⚠️ `--strict-mcp-config --mcp-config '{}'` (빈 JSON)은 **Windows에서 hang** 발생 — 사용 금지.
+> MCP 완전 스킵이 필요하면 빈 파일 사용: `--strict-mcp-config --mcp-config C:\TEST\.empty-mcp.json`
+> (`.empty-mcp.json` 내용: `{"mcpServers":{}}`)
 
 ## Agent Teams (실험 기능)
 
@@ -283,27 +302,57 @@ MAIBOT(오케스트레이터) → Claude Code CLI(전문 에이전트) 구조.
 5. [ ] MEMORY.md에 프로젝트 등록
 6. [ ] 테스트 실행: `claude -p --model sonnet "프로젝트 구조 분석해줘"`
 
+## 검증 단계 (필수)
+
+Claude Code 실행 후 MAIBOT이 반드시 검증:
+
+```
+Claude Code 에이전트 실행
+    ↓
+MAIBOT 검증 (Layer 1)
+    ├── tsc --noEmit (타입 체크)
+    ├── vitest run (테스트)
+    └── 코드 리뷰 (Read로 생성된 파일 확인)
+    ↓
+에러 있으면?
+    ├── 단순 타입 에러 → MAIBOT 직접 수정
+    ├── 로직 에러 → Claude Code 재실행 (에러 메시지 포함)
+    └── 설계 문제 → Opus 에이전트로 에스컬레이션
+    ↓
+통과 → git commit
+```
+
+> 실측: Claude Code는 ~90% 정확하지만 타입 내보내기, ESM 경로 등에서 소소한 에러 발생.
+> MAIBOT 검증+수정 패턴으로 100% 커버 가능.
+
 ## 실행 레시피
 
 ### 레시피 1: 단일 태스크 (가장 흔함)
 
 ```bash
 # MAIBOT에서 직접 Claude Code 호출
-exec pty:true workdir:"C:\TEST\MAITOK" command:"claude -p --model sonnet --agent backend-architect 'src/api/comments.ts에 페이지네이션 추가해줘'"
+exec pty:true workdir:"C:\TEST\MAITOK" command:"claude -p --model sonnet --max-budget-usd 3 --agent backend-architect 'src/api/comments.ts에 페이지네이션 추가해줘'"
+
+# 검증
+exec workdir:"C:\TEST\MAITOK" command:"npx tsc --noEmit"
+exec workdir:"C:\TEST\MAITOK" command:"npx vitest run"
 ```
 
 ### 레시피 2: 병렬 멀티에이전트
 
 ```bash
-# Sub-agent A: 프론트엔드
-sessions_spawn task:"cd C:\TEST\MAITOK && claude -p --model sonnet --agent frontend-architect 'CommentList 컴포넌트에 무한스크롤 구현'"
+# Sub-agent A: 프론트엔드 (Slot 1)
+sessions_spawn task:"cd C:\TEST\MAITOK && claude -p --model sonnet --max-budget-usd 3 --agent frontend-architect 'CommentList 컴포넌트에 무한스크롤 구현'"
 
-# Sub-agent B: 백엔드 (동시 실행)
-sessions_spawn task:"cd C:\TEST\MAITOK && claude -p --model sonnet --agent backend-architect 'GET /api/comments에 cursor 기반 페이지네이션 추가'"
+# Sub-agent B: 백엔드 (Slot 2, 동시 실행)
+sessions_spawn task:"cd C:\TEST\MAITOK && claude -p --model sonnet --max-budget-usd 3 --agent backend-architect 'GET /api/comments에 cursor 기반 페이지네이션 추가'"
 
-# Sub-agent C: 테스트 (A, B 완료 후)
-sessions_spawn task:"cd C:\TEST\MAITOK && claude -p --model sonnet --agent quality-engineer '페이지네이션 관련 테스트 작성'"
+# A, B 완료 대기 → MAIBOT 검증 (tsc + vitest) → 수정 → 그 다음:
+# Sub-agent C: 테스트
+sessions_spawn task:"cd C:\TEST\MAITOK && claude -p --model sonnet --max-budget-usd 3 --agent quality-engineer '페이지네이션 관련 테스트 작성'"
 ```
+
+> ⚠️ 동시 실행: **Sonnet 2개까지 검증 완료** (실측 2026-02-24). 3개 이상은 rate limit 위험.
 
 ### 레시피 3: 복잡한 리팩토링
 
