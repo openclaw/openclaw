@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import { resolveBrowserConfig, resolveProfile, shouldStartLocalBrowserServer } from "./config.js";
+import {
+  effectiveHeadless,
+  resolveBrowserConfig,
+  resolveProfile,
+  shouldStartLocalBrowserServer,
+} from "./config.js";
 
 describe("browser config", () => {
   it("defaults to enabled with loopback defaults and lobster-orange color", () => {
@@ -325,5 +330,28 @@ describe("browser config", () => {
     });
     const profile = resolveProfile(resolved, "headed-profile");
     expect(profile?.headless).toBe(false);
+  });
+
+  describe("effectiveHeadless", () => {
+    const makeProfile = (headless: boolean | undefined) =>
+      ({ headless }) as Parameters<typeof effectiveHeadless>[0];
+    const makeResolved = (headless: boolean) =>
+      ({ headless }) as Parameters<typeof effectiveHeadless>[1];
+
+    it("returns profile.headless:true when global is false", () => {
+      expect(effectiveHeadless(makeProfile(true), makeResolved(false))).toBe(true);
+    });
+
+    it("returns profile.headless:false when global is true", () => {
+      expect(effectiveHeadless(makeProfile(false), makeResolved(true))).toBe(false);
+    });
+
+    it("returns global headless:true when profile.headless is undefined", () => {
+      expect(effectiveHeadless(makeProfile(undefined), makeResolved(true))).toBe(true);
+    });
+
+    it("returns global headless:false when profile.headless is undefined", () => {
+      expect(effectiveHeadless(makeProfile(undefined), makeResolved(false))).toBe(false);
+    });
   });
 });
