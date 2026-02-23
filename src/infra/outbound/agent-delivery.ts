@@ -7,7 +7,6 @@ import {
   isDeliverableMessageChannel,
   isGatewayMessageChannel,
   normalizeMessageChannel,
-  type DeliverableMessageChannel,
   type GatewayMessageChannel,
 } from "../../utils/message-channel.js";
 import type { OutboundTargetResolution } from "./targets.js";
