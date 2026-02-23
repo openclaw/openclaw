@@ -250,6 +250,30 @@ describe("buildStatusMessage", () => {
     expect(optionsLine).not.toContain("elevated");
   });
 
+  it("shows reasoning level from reasoningDefault config", () => {
+    const text = buildStatusMessage({
+      agent: { model: "anthropic/claude-opus-4-5", reasoningDefault: "stream" },
+      sessionEntry: { sessionId: "r1", updatedAt: 0 },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).toContain("Reasoning: stream");
+  });
+
+  it("defaults reasoning to off when no reasoningDefault is set", () => {
+    const text = buildStatusMessage({
+      agent: { model: "anthropic/claude-opus-4-5" },
+      sessionEntry: { sessionId: "r2", updatedAt: 0 },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    expect(normalizeTestText(text)).not.toContain("Reasoning:");
+  });
+
   it("shows selected model and active runtime model when they differ", () => {
     const text = buildStatusMessage({
       agent: {
