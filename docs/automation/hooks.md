@@ -32,7 +32,7 @@ If you can write a small TypeScript function, you can write a hook. Managed and 
 
 The hooks system allows you to:
 
-- Save session context to memory when `/new` is issued
+- Save session context to memory when `/new` or `/reset` is issued
 - Log all commands for auditing
 - Trigger custom automations on agent lifecycle events
 - Extend OpenClaw's behavior without modifying core code
@@ -435,7 +435,7 @@ metadata: { "openclaw": { "emoji": "🎯", "events": ["command:new"] } }
 
 # My Custom Hook
 
-This hook does something useful when you issue `/new`.
+This hook does something useful when you issue `/new` or `/reset`.
 ```
 
 ### 4. Create handler.ts
@@ -825,6 +825,7 @@ The gateway logs hook loading at startup:
 
 ```
 Registered hook: session-memory -> command:new
+Registered hook: session-memory -> command:reset
 Registered hook: bootstrap-extra-files -> agent:bootstrap
 Registered hook: command-logger -> command
 Registered hook: boot-md -> gateway:startup
