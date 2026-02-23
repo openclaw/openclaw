@@ -40,6 +40,15 @@ export async function checkBillingAllowance(params: {
     return { allowed: true };
   }
 
+  // BILLING_GATE_MODE controls error behavior:
+  //   "open" — always allow (development/testing)
+  //   "warn" — allow on error but log warning (staging)
+  //   unset  — fail-closed (production default)
+  const gateMode = process.env.BILLING_GATE_MODE;
+  if (gateMode === "open") {
+    return { allowed: true };
+  }
+
   try {
     // Check prepaid balance — primary billing gate
     const userId = params.tenant.userId || params.tenant.orgId;
@@ -61,10 +70,17 @@ export async function checkBillingAllowance(params: {
       status,
     };
   } catch (err) {
-    // Billing service unreachable — fail closed. Do not allow usage without billing.
     console.error(
       `[billing-gate] Failed to check billing for "${params.tenant.orgId}": ${err instanceof Error ? err.message : String(err)}`,
     );
+
+    // In warn mode, allow requests when Commerce API is unreachable.
+    if (gateMode === "warn") {
+      console.warn("[billing-gate] Commerce unreachable — allowing in warn mode");
+      return { allowed: true };
+    }
+
+    // Default: fail-closed for billing safety.
     return {
       allowed: false,
       reason: "Billing service unavailable — please try again",
