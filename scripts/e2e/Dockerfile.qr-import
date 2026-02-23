@@ -7,3 +7,7 @@ WORKDIR /app
 COPY . .
 
 RUN pnpm install --frozen-lockfile
+
+RUN useradd --create-home --shell /bin/bash appuser \
+  && chown -R appuser:appuser /app
+USER appuser

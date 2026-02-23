@@ -1,5 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
+
+const TRUSTED_PROXY_AUTH = {
+  mode: "trusted-proxy" as const,
+  trustedProxy: {
+    userHeader: "x-forwarded-user",
+  },
+};
+
+const TOKEN_AUTH = {
+  mode: "token" as const,
+  token: "test-token-123",
+};
 
 describe("resolveGatewayRuntimeConfig", () => {
   describe("trusted-proxy auth mode", () => {
@@ -7,229 +19,174 @@ describe("resolveGatewayRuntimeConfig", () => {
     // 1. CLI validation in src/cli/gateway-cli/run.ts (line 246)
     // 2. Runtime config validation in src/gateway/server-runtime-config.ts (line 99)
     // Both must allow lan binding when authMode === "trusted-proxy"
-    it("should allow lan binding with trusted-proxy auth mode", async () => {
-      const cfg = {
-        gateway: {
-          bind: "lan" as const,
-          auth: {
-            mode: "trusted-proxy" as const,
-            trustedProxy: {
-              userHeader: "x-forwarded-user",
-            },
+    it.each([
+      {
+        name: "lan binding",
+        cfg: {
+          gateway: {
+            bind: "lan" as const,
+            auth: TRUSTED_PROXY_AUTH,
+            trustedProxies: ["192.168.1.1"],
           },
-          trustedProxies: ["192.168.1.1"],
         },
-      };
-
-      const result = await resolveGatewayRuntimeConfig({
-        cfg,
-        port: 18789,
-      });
-
+        expectedBindHost: "0.0.0.0",
+      },
+      {
+        name: "loopback binding with 127.0.0.1 proxy",
+        cfg: {
+          gateway: {
+            bind: "loopback" as const,
+            auth: TRUSTED_PROXY_AUTH,
+            trustedProxies: ["127.0.0.1"],
+          },
+        },
+        expectedBindHost: "127.0.0.1",
+      },
+      {
+        name: "loopback binding with ::1 proxy",
+        cfg: {
+          gateway: { bind: "loopback" as const, auth: TRUSTED_PROXY_AUTH, trustedProxies: ["::1"] },
+        },
+        expectedBindHost: "127.0.0.1",
+      },
+      {
+        name: "loopback binding with loopback cidr proxy",
+        cfg: {
+          gateway: {
+            bind: "loopback" as const,
+            auth: TRUSTED_PROXY_AUTH,
+            trustedProxies: ["127.0.0.0/8"],
+          },
+        },
+        expectedBindHost: "127.0.0.1",
+      },
+    ])("allows $name", async ({ cfg, expectedBindHost }) => {
+      const result = await resolveGatewayRuntimeConfig({ cfg, port: 18789 });
       expect(result.authMode).toBe("trusted-proxy");
-      expect(result.bindHost).toBe("0.0.0.0");
+      expect(result.bindHost).toBe(expectedBindHost);
     });
 
-    it("should reject loopback binding with trusted-proxy auth mode", async () => {
-      const cfg = {
-        gateway: {
-          bind: "loopback" as const,
-          auth: {
-            mode: "trusted-proxy" as const,
-            trustedProxy: {
-              userHeader: "x-forwarded-user",
-            },
-          },
-          trustedProxies: ["192.168.1.1"],
+    it.each([
+      {
+        name: "loopback binding without trusted proxies",
+        cfg: {
+          gateway: { bind: "loopback" as const, auth: TRUSTED_PROXY_AUTH, trustedProxies: [] },
         },
-      };
-
-      await expect(
-        resolveGatewayRuntimeConfig({
-          cfg,
-          port: 18789,
-        }),
-      ).rejects.toThrow("gateway auth mode=trusted-proxy makes no sense with bind=loopback");
-    });
-
-    it("should reject trusted-proxy without trustedProxies configured", async () => {
-      const cfg = {
-        gateway: {
-          bind: "lan" as const,
-          auth: {
-            mode: "trusted-proxy" as const,
-            trustedProxy: {
-              userHeader: "x-forwarded-user",
-            },
+        expectedMessage:
+          "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured",
+      },
+      {
+        name: "loopback binding without loopback trusted proxy",
+        cfg: {
+          gateway: {
+            bind: "loopback" as const,
+            auth: TRUSTED_PROXY_AUTH,
+            trustedProxies: ["10.0.0.1"],
           },
-          trustedProxies: [],
         },
-      };
-
-      await expect(
-        resolveGatewayRuntimeConfig({
-          cfg,
-          port: 18789,
-        }),
-      ).rejects.toThrow(
-        "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured",
+        expectedMessage:
+          "gateway auth mode=trusted-proxy with bind=loopback requires gateway.trustedProxies to include 127.0.0.1, ::1, or a loopback CIDR",
+      },
+      {
+        name: "lan binding without trusted proxies",
+        cfg: {
+          gateway: { bind: "lan" as const, auth: TRUSTED_PROXY_AUTH, trustedProxies: [] },
+        },
+        expectedMessage:
+          "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured",
+      },
+    ])("rejects $name", async ({ cfg, expectedMessage }) => {
+      await expect(resolveGatewayRuntimeConfig({ cfg, port: 18789 })).rejects.toThrow(
+        expectedMessage,
       );
     });
   });
 
   describe("token/password auth modes", () => {
-    it("should reject token mode without token configured", async () => {
-      const cfg = {
-        gateway: {
-          bind: "lan" as const,
-          auth: {
-            mode: "token" as const,
-          },
-        },
-      };
+    let originalToken: string | undefined;
 
-      await expect(
-        resolveGatewayRuntimeConfig({
-          cfg,
-          port: 18789,
-        }),
-      ).rejects.toThrow("gateway auth mode is token, but no token was configured");
+    beforeEach(() => {
+      originalToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+      delete process.env.OPENCLAW_GATEWAY_TOKEN;
     });
 
-    it("should allow lan binding with token", async () => {
-      const cfg = {
-        gateway: {
-          bind: "lan" as const,
-          auth: {
-            mode: "token" as const,
-            token: "test-token-123",
-          },
-        },
-      };
-
-      const result = await resolveGatewayRuntimeConfig({
-        cfg,
-        port: 18789,
-      });
-
-      expect(result.authMode).toBe("token");
-      expect(result.bindHost).toBe("0.0.0.0");
+    afterEach(() => {
+      if (originalToken !== undefined) {
+        process.env.OPENCLAW_GATEWAY_TOKEN = originalToken;
+      } else {
+        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      }
     });
 
-    it("should allow loopback binding with explicit none mode", async () => {
-      const cfg = {
-        gateway: {
-          bind: "loopback" as const,
-          auth: {
-            mode: "none" as const,
-          },
-        },
-      };
-
-      const result = await resolveGatewayRuntimeConfig({
-        cfg,
-        port: 18789,
-      });
-
-      expect(result.authMode).toBe("none");
-      expect(result.bindHost).toBe("127.0.0.1");
+    it.each([
+      {
+        name: "lan binding with token",
+        cfg: { gateway: { bind: "lan" as const, auth: TOKEN_AUTH } },
+        expectedAuthMode: "token",
+        expectedBindHost: "0.0.0.0",
+      },
+      {
+        name: "loopback binding with explicit none auth",
+        cfg: { gateway: { bind: "loopback" as const, auth: { mode: "none" as const } } },
+        expectedAuthMode: "none",
+        expectedBindHost: "127.0.0.1",
+      },
+    ])("allows $name", async ({ cfg, expectedAuthMode, expectedBindHost }) => {
+      const result = await resolveGatewayRuntimeConfig({ cfg, port: 18789 });
+      expect(result.authMode).toBe(expectedAuthMode);
+      expect(result.bindHost).toBe(expectedBindHost);
     });
 
-    it("should reject lan binding with explicit none mode", async () => {
-      const cfg = {
-        gateway: {
-          bind: "lan" as const,
-          auth: {
-            mode: "none" as const,
+    it.each([
+      {
+        name: "token mode without token",
+        cfg: { gateway: { bind: "lan" as const, auth: { mode: "token" as const } } },
+        expectedMessage:
+          "gateway auth mode is token, but no token was configured (set gateway.auth.token or OPENCLAW_GATEWAY_TOKEN)",
+      },
+      {
+        name: "lan binding with explicit none auth",
+        cfg: { gateway: { bind: "lan" as const, auth: { mode: "none" as const } } },
+        expectedMessage: "refusing to bind gateway",
+      },
+      {
+        name: "loopback binding that resolves to non-loopback host",
+        cfg: { gateway: { bind: "loopback" as const, auth: { mode: "none" as const } } },
+        host: "0.0.0.0",
+        expectedMessage: "gateway bind=loopback resolved to non-loopback host",
+      },
+      {
+        name: "custom bind without customBindHost",
+        cfg: { gateway: { bind: "custom" as const, auth: TOKEN_AUTH } },
+        expectedMessage: "gateway.bind=custom requires gateway.customBindHost",
+      },
+      {
+        name: "custom bind with invalid customBindHost",
+        cfg: {
+          gateway: {
+            bind: "custom" as const,
+            customBindHost: "192.168.001.100",
+            auth: TOKEN_AUTH,
           },
         },
-      };
-
-      await expect(
-        resolveGatewayRuntimeConfig({
-          cfg,
-          port: 18789,
-        }),
-      ).rejects.toThrow("refusing to bind gateway");
-    });
-
-    it("should reject loopback mode if host resolves to non-loopback", async () => {
-      const cfg = {
-        gateway: {
-          bind: "loopback" as const,
-          auth: {
-            mode: "none" as const,
+        expectedMessage: "gateway.bind=custom requires a valid IPv4 customBindHost",
+      },
+      {
+        name: "custom bind with mismatched resolved host",
+        cfg: {
+          gateway: {
+            bind: "custom" as const,
+            customBindHost: "192.168.1.100",
+            auth: TOKEN_AUTH,
           },
         },
-      };
-
-      await expect(
-        resolveGatewayRuntimeConfig({
-          cfg,
-          port: 18789,
-          host: "0.0.0.0",
-        }),
-      ).rejects.toThrow("gateway bind=loopback resolved to non-loopback host");
-    });
-
-    it("should reject custom bind without customBindHost", async () => {
-      const cfg = {
-        gateway: {
-          bind: "custom" as const,
-          auth: {
-            mode: "token" as const,
-            token: "test-token-123",
-          },
-        },
-      };
-
-      await expect(
-        resolveGatewayRuntimeConfig({
-          cfg,
-          port: 18789,
-        }),
-      ).rejects.toThrow("gateway.bind=custom requires gateway.customBindHost");
-    });
-
-    it("should reject custom bind with invalid customBindHost", async () => {
-      const cfg = {
-        gateway: {
-          bind: "custom" as const,
-          customBindHost: "192.168.001.100",
-          auth: {
-            mode: "token" as const,
-            token: "test-token-123",
-          },
-        },
-      };
-
-      await expect(
-        resolveGatewayRuntimeConfig({
-          cfg,
-          port: 18789,
-        }),
-      ).rejects.toThrow("gateway.bind=custom requires a valid IPv4 customBindHost");
-    });
-
-    it("should reject custom bind if resolved host differs from configured host", async () => {
-      const cfg = {
-        gateway: {
-          bind: "custom" as const,
-          customBindHost: "192.168.1.100",
-          auth: {
-            mode: "token" as const,
-            token: "test-token-123",
-          },
-        },
-      };
-
-      await expect(
-        resolveGatewayRuntimeConfig({
-          cfg,
-          port: 18789,
-          host: "0.0.0.0",
-        }),
-      ).rejects.toThrow("gateway bind=custom requested 192.168.1.100 but resolved 0.0.0.0");
+        host: "0.0.0.0",
+        expectedMessage: "gateway bind=custom requested 192.168.1.100 but resolved 0.0.0.0",
+      },
+    ])("rejects $name", async ({ cfg, host, expectedMessage }) => {
+      await expect(resolveGatewayRuntimeConfig({ cfg, port: 18789, host })).rejects.toThrow(
+        expectedMessage,
+      );
     });
   });
 });

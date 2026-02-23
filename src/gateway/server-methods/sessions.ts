@@ -12,8 +12,14 @@ import {
   type SessionEntry,
   updateSessionStore,
 } from "../../config/sessions.js";
+import { unbindThreadBindingsBySessionKey } from "../../discord/monitor/thread-bindings.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import {
+  isSubagentSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../routing/session-key.js";
 import {
   ErrorCodes,
   errorShape,
@@ -130,6 +136,41 @@ function archiveSessionTranscriptsForSession(params: {
     agentId: params.agentId,
     reason: params.reason,
   });
+}
+
+async function emitSessionUnboundLifecycleEvent(params: {
+  targetSessionKey: string;
+  reason: "session-reset" | "session-delete";
+  emitHooks?: boolean;
+}) {
+  const targetKind = isSubagentSessionKey(params.targetSessionKey) ? "subagent" : "acp";
+  unbindThreadBindingsBySessionKey({
+    targetSessionKey: params.targetSessionKey,
+    targetKind,
+    reason: params.reason,
+    sendFarewell: true,
+  });
+
+  if (params.emitHooks === false) {
+    return;
+  }
+
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("subagent_ended")) {
+    return;
+  }
+  await hookRunner.runSubagentEnded(
+    {
+      targetSessionKey: params.targetSessionKey,
+      targetKind,
+      reason: params.reason,
+      sendFarewell: true,
+      outcome: params.reason === "session-reset" ? "reset" : "deleted",
+    },
+    {
+      childSessionKey: params.targetSessionKey,
+    },
+  );
 }
 
 async function ensureSessionRuntimeCleanup(params: {
@@ -306,6 +347,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     const { cfg, target, storePath } = resolveGatewaySessionTargetFromKey(key);
     const { entry } = loadSessionEntry(key);
+    const hadExistingEntry = Boolean(entry);
     const commandReason = p.reason === "new" ? "new" : "reset";
     const hookEvent = createInternalHookEvent(
       "command",
@@ -367,6 +409,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       agentId: target.agentId,
       reason: "reset",
     });
+    if (hadExistingEntry) {
+      await emitSessionUnboundLifecycleEvent({
+        targetSessionKey: target.canonicalKey ?? key,
+        reason: "session-reset",
+      });
+    }
     respond(true, { ok: true, key: target.canonicalKey, entry: next }, undefined);
   },
   "sessions.delete": async ({ params, respond, client, isWebchatConnect }) => {
@@ -397,30 +445,40 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     const { entry } = loadSessionEntry(key);
     const sessionId = entry?.sessionId;
-    const existed = Boolean(entry);
     const cleanupError = await ensureSessionRuntimeCleanup({ cfg, key, target, sessionId });
     if (cleanupError) {
       respond(false, undefined, cleanupError);
       return;
     }
-    await updateSessionStore(storePath, (store) => {
+    const deleted = await updateSessionStore(storePath, (store) => {
       const { primaryKey } = migrateAndPruneSessionStoreKey({ cfg, key, store });
-      if (store[primaryKey]) {
+      const hadEntry = Boolean(store[primaryKey]);
+      if (hadEntry) {
         delete store[primaryKey];
       }
+      return hadEntry;
     });
 
-    const archived = deleteTranscript
-      ? archiveSessionTranscriptsForSession({
-          sessionId,
-          storePath,
-          sessionFile: entry?.sessionFile,
-          agentId: target.agentId,
-          reason: "deleted",
-        })
-      : [];
+    const archived =
+      deleted && deleteTranscript
+        ? archiveSessionTranscriptsForSession({
+            sessionId,
+            storePath,
+            sessionFile: entry?.sessionFile,
+            agentId: target.agentId,
+            reason: "deleted",
+          })
+        : [];
+    if (deleted) {
+      const emitLifecycleHooks = p.emitLifecycleHooks !== false;
+      await emitSessionUnboundLifecycleEvent({
+        targetSessionKey: target.canonicalKey ?? key,
+        reason: "session-delete",
+        emitHooks: emitLifecycleHooks,
+      });
+    }
 
-    respond(true, { ok: true, key: target.canonicalKey, deleted: existed, archived }, undefined);
+    respond(true, { ok: true, key: target.canonicalKey, deleted, archived }, undefined);
   },
   "sessions.compact": async ({ params, respond }) => {
     if (!assertValidParams(params, validateSessionsCompactParams, "sessions.compact", respond)) {

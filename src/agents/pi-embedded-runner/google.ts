@@ -25,6 +25,7 @@ import {
 import type { TranscriptPolicy } from "../transcript-policy.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
 import { log } from "./logger.js";
+import { dropThinkingBlocks } from "./thinking.js";
 import { describeUnknownError } from "./utils.js";
 
 const GOOGLE_TURN_ORDERING_CUSTOM_TYPE = "google-turn-ordering-bootstrap";
@@ -50,88 +51,8 @@ const GOOGLE_SCHEMA_UNSUPPORTED_KEYWORDS = new Set([
   "minProperties",
   "maxProperties",
 ]);
-const ANTIGRAVITY_SIGNATURE_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+
 const INTER_SESSION_PREFIX_BASE = "[Inter-session message]";
-
-function isValidAntigravitySignature(value: unknown): value is string {
-  if (typeof value !== "string") {
-    return false;
-  }
-  const trimmed = value.trim();
-  if (!trimmed) {
-    return false;
-  }
-  if (trimmed.length % 4 !== 0) {
-    return false;
-  }
-  return ANTIGRAVITY_SIGNATURE_RE.test(trimmed);
-}
-
-export function sanitizeAntigravityThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
-  let touched = false;
-  const out: AgentMessage[] = [];
-  for (const msg of messages) {
-    if (!msg || typeof msg !== "object" || msg.role !== "assistant") {
-      out.push(msg);
-      continue;
-    }
-    const assistant = msg;
-    if (!Array.isArray(assistant.content)) {
-      out.push(msg);
-      continue;
-    }
-    type AssistantContentBlock = Extract<AgentMessage, { role: "assistant" }>["content"][number];
-    const nextContent: AssistantContentBlock[] = [];
-    let contentChanged = false;
-    for (const block of assistant.content) {
-      if (
-        !block ||
-        typeof block !== "object" ||
-        (block as { type?: unknown }).type !== "thinking"
-      ) {
-        nextContent.push(block);
-        continue;
-      }
-      const rec = block as {
-        thinkingSignature?: unknown;
-        signature?: unknown;
-        thought_signature?: unknown;
-        thoughtSignature?: unknown;
-      };
-      const candidate =
-        rec.thinkingSignature ?? rec.signature ?? rec.thought_signature ?? rec.thoughtSignature;
-      if (!isValidAntigravitySignature(candidate)) {
-        // Preserve reasoning content as plain text when signatures are invalid/missing.
-        // Antigravity Claude rejects unsigned thinking blocks, but dropping them loses context.
-        const thinkingText = (block as { thinking?: unknown }).thinking;
-        if (typeof thinkingText === "string" && thinkingText.trim()) {
-          nextContent.push({ type: "text", text: thinkingText } as AssistantContentBlock);
-        }
-        contentChanged = true;
-        continue;
-      }
-      if (rec.thinkingSignature !== candidate) {
-        const nextBlock = {
-          ...(block as unknown as Record<string, unknown>),
-          thinkingSignature: candidate,
-        } as AssistantContentBlock;
-        nextContent.push(nextBlock);
-        contentChanged = true;
-      } else {
-        nextContent.push(block);
-      }
-    }
-    if (contentChanged) {
-      touched = true;
-    }
-    if (nextContent.length === 0) {
-      touched = true;
-      continue;
-    }
-    out.push(contentChanged ? { ...assistant, content: nextContent } : msg);
-  }
-  return touched ? out : messages;
-}
 
 function buildInterSessionPrefix(message: AgentMessage): string {
   const provenance = normalizeInputProvenance((message as { provenance?: unknown }).provenance);
@@ -212,6 +133,35 @@ function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessag
   return touched ? out : messages;
 }
 
+function stripStaleAssistantUsageBeforeLatestCompaction(messages: AgentMessage[]): AgentMessage[] {
+  let latestCompactionSummaryIndex = -1;
+  for (let i = 0; i < messages.length; i += 1) {
+    if (messages[i]?.role === "compactionSummary") {
+      latestCompactionSummaryIndex = i;
+    }
+  }
+  if (latestCompactionSummaryIndex <= 0) {
+    return messages;
+  }
+
+  const out = [...messages];
+  let touched = false;
+  for (let i = 0; i < latestCompactionSummaryIndex; i += 1) {
+    const candidate = out[i] as (AgentMessage & { usage?: unknown }) | undefined;
+    if (!candidate || candidate.role !== "assistant") {
+      continue;
+    }
+    if (!candidate.usage || typeof candidate.usage !== "object") {
+      continue;
+    }
+    const candidateRecord = candidate as unknown as Record<string, unknown>;
+    const { usage: _droppedUsage, ...rest } = candidateRecord;
+    out[i] = rest as unknown as AgentMessage;
+    touched = true;
+  }
+  return touched ? out : messages;
+}
+
 function findUnsupportedSchemaKeywords(schema: unknown, path: string): string[] {
   if (!schema || typeof schema !== "object") {
     return [];
@@ -257,7 +207,7 @@ export function sanitizeToolsForGoogle<
   // AND Claude models.  This field does not support JSON Schema keywords such as
   // patternProperties, additionalProperties, $ref, etc.  We must clean schemas
   // for every provider that routes through this path.
-  if (params.provider !== "google-gemini-cli" && params.provider !== "google-antigravity") {
+  if (params.provider !== "google-gemini-cli") {
     return params.tools;
   }
   return params.tools.map((tool) => {
@@ -274,7 +224,7 @@ export function sanitizeToolsForGoogle<
 }
 
 export function logToolSchemasForGoogle(params: { tools: AgentTool[]; provider: string }) {
-  if (params.provider !== "google-antigravity" && params.provider !== "google-gemini-cli") {
+  if (params.provider !== "google-gemini-cli") {
     return;
   }
   const toolNames = params.tools.map((tool, index) => `${index}:${tool.name}`);
@@ -424,6 +374,7 @@ export async function sanitizeSessionHistory(params: {
   modelApi?: string | null;
   modelId?: string;
   provider?: string;
+  allowedToolNames?: Iterable<string>;
   config?: OpenClawConfig;
   sessionManager: SessionManager;
   sessionId: string;
@@ -450,14 +401,18 @@ export async function sanitizeSessionHistory(params: {
       ...resolveImageSanitizationLimits(params.config),
     },
   );
-  const sanitizedThinking = policy.normalizeAntigravityThinkingBlocks
-    ? sanitizeAntigravityThinkingBlocks(sanitizedImages)
+  const droppedThinking = policy.dropThinkingBlocks
+    ? dropThinkingBlocks(sanitizedImages)
     : sanitizedImages;
-  const sanitizedToolCalls = sanitizeToolCallInputs(sanitizedThinking);
+  const sanitizedToolCalls = sanitizeToolCallInputs(droppedThinking, {
+    allowedToolNames: params.allowedToolNames,
+  });
   const repairedTools = policy.repairToolUseResultPairing
     ? sanitizeToolUseResultPairing(sanitizedToolCalls)
     : sanitizedToolCalls;
   const sanitizedToolResults = stripToolResultDetails(repairedTools);
+  const sanitizedCompactionUsage =
+    stripStaleAssistantUsageBeforeLatestCompaction(sanitizedToolResults);
 
   const isOpenAIResponsesApi =
     params.modelApi === "openai-responses" || params.modelApi === "openai-codex-responses";
@@ -472,8 +427,8 @@ export async function sanitizeSessionHistory(params: {
       })
     : false;
   const sanitizedOpenAI = isOpenAIResponsesApi
-    ? downgradeOpenAIReasoningBlocks(sanitizedToolResults)
-    : sanitizedToolResults;
+    ? downgradeOpenAIReasoningBlocks(sanitizedCompactionUsage)
+    : sanitizedCompactionUsage;
 
   if (hasSnapshot && (!priorSnapshot || modelChanged)) {
     appendModelSnapshot(params.sessionManager, {

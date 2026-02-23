@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS,
   DEFAULT_APPROVAL_TIMEOUT_MS,
@@ -8,15 +8,20 @@ vi.mock("./tools/gateway.js", () => ({
   callGatewayTool: vi.fn(),
 }));
 
+let callGatewayTool: typeof import("./tools/gateway.js").callGatewayTool;
+let requestExecApprovalDecision: typeof import("./bash-tools.exec-approval-request.js").requestExecApprovalDecision;
+
 describe("requestExecApprovalDecision", () => {
-  beforeEach(async () => {
-    const { callGatewayTool } = await import("./tools/gateway.js");
-    vi.mocked(callGatewayTool).mockReset();
+  beforeAll(async () => {
+    ({ callGatewayTool } = await import("./tools/gateway.js"));
+    ({ requestExecApprovalDecision } = await import("./bash-tools.exec-approval-request.js"));
+  });
+
+  beforeEach(() => {
+    vi.mocked(callGatewayTool).mockClear();
   });
 
   it("returns string decisions", async () => {
-    const { requestExecApprovalDecision } = await import("./bash-tools.exec-approval-request.js");
-    const { callGatewayTool } = await import("./tools/gateway.js");
     vi.mocked(callGatewayTool).mockResolvedValue({ decision: "allow-once" });
 
     const result = await requestExecApprovalDecision({
@@ -51,9 +56,6 @@ describe("requestExecApprovalDecision", () => {
   });
 
   it("returns null for missing or non-string decisions", async () => {
-    const { requestExecApprovalDecision } = await import("./bash-tools.exec-approval-request.js");
-    const { callGatewayTool } = await import("./tools/gateway.js");
-
     vi.mocked(callGatewayTool).mockResolvedValueOnce({});
     await expect(
       requestExecApprovalDecision({

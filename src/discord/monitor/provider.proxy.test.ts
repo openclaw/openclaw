@@ -87,8 +87,8 @@ describe("createDiscordGatewayPlugin", () => {
   }
 
   beforeEach(() => {
-    proxyAgentSpy.mockReset();
-    webSocketSpy.mockReset();
+    proxyAgentSpy.mockClear();
+    webSocketSpy.mockClear();
     resetLastAgent();
   });
 

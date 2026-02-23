@@ -25,6 +25,28 @@ export const OPENAI_CODEX_TEMPLATE_MODEL = {
   maxTokens: 128000,
 };
 
+export function mockOpenAICodexTemplateModel(): void {
+  mockDiscoveredModel({
+    provider: "openai-codex",
+    modelId: "gpt-5.2-codex",
+    templateModel: OPENAI_CODEX_TEMPLATE_MODEL,
+  });
+}
+
+export function buildOpenAICodexForwardCompatExpectation(
+  id: string = "gpt-5.3-codex",
+): Partial<typeof OPENAI_CODEX_TEMPLATE_MODEL> & { provider: string; id: string } {
+  return {
+    provider: "openai-codex",
+    id,
+    api: "openai-codex-responses",
+    baseUrl: "https://chatgpt.com/backend-api",
+    reasoning: true,
+    contextWindow: 272000,
+    maxTokens: 128000,
+  };
+}
+
 export function resetMockDiscoverModels(): void {
   vi.mocked(discoverModels).mockReturnValue({
     find: vi.fn(() => null),

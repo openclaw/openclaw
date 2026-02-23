@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { LookupFn, SsrFPolicy } from "openclaw/plugin-sdk";
 import { ensureUrbitChannelOpen, pokeUrbitChannel, scryUrbitPath } from "./channel-ops.js";
 import { getUrbitContext, normalizeUrbitCookie } from "./context.js";
@@ -43,7 +44,7 @@ export class UrbitChannelClient {
       return;
     }
 
-    const channelId = `${Math.floor(Date.now() / 1000)}-${Math.random().toString(36).substring(2, 8)}`;
+    const channelId = `${Math.floor(Date.now() / 1000)}-${randomUUID()}`;
     this.channelId = channelId;
 
     try {

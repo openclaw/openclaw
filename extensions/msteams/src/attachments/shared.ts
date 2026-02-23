@@ -1,3 +1,5 @@
+import { lookup } from "node:dns/promises";
+import { isPrivateIpAddress } from "openclaw/plugin-sdk";
 import type { MSTeamsAttachmentLike } from "./types.js";
 
 type InlineImageCandidate =
@@ -61,6 +63,19 @@ export const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+export function resolveRequestUrl(input: RequestInfo | URL): string {
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.toString();
+  }
+  if (typeof input === "object" && input && "url" in input && typeof input.url === "string") {
+    return input.url;
+  }
+  return String(input);
 }
 
 export function normalizeContentType(value: unknown): string | undefined {
@@ -288,4 +303,102 @@ export function isUrlAllowed(url: string, allowlist: string[]): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * Returns true if the given IPv4 or IPv6 address is in a private, loopback,
+ * or link-local range that must never be reached from media downloads.
+ *
+ * Delegates to the SDK's `isPrivateIpAddress` which handles IPv4-mapped IPv6,
+ * expanded notation, NAT64, 6to4, Teredo, octal IPv4, and fails closed on
+ * parse errors.
+ */
+export const isPrivateOrReservedIP: (ip: string) => boolean = isPrivateIpAddress;
+
+/**
+ * Resolve a hostname via DNS and reject private/reserved IPs.
+ * Throws if the resolved IP is private or resolution fails.
+ */
+export async function resolveAndValidateIP(
+  hostname: string,
+  resolveFn?: (hostname: string) => Promise<{ address: string }>,
+): Promise<string> {
+  const resolve = resolveFn ?? lookup;
+  let resolved: { address: string };
+  try {
+    resolved = await resolve(hostname);
+  } catch {
+    throw new Error(`DNS resolution failed for "${hostname}"`);
+  }
+  if (isPrivateOrReservedIP(resolved.address)) {
+    throw new Error(`Hostname "${hostname}" resolves to private/reserved IP (${resolved.address})`);
+  }
+  return resolved.address;
+}
+
+/** Maximum number of redirects to follow in safeFetch. */
+const MAX_SAFE_REDIRECTS = 5;
+
+/**
+ * Fetch a URL with redirect: "manual", validating each redirect target
+ * against the hostname allowlist and DNS-resolved IP (anti-SSRF).
+ *
+ * This prevents:
+ * - Auto-following redirects to non-allowlisted hosts
+ * - DNS rebinding attacks where an allowlisted domain resolves to a private IP
+ */
+export async function safeFetch(params: {
+  url: string;
+  allowHosts: string[];
+  fetchFn?: typeof fetch;
+  requestInit?: RequestInit;
+  resolveFn?: (hostname: string) => Promise<{ address: string }>;
+}): Promise<Response> {
+  const fetchFn = params.fetchFn ?? fetch;
+  const resolveFn = params.resolveFn;
+  let currentUrl = params.url;
+
+  // Validate the initial URL's resolved IP
+  try {
+    const initialHost = new URL(currentUrl).hostname;
+    await resolveAndValidateIP(initialHost, resolveFn);
+  } catch {
+    throw new Error(`Initial download URL blocked: ${currentUrl}`);
+  }
+
+  for (let i = 0; i <= MAX_SAFE_REDIRECTS; i++) {
+    const res = await fetchFn(currentUrl, {
+      ...params.requestInit,
+      redirect: "manual",
+    });
+
+    if (![301, 302, 303, 307, 308].includes(res.status)) {
+      return res;
+    }
+
+    const location = res.headers.get("location");
+    if (!location) {
+      return res;
+    }
+
+    let redirectUrl: string;
+    try {
+      redirectUrl = new URL(location, currentUrl).toString();
+    } catch {
+      throw new Error(`Invalid redirect URL: ${location}`);
+    }
+
+    // Validate redirect target against hostname allowlist
+    if (!isUrlAllowed(redirectUrl, params.allowHosts)) {
+      throw new Error(`Media redirect target blocked by allowlist: ${redirectUrl}`);
+    }
+
+    // Validate redirect target's resolved IP
+    const redirectHost = new URL(redirectUrl).hostname;
+    await resolveAndValidateIP(redirectHost, resolveFn);
+
+    currentUrl = redirectUrl;
+  }
+
+  throw new Error(`Too many redirects (>${MAX_SAFE_REDIRECTS})`);
 }

@@ -23,6 +23,20 @@ const isOAuthProvider = (provider: string): provider is OAuthProvider =>
 const resolveOAuthProvider = (provider: string): OAuthProvider | null =>
   isOAuthProvider(provider) ? provider : null;
 
+/** Bearer-token auth modes that are interchangeable (oauth tokens and raw tokens). */
+const BEARER_AUTH_MODES = new Set(["oauth", "token"]);
+
+const isCompatibleModeType = (mode: string | undefined, type: string | undefined): boolean => {
+  if (!mode || !type) {
+    return false;
+  }
+  if (mode === type) {
+    return true;
+  }
+  // Both token and oauth represent bearer-token auth paths — allow bidirectional compat.
+  return BEARER_AUTH_MODES.has(mode) && BEARER_AUTH_MODES.has(type);
+};
+
 function isProfileConfigCompatible(params: {
   cfg?: OpenClawConfig;
   profileId: string;
@@ -34,22 +48,14 @@ function isProfileConfigCompatible(params: {
   if (profileConfig && profileConfig.provider !== params.provider) {
     return false;
   }
-  if (profileConfig && profileConfig.mode !== params.mode) {
-    if (
-      !(
-        params.allowOAuthTokenCompatibility &&
-        profileConfig.mode === "oauth" &&
-        params.mode === "token"
-      )
-    ) {
-      return false;
-    }
+  if (profileConfig && !isCompatibleModeType(profileConfig.mode, params.mode)) {
+    return false;
   }
   return true;
 }
 
 function buildOAuthApiKey(provider: string, credentials: OAuthCredentials): string {
-  const needsProjectId = provider === "google-gemini-cli" || provider === "google-antigravity";
+  const needsProjectId = provider === "google-gemini-cli";
   return needsProjectId
     ? JSON.stringify({
         token: credentials.access,
@@ -90,6 +96,43 @@ type ResolveApiKeyForProfileParams = {
   profileId: string;
   agentDir?: string;
 };
+
+function adoptNewerMainOAuthCredential(params: {
+  store: AuthProfileStore;
+  profileId: string;
+  agentDir?: string;
+  cred: OAuthCredentials & { type: "oauth"; provider: string; email?: string };
+}): (OAuthCredentials & { type: "oauth"; provider: string; email?: string }) | null {
+  if (!params.agentDir) {
+    return null;
+  }
+  try {
+    const mainStore = ensureAuthProfileStore(undefined);
+    const mainCred = mainStore.profiles[params.profileId];
+    if (
+      mainCred?.type === "oauth" &&
+      mainCred.provider === params.cred.provider &&
+      Number.isFinite(mainCred.expires) &&
+      (!Number.isFinite(params.cred.expires) || mainCred.expires > params.cred.expires)
+    ) {
+      params.store.profiles[params.profileId] = { ...mainCred };
+      saveAuthProfileStore(params.store, params.agentDir);
+      log.info("adopted newer OAuth credentials from main agent", {
+        profileId: params.profileId,
+        agentDir: params.agentDir,
+        expires: new Date(mainCred.expires).toISOString(),
+      });
+      return mainCred;
+    }
+  } catch (err) {
+    // Best-effort: don't crash if main agent store is missing or unreadable.
+    log.debug("adoptNewerMainOAuthCredential failed", {
+      profileId: params.profileId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  return null;
+}
 
 async function refreshOAuthTokenWithLock(params: {
   profileId: string;
@@ -229,11 +272,20 @@ export async function resolveApiKeyForProfile(
     }
     return buildApiKeyProfileResult({ apiKey: token, provider: cred.provider, email: cred.email });
   }
-  if (Date.now() < cred.expires) {
+
+  const oauthCred =
+    adoptNewerMainOAuthCredential({
+      store,
+      profileId,
+      agentDir: params.agentDir,
+      cred,
+    }) ?? cred;
+
+  if (Date.now() < oauthCred.expires) {
     return buildOAuthProfileResult({
-      provider: cred.provider,
-      credentials: cred,
-      email: cred.email,
+      provider: oauthCred.provider,
+      credentials: oauthCred,
+      email: oauthCred.email,
     });
   }
 

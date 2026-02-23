@@ -149,12 +149,7 @@ function decodeBodyText(body: unknown): string {
   return "";
 }
 
-async function buildOpenAIResponsesSse(params: OpenAIResponsesParams): Promise<Response> {
-  const events: OpenAIResponseStreamEvent[] = [];
-  for await (const event of fakeOpenAIResponsesStream(params)) {
-    events.push(event);
-  }
-
+function buildSseResponse(events: unknown[]): Response {
   const sse = `${events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("")}data: [DONE]\n\n`;
   const encoder = new TextEncoder();
   const body = new ReadableStream<Uint8Array>({
@@ -167,6 +162,46 @@ async function buildOpenAIResponsesSse(params: OpenAIResponsesParams): Promise<R
     status: 200,
     headers: { "content-type": "text/event-stream" },
   });
+}
+
+export function buildOpenAIResponsesTextSse(text: string): Response {
+  return buildSseResponse([
+    {
+      type: "response.output_item.added",
+      item: {
+        type: "message",
+        id: "msg_test_1",
+        role: "assistant",
+        content: [],
+        status: "in_progress",
+      },
+    },
+    {
+      type: "response.output_item.done",
+      item: {
+        type: "message",
+        id: "msg_test_1",
+        role: "assistant",
+        status: "completed",
+        content: [{ type: "output_text", text, annotations: [] }],
+      },
+    },
+    {
+      type: "response.completed",
+      response: {
+        status: "completed",
+        usage: { input_tokens: 10, output_tokens: 10, total_tokens: 20 },
+      },
+    },
+  ]);
+}
+
+async function buildOpenAIResponsesSse(params: OpenAIResponsesParams): Promise<Response> {
+  const events: OpenAIResponseStreamEvent[] = [];
+  for await (const event of fakeOpenAIResponsesStream(params)) {
+    events.push(event);
+  }
+  return buildSseResponse(events);
 }
 
 export function installOpenAiResponsesMock(params?: { baseUrl?: string }) {

@@ -7,15 +7,21 @@ export async function writeSkill(params: {
   description: string;
   metadata?: string;
   body?: string;
+  frontmatterExtra?: string;
 }) {
-  const { dir, name, description, metadata, body } = params;
+  const { dir, name, description, metadata, body, frontmatterExtra } = params;
   await fs.mkdir(dir, { recursive: true });
+  const frontmatter = [
+    `name: ${name}`,
+    `description: ${description}`,
+    metadata ? `metadata: ${metadata}` : "",
+    frontmatterExtra ?? "",
+  ]
+    .filter((line) => line.trim().length > 0)
+    .join("\n");
   await fs.writeFile(
     path.join(dir, "SKILL.md"),
-    `---
-name: ${name}
-description: ${description}${metadata ? `\nmetadata: ${metadata}` : ""}
----
+    `---\n${frontmatter}\n---
 
 ${body ?? `# ${name}\n`}
 `,

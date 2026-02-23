@@ -5,6 +5,7 @@ import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
 import type { sendMessageSignal } from "../signal/send.js";
 import type { sendMessageSlack } from "../slack/send.js";
 import type { sendMessageTelegram } from "../telegram/send.js";
+import { createOutboundSendDepsFromCliSource } from "./outbound-send-mapping.js";
 
 export type CliDeps = {
   sendMessageWhatsApp: typeof sendMessageWhatsApp;
@@ -44,16 +45,8 @@ export function createDefaultDeps(): CliDeps {
   };
 }
 
-// Provider docking: extend this mapping when adding new outbound send deps.
 export function createOutboundSendDeps(deps: CliDeps): OutboundSendDeps {
-  return {
-    sendWhatsApp: deps.sendMessageWhatsApp,
-    sendTelegram: deps.sendMessageTelegram,
-    sendDiscord: deps.sendMessageDiscord,
-    sendSlack: deps.sendMessageSlack,
-    sendSignal: deps.sendMessageSignal,
-    sendIMessage: deps.sendMessageIMessage,
-  };
+  return createOutboundSendDepsFromCliSource(deps);
 }
 
 export { logWebSelfId } from "../web/auth-store.js";

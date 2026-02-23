@@ -2,6 +2,12 @@ import { z } from "zod";
 import { isSafeScpRemoteHost } from "../infra/scp-host.js";
 import { isValidInboundPathRootPattern } from "../media/inbound-path-policy.js";
 import {
+  resolveDiscordPreviewStreamMode,
+  resolveSlackNativeStreaming,
+  resolveSlackStreamingMode,
+  resolveTelegramPreviewStreamMode,
+} from "./discord-preview-streaming.js";
+import {
   normalizeTelegramCommandDescription,
   normalizeTelegramCommandName,
   resolveTelegramCustomCommands,
@@ -21,6 +27,7 @@ import {
   ProviderCommandsSchema,
   ReplyToModeSchema,
   RetryConfigSchema,
+  TtsConfigSchema,
   requireOpenAllowFrom,
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
@@ -98,6 +105,26 @@ const validateTelegramCustomCommands = (
   }
 };
 
+function normalizeTelegramStreamingConfig(value: { streaming?: unknown; streamMode?: unknown }) {
+  value.streaming = resolveTelegramPreviewStreamMode(value);
+  delete value.streamMode;
+}
+
+function normalizeDiscordStreamingConfig(value: { streaming?: unknown; streamMode?: unknown }) {
+  value.streaming = resolveDiscordPreviewStreamMode(value);
+  delete value.streamMode;
+}
+
+function normalizeSlackStreamingConfig(value: {
+  streaming?: unknown;
+  nativeStreaming?: unknown;
+  streamMode?: unknown;
+}) {
+  value.nativeStreaming = resolveSlackNativeStreaming(value);
+  value.streaming = resolveSlackStreamingMode(value);
+  delete value.streamMode;
+}
+
 export const TelegramAccountSchemaBase = z
   .object({
     name: z.string().optional(),
@@ -121,16 +148,19 @@ export const TelegramAccountSchemaBase = z
     dms: z.record(z.string(), DmConfigSchema.optional()).optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
+    streaming: z.union([z.boolean(), z.enum(["off", "partial", "block", "progress"])]).optional(),
     blockStreaming: z.boolean().optional(),
     draftChunk: BlockStreamingChunkSchema.optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
-    streamMode: z.enum(["off", "partial", "block"]).optional().default("partial"),
+    // Legacy key kept for automatic migration to `streaming`.
+    streamMode: z.enum(["off", "partial", "block"]).optional(),
     mediaMaxMb: z.number().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     retry: RetryConfigSchema,
     network: z
       .object({
         autoSelectFamily: z.boolean().optional(),
+        dnsResultOrder: z.enum(["ipv4first", "verbatim"]).optional(),
       })
       .strict()
       .optional(),
@@ -139,6 +169,7 @@ export const TelegramAccountSchemaBase = z
     webhookSecret: z.string().optional().register(sensitive),
     webhookPath: z.string().optional(),
     webhookHost: z.string().optional(),
+    webhookPort: z.number().int().positive().optional(),
     actions: z
       .object({
         reactions: z.boolean().optional(),
@@ -158,6 +189,7 @@ export const TelegramAccountSchemaBase = z
   .strict();
 
 export const TelegramAccountSchema = TelegramAccountSchemaBase.superRefine((value, ctx) => {
+  normalizeTelegramStreamingConfig(value);
   requireOpenAllowFrom({
     policy: value.dmPolicy,
     allowFrom: value.allowFrom,
@@ -172,6 +204,7 @@ export const TelegramAccountSchema = TelegramAccountSchemaBase.superRefine((valu
 export const TelegramConfigSchema = TelegramAccountSchemaBase.extend({
   accounts: z.record(z.string(), TelegramAccountSchema.optional()).optional(),
 }).superRefine((value, ctx) => {
+  normalizeTelegramStreamingConfig(value);
   requireOpenAllowFrom({
     policy: value.dmPolicy,
     allowFrom: value.allowFrom,
@@ -271,6 +304,22 @@ const DiscordUiSchema = z
   .strict()
   .optional();
 
+const DiscordVoiceAutoJoinSchema = z
+  .object({
+    guildId: z.string().min(1),
+    channelId: z.string().min(1),
+  })
+  .strict();
+
+const DiscordVoiceSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    autoJoin: z.array(DiscordVoiceAutoJoinSchema).optional(),
+    tts: TtsConfigSchema.optional(),
+  })
+  .strict()
+  .optional();
+
 export const DiscordAccountSchema = z
   .object({
     name: z.string().optional(),
@@ -290,6 +339,10 @@ export const DiscordAccountSchema = z
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    // Canonical streaming mode. Legacy aliases (`streamMode`, boolean `streaming`) are auto-mapped.
+    streaming: z.union([z.boolean(), z.enum(["off", "partial", "block", "progress"])]).optional(),
+    streamMode: z.enum(["partial", "block", "off"]).optional(),
+    draftChunk: BlockStreamingChunkSchema.optional(),
     maxLinesPerMessage: z.number().int().positive().optional(),
     mediaMaxMb: z.number().positive().optional(),
     retry: RetryConfigSchema,
@@ -338,6 +391,20 @@ export const DiscordAccountSchema = z
       .strict()
       .optional(),
     ui: DiscordUiSchema,
+    slashCommand: z
+      .object({
+        ephemeral: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    threadBindings: z
+      .object({
+        enabled: z.boolean().optional(),
+        ttlHours: z.number().nonnegative().optional(),
+        spawnSubagentSessions: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
     intents: z
       .object({
         presence: z.boolean().optional(),
@@ -345,6 +412,7 @@ export const DiscordAccountSchema = z
       })
       .strict()
       .optional(),
+    voice: DiscordVoiceSchema,
     pluralkit: z
       .object({
         enabled: z.boolean().optional(),
@@ -363,6 +431,8 @@ export const DiscordAccountSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
+    normalizeDiscordStreamingConfig(value);
+
     const activityText = typeof value.activity === "string" ? value.activity.trim() : "";
     const hasActivity = Boolean(activityText);
     const hasActivityType = value.activityType !== undefined;
@@ -551,7 +621,9 @@ export const SlackAccountSchema = z
     chunkMode: z.enum(["length", "newline"]).optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
-    streaming: z.boolean().optional(),
+    streaming: z.union([z.boolean(), z.enum(["off", "partial", "block", "progress"])]).optional(),
+    nativeStreaming: z.boolean().optional(),
+    streamMode: z.enum(["replace", "status_final", "append"]).optional(),
     mediaMaxMb: z.number().positive().optional(),
     reactionNotifications: z.enum(["off", "own", "all", "allowlist"]).optional(),
     reactionAllowlist: z.array(z.union([z.string(), z.number()])).optional(),
@@ -593,6 +665,8 @@ export const SlackAccountSchema = z
   })
   .strict()
   .superRefine((value, ctx) => {
+    normalizeSlackStreamingConfig(value);
+
     const dmPolicy = value.dmPolicy ?? value.dm?.policy ?? "pairing";
     const allowFrom = value.allowFrom ?? value.dm?.allowFrom;
     const allowFromPath =

@@ -69,6 +69,24 @@ repos:
         args: [--persona=regular, --min-severity=medium, --min-confidence=medium]
         exclude: "^(vendor/|Swabble/)"
 
+  # Python checks for skills scripts
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.1
+    hooks:
+      - id: ruff
+        files: "^skills/.*\\.py$"
+        args: [--config, pyproject.toml]
+
+  - repo: local
+    hooks:
+      - id: skills-python-tests
+        name: skills python tests
+        entry: pytest -q skills
+        language: python
+        additional_dependencies: [pytest>=8, <9]
+        pass_filenames: false
+        files: "^skills/.*\\.py$"
+
   # Project checks (same commands as CI)
   - repo: local
     hooks:

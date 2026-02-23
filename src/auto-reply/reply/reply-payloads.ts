@@ -2,6 +2,7 @@ import { isMessagingToolDuplicate } from "../../agents/pi-embedded-helpers.js";
 import type { MessagingToolSend } from "../../agents/pi-embedded-runner.js";
 import type { ReplyToMode } from "../../config/types.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
+import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { extractReplyToTag } from "./reply-tags.js";
@@ -99,16 +100,35 @@ export function filterMessagingToolMediaDuplicates(params: {
   payloads: ReplyPayload[];
   sentMediaUrls: string[];
 }): ReplyPayload[] {
+  const normalizeMediaForDedupe = (value: string): string => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return "";
+    }
+    if (!trimmed.toLowerCase().startsWith("file://")) {
+      return trimmed;
+    }
+    try {
+      const parsed = new URL(trimmed);
+      if (parsed.protocol === "file:") {
+        return decodeURIComponent(parsed.pathname || "");
+      }
+    } catch {
+      // Keep fallback below for non-URL-like inputs.
+    }
+    return trimmed.replace(/^file:\/\//i, "");
+  };
+
   const { payloads, sentMediaUrls } = params;
   if (sentMediaUrls.length === 0) {
     return payloads;
   }
-  const sentSet = new Set(sentMediaUrls);
+  const sentSet = new Set(sentMediaUrls.map(normalizeMediaForDedupe).filter(Boolean));
   return payloads.map((payload) => {
     const mediaUrl = payload.mediaUrl;
     const mediaUrls = payload.mediaUrls;
-    const stripSingle = mediaUrl && sentSet.has(mediaUrl);
-    const filteredUrls = mediaUrls?.filter((u) => !sentSet.has(u));
+    const stripSingle = mediaUrl && sentSet.has(normalizeMediaForDedupe(mediaUrl));
+    const filteredUrls = mediaUrls?.filter((u) => !sentSet.has(normalizeMediaForDedupe(u)));
     if (!stripSingle && (!mediaUrls || filteredUrls?.length === mediaUrls.length)) {
       return payload; // No change
     }
@@ -118,11 +138,6 @@ export function filterMessagingToolMediaDuplicates(params: {
       mediaUrls: filteredUrls?.length ? filteredUrls : undefined,
     };
   });
-}
-
-function normalizeAccountId(value?: string): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed.toLowerCase() : undefined;
 }
 
 export function shouldSuppressMessagingToolReplies(params: {
@@ -139,7 +154,7 @@ export function shouldSuppressMessagingToolReplies(params: {
   if (!originTarget) {
     return false;
   }
-  const originAccount = normalizeAccountId(params.accountId);
+  const originAccount = normalizeOptionalAccountId(params.accountId);
   const sentTargets = params.messagingToolSentTargets ?? [];
   if (sentTargets.length === 0) {
     return false;
@@ -155,7 +170,7 @@ export function shouldSuppressMessagingToolReplies(params: {
     if (!targetKey) {
       return false;
     }
-    const targetAccount = normalizeAccountId(target.accountId);
+    const targetAccount = normalizeOptionalAccountId(target.accountId);
     if (originAccount && targetAccount && originAccount !== targetAccount) {
       return false;
     }

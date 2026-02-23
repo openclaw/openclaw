@@ -6,6 +6,13 @@ import { normalizeSignalAccountInput } from "./onboarding/signal.js";
 import { telegramOutbound } from "./outbound/telegram.js";
 import { whatsappOutbound } from "./outbound/whatsapp.js";
 
+function expectWhatsAppTargetResolutionError(result: unknown) {
+  expect(result).toEqual({
+    ok: false,
+    error: expect.any(Error),
+  });
+}
+
 describe("imessage target normalization", () => {
   it("preserves service prefixes for handles", () => {
     expect(normalizeIMessageMessagingTarget("sms:+1 (555) 222-3333")).toBe("sms:+15552223333");
@@ -149,10 +156,7 @@ describe("whatsappOutbound.resolveTarget", () => {
       mode: "implicit",
     });
 
-    expect(result).toEqual({
-      ok: false,
-      error: expect.any(Error),
-    });
+    expectWhatsAppTargetResolutionError(result);
   });
 
   it("returns error when implicit target is not in allowFrom", () => {
@@ -162,10 +166,7 @@ describe("whatsappOutbound.resolveTarget", () => {
       mode: "implicit",
     });
 
-    expect(result).toEqual({
-      ok: false,
-      error: expect.any(Error),
-    });
+    expectWhatsAppTargetResolutionError(result);
   });
 
   it("keeps group JID targets even when allowFrom does not contain them", () => {

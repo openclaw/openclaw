@@ -4,7 +4,7 @@ import { clampPercent, resolveUsageProviderId, withTimeout } from "./provider-us
 describe("provider-usage.shared", () => {
   it("normalizes supported usage provider ids", () => {
     expect(resolveUsageProviderId("z-ai")).toBe("zai");
-    expect(resolveUsageProviderId(" GOOGLE-ANTIGRAVITY ")).toBe("google-antigravity");
+    expect(resolveUsageProviderId(" GOOGLE-GEMINI-CLI ")).toBe("google-gemini-cli");
     expect(resolveUsageProviderId("unknown-provider")).toBeUndefined();
     expect(resolveUsageProviderId()).toBeUndefined();
   });

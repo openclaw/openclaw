@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -84,6 +84,25 @@ function createEnv(
   return env;
 }
 
+function requireSandbox(sandbox: DockerSetupSandbox | null): DockerSetupSandbox {
+  if (!sandbox) {
+    throw new Error("sandbox missing");
+  }
+  return sandbox;
+}
+
+function runDockerSetup(
+  sandbox: DockerSetupSandbox,
+  overrides: Record<string, string | undefined> = {},
+) {
+  return spawnSync("bash", [sandbox.scriptPath], {
+    cwd: sandbox.rootDir,
+    env: createEnv(sandbox, overrides),
+    encoding: "utf8",
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+}
+
 function resolveBashForCompatCheck(): string | null {
   for (const candidate of ["/bin/bash", "bash"]) {
     const probe = spawnSync(candidate, ["-c", "exit 0"], { encoding: "utf8" });
@@ -111,44 +130,49 @@ describe("docker-setup.sh", () => {
   });
 
   it("handles env defaults, home-volume mounts, and apt build args", async () => {
-    if (!sandbox) {
-      throw new Error("sandbox missing");
-    }
+    const activeSandbox = requireSandbox(sandbox);
 
-    const result = spawnSync("bash", [sandbox.scriptPath], {
-      cwd: sandbox.rootDir,
-      env: createEnv(sandbox, {
-        OPENCLAW_DOCKER_APT_PACKAGES: "ffmpeg build-essential",
-        OPENCLAW_EXTRA_MOUNTS: undefined,
-        OPENCLAW_HOME_VOLUME: "openclaw-home",
-      }),
-      stdio: ["ignore", "ignore", "pipe"],
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_DOCKER_APT_PACKAGES: "ffmpeg build-essential",
+      OPENCLAW_EXTRA_MOUNTS: undefined,
+      OPENCLAW_HOME_VOLUME: "openclaw-home",
     });
     expect(result.status).toBe(0);
-    const envFile = await readFile(join(sandbox.rootDir, ".env"), "utf8");
+    const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
     expect(envFile).toContain("OPENCLAW_DOCKER_APT_PACKAGES=ffmpeg build-essential");
     expect(envFile).toContain("OPENCLAW_EXTRA_MOUNTS=");
     expect(envFile).toContain("OPENCLAW_HOME_VOLUME=openclaw-home");
-    const extraCompose = await readFile(join(sandbox.rootDir, "docker-compose.extra.yml"), "utf8");
+    const extraCompose = await readFile(
+      join(activeSandbox.rootDir, "docker-compose.extra.yml"),
+      "utf8",
+    );
     expect(extraCompose).toContain("openclaw-home:/home/node");
     expect(extraCompose).toContain("volumes:");
     expect(extraCompose).toContain("openclaw-home:");
-    const log = await readFile(sandbox.logPath, "utf8");
+    const log = await readFile(activeSandbox.logPath, "utf8");
     expect(log).toContain("--build-arg OPENCLAW_DOCKER_APT_PACKAGES=ffmpeg build-essential");
   });
 
-  it("rejects injected multiline OPENCLAW_EXTRA_MOUNTS values", async () => {
-    if (!sandbox) {
-      throw new Error("sandbox missing");
-    }
+  it("precreates config identity dir for CLI device auth writes", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    const configDir = join(activeSandbox.rootDir, "config-identity");
+    const workspaceDir = join(activeSandbox.rootDir, "workspace-identity");
 
-    const result = spawnSync("bash", [sandbox.scriptPath], {
-      cwd: sandbox.rootDir,
-      env: createEnv(sandbox, {
-        OPENCLAW_EXTRA_MOUNTS: "/tmp:/tmp\n  evil-service:\n    image: alpine",
-      }),
-      encoding: "utf8",
-      stdio: ["ignore", "ignore", "pipe"],
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_CONFIG_DIR: configDir,
+      OPENCLAW_WORKSPACE_DIR: workspaceDir,
+    });
+
+    expect(result.status).toBe(0);
+    const identityDirStat = await stat(join(configDir, "identity"));
+    expect(identityDirStat.isDirectory()).toBe(true);
+  });
+
+  it("rejects injected multiline OPENCLAW_EXTRA_MOUNTS values", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_EXTRA_MOUNTS: "/tmp:/tmp\n  evil-service:\n    image: alpine",
     });
 
     expect(result.status).not.toBe(0);
@@ -156,17 +180,10 @@ describe("docker-setup.sh", () => {
   });
 
   it("rejects invalid OPENCLAW_EXTRA_MOUNTS mount format", async () => {
-    if (!sandbox) {
-      throw new Error("sandbox missing");
-    }
+    const activeSandbox = requireSandbox(sandbox);
 
-    const result = spawnSync("bash", [sandbox.scriptPath], {
-      cwd: sandbox.rootDir,
-      env: createEnv(sandbox, {
-        OPENCLAW_EXTRA_MOUNTS: "bad mount spec",
-      }),
-      encoding: "utf8",
-      stdio: ["ignore", "ignore", "pipe"],
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_EXTRA_MOUNTS: "bad mount spec",
     });
 
     expect(result.status).not.toBe(0);
@@ -174,17 +191,10 @@ describe("docker-setup.sh", () => {
   });
 
   it("rejects invalid OPENCLAW_HOME_VOLUME names", async () => {
-    if (!sandbox) {
-      throw new Error("sandbox missing");
-    }
+    const activeSandbox = requireSandbox(sandbox);
 
-    const result = spawnSync("bash", [sandbox.scriptPath], {
-      cwd: sandbox.rootDir,
-      env: createEnv(sandbox, {
-        OPENCLAW_HOME_VOLUME: "bad name",
-      }),
-      encoding: "utf8",
-      stdio: ["ignore", "ignore", "pipe"],
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_HOME_VOLUME: "bad name",
     });
 
     expect(result.status).not.toBe(0);

@@ -95,6 +95,11 @@ export const en: TranslationMap = {
       failed:
         "Auth failed. Re-copy a tokenized URL with {command}, or update the token, then click Connect.",
     },
+    pairing: {
+      hint: "This device needs pairing approval from the gateway host.",
+      mobileHint:
+        "On mobile? Copy the full URL (including #token=...) from openclaw dashboard --no-open on your desktop.",
+    },
     insecure: {
       hint: "This page is HTTP, so the browser blocks device identity. Use HTTPS (Tailscale Serve) or open {url} on the gateway host.",
       stayHttp: "If you must stay on HTTP, set {config} (token-only).",

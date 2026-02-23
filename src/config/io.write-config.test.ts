@@ -96,6 +96,34 @@ describe("config io write", () => {
     });
   });
 
+  it("honors explicit unset paths when schema defaults would otherwise reappear", async () => {
+    await withTempHome("openclaw-config-io-", async (home) => {
+      const { configPath, io, snapshot } = await writeConfigAndCreateIo({
+        home,
+        initialConfig: {
+          gateway: { auth: { mode: "none" } },
+          commands: { ownerDisplay: "hash" },
+        },
+      });
+
+      const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
+      if (
+        next.commands &&
+        typeof next.commands === "object" &&
+        "ownerDisplay" in (next.commands as Record<string, unknown>)
+      ) {
+        delete (next.commands as Record<string, unknown>).ownerDisplay;
+      }
+
+      await io.writeConfigFile(next, { unsetPaths: [["commands", "ownerDisplay"]] });
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        commands?: Record<string, unknown>;
+      };
+      expect(persisted.commands ?? {}).not.toHaveProperty("ownerDisplay");
+    });
+  });
+
   it("preserves env var references when writing", async () => {
     await withTempHome("openclaw-config-io-", async (home) => {
       const { configPath, io, snapshot } = await writeConfigAndCreateIo({

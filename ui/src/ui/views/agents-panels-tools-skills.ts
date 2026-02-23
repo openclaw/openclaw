@@ -1,6 +1,6 @@
 import { html, nothing } from "lit";
 import { normalizeToolName } from "../../../../src/agents/tool-policy-shared.js";
-import type { SkillStatusEntry, SkillStatusReport } from "../types.ts";
+import type { SkillStatusEntry, SkillStatusReport, ToolsCatalogResult } from "../types.ts";
 import {
   isAllowedByPolicy,
   matchesList,
@@ -23,6 +23,9 @@ export function renderAgentTools(params: {
   configLoading: boolean;
   configSaving: boolean;
   configDirty: boolean;
+  toolsCatalogLoading: boolean;
+  toolsCatalogError: string | null;
+  toolsCatalogResult: ToolsCatalogResult | null;
   onProfileChange: (agentId: string, profile: string | null, clearAllow: boolean) => void;
   onOverridesChange: (agentId: string, alsoAllow: string[], deny: string[]) => void;
   onConfigReload: () => void;
@@ -50,7 +53,17 @@ export function renderAgentTools(params: {
   const basePolicy = hasAgentAllow
     ? { allow: agentTools.allow ?? [], deny: agentTools.deny ?? [] }
     : (resolveToolProfile(profile) ?? undefined);
-  const toolIds = TOOL_SECTIONS.flatMap((section) => section.tools.map((tool) => tool.id));
+  const sections =
+    params.toolsCatalogResult?.groups?.length &&
+    params.toolsCatalogResult.agentId === params.agentId
+      ? params.toolsCatalogResult.groups
+      : TOOL_SECTIONS;
+  const profileOptions =
+    params.toolsCatalogResult?.profiles?.length &&
+    params.toolsCatalogResult.agentId === params.agentId
+      ? params.toolsCatalogResult.profiles
+      : PROFILE_OPTIONS;
+  const toolIds = sections.flatMap((section) => section.tools.map((tool) => tool.id));
 
   const resolveAllowed = (toolId: string) => {
     const baseAllowed = isAllowedByPolicy(toolId, basePolicy);
@@ -140,6 +153,15 @@ export function renderAgentTools(params: {
       </div>
 
       ${
+        params.toolsCatalogError
+          ? html`
+              <div class="callout warn" style="margin-top: 12px">
+                Could not load runtime tool catalog. Showing fallback list.
+              </div>
+            `
+          : nothing
+      }
+      ${
         !params.configForm
           ? html`
               <div class="callout info" style="margin-top: 12px">
@@ -191,7 +213,7 @@ export function renderAgentTools(params: {
       <div class="agent-tools-presets" style="margin-top: 16px;">
         <div class="label">Quick Presets</div>
         <div class="agent-tools-buttons">
-          ${PROFILE_OPTIONS.map(
+          ${profileOptions.map(
             (option) => html`
               <button
                 class="btn btn--sm ${profile === option.id ? "active" : ""}"
@@ -213,18 +235,49 @@ export function renderAgentTools(params: {
       </div>
 
       <div class="agent-tools-grid" style="margin-top: 20px;">
-        ${TOOL_SECTIONS.map(
+        ${sections.map(
           (section) =>
             html`
               <div class="agent-tools-section">
-                <div class="agent-tools-header">${section.label}</div>
+                <div class="agent-tools-header">
+                  ${section.label}
+                  ${
+                    "source" in section && section.source === "plugin"
+                      ? html`
+                          <span class="mono" style="margin-left: 6px">plugin</span>
+                        `
+                      : nothing
+                  }
+                </div>
                 <div class="agent-tools-list">
                   ${section.tools.map((tool) => {
                     const { allowed } = resolveAllowed(tool.id);
+                    const catalogTool = tool as {
+                      source?: "core" | "plugin";
+                      pluginId?: string;
+                      optional?: boolean;
+                    };
+                    const source =
+                      catalogTool.source === "plugin"
+                        ? catalogTool.pluginId
+                          ? `plugin:${catalogTool.pluginId}`
+                          : "plugin"
+                        : "core";
+                    const isOptional = catalogTool.optional === true;
                     return html`
                       <div class="agent-tool-row">
                         <div>
-                          <div class="agent-tool-title mono">${tool.label}</div>
+                          <div class="agent-tool-title mono">
+                            ${tool.label}
+                            <span class="mono" style="margin-left: 8px; opacity: 0.8;">${source}</span>
+                            ${
+                              isOptional
+                                ? html`
+                                    <span class="mono" style="margin-left: 6px; opacity: 0.8">optional</span>
+                                  `
+                                : nothing
+                            }
+                          </div>
                           <div class="agent-tool-sub">${tool.description}</div>
                         </div>
                         <label class="cfg-toggle">
@@ -245,6 +298,13 @@ export function renderAgentTools(params: {
             `,
         )}
       </div>
+      ${
+        params.toolsCatalogLoading
+          ? html`
+              <div class="card-sub" style="margin-top: 10px">Refreshing tool catalog…</div>
+            `
+          : nothing
+      }
     </section>
   `;
 }

@@ -293,4 +293,127 @@ describe("diagnostics-otel service", () => {
     expect(options?.url).toBe("https://collector.example.com/v1/Traces");
     await service.stop?.(ctx);
   });
+
+  test("redacts sensitive data from log messages before export", async () => {
+    const registeredTransports: Array<(logObj: Record<string, unknown>) => void> = [];
+    const stopTransport = vi.fn();
+    registerLogTransportMock.mockImplementation((transport) => {
+      registeredTransports.push(transport);
+      return stopTransport;
+    });
+
+    const service = createDiagnosticsOtelService();
+    const ctx: OpenClawPluginServiceContext = {
+      config: {
+        diagnostics: {
+          enabled: true,
+          otel: {
+            enabled: true,
+            endpoint: "http://otel-collector:4318",
+            protocol: "http/protobuf",
+            logs: true,
+          },
+        },
+      },
+      logger: createLogger(),
+      stateDir: "/tmp/openclaw-diagnostics-otel-test",
+    };
+    await service.start(ctx);
+    expect(registeredTransports).toHaveLength(1);
+    registeredTransports[0]?.({
+      0: "Using API key sk-1234567890abcdef1234567890abcdef",
+      _meta: { logLevelName: "INFO", date: new Date() },
+    });
+
+    expect(logEmit).toHaveBeenCalled();
+    const emitCall = logEmit.mock.calls[0]?.[0];
+    expect(emitCall?.body).not.toContain("sk-1234567890abcdef1234567890abcdef");
+    expect(emitCall?.body).toContain("sk-123");
+    expect(emitCall?.body).toContain("…");
+    await service.stop?.(ctx);
+  });
+
+  test("redacts sensitive data from log attributes before export", async () => {
+    const registeredTransports: Array<(logObj: Record<string, unknown>) => void> = [];
+    const stopTransport = vi.fn();
+    registerLogTransportMock.mockImplementation((transport) => {
+      registeredTransports.push(transport);
+      return stopTransport;
+    });
+
+    const service = createDiagnosticsOtelService();
+    const ctx: OpenClawPluginServiceContext = {
+      config: {
+        diagnostics: {
+          enabled: true,
+          otel: {
+            enabled: true,
+            endpoint: "http://otel-collector:4318",
+            protocol: "http/protobuf",
+            logs: true,
+          },
+        },
+      },
+      logger: createLogger(),
+      stateDir: "/tmp/openclaw-diagnostics-otel-test",
+    };
+    await service.start(ctx);
+    expect(registeredTransports).toHaveLength(1);
+    registeredTransports[0]?.({
+      0: '{"token":"ghp_abcdefghijklmnopqrstuvwxyz123456"}',
+      1: "auth configured",
+      _meta: { logLevelName: "DEBUG", date: new Date() },
+    });
+
+    expect(logEmit).toHaveBeenCalled();
+    const emitCall = logEmit.mock.calls[0]?.[0];
+    const tokenAttr = emitCall?.attributes?.["openclaw.token"];
+    expect(tokenAttr).not.toBe("ghp_abcdefghijklmnopqrstuvwxyz123456");
+    if (typeof tokenAttr === "string") {
+      expect(tokenAttr).toContain("…");
+    }
+    await service.stop?.(ctx);
+  });
+
+  test("redacts sensitive reason in session.state metric attributes", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx: OpenClawPluginServiceContext = {
+      config: {
+        diagnostics: {
+          enabled: true,
+          otel: {
+            enabled: true,
+            endpoint: "http://otel-collector:4318",
+            protocol: "http/protobuf",
+            metrics: true,
+            traces: false,
+            logs: false,
+          },
+        },
+      },
+      logger: createLogger(),
+      stateDir: "/tmp/openclaw-diagnostics-otel-test",
+    };
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "session.state",
+      state: "waiting",
+      reason: "token=ghp_abcdefghijklmnopqrstuvwxyz123456",
+    });
+
+    const sessionCounter = telemetryState.counters.get("openclaw.session.state");
+    expect(sessionCounter?.add).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({
+        "openclaw.reason": expect.stringContaining("…"),
+      }),
+    );
+    const attrs = sessionCounter?.add.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    expect(typeof attrs?.["openclaw.reason"]).toBe("string");
+    expect(String(attrs?.["openclaw.reason"])).not.toContain(
+      "ghp_abcdefghijklmnopqrstuvwxyz123456",
+    );
+    await service.stop?.(ctx);
+  });
 });

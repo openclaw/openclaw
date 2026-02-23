@@ -1,4 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
+import type { DmScope } from "../config/types.base.js";
+
+export const ONBOARDING_DEFAULT_DM_SCOPE: DmScope = "per-channel-peer";
 
 export function applyOnboardingLocalWorkspaceConfig(
   baseConfig: OpenClawConfig,
@@ -16,6 +19,10 @@ export function applyOnboardingLocalWorkspaceConfig(
     gateway: {
       ...baseConfig.gateway,
       mode: "local",
+    },
+    session: {
+      ...baseConfig.session,
+      dmScope: baseConfig.session?.dmScope ?? ONBOARDING_DEFAULT_DM_SCOPE,
     },
   };
 }

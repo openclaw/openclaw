@@ -25,9 +25,16 @@ export type TelegramActionConfig = {
 export type TelegramNetworkConfig = {
   /** Override Node's autoSelectFamily behavior (true = enable, false = disable). */
   autoSelectFamily?: boolean;
+  /**
+   * DNS result order for network requests ("ipv4first" | "verbatim").
+   * Set to "ipv4first" to prioritize IPv4 addresses and work around IPv6 issues.
+   * Default: "ipv4first" on Node 22+ to avoid common fetch failures.
+   */
+  dnsResultOrder?: "ipv4first" | "verbatim";
 };
 
 export type TelegramInlineButtonsScope = "off" | "dm" | "group" | "all" | "allowlist";
+export type TelegramStreamingMode = "off" | "partial" | "block" | "progress";
 
 export type TelegramCapabilitiesConfig =
   | string[]
@@ -95,13 +102,23 @@ export type TelegramAccountConfig = {
   textChunkLimit?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
   chunkMode?: "length" | "newline";
+  /**
+   * Stream preview mode:
+   * - "off": disable preview updates
+   * - "partial": edit a single preview message
+   * - "block": stream in larger chunked updates
+   * - "progress": alias that maps to "partial" on Telegram
+   *
+   * Legacy boolean values are still accepted and auto-migrated.
+   */
+  streaming?: TelegramStreamingMode | boolean;
   /** Disable block streaming for this account. */
   blockStreaming?: boolean;
-  /** Chunking config for Telegram stream previews in `streamMode: "block"`. */
+  /** @deprecated Legacy chunking config from `streamMode: "block"`; ignored after migration. */
   draftChunk?: BlockStreamingChunkConfig;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
-  /** Telegram stream preview mode (off|partial|block). Default: partial. */
+  /** @deprecated Legacy key; migrated automatically to `streaming`. */
   streamMode?: "off" | "partial" | "block";
   mediaMaxMb?: number;
   /** Telegram API client timeout in seconds (grammY ApiClientOptions). */
@@ -116,6 +133,8 @@ export type TelegramAccountConfig = {
   webhookPath?: string;
   /** Local webhook listener bind host (default: 127.0.0.1). */
   webhookHost?: string;
+  /** Local webhook listener bind port (default: 8787). */
+  webhookPort?: number;
   /** Per-action tool gating (default: true for all). */
   actions?: TelegramActionConfig;
   /**

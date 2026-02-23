@@ -1,10 +1,39 @@
 import { execFileSync } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { isTruthyEnvValue } from "./env.js";
+import { sanitizeHostExecEnv } from "./host-env-security.js";
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_BUFFER_BYTES = 2 * 1024 * 1024;
+const DEFAULT_SHELL = "/bin/sh";
+const TRUSTED_SHELL_PREFIXES = [
+  "/bin/",
+  "/usr/bin/",
+  "/usr/local/bin/",
+  "/opt/homebrew/bin/",
+  "/run/current-system/sw/bin/",
+];
 let lastAppliedKeys: string[] = [];
 let cachedShellPath: string | null | undefined;
+let cachedEtcShells: Set<string> | null | undefined;
+
+function resolveShellExecEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const execEnv = sanitizeHostExecEnv({ baseEnv: env });
+
+  // Startup-file resolution must stay pinned to the real user home.
+  const home = os.homedir().trim();
+  if (home) {
+    execEnv.HOME = home;
+  } else {
+    delete execEnv.HOME;
+  }
+
+  // Avoid zsh startup-file redirection via env poisoning.
+  delete execEnv.ZDOTDIR;
+  return execEnv;
+}
 
 function resolveTimeoutMs(timeoutMs: number | undefined): number {
   if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs)) {
@@ -13,9 +42,57 @@ function resolveTimeoutMs(timeoutMs: number | undefined): number {
   return Math.max(0, timeoutMs);
 }
 
+function readEtcShells(): Set<string> | null {
+  if (cachedEtcShells !== undefined) {
+    return cachedEtcShells;
+  }
+  try {
+    const raw = fs.readFileSync("/etc/shells", "utf8");
+    const entries = raw
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0 && !line.startsWith("#") && path.isAbsolute(line));
+    cachedEtcShells = new Set(entries);
+  } catch {
+    cachedEtcShells = null;
+  }
+  return cachedEtcShells;
+}
+
+function isTrustedShellPath(shell: string): boolean {
+  if (!path.isAbsolute(shell)) {
+    return false;
+  }
+  const normalized = path.normalize(shell);
+  if (normalized !== shell) {
+    return false;
+  }
+
+  // Primary trust anchor: shell registered in /etc/shells.
+  const registeredShells = readEtcShells();
+  if (registeredShells?.has(shell)) {
+    return true;
+  }
+
+  // Fallback for environments where /etc/shells is incomplete/unavailable.
+  if (!TRUSTED_SHELL_PREFIXES.some((prefix) => shell.startsWith(prefix))) {
+    return false;
+  }
+
+  try {
+    fs.accessSync(shell, fs.constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function resolveShell(env: NodeJS.ProcessEnv): string {
   const shell = env.SHELL?.trim();
-  return shell && shell.length > 0 ? shell : "/bin/sh";
+  if (shell && isTrustedShellPath(shell)) {
+    return shell;
+  }
+  return DEFAULT_SHELL;
 }
 
 function execLoginShellEnvZero(params: {
@@ -86,10 +163,11 @@ export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFal
   const timeoutMs = resolveTimeoutMs(opts.timeoutMs);
 
   const shell = resolveShell(opts.env);
+  const execEnv = resolveShellExecEnv(opts.env);
 
   let stdout: Buffer;
   try {
-    stdout = execLoginShellEnvZero({ shell, env: opts.env, exec, timeoutMs });
+    stdout = execLoginShellEnvZero({ shell, env: execEnv, exec, timeoutMs });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.warn(`[openclaw] shell env fallback failed: ${msg}`);
@@ -154,10 +232,11 @@ export function getShellPathFromLoginShell(opts: {
   const exec = opts.exec ?? execFileSync;
   const timeoutMs = resolveTimeoutMs(opts.timeoutMs);
   const shell = resolveShell(opts.env);
+  const execEnv = resolveShellExecEnv(opts.env);
 
   let stdout: Buffer;
   try {
-    stdout = execLoginShellEnvZero({ shell, env: opts.env, exec, timeoutMs });
+    stdout = execLoginShellEnvZero({ shell, env: execEnv, exec, timeoutMs });
   } catch {
     cachedShellPath = null;
     return cachedShellPath;
@@ -171,6 +250,7 @@ export function getShellPathFromLoginShell(opts: {
 
 export function resetShellPathCacheForTests(): void {
   cachedShellPath = undefined;
+  cachedEtcShells = undefined;
 }
 
 export function getShellEnvAppliedKeys(): string[] {

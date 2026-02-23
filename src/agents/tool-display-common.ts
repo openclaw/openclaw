@@ -520,20 +520,26 @@ function scanTopLevelChars(
   }
 }
 
-function firstTopLevelStage(command: string): string {
-  let splitIndex = -1;
+function splitTopLevelStages(command: string): string[] {
+  const parts: string[] = [];
+  let start = 0;
+
   scanTopLevelChars(command, (char, index) => {
     if (char === ";") {
-      splitIndex = index;
-      return false;
+      parts.push(command.slice(start, index));
+      start = index + 1;
+      return true;
     }
     if ((char === "&" || char === "|") && command[index + 1] === char) {
-      splitIndex = index;
-      return false;
+      parts.push(command.slice(start, index));
+      start = index + 2;
+      return true;
     }
     return true;
   });
-  return splitIndex >= 0 ? command.slice(0, splitIndex) : command;
+
+  parts.push(command.slice(start));
+  return parts.map((part) => part.trim()).filter((part) => part.length > 0);
 }
 
 function splitTopLevelPipes(command: string): string[] {
@@ -552,29 +558,70 @@ function splitTopLevelPipes(command: string): string[] {
   return parts.map((part) => part.trim()).filter((part) => part.length > 0);
 }
 
-function stripShellPreamble(command: string): string {
+function parseChdirTarget(head: string): string | undefined {
+  const words = splitShellWords(head, 3);
+  const bin = binaryName(words[0]);
+  if (bin === "cd" || bin === "pushd") {
+    return words[1] || undefined;
+  }
+  return undefined;
+}
+
+function isChdirCommand(head: string): boolean {
+  const bin = binaryName(splitShellWords(head, 2)[0]);
+  return bin === "cd" || bin === "pushd" || bin === "popd";
+}
+
+function isPopdCommand(head: string): boolean {
+  return binaryName(splitShellWords(head, 2)[0]) === "popd";
+}
+
+type PreambleResult = {
+  command: string;
+  chdirPath?: string;
+};
+
+function stripShellPreamble(command: string): PreambleResult {
   let rest = command.trim();
+  let chdirPath: string | undefined;
 
   for (let i = 0; i < 4; i += 1) {
-    const andIndex = rest.indexOf("&&");
-    const semicolonIndex = rest.indexOf(";");
-    const newlineIndex = rest.indexOf("\n");
-
-    const candidates = [
-      { index: andIndex, length: 2 },
-      { index: semicolonIndex, length: 1 },
-      { index: newlineIndex, length: 1 },
-    ]
-      .filter((candidate) => candidate.index >= 0)
-      .toSorted((a, b) => a.index - b.index);
-
-    const first = candidates[0];
+    // Find the first top-level separator (&&, ||, ;, \n) respecting quotes/escaping.
+    let first: { index: number; length: number; isOr?: boolean } | undefined;
+    scanTopLevelChars(rest, (char, idx) => {
+      if (char === "&" && rest[idx + 1] === "&") {
+        first = { index: idx, length: 2 };
+        return false;
+      }
+      if (char === "|" && rest[idx + 1] === "|") {
+        first = { index: idx, length: 2, isOr: true };
+        return false;
+      }
+      if (char === ";" || char === "\n") {
+        first = { index: idx, length: 1 };
+        return false;
+      }
+    });
     const head = (first ? rest.slice(0, first.index) : rest).trim();
+    // cd/pushd/popd is preamble when followed by && / ; / \n, or when we already
+    // stripped at least one preamble segment (handles chained cd's like `cd /tmp && cd /app`).
+    // NOT for || — `cd /app || npm install` means npm runs when cd *fails*, so (in /app) is wrong.
+    const isChdir = (first ? !first.isOr : i > 0) && isChdirCommand(head);
     const isPreamble =
-      head.startsWith("set ") || head.startsWith("export ") || head.startsWith("unset ");
+      head.startsWith("set ") || head.startsWith("export ") || head.startsWith("unset ") || isChdir;
 
     if (!isPreamble) {
       break;
+    }
+
+    if (isChdir) {
+      // popd returns to the previous directory, so inferred cwd from earlier
+      // preamble steps is no longer reliable.
+      if (isPopdCommand(head)) {
+        chdirPath = undefined;
+      } else {
+        chdirPath = parseChdirTarget(head) ?? chdirPath;
+      }
     }
 
     rest = first ? rest.slice(first.index + first.length).trimStart() : "";
@@ -583,7 +630,7 @@ function stripShellPreamble(command: string): string {
     }
   }
 
-  return rest.trim();
+  return { command: rest.trim(), chdirPath };
 }
 
 function summarizeKnownExec(words: string[]): string {
@@ -853,13 +900,7 @@ function summarizeKnownExec(words: string[]): string {
   return /^[A-Za-z0-9._/-]+$/.test(arg) ? `run ${bin} ${arg}` : `run ${bin}`;
 }
 
-function summarizeExecCommand(command: string): string | undefined {
-  const cleaned = stripShellPreamble(command);
-  const stage = firstTopLevelStage(cleaned).trim();
-  if (!stage) {
-    return cleaned ? summarizeKnownExec(trimLeadingEnv(splitShellWords(cleaned))) : undefined;
-  }
-
+function summarizePipeline(stage: string): string {
   const pipeline = splitTopLevelPipes(stage);
   if (pipeline.length > 1) {
     const first = summarizeKnownExec(trimLeadingEnv(splitShellWords(pipeline[0])));
@@ -867,8 +908,106 @@ function summarizeExecCommand(command: string): string | undefined {
     const extra = pipeline.length > 2 ? ` (+${pipeline.length - 2} steps)` : "";
     return `${first} -> ${last}${extra}`;
   }
-
   return summarizeKnownExec(trimLeadingEnv(splitShellWords(stage)));
+}
+
+type ExecSummary = {
+  text: string;
+  chdirPath?: string;
+  allGeneric?: boolean;
+};
+
+function summarizeExecCommand(command: string): ExecSummary | undefined {
+  const { command: cleaned, chdirPath } = stripShellPreamble(command);
+  if (!cleaned) {
+    // All segments were preamble (e.g. `cd /tmp && cd /app`) — preserve chdirPath for context.
+    return chdirPath ? { text: "", chdirPath } : undefined;
+  }
+
+  const stages = splitTopLevelStages(cleaned);
+  if (stages.length === 0) {
+    return undefined;
+  }
+
+  const summaries = stages.map((stage) => summarizePipeline(stage));
+  const text = summaries.length === 1 ? summaries[0] : summaries.join(" → ");
+  const allGeneric = summaries.every((s) => isGenericSummary(s));
+
+  return { text, chdirPath, allGeneric };
+}
+
+/** Known summarizer prefixes that indicate a recognized command with useful context. */
+const KNOWN_SUMMARY_PREFIXES = [
+  "check git",
+  "view git",
+  "show git",
+  "list git",
+  "switch git",
+  "create git",
+  "pull git",
+  "push git",
+  "fetch git",
+  "merge git",
+  "rebase git",
+  "stage git",
+  "restore git",
+  "reset git",
+  "stash git",
+  "search ",
+  "find files",
+  "list files",
+  "show first",
+  "show last",
+  "print line",
+  "print text",
+  "copy ",
+  "move ",
+  "remove ",
+  "create folder",
+  "create file",
+  "fetch http",
+  "install dependencies",
+  "run tests",
+  "run build",
+  "start app",
+  "run lint",
+  "run openclaw",
+  "run node script",
+  "run node ",
+  "run python",
+  "run ruby",
+  "run php",
+  "run sed",
+  "run git ",
+  "run npm ",
+  "run pnpm ",
+  "run yarn ",
+  "run bun ",
+  "check js syntax",
+];
+
+/** True when the summary is generic and the raw command would be more informative. */
+function isGenericSummary(summary: string): boolean {
+  if (summary === "run command") {
+    return true;
+  }
+  // "run <binary>" or "run <binary> <arg>" without useful context
+  if (summary.startsWith("run ")) {
+    return !KNOWN_SUMMARY_PREFIXES.some((prefix) => summary.startsWith(prefix));
+  }
+  return false;
+}
+
+/** Compact the raw command for display: collapse whitespace, trim long strings. */
+function compactRawCommand(raw: string, maxLength = 120): string {
+  const oneLine = raw
+    .replace(/\s*\n\s*/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  if (oneLine.length <= maxLength) {
+    return oneLine;
+  }
+  return `${oneLine.slice(0, Math.max(0, maxLength - 1))}…`;
 }
 
 export function resolveExecDetail(args: unknown): string | undefined {
@@ -883,7 +1022,8 @@ export function resolveExecDetail(args: unknown): string | undefined {
   }
 
   const unwrapped = unwrapShellWrapper(raw);
-  const summary = summarizeExecCommand(unwrapped) ?? summarizeExecCommand(raw) ?? "run command";
+  const result = summarizeExecCommand(unwrapped) ?? summarizeExecCommand(raw);
+  const summary = result?.text || "run command";
 
   const cwdRaw =
     typeof record.workdir === "string"
@@ -891,9 +1031,25 @@ export function resolveExecDetail(args: unknown): string | undefined {
       : typeof record.cwd === "string"
         ? record.cwd
         : undefined;
-  const cwd = cwdRaw?.trim();
+  // Explicit workdir takes priority; fall back to cd path extracted from the command.
+  const cwd = cwdRaw?.trim() || result?.chdirPath || undefined;
 
-  return cwd ? `${summary} (in ${cwd})` : summary;
+  const compact = compactRawCommand(unwrapped);
+
+  // When ALL stages are generic (e.g. "run jj"), use the compact raw command instead.
+  // For mixed stages like "run cargo build → run tests", keep the summary since some parts are useful.
+  if (result?.allGeneric !== false && isGenericSummary(summary)) {
+    return cwd ? `${compact} (in ${cwd})` : compact;
+  }
+
+  const displaySummary = cwd ? `${summary} (in ${cwd})` : summary;
+
+  // Append the raw command when the summary differs meaningfully from the command itself.
+  if (compact && compact !== displaySummary && compact !== summary) {
+    return `${displaySummary}\n\n\`${compact}\``;
+  }
+
+  return displaySummary;
 }
 
 export function resolveActionSpec(

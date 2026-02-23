@@ -50,12 +50,12 @@ describe("noteMemorySearchHealth", () => {
   }
 
   beforeEach(() => {
-    note.mockReset();
+    note.mockClear();
     resolveDefaultAgentId.mockClear();
     resolveAgentDir.mockClear();
-    resolveMemorySearchConfig.mockReset();
-    resolveApiKeyForProvider.mockReset();
-    resolveMemoryBackendConfig.mockReset();
+    resolveMemorySearchConfig.mockClear();
+    resolveApiKeyForProvider.mockClear();
+    resolveMemoryBackendConfig.mockClear();
     resolveMemoryBackendConfig.mockReturnValue({ backend: "builtin", citations: "auto" });
   });
 
@@ -99,6 +99,28 @@ describe("noteMemorySearchHealth", () => {
 
     expect(resolveApiKeyForProvider).toHaveBeenCalledWith({
       provider: "google",
+      cfg,
+      agentDir: "/tmp/agent-default",
+    });
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("resolves mistral auth for explicit mistral embedding provider", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "mistral",
+      local: {},
+      remote: {},
+    });
+    resolveApiKeyForProvider.mockResolvedValue({
+      apiKey: "k",
+      source: "env: MISTRAL_API_KEY",
+      mode: "api-key",
+    });
+
+    await noteMemorySearchHealth(cfg);
+
+    expect(resolveApiKeyForProvider).toHaveBeenCalledWith({
+      provider: "mistral",
       cfg,
       agentDir: "/tmp/agent-default",
     });

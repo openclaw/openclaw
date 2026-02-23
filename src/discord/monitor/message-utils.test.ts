@@ -1,4 +1,5 @@
 import { ChannelType, type Client, type Message } from "@buape/carbon";
+import { StickerFormatType } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const fetchRemoteMedia = vi.fn();
@@ -22,6 +23,7 @@ const {
   resolveDiscordMessageChannelId,
   resolveDiscordMessageText,
   resolveForwardedMediaList,
+  resolveMediaList,
 } = await import("./message-utils.js");
 
 function asMessage(payload: Record<string, unknown>): Message {
@@ -57,8 +59,8 @@ describe("resolveDiscordMessageChannelId", () => {
 
 describe("resolveForwardedMediaList", () => {
   beforeEach(() => {
-    fetchRemoteMedia.mockReset();
-    saveMediaBuffer.mockReset();
+    fetchRemoteMedia.mockClear();
+    saveMediaBuffer.mockClear();
   });
 
   it("downloads forwarded attachments", async () => {
@@ -90,6 +92,7 @@ describe("resolveForwardedMediaList", () => {
     expect(fetchRemoteMedia).toHaveBeenCalledWith({
       url: attachment.url,
       filePathHint: attachment.filename,
+      maxBytes: 512,
     });
     expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
     expect(saveMediaBuffer).toHaveBeenCalledWith(expect.any(Buffer), "image/png", "inbound", 512);
@@ -98,6 +101,47 @@ describe("resolveForwardedMediaList", () => {
         path: "/tmp/image.png",
         contentType: "image/png",
         placeholder: "<media:image>",
+      },
+    ]);
+  });
+
+  it("downloads forwarded stickers", async () => {
+    const sticker = {
+      id: "sticker-1",
+      name: "wave",
+      format_type: StickerFormatType.PNG,
+    };
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("sticker"),
+      contentType: "image/png",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/sticker.png",
+      contentType: "image/png",
+    });
+
+    const result = await resolveForwardedMediaList(
+      asMessage({
+        rawData: {
+          message_snapshots: [{ message: { sticker_items: [sticker] } }],
+        },
+      }),
+      512,
+    );
+
+    expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
+    expect(fetchRemoteMedia).toHaveBeenCalledWith({
+      url: "https://media.discordapp.net/stickers/sticker-1.png",
+      filePathHint: "wave.png",
+      maxBytes: 512,
+    });
+    expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
+    expect(saveMediaBuffer).toHaveBeenCalledWith(expect.any(Buffer), "image/png", "inbound", 512);
+    expect(result).toEqual([
+      {
+        path: "/tmp/sticker.png",
+        contentType: "image/png",
+        placeholder: "<media:sticker>",
       },
     ]);
   });
@@ -121,6 +165,52 @@ describe("resolveForwardedMediaList", () => {
 
     expect(result).toEqual([]);
     expect(fetchRemoteMedia).not.toHaveBeenCalled();
+  });
+});
+
+describe("resolveMediaList", () => {
+  beforeEach(() => {
+    fetchRemoteMedia.mockClear();
+    saveMediaBuffer.mockClear();
+  });
+
+  it("downloads stickers", async () => {
+    const sticker = {
+      id: "sticker-2",
+      name: "hello",
+      format_type: StickerFormatType.PNG,
+    };
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("sticker"),
+      contentType: "image/png",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/sticker-2.png",
+      contentType: "image/png",
+    });
+
+    const result = await resolveMediaList(
+      asMessage({
+        stickers: [sticker],
+      }),
+      512,
+    );
+
+    expect(fetchRemoteMedia).toHaveBeenCalledTimes(1);
+    expect(fetchRemoteMedia).toHaveBeenCalledWith({
+      url: "https://media.discordapp.net/stickers/sticker-2.png",
+      filePathHint: "hello.png",
+      maxBytes: 512,
+    });
+    expect(saveMediaBuffer).toHaveBeenCalledTimes(1);
+    expect(saveMediaBuffer).toHaveBeenCalledWith(expect.any(Buffer), "image/png", "inbound", 512);
+    expect(result).toEqual([
+      {
+        path: "/tmp/sticker-2.png",
+        contentType: "image/png",
+        placeholder: "<media:sticker>",
+      },
+    ]);
   });
 });
 
@@ -151,6 +241,23 @@ describe("resolveDiscordMessageText", () => {
 
     expect(text).toContain("[Forwarded message from @Bob]");
     expect(text).toContain("forwarded hello");
+  });
+
+  it("uses sticker placeholders when content is empty", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "",
+        stickers: [
+          {
+            id: "sticker-3",
+            name: "party",
+            format_type: StickerFormatType.PNG,
+          },
+        ],
+      }),
+    );
+
+    expect(text).toBe("<media:sticker> (1 sticker)");
   });
 });
 

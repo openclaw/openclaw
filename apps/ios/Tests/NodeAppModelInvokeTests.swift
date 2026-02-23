@@ -42,23 +42,27 @@ private final class MockWatchMessagingService: WatchMessagingServicing, @uncheck
         queuedForDelivery: false,
         transport: "sendMessage")
     var sendError: Error?
-    var lastSent: (id: String, title: String, body: String, priority: OpenClawNotificationPriority?)?
+    var lastSent: (id: String, params: OpenClawWatchNotifyParams)?
+    private var replyHandler: (@Sendable (WatchQuickReplyEvent) -> Void)?
 
     func status() async -> WatchMessagingStatus {
         self.currentStatus
     }
 
-    func sendNotification(
-        id: String,
-        title: String,
-        body: String,
-        priority: OpenClawNotificationPriority?) async throws -> WatchNotificationSendResult
-    {
-        self.lastSent = (id: id, title: title, body: body, priority: priority)
+    func setReplyHandler(_ handler: (@Sendable (WatchQuickReplyEvent) -> Void)?) {
+        self.replyHandler = handler
+    }
+
+    func sendNotification(id: String, params: OpenClawWatchNotifyParams) async throws -> WatchNotificationSendResult {
+        self.lastSent = (id: id, params: params)
         if let sendError = self.sendError {
             throw sendError
         }
         return self.nextSendResult
+    }
+
+    func emitReply(_ event: WatchQuickReplyEvent) {
+        self.replyHandler?(event)
     }
 }
 
@@ -243,9 +247,9 @@ private final class MockWatchMessagingService: WatchMessagingServicing, @uncheck
 
         let res = await appModel._test_handleInvoke(req)
         #expect(res.ok == true)
-        #expect(watchService.lastSent?.title == "OpenClaw")
-        #expect(watchService.lastSent?.body == "Meeting with Peter is at 4pm")
-        #expect(watchService.lastSent?.priority == .timeSensitive)
+        #expect(watchService.lastSent?.params.title == "OpenClaw")
+        #expect(watchService.lastSent?.params.body == "Meeting with Peter is at 4pm")
+        #expect(watchService.lastSent?.params.priority == .timeSensitive)
 
         let payloadData = try #require(res.payloadJSON?.data(using: .utf8))
         let payload = try JSONDecoder().decode(OpenClawWatchNotifyPayload.self, from: payloadData)
@@ -290,6 +294,22 @@ private final class MockWatchMessagingService: WatchMessagingServicing, @uncheck
         #expect(res.ok == false)
         #expect(res.error?.code == .unavailable)
         #expect(res.error?.message.contains("WATCH_UNAVAILABLE") == true)
+    }
+
+    @Test @MainActor func watchReplyQueuesWhenGatewayOffline() async {
+        let watchService = MockWatchMessagingService()
+        let appModel = NodeAppModel(watchMessagingService: watchService)
+        watchService.emitReply(
+            WatchQuickReplyEvent(
+                replyId: "reply-offline-1",
+                promptId: "prompt-1",
+                actionId: "approve",
+                actionLabel: "Approve",
+                sessionKey: "ios",
+                note: nil,
+                sentAtMs: 1234,
+                transport: "transferUserInfo"))
+        #expect(appModel._test_queuedWatchReplyCount() == 1)
     }
 
     @Test @MainActor func handleDeepLinkSetsErrorWhenNotConnected() async {

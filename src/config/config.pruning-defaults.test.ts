@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { withEnvAsync } from "../test-utils/env.js";
 import { loadConfig } from "./config.js";
 import { withTempHome } from "./test-helpers.js";
 
@@ -16,27 +17,15 @@ async function writeConfigForTest(home: string, config: unknown): Promise<void> 
 
 describe("config pruning defaults", () => {
   it("does not enable contextPruning by default", async () => {
-    const prevApiKey = process.env.ANTHROPIC_API_KEY;
-    const prevOauthToken = process.env.ANTHROPIC_OAUTH_TOKEN;
-    process.env.ANTHROPIC_API_KEY = "";
-    process.env.ANTHROPIC_OAUTH_TOKEN = "";
-    await withTempHome(async (home) => {
-      await writeConfigForTest(home, { agents: { defaults: {} } });
+    await withEnvAsync({ ANTHROPIC_API_KEY: "", ANTHROPIC_OAUTH_TOKEN: "" }, async () => {
+      await withTempHome(async (home) => {
+        await writeConfigForTest(home, { agents: { defaults: {} } });
 
-      const cfg = loadConfig();
+        const cfg = loadConfig();
 
-      expect(cfg.agents?.defaults?.contextPruning?.mode).toBeUndefined();
+        expect(cfg.agents?.defaults?.contextPruning?.mode).toBeUndefined();
+      });
     });
-    if (prevApiKey === undefined) {
-      delete process.env.ANTHROPIC_API_KEY;
-    } else {
-      process.env.ANTHROPIC_API_KEY = prevApiKey;
-    }
-    if (prevOauthToken === undefined) {
-      delete process.env.ANTHROPIC_OAUTH_TOKEN;
-    } else {
-      process.env.ANTHROPIC_OAUTH_TOKEN = prevOauthToken;
-    }
   });
 
   it("enables cache-ttl pruning + 1h heartbeat for Anthropic OAuth", async () => {

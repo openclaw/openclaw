@@ -131,11 +131,13 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - OpenRouter: `openrouter` (`OPENROUTER_API_KEY`)
 - Example model: `openrouter/anthropic/claude-sonnet-4-5`
 - xAI: `xai` (`XAI_API_KEY`)
+- Mistral: `mistral` (`MISTRAL_API_KEY`)
+- Example model: `mistral/mistral-large-latest`
+- CLI: `openclaw onboard --auth-choice mistral-api-key`
 - Groq: `groq` (`GROQ_API_KEY`)
 - Cerebras: `cerebras` (`CEREBRAS_API_KEY`)
   - GLM models on Cerebras use ids `zai-glm-4.7` and `zai-glm-4.6`.
   - OpenAI-compatible base URL: `https://api.cerebras.ai/v1`.
-- Mistral: `mistral` (`MISTRAL_API_KEY`)
 - GitHub Copilot: `github-copilot` (`COPILOT_GITHUB_TOKEN` / `GH_TOKEN` / `GITHUB_TOKEN`)
 - Hugging Face Inference: `huggingface` (`HUGGINGFACE_HUB_TOKEN` or `HF_TOKEN`) — OpenAI-compatible router; example model: `huggingface/deepseek-ai/DeepSeek-R1`; CLI: `openclaw onboard --auth-choice huggingface-api-key`. See [Hugging Face (Inference)](/providers/huggingface).
 
@@ -215,6 +217,70 @@ Model refs:
 - `qwen-portal/vision-model`
 
 See [/providers/qwen](/providers/qwen) for setup details and notes.
+
+### Volcano Engine (Doubao)
+
+Volcano Engine (火山引擎) provides access to Doubao and other models in China.
+
+- Provider: `volcengine` (coding: `volcengine-plan`)
+- Auth: `VOLCANO_ENGINE_API_KEY`
+- Example model: `volcengine/doubao-seed-1-8-251228`
+- CLI: `openclaw onboard --auth-choice volcengine-api-key`
+
+```json5
+{
+  agents: {
+    defaults: { model: { primary: "volcengine/doubao-seed-1-8-251228" } },
+  },
+}
+```
+
+Available models:
+
+- `volcengine/doubao-seed-1-8-251228` (Doubao Seed 1.8)
+- `volcengine/doubao-seed-code-preview-251028`
+- `volcengine/kimi-k2-5-260127` (Kimi K2.5)
+- `volcengine/glm-4-7-251222` (GLM 4.7)
+- `volcengine/deepseek-v3-2-251201` (DeepSeek V3.2 128K)
+
+Coding models (`volcengine-plan`):
+
+- `volcengine-plan/ark-code-latest`
+- `volcengine-plan/doubao-seed-code`
+- `volcengine-plan/kimi-k2.5`
+- `volcengine-plan/kimi-k2-thinking`
+- `volcengine-plan/glm-4.7`
+
+### BytePlus (International)
+
+BytePlus ARK provides access to the same models as Volcano Engine for international users.
+
+- Provider: `byteplus` (coding: `byteplus-plan`)
+- Auth: `BYTEPLUS_API_KEY`
+- Example model: `byteplus/seed-1-8-251228`
+- CLI: `openclaw onboard --auth-choice byteplus-api-key`
+
+```json5
+{
+  agents: {
+    defaults: { model: { primary: "byteplus/seed-1-8-251228" } },
+  },
+}
+```
+
+Available models:
+
+- `byteplus/seed-1-8-251228` (Seed 1.8)
+- `byteplus/kimi-k2-5-260127` (Kimi K2.5)
+- `byteplus/glm-4-7-251222` (GLM 4.7)
+
+Coding models (`byteplus-plan`):
+
+- `byteplus-plan/ark-code-latest`
+- `byteplus-plan/doubao-seed-code`
+- `byteplus-plan/kimi-k2.5`
+- `byteplus-plan/kimi-k2-thinking`
+- `byteplus-plan/glm-4.7`
 
 ### Synthetic
 

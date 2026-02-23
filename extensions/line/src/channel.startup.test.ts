@@ -4,9 +4,9 @@ import type {
   OpenClawConfig,
   PluginRuntime,
   ResolvedLineAccount,
-  RuntimeEnv,
 } from "openclaw/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
+import { createRuntimeEnv } from "../../test-utils/runtime-env.js";
 import { linePlugin } from "./channel.js";
 import { setLineRuntime } from "./runtime.js";
 
@@ -33,20 +33,10 @@ function createRuntime() {
   return { runtime, probeLineBot, monitorLineProvider };
 }
 
-function createRuntimeEnv(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn((code: number): never => {
-      throw new Error(`exit ${code}`);
-    }),
-  };
-}
-
 function createStartAccountCtx(params: {
   token: string;
   secret: string;
-  runtime: RuntimeEnv;
+  runtime: ReturnType<typeof createRuntimeEnv>;
 }): ChannelGatewayContext<ResolvedLineAccount> {
   const snapshot: ChannelAccountSnapshot = {
     accountId: "default",
