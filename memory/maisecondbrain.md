@@ -106,6 +106,8 @@ Mnemo
 - 2026-02-24: **Daily Enrichment (cron)** — 3,395 볼트 + 36 memory 파싱 → struct 27 + related 17 + content 57 보강 | 그래프 3,486 노드 39,590 엣지 (1 컴포넌트!) | 스텁 50개 생성 | 임베딩 3,423개(+29 new) | 외부지식 22개 수집 | 대시보드 2개 갱신 | 84초 완료
 - 2026-02-24: **Stage 2 DISCOVER 자동화 완성** — daily_enrich.py에 10단계(기회 스캔) 추가 + 주간 기회 리뷰 크론 등록 (월 07:30 KST) | 지식 수집 → 기회 탐지 → 스코어링 → 프로젝트 도출 풀 파이프라인 완성
 - 2026-02-24: **온톨로지 v2** — 엔티티 분류 보강(tool 618개, concept 163개, decision 3개 새로 분류) + 의미적 관계 자동 추출(uses 1,144 / derived_from 807 / alternatives 278 / supports 249 / contradicts 3 = 총 2,481 엣지) + 가비지 노드 745개 정리(3,511→2,893) + 밀도 0.0029→0.0038(+30%)
+- 2026-02-24: **Phase 3.5 person 추출** — extract_persons.py(llama3.1:8b) 생성, 12 person stubs (Sam Altman, Jensen Huang, 김철수, 이진희 등), cleanup_person_stubs.py로 오탐(Morgan Stanley, Temasek 등) 제거
+- 2026-02-24: **Phase 4 검색 고도화** — Reranker A/B 테스트(8쿼리×4구성): Reranker +8% 관련도(0.521→0.562), 동적 가중치 단독 효과 미미(-8%). query_classifier.py(factual/relational/exploratory) + GraphRAG 프롬프트 쿼리타입별 분기 + search_ab_test.py 벤치마크 스크립트
 
 ## 결정사항
 
@@ -129,9 +131,9 @@ Mnemo
 - [x] 옵시디언 대시보드 자동 싱크 (daily_enrich 8단계)
 - [x] 기회 탐지 + 스코어링 시스템 (Stage 2 DISCOVER)
 - [x] **온톨로지 v2**: 엔티티 7/8종 활용 + 의미적 엣지 2,481건 + 가비지 745노드 정리
+- [x] **Phase 3.5**: LLM 기반 person 추출 (llama3.1:8b, 12 person stubs)
+- [x] **Phase 4 검색 고도화**: Reranker A/B (+8% 관련도) + 쿼리 분류기 + GraphRAG 프롬프트 개선
 - [ ] Phase 2: Obsidian 플러그인 (TypeScript)
-- [ ] 온톨로지 Phase 3.5: LLM 기반 person 엔티티 추출
-- [ ] 온톨로지 Phase 4: Reranker 활성화 + GraphRAG LLM 통합
 - [ ] NotebookLM 공식 API 출시 시 Mnemo 통합
 
 ## 이슈 자동 대응
