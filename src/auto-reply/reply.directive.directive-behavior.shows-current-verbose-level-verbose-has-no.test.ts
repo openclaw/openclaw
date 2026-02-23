@@ -50,6 +50,10 @@ async function runElevatedCommand(home: string, body: string) {
   );
 }
 
+async function runQueueDirective(home: string, body: string) {
+  return runCommand(home, body);
+}
+
 describe("directive behavior", () => {
   installDirectiveBehaviorE2EHooks();
 
@@ -106,6 +110,7 @@ describe("directive behavior", () => {
       const storePath = sessionStorePath(home);
       const res = await runElevatedCommand(home, "/elevated off\n/status");
       const text = replyText(res);
+      expect(text).toContain("Session: agent:main:main");
       assertElevatedOffStatusReply(text);
 
       const store = loadSessionStore(storePath);
@@ -156,6 +161,75 @@ describe("directive behavior", () => {
 
       const text = replyText(res);
       expect(text).toContain("agents.list[].tools.elevated.enabled");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+  it("shows elevated off in status when per-agent elevated is disabled", async () => {
+    await withTempHome(async (home) => {
+      const res = await getReplyFromConfig(
+        {
+          Body: "/status",
+          From: "+1222",
+          To: "+1222",
+          Provider: "whatsapp",
+          SenderE164: "+1222",
+          SessionKey: "agent:restricted:main",
+          CommandAuthorized: true,
+        },
+        {},
+        makeRestrictedElevatedDisabledConfig(home) as unknown as OpenClawConfig,
+      );
+
+      const text = replyText(res);
+      expect(text).not.toContain("elevated");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+  it("acks queue directive and persists override", async () => {
+    await withTempHome(async (home) => {
+      const storePath = sessionStorePath(home);
+
+      const text = await runQueueDirective(home, "/queue interrupt");
+
+      expect(text).toMatch(/^⚙️ Queue mode set to interrupt\./);
+      const store = loadSessionStore(storePath);
+      const entry = Object.values(store)[0];
+      expect(entry?.queueMode).toBe("interrupt");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+  it("persists queue options when directive is standalone", async () => {
+    await withTempHome(async (home) => {
+      const storePath = sessionStorePath(home);
+
+      const text = await runQueueDirective(home, "/queue collect debounce:2s cap:5 drop:old");
+
+      expect(text).toMatch(/^⚙️ Queue mode set to collect\./);
+      expect(text).toMatch(/Queue debounce set to 2000ms/);
+      expect(text).toMatch(/Queue cap set to 5/);
+      expect(text).toMatch(/Queue drop set to old/);
+      const store = loadSessionStore(storePath);
+      const entry = Object.values(store)[0];
+      expect(entry?.queueMode).toBe("collect");
+      expect(entry?.queueDebounceMs).toBe(2000);
+      expect(entry?.queueCap).toBe(5);
+      expect(entry?.queueDrop).toBe("old");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+  it("resets queue mode to default", async () => {
+    await withTempHome(async (home) => {
+      const storePath = sessionStorePath(home);
+
+      await runQueueDirective(home, "/queue interrupt");
+      const text = await runQueueDirective(home, "/queue reset");
+      expect(text).toMatch(/^⚙️ Queue mode reset to default\./);
+      const store = loadSessionStore(storePath);
+      const entry = Object.values(store)[0];
+      expect(entry?.queueMode).toBeUndefined();
+      expect(entry?.queueDebounceMs).toBeUndefined();
+      expect(entry?.queueCap).toBeUndefined();
+      expect(entry?.queueDrop).toBeUndefined();
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
