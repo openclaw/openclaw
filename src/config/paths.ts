@@ -263,6 +263,17 @@ export function resolveOAuthPath(
   return path.join(resolveOAuthDir(env, stateDir), OAUTH_FILENAME);
 }
 
+/**
+ * Path for the vault key metadata file (passphrase-derived key salt + check value).
+ * Default: $stateDir/vault-key.json
+ */
+export function resolveVaultKeyPath(
+  env: NodeJS.ProcessEnv = process.env,
+  stateDir: string = resolveStateDir(env, envHomedir(env)),
+): string {
+  return path.join(stateDir, "vault-key.json");
+}
+
 export function resolveGatewayPort(
   cfg?: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,

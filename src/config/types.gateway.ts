@@ -317,6 +317,15 @@ export type GatewayToolsConfig = {
   allow?: string[];
 };
 
+export type VaultConfig = {
+  /** Whether credential encryption is enabled. Default: true when keychain is available. */
+  enabled?: boolean;
+  /** Key storage backend. Default: "auto" (prefers keychain, falls back to passphrase). */
+  backend?: "keychain" | "passphrase" | "auto";
+  /** Auto-encrypt plaintext credentials on read. Default: true. */
+  migrateOnLoad?: boolean;
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
