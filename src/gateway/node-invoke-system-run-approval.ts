@@ -17,6 +17,7 @@ type SystemRunParamsLike = {
 
 type ApprovalLookup = {
   getSnapshot: (recordId: string) => ExecApprovalRecord | null;
+  consumeAllowOnce?: (recordId: string) => boolean;
 };
 
 type ApprovalClient = {
@@ -245,9 +246,22 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
   }
 
   // Normal path: enforce the decision recorded by the gateway.
-  if (snapshot.decision === "allow-once" || snapshot.decision === "allow-always") {
+  if (snapshot.decision === "allow-once") {
+    if (typeof manager.consumeAllowOnce !== "function" || !manager.consumeAllowOnce(runId)) {
+      return {
+        ok: false,
+        message: "approval required",
+        details: { code: "APPROVAL_REQUIRED", runId },
+      };
+    }
     next.approved = true;
-    next.approvalDecision = snapshot.decision;
+    next.approvalDecision = "allow-once";
+    return { ok: true, params: next };
+  }
+
+  if (snapshot.decision === "allow-always") {
+    next.approved = true;
+    next.approvalDecision = "allow-always";
     return { ok: true, params: next };
   }
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import type { ExecApprovalRecord } from "./exec-approval-manager.js";
+import { ExecApprovalManager, type ExecApprovalRecord } from "./exec-approval-manager.js";
 import { sanitizeSystemRunParamsForForwarding } from "./node-invoke-system-run-approval.js";
 
 describe("sanitizeSystemRunParamsForForwarding", () => {
@@ -36,8 +36,17 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
   }
 
   function manager(record: ReturnType<typeof makeRecord>) {
+    let consumed = false;
     return {
       getSnapshot: () => record,
+      consumeAllowOnce: () => {
+        if (consumed || record.decision !== "allow-once") {
+          return false;
+        }
+        consumed = true;
+        record.decision = undefined;
+        return true;
+      },
     };
   }
 
@@ -129,6 +138,56 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       nowMs: now,
     });
     expectAllowOnceForwardingResult(result);
+  });
+  test("consumes allow-once approvals and blocks same runId replay", async () => {
+    const approvalManager = new ExecApprovalManager();
+    const runId = "approval-replay-1";
+    const record = approvalManager.create(
+      {
+        host: "node",
+        command: "echo SAFE",
+        cwd: null,
+        agentId: null,
+        sessionKey: null,
+      },
+      60_000,
+      runId,
+    );
+    record.requestedByConnId = "conn-1";
+    record.requestedByDeviceId = "dev-1";
+    record.requestedByClientId = "cli-1";
+
+    const decisionPromise = approvalManager.register(record, 60_000);
+    approvalManager.resolve(runId, "allow-once", "operator");
+    await expect(decisionPromise).resolves.toBe("allow-once");
+
+    const params = {
+      command: ["echo", "SAFE"],
+      rawCommand: "echo SAFE",
+      runId,
+      approved: true,
+      approvalDecision: "allow-once",
+    };
+
+    const first = sanitizeSystemRunParamsForForwarding({
+      rawParams: params,
+      client,
+      execApprovalManager: approvalManager,
+      nowMs: now,
+    });
+    expectAllowOnceForwardingResult(first);
+
+    const second = sanitizeSystemRunParamsForForwarding({
+      rawParams: params,
+      client,
+      execApprovalManager: approvalManager,
+      nowMs: now,
+    });
+    expect(second.ok).toBe(false);
+    if (second.ok) {
+      throw new Error("unreachable");
+    }
+    expect(second.details?.code).toBe("APPROVAL_REQUIRED");
   });
 
   test("rejects approval ids that do not bind a nodeId", () => {
