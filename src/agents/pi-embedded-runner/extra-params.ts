@@ -536,7 +536,7 @@ function createAnthropicBetaHeadersWrapper(
 
 /**
  * Create a streamFn wrapper that replaces the default Bearer auth header
- * with fal's required `Authorization: Key <fal_key>` format.
+ * with Fal's required `Authorization: Key <fal_key>` format.
  */
 function createFalOpenrouterAuthWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
@@ -1206,14 +1206,14 @@ export function applyExtraParamsToAgent(
     agent.streamFn = createBedrockNoCacheWrapper(agent.streamFn);
   }
 
-  // fal routes to OpenRouter — apply the same reasoning-format transformation
+  // Fal routes to OpenRouter — apply the same reasoning-format transformation
   // that regular OpenRouter uses, and rewrite the auth header to `Key <fal_key>`.
   if (provider === "fal-openrouter") {
     const skipReasoningInjection = modelId === "auto" || isProxyReasoningUnsupported(modelId);
     const falThinkingLevel = skipReasoningInjection ? undefined : thinkingLevel;
     agent.streamFn = createOpenRouterWrapper(agent.streamFn, falThinkingLevel);
     agent.streamFn = createOpenRouterSystemCacheWrapper(agent.streamFn);
-    log.debug(`applying fal Authorization: Key header for ${provider}/${modelId}`);
+    log.debug(`applying Fal Authorization: Key header for ${provider}/${modelId}`);
     agent.streamFn = createFalOpenrouterAuthWrapper(agent.streamFn);
   }
 

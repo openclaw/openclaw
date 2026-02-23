@@ -157,7 +157,7 @@ const AUTH_CHOICE_GROUP_DEFS: {
   },
   {
     value: "fal-openrouter",
-    label: "fal OpenRouter",
+    label: "Fal OpenRouter",
     hint: "API key",
     choices: ["fal-openrouter-api-key"],
   },

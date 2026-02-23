@@ -2,7 +2,7 @@ import type { ModelDefinitionConfig } from "../config/types.models.js";
 
 export const FAL_OPENROUTER_BASE_URL = "https://fal.run/openrouter/router/openai/v1";
 
-// Models listed in the fal OpenRouter playground dropdown.
+// Models listed in the Fal OpenRouter playground dropdown.
 export const FAL_OPENROUTER_MODEL_CATALOG: ModelDefinitionConfig[] = [
   {
     id: "google/gemini-2.5-flash",

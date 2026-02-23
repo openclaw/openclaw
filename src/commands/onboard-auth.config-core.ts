@@ -181,7 +181,7 @@ export function applyFalOpenrouterProviderConfig(cfg: OpenClawConfig): OpenClawC
   const models = { ...cfg.agents?.defaults?.models };
   models[FAL_OPENROUTER_DEFAULT_MODEL_REF] = {
     ...models[FAL_OPENROUTER_DEFAULT_MODEL_REF],
-    alias: models[FAL_OPENROUTER_DEFAULT_MODEL_REF]?.alias ?? "fal OpenRouter",
+    alias: models[FAL_OPENROUTER_DEFAULT_MODEL_REF]?.alias ?? "Fal OpenRouter",
   };
 
   const falModels = FAL_OPENROUTER_MODEL_CATALOG.map(buildFalOpenrouterModelDefinition);

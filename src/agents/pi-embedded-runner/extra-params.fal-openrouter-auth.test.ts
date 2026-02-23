@@ -33,7 +33,7 @@ function buildAgent(apiKey?: string) {
   };
 }
 
-describe("extra-params: fal OpenRouter Authorization header", () => {
+describe("extra-params: Fal OpenRouter Authorization header", () => {
   it("rewrites Authorization to Key format for fal-openrouter", () => {
     const helper = buildAgent("fal-test-key-123");
     const opts = helper.call("fal-openrouter", "google/gemini-2.5-flash");

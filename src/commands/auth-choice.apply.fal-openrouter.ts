@@ -61,13 +61,13 @@ export async function applyAuthChoiceFalOpenRouter(
   if (!hasCredential) {
     await params.prompter.note(
       [
-        "fal OpenRouter gives you access to LLMs via a single FAL_API_KEY.",
+        "Fal OpenRouter gives you access to LLMs via a single FAL_API_KEY.",
         "Get your API key at: https://fal.ai/dashboard/keys",
       ].join("\n"),
-      "fal OpenRouter",
+      "Fal OpenRouter",
     );
     const key = await params.prompter.text({
-      message: "Enter fal API key (FAL_API_KEY)",
+      message: "Enter Fal API key (FAL_API_KEY)",
       validate: validateApiKeyInput,
     });
     await setFalOpenrouterApiKey(normalizeApiKeyInput(String(key ?? "")), params.agentDir);

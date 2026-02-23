@@ -43,7 +43,7 @@ describe("buildFalOpenrouterModelDefinition", () => {
 });
 
 describe("FAL_OPENROUTER_BASE_URL", () => {
-  it("points to fal openrouter endpoint", () => {
+  it("points to Fal openrouter endpoint", () => {
     expect(FAL_OPENROUTER_BASE_URL).toBe("https://fal.run/openrouter/router/openai/v1");
   });
 });
