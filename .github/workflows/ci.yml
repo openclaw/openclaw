@@ -335,7 +335,7 @@ jobs:
       - name: Install Python tooling
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest ruff
+          python -m pip install pytest ruff pyyaml
 
       - name: Lint Python skill scripts
         run: python -m ruff check skills
