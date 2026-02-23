@@ -4,7 +4,7 @@ Docs: https://docs.openclaw.ai
 
 ## Unreleased
 
-## 2026.2.22 (Unreleased)
+## 2026.2.23 (Unreleased)
 
 ### Changes
 
