@@ -170,17 +170,53 @@ describe("auditPostCompactionReads", () => {
     expect(result.passed).toBe(true);
     expect(result.missingPatterns).toEqual([]);
   });
+
+  it("uses human-readable label for labeled regex patterns instead of raw .source", () => {
+    const readPaths: string[] = [];
+    const customRequired = [
+      { pattern: /memory\/\d{4}-\d{2}-\d{2}\.md/, label: "memory/YYYY-MM-DD.md" },
+    ];
+    const result = auditPostCompactionReads(readPaths, workspaceDir, customRequired);
+
+    expect(result.passed).toBe(false);
+    expect(result.missingPatterns).toContain("memory/YYYY-MM-DD.md");
+    // Must NOT contain raw regex syntax
+    expect(result.missingPatterns).not.toContain("memory\\/\\d{4}-\\d{2}-\\d{2}\\.md");
+  });
+
+  it("matches labeled regex patterns against read paths", () => {
+    const readPaths = ["memory/2026-02-16.md"];
+    const customRequired = [
+      { pattern: /memory\/\d{4}-\d{2}-\d{2}\.md/, label: "memory/YYYY-MM-DD.md" },
+    ];
+    const result = auditPostCompactionReads(readPaths, workspaceDir, customRequired);
+
+    expect(result.passed).toBe(true);
+    expect(result.missingPatterns).toEqual([]);
+  });
+
+  it("default required reads use labels, not raw regex source", () => {
+    const result = auditPostCompactionReads([], workspaceDir);
+
+    expect(result.passed).toBe(false);
+    for (const pattern of result.missingPatterns) {
+      // No raw regex escape sequences should appear in user-facing output
+      expect(pattern).not.toMatch(/\\d\{|\\\.|\\\//);
+    }
+  });
 });
 
 describe("formatAuditWarning", () => {
-  it("formats warning message with missing patterns", () => {
-    const missingPatterns = ["WORKFLOW_AUTO.md", "memory\\/\\d{4}-\\d{2}-\\d{2}\\.md"];
+  it("formats warning message with human-readable labels", () => {
+    const missingPatterns = ["WORKFLOW_AUTO.md", "memory/YYYY-MM-DD.md"];
     const message = formatAuditWarning(missingPatterns);
 
     expect(message).toContain("⚠️ Post-Compaction Audit");
     expect(message).toContain("WORKFLOW_AUTO.md");
-    expect(message).toContain("memory");
+    expect(message).toContain("memory/YYYY-MM-DD.md");
     expect(message).toContain("Please read them now");
+    // Must not contain raw regex escape sequences
+    expect(message).not.toMatch(/\\d\{|\\\.|\\\//);
   });
 
   it("formats single missing pattern", () => {

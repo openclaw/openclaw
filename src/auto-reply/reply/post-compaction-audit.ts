@@ -1,10 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
 
+/** A regex pattern with a human-readable label for user-facing messages. */
+export type LabeledPattern = { pattern: RegExp; label: string };
+
+/** A required read entry: plain filename, bare regex, or labeled regex pattern. */
+export type RequiredRead = string | RegExp | LabeledPattern;
+
 // Default required files — constants, extensible to config later
-const DEFAULT_REQUIRED_READS: Array<string | RegExp> = [
+const DEFAULT_REQUIRED_READS: RequiredRead[] = [
   "WORKFLOW_AUTO.md",
-  /memory\/\d{4}-\d{2}-\d{2}\.md/, // daily memory files
+  { pattern: /memory\/\d{4}-\d{2}-\d{2}\.md/, label: "memory/YYYY-MM-DD.md" },
 ];
 
 /**
@@ -14,7 +20,7 @@ const DEFAULT_REQUIRED_READS: Array<string | RegExp> = [
 export function auditPostCompactionReads(
   readFilePaths: string[],
   workspaceDir: string,
-  requiredReads: Array<string | RegExp> = DEFAULT_REQUIRED_READS,
+  requiredReads: RequiredRead[] = DEFAULT_REQUIRED_READS,
 ): { passed: boolean; missingPatterns: string[] } {
   const normalizedReads = readFilePaths.map((p) => path.resolve(workspaceDir, p));
   const missingPatterns: string[] = [];
@@ -27,15 +33,17 @@ export function auditPostCompactionReads(
         missingPatterns.push(required);
       }
     } else {
-      // RegExp — match against relative paths from workspace
+      // RegExp or LabeledPattern — match against relative paths from workspace
+      const regex = required instanceof RegExp ? required : required.pattern;
+      const displayLabel = required instanceof RegExp ? required.source : required.label;
       const found = readFilePaths.some((p) => {
         const rel = path.relative(workspaceDir, path.resolve(workspaceDir, p));
         // Normalize to forward slashes for cross-platform RegExp matching
         const normalizedRel = rel.split(path.sep).join("/");
-        return required.test(normalizedRel);
+        return regex.test(normalizedRel);
       });
       if (!found) {
-        missingPatterns.push(required.source);
+        missingPatterns.push(displayLabel);
       }
     }
   }
