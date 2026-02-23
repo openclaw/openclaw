@@ -41,7 +41,11 @@ describe("compaction hook wiring", () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
 
     const ctx = {
-      params: { runId: "r1", session: { messages: [1, 2, 3] } },
+      params: {
+        runId: "r1",
+        sessionKey: "agent:main:web-abc123",
+        session: { messages: [1, 2, 3], sessionFile: "/tmp/test.jsonl" },
+      },
       state: { compactionInFlight: false },
       log: { debug: vi.fn(), warn: vi.fn() },
       incrementCompactionCount: vi.fn(),
@@ -53,10 +57,16 @@ describe("compaction hook wiring", () => {
     expect(hookMocks.runner.runBeforeCompaction).toHaveBeenCalledTimes(1);
 
     const beforeCalls = hookMocks.runner.runBeforeCompaction.mock.calls as unknown as Array<
-      [unknown]
+      [unknown, unknown]
     >;
-    const event = beforeCalls[0]?.[0] as { messageCount?: number } | undefined;
+    const event = beforeCalls[0]?.[0] as
+      | { messageCount?: number; messages?: unknown[]; sessionFile?: string }
+      | undefined;
     expect(event?.messageCount).toBe(3);
+    expect(event?.messages).toEqual([1, 2, 3]);
+    expect(event?.sessionFile).toBe("/tmp/test.jsonl");
+    const hookCtx = beforeCalls[0]?.[1] as { sessionKey?: string } | undefined;
+    expect(hookCtx?.sessionKey).toBe("agent:main:web-abc123");
   });
 
   it("calls runAfterCompaction when willRetry is false", () => {
