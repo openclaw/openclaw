@@ -96,6 +96,11 @@ export class GatewayClient {
   private tickIntervalMs = 30_000;
   private tickTimer: NodeJS.Timeout | null = null;
 
+  /** The gateway WebSocket URL this client connects to. */
+  get gatewayUrl(): string {
+    return this.opts.url ?? "ws://127.0.0.1:18789";
+  }
+
   constructor(opts: GatewayClientOptions) {
     this.opts = {
       ...opts,

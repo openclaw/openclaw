@@ -480,6 +480,25 @@ export async function handleInvoke(
     return;
   }
 
+  if (command === "vnc.tunnel.open") {
+    try {
+      const params = decodeParams<{ tunnelId: string; tunnelUrl: string }>(frame.paramsJSON);
+      if (!params.tunnelId || !params.tunnelUrl) {
+        throw new Error("INVALID_REQUEST: tunnelId and tunnelUrl required");
+      }
+      // Respond immediately — tunnel setup happens asynchronously.
+      await sendInvokeResult(client, frame, { ok: true });
+      // Open VNC tunnel in the background.
+      void openVncTunnel(params.tunnelId, params.tunnelUrl);
+    } catch (err) {
+      await sendInvokeResult(client, frame, {
+        ok: false,
+        error: { code: "INVALID_REQUEST", message: String(err) },
+      });
+    }
+    return;
+  }
+
   if (command !== "system.run") {
     await sendInvokeResult(client, frame, {
       ok: false,
@@ -809,6 +828,62 @@ export async function handleInvoke(
       stderr: result.stderr,
       error: result.error ?? null,
     }),
+  });
+}
+
+/**
+ * Open a VNC tunnel: connect a new WebSocket to the gateway and pipe binary
+ * data between it and a local VNC server (macOS Screen Sharing / x11vnc on
+ * port 5900).
+ */
+async function openVncTunnel(tunnelId: string, tunnelUrl: string): Promise<void> {
+  const { createConnection } = await import("node:net");
+  const { WebSocket: WsClient } = await import("ws");
+
+  const vncHost = process.env.BOT_VNC_HOST?.trim() ?? "127.0.0.1";
+  const vncPort = Number(process.env.BOT_VNC_PORT?.trim() ?? 5900);
+
+  // Connect back to the gateway's /vnc-tunnel endpoint.
+  const ws = new WsClient(tunnelUrl, { maxPayload: 25 * 1024 * 1024 });
+
+  ws.on("open", () => {
+    // Now connect to the local VNC server.
+    const tcp = createConnection({ host: vncHost, port: vncPort }, () => {
+      // TCP → WS
+      tcp.on("data", (data: Buffer) => {
+        if (ws.readyState === WsClient.OPEN) {
+          ws.send(data);
+        }
+      });
+      tcp.on("end", () => ws.close(1000, "VNC server closed"));
+      tcp.on("error", (err) => ws.close(1011, `VNC error: ${err.message}`));
+    });
+
+    tcp.on("error", (err) => {
+      ws.close(1011, `Cannot connect to VNC at ${vncHost}:${vncPort}: ${err.message}`);
+    });
+
+    // WS → TCP
+    ws.on("message", (data: Buffer) => {
+      if (tcp && !tcp.destroyed) {
+        tcp.write(data);
+      }
+    });
+
+    ws.on("close", () => {
+      if (tcp && !tcp.destroyed) {
+        tcp.end();
+      }
+    });
+    ws.on("error", () => {
+      if (tcp && !tcp.destroyed) {
+        tcp.destroy();
+      }
+    });
+  });
+
+  ws.on("error", () => {
+    // Tunnel connection failed — nothing to clean up.
   });
 }
 

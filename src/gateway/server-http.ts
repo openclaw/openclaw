@@ -519,9 +519,10 @@ export function createGatewayHttpServer(opts: {
         const host = req.headers.host;
         const proto = getHeader(req, "x-forwarded-proto") ?? (opts.tlsOptions ? "https" : "http");
         const origin = host ? `${proto}://${host}` : (opts.gatewayOrigin ?? "http://localhost");
+        const nodeId = requestUrl.searchParams.get("nodeId") ?? undefined;
         res.statusCode = 200;
         res.setHeader("Content-Type", "text/html; charset=utf-8");
-        res.end(vncViewerHtml(origin));
+        res.end(vncViewerHtml(origin, nodeId));
         return;
       }
 
@@ -662,7 +663,8 @@ export function attachGatewayUpgradeHandler(opts: {
   const { httpServer, wss, canvasHost, clients, resolvedAuth, rateLimiter } = opts;
   httpServer.on("upgrade", (req, socket, head) => {
     void (async () => {
-      // VNC WebSocket proxy — intercept /vnc before other upgrade handlers.
+      // VNC WebSocket proxy — intercept /vnc and /vnc-tunnel before other
+      // upgrade handlers.
       if (opts.vncProxy) {
         const url = new URL(req.url ?? "/", "http://localhost");
         if (url.pathname === "/vnc") {
@@ -681,6 +683,11 @@ export function attachGatewayUpgradeHandler(opts: {
             return;
           }
           opts.vncProxy.handleUpgrade(req, socket, head);
+          return;
+        }
+        // VNC tunnel callback from node — no auth required (tunnelId is secret).
+        if (url.pathname === "/vnc-tunnel") {
+          opts.vncProxy.handleTunnelUpgrade(req, socket, head);
           return;
         }
       }

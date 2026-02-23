@@ -9,6 +9,7 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import type { HooksConfigResolved } from "./hooks.js";
+import type { NodeRegistry } from "./node-registry.js";
 import type { DedupeEntry } from "./server-shared.js";
 import type { GatewayTlsRuntime } from "./server/tls.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -56,6 +57,8 @@ export async function createGatewayRuntimeState(params: {
   log: { info: (msg: string) => void; warn: (msg: string) => void };
   logHooks: ReturnType<typeof createSubsystemLogger>;
   logPlugins: ReturnType<typeof createSubsystemLogger>;
+  /** Node registry for VNC tunnel support. */
+  nodeRegistry?: NodeRegistry;
 }): Promise<{
   canvasHost: CanvasHostHandler | null;
   httpServer: HttpServer;
@@ -117,7 +120,7 @@ export async function createGatewayRuntimeState(params: {
     log: params.logPlugins,
   });
 
-  const vncProxy = createVncProxy();
+  const vncProxy = createVncProxy({ nodeRegistry: params.nodeRegistry });
   const gatewayScheme = params.gatewayTls?.enabled ? "https" : "http";
   const gatewayOrigin = `${gatewayScheme}://${params.bindHost}:${params.port}`;
 

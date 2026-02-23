@@ -333,6 +333,7 @@ export async function startGatewayServer(
   if (cfgAtStart.gateway?.tls?.enabled && !gatewayTls.enabled) {
     throw new Error(gatewayTls.error ?? "gateway tls: failed to enable");
   }
+  const nodeRegistry = new NodeRegistry();
   const {
     canvasHost,
     httpServer,
@@ -375,9 +376,9 @@ export async function startGatewayServer(
     log,
     logHooks,
     logPlugins,
+    nodeRegistry,
   });
   let bonjourStop: (() => Promise<void>) | null = null;
-  const nodeRegistry = new NodeRegistry();
   const nodePresenceTimers = new Map<string, ReturnType<typeof setInterval>>();
   const nodeSubscriptions = createNodeSubscriptionManager();
   const nodeSendEvent = (opts: { nodeId: string; event: string; payloadJSON?: string | null }) => {
