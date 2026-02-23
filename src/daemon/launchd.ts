@@ -363,11 +363,15 @@ async function waitForPidExit(pid: number): Promise<void> {
 export async function stopLaunchAgent({ stdout, env }: GatewayServiceControlArgs): Promise<void> {
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env });
-  const res = await execLaunchctl(["bootout", `${domain}/${label}`]);
+  const serviceTarget = `${domain}/${label}`;
+  // Disable the service so KeepAlive doesn't restart it, then kill the process.
+  // Unlike bootout, this keeps the service loaded so restart/start work without re-install.
+  await execLaunchctl(["disable", serviceTarget]);
+  const res = await execLaunchctl(["kill", "SIGTERM", serviceTarget]);
   if (res.code !== 0 && !isLaunchctlNotLoaded(res)) {
-    throw new Error(`launchctl bootout failed: ${res.stderr || res.stdout}`.trim());
+    throw new Error(`launchctl kill failed: ${res.stderr || res.stdout}`.trim());
   }
-  stdout.write(`${formatLine("Stopped LaunchAgent", `${domain}/${label}`)}\n`);
+  stdout.write(`${formatLine("Stopped LaunchAgent", serviceTarget)}\n`);
 }
 
 export async function installLaunchAgent({
@@ -451,14 +455,18 @@ export async function restartLaunchAgent({
   const domain = resolveGuiDomain();
   const label = resolveLaunchAgentLabel({ env: serviceEnv });
   const plistPath = resolveLaunchAgentPlistPath(serviceEnv);
+  const serviceTarget = `${domain}/${label}`;
 
-  const runtime = await execLaunchctl(["print", `${domain}/${label}`]);
+  // Re-enable in case the service was previously stopped (disable + kill).
+  await execLaunchctl(["enable", serviceTarget]);
+
+  const runtime = await execLaunchctl(["print", serviceTarget]);
   const previousPid =
     runtime.code === 0
       ? parseLaunchctlPrint(runtime.stdout || runtime.stderr || "").pid
       : undefined;
 
-  const stop = await execLaunchctl(["bootout", `${domain}/${label}`]);
+  const stop = await execLaunchctl(["bootout", serviceTarget]);
   if (stop.code !== 0 && !isLaunchctlNotLoaded(stop)) {
     throw new Error(`launchctl bootout failed: ${stop.stderr || stop.stdout}`.trim());
   }
@@ -483,12 +491,12 @@ export async function restartLaunchAgent({
     throw new Error(`launchctl bootstrap failed: ${detail}`);
   }
 
-  const start = await execLaunchctl(["kickstart", "-k", `${domain}/${label}`]);
+  const start = await execLaunchctl(["kickstart", "-k", serviceTarget]);
   if (start.code !== 0) {
     throw new Error(`launchctl kickstart failed: ${start.stderr || start.stdout}`.trim());
   }
   try {
-    stdout.write(`${formatLine("Restarted LaunchAgent", `${domain}/${label}`)}\n`);
+    stdout.write(`${formatLine("Restarted LaunchAgent", serviceTarget)}\n`);
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException)?.code !== "EPIPE") {
       throw err;
