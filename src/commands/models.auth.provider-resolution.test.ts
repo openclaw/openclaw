@@ -13,24 +13,24 @@ function makeProvider(params: { id: string; label?: string; aliases?: string[] }
 
 describe("resolveRequestedLoginProviderOrThrow", () => {
   it("returns null when no provider was requested", () => {
-    const providers = [makeProvider({ id: "google-antigravity" })];
+    const providers = [makeProvider({ id: "google-gemini-cli" })];
     const result = resolveRequestedLoginProviderOrThrow(providers, undefined);
     expect(result).toBeNull();
   });
 
   it("resolves requested provider by id", () => {
     const providers = [
-      makeProvider({ id: "google-antigravity" }),
       makeProvider({ id: "google-gemini-cli" }),
+      makeProvider({ id: "qwen-portal" }),
     ];
-    const result = resolveRequestedLoginProviderOrThrow(providers, "google-antigravity");
-    expect(result?.id).toBe("google-antigravity");
+    const result = resolveRequestedLoginProviderOrThrow(providers, "google-gemini-cli");
+    expect(result?.id).toBe("google-gemini-cli");
   });
 
   it("resolves requested provider by alias", () => {
-    const providers = [makeProvider({ id: "google-antigravity", aliases: ["antigravity"] })];
-    const result = resolveRequestedLoginProviderOrThrow(providers, "antigravity");
-    expect(result?.id).toBe("google-antigravity");
+    const providers = [makeProvider({ id: "google-gemini-cli", aliases: ["gemini-cli"] })];
+    const result = resolveRequestedLoginProviderOrThrow(providers, "gemini-cli");
+    expect(result?.id).toBe("google-gemini-cli");
   });
 
   it("throws when requested provider is not loaded", () => {
