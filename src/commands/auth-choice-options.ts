@@ -95,6 +95,12 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["openrouter-api-key"],
   },
   {
+    value: "kilocode",
+    label: "Kilo Gateway",
+    hint: "API key (OpenRouter-compatible)",
+    choices: ["kilocode-api-key"],
+  },
+  {
     value: "qwen",
     label: "Qwen",
     hint: "OAuth",
@@ -206,6 +212,7 @@ const BASE_AUTH_CHOICE_OPTIONS: ReadonlyArray<AuthChoiceOption> = [
     label: "Qianfan API key",
   },
   { value: "openrouter-api-key", label: "OpenRouter API key" },
+  { value: "kilocode-api-key", label: "Kilo Gateway API key" },
   {
     value: "litellm-api-key",
     label: "LiteLLM API key",
