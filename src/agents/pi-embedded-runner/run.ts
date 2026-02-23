@@ -341,7 +341,7 @@ export async function runEmbeddedPiAgent(
         log.info(`[hooks] model overridden to ${modelId}`);
       }
 
-      const { model, error, authStorage, modelRegistry } = resolveModel(
+      let { model, error, authStorage, modelRegistry } = resolveModel(
         provider,
         modelId,
         agentDir,
@@ -380,6 +380,14 @@ export async function runEmbeddedPiAgent(
           `Model context window too small (${ctxGuard.tokens} tokens). Minimum is ${CONTEXT_WINDOW_HARD_MIN_TOKENS}.`,
           { reason: "unknown", provider, model: modelId },
         );
+      }
+
+      // When agents.defaults.contextTokens is set below the model's native
+      // context window, cap model.contextWindow so the SDK's shouldCompact()
+      // triggers at the configured budget rather than the model's full window.
+      // See: https://github.com/openclaw/openclaw/issues/24031
+      if (ctxInfo.source === "agentContextTokens" && ctxInfo.tokens < (model.contextWindow ?? Infinity)) {
+        model = { ...model, contextWindow: ctxInfo.tokens } as typeof model;
       }
 
       const authStore = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
