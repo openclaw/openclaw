@@ -345,6 +345,35 @@ export type AgentsListResult = {
   agents: GatewayAgentRow[];
 };
 
+export type ToolCatalogProfile = {
+  id: "minimal" | "coding" | "messaging" | "full";
+  label: string;
+};
+
+export type ToolCatalogEntry = {
+  id: string;
+  label: string;
+  description: string;
+  source: "core" | "plugin";
+  pluginId?: string;
+  optional?: boolean;
+  defaultProfiles: Array<"minimal" | "coding" | "messaging" | "full">;
+};
+
+export type ToolCatalogGroup = {
+  id: string;
+  label: string;
+  source: "core" | "plugin";
+  pluginId?: string;
+  tools: ToolCatalogEntry[];
+};
+
+export type ToolsCatalogResult = {
+  agentId: string;
+  profiles: ToolCatalogProfile[];
+  groups: ToolCatalogGroup[];
+};
+
 export type AgentIdentityResult = {
   agentId: string;
   name: string;
