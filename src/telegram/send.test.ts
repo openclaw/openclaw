@@ -9,7 +9,8 @@ import { clearSentMessageCache, recordSentMessage, wasSentByBot } from "./sent-m
 
 installTelegramSendTestHooks();
 
-const { botApi, botCtorSpy, loadConfig, loadWebMedia } = getTelegramSendTestMocks();
+const { botApi, botCtorSpy, loadConfig, loadWebMedia, maybePersistResolvedTelegramTarget } =
+  getTelegramSendTestMocks();
 const {
   buildInlineKeyboard,
   createForumTopicTelegram,
@@ -367,6 +368,48 @@ describe("sendMessageTelegram", () => {
     expect(sendMessage).toHaveBeenCalledWith("123", "hi", {
       parse_mode: "HTML",
     });
+  });
+
+  it("resolves t.me targets to numeric chat ids via getChat", async () => {
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 1,
+      chat: { id: "-100123" },
+    });
+    const getChat = vi.fn().mockResolvedValue({ id: -100123 });
+    const api = { sendMessage, getChat } as unknown as {
+      sendMessage: typeof sendMessage;
+      getChat: typeof getChat;
+    };
+
+    await sendMessageTelegram("https://t.me/mychannel", "hi", {
+      token: "tok",
+      api,
+    });
+
+    expect(getChat).toHaveBeenCalledWith("@mychannel");
+    expect(sendMessage).toHaveBeenCalledWith("-100123", "hi", {
+      parse_mode: "HTML",
+    });
+    expect(maybePersistResolvedTelegramTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rawTarget: "https://t.me/mychannel",
+        resolvedChatId: "-100123",
+      }),
+    );
+  });
+
+  it("fails clearly when a legacy target cannot be resolved", async () => {
+    const getChat = vi.fn().mockRejectedValue(new Error("400: Bad Request: chat not found"));
+    const api = { getChat } as unknown as {
+      getChat: typeof getChat;
+    };
+
+    await expect(
+      sendMessageTelegram("@missingchannel", "hi", {
+        token: "tok",
+        api,
+      }),
+    ).rejects.toThrow(/could not be resolved to a numeric chat ID/i);
   });
 
   it("includes thread params in media messages", async () => {
@@ -1099,6 +1142,31 @@ describe("reactMessageTelegram", () => {
     });
 
     expect(setMessageReaction).toHaveBeenCalledWith("123", 456, testCase.expected);
+  });
+
+  it("resolves legacy telegram targets before reacting", async () => {
+    const setMessageReaction = vi.fn().mockResolvedValue(undefined);
+    const getChat = vi.fn().mockResolvedValue({ id: -100123 });
+    const api = { setMessageReaction, getChat } as unknown as {
+      setMessageReaction: typeof setMessageReaction;
+      getChat: typeof getChat;
+    };
+
+    await reactMessageTelegram("@mychannel", 456, "✅", {
+      token: "tok",
+      api,
+    });
+
+    expect(getChat).toHaveBeenCalledWith("@mychannel");
+    expect(setMessageReaction).toHaveBeenCalledWith("-100123", 456, [
+      { type: "emoji", emoji: "✅" },
+    ]);
+    expect(maybePersistResolvedTelegramTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rawTarget: "@mychannel",
+        resolvedChatId: "-100123",
+      }),
+    );
   });
 });
 

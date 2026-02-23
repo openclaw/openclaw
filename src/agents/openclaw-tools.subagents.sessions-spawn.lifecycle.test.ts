@@ -10,11 +10,21 @@ import {
 } from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
 import { resetSubagentRegistryForTests } from "./subagent-registry.js";
 
+const fastModeEnv = vi.hoisted(() => {
+  const previous = process.env.OPENCLAW_TEST_FAST;
+  process.env.OPENCLAW_TEST_FAST = "1";
+  return { previous };
+});
+
 vi.mock("./pi-embedded.js", () => ({
   isEmbeddedPiRunActive: () => false,
   isEmbeddedPiRunStreaming: () => false,
   queueEmbeddedPiMessage: () => false,
   waitForEmbeddedPiRunEnd: async () => true,
+}));
+
+vi.mock("./tools/agent-step.js", () => ({
+  readLatestAssistantReply: async () => "done",
 }));
 
 const callGatewayMock = getCallGatewayMock();
@@ -93,13 +103,7 @@ async function emitLifecycleEndAndFlush(params: {
 }
 
 describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
-  let previousFastTestEnv: string | undefined;
-
   beforeEach(() => {
-    if (previousFastTestEnv === undefined) {
-      previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
-    }
-    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     resetSessionsSpawnConfigOverride();
     setSessionsSpawnConfigOverride({
       session: {
@@ -117,11 +121,11 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
   });
 
   afterAll(() => {
-    if (previousFastTestEnv === undefined) {
+    if (fastModeEnv.previous === undefined) {
       delete process.env.OPENCLAW_TEST_FAST;
       return;
     }
-    process.env.OPENCLAW_TEST_FAST = previousFastTestEnv;
+    process.env.OPENCLAW_TEST_FAST = fastModeEnv.previous;
   });
 
   it("sessions_spawn runs cleanup flow after subagent completion", async () => {
@@ -151,19 +155,12 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     if (!child.runId) {
       throw new Error("missing child runId");
     }
-    emitAgentEvent({
-      runId: child.runId,
-      stream: "lifecycle",
-      data: {
-        phase: "end",
-        startedAt: 1000,
-        endedAt: 2000,
-      },
-    });
-
-    await waitFor(() => ctx.waitCalls.some((call) => call.runId === child.runId));
-    await waitFor(() => patchCalls.some((call) => call.label === "my-task"));
-    await waitFor(() => ctx.calls.filter((c) => c.method === "agent").length >= 2);
+    await waitFor(
+      () =>
+        ctx.waitCalls.some((call) => call.runId === child.runId) &&
+        patchCalls.some((call) => call.label === "my-task") &&
+        ctx.calls.filter((call) => call.method === "agent").length >= 2,
+    );
 
     const childWait = ctx.waitCalls.find((call) => call.runId === child.runId);
     expect(childWait?.timeoutMs).toBe(1000);
@@ -216,8 +213,9 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
       endedAt: 2345,
     });
 
-    await waitFor(() => ctx.calls.filter((call) => call.method === "agent").length >= 2);
-    await waitFor(() => Boolean(deletedKey));
+    await waitFor(
+      () => ctx.calls.filter((call) => call.method === "agent").length >= 2 && Boolean(deletedKey),
+    );
 
     const childWait = ctx.waitCalls.find((call) => call.runId === child.runId);
     expect(childWait?.timeoutMs).toBe(1000);
@@ -277,9 +275,12 @@ describe("openclaw-tools: subagents (sessions_spawn lifecycle)", () => {
     if (!child.runId) {
       throw new Error("missing child runId");
     }
-    await waitFor(() => ctx.waitCalls.some((call) => call.runId === child.runId));
-    await waitFor(() => ctx.calls.filter((call) => call.method === "agent").length >= 2);
-    await waitFor(() => Boolean(deletedKey));
+    await waitFor(
+      () =>
+        ctx.waitCalls.some((call) => call.runId === child.runId) &&
+        ctx.calls.filter((call) => call.method === "agent").length >= 2 &&
+        Boolean(deletedKey),
+    );
 
     const childWait = ctx.waitCalls.find((call) => call.runId === child.runId);
     expect(childWait?.timeoutMs).toBe(1000);

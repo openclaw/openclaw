@@ -41,6 +41,8 @@ vi.mock("../../daemon/service.js", () => ({
 }));
 
 vi.mock("./restart-health.js", () => ({
+  DEFAULT_RESTART_HEALTH_ATTEMPTS: 120,
+  DEFAULT_RESTART_HEALTH_DELAY_MS: 500,
   waitForGatewayHealthyRestart,
   terminateStaleGatewayPids,
   renderRestartDiagnostics,
@@ -123,7 +125,7 @@ describe("runDaemonRestart health checks", () => {
     const { runDaemonRestart } = await import("./lifecycle.js");
 
     await expect(runDaemonRestart({ json: true })).rejects.toMatchObject({
-      message: "Gateway restart failed health checks.",
+      message: "Gateway restart timed out after 60s waiting for health checks.",
     });
     expect(terminateStaleGatewayPids).not.toHaveBeenCalled();
     expect(renderRestartDiagnostics).toHaveBeenCalledTimes(1);

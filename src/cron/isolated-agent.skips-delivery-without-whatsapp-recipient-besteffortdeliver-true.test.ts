@@ -1,9 +1,13 @@
 import "./isolated-agent.mocks.js";
 import fs from "node:fs/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { runSubagentAnnounceFlow } from "../agents/subagent-announce.js";
 import type { CliDeps } from "../cli/deps.js";
+import {
+  createCliDeps,
+  mockAgentPayloads,
+  runTelegramAnnounceTurn,
+} from "./isolated-agent.delivery.test-helpers.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import {
   makeCfg,
@@ -13,56 +17,20 @@ import {
 } from "./isolated-agent.test-harness.js";
 import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
 
-function createCliDeps(overrides: Partial<CliDeps> = {}): CliDeps {
-  return {
-    sendMessageSlack: vi.fn(),
-    sendMessageWhatsApp: vi.fn(),
-    sendMessageTelegram: vi.fn(),
-    sendMessageDiscord: vi.fn(),
-    sendMessageSignal: vi.fn(),
-    sendMessageIMessage: vi.fn(),
-    ...overrides,
-  };
-}
-
-function mockAgentPayloads(
-  payloads: Array<Record<string, unknown>>,
-  extra: Partial<Awaited<ReturnType<typeof runEmbeddedPiAgent>>> = {},
-): void {
-  vi.mocked(runEmbeddedPiAgent).mockResolvedValue({
-    payloads,
-    meta: {
-      durationMs: 5,
-      agentMeta: { sessionId: "s", provider: "p", model: "m" },
-    },
-    ...extra,
-  });
-}
-
-async function runTelegramAnnounceTurn(params: {
+async function runExplicitTelegramAnnounceTurn(params: {
   home: string;
   storePath: string;
   deps: CliDeps;
-  delivery: {
-    mode: "announce";
-    channel: string;
-    to?: string;
-    bestEffort?: boolean;
-  };
 }): Promise<Awaited<ReturnType<typeof runCronIsolatedAgentTurn>>> {
-  return runCronIsolatedAgentTurn({
-    cfg: makeCfg(params.home, params.storePath, {
-      channels: { telegram: { botToken: "t-1" } },
-    }),
-    deps: params.deps,
-    job: {
-      ...makeJob({ kind: "agentTurn", message: "do it" }),
-      delivery: params.delivery,
-    },
-    message: "do it",
-    sessionKey: "cron:job-1",
-    lane: "cron",
+  return runTelegramAnnounceTurn({
+    ...params,
+    delivery: { mode: "announce", channel: "telegram", to: "123" },
   });
+}
+
+function expectDeliveredOk(result: Awaited<ReturnType<typeof runCronIsolatedAgentTurn>>): void {
+  expect(result.status).toBe("ok");
+  expect(result.delivered).toBe(true);
 }
 
 async function expectBestEffortTelegramNotDelivered(
@@ -101,25 +69,25 @@ async function expectExplicitTelegramTargetAnnounce(params: {
     const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
     const deps = createCliDeps();
     mockAgentPayloads(params.payloads);
-    const res = await runTelegramAnnounceTurn({
+    const res = await runExplicitTelegramAnnounceTurn({
       home,
       storePath,
       deps,
-      delivery: { mode: "announce", channel: "telegram", to: "123" },
     });
 
-    expect(res.status).toBe("ok");
-    expect(res.delivered).toBe(true);
+    expectDeliveredOk(res);
     expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(1);
     const announceArgs = vi.mocked(runSubagentAnnounceFlow).mock.calls[0]?.[0] as
       | {
           requesterOrigin?: { channel?: string; to?: string };
           roundOneReply?: string;
+          bestEffortDeliver?: boolean;
         }
       | undefined;
     expect(announceArgs?.requesterOrigin?.channel).toBe("telegram");
     expect(announceArgs?.requesterOrigin?.to).toBe("123");
     expect(announceArgs?.roundOneReply).toBe(params.expectedText);
+    expect(announceArgs?.bestEffortDeliver).toBe(false);
     expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
   });
 }
@@ -236,15 +204,13 @@ describe("runCronIsolatedAgentTurn", () => {
         messagingToolSentTargets: [{ tool: "message", provider: "telegram", to: "123" }],
       });
 
-      const res = await runTelegramAnnounceTurn({
+      const res = await runExplicitTelegramAnnounceTurn({
         home,
         storePath,
         deps,
-        delivery: { mode: "announce", channel: "telegram", to: "123" },
       });
 
-      expect(res.status).toBe("ok");
-      expect(res.delivered).toBe(true);
+      expectDeliveredOk(res);
       expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
       expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
     });

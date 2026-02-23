@@ -215,7 +215,7 @@ export function parseToolsBySenderTypedKey(
 export type GroupToolPolicyBySenderConfig = Record<string, GroupToolPolicyConfig>;
 
 export type ExecToolConfig = {
-  /** Exec host routing (default: sandbox with sandbox runtime, otherwise gateway). */
+  /** Exec host routing (default: sandbox). */
   host?: "sandbox" | "gateway" | "node";
   /** Exec security mode (default: deny). */
   security?: "deny" | "allowlist" | "full";

@@ -91,8 +91,12 @@ function requestUrl(input: RequestInfo | URL): string {
   return "";
 }
 
-function installMockFetch(impl: (input: RequestInfo | URL) => Promise<Response>) {
-  const mockFetch = vi.fn(async (input: RequestInfo | URL) => await impl(input));
+function installMockFetch(
+  impl: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+) {
+  const mockFetch = vi.fn(
+    async (input: RequestInfo | URL, init?: RequestInit) => await impl(input, init),
+  );
   global.fetch = withFetchPreconnect(mockFetch);
   return mockFetch;
 }
@@ -229,6 +233,29 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details.truncated).toBe(true);
   });
 
+  it("caps response bytes and does not hang on endless streams", async () => {
+    const chunk = new TextEncoder().encode("<html><body><div>hi</div></body></html>");
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(chunk);
+      },
+    });
+    const response = new Response(stream, {
+      status: 200,
+      headers: { "content-type": "text/html; charset=utf-8" },
+    });
+    const fetchSpy = vi.fn().mockResolvedValue(response);
+    global.fetch = withFetchPreconnect(fetchSpy);
+
+    const tool = createFetchTool({
+      maxResponseBytes: 128,
+      firecrawl: { enabled: false },
+    });
+    const result = await tool?.execute?.("call", { url: "https://example.com/stream" });
+    const details = result?.details as { warning?: string } | undefined;
+    expect(details?.warning).toContain("Response body truncated");
+  });
+
   // NOTE: Test for wrapping url/finalUrl/warning fields requires DNS mocking.
   // The sanitization of these fields is verified by external-content.test.ts tests.
 
@@ -251,6 +278,36 @@ describe("web_fetch extraction fallbacks", () => {
     const details = result?.details as { extractor?: string; text?: string };
     expect(details.extractor).toBe("firecrawl");
     expect(details.text).toContain("firecrawl content");
+  });
+
+  it("normalizes firecrawl Authorization header values", async () => {
+    const fetchSpy = installMockFetch((input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url.includes("api.firecrawl.dev/v2/scrape")) {
+        return Promise.resolve(firecrawlResponse("firecrawl normalized")) as Promise<Response>;
+      }
+      return Promise.resolve(
+        htmlResponse("<!doctype html><html><head></head><body></body></html>", url),
+      ) as Promise<Response>;
+    });
+
+    const tool = createFetchTool({
+      firecrawl: { apiKey: "firecrawl-test-\r\nkey" },
+    });
+
+    const result = await tool?.execute?.("call", {
+      url: "https://example.com/firecrawl",
+      extractMode: "text",
+    });
+
+    expect(result?.details).toMatchObject({ extractor: "firecrawl" });
+    const firecrawlCall = fetchSpy.mock.calls.find((call) =>
+      requestUrl(call[0]).includes("/v2/scrape"),
+    );
+    expect(firecrawlCall).toBeTruthy();
+    const init = firecrawlCall?.[1];
+    const authHeader = new Headers(init?.headers).get("Authorization");
+    expect(authHeader).toBe("Bearer firecrawl-test-key");
   });
 
   it("throws when readability is disabled and firecrawl is unavailable", async () => {

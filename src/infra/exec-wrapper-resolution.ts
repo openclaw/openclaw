@@ -346,30 +346,7 @@ export function unwrapDispatchWrappersForResolution(
 }
 
 function extractPosixShellInlineCommand(argv: string[]): string | null {
-  for (let i = 1; i < argv.length; i += 1) {
-    const token = argv[i]?.trim();
-    if (!token) {
-      continue;
-    }
-    const lower = token.toLowerCase();
-    if (lower === "--") {
-      break;
-    }
-    if (POSIX_INLINE_COMMAND_FLAGS.has(lower)) {
-      const cmd = argv[i + 1]?.trim();
-      return cmd ? cmd : null;
-    }
-    if (/^-[^-]*c[^-]*$/i.test(token)) {
-      const commandIndex = lower.indexOf("c");
-      const inline = token.slice(commandIndex + 1).trim();
-      if (inline) {
-        return inline;
-      }
-      const cmd = argv[i + 1]?.trim();
-      return cmd ? cmd : null;
-    }
-  }
-  return null;
+  return extractInlineCommandByFlags(argv, POSIX_INLINE_COMMAND_FLAGS, { allowCombinedC: true });
 }
 
 function extractCmdInlineCommand(argv: string[]): string | null {
@@ -389,6 +366,14 @@ function extractCmdInlineCommand(argv: string[]): string | null {
 }
 
 function extractPowerShellInlineCommand(argv: string[]): string | null {
+  return extractInlineCommandByFlags(argv, POWERSHELL_INLINE_COMMAND_FLAGS);
+}
+
+function extractInlineCommandByFlags(
+  argv: string[],
+  flags: ReadonlySet<string>,
+  options: { allowCombinedC?: boolean } = {},
+): string | null {
   for (let i = 1; i < argv.length; i += 1) {
     const token = argv[i]?.trim();
     if (!token) {
@@ -398,7 +383,16 @@ function extractPowerShellInlineCommand(argv: string[]): string | null {
     if (lower === "--") {
       break;
     }
-    if (POWERSHELL_INLINE_COMMAND_FLAGS.has(lower)) {
+    if (flags.has(lower)) {
+      const cmd = argv[i + 1]?.trim();
+      return cmd ? cmd : null;
+    }
+    if (options.allowCombinedC && /^-[^-]*c[^-]*$/i.test(token)) {
+      const commandIndex = lower.indexOf("c");
+      const inline = token.slice(commandIndex + 1).trim();
+      if (inline) {
+        return inline;
+      }
       const cmd = argv[i + 1]?.trim();
       return cmd ? cmd : null;
     }

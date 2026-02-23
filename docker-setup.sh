@@ -82,6 +82,9 @@ fi
 
 mkdir -p "$OPENCLAW_CONFIG_DIR"
 mkdir -p "$OPENCLAW_WORKSPACE_DIR"
+# Seed device-identity parent eagerly for Docker Desktop/Windows bind mounts
+# that reject creating new subdirectories from inside the container.
+mkdir -p "$OPENCLAW_CONFIG_DIR/identity"
 
 export OPENCLAW_CONFIG_DIR
 export OPENCLAW_WORKSPACE_DIR

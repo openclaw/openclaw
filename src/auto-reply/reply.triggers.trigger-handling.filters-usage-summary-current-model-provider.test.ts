@@ -1,13 +1,16 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
+import type { OpenClawConfig } from "../config/config.js";
+import { resolveSessionKey } from "../config/sessions.js";
 import {
   createBlockReplyCollector,
   getProviderUsageMocks,
   getRunEmbeddedPiAgentMock,
   installTriggerHandlingE2eTestHooks,
   makeCfg,
+  requireSessionStorePath,
   withTempHome,
 } from "./reply.triggers.trigger-handling.test-harness.js";
 
@@ -19,6 +22,16 @@ beforeAll(async () => {
 installTriggerHandlingE2eTestHooks();
 
 const usageMocks = getProviderUsageMocks();
+const modelStatusCtx = {
+  Body: "/model status",
+  From: "telegram:111",
+  To: "telegram:111",
+  ChatType: "direct",
+  Provider: "telegram",
+  Surface: "telegram",
+  SessionKey: "telegram:slash:111",
+  CommandAuthorized: true,
+} as const;
 
 async function readSessionStore(home: string): Promise<Record<string, unknown>> {
   const raw = await readFile(join(home, "sessions.json"), "utf-8");
@@ -258,6 +271,163 @@ describe("trigger handling", () => {
         body: "/stop",
         from: "+1003",
       });
+    });
+  });
+
+  it("shows endpoint default in /model status when not configured", async () => {
+    await withTempHome(async (home) => {
+      const cfg = makeCfg(home);
+      const res = await getReplyFromConfig(modelStatusCtx, {}, cfg);
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(normalizeTestText(text ?? "")).toContain("endpoint: default");
+    });
+  });
+
+  it("includes endpoint details in /model status when configured", async () => {
+    await withTempHome(async (home) => {
+      const cfg = {
+        ...makeCfg(home),
+        models: {
+          providers: {
+            minimax: {
+              baseUrl: "https://api.minimax.io/anthropic",
+              api: "anthropic-messages",
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      const res = await getReplyFromConfig(modelStatusCtx, {}, cfg);
+
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      const normalized = normalizeTestText(text ?? "");
+      expect(normalized).toContain(
+        "[minimax] endpoint: https://api.minimax.io/anthropic api: anthropic-messages auth:",
+      );
+    });
+  });
+
+  it("restarts by default", async () => {
+    await withTempHome(async (home) => {
+      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+      const res = await getReplyFromConfig(
+        {
+          Body: "  [Dec 5] /restart",
+          From: "+1001",
+          To: "+2000",
+          CommandAuthorized: true,
+        },
+        {},
+        makeCfg(home),
+      );
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text?.startsWith("⚙️ Restarting") || text?.startsWith("⚠️ Restart failed")).toBe(true);
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("rejects /restart when explicitly disabled", async () => {
+    await withTempHome(async (home) => {
+      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+      const cfg = { ...makeCfg(home), commands: { restart: false } } as OpenClawConfig;
+      const res = await getReplyFromConfig(
+        {
+          Body: "/restart",
+          From: "+1001",
+          To: "+2000",
+          CommandAuthorized: true,
+        },
+        {},
+        cfg,
+      );
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("/restart is disabled");
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("reports status without invoking the agent", async () => {
+    await withTempHome(async (home) => {
+      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+      const res = await getReplyFromConfig(
+        {
+          Body: "/status",
+          From: "+1002",
+          To: "+2000",
+          CommandAuthorized: true,
+        },
+        {},
+        makeCfg(home),
+      );
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("OpenClaw");
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("reports active auth profile and key snippet in status", async () => {
+    await withTempHome(async (home) => {
+      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+      const cfg = makeCfg(home);
+      const agentDir = join(home, ".openclaw", "agents", "main", "agent");
+      await mkdir(agentDir, { recursive: true });
+      await writeFile(
+        join(agentDir, "auth-profiles.json"),
+        JSON.stringify(
+          {
+            version: 1,
+            profiles: {
+              "anthropic:work": {
+                type: "api_key",
+                provider: "anthropic",
+                key: "sk-test-1234567890abcdef",
+              },
+            },
+            lastGood: { anthropic: "anthropic:work" },
+          },
+          null,
+          2,
+        ),
+      );
+
+      const sessionKey = resolveSessionKey("per-sender", {
+        From: "+1002",
+        To: "+2000",
+        Provider: "whatsapp",
+      } as Parameters<typeof resolveSessionKey>[1]);
+      await writeFile(
+        requireSessionStorePath(cfg),
+        JSON.stringify(
+          {
+            [sessionKey]: {
+              sessionId: "session-auth",
+              updatedAt: Date.now(),
+              authProfileOverride: "anthropic:work",
+            },
+          },
+          null,
+          2,
+        ),
+      );
+
+      const res = await getReplyFromConfig(
+        {
+          Body: "/status",
+          From: "+1002",
+          To: "+2000",
+          Provider: "whatsapp",
+          SenderE164: "+1002",
+          CommandAuthorized: true,
+        },
+        {},
+        cfg,
+      );
+      const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("api-key");
+      expect(text).toMatch(/\u2026|\.{3}/);
+      expect(text).toContain("(anthropic:work)");
+      expect(text).not.toContain("mixed");
+      expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
 });

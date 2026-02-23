@@ -6,7 +6,13 @@ import { loadModelCatalog } from "../agents/model-catalog.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import type { CliDeps } from "../cli/deps.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
-import { makeCfg, makeJob, withTempCronHome } from "./isolated-agent.test-harness.js";
+import {
+  makeCfg,
+  makeJob,
+  withTempCronHome,
+  writeSessionStore,
+  writeSessionStoreEntries,
+} from "./isolated-agent.test-harness.js";
 import type { CronJob } from "./types.js";
 const withTempHome = withTempCronHome;
 
@@ -44,33 +50,6 @@ function expectEmbeddedProviderModel(expected: { provider: string; model: string
   expect(call?.model).toBe(expected.model);
 }
 
-async function writeSessionStore(
-  home: string,
-  entries: Record<string, Record<string, unknown>> = {},
-) {
-  const dir = path.join(home, ".openclaw", "sessions");
-  await fs.mkdir(dir, { recursive: true });
-  const storePath = path.join(dir, "sessions.json");
-  await fs.writeFile(
-    storePath,
-    JSON.stringify(
-      {
-        "agent:main:main": {
-          sessionId: "main-session",
-          updatedAt: Date.now(),
-          lastProvider: "webchat",
-          lastTo: "",
-        },
-        ...entries,
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
-  return storePath;
-}
-
 async function readSessionEntry(storePath: string, key: string) {
   const raw = await fs.readFile(storePath, "utf-8");
   const store = JSON.parse(raw) as Record<string, { sessionId?: string; label?: string }>;
@@ -98,7 +77,17 @@ type RunCronTurnOptions = {
 };
 
 async function runCronTurn(home: string, options: RunCronTurnOptions = {}) {
-  const storePath = options.storePath ?? (await writeSessionStore(home, options.storeEntries));
+  const storePath =
+    options.storePath ??
+    (await writeSessionStoreEntries(home, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now(),
+        lastProvider: "webchat",
+        lastTo: "",
+      },
+      ...options.storeEntries,
+    }));
   const deps = options.deps ?? makeDeps();
   if (options.mockTexts === null) {
     vi.mocked(runEmbeddedPiAgent).mockClear();
@@ -468,7 +457,7 @@ describe("runCronIsolatedAgentTurn", () => {
 
   it("starts a fresh session id for each cron run", async () => {
     await withTempHome(async (home) => {
-      const storePath = await writeSessionStore(home);
+      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
       const deps = makeDeps();
 
       const first = (
@@ -502,7 +491,7 @@ describe("runCronIsolatedAgentTurn", () => {
 
   it("preserves an existing cron session label", async () => {
     await withTempHome(async (home) => {
-      const storePath = await writeSessionStore(home);
+      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
       const raw = await fs.readFile(storePath, "utf-8");
       const store = JSON.parse(raw) as Record<string, Record<string, unknown>>;
       store["agent:main:cron:job-1"] = {

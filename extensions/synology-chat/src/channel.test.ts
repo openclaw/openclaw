@@ -57,6 +57,7 @@ describe("createSynologyChatPlugin", () => {
       const plugin = createSynologyChatPlugin();
       expect(plugin.meta.id).toBe("synology-chat");
       expect(plugin.meta.label).toBe("Synology Chat");
+      expect(plugin.meta.docsPath).toBe("/channels/synology-chat");
     });
   });
 

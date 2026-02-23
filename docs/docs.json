@@ -901,6 +901,7 @@
                   "channels/imessage",
                   "channels/bluebubbles",
                   "channels/msteams",
+                  "channels/synology-chat",
                   "channels/line",
                   "channels/matrix",
                   "channels/nextcloud-talk",

@@ -635,29 +635,26 @@ export async function runCronIsolatedAgentTurn(params: {
   // `true` means we confirmed at least one outbound send reached the target.
   // Keep this strict so timer fallback can safely decide whether to wake main.
   let delivered = skipMessagingToolDelivery;
+  const failDeliveryTarget = (error: string) =>
+    withRunSession({
+      status: "error",
+      error,
+      errorKind: "delivery-target",
+      summary,
+      outputText,
+      ...telemetry,
+    });
   if (deliveryRequested && !skipHeartbeatDelivery && !skipMessagingToolDelivery) {
     if (resolvedDelivery.error) {
       if (!deliveryBestEffort) {
-        return withRunSession({
-          status: "error",
-          error: resolvedDelivery.error.message,
-          summary,
-          outputText,
-          ...telemetry,
-        });
+        return failDeliveryTarget(resolvedDelivery.error.message);
       }
       logWarn(`[cron:${params.job.id}] ${resolvedDelivery.error.message}`);
       return withRunSession({ status: "ok", summary, outputText, ...telemetry });
     }
     const failOrWarnMissingDeliveryField = (message: string) => {
       if (!deliveryBestEffort) {
-        return withRunSession({
-          status: "error",
-          error: message,
-          summary,
-          outputText,
-          ...telemetry,
-        });
+        return failDeliveryTarget(message);
       }
       logWarn(`[cron:${params.job.id}] ${message}`);
       return withRunSession({ status: "ok", summary, outputText, ...telemetry });
@@ -791,7 +788,7 @@ export async function runCronIsolatedAgentTurn(params: {
         }
         const didAnnounce = await runSubagentAnnounceFlow({
           childSessionKey: agentSessionKey,
-          childRunId: `${params.job.id}:${runSessionId}`,
+          childRunId: `${params.job.id}:${runSessionId}:${runStartedAt}`,
           requesterSessionKey: announceSessionKey,
           requesterOrigin: {
             channel: resolvedDelivery.channel,
@@ -804,6 +801,9 @@ export async function runCronIsolatedAgentTurn(params: {
           timeoutMs,
           cleanup: params.job.deleteAfterRun ? "delete" : "keep",
           roundOneReply: synthesizedText,
+          // Keep delivery outcome truthful for cron state: if outbound send fails,
+          // announce flow must report false so caller can apply best-effort policy.
+          bestEffortDeliver: false,
           waitForCompletion: false,
           startedAt: runStartedAt,
           endedAt: runEndedAt,

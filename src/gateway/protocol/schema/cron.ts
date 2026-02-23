@@ -26,6 +26,28 @@ const CronRunStatusSchema = Type.Union([
   Type.Literal("error"),
   Type.Literal("skipped"),
 ]);
+const CronSortDirSchema = Type.Union([Type.Literal("asc"), Type.Literal("desc")]);
+const CronJobsEnabledFilterSchema = Type.Union([
+  Type.Literal("all"),
+  Type.Literal("enabled"),
+  Type.Literal("disabled"),
+]);
+const CronJobsSortBySchema = Type.Union([
+  Type.Literal("nextRunAtMs"),
+  Type.Literal("updatedAtMs"),
+  Type.Literal("name"),
+]);
+const CronRunsStatusFilterSchema = Type.Union([
+  Type.Literal("all"),
+  Type.Literal("ok"),
+  Type.Literal("error"),
+  Type.Literal("skipped"),
+]);
+const CronRunsStatusValueSchema = Type.Union([
+  Type.Literal("ok"),
+  Type.Literal("error"),
+  Type.Literal("skipped"),
+]);
 const CronDeliveryStatusSchema = Type.Union([
   Type.Literal("delivered"),
   Type.Literal("not-delivered"),
@@ -58,6 +80,12 @@ function cronIdOrJobIdParams(extraFields: Record<string, TSchema>) {
     ),
   ]);
 }
+
+const CronRunLogJobIdSchema = Type.String({
+  minLength: 1,
+  // Prevent path traversal via separators in cron.runs id/jobId.
+  pattern: "^[^/\\\\]+$",
+});
 
 export const CronScheduleSchema = Type.Union([
   Type.Object(
@@ -198,6 +226,12 @@ export const CronJobSchema = Type.Object(
 export const CronListParamsSchema = Type.Object(
   {
     includeDisabled: Type.Optional(Type.Boolean()),
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
+    offset: Type.Optional(Type.Integer({ minimum: 0 })),
+    query: Type.Optional(Type.String()),
+    enabled: Type.Optional(CronJobsEnabledFilterSchema),
+    sortBy: Type.Optional(CronJobsSortBySchema),
+    sortDir: Type.Optional(CronSortDirSchema),
   },
   { additionalProperties: false },
 );
@@ -241,9 +275,24 @@ export const CronRunParamsSchema = cronIdOrJobIdParams({
   mode: Type.Optional(Type.Union([Type.Literal("due"), Type.Literal("force")])),
 });
 
-export const CronRunsParamsSchema = cronIdOrJobIdParams({
-  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 5000 })),
-});
+export const CronRunsParamsSchema = Type.Object(
+  {
+    scope: Type.Optional(Type.Union([Type.Literal("job"), Type.Literal("all")])),
+    id: Type.Optional(CronRunLogJobIdSchema),
+    jobId: Type.Optional(CronRunLogJobIdSchema),
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
+    offset: Type.Optional(Type.Integer({ minimum: 0 })),
+    statuses: Type.Optional(Type.Array(CronRunsStatusValueSchema, { minItems: 1, maxItems: 3 })),
+    status: Type.Optional(CronRunsStatusFilterSchema),
+    deliveryStatuses: Type.Optional(
+      Type.Array(CronDeliveryStatusSchema, { minItems: 1, maxItems: 4 }),
+    ),
+    deliveryStatus: Type.Optional(CronDeliveryStatusSchema),
+    query: Type.Optional(Type.String()),
+    sortDir: Type.Optional(CronSortDirSchema),
+  },
+  { additionalProperties: false },
+);
 
 export const CronRunLogEntrySchema = Type.Object(
   {
@@ -261,6 +310,21 @@ export const CronRunLogEntrySchema = Type.Object(
     runAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
     durationMs: Type.Optional(Type.Integer({ minimum: 0 })),
     nextRunAtMs: Type.Optional(Type.Integer({ minimum: 0 })),
+    model: Type.Optional(Type.String()),
+    provider: Type.Optional(Type.String()),
+    usage: Type.Optional(
+      Type.Object(
+        {
+          input_tokens: Type.Optional(Type.Number()),
+          output_tokens: Type.Optional(Type.Number()),
+          total_tokens: Type.Optional(Type.Number()),
+          cache_read_tokens: Type.Optional(Type.Number()),
+          cache_write_tokens: Type.Optional(Type.Number()),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    jobName: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
 );

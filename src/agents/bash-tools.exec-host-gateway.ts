@@ -16,7 +16,7 @@ import {
 } from "../infra/exec-approvals.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
-import { requestExecApprovalDecision } from "./bash-tools.exec-approval-request.js";
+import { requestExecApprovalDecisionForHost } from "./bash-tools.exec-approval-request.js";
 import {
   DEFAULT_APPROVAL_TIMEOUT_MS,
   DEFAULT_NOTIFY_TAIL_CHARS,
@@ -81,6 +81,19 @@ export async function processGatewayAllowlist(
   const analysisOk = allowlistEval.analysisOk;
   const allowlistSatisfied =
     hostSecurity === "allowlist" && analysisOk ? allowlistEval.allowlistSatisfied : false;
+  const recordMatchedAllowlistUse = (resolvedPath?: string) => {
+    if (allowlistMatches.length === 0) {
+      return;
+    }
+    const seen = new Set<string>();
+    for (const match of allowlistMatches) {
+      if (seen.has(match.pattern)) {
+        continue;
+      }
+      seen.add(match.pattern);
+      recordAllowlistUse(approvals.file, params.agentId, match, params.command, resolvedPath);
+    }
+  };
   const hasHeredocSegment = allowlistEval.segments.some((segment) =>
     segment.argv.some((token) => token.startsWith("<<")),
   );
@@ -113,10 +126,10 @@ export async function processGatewayAllowlist(
     void (async () => {
       let decision: string | null = null;
       try {
-        decision = await requestExecApprovalDecision({
-          id: approvalId,
+        decision = await requestExecApprovalDecisionForHost({
+          approvalId,
           command: params.command,
-          cwd: params.workdir,
+          workdir: params.workdir,
           host: "gateway",
           security: hostSecurity,
           ask: hostAsk,
@@ -186,22 +199,7 @@ export async function processGatewayAllowlist(
         return;
       }
 
-      if (allowlistMatches.length > 0) {
-        const seen = new Set<string>();
-        for (const match of allowlistMatches) {
-          if (seen.has(match.pattern)) {
-            continue;
-          }
-          seen.add(match.pattern);
-          recordAllowlistUse(
-            approvals.file,
-            params.agentId,
-            match,
-            params.command,
-            resolvedPath ?? undefined,
-          );
-        }
-      }
+      recordMatchedAllowlistUse(resolvedPath ?? undefined);
 
       let run: Awaited<ReturnType<typeof runExecProcess>> | null = null;
       try {
@@ -321,22 +319,7 @@ export async function processGatewayAllowlist(
     }
   }
 
-  if (allowlistMatches.length > 0) {
-    const seen = new Set<string>();
-    for (const match of allowlistMatches) {
-      if (seen.has(match.pattern)) {
-        continue;
-      }
-      seen.add(match.pattern);
-      recordAllowlistUse(
-        approvals.file,
-        params.agentId,
-        match,
-        params.command,
-        allowlistEval.segments[0]?.resolution?.resolvedPath,
-      );
-    }
-  }
+  recordMatchedAllowlistUse(allowlistEval.segments[0]?.resolution?.resolvedPath);
 
   return { execCommandOverride };
 }
