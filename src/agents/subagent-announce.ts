@@ -731,6 +731,16 @@ async function sendSubagentAnnounceDirectly(params: {
     }
 
     const directOrigin = normalizeDeliveryContext(params.directOrigin);
+    const directChannelRaw =
+      typeof directOrigin?.channel === "string" ? directOrigin.channel.trim() : "";
+    const directChannel =
+      directChannelRaw && isDeliverableMessageChannel(directChannelRaw) ? directChannelRaw : "";
+    const directTo = typeof directOrigin?.to === "string" ? directOrigin.to.trim() : "";
+    const hasDeliverableDirectTarget =
+      !params.requesterIsSubagent && Boolean(directChannel) && Boolean(directTo);
+    const shouldDeliverExternally =
+      !params.requesterIsSubagent &&
+      (!params.expectsCompletionMessage || hasDeliverableDirectTarget);
     const threadId =
       directOrigin?.threadId != null && directOrigin.threadId !== ""
         ? String(directOrigin.threadId)
@@ -746,12 +756,12 @@ async function sendSubagentAnnounceDirectly(params: {
       params: {
         sessionKey: canonicalRequesterSessionKey,
         message: params.triggerMessage,
-        deliver: !params.requesterIsSubagent,
+        deliver: shouldDeliverExternally,
         bestEffortDeliver: params.bestEffortDeliver,
-        channel: params.requesterIsSubagent ? undefined : directOrigin?.channel,
-        accountId: params.requesterIsSubagent ? undefined : directOrigin?.accountId,
-        to: params.requesterIsSubagent ? undefined : directOrigin?.to,
-        threadId: params.requesterIsSubagent ? undefined : threadId,
+        channel: shouldDeliverExternally ? directChannel : undefined,
+        accountId: shouldDeliverExternally ? directOrigin?.accountId : undefined,
+        to: shouldDeliverExternally ? directTo : undefined,
+        threadId: shouldDeliverExternally ? threadId : undefined,
         idempotencyKey: params.directIdempotencyKey,
       },
       expectFinal: true,
