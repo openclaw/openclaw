@@ -18,6 +18,8 @@ repos:
       - id: check-added-large-files
         args: [--maxkb=500]
       - id: check-merge-conflict
+      - id: detect-private-key
+        exclude: '(^|/)(\.secrets\.baseline$|\.detect-secrets\.cfg$|\.pre-commit-config\.yaml$|apps/ios/fastlane/Fastfile$|.*\.test\.ts$)'
 
   # Secret detection (same as CI)
   - repo: https://github.com/Yelp/detect-secrets
@@ -45,7 +47,6 @@ repos:
           - '=== "string"'
           - --exclude-lines
           - 'typeof remote\?\.password === "string"'
-
   # Shell script linting
   - repo: https://github.com/koalaman/shellcheck-precommit
     rev: v0.11.0
@@ -90,6 +91,13 @@ repos:
   # Project checks (same commands as CI)
   - repo: local
     hooks:
+      # pnpm audit --prod --audit-level=high
+      - id: pnpm-audit-prod
+        name: pnpm-audit-prod
+        entry: pnpm audit --prod --audit-level=high
+        language: system
+        pass_filenames: false
+
       # oxlint --type-aware src test
       - id: oxlint
         name: oxlint
