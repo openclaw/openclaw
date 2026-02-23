@@ -38,6 +38,31 @@ vi.mock("../config/config.js", () => ({
   })),
 }));
 
+vi.mock("../config/sessions.js", () => {
+  const sessionStore = new Proxy<Record<string, { sessionId: string; updatedAt: number }>>(
+    {},
+    {
+      get(target, prop, receiver) {
+        if (typeof prop !== "string" || prop in target) {
+          return Reflect.get(target, prop, receiver);
+        }
+        return { sessionId: `sess-${prop}`, updatedAt: 1 };
+      },
+    },
+  );
+
+  return {
+    loadSessionStore: vi.fn(() => sessionStore),
+    resolveAgentIdFromSessionKey: (key: string) => {
+      const match = key.match(/^agent:([^:]+)/);
+      return match?.[1] ?? "main";
+    },
+    resolveMainSessionKey: () => "agent:main:main",
+    resolveStorePath: () => "/tmp/test-store",
+    updateSessionStore: vi.fn(),
+  };
+});
+
 const announceSpy = vi.fn(async (_params: unknown) => true);
 const runSubagentEndedHookMock = vi.fn(async (_event?: unknown, _ctx?: unknown) => {});
 vi.mock("./subagent-announce.js", () => ({
