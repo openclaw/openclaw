@@ -475,6 +475,7 @@ type SandboxToolParams = {
   bridge: SandboxFsBridge;
   modelContextWindowTokens?: number;
   imageSanitization?: ImageSanitizationLimits;
+  mutationLockingEnabled?: boolean;
 };
 
 export function createSandboxedReadTool(params: SandboxToolParams) {
@@ -491,20 +492,16 @@ export function createSandboxedWriteTool(params: SandboxToolParams) {
   const base = createWriteTool(params.root, {
     operations: createSandboxWriteOperations(params),
   }) as unknown as AnyAgentTool;
-  return wrapToolMutationLock(
-    wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write),
-    params.root,
-  );
+  const normalized = wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write);
+  return params.mutationLockingEnabled ? wrapToolMutationLock(normalized, params.root) : normalized;
 }
 
 export function createSandboxedEditTool(params: SandboxToolParams) {
   const base = createEditTool(params.root, {
     operations: createSandboxEditOperations(params),
   }) as unknown as AnyAgentTool;
-  return wrapToolMutationLock(
-    wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit),
-    params.root,
-  );
+  const normalized = wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
+  return params.mutationLockingEnabled ? wrapToolMutationLock(normalized, params.root) : normalized;
 }
 
 export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {
