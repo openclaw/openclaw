@@ -5,12 +5,12 @@ import {
   installDirectiveBehaviorE2EHooks,
   makeEmbeddedTextResult,
   makeWhatsAppDirectiveConfig,
-  replyText,
   replyTexts,
   runEmbeddedPiAgent,
   sessionStorePath,
   withTempHome,
 } from "./reply.directive.directive-behavior.e2e-harness.js";
+import { runModelDirectiveText } from "./reply.directive.directive-behavior.model-directive-test-utils.js";
 import { getReplyFromConfig } from "./reply.js";
 
 function makeRunConfig(home: string, storePath: string) {
@@ -69,24 +69,6 @@ async function runInFlightVerboseToggleCase(params: {
   return { res };
 }
 
-async function runModelDirectiveAndGetText(
-  home: string,
-  body: string,
-): Promise<string | undefined> {
-  const res = await getReplyFromConfig(
-    { Body: body, From: "+1222", To: "+1222", CommandAuthorized: true },
-    {},
-    makeWhatsAppDirectiveConfig(home, {
-      model: { primary: "anthropic/claude-opus-4-5" },
-      models: {
-        "anthropic/claude-opus-4-5": {},
-        "openai/gpt-4.1-mini": {},
-      },
-    }),
-  );
-  return replyText(res);
-}
-
 describe("directive behavior", () => {
   installDirectiveBehaviorE2EHooks();
 
@@ -119,7 +101,7 @@ describe("directive behavior", () => {
   });
   it("shows summary on /model", async () => {
     await withTempHome(async (home) => {
-      const text = await runModelDirectiveAndGetText(home, "/model");
+      const text = await runModelDirectiveText(home, "/model", { includeSessionStore: false });
       expect(text).toContain("Current: anthropic/claude-opus-4-5");
       expect(text).toContain("Switch: /model <provider/model>");
       expect(text).toContain("Browse: /models (providers) or /models <provider> (models)");
@@ -130,7 +112,9 @@ describe("directive behavior", () => {
   });
   it("lists allowlisted models on /model status", async () => {
     await withTempHome(async (home) => {
-      const text = await runModelDirectiveAndGetText(home, "/model status");
+      const text = await runModelDirectiveText(home, "/model status", {
+        includeSessionStore: false,
+      });
       expect(text).toContain("anthropic/claude-opus-4-5");
       expect(text).toContain("openai/gpt-4.1-mini");
       expect(text).not.toContain("claude-sonnet-4-1");

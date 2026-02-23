@@ -5,10 +5,11 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
 import { setTempStateDir, writeDownloadSkill } from "./skills-install.download-test-utils.js";
 import { installSkill } from "./skills-install.js";
-
-const runCommandWithTimeoutMock = vi.fn();
-const scanDirectoryWithSummaryMock = vi.fn();
-const fetchWithSsrFGuardMock = vi.fn();
+import {
+  fetchWithSsrFGuardMock,
+  runCommandWithTimeoutMock,
+  scanDirectoryWithSummaryMock,
+} from "./skills-install.test-mocks.js";
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
@@ -18,13 +19,10 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
 }));
 
-vi.mock("../security/skill-scanner.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../security/skill-scanner.js")>();
-  return {
-    ...actual,
-    scanDirectoryWithSummary: (...args: unknown[]) => scanDirectoryWithSummaryMock(...args),
-  };
-});
+vi.mock("../security/skill-scanner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../security/skill-scanner.js")>()),
+  scanDirectoryWithSummary: (...args: unknown[]) => scanDirectoryWithSummaryMock(...args),
+}));
 
 async function fileExists(filePath: string): Promise<boolean> {
   try {
@@ -77,8 +75,8 @@ function mockTarExtractionFlow(params: {
   verboseListOutput: string;
   extract: "ok" | "reject";
 }) {
-  runCommandWithTimeoutMock.mockImplementation(async (argv: unknown[]) => {
-    const cmd = argv as string[];
+  runCommandWithTimeoutMock.mockImplementation(async (...argv: unknown[]) => {
+    const cmd = (argv[0] ?? []) as string[];
     if (cmd[0] === "tar" && cmd[1] === "tf") {
       return runCommandResult({ stdout: params.listOutput });
     }

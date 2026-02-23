@@ -124,6 +124,40 @@ function createChatContext(): Pick<
   };
 }
 
+type ChatContext = ReturnType<typeof createChatContext>;
+
+async function runNonStreamingChatSend(params: {
+  context: ChatContext;
+  respond: ReturnType<typeof vi.fn>;
+  idempotencyKey: string;
+  message?: string;
+}) {
+  await chatHandlers["chat.send"]({
+    params: {
+      sessionKey: "main",
+      message: params.message ?? "hello",
+      idempotencyKey: params.idempotencyKey,
+    },
+    respond: params.respond as unknown as Parameters<
+      (typeof chatHandlers)["chat.send"]
+    >[0]["respond"],
+    req: {} as never,
+    client: null,
+    isWebchatConnect: () => false,
+    context: params.context as GatewayRequestContext,
+  });
+
+  await vi.waitFor(() => {
+    expect(
+      (params.context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.length,
+    ).toBe(1);
+  });
+
+  const chatCall = (params.context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+  expect(chatCall?.[0]).toBe("chat");
+  return chatCall?.[1];
+}
+
 describe("chat directive tag stripping for non-streaming final payloads", () => {
   it("chat.inject keeps message defined when directive tag is the only content", async () => {
     createTranscriptFixture("openclaw-chat-inject-directive-only-");
@@ -160,33 +194,20 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const respond = vi.fn();
     const context = createChatContext();
 
-    await chatHandlers["chat.send"]({
-      params: {
-        sessionKey: "main",
-        message: "hello",
-        idempotencyKey: "idem-directive-only",
-      },
+    const payload = await runNonStreamingChatSend({
+      context,
       respond,
-      req: {} as never,
-      client: null,
-      isWebchatConnect: () => false,
-      context: context as GatewayRequestContext,
+      idempotencyKey: "idem-directive-only",
     });
 
-    await vi.waitFor(() => {
-      expect((context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
-    });
-
-    const chatCall = (context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(chatCall?.[0]).toBe("chat");
-    expect(chatCall?.[1]).toEqual(
+    expect(payload).toEqual(
       expect.objectContaining({
         runId: "idem-directive-only",
         state: "final",
         message: expect.any(Object),
       }),
     );
-    expect(extractFirstTextBlock(chatCall?.[1])).toBe("");
+    expect(extractFirstTextBlock(payload)).toBe("");
   });
 
   it("chat.inject strips external untrusted wrapper metadata from final payload text", async () => {
@@ -218,25 +239,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const respond = vi.fn();
     const context = createChatContext();
 
-    await chatHandlers["chat.send"]({
-      params: {
-        sessionKey: "main",
-        message: "hello",
-        idempotencyKey: "idem-untrusted-context",
-      },
+    const payload = await runNonStreamingChatSend({
+      context,
       respond,
-      req: {} as never,
-      client: null,
-      isWebchatConnect: () => false,
-      context: context as GatewayRequestContext,
+      idempotencyKey: "idem-untrusted-context",
     });
-
-    await vi.waitFor(() => {
-      expect((context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
-    });
-
-    const chatCall = (context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
-    expect(chatCall?.[0]).toBe("chat");
-    expect(extractFirstTextBlock(chatCall?.[1])).toBe("hello");
+    expect(extractFirstTextBlock(payload)).toBe("hello");
   });
 });

@@ -5,46 +5,19 @@ import {
   installDirectiveBehaviorE2EHooks,
   loadModelCatalog,
   makeWhatsAppDirectiveConfig,
-  replyText,
   runEmbeddedPiAgent,
   sessionStorePath,
   withTempHome,
 } from "./reply.directive.directive-behavior.e2e-harness.js";
+import { runModelDirectiveText } from "./reply.directive.directive-behavior.model-directive-test-utils.js";
 import { getReplyFromConfig } from "./reply.js";
-
-async function runModelDirective(
-  home: string,
-  body: string,
-  options: {
-    defaults?: Record<string, unknown>;
-    extra?: Record<string, unknown>;
-  } = {},
-): Promise<string | undefined> {
-  const res = await getReplyFromConfig(
-    { Body: body, From: "+1222", To: "+1222", CommandAuthorized: true },
-    {},
-    makeWhatsAppDirectiveConfig(
-      home,
-      {
-        model: { primary: "anthropic/claude-opus-4-5" },
-        models: {
-          "anthropic/claude-opus-4-5": {},
-          "openai/gpt-4.1-mini": {},
-        },
-        ...options.defaults,
-      },
-      { session: { store: sessionStorePath(home) }, ...options.extra },
-    ),
-  );
-  return replyText(res);
-}
 
 describe("directive behavior", () => {
   installDirectiveBehaviorE2EHooks();
 
   it("aliases /model list to /models", async () => {
     await withTempHome(async (home) => {
-      const text = await runModelDirective(home, "/model list");
+      const text = await runModelDirectiveText(home, "/model list");
       expect(text).toContain("Providers:");
       expect(text).toContain("- anthropic");
       expect(text).toContain("- openai");
@@ -56,7 +29,7 @@ describe("directive behavior", () => {
   it("shows current model when catalog is unavailable", async () => {
     await withTempHome(async (home) => {
       vi.mocked(loadModelCatalog).mockResolvedValueOnce([]);
-      const text = await runModelDirective(home, "/model");
+      const text = await runModelDirectiveText(home, "/model");
       expect(text).toContain("Current: anthropic/claude-opus-4-5");
       expect(text).toContain("Switch: /model <provider/model>");
       expect(text).toContain("Browse: /models (providers) or /models <provider> (models)");
@@ -71,7 +44,7 @@ describe("directive behavior", () => {
         { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
         { id: "grok-4", name: "Grok 4", provider: "xai" },
       ]);
-      const text = await runModelDirective(home, "/model list", {
+      const text = await runModelDirectiveText(home, "/model list", {
         defaults: {
           model: {
             primary: "anthropic/claude-opus-4-5",
@@ -101,7 +74,7 @@ describe("directive behavior", () => {
         },
         { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 mini" },
       ]);
-      const text = await runModelDirective(home, "/models minimax", {
+      const text = await runModelDirectiveText(home, "/models minimax", {
         defaults: {
           models: {
             "anthropic/claude-opus-4-5": {},
@@ -129,7 +102,7 @@ describe("directive behavior", () => {
   });
   it("does not repeat missing auth labels on /model list", async () => {
     await withTempHome(async (home) => {
-      const text = await runModelDirective(home, "/model list", {
+      const text = await runModelDirectiveText(home, "/model list", {
         defaults: {
           models: {
             "anthropic/claude-opus-4-5": {},
