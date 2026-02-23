@@ -33,6 +33,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -813,7 +814,20 @@ class TalkModeManager(
           throw IllegalStateException("ElevenLabs failed: $code $body")
         }
         Log.d(tag, "elevenlabs http code=$code voiceId=$voiceId format=${request.outputFormat}")
-        conn.inputStream.use { input -> file.outputStream().use { out -> input.copyTo(out) } }
+        // Manual loop so cancellation is honoured on every chunk.
+        // input.copyTo() is a single blocking call with no yield points; if the
+        // coroutine is cancelled mid-download the entire response would finish
+        // before cancellation was observed.
+        conn.inputStream.use { input ->
+          file.outputStream().use { out ->
+            val buf = ByteArray(8192)
+            var n: Int
+            while (input.read(buf).also { n = it } != -1) {
+              ensureActive()
+              out.write(buf, 0, n)
+            }
+          }
+        }
       } catch (err: Throwable) {
         file.delete()
         throw err
