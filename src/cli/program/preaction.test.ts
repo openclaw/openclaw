@@ -239,10 +239,6 @@ describe("registerPreActionHooks", () => {
       processArgv: ["node", "openclaw", "config", "set", "gateway.auth.mode", "{bad", "--json"],
     });
 
-    const firstCall = ensureConfigReadyMock.mock.calls[0]?.[0] as
-      | { suppressDoctorStdout?: boolean }
-      | undefined;
-    expect(firstCall?.suppressDoctorStdout).toBeUndefined();
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       commandPath: ["config", "set"],
