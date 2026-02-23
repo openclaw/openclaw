@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, vi } from "vitest";
 import { WebSocket } from "ws";
-import type { GatewayServerOptions } from "./server.js";
 import { resolveMainSessionKeyFromConfig, type SessionEntry } from "../config/sessions.js";
 import { resetAgentRunContextForTest } from "../infra/agent-events.js";
 import {
@@ -16,10 +15,12 @@ import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import { rawDataToString } from "../infra/ws.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import { DEFAULT_AGENT_ID, toAgentStoreSessionKey } from "../routing/session-key.js";
+import { captureEnv } from "../test-utils/env.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
 import { PROTOCOL_VERSION } from "./protocol/index.js";
+import type { GatewayServerOptions } from "./server.js";
 import {
   agentCommand,
   cronIsolatedRun,
@@ -33,17 +34,31 @@ import {
   testTailnetIPv4,
 } from "./test-helpers.mocks.js";
 
-// Preload the gateway server module once per worker.
-// Important: `test-helpers.mocks` must run before importing the server so vi.mock hooks apply.
-const serverModulePromise = import("./server.js");
+// Import lazily after test env/home setup so config/session paths resolve to test dirs.
+// Keep one cached module per worker for speed.
+let serverModulePromise: Promise<typeof import("./server.js")> | undefined;
 
-let previousHome: string | undefined;
-let previousUserProfile: string | undefined;
-let previousStateDir: string | undefined;
-let previousConfigPath: string | undefined;
-let previousSkipBrowserControl: string | undefined;
-let previousSkipGmailWatcher: string | undefined;
-let previousSkipCanvasHost: string | undefined;
+async function getServerModule() {
+  serverModulePromise ??= import("./server.js");
+  return await serverModulePromise;
+}
+
+const GATEWAY_TEST_ENV_KEYS = [
+  "HOME",
+  "USERPROFILE",
+  "OPENCLAW_STATE_DIR",
+  "OPENCLAW_CONFIG_PATH",
+  "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
+  "OPENCLAW_SKIP_GMAIL_WATCHER",
+  "OPENCLAW_SKIP_CANVAS_HOST",
+  "OPENCLAW_BUNDLED_PLUGINS_DIR",
+  "OPENCLAW_SKIP_CHANNELS",
+  "OPENCLAW_SKIP_PROVIDERS",
+  "OPENCLAW_SKIP_CRON",
+  "OPENCLAW_TEST_MINIMAL_GATEWAY",
+] as const;
+
+let gatewayEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 let tempHome: string | undefined;
 let tempConfigRoot: string | undefined;
 
@@ -76,13 +91,7 @@ export async function writeSessionStore(params: {
 }
 
 async function setupGatewayTestHome() {
-  previousHome = process.env.HOME;
-  previousUserProfile = process.env.USERPROFILE;
-  previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
-  previousSkipBrowserControl = process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER;
-  previousSkipGmailWatcher = process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
-  previousSkipCanvasHost = process.env.OPENCLAW_SKIP_CANVAS_HOST;
+  gatewayEnvSnapshot = captureEnv([...GATEWAY_TEST_ENV_KEYS]);
   tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-home-"));
   process.env.HOME = tempHome;
   process.env.USERPROFILE = tempHome;
@@ -94,6 +103,13 @@ function applyGatewaySkipEnv() {
   process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
   process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
   process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
+  process.env.OPENCLAW_SKIP_CHANNELS = "1";
+  process.env.OPENCLAW_SKIP_PROVIDERS = "1";
+  process.env.OPENCLAW_SKIP_CRON = "1";
+  process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "1";
+  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = tempHome
+    ? path.join(tempHome, "openclaw-test-no-bundled-extensions")
+    : "openclaw-test-no-bundled-extensions";
 }
 
 async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
@@ -104,9 +120,13 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
     throw new Error("resetGatewayTestState called before temp home was initialized");
   }
   applyGatewaySkipEnv();
-  tempConfigRoot = options.uniqueConfigRoot
-    ? await fs.mkdtemp(path.join(tempHome, "openclaw-test-"))
-    : path.join(tempHome, ".openclaw-test");
+  if (options.uniqueConfigRoot) {
+    tempConfigRoot = await fs.mkdtemp(path.join(tempHome, "openclaw-test-"));
+  } else {
+    tempConfigRoot = path.join(tempHome, ".openclaw-test");
+    await fs.rm(tempConfigRoot, { recursive: true, force: true });
+    await fs.mkdir(tempConfigRoot, { recursive: true });
+  }
   setTestConfigRoot(tempConfigRoot);
   sessionStoreSaveDelayMs.value = 0;
   testTailnetIPv4.value = undefined;
@@ -138,7 +158,7 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   embeddedRunMock.waitResults.clear();
   drainSystemEvents(resolveMainSessionKeyFromConfig());
   resetAgentRunContextForTest();
-  const mod = await serverModulePromise;
+  const mod = await getServerModule();
   mod.__resetModelCatalogCacheForTest();
   piSdkMock.enabled = false;
   piSdkMock.discoverCalls = 0;
@@ -149,41 +169,8 @@ async function cleanupGatewayTestHome(options: { restoreEnv: boolean }) {
   vi.useRealTimers();
   resetLogger();
   if (options.restoreEnv) {
-    if (previousHome === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = previousHome;
-    }
-    if (previousUserProfile === undefined) {
-      delete process.env.USERPROFILE;
-    } else {
-      process.env.USERPROFILE = previousUserProfile;
-    }
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-    if (previousConfigPath === undefined) {
-      delete process.env.OPENCLAW_CONFIG_PATH;
-    } else {
-      process.env.OPENCLAW_CONFIG_PATH = previousConfigPath;
-    }
-    if (previousSkipBrowserControl === undefined) {
-      delete process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER;
-    } else {
-      process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = previousSkipBrowserControl;
-    }
-    if (previousSkipGmailWatcher === undefined) {
-      delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
-    } else {
-      process.env.OPENCLAW_SKIP_GMAIL_WATCHER = previousSkipGmailWatcher;
-    }
-    if (previousSkipCanvasHost === undefined) {
-      delete process.env.OPENCLAW_SKIP_CANVAS_HOST;
-    } else {
-      process.env.OPENCLAW_SKIP_CANVAS_HOST = previousSkipCanvasHost;
-    }
+    gatewayEnvSnapshot?.restore();
+    gatewayEnvSnapshot = undefined;
   }
   if (options.restoreEnv && tempHome) {
     await fs.rm(tempHome, {
@@ -244,9 +231,51 @@ export async function occupyPort(): Promise<{
   });
 }
 
-export function onceMessage<T = unknown>(
+type GatewayTestMessage = {
+  type?: string;
+  id?: string;
+  ok?: boolean;
+  event?: string;
+  payload?: Record<string, unknown> | null;
+  seq?: number;
+  stateVersion?: Record<string, unknown>;
+  [key: string]: unknown;
+};
+
+const CONNECT_CHALLENGE_NONCE_KEY = "__openclawTestConnectChallengeNonce";
+const CONNECT_CHALLENGE_TRACKED_KEY = "__openclawTestConnectChallengeTracked";
+type TrackedWs = WebSocket & Record<string, unknown>;
+
+export function getTrackedConnectChallengeNonce(ws: WebSocket): string | undefined {
+  const tracked = (ws as TrackedWs)[CONNECT_CHALLENGE_NONCE_KEY];
+  return typeof tracked === "string" && tracked.trim().length > 0 ? tracked.trim() : undefined;
+}
+
+export function trackConnectChallengeNonce(ws: WebSocket): void {
+  const trackedWs = ws as TrackedWs;
+  if (trackedWs[CONNECT_CHALLENGE_TRACKED_KEY] === true) {
+    return;
+  }
+  trackedWs[CONNECT_CHALLENGE_TRACKED_KEY] = true;
+  ws.on("message", (data) => {
+    try {
+      const obj = JSON.parse(rawDataToString(data)) as GatewayTestMessage;
+      if (obj.type !== "event" || obj.event !== "connect.challenge") {
+        return;
+      }
+      const nonce = (obj.payload as { nonce?: unknown } | undefined)?.nonce;
+      if (typeof nonce === "string" && nonce.trim().length > 0) {
+        trackedWs[CONNECT_CHALLENGE_NONCE_KEY] = nonce.trim();
+      }
+    } catch {
+      // ignore parse errors in nonce tracker
+    }
+  });
+}
+
+export function onceMessage<T extends GatewayTestMessage = GatewayTestMessage>(
   ws: WebSocket,
-  filter: (obj: unknown) => boolean,
+  filter: (obj: T) => boolean,
   // Full-suite runs can saturate the event loop (581+ files). Keep this high
   // enough to avoid flaky RPC timeouts, but still fail fast when a response
   // never arrives.
@@ -260,12 +289,12 @@ export function onceMessage<T = unknown>(
       reject(new Error(`closed ${code}: ${reason.toString()}`));
     };
     const handler = (data: WebSocket.RawData) => {
-      const obj = JSON.parse(rawDataToString(data));
+      const obj = JSON.parse(rawDataToString(data)) as T;
       if (filter(obj)) {
         clearTimeout(timer);
         ws.off("message", handler);
         ws.off("close", closeHandler);
-        resolve(obj as T);
+        resolve(obj);
       }
     };
     ws.on("message", handler);
@@ -274,12 +303,56 @@ export function onceMessage<T = unknown>(
 }
 
 export async function startGatewayServer(port: number, opts?: GatewayServerOptions) {
-  const mod = await serverModulePromise;
-  return await mod.startGatewayServer(port, opts);
+  const mod = await getServerModule();
+  const resolvedOpts =
+    opts?.controlUiEnabled === undefined ? { ...opts, controlUiEnabled: false } : opts;
+  return await mod.startGatewayServer(port, resolvedOpts);
 }
 
-export async function startServerWithClient(token?: string, opts?: GatewayServerOptions) {
+async function startGatewayServerWithRetries(params: {
+  port: number;
+  opts?: GatewayServerOptions;
+}): Promise<{ port: number; server: Awaited<ReturnType<typeof startGatewayServer>> }> {
+  let port = params.port;
+  for (let attempt = 0; attempt < 10; attempt++) {
+    try {
+      return {
+        port,
+        server: await startGatewayServer(port, params.opts),
+      };
+    } catch (err) {
+      const code = (err as { cause?: { code?: string } }).cause?.code;
+      if (code !== "EADDRINUSE") {
+        throw err;
+      }
+      port = await getFreePort();
+    }
+  }
+  throw new Error("failed to start gateway server after retries");
+}
+
+export async function withGatewayServer<T>(
+  fn: (ctx: { port: number; server: Awaited<ReturnType<typeof startGatewayServer>> }) => Promise<T>,
+  opts?: { port?: number; serverOptions?: GatewayServerOptions },
+): Promise<T> {
+  const started = await startGatewayServerWithRetries({
+    port: opts?.port ?? (await getFreePort()),
+    opts: opts?.serverOptions,
+  });
+  try {
+    return await fn({ port: started.port, server: started.server });
+  } finally {
+    await started.server.close();
+  }
+}
+
+export async function startServerWithClient(
+  token?: string,
+  opts?: GatewayServerOptions & { wsHeaders?: Record<string, string> },
+) {
+  const { wsHeaders, ...gatewayOpts } = opts ?? {};
   let port = await getFreePort();
+  const envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN"]);
   const prev = process.env.OPENCLAW_GATEWAY_TOKEN;
   if (typeof token === "string") {
     testState.gatewayAuth = { mode: "token", token };
@@ -295,40 +368,90 @@ export async function startServerWithClient(token?: string, opts?: GatewayServer
     process.env.OPENCLAW_GATEWAY_TOKEN = fallbackToken;
   }
 
-  let server: Awaited<ReturnType<typeof startGatewayServer>> | null = null;
-  for (let attempt = 0; attempt < 10; attempt++) {
-    try {
-      server = await startGatewayServer(port, opts);
-      break;
-    } catch (err) {
-      const code = (err as { cause?: { code?: string } }).cause?.code;
-      if (code !== "EADDRINUSE") {
-        throw err;
-      }
-      port = await getFreePort();
-    }
-  }
-  if (!server) {
-    throw new Error("failed to start gateway server after retries");
-  }
+  const started = await startGatewayServerWithRetries({ port, opts: gatewayOpts });
+  port = started.port;
+  const server = started.server;
 
-  const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-  await new Promise<void>((resolve) => ws.once("open", resolve));
-  return { server, ws, port, prevToken: prev };
+  const ws = new WebSocket(
+    `ws://127.0.0.1:${port}`,
+    wsHeaders ? { headers: wsHeaders } : undefined,
+  );
+  trackConnectChallengeNonce(ws);
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timeout waiting for ws open")), 10_000);
+    const cleanup = () => {
+      clearTimeout(timer);
+      ws.off("open", onOpen);
+      ws.off("error", onError);
+      ws.off("close", onClose);
+    };
+    const onOpen = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = (err: unknown) => {
+      cleanup();
+      reject(err instanceof Error ? err : new Error(String(err)));
+    };
+    const onClose = (code: number, reason: Buffer) => {
+      cleanup();
+      reject(new Error(`closed ${code}: ${reason.toString()}`));
+    };
+    ws.once("open", onOpen);
+    ws.once("error", onError);
+    ws.once("close", onClose);
+  });
+  return { server, ws, port, prevToken: prev, envSnapshot };
+}
+
+export async function startConnectedServerWithClient(
+  token?: string,
+  opts?: GatewayServerOptions & { wsHeaders?: Record<string, string> },
+) {
+  const started = await startServerWithClient(token, opts);
+  await connectOk(started.ws);
+  return started;
 }
 
 type ConnectResponse = {
   type: "res";
   id: string;
   ok: boolean;
-  payload?: unknown;
-  error?: { message?: string };
+  payload?: Record<string, unknown>;
+  error?: { message?: string; code?: string; details?: unknown };
 };
+
+export async function readConnectChallengeNonce(
+  ws: WebSocket,
+  timeoutMs = 2_000,
+): Promise<string | undefined> {
+  const cached = getTrackedConnectChallengeNonce(ws);
+  if (cached) {
+    return cached;
+  }
+  trackConnectChallengeNonce(ws);
+  try {
+    const evt = await onceMessage<{
+      type?: string;
+      event?: string;
+      payload?: Record<string, unknown> | null;
+    }>(ws, (o) => o.type === "event" && o.event === "connect.challenge", timeoutMs);
+    const nonce = (evt.payload as { nonce?: unknown } | undefined)?.nonce;
+    if (typeof nonce === "string" && nonce.trim().length > 0) {
+      (ws as TrackedWs)[CONNECT_CHALLENGE_NONCE_KEY] = nonce.trim();
+      return nonce.trim();
+    }
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 export async function connectReq(
   ws: WebSocket,
   opts?: {
     token?: string;
+    deviceToken?: string;
     password?: string;
     skipDefaultAuth?: boolean;
     minProtocol?: number;
@@ -355,6 +478,8 @@ export async function connectReq(
       signedAt: number;
       nonce?: string;
     } | null;
+    skipConnectChallengeNonce?: boolean;
+    timeoutMs?: number;
   },
 ): Promise<ConnectResponse> {
   const { randomUUID } = await import("node:crypto");
@@ -379,14 +504,28 @@ export async function connectReq(
         ? ((testState.gatewayAuth as { password?: string }).password ?? undefined)
         : process.env.OPENCLAW_GATEWAY_PASSWORD;
   const token = opts?.token ?? defaultToken;
+  const deviceToken = opts?.deviceToken?.trim() || undefined;
   const password = opts?.password ?? defaultPassword;
-  const requestedScopes = Array.isArray(opts?.scopes) ? opts?.scopes : [];
+  const authTokenForSignature = token ?? deviceToken;
+  const requestedScopes = Array.isArray(opts?.scopes)
+    ? opts.scopes
+    : role === "operator"
+      ? ["operator.admin"]
+      : [];
+  if (opts?.skipConnectChallengeNonce && opts?.device === undefined) {
+    throw new Error("skipConnectChallengeNonce requires an explicit device override");
+  }
+  const connectChallengeNonce =
+    opts?.device !== undefined ? undefined : await readConnectChallengeNonce(ws);
   const device = (() => {
     if (opts?.device === null) {
       return undefined;
     }
     if (opts?.device) {
       return opts.device;
+    }
+    if (!connectChallengeNonce) {
+      throw new Error("missing connect.challenge nonce");
     }
     const identity = loadOrCreateDeviceIdentity();
     const signedAtMs = Date.now();
@@ -397,14 +536,15 @@ export async function connectReq(
       role,
       scopes: requestedScopes,
       signedAtMs,
-      token: token ?? null,
+      token: authTokenForSignature ?? null,
+      nonce: connectChallengeNonce,
     });
     return {
       id: identity.deviceId,
       publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
       signature: signDevicePayload(identity.privateKeyPem, payload),
       signedAt: signedAtMs,
-      nonce: opts?.device?.nonce,
+      nonce: connectChallengeNonce,
     };
   })();
   ws.send(
@@ -420,11 +560,12 @@ export async function connectReq(
         commands: opts?.commands ?? [],
         permissions: opts?.permissions ?? undefined,
         role,
-        scopes: opts?.scopes,
+        scopes: requestedScopes,
         auth:
-          token || password
+          token || password || deviceToken
             ? {
                 token,
+                deviceToken,
                 password,
               }
             : undefined,
@@ -439,7 +580,7 @@ export async function connectReq(
     const rec = o as Record<string, unknown>;
     return rec.type === "res" && rec.id === id;
   };
-  return await onceMessage<ConnectResponse>(ws, isResponseForId);
+  return await onceMessage<ConnectResponse>(ws, isResponseForId, opts?.timeoutMs);
 }
 
 export async function connectOk(ws: WebSocket, opts?: Parameters<typeof connectReq>[1]) {
@@ -449,7 +590,45 @@ export async function connectOk(ws: WebSocket, opts?: Parameters<typeof connectR
   return res.payload as { type: "hello-ok" };
 }
 
-export async function rpcReq<T = unknown>(
+export async function connectWebchatClient(params: {
+  port: number;
+  origin?: string;
+  client?: NonNullable<Parameters<typeof connectReq>[1]>["client"];
+}): Promise<WebSocket> {
+  const origin = params.origin ?? `http://127.0.0.1:${params.port}`;
+  const ws = new WebSocket(`ws://127.0.0.1:${params.port}`, {
+    headers: { origin },
+  });
+  trackConnectChallengeNonce(ws);
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("timeout waiting for ws open")), 10_000);
+    const onOpen = () => {
+      clearTimeout(timer);
+      ws.off("error", onError);
+      resolve();
+    };
+    const onError = (err: Error) => {
+      clearTimeout(timer);
+      ws.off("open", onOpen);
+      reject(err);
+    };
+    ws.once("open", onOpen);
+    ws.once("error", onError);
+  });
+  await connectOk(ws, {
+    client:
+      params.client ??
+      ({
+        id: GATEWAY_CLIENT_NAMES.WEBCHAT,
+        version: "1.0.0",
+        platform: "test",
+        mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+      } as NonNullable<Parameters<typeof connectReq>[1]>["client"]),
+  });
+  return ws;
+}
+
+export async function rpcReq<T extends Record<string, unknown>>(
   ws: WebSocket,
   method: string,
   params?: unknown,
@@ -462,7 +641,7 @@ export async function rpcReq<T = unknown>(
     type: "res";
     id: string;
     ok: boolean;
-    payload?: T;
+    payload?: T | null | undefined;
     error?: { message?: string; code?: string };
   }>(
     ws,

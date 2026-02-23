@@ -1,10 +1,18 @@
-import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/config.js";
+import {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+} from "../config/model-input.js";
 import {
   applyAuthProfileConfig,
+  applyLitellmProviderConfig,
+  applyMistralConfig,
+  applyMistralProviderConfig,
   applyMinimaxApiConfig,
   applyMinimaxApiProviderConfig,
   applyOpencodeZenConfig,
@@ -13,58 +21,118 @@ import {
   applyOpenrouterProviderConfig,
   applySyntheticConfig,
   applySyntheticProviderConfig,
+  applyXaiConfig,
+  applyXaiProviderConfig,
   applyXiaomiConfig,
   applyXiaomiProviderConfig,
+  applyZaiConfig,
+  applyZaiProviderConfig,
   OPENROUTER_DEFAULT_MODEL_REF,
+  MISTRAL_DEFAULT_MODEL_REF,
   SYNTHETIC_DEFAULT_MODEL_ID,
   SYNTHETIC_DEFAULT_MODEL_REF,
+  XAI_DEFAULT_MODEL_REF,
   setMinimaxApiKey,
   writeOAuthCredentials,
+  ZAI_CODING_CN_BASE_URL,
+  ZAI_GLOBAL_BASE_URL,
 } from "./onboard-auth.js";
+import {
+  createAuthTestLifecycle,
+  readAuthProfilesForAgent,
+  setupAuthTestEnv,
+} from "./test-wizard-helpers.js";
 
-const authProfilePathFor = (agentDir: string) => path.join(agentDir, "auth-profiles.json");
-const requireAgentDir = () => {
-  const agentDir = process.env.OPENCLAW_AGENT_DIR;
-  if (!agentDir) {
-    throw new Error("OPENCLAW_AGENT_DIR not set");
-  }
-  return agentDir;
-};
+function createLegacyProviderConfig(params: {
+  providerId: string;
+  api: "anthropic-messages" | "openai-completions" | "openai-responses";
+  modelId?: string;
+  modelName?: string;
+  baseUrl?: string;
+  apiKey?: string;
+}): OpenClawConfig {
+  return {
+    models: {
+      providers: {
+        [params.providerId]: {
+          baseUrl: params.baseUrl ?? "https://old.example.com",
+          apiKey: params.apiKey ?? "old-key",
+          api: params.api,
+          models: [
+            {
+              id: params.modelId ?? "old-model",
+              name: params.modelName ?? "Old",
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 1000,
+              maxTokens: 100,
+            },
+          ],
+        },
+      },
+    },
+  } as OpenClawConfig;
+}
+
+const EXPECTED_FALLBACKS = ["anthropic/claude-opus-4-5"] as const;
+
+function createConfigWithFallbacks() {
+  return {
+    agents: {
+      defaults: {
+        model: { fallbacks: [...EXPECTED_FALLBACKS] },
+      },
+    },
+  };
+}
+
+function expectFallbacksPreserved(cfg: ReturnType<typeof applyMinimaxApiConfig>) {
+  expect(resolveAgentModelFallbackValues(cfg.agents?.defaults?.model)).toEqual([
+    ...EXPECTED_FALLBACKS,
+  ]);
+}
+
+function expectPrimaryModelPreserved(cfg: ReturnType<typeof applyMinimaxApiProviderConfig>) {
+  expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(
+    "anthropic/claude-opus-4-5",
+  );
+}
+
+function expectAllowlistContains(
+  cfg: ReturnType<typeof applyOpenrouterProviderConfig>,
+  key: string,
+) {
+  const models = cfg.agents?.defaults?.models ?? {};
+  expect(Object.keys(models)).toContain(key);
+}
+
+function expectAliasPreserved(
+  cfg: ReturnType<typeof applyOpenrouterProviderConfig>,
+  key: string,
+  alias: string,
+) {
+  expect(cfg.agents?.defaults?.models?.[key]?.alias).toBe(alias);
+}
 
 describe("writeOAuthCredentials", () => {
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
-  const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
-  let tempStateDir: string | null = null;
+  const lifecycle = createAuthTestLifecycle([
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_AGENT_DIR",
+    "PI_CODING_AGENT_DIR",
+    "OPENCLAW_OAUTH_DIR",
+  ]);
+
+  let tempStateDir: string;
+  const authProfilePathFor = (dir: string) => path.join(dir, "auth-profiles.json");
 
   afterEach(async () => {
-    if (tempStateDir) {
-      await fs.rm(tempStateDir, { recursive: true, force: true });
-      tempStateDir = null;
-    }
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-    if (previousAgentDir === undefined) {
-      delete process.env.OPENCLAW_AGENT_DIR;
-    } else {
-      process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
-    }
-    if (previousPiAgentDir === undefined) {
-      delete process.env.PI_CODING_AGENT_DIR;
-    } else {
-      process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
-    }
-    delete process.env.OPENCLAW_OAUTH_DIR;
+    await lifecycle.cleanup();
   });
 
   it("writes auth-profiles.json under OPENCLAW_AGENT_DIR when set", async () => {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-"));
-    process.env.OPENCLAW_STATE_DIR = tempStateDir;
-    process.env.OPENCLAW_AGENT_DIR = path.join(tempStateDir, "agent");
-    process.env.PI_CODING_AGENT_DIR = process.env.OPENCLAW_AGENT_DIR;
+    const env = await setupAuthTestEnv("openclaw-oauth-");
+    lifecycle.setStateDir(env.stateDir);
 
     const creds = {
       refresh: "refresh-token",
@@ -74,11 +142,9 @@ describe("writeOAuthCredentials", () => {
 
     await writeOAuthCredentials("openai-codex", creds);
 
-    const authProfilePath = authProfilePathFor(requireAgentDir());
-    const raw = await fs.readFile(authProfilePath, "utf8");
-    const parsed = JSON.parse(raw) as {
+    const parsed = await readAuthProfilesForAgent<{
       profiles?: Record<string, OAuthCredentials & { type?: string }>;
-    };
+    }>(env.agentDir);
     expect(parsed.profiles?.["openai-codex:default"]).toMatchObject({
       refresh: "refresh-token",
       access: "access-token",
@@ -86,52 +152,141 @@ describe("writeOAuthCredentials", () => {
     });
 
     await expect(
-      fs.readFile(path.join(tempStateDir, "agents", "main", "agent", "auth-profiles.json"), "utf8"),
+      fs.readFile(path.join(env.stateDir, "agents", "main", "agent", "auth-profiles.json"), "utf8"),
     ).rejects.toThrow();
+  });
+
+  it("writes OAuth credentials to all sibling agent dirs when syncSiblingAgents=true", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-sync-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+
+    const mainAgentDir = path.join(tempStateDir, "agents", "main", "agent");
+    const kidAgentDir = path.join(tempStateDir, "agents", "kid", "agent");
+    const workerAgentDir = path.join(tempStateDir, "agents", "worker", "agent");
+    await fs.mkdir(mainAgentDir, { recursive: true });
+    await fs.mkdir(kidAgentDir, { recursive: true });
+    await fs.mkdir(workerAgentDir, { recursive: true });
+
+    process.env.OPENCLAW_AGENT_DIR = kidAgentDir;
+    process.env.PI_CODING_AGENT_DIR = kidAgentDir;
+
+    const creds = {
+      refresh: "refresh-sync",
+      access: "access-sync",
+      expires: Date.now() + 60_000,
+    } satisfies OAuthCredentials;
+
+    await writeOAuthCredentials("openai-codex", creds, undefined, {
+      syncSiblingAgents: true,
+    });
+
+    for (const dir of [mainAgentDir, kidAgentDir, workerAgentDir]) {
+      const raw = await fs.readFile(authProfilePathFor(dir), "utf8");
+      const parsed = JSON.parse(raw) as {
+        profiles?: Record<string, OAuthCredentials & { type?: string }>;
+      };
+      expect(parsed.profiles?.["openai-codex:default"]).toMatchObject({
+        refresh: "refresh-sync",
+        access: "access-sync",
+        type: "oauth",
+      });
+    }
+  });
+
+  it("writes OAuth credentials only to target dir by default", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-nosync-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+
+    const mainAgentDir = path.join(tempStateDir, "agents", "main", "agent");
+    const kidAgentDir = path.join(tempStateDir, "agents", "kid", "agent");
+    await fs.mkdir(mainAgentDir, { recursive: true });
+    await fs.mkdir(kidAgentDir, { recursive: true });
+
+    process.env.OPENCLAW_AGENT_DIR = kidAgentDir;
+    process.env.PI_CODING_AGENT_DIR = kidAgentDir;
+
+    const creds = {
+      refresh: "refresh-kid",
+      access: "access-kid",
+      expires: Date.now() + 60_000,
+    } satisfies OAuthCredentials;
+
+    await writeOAuthCredentials("openai-codex", creds, kidAgentDir);
+
+    const kidRaw = await fs.readFile(authProfilePathFor(kidAgentDir), "utf8");
+    const kidParsed = JSON.parse(kidRaw) as {
+      profiles?: Record<string, OAuthCredentials & { type?: string }>;
+    };
+    expect(kidParsed.profiles?.["openai-codex:default"]).toMatchObject({
+      access: "access-kid",
+      type: "oauth",
+    });
+
+    await expect(fs.readFile(authProfilePathFor(mainAgentDir), "utf8")).rejects.toThrow();
+  });
+
+  it("syncs siblings from explicit agentDir outside OPENCLAW_STATE_DIR", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-external-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+
+    // Create standard-layout agents tree *outside* OPENCLAW_STATE_DIR
+    const externalRoot = path.join(tempStateDir, "external", "agents");
+    const extMain = path.join(externalRoot, "main", "agent");
+    const extKid = path.join(externalRoot, "kid", "agent");
+    const extWorker = path.join(externalRoot, "worker", "agent");
+    await fs.mkdir(extMain, { recursive: true });
+    await fs.mkdir(extKid, { recursive: true });
+    await fs.mkdir(extWorker, { recursive: true });
+
+    const creds = {
+      refresh: "refresh-ext",
+      access: "access-ext",
+      expires: Date.now() + 60_000,
+    } satisfies OAuthCredentials;
+
+    await writeOAuthCredentials("openai-codex", creds, extKid, {
+      syncSiblingAgents: true,
+    });
+
+    // All siblings under the external root should have credentials
+    for (const dir of [extMain, extKid, extWorker]) {
+      const raw = await fs.readFile(authProfilePathFor(dir), "utf8");
+      const parsed = JSON.parse(raw) as {
+        profiles?: Record<string, OAuthCredentials & { type?: string }>;
+      };
+      expect(parsed.profiles?.["openai-codex:default"]).toMatchObject({
+        refresh: "refresh-ext",
+        access: "access-ext",
+        type: "oauth",
+      });
+    }
+
+    // Global state dir should NOT have credentials written
+    const globalMain = path.join(tempStateDir, "agents", "main", "agent");
+    await expect(fs.readFile(authProfilePathFor(globalMain), "utf8")).rejects.toThrow();
   });
 });
 
 describe("setMinimaxApiKey", () => {
-  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-  const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
-  const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
-  let tempStateDir: string | null = null;
+  const lifecycle = createAuthTestLifecycle([
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_AGENT_DIR",
+    "PI_CODING_AGENT_DIR",
+  ]);
 
   afterEach(async () => {
-    if (tempStateDir) {
-      await fs.rm(tempStateDir, { recursive: true, force: true });
-      tempStateDir = null;
-    }
-    if (previousStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-    if (previousAgentDir === undefined) {
-      delete process.env.OPENCLAW_AGENT_DIR;
-    } else {
-      process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
-    }
-    if (previousPiAgentDir === undefined) {
-      delete process.env.PI_CODING_AGENT_DIR;
-    } else {
-      process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
-    }
+    await lifecycle.cleanup();
   });
 
   it("writes to OPENCLAW_AGENT_DIR when set", async () => {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-minimax-"));
-    process.env.OPENCLAW_STATE_DIR = tempStateDir;
-    process.env.OPENCLAW_AGENT_DIR = path.join(tempStateDir, "custom-agent");
-    process.env.PI_CODING_AGENT_DIR = process.env.OPENCLAW_AGENT_DIR;
+    const env = await setupAuthTestEnv("openclaw-minimax-", { agentSubdir: "custom-agent" });
+    lifecycle.setStateDir(env.stateDir);
 
     await setMinimaxApiKey("sk-minimax-test");
 
-    const customAuthPath = authProfilePathFor(requireAgentDir());
-    const raw = await fs.readFile(customAuthPath, "utf8");
-    const parsed = JSON.parse(raw) as {
+    const parsed = await readAuthProfilesForAgent<{
       profiles?: Record<string, { type?: string; provider?: string; key?: string }>;
-    };
+    }>(env.agentDir);
     expect(parsed.profiles?.["minimax:default"]).toMatchObject({
       type: "api_key",
       provider: "minimax",
@@ -139,7 +294,7 @@ describe("setMinimaxApiKey", () => {
     });
 
     await expect(
-      fs.readFile(path.join(tempStateDir, "agents", "main", "agent", "auth-profiles.json"), "utf8"),
+      fs.readFile(path.join(env.stateDir, "agents", "main", "agent", "auth-profiles.json"), "utf8"),
     ).rejects.toThrow();
   });
 });
@@ -175,30 +330,9 @@ describe("applyMinimaxApiConfig", () => {
     });
   });
 
-  it("sets correct primary model", () => {
-    const cfg = applyMinimaxApiConfig({}, "MiniMax-M2.1-lightning");
-    expect(cfg.agents?.defaults?.model?.primary).toBe("minimax/MiniMax-M2.1-lightning");
-  });
-
   it("does not set reasoning for non-reasoning models", () => {
     const cfg = applyMinimaxApiConfig({}, "MiniMax-M2.1");
     expect(cfg.models?.providers?.minimax?.models[0]?.reasoning).toBe(false);
-  });
-
-  it("preserves existing model fallbacks", () => {
-    const cfg = applyMinimaxApiConfig({
-      agents: {
-        defaults: {
-          model: { fallbacks: ["anthropic/claude-opus-4-5"] },
-        },
-      },
-    });
-    expect(cfg.agents?.defaults?.model?.fallbacks).toEqual(["anthropic/claude-opus-4-5"]);
-  });
-
-  it("adds model alias", () => {
-    const cfg = applyMinimaxApiConfig({}, "MiniMax-M2.1");
-    expect(cfg.agents?.defaults?.models?.["minimax/MiniMax-M2.1"]?.alias).toBe("Minimax");
   });
 
   it("preserves existing model params when adding alias", () => {
@@ -224,34 +358,18 @@ describe("applyMinimaxApiConfig", () => {
   });
 
   it("merges existing minimax provider models", () => {
-    const cfg = applyMinimaxApiConfig({
-      models: {
-        providers: {
-          minimax: {
-            baseUrl: "https://old.example.com",
-            apiKey: "old-key",
-            api: "openai-completions",
-            models: [
-              {
-                id: "old-model",
-                name: "Old",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 1000,
-                maxTokens: 100,
-              },
-            ],
-          },
-        },
-      },
-    });
+    const cfg = applyMinimaxApiConfig(
+      createLegacyProviderConfig({
+        providerId: "minimax",
+        api: "openai-completions",
+      }),
+    );
     expect(cfg.models?.providers?.minimax?.baseUrl).toBe("https://api.minimax.io/anthropic");
     expect(cfg.models?.providers?.minimax?.api).toBe("anthropic-messages");
     expect(cfg.models?.providers?.minimax?.apiKey).toBe("old-key");
     expect(cfg.models?.providers?.minimax?.models.map((m) => m.id)).toEqual([
       "old-model",
-      "MiniMax-M2.1",
+      "MiniMax-M2.5",
     ]);
   });
 
@@ -290,12 +408,39 @@ describe("applyMinimaxApiConfig", () => {
   });
 });
 
-describe("applyMinimaxApiProviderConfig", () => {
+describe("provider config helpers", () => {
   it("does not overwrite existing primary model", () => {
-    const cfg = applyMinimaxApiProviderConfig({
-      agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
+    const providerConfigAppliers = [applyMinimaxApiProviderConfig, applyZaiProviderConfig];
+    for (const applyConfig of providerConfigAppliers) {
+      const cfg = applyConfig({
+        agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
+      });
+      expectPrimaryModelPreserved(cfg);
+    }
+  });
+});
+
+describe("applyZaiConfig", () => {
+  it("adds zai provider with correct settings", () => {
+    const cfg = applyZaiConfig({});
+    expect(cfg.models?.providers?.zai).toMatchObject({
+      // Default: general (non-coding) endpoint. Coding Plan endpoint is detected during onboarding.
+      baseUrl: ZAI_GLOBAL_BASE_URL,
+      api: "openai-completions",
     });
-    expect(cfg.agents?.defaults?.model?.primary).toBe("anthropic/claude-opus-4-5");
+    const ids = cfg.models?.providers?.zai?.models?.map((m) => m.id);
+    expect(ids).toContain("glm-5");
+    expect(ids).toContain("glm-4.7");
+    expect(ids).toContain("glm-4.7-flash");
+    expect(ids).toContain("glm-4.7-flashx");
+  });
+
+  it("supports CN endpoint for supported coding models", () => {
+    for (const modelId of ["glm-4.7-flash", "glm-4.7-flashx"] as const) {
+      const cfg = applyZaiConfig({}, { endpoint: "coding-cn", modelId });
+      expect(cfg.models?.providers?.zai?.baseUrl).toBe(ZAI_CODING_CN_BASE_URL);
+      expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(`zai/${modelId}`);
+    }
   });
 });
 
@@ -308,40 +453,42 @@ describe("applySyntheticConfig", () => {
     });
   });
 
-  it("sets correct primary model", () => {
-    const cfg = applySyntheticConfig({});
-    expect(cfg.agents?.defaults?.model?.primary).toBe(SYNTHETIC_DEFAULT_MODEL_REF);
-  });
-
   it("merges existing synthetic provider models", () => {
-    const cfg = applySyntheticProviderConfig({
-      models: {
-        providers: {
-          synthetic: {
-            baseUrl: "https://old.example.com",
-            apiKey: "old-key",
-            api: "openai-completions",
-            models: [
-              {
-                id: "old-model",
-                name: "Old",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 1000,
-                maxTokens: 100,
-              },
-            ],
-          },
-        },
-      },
-    });
+    const cfg = applySyntheticProviderConfig(
+      createLegacyProviderConfig({
+        providerId: "synthetic",
+        api: "openai-completions",
+      }),
+    );
     expect(cfg.models?.providers?.synthetic?.baseUrl).toBe("https://api.synthetic.new/anthropic");
     expect(cfg.models?.providers?.synthetic?.api).toBe("anthropic-messages");
     expect(cfg.models?.providers?.synthetic?.apiKey).toBe("old-key");
     const ids = cfg.models?.providers?.synthetic?.models.map((m) => m.id);
     expect(ids).toContain("old-model");
     expect(ids).toContain(SYNTHETIC_DEFAULT_MODEL_ID);
+  });
+});
+
+describe("primary model defaults", () => {
+  it("sets correct primary model", () => {
+    const configCases = [
+      {
+        getConfig: () => applyMinimaxApiConfig({}, "MiniMax-M2.1-lightning"),
+        primaryModel: "minimax/MiniMax-M2.1-lightning",
+      },
+      {
+        getConfig: () => applyZaiConfig({}, { modelId: "glm-5" }),
+        primaryModel: "zai/glm-5",
+      },
+      {
+        getConfig: () => applySyntheticConfig({}),
+        primaryModel: SYNTHETIC_DEFAULT_MODEL_REF,
+      },
+    ] as const;
+    for (const { getConfig, primaryModel } of configCases) {
+      const cfg = getConfig();
+      expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(primaryModel);
+    }
   });
 });
 
@@ -352,32 +499,18 @@ describe("applyXiaomiConfig", () => {
       baseUrl: "https://api.xiaomimimo.com/anthropic",
       api: "anthropic-messages",
     });
-    expect(cfg.agents?.defaults?.model?.primary).toBe("xiaomi/mimo-v2-flash");
+    expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe("xiaomi/mimo-v2-flash");
   });
 
   it("merges Xiaomi models and keeps existing provider overrides", () => {
-    const cfg = applyXiaomiProviderConfig({
-      models: {
-        providers: {
-          xiaomi: {
-            baseUrl: "https://old.example.com",
-            apiKey: "old-key",
-            api: "openai-completions",
-            models: [
-              {
-                id: "custom-model",
-                name: "Custom",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 1, output: 2, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 1000,
-                maxTokens: 100,
-              },
-            ],
-          },
-        },
-      },
-    });
+    const cfg = applyXiaomiProviderConfig(
+      createLegacyProviderConfig({
+        providerId: "xiaomi",
+        api: "openai-completions",
+        modelId: "custom-model",
+        modelName: "Custom",
+      }),
+    );
 
     expect(cfg.models?.providers?.xiaomi?.baseUrl).toBe("https://api.xiaomimimo.com/anthropic");
     expect(cfg.models?.providers?.xiaomi?.api).toBe("anthropic-messages");
@@ -389,80 +522,183 @@ describe("applyXiaomiConfig", () => {
   });
 });
 
-describe("applyOpencodeZenProviderConfig", () => {
-  it("adds allowlist entry for the default model", () => {
-    const cfg = applyOpencodeZenProviderConfig({});
-    const models = cfg.agents?.defaults?.models ?? {};
-    expect(Object.keys(models)).toContain("opencode/claude-opus-4-5");
+describe("applyXaiConfig", () => {
+  it("adds xAI provider with correct settings", () => {
+    const cfg = applyXaiConfig({});
+    expect(cfg.models?.providers?.xai).toMatchObject({
+      baseUrl: "https://api.x.ai/v1",
+      api: "openai-completions",
+    });
+    expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(XAI_DEFAULT_MODEL_REF);
   });
+});
 
-  it("preserves existing alias for the default model", () => {
-    const cfg = applyOpencodeZenProviderConfig({
-      agents: {
-        defaults: {
-          models: {
-            "opencode/claude-opus-4-5": { alias: "My Opus" },
+describe("applyXaiProviderConfig", () => {
+  it("merges xAI models and keeps existing provider overrides", () => {
+    const cfg = applyXaiProviderConfig(
+      createLegacyProviderConfig({
+        providerId: "xai",
+        api: "anthropic-messages",
+        modelId: "custom-model",
+        modelName: "Custom",
+      }),
+    );
+
+    expect(cfg.models?.providers?.xai?.baseUrl).toBe("https://api.x.ai/v1");
+    expect(cfg.models?.providers?.xai?.api).toBe("openai-completions");
+    expect(cfg.models?.providers?.xai?.apiKey).toBe("old-key");
+    expect(cfg.models?.providers?.xai?.models.map((m) => m.id)).toEqual(["custom-model", "grok-4"]);
+  });
+});
+
+describe("applyMistralConfig", () => {
+  it("adds Mistral provider with correct settings", () => {
+    const cfg = applyMistralConfig({});
+    expect(cfg.models?.providers?.mistral).toMatchObject({
+      baseUrl: "https://api.mistral.ai/v1",
+      api: "openai-completions",
+    });
+    expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(
+      MISTRAL_DEFAULT_MODEL_REF,
+    );
+  });
+});
+
+describe("applyMistralProviderConfig", () => {
+  it("merges Mistral models and keeps existing provider overrides", () => {
+    const cfg = applyMistralProviderConfig(
+      createLegacyProviderConfig({
+        providerId: "mistral",
+        api: "anthropic-messages",
+        modelId: "custom-model",
+        modelName: "Custom",
+      }),
+    );
+
+    expect(cfg.models?.providers?.mistral?.baseUrl).toBe("https://api.mistral.ai/v1");
+    expect(cfg.models?.providers?.mistral?.api).toBe("openai-completions");
+    expect(cfg.models?.providers?.mistral?.apiKey).toBe("old-key");
+    expect(cfg.models?.providers?.mistral?.models.map((m) => m.id)).toEqual([
+      "custom-model",
+      "mistral-large-latest",
+    ]);
+    const mistralDefault = cfg.models?.providers?.mistral?.models.find(
+      (model) => model.id === "mistral-large-latest",
+    );
+    expect(mistralDefault?.contextWindow).toBe(262144);
+    expect(mistralDefault?.maxTokens).toBe(262144);
+  });
+});
+
+describe("fallback preservation helpers", () => {
+  it("preserves existing model fallbacks", () => {
+    const fallbackCases = [applyMinimaxApiConfig, applyXaiConfig, applyMistralConfig] as const;
+    for (const applyConfig of fallbackCases) {
+      const cfg = applyConfig(createConfigWithFallbacks());
+      expectFallbacksPreserved(cfg);
+    }
+  });
+});
+
+describe("provider alias defaults", () => {
+  it("adds expected alias for provider defaults", () => {
+    const aliasCases = [
+      {
+        applyConfig: () => applyMinimaxApiConfig({}, "MiniMax-M2.1"),
+        modelRef: "minimax/MiniMax-M2.1",
+        alias: "Minimax",
+      },
+      {
+        applyConfig: () => applyXaiProviderConfig({}),
+        modelRef: XAI_DEFAULT_MODEL_REF,
+        alias: "Grok",
+      },
+      {
+        applyConfig: () => applyMistralProviderConfig({}),
+        modelRef: MISTRAL_DEFAULT_MODEL_REF,
+        alias: "Mistral",
+      },
+    ] as const;
+    for (const testCase of aliasCases) {
+      const cfg = testCase.applyConfig();
+      expect(cfg.agents?.defaults?.models?.[testCase.modelRef]?.alias).toBe(testCase.alias);
+    }
+  });
+});
+
+describe("allowlist provider helpers", () => {
+  it("adds allowlist entry and preserves alias", () => {
+    const providerCases = [
+      {
+        applyConfig: applyOpencodeZenProviderConfig,
+        modelRef: "opencode/claude-opus-4-6",
+        alias: "My Opus",
+      },
+      {
+        applyConfig: applyOpenrouterProviderConfig,
+        modelRef: OPENROUTER_DEFAULT_MODEL_REF,
+        alias: "Router",
+      },
+    ] as const;
+    for (const { applyConfig, modelRef, alias } of providerCases) {
+      const withDefault = applyConfig({});
+      expectAllowlistContains(withDefault, modelRef);
+
+      const withAlias = applyConfig({
+        agents: {
+          defaults: {
+            models: {
+              [modelRef]: { alias },
+            },
           },
         },
-      },
-    });
-    expect(cfg.agents?.defaults?.models?.["opencode/claude-opus-4-5"]?.alias).toBe("My Opus");
+      });
+      expectAliasPreserved(withAlias, modelRef, alias);
+    }
   });
 });
 
-describe("applyOpencodeZenConfig", () => {
-  it("sets correct primary model", () => {
-    const cfg = applyOpencodeZenConfig({});
-    expect(cfg.agents?.defaults?.model?.primary).toBe("opencode/claude-opus-4-5");
-  });
+describe("applyLitellmProviderConfig", () => {
+  it("preserves existing baseUrl and api key while adding the default model", () => {
+    const cfg = applyLitellmProviderConfig(
+      createLegacyProviderConfig({
+        providerId: "litellm",
+        api: "anthropic-messages",
+        modelId: "custom-model",
+        modelName: "Custom",
+        baseUrl: "https://litellm.example/v1",
+        apiKey: "  old-key  ",
+      }),
+    );
 
-  it("preserves existing model fallbacks", () => {
-    const cfg = applyOpencodeZenConfig({
-      agents: {
-        defaults: {
-          model: { fallbacks: ["anthropic/claude-opus-4-5"] },
-        },
-      },
-    });
-    expect(cfg.agents?.defaults?.model?.fallbacks).toEqual(["anthropic/claude-opus-4-5"]);
-  });
-});
-
-describe("applyOpenrouterProviderConfig", () => {
-  it("adds allowlist entry for the default model", () => {
-    const cfg = applyOpenrouterProviderConfig({});
-    const models = cfg.agents?.defaults?.models ?? {};
-    expect(Object.keys(models)).toContain(OPENROUTER_DEFAULT_MODEL_REF);
-  });
-
-  it("preserves existing alias for the default model", () => {
-    const cfg = applyOpenrouterProviderConfig({
-      agents: {
-        defaults: {
-          models: {
-            [OPENROUTER_DEFAULT_MODEL_REF]: { alias: "Router" },
-          },
-        },
-      },
-    });
-    expect(cfg.agents?.defaults?.models?.[OPENROUTER_DEFAULT_MODEL_REF]?.alias).toBe("Router");
+    expect(cfg.models?.providers?.litellm?.baseUrl).toBe("https://litellm.example/v1");
+    expect(cfg.models?.providers?.litellm?.api).toBe("openai-completions");
+    expect(cfg.models?.providers?.litellm?.apiKey).toBe("old-key");
+    expect(cfg.models?.providers?.litellm?.models.map((m) => m.id)).toEqual([
+      "custom-model",
+      "claude-opus-4-6",
+    ]);
   });
 });
 
-describe("applyOpenrouterConfig", () => {
-  it("sets correct primary model", () => {
-    const cfg = applyOpenrouterConfig({});
-    expect(cfg.agents?.defaults?.model?.primary).toBe(OPENROUTER_DEFAULT_MODEL_REF);
-  });
-
-  it("preserves existing model fallbacks", () => {
-    const cfg = applyOpenrouterConfig({
-      agents: {
-        defaults: {
-          model: { fallbacks: ["anthropic/claude-opus-4-5"] },
-        },
+describe("default-model config helpers", () => {
+  it("sets primary model and preserves existing model fallbacks", () => {
+    const configCases = [
+      {
+        applyConfig: applyOpencodeZenConfig,
+        primaryModel: "opencode/claude-opus-4-6",
       },
-    });
-    expect(cfg.agents?.defaults?.model?.fallbacks).toEqual(["anthropic/claude-opus-4-5"]);
+      {
+        applyConfig: applyOpenrouterConfig,
+        primaryModel: OPENROUTER_DEFAULT_MODEL_REF,
+      },
+    ] as const;
+    for (const { applyConfig, primaryModel } of configCases) {
+      const cfg = applyConfig({});
+      expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(primaryModel);
+
+      const cfgWithFallbacks = applyConfig(createConfigWithFallbacks());
+      expectFallbacksPreserved(cfgWithFallbacks);
+    }
   });
 });

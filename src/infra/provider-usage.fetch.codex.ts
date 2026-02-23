@@ -1,6 +1,6 @@
-import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
-import { fetchJson } from "./provider-usage.fetch.shared.js";
+import { buildUsageHttpErrorSnapshot, fetchJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
+import type { ProviderUsageSnapshot, UsageWindow } from "./provider-usage.types.js";
 
 type CodexUsageResponse = {
   rate_limit?: {
@@ -41,22 +41,12 @@ export async function fetchCodexUsage(
     fetchFn,
   );
 
-  if (res.status === 401 || res.status === 403) {
-    return {
-      provider: "openai-codex",
-      displayName: PROVIDER_LABELS["openai-codex"],
-      windows: [],
-      error: "Token expired",
-    };
-  }
-
   if (!res.ok) {
-    return {
+    return buildUsageHttpErrorSnapshot({
       provider: "openai-codex",
-      displayName: PROVIDER_LABELS["openai-codex"],
-      windows: [],
-      error: `HTTP ${res.status}`,
-    };
+      status: res.status,
+      tokenExpiredStatuses: [401, 403],
+    });
   }
 
   const data = (await res.json()) as CodexUsageResponse;

@@ -1,9 +1,10 @@
+import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
+import { normalizeProviderId, parseModelRef } from "../agents/model-selection.js";
+import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
+import { resolveAgentModelPrimaryValue } from "./model-input.js";
+import { resolveTalkApiKey } from "./talk.js";
 import type { OpenClawConfig } from "./types.js";
 import type { ModelDefinitionConfig } from "./types.models.js";
-import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
-import { parseModelRef } from "../agents/model-selection.js";
-import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
-import { resolveTalkApiKey } from "./talk.js";
 
 type WarnState = { warned: boolean };
 
@@ -13,8 +14,8 @@ type AnthropicAuthDefaultsMode = "api_key" | "oauth";
 
 const DEFAULT_MODEL_ALIASES: Readonly<Record<string, string>> = {
   // Anthropic (pi-ai catalog uses "latest" ids without date suffix)
-  opus: "anthropic/claude-opus-4-5",
-  sonnet: "anthropic/claude-sonnet-4-5",
+  opus: "anthropic/claude-opus-4-6",
+  sonnet: "anthropic/claude-sonnet-4-6",
 
   // OpenAI
   gpt: "openai/gpt-5.2",
@@ -36,6 +37,16 @@ const DEFAULT_MODEL_MAX_TOKENS = 8192;
 
 type ModelDefinitionLike = Partial<ModelDefinitionConfig> &
   Pick<ModelDefinitionConfig, "id" | "name">;
+
+function resolveDefaultProviderApi(
+  providerId: string,
+  providerApi: ModelDefinitionConfig["api"] | undefined,
+): ModelDefinitionConfig["api"] | undefined {
+  if (providerApi) {
+    return providerApi;
+  }
+  return normalizeProviderId(providerId) === "anthropic" ? "anthropic-messages" : undefined;
+}
 
 function isPositiveNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
@@ -181,6 +192,12 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
       if (!Array.isArray(models) || models.length === 0) {
         continue;
       }
+      const providerApi = resolveDefaultProviderApi(providerId, provider.api);
+      let nextProvider = provider;
+      if (providerApi && provider.api !== providerApi) {
+        mutated = true;
+        nextProvider = { ...nextProvider, api: providerApi };
+      }
       let providerMutated = false;
       const nextModels = models.map((model) => {
         const raw = model as ModelDefinitionLike;
@@ -215,8 +232,13 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
         }
 
         const defaultMaxTokens = Math.min(DEFAULT_MODEL_MAX_TOKENS, contextWindow);
-        const maxTokens = isPositiveNumber(raw.maxTokens) ? raw.maxTokens : defaultMaxTokens;
+        const rawMaxTokens = isPositiveNumber(raw.maxTokens) ? raw.maxTokens : defaultMaxTokens;
+        const maxTokens = Math.min(rawMaxTokens, contextWindow);
         if (raw.maxTokens !== maxTokens) {
+          modelMutated = true;
+        }
+        const api = raw.api ?? providerApi;
+        if (raw.api !== api) {
           modelMutated = true;
         }
 
@@ -231,13 +253,17 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
           cost,
           contextWindow,
           maxTokens,
+          api,
         } as ModelDefinitionConfig;
       });
 
       if (!providerMutated) {
+        if (nextProvider !== provider) {
+          nextProviders[providerId] = nextProvider;
+        }
         continue;
       }
-      nextProviders[providerId] = { ...provider, models: nextModels };
+      nextProviders[providerId] = { ...nextProvider, models: nextModels };
       mutated = true;
     }
 
@@ -384,10 +410,19 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
   if (authMode === "api_key") {
     const nextModels = defaults.models ? { ...defaults.models } : {};
     let modelsMutated = false;
+    const isAnthropicCacheRetentionTarget = (
+      parsed: { provider: string; model: string } | null | undefined,
+    ): parsed is { provider: string; model: string } =>
+      Boolean(
+        parsed &&
+        (parsed.provider === "anthropic" ||
+          (parsed.provider === "amazon-bedrock" &&
+            parsed.model.toLowerCase().includes("anthropic.claude"))),
+      );
 
     for (const [key, entry] of Object.entries(nextModels)) {
       const parsed = parseModelRef(key, "anthropic");
-      if (!parsed || parsed.provider !== "anthropic") {
+      if (!isAnthropicCacheRetentionTarget(parsed)) {
         continue;
       }
       const current = entry ?? {};
@@ -402,10 +437,12 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
       modelsMutated = true;
     }
 
-    const primary = resolvePrimaryModelRef(defaults.model?.primary ?? undefined);
+    const primary = resolvePrimaryModelRef(
+      resolveAgentModelPrimaryValue(defaults.model) ?? undefined,
+    );
     if (primary) {
       const parsedPrimary = parseModelRef(primary, "anthropic");
-      if (parsedPrimary?.provider === "anthropic") {
+      if (isAnthropicCacheRetentionTarget(parsedPrimary)) {
         const key = `${parsedPrimary.provider}/${parsedPrimary.model}`;
         const entry = nextModels[key];
         const current = entry ?? {};

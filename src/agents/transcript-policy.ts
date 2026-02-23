@@ -1,6 +1,6 @@
-import type { ToolCallIdMode } from "./tool-call-id.js";
 import { normalizeProviderId } from "./model-selection.js";
-import { isAntigravityClaude, isGoogleModelApi } from "./pi-embedded-helpers/google.js";
+import { isGoogleModelApi } from "./pi-embedded-helpers/google.js";
+import type { ToolCallIdMode } from "./tool-call-id.js";
 
 export type TranscriptSanitizeMode = "full" | "images-only";
 
@@ -14,7 +14,8 @@ export type TranscriptPolicy = {
     allowBase64Only?: boolean;
     includeCamelCase?: boolean;
   };
-  normalizeAntigravityThinkingBlocks: boolean;
+  sanitizeThinkingSignatures: boolean;
+  dropThinkingBlocks: boolean;
   applyGoogleTurnOrdering: boolean;
   validateGeminiTurns: boolean;
   validateAnthropicTurns: boolean;
@@ -37,6 +38,7 @@ const OPENAI_MODEL_APIS = new Set([
   "openai-codex-responses",
 ]);
 const OPENAI_PROVIDERS = new Set(["openai", "openai-codex"]);
+const OPENAI_COMPAT_TURN_MERGE_EXCLUDED_PROVIDERS = new Set(["openrouter", "opencode"]);
 
 function isOpenAiApi(modelApi?: string | null): boolean {
   if (!modelApi) {
@@ -83,41 +85,45 @@ export function resolveTranscriptPolicy(params: {
   const isGoogle = isGoogleModelApi(params.modelApi);
   const isAnthropic = isAnthropicApi(params.modelApi, provider);
   const isOpenAi = isOpenAiProvider(provider) || (!provider && isOpenAiApi(params.modelApi));
+  const isStrictOpenAiCompatible =
+    params.modelApi === "openai-completions" &&
+    !isOpenAi &&
+    !OPENAI_COMPAT_TURN_MERGE_EXCLUDED_PROVIDERS.has(provider);
   const isMistral = isMistralModel({ provider, modelId });
   const isOpenRouterGemini =
     (provider === "openrouter" || provider === "opencode") &&
     modelId.toLowerCase().includes("gemini");
-  const isAntigravityClaudeModel = isAntigravityClaude({
-    api: params.modelApi,
-    provider,
-    modelId,
-  });
+  const isCopilotClaude = provider === "github-copilot" && modelId.toLowerCase().includes("claude");
+
+  // GitHub Copilot's Claude endpoints can reject persisted `thinking` blocks with
+  // non-binary/non-base64 signatures (e.g. thinkingSignature: "reasoning_text").
+  // Drop these blocks at send-time to keep sessions usable.
+  const dropThinkingBlocks = isCopilotClaude;
 
   const needsNonImageSanitize = isGoogle || isAnthropic || isMistral || isOpenRouterGemini;
 
-  const sanitizeToolCallIds = isGoogle || isMistral;
+  const sanitizeToolCallIds = isGoogle || isMistral || isAnthropic;
   const toolCallIdMode: ToolCallIdMode | undefined = isMistral
     ? "strict9"
     : sanitizeToolCallIds
       ? "strict"
       : undefined;
   const repairToolUseResultPairing = isGoogle || isAnthropic;
-  const sanitizeThoughtSignatures = isOpenRouterGemini
-    ? { allowBase64Only: true, includeCamelCase: true }
-    : undefined;
-  const normalizeAntigravityThinkingBlocks = isAntigravityClaudeModel;
+  const sanitizeThoughtSignatures =
+    isOpenRouterGemini || isGoogle ? { allowBase64Only: true, includeCamelCase: true } : undefined;
 
   return {
     sanitizeMode: isOpenAi ? "images-only" : needsNonImageSanitize ? "full" : "images-only",
     sanitizeToolCallIds: !isOpenAi && sanitizeToolCallIds,
     toolCallIdMode,
     repairToolUseResultPairing: !isOpenAi && repairToolUseResultPairing,
-    preserveSignatures: isAntigravityClaudeModel,
+    preserveSignatures: false,
     sanitizeThoughtSignatures: isOpenAi ? undefined : sanitizeThoughtSignatures,
-    normalizeAntigravityThinkingBlocks,
+    sanitizeThinkingSignatures: false,
+    dropThinkingBlocks,
     applyGoogleTurnOrdering: !isOpenAi && isGoogle,
     validateGeminiTurns: !isOpenAi && isGoogle,
-    validateAnthropicTurns: !isOpenAi && isAnthropic,
+    validateAnthropicTurns: !isOpenAi && (isAnthropic || isStrictOpenAiCompatible),
     allowSyntheticToolResults: !isOpenAi && (isGoogle || isAnthropic),
   };
 }

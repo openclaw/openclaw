@@ -63,6 +63,17 @@ export type OpenClawConfig = {
     channel?: "stable" | "beta" | "dev";
     /** Check for updates on gateway start (npm installs only). */
     checkOnStart?: boolean;
+    /** Core auto-update policy for package installs. */
+    auto?: {
+      /** Enable background auto-update checks and apply logic. Default: false. */
+      enabled?: boolean;
+      /** Stable channel minimum delay before auto-apply. Default: 6. */
+      stableDelayHours?: number;
+      /** Additional stable-channel jitter window. Default: 12. */
+      stableJitterHours?: number;
+      /** Beta channel check cadence. Default: 1 hour. */
+      betaCheckIntervalHours?: number;
+    };
   };
   browser?: BrowserConfig;
   ui?: {
@@ -114,6 +125,12 @@ export type ConfigFileSnapshot = {
   exists: boolean;
   raw: string | null;
   parsed: unknown;
+  /**
+   * Config after $include resolution and ${ENV} substitution, but BEFORE runtime
+   * defaults are applied. Use this for config set/unset operations to avoid
+   * leaking runtime defaults into the written config file.
+   */
+  resolved: OpenClawConfig;
   valid: boolean;
   config: OpenClawConfig;
   hash?: string;

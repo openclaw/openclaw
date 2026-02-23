@@ -1,9 +1,15 @@
-import type { Llama, LlamaEmbeddingContext, LlamaModel } from "node-llama-cpp";
 import fsSync from "node:fs";
+import type { Llama, LlamaEmbeddingContext, LlamaModel } from "node-llama-cpp";
 import type { OpenClawConfig } from "../config/config.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUserPath } from "../utils.js";
 import { createGeminiEmbeddingProvider, type GeminiEmbeddingClient } from "./embeddings-gemini.js";
+import {
+  createMistralEmbeddingProvider,
+  type MistralEmbeddingClient,
+} from "./embeddings-mistral.js";
 import { createOpenAiEmbeddingProvider, type OpenAiEmbeddingClient } from "./embeddings-openai.js";
+import { createVoyageEmbeddingProvider, type VoyageEmbeddingClient } from "./embeddings-voyage.js";
 import { importNodeLlamaCpp } from "./node-llama.js";
 
 function sanitizeAndNormalizeEmbedding(vec: number[]): number[] {
@@ -16,42 +22,55 @@ function sanitizeAndNormalizeEmbedding(vec: number[]): number[] {
 }
 
 export type { GeminiEmbeddingClient } from "./embeddings-gemini.js";
+export type { MistralEmbeddingClient } from "./embeddings-mistral.js";
 export type { OpenAiEmbeddingClient } from "./embeddings-openai.js";
+export type { VoyageEmbeddingClient } from "./embeddings-voyage.js";
 
 export type EmbeddingProvider = {
   id: string;
   model: string;
+  maxInputTokens?: number;
   embedQuery: (text: string) => Promise<number[]>;
   embedBatch: (texts: string[]) => Promise<number[][]>;
 };
 
+export type EmbeddingProviderId = "openai" | "local" | "gemini" | "voyage" | "mistral";
+export type EmbeddingProviderRequest = EmbeddingProviderId | "auto";
+export type EmbeddingProviderFallback = EmbeddingProviderId | "none";
+
+const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "voyage", "mistral"] as const;
+
 export type EmbeddingProviderResult = {
-  provider: EmbeddingProvider;
-  requestedProvider: "openai" | "local" | "gemini" | "auto";
-  fallbackFrom?: "openai" | "local" | "gemini";
+  provider: EmbeddingProvider | null;
+  requestedProvider: EmbeddingProviderRequest;
+  fallbackFrom?: EmbeddingProviderId;
   fallbackReason?: string;
+  providerUnavailableReason?: string;
   openAi?: OpenAiEmbeddingClient;
   gemini?: GeminiEmbeddingClient;
+  voyage?: VoyageEmbeddingClient;
+  mistral?: MistralEmbeddingClient;
 };
 
 export type EmbeddingProviderOptions = {
   config: OpenClawConfig;
   agentDir?: string;
-  provider: "openai" | "local" | "gemini" | "auto";
+  provider: EmbeddingProviderRequest;
   remote?: {
     baseUrl?: string;
     apiKey?: string;
     headers?: Record<string, string>;
   };
   model: string;
-  fallback: "openai" | "gemini" | "local" | "none";
+  fallback: EmbeddingProviderFallback;
   local?: {
     modelPath?: string;
     modelCacheDir?: string;
   };
 };
 
-const DEFAULT_LOCAL_MODEL = "hf:ggml-org/embeddinggemma-300M-GGUF/embeddinggemma-300M-Q8_0.gguf";
+export const DEFAULT_LOCAL_MODEL =
+  "hf:ggml-org/embeddinggemma-300m-qat-q8_0-GGUF/embeddinggemma-300m-qat-Q8_0.gguf";
 
 function canAutoSelectLocal(options: EmbeddingProviderOptions): boolean {
   const modelPath = options.local?.modelPath?.trim();
@@ -70,7 +89,7 @@ function canAutoSelectLocal(options: EmbeddingProviderOptions): boolean {
 }
 
 function isMissingApiKeyError(err: unknown): boolean {
-  const message = formatError(err);
+  const message = formatErrorMessage(err);
   return message.includes("No API key found for provider");
 }
 
@@ -128,7 +147,7 @@ export async function createEmbeddingProvider(
   const requestedProvider = options.provider;
   const fallback = options.fallback;
 
-  const createProvider = async (id: "openai" | "local" | "gemini") => {
+  const createProvider = async (id: EmbeddingProviderId) => {
     if (id === "local") {
       const provider = await createLocalEmbeddingProvider(options);
       return { provider };
@@ -137,12 +156,20 @@ export async function createEmbeddingProvider(
       const { provider, client } = await createGeminiEmbeddingProvider(options);
       return { provider, gemini: client };
     }
+    if (id === "voyage") {
+      const { provider, client } = await createVoyageEmbeddingProvider(options);
+      return { provider, voyage: client };
+    }
+    if (id === "mistral") {
+      const { provider, client } = await createMistralEmbeddingProvider(options);
+      return { provider, mistral: client };
+    }
     const { provider, client } = await createOpenAiEmbeddingProvider(options);
     return { provider, openAi: client };
   };
 
-  const formatPrimaryError = (err: unknown, provider: "openai" | "local" | "gemini") =>
-    provider === "local" ? formatLocalSetupError(err) : formatError(err);
+  const formatPrimaryError = (err: unknown, provider: EmbeddingProviderId) =>
+    provider === "local" ? formatLocalSetupError(err) : formatErrorMessage(err);
 
   if (requestedProvider === "auto") {
     const missingKeyErrors: string[] = [];
@@ -157,7 +184,7 @@ export async function createEmbeddingProvider(
       }
     }
 
-    for (const provider of ["openai", "gemini"] as const) {
+    for (const provider of REMOTE_EMBEDDING_PROVIDER_IDS) {
       try {
         const result = await createProvider(provider);
         return { ...result, requestedProvider };
@@ -167,15 +194,21 @@ export async function createEmbeddingProvider(
           missingKeyErrors.push(message);
           continue;
         }
-        throw new Error(message, { cause: err });
+        // Non-auth errors (e.g., network) are still fatal
+        const wrapped = new Error(message) as Error & { cause?: unknown };
+        wrapped.cause = err;
+        throw wrapped;
       }
     }
 
+    // All providers failed due to missing API keys - return null provider for FTS-only mode
     const details = [...missingKeyErrors, localError].filter(Boolean) as string[];
-    if (details.length > 0) {
-      throw new Error(details.join("\n\n"));
-    }
-    throw new Error("No embeddings provider available.");
+    const reason = details.length > 0 ? details.join("\n\n") : "No embeddings provider available.";
+    return {
+      provider: null,
+      requestedProvider,
+      providerUnavailableReason: reason,
+    };
   }
 
   try {
@@ -193,22 +226,37 @@ export async function createEmbeddingProvider(
           fallbackReason: reason,
         };
       } catch (fallbackErr) {
-        // oxlint-disable-next-line preserve-caught-error
-        throw new Error(
-          `${reason}\n\nFallback to ${fallback} failed: ${formatError(fallbackErr)}`,
-          { cause: fallbackErr },
-        );
+        // Both primary and fallback failed - check if it's auth-related
+        const fallbackReason = formatErrorMessage(fallbackErr);
+        const combinedReason = `${reason}\n\nFallback to ${fallback} failed: ${fallbackReason}`;
+        if (isMissingApiKeyError(primaryErr) && isMissingApiKeyError(fallbackErr)) {
+          // Both failed due to missing API keys - return null for FTS-only mode
+          return {
+            provider: null,
+            requestedProvider,
+            fallbackFrom: requestedProvider,
+            fallbackReason: reason,
+            providerUnavailableReason: combinedReason,
+          };
+        }
+        // Non-auth errors are still fatal
+        const wrapped = new Error(combinedReason) as Error & { cause?: unknown };
+        wrapped.cause = fallbackErr;
+        throw wrapped;
       }
     }
-    throw new Error(reason, { cause: primaryErr });
+    // No fallback configured - check if we should degrade to FTS-only
+    if (isMissingApiKeyError(primaryErr)) {
+      return {
+        provider: null,
+        requestedProvider,
+        providerUnavailableReason: reason,
+      };
+    }
+    const wrapped = new Error(reason) as Error & { cause?: unknown };
+    wrapped.cause = primaryErr;
+    throw wrapped;
   }
-}
-
-function formatError(err: unknown): string {
-  if (err instanceof Error) {
-    return err.message;
-  }
-  return String(err);
 }
 
 function isNodeLlamaCppMissing(err: unknown): boolean {
@@ -223,7 +271,7 @@ function isNodeLlamaCppMissing(err: unknown): boolean {
 }
 
 function formatLocalSetupError(err: unknown): string {
-  const detail = formatError(err);
+  const detail = formatErrorMessage(err);
   const missing = isNodeLlamaCppMissing(err);
   return [
     "Local embeddings unavailable.",
@@ -239,7 +287,9 @@ function formatLocalSetupError(err: unknown): string {
       ? "2) Reinstall OpenClaw (this should install node-llama-cpp): npm i -g openclaw@latest"
       : null,
     "3) If you use pnpm: pnpm approve-builds (select node-llama-cpp), then pnpm rebuild node-llama-cpp",
-    'Or set agents.defaults.memorySearch.provider = "openai" (remote).',
+    ...REMOTE_EMBEDDING_PROVIDER_IDS.map(
+      (provider) => `Or set agents.defaults.memorySearch.provider = "${provider}" (remote).`,
+    ),
   ]
     .filter(Boolean)
     .join("\n");

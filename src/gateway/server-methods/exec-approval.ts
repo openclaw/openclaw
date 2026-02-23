@@ -1,7 +1,9 @@
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
-import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
+import {
+  DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
+  type ExecApprovalDecision,
+} from "../../infra/exec-approvals.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
-import type { GatewayRequestHandlers } from "./types.js";
 import {
   ErrorCodes,
   errorShape,
@@ -9,13 +11,22 @@ import {
   validateExecApprovalRequestParams,
   validateExecApprovalResolveParams,
 } from "../protocol/index.js";
+import type { GatewayRequestHandlers } from "./types.js";
 
 export function createExecApprovalHandlers(
   manager: ExecApprovalManager,
   opts?: { forwarder?: ExecApprovalForwarder },
 ): GatewayRequestHandlers {
+  const hasApprovalClients = (context: { hasExecApprovalClients?: () => boolean }) => {
+    if (typeof context.hasExecApprovalClients === "function") {
+      return context.hasExecApprovalClients();
+    }
+    // Fail closed when no operator-scope probe is available.
+    return false;
+  };
+
   return {
-    "exec.approval.request": async ({ params, respond, context }) => {
+    "exec.approval.request": async ({ params, respond, context, client }) => {
       if (!validateExecApprovalRequestParams(params)) {
         respond(
           false,
@@ -40,8 +51,11 @@ export function createExecApprovalHandlers(
         resolvedPath?: string;
         sessionKey?: string;
         timeoutMs?: number;
+        twoPhase?: boolean;
       };
-      const timeoutMs = typeof p.timeoutMs === "number" ? p.timeoutMs : 120_000;
+      const twoPhase = p.twoPhase === true;
+      const timeoutMs =
+        typeof p.timeoutMs === "number" ? p.timeoutMs : DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
       const explicitId = typeof p.id === "string" && p.id.trim().length > 0 ? p.id.trim() : null;
       if (explicitId && manager.getSnapshot(explicitId)) {
         respond(
@@ -62,7 +76,24 @@ export function createExecApprovalHandlers(
         sessionKey: p.sessionKey ?? null,
       };
       const record = manager.create(request, timeoutMs, explicitId);
-      const decisionPromise = manager.waitForDecision(record, timeoutMs);
+      record.requestedByConnId = client?.connId ?? null;
+      record.requestedByDeviceId = client?.connect?.device?.id ?? null;
+      record.requestedByClientId = client?.connect?.client?.id ?? null;
+      // Use register() to synchronously add to pending map before sending any response.
+      // This ensures the approval ID is valid immediately after the "accepted" response.
+      let decisionPromise: Promise<
+        import("../../infra/exec-approvals.js").ExecApprovalDecision | null
+      >;
+      try {
+        decisionPromise = manager.register(record, timeoutMs);
+      } catch (err) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `registration failed: ${String(err)}`),
+        );
+        return;
+      }
       context.broadcast(
         "exec.approval.requested",
         {
@@ -73,17 +104,41 @@ export function createExecApprovalHandlers(
         },
         { dropIfSlow: true },
       );
-      void opts?.forwarder
-        ?.handleRequested({
-          id: record.id,
-          request: record.request,
-          createdAtMs: record.createdAtMs,
-          expiresAtMs: record.expiresAtMs,
-        })
-        .catch((err) => {
+      let forwardedToTargets = false;
+      if (opts?.forwarder) {
+        try {
+          forwardedToTargets = await opts.forwarder.handleRequested({
+            id: record.id,
+            request: record.request,
+            createdAtMs: record.createdAtMs,
+            expiresAtMs: record.expiresAtMs,
+          });
+        } catch (err) {
           context.logGateway?.error?.(`exec approvals: forward request failed: ${String(err)}`);
-        });
+        }
+      }
+
+      if (!hasApprovalClients(context) && !forwardedToTargets) {
+        manager.expire(record.id, "auto-expire:no-approver-clients");
+      }
+
+      // Only send immediate "accepted" response when twoPhase is requested.
+      // This preserves single-response semantics for existing callers.
+      if (twoPhase) {
+        respond(
+          true,
+          {
+            status: "accepted",
+            id: record.id,
+            createdAtMs: record.createdAtMs,
+            expiresAtMs: record.expiresAtMs,
+          },
+          undefined,
+        );
+      }
+
       const decision = await decisionPromise;
+      // Send final response with decision for callers using expectFinal:true.
       respond(
         true,
         {
@@ -91,6 +146,37 @@ export function createExecApprovalHandlers(
           decision,
           createdAtMs: record.createdAtMs,
           expiresAtMs: record.expiresAtMs,
+        },
+        undefined,
+      );
+    },
+    "exec.approval.waitDecision": async ({ params, respond }) => {
+      const p = params as { id?: string };
+      const id = typeof p.id === "string" ? p.id.trim() : "";
+      if (!id) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "id is required"));
+        return;
+      }
+      const decisionPromise = manager.awaitDecision(id);
+      if (!decisionPromise) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "approval expired or not found"),
+        );
+        return;
+      }
+      // Capture snapshot before await (entry may be deleted after grace period)
+      const snapshot = manager.getSnapshot(id);
+      const decision = await decisionPromise;
+      // Return decision (can be null on timeout) - let clients handle via askFallback
+      respond(
+        true,
+        {
+          id,
+          decision,
+          createdAtMs: snapshot?.createdAtMs,
+          expiresAtMs: snapshot?.expiresAtMs,
         },
         undefined,
       );
@@ -115,6 +201,7 @@ export function createExecApprovalHandlers(
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid decision"));
         return;
       }
+      const snapshot = manager.getSnapshot(p.id);
       const resolvedBy = client?.connect?.client?.displayName ?? client?.connect?.client?.id;
       const ok = manager.resolve(p.id, decision, resolvedBy ?? null);
       if (!ok) {
@@ -123,11 +210,17 @@ export function createExecApprovalHandlers(
       }
       context.broadcast(
         "exec.approval.resolved",
-        { id: p.id, decision, resolvedBy, ts: Date.now() },
+        { id: p.id, decision, resolvedBy, ts: Date.now(), request: snapshot?.request },
         { dropIfSlow: true },
       );
       void opts?.forwarder
-        ?.handleResolved({ id: p.id, decision, resolvedBy, ts: Date.now() })
+        ?.handleResolved({
+          id: p.id,
+          decision,
+          resolvedBy,
+          ts: Date.now(),
+          request: snapshot?.request,
+        })
         .catch((err) => {
           context.logGateway?.error?.(`exec approvals: forward resolve failed: ${String(err)}`);
         });

@@ -2,6 +2,40 @@ import { describe, expect, it } from "vitest";
 import { buildSandboxCreateArgs, type SandboxDockerConfig } from "./sandbox.js";
 
 describe("buildSandboxCreateArgs", () => {
+  function createSandboxConfig(
+    overrides: Partial<SandboxDockerConfig> = {},
+    binds?: string[],
+  ): SandboxDockerConfig {
+    return {
+      image: "openclaw-sandbox:bookworm-slim",
+      containerPrefix: "openclaw-sbx-",
+      workdir: "/workspace",
+      readOnlyRoot: false,
+      tmpfs: [],
+      network: "none",
+      capDrop: [],
+      ...(binds ? { binds } : {}),
+      ...overrides,
+    };
+  }
+
+  function expectBuildToThrow(
+    name: string,
+    cfg: SandboxDockerConfig,
+    expectedMessage: RegExp,
+  ): void {
+    expect(
+      () =>
+        buildSandboxCreateArgs({
+          name,
+          cfg,
+          scopeKey: "main",
+          createdAtMs: 1700000000000,
+        }),
+      name,
+    ).toThrow(expectedMessage);
+  }
+
   it("includes hardening and resource flags", () => {
     const cfg: SandboxDockerConfig = {
       image: "openclaw-sandbox:bookworm-slim",
@@ -78,6 +112,7 @@ describe("buildSandboxCreateArgs", () => {
         "1.5",
       ]),
     );
+    expect(args).toEqual(expect.arrayContaining(["--env", "LANG=C.UTF-8"]));
 
     const ulimitValues: string[] = [];
     for (let i = 0; i < args.length; i += 1) {
@@ -93,7 +128,7 @@ describe("buildSandboxCreateArgs", () => {
     );
   });
 
-  it("emits -v flags for custom binds", () => {
+  it("emits -v flags for safe custom binds", () => {
     const cfg: SandboxDockerConfig = {
       image: "openclaw-sandbox:bookworm-slim",
       containerPrefix: "openclaw-sbx-",
@@ -102,7 +137,7 @@ describe("buildSandboxCreateArgs", () => {
       tmpfs: [],
       network: "none",
       capDrop: [],
-      binds: ["/home/user/source:/source:rw", "/var/run/docker.sock:/var/run/docker.sock"],
+      binds: ["/home/user/source:/source:rw", "/var/data/myapp:/data:ro"],
     };
 
     const args = buildSandboxCreateArgs({
@@ -123,7 +158,42 @@ describe("buildSandboxCreateArgs", () => {
       }
     }
     expect(vFlags).toContain("/home/user/source:/source:rw");
-    expect(vFlags).toContain("/var/run/docker.sock:/var/run/docker.sock");
+    expect(vFlags).toContain("/var/data/myapp:/data:ro");
+  });
+
+  it.each([
+    {
+      name: "dangerous Docker socket bind mounts",
+      containerName: "openclaw-sbx-dangerous",
+      cfg: createSandboxConfig({}, ["/var/run/docker.sock:/var/run/docker.sock"]),
+      expected: /blocked path/,
+    },
+    {
+      name: "dangerous parent bind mounts",
+      containerName: "openclaw-sbx-dangerous-parent",
+      cfg: createSandboxConfig({}, ["/run:/run"]),
+      expected: /blocked path/,
+    },
+    {
+      name: "network host mode",
+      containerName: "openclaw-sbx-host",
+      cfg: createSandboxConfig({ network: "host" }),
+      expected: /network mode "host" is blocked/,
+    },
+    {
+      name: "seccomp unconfined",
+      containerName: "openclaw-sbx-seccomp",
+      cfg: createSandboxConfig({ seccompProfile: "unconfined" }),
+      expected: /seccomp profile "unconfined" is blocked/,
+    },
+    {
+      name: "apparmor unconfined",
+      containerName: "openclaw-sbx-apparmor",
+      cfg: createSandboxConfig({ apparmorProfile: "unconfined" }),
+      expected: /apparmor profile "unconfined" is blocked/,
+    },
+  ])("throws on $name", ({ containerName, cfg, expected }) => {
+    expectBuildToThrow(containerName, cfg, expected);
   });
 
   it("omits -v flags when binds is empty or undefined", () => {

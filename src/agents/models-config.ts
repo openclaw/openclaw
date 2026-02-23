@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { type OpenClawConfig, loadConfig } from "../config/config.js";
+import { isRecord } from "../utils.js";
 import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import {
   normalizeProviders,
@@ -13,10 +14,6 @@ import {
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 
 const DEFAULT_MODE: NonNullable<ModelsConfig["mode"]> = "merge";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function mergeProviderModels(implicit: ProviderConfig, explicit: ProviderConfig): ProviderConfig {
   const implicitModels = Array.isArray(implicit.models) ? implicit.models : [];
@@ -32,22 +29,41 @@ function mergeProviderModels(implicit: ProviderConfig, explicit: ProviderConfig)
     const id = (model as { id?: unknown }).id;
     return typeof id === "string" ? id.trim() : "";
   };
-  const seen = new Set(explicitModels.map(getId).filter(Boolean));
+  const implicitById = new Map(
+    implicitModels.map((model) => [getId(model), model] as const).filter(([id]) => Boolean(id)),
+  );
+  const seen = new Set<string>();
 
-  const mergedModels = [
-    ...explicitModels,
-    ...implicitModels.filter((model) => {
-      const id = getId(model);
-      if (!id) {
-        return false;
-      }
-      if (seen.has(id)) {
-        return false;
-      }
-      seen.add(id);
-      return true;
-    }),
-  ];
+  const mergedModels = explicitModels.map((explicitModel) => {
+    const id = getId(explicitModel);
+    if (!id) {
+      return explicitModel;
+    }
+    seen.add(id);
+    const implicitModel = implicitById.get(id);
+    if (!implicitModel) {
+      return explicitModel;
+    }
+
+    // Refresh capability metadata from the implicit catalog while preserving
+    // user-specific fields (cost, headers, compat, etc.) on explicit entries.
+    return {
+      ...explicitModel,
+      input: implicitModel.input,
+      reasoning: implicitModel.reasoning,
+      contextWindow: implicitModel.contextWindow,
+      maxTokens: implicitModel.maxTokens,
+    };
+  });
+
+  for (const implicitModel of implicitModels) {
+    const id = getId(implicitModel);
+    if (!id || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    mergedModels.push(implicitModel);
+  }
 
   return {
     ...implicit,
@@ -89,7 +105,7 @@ export async function ensureOpenClawModelsJson(
   const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveOpenClawAgentDir();
 
   const explicitProviders = cfg.models?.providers ?? {};
-  const implicitProviders = await resolveImplicitProviders({ agentDir });
+  const implicitProviders = await resolveImplicitProviders({ agentDir, explicitProviders });
   const providers: Record<string, ProviderConfig> = mergeProviders({
     implicit: implicitProviders,
     explicit: explicitProviders,

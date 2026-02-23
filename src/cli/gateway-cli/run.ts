@@ -1,15 +1,17 @@
-import type { Command } from "commander";
 import fs from "node:fs";
-import type { GatewayAuthMode } from "../../config/config.js";
-import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
+import path from "node:path";
+import type { Command } from "commander";
+import type { GatewayAuthMode, GatewayTailscaleMode } from "../../config/config.js";
 import {
   CONFIG_PATH,
   loadConfig,
   readConfigFileSnapshot,
+  resolveStateDir,
   resolveGatewayPort,
 } from "../../config/config.js";
 import { resolveGatewayAuth } from "../../gateway/auth.js";
 import { startGatewayServer } from "../../gateway/server.js";
+import type { GatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setGatewayWsLogStyle } from "../../gateway/ws-logging.js";
 import { setVerbose } from "../../globals.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
@@ -18,6 +20,7 @@ import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logg
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
+import { inheritOptionFromParent } from "../command-options.js";
 import { forceFreePortAndWait } from "../ports.js";
 import { ensureDevGatewayConfig } from "./dev.js";
 import { runGatewayLoop } from "./run-loop.js";
@@ -50,6 +53,50 @@ type GatewayRunOpts = {
 };
 
 const gatewayLog = createSubsystemLogger("gateway");
+
+const GATEWAY_RUN_VALUE_KEYS = [
+  "port",
+  "bind",
+  "token",
+  "auth",
+  "password",
+  "tailscale",
+  "wsLog",
+  "rawStreamPath",
+] as const;
+
+const GATEWAY_RUN_BOOLEAN_KEYS = [
+  "tailscaleResetOnExit",
+  "allowUnconfigured",
+  "dev",
+  "reset",
+  "force",
+  "verbose",
+  "claudeCliLogs",
+  "compact",
+  "rawStream",
+] as const;
+
+function resolveGatewayRunOptions(opts: GatewayRunOpts, command?: Command): GatewayRunOpts {
+  const resolved: GatewayRunOpts = { ...opts };
+
+  for (const key of GATEWAY_RUN_VALUE_KEYS) {
+    const inherited = inheritOptionFromParent(command, key);
+    if (key === "wsLog") {
+      // wsLog has a child default ("auto"), so prefer inherited parent CLI value when present.
+      resolved[key] = inherited ?? resolved[key];
+      continue;
+    }
+    resolved[key] = resolved[key] ?? inherited;
+  }
+
+  for (const key of GATEWAY_RUN_BOOLEAN_KEYS) {
+    const inherited = inheritOptionFromParent<boolean>(command, key);
+    resolved[key] = Boolean(resolved[key] || inherited);
+  }
+
+  return resolved;
+}
 
 async function runGatewayCommand(opts: GatewayRunOpts) {
   const isDevProfile = process.env.OPENCLAW_PROFILE?.trim().toLowerCase() === "dev";
@@ -146,7 +193,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     return;
   }
   const tailscaleRaw = toOptionString(opts.tailscale);
-  const tailscaleMode =
+  const tailscaleMode: GatewayTailscaleMode | null =
     tailscaleRaw === "off" || tailscaleRaw === "serve" || tailscaleRaw === "funnel"
       ? tailscaleRaw
       : null;
@@ -160,6 +207,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
 
   const snapshot = await readConfigFileSnapshot().catch(() => null);
   const configExists = snapshot?.exists ?? fs.existsSync(CONFIG_PATH);
+  const configAuditPath = path.join(resolveStateDir(process.env), "logs", "config-audit.jsonl");
   const mode = cfg.gateway?.mode;
   if (!opts.allowUnconfigured && mode !== "local") {
     if (!configExists) {
@@ -170,6 +218,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
       defaultRuntime.error(
         `Gateway start blocked: set gateway.mode=local (current: ${mode ?? "unset"}) or pass --allow-unconfigured.`,
       );
+      defaultRuntime.error(`Config write audit: ${configAuditPath}`);
     }
     defaultRuntime.exit(1);
     return;
@@ -190,14 +239,17 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   }
 
   const miskeys = extractGatewayMiskeys(snapshot?.parsed);
-  const authConfig = {
-    ...cfg.gateway?.auth,
-    ...(authMode ? { mode: authMode } : {}),
-    ...(passwordRaw ? { password: passwordRaw } : {}),
-    ...(tokenRaw ? { token: tokenRaw } : {}),
-  };
+  const authOverride =
+    authMode || passwordRaw || tokenRaw || authModeRaw
+      ? {
+          ...(authMode ? { mode: authMode } : {}),
+          ...(tokenRaw ? { token: tokenRaw } : {}),
+          ...(passwordRaw ? { password: passwordRaw } : {}),
+        }
+      : undefined;
   const resolvedAuth = resolveGatewayAuth({
-    authConfig,
+    authConfig: cfg.gateway?.auth,
+    authOverride,
     env: process.env,
     tailscaleMode: tailscaleMode ?? cfg.gateway?.tailscale?.mode ?? "off",
   });
@@ -208,6 +260,7 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   const hasPassword = typeof passwordValue === "string" && passwordValue.trim().length > 0;
   const hasSharedSecret =
     (resolvedAuthMode === "token" && hasToken) || (resolvedAuthMode === "password" && hasPassword);
+  const canBootstrapToken = resolvedAuthMode === "token" && !hasToken;
   const authHints: string[] = [];
   if (miskeys.hasGatewayToken) {
     authHints.push('Found "gateway.token" in config. Use "gateway.auth.token" instead.');
@@ -216,19 +269,6 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     authHints.push(
       '"gateway.remote.token" is for remote CLI calls; it does not enable local gateway auth.',
     );
-  }
-  if (resolvedAuthMode === "token" && !hasToken && !resolvedAuth.allowTailscale) {
-    defaultRuntime.error(
-      [
-        "Gateway auth is set to token, but no token is configured.",
-        "Set gateway.auth.token (or OPENCLAW_GATEWAY_TOKEN), or pass --token.",
-        ...authHints,
-      ]
-        .filter(Boolean)
-        .join("\n"),
-    );
-    defaultRuntime.exit(1);
-    return;
   }
   if (resolvedAuthMode === "password" && !hasPassword) {
     defaultRuntime.error(
@@ -243,7 +283,17 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.exit(1);
     return;
   }
-  if (bind !== "loopback" && !hasSharedSecret) {
+  if (resolvedAuthMode === "none") {
+    gatewayLog.warn(
+      "Gateway auth mode=none explicitly configured; all gateway connections are unauthenticated.",
+    );
+  }
+  if (
+    bind !== "loopback" &&
+    !hasSharedSecret &&
+    !canBootstrapToken &&
+    resolvedAuthMode !== "trusted-proxy"
+  ) {
     defaultRuntime.error(
       [
         `Refusing to bind gateway to ${bind} without auth.`,
@@ -256,28 +306,23 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.exit(1);
     return;
   }
+  const tailscaleOverride =
+    tailscaleMode || opts.tailscaleResetOnExit
+      ? {
+          ...(tailscaleMode ? { mode: tailscaleMode } : {}),
+          ...(opts.tailscaleResetOnExit ? { resetOnExit: true } : {}),
+        }
+      : undefined;
 
   try {
     await runGatewayLoop({
       runtime: defaultRuntime,
+      lockPort: port,
       start: async () =>
         await startGatewayServer(port, {
           bind,
-          auth:
-            authMode || passwordRaw || tokenRaw || authModeRaw
-              ? {
-                  mode: authMode ?? undefined,
-                  token: tokenRaw,
-                  password: passwordRaw,
-                }
-              : undefined,
-          tailscale:
-            tailscaleMode || opts.tailscaleResetOnExit
-              ? {
-                  mode: tailscaleMode ?? undefined,
-                  resetOnExit: Boolean(opts.tailscaleResetOnExit),
-                }
-              : undefined,
+          auth: authOverride,
+          tailscale: tailscaleOverride,
         }),
     });
   } catch (err) {
@@ -349,7 +394,7 @@ export function addGatewayRunCommand(cmd: Command): Command {
     .option("--compact", 'Alias for "--ws-log compact"', false)
     .option("--raw-stream", "Log raw model stream events to jsonl", false)
     .option("--raw-stream-path <path>", "Raw stream jsonl path")
-    .action(async (opts) => {
-      await runGatewayCommand(opts);
+    .action(async (opts, command) => {
+      await runGatewayCommand(resolveGatewayRunOptions(opts, command));
     });
 }

@@ -9,9 +9,11 @@ export type AuthChoice =
   | "claude-cli"
   | "token"
   | "chutes"
+  | "vllm"
   | "openai-codex"
   | "openai-api-key"
   | "openrouter-api-key"
+  | "litellm-api-key"
   | "ai-gateway-api-key"
   | "cloudflare-ai-gateway-api-key"
   | "moonshot-api-key"
@@ -19,23 +21,62 @@ export type AuthChoice =
   | "kimi-code-api-key"
   | "synthetic-api-key"
   | "venice-api-key"
+  | "together-api-key"
+  | "huggingface-api-key"
   | "codex-cli"
   | "apiKey"
   | "gemini-api-key"
-  | "google-antigravity"
   | "google-gemini-cli"
   | "zai-api-key"
+  | "zai-coding-global"
+  | "zai-coding-cn"
+  | "zai-global"
+  | "zai-cn"
   | "xiaomi-api-key"
   | "minimax-cloud"
   | "minimax"
   | "minimax-api"
+  | "minimax-api-key-cn"
   | "minimax-api-lightning"
   | "minimax-portal"
   | "opencode-zen"
   | "github-copilot"
   | "copilot-proxy"
   | "qwen-portal"
+  | "xai-api-key"
+  | "mistral-api-key"
+  | "volcengine-api-key"
+  | "byteplus-api-key"
+  | "qianfan-api-key"
+  | "custom-api-key"
   | "skip";
+export type AuthChoiceGroupId =
+  | "openai"
+  | "anthropic"
+  | "chutes"
+  | "vllm"
+  | "google"
+  | "copilot"
+  | "openrouter"
+  | "litellm"
+  | "ai-gateway"
+  | "cloudflare-ai-gateway"
+  | "moonshot"
+  | "zai"
+  | "xiaomi"
+  | "opencode-zen"
+  | "minimax"
+  | "synthetic"
+  | "venice"
+  | "mistral"
+  | "qwen"
+  | "together"
+  | "huggingface"
+  | "qianfan"
+  | "xai"
+  | "volcengine"
+  | "byteplus"
+  | "custom";
 export type GatewayAuthChoice = "token" | "password";
 export type ResetScope = "config" | "config+creds+sessions" | "full";
 export type GatewayBind = "loopback" | "lan" | "auto" | "custom" | "tailnet";
@@ -65,7 +106,9 @@ export type OnboardOptions = {
   tokenExpiresIn?: string;
   anthropicApiKey?: string;
   openaiApiKey?: string;
+  mistralApiKey?: string;
   openrouterApiKey?: string;
+  litellmApiKey?: string;
   aiGatewayApiKey?: string;
   cloudflareAiGatewayAccountId?: string;
   cloudflareAiGatewayGatewayId?: string;
@@ -78,7 +121,18 @@ export type OnboardOptions = {
   minimaxApiKey?: string;
   syntheticApiKey?: string;
   veniceApiKey?: string;
+  togetherApiKey?: string;
+  huggingfaceApiKey?: string;
   opencodeZenApiKey?: string;
+  xaiApiKey?: string;
+  volcengineApiKey?: string;
+  byteplusApiKey?: string;
+  qianfanApiKey?: string;
+  customBaseUrl?: string;
+  customApiKey?: string;
+  customModelId?: string;
+  customProviderId?: string;
+  customCompatibility?: "openai" | "anthropic";
   gatewayPort?: number;
   gatewayBind?: GatewayBind;
   gatewayAuth?: GatewayAuthChoice;

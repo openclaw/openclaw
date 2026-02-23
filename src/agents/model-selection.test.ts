@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import {
   parseModelRef,
   resolveModelRefFromString,
@@ -29,6 +30,32 @@ describe("model-selection", () => {
       });
     });
 
+    it("preserves nested model ids after provider prefix", () => {
+      expect(parseModelRef("nvidia/moonshotai/kimi-k2.5", "anthropic")).toEqual({
+        provider: "nvidia",
+        model: "moonshotai/kimi-k2.5",
+      });
+    });
+
+    it("normalizes anthropic alias refs to canonical model ids", () => {
+      expect(parseModelRef("anthropic/opus-4.6", "openai")).toEqual({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      });
+      expect(parseModelRef("opus-4.6", "anthropic")).toEqual({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      });
+      expect(parseModelRef("anthropic/sonnet-4.6", "openai")).toEqual({
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+      });
+      expect(parseModelRef("sonnet-4.6", "anthropic")).toEqual({
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+      });
+    });
+
     it("should use default provider if none specified", () => {
       expect(parseModelRef("claude-3-5-sonnet", "anthropic")).toEqual({
         provider: "anthropic",
@@ -36,9 +63,63 @@ describe("model-selection", () => {
       });
     });
 
+    it("normalizes openai gpt-5.3 codex refs to openai-codex provider", () => {
+      expect(parseModelRef("openai/gpt-5.3-codex", "anthropic")).toEqual({
+        provider: "openai-codex",
+        model: "gpt-5.3-codex",
+      });
+      expect(parseModelRef("gpt-5.3-codex", "openai")).toEqual({
+        provider: "openai-codex",
+        model: "gpt-5.3-codex",
+      });
+      expect(parseModelRef("openai/gpt-5.3-codex-codex", "anthropic")).toEqual({
+        provider: "openai-codex",
+        model: "gpt-5.3-codex-codex",
+      });
+    });
+
     it("should return null for empty strings", () => {
       expect(parseModelRef("", "anthropic")).toBeNull();
       expect(parseModelRef("  ", "anthropic")).toBeNull();
+    });
+
+    it("should preserve openrouter/ prefix for native models", () => {
+      expect(parseModelRef("openrouter/aurora-alpha", "openai")).toEqual({
+        provider: "openrouter",
+        model: "openrouter/aurora-alpha",
+      });
+    });
+
+    it("should pass through openrouter external provider models as-is", () => {
+      expect(parseModelRef("openrouter/anthropic/claude-sonnet-4-5", "openai")).toEqual({
+        provider: "openrouter",
+        model: "anthropic/claude-sonnet-4-5",
+      });
+    });
+
+    it("normalizes Vercel Claude shorthand to anthropic-prefixed model ids", () => {
+      expect(parseModelRef("vercel-ai-gateway/claude-opus-4.6", "openai")).toEqual({
+        provider: "vercel-ai-gateway",
+        model: "anthropic/claude-opus-4.6",
+      });
+      expect(parseModelRef("vercel-ai-gateway/opus-4.6", "openai")).toEqual({
+        provider: "vercel-ai-gateway",
+        model: "anthropic/claude-opus-4-6",
+      });
+    });
+
+    it("keeps already-prefixed Vercel Anthropic models unchanged", () => {
+      expect(parseModelRef("vercel-ai-gateway/anthropic/claude-opus-4.6", "openai")).toEqual({
+        provider: "vercel-ai-gateway",
+        model: "anthropic/claude-opus-4.6",
+      });
+    });
+
+    it("passes through non-Claude Vercel model ids unchanged", () => {
+      expect(parseModelRef("vercel-ai-gateway/openai/gpt-5.2", "openai")).toEqual({
+        provider: "vercel-ai-gateway",
+        model: "openai/gpt-5.2",
+      });
     });
 
     it("should handle invalid slash usage", () => {
@@ -105,26 +186,31 @@ describe("model-selection", () => {
 
   describe("resolveConfiguredModelRef", () => {
     it("should fall back to anthropic and warn if provider is missing for non-alias", () => {
+      setLoggerOverride({ level: "silent", consoleLevel: "warn" });
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-      const cfg: Partial<OpenClawConfig> = {
-        agents: {
-          defaults: {
-            model: "claude-3-5-sonnet",
+      try {
+        const cfg: Partial<OpenClawConfig> = {
+          agents: {
+            defaults: {
+              model: { primary: "claude-3-5-sonnet" },
+            },
           },
-        },
-      };
+        };
 
-      const result = resolveConfiguredModelRef({
-        cfg: cfg as OpenClawConfig,
-        defaultProvider: "google",
-        defaultModel: "gemini-pro",
-      });
+        const result = resolveConfiguredModelRef({
+          cfg: cfg as OpenClawConfig,
+          defaultProvider: "google",
+          defaultModel: "gemini-pro",
+        });
 
-      expect(result).toEqual({ provider: "anthropic", model: "claude-3-5-sonnet" });
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Falling back to "anthropic/claude-3-5-sonnet"'),
-      );
-      warnSpy.mockRestore();
+        expect(result).toEqual({ provider: "anthropic", model: "claude-3-5-sonnet" });
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('Falling back to "anthropic/claude-3-5-sonnet"'),
+        );
+      } finally {
+        setLoggerOverride(null);
+        resetLogger();
+      }
     });
 
     it("should use default provider/model if config is empty", () => {

@@ -13,6 +13,17 @@ function updateRelayUrl(port) {
   el.textContent = `http://127.0.0.1:${port}/`
 }
 
+async function deriveRelayToken(gatewayToken, port) {
+  const enc = new TextEncoder()
+  const key = await crypto.subtle.importKey(
+    'raw', enc.encode(gatewayToken), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+  )
+  const sig = await crypto.subtle.sign(
+    'HMAC', key, enc.encode(`openclaw-extension-relay-v1:${port}`),
+  )
+  return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
 function setStatus(kind, message) {
   const status = document.getElementById('status')
   if (!status) return
@@ -20,39 +31,58 @@ function setStatus(kind, message) {
   status.textContent = message || ''
 }
 
-async function checkRelayReachable(port) {
-  const url = `http://127.0.0.1:${port}/`
-  const ctrl = new AbortController()
-  const t = setTimeout(() => ctrl.abort(), 900)
+async function checkRelayReachable(port, token) {
+  const url = `http://127.0.0.1:${port}/json/version`
+  const trimmedToken = String(token || '').trim()
+  if (!trimmedToken) {
+    setStatus('error', 'Gateway token required. Save your gateway token to connect.')
+    return
+  }
   try {
-    const res = await fetch(url, { method: 'HEAD', signal: ctrl.signal })
+    const relayToken = await deriveRelayToken(trimmedToken, port)
+    // Delegate the fetch to the background service worker to bypass
+    // CORS preflight on the custom x-openclaw-relay-token header.
+    const res = await chrome.runtime.sendMessage({
+      type: 'relayCheck',
+      url,
+      token: relayToken,
+    })
+    if (!res) throw new Error('No response from service worker')
+    if (res.status === 401) {
+      setStatus('error', 'Gateway token rejected. Check token and save again.')
+      return
+    }
+    if (res.error) throw new Error(res.error)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    setStatus('ok', `Relay reachable at ${url}`)
+    setStatus('ok', `Relay reachable and authenticated at http://127.0.0.1:${port}/`)
   } catch {
     setStatus(
       'error',
-      `Relay not reachable at ${url}. Start OpenClaw’s browser relay on this machine, then click the toolbar button again.`,
+      `Relay not reachable/authenticated at http://127.0.0.1:${port}/. Start OpenClaw browser relay and verify token.`,
     )
-  } finally {
-    clearTimeout(t)
   }
 }
 
 async function load() {
-  const stored = await chrome.storage.local.get(['relayPort'])
+  const stored = await chrome.storage.local.get(['relayPort', 'gatewayToken'])
   const port = clampPort(stored.relayPort)
+  const token = String(stored.gatewayToken || '').trim()
   document.getElementById('port').value = String(port)
+  document.getElementById('token').value = token
   updateRelayUrl(port)
-  await checkRelayReachable(port)
+  await checkRelayReachable(port, token)
 }
 
 async function save() {
-  const input = document.getElementById('port')
-  const port = clampPort(input.value)
-  await chrome.storage.local.set({ relayPort: port })
-  input.value = String(port)
+  const portInput = document.getElementById('port')
+  const tokenInput = document.getElementById('token')
+  const port = clampPort(portInput.value)
+  const token = String(tokenInput.value || '').trim()
+  await chrome.storage.local.set({ relayPort: port, gatewayToken: token })
+  portInput.value = String(port)
+  tokenInput.value = token
   updateRelayUrl(port)
-  await checkRelayReachable(port)
+  await checkRelayReachable(port, token)
 }
 
 document.getElementById('save').addEventListener('click', () => void save())

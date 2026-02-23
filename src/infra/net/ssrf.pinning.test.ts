@@ -1,12 +1,22 @@
 import { describe, expect, it, vi } from "vitest";
-import { createPinnedLookup, resolvePinnedHostname } from "./ssrf.js";
+import {
+  createPinnedLookup,
+  type LookupFn,
+  resolvePinnedHostname,
+  resolvePinnedHostnameWithPolicy,
+  SsrFBlockedError,
+} from "./ssrf.js";
+
+function createPublicLookupMock(): LookupFn {
+  return vi.fn(async () => [{ address: "93.184.216.34", family: 4 }]) as unknown as LookupFn;
+}
 
 describe("ssrf pinning", () => {
   it("pins resolved addresses for the target hostname", async () => {
     const lookup = vi.fn(async () => [
       { address: "93.184.216.34", family: 4 },
       { address: "93.184.216.35", family: 4 },
-    ]);
+    ]) as unknown as LookupFn;
 
     const pinned = await resolvePinnedHostname("Example.com.", lookup);
     expect(pinned.hostname).toBe("example.com");
@@ -39,8 +49,11 @@ describe("ssrf pinning", () => {
     );
   });
 
-  it("rejects private DNS results", async () => {
-    const lookup = vi.fn(async () => [{ address: "10.0.0.8", family: 4 }]);
+  it.each([
+    { name: "RFC1918 private address", address: "10.0.0.8" },
+    { name: "RFC2544 benchmarking range", address: "198.18.0.1" },
+  ])("rejects blocked DNS results: $name", async ({ address }) => {
+    const lookup = vi.fn(async () => [{ address, family: 4 }]) as unknown as LookupFn;
     await expect(resolvePinnedHostname("example.com", lookup)).rejects.toThrow(/private|internal/i);
   });
 
@@ -48,7 +61,7 @@ describe("ssrf pinning", () => {
     const fallback = vi.fn((host: string, options?: unknown, callback?: unknown) => {
       const cb = typeof options === "function" ? options : (callback as () => void);
       (cb as (err: null, address: string, family: number) => void)(null, "1.2.3.4", 4);
-    });
+    }) as unknown as Parameters<typeof createPinnedLookup>[0]["fallback"];
     const lookup = createPinnedLookup({
       hostname: "example.com",
       addresses: ["93.184.216.34"],
@@ -67,5 +80,78 @@ describe("ssrf pinning", () => {
 
     expect(fallback).toHaveBeenCalledTimes(1);
     expect(result.address).toBe("1.2.3.4");
+  });
+
+  it("enforces hostname allowlist when configured", async () => {
+    const lookup = vi.fn(async () => [
+      { address: "93.184.216.34", family: 4 },
+    ]) as unknown as LookupFn;
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("api.example.com", {
+        lookupFn: lookup,
+        policy: { hostnameAllowlist: ["cdn.example.com", "*.trusted.example"] },
+      }),
+    ).rejects.toThrow(/allowlist/i);
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it("supports wildcard hostname allowlist patterns", async () => {
+    const lookup = vi.fn(async () => [
+      { address: "93.184.216.34", family: 4 },
+    ]) as unknown as LookupFn;
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("assets.example.com", {
+        lookupFn: lookup,
+        policy: { hostnameAllowlist: ["*.example.com"] },
+      }),
+    ).resolves.toMatchObject({ hostname: "assets.example.com" });
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("example.com", {
+        lookupFn: lookup,
+        policy: { hostnameAllowlist: ["*.example.com"] },
+      }),
+    ).rejects.toThrow(/allowlist/i);
+  });
+
+  it.each([
+    {
+      name: "ISATAP embedded private IPv4",
+      hostname: "2001:db8:1234::5efe:127.0.0.1",
+    },
+    {
+      name: "legacy loopback IPv4 literal",
+      hostname: "0177.0.0.1",
+    },
+    {
+      name: "unsupported short-form IPv4 literal",
+      hostname: "8.8.2056",
+    },
+  ])("blocks $name before DNS lookup", async ({ hostname }) => {
+    const lookup = createPublicLookupMock();
+
+    await expect(resolvePinnedHostnameWithPolicy(hostname, { lookupFn: lookup })).rejects.toThrow(
+      SsrFBlockedError,
+    );
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it("allows ISATAP embedded private IPv4 when private network is explicitly enabled", async () => {
+    const lookup = vi.fn(async () => [
+      { address: "2001:db8:1234::5efe:127.0.0.1", family: 6 },
+    ]) as unknown as LookupFn;
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("2001:db8:1234::5efe:127.0.0.1", {
+        lookupFn: lookup,
+        policy: { allowPrivateNetwork: true },
+      }),
+    ).resolves.toMatchObject({
+      hostname: "2001:db8:1234::5efe:127.0.0.1",
+      addresses: ["2001:db8:1234::5efe:127.0.0.1"],
+    });
+    expect(lookup).toHaveBeenCalledTimes(1);
   });
 });

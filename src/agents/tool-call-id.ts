@@ -1,9 +1,15 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { createHash } from "node:crypto";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 
 export type ToolCallIdMode = "strict" | "strict9";
 
 const STRICT9_LEN = 9;
+const TOOL_CALL_TYPES = new Set(["toolCall", "toolUse", "functionCall"]);
+
+export type ToolCallLike = {
+  id: string;
+  name?: string;
+};
 
 /**
  * Sanitize a tool call ID to be compatible with various providers.
@@ -35,6 +41,47 @@ export function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "strict"):
   return alphanumericOnly.length > 0 ? alphanumericOnly : "sanitizedtoolid";
 }
 
+export function extractToolCallsFromAssistant(
+  msg: Extract<AgentMessage, { role: "assistant" }>,
+): ToolCallLike[] {
+  const content = msg.content;
+  if (!Array.isArray(content)) {
+    return [];
+  }
+
+  const toolCalls: ToolCallLike[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const rec = block as { type?: unknown; id?: unknown; name?: unknown };
+    if (typeof rec.id !== "string" || !rec.id) {
+      continue;
+    }
+    if (typeof rec.type === "string" && TOOL_CALL_TYPES.has(rec.type)) {
+      toolCalls.push({
+        id: rec.id,
+        name: typeof rec.name === "string" ? rec.name : undefined,
+      });
+    }
+  }
+  return toolCalls;
+}
+
+export function extractToolResultId(
+  msg: Extract<AgentMessage, { role: "toolResult" }>,
+): string | null {
+  const toolCallId = (msg as { toolCallId?: unknown }).toolCallId;
+  if (typeof toolCallId === "string" && toolCallId) {
+    return toolCallId;
+  }
+  const toolUseId = (msg as { toolUseId?: unknown }).toolUseId;
+  if (typeof toolUseId === "string" && toolUseId) {
+    return toolUseId;
+  }
+  return null;
+}
+
 export function isValidCloudCodeAssistToolId(id: string, mode: ToolCallIdMode = "strict"): boolean {
   if (!id || typeof id !== "string") {
     return false;
@@ -47,7 +94,7 @@ export function isValidCloudCodeAssistToolId(id: string, mode: ToolCallIdMode = 
 }
 
 function shortHash(text: string, length = 8): string {
-  return createHash("sha1").update(text).digest("hex").slice(0, length);
+  return createHash("sha256").update(text).digest("hex").slice(0, length);
 }
 
 function makeUniqueToolId(params: { id: string; used: Set<string>; mode: ToolCallIdMode }): string {

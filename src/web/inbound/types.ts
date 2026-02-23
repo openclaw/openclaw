@@ -37,6 +37,7 @@ export type WebInboundMessage = {
   sendMedia: (payload: AnyMessageContent) => Promise<void>;
   mediaPath?: string;
   mediaType?: string;
+  mediaFileName?: string;
   mediaUrl?: string;
   wasMentioned?: boolean;
 };

@@ -1,3 +1,4 @@
+import os from "node:os";
 import path from "node:path";
 import { VERSION } from "../version.js";
 import {
@@ -24,6 +25,39 @@ type BuildServicePathOptions = MinimalServicePathOptions & {
   env?: Record<string, string | undefined>;
 };
 
+function addNonEmptyDir(dirs: string[], dir: string | undefined): void {
+  if (dir) {
+    dirs.push(dir);
+  }
+}
+
+function appendSubdir(base: string | undefined, subdir: string): string | undefined {
+  if (!base) {
+    return undefined;
+  }
+  return base.endsWith(`/${subdir}`) ? base : path.posix.join(base, subdir);
+}
+
+function addCommonUserBinDirs(dirs: string[], home: string): void {
+  dirs.push(`${home}/.local/bin`);
+  dirs.push(`${home}/.npm-global/bin`);
+  dirs.push(`${home}/bin`);
+  dirs.push(`${home}/.volta/bin`);
+  dirs.push(`${home}/.asdf/shims`);
+  dirs.push(`${home}/.bun/bin`);
+}
+
+function addCommonEnvConfiguredBinDirs(
+  dirs: string[],
+  env: Record<string, string | undefined> | undefined,
+): void {
+  addNonEmptyDir(dirs, env?.PNPM_HOME);
+  addNonEmptyDir(dirs, appendSubdir(env?.NPM_CONFIG_PREFIX, "bin"));
+  addNonEmptyDir(dirs, appendSubdir(env?.BUN_INSTALL, "bin"));
+  addNonEmptyDir(dirs, appendSubdir(env?.VOLTA_HOME, "bin"));
+  addNonEmptyDir(dirs, appendSubdir(env?.ASDF_DATA_DIR, "shims"));
+}
+
 function resolveSystemPathDirs(platform: NodeJS.Platform): string[] {
   if (platform === "darwin") {
     return ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"];
@@ -32,6 +66,50 @@ function resolveSystemPathDirs(platform: NodeJS.Platform): string[] {
     return ["/usr/local/bin", "/usr/bin", "/bin"];
   }
   return [];
+}
+
+/**
+ * Resolve common user bin directories for macOS.
+ * These are paths where npm global installs and node version managers typically place binaries.
+ *
+ * Key differences from Linux:
+ * - fnm: macOS uses ~/Library/Application Support/fnm (not ~/.local/share/fnm)
+ * - pnpm: macOS uses ~/Library/pnpm (not ~/.local/share/pnpm)
+ */
+export function resolveDarwinUserBinDirs(
+  home: string | undefined,
+  env?: Record<string, string | undefined>,
+): string[] {
+  if (!home) {
+    return [];
+  }
+
+  const dirs: string[] = [];
+
+  // Env-configured bin roots (override defaults when present).
+  // Note: FNM_DIR on macOS defaults to ~/Library/Application Support/fnm
+  // Note: PNPM_HOME on macOS defaults to ~/Library/pnpm
+  addCommonEnvConfiguredBinDirs(dirs, env);
+  // nvm: no stable default path, relies on env or user's shell config
+  // User must set NVM_DIR and source nvm.sh for it to work
+  addNonEmptyDir(dirs, env?.NVM_DIR);
+  // fnm: use aliases/default (not current)
+  addNonEmptyDir(dirs, appendSubdir(env?.FNM_DIR, "aliases/default/bin"));
+  // pnpm: binary is directly in PNPM_HOME (not in bin subdirectory)
+
+  // Common user bin directories
+  addCommonUserBinDirs(dirs, home);
+
+  // Node version managers - macOS specific paths
+  // nvm: no stable default path, depends on user's shell configuration
+  // fnm: macOS default is ~/Library/Application Support/fnm, not ~/.fnm
+  dirs.push(`${home}/Library/Application Support/fnm/aliases/default/bin`); // fnm default
+  dirs.push(`${home}/.fnm/aliases/default/bin`); // fnm if customized to ~/.fnm
+  // pnpm: macOS default is ~/Library/pnpm, not ~/.local/share/pnpm
+  dirs.push(`${home}/Library/pnpm`); // pnpm default
+  dirs.push(`${home}/.local/share/pnpm`); // pnpm XDG fallback
+
+  return dirs;
 }
 
 /**
@@ -48,39 +126,18 @@ export function resolveLinuxUserBinDirs(
 
   const dirs: string[] = [];
 
-  const add = (dir: string | undefined) => {
-    if (dir) {
-      dirs.push(dir);
-    }
-  };
-  const appendSubdir = (base: string | undefined, subdir: string) => {
-    if (!base) {
-      return undefined;
-    }
-    return base.endsWith(`/${subdir}`) ? base : path.posix.join(base, subdir);
-  };
-
   // Env-configured bin roots (override defaults when present).
-  add(env?.PNPM_HOME);
-  add(appendSubdir(env?.NPM_CONFIG_PREFIX, "bin"));
-  add(appendSubdir(env?.BUN_INSTALL, "bin"));
-  add(appendSubdir(env?.VOLTA_HOME, "bin"));
-  add(appendSubdir(env?.ASDF_DATA_DIR, "shims"));
-  add(appendSubdir(env?.NVM_DIR, "current/bin"));
-  add(appendSubdir(env?.FNM_DIR, "current/bin"));
+  addCommonEnvConfiguredBinDirs(dirs, env);
+  addNonEmptyDir(dirs, appendSubdir(env?.NVM_DIR, "current/bin"));
+  addNonEmptyDir(dirs, appendSubdir(env?.FNM_DIR, "current/bin"));
 
   // Common user bin directories
-  dirs.push(`${home}/.local/bin`); // XDG standard, pip, etc.
-  dirs.push(`${home}/.npm-global/bin`); // npm custom prefix (recommended for non-root)
-  dirs.push(`${home}/bin`); // User's personal bin
+  addCommonUserBinDirs(dirs, home);
 
   // Node version managers
   dirs.push(`${home}/.nvm/current/bin`); // nvm with current symlink
   dirs.push(`${home}/.fnm/current/bin`); // fnm
-  dirs.push(`${home}/.volta/bin`); // Volta
-  dirs.push(`${home}/.asdf/shims`); // asdf
   dirs.push(`${home}/.local/share/pnpm`); // pnpm global bin
-  dirs.push(`${home}/.bun/bin`); // Bun
 
   return dirs;
 }
@@ -95,9 +152,13 @@ export function getMinimalServicePathParts(options: MinimalServicePathOptions = 
   const extraDirs = options.extraDirs ?? [];
   const systemDirs = resolveSystemPathDirs(platform);
 
-  // Add Linux user bin directories (npm global, nvm, fnm, volta, etc.)
-  const linuxUserDirs =
-    platform === "linux" ? resolveLinuxUserBinDirs(options.home, options.env) : [];
+  // Add user bin directories for version managers (npm global, nvm, fnm, volta, etc.)
+  const userDirs =
+    platform === "linux"
+      ? resolveLinuxUserBinDirs(options.home, options.env)
+      : platform === "darwin"
+        ? resolveDarwinUserBinDirs(options.home, options.env)
+        : [];
 
   const add = (dir: string) => {
     if (!dir) {
@@ -112,7 +173,7 @@ export function getMinimalServicePathParts(options: MinimalServicePathOptions = 
     add(dir);
   }
   // User dirs first so user-installed binaries take precedence
-  for (const dir of linuxUserDirs) {
+  for (const dir of userDirs) {
     add(dir);
   }
   for (const dir of systemDirs) {
@@ -155,8 +216,11 @@ export function buildServiceEnvironment(params: {
   const systemdUnit = `${resolveGatewaySystemdServiceName(profile)}.service`;
   const stateDir = env.OPENCLAW_STATE_DIR;
   const configPath = env.OPENCLAW_CONFIG_PATH;
+  // Keep a usable temp directory for supervised services even when the host env omits TMPDIR.
+  const tmpDir = env.TMPDIR?.trim() || os.tmpdir();
   return {
     HOME: env.HOME,
+    TMPDIR: tmpDir,
     PATH: buildMinimalServicePath({ env }),
     OPENCLAW_PROFILE: profile,
     OPENCLAW_STATE_DIR: stateDir,
@@ -177,8 +241,10 @@ export function buildNodeServiceEnvironment(params: {
   const { env } = params;
   const stateDir = env.OPENCLAW_STATE_DIR;
   const configPath = env.OPENCLAW_CONFIG_PATH;
+  const tmpDir = env.TMPDIR?.trim() || os.tmpdir();
   return {
     HOME: env.HOME,
+    TMPDIR: tmpDir,
     PATH: buildMinimalServicePath({ env }),
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: configPath,

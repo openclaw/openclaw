@@ -2,6 +2,7 @@ import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
+import { createRestartIterationHook } from "./restart-recovery.js";
 import { spawnWithFallback } from "./spawn-utils.js";
 
 function createStubChild() {
@@ -9,8 +10,8 @@ function createStubChild() {
   child.stdin = new PassThrough() as ChildProcess["stdin"];
   child.stdout = new PassThrough() as ChildProcess["stdout"];
   child.stderr = new PassThrough() as ChildProcess["stderr"];
-  child.pid = 1234;
-  child.killed = false;
+  Object.defineProperty(child, "pid", { value: 1234, configurable: true });
+  Object.defineProperty(child, "killed", { value: false, configurable: true, writable: true });
   child.kill = vi.fn(() => true) as ChildProcess["kill"];
   queueMicrotask(() => {
     child.emit("spawn");
@@ -59,5 +60,21 @@ describe("spawnWithFallback", () => {
       }),
     ).rejects.toThrow(/ENOENT/);
     expect(spawnMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("restart-recovery", () => {
+  it("skips recovery on first iteration and runs on subsequent iterations", () => {
+    const onRestart = vi.fn();
+    const onIteration = createRestartIterationHook(onRestart);
+
+    expect(onIteration()).toBe(false);
+    expect(onRestart).not.toHaveBeenCalled();
+
+    expect(onIteration()).toBe(true);
+    expect(onRestart).toHaveBeenCalledTimes(1);
+
+    expect(onIteration()).toBe(true);
+    expect(onRestart).toHaveBeenCalledTimes(2);
   });
 });

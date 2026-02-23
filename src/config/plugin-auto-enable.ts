@@ -1,4 +1,3 @@
-import type { OpenClawConfig } from "./config.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import {
   getChannelPluginCatalogEntry,
@@ -9,7 +8,10 @@ import {
   listChatChannels,
   normalizeChatChannelId,
 } from "../channels/registry.js";
+import { isRecord } from "../utils.js";
 import { hasAnyWhatsAppAuth } from "../web/accounts.js";
+import type { OpenClawConfig } from "./config.js";
+import { ensurePluginAllowlisted } from "./plugins-allowlist.js";
 
 type PluginEnableChange = {
   pluginId: string;
@@ -29,16 +31,11 @@ const CHANNEL_PLUGIN_IDS = Array.from(
 );
 
 const PROVIDER_PLUGIN_IDS: Array<{ pluginId: string; providerId: string }> = [
-  { pluginId: "google-antigravity-auth", providerId: "google-antigravity" },
   { pluginId: "google-gemini-cli-auth", providerId: "google-gemini-cli" },
   { pluginId: "qwen-portal-auth", providerId: "qwen-portal" },
   { pluginId: "copilot-proxy", providerId: "copilot-proxy" },
   { pluginId: "minimax-portal-auth", providerId: "minimax-portal" },
 ];
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function hasNonEmptyString(value: unknown): boolean {
   return typeof value === "string" && value.trim().length > 0;
@@ -103,6 +100,23 @@ function isDiscordConfigured(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boole
     return true;
   }
   if (accountsHaveKeys(entry.accounts, ["token"])) {
+    return true;
+  }
+  return recordHasKeys(entry);
+}
+
+function isIrcConfigured(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+  if (hasNonEmptyString(env.IRC_HOST) && hasNonEmptyString(env.IRC_NICK)) {
+    return true;
+  }
+  const entry = resolveChannelConfig(cfg, "irc");
+  if (!entry) {
+    return false;
+  }
+  if (hasNonEmptyString(entry.host) || hasNonEmptyString(entry.nick)) {
+    return true;
+  }
+  if (accountsHaveKeys(entry.accounts, ["host", "nick"])) {
     return true;
   }
   return recordHasKeys(entry);
@@ -192,6 +206,8 @@ export function isChannelConfigured(
       return isTelegramConfigured(cfg, env);
     case "discord":
       return isDiscordConfigured(cfg, env);
+    case "irc":
+      return isIrcConfigured(cfg, env);
     case "slack":
       return isSlackConfigured(cfg, env);
     case "signal":
@@ -302,10 +318,10 @@ function resolveConfiguredPlugins(
   const configuredChannels = cfg.channels as Record<string, unknown> | undefined;
   if (configuredChannels && typeof configuredChannels === "object") {
     for (const key of Object.keys(configuredChannels)) {
-      if (key === "defaults") {
+      if (key === "defaults" || key === "modelByChannel") {
         continue;
       }
-      channelIds.add(key);
+      channelIds.add(normalizeChatChannelId(key) ?? key);
     }
   }
   for (const channelId of channelIds) {
@@ -331,6 +347,19 @@ function resolveConfiguredPlugins(
 }
 
 function isPluginExplicitlyDisabled(cfg: OpenClawConfig, pluginId: string): boolean {
+  const builtInChannelId = normalizeChatChannelId(pluginId);
+  if (builtInChannelId) {
+    const channels = cfg.channels as Record<string, unknown> | undefined;
+    const channelConfig = channels?.[builtInChannelId];
+    if (
+      channelConfig &&
+      typeof channelConfig === "object" &&
+      !Array.isArray(channelConfig) &&
+      (channelConfig as { enabled?: unknown }).enabled === false
+    ) {
+      return true;
+    }
+  }
   const entry = cfg.plugins?.entries?.[pluginId];
   return entry?.enabled === false;
 }
@@ -372,21 +401,26 @@ function shouldSkipPreferredPluginAutoEnable(
   return false;
 }
 
-function ensureAllowlisted(cfg: OpenClawConfig, pluginId: string): OpenClawConfig {
-  const allow = cfg.plugins?.allow;
-  if (!Array.isArray(allow) || allow.includes(pluginId)) {
-    return cfg;
+function registerPluginEntry(cfg: OpenClawConfig, pluginId: string): OpenClawConfig {
+  const builtInChannelId = normalizeChatChannelId(pluginId);
+  if (builtInChannelId) {
+    const channels = cfg.channels as Record<string, unknown> | undefined;
+    const existing = channels?.[builtInChannelId];
+    const existingRecord =
+      existing && typeof existing === "object" && !Array.isArray(existing)
+        ? (existing as Record<string, unknown>)
+        : {};
+    return {
+      ...cfg,
+      channels: {
+        ...cfg.channels,
+        [builtInChannelId]: {
+          ...existingRecord,
+          enabled: true,
+        },
+      },
+    };
   }
-  return {
-    ...cfg,
-    plugins: {
-      ...cfg.plugins,
-      allow: [...allow, pluginId],
-    },
-  };
-}
-
-function enablePluginEntry(cfg: OpenClawConfig, pluginId: string): OpenClawConfig {
   const entries = {
     ...cfg.plugins?.entries,
     [pluginId]: {
@@ -399,7 +433,6 @@ function enablePluginEntry(cfg: OpenClawConfig, pluginId: string): OpenClawConfi
     plugins: {
       ...cfg.plugins,
       entries,
-      ...(cfg.plugins?.enabled === false ? { enabled: true } : {}),
     },
   };
 }
@@ -411,7 +444,7 @@ function formatAutoEnableChange(entry: PluginEnableChange): string {
     const label = getChatChannelMeta(channelId).label;
     reason = reason.replace(new RegExp(`^${channelId}\\b`, "i"), label);
   }
-  return `${reason}, not enabled yet.`;
+  return `${reason}, enabled automatically.`;
 }
 
 export function applyPluginAutoEnable(params: {
@@ -432,6 +465,7 @@ export function applyPluginAutoEnable(params: {
   }
 
   for (const entry of configured) {
+    const builtInChannelId = normalizeChatChannelId(entry.pluginId);
     if (isPluginDenied(next, entry.pluginId)) {
       continue;
     }
@@ -443,12 +477,28 @@ export function applyPluginAutoEnable(params: {
     }
     const allow = next.plugins?.allow;
     const allowMissing = Array.isArray(allow) && !allow.includes(entry.pluginId);
-    const alreadyEnabled = next.plugins?.entries?.[entry.pluginId]?.enabled === true;
+    const alreadyEnabled =
+      builtInChannelId != null
+        ? (() => {
+            const channels = next.channels as Record<string, unknown> | undefined;
+            const channelConfig = channels?.[builtInChannelId];
+            if (
+              !channelConfig ||
+              typeof channelConfig !== "object" ||
+              Array.isArray(channelConfig)
+            ) {
+              return false;
+            }
+            return (channelConfig as { enabled?: unknown }).enabled === true;
+          })()
+        : next.plugins?.entries?.[entry.pluginId]?.enabled === true;
     if (alreadyEnabled && !allowMissing) {
       continue;
     }
-    next = enablePluginEntry(next, entry.pluginId);
-    next = ensureAllowlisted(next, entry.pluginId);
+    next = registerPluginEntry(next, entry.pluginId);
+    if (allowMissing || !builtInChannelId) {
+      next = ensurePluginAllowlisted(next, entry.pluginId);
+    }
     changes.push(formatAutoEnableChange(entry));
   }
 

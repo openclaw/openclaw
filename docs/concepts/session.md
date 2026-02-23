@@ -17,9 +17,17 @@ Use `session.dmScope` to control how **direct messages** are grouped:
 - `per-account-channel-peer`: isolate by account + channel + sender (recommended for multi-account inboxes).
   Use `session.identityLinks` to map provider-prefixed peer ids to a canonical identity so the same person shares a DM session across channels when using `per-peer`, `per-channel-peer`, or `per-account-channel-peer`.
 
-### Secure DM mode (recommended)
+## Secure DM mode (recommended for multi-user setups)
 
-If your agent can receive DMs from **multiple people** (pairing approvals for more than one sender, a DM allowlist with multiple entries, or `dmPolicy: "open"`), enable **secure DM mode** to avoid cross-user context leakage:
+> **Security Warning:** If your agent can receive DMs from **multiple people**, you should strongly consider enabling secure DM mode. Without it, all users share the same conversation context, which can leak private information between users.
+
+**Example of the problem with default settings:**
+
+- Alice (`<SENDER_A>`) messages your agent about a private topic (for example, a medical appointment)
+- Bob (`<SENDER_B>`) messages your agent asking "What were we talking about?"
+- Because both DMs share the same session, the model may answer Bob using Alice's prior context.
+
+**The fix:** Set `dmScope` to isolate sessions per user:
 
 ```json5
 // ~/.openclaw/openclaw.json
@@ -31,11 +39,20 @@ If your agent can receive DMs from **multiple people** (pairing approvals for mo
 }
 ```
 
+**When to enable this:**
+
+- You have pairing approvals for more than one sender
+- You use a DM allowlist with multiple entries
+- You set `dmPolicy: "open"`
+- Multiple phone numbers or accounts can message your agent
+
 Notes:
 
-- Default is `dmScope: "main"` for continuity (all DMs share the main session).
+- Default is `dmScope: "main"` for continuity (all DMs share the main session). This is fine for single-user setups.
+- Local CLI onboarding writes `session.dmScope: "per-channel-peer"` by default when unset (existing explicit values are preserved).
 - For multi-account inboxes on the same channel, prefer `per-account-channel-peer`.
 - If the same person contacts you on multiple channels, use `session.identityLinks` to collapse their DM sessions into one canonical identity.
+- You can verify your DM settings with `openclaw security audit` (see [security](/cli/security)).
 
 ## Gateway is the source of truth
 
@@ -53,6 +70,109 @@ All session state is **owned by the gateway** (the “master” OpenClaw). UI cl
 - Group entries may include `displayName`, `channel`, `subject`, `room`, and `space` to label sessions in UIs.
 - Session entries include `origin` metadata (label + routing hints) so UIs can explain where a session came from.
 - OpenClaw does **not** read legacy Pi/Tau session folders.
+
+## Maintenance
+
+OpenClaw applies session-store maintenance to keep `sessions.json` and transcript artifacts bounded over time.
+
+### Defaults
+
+- `session.maintenance.mode`: `warn`
+- `session.maintenance.pruneAfter`: `30d`
+- `session.maintenance.maxEntries`: `500`
+- `session.maintenance.rotateBytes`: `10mb`
+- `session.maintenance.resetArchiveRetention`: defaults to `pruneAfter` (`30d`)
+- `session.maintenance.maxDiskBytes`: unset (disabled)
+- `session.maintenance.highWaterBytes`: defaults to `80%` of `maxDiskBytes` when budgeting is enabled
+
+### How it works
+
+Maintenance runs during session-store writes, and you can trigger it on demand with `openclaw sessions cleanup`.
+
+- `mode: "warn"`: reports what would be evicted but does not mutate entries/transcripts.
+- `mode: "enforce"`: applies cleanup in this order:
+  1. prune stale entries older than `pruneAfter`
+  2. cap entry count to `maxEntries` (oldest first)
+  3. archive transcript files for removed entries that are no longer referenced
+  4. purge old `*.deleted.<timestamp>` and `*.reset.<timestamp>` archives by retention policy
+  5. rotate `sessions.json` when it exceeds `rotateBytes`
+  6. if `maxDiskBytes` is set, enforce disk budget toward `highWaterBytes` (oldest artifacts first, then oldest sessions)
+
+### Performance caveat for large stores
+
+Large session stores are common in high-volume setups. Maintenance work is write-path work, so very large stores can increase write latency.
+
+What increases cost most:
+
+- very high `session.maintenance.maxEntries` values
+- long `pruneAfter` windows that keep stale entries around
+- many transcript/archive artifacts in `~/.openclaw/agents/<agentId>/sessions/`
+- enabling disk budgets (`maxDiskBytes`) without reasonable pruning/cap limits
+
+What to do:
+
+- use `mode: "enforce"` in production so growth is bounded automatically
+- set both time and count limits (`pruneAfter` + `maxEntries`), not just one
+- set `maxDiskBytes` + `highWaterBytes` for hard upper bounds in large deployments
+- keep `highWaterBytes` meaningfully below `maxDiskBytes` (default is 80%)
+- run `openclaw sessions cleanup --dry-run --json` after config changes to verify projected impact before enforcing
+- for frequent active sessions, pass `--active-key` when running manual cleanup
+
+### Customize examples
+
+Use a conservative enforce policy:
+
+```json5
+{
+  session: {
+    maintenance: {
+      mode: "enforce",
+      pruneAfter: "45d",
+      maxEntries: 800,
+      rotateBytes: "20mb",
+      resetArchiveRetention: "14d",
+    },
+  },
+}
+```
+
+Enable a hard disk budget for the sessions directory:
+
+```json5
+{
+  session: {
+    maintenance: {
+      mode: "enforce",
+      maxDiskBytes: "1gb",
+      highWaterBytes: "800mb",
+    },
+  },
+}
+```
+
+Tune for larger installs (example):
+
+```json5
+{
+  session: {
+    maintenance: {
+      mode: "enforce",
+      pruneAfter: "14d",
+      maxEntries: 2000,
+      rotateBytes: "25mb",
+      maxDiskBytes: "2gb",
+      highWaterBytes: "1.6gb",
+    },
+  },
+}
+```
+
+Preview or force maintenance from CLI:
+
+```bash
+openclaw sessions cleanup --dry-run
+openclaw sessions cleanup --enforce
+```
 
 ## Session pruning
 
@@ -90,7 +210,7 @@ the workspace is writable. See [Memory](/concepts/memory) and
 - Daily reset: defaults to **4:00 AM local time on the gateway host**. A session is stale once its last update is earlier than the most recent daily reset time.
 - Idle reset (optional): `idleMinutes` adds a sliding idle window. When both daily and idle resets are configured, **whichever expires first** forces a new session.
 - Legacy idle-only: if you set `session.idleMinutes` without any `session.reset`/`resetByType` config, OpenClaw stays in idle-only mode for backward compatibility.
-- Per-type overrides (optional): `resetByType` lets you override the policy for `dm`, `group`, and `thread` sessions (thread = Slack/Discord threads, Telegram topics, Matrix threads when provided by the connector).
+- Per-type overrides (optional): `resetByType` lets you override the policy for `direct`, `group`, and `thread` sessions (thread = Slack/Discord threads, Telegram topics, Matrix threads when provided by the connector).
 - Per-channel overrides (optional): `resetByChannel` overrides the reset policy for a channel (applies to all session types for that channel and takes precedence over `reset`/`resetByType`).
 - Reset triggers: exact `/new` or `/reset` (plus any extras in `resetTriggers`) start a fresh session id and pass the remainder of the message through. `/new <model>` accepts a model alias, `provider/model`, or provider name (fuzzy match) to set the new session model. If `/new` or `/reset` is sent alone, OpenClaw runs a short “hello” greeting turn to confirm the reset.
 - Manual reset: delete specific keys from the store or remove the JSONL transcript; the next message recreates them.
@@ -107,6 +227,8 @@ Block delivery for specific session types without listing individual ids.
       rules: [
         { action: "deny", match: { channel: "discord", chatType: "group" } },
         { action: "deny", match: { keyPrefix: "cron:" } },
+        // Match the raw session key (including the `agent:<id>:` prefix).
+        { action: "deny", match: { rawKeyPrefix: "agent:main:discord:" } },
       ],
       default: "allow",
     },
@@ -141,7 +263,7 @@ Runtime override (owner only):
     },
     resetByType: {
       thread: { mode: "daily", atHour: 4 },
-      dm: { mode: "idle", idleMinutes: 240 },
+      direct: { mode: "idle", idleMinutes: 240 },
       group: { mode: "idle", idleMinutes: 120 },
     },
     resetByChannel: {

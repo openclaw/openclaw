@@ -31,7 +31,7 @@ openclaw plugins install ./extensions/mattermost
 If you choose Mattermost during configure/onboarding and a git checkout is detected,
 OpenClaw will offer the local install path automatically.
 
-Details: [Plugins](/plugin)
+Details: [Plugins](/tools/plugin)
 
 ## Quick setup
 
@@ -103,6 +103,7 @@ Notes:
 - Default: `channels.mattermost.groupPolicy = "allowlist"` (mention-gated).
 - Allowlist senders with `channels.mattermost.groupAllowFrom` (user IDs or `@username`).
 - Open channels: `channels.mattermost.groupPolicy="open"` (mention-gated).
+- Runtime note: if `channels.mattermost` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group checks (even if `channels.defaults.groupPolicy` is set).
 
 ## Targets for outbound delivery
 
@@ -113,6 +114,26 @@ Use these target formats with `openclaw message send` or cron/webhooks:
 - `@username` for a DM (resolved via the Mattermost API)
 
 Bare IDs are treated as channels.
+
+## Reactions (message tool)
+
+- Use `message action=react` with `channel=mattermost`.
+- `messageId` is the Mattermost post id.
+- `emoji` accepts names like `thumbsup` or `:+1:` (colons are optional).
+- Set `remove=true` (boolean) to remove a reaction.
+- Reaction add/remove events are forwarded as system events to the routed agent session.
+
+Examples:
+
+```
+message action=react channel=mattermost target=channel:<channelId> messageId=<postId> emoji=thumbsup
+message action=react channel=mattermost target=channel:<channelId> messageId=<postId> emoji=thumbsup remove=true
+```
+
+Config:
+
+- `channels.mattermost.actions.reactions`: enable/disable reaction actions (default true).
+- Per-account override: `channels.mattermost.accounts.<id>.actions.reactions`.
 
 ## Multi-account
 

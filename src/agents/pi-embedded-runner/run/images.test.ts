@@ -1,5 +1,14 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { detectAndLoadPromptImages, detectImageReferences, modelSupportsImages } from "./images.js";
+import { createHostSandboxFsBridge } from "../../test-helpers/host-sandbox-fs-bridge.js";
+import {
+  detectAndLoadPromptImages,
+  detectImageReferences,
+  loadImageFromRef,
+  modelSupportsImages,
+} from "./images.js";
 
 describe("detectImageReferences", () => {
   it("detects absolute file paths with common extensions", () => {
@@ -193,6 +202,43 @@ describe("modelSupportsImages", () => {
   it("returns false when model input is empty", () => {
     const model = { input: [] };
     expect(modelSupportsImages(model)).toBe(false);
+  });
+});
+
+describe("loadImageFromRef", () => {
+  it("allows sandbox-validated host paths outside default media roots", async () => {
+    const homeDir = os.homedir();
+    await fs.mkdir(homeDir, { recursive: true });
+    const sandboxParent = await fs.mkdtemp(path.join(homeDir, "openclaw-sandbox-image-"));
+    try {
+      const sandboxRoot = path.join(sandboxParent, "sandbox");
+      await fs.mkdir(sandboxRoot, { recursive: true });
+      const imagePath = path.join(sandboxRoot, "photo.png");
+      const pngB64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+      await fs.writeFile(imagePath, Buffer.from(pngB64, "base64"));
+
+      const image = await loadImageFromRef(
+        {
+          raw: "./photo.png",
+          type: "path",
+          resolved: "./photo.png",
+        },
+        sandboxRoot,
+        {
+          sandbox: {
+            root: sandboxRoot,
+            bridge: createHostSandboxFsBridge(sandboxRoot),
+          },
+        },
+      );
+
+      expect(image).not.toBeNull();
+      expect(image?.type).toBe("image");
+      expect(image?.data.length).toBeGreaterThan(0);
+    } finally {
+      await fs.rm(sandboxParent, { recursive: true, force: true });
+    }
   });
 });
 

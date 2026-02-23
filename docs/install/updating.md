@@ -24,10 +24,13 @@ Notes:
 
 - Add `--no-onboard` if you don’t want the onboarding wizard to run again.
 - For **source installs**, use:
+
   ```bash
   curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method git --no-onboard
   ```
+
   The installer will `git pull --rebase` **only** if the repo is clean.
+
 - For **global installs**, the script uses `npm install -g openclaw@latest` under the hood.
 - Legacy note: `clawdbot` remains available as a compatibility shim.
 
@@ -67,6 +70,32 @@ Use `--tag <dist-tag|version>` for a one-off install tag/version.
 See [Development channels](/install/development-channels) for channel semantics and release notes.
 
 Note: on npm installs, the gateway logs an update hint on startup (checks the current channel tag). Disable via `update.checkOnStart: false`.
+
+### Core auto-updater (optional)
+
+Auto-updater is **off by default** and is a core Gateway feature (not a plugin).
+
+```json
+{
+  "update": {
+    "channel": "stable",
+    "auto": {
+      "enabled": true,
+      "stableDelayHours": 6,
+      "stableJitterHours": 12,
+      "betaCheckIntervalHours": 1
+    }
+  }
+}
+```
+
+Behavior:
+
+- `stable`: when a new version is seen, OpenClaw waits `stableDelayHours` and then applies a deterministic per-install jitter in `stableJitterHours` (spread rollout).
+- `beta`: checks on `betaCheckIntervalHours` cadence (default: hourly) and applies when an update is available.
+- `dev`: no automatic apply; use manual `openclaw update`.
+
+Use `openclaw update --dry-run` to preview update actions before enabling automation.
 
 Then:
 
@@ -225,4 +254,4 @@ git pull
 
 - Run `openclaw doctor` again and read the output carefully (it often tells you the fix).
 - Check: [Troubleshooting](/gateway/troubleshooting)
-- Ask in Discord: https://discord.gg/clawd
+- Ask in Discord: [https://discord.gg/clawd](https://discord.gg/clawd)

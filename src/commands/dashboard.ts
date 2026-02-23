@@ -1,6 +1,6 @@
-import type { RuntimeEnv } from "../runtime.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import { copyToClipboard } from "../infra/clipboard.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
 import {
   detectBrowserOpenSupport,
@@ -25,17 +25,22 @@ export async function dashboardCommand(
   const customBindHost = cfg.gateway?.customBindHost;
   const token = cfg.gateway?.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN ?? "";
 
+  // LAN URLs fail secure-context checks in browsers.
+  // Coerce only lan->loopback and preserve other bind modes.
   const links = resolveControlUiLinks({
     port,
-    bind,
+    bind: bind === "lan" ? "loopback" : bind,
     customBindHost,
     basePath,
   });
-  const authedUrl = token ? `${links.httpUrl}?token=${encodeURIComponent(token)}` : links.httpUrl;
+  // Prefer URL fragment to avoid leaking auth tokens via query params.
+  const dashboardUrl = token
+    ? `${links.httpUrl}#token=${encodeURIComponent(token)}`
+    : links.httpUrl;
 
-  runtime.log(`Dashboard URL: ${authedUrl}`);
+  runtime.log(`Dashboard URL: ${dashboardUrl}`);
 
-  const copied = await copyToClipboard(authedUrl).catch(() => false);
+  const copied = await copyToClipboard(dashboardUrl).catch(() => false);
   runtime.log(copied ? "Copied to clipboard." : "Copy to clipboard unavailable.");
 
   let opened = false;
@@ -43,7 +48,7 @@ export async function dashboardCommand(
   if (!options.noOpen) {
     const browserSupport = await detectBrowserOpenSupport();
     if (browserSupport.ok) {
-      opened = await openUrl(authedUrl);
+      opened = await openUrl(dashboardUrl);
     }
     if (!opened) {
       hint = formatControlUiSshHint({

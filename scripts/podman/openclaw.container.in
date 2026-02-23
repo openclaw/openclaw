@@ -1,0 +1,26 @@
+# OpenClaw gateway — Podman Quadlet (rootless)
+# Installed by setup-podman.sh into openclaw's ~/.config/containers/systemd/
+# {{OPENCLAW_HOME}} is replaced at install time.
+
+[Unit]
+Description=OpenClaw gateway (rootless Podman)
+
+[Container]
+Image=openclaw:local
+ContainerName=openclaw
+UserNS=keep-id
+Volume={{OPENCLAW_HOME}}/.openclaw:/home/node/.openclaw
+EnvironmentFile={{OPENCLAW_HOME}}/.openclaw/.env
+Environment=HOME=/home/node
+Environment=TERM=xterm-256color
+PublishPort=18789:18789
+PublishPort=18790:18790
+Pull=never
+Exec=node dist/index.js gateway --bind lan --port 18789
+
+[Service]
+TimeoutStartSec=300
+Restart=on-failure
+
+[Install]
+WantedBy=default.target

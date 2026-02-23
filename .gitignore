@@ -3,11 +3,13 @@ node_modules
 .env
 docker-compose.extra.yml
 dist
-*.bun-build
 pnpm-lock.yaml
 bun.lock
 bun.lockb
 coverage
+__pycache__/
+*.pyc
+.tsbuildinfo
 .pnpm-store
 .worktrees/
 .DS_Store
@@ -15,11 +17,23 @@ coverage
 ui/src/ui/__screenshots__/
 ui/playwright-report/
 ui/test-results/
+packages/dashboard-next/.next/
+packages/dashboard-next/out/
+
+# Mise configuration files
+mise.toml
+
+# Android build artifacts
+apps/android/.gradle/
+apps/android/app/build/
+apps/android/.cxx/
 
 # Bun build artifacts
 *.bun-build
 apps/macos/.build/
 apps/shared/MoltbotKit/.build/
+apps/shared/OpenClawKit/.build/
+apps/shared/OpenClawKit/Package.resolved
 **/ModuleCache/
 bin/
 bin/clawdbot-mac
@@ -27,10 +41,13 @@ bin/docs-list
 apps/macos/.build-local/
 apps/macos/.swiftpm/
 apps/shared/MoltbotKit/.swiftpm/
+apps/shared/OpenClawKit/.swiftpm/
 Core/
 apps/ios/*.xcodeproj/
 apps/ios/*.xcworkspace/
 apps/ios/.swiftpm/
+apps/ios/.derivedData/
+apps/ios/.local-signing.xcconfig
 vendor/
 apps/ios/Clawdbot.xcodeproj/
 apps/ios/Clawdbot.xcodeproj/**
@@ -52,7 +69,6 @@ apps/ios/fastlane/screenshots/
 apps/ios/fastlane/test_output/
 apps/ios/fastlane/logs/
 apps/ios/fastlane/.env
-apps/ios/fastlane/report.xml
 
 # fastlane build artifacts (local)
 apps/ios/*.ipa
@@ -60,14 +76,41 @@ apps/ios/*.dSYM.zip
 
 # provisioning profiles (local)
 apps/ios/*.mobileprovision
-.env
 
 # Local untracked files
 .local/
-.vscode/
+docs/.local/
 IDENTITY.md
 USER.md
 .tgz
+.idea
 
 # local tooling
 .serena/
+
+# Agent credentials and memory (NEVER COMMIT)
+/memory/
+.agent/*.json
+!.agent/workflows/
+/local/
+package-lock.json
+.claude/settings.local.json
+.agents/
+.agents
+.agent/
+skills-lock.json
+
+# Local iOS signing overrides
+apps/ios/LocalSigning.xcconfig
+# Generated protocol schema (produced via pnpm protocol:gen)
+dist/protocol.schema.json
+.ant-colony/
+
+# Eclipse
+**/.project
+**/.classpath
+**/.settings/
+**/.gradle/
+
+# Synthing
+**/.stfolder/

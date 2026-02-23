@@ -1,6 +1,7 @@
 import net from "node:net";
 import { describe, expect, it, vi } from "vitest";
 import { CHUTES_TOKEN_ENDPOINT, CHUTES_USERINFO_ENDPOINT } from "../agents/chutes-oauth.js";
+import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { loginChutes } from "./chutes-oauth.js";
 
 async function getFreePort(): Promise<number> {
@@ -19,31 +20,55 @@ async function getFreePort(): Promise<number> {
   });
 }
 
+const urlToString = (url: Request | URL | string): string => {
+  if (typeof url === "string") {
+    return url;
+  }
+  return "url" in url ? url.url : String(url);
+};
+
+function createOAuthFetchFn(params: {
+  accessToken: string;
+  refreshToken: string;
+  username: string;
+  passthrough?: boolean;
+}) {
+  return withFetchPreconnect(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = urlToString(input);
+    if (url === CHUTES_TOKEN_ENDPOINT) {
+      return new Response(
+        JSON.stringify({
+          access_token: params.accessToken,
+          refresh_token: params.refreshToken,
+          expires_in: 3600,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
+    if (url === CHUTES_USERINFO_ENDPOINT) {
+      return new Response(JSON.stringify({ username: params.username }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    if (params.passthrough) {
+      return fetch(input, init);
+    }
+    return new Response("not found", { status: 404 });
+  });
+}
+
 describe("loginChutes", () => {
   it("captures local redirect and exchanges code for tokens", async () => {
     const port = await getFreePort();
     const redirectUri = `http://127.0.0.1:${port}/oauth-callback`;
 
-    const fetchFn: typeof fetch = async (input, init) => {
-      const url = String(input);
-      if (url === CHUTES_TOKEN_ENDPOINT) {
-        return new Response(
-          JSON.stringify({
-            access_token: "at_local",
-            refresh_token: "rt_local",
-            expires_in: 3600,
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
-      }
-      if (url === CHUTES_USERINFO_ENDPOINT) {
-        return new Response(JSON.stringify({ username: "local-user" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-      return fetch(input, init);
-    };
+    const fetchFn = createOAuthFetchFn({
+      accessToken: "at_local",
+      refreshToken: "rt_local",
+      username: "local-user",
+      passthrough: true,
+    });
 
     const onPrompt = vi.fn(async () => {
       throw new Error("onPrompt should not be called for local callback");
@@ -66,28 +91,14 @@ describe("loginChutes", () => {
     expect(creds.email).toBe("local-user");
   });
 
-  it("supports manual flow with pasted code", async () => {
-    const fetchFn: typeof fetch = async (input) => {
-      const url = String(input);
-      if (url === CHUTES_TOKEN_ENDPOINT) {
-        return new Response(
-          JSON.stringify({
-            access_token: "at_manual",
-            refresh_token: "rt_manual",
-            expires_in: 3600,
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
-      }
-      if (url === CHUTES_USERINFO_ENDPOINT) {
-        return new Response(JSON.stringify({ username: "manual-user" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-      return new Response("not found", { status: 404 });
-    };
+  it("supports manual flow with pasted redirect URL", async () => {
+    const fetchFn = createOAuthFetchFn({
+      accessToken: "at_manual",
+      refreshToken: "rt_manual",
+      username: "manual-user",
+    });
 
+    let capturedState: string | null = null;
     const creds = await loginChutes({
       app: {
         clientId: "cid_test",
@@ -95,8 +106,15 @@ describe("loginChutes", () => {
         scopes: ["openid"],
       },
       manual: true,
-      onAuth: async () => {},
-      onPrompt: async () => "code_manual",
+      onAuth: async ({ url }) => {
+        capturedState = new URL(url).searchParams.get("state");
+      },
+      onPrompt: async () => {
+        if (!capturedState) {
+          throw new Error("missing state");
+        }
+        return `?code=code_manual&state=${capturedState}`;
+      },
       fetchFn,
     });
 
@@ -106,26 +124,11 @@ describe("loginChutes", () => {
   });
 
   it("does not reuse code_verifier as state", async () => {
-    const fetchFn: typeof fetch = async (input) => {
-      const url = String(input);
-      if (url === CHUTES_TOKEN_ENDPOINT) {
-        return new Response(
-          JSON.stringify({
-            access_token: "at_manual",
-            refresh_token: "rt_manual",
-            expires_in: 3600,
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
-      }
-      if (url === CHUTES_USERINFO_ENDPOINT) {
-        return new Response(JSON.stringify({ username: "manual-user" }), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-      return new Response("not found", { status: 404 });
-    };
+    const fetchFn = createOAuthFetchFn({
+      accessToken: "at_manual",
+      refreshToken: "rt_manual",
+      username: "manual-user",
+    });
 
     const createPkce = () => ({
       verifier: "verifier_123",
@@ -147,7 +150,7 @@ describe("loginChutes", () => {
         expect(parsed.searchParams.get("state")).toBe("state_456");
         expect(parsed.searchParams.get("state")).not.toBe("verifier_123");
       },
-      onPrompt: async () => "code_manual",
+      onPrompt: async () => "?code=code_manual&state=state_456",
       fetchFn,
     });
 
@@ -155,7 +158,7 @@ describe("loginChutes", () => {
   });
 
   it("rejects pasted redirect URLs missing state", async () => {
-    const fetchFn: typeof fetch = async () => new Response("not found", { status: 404 });
+    const fetchFn = withFetchPreconnect(async () => new Response("not found", { status: 404 }));
 
     await expect(
       loginChutes({

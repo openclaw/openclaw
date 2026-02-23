@@ -30,6 +30,7 @@ const sdkStart = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const sdkShutdown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const logEmit = vi.hoisted(() => vi.fn());
 const logShutdown = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const traceExporterCtor = vi.hoisted(() => vi.fn());
 
 vi.mock("@opentelemetry/api", () => ({
   metrics: {
@@ -55,7 +56,11 @@ vi.mock("@opentelemetry/exporter-metrics-otlp-http", () => ({
 }));
 
 vi.mock("@opentelemetry/exporter-trace-otlp-http", () => ({
-  OTLPTraceExporter: class {},
+  OTLPTraceExporter: class {
+    constructor(options?: unknown) {
+      traceExporterCtor(options);
+    }
+  },
 }));
 
 vi.mock("@opentelemetry/exporter-logs-otlp-http", () => ({
@@ -65,7 +70,6 @@ vi.mock("@opentelemetry/exporter-logs-otlp-http", () => ({
 vi.mock("@opentelemetry/sdk-logs", () => ({
   BatchLogRecordProcessor: class {},
   LoggerProvider: class {
-    addLogRecordProcessor = vi.fn();
     getLogger = vi.fn(() => ({
       emit: logEmit,
     }));
@@ -83,6 +87,7 @@ vi.mock("@opentelemetry/sdk-trace-base", () => ({
 }));
 
 vi.mock("@opentelemetry/resources", () => ({
+  resourceFromAttributes: vi.fn((attrs: Record<string, unknown>) => attrs),
   Resource: class {
     // eslint-disable-next-line @typescript-eslint/no-useless-constructor
     constructor(_value?: unknown) {}
@@ -90,9 +95,7 @@ vi.mock("@opentelemetry/resources", () => ({
 }));
 
 vi.mock("@opentelemetry/semantic-conventions", () => ({
-  SemanticResourceAttributes: {
-    SERVICE_NAME: "service.name",
-  },
+  ATTR_SERVICE_NAME: "service.name",
 }));
 
 vi.mock("openclaw/plugin-sdk", async () => {
@@ -103,8 +106,78 @@ vi.mock("openclaw/plugin-sdk", async () => {
   };
 });
 
+import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk";
 import { emitDiagnosticEvent } from "openclaw/plugin-sdk";
 import { createDiagnosticsOtelService } from "./service.js";
+
+const OTEL_TEST_STATE_DIR = "/tmp/openclaw-diagnostics-otel-test";
+const OTEL_TEST_ENDPOINT = "http://otel-collector:4318";
+const OTEL_TEST_PROTOCOL = "http/protobuf";
+
+function createLogger() {
+  return {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  };
+}
+
+type OtelContextFlags = {
+  traces?: boolean;
+  metrics?: boolean;
+  logs?: boolean;
+};
+function createOtelContext(
+  endpoint: string,
+  { traces = false, metrics = false, logs = false }: OtelContextFlags = {},
+): OpenClawPluginServiceContext {
+  return {
+    config: {
+      diagnostics: {
+        enabled: true,
+        otel: {
+          enabled: true,
+          endpoint,
+          protocol: OTEL_TEST_PROTOCOL,
+          traces,
+          metrics,
+          logs,
+        },
+      },
+    },
+    logger: createLogger(),
+    stateDir: OTEL_TEST_STATE_DIR,
+  };
+}
+
+function createTraceOnlyContext(endpoint: string): OpenClawPluginServiceContext {
+  return createOtelContext(endpoint, { traces: true });
+}
+
+type RegisteredLogTransport = (logObj: Record<string, unknown>) => void;
+function setupRegisteredTransports() {
+  const registeredTransports: RegisteredLogTransport[] = [];
+  const stopTransport = vi.fn();
+  registerLogTransportMock.mockImplementation((transport) => {
+    registeredTransports.push(transport);
+    return stopTransport;
+  });
+  return { registeredTransports, stopTransport };
+}
+
+async function emitAndCaptureLog(logObj: Record<string, unknown>) {
+  const { registeredTransports } = setupRegisteredTransports();
+  const service = createDiagnosticsOtelService();
+  const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { logs: true });
+  await service.start(ctx);
+  expect(registeredTransports).toHaveLength(1);
+  registeredTransports[0]?.(logObj);
+  expect(logEmit).toHaveBeenCalled();
+  const emitCall = logEmit.mock.calls[0]?.[0];
+  await service.stop?.(ctx);
+  return emitCall;
+}
 
 describe("diagnostics-otel service", () => {
   beforeEach(() => {
@@ -117,39 +190,16 @@ describe("diagnostics-otel service", () => {
     sdkShutdown.mockClear();
     logEmit.mockClear();
     logShutdown.mockClear();
+    traceExporterCtor.mockClear();
     registerLogTransportMock.mockReset();
   });
 
   test("records message-flow metrics and spans", async () => {
-    const registeredTransports: Array<(logObj: Record<string, unknown>) => void> = [];
-    const stopTransport = vi.fn();
-    registerLogTransportMock.mockImplementation((transport) => {
-      registeredTransports.push(transport);
-      return stopTransport;
-    });
+    const { registeredTransports } = setupRegisteredTransports();
 
     const service = createDiagnosticsOtelService();
-    await service.start({
-      config: {
-        diagnostics: {
-          enabled: true,
-          otel: {
-            enabled: true,
-            endpoint: "http://otel-collector:4318",
-            protocol: "http/protobuf",
-            traces: true,
-            metrics: true,
-            logs: true,
-          },
-        },
-      },
-      logger: {
-        info: vi.fn(),
-        warn: vi.fn(),
-        error: vi.fn(),
-        debug: vi.fn(),
-      },
-    });
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true, logs: true });
+    await service.start(ctx);
 
     emitDiagnosticEvent({
       type: "webhook.received",
@@ -221,6 +271,97 @@ describe("diagnostics-otel service", () => {
     });
     expect(logEmit).toHaveBeenCalled();
 
-    await service.stop?.();
+    await service.stop?.(ctx);
+  });
+
+  test("appends signal path when endpoint contains non-signal /v1 segment", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createTraceOnlyContext("https://www.comet.com/opik/api/v1/private/otel");
+    await service.start(ctx);
+
+    const options = traceExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
+    expect(options?.url).toBe("https://www.comet.com/opik/api/v1/private/otel/v1/traces");
+    await service.stop?.(ctx);
+  });
+
+  test("keeps already signal-qualified endpoint unchanged", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createTraceOnlyContext("https://collector.example.com/v1/traces");
+    await service.start(ctx);
+
+    const options = traceExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
+    expect(options?.url).toBe("https://collector.example.com/v1/traces");
+    await service.stop?.(ctx);
+  });
+
+  test("keeps signal-qualified endpoint unchanged when it has query params", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createTraceOnlyContext("https://collector.example.com/v1/traces?timeout=30s");
+    await service.start(ctx);
+
+    const options = traceExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
+    expect(options?.url).toBe("https://collector.example.com/v1/traces?timeout=30s");
+    await service.stop?.(ctx);
+  });
+
+  test("keeps signal-qualified endpoint unchanged when signal path casing differs", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createTraceOnlyContext("https://collector.example.com/v1/Traces");
+    await service.start(ctx);
+
+    const options = traceExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
+    expect(options?.url).toBe("https://collector.example.com/v1/Traces");
+    await service.stop?.(ctx);
+  });
+
+  test("redacts sensitive data from log messages before export", async () => {
+    const emitCall = await emitAndCaptureLog({
+      0: "Using API key sk-1234567890abcdef1234567890abcdef",
+      _meta: { logLevelName: "INFO", date: new Date() },
+    });
+
+    expect(emitCall?.body).not.toContain("sk-1234567890abcdef1234567890abcdef");
+    expect(emitCall?.body).toContain("sk-123");
+    expect(emitCall?.body).toContain("…");
+  });
+
+  test("redacts sensitive data from log attributes before export", async () => {
+    const emitCall = await emitAndCaptureLog({
+      0: '{"token":"ghp_abcdefghijklmnopqrstuvwxyz123456"}',
+      1: "auth configured",
+      _meta: { logLevelName: "DEBUG", date: new Date() },
+    });
+
+    const tokenAttr = emitCall?.attributes?.["openclaw.token"];
+    expect(tokenAttr).not.toBe("ghp_abcdefghijklmnopqrstuvwxyz123456");
+    if (typeof tokenAttr === "string") {
+      expect(tokenAttr).toContain("…");
+    }
+  });
+
+  test("redacts sensitive reason in session.state metric attributes", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "session.state",
+      state: "waiting",
+      reason: "token=ghp_abcdefghijklmnopqrstuvwxyz123456",
+    });
+
+    const sessionCounter = telemetryState.counters.get("openclaw.session.state");
+    expect(sessionCounter?.add).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({
+        "openclaw.reason": expect.stringContaining("…"),
+      }),
+    );
+    const attrs = sessionCounter?.add.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    expect(typeof attrs?.["openclaw.reason"]).toBe("string");
+    expect(String(attrs?.["openclaw.reason"])).not.toContain(
+      "ghp_abcdefghijklmnopqrstuvwxyz123456",
+    );
+    await service.stop?.(ctx);
   });
 });

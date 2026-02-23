@@ -1,9 +1,14 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ExtensionAPI, FileOperations } from "@mariozechner/pi-coding-agent";
+import { extractSections } from "../../auto-reply/reply/post-compaction-context.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
+  SUMMARIZATION_OVERHEAD_TOKENS,
   computeAdaptiveChunkRatio,
   estimateMessagesTokens,
   isOversizedForSummary,
@@ -11,7 +16,13 @@ import {
   resolveContextWindowTokens,
   summarizeInStages,
 } from "../compaction.js";
+import { collectTextContentBlocks } from "../content-blocks.js";
 import { getCompactionSafeguardRuntime } from "./compaction-safeguard-runtime.js";
+
+const log = createSubsystemLogger("compaction-safeguard");
+
+// Track session managers that have already logged the missing-model warning to avoid log spam.
+const missedModelWarningSessions = new WeakSet<object>();
 
 /**
  * Parse a model reference string (e.g., "google/gemini-2.0-flash") into provider and modelId.
@@ -33,8 +44,6 @@ function parseModelRef(ref: string): { provider: string; modelId: string } | nul
   return { provider, modelId };
 }
 
-const FALLBACK_SUMMARY =
-  "Summary unavailable due to context limits. Older messages were truncated.";
 const TURN_PREFIX_INSTRUCTIONS =
   "This summary covers the prefix of a split turn. Focus on the original request," +
   " early progress, and any details needed to understand the retained suffix.";
@@ -80,20 +89,7 @@ function formatToolFailureMeta(details: unknown): string | undefined {
 }
 
 function extractToolResultText(content: unknown): string {
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  const parts: string[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const rec = block as { type?: unknown; text?: unknown };
-    if (rec.type === "text" && typeof rec.text === "string") {
-      parts.push(rec.text);
-    }
-  }
-  return parts.join("\n");
+  return collectTextContentBlocks(content).join("\n");
 }
 
 function collectToolFailures(messages: AgentMessage[]): ToolFailure[] {
@@ -179,6 +175,40 @@ function formatFileOperations(readFiles: string[], modifiedFiles: string[]): str
   return `\n\n${sections.join("\n\n")}`;
 }
 
+/**
+ * Read and format critical workspace context for compaction summary.
+ * Extracts "Session Startup" and "Red Lines" from AGENTS.md.
+ * Limited to 2000 chars to avoid bloating the summary.
+ */
+async function readWorkspaceContextForSummary(): Promise<string> {
+  const MAX_SUMMARY_CONTEXT_CHARS = 2000;
+  const workspaceDir = process.cwd();
+  const agentsPath = path.join(workspaceDir, "AGENTS.md");
+
+  try {
+    if (!fs.existsSync(agentsPath)) {
+      return "";
+    }
+
+    const content = await fs.promises.readFile(agentsPath, "utf-8");
+    const sections = extractSections(content, ["Session Startup", "Red Lines"]);
+
+    if (sections.length === 0) {
+      return "";
+    }
+
+    const combined = sections.join("\n\n");
+    const safeContent =
+      combined.length > MAX_SUMMARY_CONTEXT_CHARS
+        ? combined.slice(0, MAX_SUMMARY_CONTEXT_CHARS) + "\n...[truncated]..."
+        : combined;
+
+    return `\n\n<workspace-critical-rules>\n${safeContent}\n</workspace-critical-rules>`;
+  } catch {
+    return "";
+  }
+}
+
 export default function compactionSafeguardExtension(api: ExtensionAPI): void {
   api.on("session_before_compact", async (event, ctx) => {
     const { preparation, customInstructions, signal } = event;
@@ -189,11 +219,12 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       ...preparation.turnPrefixMessages,
     ]);
     const toolFailureSection = formatToolFailuresSection(toolFailures);
-    const fallbackSummary = `${FALLBACK_SUMMARY}${toolFailureSection}${fileOpsSummary}`;
 
-    // Resolve summarization model: prefer dedicated model if configured, fall back to session model
+    // Model resolution: ctx.model is undefined in compact.ts workflow (extensionRunner.initialize() is never called).
+    // Fall back to runtime.model which is explicitly passed when building extension paths.
+    // Additionally, prefer a dedicated summarization model if configured.
     const runtime = getCompactionSafeguardRuntime(ctx.sessionManager);
-    let model = ctx.model;
+    let model = ctx.model ?? runtime?.model;
     let usedDedicatedModel = false;
 
     if (runtime?.summarizationModel) {
@@ -204,59 +235,52 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           model = dedicatedModel;
           usedDedicatedModel = true;
         } else {
-          console.warn(
-            `Compaction: configured summarization model "${runtime.summarizationModel}" not found in registry; falling back to session model`,
+          log.warn(
+            `Configured summarization model "${runtime.summarizationModel}" not found in registry; falling back to session model`,
           );
         }
       }
     }
-
     if (!model) {
-      return {
-        compaction: {
-          summary: fallbackSummary,
-          firstKeptEntryId: preparation.firstKeptEntryId,
-          tokensBefore: preparation.tokensBefore,
-          details: { readFiles, modifiedFiles },
-        },
-      };
+      // Log warning once per session when both models are missing (diagnostic for future issues).
+      // Use a WeakSet to track which session managers have already logged the warning.
+      if (!ctx.model && !runtime?.model && !missedModelWarningSessions.has(ctx.sessionManager)) {
+        missedModelWarningSessions.add(ctx.sessionManager);
+        console.warn(
+          "[compaction-safeguard] Both ctx.model and runtime.model are undefined. " +
+            "Compaction summarization will not run. This indicates extensionRunner.initialize() " +
+            "was not called and model was not passed through runtime registry.",
+        );
+      }
+      return { cancel: true };
     }
 
     let apiKey = await ctx.modelRegistry.getApiKey(model);
     if (!apiKey) {
-      // If dedicated model has no API key, try falling back to session model
-      if (usedDedicatedModel && ctx.model) {
-        const sessionApiKey = await ctx.modelRegistry.getApiKey(ctx.model);
-        if (sessionApiKey) {
-          console.warn(
-            `Compaction: no API key for summarization model "${runtime?.summarizationModel}"; falling back to session model`,
+      if (usedDedicatedModel) {
+        const fallbackModel = ctx.model ?? runtime?.model;
+        const fallbackKey = fallbackModel ? await ctx.modelRegistry.getApiKey(fallbackModel) : null;
+        if (fallbackModel && fallbackKey) {
+          log.warn(
+            `No API key for summarization model "${runtime?.summarizationModel}"; falling back to session model`,
           );
-          model = ctx.model;
-          apiKey = sessionApiKey;
+          model = fallbackModel;
+          apiKey = fallbackKey;
         } else {
-          return {
-            compaction: {
-              summary: fallbackSummary,
-              firstKeptEntryId: preparation.firstKeptEntryId,
-              tokensBefore: preparation.tokensBefore,
-              details: { readFiles, modifiedFiles },
-            },
-          };
+          log.warn(
+            "Compaction safeguard: no API key available; cancelling compaction to preserve history.",
+          );
+          return { cancel: true };
         }
       } else {
-        return {
-          compaction: {
-            summary: fallbackSummary,
-            firstKeptEntryId: preparation.firstKeptEntryId,
-            tokensBefore: preparation.tokensBefore,
-            details: { readFiles, modifiedFiles },
-          },
-        };
+        log.warn(
+          "Compaction safeguard: no API key available; cancelling compaction to preserve history.",
+        );
+        return { cancel: true };
       }
     }
 
     try {
-      // Note: runtime was already retrieved above for summarization model resolution
       const modelContextWindow = resolveContextWindowTokens(model);
       const contextWindowTokens = runtime?.contextWindowTokens ?? modelContextWindow;
       const turnPrefixMessages = preparation.turnPrefixMessages ?? [];
@@ -287,7 +311,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           });
           if (pruned.droppedChunks > 0) {
             const newContentRatio = (newContentTokens / contextWindowTokens) * 100;
-            console.warn(
+            log.warn(
               `Compaction safeguard: new content uses ${newContentRatio.toFixed(
                 1,
               )}% of context; dropped ${pruned.droppedChunks} older chunk(s) ` +
@@ -304,7 +328,8 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                 );
                 const droppedMaxChunkTokens = Math.max(
                   1,
-                  Math.floor(contextWindowTokens * droppedChunkRatio),
+                  Math.floor(contextWindowTokens * droppedChunkRatio) -
+                    SUMMARIZATION_OVERHEAD_TOKENS,
                 );
                 droppedSummary = await summarizeInStages({
                   messages: pruned.droppedMessagesList,
@@ -318,7 +343,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
                   previousSummary: preparation.previousSummary,
                 });
               } catch (droppedError) {
-                console.warn(
+                log.warn(
                   `Compaction safeguard: failed to summarize dropped messages, continuing without: ${
                     droppedError instanceof Error ? droppedError.message : String(droppedError)
                   }`,
@@ -329,10 +354,15 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         }
       }
 
-      // Use adaptive chunk ratio based on message sizes
+      // Use adaptive chunk ratio based on message sizes, reserving headroom for
+      // the summarization prompt, system prompt, previous summary, and reasoning budget
+      // that generateSummary adds on top of the serialized conversation chunk.
       const allMessages = [...messagesToSummarize, ...turnPrefixMessages];
       const adaptiveRatio = computeAdaptiveChunkRatio(allMessages, contextWindowTokens);
-      const maxChunkTokens = Math.max(1, Math.floor(contextWindowTokens * adaptiveRatio));
+      const maxChunkTokens = Math.max(
+        1,
+        Math.floor(contextWindowTokens * adaptiveRatio) - SUMMARIZATION_OVERHEAD_TOKENS,
+      );
       const reserveTokens = Math.max(1, Math.floor(preparation.settings.reserveTokens));
 
       // Feed dropped-messages summary as previousSummary so the main summarization
@@ -370,6 +400,12 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       summary += toolFailureSection;
       summary += fileOpsSummary;
 
+      // Append workspace critical context (Session Startup + Red Lines from AGENTS.md)
+      const workspaceContext = await readWorkspaceContextForSummary();
+      if (workspaceContext) {
+        summary += workspaceContext;
+      }
+
       return {
         compaction: {
           summary,
@@ -379,19 +415,12 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
         },
       };
     } catch (error) {
-      console.warn(
-        `Compaction summarization failed; truncating history: ${
+      log.warn(
+        `Compaction summarization failed; cancelling compaction to preserve history: ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
-      return {
-        compaction: {
-          summary: fallbackSummary,
-          firstKeptEntryId: preparation.firstKeptEntryId,
-          tokensBefore: preparation.tokensBefore,
-          details: { readFiles, modifiedFiles },
-        },
-      };
+      return { cancel: true };
     }
   });
 }

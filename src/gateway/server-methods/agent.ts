@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { GatewayRequestHandlers } from "./types.js";
 import { listAgentIds } from "../../agents/agent-scope.js";
+import { BARE_SESSION_RESET_PROMPT } from "../../auto-reply/reply/session-reset-prompt.js";
 import { agentCommand } from "../../commands/agent.js";
 import { loadConfig } from "../../config/config.js";
 import {
@@ -15,8 +15,10 @@ import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
+import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.js";
 import {
@@ -28,6 +30,7 @@ import {
 import { resolveAssistantIdentity } from "../assistant-identity.js";
 import { parseMessageWithAttachments } from "../chat-attachments.js";
 import { resolveAssistantAvatarUrl } from "../control-ui-shared.js";
+import { GATEWAY_CLIENT_CAPS, hasGatewayClientCap } from "../protocol/client-info.js";
 import {
   ErrorCodes,
   errorShape,
@@ -36,13 +39,120 @@ import {
   validateAgentParams,
   validateAgentWaitParams,
 } from "../protocol/index.js";
-import { loadSessionEntry } from "../session-utils.js";
+import {
+  canonicalizeSpawnedByForAgent,
+  loadSessionEntry,
+  pruneLegacyStoreKeys,
+  resolveGatewaySessionStoreTarget,
+} from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
+import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
+import { sessionsHandlers } from "./sessions.js";
+import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+
+const RESET_COMMAND_RE = /^\/(new|reset)(?:\s+([\s\S]*))?$/i;
+
+function isGatewayErrorShape(value: unknown): value is { code: string; message: string } {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const candidate = value as { code?: unknown; message?: unknown };
+  return typeof candidate.code === "string" && typeof candidate.message === "string";
+}
+
+async function runSessionResetFromAgent(params: {
+  key: string;
+  reason: "new" | "reset";
+  idempotencyKey: string;
+  context: GatewayRequestHandlerOptions["context"];
+  client: GatewayRequestHandlerOptions["client"];
+  isWebchatConnect: GatewayRequestHandlerOptions["isWebchatConnect"];
+}): Promise<
+  | { ok: true; key: string; sessionId?: string }
+  | { ok: false; error: ReturnType<typeof errorShape> }
+> {
+  return await new Promise((resolve) => {
+    let settled = false;
+    const settle = (
+      result:
+        | { ok: true; key: string; sessionId?: string }
+        | { ok: false; error: ReturnType<typeof errorShape> },
+    ) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve(result);
+    };
+
+    const respond: GatewayRequestHandlerOptions["respond"] = (ok, payload, error) => {
+      if (!ok) {
+        settle({
+          ok: false,
+          error: isGatewayErrorShape(error)
+            ? error
+            : errorShape(ErrorCodes.UNAVAILABLE, String(error ?? "sessions.reset failed")),
+        });
+        return;
+      }
+      const payloadObj = payload as
+        | {
+            key?: unknown;
+            entry?: {
+              sessionId?: unknown;
+            };
+          }
+        | undefined;
+      const key = typeof payloadObj?.key === "string" ? payloadObj.key : params.key;
+      const sessionId =
+        payloadObj?.entry && typeof payloadObj.entry.sessionId === "string"
+          ? payloadObj.entry.sessionId
+          : undefined;
+      settle({ ok: true, key, sessionId });
+    };
+
+    const resetResult = sessionsHandlers["sessions.reset"]({
+      req: {
+        type: "req",
+        id: `${params.idempotencyKey}:reset`,
+        method: "sessions.reset",
+      },
+      params: {
+        key: params.key,
+        reason: params.reason,
+      },
+      context: params.context,
+      client: params.client,
+      isWebchatConnect: params.isWebchatConnect,
+      respond,
+    });
+
+    void (async () => {
+      try {
+        await resetResult;
+        if (!settled) {
+          settle({
+            ok: false,
+            error: errorShape(
+              ErrorCodes.UNAVAILABLE,
+              "sessions.reset completed without returning a response",
+            ),
+          });
+        }
+      } catch (err: unknown) {
+        settle({
+          ok: false,
+          error: errorShape(ErrorCodes.UNAVAILABLE, String(err)),
+        });
+      }
+    })();
+  });
+}
 
 export const agentHandlers: GatewayRequestHandlers = {
-  agent: async ({ params, respond, context }) => {
+  agent: async ({ params, respond, context, client, isWebchatConnect }) => {
     const p = params;
     if (!validateAgentParams(p)) {
       respond(
@@ -82,8 +192,10 @@ export const agentHandlers: GatewayRequestHandlers = {
       extraSystemPrompt?: string;
       idempotencyKey: string;
       timeout?: number;
+      bestEffortDeliver?: boolean;
       label?: string;
       spawnedBy?: string;
+      inputProvenance?: InputProvenance;
     };
     const cfg = loadConfig();
     const idem = request.idempotencyKey;
@@ -96,6 +208,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     let resolvedGroupSpace: string | undefined = groupSpaceRaw || undefined;
     let spawnedByValue =
       typeof request.spawnedBy === "string" ? request.spawnedBy.trim() : undefined;
+    const inputProvenance = normalizeInputProvenance(request.inputProvenance);
     const cached = context.dedupe.get(`agent:${idem}`);
     if (cached) {
       respond(cached.ok, cached.payload, cached.error, {
@@ -103,26 +216,11 @@ export const agentHandlers: GatewayRequestHandlers = {
       });
       return;
     }
-    const normalizedAttachments =
-      request.attachments
-        ?.map((a) => ({
-          type: typeof a?.type === "string" ? a.type : undefined,
-          mimeType: typeof a?.mimeType === "string" ? a.mimeType : undefined,
-          fileName: typeof a?.fileName === "string" ? a.fileName : undefined,
-          content:
-            typeof a?.content === "string"
-              ? a.content
-              : ArrayBuffer.isView(a?.content)
-                ? Buffer.from(
-                    a.content.buffer,
-                    a.content.byteOffset,
-                    a.content.byteLength,
-                  ).toString("base64")
-                : undefined,
-        }))
-        .filter((a) => a.content) ?? [];
+    const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(request.attachments);
+    const requestedBestEffortDeliver =
+      typeof request.bestEffortDeliver === "boolean" ? request.bestEffortDeliver : undefined;
 
-    let message = request.message.trim();
+    let message = (request.message ?? "").trim();
     let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
     if (normalizedAttachments.length > 0) {
       try {
@@ -137,12 +235,6 @@ export const agentHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-
-    // Inject timestamp into messages that don't already have one.
-    // Channel messages (Discord, Telegram, etc.) get timestamps via envelope
-    // formatting in a separate code path — they never reach this handler.
-    // See: https://github.com/moltbot/moltbot/issues/3658
-    message = injectTimestamp(message, timestampOptsFromConfig(cfg));
 
     const isKnownGatewayChannel = (value: string): boolean => isGatewayMessageChannel(value);
     const channelHints = [request.channel, request.replyChannel]
@@ -185,7 +277,21 @@ export const agentHandlers: GatewayRequestHandlers = {
       typeof request.sessionKey === "string" && request.sessionKey.trim()
         ? request.sessionKey.trim()
         : undefined;
-    const requestedSessionKey =
+    if (
+      requestedSessionKeyRaw &&
+      classifySessionKeyShape(requestedSessionKeyRaw) === "malformed_agent"
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid agent params: malformed session key "${requestedSessionKeyRaw}"`,
+        ),
+      );
+      return;
+    }
+    let requestedSessionKey =
       requestedSessionKeyRaw ??
       resolveExplicitAgentSessionKey({
         cfg,
@@ -207,8 +313,46 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
     let resolvedSessionId = request.sessionId?.trim() || undefined;
     let sessionEntry: SessionEntry | undefined;
-    let bestEffortDeliver = false;
+    let bestEffortDeliver = requestedBestEffortDeliver ?? false;
     let cfgForAgent: ReturnType<typeof loadConfig> | undefined;
+    let resolvedSessionKey = requestedSessionKey;
+    let skipTimestampInjection = false;
+
+    const resetCommandMatch = message.match(RESET_COMMAND_RE);
+    if (resetCommandMatch && requestedSessionKey) {
+      const resetReason = resetCommandMatch[1]?.toLowerCase() === "new" ? "new" : "reset";
+      const resetResult = await runSessionResetFromAgent({
+        key: requestedSessionKey,
+        reason: resetReason,
+        idempotencyKey: idem,
+        context,
+        client,
+        isWebchatConnect,
+      });
+      if (!resetResult.ok) {
+        respond(false, undefined, resetResult.error);
+        return;
+      }
+      requestedSessionKey = resetResult.key;
+      resolvedSessionId = resetResult.sessionId ?? resolvedSessionId;
+      const postResetMessage = resetCommandMatch[2]?.trim() ?? "";
+      if (postResetMessage) {
+        message = postResetMessage;
+      } else {
+        // Keep bare /new and /reset behavior aligned with chat.send:
+        // reset first, then run a fresh-session greeting prompt in-place.
+        message = BARE_SESSION_RESET_PROMPT;
+        skipTimestampInjection = true;
+      }
+    }
+
+    // Inject timestamp into user-authored messages that don't already have one.
+    // Channel messages (Discord, Telegram, etc.) get timestamps via envelope
+    // formatting in a separate code path — they never reach this handler.
+    // See: https://github.com/moltbot/moltbot/issues/3658
+    if (!skipTimestampInjection) {
+      message = injectTimestamp(message, timestampOptsFromConfig(cfg));
+    }
 
     if (requestedSessionKey) {
       const { cfg, storePath, entry, canonicalKey } = loadSessionEntry(requestedSessionKey);
@@ -216,7 +360,12 @@ export const agentHandlers: GatewayRequestHandlers = {
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
       const labelValue = request.label?.trim() || entry?.label;
-      spawnedByValue = spawnedByValue || entry?.spawnedBy;
+      const sessionAgent = resolveAgentIdFromSessionKey(canonicalKey);
+      spawnedByValue = canonicalizeSpawnedByForAgent(
+        cfg,
+        sessionAgent,
+        spawnedByValue || entry?.spawnedBy,
+      );
       let inheritedGroup:
         | { groupId?: string; groupChannel?: string; groupSpace?: string }
         | undefined;
@@ -253,6 +402,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         providerOverride: entry?.providerOverride,
         label: labelValue,
         spawnedBy: spawnedByValue,
+        spawnDepth: entry?.spawnDepth,
         channel: entry?.channel ?? request.channel?.trim(),
         groupId: resolvedGroupId ?? entry?.groupId,
         groupChannel: resolvedGroupChannel ?? entry?.groupChannel,
@@ -264,7 +414,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       const sendPolicy = resolveSendPolicy({
         cfg,
         entry,
-        sessionKey: requestedSessionKey,
+        sessionKey: canonicalKey,
         channel: entry?.channel,
         chatType: entry?.chatType,
       });
@@ -278,24 +428,53 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
       resolvedSessionId = sessionId;
       const canonicalSessionKey = canonicalKey;
+      resolvedSessionKey = canonicalSessionKey;
       const agentId = resolveAgentIdFromSessionKey(canonicalSessionKey);
       const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId });
       if (storePath) {
         await updateSessionStore(storePath, (store) => {
+          const target = resolveGatewaySessionStoreTarget({
+            cfg,
+            key: requestedSessionKey,
+            store,
+          });
+          pruneLegacyStoreKeys({
+            store,
+            canonicalKey: target.canonicalKey,
+            candidates: target.storeKeys,
+          });
           store[canonicalSessionKey] = nextEntry;
         });
       }
       if (canonicalSessionKey === mainSessionKey || canonicalSessionKey === "global") {
         context.addChatRun(idem, {
-          sessionKey: requestedSessionKey,
+          sessionKey: canonicalSessionKey,
           clientRunId: idem,
         });
-        bestEffortDeliver = true;
+        if (requestedBestEffortDeliver === undefined) {
+          bestEffortDeliver = true;
+        }
       }
-      registerAgentRunContext(idem, { sessionKey: requestedSessionKey });
+      registerAgentRunContext(idem, { sessionKey: canonicalSessionKey });
     }
 
     const runId = idem;
+    const connId = typeof client?.connId === "string" ? client.connId : undefined;
+    const wantsToolEvents = hasGatewayClientCap(
+      client?.connect?.caps,
+      GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+    );
+    if (connId && wantsToolEvents) {
+      context.registerToolEventRecipient(runId, connId);
+      // Register for any other active runs *in the same session* so
+      // late-joining clients (e.g. page refresh mid-response) receive
+      // in-progress tool events without leaking cross-session data.
+      for (const [activeRunId, active] of context.chatAbortControllers) {
+        if (activeRunId !== runId && active.sessionKey === requestedSessionKey) {
+          context.registerToolEventRecipient(activeRunId, connId);
+        }
+      }
+    }
 
     const wantsDelivery = request.deliver === true;
     const explicitTo =
@@ -317,22 +496,53 @@ export const agentHandlers: GatewayRequestHandlers = {
       wantsDelivery,
     });
 
-    const resolvedChannel = deliveryPlan.resolvedChannel;
-    const deliveryTargetMode = deliveryPlan.deliveryTargetMode;
-    const resolvedAccountId = deliveryPlan.resolvedAccountId;
+    let resolvedChannel = deliveryPlan.resolvedChannel;
+    let deliveryTargetMode = deliveryPlan.deliveryTargetMode;
+    let resolvedAccountId = deliveryPlan.resolvedAccountId;
     let resolvedTo = deliveryPlan.resolvedTo;
+    let effectivePlan = deliveryPlan;
+
+    if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
+      const cfgResolved = cfgForAgent ?? cfg;
+      try {
+        const selection = await resolveMessageChannelSelection({ cfg: cfgResolved });
+        resolvedChannel = selection.channel;
+        deliveryTargetMode = deliveryTargetMode ?? "implicit";
+        effectivePlan = {
+          ...deliveryPlan,
+          resolvedChannel,
+          deliveryTargetMode,
+          resolvedAccountId,
+        };
+      } catch (err) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
+        return;
+      }
+    }
 
     if (!resolvedTo && isDeliverableMessageChannel(resolvedChannel)) {
       const cfgResolved = cfgForAgent ?? cfg;
       const fallback = resolveAgentOutboundTarget({
         cfg: cfgResolved,
-        plan: deliveryPlan,
-        targetMode: "implicit",
+        plan: effectivePlan,
+        targetMode: deliveryTargetMode ?? "implicit",
         validateExplicitTarget: false,
       });
       if (fallback.resolvedTarget?.ok) {
         resolvedTo = fallback.resolvedTo;
       }
+    }
+
+    if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "delivery channel is required: pass --channel/--reply-channel or use a main session with a previous channel",
+        ),
+      );
+      return;
     }
 
     const deliver = request.deliver === true && resolvedChannel !== INTERNAL_MESSAGE_CHANNEL;
@@ -358,7 +568,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         images,
         to: resolvedTo,
         sessionId: resolvedSessionId,
-        sessionKey: requestedSessionKey,
+        sessionKey: resolvedSessionKey,
         thinking: request.thinking,
         deliver,
         deliveryTargetMode,
@@ -383,6 +593,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         runId,
         lane: request.lane,
         extraSystemPrompt: request.extraSystemPrompt,
+        inputProvenance,
       },
       defaultRuntime,
       context.deps,
@@ -441,6 +652,17 @@ export const agentHandlers: GatewayRequestHandlers = {
     const sessionKeyRaw = typeof p.sessionKey === "string" ? p.sessionKey.trim() : "";
     let agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : undefined;
     if (sessionKeyRaw) {
+      if (classifySessionKeyShape(sessionKeyRaw) === "malformed_agent") {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            `invalid agent.identity.get params: malformed session key "${sessionKeyRaw}"`,
+          ),
+        );
+        return;
+      }
       const resolved = resolveAgentIdFromSessionKey(sessionKeyRaw);
       if (agentId && resolved !== agentId) {
         respond(
@@ -478,7 +700,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       return;
     }
     const p = params;
-    const runId = p.runId.trim();
+    const runId = (p.runId ?? "").trim();
     const timeoutMs =
       typeof p.timeoutMs === "number" && Number.isFinite(p.timeoutMs)
         ? Math.max(0, Math.floor(p.timeoutMs))

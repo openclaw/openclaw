@@ -1,30 +1,86 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import type { BlueBubblesAttachment } from "./types.js";
+import type { PluginRuntime } from "openclaw/plugin-sdk";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import "./test-mocks.js";
 import { downloadBlueBubblesAttachment, sendBlueBubblesAttachment } from "./attachments.js";
-
-vi.mock("./accounts.js", () => ({
-  resolveBlueBubblesAccount: vi.fn(({ cfg, accountId }) => {
-    const config = cfg?.channels?.bluebubbles ?? {};
-    return {
-      accountId: accountId ?? "default",
-      enabled: config.enabled !== false,
-      configured: Boolean(config.serverUrl && config.password),
-      config,
-    };
-  }),
-}));
+import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
+import { setBlueBubblesRuntime } from "./runtime.js";
+import {
+  BLUE_BUBBLES_PRIVATE_API_STATUS,
+  installBlueBubblesFetchTestHooks,
+  mockBlueBubblesPrivateApiStatus,
+  mockBlueBubblesPrivateApiStatusOnce,
+} from "./test-harness.js";
+import type { BlueBubblesAttachment } from "./types.js";
 
 const mockFetch = vi.fn();
+const fetchRemoteMediaMock = vi.fn(
+  async (params: {
+    url: string;
+    maxBytes?: number;
+    fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  }) => {
+    const fetchFn = params.fetchImpl ?? fetch;
+    const res = await fetchFn(params.url);
+    if (!res.ok) {
+      const text = await res.text().catch(() => "unknown");
+      throw new Error(
+        `Failed to fetch media from ${params.url}: HTTP ${res.status}; body: ${text}`,
+      );
+    }
+    const buffer = Buffer.from(await res.arrayBuffer());
+    if (typeof params.maxBytes === "number" && buffer.byteLength > params.maxBytes) {
+      const error = new Error(`payload exceeds maxBytes ${params.maxBytes}`) as Error & {
+        code?: string;
+      };
+      error.code = "max_bytes";
+      throw error;
+    }
+    return {
+      buffer,
+      contentType: res.headers.get("content-type") ?? undefined,
+      fileName: undefined,
+    };
+  },
+);
+
+installBlueBubblesFetchTestHooks({
+  mockFetch,
+  privateApiStatusMock: vi.mocked(getCachedBlueBubblesPrivateApiStatus),
+});
+
+const runtimeStub = {
+  channel: {
+    media: {
+      fetchRemoteMedia:
+        fetchRemoteMediaMock as unknown as PluginRuntime["channel"]["media"]["fetchRemoteMedia"],
+    },
+  },
+} as unknown as PluginRuntime;
 
 describe("downloadBlueBubblesAttachment", () => {
   beforeEach(() => {
-    vi.stubGlobal("fetch", mockFetch);
+    fetchRemoteMediaMock.mockClear();
     mockFetch.mockReset();
+    setBlueBubblesRuntime(runtimeStub);
   });
 
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
+  async function expectAttachmentTooLarge(params: { bufferBytes: number; maxBytes?: number }) {
+    const largeBuffer = new Uint8Array(params.bufferBytes);
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers(),
+      arrayBuffer: () => Promise.resolve(largeBuffer.buffer),
+    });
+
+    const attachment: BlueBubblesAttachment = { guid: "att-large" };
+    await expect(
+      downloadBlueBubblesAttachment(attachment, {
+        serverUrl: "http://localhost:1234",
+        password: "test",
+        ...(params.maxBytes === undefined ? {} : { maxBytes: params.maxBytes }),
+      }),
+    ).rejects.toThrow("too large");
+  }
 
   it("throws when guid is missing", async () => {
     const attachment: BlueBubblesAttachment = {};
@@ -133,42 +189,18 @@ describe("downloadBlueBubblesAttachment", () => {
         serverUrl: "http://localhost:1234",
         password: "test",
       }),
-    ).rejects.toThrow("download failed (404): Attachment not found");
+    ).rejects.toThrow("Attachment not found");
   });
 
   it("throws when attachment exceeds max bytes", async () => {
-    const largeBuffer = new Uint8Array(10 * 1024 * 1024);
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      headers: new Headers(),
-      arrayBuffer: () => Promise.resolve(largeBuffer.buffer),
+    await expectAttachmentTooLarge({
+      bufferBytes: 10 * 1024 * 1024,
+      maxBytes: 5 * 1024 * 1024,
     });
-
-    const attachment: BlueBubblesAttachment = { guid: "att-large" };
-    await expect(
-      downloadBlueBubblesAttachment(attachment, {
-        serverUrl: "http://localhost:1234",
-        password: "test",
-        maxBytes: 5 * 1024 * 1024,
-      }),
-    ).rejects.toThrow("too large");
   });
 
   it("uses default max bytes when not specified", async () => {
-    const largeBuffer = new Uint8Array(9 * 1024 * 1024);
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      headers: new Headers(),
-      arrayBuffer: () => Promise.resolve(largeBuffer.buffer),
-    });
-
-    const attachment: BlueBubblesAttachment = { guid: "att-large" };
-    await expect(
-      downloadBlueBubblesAttachment(attachment, {
-        serverUrl: "http://localhost:1234",
-        password: "test",
-      }),
-    ).rejects.toThrow("too large");
+    await expectAttachmentTooLarge({ bufferBytes: 9 * 1024 * 1024 });
   });
 
   it("uses attachment mimeType as fallback when response has no content-type", async () => {
@@ -242,6 +274,13 @@ describe("sendBlueBubblesAttachment", () => {
   beforeEach(() => {
     vi.stubGlobal("fetch", mockFetch);
     mockFetch.mockReset();
+    fetchRemoteMediaMock.mockClear();
+    setBlueBubblesRuntime(runtimeStub);
+    vi.mocked(getCachedBlueBubblesPrivateApiStatus).mockReset();
+    mockBlueBubblesPrivateApiStatus(
+      vi.mocked(getCachedBlueBubblesPrivateApiStatus),
+      BLUE_BUBBLES_PRIVATE_API_STATUS.unknown,
+    );
   });
 
   afterEach(() => {
@@ -341,5 +380,59 @@ describe("sendBlueBubblesAttachment", () => {
     const bodyText = decodeBody(body);
     expect(bodyText).toContain('filename="evil.mp3"');
     expect(bodyText).toContain('name="evil.mp3"');
+  });
+
+  it("downgrades attachment reply threading when private API is disabled", async () => {
+    mockBlueBubblesPrivateApiStatusOnce(
+      vi.mocked(getCachedBlueBubblesPrivateApiStatus),
+      BLUE_BUBBLES_PRIVATE_API_STATUS.disabled,
+    );
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify({ messageId: "msg-4" })),
+    });
+
+    await sendBlueBubblesAttachment({
+      to: "chat_guid:iMessage;-;+15551234567",
+      buffer: new Uint8Array([1, 2, 3]),
+      filename: "photo.jpg",
+      contentType: "image/jpeg",
+      replyToMessageGuid: "reply-guid-123",
+      opts: { serverUrl: "http://localhost:1234", password: "test" },
+    });
+
+    const body = mockFetch.mock.calls[0][1]?.body as Uint8Array;
+    const bodyText = decodeBody(body);
+    expect(bodyText).not.toContain('name="method"');
+    expect(bodyText).not.toContain('name="selectedMessageGuid"');
+    expect(bodyText).not.toContain('name="partIndex"');
+  });
+
+  it("warns and downgrades attachment reply threading when private API status is unknown", async () => {
+    const runtimeLog = vi.fn();
+    setBlueBubblesRuntime({
+      ...runtimeStub,
+      log: runtimeLog,
+    } as unknown as PluginRuntime);
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      text: () => Promise.resolve(JSON.stringify({ messageId: "msg-5" })),
+    });
+
+    await sendBlueBubblesAttachment({
+      to: "chat_guid:iMessage;-;+15551234567",
+      buffer: new Uint8Array([1, 2, 3]),
+      filename: "photo.jpg",
+      contentType: "image/jpeg",
+      replyToMessageGuid: "reply-guid-unknown",
+      opts: { serverUrl: "http://localhost:1234", password: "test" },
+    });
+
+    expect(runtimeLog).toHaveBeenCalledTimes(1);
+    expect(runtimeLog.mock.calls[0]?.[0]).toContain("Private API status unknown");
+    const body = mockFetch.mock.calls[0][1]?.body as Uint8Array;
+    const bodyText = decodeBody(body);
+    expect(bodyText).not.toContain('name="selectedMessageGuid"');
+    expect(bodyText).not.toContain('name="partIndex"');
   });
 });

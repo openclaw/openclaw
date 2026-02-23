@@ -1,35 +1,40 @@
 import { type Bot, GrammyError, InputFile } from "grammy";
+import { chunkMarkdownTextWithMode, type ChunkMode } from "../../auto-reply/chunk.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ReplyToMode } from "../../config/config.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
-import type { RuntimeEnv } from "../../runtime.js";
-import type { StickerMetadata, TelegramContext } from "./types.js";
-import { chunkMarkdownTextWithMode, type ChunkMode } from "../../auto-reply/chunk.js";
-import { danger, logVerbose } from "../../globals.js";
+import { danger, logVerbose, warn } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { retryAsync } from "../../infra/retry.js";
 import { mediaKindFromMime } from "../../media/constants.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
 import { isGifMedia } from "../../media/mime.js";
 import { saveMediaBuffer } from "../../media/store.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import { loadWebMedia } from "../../web/media.js";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
+import type { TelegramInlineButtons } from "../button-types.js";
 import { splitTelegramCaption } from "../caption.js";
 import {
   markdownToTelegramChunks,
   markdownToTelegramHtml,
   renderTelegramHtmlText,
+  wrapFileReferencesInHtml,
 } from "../format.js";
 import { buildInlineKeyboard } from "../send.js";
 import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import {
   buildTelegramThreadParams,
+  resolveTelegramMediaPlaceholder,
   resolveTelegramReplyId,
   type TelegramThreadSpec,
 } from "./helpers.js";
+import type { StickerMetadata, TelegramContext } from "./types.js";
 
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const VOICE_FORBIDDEN_RE = /VOICE_MESSAGES_FORBIDDEN/;
+const FILE_TOO_BIG_RE = /file is too big/i;
 
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
@@ -37,6 +42,7 @@ export async function deliverReplies(params: {
   token: string;
   runtime: RuntimeEnv;
   bot: Bot;
+  mediaLocalRoots?: readonly string[];
   replyToMode: ReplyToMode;
   textLimit: number;
   thread?: TelegramThreadSpec | null;
@@ -76,7 +82,9 @@ export async function deliverReplies(params: {
       const nested = markdownToTelegramChunks(chunk, textLimit, { tableMode: params.tableMode });
       if (!nested.length && chunk) {
         chunks.push({
-          html: markdownToTelegramHtml(chunk, { tableMode: params.tableMode }),
+          html: wrapFileReferencesInHtml(
+            markdownToTelegramHtml(chunk, { tableMode: params.tableMode, wrapFileRefs: false }),
+          ),
           text: chunk,
         });
         continue;
@@ -96,17 +104,20 @@ export async function deliverReplies(params: {
       continue;
     }
     const replyToId = replyToMode === "off" ? undefined : resolveTelegramReplyId(reply.replyToId);
+    const replyToMessageIdForPayload =
+      replyToId && (replyToMode === "all" || !hasReplied) ? replyToId : undefined;
     const mediaList = reply.mediaUrls?.length
       ? reply.mediaUrls
       : reply.mediaUrl
         ? [reply.mediaUrl]
         : [];
     const telegramData = reply.channelData?.telegram as
-      | { buttons?: Array<Array<{ text: string; callback_data: string }>> }
+      | { buttons?: TelegramInlineButtons }
       | undefined;
     const replyMarkup = buildInlineKeyboard(telegramData?.buttons);
     if (mediaList.length === 0) {
       const chunks = chunkText(reply.text || "");
+      let sentTextChunk = false;
       for (let i = 0; i < chunks.length; i += 1) {
         const chunk = chunks[i];
         if (!chunk) {
@@ -115,8 +126,7 @@ export async function deliverReplies(params: {
         // Only attach buttons to the first chunk.
         const shouldAttachButtons = i === 0 && replyMarkup;
         await sendTelegramText(bot, chatId, chunk.html, runtime, {
-          replyToMessageId:
-            replyToId && (replyToMode === "all" || !hasReplied) ? replyToId : undefined,
+          replyToMessageId: replyToMessageIdForPayload,
           replyQuoteText,
           thread,
           textMode: "html",
@@ -124,10 +134,11 @@ export async function deliverReplies(params: {
           linkPreview,
           replyMarkup: shouldAttachButtons ? replyMarkup : undefined,
         });
+        sentTextChunk = true;
         markDelivered();
-        if (replyToId && !hasReplied) {
-          hasReplied = true;
-        }
+      }
+      if (replyToMessageIdForPayload && !hasReplied && sentTextChunk) {
+        hasReplied = true;
       }
       continue;
     }
@@ -138,7 +149,9 @@ export async function deliverReplies(params: {
     let pendingFollowUpText: string | undefined;
     for (const mediaUrl of mediaList) {
       const isFirstMedia = first;
-      const media = await loadWebMedia(mediaUrl);
+      const media = await loadWebMedia(mediaUrl, {
+        localRoots: params.mediaLocalRoots,
+      });
       const kind = mediaKindFromMime(media.contentType ?? undefined);
       const isGif = isGifMedia({
         contentType: media.contentType,
@@ -157,8 +170,7 @@ export async function deliverReplies(params: {
         pendingFollowUpText = followUpText;
       }
       first = false;
-      const replyToMessageId =
-        replyToId && (replyToMode === "all" || !hasReplied) ? replyToId : undefined;
+      const replyToMessageId = replyToMessageIdForPayload;
       const shouldAttachButtonsToMedia = isFirstMedia && replyMarkup && !followUpText;
       const mediaParams: Record<string, unknown> = {
         caption: htmlCaption,
@@ -166,7 +178,6 @@ export async function deliverReplies(params: {
         ...(shouldAttachButtonsToMedia ? { reply_markup: replyMarkup } : {}),
         ...buildTelegramSendParams({
           replyToMessageId,
-          replyQuoteText,
           thread,
         }),
       };
@@ -222,20 +233,21 @@ export async function deliverReplies(params: {
               logVerbose(
                 "telegram sendVoice forbidden (recipient has voice messages blocked in privacy settings); falling back to text",
               );
-              hasReplied = await sendTelegramVoiceFallbackText({
+              await sendTelegramVoiceFallbackText({
                 bot,
                 chatId,
                 runtime,
                 text: fallbackText,
                 chunkText,
-                replyToId,
-                replyToMode,
-                hasReplied,
+                replyToId: replyToMessageIdForPayload,
                 thread,
                 linkPreview,
                 replyMarkup,
                 replyQuoteText,
               });
+              if (replyToMessageIdForPayload && !hasReplied) {
+                hasReplied = true;
+              }
               markDelivered();
               // Skip this media item; continue with next.
               continue;
@@ -268,10 +280,8 @@ export async function deliverReplies(params: {
         const chunks = chunkText(pendingFollowUpText);
         for (let i = 0; i < chunks.length; i += 1) {
           const chunk = chunks[i];
-          const replyToMessageIdFollowup =
-            replyToId && (replyToMode === "all" || !hasReplied) ? replyToId : undefined;
           await sendTelegramText(bot, chatId, chunk.html, runtime, {
-            replyToMessageId: replyToMessageIdFollowup,
+            replyToMessageId: replyToMessageIdForPayload,
             thread,
             textMode: "html",
             plainText: chunk.text,
@@ -279,11 +289,11 @@ export async function deliverReplies(params: {
             replyMarkup: i === 0 ? replyMarkup : undefined,
           });
           markDelivered();
-          if (replyToId && !hasReplied) {
-            hasReplied = true;
-          }
         }
         pendingFollowUpText = undefined;
+      }
+      if (replyToMessageIdForPayload && !hasReplied) {
+        hasReplied = true;
       }
     }
   }
@@ -303,6 +313,17 @@ export async function resolveMedia(
   stickerMetadata?: StickerMetadata;
 } | null> {
   const msg = ctx.message;
+  const downloadAndSaveTelegramFile = async (filePath: string, fetchImpl: typeof fetch) => {
+    const url = `https://api.telegram.org/file/bot${token}/${filePath}`;
+    const fetched = await fetchRemoteMedia({
+      url,
+      fetchImpl,
+      filePathHint: filePath,
+      maxBytes,
+    });
+    const originalName = fetched.fileName ?? filePath;
+    return saveMediaBuffer(fetched.buffer, fetched.contentType, "inbound", maxBytes, originalName);
+  };
 
   // Handle stickers separately - only static stickers (WEBP) are supported
   if (msg.sticker) {
@@ -327,20 +348,7 @@ export async function resolveMedia(
         logVerbose("telegram: fetch not available for sticker download");
         return null;
       }
-      const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
-      const fetched = await fetchRemoteMedia({
-        url,
-        fetchImpl,
-        filePathHint: file.file_path,
-      });
-      const originalName = fetched.fileName ?? file.file_path;
-      const saved = await saveMediaBuffer(
-        fetched.buffer,
-        fetched.contentType,
-        "inbound",
-        maxBytes,
-        originalName,
-      );
+      const saved = await downloadAndSaveTelegramFile(file.file_path, fetchImpl);
 
       // Check sticker cache for existing description
       const cached = sticker.file_unique_id ? getCachedSticker(sticker.file_unique_id) : null;
@@ -400,7 +408,34 @@ export async function resolveMedia(
   if (!m?.file_id) {
     return null;
   }
-  const file = await ctx.getFile();
+
+  let file: { file_path?: string };
+  try {
+    file = await retryAsync(() => ctx.getFile(), {
+      attempts: 3,
+      minDelayMs: 1000,
+      maxDelayMs: 4000,
+      jitter: 0.2,
+      label: "telegram:getFile",
+      shouldRetry: isRetryableGetFileError,
+      onRetry: ({ attempt, maxAttempts }) =>
+        logVerbose(`telegram: getFile retry ${attempt}/${maxAttempts}`),
+    });
+  } catch (err) {
+    // Handle "file is too big" separately - Telegram Bot API has a 20MB download limit
+    if (isFileTooBigError(err)) {
+      logVerbose(
+        warn(
+          "telegram: getFile failed - file exceeds Telegram Bot API 20MB limit; skipping attachment",
+        ),
+      );
+      return null;
+    }
+    // All retries exhausted — return null so the message still reaches the agent
+    // with a type-based placeholder (e.g. <media:audio>) instead of being dropped.
+    logVerbose(`telegram: getFile failed after retries: ${String(err)}`);
+    return null;
+  }
   if (!file.file_path) {
     throw new Error("Telegram getFile returned no file_path");
   }
@@ -408,30 +443,8 @@ export async function resolveMedia(
   if (!fetchImpl) {
     throw new Error("fetch is not available; set channels.telegram.proxy in config");
   }
-  const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
-  const fetched = await fetchRemoteMedia({
-    url,
-    fetchImpl,
-    filePathHint: file.file_path,
-  });
-  const originalName = fetched.fileName ?? file.file_path;
-  const saved = await saveMediaBuffer(
-    fetched.buffer,
-    fetched.contentType,
-    "inbound",
-    maxBytes,
-    originalName,
-  );
-  let placeholder = "<media:document>";
-  if (msg.photo) {
-    placeholder = "<media:image>";
-  } else if (msg.video) {
-    placeholder = "<media:video>";
-  } else if (msg.video_note) {
-    placeholder = "<media:video>";
-  } else if (msg.audio || msg.voice) {
-    placeholder = "<media:audio>";
-  }
+  const saved = await downloadAndSaveTelegramFile(file.file_path, fetchImpl);
+  const placeholder = resolveTelegramMediaPlaceholder(msg) ?? "<media:document>";
   return { path: saved.path, contentType: saved.contentType, placeholder };
 }
 
@@ -442,6 +455,31 @@ function isVoiceMessagesForbidden(err: unknown): boolean {
   return VOICE_FORBIDDEN_RE.test(formatErrorMessage(err));
 }
 
+/**
+ * Returns true if the error is Telegram's "file is too big" error.
+ * This happens when trying to download files >20MB via the Bot API.
+ * Unlike network errors, this is a permanent error and should not be retried.
+ */
+function isFileTooBigError(err: unknown): boolean {
+  if (err instanceof GrammyError) {
+    return FILE_TOO_BIG_RE.test(err.description);
+  }
+  return FILE_TOO_BIG_RE.test(formatErrorMessage(err));
+}
+
+/**
+ * Returns true if the error is a transient network error that should be retried.
+ * Returns false for permanent errors like "file is too big" (400 Bad Request).
+ */
+function isRetryableGetFileError(err: unknown): boolean {
+  // Don't retry "file is too big" - it's a permanent 400 error
+  if (isFileTooBigError(err)) {
+    return false;
+  }
+  // Retry all other errors (network issues, timeouts, etc.)
+  return true;
+}
+
 async function sendTelegramVoiceFallbackText(opts: {
   bot: Bot;
   chatId: string;
@@ -449,20 +487,16 @@ async function sendTelegramVoiceFallbackText(opts: {
   text: string;
   chunkText: (markdown: string) => ReturnType<typeof markdownToTelegramChunks>;
   replyToId?: number;
-  replyToMode: ReplyToMode;
-  hasReplied: boolean;
   thread?: TelegramThreadSpec | null;
   linkPreview?: boolean;
   replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   replyQuoteText?: string;
-}): Promise<boolean> {
+}): Promise<void> {
   const chunks = opts.chunkText(opts.text);
-  let hasReplied = opts.hasReplied;
   for (let i = 0; i < chunks.length; i += 1) {
     const chunk = chunks[i];
     await sendTelegramText(opts.bot, opts.chatId, chunk.html, opts.runtime, {
-      replyToMessageId:
-        opts.replyToId && (opts.replyToMode === "all" || !hasReplied) ? opts.replyToId : undefined,
+      replyToMessageId: opts.replyToId,
       replyQuoteText: opts.replyQuoteText,
       thread: opts.thread,
       textMode: "html",
@@ -470,30 +504,17 @@ async function sendTelegramVoiceFallbackText(opts: {
       linkPreview: opts.linkPreview,
       replyMarkup: i === 0 ? opts.replyMarkup : undefined,
     });
-    if (opts.replyToId && !hasReplied) {
-      hasReplied = true;
-    }
   }
-  return hasReplied;
 }
 
 function buildTelegramSendParams(opts?: {
   replyToMessageId?: number;
   thread?: TelegramThreadSpec | null;
-  replyQuoteText?: string;
 }): Record<string, unknown> {
   const threadParams = buildTelegramThreadParams(opts?.thread);
   const params: Record<string, unknown> = {};
-  const quoteText = opts?.replyQuoteText?.trim();
   if (opts?.replyToMessageId) {
-    if (quoteText) {
-      params.reply_parameters = {
-        message_id: Math.trunc(opts.replyToMessageId),
-        quote: quoteText,
-      };
-    } else {
-      params.reply_to_message_id = opts.replyToMessageId;
-    }
+    params.reply_to_message_id = opts.replyToMessageId;
   }
   if (threadParams) {
     params.message_thread_id = threadParams.message_thread_id;
@@ -518,7 +539,6 @@ async function sendTelegramText(
 ): Promise<number | undefined> {
   const baseParams = buildTelegramSendParams({
     replyToMessageId: opts?.replyToMessageId,
-    replyQuoteText: opts?.replyQuoteText,
     thread: opts?.thread,
   });
   // Add link_preview_options when link preview is disabled.
@@ -539,6 +559,7 @@ async function sendTelegramText(
           ...baseParams,
         }),
     });
+    runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id}`);
     return res.message_id;
   } catch (err) {
     const errText = formatErrorMessage(err);
@@ -555,6 +576,7 @@ async function sendTelegramText(
             ...baseParams,
           }),
       });
+      runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id} (plain)`);
       return res.message_id;
     }
     throw err;

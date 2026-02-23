@@ -10,9 +10,20 @@ docker build -t "$IMAGE_NAME" -f "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR"
 echo "Running onboarding E2E..."
 docker run --rm -t "$IMAGE_NAME" bash -lc '
   set -euo pipefail
-  trap "" PIPE
-  export TERM=xterm-256color
-  ONBOARD_FLAGS="--flow quickstart --auth-choice skip --skip-channels --skip-skills --skip-daemon --skip-ui"
+	  trap "" PIPE
+	  export TERM=xterm-256color
+	  ONBOARD_FLAGS="--flow quickstart --auth-choice skip --skip-channels --skip-skills --skip-daemon --skip-ui"
+	  # tsdown may emit dist/index.js or dist/index.mjs depending on runtime/bundler.
+	  if [ -f dist/index.mjs ]; then
+	    OPENCLAW_ENTRY="dist/index.mjs"
+	  elif [ -f dist/index.js ]; then
+	    OPENCLAW_ENTRY="dist/index.js"
+	  else
+	    echo "Missing dist/index.(m)js (build output):"
+	    ls -la dist || true
+	    exit 1
+	  fi
+	  export OPENCLAW_ENTRY
 
   # Provide a minimal trash shim to avoid noisy "missing trash" logs in containers.
   export PATH="/tmp/openclaw-bin:$PATH"
@@ -45,8 +56,9 @@ TRASH
   wait_for_log() {
     local needle="$1"
     local timeout_s="${2:-45}"
+    local quiet_on_timeout="${3:-false}"
     local needle_compact
-    needle_compact="$(printf "%s" "$needle" | tr -cd "[:alnum:]")"
+    needle_compact="$(printf "%s" "$needle" | tr -cd "[:alpha:]")"
     local start_s
     start_s="$(date +%s)"
     while true; do
@@ -60,9 +72,17 @@ TRASH
           const needle = process.env.NEEDLE ?? \"\";
           let text = \"\";
           try { text = fs.readFileSync(file, \"utf8\"); } catch { process.exit(1); }
-          if (text.length > 20000) text = text.slice(-20000);
-          const stripAnsi = (value) => value.replace(/\\x1b\\[[0-9;]*[A-Za-z]/g, \"\");
-          const compact = (value) => stripAnsi(value).toLowerCase().replace(/[^a-z0-9]+/g, \"\");
+          // Clack/script output can include lots of control sequences; keep a larger tail and strip ANSI more robustly.
+          if (text.length > 120000) text = text.slice(-120000);
+          const stripAnsi = (value) =>
+            value
+              // OSC: ESC ] ... BEL or ESC \\
+              .replace(/\\x1b\\][^\\x07]*(?:\\x07|\\x1b\\\\)/g, \"\")
+              // CSI: ESC [ ... cmd
+              .replace(/\\x1b\\[[0-?]*[ -/]*[@-~]/g, \"\");
+          // Letters-only: script output sometimes fragments ANSI sequences into digits/letters that
+          // can otherwise break substring matching.
+          const compact = (value) => stripAnsi(value).toLowerCase().replace(/[^a-z]+/g, \"\");
           const haystack = compact(text);
           const compactNeedle = compact(needle);
           if (!compactNeedle) process.exit(1);
@@ -72,6 +92,9 @@ TRASH
         fi
       fi
       if [ $(( $(date +%s) - start_s )) -ge "$timeout_s" ]; then
+        if [ "$quiet_on_timeout" = "true" ]; then
+          return 1
+        fi
         echo "Timeout waiting for log: $needle"
         if [ -n "${WIZARD_LOG_PATH:-}" ] && [ -f "$WIZARD_LOG_PATH" ]; then
           tail -n 140 "$WIZARD_LOG_PATH" || true
@@ -82,10 +105,10 @@ TRASH
     done
   }
 
-  start_gateway() {
-    node dist/index.js gateway --port 18789 --bind loopback --allow-unconfigured > /tmp/gateway-e2e.log 2>&1 &
-    GATEWAY_PID="$!"
-  }
+	  start_gateway() {
+	    node "$OPENCLAW_ENTRY" gateway --port 18789 --bind loopback --allow-unconfigured > /tmp/gateway-e2e.log 2>&1 &
+	    GATEWAY_PID="$!"
+	  }
 
   wait_for_gateway() {
     for _ in $(seq 1 20); do
@@ -184,9 +207,9 @@ TRASH
     local send_fn="$3"
     local validate_fn="${4:-}"
 
-    # Default onboarding command wrapper.
-    run_wizard_cmd "$case_name" "$home_dir" "node dist/index.js onboard $ONBOARD_FLAGS" "$send_fn" true "$validate_fn"
-  }
+	    # Default onboarding command wrapper.
+	    run_wizard_cmd "$case_name" "$home_dir" "node \"$OPENCLAW_ENTRY\" onboard $ONBOARD_FLAGS" "$send_fn" true "$validate_fn"
+	  }
 
   make_home() {
     mktemp -d "/tmp/openclaw-e2e-$1.XXXXXX"
@@ -210,7 +233,7 @@ TRASH
 
   select_skip_hooks() {
     # Hooks multiselect: pick "Skip for now".
-    wait_for_log "Enable hooks?" 60 || true
+    wait_for_log "Enable hooks?" 60 true || true
     send $'"'"' \r'"'"' 0.6
   }
 
@@ -218,24 +241,21 @@ TRASH
     # Risk acknowledgement (default is "No").
     wait_for_log "Continue?" 60
     send $'"'"'y\r'"'"' 0.6
-    # Choose local gateway, accept defaults, skip channels/skills/daemon, skip UI.
-    if wait_for_log "Where will the Gateway run?" 20; then
-      send $'"'"'\r'"'"' 0.5
-    fi
+    # Non-interactive flow; no gateway-location prompt.
     select_skip_hooks
   }
 
   send_reset_config_only() {
     # Risk acknowledgement (default is "No").
-    wait_for_log "Continue?" 40 || true
+    wait_for_log "Continue?" 40 true || true
     send $'"'"'y\r'"'"' 0.8
     # Select reset flow for existing config.
-    wait_for_log "Config handling" 40 || true
+    wait_for_log "Config handling" 40 true || true
     send $'"'"'\e[B'"'"' 0.3
     send $'"'"'\e[B'"'"' 0.3
     send $'"'"'\r'"'"' 0.4
     # Reset scope -> Config only (default).
-    wait_for_log "Reset scope" 40 || true
+    wait_for_log "Reset scope" 40 true || true
     send $'"'"'\r'"'"' 0.4
     select_skip_hooks
   }
@@ -254,23 +274,22 @@ TRASH
   }
 
   send_skills_flow() {
-    # Select skills section and skip optional installs.
-    wait_for_log "Where will the Gateway run?" 60 || true
-    send $'"'"'\r'"'"' 0.6
-    # Configure skills now? -> No
-    wait_for_log "Configure skills now?" 60 || true
+    # configure --section skills still runs the configure wizard; the first prompt is gateway location.
+    # Avoid log-based synchronization here; clack output can fragment ANSI sequences and break matching.
+    send $'"'"'\r'"'"' 3.0
+    wait_for_log "Configure skills now?" 120 true || true
     send $'"'"'n\r'"'"' 0.8
-    send "" 1.0
+    send "" 2.0
   }
 
-  run_case_local_basic() {
-    local home_dir
-    home_dir="$(make_home local-basic)"
-    export HOME="$home_dir"
-    mkdir -p "$HOME"
-    node dist/index.js onboard \
-      --non-interactive \
-      --accept-risk \
+	  run_case_local_basic() {
+	    local home_dir
+	    home_dir="$(make_home local-basic)"
+	    export HOME="$home_dir"
+	    mkdir -p "$HOME"
+	    node "$OPENCLAW_ENTRY" onboard \
+	      --non-interactive \
+	      --accept-risk \
       --flow quickstart \
       --mode local \
       --skip-channels \
@@ -343,11 +362,11 @@ NODE
     local home_dir
     home_dir="$(make_home remote-non-interactive)"
     export HOME="$home_dir"
-    mkdir -p "$HOME"
-    # Smoke test non-interactive remote config write.
-    node dist/index.js onboard --non-interactive --accept-risk \
-      --mode remote \
-      --remote-url ws://gateway.local:18789 \
+	    mkdir -p "$HOME"
+	    # Smoke test non-interactive remote config write.
+	    node "$OPENCLAW_ENTRY" onboard --non-interactive --accept-risk \
+	      --mode remote \
+	      --remote-url ws://gateway.local:18789 \
       --remote-token remote-token \
       --skip-skills \
       --skip-health
@@ -388,7 +407,7 @@ NODE
     export HOME="$home_dir"
     mkdir -p "$HOME/.openclaw"
     # Seed a remote config to exercise reset path.
-    cat > "$HOME/.openclaw/openclaw.json" <<'"'"'JSON'"'"'
+	    cat > "$HOME/.openclaw/openclaw.json" <<'"'"'JSON'"'"'
 {
   "agents": { "defaults": { "workspace": "/root/old" } },
   "gateway": {
@@ -398,9 +417,9 @@ NODE
 }
 JSON
 
-    node dist/index.js onboard \
-      --non-interactive \
-      --accept-risk \
+	    node "$OPENCLAW_ENTRY" onboard \
+	      --non-interactive \
+	      --accept-risk \
       --flow quickstart \
       --mode local \
       --reset \
@@ -438,10 +457,10 @@ NODE
   }
 
   run_case_channels() {
-    local home_dir
-    home_dir="$(make_home channels)"
-    # Channels-only configure flow.
-    run_wizard_cmd channels "$home_dir" "node dist/index.js configure --section channels" send_channels_flow
+	    local home_dir
+	    home_dir="$(make_home channels)"
+	    # Channels-only configure flow.
+	    run_wizard_cmd channels "$home_dir" "node \"$OPENCLAW_ENTRY\" configure --section channels" send_channels_flow
 
     config_path="$HOME/.openclaw/openclaw.json"
     assert_file "$config_path"
@@ -483,7 +502,7 @@ NODE
     export HOME="$home_dir"
     mkdir -p "$HOME/.openclaw"
     # Seed skills config to ensure it survives the wizard.
-    cat > "$HOME/.openclaw/openclaw.json" <<'"'"'JSON'"'"'
+	    cat > "$HOME/.openclaw/openclaw.json" <<'"'"'JSON'"'"'
 {
   "skills": {
     "allowBundled": ["__none__"],
@@ -492,7 +511,7 @@ NODE
 }
 JSON
 
-    run_wizard_cmd skills "$home_dir" "node dist/index.js configure --section skills" send_skills_flow
+	    run_wizard_cmd skills "$home_dir" "node \"$OPENCLAW_ENTRY\" configure --section skills" send_skills_flow
 
     config_path="$HOME/.openclaw/openclaw.json"
     assert_file "$config_path"

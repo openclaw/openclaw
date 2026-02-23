@@ -63,6 +63,8 @@ export type MSTeamsConfig = {
   dmPolicy?: DmPolicy;
   /** Allowlist for DM senders (AAD object IDs or UPNs). */
   allowFrom?: Array<string>;
+  /** Default delivery target for CLI --deliver when no explicit --reply-to is provided. */
+  defaultTo?: string;
   /** Optional allowlist for group/channel senders (AAD object IDs or UPNs). */
   groupAllowFrom?: Array<string>;
   /**
@@ -106,4 +108,6 @@ export type MSTeamsConfig = {
   sharePointSiteId?: string;
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Outbound response prefix override for this channel/account. */
+  responsePrefix?: string;
 };
