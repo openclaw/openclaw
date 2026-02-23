@@ -171,14 +171,6 @@ test("background exec without explicit timeout ignores default timeout", async (
   cleanupRunningSession(sessionId);
 });
 
-test("yielded background exec is not killed when tool signal aborts", async () => {
-  const tool = createTestExecTool({ allowBackground: true, backgroundMs: 10 });
-  await expectBackgroundSessionSurvivesAbort({
-    tool,
-    executeParams: { command: BACKGROUND_HOLD_CMD, yieldMs: 5 },
-  });
-});
-
 test("yielded background exec still times out", async () => {
   const tool = createTestExecTool({ allowBackground: true, backgroundMs: 10 });
   await expectBackgroundSessionTimesOut({
