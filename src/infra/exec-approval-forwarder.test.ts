@@ -160,6 +160,34 @@ describe("exec approval forwarder", () => {
     expect(deliver).not.toHaveBeenCalled();
   });
 
+  it("rejects unsafe nested-repetition regex in sessionFilter", async () => {
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "session",
+          sessionFilter: ["(a+)+$"],
+        },
+      },
+    } as OpenClawConfig;
+
+    const { deliver, forwarder } = createForwarder({
+      cfg,
+      resolveSessionTarget: () => ({ channel: "slack", to: "U1" }),
+    });
+
+    const request = {
+      ...baseRequest,
+      request: {
+        ...baseRequest.request,
+        sessionKey: `${"a".repeat(28)}!`,
+      },
+    };
+
+    await expect(forwarder.handleRequested(request)).resolves.toBe(false);
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
   it("returns false when all targets are skipped", async () => {
     await expectDiscordSessionTargetRequest({
       cfg: makeSessionCfg({ discordExecApprovalsEnabled: true }),
