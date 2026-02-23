@@ -283,7 +283,9 @@ function createRuntimeMedia(): PluginRuntime["media"] {
 
 function createRuntimeTools(): PluginRuntime["tools"] {
   return {
+    createMemoryAddTool,
     createMemoryGetTool,
+    createMemoryRelatedTool,
     createMemorySearchTool,
     registerMemoryCli,
   };
@@ -337,13 +339,6 @@ function createRuntimeChannel(): PluginRuntime["channel"] {
       recordSessionMetaFromInbound,
       recordInboundSession,
       updateLastRoute,
-    },
-    tools: {
-      createMemoryAddTool,
-      createMemoryGetTool,
-      createMemoryRelatedTool,
-      createMemorySearchTool,
-      registerMemoryCli,
     },
     mentions: {
       buildMentionRegexes,

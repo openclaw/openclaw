@@ -14,10 +14,17 @@ import type {
 import { resolveUserPath } from "../utils.js";
 import { splitShellArgs } from "../utils/shell-argv.js";
 
+export type ResolvedOpenMemoryConfig = {
+  url: string;
+  userId?: string;
+  timeout?: number;
+};
+
 export type ResolvedMemoryBackendConfig = {
   backend: MemoryBackend;
   citations: MemoryCitationsMode;
   qmd?: ResolvedQmdConfig;
+  openmemory?: ResolvedOpenMemoryConfig;
 };
 
 export type ResolvedQmdCollection = {

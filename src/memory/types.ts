@@ -8,6 +8,7 @@ export type MemorySearchResult = {
   snippet: string;
   source: MemorySource;
   citation?: string;
+  importanceScore?: number;
 };
 
 export type MemoryEmbeddingProbeResult = {
@@ -22,7 +23,7 @@ export type MemorySyncProgressUpdate = {
 };
 
 export type MemoryProviderStatus = {
-  backend: "builtin" | "qmd";
+  backend: "builtin" | "qmd" | "openmemory";
   provider: string;
   model?: string;
   requestedProvider?: string;
