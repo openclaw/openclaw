@@ -43,6 +43,7 @@ describe("buildAuthChoiceOptions", () => {
     ["Chutes OAuth auth choice", ["chutes"]],
     ["Qwen auth choice", ["qwen-portal"]],
     ["xAI auth choice", ["xai-api-key"]],
+    ["Mistral auth choice", ["mistral-api-key"]],
     ["Volcano Engine auth choice", ["volcengine-api-key"]],
     ["BytePlus auth choice", ["byteplus-api-key"]],
     ["vLLM auth choice", ["vllm"]],
