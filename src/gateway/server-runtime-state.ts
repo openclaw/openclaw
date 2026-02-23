@@ -27,6 +27,7 @@ import {
 } from "./server-chat.js";
 import { MAX_PAYLOAD_BYTES } from "./server-constants.js";
 import { attachGatewayUpgradeHandler, createGatewayHttpServer } from "./server-http.js";
+import { createVncProxy } from "./server-methods/vnc.js";
 import { createGatewayHooksRequestHandler } from "./server/hooks.js";
 import { listenGatewayHttpServer } from "./server/http-listen.js";
 import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
@@ -61,6 +62,7 @@ export async function createGatewayRuntimeState(params: {
   httpServers: HttpServer[];
   httpBindHosts: string[];
   wss: WebSocketServer;
+  vncProxy: ReturnType<typeof createVncProxy>;
   clients: Set<GatewayWsClient>;
   broadcast: GatewayBroadcastFn;
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
@@ -115,6 +117,10 @@ export async function createGatewayRuntimeState(params: {
     log: params.logPlugins,
   });
 
+  const vncProxy = createVncProxy();
+  const gatewayScheme = params.gatewayTls?.enabled ? "https" : "http";
+  const gatewayOrigin = `${gatewayScheme}://${params.bindHost}:${params.port}`;
+
   const bindHosts = await resolveGatewayListenHosts(params.bindHost);
   const httpServers: HttpServer[] = [];
   const httpBindHosts: string[] = [];
@@ -133,6 +139,8 @@ export async function createGatewayRuntimeState(params: {
       resolvedAuth: params.resolvedAuth,
       rateLimiter: params.rateLimiter,
       tlsOptions: params.gatewayTls?.enabled ? params.gatewayTls.tlsOptions : undefined,
+      vncEnabled: true,
+      gatewayOrigin,
     });
     try {
       await listenGatewayHttpServer({
@@ -168,6 +176,7 @@ export async function createGatewayRuntimeState(params: {
       clients,
       resolvedAuth: params.resolvedAuth,
       rateLimiter: params.rateLimiter,
+      vncProxy,
     });
   }
 
@@ -188,6 +197,7 @@ export async function createGatewayRuntimeState(params: {
     httpServers,
     httpBindHosts,
     wss,
+    vncProxy,
     clients,
     broadcast,
     broadcastToConnIds,

@@ -55,6 +55,7 @@ import { handleIamOAuthHttpRequest } from "./iam-oauth-http.js";
 import { isPrivateOrLoopbackAddress, resolveGatewayClientIp } from "./net.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
+import { createVncProxy, vncViewerHtml } from "./server-methods/vnc.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -451,6 +452,9 @@ export function createGatewayHttpServer(opts: {
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
   tlsOptions?: TlsOptions;
+  /** VNC proxy for /vnc-viewer endpoint. */
+  vncEnabled?: boolean;
+  gatewayOrigin?: string;
 }): HttpServer {
   const {
     canvasHost,
@@ -488,6 +492,27 @@ export function createGatewayHttpServer(opts: {
       // Health check endpoint — unauthenticated, used by K8s probes and load balancers.
       if (requestPath === "/health" || requestPath === "/healthz") {
         sendJson(res, 200, { status: "ok", timestamp: new Date().toISOString() });
+        return;
+      }
+
+      // VNC viewer — serves self-contained noVNC HTML page (gateway-auth protected).
+      if (requestPath === "/vnc-viewer" && opts.vncEnabled) {
+        const token = getBearerToken(req);
+        const authResult = await authorizeGatewayConnect({
+          auth: resolvedAuth,
+          connectAuth: token ? { token, password: token } : null,
+          req,
+          trustedProxies,
+          rateLimiter,
+        });
+        if (!authResult.ok) {
+          sendGatewayAuthFailure(res, authResult);
+          return;
+        }
+        const origin = opts.gatewayOrigin ?? `http://${req.headers.host ?? "localhost"}`;
+        res.statusCode = 200;
+        res.setHeader("Content-Type", "text/html; charset=utf-8");
+        res.end(vncViewerHtml(origin));
         return;
       }
 
@@ -622,10 +647,34 @@ export function attachGatewayUpgradeHandler(opts: {
   resolvedAuth: ResolvedGatewayAuth;
   /** Optional rate limiter for auth brute-force protection. */
   rateLimiter?: AuthRateLimiter;
+  /** VNC WebSocket-to-TCP proxy for /vnc path. */
+  vncProxy?: ReturnType<typeof createVncProxy>;
 }) {
   const { httpServer, wss, canvasHost, clients, resolvedAuth, rateLimiter } = opts;
   httpServer.on("upgrade", (req, socket, head) => {
     void (async () => {
+      // VNC WebSocket proxy — intercept /vnc before other upgrade handlers.
+      if (opts.vncProxy) {
+        const url = new URL(req.url ?? "/", "http://localhost");
+        if (url.pathname === "/vnc") {
+          const configSnapshot = loadConfig();
+          const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
+          const ok = await authorizeCanvasRequest({
+            req,
+            auth: resolvedAuth,
+            trustedProxies,
+            clients,
+            rateLimiter,
+          });
+          if (!ok.ok) {
+            writeUpgradeAuthFailure(socket, ok);
+            socket.destroy();
+            return;
+          }
+          opts.vncProxy.handleUpgrade(req, socket, head);
+          return;
+        }
+      }
       if (canvasHost) {
         const url = new URL(req.url ?? "/", "http://localhost");
         if (url.pathname === CANVAS_WS_PATH) {

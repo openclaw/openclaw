@@ -23,6 +23,7 @@ import { talkHandlers } from "./server-methods/talk.js";
 import { ttsHandlers } from "./server-methods/tts.js";
 import { updateHandlers } from "./server-methods/update.js";
 import { usageHandlers } from "./server-methods/usage.js";
+import { vncHandlers } from "./server-methods/vnc.js";
 import { voicewakeHandlers } from "./server-methods/voicewake.js";
 import { webHandlers } from "./server-methods/web.js";
 import { wizardHandlers } from "./server-methods/wizard.js";
@@ -80,6 +81,7 @@ const READ_METHODS = new Set([
   "chat.history",
   "config.get",
   "talk.config",
+  "screen.vnc",
 ]);
 const WRITE_METHODS = new Set([
   "send",
@@ -196,6 +198,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...agentHandlers,
   ...agentsHandlers,
   ...browserHandlers,
+  ...vncHandlers,
 };
 
 export async function handleGatewayRequest(

@@ -339,6 +339,7 @@ export async function startGatewayServer(
     httpServers,
     httpBindHosts,
     wss,
+    vncProxy,
     clients,
     broadcast,
     broadcastToConnIds,
@@ -743,6 +744,7 @@ export async function startGatewayServer(
       }
       skillsChangeUnsub();
       authRateLimiter?.dispose();
+      vncProxy.close();
       if (tunnelResult) {
         await tunnelResult.stop().catch((err) => {
           logTunnel.warn(
