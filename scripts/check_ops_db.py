@@ -10,17 +10,15 @@ check_ops_db.py
 
 추가 기능:
 - --stub : 단명 테스트 DB를 만들어 검사 로직을 실행하는 스텁(검증용)
-- 개선된 예외/로깅, 일관된 exit code
+- 개선된 예외/로깅, 일관된 exit code (팀 표준: 0=OK,1=Issues,2=Fatal)
 
 Usage:
-  python3 check_ops_db.py [--apply] [--approve-recovery] [--db /path/to/db] [--stub]
+  python3 check_ops_db.py [--apply] [--approve-recovery] [--db /path/to/db] [--stub] [--json]
 
 Exit codes:
-  0 - 문제 없음
+  0 - 문제 없음 (또는 자동복구 성공)
   1 - 문제 발견 (수동 조치 필요)
   2 - 실행 중 예외(치명적)
-  3 - 자동 복구 실행됨
-  4 - 복구 필요하지만 승인 없음
 
 Cron 설치 시 권장:
 - 실행권한 추가: chmod +x scripts/check_ops_db.py
@@ -41,6 +39,8 @@ import datetime
 import traceback
 import tempfile
 import stat
+import json
+import logging
 from typing import List, Tuple
 
 # Paths and constants
@@ -54,10 +54,17 @@ REPORT_PATH = os.path.join(LOG_DIR, f'check_ops_db_report_{REPORT_TS}.txt')
 
 # Exit codes (team standard: 0=OK, 1=Issues, 2=Fatal)
 EXIT_OK = 0
-# Any non-fatal issue (including recovered or awaiting approval) returns 1
 EXIT_ISSUES = 1
-# Fatal/unhandled exceptions return 2
 EXIT_FATAL = 2
+
+# Logging setup (plain or JSON controlled by --json)
+logger = logging.getLogger('check_ops_db')
+logger.setLevel(logging.INFO)
+ch = logging.StreamHandler()
+ch.setLevel(logging.INFO)
+formatter = logging.Formatter('%(asctime)s %(levelname)s: %(message)s')
+ch.setFormatter(formatter)
+logger.addHandler(ch)
 
 
 def write_report(lines: List[str]):
@@ -66,7 +73,7 @@ def write_report(lines: List[str]):
             f.write('\n'.join(lines))
     except Exception:
         # best-effort: print to stdout if file write fails
-        print('WARN: failed to write report file', REPORT_PATH)
+        logger.warning('failed to write report file %s', REPORT_PATH)
 
 
 def insert_ops_todos_summary(conn: sqlite3.Connection, summary_title: str, summary_body: str) -> Tuple[bool,str]:
@@ -244,6 +251,7 @@ def main():
     parser.add_argument('--approve-recovery', action='store_true', help='Approve automatic recovery actions')
     parser.add_argument('--db', type=str, default=DEFAULT_DB_PATH, help='Path to sqlite DB')
     parser.add_argument('--stub', action='store_true', help='Create and run against a temporary stub DB for verification')
+    parser.add_argument('--json', action='store_true', help='Emit machine-readable JSON summary on stdout')
     args = parser.parse_args()
 
     report_lines: List[str] = []
@@ -264,7 +272,7 @@ def main():
         if not os.path.exists(db_path):
             report_lines.append(f'DB not found at {db_path}')
             write_report(report_lines)
-            print('\n'.join(report_lines))
+            logger.error('\n'.join(report_lines))
             return EXIT_FATAL
 
         conn = sqlite3.connect(db_path)
@@ -300,29 +308,45 @@ def main():
 
         summary_title = 'ops_multiagent.db 무결성 검사 결과 ' + ('OK' if not problems_found else 'Issues found')
         summary_body = '\n'.join(report_lines[:2000])
-        inserted, msg = insert_ops_todos_summary(conn, summary_title, summary_body)
-        report_lines.append(f'ops_todos insert: {inserted} / {msg}')
+        try:
+            inserted, msg = insert_ops_todos_summary(conn, summary_title, summary_body)
+            report_lines.append(f'ops_todos insert: {inserted} / {msg}')
+        except Exception as e:
+            report_lines.append(f'ops_todos insert failed: {e}')
 
         write_report(report_lines)
-        print('\n'.join(report_lines))
 
-        # return codes
+        # Output
+        if args.json:
+            out = {
+                'timestamp': datetime.datetime.utcnow().isoformat()+'Z',
+                'db_path': db_path,
+                'problems_found': problems_found,
+                'recovered': recovered,
+                'report_path': REPORT_PATH,
+                'summary': report_lines[:200]
+            }
+            print(json.dumps(out))
+        else:
+            logger.info('\n'.join(report_lines))
+
+        # return codes: aligned to team standard
         if recovered:
-            return EXIT_RECOVERED
+            return EXIT_OK
         if problems_found:
-            if args.apply and stuck and not args.approve_recovery:
-                return EXIT_NO_APPROVAL
             return EXIT_ISSUES
         return EXIT_OK
 
     except Exception as e:
         tb = traceback.format_exc()
-        print('FATAL ERROR', e)
-        print(tb)
-        with open(REPORT_PATH, 'w') as f:
-            f.write('FATAL ERROR:\n')
-            f.write(str(e) + '\n')
-            f.write(tb)
+        logger.exception('FATAL ERROR: %s', e)
+        try:
+            with open(REPORT_PATH, 'w') as f:
+                f.write('FATAL ERROR:\n')
+                f.write(str(e) + '\n')
+                f.write(tb)
+        except Exception:
+            logger.warning('Failed to write fatal report file')
         return EXIT_FATAL
     finally:
         if temp_db and os.path.exists(temp_db):
@@ -337,4 +361,3 @@ def main():
 if __name__ == '__main__':
     rc = main()
     sys.exit(rc)
-

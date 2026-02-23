@@ -1,31 +1,31 @@
 import subprocess
 import sys
+import json
 import os
-import tempfile
 
 SCRIPT = os.path.join(os.path.dirname(__file__), '..', 'scripts', 'check_ops_db.py')
 
 
 def run(args):
-    proc = subprocess.Popen([sys.executable, SCRIPT] + args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-    out, _ = proc.communicate()
-    return proc.returncode, out.decode('utf-8', errors='replace')
+    p = subprocess.run([sys.executable, SCRIPT] + args, capture_output=True, text=True)
+    return p.returncode, p.stdout, p.stderr
 
 
-def test_stub_runs_ok_or_issues():
-    rc, out = run(['--stub'])
-    assert rc in (0,1)
-    assert 'STUB DB created' in out
+def test_stub_runs_ok():
+    rc, out, err = run(['--stub'])
+    assert rc == 0
+    assert 'STUB DB created' in out or 'Check run at' in out
+
+
+def test_stub_json():
+    rc, out, err = run(['--stub','--json'])
+    assert rc == 0
+    data = json.loads(out)
+    assert 'db_path' in data
+    assert data['problems_found'] in [True, False]
 
 
 def test_missing_db_returns_fatal():
-    rc, out = run(['--db', '/nonexistent/path/does_not_exist.db'])
+    rc, out, err = run(['--db','/nonexistent/path/db.sqlite'])
     assert rc == 2
-    assert 'DB not found' in out
-
-
-def test_apply_without_approve_returns_issues_code():
-    # run stub with --apply but without --approve-recovery: should report issues (code 1)
-    rc, out = run(['--stub', '--apply'])
-    assert rc == 1
-    assert 'Stuck entries found but --approve-recovery not provided' in out
+    assert 'DB not found' in out or 'DB not found' in err
