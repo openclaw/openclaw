@@ -328,6 +328,8 @@ export function resolveChannelGroupPolicy(params: {
   groupId?: string | null;
   accountId?: string | null;
   groupIdCaseInsensitive?: boolean;
+  /** When true, sender-level filtering (groupAllowFrom) is configured upstream. */
+  hasGroupAllowFrom?: boolean;
 }): ChannelGroupPolicy {
   const { cfg, channel } = params;
   const groups = resolveChannelGroups(cfg, channel, params.accountId);
@@ -340,8 +342,14 @@ export function resolveChannelGroupPolicy(params: {
     : undefined;
   const defaultConfig = groups?.["*"];
   const allowAll = allowlistEnabled && Boolean(groups && Object.hasOwn(groups, "*"));
+  // When groupPolicy is "allowlist" with groupAllowFrom but no explicit groups,
+  // allow the group through — sender-level filtering handles access control.
+  const senderFilterBypass =
+    groupPolicy === "allowlist" && !hasGroups && Boolean(params.hasGroupAllowFrom);
   const allowed =
-    groupPolicy === "disabled" ? false : !allowlistEnabled || allowAll || Boolean(groupConfig);
+    groupPolicy === "disabled"
+      ? false
+      : !allowlistEnabled || allowAll || Boolean(groupConfig) || senderFilterBypass;
   return {
     allowlistEnabled,
     allowed,
