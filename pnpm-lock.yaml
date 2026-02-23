@@ -469,6 +469,10 @@ importers:
         version: link:../..
 
   extensions/synology-chat:
+    dependencies:
+      zod:
+        specifier: ^4.3.6
+        version: 4.3.6
     devDependencies:
       openclaw:
         specifier: workspace:*
