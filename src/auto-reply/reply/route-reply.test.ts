@@ -67,7 +67,6 @@ const createRegistry = (channels: PluginRegistry["channels"]): PluginRegistry =>
   hooks: [],
   typedHooks: [],
   commands: [],
-  commandOptions: [],
   channels,
   providers: [],
   gatewayHandlers: {},
