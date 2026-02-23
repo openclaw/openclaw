@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { configureClient } from "@tloncorp/api";
 import type {
   ChannelOutboundAdapter,
@@ -37,7 +38,7 @@ async function createHttpPokeApi(params: {
 }) {
   const ssrfPolicy = ssrfPolicyFromAllowPrivateNetwork(params.allowPrivateNetwork);
   const cookie = await authenticate(params.url, params.code, { ssrfPolicy });
-  const channelId = `${Math.floor(Date.now() / 1000)}-${Math.random().toString(36).substring(2, 8)}`;
+  const channelId = `${Math.floor(Date.now() / 1000)}-${crypto.randomUUID()}`;
   const channelUrl = `${params.url}/~/channel/${channelId}`;
   const shipName = params.ship.replace(/^~/, "");
 
