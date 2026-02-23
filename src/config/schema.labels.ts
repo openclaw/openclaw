@@ -86,6 +86,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.tls.caPath": "Gateway TLS CA Path",
   "gateway.http": "Gateway HTTP API",
   "gateway.http.endpoints": "Gateway HTTP Endpoints",
+  "gateway.http.securityHeaders": "Gateway HTTP Security Headers",
+  "gateway.http.securityHeaders.strictTransportSecurity": "Strict Transport Security Header",
   "gateway.remote.url": "Remote Gateway URL",
   "gateway.remote.sshTarget": "Remote Gateway SSH Target",
   "gateway.remote.sshIdentity": "Remote Gateway SSH Identity",

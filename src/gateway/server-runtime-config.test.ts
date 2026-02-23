@@ -189,4 +189,44 @@ describe("resolveGatewayRuntimeConfig", () => {
       );
     });
   });
+
+  describe("HTTP security headers", () => {
+    it("resolves strict transport security header from config", async () => {
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: {
+          gateway: {
+            bind: "loopback",
+            auth: { mode: "none" },
+            http: {
+              securityHeaders: {
+                strictTransportSecurity: "  max-age=31536000; includeSubDomains  ",
+              },
+            },
+          },
+        },
+        port: 18789,
+      });
+
+      expect(result.strictTransportSecurityHeader).toBe("max-age=31536000; includeSubDomains");
+    });
+
+    it("does not set strict transport security when explicitly disabled", async () => {
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: {
+          gateway: {
+            bind: "loopback",
+            auth: { mode: "none" },
+            http: {
+              securityHeaders: {
+                strictTransportSecurity: false,
+              },
+            },
+          },
+        },
+        port: 18789,
+      });
+
+      expect(result.strictTransportSecurityHeader).toBeUndefined();
+    });
+  });
 });
