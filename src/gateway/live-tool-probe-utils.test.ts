@@ -45,4 +45,56 @@ describe("live tool probe utils", () => {
       }),
     ).toBe(false);
   });
+
+  it("retries when tool output is empty and attempts remain", () => {
+    expect(
+      shouldRetryToolReadProbe({
+        text: "   ",
+        nonceA: "nonce-a",
+        nonceB: "nonce-b",
+        provider: "openai",
+        attempt: 0,
+        maxAttempts: 3,
+      }),
+    ).toBe(true);
+  });
+
+  it("retries when output still looks like tool/function scaffolding", () => {
+    expect(
+      shouldRetryToolReadProbe({
+        text: "Use tool function read[] now.",
+        nonceA: "nonce-a",
+        nonceB: "nonce-b",
+        provider: "openai",
+        attempt: 0,
+        maxAttempts: 3,
+      }),
+    ).toBe(true);
+  });
+
+  it("retries mistral nonce marker echoes without parsed nonce values", () => {
+    expect(
+      shouldRetryToolReadProbe({
+        text: "nonceA= nonceB=",
+        nonceA: "nonce-a",
+        nonceB: "nonce-b",
+        provider: "mistral",
+        attempt: 0,
+        maxAttempts: 3,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not retry nonce marker echoes for non-mistral providers", () => {
+    expect(
+      shouldRetryToolReadProbe({
+        text: "nonceA= nonceB=",
+        nonceA: "nonce-a",
+        nonceB: "nonce-b",
+        provider: "openai",
+        attempt: 0,
+        maxAttempts: 3,
+      }),
+    ).toBe(false);
+  });
 });
