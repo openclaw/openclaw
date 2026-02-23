@@ -248,7 +248,7 @@ describe("web_fetch extraction fallbacks", () => {
     global.fetch = withFetchPreconnect(fetchSpy);
 
     const tool = createFetchTool({
-      maxResponseBytes: 1024,
+      maxResponseBytes: 128,
       firecrawl: { enabled: false },
     });
     const result = await tool?.execute?.("call", { url: "https://example.com/stream" });
