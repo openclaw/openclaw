@@ -1,4 +1,4 @@
-import type { CronJobCreate, CronJobPatch } from "../types.js";
+import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
 import {
   applyJobPatch,
   computeJobNextRunAtMs,
@@ -21,6 +21,29 @@ import {
   stopTimer,
   wake,
 } from "./timer.js";
+
+type CronJobsEnabledFilter = "all" | "enabled" | "disabled";
+type CronJobsSortBy = "nextRunAtMs" | "updatedAtMs" | "name";
+type CronSortDir = "asc" | "desc";
+
+export type CronListPageOptions = {
+  includeDisabled?: boolean;
+  limit?: number;
+  offset?: number;
+  query?: string;
+  enabled?: CronJobsEnabledFilter;
+  sortBy?: CronJobsSortBy;
+  sortDir?: CronSortDir;
+};
+
+export type CronListPageResult = {
+  jobs: ReturnType<typeof sortJobs>;
+  total: number;
+  offset: number;
+  limit: number;
+  hasMore: boolean;
+  nextOffset: number | null;
+};
 
 async function ensureLoadedForRead(state: CronServiceState) {
   await ensureLoaded(state, { skipRecompute: true });
@@ -98,6 +121,80 @@ export async function list(state: CronServiceState, opts?: { includeDisabled?: b
     const includeDisabled = opts?.includeDisabled === true;
     const jobs = (state.store?.jobs ?? []).filter((j) => includeDisabled || j.enabled);
     return jobs.toSorted((a, b) => (a.state.nextRunAtMs ?? 0) - (b.state.nextRunAtMs ?? 0));
+  });
+}
+
+function resolveEnabledFilter(opts?: CronListPageOptions): CronJobsEnabledFilter {
+  if (opts?.enabled === "all" || opts?.enabled === "enabled" || opts?.enabled === "disabled") {
+    return opts.enabled;
+  }
+  return opts?.includeDisabled ? "all" : "enabled";
+}
+
+function sortJobs(jobs: CronJob[], sortBy: CronJobsSortBy, sortDir: CronSortDir) {
+  const dir = sortDir === "desc" ? -1 : 1;
+  return jobs.toSorted((a, b) => {
+    let cmp = 0;
+    if (sortBy === "name") {
+      cmp = a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
+    } else if (sortBy === "updatedAtMs") {
+      cmp = a.updatedAtMs - b.updatedAtMs;
+    } else {
+      const aNext = a.state.nextRunAtMs;
+      const bNext = b.state.nextRunAtMs;
+      if (typeof aNext === "number" && typeof bNext === "number") {
+        cmp = aNext - bNext;
+      } else if (typeof aNext === "number") {
+        cmp = -1;
+      } else if (typeof bNext === "number") {
+        cmp = 1;
+      } else {
+        cmp = 0;
+      }
+    }
+    if (cmp !== 0) {
+      return cmp * dir;
+    }
+    return a.id.localeCompare(b.id);
+  });
+}
+
+export async function listPage(state: CronServiceState, opts?: CronListPageOptions) {
+  return await locked(state, async () => {
+    await ensureLoadedForRead(state);
+    const query = opts?.query?.trim().toLowerCase() ?? "";
+    const enabledFilter = resolveEnabledFilter(opts);
+    const sortBy = opts?.sortBy ?? "nextRunAtMs";
+    const sortDir = opts?.sortDir ?? "asc";
+    const source = state.store?.jobs ?? [];
+    const filtered = source.filter((job) => {
+      if (enabledFilter === "enabled" && !job.enabled) {
+        return false;
+      }
+      if (enabledFilter === "disabled" && job.enabled) {
+        return false;
+      }
+      if (!query) {
+        return true;
+      }
+      const haystack = [job.name, job.description ?? "", job.agentId ?? ""].join(" ").toLowerCase();
+      return haystack.includes(query);
+    });
+    const sorted = sortJobs(filtered, sortBy, sortDir);
+    const total = sorted.length;
+    const offset = Math.max(0, Math.min(total, Math.floor(opts?.offset ?? 0)));
+    const defaultLimit = total === 0 ? 50 : total;
+    const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? defaultLimit)));
+    const jobs = sorted.slice(offset, offset + limit);
+    const nextOffset = offset + jobs.length;
+    return {
+      jobs,
+      total,
+      offset,
+      limit,
+      hasMore: nextOffset < total,
+      nextOffset: nextOffset < total ? nextOffset : null,
+    } satisfies CronListPageResult;
   });
 }
 

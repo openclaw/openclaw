@@ -19,6 +19,35 @@ export type CronRunLogEntry = {
   nextRunAtMs?: number;
 } & CronRunTelemetry;
 
+export type CronRunLogSortDir = "asc" | "desc";
+export type CronRunLogStatusFilter = "all" | "ok" | "error" | "skipped";
+
+export type ReadCronRunLogPageOptions = {
+  limit?: number;
+  offset?: number;
+  jobId?: string;
+  status?: CronRunLogStatusFilter;
+  statuses?: CronRunStatus[];
+  deliveryStatus?: CronDeliveryStatus;
+  deliveryStatuses?: CronDeliveryStatus[];
+  query?: string;
+  sortDir?: CronRunLogSortDir;
+};
+
+export type CronRunLogPageResult = {
+  entries: CronRunLogEntry[];
+  total: number;
+  offset: number;
+  limit: number;
+  hasMore: boolean;
+  nextOffset: number | null;
+};
+
+type ReadCronRunLogAllPageOptions = Omit<ReadCronRunLogPageOptions, "jobId"> & {
+  storePath: string;
+  jobNameById?: Record<string, string>;
+};
+
 function assertSafeCronRunLogJobId(jobId: string): string {
   const trimmed = jobId.trim();
   if (!trimmed) {
@@ -98,14 +127,78 @@ export async function readCronRunLogEntries(
   opts?: { limit?: number; jobId?: string },
 ): Promise<CronRunLogEntry[]> {
   const limit = Math.max(1, Math.min(5000, Math.floor(opts?.limit ?? 200)));
+  const page = await readCronRunLogEntriesPage(filePath, {
+    jobId: opts?.jobId,
+    limit,
+    offset: 0,
+    status: "all",
+    sortDir: "desc",
+  });
+  return page.entries.toReversed();
+}
+
+function normalizeRunStatusFilter(status?: string): CronRunLogStatusFilter {
+  if (status === "ok" || status === "error" || status === "skipped" || status === "all") {
+    return status;
+  }
+  return "all";
+}
+
+function normalizeRunStatuses(opts?: {
+  statuses?: CronRunStatus[];
+  status?: CronRunLogStatusFilter;
+}): CronRunStatus[] | null {
+  if (Array.isArray(opts?.statuses) && opts.statuses.length > 0) {
+    const filtered = opts.statuses.filter(
+      (status): status is CronRunStatus =>
+        status === "ok" || status === "error" || status === "skipped",
+    );
+    if (filtered.length > 0) {
+      return Array.from(new Set(filtered));
+    }
+  }
+  const status = normalizeRunStatusFilter(opts?.status);
+  if (status === "all") {
+    return null;
+  }
+  return [status];
+}
+
+function normalizeDeliveryStatuses(opts?: {
+  deliveryStatuses?: CronDeliveryStatus[];
+  deliveryStatus?: CronDeliveryStatus;
+}): CronDeliveryStatus[] | null {
+  if (Array.isArray(opts?.deliveryStatuses) && opts.deliveryStatuses.length > 0) {
+    const filtered = opts.deliveryStatuses.filter(
+      (status): status is CronDeliveryStatus =>
+        status === "delivered" ||
+        status === "not-delivered" ||
+        status === "unknown" ||
+        status === "not-requested",
+    );
+    if (filtered.length > 0) {
+      return Array.from(new Set(filtered));
+    }
+  }
+  if (
+    opts?.deliveryStatus === "delivered" ||
+    opts?.deliveryStatus === "not-delivered" ||
+    opts?.deliveryStatus === "unknown" ||
+    opts?.deliveryStatus === "not-requested"
+  ) {
+    return [opts.deliveryStatus];
+  }
+  return null;
+}
+
+function parseAllRunLogEntries(raw: string, opts?: { jobId?: string }): CronRunLogEntry[] {
   const jobId = opts?.jobId?.trim() || undefined;
-  const raw = await fs.readFile(path.resolve(filePath), "utf-8").catch(() => "");
   if (!raw.trim()) {
     return [];
   }
   const parsed: CronRunLogEntry[] = [];
   const lines = raw.split("\n");
-  for (let i = lines.length - 1; i >= 0 && parsed.length < limit; i--) {
+  for (let i = 0; i < lines.length; i++) {
     const line = lines[i]?.trim();
     if (!line) {
       continue;
@@ -182,5 +275,125 @@ export async function readCronRunLogEntries(
       // ignore invalid lines
     }
   }
-  return parsed.toReversed();
+  return parsed;
+}
+
+export async function readCronRunLogEntriesPage(
+  filePath: string,
+  opts?: ReadCronRunLogPageOptions,
+): Promise<CronRunLogPageResult> {
+  const limit = Math.max(1, Math.min(200, Math.floor(opts?.limit ?? 50)));
+  const raw = await fs.readFile(path.resolve(filePath), "utf-8").catch(() => "");
+  const statuses = normalizeRunStatuses(opts);
+  const deliveryStatuses = normalizeDeliveryStatuses(opts);
+  const query = opts?.query?.trim().toLowerCase() ?? "";
+  const sortDir: CronRunLogSortDir = opts?.sortDir === "asc" ? "asc" : "desc";
+  const all = parseAllRunLogEntries(raw, { jobId: opts?.jobId });
+  const filtered = all.filter((entry) => {
+    if (statuses && (!entry.status || !statuses.includes(entry.status))) {
+      return false;
+    }
+    if (deliveryStatuses) {
+      const deliveryStatus = entry.deliveryStatus ?? "not-requested";
+      if (!deliveryStatuses.includes(deliveryStatus)) {
+        return false;
+      }
+    }
+    if (!query) {
+      return true;
+    }
+    const haystack = [entry.summary ?? "", entry.error ?? "", entry.jobId].join(" ").toLowerCase();
+    return haystack.includes(query);
+  });
+  const sorted =
+    sortDir === "asc"
+      ? filtered.toSorted((a, b) => a.ts - b.ts)
+      : filtered.toSorted((a, b) => b.ts - a.ts);
+  const total = sorted.length;
+  const offset = Math.max(0, Math.min(total, Math.floor(opts?.offset ?? 0)));
+  const entries = sorted.slice(offset, offset + limit);
+  const nextOffset = offset + entries.length;
+  return {
+    entries,
+    total,
+    offset,
+    limit,
+    hasMore: nextOffset < total,
+    nextOffset: nextOffset < total ? nextOffset : null,
+  };
+}
+
+export async function readCronRunLogEntriesPageAll(
+  opts: ReadCronRunLogAllPageOptions,
+): Promise<CronRunLogPageResult> {
+  const limit = Math.max(1, Math.min(200, Math.floor(opts.limit ?? 50)));
+  const statuses = normalizeRunStatuses(opts);
+  const deliveryStatuses = normalizeDeliveryStatuses(opts);
+  const query = opts.query?.trim().toLowerCase() ?? "";
+  const sortDir: CronRunLogSortDir = opts.sortDir === "asc" ? "asc" : "desc";
+  const runsDir = path.resolve(path.dirname(path.resolve(opts.storePath)), "runs");
+  const files = await fs.readdir(runsDir, { withFileTypes: true }).catch(() => []);
+  const jsonlFiles = files
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+    .map((entry) => path.join(runsDir, entry.name));
+  if (jsonlFiles.length === 0) {
+    return {
+      entries: [],
+      total: 0,
+      offset: 0,
+      limit,
+      hasMore: false,
+      nextOffset: null,
+    };
+  }
+  const chunks = await Promise.all(
+    jsonlFiles.map(async (filePath) => {
+      const raw = await fs.readFile(filePath, "utf-8").catch(() => "");
+      return parseAllRunLogEntries(raw);
+    }),
+  );
+  const all = chunks.flat();
+  const filtered = all.filter((entry) => {
+    if (statuses && (!entry.status || !statuses.includes(entry.status))) {
+      return false;
+    }
+    if (deliveryStatuses) {
+      const deliveryStatus = entry.deliveryStatus ?? "not-requested";
+      if (!deliveryStatuses.includes(deliveryStatus)) {
+        return false;
+      }
+    }
+    if (!query) {
+      return true;
+    }
+    const jobName = opts.jobNameById?.[entry.jobId] ?? "";
+    const haystack = [entry.summary ?? "", entry.error ?? "", entry.jobId, jobName]
+      .join(" ")
+      .toLowerCase();
+    return haystack.includes(query);
+  });
+  const sorted =
+    sortDir === "asc"
+      ? filtered.toSorted((a, b) => a.ts - b.ts)
+      : filtered.toSorted((a, b) => b.ts - a.ts);
+  const total = sorted.length;
+  const offset = Math.max(0, Math.min(total, Math.floor(opts.offset ?? 0)));
+  const entries = sorted.slice(offset, offset + limit);
+  if (opts.jobNameById) {
+    for (const entry of entries) {
+      const jobName = opts.jobNameById[entry.jobId];
+      if (jobName) {
+        (entry as CronRunLogEntry & { jobName?: string }).jobName = jobName;
+      }
+    }
+  }
+  const nextOffset = offset + entries.length;
+  return {
+    entries,
+    total,
+    offset,
+    limit,
+    hasMore: nextOffset < total,
+    nextOffset: nextOffset < total ? nextOffset : null,
+  };
 }
