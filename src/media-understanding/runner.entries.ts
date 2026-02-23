@@ -497,6 +497,13 @@ export async function runProviderEntry(params: {
     entry,
     agentDir: params.agentDir,
   });
+  const baseUrl = entry.baseUrl ?? params.config?.baseUrl ?? providerConfig?.baseUrl;
+  const mergedHeaders = {
+    ...providerConfig?.headers,
+    ...params.config?.headers,
+    ...entry.headers,
+  };
+  const headers = Object.keys(mergedHeaders).length > 0 ? mergedHeaders : undefined;
   const result = await executeWithApiKeyRotation({
     provider: providerId,
     apiKeys,
@@ -506,8 +513,8 @@ export async function runProviderEntry(params: {
         fileName: media.fileName,
         mime: media.mime,
         apiKey,
-        baseUrl: providerConfig?.baseUrl,
-        headers: providerConfig?.headers,
+        baseUrl,
+        headers,
         model: entry.model,
         prompt,
         timeoutMs,
