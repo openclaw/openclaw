@@ -287,10 +287,13 @@ export function createAgentEventHandler({
     seq: number,
     text: string,
   ) => {
+    // Always buffer the full text (including NO_REPLY suffix) so onChatFinal
+    // sees the complete output for watchdog sign-off detection.
+    // Suppression of silent replies happens at the final emission layer.
+    chatRunState.buffers.set(clientRunId, text);
     if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
       return;
     }
-    chatRunState.buffers.set(clientRunId, text);
     if (shouldHideHeartbeatChatOutput(clientRunId, sourceRunId)) {
       return;
     }
