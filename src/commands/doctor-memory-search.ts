@@ -76,7 +76,7 @@ export async function noteMemorySearchHealth(cfg: OpenClawConfig): Promise<void>
   if (hasLocalEmbeddings(resolved.local)) {
     return;
   }
-  for (const provider of ["openai", "gemini", "voyage"] as const) {
+  for (const provider of ["openai", "gemini", "voyage", "mistral"] as const) {
     if (hasRemoteApiKey || (await hasApiKeyForProvider(provider, cfg, agentDir))) {
       return;
     }
@@ -88,7 +88,7 @@ export async function noteMemorySearchHealth(cfg: OpenClawConfig): Promise<void>
       "Semantic recall will not work without an embedding provider.",
       "",
       "Fix (pick one):",
-      "- Set OPENAI_API_KEY or GEMINI_API_KEY in your environment",
+      "- Set OPENAI_API_KEY, GEMINI_API_KEY, VOYAGE_API_KEY, or MISTRAL_API_KEY in your environment",
       `- Add credentials: ${formatCliCommand("openclaw auth add --provider openai")}`,
       `- For local embeddings: configure agents.defaults.memorySearch.provider and local model path`,
       `- To disable: ${formatCliCommand("openclaw config set agents.defaults.memorySearch.enabled false")}`,
@@ -119,7 +119,7 @@ function hasLocalEmbeddings(local: { modelPath?: string }): boolean {
 }
 
 async function hasApiKeyForProvider(
-  provider: "openai" | "gemini" | "voyage",
+  provider: "openai" | "gemini" | "voyage" | "mistral",
   cfg: OpenClawConfig,
   agentDir: string,
 ): Promise<boolean> {
