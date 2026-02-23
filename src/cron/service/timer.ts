@@ -737,7 +737,9 @@ export async function executeJobCore(
   // See: https://github.com/openclaw/openclaw/issues/15692
   const summaryText = res.summary?.trim();
   const deliveryPlan = resolveCronDeliveryPlan(job);
-  if (summaryText && deliveryPlan.requested && !res.delivered) {
+  const suppressMainSummary =
+    res.status === "error" && res.errorKind === "delivery-target" && deliveryPlan.requested;
+  if (summaryText && deliveryPlan.requested && !res.delivered && !suppressMainSummary) {
     const prefix = "Cron";
     const label =
       res.status === "error" ? `${prefix} (error): ${summaryText}` : `${prefix}: ${summaryText}`;
