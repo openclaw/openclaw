@@ -15,8 +15,17 @@ vi.mock("./tools/nodes-utils.js", () => ({
   resolveNodeIdFromList: vi.fn((nodes: Array<{ nodeId: string }>) => nodes[0]?.nodeId),
 }));
 
+vi.mock("../infra/exec-obfuscation-detect.js", () => ({
+  detectCommandObfuscation: vi.fn(() => ({
+    detected: false,
+    reasons: [],
+    matchedPatterns: [],
+  })),
+}));
+
 let callGatewayTool: typeof import("./tools/gateway.js").callGatewayTool;
 let createExecTool: typeof import("./bash-tools.exec.js").createExecTool;
+let detectCommandObfuscation: typeof import("../infra/exec-obfuscation-detect.js").detectCommandObfuscation;
 
 describe("exec approvals", () => {
   let previousHome: string | undefined;
@@ -25,6 +34,7 @@ describe("exec approvals", () => {
   beforeAll(async () => {
     ({ callGatewayTool } = await import("./tools/gateway.js"));
     ({ createExecTool } = await import("./bash-tools.exec.js"));
+    ({ detectCommandObfuscation } = await import("../infra/exec-obfuscation-detect.js"));
   });
 
   beforeEach(async () => {
@@ -181,5 +191,79 @@ describe("exec approvals", () => {
     expect(result.details.status).toBe("approval-pending");
     await approvalSeen;
     expect(calls).toContain("exec.approval.request");
+  });
+
+  it("denies node obfuscated command when approval request times out", async () => {
+    vi.mocked(detectCommandObfuscation).mockReturnValue({
+      detected: true,
+      reasons: ["Content piped directly to shell interpreter"],
+      matchedPatterns: ["pipe-to-shell"],
+    });
+
+    const calls: string[] = [];
+    vi.mocked(callGatewayTool).mockImplementation(async (method) => {
+      calls.push(method);
+      if (method === "exec.approval.request") {
+        return {};
+      }
+      if (method === "node.invoke") {
+        return { payload: { success: true, stdout: "should-not-run" } };
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "node",
+      ask: "off",
+      security: "full",
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call5", { command: "echo hi | sh" });
+    expect(result.details.status).toBe("approval-pending");
+    await expect.poll(() => calls.filter((call) => call === "node.invoke").length).toBe(0);
+  });
+
+  it("denies gateway obfuscated command when approval request times out", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    vi.mocked(detectCommandObfuscation).mockReturnValue({
+      detected: true,
+      reasons: ["Content piped directly to shell interpreter"],
+      matchedPatterns: ["pipe-to-shell"],
+    });
+
+    vi.mocked(callGatewayTool).mockImplementation(async (method) => {
+      if (method === "exec.approval.request") {
+        return {};
+      }
+      return { ok: true };
+    });
+
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-obf-"));
+    const markerPath = path.join(tempDir, "ran.txt");
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "off",
+      security: "full",
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call6", {
+      command: `echo touch ${JSON.stringify(markerPath)} | sh`,
+    });
+    expect(result.details.status).toBe("approval-pending");
+    await expect
+      .poll(async () => {
+        try {
+          await fs.access(markerPath);
+          return true;
+        } catch {
+          return false;
+        }
+      })
+      .toBe(false);
   });
 });
