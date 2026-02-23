@@ -1,8 +1,34 @@
 import type { StreamFn } from "@mariozechner/pi-agent-core";
 import type { Context, Model } from "@mariozechner/pi-ai";
-import { AssistantMessageEventStream } from "@mariozechner/pi-ai";
+import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
 import { applyExtraParamsToAgent } from "./extra-params.js";
+
+type StreamPayload = {
+  messages: Array<{
+    role: string;
+    content: unknown;
+  }>;
+};
+
+function runOpenRouterPayload(payload: StreamPayload, modelId: string) {
+  const baseStreamFn: StreamFn = (_model, _context, options) => {
+    options?.onPayload?.(payload);
+    return createAssistantMessageEventStream();
+  };
+  const agent = { streamFn: baseStreamFn };
+
+  applyExtraParamsToAgent(agent, undefined, "openrouter", modelId);
+
+  const model = {
+    api: "openai-completions",
+    provider: "openrouter",
+    id: modelId,
+  } as Model<"openai-completions">;
+  const context: Context = { messages: [] };
+
+  void agent.streamFn?.(model, context, {});
+}
 
 describe("extra-params: OpenRouter Anthropic cache_control", () => {
   it("injects cache_control into system message for OpenRouter Anthropic models", () => {
@@ -12,22 +38,8 @@ describe("extra-params: OpenRouter Anthropic cache_control", () => {
         { role: "user", content: "Hello" },
       ],
     };
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      options?.onPayload?.(payload);
-      return new AssistantMessageEventStream();
-    };
-    const agent = { streamFn: baseStreamFn };
 
-    applyExtraParamsToAgent(agent, undefined, "openrouter", "anthropic/claude-opus-4-6");
-
-    const model = {
-      api: "openai-completions",
-      provider: "openrouter",
-      id: "anthropic/claude-opus-4-6",
-    } as Model<"openai-completions">;
-    const context: Context = { messages: [] };
-
-    void agent.streamFn?.(model, context, {});
+    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6");
 
     expect(payload.messages[0].content).toEqual([
       { type: "text", text: "You are a helpful assistant.", cache_control: { type: "ephemeral" } },
@@ -47,22 +59,8 @@ describe("extra-params: OpenRouter Anthropic cache_control", () => {
         },
       ],
     };
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      options?.onPayload?.(payload);
-      return new AssistantMessageEventStream();
-    };
-    const agent = { streamFn: baseStreamFn };
 
-    applyExtraParamsToAgent(agent, undefined, "openrouter", "anthropic/claude-opus-4-6");
-
-    const model = {
-      api: "openai-completions",
-      provider: "openrouter",
-      id: "anthropic/claude-opus-4-6",
-    } as Model<"openai-completions">;
-    const context: Context = { messages: [] };
-
-    void agent.streamFn?.(model, context, {});
+    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6");
 
     const content = payload.messages[0].content as Array<Record<string, unknown>>;
     expect(content[0]).toEqual({ type: "text", text: "Part 1" });
@@ -77,23 +75,19 @@ describe("extra-params: OpenRouter Anthropic cache_control", () => {
     const payload = {
       messages: [{ role: "system", content: "You are a helpful assistant." }],
     };
-    const baseStreamFn: StreamFn = (_model, _context, options) => {
-      options?.onPayload?.(payload);
-      return new AssistantMessageEventStream();
-    };
-    const agent = { streamFn: baseStreamFn };
 
-    applyExtraParamsToAgent(agent, undefined, "openrouter", "google/gemini-3-pro");
-
-    const model = {
-      api: "openai-completions",
-      provider: "openrouter",
-      id: "google/gemini-3-pro",
-    } as Model<"openai-completions">;
-    const context: Context = { messages: [] };
-
-    void agent.streamFn?.(model, context, {});
+    runOpenRouterPayload(payload, "google/gemini-3-pro");
 
     expect(payload.messages[0].content).toBe("You are a helpful assistant.");
+  });
+
+  it("leaves payload unchanged when no system message exists", () => {
+    const payload = {
+      messages: [{ role: "user", content: "Hello" }],
+    };
+
+    runOpenRouterPayload(payload, "anthropic/claude-opus-4-6");
+
+    expect(payload.messages[0].content).toBe("Hello");
   });
 });

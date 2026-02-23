@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import type { CronEvent, CronServiceDeps } from "./service.js";
 import { CronService } from "./service.js";
-import { createNoopLogger, installCronTestHooks } from "./service.test-harness.js";
+import { createDeferred, createNoopLogger, installCronTestHooks } from "./service.test-harness.js";
 
 const noopLogger = createNoopLogger();
 installCronTestHooks({ logger: noopLogger });
@@ -195,16 +195,6 @@ beforeEach(() => {
   fsState.fixtureCount = 0;
   ensureDir(fixturesRoot);
 });
-
-function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
 
 function createCronEventHarness() {
   const events: CronEvent[] = [];

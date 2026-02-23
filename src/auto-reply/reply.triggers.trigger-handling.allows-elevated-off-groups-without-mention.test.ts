@@ -1,13 +1,12 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { loadSessionStore } from "../config/sessions.js";
 import {
+  expectDirectElevatedToggleOn,
   installTriggerHandlingE2eTestHooks,
   loadGetReplyFromConfig,
-  MAIN_SESSION_KEY,
   makeWhatsAppElevatedCfg,
   readSessionStore,
   requireSessionStorePath,
-  runDirectElevatedToggleAndLoadStore,
   withTempHome,
 } from "./reply.triggers.trigger-handling.test-harness.js";
 
@@ -72,14 +71,6 @@ describe("trigger handling", () => {
   });
 
   it("allows elevated directive in direct chats without mentions", async () => {
-    await withTempHome(async (home) => {
-      const cfg = makeWhatsAppElevatedCfg(home);
-      const { text, store } = await runDirectElevatedToggleAndLoadStore({
-        cfg,
-        getReplyFromConfig,
-      });
-      expect(text).toContain("Elevated mode set to ask");
-      expect(store[MAIN_SESSION_KEY]?.elevatedLevel).toBe("on");
-    });
+    await expectDirectElevatedToggleOn({ getReplyFromConfig });
   });
 });

@@ -104,6 +104,28 @@ describe("noteMemorySearchHealth", () => {
     });
     expect(note).not.toHaveBeenCalled();
   });
+
+  it("resolves mistral auth for explicit mistral embedding provider", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "mistral",
+      local: {},
+      remote: {},
+    });
+    resolveApiKeyForProvider.mockResolvedValue({
+      apiKey: "k",
+      source: "env: MISTRAL_API_KEY",
+      mode: "api-key",
+    });
+
+    await noteMemorySearchHealth(cfg);
+
+    expect(resolveApiKeyForProvider).toHaveBeenCalledWith({
+      provider: "mistral",
+      cfg,
+      agentDir: "/tmp/agent-default",
+    });
+    expect(note).not.toHaveBeenCalled();
+  });
 });
 
 describe("detectLegacyWorkspaceDirs", () => {

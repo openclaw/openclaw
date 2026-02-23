@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { resolveGatewayProbeAuth as resolveStatusGatewayProbeAuth } from "../commands/status.gateway-probe.js";
-import type { OpenClawConfig, loadConfig } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { resolveGatewayCredentialsFromConfig } from "./credentials.js";
 import { resolveGatewayProbeAuth } from "./probe-auth.js";
@@ -18,6 +18,24 @@ type TestCase = {
   env: NodeJS.ProcessEnv;
   expected: ExpectedCredentialSet;
 };
+
+const gatewayEnv = {
+  OPENCLAW_GATEWAY_TOKEN: "env-token",
+  OPENCLAW_GATEWAY_PASSWORD: "env-password",
+} as NodeJS.ProcessEnv;
+
+function makeRemoteGatewayConfig(remote: { token?: string; password?: string }): OpenClawConfig {
+  return {
+    gateway: {
+      mode: "remote",
+      remote,
+      auth: {
+        token: "local-token",
+        password: "local-password",
+      },
+    },
+  } as OpenClawConfig;
+}
 
 function withGatewayAuthEnv<T>(env: NodeJS.ProcessEnv, fn: () => T): T {
   const keys = [
@@ -76,23 +94,11 @@ describe("gateway credential precedence parity", () => {
     },
     {
       name: "remote mode with remote token configured",
-      cfg: {
-        gateway: {
-          mode: "remote",
-          remote: {
-            token: "remote-token",
-            password: "remote-password",
-          },
-          auth: {
-            token: "local-token",
-            password: "local-password",
-          },
-        },
-      } as OpenClawConfig,
-      env: {
-        OPENCLAW_GATEWAY_TOKEN: "env-token",
-        OPENCLAW_GATEWAY_PASSWORD: "env-password",
-      } as NodeJS.ProcessEnv,
+      cfg: makeRemoteGatewayConfig({
+        token: "remote-token",
+        password: "remote-password",
+      }),
+      env: gatewayEnv,
       expected: {
         call: { token: "remote-token", password: "env-password" },
         probe: { token: "remote-token", password: "env-password" },
@@ -102,22 +108,10 @@ describe("gateway credential precedence parity", () => {
     },
     {
       name: "remote mode without remote token keeps remote probe/status strict",
-      cfg: {
-        gateway: {
-          mode: "remote",
-          remote: {
-            password: "remote-password",
-          },
-          auth: {
-            token: "local-token",
-            password: "local-password",
-          },
-        },
-      } as OpenClawConfig,
-      env: {
-        OPENCLAW_GATEWAY_TOKEN: "env-token",
-        OPENCLAW_GATEWAY_PASSWORD: "env-password",
-      } as NodeJS.ProcessEnv,
+      cfg: makeRemoteGatewayConfig({
+        password: "remote-password",
+      }),
+      env: gatewayEnv,
       expected: {
         call: { token: "env-token", password: "env-password" },
         probe: { token: undefined, password: "env-password" },

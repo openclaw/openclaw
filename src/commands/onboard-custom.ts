@@ -383,6 +383,26 @@ async function promptCustomApiModelId(prompter: WizardPrompter): Promise<string>
   ).trim();
 }
 
+async function applyCustomApiRetryChoice(params: {
+  prompter: WizardPrompter;
+  retryChoice: CustomApiRetryChoice;
+  current: { baseUrl: string; apiKey: string; modelId: string };
+}): Promise<{ baseUrl: string; apiKey: string; modelId: string }> {
+  let { baseUrl, apiKey, modelId } = params.current;
+  if (params.retryChoice === "baseUrl" || params.retryChoice === "both") {
+    const retryInput = await promptBaseUrlAndKey({
+      prompter: params.prompter,
+      initialBaseUrl: baseUrl,
+    });
+    baseUrl = retryInput.baseUrl;
+    apiKey = retryInput.apiKey;
+  }
+  if (params.retryChoice === "model" || params.retryChoice === "both") {
+    modelId = await promptCustomApiModelId(params.prompter);
+  }
+  return { baseUrl, apiKey, modelId };
+}
+
 function resolveProviderApi(
   compatibility: CustomApiCompatibility,
 ): "openai-completions" | "anthropic-messages" {
@@ -618,17 +638,11 @@ export async function promptCustomApiConfig(params: {
             "Endpoint detection",
           );
           const retryChoice = await promptCustomApiRetryChoice(prompter);
-          if (retryChoice === "baseUrl" || retryChoice === "both") {
-            const retryInput = await promptBaseUrlAndKey({
-              prompter,
-              initialBaseUrl: baseUrl,
-            });
-            baseUrl = retryInput.baseUrl;
-            apiKey = retryInput.apiKey;
-          }
-          if (retryChoice === "model" || retryChoice === "both") {
-            modelId = await promptCustomApiModelId(prompter);
-          }
+          ({ baseUrl, apiKey, modelId } = await applyCustomApiRetryChoice({
+            prompter,
+            retryChoice,
+            current: { baseUrl, apiKey, modelId },
+          }));
           continue;
         }
       }
@@ -653,17 +667,11 @@ export async function promptCustomApiConfig(params: {
       verifySpinner.stop(`Verification failed: ${formatVerificationError(result.error)}`);
     }
     const retryChoice = await promptCustomApiRetryChoice(prompter);
-    if (retryChoice === "baseUrl" || retryChoice === "both") {
-      const retryInput = await promptBaseUrlAndKey({
-        prompter,
-        initialBaseUrl: baseUrl,
-      });
-      baseUrl = retryInput.baseUrl;
-      apiKey = retryInput.apiKey;
-    }
-    if (retryChoice === "model" || retryChoice === "both") {
-      modelId = await promptCustomApiModelId(prompter);
-    }
+    ({ baseUrl, apiKey, modelId } = await applyCustomApiRetryChoice({
+      prompter,
+      retryChoice,
+      current: { baseUrl, apiKey, modelId },
+    }));
     if (compatibilityChoice === "unknown") {
       compatibility = null;
     }

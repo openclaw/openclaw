@@ -2,7 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { appendCronRunLog, readCronRunLogEntries, resolveCronRunLogPath } from "./run-log.js";
+import {
+  appendCronRunLog,
+  getPendingCronRunLogWriteCountForTests,
+  readCronRunLogEntries,
+  resolveCronRunLogPath,
+} from "./run-log.js";
 
 describe("cron run log", () => {
   async function withRunLogDir(prefix: string, run: (dir: string) => Promise<void>) {
@@ -105,7 +110,7 @@ describe("cron run log", () => {
     });
   });
 
-  it("ignores invalid and non-finished lines while preserving delivered flag", async () => {
+  it("ignores invalid and non-finished lines while preserving delivery fields", async () => {
     await withRunLogDir("openclaw-cron-log-filter-", async (dir) => {
       const logPath = path.join(dir, "runs", "job-1.jsonl");
       await fs.mkdir(path.dirname(logPath), { recursive: true });
@@ -120,6 +125,8 @@ describe("cron run log", () => {
             action: "finished",
             status: "ok",
             delivered: true,
+            deliveryStatus: "not-delivered",
+            deliveryError: "announce failed",
           }),
         ].join("\n") + "\n",
         "utf-8",
@@ -129,6 +136,8 @@ describe("cron run log", () => {
       expect(entries).toHaveLength(1);
       expect(entries[0]?.ts).toBe(2);
       expect(entries[0]?.delivered).toBe(true);
+      expect(entries[0]?.deliveryStatus).toBe("not-delivered");
+      expect(entries[0]?.deliveryError).toBe("announce failed");
     });
   });
 
@@ -179,6 +188,20 @@ describe("cron run log", () => {
       expect(entries[1]?.model).toBeUndefined();
       expect(entries[1]?.provider).toBeUndefined();
       expect(entries[1]?.usage?.input_tokens).toBeUndefined();
+    });
+  });
+
+  it("cleans up pending-write bookkeeping after appends complete", async () => {
+    await withRunLogDir("openclaw-cron-log-pending-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-cleanup.jsonl");
+      await appendCronRunLog(logPath, {
+        ts: 1,
+        jobId: "job-cleanup",
+        action: "finished",
+        status: "ok",
+      });
+
+      expect(getPendingCronRunLogWriteCountForTests()).toBe(0);
     });
   });
 });

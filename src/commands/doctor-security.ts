@@ -1,4 +1,3 @@
-import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
@@ -7,10 +6,19 @@ import { resolveGatewayAuth } from "../gateway/auth.js";
 import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
 import { resolveDmAllowState } from "../security/dm-policy-shared.js";
 import { note } from "../terminal/note.js";
+import { resolveDefaultChannelAccountContext } from "./channel-account-context.js";
 
 export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   const warnings: string[] = [];
   const auditHint = `- Run: ${formatCliCommand("openclaw security audit --deep")}`;
+
+  if (cfg.approvals?.exec?.enabled === false) {
+    warnings.push(
+      "- Note: approvals.exec.enabled=false disables approval forwarding only.",
+      "  Host exec gating still comes from ~/.openclaw/exec-approvals.json.",
+      `  Check local policy with: ${formatCliCommand("openclaw approvals get --gateway")}`,
+    );
+  }
 
   // ===========================================
   // GATEWAY NETWORK EXPOSURE CHECK
@@ -133,20 +141,11 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
     if (!plugin.security) {
       continue;
     }
-    const accountIds = plugin.config.listAccountIds(cfg);
-    const defaultAccountId = resolveChannelDefaultAccountId({
-      plugin,
-      cfg,
-      accountIds,
-    });
-    const account = plugin.config.resolveAccount(cfg, defaultAccountId);
-    const enabled = plugin.config.isEnabled ? plugin.config.isEnabled(account, cfg) : true;
+    const { defaultAccountId, account, enabled, configured } =
+      await resolveDefaultChannelAccountContext(plugin, cfg);
     if (!enabled) {
       continue;
     }
-    const configured = plugin.config.isConfigured
-      ? await plugin.config.isConfigured(account, cfg)
-      : true;
     if (!configured) {
       continue;
     }

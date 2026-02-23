@@ -8,6 +8,7 @@ import {
   resolveEnvApiKey,
 } from "../../agents/model-auth.js";
 import {
+  ANTIGRAVITY_GEMINI_31_FORWARD_COMPAT_CANDIDATES,
   ANTIGRAVITY_OPUS_46_FORWARD_COMPAT_CANDIDATES,
   resolveForwardCompatModel,
 } from "../../agents/model-forward-compat.js";
@@ -117,6 +118,9 @@ export async function loadModelRegistry(cfg: OpenClawConfig) {
     for (const synthesized of synthesizedForwardCompat) {
       if (hasAvailableTemplate(availableKeys, synthesized.templatePrefixes)) {
         availableKeys.add(synthesized.key);
+        for (const aliasKey of synthesized.availabilityAliasKeys) {
+          availableKeys.add(aliasKey);
+        }
       }
     }
   } catch (err) {
@@ -137,6 +141,7 @@ export async function loadModelRegistry(cfg: OpenClawConfig) {
 type SynthesizedForwardCompat = {
   key: string;
   templatePrefixes: readonly string[];
+  availabilityAliasKeys: readonly string[];
 };
 
 function appendAntigravityForwardCompatModels(
@@ -145,8 +150,12 @@ function appendAntigravityForwardCompatModels(
 ): { models: Model<Api>[]; synthesizedForwardCompat: SynthesizedForwardCompat[] } {
   const nextModels = [...models];
   const synthesizedForwardCompat: SynthesizedForwardCompat[] = [];
+  const candidates = [
+    ...ANTIGRAVITY_OPUS_46_FORWARD_COMPAT_CANDIDATES,
+    ...ANTIGRAVITY_GEMINI_31_FORWARD_COMPAT_CANDIDATES,
+  ];
 
-  for (const candidate of ANTIGRAVITY_OPUS_46_FORWARD_COMPAT_CANDIDATES) {
+  for (const candidate of candidates) {
     const key = modelKey("google-antigravity", candidate.id);
     const hasForwardCompat = nextModels.some((model) => modelKey(model.provider, model.id) === key);
     if (hasForwardCompat) {
@@ -162,6 +171,9 @@ function appendAntigravityForwardCompatModels(
     synthesizedForwardCompat.push({
       key,
       templatePrefixes: candidate.templatePrefixes,
+      availabilityAliasKeys: candidate.availabilityAliasIds.map((id) =>
+        modelKey("google-antigravity", id),
+      ),
     });
   }
 

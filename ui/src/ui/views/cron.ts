@@ -333,7 +333,7 @@ export function renderCron(props: CronProps) {
                 <div class="muted" style="margin-top: 12px">No runs yet.</div>
               `
             : html`
-              <div class="list list-scroll" style="margin-top: 12px;">
+              <div class="list" style="margin-top: 12px;">
                 ${orderedRuns.map((entry) => renderRun(entry, props.basePath))}
               </div>
             `

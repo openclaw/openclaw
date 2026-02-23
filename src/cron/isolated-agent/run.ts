@@ -156,10 +156,19 @@ export async function runCronIsolatedAgentTurn(params: {
   job: CronJob;
   message: string;
   abortSignal?: AbortSignal;
+  signal?: AbortSignal;
   sessionKey: string;
   agentId?: string;
   lane?: string;
 }): Promise<RunCronAgentTurnResult> {
+  const abortSignal = params.abortSignal ?? params.signal;
+  const isAborted = () => abortSignal?.aborted === true;
+  const abortReason = () => {
+    const reason = abortSignal?.reason;
+    return typeof reason === "string" && reason.trim()
+      ? reason.trim()
+      : "cron: job execution timed out";
+  };
   const isFastTestEnv = process.env.OPENCLAW_TEST_FAST === "1";
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
   const requestedAgentId =
@@ -270,6 +279,8 @@ export async function runCronIsolatedAgentTurn(params: {
     sessionKey: agentSessionKey,
     agentId,
     nowMs: now,
+    // Isolated cron runs must not carry prior turn context across executions.
+    forceNew: params.job.sessionTarget === "isolated",
   });
   const runSessionId = cronSession.sessionEntry.sessionId;
   const runSessionKey = baseSessionKey.startsWith("cron:")
@@ -471,8 +482,8 @@ export async function runCronIsolatedAgentTurn(params: {
       agentDir,
       fallbacksOverride: resolveAgentModelFallbacksOverride(params.cfg, agentId),
       run: (providerOverride, modelOverride) => {
-        if (params.abortSignal?.aborted) {
-          throw new Error("cron: isolated run aborted");
+        if (abortSignal?.aborted) {
+          throw new Error(abortReason());
         }
         if (isCliProvider(providerOverride, cfgWithAgentDefaults)) {
           const cliSessionId = getCliSessionId(cronSession.sessionEntry, providerOverride);
@@ -499,6 +510,7 @@ export async function runCronIsolatedAgentTurn(params: {
           messageChannel,
           agentAccountId: resolvedDelivery.accountId,
           sessionFile,
+          agentDir,
           workspaceDir,
           config: cfgWithAgentDefaults,
           skillsSnapshot,
@@ -514,7 +526,7 @@ export async function runCronIsolatedAgentTurn(params: {
           runId: cronSession.sessionEntry.sessionId,
           requireExplicitMessageTarget: true,
           disableMessageTool: deliveryRequested,
-          abortSignal: params.abortSignal,
+          abortSignal,
         });
       },
     });
@@ -524,6 +536,10 @@ export async function runCronIsolatedAgentTurn(params: {
     runEndedAt = Date.now();
   } catch (err) {
     return withRunSession({ status: "error", error: String(err) });
+  }
+
+  if (isAborted()) {
+    return withRunSession({ status: "error", error: abortReason() });
   }
 
   const payloads = runResult.payloads ?? [];
@@ -580,6 +596,10 @@ export async function runCronIsolatedAgentTurn(params: {
       };
     }
     await persistSessionEntry();
+  }
+
+  if (isAborted()) {
+    return withRunSession({ status: "error", error: abortReason(), ...telemetry });
   }
   const firstText = payloads[0]?.text ?? "";
   let summary = pickSummaryFromPayloads(payloads) ?? pickSummaryFromOutput(firstText);
@@ -654,7 +674,13 @@ export async function runCronIsolatedAgentTurn(params: {
     // follows the same system-message injection path as subagent completions.
     // Keep direct outbound delivery only for structured payloads (media/channel
     // data), which cannot be represented by the shared announce flow.
-    if (deliveryPayloadHasStructuredContent) {
+    //
+    // Forum/topic targets should also use direct delivery. Announce flow can
+    // be swallowed by ANNOUNCE_SKIP/NO_REPLY in the target agent turn, which
+    // silently drops cron output for topic-bound sessions.
+    const useDirectDelivery =
+      deliveryPayloadHasStructuredContent || resolvedDelivery.threadId != null;
+    if (useDirectDelivery) {
       try {
         const payloadsForDelivery =
           deliveryPayloads.length > 0
@@ -663,6 +689,9 @@ export async function runCronIsolatedAgentTurn(params: {
               ? [{ text: synthesizedText }]
               : [];
         if (payloadsForDelivery.length > 0) {
+          if (isAborted()) {
+            return withRunSession({ status: "error", error: abortReason(), ...telemetry });
+          }
           const deliveryResults = await deliverOutboundPayloads({
             cfg: cfgWithAgentDefaults,
             channel: resolvedDelivery.channel,
@@ -674,6 +703,7 @@ export async function runCronIsolatedAgentTurn(params: {
             identity,
             bestEffort: deliveryBestEffort,
             deps: createOutboundSendDeps(params.deps),
+            abortSignal,
           });
           delivered = deliveryResults.length > 0;
         }
@@ -756,6 +786,9 @@ export async function runCronIsolatedAgentTurn(params: {
         return withRunSession({ status: "ok", summary, outputText, delivered: true, ...telemetry });
       }
       try {
+        if (isAborted()) {
+          return withRunSession({ status: "error", error: abortReason(), ...telemetry });
+        }
         const didAnnounce = await runSubagentAnnounceFlow({
           childSessionKey: agentSessionKey,
           childRunId: `${params.job.id}:${runSessionId}`,
@@ -776,6 +809,7 @@ export async function runCronIsolatedAgentTurn(params: {
           endedAt: runEndedAt,
           outcome: { status: "ok" },
           announceType: "cron job",
+          signal: abortSignal,
         });
         if (didAnnounce) {
           delivered = true;

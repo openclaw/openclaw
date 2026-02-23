@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { writeSkill } from "./skills.e2e-test-helpers.js";
-import { buildWorkspaceSkillSnapshot } from "./skills.js";
+import { buildWorkspaceSkillSnapshot, buildWorkspaceSkillsPrompt } from "./skills.js";
 
 const tempDirs = createTrackedTempDirs();
 
@@ -49,6 +49,47 @@ describe("buildWorkspaceSkillSnapshot", () => {
       "hidden-skill",
       "visible-skill",
     ]);
+  });
+
+  it("keeps prompt output aligned with buildWorkspaceSkillsPrompt", async () => {
+    const workspaceDir = await tempDirs.make("openclaw-");
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "visible"),
+      name: "visible",
+      description: "Visible",
+    });
+    await writeSkill({
+      dir: path.join(workspaceDir, "skills", "hidden"),
+      name: "hidden",
+      description: "Hidden",
+      frontmatterExtra: "disable-model-invocation: true",
+    });
+    const config = {
+      skills: {
+        limits: {
+          maxSkillsInPrompt: 1,
+          maxSkillsPromptChars: 200,
+        },
+      },
+    } as const;
+    const opts = {
+      config,
+      managedSkillsDir: path.join(workspaceDir, ".managed"),
+      bundledSkillsDir: path.join(workspaceDir, ".bundled"),
+      eligibility: {
+        remote: {
+          platforms: ["linux"],
+          hasBin: (_bin: string) => true,
+          hasAnyBin: (_bins: string[]) => true,
+          note: "Remote note",
+        },
+      },
+    };
+
+    const snapshot = buildWorkspaceSkillSnapshot(workspaceDir, opts);
+    const prompt = buildWorkspaceSkillsPrompt(workspaceDir, opts);
+
+    expect(snapshot.prompt).toBe(prompt);
   });
 
   it("truncates the skills prompt when it exceeds the configured char budget", async () => {

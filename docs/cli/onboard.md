@@ -56,6 +56,14 @@ openclaw onboard --non-interactive \
 # --auth-choice zai-cn
 ```
 
+Non-interactive Mistral example:
+
+```bash
+openclaw onboard --non-interactive \
+  --auth-choice mistral-api-key \
+  --mistral-api-key "$MISTRAL_API_KEY"
+```
+
 Flow notes:
 
 - `quickstart`: minimal prompts, auto-generates a gateway token.

@@ -7,6 +7,7 @@ import {
   upsertPendingPairingRequest,
   writeJsonAtomic,
 } from "./pairing-files.js";
+import { rejectPendingPairingRequest } from "./pairing-pending.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
 export type NodePairingPendingRequest = {
@@ -194,14 +195,17 @@ export async function rejectNodePairing(
   baseDir?: string,
 ): Promise<{ requestId: string; nodeId: string } | null> {
   return await withLock(async () => {
-    const state = await loadState(baseDir);
-    const pending = state.pendingById[requestId];
-    if (!pending) {
-      return null;
-    }
-    delete state.pendingById[requestId];
-    await persistState(state, baseDir);
-    return { requestId, nodeId: pending.nodeId };
+    return await rejectPendingPairingRequest<
+      NodePairingPendingRequest,
+      NodePairingStateFile,
+      "nodeId"
+    >({
+      requestId,
+      idKey: "nodeId",
+      loadState: () => loadState(baseDir),
+      persistState: (state) => persistState(state, baseDir),
+      getId: (pending: NodePairingPendingRequest) => pending.nodeId,
+    });
   });
 }
 

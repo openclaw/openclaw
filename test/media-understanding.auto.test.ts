@@ -30,12 +30,31 @@ const envSnapshot = () => ({
   PATH: process.env.PATH,
   SHERPA_ONNX_MODEL_DIR: process.env.SHERPA_ONNX_MODEL_DIR,
   WHISPER_CPP_MODEL: process.env.WHISPER_CPP_MODEL,
+  OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+  GROQ_API_KEY: process.env.GROQ_API_KEY,
+  DEEPGRAM_API_KEY: process.env.DEEPGRAM_API_KEY,
+  GEMINI_API_KEY: process.env.GEMINI_API_KEY,
+  OPENCLAW_AGENT_DIR: process.env.OPENCLAW_AGENT_DIR,
+  PI_CODING_AGENT_DIR: process.env.PI_CODING_AGENT_DIR,
 });
 
 const restoreEnv = (snapshot: ReturnType<typeof envSnapshot>) => {
-  process.env.PATH = snapshot.PATH;
-  process.env.SHERPA_ONNX_MODEL_DIR = snapshot.SHERPA_ONNX_MODEL_DIR;
-  process.env.WHISPER_CPP_MODEL = snapshot.WHISPER_CPP_MODEL;
+  const restoreEnvVar = (key: string, value: string | undefined) => {
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  };
+  restoreEnvVar("PATH", snapshot.PATH);
+  restoreEnvVar("SHERPA_ONNX_MODEL_DIR", snapshot.SHERPA_ONNX_MODEL_DIR);
+  restoreEnvVar("WHISPER_CPP_MODEL", snapshot.WHISPER_CPP_MODEL);
+  restoreEnvVar("OPENAI_API_KEY", snapshot.OPENAI_API_KEY);
+  restoreEnvVar("GROQ_API_KEY", snapshot.GROQ_API_KEY);
+  restoreEnvVar("DEEPGRAM_API_KEY", snapshot.DEEPGRAM_API_KEY);
+  restoreEnvVar("GEMINI_API_KEY", snapshot.GEMINI_API_KEY);
+  restoreEnvVar("OPENCLAW_AGENT_DIR", snapshot.OPENCLAW_AGENT_DIR);
+  restoreEnvVar("PI_CODING_AGENT_DIR", snapshot.PI_CODING_AGENT_DIR);
 };
 
 const withEnvSnapshot = async <T>(run: () => Promise<T>): Promise<T> => {
@@ -176,9 +195,16 @@ describe("media understanding auto-detect (e2e)", () => {
   it("skips auto-detect when no supported binaries are available", async () => {
     await withEnvSnapshot(async () => {
       const emptyBinDir = await createTrackedTempDir(tempPaths, "openclaw-bin-empty-");
+      const isolatedAgentDir = await createTrackedTempDir(tempPaths, "openclaw-agent-empty-");
       process.env.PATH = emptyBinDir;
       delete process.env.SHERPA_ONNX_MODEL_DIR;
       delete process.env.WHISPER_CPP_MODEL;
+      delete process.env.OPENAI_API_KEY;
+      delete process.env.GROQ_API_KEY;
+      delete process.env.DEEPGRAM_API_KEY;
+      delete process.env.GEMINI_API_KEY;
+      process.env.OPENCLAW_AGENT_DIR = isolatedAgentDir;
+      process.env.PI_CODING_AGENT_DIR = isolatedAgentDir;
 
       const filePath = await createTrackedTempMedia(tempPaths, ".wav");
       const ctx: MsgContext = {

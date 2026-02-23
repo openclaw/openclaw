@@ -22,6 +22,7 @@ import {
   onceMessage,
   piSdkMock,
   rpcReq,
+  startConnectedServerWithClient,
   startGatewayServer,
   startServerWithClient,
   testState,
@@ -35,17 +36,16 @@ let server: Awaited<ReturnType<typeof startServerWithClient>>["server"];
 let ws: WebSocket;
 let port: number;
 
-beforeAll(async () => {
-  const started = await startServerWithClient();
-  server = started.server;
-  ws = started.ws;
-  port = started.port;
-  await connectOk(ws);
-});
-
 afterAll(async () => {
   ws.close();
   await server.close();
+});
+
+beforeAll(async () => {
+  const started = await startConnectedServerWithClient();
+  server = started.server;
+  ws = started.ws;
+  port = started.port;
 });
 
 const whatsappOutbound: ChannelOutboundAdapter = {
@@ -442,12 +442,11 @@ describe("gateway server misc", () => {
     await autoServer.close();
 
     const updated = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
-    const plugins = updated.plugins as Record<string, unknown> | undefined;
-    const entries = plugins?.entries as Record<string, unknown> | undefined;
-    const discord = entries?.discord as Record<string, unknown> | undefined;
-    expect(discord?.enabled).toBe(true);
-    expect((updated.channels as Record<string, unknown> | undefined)?.discord).toMatchObject({
+    const channels = updated.channels as Record<string, unknown> | undefined;
+    const discord = channels?.discord as Record<string, unknown> | undefined;
+    expect(discord).toMatchObject({
       token: "token-123",
+      enabled: true,
     });
   });
 

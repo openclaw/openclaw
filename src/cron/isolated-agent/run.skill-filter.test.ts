@@ -327,6 +327,16 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     ]);
   });
 
+  it("forces a fresh session for isolated cron runs", async () => {
+    const result = await runCronIsolatedAgentTurn(makeParams());
+
+    expect(result.status).toBe("ok");
+    expect(resolveCronSessionMock).toHaveBeenCalledOnce();
+    expect(resolveCronSessionMock.mock.calls[0]?.[0]).toMatchObject({
+      forceNew: true,
+    });
+  });
+
   it("reuses cached snapshot when version and normalized skillFilter are unchanged", async () => {
     resolveAgentSkillsFilterMock.mockReturnValue([" weather ", "meme-factory", "weather"]);
     resolveCronSessionMock.mockReturnValue({

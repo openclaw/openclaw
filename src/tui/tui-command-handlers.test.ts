@@ -59,13 +59,13 @@ function createHarness(params?: {
 
 describe("tui command handlers", () => {
   it("renders the sending indicator before chat.send resolves", async () => {
-    let resolveSend: ((value: { runId: string }) => void) | null = null;
-    const sendChat = vi.fn(
-      () =>
-        new Promise<{ runId: string }>((resolve) => {
-          resolveSend = resolve;
-        }),
-    );
+    let resolveSend: (value: { runId: string }) => void = () => {
+      throw new Error("sendChat promise resolver was not initialized");
+    };
+    const sendPromise = new Promise<{ runId: string }>((resolve) => {
+      resolveSend = (value) => resolve(value);
+    });
+    const sendChat = vi.fn(() => sendPromise);
     const setActivityStatus = vi.fn();
 
     const { handleCommand, requestRender } = createHarness({
@@ -81,10 +81,7 @@ describe("tui command handlers", () => {
     const renderOrders = requestRender.mock.invocationCallOrder;
     expect(renderOrders.some((order) => order > sendingOrder)).toBe(true);
 
-    if (typeof resolveSend !== "function") {
-      throw new Error("expected sendChat to be pending");
-    }
-    (resolveSend as (value: { runId: string }) => void)({ runId: "r1" });
+    resolveSend({ runId: "r1" });
     await pending;
     expect(setActivityStatus).toHaveBeenCalledWith("waiting");
   });

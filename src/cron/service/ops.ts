@@ -12,7 +12,15 @@ import {
 import { locked } from "./locked.js";
 import type { CronServiceState } from "./state.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
-import { armTimer, emit, executeJob, runMissedJobs, stopTimer, wake } from "./timer.js";
+import {
+  applyJobResult,
+  armTimer,
+  emit,
+  executeJobCoreWithTimeout,
+  runMissedJobs,
+  stopTimer,
+  wake,
+} from "./timer.js";
 
 async function ensureLoadedForRead(state: CronServiceState) {
   await ensureLoaded(state, { skipRecompute: true });
@@ -201,7 +209,7 @@ export async function remove(state: CronServiceState, id: string) {
 }
 
 export async function run(state: CronServiceState, id: string, mode?: "due" | "force") {
-  return await locked(state, async () => {
+  const prepared = await locked(state, async () => {
     warnIfDisabled(state, "run");
     await ensureLoaded(state, { skipRecompute: true });
     const job = findJobOrThrow(state, id);
@@ -213,12 +221,85 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
     if (!due) {
       return { ok: true, ran: false, reason: "not-due" as const };
     }
-    await executeJob(state, job, now, { forced: mode === "force" });
+
+    // Reserve this run under lock, then execute outside lock so read ops
+    // (`list`, `status`) stay responsive while the run is in progress.
+    job.state.runningAtMs = now;
+    job.state.lastError = undefined;
+    emit(state, { jobId: job.id, action: "started", runAtMs: now });
+    const executionJob = JSON.parse(JSON.stringify(job)) as typeof job;
+    return {
+      ok: true,
+      ran: true,
+      jobId: job.id,
+      startedAt: now,
+      executionJob,
+    } as const;
+  });
+
+  if (!prepared.ran) {
+    return prepared;
+  }
+  if (!prepared.executionJob || typeof prepared.startedAt !== "number") {
+    return { ok: false } as const;
+  }
+  const executionJob = prepared.executionJob;
+  const startedAt = prepared.startedAt;
+  const jobId = prepared.jobId;
+
+  let coreResult: Awaited<ReturnType<typeof executeJobCoreWithTimeout>>;
+  try {
+    coreResult = await executeJobCoreWithTimeout(state, executionJob);
+  } catch (err) {
+    coreResult = { status: "error", error: String(err) };
+  }
+  const endedAt = state.deps.nowMs();
+
+  await locked(state, async () => {
+    await ensureLoaded(state, { skipRecompute: true });
+    const job = state.store?.jobs.find((entry) => entry.id === jobId);
+    if (!job) {
+      return;
+    }
+
+    const shouldDelete = applyJobResult(state, job, {
+      status: coreResult.status,
+      error: coreResult.error,
+      delivered: coreResult.delivered,
+      startedAt,
+      endedAt,
+    });
+
+    emit(state, {
+      jobId: job.id,
+      action: "finished",
+      status: coreResult.status,
+      error: coreResult.error,
+      summary: coreResult.summary,
+      delivered: coreResult.delivered,
+      deliveryStatus: job.state.lastDeliveryStatus,
+      deliveryError: job.state.lastDeliveryError,
+      sessionId: coreResult.sessionId,
+      sessionKey: coreResult.sessionKey,
+      runAtMs: startedAt,
+      durationMs: job.state.lastDurationMs,
+      nextRunAtMs: job.state.nextRunAtMs,
+      model: coreResult.model,
+      provider: coreResult.provider,
+      usage: coreResult.usage,
+    });
+
+    if (shouldDelete && state.store) {
+      state.store.jobs = state.store.jobs.filter((entry) => entry.id !== job.id);
+      emit(state, { jobId: job.id, action: "removed" });
+    }
+
     recomputeNextRuns(state);
     await persist(state);
     armTimer(state);
-    return { ok: true, ran: true } as const;
   });
+
+  return { ok: true, ran: true } as const;
 }
 
 export function wakeNow(

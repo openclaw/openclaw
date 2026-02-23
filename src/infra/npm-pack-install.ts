@@ -21,6 +21,69 @@ export type NpmSpecArchiveInstallFlowResult<TResult extends { ok: boolean }> =
       integrityDrift?: NpmIntegrityDrift;
     };
 
+export async function installFromNpmSpecArchiveWithInstaller<
+  TResult extends { ok: boolean },
+  TArchiveInstallParams extends { archivePath: string },
+>(params: {
+  tempDirPrefix: string;
+  spec: string;
+  timeoutMs: number;
+  expectedIntegrity?: string;
+  onIntegrityDrift?: (payload: NpmIntegrityDriftPayload) => boolean | Promise<boolean>;
+  warn?: (message: string) => void;
+  installFromArchive: (params: TArchiveInstallParams) => Promise<TResult>;
+  archiveInstallParams: Omit<TArchiveInstallParams, "archivePath">;
+}): Promise<NpmSpecArchiveInstallFlowResult<TResult>> {
+  return await installFromNpmSpecArchive({
+    tempDirPrefix: params.tempDirPrefix,
+    spec: params.spec,
+    timeoutMs: params.timeoutMs,
+    expectedIntegrity: params.expectedIntegrity,
+    onIntegrityDrift: params.onIntegrityDrift,
+    warn: params.warn,
+    installFromArchive: async ({ archivePath }) =>
+      await params.installFromArchive({
+        archivePath,
+        ...params.archiveInstallParams,
+      } as TArchiveInstallParams),
+  });
+}
+
+export type NpmSpecArchiveFinalInstallResult<TResult extends { ok: boolean }> =
+  | { ok: false; error: string }
+  | Exclude<TResult, { ok: true }>
+  | (Extract<TResult, { ok: true }> & {
+      npmResolution: NpmSpecResolution;
+      integrityDrift?: NpmIntegrityDrift;
+    });
+
+function isSuccessfulInstallResult<TResult extends { ok: boolean }>(
+  result: TResult,
+): result is Extract<TResult, { ok: true }> {
+  return result.ok;
+}
+
+export function finalizeNpmSpecArchiveInstall<TResult extends { ok: boolean }>(
+  flowResult: NpmSpecArchiveInstallFlowResult<TResult>,
+): NpmSpecArchiveFinalInstallResult<TResult> {
+  if (!flowResult.ok) {
+    return flowResult;
+  }
+  const installResult = flowResult.installResult;
+  if (!isSuccessfulInstallResult(installResult)) {
+    return installResult as Exclude<TResult, { ok: true }>;
+  }
+  const finalized: Extract<TResult, { ok: true }> & {
+    npmResolution: NpmSpecResolution;
+    integrityDrift?: NpmIntegrityDrift;
+  } = {
+    ...installResult,
+    npmResolution: flowResult.npmResolution,
+    ...(flowResult.integrityDrift ? { integrityDrift: flowResult.integrityDrift } : {}),
+  };
+  return finalized;
+}
+
 export async function installFromNpmSpecArchive<TResult extends { ok: boolean }>(params: {
   tempDirPrefix: string;
   spec: string;

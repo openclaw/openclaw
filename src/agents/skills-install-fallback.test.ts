@@ -30,7 +30,7 @@ vi.mock("../shared/config-eval.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../shared/config-eval.js")>();
   return {
     ...actual,
-    hasBinary: (...args: unknown[]) => hasBinaryMock(...args),
+    hasBinary: (bin: string) => hasBinaryMock(bin),
   };
 });
 

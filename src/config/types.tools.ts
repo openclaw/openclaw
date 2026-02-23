@@ -176,6 +176,42 @@ export type GroupToolPolicyConfig = {
   deny?: string[];
 };
 
+export const TOOLS_BY_SENDER_KEY_TYPES = ["id", "e164", "username", "name"] as const;
+export type ToolsBySenderKeyType = (typeof TOOLS_BY_SENDER_KEY_TYPES)[number];
+
+export function parseToolsBySenderTypedKey(
+  rawKey: string,
+): { type: ToolsBySenderKeyType; value: string } | undefined {
+  const trimmed = rawKey.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const lowered = trimmed.toLowerCase();
+  for (const type of TOOLS_BY_SENDER_KEY_TYPES) {
+    const prefix = `${type}:`;
+    if (!lowered.startsWith(prefix)) {
+      continue;
+    }
+    return {
+      type,
+      value: trimmed.slice(prefix.length),
+    };
+  }
+  return undefined;
+}
+
+/**
+ * Per-sender overrides.
+ *
+ * Prefer explicit key prefixes:
+ * - id:<senderId>
+ * - e164:<phone>
+ * - username:<handle>
+ * - name:<display-name>
+ * - * (wildcard)
+ *
+ * Legacy unprefixed keys are supported for backward compatibility and are matched as senderId only.
+ */
 export type GroupToolPolicyBySenderConfig = Record<string, GroupToolPolicyConfig>;
 
 export type ExecToolConfig = {
@@ -191,6 +227,8 @@ export type ExecToolConfig = {
   pathPrepend?: string[];
   /** Safe stdin-only binaries that can run without allowlist entries. */
   safeBins?: string[];
+  /** Extra explicit directories trusted for safeBins path checks (never derived from PATH). */
+  safeBinTrustedDirs?: string[];
   /** Optional custom safe-bin profiles for entries in tools.exec.safeBins. */
   safeBinProfiles?: Record<string, SafeBinProfileFixture>;
   /** Default time (ms) before an exec command auto-backgrounds. */
@@ -276,7 +314,7 @@ export type MemorySearchConfig = {
     sessionMemory?: boolean;
   };
   /** Embedding provider mode. */
-  provider?: "openai" | "gemini" | "local" | "voyage";
+  provider?: "openai" | "gemini" | "local" | "voyage" | "mistral";
   remote?: {
     baseUrl?: string;
     apiKey?: string;
@@ -295,7 +333,7 @@ export type MemorySearchConfig = {
     };
   };
   /** Fallback behavior when embeddings fail. */
-  fallback?: "openai" | "gemini" | "local" | "voyage" | "none";
+  fallback?: "openai" | "gemini" | "local" | "voyage" | "mistral" | "none";
   /** Embedding model id (remote) or alias (local). */
   model?: string;
   /** Local embedding settings (node-llama-cpp). */

@@ -51,11 +51,21 @@ describe("runCommandWithTimeout", () => {
       [
         process.execPath,
         "-e",
-        'process.stdout.write("."); setTimeout(() => process.stdout.write("."), 20); setTimeout(() => process.exit(0), 40);',
+        [
+          'process.stdout.write(".");',
+          "let count = 0;",
+          'const ticker = setInterval(() => { process.stdout.write(".");',
+          "count += 1;",
+          "if (count === 4) {",
+          "clearInterval(ticker);",
+          "process.exit(0);",
+          "}",
+          "}, 180);",
+        ].join(" "),
       ],
       {
-        timeoutMs: 500,
-        noOutputTimeoutMs: 250,
+        timeoutMs: 5_000,
+        noOutputTimeoutMs: 500,
       },
     );
 
@@ -63,7 +73,7 @@ describe("runCommandWithTimeout", () => {
     expect(result.code ?? 0).toBe(0);
     expect(result.termination).toBe("exit");
     expect(result.noOutputTimedOut).toBe(false);
-    expect(result.stdout.length).toBeGreaterThanOrEqual(2);
+    expect(result.stdout.length).toBeGreaterThanOrEqual(5);
   });
 
   it("reports global timeout termination when overall timeout elapses", async () => {

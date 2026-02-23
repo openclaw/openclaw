@@ -73,6 +73,7 @@ const mocks = vi.hoisted(() => {
       models: { providers: {} },
       env: { shellEnv: { enabled: true } },
     }),
+    loadProviderUsageSummary: vi.fn().mockResolvedValue(undefined),
   };
 });
 
@@ -113,6 +114,14 @@ vi.mock("../../config/config.js", async (importOriginal) => {
   return {
     ...actual,
     loadConfig: mocks.loadConfig,
+  };
+});
+
+vi.mock("../../infra/provider-usage.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/provider-usage.js")>();
+  return {
+    ...actual,
+    loadProviderUsageSummary: mocks.loadProviderUsageSummary,
   };
 });
 

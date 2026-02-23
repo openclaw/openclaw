@@ -6,7 +6,7 @@ import { installEmbeddingManagerFixture } from "./embedding-manager.test-harness
 
 const fx = installEmbeddingManagerFixture({
   fixturePrefix: "openclaw-mem-",
-  largeTokens: 1250,
+  largeTokens: 4000,
   smallTokens: 200,
   createCfg: ({ workspaceDir, indexPath, tokens }) => ({
     agents: {
@@ -50,6 +50,10 @@ describe("memory embedding batches", () => {
     );
     expect(totalTexts).toBe(status.chunks);
     expect(embedBatch.mock.calls.length).toBeGreaterThan(1);
+    const inputs: string[] = embedBatch.mock.calls.flatMap(
+      (call: unknown[]) => (call[0] as string[] | undefined) ?? [],
+    );
+    expect(inputs.every((text) => Buffer.byteLength(text, "utf8") <= 8000)).toBe(true);
     expect(updates.length).toBeGreaterThan(0);
     expect(updates.some((update) => update.label?.includes("/"))).toBe(true);
     const last = updates[updates.length - 1];

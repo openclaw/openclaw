@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
+import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import net from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -113,22 +115,6 @@ function createEaccesProcStatSpy() {
   });
 }
 
-async function acquireStaleLinuxLock(env: NodeJS.ProcessEnv) {
-  await writeLockFile(env, {
-    startTime: 111,
-    createdAt: new Date(0).toISOString(),
-  });
-  const staleProcSpy = createEaccesProcStatSpy();
-  const lock = await acquireForTest(env, {
-    staleMs: 1,
-    platform: "linux",
-  });
-  expect(lock).not.toBeNull();
-
-  await lock?.release();
-  staleProcSpy.mockRestore();
-}
-
 describe("gateway lock", () => {
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-lock-"));
@@ -203,7 +189,6 @@ describe("gateway lock", () => {
     await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
 
     spy.mockRestore();
-    await acquireStaleLinuxLock(env);
   });
 
   it("keeps lock when fs.stat fails until payload is stale", async () => {
@@ -223,8 +208,64 @@ describe("gateway lock", () => {
     await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
 
     procSpy.mockRestore();
-    await acquireStaleLinuxLock(env);
     statSpy.mockRestore();
+  });
+
+  it("treats lock as stale when owner pid is alive but configured port is free", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    await writeLockFile(env, {
+      startTime: 111,
+      createdAt: new Date().toISOString(),
+    });
+    const connectSpy = vi.spyOn(net, "createConnection").mockImplementation(() => {
+      const socket = new EventEmitter() as net.Socket;
+      socket.destroy = vi.fn();
+      setImmediate(() => {
+        socket.emit("error", Object.assign(new Error("ECONNREFUSED"), { code: "ECONNREFUSED" }));
+      });
+      return socket;
+    });
+
+    const lock = await acquireForTest(env, {
+      timeoutMs: 80,
+      pollIntervalMs: 5,
+      staleMs: 10_000,
+      platform: "darwin",
+      port: 18789,
+    });
+    expect(lock).not.toBeNull();
+    await lock?.release();
+    connectSpy.mockRestore();
+  });
+
+  it("keeps lock when configured port is busy and owner pid is alive", async () => {
+    vi.useRealTimers();
+    const env = await makeEnv();
+    await writeLockFile(env, {
+      startTime: 111,
+      createdAt: new Date().toISOString(),
+    });
+    const connectSpy = vi.spyOn(net, "createConnection").mockImplementation(() => {
+      const socket = new EventEmitter() as net.Socket;
+      socket.destroy = vi.fn();
+      setImmediate(() => {
+        socket.emit("connect");
+      });
+      return socket;
+    });
+    try {
+      const pending = acquireForTest(env, {
+        timeoutMs: 20,
+        pollIntervalMs: 2,
+        staleMs: 10_000,
+        platform: "darwin",
+        port: 18789,
+      });
+      await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
+    } finally {
+      connectSpy.mockRestore();
+    }
   });
 
   it("returns null when multi-gateway override is enabled", async () => {

@@ -6,7 +6,6 @@ import { isDeepStrictEqual } from "node:util";
 import JSON5 from "json5";
 import { ensureOwnerDisplaySecret } from "../agents/owner-display.js";
 import { loadDotEnv } from "../infra/dotenv.js";
-import { normalizeSafeBinProfileFixtures } from "../infra/exec-safe-bin-policy.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import {
   loadShellEnvFallback,
@@ -37,6 +36,7 @@ import { applyConfigEnvVars } from "./env-vars.js";
 import { ConfigIncludeError, resolveConfigIncludes } from "./includes.js";
 import { findLegacyConfigIssues } from "./legacy.js";
 import { applyMergePatch } from "./merge-patch.js";
+import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
 import { normalizeConfigPaths } from "./normalize-paths.js";
 import { resolveConfigPath, resolveDefaultConfigCandidates, resolveStateDir } from "./paths.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
@@ -554,33 +554,6 @@ function maybeLoadDotEnvForConfig(env: NodeJS.ProcessEnv): void {
     return;
   }
   loadDotEnv({ quiet: true });
-}
-
-function normalizeExecSafeBinProfilesInConfig(cfg: OpenClawConfig): void {
-  const normalizeExec = (exec: unknown) => {
-    if (!exec || typeof exec !== "object" || Array.isArray(exec)) {
-      return;
-    }
-    const typedExec = exec as { safeBinProfiles?: Record<string, unknown> };
-    const normalized = normalizeSafeBinProfileFixtures(
-      typedExec.safeBinProfiles as Record<
-        string,
-        {
-          minPositional?: number;
-          maxPositional?: number;
-          allowedValueFlags?: readonly string[];
-          deniedFlags?: readonly string[];
-        }
-      >,
-    );
-    typedExec.safeBinProfiles = Object.keys(normalized).length > 0 ? normalized : undefined;
-  };
-
-  normalizeExec(cfg.tools?.exec);
-  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  for (const agent of agents) {
-    normalizeExec(agent?.tools?.exec);
-  }
 }
 
 export function parseConfigJson5(

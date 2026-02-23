@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-contract.js";
-import { handleControlUiHttpRequest } from "./control-ui.js";
+import { handleControlUiAvatarRequest, handleControlUiHttpRequest } from "./control-ui.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 describe("handleControlUiHttpRequest", () => {
@@ -53,6 +53,24 @@ describe("handleControlUiHttpRequest", () => {
       {
         ...(params.basePath ? { basePath: params.basePath } : {}),
         root: { kind: "resolved", path: params.rootPath },
+      },
+    );
+    return { res, end, handled };
+  }
+
+  function runAvatarRequest(params: {
+    url: string;
+    method: "GET" | "HEAD";
+    resolveAvatar: Parameters<typeof handleControlUiAvatarRequest>[2]["resolveAvatar"];
+    basePath?: string;
+  }) {
+    const { res, end } = makeMockHttpResponse();
+    const handled = handleControlUiAvatarRequest(
+      { url: params.url, method: params.method } as IncomingMessage,
+      res,
+      {
+        ...(params.basePath ? { basePath: params.basePath } : {}),
+        resolveAvatar: params.resolveAvatar,
       },
     );
     return { res, end, handled };
@@ -177,6 +195,48 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.assistantAgentId).toBe("main");
       },
     });
+  });
+
+  it("serves local avatar bytes through hardened avatar handler", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-avatar-http-"));
+    try {
+      const avatarPath = path.join(tmp, "main.png");
+      await fs.writeFile(avatarPath, "avatar-bytes\n");
+
+      const { res, end, handled } = runAvatarRequest({
+        url: "/avatar/main",
+        method: "GET",
+        resolveAvatar: () => ({ kind: "local", filePath: avatarPath }),
+      });
+
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(200);
+      expect(String(end.mock.calls[0]?.[0] ?? "")).toBe("avatar-bytes\n");
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects avatar symlink paths from resolver", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-avatar-http-link-"));
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-avatar-http-outside-"));
+    try {
+      const outsideFile = path.join(outside, "secret.txt");
+      await fs.writeFile(outsideFile, "outside-secret\n");
+      const linkPath = path.join(tmp, "avatar-link.png");
+      await fs.symlink(outsideFile, linkPath);
+
+      const { res, end, handled } = runAvatarRequest({
+        url: "/avatar/main",
+        method: "GET",
+        resolveAvatar: () => ({ kind: "local", filePath: linkPath }),
+      });
+
+      expectNotFoundResponse({ handled, res, end });
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+      await fs.rm(outside, { recursive: true, force: true });
+    }
   });
 
   it("rejects symlinked assets that resolve outside control-ui root", async () => {

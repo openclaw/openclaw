@@ -401,10 +401,9 @@ describe("handleDiscordMessageAction", () => {
         cfg: {} as OpenClawConfig,
       });
 
-      expect(handleDiscordAction).toHaveBeenCalledWith(
-        expect.objectContaining(testCase.expected),
-        expect.any(Object),
-      );
+      const call = handleDiscordAction.mock.calls.at(-1);
+      expect(call?.[0]).toEqual(expect.objectContaining(testCase.expected));
+      expect(call?.[1]).toEqual(expect.any(Object));
     });
   }
 
@@ -422,7 +421,8 @@ describe("handleDiscordMessageAction", () => {
       toolContext: { currentChannelProvider: "discord" },
     });
 
-    expect(handleDiscordAction).toHaveBeenCalledWith(
+    const call = handleDiscordAction.mock.calls.at(-1);
+    expect(call?.[0]).toEqual(
       expect.objectContaining({
         action: "timeout",
         guildId: "guild-1",
@@ -430,7 +430,25 @@ describe("handleDiscordMessageAction", () => {
         durationMinutes: 5,
         senderUserId: "trusted-sender-id",
       }),
+    );
+    expect(call?.[1]).toEqual(expect.any(Object));
+  });
+
+  it("forwards trusted mediaLocalRoots for send actions", async () => {
+    await handleDiscordMessageAction({
+      action: "send",
+      params: { to: "channel:123", message: "hi", media: "/tmp/file.png" },
+      cfg: {} as OpenClawConfig,
+      mediaLocalRoots: ["/tmp/agent-root"],
+    });
+
+    expect(handleDiscordAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "sendMessage",
+        mediaUrl: "/tmp/file.png",
+      }),
       expect.any(Object),
+      expect.objectContaining({ mediaLocalRoots: ["/tmp/agent-root"] }),
     );
   });
 });
@@ -559,8 +577,32 @@ describe("telegramMessageActions", () => {
       expect(handleTelegramAction, testCase.name).toHaveBeenCalledWith(
         testCase.expectedPayload,
         cfg,
+        expect.objectContaining({ mediaLocalRoots: undefined }),
       );
     }
+  });
+
+  it("forwards trusted mediaLocalRoots for send", async () => {
+    const cfg = telegramCfg();
+    await telegramMessageActions.handleAction?.({
+      channel: "telegram",
+      action: "send",
+      params: {
+        to: "123",
+        media: "/tmp/voice.ogg",
+      },
+      cfg,
+      mediaLocalRoots: ["/tmp/agent-root"],
+    });
+
+    expect(handleTelegramAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "sendMessage",
+        mediaUrl: "/tmp/voice.ogg",
+      }),
+      cfg,
+      expect.objectContaining({ mediaLocalRoots: ["/tmp/agent-root"] }),
+    );
   });
 
   it("rejects non-integer messageId for edit before reaching telegram-actions", async () => {

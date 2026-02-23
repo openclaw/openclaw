@@ -7,6 +7,8 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   applyAuthProfileConfig,
   applyLitellmProviderConfig,
+  applyMistralConfig,
+  applyMistralProviderConfig,
   applyMinimaxApiConfig,
   applyMinimaxApiProviderConfig,
   applyOpencodeZenConfig,
@@ -22,6 +24,7 @@ import {
   applyZaiConfig,
   applyZaiProviderConfig,
   OPENROUTER_DEFAULT_MODEL_REF,
+  MISTRAL_DEFAULT_MODEL_REF,
   SYNTHETIC_DEFAULT_MODEL_ID,
   SYNTHETIC_DEFAULT_MODEL_REF,
   XAI_DEFAULT_MODEL_REF,
@@ -540,9 +543,46 @@ describe("applyXaiProviderConfig", () => {
   });
 });
 
+describe("applyMistralConfig", () => {
+  it("adds Mistral provider with correct settings", () => {
+    const cfg = applyMistralConfig({});
+    expect(cfg.models?.providers?.mistral).toMatchObject({
+      baseUrl: "https://api.mistral.ai/v1",
+      api: "openai-completions",
+    });
+    expect(cfg.agents?.defaults?.model?.primary).toBe(MISTRAL_DEFAULT_MODEL_REF);
+  });
+});
+
+describe("applyMistralProviderConfig", () => {
+  it("merges Mistral models and keeps existing provider overrides", () => {
+    const cfg = applyMistralProviderConfig(
+      createLegacyProviderConfig({
+        providerId: "mistral",
+        api: "anthropic-messages",
+        modelId: "custom-model",
+        modelName: "Custom",
+      }),
+    );
+
+    expect(cfg.models?.providers?.mistral?.baseUrl).toBe("https://api.mistral.ai/v1");
+    expect(cfg.models?.providers?.mistral?.api).toBe("openai-completions");
+    expect(cfg.models?.providers?.mistral?.apiKey).toBe("old-key");
+    expect(cfg.models?.providers?.mistral?.models.map((m) => m.id)).toEqual([
+      "custom-model",
+      "mistral-large-latest",
+    ]);
+    const mistralDefault = cfg.models?.providers?.mistral?.models.find(
+      (model) => model.id === "mistral-large-latest",
+    );
+    expect(mistralDefault?.contextWindow).toBe(262144);
+    expect(mistralDefault?.maxTokens).toBe(262144);
+  });
+});
+
 describe("fallback preservation helpers", () => {
   it("preserves existing model fallbacks", () => {
-    const fallbackCases = [applyMinimaxApiConfig, applyXaiConfig] as const;
+    const fallbackCases = [applyMinimaxApiConfig, applyXaiConfig, applyMistralConfig] as const;
     for (const applyConfig of fallbackCases) {
       const cfg = applyConfig(createConfigWithFallbacks());
       expectFallbacksPreserved(cfg);
@@ -562,6 +602,11 @@ describe("provider alias defaults", () => {
         applyConfig: () => applyXaiProviderConfig({}),
         modelRef: XAI_DEFAULT_MODEL_REF,
         alias: "Grok",
+      },
+      {
+        applyConfig: () => applyMistralProviderConfig({}),
+        modelRef: MISTRAL_DEFAULT_MODEL_REF,
+        alias: "Mistral",
       },
     ] as const;
     for (const testCase of aliasCases) {

@@ -48,7 +48,7 @@ describe("trigger handling", () => {
   it("uses tools.elevated.allowFrom.discord for elevated approval", async () => {
     await withTempHome(async (home) => {
       const cfg = makeCfg(home);
-      cfg.tools = { elevated: { allowFrom: { discord: ["steipete"] } } };
+      cfg.tools = { elevated: { allowFrom: { discord: ["123"] } } };
 
       const res = await getReplyFromConfig(
         {

@@ -11,6 +11,7 @@ import {
   type DeliverFn,
   enqueueDelivery,
   failDelivery,
+  isPermanentDeliveryError,
   loadPendingDeliveries,
   MAX_RETRIES,
   moveToFailed,
@@ -142,6 +143,30 @@ describe("delivery-queue", () => {
     });
   });
 
+  describe("isPermanentDeliveryError", () => {
+    it.each([
+      "No conversation reference found for user:abc",
+      "Telegram send failed: chat not found (chat_id=user:123)",
+      "user not found",
+      "Bot was blocked by the user",
+      "Forbidden: bot was kicked from the group chat",
+      "chat_id is empty",
+      "Outbound not configured for channel: msteams",
+    ])("returns true for permanent error: %s", (msg) => {
+      expect(isPermanentDeliveryError(msg)).toBe(true);
+    });
+
+    it.each([
+      "network down",
+      "ETIMEDOUT",
+      "socket hang up",
+      "rate limited",
+      "500 Internal Server Error",
+    ])("returns false for transient error: %s", (msg) => {
+      expect(isPermanentDeliveryError(msg)).toBe(false);
+    });
+  });
+
   describe("loadPendingDeliveries", () => {
     it("returns empty array when queue directory does not exist", async () => {
       const nonexistent = path.join(tmpDir, "no-such-dir");
@@ -263,6 +288,26 @@ describe("delivery-queue", () => {
       expect(entries).toHaveLength(1);
       expect(entries[0].retryCount).toBe(1);
       expect(entries[0].lastError).toBe("network down");
+    });
+
+    it("moves entries to failed/ immediately on permanent delivery errors", async () => {
+      const id = await enqueueDelivery(
+        { channel: "msteams", to: "user:abc", payloads: [{ text: "hi" }] },
+        tmpDir,
+      );
+      const deliver = vi
+        .fn()
+        .mockRejectedValue(new Error("No conversation reference found for user:abc"));
+      const log = createLog();
+      const { result } = await runRecovery({ deliver, log });
+
+      expect(result.failed).toBe(1);
+      expect(result.recovered).toBe(0);
+      const remaining = await loadPendingDeliveries(tmpDir);
+      expect(remaining).toHaveLength(0);
+      const failedDir = path.join(tmpDir, "delivery-queue", "failed");
+      expect(fs.existsSync(path.join(failedDir, `${id}.json`))).toBe(true);
+      expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("permanent error"));
     });
 
     it("passes skipQueue: true to prevent re-enqueueing during recovery", async () => {

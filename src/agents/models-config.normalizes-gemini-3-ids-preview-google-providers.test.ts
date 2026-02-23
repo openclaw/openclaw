@@ -2,16 +2,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { installModelsConfigTestHooks, withModelsTempHome } from "./models-config.e2e-harness.js";
+import { ensureOpenClawModelsJson } from "./models-config.js";
 
 describe("models-config", () => {
   installModelsConfigTestHooks();
 
   it("normalizes gemini 3 ids to preview for google providers", async () => {
     await withModelsTempHome(async () => {
-      const { ensureOpenClawModelsJson } = await import("./models-config.js");
-      const { resolveOpenClawAgentDir } = await import("./agent-paths.js");
-
       const cfg: OpenClawConfig = {
         models: {
           providers: {

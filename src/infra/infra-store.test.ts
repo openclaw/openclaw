@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   getChannelActivity,
   recordChannelActivity,
@@ -19,15 +19,6 @@ import {
   loadVoiceWakeConfig,
   setVoiceWakeTriggers,
 } from "./voicewake.js";
-
-async function withTempDir(prefix: string, run: (dir: string) => Promise<void>) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  try {
-    await run(dir);
-  } finally {
-    await fs.rm(dir, { recursive: true, force: true });
-  }
-}
 
 describe("infra store", () => {
   describe("state migrations fs", () => {

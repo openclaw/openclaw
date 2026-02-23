@@ -404,12 +404,21 @@ export async function startServerWithClient(
   return { server, ws, port, prevToken: prev, envSnapshot };
 }
 
+export async function startConnectedServerWithClient(
+  token?: string,
+  opts?: GatewayServerOptions & { wsHeaders?: Record<string, string> },
+) {
+  const started = await startServerWithClient(token, opts);
+  await connectOk(started.ws);
+  return started;
+}
+
 type ConnectResponse = {
   type: "res";
   id: string;
   ok: boolean;
   payload?: Record<string, unknown>;
-  error?: { message?: string };
+  error?: { message?: string; code?: string; details?: unknown };
 };
 
 export async function readConnectChallengeNonce(

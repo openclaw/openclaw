@@ -53,6 +53,22 @@ async function runCommandAndCollectReplies(params: {
   return { blockReplies, replies };
 }
 
+async function expectStopAbortWithoutAgent(params: { home: string; body: string; from: string }) {
+  const res = await getReplyFromConfig(
+    {
+      Body: params.body,
+      From: params.from,
+      To: "+2000",
+      CommandAuthorized: true,
+    },
+    {},
+    makeCfg(params.home),
+  );
+  const text = Array.isArray(res) ? res[0]?.text : res?.text;
+  expect(text).toBe("⚙️ Agent was aborted.");
+  expect(getRunEmbeddedPiAgentMock()).not.toHaveBeenCalled();
+}
+
 describe("trigger handling", () => {
   it("filters usage summary to the current model provider", async () => {
     await withTempHome(async (home) => {
@@ -228,36 +244,20 @@ describe("trigger handling", () => {
   });
   it("aborts even with timestamp prefix", async () => {
     await withTempHome(async (home) => {
-      const res = await getReplyFromConfig(
-        {
-          Body: "[Dec 5 10:00] stop",
-          From: "+1000",
-          To: "+2000",
-          CommandAuthorized: true,
-        },
-        {},
-        makeCfg(home),
-      );
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toBe("⚙️ Agent was aborted.");
-      expect(getRunEmbeddedPiAgentMock()).not.toHaveBeenCalled();
+      await expectStopAbortWithoutAgent({
+        home,
+        body: "[Dec 5 10:00] stop",
+        from: "+1000",
+      });
     });
   });
   it("handles /stop without invoking the agent", async () => {
     await withTempHome(async (home) => {
-      const res = await getReplyFromConfig(
-        {
-          Body: "/stop",
-          From: "+1003",
-          To: "+2000",
-          CommandAuthorized: true,
-        },
-        {},
-        makeCfg(home),
-      );
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toBe("⚙️ Agent was aborted.");
-      expect(getRunEmbeddedPiAgentMock()).not.toHaveBeenCalled();
+      await expectStopAbortWithoutAgent({
+        home,
+        body: "/stop",
+        from: "+1003",
+      });
     });
   });
 });

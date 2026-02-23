@@ -1,10 +1,26 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { SessionManager as PiSessionManager } from "@mariozechner/pi-coding-agent";
 import "./test-helpers/fast-coding-tools.js";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+
+function createMockUsage(input: number, output: number) {
+  return {
+    input,
+    output,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: input + output,
+    cost: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
+    },
+  };
+}
 
 vi.mock("@mariozechner/pi-coding-agent", async () => {
   const actual = await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
@@ -41,20 +57,7 @@ vi.mock("@mariozechner/pi-ai", async () => {
     api: model.api,
     provider: model.provider,
     model: model.id,
-    usage: {
-      input: 1,
-      output: 1,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 2,
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        total: 0,
-      },
-    },
+    usage: createMockUsage(1, 1),
     timestamp: Date.now(),
   });
 
@@ -66,20 +69,7 @@ vi.mock("@mariozechner/pi-ai", async () => {
     api: model.api,
     provider: model.provider,
     model: model.id,
-    usage: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        total: 0,
-      },
-    },
+    usage: createMockUsage(0, 0),
     timestamp: Date.now(),
   });
 
@@ -116,7 +106,7 @@ vi.mock("@mariozechner/pi-ai", async () => {
 });
 
 let runEmbeddedPiAgent: typeof import("./pi-embedded-runner/run.js").runEmbeddedPiAgent;
-let SessionManager: PiSessionManager;
+let SessionManager: typeof import("@mariozechner/pi-coding-agent").SessionManager;
 let tempRoot: string | undefined;
 let agentDir: string;
 let workspaceDir: string;
@@ -243,7 +233,7 @@ const runDefaultEmbeddedTurn = async (sessionFile: string, prompt: string, sessi
   });
 };
 
-describe.concurrent("runEmbeddedPiAgent", () => {
+describe("runEmbeddedPiAgent", () => {
   it("handles prompt error paths without dropping user state", async () => {
     for (const testCase of [
       {
@@ -315,20 +305,7 @@ describe.concurrent("runEmbeddedPiAgent", () => {
         api: "openai-responses",
         provider: "openai",
         model: "mock-1",
-        usage: {
-          input: 1,
-          output: 1,
-          cacheRead: 0,
-          cacheWrite: 0,
-          totalTokens: 2,
-          cost: {
-            input: 0,
-            output: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            total: 0,
-          },
-        },
+        usage: createMockUsage(1, 1),
         timestamp: Date.now(),
       });
 

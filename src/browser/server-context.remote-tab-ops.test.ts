@@ -64,6 +64,16 @@ function createRemoteRouteHarness(fetchMock?: ReturnType<typeof vi.fn>) {
   return { state, remote: ctx.forProfile("remote"), fetchMock: activeFetchMock };
 }
 
+function createSequentialPageLister<T>(responses: T[]) {
+  return vi.fn(async () => {
+    const next = responses.shift();
+    if (!next) {
+      throw new Error("no more responses");
+    }
+    return next;
+  });
+}
+
 describe("browser server-context remote profile tab operations", () => {
   it("uses Playwright tab operations when available", async () => {
     const listPagesViaPlaywright = vi.fn(async () => [
@@ -151,6 +161,43 @@ describe("browser server-context remote profile tab operations", () => {
     expect(first.targetId).toBe("A");
     const second = await remote.ensureTabAvailable();
     expect(second.targetId).toBe("A");
+  });
+
+  it("falls back to the only tab for remote profiles when targetId is stale", async () => {
+    const responses = [
+      [{ targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" }],
+      [{ targetId: "T1", title: "Tab 1", url: "https://example.com", type: "page" }],
+    ];
+    const listPagesViaPlaywright = createSequentialPageLister(responses);
+
+    vi.spyOn(pwAiModule, "getPwAiModule").mockResolvedValue({
+      listPagesViaPlaywright,
+    } as unknown as Awaited<ReturnType<typeof pwAiModule.getPwAiModule>>);
+
+    const { remote } = createRemoteRouteHarness();
+    const chosen = await remote.ensureTabAvailable("STALE_TARGET");
+    expect(chosen.targetId).toBe("T1");
+  });
+
+  it("keeps rejecting stale targetId for remote profiles when multiple tabs exist", async () => {
+    const responses = [
+      [
+        { targetId: "A", title: "A", url: "https://a.example", type: "page" },
+        { targetId: "B", title: "B", url: "https://b.example", type: "page" },
+      ],
+      [
+        { targetId: "A", title: "A", url: "https://a.example", type: "page" },
+        { targetId: "B", title: "B", url: "https://b.example", type: "page" },
+      ],
+    ];
+    const listPagesViaPlaywright = createSequentialPageLister(responses);
+
+    vi.spyOn(pwAiModule, "getPwAiModule").mockResolvedValue({
+      listPagesViaPlaywright,
+    } as unknown as Awaited<ReturnType<typeof pwAiModule.getPwAiModule>>);
+
+    const { remote } = createRemoteRouteHarness();
+    await expect(remote.ensureTabAvailable("STALE_TARGET")).rejects.toThrow(/tab not found/i);
   });
 
   it("uses Playwright focus for remote profiles when available", async () => {

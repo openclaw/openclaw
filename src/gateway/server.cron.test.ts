@@ -407,11 +407,13 @@ describe("gateway server cron", () => {
         action?: unknown;
         status?: unknown;
         summary?: unknown;
+        deliveryStatus?: unknown;
       };
       expect(last.action).toBe("finished");
       expect(last.jobId).toBe(jobId);
       expect(last.status).toBe("ok");
       expect(last.summary).toBe("hello");
+      expect(last.deliveryStatus).toBe("not-requested");
 
       const runsRes = await rpcReq(ws, "cron.runs", { id: jobId, limit: 50 });
       expect(runsRes.ok).toBe(true);
@@ -419,6 +421,9 @@ describe("gateway server cron", () => {
       expect(Array.isArray(entries)).toBe(true);
       expect((entries as Array<{ jobId?: unknown }>).at(-1)?.jobId).toBe(jobId);
       expect((entries as Array<{ summary?: unknown }>).at(-1)?.summary).toBe("hello");
+      expect((entries as Array<{ deliveryStatus?: unknown }>).at(-1)?.deliveryStatus).toBe(
+        "not-requested",
+      );
 
       const statusRes = await rpcReq(ws, "cron.status", {});
       expect(statusRes.ok).toBe(true);

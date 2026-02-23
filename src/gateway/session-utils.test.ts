@@ -30,6 +30,15 @@ function createSymlinkOrSkip(targetPath: string, linkPath: string): boolean {
   }
 }
 
+function createSingleAgentAvatarConfig(workspace: string): OpenClawConfig {
+  return {
+    session: { mainKey: "main" },
+    agents: {
+      list: [{ id: "main", default: true, workspace, identity: { avatar: "avatar-link.png" } }],
+    },
+  } as OpenClawConfig;
+}
+
 describe("gateway session utils", () => {
   test("capArrayByJsonBytes trims from the front", () => {
     const res = capArrayByJsonBytes(["a", "b", "c"], 10);
@@ -243,12 +252,7 @@ describe("gateway session utils", () => {
       return;
     }
 
-    const cfg = {
-      session: { mainKey: "main" },
-      agents: {
-        list: [{ id: "main", default: true, workspace, identity: { avatar: "avatar-link.png" } }],
-      },
-    } as OpenClawConfig;
+    const cfg = createSingleAgentAvatarConfig(workspace);
 
     const result = listAgentsForGateway(cfg);
     expect(result.agents[0]?.identity?.avatarUrl).toBeUndefined();
@@ -265,12 +269,7 @@ describe("gateway session utils", () => {
       return;
     }
 
-    const cfg = {
-      session: { mainKey: "main" },
-      agents: {
-        list: [{ id: "main", default: true, workspace, identity: { avatar: "avatar-link.png" } }],
-      },
-    } as OpenClawConfig;
+    const cfg = createSingleAgentAvatarConfig(workspace);
 
     const result = listAgentsForGateway(cfg);
     expect(result.agents[0]?.identity?.avatarUrl).toBe(

@@ -4,17 +4,25 @@ import type { FeishuMessageEvent } from "./bot.js";
 import { handleFeishuMessage } from "./bot.js";
 import { setFeishuRuntime } from "./runtime.js";
 
-const { mockCreateFeishuReplyDispatcher, mockSendMessageFeishu, mockGetMessageFeishu } = vi.hoisted(
-  () => ({
-    mockCreateFeishuReplyDispatcher: vi.fn(() => ({
-      dispatcher: vi.fn(),
-      replyOptions: {},
-      markDispatchIdle: vi.fn(),
-    })),
-    mockSendMessageFeishu: vi.fn().mockResolvedValue({ messageId: "pairing-msg", chatId: "oc-dm" }),
-    mockGetMessageFeishu: vi.fn().mockResolvedValue(null),
+const {
+  mockCreateFeishuReplyDispatcher,
+  mockSendMessageFeishu,
+  mockGetMessageFeishu,
+  mockDownloadMessageResourceFeishu,
+} = vi.hoisted(() => ({
+  mockCreateFeishuReplyDispatcher: vi.fn(() => ({
+    dispatcher: vi.fn(),
+    replyOptions: {},
+    markDispatchIdle: vi.fn(),
+  })),
+  mockSendMessageFeishu: vi.fn().mockResolvedValue({ messageId: "pairing-msg", chatId: "oc-dm" }),
+  mockGetMessageFeishu: vi.fn().mockResolvedValue(null),
+  mockDownloadMessageResourceFeishu: vi.fn().mockResolvedValue({
+    buffer: Buffer.from("video"),
+    contentType: "video/mp4",
+    fileName: "clip.mp4",
   }),
-);
+}));
 
 vi.mock("./reply-dispatcher.js", () => ({
   createFeishuReplyDispatcher: mockCreateFeishuReplyDispatcher,
@@ -23,6 +31,10 @@ vi.mock("./reply-dispatcher.js", () => ({
 vi.mock("./send.js", () => ({
   sendMessageFeishu: mockSendMessageFeishu,
   getMessageFeishu: mockGetMessageFeishu,
+}));
+
+vi.mock("./media.js", () => ({
+  downloadMessageResourceFeishu: mockDownloadMessageResourceFeishu,
 }));
 
 function createRuntimeEnv(): RuntimeEnv {
@@ -53,6 +65,10 @@ describe("handleFeishuMessage command authorization", () => {
   const mockReadAllowFromStore = vi.fn().mockResolvedValue([]);
   const mockUpsertPairingRequest = vi.fn().mockResolvedValue({ code: "ABCDEFGH", created: false });
   const mockBuildPairingReply = vi.fn(() => "Pairing response");
+  const mockSaveMediaBuffer = vi.fn().mockResolvedValue({
+    path: "/tmp/inbound-clip.mp4",
+    contentType: "video/mp4",
+  });
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -79,11 +95,17 @@ describe("handleFeishuMessage command authorization", () => {
           shouldComputeCommandAuthorized: mockShouldComputeCommandAuthorized,
           resolveCommandAuthorizedFromAuthorizers: mockResolveCommandAuthorizedFromAuthorizers,
         },
+        media: {
+          saveMediaBuffer: mockSaveMediaBuffer,
+        },
         pairing: {
           readAllowFromStore: mockReadAllowFromStore,
           upsertPairingRequest: mockUpsertPairingRequest,
           buildPairingReply: mockBuildPairingReply,
         },
+      },
+      media: {
+        detectMime: vi.fn(async () => "application/octet-stream"),
       },
     } as unknown as PluginRuntime);
   });
@@ -262,6 +284,102 @@ describe("handleFeishuMessage command authorization", () => {
         CommandAuthorized: false,
         SenderId: "ou-attacker",
       }),
+    );
+  });
+
+  it("falls back to top-level allowFrom for group command authorization", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(true);
+    mockResolveCommandAuthorizedFromAuthorizers.mockReturnValue(true);
+
+    const cfg: ClawdbotConfig = {
+      commands: { useAccessGroups: true },
+      channels: {
+        feishu: {
+          allowFrom: ["ou-admin"],
+          groups: {
+            "oc-group": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-admin",
+        },
+      },
+      message: {
+        message_id: "msg-group-command-fallback",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "/status" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockResolveCommandAuthorizedFromAuthorizers).toHaveBeenCalledWith({
+      useAccessGroups: true,
+      authorizers: [{ configured: true, allowed: true }],
+    });
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ChatType: "group",
+        CommandAuthorized: true,
+        SenderId: "ou-admin",
+      }),
+    );
+  });
+
+  it("uses video file_key (not thumbnail image_key) for inbound video download", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-sender",
+        },
+      },
+      message: {
+        message_id: "msg-video-inbound",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "video",
+        content: JSON.stringify({
+          file_key: "file_video_payload",
+          image_key: "img_thumb_payload",
+          file_name: "clip.mp4",
+        }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockDownloadMessageResourceFeishu).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "msg-video-inbound",
+        fileKey: "file_video_payload",
+        type: "file",
+      }),
+    );
+    expect(mockSaveMediaBuffer).toHaveBeenCalledWith(
+      expect.any(Buffer),
+      "video/mp4",
+      "inbound",
+      expect.any(Number),
+      "clip.mp4",
     );
   });
 });

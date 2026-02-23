@@ -243,6 +243,23 @@ describe("handleTelegramAction", () => {
     });
   });
 
+  it("forwards trusted mediaLocalRoots into sendMessageTelegram", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "@testchannel",
+        content: "Hello with local media",
+      },
+      telegramConfig(),
+      { mediaLocalRoots: ["/tmp/agent-root"] },
+    );
+    expect(sendMessageTelegram).toHaveBeenCalledWith(
+      "@testchannel",
+      "Hello with local media",
+      expect.objectContaining({ mediaLocalRoots: ["/tmp/agent-root"] }),
+    );
+  });
+
   it.each([
     {
       name: "media",
@@ -421,11 +438,7 @@ describe("handleTelegramAction", () => {
   });
 
   it("allows inline buttons in DMs with tg: prefixed targets", async () => {
-    const cfg = {
-      channels: {
-        telegram: { botToken: "tok", capabilities: { inlineButtons: "dm" } },
-      },
-    } as OpenClawConfig;
+    const cfg = telegramConfig({ capabilities: { inlineButtons: "dm" } });
     await handleTelegramAction(
       {
         action: "sendMessage",
@@ -439,11 +452,7 @@ describe("handleTelegramAction", () => {
   });
 
   it("allows inline buttons in groups with topic targets", async () => {
-    const cfg = {
-      channels: {
-        telegram: { botToken: "tok", capabilities: { inlineButtons: "group" } },
-      },
-    } as OpenClawConfig;
+    const cfg = telegramConfig({ capabilities: { inlineButtons: "group" } });
     await handleTelegramAction(
       {
         action: "sendMessage",
@@ -457,11 +466,7 @@ describe("handleTelegramAction", () => {
   });
 
   it("sends messages with inline keyboard buttons when enabled", async () => {
-    const cfg = {
-      channels: {
-        telegram: { botToken: "tok", capabilities: { inlineButtons: "all" } },
-      },
-    } as OpenClawConfig;
+    const cfg = telegramConfig({ capabilities: { inlineButtons: "all" } });
     await handleTelegramAction(
       {
         action: "sendMessage",
@@ -481,11 +486,7 @@ describe("handleTelegramAction", () => {
   });
 
   it("forwards optional button style", async () => {
-    const cfg = {
-      channels: {
-        telegram: { botToken: "tok", capabilities: { inlineButtons: "all" } },
-      },
-    } as OpenClawConfig;
+    const cfg = telegramConfig({ capabilities: { inlineButtons: "all" } });
     await handleTelegramAction(
       {
         action: "sendMessage",

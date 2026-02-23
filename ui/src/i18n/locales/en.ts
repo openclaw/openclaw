@@ -12,7 +12,6 @@ export const en: TranslationMap = {
     na: "n/a",
     docs: "Docs",
     resources: "Resources",
-    search: "Search",
   },
   nav: {
     chat: "Chat",
@@ -21,7 +20,6 @@ export const en: TranslationMap = {
     settings: "Settings",
     expand: "Expand sidebar",
     collapse: "Collapse sidebar",
-    resize: "Resize sidebar",
   },
   tabs: {
     agents: "Agents",
@@ -39,19 +37,19 @@ export const en: TranslationMap = {
     logs: "Logs",
   },
   subtitles: {
-    agents: "Workspaces, tools, identities.",
-    overview: "Status, entry points, health.",
-    channels: "Channels and settings.",
-    instances: "Connected clients and nodes.",
-    sessions: "Active sessions and defaults.",
-    usage: "API usage and costs.",
-    cron: "Wakeups and recurring runs.",
-    skills: "Skills and API keys.",
-    nodes: "Paired devices and commands.",
-    chat: "Gateway chat for quick interventions.",
-    config: "Edit openclaw.json.",
-    debug: "Snapshots, events, RPC.",
-    logs: "Live gateway logs.",
+    agents: "Manage agent workspaces, tools, and identities.",
+    overview: "Gateway status, entry points, and a fast health read.",
+    channels: "Manage channels and settings.",
+    instances: "Presence beacons from connected clients and nodes.",
+    sessions: "Inspect active sessions and adjust per-session defaults.",
+    usage: "Monitor API usage and costs.",
+    cron: "Schedule wakeups and recurring agent runs.",
+    skills: "Manage skill availability and API key injection.",
+    nodes: "Paired devices, capabilities, and command exposure.",
+    chat: "Direct gateway chat session for quick interventions.",
+    config: "Edit ~/.openclaw/openclaw.json safely.",
+    debug: "Gateway snapshots, events, and manual RPC calls.",
+    logs: "Live tail of the gateway file logs.",
   },
   overview: {
     access: {
@@ -97,51 +95,15 @@ export const en: TranslationMap = {
       failed:
         "Auth failed. Re-copy a tokenized URL with {command}, or update the token, then click Connect.",
     },
+    pairing: {
+      hint: "This device needs pairing approval from the gateway host.",
+      mobileHint:
+        "On mobile? Copy the full URL (including #token=...) from openclaw dashboard --no-open on your desktop.",
+    },
     insecure: {
       hint: "This page is HTTP, so the browser blocks device identity. Use HTTPS (Tailscale Serve) or open {url} on the gateway host.",
       stayHttp: "If you must stay on HTTP, set {config} (token-only).",
     },
-    connection: {
-      title: "How to connect",
-      step1: "Start the gateway on your host machine:",
-      step2: "Get a tokenized dashboard URL:",
-      step3: "Paste the WebSocket URL and token above, or open the tokenized URL directly.",
-      step4: "Or generate a reusable token:",
-      docsHint: "For remote access, Tailscale Serve is recommended. ",
-      docsLink: "Read the docs →",
-    },
-    cards: {
-      cost: "Cost",
-      skills: "Skills",
-      recentSessions: "Recent Sessions",
-    },
-    attention: {
-      title: "Attention",
-    },
-    eventLog: {
-      title: "Event Log",
-    },
-    logTail: {
-      title: "Gateway Logs",
-    },
-    quickActions: {
-      newSession: "New Session",
-      automation: "Automation",
-      refreshAll: "Refresh All",
-      terminal: "Terminal",
-    },
-    streamMode: {
-      active: "Stream mode — values redacted",
-      disable: "Disable",
-    },
-    palette: {
-      placeholder: "Type a command…",
-      noResults: "No results",
-    },
-  },
-  login: {
-    subtitle: "Gateway Dashboard",
-    passwordPlaceholder: "optional",
   },
   chat: {
     disconnected: "Disconnected from gateway.",

@@ -264,6 +264,28 @@ describe("handleDiscordMessagingAction", () => {
     expect(sendMessageDiscord).not.toHaveBeenCalled();
   });
 
+  it("forwards trusted mediaLocalRoots into sendMessageDiscord", async () => {
+    sendMessageDiscord.mockClear();
+    await handleDiscordMessagingAction(
+      "sendMessage",
+      {
+        to: "channel:123",
+        content: "hello",
+        mediaUrl: "/tmp/image.png",
+      },
+      enableAllActions,
+      { mediaLocalRoots: ["/tmp/agent-root"] },
+    );
+    expect(sendMessageDiscord).toHaveBeenCalledWith(
+      "channel:123",
+      "hello",
+      expect.objectContaining({
+        mediaUrl: "/tmp/image.png",
+        mediaLocalRoots: ["/tmp/agent-root"],
+      }),
+    );
+  });
+
   it("rejects voice messages that include content", async () => {
     await expect(
       handleDiscordMessagingAction(

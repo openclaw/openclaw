@@ -12,7 +12,6 @@ export const zh_CN: TranslationMap = {
     na: "不适用",
     docs: "文档",
     resources: "资源",
-    search: "搜索",
   },
   nav: {
     chat: "聊天",
@@ -21,7 +20,6 @@ export const zh_CN: TranslationMap = {
     settings: "设置",
     expand: "展开侧边栏",
     collapse: "折叠侧边栏",
-    resize: "调整侧边栏大小",
   },
   tabs: {
     agents: "代理",
@@ -39,19 +37,19 @@ export const zh_CN: TranslationMap = {
     logs: "日志",
   },
   subtitles: {
-    agents: "工作区、工具、身份。",
-    overview: "状态、入口点、健康。",
-    channels: "频道和设置。",
-    instances: "已连接客户端和节点。",
-    sessions: "活动会话和默认设置。",
-    usage: "API 使用情况和成本。",
-    cron: "唤醒和重复运行。",
-    skills: "技能和 API 密钥。",
-    nodes: "配对设备和命令。",
-    chat: "网关聊天，快速干预。",
-    config: "编辑 openclaw.json。",
-    debug: "快照、事件、RPC。",
-    logs: "实时网关日志。",
+    agents: "管理代理工作区、工具和身份。",
+    overview: "网关状态、入口点和快速健康读取。",
+    channels: "管理频道和设置。",
+    instances: "来自已连接客户端和节点的在线信号。",
+    sessions: "检查活动会话并调整每个会话的默认设置。",
+    usage: "监控 API 使用情况和成本。",
+    cron: "安排唤醒和重复的代理运行。",
+    skills: "管理技能可用性和 API 密钥注入。",
+    nodes: "配对设备、功能和命令公开。",
+    chat: "用于快速干预的直接网关聊天会话。",
+    config: "安全地编辑 ~/.openclaw/openclaw.json。",
+    debug: "网关快照、事件和手动 RPC 调用。",
+    logs: "网关文件日志的实时追踪。",
   },
   overview: {
     access: {
@@ -96,51 +94,15 @@ export const zh_CN: TranslationMap = {
       required: "此网关需要身份验证。添加令牌或密码，然后点击连接。",
       failed: "身份验证失败。请使用 {command} 重新复制令牌化 URL，或更新令牌，然后点击连接。",
     },
+    pairing: {
+      hint: "此设备需要网关主机的配对批准。",
+      mobileHint:
+        "在手机上？从桌面运行 openclaw dashboard --no-open 复制完整 URL（包括 #token=...）。",
+    },
     insecure: {
       hint: "此页面为 HTTP，因此浏览器阻止设备标识。请使用 HTTPS (Tailscale Serve) 或在网关主机上打开 {url}。",
       stayHttp: "如果您必须保持 HTTP，请设置 {config} (仅限令牌)。",
     },
-    connection: {
-      title: "如何连接",
-      step1: "在主机上启动网关：",
-      step2: "获取带令牌的仪表盘 URL：",
-      step3: "将 WebSocket URL 和令牌粘贴到上方，或直接打开带令牌的 URL。",
-      step4: "或生成可重复使用的令牌：",
-      docsHint: "如需远程访问，建议使用 Tailscale Serve。",
-      docsLink: "查看文档 →",
-    },
-    cards: {
-      cost: "费用",
-      skills: "技能",
-      recentSessions: "最近会话",
-    },
-    attention: {
-      title: "注意事项",
-    },
-    eventLog: {
-      title: "事件日志",
-    },
-    logTail: {
-      title: "网关日志",
-    },
-    quickActions: {
-      newSession: "新建会话",
-      automation: "自动化",
-      refreshAll: "全部刷新",
-      terminal: "终端",
-    },
-    streamMode: {
-      active: "流模式 — 数据已隐藏",
-      disable: "禁用",
-    },
-    palette: {
-      placeholder: "输入命令…",
-      noResults: "无结果",
-    },
-  },
-  login: {
-    subtitle: "网关仪表盘",
-    passwordPlaceholder: "可选",
   },
   chat: {
     disconnected: "已断开与网关的连接。",

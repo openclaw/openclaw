@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 import type { SandboxDockerConfig } from "./sandbox.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
+import { createRestrictedAgentSandboxConfig } from "./test-helpers/sandbox-agent-config-fixtures.js";
 
 type ToolWithExecute = {
   execute: (toolCallId: string, args: unknown, signal?: AbortSignal) => Promise<unknown>;
@@ -85,28 +86,41 @@ describe("Agent-specific tool filtering", () => {
     }
   }
 
-  it("should apply global tool policy when no agent-specific policy exists", () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        allow: ["read", "write"],
-        deny: ["bash"],
-      },
-      agents: {
-        list: [
-          {
-            id: "main",
-            workspace: "~/openclaw",
-          },
-        ],
-      },
-    };
-
-    const tools = createOpenClawCodingTools({
+  function createMainSessionTools(cfg: OpenClawConfig) {
+    return createOpenClawCodingTools({
       config: cfg,
       sessionKey: "agent:main:main",
       workspaceDir: "/tmp/test",
       agentDir: "/tmp/agent",
     });
+  }
+
+  function createMainAgentConfig(params: {
+    tools: NonNullable<OpenClawConfig["tools"]>;
+    agentTools?: NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number]["tools"];
+  }): OpenClawConfig {
+    return {
+      tools: params.tools,
+      agents: {
+        list: [
+          {
+            id: "main",
+            workspace: "~/openclaw",
+            ...(params.agentTools ? { tools: params.agentTools } : {}),
+          },
+        ],
+      },
+    };
+  }
+
+  it("should apply global tool policy when no agent-specific policy exists", () => {
+    const cfg = createMainAgentConfig({
+      tools: {
+        allow: ["read", "write"],
+        deny: ["bash"],
+      },
+    });
+    const tools = createMainSessionTools(cfg);
 
     const toolNames = tools.map((t) => t.name);
     expect(toolNames).toContain("read");
@@ -116,32 +130,18 @@ describe("Agent-specific tool filtering", () => {
   });
 
   it("should keep global tool policy when agent only sets tools.elevated", () => {
-    const cfg: OpenClawConfig = {
+    const cfg = createMainAgentConfig({
       tools: {
         deny: ["write"],
       },
-      agents: {
-        list: [
-          {
-            id: "main",
-            workspace: "~/openclaw",
-            tools: {
-              elevated: {
-                enabled: true,
-                allowFrom: { whatsapp: ["+15555550123"] },
-              },
-            },
-          },
-        ],
+      agentTools: {
+        elevated: {
+          enabled: true,
+          allowFrom: { whatsapp: ["+15555550123"] },
+        },
       },
-    };
-
-    const tools = createOpenClawCodingTools({
-      config: cfg,
-      sessionKey: "agent:main:main",
-      workspaceDir: "/tmp/test",
-      agentDir: "/tmp/agent",
     });
+    const tools = createMainSessionTools(cfg);
 
     const toolNames = tools.map((t) => t.name);
     expect(toolNames).toContain("exec");
@@ -379,7 +379,7 @@ describe("Agent-specific tool filtering", () => {
             "*": {
               tools: { allow: ["read"] },
               toolsBySender: {
-                alice: { allow: ["read", "exec"] },
+                "id:alice": { allow: ["read", "exec"] },
               },
             },
           },
@@ -417,7 +417,7 @@ describe("Agent-specific tool filtering", () => {
           groups: {
             "*": {
               toolsBySender: {
-                admin: { allow: ["read", "exec"] },
+                "id:admin": { allow: ["read", "exec"] },
               },
             },
             locked: {
@@ -524,38 +524,16 @@ describe("Agent-specific tool filtering", () => {
   });
 
   it("should work with sandbox tools filtering", () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-            scope: "agent",
-          },
-        },
-        list: [
-          {
-            id: "restricted",
-            workspace: "~/openclaw-restricted",
-            sandbox: {
-              mode: "all",
-              scope: "agent",
-            },
-            tools: {
-              allow: ["read"], // Agent further restricts to only read
-              deny: ["exec", "write"],
-            },
-          },
-        ],
+    const cfg = createRestrictedAgentSandboxConfig({
+      agentTools: {
+        allow: ["read"], // Agent further restricts to only read
+        deny: ["exec", "write"],
       },
-      tools: {
-        sandbox: {
-          tools: {
-            allow: ["read", "write", "exec"], // Sandbox allows these
-            deny: [],
-          },
-        },
+      globalSandboxTools: {
+        allow: ["read", "write", "exec"], // Sandbox allows these
+        deny: [],
       },
-    };
+    });
 
     const tools = createOpenClawCodingTools({
       config: cfg,
@@ -711,5 +689,45 @@ describe("Agent-specific tool filtering", () => {
         yieldMs: 1000,
       }),
     ).rejects.toThrow("exec host=sandbox is configured");
+  });
+
+  it("applies explicit agentId exec defaults when sessionKey is opaque", async () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        exec: {
+          host: "sandbox",
+          security: "full",
+          ask: "off",
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            tools: {
+              exec: {
+                host: "gateway",
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    const tools = createOpenClawCodingTools({
+      config: cfg,
+      agentId: "main",
+      sessionKey: "run-opaque-123",
+      workspaceDir: "/tmp/test-main-opaque-session",
+      agentDir: "/tmp/agent-main-opaque-session",
+    });
+    const execTool = tools.find((tool) => tool.name === "exec");
+    expect(execTool).toBeDefined();
+    const result = await execTool!.execute("call-main-opaque-session", {
+      command: "echo done",
+      yieldMs: 1000,
+    });
+    const details = result?.details as { status?: string } | undefined;
+    expect(details?.status).toBe("completed");
   });
 });

@@ -164,27 +164,16 @@ describe("exec tool backgrounding", () => {
   });
 
   it("uses default timeout when timeout is omitted", async () => {
-    const customBash = createTestExecTool({ timeoutSec: 0.05, backgroundMs: 10 });
-    const customProcess = createProcessTool();
-
-    const result = await customBash.execute("call1", {
-      command: longDelayCmd,
-      background: true,
+    const customBash = createTestExecTool({
+      timeoutSec: 0.05,
+      backgroundMs: 10,
+      allowBackground: false,
     });
-
-    const sessionId = (result.details as { sessionId: string }).sessionId;
-    await expect
-      .poll(
-        async () => {
-          const poll = await customProcess.execute("call2", {
-            action: "poll",
-            sessionId,
-          });
-          return (poll.details as { status: string }).status;
-        },
-        { timeout: 1000, interval: POLL_INTERVAL_MS },
-      )
-      .toBe("failed");
+    await expect(
+      customBash.execute("call1", {
+        command: longDelayCmd,
+      }),
+    ).rejects.toThrow(/timed out/i);
   });
 
   it("rejects elevated requests when not allowed", async () => {

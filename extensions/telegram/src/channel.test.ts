@@ -162,4 +162,34 @@ describe("telegramPlugin duplicate token guard", () => {
       }),
     );
   });
+
+  it("forwards mediaLocalRoots to sendMessageTelegram for outbound media sends", async () => {
+    const sendMessageTelegram = vi.fn(async () => ({ messageId: "tg-1" }));
+    setTelegramRuntime({
+      channel: {
+        telegram: {
+          sendMessageTelegram,
+        },
+      },
+    } as unknown as PluginRuntime);
+
+    const result = await telegramPlugin.outbound!.sendMedia!({
+      cfg: createCfg(),
+      to: "12345",
+      text: "hello",
+      mediaUrl: "/tmp/image.png",
+      mediaLocalRoots: ["/tmp/agent-root"],
+      accountId: "ops",
+    });
+
+    expect(sendMessageTelegram).toHaveBeenCalledWith(
+      "12345",
+      "hello",
+      expect.objectContaining({
+        mediaUrl: "/tmp/image.png",
+        mediaLocalRoots: ["/tmp/agent-root"],
+      }),
+    );
+    expect(result).toMatchObject({ channel: "telegram", messageId: "tg-1" });
+  });
 });

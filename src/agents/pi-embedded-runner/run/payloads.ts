@@ -95,6 +95,7 @@ export function buildEmbeddedRunPayloads(params: {
   toolResultFormat?: ToolResultFormat;
   suppressToolErrorWarnings?: boolean;
   inlineToolResultsAllowed: boolean;
+  didSendViaMessagingTool?: boolean;
 }): Array<{
   text?: string;
   mediaUrl?: string;
@@ -308,7 +309,7 @@ export function buildEmbeddedRunPayloads(params: {
   }
 
   const hasAudioAsVoiceTag = replyItems.some((item) => item.audioAsVoice);
-  const payloads = replyItems
+  return replyItems
     .map((item) => ({
       text: item.text?.trim() ? item.text.trim() : undefined,
       mediaUrls: item.media?.length ? item.media : undefined,
@@ -328,13 +329,4 @@ export function buildEmbeddedRunPayloads(params: {
       }
       return true;
     });
-  if (
-    payloads.length === 0 &&
-    params.toolMetas.length > 0 &&
-    !params.lastToolError &&
-    !lastAssistantErrored
-  ) {
-    return [{ text: "✅ Done." }];
-  }
-  return payloads;
 }

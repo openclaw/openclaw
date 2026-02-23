@@ -175,6 +175,18 @@ describe("extractToolResultMediaPaths", () => {
     expect(extractToolResultMediaPaths(result)).toEqual([]);
   });
 
+  it("does not treat malformed MEDIA:-prefixed prose as a file path", () => {
+    const result = {
+      content: [
+        {
+          type: "text",
+          text: "MEDIA:-prefixed paths (lenient whitespace) when loading outbound media",
+        },
+      ],
+    };
+    expect(extractToolResultMediaPaths(result)).toEqual([]);
+  });
+
   it("still extracts MEDIA: at line start after other text lines", () => {
     const result = {
       content: [

@@ -43,4 +43,32 @@ describe("buildReplyPayloads media filter integration", () => {
     // Text filter removes the payload entirely (text matched), so nothing remains.
     expect(replyPayloads).toHaveLength(0);
   });
+
+  it("does not dedupe text for cross-target messaging sends", () => {
+    const { replyPayloads } = buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "hello world!" }],
+      messageProvider: "telegram",
+      originatingTo: "telegram:123",
+      messagingToolSentTexts: ["hello world!"],
+      messagingToolSentTargets: [{ tool: "discord", provider: "discord", to: "channel:C1" }],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("hello world!");
+  });
+
+  it("does not dedupe media for cross-target messaging sends", () => {
+    const { replyPayloads } = buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "photo", mediaUrl: "file:///tmp/photo.jpg" }],
+      messageProvider: "telegram",
+      originatingTo: "telegram:123",
+      messagingToolSentMediaUrls: ["file:///tmp/photo.jpg"],
+      messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.mediaUrl).toBe("file:///tmp/photo.jpg");
+  });
 });

@@ -7,7 +7,7 @@ import {
 import { createExecTool } from "./bash-tools.exec.js";
 import { killProcessTree } from "./shell-utils.js";
 
-const BACKGROUND_HOLD_CMD = 'node -e "setTimeout(() => {}, 100)"';
+const BACKGROUND_HOLD_CMD = 'node -e "setTimeout(() => {}, 5000)"';
 const ABORT_SETTLE_MS = process.platform === "win32" ? 200 : 40;
 const ABORT_WAIT_TIMEOUT_MS = process.platform === "win32" ? 1_500 : 240;
 const POLL_INTERVAL_MS = 15;
@@ -140,6 +140,35 @@ test("background exec still times out after tool signal abort", async () => {
     },
     abortAfterStart: true,
   });
+});
+
+test("background exec without explicit timeout ignores default timeout", async () => {
+  const tool = createTestExecTool({
+    allowBackground: true,
+    backgroundMs: 0,
+    timeoutSec: BACKGROUND_TIMEOUT_SEC,
+  });
+  const result = await tool.execute("toolcall", { command: BACKGROUND_HOLD_CMD, background: true });
+  expect(result.details.status).toBe("running");
+  const sessionId = (result.details as { sessionId: string }).sessionId;
+  const waitMs = Math.max(ABORT_SETTLE_MS + 120, BACKGROUND_TIMEOUT_SEC * 1000 + 120);
+
+  const startedAt = Date.now();
+  await expect
+    .poll(
+      () => {
+        const running = getSession(sessionId);
+        const finished = getFinishedSession(sessionId);
+        return Date.now() - startedAt >= waitMs && !finished && running?.exited === false;
+      },
+      {
+        timeout: waitMs + ABORT_WAIT_TIMEOUT_MS,
+        interval: POLL_INTERVAL_MS,
+      },
+    )
+    .toBe(true);
+
+  cleanupRunningSession(sessionId);
 });
 
 test("yielded background exec is not killed when tool signal aborts", async () => {

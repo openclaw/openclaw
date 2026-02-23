@@ -185,6 +185,20 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
+  it("passes resolved agentDir to runEmbeddedPiAgent", async () => {
+    await withTempHome(async (home) => {
+      const { res } = await runCronTurn(home, {
+        jobPayload: DEFAULT_AGENT_TURN_PAYLOAD,
+      });
+
+      expect(res.status).toBe("ok");
+      const call = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0] as {
+        agentDir?: string;
+      };
+      expect(call?.agentDir).toBe(path.join(home, ".openclaw", "agents", "main", "agent"));
+    });
+  });
+
   it("appends current time after the cron header line", async () => {
     await withTempHome(async (home) => {
       await runCronTurn(home, {

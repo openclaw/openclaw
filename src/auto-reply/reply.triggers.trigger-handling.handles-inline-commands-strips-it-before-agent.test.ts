@@ -1,11 +1,10 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import {
-  createBlockReplyCollector,
+  expectInlineCommandHandledAndStripped,
   getRunEmbeddedPiAgentMock,
   installTriggerHandlingE2eTestHooks,
   loadGetReplyFromConfig,
   makeCfg,
-  mockRunEmbeddedPiAgentOk,
   withTempHome,
 } from "./reply.triggers.trigger-handling.test-harness.js";
 
@@ -48,52 +47,28 @@ async function expectUnauthorizedCommandDropped(home: string, body: "/status" | 
 describe("trigger handling", () => {
   it("handles inline /commands and strips it before the agent", async () => {
     await withTempHome(async (home) => {
-      const runEmbeddedPiAgentMock = mockRunEmbeddedPiAgentOk();
-      const { blockReplies, handlers } = createBlockReplyCollector();
-      const res = await getReplyFromConfig(
-        {
-          Body: "please /commands now",
-          From: "+1002",
-          To: "+2000",
-          CommandAuthorized: true,
-        },
-        handlers,
-        makeCfg(home),
-      );
-
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(blockReplies.length).toBe(1);
-      expect(blockReplies[0]?.text).toContain("Slash commands");
-      expect(runEmbeddedPiAgentMock).toHaveBeenCalled();
-      const prompt = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt ?? "";
-      expect(prompt).not.toContain("/commands");
-      expect(text).toBe("ok");
+      await expectInlineCommandHandledAndStripped({
+        home,
+        getReplyFromConfig,
+        body: "please /commands now",
+        stripToken: "/commands",
+        blockReplyContains: "Slash commands",
+      });
     });
   });
 
   it("handles inline /whoami and strips it before the agent", async () => {
     await withTempHome(async (home) => {
-      const runEmbeddedPiAgentMock = mockRunEmbeddedPiAgentOk();
-      const { blockReplies, handlers } = createBlockReplyCollector();
-      const res = await getReplyFromConfig(
-        {
-          Body: "please /whoami now",
-          From: "+1002",
-          To: "+2000",
+      await expectInlineCommandHandledAndStripped({
+        home,
+        getReplyFromConfig,
+        body: "please /whoami now",
+        stripToken: "/whoami",
+        blockReplyContains: "Identity",
+        requestOverrides: {
           SenderId: "12345",
-          CommandAuthorized: true,
         },
-        handlers,
-        makeCfg(home),
-      );
-
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(blockReplies.length).toBe(1);
-      expect(blockReplies[0]?.text).toContain("Identity");
-      expect(runEmbeddedPiAgentMock).toHaveBeenCalled();
-      const prompt = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt ?? "";
-      expect(prompt).not.toContain("/whoami");
-      expect(text).toBe("ok");
+      });
     });
   });
 

@@ -184,6 +184,31 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
     let restartAttempts = 0;
     let webhookCleared = false;
     const runnerOptions = createTelegramRunnerOptions(cfg);
+    const waitBeforeRetryOnRecoverableSetupError = async (
+      err: unknown,
+      logPrefix: string,
+    ): Promise<boolean> => {
+      if (opts.abortSignal?.aborted) {
+        return false;
+      }
+      if (!isRecoverableTelegramNetworkError(err, { context: "unknown" })) {
+        throw err;
+      }
+      restartAttempts += 1;
+      const delayMs = computeBackoff(TELEGRAM_POLL_RESTART_POLICY, restartAttempts);
+      (opts.runtime?.error ?? console.error)(
+        `${logPrefix}: ${formatErrorMessage(err)}; retrying in ${formatDurationPrecise(delayMs)}.`,
+      );
+      try {
+        await sleepWithAbort(delayMs, opts.abortSignal);
+      } catch (sleepErr) {
+        if (opts.abortSignal?.aborted) {
+          return false;
+        }
+        throw sleepErr;
+      }
+      return true;
+    };
 
     while (!opts.abortSignal?.aborted) {
       let bot;
@@ -200,24 +225,12 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
           },
         });
       } catch (err) {
-        if (opts.abortSignal?.aborted) {
-          return;
-        }
-        if (!isRecoverableTelegramNetworkError(err, { context: "unknown" })) {
-          throw err;
-        }
-        restartAttempts += 1;
-        const delayMs = computeBackoff(TELEGRAM_POLL_RESTART_POLICY, restartAttempts);
-        (opts.runtime?.error ?? console.error)(
-          `Telegram setup network error: ${formatErrorMessage(err)}; retrying in ${formatDurationPrecise(delayMs)}.`,
+        const shouldRetry = await waitBeforeRetryOnRecoverableSetupError(
+          err,
+          "Telegram setup network error",
         );
-        try {
-          await sleepWithAbort(delayMs, opts.abortSignal);
-        } catch (sleepErr) {
-          if (opts.abortSignal?.aborted) {
-            return;
-          }
-          throw sleepErr;
+        if (!shouldRetry) {
+          return;
         }
         continue;
       }
@@ -231,24 +244,12 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
           });
           webhookCleared = true;
         } catch (err) {
-          if (opts.abortSignal?.aborted) {
-            return;
-          }
-          if (!isRecoverableTelegramNetworkError(err, { context: "unknown" })) {
-            throw err;
-          }
-          restartAttempts += 1;
-          const delayMs = computeBackoff(TELEGRAM_POLL_RESTART_POLICY, restartAttempts);
-          (opts.runtime?.error ?? console.error)(
-            `Telegram webhook cleanup failed: ${formatErrorMessage(err)}; retrying in ${formatDurationPrecise(delayMs)}.`,
+          const shouldRetry = await waitBeforeRetryOnRecoverableSetupError(
+            err,
+            "Telegram webhook cleanup failed",
           );
-          try {
-            await sleepWithAbort(delayMs, opts.abortSignal);
-          } catch (sleepErr) {
-            if (opts.abortSignal?.aborted) {
-              return;
-            }
-            throw sleepErr;
+          if (!shouldRetry) {
+            return;
           }
           continue;
         }

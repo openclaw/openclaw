@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   isInterpreterLikeSafeBin,
@@ -69,5 +70,21 @@ describe("exec safe-bin runtime policy", () => {
     expect(policy.safeBins.has("myfilter")).toBe(true);
     expect(policy.unprofiledSafeBins).toEqual(["python3"]);
     expect(policy.unprofiledInterpreterSafeBins).toEqual(["python3"]);
+  });
+
+  it("merges explicit safe-bin trusted dirs from global and local config", () => {
+    const customDir = path.join(path.sep, "custom", "bin");
+    const agentDir = path.join(path.sep, "agent", "bin");
+    const policy = resolveExecSafeBinRuntimePolicy({
+      global: {
+        safeBinTrustedDirs: [` ${customDir} `, customDir],
+      },
+      local: {
+        safeBinTrustedDirs: [agentDir],
+      },
+    });
+
+    expect(policy.trustedSafeBinDirs.has(path.resolve(customDir))).toBe(true);
+    expect(policy.trustedSafeBinDirs.has(path.resolve(agentDir))).toBe(true);
   });
 });
