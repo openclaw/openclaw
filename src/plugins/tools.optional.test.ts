@@ -154,4 +154,24 @@ describe("resolvePluginTools optional tools", () => {
     expect(registry.diagnostics).toHaveLength(1);
     expect(registry.diagnostics[0]?.message).toContain("plugin tool name conflict");
   });
+
+  it("suppresses conflict diagnostics when requested", () => {
+    const registry = setRegistry([
+      {
+        pluginId: "multi",
+        optional: false,
+        source: "/tmp/multi.js",
+        factory: () => [makeTool("message"), makeTool("other_tool")],
+      },
+    ]);
+
+    const tools = resolvePluginTools({
+      context: createContext() as never,
+      existingToolNames: new Set(["message"]),
+      suppressNameConflicts: true,
+    });
+
+    expect(tools.map((tool) => tool.name)).toEqual(["other_tool"]);
+    expect(registry.diagnostics).toHaveLength(0);
+  });
 });
