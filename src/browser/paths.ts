@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { SafeOpenError, openFileWithinRoot } from "../infra/fs-safe.js";
@@ -81,6 +82,33 @@ export function resolvePathWithinRoot(params: {
   const resolved = path.resolve(root, raw);
   const rel = path.relative(root, resolved);
   if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
+    // On macOS, /tmp is a symlink to /private/tmp. When the root and candidate
+    // use different aliases for the same directory, the lexical comparison fails
+    // even though they refer to the same location. Try canonicalizing both via
+    // realpathSync before giving up.
+    if (path.isAbsolute(raw)) {
+      try {
+        const rootReal = fsSync.realpathSync(root);
+        // Try resolving the full path first; fall back to resolving the parent
+        // directory and appending the filename so that non-existent files still
+        // pass validation (realpathSync requires the target to exist).
+        let resolvedReal: string;
+        try {
+          resolvedReal = fsSync.realpathSync(resolved);
+        } catch {
+          resolvedReal = path.join(
+            fsSync.realpathSync(path.dirname(resolved)),
+            path.basename(resolved),
+          );
+        }
+        const relReal = path.relative(rootReal, resolvedReal);
+        if (relReal && !relReal.startsWith("..") && !path.isAbsolute(relReal)) {
+          return { ok: true, path: path.join(root, relReal) };
+        }
+      } catch {
+        // realpathSync can fail if parent directories don't exist; fall through.
+      }
+    }
     return { ok: false, error: `Invalid path: must stay within ${params.scopeLabel}` };
   }
   return { ok: true, path: resolved };
@@ -203,7 +231,16 @@ async function resolveCheckedPathsWithinRoot(params: {
       return lexicalPathResult;
     }
     try {
-      const resolvedExistingPath = await fs.realpath(raw);
+      // Try resolving the full path; fall back to resolving the parent
+      // directory and appending the filename so that non-existent files
+      // (e.g. pending uploads) still pass validation when the root uses a
+      // symlink alias like /tmp vs /private/tmp on macOS.
+      let resolvedExistingPath: string;
+      try {
+        resolvedExistingPath = await fs.realpath(raw);
+      } catch {
+        resolvedExistingPath = path.join(await fs.realpath(path.dirname(raw)), path.basename(raw));
+      }
       const relativePath = path.relative(rootRealPath, resolvedExistingPath);
       if (!isInRoot(relativePath)) {
         return lexicalPathResult;
