@@ -110,87 +110,84 @@ describe("directive behavior", () => {
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
-  it("picks the best fuzzy match when multiple models match", async () => {
+  it("picks the best fuzzy match for global and provider-scoped minimax queries", async () => {
     await withTempHome(async (home) => {
-      const storePath = path.join(home, "sessions.json");
-
-      await getReplyFromConfig(
-        { Body: "/model minimax", From: "+1222", To: "+1222", CommandAuthorized: true },
-        {},
+      for (const testCase of [
         {
-          agents: {
-            defaults: {
-              model: { primary: "minimax/MiniMax-M2.1" },
-              workspace: path.join(home, "openclaw"),
-              models: {
-                "minimax/MiniMax-M2.1": {},
-                "minimax/MiniMax-M2.1-lightning": {},
-                "lmstudio/minimax-m2.1-gs32": {},
+          body: "/model minimax",
+          storePath: path.join(home, "sessions-global-fuzzy.json"),
+          config: {
+            agents: {
+              defaults: {
+                model: { primary: "minimax/MiniMax-M2.1" },
+                workspace: path.join(home, "openclaw"),
+                models: {
+                  "minimax/MiniMax-M2.1": {},
+                  "minimax/MiniMax-M2.1-lightning": {},
+                  "lmstudio/minimax-m2.1-gs32": {},
+                },
+              },
+            },
+            models: {
+              mode: "merge",
+              providers: {
+                minimax: {
+                  baseUrl: "https://api.minimax.io/anthropic",
+                  apiKey: "sk-test",
+                  api: "anthropic-messages",
+                  models: [makeModelDefinition("MiniMax-M2.1", "MiniMax M2.1")],
+                },
+                lmstudio: {
+                  baseUrl: "http://127.0.0.1:1234/v1",
+                  apiKey: "lmstudio",
+                  api: "openai-responses",
+                  models: [makeModelDefinition("minimax-m2.1-gs32", "MiniMax M2.1 GS32")],
+                },
               },
             },
           },
-          models: {
-            mode: "merge",
-            providers: {
-              minimax: {
-                baseUrl: "https://api.minimax.io/anthropic",
-                apiKey: "sk-test",
-                api: "anthropic-messages",
-                models: [makeModelDefinition("MiniMax-M2.1", "MiniMax M2.1")],
-              },
-              lmstudio: {
-                baseUrl: "http://127.0.0.1:1234/v1",
-                apiKey: "lmstudio",
-                api: "openai-responses",
-                models: [makeModelDefinition("minimax-m2.1-gs32", "MiniMax M2.1 GS32")],
-              },
-            },
-          },
-          session: { store: storePath },
-        } as unknown as OpenClawConfig,
-      );
-
-      assertModelSelection(storePath);
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
-    });
-  });
-  it("picks the best fuzzy match within a provider", async () => {
-    await withTempHome(async (home) => {
-      const storePath = path.join(home, "sessions.json");
-
-      await getReplyFromConfig(
-        { Body: "/model minimax/m2.1", From: "+1222", To: "+1222", CommandAuthorized: true },
-        {},
+        },
         {
-          agents: {
-            defaults: {
-              model: { primary: "minimax/MiniMax-M2.1" },
-              workspace: path.join(home, "openclaw"),
-              models: {
-                "minimax/MiniMax-M2.1": {},
-                "minimax/MiniMax-M2.1-lightning": {},
+          body: "/model minimax/m2.1",
+          storePath: path.join(home, "sessions-provider-fuzzy.json"),
+          config: {
+            agents: {
+              defaults: {
+                model: { primary: "minimax/MiniMax-M2.1" },
+                workspace: path.join(home, "openclaw"),
+                models: {
+                  "minimax/MiniMax-M2.1": {},
+                  "minimax/MiniMax-M2.1-lightning": {},
+                },
+              },
+            },
+            models: {
+              mode: "merge",
+              providers: {
+                minimax: {
+                  baseUrl: "https://api.minimax.io/anthropic",
+                  apiKey: "sk-test",
+                  api: "anthropic-messages",
+                  models: [
+                    makeModelDefinition("MiniMax-M2.1", "MiniMax M2.1"),
+                    makeModelDefinition("MiniMax-M2.1-lightning", "MiniMax M2.1 Lightning"),
+                  ],
+                },
               },
             },
           },
-          models: {
-            mode: "merge",
-            providers: {
-              minimax: {
-                baseUrl: "https://api.minimax.io/anthropic",
-                apiKey: "sk-test",
-                api: "anthropic-messages",
-                models: [
-                  makeModelDefinition("MiniMax-M2.1", "MiniMax M2.1"),
-                  makeModelDefinition("MiniMax-M2.1-lightning", "MiniMax M2.1 Lightning"),
-                ],
-              },
-            },
-          },
-          session: { store: storePath },
-        } as unknown as OpenClawConfig,
-      );
-
-      assertModelSelection(storePath);
+        },
+      ]) {
+        await getReplyFromConfig(
+          { Body: testCase.body, From: "+1222", To: "+1222", CommandAuthorized: true },
+          {},
+          {
+            ...testCase.config,
+            session: { store: testCase.storePath },
+          } as unknown as OpenClawConfig,
+        );
+        assertModelSelection(testCase.storePath);
+      }
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });

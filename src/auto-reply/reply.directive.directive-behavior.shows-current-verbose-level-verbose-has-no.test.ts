@@ -184,9 +184,9 @@ describe("directive behavior", () => {
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
-  it("rejects per-agent elevated when disabled", async () => {
+  it("enforces per-agent elevated restrictions and status visibility", async () => {
     await withTempHome(async (home) => {
-      const res = await getReplyFromConfig(
+      const deniedRes = await getReplyFromConfig(
         {
           Body: "/elevated on",
           From: "+1222",
@@ -199,93 +199,10 @@ describe("directive behavior", () => {
         {},
         makeRestrictedElevatedDisabledConfig(home) as unknown as OpenClawConfig,
       );
+      const deniedText = replyText(deniedRes);
+      expect(deniedText).toContain("agents.list[].tools.elevated.enabled");
 
-      const text = replyText(res);
-      expect(text).toContain("agents.list[].tools.elevated.enabled");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
-    });
-  });
-  it("requires per-agent allowlist in addition to global", async () => {
-    await withTempHome(async (home) => {
-      const res = await getReplyFromConfig(
-        {
-          Body: "/elevated on",
-          From: "+1222",
-          To: "+1222",
-          Provider: "whatsapp",
-          SenderE164: "+1222",
-          SessionKey: "agent:work:main",
-          CommandAuthorized: true,
-        },
-        {},
-        makeWorkElevatedAllowlistConfig(home),
-      );
-
-      const text = replyText(res);
-      expect(text).toContain("agents.list[].tools.elevated.allowFrom.whatsapp");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
-    });
-  });
-  it("allows elevated when both global and per-agent allowlists match", async () => {
-    await withTempHome(async (home) => {
-      const res = await getReplyFromConfig(
-        {
-          ...makeCommandMessage("/elevated on", "+1333"),
-          SessionKey: "agent:work:main",
-        },
-        {},
-        makeWorkElevatedAllowlistConfig(home),
-      );
-
-      const text = replyText(res);
-      expect(text).toContain("Elevated mode set to ask");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
-    });
-  });
-  it("warns when elevated is used in direct runtime", async () => {
-    await withTempHome(async (home) => {
-      const res = await getReplyFromConfig(
-        makeCommandMessage("/elevated off"),
-        {},
-        makeAllowlistedElevatedConfig(home, { sandbox: { mode: "off" } }),
-      );
-
-      const text = replyText(res);
-      expect(text).toContain("Elevated mode disabled.");
-      expect(text).toContain("Runtime is direct; sandboxing does not apply.");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
-    });
-  });
-  it("rejects invalid elevated level", async () => {
-    await withTempHome(async (home) => {
-      const res = await getReplyFromConfig(
-        makeCommandMessage("/elevated maybe"),
-        {},
-        makeAllowlistedElevatedConfig(home),
-      );
-
-      const text = replyText(res);
-      expect(text).toContain("Unrecognized elevated level");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
-    });
-  });
-  it("handles multiple directives in a single message", async () => {
-    await withTempHome(async (home) => {
-      const res = await getReplyFromConfig(
-        makeCommandMessage("/elevated off\n/verbose on"),
-        {},
-        makeAllowlistedElevatedConfig(home),
-      );
-
-      const text = replyText(res);
-      expect(text).toContain("Elevated mode disabled.");
-      expect(text).toContain("Verbose logging enabled.");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
-    });
-  });
-  it("shows elevated off in status when per-agent elevated is disabled", async () => {
-    await withTempHome(async (home) => {
-      const res = await getReplyFromConfig(
+      const statusRes = await getReplyFromConfig(
         {
           Body: "/status",
           From: "+1222",
@@ -298,9 +215,71 @@ describe("directive behavior", () => {
         {},
         makeRestrictedElevatedDisabledConfig(home) as unknown as OpenClawConfig,
       );
+      const statusText = replyText(statusRes);
+      expect(statusText).not.toContain("elevated");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+  it("applies per-agent allowlist requirements before allowing elevated", async () => {
+    await withTempHome(async (home) => {
+      const deniedRes = await getReplyFromConfig(
+        {
+          ...makeCommandMessage("/elevated on", "+1222"),
+          SessionKey: "agent:work:main",
+        },
+        {},
+        makeWorkElevatedAllowlistConfig(home),
+      );
 
-      const text = replyText(res);
-      expect(text).not.toContain("elevated");
+      const deniedText = replyText(deniedRes);
+      expect(deniedText).toContain("agents.list[].tools.elevated.allowFrom.whatsapp");
+
+      const allowedRes = await getReplyFromConfig(
+        {
+          ...makeCommandMessage("/elevated on", "+1333"),
+          SessionKey: "agent:work:main",
+        },
+        {},
+        makeWorkElevatedAllowlistConfig(home),
+      );
+
+      const allowedText = replyText(allowedRes);
+      expect(allowedText).toContain("Elevated mode set to ask");
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    });
+  });
+  it("handles runtime warning, invalid level, and multi-directive elevated inputs", async () => {
+    await withTempHome(async (home) => {
+      for (const scenario of [
+        {
+          body: "/elevated off",
+          config: makeAllowlistedElevatedConfig(home, { sandbox: { mode: "off" } }),
+          expectedSnippets: [
+            "Elevated mode disabled.",
+            "Runtime is direct; sandboxing does not apply.",
+          ],
+        },
+        {
+          body: "/elevated maybe",
+          config: makeAllowlistedElevatedConfig(home),
+          expectedSnippets: ["Unrecognized elevated level"],
+        },
+        {
+          body: "/elevated off\n/verbose on",
+          config: makeAllowlistedElevatedConfig(home),
+          expectedSnippets: ["Elevated mode disabled.", "Verbose logging enabled."],
+        },
+      ]) {
+        const res = await getReplyFromConfig(
+          makeCommandMessage(scenario.body),
+          {},
+          scenario.config,
+        );
+        const text = replyText(res);
+        for (const snippet of scenario.expectedSnippets) {
+          expect(text).toContain(snippet);
+        }
+      }
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
