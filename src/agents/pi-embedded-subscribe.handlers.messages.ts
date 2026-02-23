@@ -41,6 +41,25 @@ function emitReasoningEnd(ctx: EmbeddedPiSubscribeContext) {
   void ctx.params.onReasoningEnd?.();
 }
 
+function hasToolCallBlock(message: AgentMessage): boolean {
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some((block) => {
+    if (!block || typeof block !== "object") {
+      return false;
+    }
+    const type = (block as { type?: unknown }).type;
+    return type === "toolCall" || type === "toolUse" || type === "functionCall";
+  });
+}
+
+function shouldSuppressMessageEndBlockReply(message: AgentMessage): boolean {
+  const stopReason = (message as { stopReason?: unknown }).stopReason;
+  return stopReason === "toolUse" && hasToolCallBlock(message);
+}
+
 export function resolveSilentReplyFallbackText(params: {
   text: string;
   messagingToolSentTexts: string[];
@@ -336,10 +355,14 @@ export function handleMessageEnd(
         ctx.log.warn(`block reply callback failed: ${String(err)}`);
       });
   };
+  const suppressMessageEndReply =
+    ctx.state.blockReplyBreak === "message_end" &&
+    shouldSuppressMessageEndBlockReply(assistantMessage);
   const shouldEmitReasoning = Boolean(
     ctx.state.includeReasoning &&
     formattedReasoning &&
     onBlockReply &&
+    !suppressMessageEndReply &&
     formattedReasoning !== ctx.state.lastReasoningSent,
   );
   const shouldEmitReasoningBeforeAnswer =
@@ -387,7 +410,8 @@ export function handleMessageEnd(
     (ctx.state.blockReplyBreak === "message_end" ||
       (ctx.blockChunker ? ctx.blockChunker.hasBuffered() : ctx.state.blockBuffer.length > 0)) &&
     text &&
-    onBlockReply
+    onBlockReply &&
+    !suppressMessageEndReply
   ) {
     if (ctx.blockChunker?.hasBuffered()) {
       ctx.blockChunker.drain({ force: true, emit: ctx.emitBlockChunk });
