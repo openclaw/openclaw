@@ -10,6 +10,7 @@ import {
   withModelsTempHome as withTempHome,
 } from "./models-config.e2e-harness.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
+import { readGeneratedModelsJson } from "./models-config.test-utils.js";
 
 installModelsConfigTestHooks();
 
@@ -34,11 +35,9 @@ describe("models-config", () => {
 
       await ensureOpenClawModelsJson(validated.config);
 
-      const modelPath = path.join(resolveOpenClawAgentDir(), "models.json");
-      const raw = await fs.readFile(modelPath, "utf8");
-      const parsed = JSON.parse(raw) as {
+      const parsed = await readGeneratedModelsJson<{
         providers: Record<string, { api?: string; models?: Array<{ id: string; api?: string }> }>;
-      };
+      }>();
 
       expect(parsed.providers.anthropic?.api).toBe("anthropic-messages");
       expect(parsed.providers.anthropic?.models?.[0]?.api).toBe("anthropic-messages");
@@ -74,11 +73,9 @@ describe("models-config", () => {
 
         await ensureOpenClawModelsJson(cfg);
 
-        const modelPath = path.join(resolveOpenClawAgentDir(), "models.json");
-        const raw = await fs.readFile(modelPath, "utf8");
-        const parsed = JSON.parse(raw) as {
+        const parsed = await readGeneratedModelsJson<{
           providers: Record<string, { apiKey?: string; models?: Array<{ id: string }> }>;
-        };
+        }>();
         expect(parsed.providers.minimax?.apiKey).toBe("MINIMAX_API_KEY");
         const ids = parsed.providers.minimax?.models?.map((model) => model.id);
         expect(ids).toContain("MiniMax-VL-01");

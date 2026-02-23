@@ -1,20 +1,18 @@
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   getRunEmbeddedPiAgentMock,
-  installTriggerHandlingE2eTestHooks,
+  installTriggerHandlingReplyHarness,
   makeCfg,
   runGreetingPromptForBareNewOrReset,
   withTempHome,
 } from "./reply.triggers.trigger-handling.test-harness.js";
 
 let getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
-beforeAll(async () => {
-  ({ getReplyFromConfig } = await import("./reply.js"));
+installTriggerHandlingReplyHarness((loader) => {
+  getReplyFromConfig = loader;
 });
-
-installTriggerHandlingE2eTestHooks();
 
 async function expectResetBlockedForNonOwner(params: {
   home: string;
@@ -68,6 +66,7 @@ describe("trigger handling", () => {
       expect(getRunEmbeddedPiAgentMock()).not.toHaveBeenCalled();
     });
   });
+
   it("injects group activation context into the system prompt", async () => {
     await withTempHome(async (home) => {
       getRunEmbeddedPiAgentMock().mockResolvedValue({
@@ -112,16 +111,19 @@ describe("trigger handling", () => {
       expect(extra).toContain("Activation: always-on");
     });
   });
+
   it("runs a greeting prompt for a bare /reset", async () => {
     await withTempHome(async (home) => {
       await runGreetingPromptForBareNewOrReset({ home, body: "/reset", getReplyFromConfig });
     });
   });
+
   it("runs a greeting prompt for a bare /new", async () => {
     await withTempHome(async (home) => {
       await runGreetingPromptForBareNewOrReset({ home, body: "/new", getReplyFromConfig });
     });
   });
+
   it("does not reset for unauthorized /reset", async () => {
     await withTempHome(async (home) => {
       await expectResetBlockedForNonOwner({
@@ -131,6 +133,7 @@ describe("trigger handling", () => {
       });
     });
   });
+
   it("blocks /reset for non-owner senders", async () => {
     await withTempHome(async (home) => {
       await expectResetBlockedForNonOwner({
