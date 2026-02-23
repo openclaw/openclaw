@@ -1,0 +1,18 @@
+name: Notify Downstream
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch to american-claw
+        env:
+          GH_TOKEN: ${{ secrets.AMERICAN_CLAW_DISPATCH_TOKEN }}
+        run: |
+          gh api repos/justuseapen/american-claw/dispatches \
+            -f event_type="else-core-updated" \
+            -f "client_payload[commit_sha]=${{ github.sha }}" \
+            -f "client_payload[commit_message]=${{ github.event.head_commit.message }}"
