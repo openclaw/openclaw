@@ -110,25 +110,54 @@ async function runInlineUnauthorizedCommand(params: {
 }
 
 describe("trigger handling", () => {
-  it("allows /activation from allowFrom in groups", async () => {
+  it("handles owner-admin commands without invoking the agent", async () => {
     await withTempHome(async (home) => {
-      const cfg = makeCfg(home);
-      const res = await getReplyFromConfig(
-        {
-          Body: "/activation mention",
-          From: "123@g.us",
-          To: "+2000",
-          ChatType: "group",
-          Provider: "whatsapp",
-          SenderE164: "+999",
-          CommandAuthorized: true,
-        },
-        {},
-        cfg,
-      );
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toBe("⚙️ Group activation set to mention.");
-      expect(getRunEmbeddedPiAgentMock()).not.toHaveBeenCalled();
+      {
+        const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+        runEmbeddedPiAgentMock.mockClear();
+        const cfg = makeCfg(home);
+        const res = await getReplyFromConfig(
+          {
+            Body: "/activation mention",
+            From: "123@g.us",
+            To: "+2000",
+            ChatType: "group",
+            Provider: "whatsapp",
+            SenderE164: "+999",
+            CommandAuthorized: true,
+          },
+          {},
+          cfg,
+        );
+        const text = Array.isArray(res) ? res[0]?.text : res?.text;
+        expect(text).toBe("⚙️ Group activation set to mention.");
+        expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+      }
+
+      {
+        const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+        runEmbeddedPiAgentMock.mockClear();
+        const cfg = makeUnauthorizedWhatsAppCfg(home);
+        const res = await getReplyFromConfig(
+          {
+            Body: "/send off",
+            From: "+1000",
+            To: "+2000",
+            Provider: "whatsapp",
+            SenderE164: "+1000",
+            CommandAuthorized: true,
+          },
+          {},
+          cfg,
+        );
+        const text = Array.isArray(res) ? res[0]?.text : res?.text;
+        expect(text).toContain("Send policy set to off");
+
+        const storeRaw = await fs.readFile(requireSessionStorePath(cfg), "utf-8");
+        const store = JSON.parse(storeRaw) as Record<string, { sendPolicy?: string }>;
+        expect(store[MAIN_SESSION_KEY]?.sendPolicy).toBe("deny");
+        expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+      }
     });
   });
 
@@ -275,31 +304,6 @@ describe("trigger handling", () => {
     });
   });
 
-  it("allows owner to set send policy", async () => {
-    await withTempHome(async (home) => {
-      const cfg = makeUnauthorizedWhatsAppCfg(home);
-
-      const res = await getReplyFromConfig(
-        {
-          Body: "/send off",
-          From: "+1000",
-          To: "+2000",
-          Provider: "whatsapp",
-          SenderE164: "+1000",
-          CommandAuthorized: true,
-        },
-        {},
-        cfg,
-      );
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).toContain("Send policy set to off");
-
-      const storeRaw = await fs.readFile(requireSessionStorePath(cfg), "utf-8");
-      const store = JSON.parse(storeRaw) as Record<string, { sendPolicy?: string }>;
-      expect(store[MAIN_SESSION_KEY]?.sendPolicy).toBe("deny");
-    });
-  });
-
   it("enforces elevated toggles across enabled and mention scenarios", async () => {
     await withTempHome(async (home) => {
       const isolateStore = (cfg: ReturnType<typeof makeWhatsAppElevatedCfg>, label: string) => {
@@ -409,34 +413,34 @@ describe("trigger handling", () => {
         expect(text).toBeUndefined();
         expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
       }
-    });
-  });
 
-  it("ignores inline elevated directive for unapproved sender", async () => {
-    await withTempHome(async (home) => {
-      getRunEmbeddedPiAgentMock().mockResolvedValue({
-        payloads: [{ text: "ok" }],
-        meta: {
-          durationMs: 1,
-          agentMeta: { sessionId: "s", provider: "p", model: "m" },
-        },
-      });
-      const cfg = makeWhatsAppElevatedCfg(home);
+      {
+        const cfg = isolateStore(makeWhatsAppElevatedCfg(home), "inline-unapproved");
+        const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+        runEmbeddedPiAgentMock.mockClear();
+        runEmbeddedPiAgentMock.mockResolvedValue({
+          payloads: [{ text: "ok" }],
+          meta: {
+            durationMs: 1,
+            agentMeta: { sessionId: "s", provider: "p", model: "m" },
+          },
+        });
 
-      const res = await getReplyFromConfig(
-        {
-          Body: "please /elevated on now",
-          From: "+2000",
-          To: "+2000",
-          Provider: "whatsapp",
-          SenderE164: "+2000",
-        },
-        {},
-        cfg,
-      );
-      const text = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(text).not.toContain("elevated is not available right now");
-      expect(getRunEmbeddedPiAgentMock()).toHaveBeenCalled();
+        const res = await getReplyFromConfig(
+          {
+            Body: "please /elevated on now",
+            From: "+2000",
+            To: "+2000",
+            Provider: "whatsapp",
+            SenderE164: "+2000",
+          },
+          {},
+          cfg,
+        );
+        const text = Array.isArray(res) ? res[0]?.text : res?.text;
+        expect(text).not.toContain("elevated is not available right now");
+        expect(runEmbeddedPiAgentMock).toHaveBeenCalled();
+      }
     });
   });
 
