@@ -73,6 +73,54 @@ describe("config pruning defaults", () => {
     });
   });
 
+  it("adds default cacheRetention for Anthropic Claude models on Bedrock", async () => {
+    await withTempHome(async (home) => {
+      await writeConfigForTest(home, {
+        auth: {
+          profiles: {
+            "anthropic:api": { provider: "anthropic", mode: "api_key" },
+          },
+        },
+        agents: {
+          defaults: {
+            model: { primary: "amazon-bedrock/us.anthropic.claude-opus-4-6-v1" },
+          },
+        },
+      });
+
+      const cfg = loadConfig();
+
+      expect(
+        cfg.agents?.defaults?.models?.["amazon-bedrock/us.anthropic.claude-opus-4-6-v1"]?.params
+          ?.cacheRetention,
+      ).toBe("short");
+    });
+  });
+
+  it("does not add default cacheRetention for non-Anthropic Bedrock models", async () => {
+    await withTempHome(async (home) => {
+      await writeConfigForTest(home, {
+        auth: {
+          profiles: {
+            "anthropic:api": { provider: "anthropic", mode: "api_key" },
+          },
+        },
+        agents: {
+          defaults: {
+            model: { primary: "amazon-bedrock/amazon.nova-micro-v1:0" },
+          },
+        },
+      });
+
+      const cfg = loadConfig();
+
+      expect(
+        cfg.agents?.defaults?.models?.["amazon-bedrock/amazon.nova-micro-v1:0"]?.params
+          ?.cacheRetention,
+      ).toBeUndefined();
+    });
+  });
+
   it("does not override explicit contextPruning mode", async () => {
     await withTempHome(async (home) => {
       await writeConfigForTest(home, { agents: { defaults: { contextPruning: { mode: "off" } } } });

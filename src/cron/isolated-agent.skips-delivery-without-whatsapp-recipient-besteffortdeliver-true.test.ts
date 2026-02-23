@@ -262,6 +262,31 @@ describe("runCronIsolatedAgentTurn", () => {
     });
   });
 
+  it("fails when announce delivery reports false and best-effort is disabled", async () => {
+    await withTempCronHome(async (home) => {
+      const storePath = await writeSessionStore(home, { lastProvider: "webchat", lastTo: "" });
+      const deps = createCliDeps();
+      mockAgentPayloads([{ text: "hello from cron" }]);
+      vi.mocked(runSubagentAnnounceFlow).mockResolvedValueOnce(false);
+
+      const res = await runTelegramAnnounceTurn({
+        home,
+        storePath,
+        deps,
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "123",
+          bestEffort: false,
+        },
+      });
+
+      expect(res.status).toBe("error");
+      expect(res.error).toContain("cron announce delivery failed");
+      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+    });
+  });
+
   it("ignores structured direct delivery failures when best-effort is enabled", async () => {
     await expectBestEffortTelegramNotDelivered({
       text: "hello from cron",

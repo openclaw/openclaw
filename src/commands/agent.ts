@@ -2,7 +2,7 @@ import {
   listAgentIds,
   resolveAgentDir,
   resolveEffectiveModelFallbacks,
-  resolveAgentModelPrimary,
+  resolveSessionAgentId,
   resolveAgentSkillsFilter,
   resolveAgentWorkspaceDir,
 } from "../agents/agent-scope.js";
@@ -20,6 +20,7 @@ import {
   modelKey,
   normalizeModelRef,
   resolveConfiguredModelRef,
+  resolveDefaultModelForAgent,
   resolveThinkingDefault,
 } from "../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
@@ -218,14 +219,6 @@ export async function agentCommand(
     }
   }
   const agentCfg = cfg.agents?.defaults;
-  const sessionAgentId = agentIdOverride ?? resolveAgentIdFromSessionKey(opts.sessionKey?.trim());
-  const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, sessionAgentId);
-  const agentDir = resolveAgentDir(cfg, sessionAgentId);
-  const workspace = await ensureAgentWorkspace({
-    dir: workspaceDirRaw,
-    ensureBootstrapFiles: !agentCfg?.skipBootstrap,
-  });
-  const workspaceDir = workspace.dir;
   const configuredModel = resolveConfiguredModelRef({
     cfg,
     defaultProvider: DEFAULT_PROVIDER,
@@ -284,6 +277,19 @@ export async function agentCommand(
     persistedThinking,
     persistedVerbose,
   } = sessionResolution;
+  const sessionAgentId =
+    agentIdOverride ??
+    resolveSessionAgentId({
+      sessionKey: sessionKey ?? opts.sessionKey?.trim(),
+      config: cfg,
+    });
+  const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, sessionAgentId);
+  const agentDir = resolveAgentDir(cfg, sessionAgentId);
+  const workspace = await ensureAgentWorkspace({
+    dir: workspaceDirRaw,
+    ensureBootstrapFiles: !agentCfg?.skipBootstrap,
+  });
+  const workspaceDir = workspace.dir;
   let sessionEntry = resolvedSessionEntry;
   const runId = opts.runId?.trim() || sessionId;
 
@@ -366,29 +372,9 @@ export async function agentCommand(
       sessionEntry = next;
     }
 
-    const agentModelPrimary = resolveAgentModelPrimary(cfg, sessionAgentId);
-    const cfgForModelSelection = agentModelPrimary
-      ? {
-          ...cfg,
-          agents: {
-            ...cfg.agents,
-            defaults: {
-              ...cfg.agents?.defaults,
-              model: {
-                ...(typeof cfg.agents?.defaults?.model === "object"
-                  ? cfg.agents.defaults.model
-                  : undefined),
-                primary: agentModelPrimary,
-              },
-            },
-          },
-        }
-      : cfg;
-
-    const configuredDefaultRef = resolveConfiguredModelRef({
-      cfg: cfgForModelSelection,
-      defaultProvider: DEFAULT_PROVIDER,
-      defaultModel: DEFAULT_MODEL,
+    const configuredDefaultRef = resolveDefaultModelForAgent({
+      cfg,
+      agentId: sessionAgentId,
     });
     const { provider: defaultProvider, model: defaultModel } = normalizeModelRef(
       configuredDefaultRef.provider,

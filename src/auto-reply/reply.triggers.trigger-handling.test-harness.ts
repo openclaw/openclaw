@@ -301,20 +301,6 @@ export async function runDirectElevatedToggleAndLoadStore(params: {
   return { text, store };
 }
 
-export async function expectDirectElevatedToggleOn(params: {
-  getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
-}) {
-  await withTempHome(async (home) => {
-    const cfg = makeWhatsAppElevatedCfg(home);
-    const { text, store } = await runDirectElevatedToggleAndLoadStore({
-      cfg,
-      getReplyFromConfig: params.getReplyFromConfig,
-    });
-    expect(text).toContain("Elevated mode set to ask");
-    expect(store[MAIN_SESSION_KEY]?.elevatedLevel).toBe("on");
-  });
-}
-
 export async function expectInlineCommandHandledAndStripped(params: {
   home: string;
   getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
@@ -324,6 +310,7 @@ export async function expectInlineCommandHandledAndStripped(params: {
   requestOverrides?: Record<string, unknown>;
 }) {
   const runEmbeddedPiAgentMock = mockRunEmbeddedPiAgentOk();
+  runEmbeddedPiAgentMock.mockClear();
   const { blockReplies, handlers } = createBlockReplyCollector();
   const res = await params.getReplyFromConfig(
     {
@@ -341,7 +328,7 @@ export async function expectInlineCommandHandledAndStripped(params: {
   expect(blockReplies.length).toBe(1);
   expect(blockReplies[0]?.text).toContain(params.blockReplyContains);
   expect(runEmbeddedPiAgentMock).toHaveBeenCalled();
-  const prompt = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt ?? "";
+  const prompt = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0]?.prompt ?? "";
   expect(prompt).not.toContain(params.stripToken);
   expect(text).toBe("ok");
 }
@@ -351,7 +338,9 @@ export async function runGreetingPromptForBareNewOrReset(params: {
   body: "/new" | "/reset";
   getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
 }) {
-  getRunEmbeddedPiAgentMock().mockResolvedValue({
+  const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
+  runEmbeddedPiAgentMock.mockClear();
+  runEmbeddedPiAgentMock.mockResolvedValue({
     payloads: [{ text: "hello" }],
     meta: {
       durationMs: 1,
@@ -371,8 +360,8 @@ export async function runGreetingPromptForBareNewOrReset(params: {
   );
   const text = Array.isArray(res) ? res[0]?.text : res?.text;
   expect(text).toBe("hello");
-  expect(getRunEmbeddedPiAgentMock()).toHaveBeenCalledOnce();
-  const prompt = getRunEmbeddedPiAgentMock().mock.calls[0]?.[0]?.prompt ?? "";
+  expect(runEmbeddedPiAgentMock).toHaveBeenCalledOnce();
+  const prompt = runEmbeddedPiAgentMock.mock.calls.at(-1)?.[0]?.prompt ?? "";
   expect(prompt).toContain("A new session was started via /new or /reset");
   expect(prompt).toContain("Execute your Session Startup sequence now");
 }

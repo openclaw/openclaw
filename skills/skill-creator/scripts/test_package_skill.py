@@ -9,13 +9,25 @@ import types
 import zipfile
 from pathlib import Path
 from unittest import TestCase, main
+from unittest.mock import patch
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 
 
 fake_quick_validate = types.ModuleType("quick_validate")
 fake_quick_validate.validate_skill = lambda _path: (True, "Skill is valid!")
+original_quick_validate = sys.modules.get("quick_validate")
 sys.modules["quick_validate"] = fake_quick_validate
 
+import package_skill as package_skill_module
 from package_skill import package_skill
+
+if original_quick_validate is not None:
+    sys.modules["quick_validate"] = original_quick_validate
+else:
+    sys.modules.pop("quick_validate", None)
 
 
 class TestPackageSkillSecurity(TestCase):
@@ -50,7 +62,7 @@ class TestPackageSkillSecurity(TestCase):
         self.assertIn("normal-skill/SKILL.md", names)
         self.assertIn("normal-skill/script.py", names)
 
-    def test_rejects_symlink_to_external_file(self):
+    def test_skips_symlink_to_external_file(self):
         skill_dir = self.create_skill("symlink-file-skill")
         outside = self.temp_dir / "outside-secret.txt"
         outside.write_text("super-secret\n")
@@ -64,9 +76,16 @@ class TestPackageSkillSecurity(TestCase):
             self.skipTest("symlink unsupported on this platform")
 
         result = package_skill(str(skill_dir), str(out_dir))
-        self.assertIsNone(result)
+        self.assertIsNotNone(result)
+        skill_file = out_dir / "symlink-file-skill.skill"
+        self.assertTrue(skill_file.exists())
+        with zipfile.ZipFile(skill_file, "r") as archive:
+            names = set(archive.namelist())
+        self.assertIn("symlink-file-skill/SKILL.md", names)
+        self.assertIn("symlink-file-skill/script.py", names)
+        self.assertNotIn("symlink-file-skill/loot.txt", names)
 
-    def test_rejects_symlink_directory(self):
+    def test_skips_symlink_directory(self):
         skill_dir = self.create_skill("symlink-dir-skill")
         outside_dir = self.temp_dir / "outside"
         outside_dir.mkdir()
@@ -81,6 +100,29 @@ class TestPackageSkillSecurity(TestCase):
             self.skipTest("symlink unsupported on this platform")
 
         result = package_skill(str(skill_dir), str(out_dir))
+        self.assertIsNotNone(result)
+        skill_file = out_dir / "symlink-dir-skill.skill"
+        with zipfile.ZipFile(skill_file, "r") as archive:
+            names = set(archive.namelist())
+        self.assertIn("symlink-dir-skill/SKILL.md", names)
+        self.assertIn("symlink-dir-skill/script.py", names)
+        self.assertNotIn("symlink-dir-skill/docs/secret.txt", names)
+
+    def test_rejects_resolved_path_outside_skill_root(self):
+        skill_dir = self.create_skill("escape-skill")
+        out_dir = self.temp_dir / "out"
+        out_dir.mkdir()
+
+        original_within = package_skill_module._is_within
+
+        def fake_is_within(path_obj: Path, root: Path):
+            if path_obj.name == "script.py":
+                return False
+            return original_within(path_obj, root)
+
+        with patch.object(package_skill_module, "_is_within", fake_is_within):
+            result = package_skill(str(skill_dir), str(out_dir))
+
         self.assertIsNone(result)
 
     def test_allows_nested_regular_files(self):
@@ -98,6 +140,20 @@ class TestPackageSkillSecurity(TestCase):
         with zipfile.ZipFile(skill_file, "r") as archive:
             names = set(archive.namelist())
         self.assertIn("nested-skill/lib/helpers/util.py", names)
+
+    def test_skips_output_archive_when_output_dir_is_skill_dir(self):
+        skill_dir = self.create_skill("self-output-skill")
+
+        result = package_skill(str(skill_dir), str(skill_dir))
+
+        self.assertIsNotNone(result)
+        skill_file = skill_dir / "self-output-skill.skill"
+        self.assertTrue(skill_file.exists())
+        with zipfile.ZipFile(skill_file, "r") as archive:
+            names = set(archive.namelist())
+        self.assertIn("self-output-skill/SKILL.md", names)
+        self.assertIn("self-output-skill/script.py", names)
+        self.assertNotIn("self-output-skill/self-output-skill.skill", names)
 
 
 if __name__ == "__main__":

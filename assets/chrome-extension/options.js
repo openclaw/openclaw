@@ -13,10 +13,15 @@ function updateRelayUrl(port) {
   el.textContent = `http://127.0.0.1:${port}/`
 }
 
-function relayHeaders(token) {
-  const t = String(token || '').trim()
-  if (!t) return {}
-  return { 'x-openclaw-relay-token': t }
+async function deriveRelayToken(gatewayToken, port) {
+  const enc = new TextEncoder()
+  const key = await crypto.subtle.importKey(
+    'raw', enc.encode(gatewayToken), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+  )
+  const sig = await crypto.subtle.sign(
+    'HMAC', key, enc.encode(`openclaw-extension-relay-v1:${port}`),
+  )
+  return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
 function setStatus(kind, message) {
@@ -33,18 +38,21 @@ async function checkRelayReachable(port, token) {
     setStatus('error', 'Gateway token required. Save your gateway token to connect.')
     return
   }
-  const ctrl = new AbortController()
-  const t = setTimeout(() => ctrl.abort(), 1200)
   try {
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: relayHeaders(trimmedToken),
-      signal: ctrl.signal,
+    const relayToken = await deriveRelayToken(trimmedToken, port)
+    // Delegate the fetch to the background service worker to bypass
+    // CORS preflight on the custom x-openclaw-relay-token header.
+    const res = await chrome.runtime.sendMessage({
+      type: 'relayCheck',
+      url,
+      token: relayToken,
     })
+    if (!res) throw new Error('No response from service worker')
     if (res.status === 401) {
       setStatus('error', 'Gateway token rejected. Check token and save again.')
       return
     }
+    if (res.error) throw new Error(res.error)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     setStatus('ok', `Relay reachable and authenticated at http://127.0.0.1:${port}/`)
   } catch {
@@ -52,8 +60,6 @@ async function checkRelayReachable(port, token) {
       'error',
       `Relay not reachable/authenticated at http://127.0.0.1:${port}/. Start OpenClaw browser relay and verify token.`,
     )
-  } finally {
-    clearTimeout(t)
   }
 }
 

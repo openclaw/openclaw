@@ -39,6 +39,7 @@ import { applyMergePatch } from "./merge-patch.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
 import { normalizeConfigPaths } from "./normalize-paths.js";
 import { resolveConfigPath, resolveDefaultConfigCandidates, resolveStateDir } from "./paths.js";
+import { isBlockedObjectKey } from "./prototype-keys.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
 import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import {
@@ -143,76 +144,104 @@ function isWritePlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function unsetPathForWrite(root: Record<string, unknown>, pathSegments: string[]): boolean {
-  if (pathSegments.length === 0) {
-    return false;
+function hasOwnObjectKey(value: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+const WRITE_PRUNED_OBJECT = Symbol("write-pruned-object");
+
+type UnsetPathWriteResult = {
+  changed: boolean;
+  value: unknown;
+};
+
+function unsetPathForWriteAt(
+  value: unknown,
+  pathSegments: string[],
+  depth: number,
+): UnsetPathWriteResult {
+  if (depth >= pathSegments.length) {
+    return { changed: false, value };
   }
+  const segment = pathSegments[depth];
+  const isLeaf = depth === pathSegments.length - 1;
 
-  const traversal: Array<{ container: unknown; key: string | number }> = [];
-  let cursor: unknown = root;
-
-  for (let i = 0; i < pathSegments.length - 1; i += 1) {
-    const segment = pathSegments[i];
-    if (Array.isArray(cursor)) {
-      if (!isNumericPathSegment(segment)) {
-        return false;
-      }
-      const index = Number.parseInt(segment, 10);
-      if (!Number.isFinite(index) || index < 0 || index >= cursor.length) {
-        return false;
-      }
-      traversal.push({ container: cursor, key: index });
-      cursor = cursor[index];
-      continue;
+  if (Array.isArray(value)) {
+    if (!isNumericPathSegment(segment)) {
+      return { changed: false, value };
     }
-    if (!isWritePlainObject(cursor) || !(segment in cursor)) {
-      return false;
+    const index = Number.parseInt(segment, 10);
+    if (!Number.isFinite(index) || index < 0 || index >= value.length) {
+      return { changed: false, value };
     }
-    traversal.push({ container: cursor, key: segment });
-    cursor = cursor[segment];
-  }
-
-  const leaf = pathSegments[pathSegments.length - 1];
-  if (Array.isArray(cursor)) {
-    if (!isNumericPathSegment(leaf)) {
-      return false;
+    if (isLeaf) {
+      const next = value.slice();
+      next.splice(index, 1);
+      return { changed: true, value: next };
     }
-    const index = Number.parseInt(leaf, 10);
-    if (!Number.isFinite(index) || index < 0 || index >= cursor.length) {
-      return false;
+    const child = unsetPathForWriteAt(value[index], pathSegments, depth + 1);
+    if (!child.changed) {
+      return { changed: false, value };
     }
-    cursor.splice(index, 1);
-  } else {
-    if (!isWritePlainObject(cursor) || !(leaf in cursor)) {
-      return false;
-    }
-    delete cursor[leaf];
-  }
-
-  // Prune now-empty object branches after unsetting to avoid dead config scaffolding.
-  for (let i = traversal.length - 1; i >= 0; i -= 1) {
-    const { container, key } = traversal[i];
-    let child: unknown;
-    if (Array.isArray(container)) {
-      child = typeof key === "number" ? container[key] : undefined;
-    } else if (isWritePlainObject(container)) {
-      child = container[String(key)];
+    const next = value.slice();
+    if (child.value === WRITE_PRUNED_OBJECT) {
+      next.splice(index, 1);
     } else {
-      break;
+      next[index] = child.value;
     }
-    if (!isWritePlainObject(child) || Object.keys(child).length > 0) {
-      break;
-    }
-    if (Array.isArray(container) && typeof key === "number") {
-      if (key >= 0 && key < container.length) {
-        container.splice(key, 1);
-      }
-    } else if (isWritePlainObject(container)) {
-      delete container[String(key)];
-    }
+    return { changed: true, value: next };
   }
 
-  return true;
+  if (
+    isBlockedObjectKey(segment) ||
+    !isWritePlainObject(value) ||
+    !hasOwnObjectKey(value, segment)
+  ) {
+    return { changed: false, value };
+  }
+  if (isLeaf) {
+    const next: Record<string, unknown> = { ...value };
+    delete next[segment];
+    return {
+      changed: true,
+      value: Object.keys(next).length === 0 ? WRITE_PRUNED_OBJECT : next,
+    };
+  }
+
+  const child = unsetPathForWriteAt(value[segment], pathSegments, depth + 1);
+  if (!child.changed) {
+    return { changed: false, value };
+  }
+  const next: Record<string, unknown> = { ...value };
+  if (child.value === WRITE_PRUNED_OBJECT) {
+    delete next[segment];
+  } else {
+    next[segment] = child.value;
+  }
+  return {
+    changed: true,
+    value: Object.keys(next).length === 0 ? WRITE_PRUNED_OBJECT : next,
+  };
+}
+
+function unsetPathForWrite(
+  root: OpenClawConfig,
+  pathSegments: string[],
+): { changed: boolean; next: OpenClawConfig } {
+  if (pathSegments.length === 0) {
+    return { changed: false, next: root };
+  }
+  const result = unsetPathForWriteAt(root, pathSegments, 0);
+  if (!result.changed) {
+    return { changed: false, next: root };
+  }
+  if (result.value === WRITE_PRUNED_OBJECT) {
+    return { changed: true, next: {} };
+  }
+  if (isWritePlainObject(result.value)) {
+    return { changed: true, next: coerceConfig(result.value) };
+  }
+  return { changed: false, next: root };
 }
 
 export function resolveConfigSnapshotHash(snapshot: {
@@ -1011,16 +1040,20 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
 
     const dir = path.dirname(configPath);
     await deps.fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
-    const outputConfig =
+    const outputConfigBase =
       envRefMap && changedPaths
         ? (restoreEnvRefsFromMap(cfgToWrite, "", envRefMap, changedPaths) as OpenClawConfig)
         : cfgToWrite;
+    let outputConfig = outputConfigBase;
     if (options.unsetPaths?.length) {
       for (const unsetPath of options.unsetPaths) {
         if (!Array.isArray(unsetPath) || unsetPath.length === 0) {
           continue;
         }
-        unsetPathForWrite(outputConfig as Record<string, unknown>, unsetPath);
+        const unsetResult = unsetPathForWrite(outputConfig, unsetPath);
+        if (unsetResult.changed) {
+          outputConfig = unsetResult.next;
+        }
       }
     }
     // Do NOT apply runtime defaults when writing — user config should only contain

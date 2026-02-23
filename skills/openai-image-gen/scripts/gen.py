@@ -9,6 +9,7 @@ import re
 import sys
 import urllib.error
 import urllib.request
+from html import escape as html_escape
 from pathlib import Path
 
 
@@ -131,8 +132,8 @@ def write_gallery(out_dir: Path, items: list[dict]) -> None:
         [
             f"""
 <figure>
-  <a href="{it["file"]}"><img src="{it["file"]}" loading="lazy" /></a>
-  <figcaption>{it["prompt"]}</figcaption>
+  <a href="{html_escape(it["file"], quote=True)}"><img src="{html_escape(it["file"], quote=True)}" loading="lazy" /></a>
+  <figcaption>{html_escape(it["prompt"])}</figcaption>
 </figure>
 """.strip()
             for it in items
@@ -152,7 +153,7 @@ def write_gallery(out_dir: Path, items: list[dict]) -> None:
   code {{ color: #9cd1ff; }}
 </style>
 <h1>openai-image-gen</h1>
-<p>Output: <code>{out_dir.as_posix()}</code></p>
+<p>Output: <code>{html_escape(out_dir.as_posix())}</code></p>
 <div class="grid">
 {thumbs}
 </div>

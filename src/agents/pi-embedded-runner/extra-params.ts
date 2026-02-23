@@ -26,10 +26,21 @@ export function resolveExtraParams(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
   modelId: string;
+  agentId?: string;
 }): Record<string, unknown> | undefined {
   const modelKey = `${params.provider}/${params.modelId}`;
   const modelConfig = params.cfg?.agents?.defaults?.models?.[modelKey];
-  return modelConfig?.params ? { ...modelConfig.params } : undefined;
+  const globalParams = modelConfig?.params ? { ...modelConfig.params } : undefined;
+  const agentParams =
+    params.agentId && params.cfg?.agents?.list
+      ? params.cfg.agents.list.find((agent) => agent.id === params.agentId)?.params
+      : undefined;
+
+  if (!globalParams && !agentParams) {
+    return undefined;
+  }
+
+  return Object.assign({}, globalParams, agentParams);
 }
 
 type CacheRetention = "none" | "short" | "long";
@@ -43,16 +54,25 @@ type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
  *
  * Mapping: "5m" → "short", "1h" → "long"
  *
- * Only applies to Anthropic provider (OpenRouter uses openai-completions API
- * with hardcoded cache_control, not the cacheRetention stream option).
+ * Applies to:
+ * - direct Anthropic provider
+ * - Anthropic Claude models on Bedrock when cache retention is explicitly configured
  *
- * Defaults to "short" for Anthropic provider when not explicitly configured.
+ * OpenRouter uses openai-completions API with hardcoded cache_control instead
+ * of the cacheRetention stream option.
+ *
+ * Defaults to "short" for direct Anthropic when not explicitly configured.
  */
 function resolveCacheRetention(
   extraParams: Record<string, unknown> | undefined,
   provider: string,
 ): CacheRetention | undefined {
-  if (provider !== "anthropic") {
+  const isAnthropicDirect = provider === "anthropic";
+  const hasBedrockOverride =
+    extraParams?.cacheRetention !== undefined || extraParams?.cacheControlTtl !== undefined;
+  const isAnthropicBedrock = provider === "amazon-bedrock" && hasBedrockOverride;
+
+  if (!isAnthropicDirect && !isAnthropicBedrock) {
     return undefined;
   }
 
@@ -71,7 +91,13 @@ function resolveCacheRetention(
     return "long";
   }
 
-  // Default to "short" for Anthropic when not explicitly configured
+  // Default to "short" only for direct Anthropic when not explicitly configured.
+  // Bedrock retains upstream provider defaults unless explicitly set.
+  if (!isAnthropicDirect) {
+    return undefined;
+  }
+
+  // Default to "short" for direct Anthropic when not explicitly configured
   return "short";
 }
 
@@ -135,6 +161,20 @@ function createStreamFnWithExtraParams(
   };
 
   return wrappedStreamFn;
+}
+
+function isAnthropicBedrockModel(modelId: string): boolean {
+  const normalized = modelId.toLowerCase();
+  return normalized.includes("anthropic.claude") || normalized.includes("anthropic/claude");
+}
+
+function createBedrockNoCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) =>
+    underlying(model, context, {
+      ...options,
+      cacheRetention: "none",
+    });
 }
 
 function isDirectOpenAIBaseUrl(baseUrl: unknown): boolean {
@@ -276,13 +316,25 @@ function createAnthropicBetaHeadersWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
+    const isOauth = isAnthropicOAuthApiKey(options?.apiKey);
+    const requestedContext1m = betas.includes(ANTHROPIC_CONTEXT_1M_BETA);
+    const effectiveBetas =
+      isOauth && requestedContext1m
+        ? betas.filter((beta) => beta !== ANTHROPIC_CONTEXT_1M_BETA)
+        : betas;
+    if (isOauth && requestedContext1m) {
+      log.warn(
+        `ignoring context1m for OAuth token auth on ${model.provider}/${model.id}; Anthropic rejects context-1m beta with OAuth auth`,
+      );
+    }
+
     // Preserve the betas pi-ai's createClient would inject for the given token type.
     // Without this, our options.headers["anthropic-beta"] overwrites the pi-ai
     // defaultHeaders via Object.assign, stripping critical betas like oauth-2025-04-20.
-    const piAiBetas = isAnthropicOAuthApiKey(options?.apiKey)
+    const piAiBetas = isOauth
       ? (PI_AI_OAUTH_ANTHROPIC_BETAS as readonly string[])
       : (PI_AI_DEFAULT_ANTHROPIC_BETAS as readonly string[]);
-    const allBetas = [...new Set([...piAiBetas, ...betas])];
+    const allBetas = [...new Set([...piAiBetas, ...effectiveBetas])];
     return underlying(model, context, {
       ...options,
       headers: mergeAnthropicBetaHeader(options?.headers, allBetas),
@@ -376,6 +428,13 @@ function createOpenRouterWrapper(
       onPayload: (payload) => {
         if (thinkingLevel && payload && typeof payload === "object") {
           const payloadObj = payload as Record<string, unknown>;
+
+          // pi-ai may inject a top-level reasoning_effort (OpenAI flat format).
+          // OpenRouter expects the nested reasoning.effort format instead, and
+          // rejects payloads containing both fields. Remove the flat field so
+          // only the nested one is sent.
+          delete payloadObj.reasoning_effort;
+
           const existingReasoning = payloadObj.reasoning;
 
           // OpenRouter treats reasoning.effort and reasoning.max_tokens as
@@ -448,11 +507,13 @@ export function applyExtraParamsToAgent(
   modelId: string,
   extraParamsOverride?: Record<string, unknown>,
   thinkingLevel?: ThinkLevel,
+  agentId?: string,
 ): void {
   const extraParams = resolveExtraParams({
     cfg,
     provider,
     modelId,
+    agentId,
   });
   const override =
     extraParamsOverride && Object.keys(extraParamsOverride).length > 0
@@ -480,6 +541,11 @@ export function applyExtraParamsToAgent(
     log.debug(`applying OpenRouter app attribution headers for ${provider}/${modelId}`);
     agent.streamFn = createOpenRouterWrapper(agent.streamFn, thinkingLevel);
     agent.streamFn = createOpenRouterSystemCacheWrapper(agent.streamFn);
+  }
+
+  if (provider === "amazon-bedrock" && !isAnthropicBedrockModel(modelId)) {
+    log.debug(`disabling prompt caching for non-Anthropic Bedrock model ${provider}/${modelId}`);
+    agent.streamFn = createBedrockNoCacheWrapper(agent.streamFn);
   }
 
   // Enable Z.AI tool_stream for real-time tool call streaming.

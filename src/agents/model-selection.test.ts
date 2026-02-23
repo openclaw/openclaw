@@ -97,6 +97,31 @@ describe("model-selection", () => {
       });
     });
 
+    it("normalizes Vercel Claude shorthand to anthropic-prefixed model ids", () => {
+      expect(parseModelRef("vercel-ai-gateway/claude-opus-4.6", "openai")).toEqual({
+        provider: "vercel-ai-gateway",
+        model: "anthropic/claude-opus-4.6",
+      });
+      expect(parseModelRef("vercel-ai-gateway/opus-4.6", "openai")).toEqual({
+        provider: "vercel-ai-gateway",
+        model: "anthropic/claude-opus-4-6",
+      });
+    });
+
+    it("keeps already-prefixed Vercel Anthropic models unchanged", () => {
+      expect(parseModelRef("vercel-ai-gateway/anthropic/claude-opus-4.6", "openai")).toEqual({
+        provider: "vercel-ai-gateway",
+        model: "anthropic/claude-opus-4.6",
+      });
+    });
+
+    it("passes through non-Claude Vercel model ids unchanged", () => {
+      expect(parseModelRef("vercel-ai-gateway/openai/gpt-5.2", "openai")).toEqual({
+        provider: "vercel-ai-gateway",
+        model: "openai/gpt-5.2",
+      });
+    });
+
     it("should handle invalid slash usage", () => {
       expect(parseModelRef("/", "anthropic")).toBeNull();
       expect(parseModelRef("anthropic/", "anthropic")).toBeNull();

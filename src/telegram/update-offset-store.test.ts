@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
@@ -32,6 +34,48 @@ describe("deleteTelegramUpdateOffset", () => {
 
       expect(await readTelegramUpdateOffset({ accountId: "default" })).toBeNull();
       expect(await readTelegramUpdateOffset({ accountId: "alerts" })).toBe(200);
+    });
+  });
+
+  it("returns null when stored offset was written by a different bot token", async () => {
+    await withStateDirEnv("openclaw-tg-offset-", async () => {
+      await writeTelegramUpdateOffset({
+        accountId: "default",
+        updateId: 321,
+        botToken: "111111:token-a",
+      });
+
+      expect(
+        await readTelegramUpdateOffset({
+          accountId: "default",
+          botToken: "222222:token-b",
+        }),
+      ).toBeNull();
+      expect(
+        await readTelegramUpdateOffset({
+          accountId: "default",
+          botToken: "111111:token-a",
+        }),
+      ).toBe(321);
+    });
+  });
+
+  it("treats legacy offset records without bot identity as stale when token is provided", async () => {
+    await withStateDirEnv("openclaw-tg-offset-", async ({ stateDir }) => {
+      const legacyPath = path.join(stateDir, "telegram", "update-offset-default.json");
+      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+      await fs.writeFile(
+        legacyPath,
+        `${JSON.stringify({ version: 1, lastUpdateId: 777 }, null, 2)}\n`,
+        "utf-8",
+      );
+
+      expect(
+        await readTelegramUpdateOffset({
+          accountId: "default",
+          botToken: "333333:token-c",
+        }),
+      ).toBeNull();
     });
   });
 });

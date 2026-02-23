@@ -1,3 +1,4 @@
+import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { lookupContextTokens } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveConfiguredModelRef } from "../agents/model-selection.js";
@@ -181,7 +182,8 @@ export async function sessionsCommand(
     lookupContextTokens(resolved.model) ??
     DEFAULT_CONTEXT_TOKENS;
   const configModel = resolved.model ?? DEFAULT_MODEL;
-  const storePath = resolveStorePath(opts.store ?? cfg.session?.store);
+  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const storePath = resolveStorePath(opts.store ?? cfg.session?.store, { agentId: defaultAgentId });
   const store = loadSessionStore(storePath);
 
   let activeMinutes: number | undefined;

@@ -110,6 +110,10 @@ import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk";
 import { emitDiagnosticEvent } from "openclaw/plugin-sdk";
 import { createDiagnosticsOtelService } from "./service.js";
 
+const OTEL_TEST_STATE_DIR = "/tmp/openclaw-diagnostics-otel-test";
+const OTEL_TEST_ENDPOINT = "http://otel-collector:4318";
+const OTEL_TEST_PROTOCOL = "http/protobuf";
+
 function createLogger() {
   return {
     info: vi.fn(),
@@ -119,7 +123,15 @@ function createLogger() {
   };
 }
 
-function createTraceOnlyContext(endpoint: string): OpenClawPluginServiceContext {
+type OtelContextFlags = {
+  traces?: boolean;
+  metrics?: boolean;
+  logs?: boolean;
+};
+function createOtelContext(
+  endpoint: string,
+  { traces = false, metrics = false, logs = false }: OtelContextFlags = {},
+): OpenClawPluginServiceContext {
   return {
     config: {
       diagnostics: {
@@ -127,17 +139,46 @@ function createTraceOnlyContext(endpoint: string): OpenClawPluginServiceContext 
         otel: {
           enabled: true,
           endpoint,
-          protocol: "http/protobuf",
-          traces: true,
-          metrics: false,
-          logs: false,
+          protocol: OTEL_TEST_PROTOCOL,
+          traces,
+          metrics,
+          logs,
         },
       },
     },
     logger: createLogger(),
-    stateDir: "/tmp/openclaw-diagnostics-otel-test",
+    stateDir: OTEL_TEST_STATE_DIR,
   };
 }
+
+function createTraceOnlyContext(endpoint: string): OpenClawPluginServiceContext {
+  return createOtelContext(endpoint, { traces: true });
+}
+
+type RegisteredLogTransport = (logObj: Record<string, unknown>) => void;
+function setupRegisteredTransports() {
+  const registeredTransports: RegisteredLogTransport[] = [];
+  const stopTransport = vi.fn();
+  registerLogTransportMock.mockImplementation((transport) => {
+    registeredTransports.push(transport);
+    return stopTransport;
+  });
+  return { registeredTransports, stopTransport };
+}
+
+async function emitAndCaptureLog(logObj: Record<string, unknown>) {
+  const { registeredTransports } = setupRegisteredTransports();
+  const service = createDiagnosticsOtelService();
+  const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { logs: true });
+  await service.start(ctx);
+  expect(registeredTransports).toHaveLength(1);
+  registeredTransports[0]?.(logObj);
+  expect(logEmit).toHaveBeenCalled();
+  const emitCall = logEmit.mock.calls[0]?.[0];
+  await service.stop?.(ctx);
+  return emitCall;
+}
+
 describe("diagnostics-otel service", () => {
   beforeEach(() => {
     telemetryState.counters.clear();
@@ -154,31 +195,10 @@ describe("diagnostics-otel service", () => {
   });
 
   test("records message-flow metrics and spans", async () => {
-    const registeredTransports: Array<(logObj: Record<string, unknown>) => void> = [];
-    const stopTransport = vi.fn();
-    registerLogTransportMock.mockImplementation((transport) => {
-      registeredTransports.push(transport);
-      return stopTransport;
-    });
+    const { registeredTransports } = setupRegisteredTransports();
 
     const service = createDiagnosticsOtelService();
-    const ctx: OpenClawPluginServiceContext = {
-      config: {
-        diagnostics: {
-          enabled: true,
-          otel: {
-            enabled: true,
-            endpoint: "http://otel-collector:4318",
-            protocol: "http/protobuf",
-            traces: true,
-            metrics: true,
-            logs: true,
-          },
-        },
-      },
-      logger: createLogger(),
-      stateDir: "/tmp/openclaw-diagnostics-otel-test",
-    };
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true, metrics: true, logs: true });
     await service.start(ctx);
 
     emitDiagnosticEvent({
@@ -291,6 +311,57 @@ describe("diagnostics-otel service", () => {
 
     const options = traceExporterCtor.mock.calls[0]?.[0] as { url?: string } | undefined;
     expect(options?.url).toBe("https://collector.example.com/v1/Traces");
+    await service.stop?.(ctx);
+  });
+
+  test("redacts sensitive data from log messages before export", async () => {
+    const emitCall = await emitAndCaptureLog({
+      0: "Using API key sk-1234567890abcdef1234567890abcdef",
+      _meta: { logLevelName: "INFO", date: new Date() },
+    });
+
+    expect(emitCall?.body).not.toContain("sk-1234567890abcdef1234567890abcdef");
+    expect(emitCall?.body).toContain("sk-123");
+    expect(emitCall?.body).toContain("…");
+  });
+
+  test("redacts sensitive data from log attributes before export", async () => {
+    const emitCall = await emitAndCaptureLog({
+      0: '{"token":"ghp_abcdefghijklmnopqrstuvwxyz123456"}',
+      1: "auth configured",
+      _meta: { logLevelName: "DEBUG", date: new Date() },
+    });
+
+    const tokenAttr = emitCall?.attributes?.["openclaw.token"];
+    expect(tokenAttr).not.toBe("ghp_abcdefghijklmnopqrstuvwxyz123456");
+    if (typeof tokenAttr === "string") {
+      expect(tokenAttr).toContain("…");
+    }
+  });
+
+  test("redacts sensitive reason in session.state metric attributes", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { metrics: true });
+    await service.start(ctx);
+
+    emitDiagnosticEvent({
+      type: "session.state",
+      state: "waiting",
+      reason: "token=ghp_abcdefghijklmnopqrstuvwxyz123456",
+    });
+
+    const sessionCounter = telemetryState.counters.get("openclaw.session.state");
+    expect(sessionCounter?.add).toHaveBeenCalledWith(
+      1,
+      expect.objectContaining({
+        "openclaw.reason": expect.stringContaining("…"),
+      }),
+    );
+    const attrs = sessionCounter?.add.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    expect(typeof attrs?.["openclaw.reason"]).toBe("string");
+    expect(String(attrs?.["openclaw.reason"])).not.toContain(
+      "ghp_abcdefghijklmnopqrstuvwxyz123456",
+    );
     await service.stop?.(ctx);
   });
 });

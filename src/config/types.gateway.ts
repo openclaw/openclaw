@@ -255,8 +255,19 @@ export type GatewayHttpEndpointsConfig = {
   responses?: GatewayHttpResponsesConfig;
 };
 
+export type GatewayHttpSecurityHeadersConfig = {
+  /**
+   * Value for the Strict-Transport-Security response header.
+   * Set to false to disable explicitly.
+   *
+   * Example: "max-age=31536000; includeSubDomains"
+   */
+  strictTransportSecurity?: string | false;
+};
+
 export type GatewayHttpConfig = {
   endpoints?: GatewayHttpEndpointsConfig;
+  securityHeaders?: GatewayHttpSecurityHeadersConfig;
 };
 
 export type GatewayNodesConfig = {

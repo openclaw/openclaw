@@ -34,11 +34,34 @@ function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
   return undefined;
 }
 
+function isReasoningConstraintErrorMessage(raw: string): boolean {
+  if (!raw) {
+    return false;
+  }
+  const lower = raw.toLowerCase();
+  return (
+    lower.includes("reasoning is mandatory") ||
+    lower.includes("reasoning is required") ||
+    lower.includes("requires reasoning") ||
+    (lower.includes("reasoning") && lower.includes("cannot be disabled"))
+  );
+}
+
 export function isContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
   }
   const lower = errorMessage.toLowerCase();
+
+  // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context overflow.
+  if (lower.includes("tpm") || lower.includes("tokens per minute")) {
+    return false;
+  }
+
+  if (isReasoningConstraintErrorMessage(errorMessage)) {
+    return false;
+  }
+
   const hasRequestSizeExceeds = lower.includes("request size exceeds");
   const hasContextWindow =
     lower.includes("context window") ||
@@ -51,9 +74,20 @@ export function isContextOverflowError(errorMessage?: string): boolean {
     lower.includes("maximum context length") ||
     lower.includes("prompt is too long") ||
     lower.includes("exceeds model context window") ||
+    lower.includes("model token limit") ||
     (hasRequestSizeExceeds && hasContextWindow) ||
     lower.includes("context overflow:") ||
-    (lower.includes("413") && lower.includes("too large"))
+    lower.includes("exceed context limit") ||
+    lower.includes("exceeds the model's maximum context") ||
+    (lower.includes("max_tokens") && lower.includes("exceed") && lower.includes("context")) ||
+    (lower.includes("input length") && lower.includes("exceed") && lower.includes("context")) ||
+    (lower.includes("413") && lower.includes("too large")) ||
+    // Chinese proxy error messages for context overflow
+    errorMessage.includes("上下文过长") ||
+    errorMessage.includes("上下文超出") ||
+    errorMessage.includes("上下文长度超") ||
+    errorMessage.includes("超出最大上下文") ||
+    errorMessage.includes("请压缩上下文")
   );
 }
 
@@ -67,6 +101,17 @@ export function isLikelyContextOverflowError(errorMessage?: string): boolean {
   if (!errorMessage) {
     return false;
   }
+
+  // Groq uses 413 for TPM (tokens per minute) limits, which is a rate limit, not context overflow.
+  const lower = errorMessage.toLowerCase();
+  if (lower.includes("tpm") || lower.includes("tokens per minute")) {
+    return false;
+  }
+
+  if (isReasoningConstraintErrorMessage(errorMessage)) {
+    return false;
+  }
+
   if (CONTEXT_WINDOW_TOO_SMALL_RE.test(errorMessage)) {
     return false;
   }
@@ -120,7 +165,7 @@ const HTTP_STATUS_PREFIX_RE = /^(?:http\s*)?(\d{3})\s+(.+)$/i;
 const HTTP_STATUS_CODE_PREFIX_RE = /^(?:http\s*)?(\d{3})(?:\s+([\s\S]+))?$/i;
 const HTML_ERROR_PREFIX_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
 const CLOUDFLARE_HTML_ERROR_CODES = new Set([521, 522, 523, 524, 525, 526, 530]);
-const TRANSIENT_HTTP_ERROR_CODES = new Set([500, 502, 503, 521, 522, 523, 524, 529]);
+const TRANSIENT_HTTP_ERROR_CODES = new Set([500, 502, 503, 504, 521, 522, 523, 524, 529]);
 const HTTP_ERROR_HINTS = [
   "error",
   "bad request",
@@ -446,6 +491,13 @@ export function formatAssistantErrorText(
     );
   }
 
+  if (isReasoningConstraintErrorMessage(raw)) {
+    return (
+      "Reasoning is required for this model endpoint. " +
+      "Use /think minimal (or any non-off level) and try again."
+    );
+  }
+
   // Catch role ordering errors - including JSON-wrapped and "400" prefix variants
   if (
     /incorrect role information|roles must alternate|400.*role|"message".*role.*information/i.test(
@@ -566,6 +618,8 @@ const ERROR_PATTERNS = {
     "quota exceeded",
     "resource_exhausted",
     "usage limit",
+    "tpm",
+    "tokens per minute",
   ],
   overloaded: [
     /overloaded_error|"type"\s*:\s*"overloaded_error"/i,

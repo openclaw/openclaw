@@ -160,6 +160,24 @@ async function createAudioCtx(params?: {
   } satisfies MsgContext;
 }
 
+async function setupAudioAutoDetectCase(stdout: string): Promise<{
+  ctx: MsgContext;
+  cfg: OpenClawConfig;
+}> {
+  const ctx = await createAudioCtx({
+    fileName: "sample.wav",
+    mediaType: "audio/wav",
+    content: "audio",
+  });
+  const cfg: OpenClawConfig = { tools: { media: { audio: {} } } };
+  const execModule = await import("../process/exec.js");
+  vi.mocked(execModule.runExec).mockResolvedValueOnce({
+    stdout,
+    stderr: "",
+  });
+  return { ctx, cfg };
+}
+
 async function applyWithDisabledMedia(params: {
   body: string;
   mediaPath: string;
@@ -395,19 +413,9 @@ describe("applyMediaUnderstanding", () => {
     await fs.writeFile(path.join(modelDir, "decoder.onnx"), "a");
     await fs.writeFile(path.join(modelDir, "joiner.onnx"), "a");
 
-    const ctx = await createAudioCtx({
-      fileName: "sample.wav",
-      mediaType: "audio/wav",
-      content: "audio",
-    });
-    const cfg: OpenClawConfig = { tools: { media: { audio: {} } } };
-
+    const { ctx, cfg } = await setupAudioAutoDetectCase('{"text":"sherpa ok"}');
     const execModule = await import("../process/exec.js");
     const mockedRunExec = vi.mocked(execModule.runExec);
-    mockedRunExec.mockResolvedValueOnce({
-      stdout: '{"text":"sherpa ok"}',
-      stderr: "",
-    });
 
     await withMediaAutoDetectEnv(
       {
@@ -435,19 +443,9 @@ describe("applyMediaUnderstanding", () => {
     const modelPath = path.join(modelDir, "tiny.bin");
     await fs.writeFile(modelPath, "model");
 
-    const ctx = await createAudioCtx({
-      fileName: "sample.wav",
-      mediaType: "audio/wav",
-      content: "audio",
-    });
-    const cfg: OpenClawConfig = { tools: { media: { audio: {} } } };
-
+    const { ctx, cfg } = await setupAudioAutoDetectCase("whisper cpp ok\n");
     const execModule = await import("../process/exec.js");
     const mockedRunExec = vi.mocked(execModule.runExec);
-    mockedRunExec.mockResolvedValueOnce({
-      stdout: "whisper cpp ok\n",
-      stderr: "",
-    });
 
     await withMediaAutoDetectEnv(
       {

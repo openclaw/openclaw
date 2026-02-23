@@ -78,6 +78,7 @@ import {
   resolveControlUiAuthPolicy,
   shouldSkipControlUiPairing,
 } from "./connect-policy.js";
+import { isUnauthorizedRoleError, UnauthorizedFloodGuard } from "./unauthorized-flood-guard.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
@@ -190,6 +191,7 @@ export function attachGatewayWsMessageHandler(params: {
   }
 
   const isWebchatConnect = (p: ConnectParams | null | undefined) => isWebchatClient(p?.client);
+  const unauthorizedFloodGuard = new UnauthorizedFloodGuard();
 
   socket.on("message", async (data) => {
     if (isClosed()) {
@@ -908,6 +910,33 @@ export function attachGatewayWsMessageHandler(params: {
         meta?: Record<string, unknown>,
       ) => {
         send({ type: "res", id: req.id, ok, payload, error });
+        const unauthorizedRoleError = isUnauthorizedRoleError(error);
+        let logMeta = meta;
+        if (unauthorizedRoleError) {
+          const unauthorizedDecision = unauthorizedFloodGuard.registerUnauthorized();
+          if (unauthorizedDecision.suppressedSinceLastLog > 0) {
+            logMeta = {
+              ...logMeta,
+              suppressedUnauthorizedResponses: unauthorizedDecision.suppressedSinceLastLog,
+            };
+          }
+          if (!unauthorizedDecision.shouldLog) {
+            return;
+          }
+          if (unauthorizedDecision.shouldClose) {
+            setCloseCause("repeated-unauthorized-requests", {
+              unauthorizedCount: unauthorizedDecision.count,
+              method: req.method,
+            });
+            queueMicrotask(() => close(1008, "repeated unauthorized calls"));
+          }
+          logMeta = {
+            ...logMeta,
+            unauthorizedCount: unauthorizedDecision.count,
+          };
+        } else {
+          unauthorizedFloodGuard.reset();
+        }
         logWs("out", "res", {
           connId,
           id: req.id,
@@ -915,7 +944,7 @@ export function attachGatewayWsMessageHandler(params: {
           method: req.method,
           errorCode: error?.code,
           errorMessage: error?.message,
-          ...meta,
+          ...logMeta,
         });
       };
 

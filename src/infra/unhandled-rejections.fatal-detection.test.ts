@@ -93,6 +93,10 @@ describe("installUnhandledRejectionHandler - fatal detection", () => {
         Object.assign(new Error("DNS resolve failed"), { code: "UND_ERR_DNS_RESOLVE_FAILED" }),
         Object.assign(new Error("Connection reset"), { code: "ECONNRESET" }),
         Object.assign(new Error("Timeout"), { code: "ETIMEDOUT" }),
+        Object.assign(new Error("A request error occurred: getaddrinfo EAI_AGAIN slack.com"), {
+          code: "slack_webapi_request_error",
+          original: { code: "EAI_AGAIN", syscall: "getaddrinfo", hostname: "slack.com" },
+        }),
       ];
 
       for (const transientErr of transientCases) {

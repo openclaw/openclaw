@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   probeAuthenticatedOpenClawRelay,
+  resolveRelayAcceptedTokensForPort,
   resolveRelayAuthTokenForPort,
 } from "./extension-relay-auth.js";
 import { getFreePort } from "./test-port.js";
@@ -49,6 +50,13 @@ describe("extension-relay-auth", () => {
     expect(tokenA1).toBe(tokenA2);
     expect(tokenA1).not.toBe(tokenB);
     expect(tokenA1).not.toBe(TEST_GATEWAY_TOKEN);
+  });
+
+  it("accepts both relay-scoped and raw gateway tokens for compatibility", () => {
+    const tokens = resolveRelayAcceptedTokensForPort(18790);
+    expect(tokens).toContain(TEST_GATEWAY_TOKEN);
+    expect(tokens[0]).not.toBe(TEST_GATEWAY_TOKEN);
+    expect(tokens[0]).toBe(resolveRelayAuthTokenForPort(18790));
   });
 
   it("accepts authenticated openclaw relay probe responses", async () => {

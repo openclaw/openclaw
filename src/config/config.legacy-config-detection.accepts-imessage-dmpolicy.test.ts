@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { resolveAgentModelFallbackValues, resolveAgentModelPrimaryValue } from "./model-input.js";
 
 const { loadConfig, migrateLegacyConfig, readConfigFileSnapshot, validateConfigObject } =
   await vi.importActual<typeof import("./config.js")>("./config.js");
@@ -241,10 +242,16 @@ describe("legacy config detection", () => {
       },
     });
 
-    expect(res.config?.agents?.defaults?.model?.primary).toBe("anthropic/claude-opus-4-5");
-    expect(res.config?.agents?.defaults?.model?.fallbacks).toEqual(["openai/gpt-4.1-mini"]);
-    expect(res.config?.agents?.defaults?.imageModel?.primary).toBe("openai/gpt-4.1-mini");
-    expect(res.config?.agents?.defaults?.imageModel?.fallbacks).toEqual([
+    expect(resolveAgentModelPrimaryValue(res.config?.agents?.defaults?.model)).toBe(
+      "anthropic/claude-opus-4-5",
+    );
+    expect(resolveAgentModelFallbackValues(res.config?.agents?.defaults?.model)).toEqual([
+      "openai/gpt-4.1-mini",
+    ]);
+    expect(resolveAgentModelPrimaryValue(res.config?.agents?.defaults?.imageModel)).toBe(
+      "openai/gpt-4.1-mini",
+    );
+    expect(resolveAgentModelFallbackValues(res.config?.agents?.defaults?.imageModel)).toEqual([
       "anthropic/claude-opus-4-5",
     ]);
     expect(res.config?.agents?.defaults?.models?.["anthropic/claude-opus-4-5"]).toMatchObject({

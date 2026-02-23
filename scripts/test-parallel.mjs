@@ -49,15 +49,9 @@ const unitIsolatedFilesRaw = [
   "src/agents/pi-embedded-runner.run-embedded-pi-agent.auth-profile-rotation.test.ts",
   // Heavy trigger command scenarios; keep off unit-fast critical path to reduce contention noise.
   "src/auto-reply/reply.triggers.trigger-handling.filters-usage-summary-current-model-provider.test.ts",
-  "src/auto-reply/reply.triggers.trigger-handling.includes-error-cause-embedded-agent-throws.test.ts",
-  "src/auto-reply/reply.triggers.trigger-handling.runs-greeting-prompt-bare-reset.test.ts",
-  "src/auto-reply/reply.triggers.trigger-handling.runs-compact-as-gated-command.test.ts",
-  "src/auto-reply/reply.triggers.trigger-handling.allows-activation-from-allowfrom-groups.test.ts",
+  "src/auto-reply/reply.triggers.trigger-handling.targets-active-session-native-stop.test.ts",
   "src/auto-reply/reply.triggers.group-intro-prompts.test.ts",
   "src/auto-reply/reply.triggers.trigger-handling.handles-inline-commands-strips-it-before-agent.test.ts",
-  "src/auto-reply/reply.triggers.trigger-handling.ignores-inline-elevated-directive-unapproved-sender.test.ts",
-  "src/auto-reply/reply.triggers.trigger-handling.keeps-inline-status-unauthorized-senders.test.ts",
-  "src/auto-reply/reply.triggers.trigger-handling.shows-endpoint-default-model-status-not-configured.test.ts",
   "src/web/auto-reply.web-auto-reply.compresses-common-formats-jpeg-cap.test.ts",
   // Setup-heavy bot bootstrap suite.
   "src/telegram/bot.create-telegram-bot.test.ts",
@@ -163,16 +157,21 @@ const testProfile =
 const overrideWorkers = Number.parseInt(process.env.OPENCLAW_TEST_WORKERS ?? "", 10);
 const resolvedOverride =
   Number.isFinite(overrideWorkers) && overrideWorkers > 0 ? overrideWorkers : null;
-// Keep gateway serial on Windows CI and CI by default; run in parallel locally
-// for lower wall-clock time. CI can opt in via OPENCLAW_TEST_PARALLEL_GATEWAY=1.
+const hostCpuCount = os.cpus().length;
+const hostMemoryGiB = Math.floor(os.totalmem() / 1024 ** 3);
+// Keep aggressive local defaults for high-memory workstations (Mac Studio class).
+const highMemLocalHost = !isCI && hostMemoryGiB >= 96;
+const lowMemLocalHost = !isCI && hostMemoryGiB < 64;
+const parallelGatewayEnabled =
+  process.env.OPENCLAW_TEST_PARALLEL_GATEWAY === "1" || (!isCI && highMemLocalHost);
+// Keep gateway serial by default except when explicitly requested or on high-memory local hosts.
 const keepGatewaySerial =
   isWindowsCi ||
   process.env.OPENCLAW_TEST_SERIAL_GATEWAY === "1" ||
   testProfile === "serial" ||
-  (isCI && process.env.OPENCLAW_TEST_PARALLEL_GATEWAY !== "1");
+  !parallelGatewayEnabled;
 const parallelRuns = keepGatewaySerial ? runs.filter((entry) => entry.name !== "gateway") : runs;
 const serialRuns = keepGatewaySerial ? runs.filter((entry) => entry.name === "gateway") : [];
-const hostCpuCount = os.cpus().length;
 const baseLocalWorkers = Math.max(4, Math.min(16, hostCpuCount));
 const loadAwareDisabledRaw = process.env.OPENCLAW_TEST_LOAD_AWARE?.trim().toLowerCase();
 const loadAwareDisabled = loadAwareDisabledRaw === "0" || loadAwareDisabledRaw === "false";
@@ -205,15 +204,29 @@ const defaultWorkerBudget =
             extensions: Math.max(1, Math.min(6, Math.floor(localWorkers / 2))),
             gateway: Math.max(1, Math.min(2, Math.floor(localWorkers / 4))),
           }
-        : {
-            // Local `pnpm test` runs multiple vitest groups concurrently;
-            // bias workers toward unit-fast (wall-clock bottleneck) while
-            // keeping unit-isolated low enough that both groups finish closer together.
-            unit: Math.max(4, Math.min(14, Math.floor((localWorkers * 7) / 8))),
-            unitIsolated: Math.max(1, Math.min(2, Math.floor(localWorkers / 6) || 1)),
-            extensions: Math.max(1, Math.min(4, Math.floor(localWorkers / 4))),
-            gateway: Math.max(2, Math.min(4, Math.floor(localWorkers / 3))),
-          };
+        : highMemLocalHost
+          ? {
+              // High-memory local hosts can prioritize wall-clock speed.
+              unit: Math.max(4, Math.min(14, Math.floor((localWorkers * 7) / 8))),
+              unitIsolated: Math.max(1, Math.min(2, Math.floor(localWorkers / 6) || 1)),
+              extensions: Math.max(1, Math.min(4, Math.floor(localWorkers / 4))),
+              gateway: Math.max(2, Math.min(4, Math.floor(localWorkers / 3))),
+            }
+          : lowMemLocalHost
+            ? {
+                // Sub-64 GiB local hosts are prone to OOM with large vmFork runs.
+                unit: 2,
+                unitIsolated: 1,
+                extensions: 1,
+                gateway: 1,
+              }
+            : {
+                // 64-95 GiB local hosts: conservative split with some parallel headroom.
+                unit: Math.max(2, Math.min(8, Math.floor(localWorkers / 2))),
+                unitIsolated: 1,
+                extensions: Math.max(1, Math.min(4, Math.floor(localWorkers / 4))),
+                gateway: 1,
+              };
 
 // Keep worker counts predictable for local runs; trim macOS CI workers to avoid worker crashes/OOM.
 // In CI on linux/windows, prefer Vitest defaults to avoid cross-test interference from lower worker counts.

@@ -106,6 +106,51 @@ function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryCon
   return next;
 }
 
+function normalizeStoreSessionKey(sessionKey: string): string {
+  return sessionKey.trim().toLowerCase();
+}
+
+function resolveStoreSessionEntry(params: {
+  store: Record<string, SessionEntry>;
+  sessionKey: string;
+}): {
+  normalizedKey: string;
+  existing: SessionEntry | undefined;
+  legacyKeys: string[];
+} {
+  const trimmedKey = params.sessionKey.trim();
+  const normalizedKey = normalizeStoreSessionKey(trimmedKey);
+  const legacyKeySet = new Set<string>();
+  if (
+    trimmedKey !== normalizedKey &&
+    Object.prototype.hasOwnProperty.call(params.store, trimmedKey)
+  ) {
+    legacyKeySet.add(trimmedKey);
+  }
+  let existing =
+    params.store[normalizedKey] ?? (legacyKeySet.size > 0 ? params.store[trimmedKey] : undefined);
+  let existingUpdatedAt = existing?.updatedAt ?? 0;
+  for (const [candidateKey, candidateEntry] of Object.entries(params.store)) {
+    if (candidateKey === normalizedKey) {
+      continue;
+    }
+    if (candidateKey.toLowerCase() !== normalizedKey) {
+      continue;
+    }
+    legacyKeySet.add(candidateKey);
+    const candidateUpdatedAt = candidateEntry?.updatedAt ?? 0;
+    if (!existing || candidateUpdatedAt > existingUpdatedAt) {
+      existing = candidateEntry;
+      existingUpdatedAt = candidateUpdatedAt;
+    }
+  }
+  return {
+    normalizedKey,
+    existing,
+    legacyKeys: [...legacyKeySet],
+  };
+}
+
 function normalizeSessionStore(store: Record<string, SessionEntry>): void {
   for (const [key, entry] of Object.entries(store)) {
     if (!entry) {
@@ -239,7 +284,8 @@ export function readSessionUpdatedAt(params: {
 }): number | undefined {
   try {
     const store = loadSessionStore(params.storePath);
-    return store[params.sessionKey]?.updatedAt;
+    const resolved = resolveStoreSessionEntry({ store, sessionKey: params.sessionKey });
+    return resolved.existing?.updatedAt;
   } catch {
     return undefined;
   }
@@ -807,7 +853,8 @@ export async function updateSessionStoreEntry(params: {
   const { storePath, sessionKey, update } = params;
   return await withSessionStoreLock(storePath, async () => {
     const store = loadSessionStore(storePath, { skipCache: true });
-    const existing = store[sessionKey];
+    const resolved = resolveStoreSessionEntry({ store, sessionKey });
+    const existing = resolved.existing;
     if (!existing) {
       return null;
     }
@@ -816,8 +863,13 @@ export async function updateSessionStoreEntry(params: {
       return existing;
     }
     const next = mergeSessionEntry(existing, patch);
-    store[sessionKey] = next;
-    await saveSessionStoreUnlocked(storePath, store, { activeSessionKey: sessionKey });
+    store[resolved.normalizedKey] = next;
+    for (const legacyKey of resolved.legacyKeys) {
+      delete store[legacyKey];
+    }
+    await saveSessionStoreUnlocked(storePath, store, {
+      activeSessionKey: resolved.normalizedKey,
+    });
     return next;
   });
 }
@@ -834,24 +886,34 @@ export async function recordSessionMetaFromInbound(params: {
   return await updateSessionStore(
     storePath,
     (store) => {
-      const existing = store[sessionKey];
+      const resolved = resolveStoreSessionEntry({ store, sessionKey });
+      const existing = resolved.existing;
       const patch = deriveSessionMetaPatch({
         ctx,
-        sessionKey,
+        sessionKey: resolved.normalizedKey,
         existing,
         groupResolution: params.groupResolution,
       });
       if (!patch) {
+        if (existing && resolved.legacyKeys.length > 0) {
+          store[resolved.normalizedKey] = existing;
+          for (const legacyKey of resolved.legacyKeys) {
+            delete store[legacyKey];
+          }
+        }
         return existing ?? null;
       }
       if (!existing && !createIfMissing) {
         return null;
       }
       const next = mergeSessionEntry(existing, patch);
-      store[sessionKey] = next;
+      store[resolved.normalizedKey] = next;
+      for (const legacyKey of resolved.legacyKeys) {
+        delete store[legacyKey];
+      }
       return next;
     },
-    { activeSessionKey: sessionKey },
+    { activeSessionKey: normalizeStoreSessionKey(sessionKey) },
   );
 }
 
@@ -869,7 +931,8 @@ export async function updateLastRoute(params: {
   const { storePath, sessionKey, channel, to, accountId, threadId, ctx } = params;
   return await withSessionStoreLock(storePath, async () => {
     const store = loadSessionStore(storePath);
-    const existing = store[sessionKey];
+    const resolved = resolveStoreSessionEntry({ store, sessionKey });
+    const existing = resolved.existing;
     const now = Date.now();
     const explicitContext = normalizeDeliveryContext(params.deliveryContext);
     const inlineContext = normalizeDeliveryContext({
@@ -910,7 +973,7 @@ export async function updateLastRoute(params: {
     const metaPatch = ctx
       ? deriveSessionMetaPatch({
           ctx,
-          sessionKey,
+          sessionKey: resolved.normalizedKey,
           existing,
           groupResolution: params.groupResolution,
         })
@@ -927,8 +990,13 @@ export async function updateLastRoute(params: {
       existing,
       metaPatch ? { ...basePatch, ...metaPatch } : basePatch,
     );
-    store[sessionKey] = next;
-    await saveSessionStoreUnlocked(storePath, store, { activeSessionKey: sessionKey });
+    store[resolved.normalizedKey] = next;
+    for (const legacyKey of resolved.legacyKeys) {
+      delete store[legacyKey];
+    }
+    await saveSessionStoreUnlocked(storePath, store, {
+      activeSessionKey: resolved.normalizedKey,
+    });
     return next;
   });
 }

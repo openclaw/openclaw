@@ -205,6 +205,31 @@ describe("agentCommand", () => {
     });
   });
 
+  it("uses the resumed session agent scope when sessionId resolves to another agent store", async () => {
+    await withTempHome(async (home) => {
+      const storePattern = path.join(home, "sessions", "{agentId}", "sessions.json");
+      const execStore = path.join(home, "sessions", "exec", "sessions.json");
+      writeSessionStoreSeed(execStore, {
+        "agent:exec:hook:gmail:thread-1": {
+          sessionId: "session-exec-hook",
+          updatedAt: Date.now(),
+          systemSent: true,
+        },
+      });
+      mockConfig(home, storePattern, undefined, undefined, [
+        { id: "dev" },
+        { id: "exec", default: true },
+      ]);
+
+      await agentCommand({ message: "resume me", sessionId: "session-exec-hook" }, runtime);
+
+      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls.at(-1)?.[0];
+      expect(callArgs?.sessionKey).toBe("agent:exec:hook:gmail:thread-1");
+      expect(callArgs?.agentId).toBe("exec");
+      expect(callArgs?.agentDir).toContain(`${path.sep}agents${path.sep}exec${path.sep}agent`);
+    });
+  });
+
   it("resolves resumed session transcript path from custom session store directory", async () => {
     await withTempHome(async (home) => {
       const customStoreDir = path.join(home, "custom-state");
