@@ -130,22 +130,6 @@ async function expectHelloOkServerVersion(port: number, expectedVersion: string)
   }
 }
 
-async function expectMissingScopeAfterConnect(
-  port: number,
-  opts?: Parameters<typeof connectReq>[1],
-) {
-  const ws = await openWs(port);
-  try {
-    const res = await connectReq(ws, opts);
-    expect(res.ok).toBe(true);
-    const status = await rpcReq(ws, "status");
-    expect(status.ok).toBe(false);
-    expect(status.error?.message).toContain("missing scope");
-  } finally {
-    ws.close();
-  }
-}
-
 async function createSignedDevice(params: {
   token: string;
   scopes: string[];
@@ -349,41 +333,37 @@ describe("gateway server auth/connect", () => {
       ws.close();
     });
 
-    test("connect (req) handshake prefers service version fallback in hello-ok payload", async () => {
-      await withRuntimeVersionEnv(
+    test("connect (req) handshake resolves server version from env precedence", async () => {
+      for (const testCase of [
         {
-          OPENCLAW_VERSION: " ",
-          OPENCLAW_SERVICE_VERSION: "2.4.6-service",
-          npm_package_version: "1.0.0-package",
+          env: {
+            OPENCLAW_VERSION: " ",
+            OPENCLAW_SERVICE_VERSION: "2.4.6-service",
+            npm_package_version: "1.0.0-package",
+          },
+          expectedVersion: "2.4.6-service",
         },
-        async () => expectHelloOkServerVersion(port, "2.4.6-service"),
-      );
-    });
-
-    test("connect (req) handshake prefers OPENCLAW_VERSION over service version", async () => {
-      await withRuntimeVersionEnv(
         {
-          OPENCLAW_VERSION: "9.9.9-cli",
-          OPENCLAW_SERVICE_VERSION: "2.4.6-service",
-          npm_package_version: "1.0.0-package",
+          env: {
+            OPENCLAW_VERSION: "9.9.9-cli",
+            OPENCLAW_SERVICE_VERSION: "2.4.6-service",
+            npm_package_version: "1.0.0-package",
+          },
+          expectedVersion: "9.9.9-cli",
         },
-        async () => expectHelloOkServerVersion(port, "9.9.9-cli"),
-      );
-    });
-
-    test("connect (req) handshake falls back to npm_package_version when higher-precedence env values are blank", async () => {
-      await withRuntimeVersionEnv(
         {
-          OPENCLAW_VERSION: " ",
-          OPENCLAW_SERVICE_VERSION: "\t",
-          npm_package_version: "1.0.0-package",
+          env: {
+            OPENCLAW_VERSION: " ",
+            OPENCLAW_SERVICE_VERSION: "\t",
+            npm_package_version: "1.0.0-package",
+          },
+          expectedVersion: "1.0.0-package",
         },
-        async () => expectHelloOkServerVersion(port, "1.0.0-package"),
-      );
-    });
-
-    test("does not grant admin when scopes are empty", async () => {
-      await expectMissingScopeAfterConnect(port, { scopes: [] });
+      ]) {
+        await withRuntimeVersionEnv(testCase.env, async () =>
+          expectHelloOkServerVersion(port, testCase.expectedVersion),
+        );
+      }
     });
 
     test("device-less auth matrix", async () => {
@@ -439,11 +419,14 @@ describe("gateway server auth/connect", () => {
       }
     });
 
-    test("allows health when scopes are empty", async () => {
+    test("keeps health available but admin status restricted when scopes are empty", async () => {
       const ws = await openWs(port);
       try {
         const res = await connectReq(ws, { scopes: [] });
         expect(res.ok).toBe(true);
+        const status = await rpcReq(ws, "status");
+        expect(status.ok).toBe(false);
+        expect(status.error?.message).toContain("missing scope");
         const health = await rpcReq(ws, "health");
         expect(health.ok).toBe(true);
       } finally {
