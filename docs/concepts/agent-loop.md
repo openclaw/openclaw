@@ -82,7 +82,7 @@ See [Hooks](/automation/hooks) for setup and examples.
 These run inside the agent loop or gateway pipeline:
 
 - **`before_model_resolve`**: runs pre-session (no `messages`) to deterministically override provider/model before model resolution.
-- **`before_prompt_build`**: runs after session load (with `messages`) to inject prompt actions (for example `prependContext` and `appendSystemPrompt`) or legacy fields like `systemPrompt`, `prependSystemContext`, and `appendSystemContext`. Use `prependContext` for per-turn dynamic text and system-prompt fields for stable guidance that should sit in system prompt space.
+- **`before_prompt_build`**: runs after session load (with `messages`) to inject prompt actions (for example `prependContext` and `appendSystemPrompt`) or legacy fields like `systemPrompt`, `prependSystemContext`, and `appendSystemContext` before the PI session is created. `prependContext` is capped at 8000 chars and `appendSystemPrompt` at 4000 chars. Use `prependContext` for per-turn dynamic text and system-prompt fields for stable guidance that should sit in system prompt space.
 - **`before_agent_start`**: legacy compatibility hook that may run in either phase; prefer the explicit hooks above.
 - **`agent_end`**: inspect the final message list and run metadata after completion.
 - **`before_compaction` / `after_compaction`**: observe or annotate compaction cycles.
