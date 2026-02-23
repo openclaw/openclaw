@@ -720,10 +720,10 @@ export async function handleFeishuMessage(params: {
     // When topicSessionMode is enabled, messages within a topic (identified by root_id)
     // get a separate session from the main group chat.
     let peerId = isGroup ? ctx.chatId : ctx.senderOpenId;
+    let topicSessionMode: "enabled" | "disabled" = "disabled";
     if (isGroup && ctx.rootId) {
       const groupConfig = resolveFeishuGroupConfig({ cfg: feishuCfg, groupId: ctx.chatId });
-      const topicSessionMode =
-        groupConfig?.topicSessionMode ?? feishuCfg?.topicSessionMode ?? "disabled";
+      topicSessionMode = groupConfig?.topicSessionMode ?? feishuCfg?.topicSessionMode ?? "disabled";
       if (topicSessionMode === "enabled") {
         // Use chatId:topic:rootId as peer ID for topic-scoped sessions
         peerId = `${ctx.chatId}:topic:${ctx.rootId}`;
@@ -739,6 +739,14 @@ export async function handleFeishuMessage(params: {
         kind: isGroup ? "group" : "direct",
         id: peerId,
       },
+      // Add parentPeer for binding inheritance in topic mode
+      parentPeer:
+        isGroup && ctx.rootId && topicSessionMode === "enabled"
+          ? {
+              kind: "group",
+              id: ctx.chatId,
+            }
+          : null,
     });
 
     // Dynamic agent creation for DM users
