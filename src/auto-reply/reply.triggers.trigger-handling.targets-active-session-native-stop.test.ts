@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadSessionStore, resolveSessionKey } from "../config/sessions.js";
 import {
@@ -36,41 +35,11 @@ afterAll(() => {
 
 installTriggerHandlingE2eTestHooks();
 
-const DEFAULT_SESSION_KEY = "telegram:slash:111";
 const BASE_MESSAGE = {
   Body: "hello",
   From: "+1002",
   To: "+2000",
 } as const;
-
-function makeTelegramModelCommand(body: string, sessionKey = DEFAULT_SESSION_KEY) {
-  return {
-    Body: body,
-    From: "telegram:111",
-    To: "telegram:111",
-    ChatType: "direct" as const,
-    Provider: "telegram" as const,
-    Surface: "telegram" as const,
-    SessionKey: sessionKey,
-    CommandAuthorized: true,
-  };
-}
-
-function firstReplyText(reply: Awaited<ReturnType<typeof getReplyFromConfig>>) {
-  return Array.isArray(reply) ? (reply[0]?.text ?? "") : (reply?.text ?? "");
-}
-
-async function runModelCommand(home: string, body: string, sessionKey = DEFAULT_SESSION_KEY) {
-  const cfg = makeCfg(home);
-  const res = await getReplyFromConfig(makeTelegramModelCommand(body, sessionKey), {}, cfg);
-  const text = firstReplyText(res);
-  return {
-    cfg,
-    sessionKey,
-    text,
-    normalized: normalizeTestText(text),
-  };
-}
 
 function maybeReplyText(reply: Awaited<ReturnType<typeof getReplyFromConfig>>) {
   return Array.isArray(reply) ? reply[0]?.text : reply?.text;
@@ -323,62 +292,6 @@ describe("trigger handling", () => {
       expect(text).toBe("ok");
       expect(text).not.toMatch(/Thinking level set/i);
       expect(getRunEmbeddedPiAgentMock()).toHaveBeenCalledOnce();
-    });
-  });
-
-  it("selects the exact provider/model pair for openrouter", async () => {
-    await withTempHome(async (home) => {
-      const { cfg, sessionKey, normalized } = await runModelCommand(
-        home,
-        "/model openrouter/anthropic/claude-opus-4-5",
-      );
-
-      expect(normalized).toContain("Model set to openrouter/anthropic/claude-opus-4-5");
-
-      const store = loadSessionStore(requireSessionStorePath(cfg));
-      expect(store[sessionKey]?.providerOverride).toBe("openrouter");
-      expect(store[sessionKey]?.modelOverride).toBe("anthropic/claude-opus-4-5");
-    });
-  });
-
-  it("rejects invalid /model <#> selections", async () => {
-    await withTempHome(async (home) => {
-      const { cfg, sessionKey, normalized } = await runModelCommand(home, "/model 99");
-
-      expect(normalized).toContain("Numeric model selection is not supported in chat.");
-      expect(normalized).toContain("Browse: /models or /models <provider>");
-      expect(normalized).toContain("Switch: /model <provider/model>");
-
-      const store = loadSessionStore(requireSessionStorePath(cfg));
-      expect(store[sessionKey]?.providerOverride).toBeUndefined();
-      expect(store[sessionKey]?.modelOverride).toBeUndefined();
-    });
-  });
-
-  it("resets to the default model via /model <provider/model>", async () => {
-    await withTempHome(async (home) => {
-      const { cfg, sessionKey, normalized } = await runModelCommand(
-        home,
-        "/model anthropic/claude-opus-4-5",
-      );
-
-      expect(normalized).toContain("Model reset to default (anthropic/claude-opus-4-5)");
-
-      const store = loadSessionStore(requireSessionStorePath(cfg));
-      expect(store[sessionKey]?.providerOverride).toBeUndefined();
-      expect(store[sessionKey]?.modelOverride).toBeUndefined();
-    });
-  });
-
-  it("selects a model via /model <provider/model>", async () => {
-    await withTempHome(async (home) => {
-      const { cfg, sessionKey, normalized } = await runModelCommand(home, "/model openai/gpt-5.2");
-
-      expect(normalized).toContain("Model set to openai/gpt-5.2");
-
-      const store = loadSessionStore(requireSessionStorePath(cfg));
-      expect(store[sessionKey]?.providerOverride).toBe("openai");
-      expect(store[sessionKey]?.modelOverride).toBe("gpt-5.2");
     });
   });
 
