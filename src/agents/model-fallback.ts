@@ -6,6 +6,7 @@ import {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
 import {
+  clearExpiredCooldowns,
   ensureAuthProfileStore,
   getSoonestCooldownExpiry,
   isProfileInCooldown,
@@ -823,6 +824,70 @@ export async function runWithModelFallback<T>(params: {
         attempt: i + 1,
         total: candidates.length,
       });
+    }
+  }
+
+  // When all candidates failed exclusively due to cooldowns, wait for the
+  // soonest cooldown to expire and retry once rather than failing immediately.
+  // This prevents transient rate limits from surfacing as hard errors when
+  // the wait is short enough to be acceptable (≤90 seconds).
+  const MAX_COOLDOWN_WAIT_MS = 90_000;
+  const allCooldownSkips =
+    authStore &&
+    attempts.length > 0 &&
+    attempts.every((a) => a.error.includes("cooldown") || a.reason === "rate_limit");
+
+  if (allCooldownSkips && authStore) {
+    const allProfileIds = [
+      ...new Set(
+        candidates.flatMap((c) =>
+          resolveAuthProfileOrder({
+            cfg: params.cfg,
+            store: authStore,
+            provider: c.provider,
+          }),
+        ),
+      ),
+    ];
+    const soonest = getSoonestCooldownExpiry(authStore, allProfileIds);
+    const now = Date.now();
+
+    if (soonest !== null && Number.isFinite(soonest) && soonest > now) {
+      const waitMs = soonest - now;
+
+      if (waitMs <= MAX_COOLDOWN_WAIT_MS) {
+        // Wait for the cooldown to expire, plus a small buffer.
+        await new Promise((resolve) => setTimeout(resolve, waitMs + 500));
+
+        // Clear expired cooldowns so the profiles are available again.
+        clearExpiredCooldowns(authStore);
+
+        // Single retry pass over all candidates.
+        for (const candidate of candidates) {
+          const profileIds = resolveAuthProfileOrder({
+            cfg: params.cfg,
+            store: authStore,
+            provider: candidate.provider,
+          });
+          if (!profileIds.some((id) => !isProfileInCooldown(authStore, id))) {
+            continue;
+          }
+          try {
+            return {
+              result: await params.run(candidate.provider, candidate.model),
+              provider: candidate.provider,
+              model: candidate.model,
+              attempts,
+            };
+          } catch (retryErr) {
+            if (shouldRethrowAbort(retryErr)) {
+              throw retryErr;
+            }
+            lastError = retryErr;
+            break;
+          }
+        }
+      }
     }
   }
 

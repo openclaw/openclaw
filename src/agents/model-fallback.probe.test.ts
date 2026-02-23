@@ -7,6 +7,7 @@ import { makeModelFallbackCfg } from "./test-helpers/model-fallback-config-fixtu
 
 // Mock auth-profiles module — must be before importing model-fallback
 vi.mock("./auth-profiles.js", () => ({
+  clearExpiredCooldowns: vi.fn(),
   ensureAuthProfileStore: vi.fn(),
   getSoonestCooldownExpiry: vi.fn(),
   isProfileInCooldown: vi.fn(),
@@ -538,8 +539,9 @@ describe("runWithModelFallback – probe logic", () => {
       },
     } as Partial<OpenClawConfig>);
 
-    const almostExpired = NOW + 30 * 1000;
-    mockedGetSoonestCooldownExpiry.mockReturnValue(almostExpired);
+    // Cooldown far enough away (> 90s) that the wait-and-retry path does not trigger.
+    const farCooldown = NOW + 120 * 1000;
+    mockedGetSoonestCooldownExpiry.mockReturnValue(farCooldown);
 
     const run = vi.fn().mockResolvedValue("unreachable");
 
