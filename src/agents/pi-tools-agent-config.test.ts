@@ -648,6 +648,9 @@ describe("Agent-specific tool filtering", () => {
 
     const result = await execTool!.execute("call-implicit-sandbox-default", {
       command: "echo done",
+      // On Windows CI, spawning bash can exceed very small yield windows, returning status=running.
+      // This test is about the implicit host default, not yield behavior.
+      yieldMs: 1000,
     });
     const details = result?.details as { status?: string } | undefined;
     expect(details?.status).toBe("completed");
