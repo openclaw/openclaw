@@ -815,6 +815,7 @@ Docs: https://docs.openclaw.ai
 ### Changes
 
 - Browser/Profiles: add per-profile `headless` override so individual profiles can run headed (or headless) independently of the global `browser.headless` setting. Useful for profiles that require a visible window (e.g. login setup) while keeping the rest headless.
+- Browser/Profiles: add per-profile `executablePath` override so individual profiles can launch a different browser binary independently of the global `browser.executablePath` setting. Useful for mixed-browser setups (e.g. Chrome for one profile, Chromium for another).
 - Android/Chat: improve streaming delivery handling and markdown rendering quality in the native Android chat UI, including better GitHub-flavored markdown behavior. (#26079) Thanks @obviyus.
 - Android/Startup perf: defer foreground-service startup, move WebView debugging init out of critical startup, and add startup macrobenchmark + low-noise perf CLI scripts for deterministic cold-start tracking. (#26659) Thanks @obviyus.
 - UI/Chat compose: add mobile stacked layout for compose action buttons on small screens to improve send/session controls usability. (#11167) Thanks @junyiz.
