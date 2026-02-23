@@ -1,7 +1,11 @@
 import type { SandboxFsBridge } from "./fs-bridge.js";
+import type { SandboxBwrapConfig } from "./types.bwrap.js";
 import type { SandboxDockerConfig } from "./types.docker.js";
 
+export type { SandboxBwrapConfig } from "./types.bwrap.js";
 export type { SandboxDockerConfig } from "./types.docker.js";
+
+export type SandboxBackend = "docker" | "bwrap";
 
 export type SandboxToolPolicy = {
   allow?: string[];
@@ -55,9 +59,13 @@ export type SandboxScope = "session" | "agent" | "shared";
 export type SandboxConfig = {
   mode: "off" | "non-main" | "all";
   scope: SandboxScope;
+  /** Sandbox backend. Default: "docker". */
+  backend: SandboxBackend;
   workspaceAccess: SandboxWorkspaceAccess;
   workspaceRoot: string;
   docker: SandboxDockerConfig;
+  /** Bubblewrap config — used when backend is "bwrap". */
+  bwrap: SandboxBwrapConfig;
   browser: SandboxBrowserConfig;
   tools: SandboxToolPolicy;
   prune: SandboxPruneConfig;
@@ -71,13 +79,18 @@ export type SandboxBrowserContext = {
 
 export type SandboxContext = {
   enabled: boolean;
+  /** Sandbox backend in use for this session. */
+  backend: SandboxBackend;
   sessionKey: string;
   workspaceDir: string;
   agentWorkspaceDir: string;
   workspaceAccess: SandboxWorkspaceAccess;
+  /** Docker container name (empty string when backend is "bwrap"). */
   containerName: string;
   containerWorkdir: string;
   docker: SandboxDockerConfig;
+  /** Bubblewrap config — present when backend is "bwrap". */
+  bwrap?: SandboxBwrapConfig;
   tools: SandboxToolPolicy;
   browserAllowHostControl: boolean;
   browser?: SandboxBrowserContext;

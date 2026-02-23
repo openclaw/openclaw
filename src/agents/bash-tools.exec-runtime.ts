@@ -9,6 +9,7 @@ import { enqueueSystemEvent } from "../infra/system-events.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
+import { buildBwrapExecArgs } from "./bash-tools.shared.js";
 export { applyPathPrepend, normalizePathPrepend } from "../infra/path-prepend.js";
 import { logWarn } from "../logger.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
@@ -377,6 +378,27 @@ export async function runExecProcess(opts: {
         stdinMode: "pipe-open";
       } = (() => {
     if (opts.sandbox) {
+      if (opts.sandbox.backend === "bwrap" && opts.sandbox.bwrap) {
+        // Bubblewrap backend: each exec is a fresh namespace invocation.
+        return {
+          mode: "child" as const,
+          argv: [
+            "bwrap",
+            ...buildBwrapExecArgs({
+              cfg: opts.sandbox.bwrap,
+              workspaceDir: opts.sandbox.workspaceDir,
+              workspaceAccess: opts.sandbox.workspaceAccess ?? "rw",
+              command: execCommand,
+              workdir: opts.containerWorkdir ?? opts.sandbox.containerWorkdir,
+              env: opts.env,
+              tty: opts.usePty,
+            }),
+          ],
+          env: process.env,
+          stdinMode: opts.usePty ? ("pipe-open" as const) : ("pipe-closed" as const),
+        };
+      }
+      // Docker backend: exec into existing container.
       return {
         mode: "child" as const,
         argv: [

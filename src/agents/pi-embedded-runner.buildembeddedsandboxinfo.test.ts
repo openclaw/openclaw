@@ -5,6 +5,7 @@ import type { SandboxContext } from "./sandbox.js";
 function createSandboxContext(overrides?: Partial<SandboxContext>): SandboxContext {
   const base = {
     enabled: true,
+    backend: "docker",
     sessionKey: "session:test",
     workspaceDir: "/tmp/openclaw-sandbox",
     agentWorkspaceDir: "/tmp/openclaw-workspace",

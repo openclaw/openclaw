@@ -87,6 +87,7 @@ function createSandboxConfig(dns: string[], binds?: string[]): SandboxConfig {
   return {
     mode: "all",
     scope: "shared",
+    backend: "docker",
     workspaceAccess: "rw",
     workspaceRoot: "~/.openclaw/sandboxes",
     docker: {
@@ -119,6 +120,18 @@ function createSandboxConfig(dns: string[], binds?: string[]): SandboxConfig {
     },
     tools: { allow: [], deny: [] },
     prune: { idleHours: 24, maxAgeDays: 7 },
+    bwrap: {
+      workdir: "/workspace",
+      readOnlyRoot: true,
+      tmpfs: ["/tmp", "/var/tmp", "/run"],
+      unshareNet: true,
+      unsharePid: true,
+      unshareIpc: true,
+      unshareCgroup: false,
+      newSession: true,
+      dieWithParent: true,
+      mountProc: true,
+    },
   };
 }
 

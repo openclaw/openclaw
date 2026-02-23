@@ -4,14 +4,24 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { sliceUtf16Safe } from "../utils.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
+import { buildBwrapArgs } from "./sandbox/bwrap.js";
+import type { SandboxBwrapConfig } from "./sandbox/types.bwrap.js";
+import type { SandboxWorkspaceAccess } from "./sandbox/types.js";
 
 const CHUNK_LIMIT = 8 * 1024;
 
 export type BashSandboxConfig = {
+  /** Sandbox backend in use. */
+  backend: "docker" | "bwrap";
+  /** Docker container name (only meaningful for docker backend). */
   containerName: string;
   workspaceDir: string;
   containerWorkdir: string;
   env?: Record<string, string>;
+  /** Bwrap config (only present for bwrap backend). */
+  bwrap?: SandboxBwrapConfig;
+  /** Workspace access mode (used by bwrap to set bind mount permissions). */
+  workspaceAccess?: SandboxWorkspaceAccess;
 };
 
 export function buildSandboxEnv(params: {
@@ -77,6 +87,32 @@ export function buildDockerExecArgs(params: {
     : "";
   args.push(params.containerName, "sh", "-lc", `${pathExport}${params.command}`);
   return args;
+}
+
+/**
+ * Build a bwrap argv (excluding the "bwrap" binary) for an exec tool invocation.
+ * Unlike Docker, each invocation spins up a fresh namespace.
+ */
+export function buildBwrapExecArgs(params: {
+  cfg: SandboxBwrapConfig;
+  workspaceDir: string;
+  workspaceAccess: SandboxWorkspaceAccess;
+  command: string;
+  workdir?: string;
+  env: Record<string, string>;
+  tty: boolean;
+}): string[] {
+  // Delegate to the bwrap module's buildBwrapArgs which handles namespace flags,
+  // bind mounts, etc. We only need to merge env and workdir here.
+  return buildBwrapArgs({
+    cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
+    workspaceAccess: params.workspaceAccess,
+    command: params.command,
+    workdir: params.workdir,
+    env: params.env,
+    tty: params.tty,
+  });
 }
 
 export async function resolveSandboxWorkdir(params: {

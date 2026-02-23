@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveAgentConfig } from "../agent-scope.js";
+import { resolveBwrapConfig } from "./bwrap.js";
 import {
   DEFAULT_SANDBOX_BROWSER_AUTOSTART_TIMEOUT_MS,
   DEFAULT_SANDBOX_BROWSER_CDP_PORT,
@@ -17,6 +18,7 @@ import {
 } from "./constants.js";
 import { resolveSandboxToolPolicyForAgent } from "./tool-policy.js";
 import type {
+  SandboxBackend,
   SandboxBrowserConfig,
   SandboxConfig,
   SandboxDockerConfig,
@@ -187,9 +189,12 @@ export function resolveSandboxConfigForAgent(
 
   const toolPolicy = resolveSandboxToolPolicyForAgent(cfg, agentId);
 
+  const backend: SandboxBackend = agentSandbox?.backend ?? agent?.backend ?? "docker";
+
   return {
     mode: agentSandbox?.mode ?? agent?.mode ?? "off",
     scope,
+    backend,
     workspaceAccess: agentSandbox?.workspaceAccess ?? agent?.workspaceAccess ?? "none",
     workspaceRoot:
       agentSandbox?.workspaceRoot ?? agent?.workspaceRoot ?? DEFAULT_SANDBOX_WORKSPACE_ROOT,
@@ -197,6 +202,10 @@ export function resolveSandboxConfigForAgent(
       scope,
       globalDocker: agent?.docker,
       agentDocker: agentSandbox?.docker,
+    }),
+    bwrap: resolveBwrapConfig({
+      globalBwrap: agent?.bwrap,
+      agentBwrap: agentSandbox?.bwrap,
     }),
     browser: resolveSandboxBrowserConfig({
       scope,

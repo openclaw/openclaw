@@ -88,6 +88,44 @@ export type SandboxBrowserSettings = {
   binds?: string[];
 };
 
+export type SandboxBwrapSettings = {
+  /** Working directory inside the namespace (workspace mount target). */
+  workdir?: string;
+  /** Mount the root filesystem read-only. Default: true. */
+  readOnlyRoot?: boolean;
+  /** Paths to mount as tmpfs inside the namespace. Default: ["/tmp", "/var/tmp", "/run"]. */
+  tmpfs?: string[];
+  /** Disable network access via --unshare-net. Default: true (no network). */
+  unshareNet?: boolean;
+  /** Unshare PID namespace. Default: true. */
+  unsharePid?: boolean;
+  /** Unshare IPC namespace. Default: true. */
+  unshareIpc?: boolean;
+  /** Unshare cgroup namespace. Default: false. */
+  unshareCgroup?: boolean;
+  /** Use --new-session to prevent TIOCSTI attacks. Default: true. */
+  newSession?: boolean;
+  /** Use --die-with-parent to kill sandbox when parent exits. Default: true. */
+  dieWithParent?: boolean;
+  /**
+   * Mount a /proc filesystem inside the namespace.
+   * Disable for already-containerised environments where /proc is inherited.
+   * Default: true.
+   */
+  mountProc?: boolean;
+  /**
+   * Additional bind mounts: "hostPath:containerPath" or "hostPath:containerPath:rw".
+   */
+  extraBinds?: string[];
+  /**
+   * Host paths to bind read-only into the namespace for a functioning userland.
+   * Defaults: /usr, /lib, /lib64, /bin, /sbin, /etc.
+   */
+  rootBinds?: string[];
+  /** Extra environment variables for sandbox exec. */
+  env?: Record<string, string>;
+};
+
 export type SandboxPruneSettings = {
   /** Prune if idle for more than N hours (0 disables). */
   idleHours?: number;

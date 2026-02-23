@@ -93,7 +93,7 @@ Nothing is explicitly out of scope for this threat model.
 │                 TRUST BOUNDARY 3: Tool Execution                 │
 │  ┌──────────────────────────────────────────────────────────┐   │
 │  │                  EXECUTION SANDBOX                        │   │
-│  │  • Docker sandbox OR Host (exec-approvals)                │   │
+│  │  • Docker sandbox OR bwrap sandbox OR Host (exec-approvals)│   │
 │  │  • Node remote execution                                  │   │
 │  │  • SSRF protection (DNS pinning + IP blocking)            │   │
 │  └──────────────────────────────────────────────────────────┘   │
@@ -397,15 +397,15 @@ Nothing is explicitly out of scope for this threat model.
 
 #### T-IMPACT-001: Unauthorized Command Execution
 
-| Attribute               | Value                                               |
-| ----------------------- | --------------------------------------------------- |
-| **ATLAS ID**            | AML.T0031 - Erode AI Model Integrity                |
-| **Description**         | Attacker executes arbitrary commands on user system |
-| **Attack Vector**       | Prompt injection combined with exec approval bypass |
-| **Affected Components** | Bash tool, command execution                        |
-| **Current Mitigations** | Exec approvals, Docker sandbox option               |
-| **Residual Risk**       | Critical - Host execution without sandbox           |
-| **Recommendations**     | Default to sandbox, improve approval UX             |
+| Attribute               | Value                                                       |
+| ----------------------- | ----------------------------------------------------------- |
+| **ATLAS ID**            | AML.T0031 - Erode AI Model Integrity                        |
+| **Description**         | Attacker executes arbitrary commands on user system         |
+| **Attack Vector**       | Prompt injection combined with exec approval bypass         |
+| **Affected Components** | Bash tool, command execution                                |
+| **Current Mitigations** | Exec approvals, Docker sandbox option, bwrap sandbox option |
+| **Residual Risk**       | Critical - Host execution without sandbox                   |
+| **Recommendations**     | Default to sandbox (Docker or bwrap), improve approval UX   |
 
 #### T-IMPACT-002: Resource Exhaustion (DoS)
 

@@ -467,15 +467,36 @@ const ToolLoopDetectionSchema = z
   })
   .optional();
 
+export const SandboxBwrapSchema = z
+  .object({
+    workdir: z.string().optional(),
+    readOnlyRoot: z.boolean().optional(),
+    tmpfs: z.array(z.string()).optional(),
+    unshareNet: z.boolean().optional(),
+    unsharePid: z.boolean().optional(),
+    unshareIpc: z.boolean().optional(),
+    unshareCgroup: z.boolean().optional(),
+    newSession: z.boolean().optional(),
+    dieWithParent: z.boolean().optional(),
+    mountProc: z.boolean().optional(),
+    extraBinds: z.array(z.string()).optional(),
+    rootBinds: z.array(z.string()).optional(),
+    env: z.record(z.string(), z.string()).optional(),
+  })
+  .strict()
+  .optional();
+
 export const AgentSandboxSchema = z
   .object({
     mode: z.union([z.literal("off"), z.literal("non-main"), z.literal("all")]).optional(),
+    backend: z.union([z.literal("docker"), z.literal("bwrap")]).optional(),
     workspaceAccess: z.union([z.literal("none"), z.literal("ro"), z.literal("rw")]).optional(),
     sessionToolsVisibility: z.union([z.literal("spawned"), z.literal("all")]).optional(),
     scope: z.union([z.literal("session"), z.literal("agent"), z.literal("shared")]).optional(),
     perSession: z.boolean().optional(),
     workspaceRoot: z.string().optional(),
     docker: SandboxDockerSchema,
+    bwrap: SandboxBwrapSchema,
     browser: SandboxBrowserSchema,
     prune: SandboxPruneSchema,
   })

@@ -48,6 +48,7 @@ function buildConfig(enableNoVnc: boolean): SandboxConfig {
   return {
     mode: "all",
     scope: "session",
+    backend: "docker",
     workspaceAccess: "none",
     workspaceRoot: "/tmp/openclaw-sandboxes",
     docker: {
@@ -81,6 +82,18 @@ function buildConfig(enableNoVnc: boolean): SandboxConfig {
     prune: {
       idleHours: 24,
       maxAgeDays: 7,
+    },
+    bwrap: {
+      workdir: "/workspace",
+      readOnlyRoot: true,
+      tmpfs: ["/tmp", "/var/tmp", "/run"],
+      unshareNet: true,
+      unsharePid: true,
+      unshareIpc: true,
+      unshareCgroup: false,
+      newSession: true,
+      dieWithParent: true,
+      mountProc: true,
     },
   };
 }

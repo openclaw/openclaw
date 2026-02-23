@@ -8,6 +8,8 @@ import { resolveUserPath } from "../../utils.js";
 import { syncSkillsToWorkspace } from "../skills.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../workspace.js";
 import { ensureSandboxBrowser } from "./browser.js";
+import { createBwrapFsBridge } from "./bwrap-fs-bridge.js";
+import { ensureBwrapAvailable } from "./bwrap.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import { ensureSandboxContainer } from "./docker.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
@@ -125,18 +127,28 @@ export async function resolveSandboxContext(params: {
     workspaceDir: params.workspaceDir,
   });
 
-  const docker = await resolveSandboxDockerUser({
-    docker: cfg.docker,
-    workspaceDir,
-  });
-  const resolvedCfg = docker === cfg.docker ? cfg : { ...cfg, docker };
+  const backend = cfg.backend;
 
-  const containerName = await ensureSandboxContainer({
-    sessionKey: rawSessionKey,
-    workspaceDir,
-    agentWorkspaceDir,
-    cfg: resolvedCfg,
-  });
+  // --- Docker backend: resolve user and create/start persistent container ---
+  let containerName = "";
+  let resolvedCfg = cfg;
+  if (backend === "docker") {
+    const docker = await resolveSandboxDockerUser({
+      docker: cfg.docker,
+      workspaceDir,
+    });
+    resolvedCfg = docker === cfg.docker ? cfg : { ...cfg, docker };
+
+    containerName = await ensureSandboxContainer({
+      sessionKey: rawSessionKey,
+      workspaceDir,
+      agentWorkspaceDir,
+      cfg: resolvedCfg,
+    });
+  } else {
+    // bwrap: validate that bwrap is available on PATH
+    await ensureBwrapAvailable();
+  }
 
   const evaluateEnabled =
     params.config?.browser?.evaluateEnabled ?? DEFAULT_BROWSER_EVALUATE_ENABLED;
@@ -168,19 +180,24 @@ export async function resolveSandboxContext(params: {
 
   const sandboxContext: SandboxContext = {
     enabled: true,
+    backend,
     sessionKey: rawSessionKey,
     workspaceDir,
     agentWorkspaceDir,
     workspaceAccess: resolvedCfg.workspaceAccess,
     containerName,
-    containerWorkdir: resolvedCfg.docker.workdir,
+    containerWorkdir: backend === "bwrap" ? cfg.bwrap.workdir : resolvedCfg.docker.workdir,
     docker: resolvedCfg.docker,
+    bwrap: backend === "bwrap" ? cfg.bwrap : undefined,
     tools: resolvedCfg.tools,
     browserAllowHostControl: resolvedCfg.browser.allowHostControl,
     browser: browser ?? undefined,
   };
 
-  sandboxContext.fsBridge = createSandboxFsBridge({ sandbox: sandboxContext });
+  sandboxContext.fsBridge =
+    backend === "bwrap"
+      ? createBwrapFsBridge({ sandbox: sandboxContext, bwrapCfg: cfg.bwrap })
+      : createSandboxFsBridge({ sandbox: sandboxContext });
 
   return sandboxContext;
 }
@@ -205,6 +222,6 @@ export async function ensureSandboxWorkspaceForSession(params: {
 
   return {
     workspaceDir,
-    containerWorkdir: cfg.docker.workdir,
+    containerWorkdir: cfg.backend === "bwrap" ? cfg.bwrap.workdir : cfg.docker.workdir,
   };
 }
