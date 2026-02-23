@@ -368,10 +368,28 @@ function resolvePackageEntrySource(params: {
   packageDir: string;
   entryPath: string;
   sourceLabel: string;
+  origin?: PluginOrigin;
   diagnostics: PluginDiagnostic[];
   rejectHardlinks?: boolean;
 }): string | null {
   const source = path.resolve(params.packageDir, params.entryPath);
+  // Bundled extensions are trusted — skip boundary file open which fails
+  // when .ts source files referenced in package.json don't exist in the
+  // published npm package (only compiled .js exists).
+  if (params.origin === "bundled") {
+    // Simple lexical containment check for bundled entries
+    const real = path.resolve(source);
+    const root = path.resolve(params.packageDir);
+    if (!real.startsWith(root + path.sep) && real !== root) {
+      params.diagnostics.push({
+        level: "error",
+        message: `extension entry escapes package directory: ${params.entryPath}`,
+        source: params.sourceLabel,
+      });
+      return null;
+    }
+    return source;
+  }
   const opened = openBoundaryFileSync({
     absolutePath: source,
     rootPath: params.packageDir,
@@ -451,6 +469,7 @@ function discoverInDirectory(params: {
           packageDir: fullPath,
           entryPath: extPath,
           sourceLabel: fullPath,
+          origin: params.origin,
           diagnostics: params.diagnostics,
           rejectHardlinks,
         });
@@ -554,6 +573,7 @@ function discoverFromPath(params: {
           packageDir: resolved,
           entryPath: extPath,
           sourceLabel: resolved,
+          origin: params.origin,
           diagnostics: params.diagnostics,
           rejectHardlinks,
         });
