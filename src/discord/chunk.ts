@@ -205,7 +205,7 @@ export function chunkDiscordText(text: string, opts: ChunkDiscordTextOpts = {}):
     }
   }
 
-  return rebalanceReasoningItalics(text, chunks);
+  return formatReasoningBlockquotes(text, chunks);
 }
 
 export function chunkDiscordTextWithMode(
@@ -233,45 +233,33 @@ export function chunkDiscordTextWithMode(
   return chunks;
 }
 
-// Keep italics intact for reasoning payloads that are wrapped once with `_…_`.
-// When Discord chunking splits the message, we close italics at the end of
-// each chunk and reopen at the start of the next so every chunk renders
-// consistently.
-function rebalanceReasoningItalics(source: string, chunks: string[]): string[] {
-  if (chunks.length <= 1) {
+// Convert reasoning payloads from italic format (`_…_`) to Discord blockquotes
+// (`> …`). Blockquotes are visually distinct and easier to scan than italics
+// for long reasoning blocks. Each line is independently prefixed so no
+// cross-chunk rebalancing is needed.
+function formatReasoningBlockquotes(source: string, chunks: string[]): string[] {
+  const isReasoningItalics = source.startsWith("Reasoning:\n_") && source.trimEnd().endsWith("_");
+  if (!isReasoningItalics) {
     return chunks;
   }
 
-  const opensWithReasoningItalics =
-    source.startsWith("Reasoning:\n_") && source.trimEnd().endsWith("_");
-  if (!opensWithReasoningItalics) {
-    return chunks;
-  }
-
-  const adjusted = [...chunks];
-  for (let i = 0; i < adjusted.length; i++) {
-    const isLast = i === adjusted.length - 1;
-    const current = adjusted[i];
-
-    // Ensure current chunk closes italics so Discord renders it italicized.
-    const needsClosing = !current.trimEnd().endsWith("_");
-    if (needsClosing) {
-      adjusted[i] = `${current}_`;
-    }
-
-    if (isLast) {
-      break;
-    }
-
-    // Re-open italics on the next chunk if needed.
-    const next = adjusted[i + 1];
-    const leadingWhitespaceLen = next.length - next.trimStart().length;
-    const leadingWhitespace = next.slice(0, leadingWhitespaceLen);
-    const nextBody = next.slice(leadingWhitespaceLen);
-    if (!nextBody.startsWith("_")) {
-      adjusted[i + 1] = `${leadingWhitespace}_${nextBody}`;
-    }
-  }
-
-  return adjusted;
+  return chunks.map((chunk) => {
+    const lines = chunk.split("\n");
+    const converted = lines.map((line) => {
+      // Replace the "Reasoning:" header with a bold blockquoted label.
+      if (line === "Reasoning:") {
+        return "> **Reasoning:**";
+      }
+      // Strip italic markers and convert to blockquote.
+      let content = line;
+      if (content.startsWith("_")) {
+        content = content.slice(1);
+      }
+      if (content.endsWith("_")) {
+        content = content.slice(0, -1);
+      }
+      return content ? `> ${content}` : ">";
+    });
+    return converted.join("\n");
+  });
 }
