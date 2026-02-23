@@ -566,6 +566,7 @@ export async function runHeartbeatOnce(opts: {
   sessionKey?: string;
   heartbeat?: HeartbeatConfig;
   reason?: string;
+  prompt?: string;
   deps?: HeartbeatDeps;
 }): Promise<HeartbeatRunResult> {
   const cfg = opts.cfg ?? loadConfig();
@@ -654,11 +655,13 @@ export async function runHeartbeatOnce(opts: {
     .map((event) => event.text);
   const hasExecCompletion = pendingEvents.some(isExecCompletionEvent);
   const hasCronEvents = cronEvents.length > 0;
-  const prompt = hasExecCompletion
-    ? EXEC_EVENT_PROMPT
-    : hasCronEvents
-      ? buildCronEventPrompt(cronEvents)
-      : resolveHeartbeatPrompt(cfg, heartbeat);
+  const prompt = opts.prompt
+    ? opts.prompt
+    : hasExecCompletion
+      ? EXEC_EVENT_PROMPT
+      : hasCronEvents
+        ? buildCronEventPrompt(cronEvents)
+        : resolveHeartbeatPrompt(cfg, heartbeat);
   const ctx = {
     Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
     From: sender,
