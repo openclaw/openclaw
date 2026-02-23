@@ -226,6 +226,9 @@ export async function run(state: CronServiceState, id: string, mode?: "due" | "f
     // (`list`, `status`) stay responsive while the run is in progress.
     job.state.runningAtMs = now;
     job.state.lastError = undefined;
+    // Persist the running marker before releasing lock so timer ticks that
+    // force-reload from disk cannot start the same job concurrently.
+    await persist(state);
     emit(state, { jobId: job.id, action: "started", runAtMs: now });
     const executionJob = JSON.parse(JSON.stringify(job)) as typeof job;
     return {
