@@ -77,6 +77,7 @@ describe("applyAuthChoice (moonshot)", () => {
       "anthropic/claude-opus-4-5",
     );
     expect(result.config.models?.providers?.moonshot?.baseUrl).toBe("https://api.moonshot.cn/v1");
+    expect(result.config.models?.providers?.moonshot?.models?.[0]?.input).toContain("image");
     expect(result.agentModelOverride).toBe("moonshot/kimi-k2.5");
 
     const parsed = await readAuthProfiles();
@@ -95,6 +96,7 @@ describe("applyAuthChoice (moonshot)", () => {
       "moonshot/kimi-k2.5",
     );
     expect(result.config.models?.providers?.moonshot?.baseUrl).toBe("https://api.moonshot.cn/v1");
+    expect(result.config.models?.providers?.moonshot?.models?.[0]?.input).toContain("image");
     expect(result.agentModelOverride).toBeUndefined();
 
     const parsed = await readAuthProfiles();
