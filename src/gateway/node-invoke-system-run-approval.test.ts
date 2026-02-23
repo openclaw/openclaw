@@ -40,6 +40,18 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     };
   }
 
+  function expectAllowOnceForwardingResult(
+    result: ReturnType<typeof sanitizeSystemRunParamsForForwarding>,
+  ) {
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("unreachable");
+    }
+    const params = result.params as Record<string, unknown>;
+    expect(params.approved).toBe(true);
+    expect(params.approvalDecision).toBe("allow-once");
+  }
+
   test("rejects cmd.exe /c trailing-arg mismatch against rawCommand", () => {
     const result = sanitizeSystemRunParamsForForwarding({
       rawParams: {
@@ -74,13 +86,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       execApprovalManager: manager(makeRecord("echo SAFE&&whoami")),
       nowMs: now,
     });
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw new Error("unreachable");
-    }
-    const params = result.params as Record<string, unknown>;
-    expect(params.approved).toBe(true);
-    expect(params.approvalDecision).toBe("allow-once");
+    expectAllowOnceForwardingResult(result);
   });
 
   test("rejects env-assignment shell wrapper when approval command omits env prelude", () => {
@@ -117,12 +123,6 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       ),
       nowMs: now,
     });
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      throw new Error("unreachable");
-    }
-    const params = result.params as Record<string, unknown>;
-    expect(params.approved).toBe(true);
-    expect(params.approvalDecision).toBe("allow-once");
+    expectAllowOnceForwardingResult(result);
   });
 });

@@ -79,6 +79,35 @@ describe("config io write", () => {
     return { last, lines, configPath };
   }
 
+  const createGatewayCommandsInput = (): Record<string, unknown> => ({
+    gateway: { mode: "local" },
+    commands: { ownerDisplay: "hash" },
+  });
+
+  const expectInputOwnerDisplayUnchanged = (input: Record<string, unknown>) => {
+    expect((input.commands as Record<string, unknown>).ownerDisplay).toBe("hash");
+  };
+
+  const readPersistedCommands = async (configPath: string) => {
+    const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+      commands?: Record<string, unknown>;
+    };
+    return persisted.commands;
+  };
+
+  async function runUnsetNoopCase(params: { home: string; unsetPaths: string[][] }) {
+    const { configPath, io } = await writeConfigAndCreateIo({
+      home: params.home,
+      initialConfig: createGatewayCommandsInput(),
+    });
+
+    const input = createGatewayCommandsInput();
+    await io.writeConfigFile(input, { unsetPaths: params.unsetPaths });
+
+    expectInputOwnerDisplayUnchanged(input);
+    expect((await readPersistedCommands(configPath))?.ownerDisplay).toBe("hash");
+  }
+
   it("persists caller changes onto resolved config without leaking runtime defaults", async () => {
     await withTempHome("openclaw-config-io-", async (home) => {
       const { configPath, io, snapshot } = await writeConfigAndCreateIo({
@@ -144,11 +173,8 @@ describe("config io write", () => {
         gateway: { mode: "local" },
         commands: { ownerDisplay: "hash" },
       });
-      expect((input.commands as Record<string, unknown>).ownerDisplay).toBe("hash");
-      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
-        commands?: Record<string, unknown>;
-      };
-      expect(persisted.commands ?? {}).not.toHaveProperty("ownerDisplay");
+      expectInputOwnerDisplayUnchanged(input);
+      expect((await readPersistedCommands(configPath)) ?? {}).not.toHaveProperty("ownerDisplay");
     });
   });
 
@@ -165,11 +191,8 @@ describe("config io write", () => {
       const input = structuredClone(snapshot.config) as Record<string, unknown>;
       await io.writeConfigFile(input, { unsetPaths: [["commands", "ownerDisplay"]] });
 
-      expect((input.commands as Record<string, unknown>).ownerDisplay).toBe("hash");
-      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
-        commands?: Record<string, unknown>;
-      };
-      expect(persisted.commands ?? {}).not.toHaveProperty("ownerDisplay");
+      expectInputOwnerDisplayUnchanged(input);
+      expect((await readPersistedCommands(configPath)) ?? {}).not.toHaveProperty("ownerDisplay");
     });
   });
 
@@ -196,55 +219,23 @@ describe("config io write", () => {
 
   it("treats missing unset paths as no-op without mutating caller config", async () => {
     await withTempHome("openclaw-config-io-", async (home) => {
-      const { configPath, io } = await writeConfigAndCreateIo({
+      await runUnsetNoopCase({
         home,
-        initialConfig: {
-          gateway: { mode: "local" },
-          commands: { ownerDisplay: "hash" },
-        },
+        unsetPaths: [["commands", "missingKey"]],
       });
-
-      const input: Record<string, unknown> = {
-        gateway: { mode: "local" },
-        commands: { ownerDisplay: "hash" },
-      };
-      await io.writeConfigFile(input, { unsetPaths: [["commands", "missingKey"]] });
-
-      expect((input.commands as Record<string, unknown>).ownerDisplay).toBe("hash");
-      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
-        commands?: Record<string, unknown>;
-      };
-      expect(persisted.commands?.ownerDisplay).toBe("hash");
     });
   });
 
   it("ignores blocked prototype-key unset path segments", async () => {
     await withTempHome("openclaw-config-io-", async (home) => {
-      const { configPath, io } = await writeConfigAndCreateIo({
+      await runUnsetNoopCase({
         home,
-        initialConfig: {
-          gateway: { mode: "local" },
-          commands: { ownerDisplay: "hash" },
-        },
-      });
-
-      const input: Record<string, unknown> = {
-        gateway: { mode: "local" },
-        commands: { ownerDisplay: "hash" },
-      };
-      await io.writeConfigFile(input, {
         unsetPaths: [
           ["commands", "__proto__"],
           ["commands", "constructor"],
           ["commands", "prototype"],
         ],
       });
-
-      expect((input.commands as Record<string, unknown>).ownerDisplay).toBe("hash");
-      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
-        commands?: Record<string, unknown>;
-      };
-      expect(persisted.commands?.ownerDisplay).toBe("hash");
     });
   });
 
