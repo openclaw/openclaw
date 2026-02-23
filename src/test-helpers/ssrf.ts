@@ -21,13 +21,12 @@ export function mockPinnedHostnameResolution(addresses: string[] = ["93.184.216.
       address: entry.address,
       family: entry.family,
     }));
-    const useAll =
-      Boolean(
-        options &&
-        typeof options === "object" &&
-        "all" in options &&
-        (options as { all?: unknown }).all === true,
-      ) || options === undefined;
+    const useAll = Boolean(
+      options &&
+      typeof options === "object" &&
+      "all" in options &&
+      (options as { all?: unknown }).all === true,
+    );
     return useAll ? resolved : (resolved[0] ?? { address: "127.0.0.1", family: 4 });
   }) as ssrf.LookupFn;
 
