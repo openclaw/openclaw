@@ -109,6 +109,13 @@ function normalizeProviderModelId(provider: string, model: string): string {
   if (provider === "anthropic") {
     return normalizeAnthropicModelId(model);
   }
+  if (provider === "vercel-ai-gateway" && !model.includes("/")) {
+    // Allow Vercel-specific Claude refs without an upstream prefix.
+    const normalizedAnthropicModel = normalizeAnthropicModelId(model);
+    if (normalizedAnthropicModel.startsWith("claude-")) {
+      return `anthropic/${normalizedAnthropicModel}`;
+    }
+  }
   if (provider === "google") {
     return normalizeGoogleModelId(model);
   }
