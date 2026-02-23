@@ -7,6 +7,7 @@ import {
   isDeliverableMessageChannel,
   isGatewayMessageChannel,
   normalizeMessageChannel,
+  type DeliverableMessageChannel,
   type GatewayMessageChannel,
 } from "../../utils/message-channel.js";
 import type { OutboundTargetResolution } from "./targets.js";
@@ -32,6 +33,20 @@ export function resolveAgentDeliveryPlan(params: {
   explicitThreadId?: string | number;
   accountId?: string;
   wantsDelivery: boolean;
+  /**
+   * The channel that originated the current agent turn.  When provided,
+   * overrides session-level `lastChannel` to prevent cross-channel reply
+   * routing in shared sessions (dmScope="main").
+   *
+   * @see https://github.com/openclaw/openclaw/issues/24152
+   */
+  turnSourceChannel?: string;
+  /** Turn-source `to` — paired with `turnSourceChannel`. */
+  turnSourceTo?: string;
+  /** Turn-source `accountId` — paired with `turnSourceChannel`. */
+  turnSourceAccountId?: string;
+  /** Turn-source `threadId` — paired with `turnSourceChannel`. */
+  turnSourceThreadId?: string | number;
 }): AgentDeliveryPlan {
   const requestedRaw =
     typeof params.requestedChannel === "string" ? params.requestedChannel.trim() : "";
@@ -43,11 +58,24 @@ export function resolveAgentDeliveryPlan(params: {
       ? params.explicitTo.trim()
       : undefined;
 
+  // Resolve turn-source channel for cross-channel safety.
+  const normalizedTurnSource = params.turnSourceChannel
+    ? normalizeMessageChannel(params.turnSourceChannel)
+    : undefined;
+  const turnSourceChannel =
+    normalizedTurnSource && isDeliverableMessageChannel(normalizedTurnSource)
+      ? normalizedTurnSource
+      : undefined;
+
   const baseDelivery = resolveSessionDeliveryTarget({
     entry: params.sessionEntry,
     requestedChannel: requestedChannel === INTERNAL_MESSAGE_CHANNEL ? "last" : requestedChannel,
     explicitTo,
     explicitThreadId: params.explicitThreadId,
+    turnSourceChannel,
+    turnSourceTo: params.turnSourceTo,
+    turnSourceAccountId: params.turnSourceAccountId,
+    turnSourceThreadId: params.turnSourceThreadId,
   });
 
   const resolvedChannel = (() => {
