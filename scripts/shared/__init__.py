@@ -1,0 +1,1 @@
+# shared — OpenClaw common utilities
