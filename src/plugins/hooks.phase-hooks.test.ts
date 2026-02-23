@@ -50,7 +50,7 @@ describe("phase hooks merger", () => {
     expect(result?.providerOverride).toBe("ollama");
   });
 
-  it("before_prompt_build concatenates prependContext and preserves systemPrompt precedence", async () => {
+  it("before_prompt_build concatenates prependContext and preserves systemPrompt ordering", async () => {
     addTypedHook(
       registry,
       "before_prompt_build",
@@ -71,6 +71,16 @@ describe("phase hooks merger", () => {
 
     expect(result?.prependContext).toBe("context A\n\ncontext B");
     expect(result?.systemPrompt).toBe("system A");
+  });
+
+  it("before_prompt_build concatenates systemPrompt in hook order", async () => {
+    addTypedHook(registry, "before_prompt_build", "high", () => ({ systemPrompt: "system A" }), 10);
+    addTypedHook(registry, "before_prompt_build", "low", () => ({ systemPrompt: "system B" }), 1);
+
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, {});
+
+    expect(result?.systemPrompt).toBe("system A\n\nsystem B");
   });
 
   it("before_prompt_build concatenates prependSystemContext and appendSystemContext", async () => {

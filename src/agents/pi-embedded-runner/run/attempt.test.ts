@@ -576,12 +576,12 @@ describe("applyPromptBuildHookResultToSession", () => {
 
     expect(result.effectivePrompt).toBe("ctx A\n\nctx B\n\nuser prompt");
     expect(result.systemPromptText).toBe("BASE\n\nsys X\n\nsys Y");
-    expect(result.prependContextChars).toBe("ctx A".length + "ctx B".length);
+    expect(result.prependContextChars).toBe("ctx A\n\nctx B".length);
     expect(result.appendedSystemPromptChars).toBe("sys X\n\nsys Y".length);
     expect(agent.setSystemPrompt).toHaveBeenCalledWith("BASE\n\nsys X\n\nsys Y");
   });
 
-  it("preserves legacy system prompt override and wraps it with system context", () => {
+  it("combines explicit actions with legacy system prompt fields without double-applying prompt text", () => {
     const agent = { setSystemPrompt: vi.fn() };
     const session = { agent } as unknown as AgentSession;
 
@@ -593,12 +593,16 @@ describe("applyPromptBuildHookResultToSession", () => {
         systemPrompt: "legacy sys",
         prependSystemContext: "prepend ctx",
         appendSystemContext: "append ctx",
-        actions: [{ kind: "appendSystemPrompt", text: "sys tail" }],
+        actions: [
+          { kind: "prependContext", text: "action ctx" },
+          { kind: "appendSystemPrompt", text: "sys tail" },
+        ],
       },
       session,
     });
 
-    expect(result.effectivePrompt).toBe("legacy ctx\n\nuser prompt");
+    expect(result.effectivePrompt).toBe("action ctx\n\nuser prompt");
+    expect(result.prependContextChars).toBe("action ctx".length);
     expect(result.systemPromptText).toBe("prepend ctx\n\nlegacy sys\n\nsys tail\n\nappend ctx");
     expect(result.systemPromptOverrideChars).toBe("legacy sys".length);
     expect(result.prependSystemContextChars).toBe("prepend ctx".length);

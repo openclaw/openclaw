@@ -576,7 +576,10 @@ export async function resolvePromptBuildHookResult(params: {
   ] satisfies PluginHookPromptAction[];
   return {
     ...(actions.length > 0 ? { actions } : {}),
-    systemPrompt: promptBuildResult?.systemPrompt ?? legacyResult?.systemPrompt,
+    systemPrompt: joinPresentTextSegments([
+      promptBuildResult?.systemPrompt,
+      legacyResult?.systemPrompt,
+    ]),
     prependContext: joinPresentTextSegments([
       promptBuildResult?.prependContext,
       legacyResult?.prependContext,
@@ -633,14 +636,33 @@ function normalizePromptBuildHookActions(
   }
 
   const actions: PluginHookPromptAction[] = [];
+  let hasExplicitActions = false;
 
   if (Array.isArray(result.actions)) {
-    actions.push(...result.actions);
+    for (const raw of result.actions) {
+      if (!raw || typeof raw !== "object") {
+        continue;
+      }
+      const { kind, text } = raw as { kind?: unknown; text?: unknown };
+      if (kind === "prependContext" && typeof text === "string") {
+        actions.push({ kind, text });
+        hasExplicitActions = true;
+        continue;
+      }
+      if (kind === "appendSystemPrompt" && typeof text === "string") {
+        actions.push({ kind, text });
+        hasExplicitActions = true;
+        continue;
+      }
+    }
   }
 
-  // Legacy compatibility: treat legacy fields as shorthand actions.
-  if (typeof result.prependContext === "string" && result.prependContext.trim()) {
-    actions.push({ kind: "prependContext", text: result.prependContext });
+  // Legacy compatibility: treat legacy fields as shorthand actions, but only when
+  // the hook did not return explicit actions (prevents accidental double-apply).
+  if (!hasExplicitActions) {
+    if (typeof result.prependContext === "string" && result.prependContext.trim()) {
+      actions.push({ kind: "prependContext", text: result.prependContext });
+    }
   }
 
   return actions;
@@ -700,10 +722,22 @@ export function applyPromptBuildHookResultToSession(params: {
     }
   }
 
+  const prependContextText = prependParts.join("\n\n");
   const effectivePrompt =
-    prependParts.length > 0 ? `${prependParts.join("\n\n")}\n\n${params.prompt}` : params.prompt;
-  const prependContextChars = prependParts.reduce((sum, part) => sum + part.length, 0);
+    prependContextText.length > 0 ? `${prependContextText}\n\n${params.prompt}` : params.prompt;
+  const prependContextChars = prependContextText.length;
   const appendText = systemPromptAppends.join("\n\n");
+  if (!hasSystemPromptMutations && appendText.length === 0) {
+    return {
+      effectivePrompt,
+      systemPromptText: params.systemPromptText,
+      prependContextChars,
+      systemPromptOverrideChars: 0,
+      prependSystemContextChars: 0,
+      appendSystemContextChars: 0,
+      appendedSystemPromptChars: 0,
+    };
+  }
   const baseSystemPrompt = joinPresentTextSegments(
     [systemPromptOverride || params.systemPromptText, appendText],
     { trim: true },
@@ -1662,9 +1696,14 @@ export async function runEmbeddedAttempt(
             `hooks: prepended context to prompt (${appliedHookResult.prependContextChars} chars)`,
           );
         }
-        if (appliedHookResult.appendedSystemPromptChars > 0) {
+        if (
+          appliedHookResult.appendedSystemPromptChars > 0 ||
+          appliedHookResult.systemPromptOverrideChars > 0 ||
+          appliedHookResult.prependSystemContextChars > 0 ||
+          appliedHookResult.appendSystemContextChars > 0
+        ) {
           log.debug(
-            `hooks: appended system prompt (${appliedHookResult.appendedSystemPromptChars} chars)`,
+            `hooks: updated system prompt (${appliedHookResult.appendedSystemPromptChars} appended chars)`,
           );
           systemPromptReport = buildSystemPromptReport({
             source: "run",
@@ -1697,6 +1736,10 @@ export async function runEmbeddedAttempt(
             `hooks: applied prependSystemContext/appendSystemContext (${appliedHookResult.prependSystemContextChars}+${appliedHookResult.appendSystemContextChars} chars)`,
           );
         }
+        cacheTrace?.recordStage("prompt:hooks", {
+          prompt: effectivePrompt,
+          system: systemPromptText,
+        });
 
         log.debug(`embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`);
         cacheTrace?.recordStage("prompt:before", {

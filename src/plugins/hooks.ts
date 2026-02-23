@@ -144,7 +144,10 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       acc?.actions && next.actions
         ? [...acc.actions, ...next.actions]
         : (acc?.actions ?? next.actions),
-    systemPrompt: next.systemPrompt ?? acc?.systemPrompt,
+    systemPrompt: concatOptionalTextSegments({
+      left: acc?.systemPrompt,
+      right: next.systemPrompt,
+    }),
     prependContext: concatOptionalTextSegments({
       left: acc?.prependContext,
       right: next.prependContext,
