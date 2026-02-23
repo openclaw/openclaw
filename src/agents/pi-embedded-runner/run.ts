@@ -386,7 +386,10 @@ export async function runEmbeddedPiAgent(
       // context window, cap model.contextWindow so the SDK's shouldCompact()
       // triggers at the configured budget rather than the model's full window.
       // See: https://github.com/openclaw/openclaw/issues/24031
-      if (ctxInfo.source === "agentContextTokens" && ctxInfo.tokens < (model.contextWindow ?? Infinity)) {
+      if (
+        ctxInfo.source === "agentContextTokens" &&
+        ctxInfo.tokens < (model.contextWindow ?? Infinity)
+      ) {
         model = { ...model, contextWindow: ctxInfo.tokens } as typeof model;
       }
 
