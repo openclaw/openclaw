@@ -15,10 +15,26 @@ const shortDelayCmd = isWin ? "Start-Sleep -Milliseconds 4" : "sleep 0.004";
 const yieldDelayCmd = isWin ? "Start-Sleep -Milliseconds 16" : "sleep 0.016";
 const longDelayCmd = isWin ? "Start-Sleep -Milliseconds 72" : "sleep 0.072";
 const POLL_INTERVAL_MS = 15;
+const BACKGROUND_POLL_TIMEOUT_MS = isWin ? 8000 : 1200;
+const NOTIFY_EVENT_TIMEOUT_MS = isWin ? 12_000 : 5_000;
 const TEST_EXEC_DEFAULTS = { security: "full" as const, ask: "off" as const };
+const DEFAULT_NOTIFY_SESSION_KEY = "agent:main:main";
+type ExecToolConfig = Exclude<Parameters<typeof createExecTool>[0], undefined>;
 const createTestExecTool = (
   defaults?: Parameters<typeof createExecTool>[0],
 ): ReturnType<typeof createExecTool> => createExecTool({ ...TEST_EXEC_DEFAULTS, ...defaults });
+const createNotifyOnExitExecTool = (overrides: Partial<ExecToolConfig> = {}) =>
+  createTestExecTool({
+    allowBackground: true,
+    backgroundMs: 0,
+    notifyOnExit: true,
+    sessionKey: DEFAULT_NOTIFY_SESSION_KEY,
+    ...overrides,
+  });
+const createScopedToolSet = (scopeKey: string) => ({
+  exec: createTestExecTool({ backgroundMs: 10, scopeKey }),
+  process: createProcessTool({ scopeKey }),
+});
 const execTool = createTestExecTool();
 const processTool = createProcessTool();
 // Both PowerShell and bash use ; for command separation
@@ -33,13 +49,36 @@ const normalizeText = (value?: string) =>
     .map((line) => line.replace(/\s+$/u, ""))
     .join("\n")
     .trim();
+type ToolTextContent = Array<{ type: string; text?: string }>;
+const readTextContent = (content: ToolTextContent) =>
+  content.find((part) => part.type === "text")?.text;
+const readNormalizedTextContent = (content: ToolTextContent) =>
+  normalizeText(readTextContent(content));
+const readTrimmedLines = (content: ToolTextContent) =>
+  (readTextContent(content) ?? "").split("\n").map((line) => line.trim());
+const readTotalLines = (details: unknown) => (details as { totalLines?: number }).totalLines;
 
-function captureShellEnv() {
-  const envSnapshot = captureEnv(["SHELL"]);
+function applyDefaultShellEnv() {
   if (!isWin && defaultShell) {
     process.env.SHELL = defaultShell;
   }
-  return envSnapshot;
+}
+
+function useCapturedEnv(keys: string[], afterCapture?: () => void) {
+  let envSnapshot: ReturnType<typeof captureEnv>;
+
+  beforeEach(() => {
+    envSnapshot = captureEnv(keys);
+    afterCapture?.();
+  });
+
+  afterEach(() => {
+    envSnapshot.restore();
+  });
+}
+
+function useCapturedShellEnv() {
+  useCapturedEnv(["SHELL"], applyDefaultShellEnv);
 }
 
 async function waitForCompletion(sessionId: string) {
@@ -54,18 +93,42 @@ async function waitForCompletion(sessionId: string) {
         status = (poll.details as { status: string }).status;
         return status;
       },
-      { timeout: process.platform === "win32" ? 8000 : 1200, interval: POLL_INTERVAL_MS },
+      { timeout: BACKGROUND_POLL_TIMEOUT_MS, interval: POLL_INTERVAL_MS },
     )
     .not.toBe("running");
   return status;
 }
 
-async function runBackgroundEchoLines(lines: string[]) {
-  const result = await execTool.execute("call1", {
-    command: echoLines(lines),
+function requireSessionId(details: { sessionId?: string }): string {
+  if (!details.sessionId) {
+    throw new Error("expected sessionId in exec result details");
+  }
+  return details.sessionId;
+}
+
+function hasNotifyEventForPrefix(prefix: string): boolean {
+  return peekSystemEvents(DEFAULT_NOTIFY_SESSION_KEY).some((event) => event.includes(prefix));
+}
+
+async function startBackgroundSession(params: {
+  tool: ReturnType<typeof createExecTool>;
+  callId: string;
+  command: string;
+}) {
+  const result = await params.tool.execute(params.callId, {
+    command: params.command,
     background: true,
   });
-  const sessionId = (result.details as { sessionId: string }).sessionId;
+  expect(result.details.status).toBe("running");
+  return requireSessionId(result.details as { sessionId?: string });
+}
+
+async function runBackgroundEchoLines(lines: string[]) {
+  const sessionId = await startBackgroundSession({
+    tool: execTool,
+    callId: "call1",
+    command: echoLines(lines),
+  });
   await waitForCompletion(sessionId);
   return sessionId;
 }
@@ -81,18 +144,32 @@ async function readProcessLog(
   });
 }
 
+type ProcessLogResult = Awaited<ReturnType<typeof readProcessLog>>;
+const readLogSnapshot = (log: ProcessLogResult) => ({
+  text: readTextContent(log.content) ?? "",
+  lines: readTrimmedLines(log.content),
+  totalLines: readTotalLines(log.details),
+});
+const createNumberedLines = (count: number) =>
+  Array.from({ length: count }, (_value, index) => `line-${index + 1}`);
+const LONG_LOG_LINE_COUNT = 201;
+
+async function runBackgroundAndReadProcessLog(
+  lines: string[],
+  options: { offset?: number; limit?: number } = {},
+) {
+  const sessionId = await runBackgroundEchoLines(lines);
+  return readProcessLog(sessionId, options);
+}
+const readLongProcessLog = (options: { offset?: number; limit?: number } = {}) =>
+  runBackgroundAndReadProcessLog(createNumberedLines(LONG_LOG_LINE_COUNT), options);
+
 async function runBackgroundAndWaitForCompletion(params: {
   tool: ReturnType<typeof createExecTool>;
   callId: string;
   command: string;
 }) {
-  const result = await params.tool.execute(params.callId, {
-    command: params.command,
-    background: true,
-  });
-
-  expect(result.details.status).toBe("running");
-  const sessionId = (result.details as { sessionId: string }).sessionId;
+  const sessionId = await startBackgroundSession(params);
   const status = await waitForCompletion(sessionId);
   expect(status).toBe("completed");
   return { sessionId };
@@ -104,15 +181,7 @@ beforeEach(() => {
 });
 
 describe("exec tool backgrounding", () => {
-  let envSnapshot: ReturnType<typeof captureEnv>;
-
-  beforeEach(() => {
-    envSnapshot = captureShellEnv();
-  });
-
-  afterEach(() => {
-    envSnapshot.restore();
-  });
+  useCapturedShellEnv();
 
   it(
     "backgrounds after yield and can be polled",
@@ -122,8 +191,15 @@ describe("exec tool backgrounding", () => {
         yieldMs: 10,
       });
 
+      // Timing can race here: command may already be complete before the first response.
+      if (result.details.status === "completed") {
+        const text = readTextContent(result.content) ?? "";
+        expect(text).toContain("done");
+        return;
+      }
+
       expect(result.details.status).toBe("running");
-      const sessionId = (result.details as { sessionId: string }).sessionId;
+      const sessionId = requireSessionId(result.details as { sessionId?: string });
 
       let output = "";
       await expect
@@ -134,11 +210,10 @@ describe("exec tool backgrounding", () => {
               sessionId,
             });
             const status = (poll.details as { status: string }).status;
-            const textBlock = poll.content.find((c) => c.type === "text");
-            output = textBlock?.text ?? "";
+            output = readTextContent(poll.content) ?? "";
             return status;
           },
-          { timeout: process.platform === "win32" ? 8000 : 1200, interval: POLL_INTERVAL_MS },
+          { timeout: BACKGROUND_POLL_TIMEOUT_MS, interval: POLL_INTERVAL_MS },
         )
         .toBe("completed");
 
@@ -148,13 +223,11 @@ describe("exec tool backgrounding", () => {
   );
 
   it("supports explicit background and derives session name from the command", async () => {
-    const result = await execTool.execute("call1", {
+    const sessionId = await startBackgroundSession({
+      tool: execTool,
+      callId: "call1",
       command: "echo hello",
-      background: true,
     });
-
-    expect(result.details.status).toBe("running");
-    const sessionId = (result.details as { sessionId: string }).sessionId;
 
     const list = await processTool.execute("call2", { action: "list" });
     const sessions = (list.details as { sessions: Array<{ sessionId: string; name?: string }> })
@@ -180,7 +253,7 @@ describe("exec tool backgrounding", () => {
     const customBash = createTestExecTool({
       elevated: { enabled: true, allowed: false, defaultLevel: "off" },
       messageProvider: "telegram",
-      sessionKey: "agent:main:main",
+      sessionKey: DEFAULT_NOTIFY_SESSION_KEY,
     });
 
     await expect(
@@ -201,99 +274,66 @@ describe("exec tool backgrounding", () => {
     const result = await customBash.execute("call1", {
       command: "echo hi",
     });
-    const text = result.content.find((c) => c.type === "text")?.text ?? "";
+    const text = readTextContent(result.content) ?? "";
     expect(text).toContain("hi");
   });
 
   it("logs line-based slices and defaults to last lines", async () => {
-    const result = await execTool.execute("call1", {
+    const { sessionId } = await runBackgroundAndWaitForCompletion({
+      tool: execTool,
+      callId: "call1",
       command: echoLines(["one", "two", "three"]),
-      background: true,
     });
-    const sessionId = (result.details as { sessionId: string }).sessionId;
 
-    const status = await waitForCompletion(sessionId);
-
-    const log = await processTool.execute("call3", {
-      action: "log",
-      sessionId,
-      limit: 2,
-    });
-    const textBlock = log.content.find((c) => c.type === "text");
-    expect(normalizeText(textBlock?.text)).toBe("two\nthree");
-    expect((log.details as { totalLines?: number }).totalLines).toBe(3);
-    expect(status).toBe("completed");
+    const log = await readProcessLog(sessionId, { limit: 2 });
+    expect(readNormalizedTextContent(log.content)).toBe("two\nthree");
+    expect(readTotalLines(log.details)).toBe(3);
   });
 
   it("applies default tail only when no explicit log window is provided", async () => {
-    const lines = Array.from({ length: 201 }, (_value, index) => `line-${index + 1}`);
-    const sessionId = await runBackgroundEchoLines(lines);
-
-    const log = await readProcessLog(sessionId);
-    const textBlock = log.content.find((c) => c.type === "text")?.text ?? "";
-    const firstLine = textBlock.split("\n")[0]?.trim();
-    expect(textBlock).toContain("showing last 200 of 201 lines");
-    expect(firstLine).toBe("line-2");
-    expect(textBlock).toContain("line-2");
-    expect(textBlock).toContain("line-201");
-    expect((log.details as { totalLines?: number }).totalLines).toBe(201);
+    const snapshot = readLogSnapshot(await readLongProcessLog());
+    expect(snapshot.text).toContain("showing last 200 of 201 lines");
+    expect(snapshot.lines[0]).toBe("line-2");
+    expect(snapshot.text).toContain("line-2");
+    expect(snapshot.text).toContain("line-201");
+    expect(snapshot.totalLines).toBe(LONG_LOG_LINE_COUNT);
   });
 
   it("supports line offsets for log slices", async () => {
-    const result = await execTool.execute("call1", {
-      command: echoLines(["alpha", "beta", "gamma"]),
-      background: true,
-    });
-    const sessionId = (result.details as { sessionId: string }).sessionId;
-    await waitForCompletion(sessionId);
+    const sessionId = await runBackgroundEchoLines(["alpha", "beta", "gamma"]);
 
-    const log = await processTool.execute("call2", {
-      action: "log",
-      sessionId,
-      offset: 1,
-      limit: 1,
-    });
-    const textBlock = log.content.find((c) => c.type === "text");
-    expect(normalizeText(textBlock?.text)).toBe("beta");
+    const log = await readProcessLog(sessionId, { offset: 1, limit: 1 });
+    expect(readNormalizedTextContent(log.content)).toBe("beta");
   });
 
   it("keeps offset-only log requests unbounded by default tail mode", async () => {
-    const lines = Array.from({ length: 201 }, (_value, index) => `line-${index + 1}`);
-    const sessionId = await runBackgroundEchoLines(lines);
-
-    const log = await readProcessLog(sessionId, { offset: 30 });
-
-    const textBlock = log.content.find((c) => c.type === "text")?.text ?? "";
-    const renderedLines = textBlock.split("\n");
-    expect(renderedLines[0]?.trim()).toBe("line-31");
-    expect(renderedLines[renderedLines.length - 1]?.trim()).toBe("line-201");
-    expect(textBlock).not.toContain("showing last 200");
-    expect((log.details as { totalLines?: number }).totalLines).toBe(201);
+    const snapshot = readLogSnapshot(await readLongProcessLog({ offset: 30 }));
+    expect(snapshot.lines[0]).toBe("line-31");
+    expect(snapshot.lines[snapshot.lines.length - 1]).toBe("line-201");
+    expect(snapshot.text).not.toContain("showing last 200");
+    expect(snapshot.totalLines).toBe(LONG_LOG_LINE_COUNT);
   });
   it("scopes process sessions by scopeKey", async () => {
-    const bashA = createTestExecTool({ backgroundMs: 10, scopeKey: "agent:alpha" });
-    const processA = createProcessTool({ scopeKey: "agent:alpha" });
-    const bashB = createTestExecTool({ backgroundMs: 10, scopeKey: "agent:beta" });
-    const processB = createProcessTool({ scopeKey: "agent:beta" });
+    const alphaTools = createScopedToolSet("agent:alpha");
+    const betaTools = createScopedToolSet("agent:beta");
 
-    const resultA = await bashA.execute("call1", {
+    const sessionA = await startBackgroundSession({
+      tool: alphaTools.exec,
+      callId: "call1",
       command: shortDelayCmd,
-      background: true,
     });
-    const resultB = await bashB.execute("call2", {
+    const sessionB = await startBackgroundSession({
+      tool: betaTools.exec,
+      callId: "call2",
       command: shortDelayCmd,
-      background: true,
     });
 
-    const sessionA = (resultA.details as { sessionId: string }).sessionId;
-    const sessionB = (resultB.details as { sessionId: string }).sessionId;
-
-    const listA = await processA.execute("call3", { action: "list" });
+    const listA = await alphaTools.process.execute("call3", { action: "list" });
     const sessionsA = (listA.details as { sessions: Array<{ sessionId: string }> }).sessions;
     expect(sessionsA.some((s) => s.sessionId === sessionA)).toBe(true);
     expect(sessionsA.some((s) => s.sessionId === sessionB)).toBe(false);
 
-    const pollB = await processB.execute("call4", {
+    const pollB = await betaTools.process.execute("call4", {
       action: "poll",
       sessionId: sessionA,
     });
@@ -303,15 +343,7 @@ describe("exec tool backgrounding", () => {
 });
 
 describe("exec exit codes", () => {
-  let envSnapshot: ReturnType<typeof captureEnv>;
-
-  beforeEach(() => {
-    envSnapshot = captureShellEnv();
-  });
-
-  afterEach(() => {
-    envSnapshot.restore();
-  });
+  useCapturedShellEnv();
 
   it("treats non-zero exits as completed and appends exit code", async () => {
     const command = isWin
@@ -322,7 +354,7 @@ describe("exec exit codes", () => {
     expect(resultDetails.status).toBe("completed");
     expect(resultDetails.exitCode).toBe(1);
 
-    const text = normalizeText(result.content.find((c) => c.type === "text")?.text);
+    const text = readNormalizedTextContent(result.content);
     expect(text).toContain("nope");
     expect(text).toContain("Command exited with code 1");
   });
@@ -330,39 +362,32 @@ describe("exec exit codes", () => {
 
 describe("exec notifyOnExit", () => {
   it("enqueues a system event when a backgrounded exec exits", async () => {
-    const tool = createTestExecTool({
-      allowBackground: true,
-      backgroundMs: 0,
-      notifyOnExit: true,
-      sessionKey: "agent:main:main",
-    });
+    const tool = createNotifyOnExitExecTool();
 
-    const result = await tool.execute("call1", {
+    const sessionId = await startBackgroundSession({
+      tool,
+      callId: "call1",
       command: echoAfterDelay("notify"),
-      background: true,
     });
-
-    expect(result.details.status).toBe("running");
-    const sessionId = (result.details as { sessionId: string }).sessionId;
 
     const prefix = sessionId.slice(0, 8);
     let finished = getFinishedSession(sessionId);
-    let hasEvent = peekSystemEvents("agent:main:main").some((event) => event.includes(prefix));
+    let hasEvent = hasNotifyEventForPrefix(prefix);
     await expect
       .poll(
         () => {
           finished = getFinishedSession(sessionId);
-          hasEvent = peekSystemEvents("agent:main:main").some((event) => event.includes(prefix));
+          hasEvent = hasNotifyEventForPrefix(prefix);
           return Boolean(finished && hasEvent);
         },
-        { timeout: isWin ? 12_000 : 5_000, interval: POLL_INTERVAL_MS },
+        { timeout: NOTIFY_EVENT_TIMEOUT_MS, interval: POLL_INTERVAL_MS },
       )
       .toBe(true);
     if (!finished) {
       finished = getFinishedSession(sessionId);
     }
     if (!hasEvent) {
-      hasEvent = peekSystemEvents("agent:main:main").some((event) => event.includes(prefix));
+      hasEvent = hasNotifyEventForPrefix(prefix);
     }
 
     expect(finished).toBeTruthy();
@@ -381,20 +406,16 @@ describe("exec notifyOnExit", () => {
       },
     ]) {
       resetSystemEventsForTest();
-      const tool = createTestExecTool({
-        allowBackground: true,
-        backgroundMs: 0,
-        notifyOnExit: true,
-        ...(testCase.notifyOnExitEmptySuccess ? { notifyOnExitEmptySuccess: true } : {}),
-        sessionKey: "agent:main:main",
-      });
+      const tool = createNotifyOnExitExecTool(
+        testCase.notifyOnExitEmptySuccess ? { notifyOnExitEmptySuccess: true } : {},
+      );
 
       await runBackgroundAndWaitForCompletion({
         tool,
         callId: "call-noop",
         command: shortDelayCmd,
       });
-      const events = peekSystemEvents("agent:main:main");
+      const events = peekSystemEvents(DEFAULT_NOTIFY_SESSION_KEY);
       if (!testCase.notifyOnExitEmptySuccess) {
         expect(events, testCase.label).toEqual([]);
       } else {
@@ -409,18 +430,7 @@ describe("exec notifyOnExit", () => {
 });
 
 describe("exec PATH handling", () => {
-  let envSnapshot: ReturnType<typeof captureEnv>;
-
-  beforeEach(() => {
-    envSnapshot = captureEnv(["PATH", "SHELL"]);
-    if (!isWin && defaultShell) {
-      process.env.SHELL = defaultShell;
-    }
-  });
-
-  afterEach(() => {
-    envSnapshot.restore();
-  });
+  useCapturedEnv(["PATH", "SHELL"], applyDefaultShellEnv);
 
   it("prepends configured path entries", async () => {
     const basePath = isWin ? "C:\\Windows\\System32" : "/usr/bin";
@@ -432,7 +442,7 @@ describe("exec PATH handling", () => {
       command: isWin ? "Write-Output $env:PATH" : "echo $PATH",
     });
 
-    const text = normalizeText(result.content.find((c) => c.type === "text")?.text);
+    const text = readNormalizedTextContent(result.content);
     const entries = text.split(path.delimiter);
     expect(entries.slice(0, prepend.length)).toEqual(prepend);
     expect(entries).toContain(basePath);
