@@ -75,10 +75,15 @@ function deriveIdHint(params: {
     ? (rawPackageName.split("/").pop() ?? rawPackageName)
     : rawPackageName;
 
+  // Strip the "bot-" prefix that all built-in extensions use in their npm
+  // package name so the derived hint matches the manifest id
+  // (e.g. @hanzo/bot-telegram → "telegram", not "bot-telegram").
+  const normalized = unscoped.startsWith("bot-") ? unscoped.slice(4) : unscoped;
+
   if (!params.hasMultipleExtensions) {
-    return unscoped;
+    return normalized;
   }
-  return `${unscoped}/${base}`;
+  return `${normalized}/${base}`;
 }
 
 function addCandidate(params: {

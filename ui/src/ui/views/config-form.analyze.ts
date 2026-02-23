@@ -123,6 +123,22 @@ function normalizeUnion(
   path: Array<string | number>,
 ): ConfigSchemaAnalysis | null {
   if (schema.allOf) {
+    // superRefine / ZodEffects produce allOf wrapping the inner schema.
+    // Merge all sub-schemas and normalise the result so the UI can render it.
+    if (Array.isArray(schema.allOf) && schema.allOf.length > 0) {
+      let merged: JsonSchema = {};
+      for (const sub of schema.allOf) {
+        if (!sub || typeof sub !== "object") {
+          continue;
+        }
+        const { properties: subProps, allOf: _nested, anyOf: _any, oneOf: _one, ...rest } = sub;
+        merged = { ...merged, ...rest };
+        if (subProps) {
+          merged.properties = { ...merged.properties, ...subProps };
+        }
+      }
+      return normalizeSchemaNode(merged, path);
+    }
     return null;
   }
   const union = schema.anyOf ?? schema.oneOf;
