@@ -15,7 +15,8 @@ import {
   updateSessionStoreEntry,
 } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
-import { emitAgentEvent } from "../../infra/agent-events.js";import type { OriginatingChannelType, TemplateContext } from "../templating.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
+import type { OriginatingChannelType, TemplateContext } from "../templating.js";
 import { resolveResponseUsageMode, type VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runAgentTurnWithFallback } from "./agent-runner-execution.js";
