@@ -152,6 +152,49 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
     expect(buildWorkspaceSkillSnapshotMock).not.toHaveBeenCalled();
   });
 
+  describe("critic loop gate", () => {
+    it("returns deterministic needs_replan outcome when score is below threshold", async () => {
+      const result = await runCronIsolatedAgentTurn(
+        makeParams({
+          cfg: {
+            cron: { criticLoop: { enabled: true, minScore: 0.9 } },
+          },
+          job: makeJob({
+            payload: {
+              kind: "agentTurn",
+              message: "test",
+              criticSpec: "include benchmark table and rollback checklist",
+            },
+          }),
+        }),
+      );
+
+      expect(result.status).toBe("ok");
+      expect(result.outcome).toBe("needs_replan");
+      expect(result.critic?.passed).toBe(false);
+      expect(result.summary).toBe("needs_replan");
+    });
+
+    it("keeps default behavior when critic loop is disabled", async () => {
+      const result = await runCronIsolatedAgentTurn(
+        makeParams({
+          cfg: { cron: { criticLoop: { enabled: false } } },
+          job: makeJob({
+            payload: {
+              kind: "agentTurn",
+              message: "test",
+              criticSpec: "include benchmark table",
+            },
+          }),
+        }),
+      );
+
+      expect(result.status).toBe("ok");
+      expect(result.outcome).toBeUndefined();
+      expect(result.critic).toBeUndefined();
+    });
+  });
+
   describe("model fallbacks", () => {
     const defaultFallbacks = [
       "anthropic/claude-opus-4-6",

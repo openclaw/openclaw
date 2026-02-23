@@ -99,7 +99,9 @@ function coercePayload(payload: UnknownRecord) {
       typeof next.model === "string" ||
       typeof next.thinking === "string" ||
       typeof next.timeoutSeconds === "number" ||
-      typeof next.allowUnsafeExternalContent === "boolean";
+      typeof next.allowUnsafeExternalContent === "boolean" ||
+      typeof next.criticSpec === "string" ||
+      typeof next.criticThreshold === "number";
     if (hasMessage) {
       next.kind = "agentTurn";
     } else if (hasText) {
@@ -157,6 +159,25 @@ function coercePayload(payload: UnknownRecord) {
     typeof next.allowUnsafeExternalContent !== "boolean"
   ) {
     delete next.allowUnsafeExternalContent;
+  }
+  if ("criticSpec" in next) {
+    if (typeof next.criticSpec === "string") {
+      const trimmed = next.criticSpec.trim();
+      if (trimmed) {
+        next.criticSpec = trimmed;
+      } else {
+        delete next.criticSpec;
+      }
+    } else {
+      delete next.criticSpec;
+    }
+  }
+  if ("criticThreshold" in next) {
+    if (typeof next.criticThreshold === "number" && Number.isFinite(next.criticThreshold)) {
+      next.criticThreshold = Math.min(1, Math.max(0, next.criticThreshold));
+    } else {
+      delete next.criticThreshold;
+    }
   }
   return next;
 }
@@ -237,7 +258,7 @@ function normalizeWakeMode(raw: unknown) {
 }
 
 function copyTopLevelAgentTurnFields(next: UnknownRecord, payload: UnknownRecord) {
-  const copyString = (field: "model" | "thinking") => {
+  const copyString = (field: "model" | "thinking" | "criticSpec") => {
     if (typeof payload[field] === "string" && payload[field].trim()) {
       return;
     }
@@ -248,6 +269,7 @@ function copyTopLevelAgentTurnFields(next: UnknownRecord, payload: UnknownRecord
   };
   copyString("model");
   copyString("thinking");
+  copyString("criticSpec");
 
   if (typeof payload.timeoutSeconds !== "number" && typeof next.timeoutSeconds === "number") {
     payload.timeoutSeconds = next.timeoutSeconds;
@@ -257,6 +279,9 @@ function copyTopLevelAgentTurnFields(next: UnknownRecord, payload: UnknownRecord
     typeof next.allowUnsafeExternalContent === "boolean"
   ) {
     payload.allowUnsafeExternalContent = next.allowUnsafeExternalContent;
+  }
+  if (typeof payload.criticThreshold !== "number" && typeof next.criticThreshold === "number") {
+    payload.criticThreshold = Math.min(1, Math.max(0, next.criticThreshold));
   }
 }
 
@@ -294,6 +319,8 @@ function stripLegacyTopLevelFields(next: UnknownRecord) {
   delete next.thinking;
   delete next.timeoutSeconds;
   delete next.allowUnsafeExternalContent;
+  delete next.criticSpec;
+  delete next.criticThreshold;
   delete next.message;
   delete next.text;
   delete next.deliver;

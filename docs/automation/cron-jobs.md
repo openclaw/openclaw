@@ -177,6 +177,8 @@ Common `agentTurn` fields:
 - `message`: required text prompt.
 - `model` / `thinking`: optional overrides (see below).
 - `timeoutSeconds`: optional timeout override.
+- `criticSpec`: optional evaluation spec used by the critic loop gate.
+- `criticThreshold`: optional pass threshold override (`0..1`) for the critic loop gate.
 - `lightContext`: optional lightweight bootstrap mode for jobs that do not need workspace bootstrap file injection.
 
 Delivery config:
