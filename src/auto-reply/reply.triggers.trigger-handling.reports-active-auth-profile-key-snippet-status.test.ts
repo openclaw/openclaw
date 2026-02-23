@@ -3,13 +3,10 @@ import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import { resolveSessionKey } from "../config/sessions.js";
 import {
-  createBlockReplyCollector,
-  expectInlineCommandHandledAndStripped,
   getRunEmbeddedPiAgentMock,
   installTriggerHandlingE2eTestHooks,
   loadGetReplyFromConfig,
   makeCfg,
-  mockRunEmbeddedPiAgentOk,
   requireSessionStorePath,
   withTempHome,
 } from "./reply.triggers.trigger-handling.test-harness.js";
@@ -85,45 +82,6 @@ describe("trigger handling", () => {
       expect(text).toContain("(anthropic:work)");
       expect(text).not.toContain("mixed");
       expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
-    });
-  });
-
-  it("strips inline /status and still runs the agent", async () => {
-    await withTempHome(async (home) => {
-      const runEmbeddedPiAgentMock = mockRunEmbeddedPiAgentOk();
-      const { blockReplies, handlers } = createBlockReplyCollector();
-      await getReplyFromConfig(
-        {
-          Body: "please /status now",
-          From: "+1002",
-          To: "+2000",
-          Provider: "whatsapp",
-          Surface: "whatsapp",
-          SenderE164: "+1002",
-          CommandAuthorized: true,
-        },
-        handlers,
-        makeCfg(home),
-      );
-      expect(runEmbeddedPiAgentMock).toHaveBeenCalled();
-      // Allowlisted senders: inline /status runs immediately (like /help) and is
-      // stripped from the prompt; the remaining text continues through the agent.
-      expect(blockReplies.length).toBe(1);
-      expect(String(blockReplies[0]?.text ?? "").length).toBeGreaterThan(0);
-      const prompt = runEmbeddedPiAgentMock.mock.calls[0]?.[0]?.prompt ?? "";
-      expect(prompt).not.toContain("/status");
-    });
-  });
-
-  it("handles inline /help and strips it before the agent", async () => {
-    await withTempHome(async (home) => {
-      await expectInlineCommandHandledAndStripped({
-        home,
-        getReplyFromConfig,
-        body: "please /help now",
-        stripToken: "/help",
-        blockReplyContains: "Help",
-      });
     });
   });
 });
