@@ -1,5 +1,6 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
+import { isModernModelRef } from "./live-model-filter.js";
 import { normalizeModelCompat } from "./model-compat.js";
 
 const baseModel = (): Model<Api> =>
@@ -44,5 +45,17 @@ describe("normalizeModelCompat", () => {
     expect(
       (normalized.compat as { supportsDeveloperRole?: boolean } | undefined)?.supportsDeveloperRole,
     ).toBe(false);
+  });
+});
+
+describe("isModernModelRef", () => {
+  it("excludes opencode minimax variants from modern selection", () => {
+    expect(isModernModelRef({ provider: "opencode", id: "minimax-m2.1" })).toBe(false);
+    expect(isModernModelRef({ provider: "opencode", id: "minimax-m2.5" })).toBe(false);
+  });
+
+  it("keeps non-minimax opencode modern models", () => {
+    expect(isModernModelRef({ provider: "opencode", id: "claude-opus-4-6" })).toBe(true);
+    expect(isModernModelRef({ provider: "opencode", id: "gemini-3-pro" })).toBe(true);
   });
 });
