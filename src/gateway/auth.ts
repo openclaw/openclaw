@@ -210,6 +210,14 @@ export function resolveGatewayAuth(params: {
   let mode: ResolvedGatewayAuth["mode"];
   if (authConfig.mode) {
     mode = authConfig.mode;
+  } else if (
+    env.BOT_GATEWAY_AUTH_MODE &&
+    env.BOT_GATEWAY_AUTH_MODE !== "iam" &&
+    ["token", "password", "none", "trusted-proxy"].includes(env.BOT_GATEWAY_AUTH_MODE)
+  ) {
+    // Explicit env-var mode override takes precedence over cloud auto-detection.
+    // This lets cloud pods use token auth without requiring an IAM config file.
+    mode = env.BOT_GATEWAY_AUTH_MODE as ResolvedGatewayAuth["mode"];
   } else if (isPlaygroundCloud || iam?.serverUrl) {
     mode = "iam";
   } else if (password) {
