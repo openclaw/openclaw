@@ -221,4 +221,32 @@ describe("runPreparedReply media-only handling", () => {
     expect(resetNoticeCall?.payload?.text).not.toContain("api-key");
     expect(resetNoticeCall?.payload?.text).not.toContain("env:");
   });
+
+  it("skips reset notice when only webchat fallback routing is available", async () => {
+    await runPreparedReply(
+      baseParams({
+        resetTriggered: true,
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+          ThreadHistoryBody: "Earlier message in this thread",
+          OriginatingChannel: undefined,
+          OriginatingTo: undefined,
+          ChatType: "group",
+        },
+        command: {
+          isAuthorizedSender: true,
+          abortKey: "session-key",
+          ownerList: [],
+          senderIsOwner: false,
+          channel: "webchat",
+          from: undefined,
+          to: undefined,
+        } as never,
+      }),
+    );
+
+    expect(vi.mocked(routeReply)).not.toHaveBeenCalled();
+  });
 });
