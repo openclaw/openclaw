@@ -204,6 +204,35 @@ describe("config cli", () => {
     });
   });
 
+  describe("path hardening", () => {
+    it("rejects blocked prototype-key segments for config get", async () => {
+      await expect(runConfigCommand(["config", "get", "gateway.__proto__.token"])).rejects.toThrow(
+        "Invalid path segment: __proto__",
+      );
+
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("rejects blocked prototype-key segments for config set", async () => {
+      await expect(
+        runConfigCommand(["config", "set", "tools.constructor.profile", '"sandbox"']),
+      ).rejects.toThrow("Invalid path segment: constructor");
+
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+
+    it("rejects blocked prototype-key segments for config unset", async () => {
+      await expect(
+        runConfigCommand(["config", "unset", "channels.prototype.enabled"]),
+      ).rejects.toThrow("Invalid path segment: prototype");
+
+      expect(mockReadConfigFileSnapshot).not.toHaveBeenCalled();
+      expect(mockWriteConfigFile).not.toHaveBeenCalled();
+    });
+  });
+
   describe("config unset - issue #6070", () => {
     it("preserves existing config keys when unsetting a value", async () => {
       const resolved: OpenClawConfig = {
