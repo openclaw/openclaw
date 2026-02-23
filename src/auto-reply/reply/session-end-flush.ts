@@ -8,6 +8,7 @@
  * the normal pre-compaction flush threshold.
  */
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -192,13 +193,11 @@ export async function runSessionEndFlush(params: {
           extraSystemPrompt: settings.systemPrompt,
           provider,
           model,
-          // Use minimal thinking for cost efficiency
           thinkLevel: "off",
           verboseLevel: "off",
           reasoningLevel: "off",
-          // Short timeout - this should be quick
           timeoutMs: 60_000,
-          // Don't enforce final tag - we want NO_REPLY
+          runId: crypto.randomUUID(),
           enforceFinalTag: false,
         });
       },
