@@ -36,6 +36,7 @@ Docs: https://docs.openclaw.ai
 
 - Install/Discord Voice: make `@discordjs/opus` an optional dependency so `openclaw` install/update no longer hard-fails when native Opus builds fail, while keeping `opusscript` as the runtime fallback decoder for Discord voice flows. (#23737, #23733, #23703) Thanks @jeadland, @Sheetaa, and @Breakyman.
 - Agents/Exec: honor explicit agent context when resolving `tools.exec` defaults for runs with opaque/non-agent session keys, so per-agent `host/security/ask` policies are applied consistently. (#11832)
+- Agents/Auth profiles: infer `all profiles unavailable` failover reasons from active profile cooldown/disabled stats (instead of hardcoded `rate_limit`) so auth/billing OAuth outages surface accurately in fallback errors. (#23996) Thanks @DerpyNoodlez.
 - Security/Sessions: redact sensitive token patterns from `sessions_history` tool output and surface `contentRedacted` metadata when masking occurs. (#16928) Thanks @aether-ai-agent.
 - Sandbox/Docker: default sandbox container user to the workspace owner `uid:gid` when `agents.*.sandbox.docker.user` is unset, fixing non-root gateway file-tool permissions under capability-dropped containers. (#20979)
 - Doctor/Security: add an explicit warning that `approvals.exec.enabled=false` disables forwarding only, while enforcement remains driven by host-local `exec-approvals.json` policy. (#15047)

@@ -348,6 +348,49 @@ describe("runWithModelFallback", () => {
     expect(result.attempts[0]?.reason).toBe("rate_limit");
   });
 
+  it("propagates disabled reason when all profiles are unavailable", async () => {
+    const provider = `disabled-test-${crypto.randomUUID()}`;
+    const profileId = `${provider}:default`;
+    const now = Date.now();
+
+    const store: AuthProfileStore = {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        [profileId]: {
+          type: "api_key",
+          provider,
+          key: "test-key",
+        },
+      },
+      usageStats: {
+        [profileId]: {
+          disabledUntil: now + 5 * 60_000,
+          disabledReason: "billing",
+          failureCounts: { rate_limit: 4 },
+        },
+      },
+    };
+
+    const cfg = makeProviderFallbackCfg(provider);
+    const run = vi.fn().mockImplementation(async (providerId, modelId) => {
+      if (providerId === "fallback") {
+        return "ok";
+      }
+      throw new Error(`unexpected provider: ${providerId}/${modelId}`);
+    });
+
+    const result = await runWithStoredAuth({
+      cfg,
+      store,
+      provider,
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run.mock.calls).toEqual([["fallback", "ok-model"]]);
+    expect(result.attempts[0]?.reason).toBe("billing");
+  });
+
   it("does not skip when any profile is available", async () => {
     const provider = `cooldown-mixed-${crypto.randomUUID()}`;
     const profileA = `${provider}:a`;

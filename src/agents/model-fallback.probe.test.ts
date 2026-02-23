@@ -8,6 +8,7 @@ vi.mock("./auth-profiles.js", () => ({
   ensureAuthProfileStore: vi.fn(),
   getSoonestCooldownExpiry: vi.fn(),
   isProfileInCooldown: vi.fn(),
+  resolveProfilesUnavailableReason: vi.fn(),
   resolveAuthProfileOrder: vi.fn(),
 }));
 
@@ -15,6 +16,7 @@ import {
   ensureAuthProfileStore,
   getSoonestCooldownExpiry,
   isProfileInCooldown,
+  resolveProfilesUnavailableReason,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
 import { _probeThrottleInternals, runWithModelFallback } from "./model-fallback.js";
@@ -22,6 +24,7 @@ import { _probeThrottleInternals, runWithModelFallback } from "./model-fallback.
 const mockedEnsureAuthProfileStore = vi.mocked(ensureAuthProfileStore);
 const mockedGetSoonestCooldownExpiry = vi.mocked(getSoonestCooldownExpiry);
 const mockedIsProfileInCooldown = vi.mocked(isProfileInCooldown);
+const mockedResolveProfilesUnavailableReason = vi.mocked(resolveProfilesUnavailableReason);
 const mockedResolveAuthProfileOrder = vi.mocked(resolveAuthProfileOrder);
 
 const makeCfg = makeModelFallbackCfg;
@@ -98,6 +101,7 @@ describe("runWithModelFallback – probe logic", () => {
     mockedIsProfileInCooldown.mockImplementation((_store, profileId: string) => {
       return profileId.startsWith("openai");
     });
+    mockedResolveProfilesUnavailableReason.mockReturnValue("rate_limit");
   });
 
   afterEach(() => {
@@ -117,6 +121,22 @@ describe("runWithModelFallback – probe logic", () => {
 
     // Should skip primary and use fallback
     expectFallbackUsed(result, run);
+  });
+
+  it("uses inferred unavailable reason when skipping a cooldowned primary model", async () => {
+    const cfg = makeCfg();
+    const expiresIn30Min = NOW + 30 * 60 * 1000;
+    mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn30Min);
+    mockedResolveProfilesUnavailableReason.mockReturnValue("billing");
+
+    const run = vi.fn().mockResolvedValue("ok");
+
+    const result = await runPrimaryCandidate(cfg, run);
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-3-5");
+    expect(result.attempts[0]?.reason).toBe("billing");
   });
 
   it("probes primary model when within 2-min margin of cooldown expiry", async () => {
