@@ -476,4 +476,49 @@ describe("processDiscordMessage draft streaming", () => {
 
     expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
   });
+
+  it("strips reasoning tags from partial stream updates", async () => {
+    const draftStream = createMockDraftStream();
+    createDiscordDraftStream.mockReturnValueOnce(draftStream);
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onPartialReply?.({
+        text: "<thinking>Let me think about this</thinking>\nThe answer is 42",
+      });
+      return { queuedFinal: false, counts: { final: 0, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createBaseContext({
+      discordConfig: { streamMode: "partial" },
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    const updates = draftStream.update.mock.calls.map((call) => call[0]);
+    for (const text of updates) {
+      expect(text).not.toContain("<thinking>");
+    }
+  });
+
+  it("skips pure-reasoning partial updates without updating draft", async () => {
+    const draftStream = createMockDraftStream();
+    createDiscordDraftStream.mockReturnValueOnce(draftStream);
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onPartialReply?.({
+        text: "Reasoning:\nThe user asked about X so I need to consider Y",
+      });
+      return { queuedFinal: false, counts: { final: 0, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createBaseContext({
+      discordConfig: { streamMode: "partial" },
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    expect(draftStream.update).not.toHaveBeenCalled();
+  });
 });
