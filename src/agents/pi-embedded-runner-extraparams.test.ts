@@ -61,6 +61,79 @@ describe("resolveExtraParams", () => {
 
     expect(result).toBeUndefined();
   });
+
+  it("returns per-agent params when agentId matches", () => {
+    const result = resolveExtraParams({
+      cfg: {
+        agents: {
+          list: [
+            {
+              id: "risk-reviewer",
+              params: { cacheRetention: "none" },
+            },
+          ],
+        },
+      },
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      agentId: "risk-reviewer",
+    });
+
+    expect(result).toEqual({ cacheRetention: "none" });
+  });
+
+  it("merges per-agent params over global model defaults", () => {
+    const result = resolveExtraParams({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-opus-4-6": {
+                params: {
+                  temperature: 0.5,
+                  cacheRetention: "long",
+                },
+              },
+            },
+          },
+          list: [
+            {
+              id: "risk-reviewer",
+              params: { cacheRetention: "none" },
+            },
+          ],
+        },
+      },
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      agentId: "risk-reviewer",
+    });
+
+    expect(result).toEqual({
+      temperature: 0.5,
+      cacheRetention: "none",
+    });
+  });
+
+  it("ignores per-agent params when agentId does not match", () => {
+    const result = resolveExtraParams({
+      cfg: {
+        agents: {
+          list: [
+            {
+              id: "risk-reviewer",
+              params: { cacheRetention: "none" },
+            },
+          ],
+        },
+      },
+      provider: "anthropic",
+      modelId: "claude-opus-4-6",
+      agentId: "main",
+    });
+
+    expect(result).toBeUndefined();
+  });
 });
 
 describe("applyExtraParamsToAgent", () => {
