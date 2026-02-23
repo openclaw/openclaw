@@ -73,6 +73,25 @@ All session state is **owned by the gateway** (the “master” OpenClaw). UI cl
 
 ## Shared workspace locking
 
+OpenClaw has two lock layers for shared-workspace concurrency:
+
+1. **Session transcript locking** (always on): protects JSONL/session-store writes.
+2. **Workspace mutation locking** (optional): serializes `write`/`edit` tool mutations per target path.
+
+Enable optional workspace mutation locking:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "sharedWorkspaceLocking": {
+        "enabled": true
+      }
+    }
+  }
+}
+```
+
 When multiple runs can touch the same session transcript (for example queued followups, compaction, or concurrent workers on a shared workspace), OpenClaw uses a per-session lock file to serialize writes.
 
 - Lock file path: `<sessionFile>.lock` (for example `.../sessions/<SessionId>.jsonl.lock`).
