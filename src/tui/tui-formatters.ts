@@ -366,3 +366,49 @@ export function asString(value: unknown, fallback = ""): string {
   }
   return fallback;
 }
+
+/**
+ * Detect system-generated messages that should not appear in TUI chat history.
+ * Filters heartbeat prompts, memory flush prompts, silent responses,
+ * compaction status messages, and post-compaction audit messages.
+ */
+const SYSTEM_MESSAGE_PATTERNS = [
+  /\bHEARTBEAT_OK\b/,
+  /\bNO_REPLY\b/,
+  /\bNO_FLUSH\b/,
+  /^Compacted\s*[•·]/,
+  /Post-Compaction Audit/i,
+  /Pre-compaction memory flush/i,
+  /Read HEARTBEAT\.md/i,
+  /heartbeat poll/i,
+];
+
+export function isSystemGeneratedMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const record = message as Record<string, unknown>;
+
+  // Messages explicitly marked as internal/system-generated
+  if (record.internal === true || record.systemGenerated === true) {
+    return true;
+  }
+
+  const text = extractTextFromMessage(record);
+  if (!text) {
+    return false;
+  }
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  // Check for known system message patterns
+  for (const pattern of SYSTEM_MESSAGE_PATTERNS) {
+    if (pattern.test(trimmed)) {
+      return true;
+    }
+  }
+
+  return false;
+}

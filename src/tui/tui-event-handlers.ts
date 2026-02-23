@@ -1,4 +1,9 @@
-import { asString, extractTextFromMessage, isCommandMessage } from "./tui-formatters.js";
+import {
+  asString,
+  extractTextFromMessage,
+  isCommandMessage,
+  isSystemGeneratedMessage,
+} from "./tui-formatters.js";
 import { TuiStreamAssembler } from "./tui-stream-assembler.js";
 import type { AgentEvent, ChatEvent, TuiStateAccess } from "./tui-types.js";
 
@@ -179,6 +184,12 @@ export function createEventHandlers(context: EventHandlerContext) {
       const wasActiveRun = state.activeChatRunId === evt.runId;
       if (!evt.message) {
         maybeRefreshHistoryForRun(evt.runId);
+        chatLog.dropAssistant(evt.runId);
+        finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle" });
+        tui.requestRender();
+        return;
+      }
+      if (isSystemGeneratedMessage(evt.message)) {
         chatLog.dropAssistant(evt.runId);
         finalizeRun({ runId: evt.runId, wasActiveRun, status: "idle" });
         tui.requestRender();
