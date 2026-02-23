@@ -453,8 +453,6 @@ export async function startGatewayServer(
       },
     },
   );
-  replyEnforcer.start();
-
   // Agent messages are handled via onChatFinal/onChatDelta callbacks in createAgentEventHandler.
   // No transcript file watcher needed — avoids races with heartbeat transcript pruning.
 
