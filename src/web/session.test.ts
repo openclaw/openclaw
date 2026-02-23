@@ -204,6 +204,48 @@ describe("web session", () => {
     expect(inFlight).toBe(0);
   });
 
+  it("isolates creds.update save queues per auth directory", async () => {
+    let inFlightA = 0;
+    let releaseA: (() => void) | null = null;
+    const gateA = new Promise<void>((resolve) => {
+      releaseA = resolve;
+    });
+    const saveCredsA = vi.fn(async () => {
+      inFlightA += 1;
+      await gateA;
+      inFlightA -= 1;
+    });
+    const saveCredsB = vi.fn(async () => {});
+    useMultiFileAuthStateMock
+      .mockResolvedValueOnce({
+        state: { creds: {} as never, keys: {} as never },
+        saveCreds: saveCredsA,
+      })
+      .mockResolvedValueOnce({
+        state: { creds: {} as never, keys: {} as never },
+        saveCreds: saveCredsB,
+      });
+
+    await createWaSocket(false, false, { authDir: "/tmp/wa-a" });
+    const sockA = getLastSocket();
+    await createWaSocket(false, false, { authDir: "/tmp/wa-b" });
+    const sockB = getLastSocket();
+
+    sockA.ev.emit("creds.update", {});
+    await flushCredsUpdate();
+    expect(inFlightA).toBe(1);
+
+    sockB.ev.emit("creds.update", {});
+    await flushCredsUpdate();
+    expect(saveCredsB).toHaveBeenCalledTimes(1);
+
+    (releaseA as (() => void) | null)?.();
+    await flushCredsUpdate();
+    await flushCredsUpdate();
+    expect(saveCredsA).toHaveBeenCalledTimes(1);
+    expect(inFlightA).toBe(0);
+  });
+
   it("rotates creds backup when creds.json is valid JSON", async () => {
     const creds = mockCredsJsonSpies("{}");
     const backupSuffix = path.join(

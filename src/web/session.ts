@@ -31,17 +31,28 @@ export {
   webAuthExists,
 } from "./auth-store.js";
 
-let credsSaveQueue: Promise<void> = Promise.resolve();
+const credsSaveQueues = new Map<string, Promise<void>>();
 function enqueueSaveCreds(
   authDir: string,
   saveCreds: () => Promise<void> | void,
   logger: ReturnType<typeof getChildLogger>,
 ): void {
-  credsSaveQueue = credsSaveQueue
+  const previous = credsSaveQueues.get(authDir) ?? Promise.resolve();
+  let queuedSave: Promise<void>;
+  queuedSave = previous
+    .catch((err) => {
+      logger.warn({ error: String(err) }, "WhatsApp creds save queue error");
+    })
     .then(() => safeSaveCreds(authDir, saveCreds, logger))
     .catch((err) => {
       logger.warn({ error: String(err) }, "WhatsApp creds save queue error");
+    })
+    .finally(() => {
+      if (credsSaveQueues.get(authDir) === queuedSave) {
+        credsSaveQueues.delete(authDir);
+      }
     });
+  credsSaveQueues.set(authDir, queuedSave);
 }
 
 async function safeSaveCreds(
