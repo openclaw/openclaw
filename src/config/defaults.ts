@@ -411,7 +411,7 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
     const nextModels = defaults.models ? { ...defaults.models } : {};
     let modelsMutated = false;
     const isAnthropicCacheRetentionTarget = (
-      parsed: { provider: string; model: string } | undefined,
+      parsed: { provider: string; model: string } | null | undefined,
     ): parsed is { provider: string; model: string } =>
       Boolean(
         parsed &&
@@ -422,7 +422,7 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
 
     for (const [key, entry] of Object.entries(nextModels)) {
       const parsed = parseModelRef(key, "anthropic");
-      if (!isAnthropicCacheRetentionTarget(parsed ?? undefined)) {
+      if (!isAnthropicCacheRetentionTarget(parsed)) {
         continue;
       }
       const current = entry ?? {};
@@ -442,7 +442,7 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
     );
     if (primary) {
       const parsedPrimary = parseModelRef(primary, "anthropic");
-      if (isAnthropicCacheRetentionTarget(parsedPrimary ?? undefined)) {
+      if (isAnthropicCacheRetentionTarget(parsedPrimary)) {
         const key = `${parsedPrimary.provider}/${parsedPrimary.model}`;
         const entry = nextModels[key];
         const current = entry ?? {};
