@@ -430,8 +430,8 @@ export type ToolsConfig = {
     search?: {
       /** Enable web search tool (default: true when API key is present). */
       enabled?: boolean;
-      /** Search provider ("brave", "perplexity", or "grok"). */
-      provider?: "brave" | "perplexity" | "grok";
+      /** Search provider ("brave", "perplexity", "grok", or "gemini"). */
+      provider?: "brave" | "perplexity" | "grok" | "gemini";
       /** Brave Search API key (optional; defaults to BRAVE_API_KEY env var). */
       apiKey?: string;
       /** Default search results count (1-10). */
@@ -457,6 +457,13 @@ export type ToolsConfig = {
         model?: string;
         /** Include inline citations in response text as markdown links (default: false). */
         inlineCitations?: boolean;
+      };
+      /** Gemini-specific configuration (used when provider="gemini"). */
+      gemini?: {
+        /** Gemini API key (defaults to GEMINI_API_KEY env var). */
+        apiKey?: string;
+        /** Model to use for grounded search (defaults to "gemini-2.5-flash"). */
+        model?: string;
       };
     };
     fetch?: {
