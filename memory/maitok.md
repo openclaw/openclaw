@@ -28,13 +28,22 @@ TikTok 셀러를 위한 AI 댓글 분석 + 자동 대댓글 서비스
 ## 진행상황
 
 - 2026-02-18: 프로젝트 초기화 (로컬/GitHub/Obsidian/메모리)
-- 2026-06-18: 전체 문서 생성 완료 (3-agent 팀 x2 라운드)
+- 2026-02-18: 전체 문서 생성 완료 (3-agent 팀 x2 라운드)
   - A001-PRD, A002-market-analysis, A003-business-strategy
   - D001-architecture, D002-detailed-design
   - I001-tiktok-developer-setup (7단계 가이드)
   - I002-development-plan
   - KANBAN.md (55 tasks, 7 columns) in Obsidian
-- 2026-06-18: \_DASHBOARD.md 등록, \_MASTER_DASHBOARD.md 업데이트
+- 2026-02-18: \_DASHBOARD.md 등록, \_MASTER_DASHBOARD.md 업데이트
+- 2026-02-24: **v0.1.0 구현 완료** (3-Layer 멀티에이전트 아키텍처 테스트베드)
+  - TikTok Research API 클라이언트 (댓글 조회, OAuth 토큰 갱신, Rate Limit 관리)
+  - Adaptive Comment Poller (영상 나이별 2분/5분/30분 자동 조절)
+  - AI 파이프라인 (감성분석 + 다국어 대댓글 생성, Claude Sonnet)
+  - Discord 알림 서비스 (새 댓글 Embed + 일일 요약 통계)
+  - SQLite 스키마 (comments, replies, seller_config, watched_videos)
+  - Fastify HTTP 서버 + Health check API
+  - 테스트: 3 tests passed (vitest), tsc --noEmit 통과
+  - 개발 방식: Claude Code CLI Sonnet × 2 병렬 에이전트
 
 ## 핵심 발견
 
@@ -48,9 +57,21 @@ TikTok 셀러를 위한 AI 댓글 분석 + 자동 대댓글 서비스
 - MAIBEAUTY(베트남 화장품) 시너지 활용
 - MVP: 읽기+분석+초안 생성 (쓰기 API 없으므로)
 
+## 기술 스택
+
+| 영역    | 선택                            |
+| ------- | ------------------------------- |
+| Runtime | Node.js 22+ (TypeScript, ESM)   |
+| DB      | SQLite (better-sqlite3)         |
+| LLM     | Claude Sonnet via Anthropic SDK |
+| HTTP    | Fastify 5                       |
+| Test    | Vitest 3                        |
+| Notify  | Discord Webhook                 |
+
 ## 다음 액션
 
 - TikTok Developer 계정 생성 (https://developers.tiktok.com/signup)
 - Sandbox API 테스트 (댓글 읽기 기능 + rate limit 확인)
 - TikTok API 업데이트 모니터링 (댓글 쓰기 엔드포인트 추가 여부)
-- 지니님 추가 분석 후 개발 착수 ("더 분석 후 진행")
+- Phase 1 MVP 완성: 실제 TikTok API 연동 + E2E 테스트
+- Phase 2: Browser Automation 자동 게시
