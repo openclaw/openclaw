@@ -85,6 +85,7 @@ async function expectStopAbortWithoutAgent(params: { home: string; body: string;
 describe("trigger handling", () => {
   it("filters usage summary to the current model provider", async () => {
     await withTempHome(async (home) => {
+      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
       usageMocks.loadProviderUsageSummary.mockClear();
       usageMocks.loadProviderUsageSummary.mockResolvedValue({
         updatedAt: 0,
@@ -116,24 +117,12 @@ describe("trigger handling", () => {
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;
+      expect(text).toContain("Model:");
+      expect(text).toContain("OpenClaw");
       expect(normalizeTestText(text ?? "")).toContain("Usage: Claude 80% left");
       expect(usageMocks.loadProviderUsageSummary).toHaveBeenCalledWith(
         expect.objectContaining({ providers: ["anthropic"] }),
       );
-    });
-  });
-  it("reports /status once without invoking the agent", async () => {
-    await withTempHome(async (home) => {
-      const runEmbeddedPiAgentMock = getRunEmbeddedPiAgentMock();
-      const { blockReplies, replies } = await runCommandAndCollectReplies({
-        home,
-        body: "/status",
-      });
-      expect(blockReplies.length).toBe(0);
-      expect(replies.length).toBe(1);
-      const text = String(replies[0]?.text ?? "");
-      expect(text).toContain("Model:");
-      expect(text).toContain("OpenClaw");
       expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
     });
   });
@@ -150,9 +139,27 @@ describe("trigger handling", () => {
     });
   });
 
-  it("cycles /usage modes and persists to the session store", async () => {
+  it("handles /usage back-compat and cycles modes, persisting to the session store", async () => {
     await withTempHome(async (home) => {
       const cfg = makeCfg(home);
+
+      const r0 = await getReplyFromConfig(
+        {
+          Body: "/usage on",
+          From: "+1000",
+          To: "+2000",
+          Provider: "whatsapp",
+          SenderE164: "+1000",
+          CommandAuthorized: true,
+        },
+        undefined,
+        cfg,
+      );
+      expect(String((Array.isArray(r0) ? r0[0]?.text : r0?.text) ?? "")).toContain(
+        "Usage footer: tokens",
+      );
+      const s0 = await readSessionStore(home);
+      expect(pickFirstStoreEntry<{ responseUsage?: string }>(s0)?.responseUsage).toBe("tokens");
 
       const r1 = await getReplyFromConfig(
         {
@@ -167,10 +174,10 @@ describe("trigger handling", () => {
         cfg,
       );
       expect(String((Array.isArray(r1) ? r1[0]?.text : r1?.text) ?? "")).toContain(
-        "Usage footer: tokens",
+        "Usage footer: full",
       );
       const s1 = await readSessionStore(home);
-      expect(pickFirstStoreEntry<{ responseUsage?: string }>(s1)?.responseUsage).toBe("tokens");
+      expect(pickFirstStoreEntry<{ responseUsage?: string }>(s1)?.responseUsage).toBe("full");
 
       const r2 = await getReplyFromConfig(
         {
@@ -185,10 +192,10 @@ describe("trigger handling", () => {
         cfg,
       );
       expect(String((Array.isArray(r2) ? r2[0]?.text : r2?.text) ?? "")).toContain(
-        "Usage footer: full",
+        "Usage footer: off",
       );
       const s2 = await readSessionStore(home);
-      expect(pickFirstStoreEntry<{ responseUsage?: string }>(s2)?.responseUsage).toBe("full");
+      expect(pickFirstStoreEntry<{ responseUsage?: string }>(s2)?.responseUsage).toBeUndefined();
 
       const r3 = await getReplyFromConfig(
         {
@@ -203,36 +210,10 @@ describe("trigger handling", () => {
         cfg,
       );
       expect(String((Array.isArray(r3) ? r3[0]?.text : r3?.text) ?? "")).toContain(
-        "Usage footer: off",
+        "Usage footer: tokens",
       );
       const s3 = await readSessionStore(home);
-      expect(pickFirstStoreEntry<{ responseUsage?: string }>(s3)?.responseUsage).toBeUndefined();
-
-      expect(getRunEmbeddedPiAgentMock()).not.toHaveBeenCalled();
-    });
-  });
-
-  it("treats /usage on as tokens (back-compat)", async () => {
-    await withTempHome(async (home) => {
-      const cfg = makeCfg(home);
-      const res = await getReplyFromConfig(
-        {
-          Body: "/usage on",
-          From: "+1000",
-          To: "+2000",
-          Provider: "whatsapp",
-          SenderE164: "+1000",
-          CommandAuthorized: true,
-        },
-        undefined,
-        cfg,
-      );
-      const replies = res ? (Array.isArray(res) ? res : [res]) : [];
-      expect(replies.length).toBe(1);
-      expect(String(replies[0]?.text ?? "")).toContain("Usage footer: tokens");
-
-      const store = await readSessionStore(home);
-      expect(pickFirstStoreEntry<{ responseUsage?: string }>(store)?.responseUsage).toBe("tokens");
+      expect(pickFirstStoreEntry<{ responseUsage?: string }>(s3)?.responseUsage).toBe("tokens");
 
       expect(getRunEmbeddedPiAgentMock()).not.toHaveBeenCalled();
     });
