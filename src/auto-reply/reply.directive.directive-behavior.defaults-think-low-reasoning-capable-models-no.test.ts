@@ -45,30 +45,28 @@ async function runReplyToCurrentCase(home: string, text: string) {
 }
 
 async function expectThinkStatusForReasoningModel(params: {
+  home: string;
   reasoning: boolean;
   expectedLevel: "low" | "off";
 }): Promise<void> {
-  await withTempHome(async (home) => {
-    vi.mocked(loadModelCatalog).mockResolvedValueOnce([
-      {
-        id: "claude-opus-4-5",
-        name: "Opus 4.5",
-        provider: "anthropic",
-        reasoning: params.reasoning,
-      },
-    ]);
+  vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+    {
+      id: "claude-opus-4-5",
+      name: "Opus 4.5",
+      provider: "anthropic",
+      reasoning: params.reasoning,
+    },
+  ]);
 
-    const res = await getReplyFromConfig(
-      { Body: "/think", From: "+1222", To: "+1222", CommandAuthorized: true },
-      {},
-      makeWhatsAppDirectiveConfig(home, { model: "anthropic/claude-opus-4-5" }),
-    );
+  const res = await getReplyFromConfig(
+    { Body: "/think", From: "+1222", To: "+1222", CommandAuthorized: true },
+    {},
+    makeWhatsAppDirectiveConfig(params.home, { model: "anthropic/claude-opus-4-5" }),
+  );
 
-    const text = replyText(res);
-    expect(text).toContain(`Current thinking level: ${params.expectedLevel}`);
-    expect(text).toContain("Options: off, minimal, low, medium, high.");
-    expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
-  });
+  const text = replyText(res);
+  expect(text).toContain(`Current thinking level: ${params.expectedLevel}`);
+  expect(text).toContain("Options: off, minimal, low, medium, high.");
 }
 
 function mockReasoningCapableCatalog() {
@@ -113,60 +111,53 @@ async function runReasoningDefaultCase(params: {
 describe("directive behavior", () => {
   installDirectiveBehaviorE2EHooks();
 
-  it("defaults /think to low for reasoning-capable models when no default set", async () => {
-    await expectThinkStatusForReasoningModel({
-      reasoning: true,
-      expectedLevel: "low",
-    });
-  });
-  it("shows off when /think has no argument and model lacks reasoning", async () => {
-    await expectThinkStatusForReasoningModel({
-      reasoning: false,
-      expectedLevel: "off",
-    });
-  });
-  it("aliases /model list to /models", async () => {
+  it("shows /think defaults for reasoning and non-reasoning models", async () => {
     await withTempHome(async (home) => {
-      const text = await runModelDirectiveText(home, "/model list");
-      expect(text).toContain("Providers:");
-      expect(text).toContain("- anthropic");
-      expect(text).toContain("- openai");
-      expect(text).toContain("Use: /models <provider>");
-      expect(text).toContain("Switch: /model <provider/model>");
+      await expectThinkStatusForReasoningModel({
+        home,
+        reasoning: true,
+        expectedLevel: "low",
+      });
+      await expectThinkStatusForReasoningModel({
+        home,
+        reasoning: false,
+        expectedLevel: "off",
+      });
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
-  it("shows current model when catalog is unavailable", async () => {
+  it("renders model list and status variants across catalog/config combinations", async () => {
     await withTempHome(async (home) => {
+      const aliasText = await runModelDirectiveText(home, "/model list");
+      expect(aliasText).toContain("Providers:");
+      expect(aliasText).toContain("- anthropic");
+      expect(aliasText).toContain("- openai");
+      expect(aliasText).toContain("Use: /models <provider>");
+      expect(aliasText).toContain("Switch: /model <provider/model>");
+
       vi.mocked(loadModelCatalog).mockResolvedValueOnce([]);
-      const text = await runModelDirectiveText(home, "/model");
-      expect(text).toContain("Current: anthropic/claude-opus-4-5");
-      expect(text).toContain("Switch: /model <provider/model>");
-      expect(text).toContain("Browse: /models (providers) or /models <provider> (models)");
-      expect(text).toContain("More: /model status");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
-    });
-  });
-  it("lists allowlisted models on /model status", async () => {
-    await withTempHome(async (home) => {
-      const text = await runModelDirectiveText(home, "/model status", {
+      const unavailableCatalogText = await runModelDirectiveText(home, "/model");
+      expect(unavailableCatalogText).toContain("Current: anthropic/claude-opus-4-5");
+      expect(unavailableCatalogText).toContain("Switch: /model <provider/model>");
+      expect(unavailableCatalogText).toContain(
+        "Browse: /models (providers) or /models <provider> (models)",
+      );
+      expect(unavailableCatalogText).toContain("More: /model status");
+
+      const allowlistedStatusText = await runModelDirectiveText(home, "/model status", {
         includeSessionStore: false,
       });
-      expect(text).toContain("anthropic/claude-opus-4-5");
-      expect(text).toContain("openai/gpt-4.1-mini");
-      expect(text).not.toContain("claude-sonnet-4-1");
-      expect(text).toContain("auth:");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
-    });
-  });
-  it("includes catalog providers when no allowlist is set", async () => {
-    await withTempHome(async (home) => {
+      expect(allowlistedStatusText).toContain("anthropic/claude-opus-4-5");
+      expect(allowlistedStatusText).toContain("openai/gpt-4.1-mini");
+      expect(allowlistedStatusText).not.toContain("claude-sonnet-4-1");
+      expect(allowlistedStatusText).toContain("auth:");
+
       vi.mocked(loadModelCatalog).mockResolvedValue([
         { id: "claude-opus-4-5", name: "Opus 4.5", provider: "anthropic" },
         { id: "gpt-4.1-mini", name: "GPT-4.1 Mini", provider: "openai" },
         { id: "grok-4", name: "Grok 4", provider: "xai" },
       ]);
-      const text = await runModelDirectiveText(home, "/model list", {
+      const noAllowlistText = await runModelDirectiveText(home, "/model list", {
         defaults: {
           model: {
             primary: "anthropic/claude-opus-4-5",
@@ -176,16 +167,12 @@ describe("directive behavior", () => {
           models: undefined,
         },
       });
-      expect(text).toContain("Providers:");
-      expect(text).toContain("- anthropic");
-      expect(text).toContain("- openai");
-      expect(text).toContain("- xai");
-      expect(text).toContain("Use: /models <provider>");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
-    });
-  });
-  it("lists config-only providers when catalog is present", async () => {
-    await withTempHome(async (home) => {
+      expect(noAllowlistText).toContain("Providers:");
+      expect(noAllowlistText).toContain("- anthropic");
+      expect(noAllowlistText).toContain("- openai");
+      expect(noAllowlistText).toContain("- xai");
+      expect(noAllowlistText).toContain("Use: /models <provider>");
+
       vi.mocked(loadModelCatalog).mockResolvedValueOnce([
         {
           provider: "anthropic",
@@ -194,7 +181,7 @@ describe("directive behavior", () => {
         },
         { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 mini" },
       ]);
-      const text = await runModelDirectiveText(home, "/models minimax", {
+      const configOnlyProviderText = await runModelDirectiveText(home, "/models minimax", {
         defaults: {
           models: {
             "anthropic/claude-opus-4-5": {},
@@ -215,22 +202,18 @@ describe("directive behavior", () => {
           },
         },
       });
-      expect(text).toContain("Models (minimax");
-      expect(text).toContain("minimax/MiniMax-M2.1");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
-    });
-  });
-  it("does not repeat missing auth labels on /model list", async () => {
-    await withTempHome(async (home) => {
-      const text = await runModelDirectiveText(home, "/model list", {
+      expect(configOnlyProviderText).toContain("Models (minimax");
+      expect(configOnlyProviderText).toContain("minimax/MiniMax-M2.1");
+
+      const missingAuthText = await runModelDirectiveText(home, "/model list", {
         defaults: {
           models: {
             "anthropic/claude-opus-4-5": {},
           },
         },
       });
-      expect(text).toContain("Providers:");
-      expect(text).not.toContain("missing (missing)");
+      expect(missingAuthText).toContain("Providers:");
+      expect(missingAuthText).not.toContain("missing (missing)");
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
