@@ -6,10 +6,21 @@ Quick validation script for skills - minimal version
 import re
 import sys
 from pathlib import Path
+from typing import Optional
 
 import yaml
 
 MAX_SKILL_NAME_LENGTH = 64
+
+
+def _extract_frontmatter(content: str) -> Optional[str]:
+    lines = content.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            return "\n".join(lines[1:i])
+    return None
 
 
 def validate_skill(skill_path):
@@ -20,15 +31,14 @@ def validate_skill(skill_path):
     if not skill_md.exists():
         return False, "SKILL.md not found"
 
-    content = skill_md.read_text()
-    if not content.startswith("---"):
-        return False, "No YAML frontmatter found"
+    try:
+        content = skill_md.read_text(encoding="utf-8")
+    except OSError as e:
+        return False, f"Could not read SKILL.md: {e}"
 
-    match = re.match(r"^---\n(.*?)\n---", content, re.DOTALL)
-    if not match:
+    frontmatter_text = _extract_frontmatter(content)
+    if frontmatter_text is None:
         return False, "Invalid frontmatter format"
-
-    frontmatter_text = match.group(1)
 
     try:
         frontmatter = yaml.safe_load(frontmatter_text)

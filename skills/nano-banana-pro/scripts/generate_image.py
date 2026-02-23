@@ -95,12 +95,13 @@ def main():
         max_input_dim = 0
         for img_path in args.input_images:
             try:
-                img = PILImage.open(img_path)
-                input_images.append(img)
+                with PILImage.open(img_path) as img:
+                    copied = img.copy()
+                    width, height = copied.size
+                input_images.append(copied)
                 print(f"Loaded input image: {img_path}")
 
                 # Track largest dimension for auto-resolution
-                width, height = img.size
                 max_input_dim = max(max_input_dim, width, height)
             except Exception as e:
                 print(f"Error loading input image '{img_path}': {e}", file=sys.stderr)
