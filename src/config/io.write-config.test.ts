@@ -125,6 +125,32 @@ describe("config io write", () => {
     });
   });
 
+  it('shows actionable guidance for dmPolicy="open" without wildcard allowFrom', async () => {
+    await withTempHome("openclaw-config-io-", async (home) => {
+      const io = createConfigIO({
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+
+      const invalidConfig = {
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: [],
+          },
+        },
+      };
+
+      await expect(io.writeConfigFile(invalidConfig)).rejects.toThrow(
+        "openclaw config set channels.telegram.allowFrom '[\"*\"]'",
+      );
+      await expect(io.writeConfigFile(invalidConfig)).rejects.toThrow(
+        'openclaw config set channels.telegram.dmPolicy "pairing"',
+      );
+    });
+  });
+
   it("honors explicit unset paths when schema defaults would otherwise reappear", async () => {
     await withTempHome("openclaw-config-io-", async (home) => {
       const { configPath, io, snapshot } = await writeConfigAndCreateIo({
