@@ -5,6 +5,7 @@ import {
   clearExpiredCooldowns,
   isProfileInCooldown,
   markAuthProfileFailure,
+  resolveProfilesUnavailableReason,
   resolveProfileUnusableUntil,
 } from "./usage.js";
 
@@ -82,6 +83,101 @@ describe("isProfileInCooldown", () => {
       },
     });
     expect(isProfileInCooldown(store, "anthropic:default")).toBe(true);
+  });
+});
+
+describe("resolveProfilesUnavailableReason", () => {
+  it("prefers active disabledReason when profiles are disabled", () => {
+    const now = Date.now();
+    const store = makeStore({
+      "anthropic:default": {
+        disabledUntil: now + 60_000,
+        disabledReason: "billing",
+      },
+    });
+
+    expect(
+      resolveProfilesUnavailableReason({
+        store,
+        profileIds: ["anthropic:default"],
+        now,
+      }),
+    ).toBe("billing");
+  });
+
+  it("uses recorded non-rate-limit failure counts for active cooldown windows", () => {
+    const now = Date.now();
+    const store = makeStore({
+      "anthropic:default": {
+        cooldownUntil: now + 60_000,
+        failureCounts: { auth: 3, rate_limit: 1 },
+      },
+    });
+
+    expect(
+      resolveProfilesUnavailableReason({
+        store,
+        profileIds: ["anthropic:default"],
+        now,
+      }),
+    ).toBe("auth");
+  });
+
+  it("falls back to rate_limit when active cooldown has no reason history", () => {
+    const now = Date.now();
+    const store = makeStore({
+      "anthropic:default": {
+        cooldownUntil: now + 60_000,
+      },
+    });
+
+    expect(
+      resolveProfilesUnavailableReason({
+        store,
+        profileIds: ["anthropic:default"],
+        now,
+      }),
+    ).toBe("rate_limit");
+  });
+
+  it("ignores expired windows and returns null when no profile is actively unavailable", () => {
+    const now = Date.now();
+    const store = makeStore({
+      "anthropic:default": {
+        cooldownUntil: now - 1_000,
+        failureCounts: { auth: 5 },
+      },
+      "anthropic:backup": {
+        disabledUntil: now - 500,
+        disabledReason: "billing",
+      },
+    });
+
+    expect(
+      resolveProfilesUnavailableReason({
+        store,
+        profileIds: ["anthropic:default", "anthropic:backup"],
+        now,
+      }),
+    ).toBeNull();
+  });
+
+  it("breaks ties by reason priority for equal active failure counts", () => {
+    const now = Date.now();
+    const store = makeStore({
+      "anthropic:default": {
+        cooldownUntil: now + 60_000,
+        failureCounts: { timeout: 2, auth: 2 },
+      },
+    });
+
+    expect(
+      resolveProfilesUnavailableReason({
+        store,
+        profileIds: ["anthropic:default"],
+        now,
+      }),
+    ).toBe("auth");
   });
 });
 
