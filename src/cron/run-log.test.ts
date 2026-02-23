@@ -25,6 +25,19 @@ describe("cron run log", () => {
     expect(p.endsWith(path.join(os.tmpdir(), "cron", "runs", "job-1.jsonl"))).toBe(true);
   });
 
+  it("rejects unsafe job ids when resolving run log path", () => {
+    const storePath = path.join(os.tmpdir(), "cron", "jobs.json");
+    expect(() => resolveCronRunLogPath({ storePath, jobId: "../job-1" })).toThrow(
+      /invalid cron run log job id/i,
+    );
+    expect(() => resolveCronRunLogPath({ storePath, jobId: "nested/job-1" })).toThrow(
+      /invalid cron run log job id/i,
+    );
+    expect(() => resolveCronRunLogPath({ storePath, jobId: "..\\job-1" })).toThrow(
+      /invalid cron run log job id/i,
+    );
+  });
+
   it("appends JSONL and prunes by line count", async () => {
     await withRunLogDir("openclaw-cron-log-", async (dir) => {
       const logPath = path.join(dir, "runs", "job-1.jsonl");
