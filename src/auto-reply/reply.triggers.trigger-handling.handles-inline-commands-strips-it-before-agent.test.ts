@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   expectInlineCommandHandledAndStripped,
-  expectDirectElevatedToggleOn,
   getRunEmbeddedPiAgentMock,
   installTriggerHandlingE2eTestHooks,
   loadGetReplyFromConfig,
@@ -178,15 +177,11 @@ describe("trigger handling", () => {
     });
   });
 
-  it("runs a greeting prompt for a bare /reset", async () => {
+  it("runs a greeting prompt for bare /reset and /new", async () => {
     await withTempHome(async (home) => {
-      await runGreetingPromptForBareNewOrReset({ home, body: "/reset", getReplyFromConfig });
-    });
-  });
-
-  it("runs a greeting prompt for a bare /new", async () => {
-    await withTempHome(async (home) => {
-      await runGreetingPromptForBareNewOrReset({ home, body: "/new", getReplyFromConfig });
+      for (const body of ["/reset", "/new"] as const) {
+        await runGreetingPromptForBareNewOrReset({ home, body, getReplyFromConfig });
+      }
     });
   });
 
@@ -201,42 +196,41 @@ describe("trigger handling", () => {
     });
   });
 
-  it("handles inline /commands and strips it before the agent", async () => {
+  it("handles inline help/whoami/commands and strips directives before the agent", async () => {
     await withTempHome(async (home) => {
-      await expectInlineCommandHandledAndStripped({
-        home,
-        getReplyFromConfig,
-        body: "please /commands now",
-        stripToken: "/commands",
-        blockReplyContains: "Slash commands",
-      });
-    });
-  });
-
-  it("handles inline /whoami and strips it before the agent", async () => {
-    await withTempHome(async (home) => {
-      await expectInlineCommandHandledAndStripped({
-        home,
-        getReplyFromConfig,
-        body: "please /whoami now",
-        stripToken: "/whoami",
-        blockReplyContains: "Identity",
-        requestOverrides: {
-          SenderId: "12345",
+      const cases: Array<{
+        body: string;
+        stripToken: string;
+        blockReplyContains: string;
+        requestOverrides?: Record<string, unknown>;
+      }> = [
+        {
+          body: "please /commands now",
+          stripToken: "/commands",
+          blockReplyContains: "Slash commands",
         },
-      });
-    });
-  });
-
-  it("handles inline /help and strips it before the agent", async () => {
-    await withTempHome(async (home) => {
-      await expectInlineCommandHandledAndStripped({
-        home,
-        getReplyFromConfig,
-        body: "please /help now",
-        stripToken: "/help",
-        blockReplyContains: "Help",
-      });
+        {
+          body: "please /whoami now",
+          stripToken: "/whoami",
+          blockReplyContains: "Identity",
+          requestOverrides: { SenderId: "12345" },
+        },
+        {
+          body: "please /help now",
+          stripToken: "/help",
+          blockReplyContains: "Help",
+        },
+      ];
+      for (const testCase of cases) {
+        await expectInlineCommandHandledAndStripped({
+          home,
+          getReplyFromConfig,
+          body: testCase.body,
+          stripToken: testCase.stripToken,
+          blockReplyContains: testCase.blockReplyContains,
+          requestOverrides: testCase.requestOverrides,
+        });
+      }
     });
   });
 
@@ -309,10 +303,6 @@ describe("trigger handling", () => {
       const store = JSON.parse(storeRaw) as Record<string, { sendPolicy?: string }>;
       expect(store[MAIN_SESSION_KEY]?.sendPolicy).toBe("deny");
     });
-  });
-
-  it("allows approved sender to toggle elevated mode", async () => {
-    await expectDirectElevatedToggleOn({ getReplyFromConfig });
   });
 
   it("rejects elevated toggles when disabled", async () => {
