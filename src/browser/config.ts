@@ -50,6 +50,8 @@ export type ResolvedBrowserProfile = {
   attachOnly: boolean;
   /** Per-profile headless override. undefined = use global setting. */
   headless: boolean | undefined;
+  /** Per-profile executable path override. undefined = use global executablePath setting. */
+  executablePath: string | undefined;
 };
 
 function normalizeHexColor(raw: string | undefined) {
@@ -360,6 +362,7 @@ export function resolveProfile(
     driver,
     attachOnly: profile.attachOnly ?? resolved.attachOnly,
     headless: profile.headless,
+    executablePath: profile.executablePath?.trim() || undefined,
   };
 }
 
