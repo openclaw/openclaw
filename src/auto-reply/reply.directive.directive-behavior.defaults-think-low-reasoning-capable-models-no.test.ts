@@ -71,6 +71,45 @@ async function expectThinkStatusForReasoningModel(params: {
   });
 }
 
+function mockReasoningCapableCatalog() {
+  vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+    {
+      id: "claude-opus-4-5",
+      name: "Opus 4.5",
+      provider: "anthropic",
+      reasoning: true,
+    },
+  ]);
+}
+
+async function runReasoningDefaultCase(params: {
+  home: string;
+  expectedThinkLevel: "low" | "off";
+  expectedReasoningLevel: "off" | "on";
+  thinkingDefault?: "off" | "low" | "medium" | "high";
+}) {
+  mockEmbeddedTextResult("done");
+  mockReasoningCapableCatalog();
+
+  await getReplyFromConfig(
+    {
+      Body: "hello",
+      From: "+1004",
+      To: "+2000",
+    },
+    {},
+    makeWhatsAppDirectiveConfig(params.home, {
+      model: { primary: "anthropic/claude-opus-4-5" },
+      ...(params.thinkingDefault ? { thinkingDefault: params.thinkingDefault } : {}),
+    }),
+  );
+
+  expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
+  const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0];
+  expect(call?.thinkLevel).toBe(params.expectedThinkLevel);
+  expect(call?.reasoningLevel).toBe(params.expectedReasoningLevel);
+}
+
 describe("directive behavior", () => {
   installDirectiveBehaviorE2EHooks();
 
@@ -246,61 +285,21 @@ describe("directive behavior", () => {
   });
   it("defaults thinking to low for reasoning-capable models without auto-enabling reasoning", async () => {
     await withTempHome(async (home) => {
-      mockEmbeddedTextResult("done");
-      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
-        {
-          id: "claude-opus-4-5",
-          name: "Opus 4.5",
-          provider: "anthropic",
-          reasoning: true,
-        },
-      ]);
-
-      await getReplyFromConfig(
-        {
-          Body: "hello",
-          From: "+1004",
-          To: "+2000",
-        },
-        {},
-        makeWhatsAppDirectiveConfig(home, { model: { primary: "anthropic/claude-opus-4-5" } }),
-      );
-
-      expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
-      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0];
-      expect(call?.thinkLevel).toBe("low");
-      expect(call?.reasoningLevel).toBe("off");
+      await runReasoningDefaultCase({
+        home,
+        expectedThinkLevel: "low",
+        expectedReasoningLevel: "off",
+      });
     });
   });
   it("keeps auto-reasoning enabled when thinking is explicitly off", async () => {
     await withTempHome(async (home) => {
-      mockEmbeddedTextResult("done");
-      vi.mocked(loadModelCatalog).mockResolvedValueOnce([
-        {
-          id: "claude-opus-4-5",
-          name: "Opus 4.5",
-          provider: "anthropic",
-          reasoning: true,
-        },
-      ]);
-
-      await getReplyFromConfig(
-        {
-          Body: "hello",
-          From: "+1004",
-          To: "+2000",
-        },
-        {},
-        makeWhatsAppDirectiveConfig(home, {
-          model: { primary: "anthropic/claude-opus-4-5" },
-          thinkingDefault: "off",
-        }),
-      );
-
-      expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
-      const call = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0];
-      expect(call?.thinkLevel).toBe("off");
-      expect(call?.reasoningLevel).toBe("on");
+      await runReasoningDefaultCase({
+        home,
+        expectedThinkLevel: "off",
+        expectedReasoningLevel: "on",
+        thinkingDefault: "off",
+      });
     });
   });
   it("passes elevated defaults when sender is approved", async () => {

@@ -63,6 +63,17 @@ const ENV_OPTIONS_WITH_VALUE = new Set([
   "--ignore-signal",
   "--block-signal",
 ]);
+const ENV_INLINE_VALUE_PREFIXES = [
+  "-u",
+  "-c",
+  "-s",
+  "--unset=",
+  "--chdir=",
+  "--split-string=",
+  "--default-signal=",
+  "--ignore-signal=",
+  "--block-signal=",
+] as const;
 const ENV_FLAG_OPTIONS = new Set(["-i", "--ignore-environment", "-0", "--null"]);
 const NICE_OPTIONS_WITH_VALUE = new Set(["-n", "--adjustment", "--priority"]);
 const STDBUF_OPTIONS_WITH_VALUE = new Set(["-i", "--input", "-o", "--output", "-e", "--error"]);
@@ -123,6 +134,15 @@ function findShellWrapperSpec(baseExecutable: string): ShellWrapperSpec | null {
 
 export function isEnvAssignment(token: string): boolean {
   return /^[A-Za-z_][A-Za-z0-9_]*=.*/.test(token);
+}
+
+function hasEnvInlineValuePrefix(lower: string): boolean {
+  for (const prefix of ENV_INLINE_VALUE_PREFIXES) {
+    if (lower.startsWith(prefix)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 type WrapperScanDirective = "continue" | "consume-next" | "stop" | "invalid";
@@ -191,17 +211,7 @@ export function unwrapEnvInvocation(argv: string[]): string[] | null {
       if (ENV_OPTIONS_WITH_VALUE.has(flag)) {
         return lower.includes("=") ? "continue" : "consume-next";
       }
-      if (
-        lower.startsWith("-u") ||
-        lower.startsWith("-c") ||
-        lower.startsWith("-s") ||
-        lower.startsWith("--unset=") ||
-        lower.startsWith("--chdir=") ||
-        lower.startsWith("--split-string=") ||
-        lower.startsWith("--default-signal=") ||
-        lower.startsWith("--ignore-signal=") ||
-        lower.startsWith("--block-signal=")
-      ) {
+      if (hasEnvInlineValuePrefix(lower)) {
         return "continue";
       }
       return "invalid";
@@ -244,17 +254,7 @@ function envInvocationUsesModifiers(argv: string[]): boolean {
       idx += 1;
       continue;
     }
-    if (
-      lower.startsWith("-u") ||
-      lower.startsWith("-c") ||
-      lower.startsWith("-s") ||
-      lower.startsWith("--unset=") ||
-      lower.startsWith("--chdir=") ||
-      lower.startsWith("--split-string=") ||
-      lower.startsWith("--default-signal=") ||
-      lower.startsWith("--ignore-signal=") ||
-      lower.startsWith("--block-signal=")
-    ) {
+    if (hasEnvInlineValuePrefix(lower)) {
       return true;
     }
     // Unknown env flags are treated conservatively as modifiers.
@@ -265,13 +265,8 @@ function envInvocationUsesModifiers(argv: string[]): boolean {
 }
 
 function unwrapNiceInvocation(argv: string[]): string[] | null {
-  return scanWrapperInvocation(argv, {
-    separators: new Set(["--"]),
-    onToken: (token, lower) => {
-      if (!token.startsWith("-") || token === "-") {
-        return "stop";
-      }
-      const [flag] = lower.split("=", 2);
+  return unwrapDashOptionInvocation(argv, {
+    onFlag: (flag, lower) => {
       if (/^-\d+$/.test(lower)) {
         return "continue";
       }
@@ -298,7 +293,13 @@ function unwrapNohupInvocation(argv: string[]): string[] | null {
   });
 }
 
-function unwrapStdbufInvocation(argv: string[]): string[] | null {
+function unwrapDashOptionInvocation(
+  argv: string[],
+  params: {
+    onFlag: (flag: string, lowerToken: string) => WrapperScanDirective;
+    adjustCommandIndex?: (commandIndex: number, argv: string[]) => number | null;
+  },
+): string[] | null {
   return scanWrapperInvocation(argv, {
     separators: new Set(["--"]),
     onToken: (token, lower) => {
@@ -306,22 +307,26 @@ function unwrapStdbufInvocation(argv: string[]): string[] | null {
         return "stop";
       }
       const [flag] = lower.split("=", 2);
-      if (STDBUF_OPTIONS_WITH_VALUE.has(flag)) {
-        return lower.includes("=") ? "continue" : "consume-next";
+      return params.onFlag(flag, lower);
+    },
+    adjustCommandIndex: params.adjustCommandIndex,
+  });
+}
+
+function unwrapStdbufInvocation(argv: string[]): string[] | null {
+  return unwrapDashOptionInvocation(argv, {
+    onFlag: (flag, lower) => {
+      if (!STDBUF_OPTIONS_WITH_VALUE.has(flag)) {
+        return "invalid";
       }
-      return "invalid";
+      return lower.includes("=") ? "continue" : "consume-next";
     },
   });
 }
 
 function unwrapTimeoutInvocation(argv: string[]): string[] | null {
-  return scanWrapperInvocation(argv, {
-    separators: new Set(["--"]),
-    onToken: (token, lower) => {
-      if (!token.startsWith("-") || token === "-") {
-        return "stop";
-      }
-      const [flag] = lower.split("=", 2);
+  return unwrapDashOptionInvocation(argv, {
+    onFlag: (flag, lower) => {
       if (TIMEOUT_FLAG_OPTIONS.has(flag)) {
         return "continue";
       }
