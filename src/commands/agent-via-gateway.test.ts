@@ -107,6 +107,27 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("accepts --session-key and forwards it to gateway", async () => {
+    await withTempStore(async () => {
+      mockGatewaySuccessReply();
+      const explicitSessionKey = "agent:demo:slack:channel:c0123456789";
+
+      await agentCliCommand(
+        {
+          message: "hi",
+          sessionKey: explicitSessionKey,
+        },
+        runtime,
+      );
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      const request = vi.mocked(callGateway).mock.calls[0]?.[0] as {
+        params?: { sessionKey?: string };
+      };
+      expect(request.params?.sessionKey).toBe(explicitSessionKey);
+    });
+  });
+
   it("falls back to embedded agent when gateway fails", async () => {
     await withTempStore(async () => {
       vi.mocked(callGateway).mockRejectedValue(new Error("gateway not connected"));
