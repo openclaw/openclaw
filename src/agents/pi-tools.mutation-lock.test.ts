@@ -13,8 +13,8 @@ function deferred<T = void>() {
 
 function textResult(text: string): AgentToolResult<unknown> {
   return {
-    isError: false,
     content: [{ type: "text", text }],
+    details: undefined,
   };
 }
 
@@ -25,6 +25,8 @@ describe("wrapToolMutationLock", () => {
 
     const base: AnyAgentTool = {
       name: "write",
+      label: "write",
+      description: "test write",
       parameters: {},
       execute: async (_toolCallId, params) => {
         const record = params as Record<string, unknown>;
@@ -49,8 +51,8 @@ describe("wrapToolMutationLock", () => {
 
     firstGate.resolve();
 
-    await expect(p1).resolves.toMatchObject({ isError: false });
-    await expect(p2).resolves.toMatchObject({ isError: false });
+    await expect(p1).resolves.toMatchObject({ content: [{ type: "text", text: "one" }] });
+    await expect(p2).resolves.toMatchObject({ content: [{ type: "text", text: "two" }] });
     expect(events).toEqual(["start:one", "end:one", "start:two", "end:two"]);
   });
 
@@ -61,6 +63,8 @@ describe("wrapToolMutationLock", () => {
 
     const base: AnyAgentTool = {
       name: "edit",
+      label: "edit",
+      description: "test edit",
       parameters: {},
       execute: async (_toolCallId, params) => {
         const record = params as Record<string, unknown>;
