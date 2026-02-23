@@ -113,7 +113,7 @@ describe("killProcessTree", () => {
 
   it("on Unix sends SIGKILL after grace period when process is still alive", async () => {
     killSpy.mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
-      if (pid === -4444 && signal === 0) {
+      if (pid === 4444 && signal === 0) {
         return true;
       }
       return true;
@@ -126,6 +126,7 @@ describe("killProcessTree", () => {
 
       expect(killSpy).toHaveBeenCalledWith(-4444, "SIGTERM");
       expect(killSpy).toHaveBeenCalledWith(-4444, "SIGKILL");
+      expect(killSpy).toHaveBeenCalledWith(4444, "SIGKILL");
     });
   });
 });

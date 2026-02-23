@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { isPidAlive } from "../shared/pid-alive.js";
 
 const DEFAULT_GRACE_MS = 3000;
 const MAX_GRACE_MS = 60_000;
@@ -34,15 +35,6 @@ function normalizeGraceMs(value?: number): number {
   return Math.max(0, Math.min(MAX_GRACE_MS, Math.floor(value)));
 }
 
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function killProcessTreeUnix(pid: number, graceMs: number): void {
   // Step 1: Try graceful SIGTERM to process group
   try {
@@ -59,15 +51,16 @@ function killProcessTreeUnix(pid: number, graceMs: number): void {
 
   // Step 2: Wait grace period, then SIGKILL if still alive
   setTimeout(() => {
-    if (isProcessAlive(-pid)) {
-      try {
-        process.kill(-pid, "SIGKILL");
-        return;
-      } catch {
-        // Fall through to direct pid kill
-      }
+    if (!isPidAlive(pid)) {
+      return;
     }
-    if (!isProcessAlive(pid)) {
+    try {
+      process.kill(-pid, "SIGKILL");
+    } catch {
+      // Process group doesn't exist or we lack permission.
+      // Fall through to direct pid kill when needed.
+    }
+    if (!isPidAlive(pid)) {
       return;
     }
     try {
@@ -96,7 +89,7 @@ function killProcessTreeWindows(pid: number, graceMs: number): void {
   // Step 2: Wait grace period, then force kill only if pid still exists.
   // This avoids unconditional delayed /F kills after graceful shutdown.
   setTimeout(() => {
-    if (!isProcessAlive(pid)) {
+    if (!isPidAlive(pid)) {
       return;
     }
     runTaskkill(["/F", "/T", "/PID", String(pid)]);
