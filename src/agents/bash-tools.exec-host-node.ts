@@ -12,7 +12,7 @@ import {
   resolveExecApprovalsFromFile,
 } from "../infra/exec-approvals.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
-import { requestExecApprovalDecision } from "./bash-tools.exec-approval-request.js";
+import { requestExecApprovalDecisionForHost } from "./bash-tools.exec-approval-request.js";
 import {
   DEFAULT_APPROVAL_TIMEOUT_MS,
   createApprovalSlug,
@@ -178,10 +178,10 @@ export async function executeNodeHostCommand(
     void (async () => {
       let decision: string | null = null;
       try {
-        decision = await requestExecApprovalDecision({
-          id: approvalId,
+        decision = await requestExecApprovalDecisionForHost({
+          approvalId,
           command: params.command,
-          cwd: params.workdir,
+          workdir: params.workdir,
           host: "node",
           security: hostSecurity,
           ask: hostAsk,
