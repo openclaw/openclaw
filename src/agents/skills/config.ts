@@ -82,11 +82,16 @@ export function shouldIncludeSkill(params: {
   if (skillConfig?.enabled === false) {
     return false;
   }
-  // Note: allowedAgents check is performed at runtime (not at registration time).
+  // allowedAgents check is performed at runtime (not at registration time).
   // This is because:
   // 1. At resolution time, agentId may be unknown
-  // 2. Skills are resolved per-agent at runtime when needed
-  // 3. The check happens in shouldIncludeSkill when agentId is known
+  // 2. Skills are resolved per-agent at runtime when agentId is known
+  // 3. The check happens in shouldIncludeSkill when eligibility.agentId is available
+  if (skillConfig?.allowedAgents && eligibility?.agentId) {
+    if (!skillConfig.allowedAgents.includes(eligibility.agentId)) {
+      return false;
+    }
+  }
   if (!isBundledSkillAllowed(entry, allowBundled)) {
     return false;
   }
