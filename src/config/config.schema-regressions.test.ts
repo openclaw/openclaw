@@ -91,6 +91,19 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts string values for agents defaults model inputs", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          model: "anthropic/claude-opus-4-6",
+          imageModel: "openai/gpt-4.1-mini",
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects relative iMessage attachment roots", () => {
     const res = validateConfigObject({
       channels: {
