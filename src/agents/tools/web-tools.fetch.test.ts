@@ -233,6 +233,29 @@ describe("web_fetch extraction fallbacks", () => {
     expect(details.truncated).toBe(true);
   });
 
+  it("caps response bytes and does not hang on endless streams", async () => {
+    const chunk = new TextEncoder().encode("<html><body><div>hi</div></body></html>");
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.enqueue(chunk);
+      },
+    });
+    const response = new Response(stream, {
+      status: 200,
+      headers: { "content-type": "text/html; charset=utf-8" },
+    });
+    const fetchSpy = vi.fn().mockResolvedValue(response);
+    global.fetch = withFetchPreconnect(fetchSpy);
+
+    const tool = createFetchTool({
+      maxResponseBytes: 1024,
+      firecrawl: { enabled: false },
+    });
+    const result = await tool?.execute?.("call", { url: "https://example.com/stream" });
+    const details = result?.details as { warning?: string } | undefined;
+    expect(details?.warning).toContain("Response body truncated");
+  });
+
   // NOTE: Test for wrapping url/finalUrl/warning fields requires DNS mocking.
   // The sanitization of these fields is verified by external-content.test.ts tests.
 
