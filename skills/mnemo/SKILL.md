@@ -24,7 +24,7 @@ Obsidian 볼트(3,090+ 파일)와 MAIBOT memory를 NetworkX 지식그래프로 �
 | Memory      | `C:\MAIBOT\memory`                            |
 | 캐시        | `C:\TEST\MAISECONDBRAIN\.mnemo/`              |
 | Python      | 3.13+, pip dependencies installed             |
-| 임베딩 모델 | Ollama nomic-embed-text (로컬, 768dim)        |
+| 임베딩 모델 | Ollama qwen3-embedding:0.6b (로컬, 1024dim)   |
 
 **모든 명령에 `$env:PYTHONIOENCODING="utf-8"` 필수** (Windows 콘솔)
 
@@ -75,7 +75,7 @@ python -m mnemo.cli serve --cache-dir ".mnemo" --port 7890
 python scripts/embed_vault.py
 ```
 
-Ollama nomic-embed-text (로컬 GPU), ~46초 for 2,164개 노트.
+Ollama qwen3-embedding:0.6b (로컬 GPU), 전체 재빌드 시 수분 소요.
 
 ### 6. 볼트 보강 (3단계)
 
