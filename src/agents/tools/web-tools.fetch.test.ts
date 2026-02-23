@@ -91,8 +91,12 @@ function requestUrl(input: RequestInfo | URL): string {
   return "";
 }
 
-function installMockFetch(impl: (input: RequestInfo | URL) => Promise<Response>) {
-  const mockFetch = vi.fn(async (input: RequestInfo | URL) => await impl(input));
+function installMockFetch(
+  impl: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+) {
+  const mockFetch = vi.fn(
+    async (input: RequestInfo | URL, init?: RequestInit) => await impl(input, init),
+  );
   global.fetch = withFetchPreconnect(mockFetch);
   return mockFetch;
 }
@@ -251,6 +255,36 @@ describe("web_fetch extraction fallbacks", () => {
     const details = result?.details as { extractor?: string; text?: string };
     expect(details.extractor).toBe("firecrawl");
     expect(details.text).toContain("firecrawl content");
+  });
+
+  it("normalizes firecrawl Authorization header values", async () => {
+    const fetchSpy = installMockFetch((input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url.includes("api.firecrawl.dev/v2/scrape")) {
+        return Promise.resolve(firecrawlResponse("firecrawl normalized")) as Promise<Response>;
+      }
+      return Promise.resolve(
+        htmlResponse("<!doctype html><html><head></head><body></body></html>", url),
+      ) as Promise<Response>;
+    });
+
+    const tool = createFetchTool({
+      firecrawl: { apiKey: "firecrawl-test-\r\nkey" },
+    });
+
+    const result = await tool?.execute?.("call", {
+      url: "https://example.com/firecrawl",
+      extractMode: "text",
+    });
+
+    expect(result?.details).toMatchObject({ extractor: "firecrawl" });
+    const firecrawlCall = fetchSpy.mock.calls.find((call) =>
+      requestUrl(call[0]).includes("/v2/scrape"),
+    );
+    expect(firecrawlCall).toBeTruthy();
+    const init = firecrawlCall?.[1];
+    const authHeader = new Headers(init?.headers).get("Authorization");
+    expect(authHeader).toBe("Bearer firecrawl-test-key");
   });
 
   it("throws when readability is disabled and firecrawl is unavailable", async () => {
