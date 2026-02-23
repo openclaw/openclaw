@@ -18,7 +18,7 @@ import {
   writeCache,
 } from "./web-shared.js";
 
-const SEARCH_PROVIDERS = ["brave", "perplexity", "grok"] as const;
+const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "duckduckgo"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
 const MAX_SEARCH_COUNT = 10;
 
@@ -31,6 +31,8 @@ const OPENROUTER_KEY_PREFIXES = ["sk-or-"];
 
 const XAI_API_ENDPOINT = "https://api.x.ai/v1/responses";
 const DEFAULT_GROK_MODEL = "grok-4-1-fast";
+
+const DUCKDUCKGO_API_ENDPOINT = "https://api.duckduckgo.com";
 
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
@@ -227,6 +229,13 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
+  if (provider === "duckduckgo") {
+    return {
+      error: "duckduckgo_unavailable",
+      message: "web_search (duckduckgo) is unavailable. The service may be down or blocked.",
+      docs: "https://docs.openclaw.ai/tools/web",
+    };
+  }
   return {
     error: "missing_brave_api_key",
     message: `web_search needs a Brave Search API key. Run \`${formatCliCommand("openclaw configure --section web")}\` to store it, or set BRAVE_API_KEY in the Gateway environment.`,
@@ -244,6 +253,9 @@ function resolveSearchProvider(search?: WebSearchConfig): (typeof SEARCH_PROVIDE
   }
   if (raw === "grok") {
     return "grok";
+  }
+  if (raw === "duckduckgo") {
+    return "duckduckgo";
   }
   if (raw === "brave") {
     return "brave";
@@ -474,6 +486,90 @@ async function throwWebSearchApiError(res: Response, providerLabel: string): Pro
   throw new Error(`${providerLabel} API error (${res.status}): ${detail || res.statusText}`);
 }
 
+type DuckDuckGoResult = {
+  title: string;
+  url: string;
+  snippet: string;
+  published?: string;
+};
+
+type DuckDuckGoResponse = {
+  RelatedTopics?: Array<{
+    Text?: string;
+    FirstURL?: string;
+    Icon?: { URL?: string };
+  }>;
+  Results?: Array<{
+    Text?: string;
+    FirstURL?: string;
+  }>;
+  AbstractText?: string;
+  AbstractURL?: string;
+  Heading?: string;
+};
+
+async function runDuckDuckGoSearch(params: {
+  query: string;
+  count: number;
+  timeoutSeconds: number;
+}): Promise<DuckDuckGoResult[]> {
+  const url = new URL(DUCKDUCKGO_API_ENDPOINT);
+  url.searchParams.set("q", params.query);
+  url.searchParams.set("format", "json");
+  url.searchParams.set("no_html", "1");
+  url.searchParams.set("skip_disambig", "1");
+
+  const res = await fetch(url.toString(), {
+    method: "GET",
+    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
+  });
+
+  if (!res.ok) {
+    return throwWebSearchApiError(res, "DuckDuckGo");
+  }
+
+  const data = (await res.json()) as DuckDuckGoResponse;
+  const results: DuckDuckGoResult[] = [];
+
+  const topics = data.RelatedTopics ?? [];
+  for (const topic of topics) {
+    if (topic.FirstURL && topic.Text) {
+      results.push({
+        title: topic.Text.split(" - ")[0] || "",
+        url: topic.FirstURL,
+        snippet: topic.Text,
+      });
+      if (results.length >= params.count) {
+        break;
+      }
+    }
+  }
+
+  const results2 = data.Results ?? [];
+  for (const topic of results2) {
+    if (topic.FirstURL && topic.Text) {
+      results.push({
+        title: topic.Text.split(" - ")[0] || "",
+        url: topic.FirstURL,
+        snippet: topic.Text,
+      });
+      if (results.length >= params.count) {
+        break;
+      }
+    }
+  }
+
+  if (results.length === 0 && data.AbstractText) {
+    results.push({
+      title: data.Heading || data.AbstractURL || "",
+      url: data.AbstractURL || "",
+      snippet: data.AbstractText,
+    });
+  }
+
+  return results.slice(0, params.count);
+}
+
 async function runPerplexitySearch(params: {
   query: string;
   apiKey: string;
@@ -661,6 +757,44 @@ async function runWebSearch(params: {
     return payload;
   }
 
+  if (params.provider === "duckduckgo") {
+    const results = await runDuckDuckGoSearch({
+      query: params.query,
+      count: params.count,
+      timeoutSeconds: params.timeoutSeconds,
+    });
+
+    const mapped = results.map((entry) => {
+      const description = entry.snippet ?? "";
+      const title = entry.title ?? "";
+      const url = entry.url ?? "";
+      const rawSiteName = resolveSiteName(url);
+      return {
+        title: title ? wrapWebContent(title, "web_search") : "",
+        url,
+        description: description ? wrapWebContent(description, "web_search") : "",
+        published: entry.published || undefined,
+        siteName: rawSiteName || undefined,
+      };
+    });
+
+    const payload = {
+      query: params.query,
+      provider: params.provider,
+      count: mapped.length,
+      tookMs: Date.now() - start,
+      externalContent: {
+        untrusted: true,
+        source: "web_search",
+        provider: params.provider,
+        wrapped: true,
+      },
+      results: mapped,
+    };
+    writeCache(SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
+    return payload;
+  }
+
   if (params.provider !== "brave") {
     throw new Error("Unsupported web search provider.");
   }
@@ -747,7 +881,9 @@ export function createWebSearchTool(options?: {
       ? "Search the web using Perplexity Sonar (direct or via OpenRouter). Returns AI-synthesized answers with citations from real-time web search."
       : provider === "grok"
         ? "Search the web using xAI Grok. Returns AI-synthesized answers with citations from real-time web search."
-        : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
+        : provider === "duckduckgo"
+          ? "Search the web using DuckDuckGo Instant Answer API. Returns web results with titles, URLs, and snippets. No API key required."
+          : "Search the web using Brave Search API. Supports region-specific and localized search via country and language parameters. Returns titles, URLs, and snippets for fast research.";
 
   return {
     label: "Web Search",

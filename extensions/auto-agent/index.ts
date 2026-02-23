@@ -68,7 +68,7 @@ type AutoAgentConfig = {
   safeMode?: boolean;
   webSearch?: {
     enabled?: boolean;
-    provider?: "brave" | "perplexity" | "grok";
+    provider?: "brave" | "perplexity" | "grok" | "duckduckgo";
   };
 };
 
