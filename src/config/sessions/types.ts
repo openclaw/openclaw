@@ -86,6 +86,8 @@ export type SessionEntry = {
   subagentRole?: "orchestrator" | "leaf";
   /** Explicit control scope assigned at spawn time for subagent control decisions. */
   subagentControlScope?: "children" | "none";
+  /** Workspace override for this session (respects agents.list[].workspace). */
+  workspace?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
   /**
