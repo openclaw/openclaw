@@ -90,7 +90,7 @@ describe("launchd runtime parsing", () => {
 
 describe("launchctl list detection", () => {
   it("detects the resolved label in launchctl list", async () => {
-    state.listOutput = "123 0 ai.bot.gateway\n";
+    state.listOutput = "123 0 ai.hanzo.bot.gateway\n";
     const listed = await isLaunchAgentListed({
       env: { HOME: "/Users/test", BOT_PROFILE: "default" },
     });
@@ -116,7 +116,7 @@ describe("launchd bootstrap repair", () => {
     expect(repair.ok).toBe(true);
 
     const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-    const label = "ai.bot.gateway";
+    const label = "ai.hanzo.bot.gateway";
     const plistPath = resolveLaunchAgentPlistPath(env);
 
     expect(state.launchctlCalls).toContainEqual(["bootstrap", domain, plistPath]);
@@ -137,7 +137,7 @@ describe("launchd install", () => {
     });
 
     const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
-    const label = "ai.bot.gateway";
+    const label = "ai.hanzo.bot.gateway";
     const plistPath = resolveLaunchAgentPlistPath(env);
     const serviceId = `${domain}/${label}`;
 
@@ -157,14 +157,14 @@ describe("resolveLaunchAgentPlistPath", () => {
   it("uses default label when BOT_PROFILE is unset", () => {
     const env = { HOME: "/Users/test" };
     expect(resolveLaunchAgentPlistPath(env)).toBe(
-      "/Users/test/Library/LaunchAgents/ai.bot.gateway.plist",
+      "/Users/test/Library/LaunchAgents/ai.hanzo.bot.gateway.plist",
     );
   });
 
   it("uses profile-specific label when BOT_PROFILE is set to a custom value", () => {
     const env = { HOME: "/Users/test", BOT_PROFILE: "jbphoenix" };
     expect(resolveLaunchAgentPlistPath(env)).toBe(
-      "/Users/test/Library/LaunchAgents/ai.bot.jbphoenix.plist",
+      "/Users/test/Library/LaunchAgents/ai.hanzo.bot.jbphoenix.plist",
     );
   });
 
@@ -196,7 +196,7 @@ describe("resolveLaunchAgentPlistPath", () => {
       BOT_LAUNCHD_LABEL: "   ",
     };
     expect(resolveLaunchAgentPlistPath(env)).toBe(
-      "/Users/test/Library/LaunchAgents/ai.bot.myprofile.plist",
+      "/Users/test/Library/LaunchAgents/ai.hanzo.bot.myprofile.plist",
     );
   });
 });
