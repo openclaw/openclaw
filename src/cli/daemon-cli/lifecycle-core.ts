@@ -346,7 +346,7 @@ export async function runServiceRestart(params: {
   }
 
   // TODO(remove-migration-notice): Remove this block after 2 releases.
-  // Track: openclaw/openclaw#REPLACE_BEFORE_COMMIT
+  // Track: openclaw/openclaw#24121
   const migrationNotice =
     "`openclaw gateway restart` now defaults to graceful restart (SIGUSR1). " +
     "For the old behaviour (systemctl kill + respawn), use --hard. " +
