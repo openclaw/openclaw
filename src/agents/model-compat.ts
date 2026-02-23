@@ -4,20 +4,12 @@ function isOpenAiCompletionsModel(model: Model<Api>): model is Model<"openai-com
   return model.api === "openai-completions";
 }
 
-/**
- * Returns true only for endpoints that are confirmed to be native OpenAI
- * infrastructure and therefore accept the `developer` message role.
- * Azure OpenAI uses the Chat Completions API and does NOT accept `developer`.
- * All other openai-completions backends (proxies, Qwen, GLM, DeepSeek, etc.)
- * only support the standard `system` role.
- */
-function isOpenAINativeEndpoint(baseUrl: string): boolean {
-  try {
-    const host = new URL(baseUrl).hostname.toLowerCase();
-    return host === "api.openai.com";
-  } catch {
-    return false;
-  }
+function isDashScopeCompatibleEndpoint(baseUrl: string): boolean {
+  return (
+    baseUrl.includes("dashscope.aliyuncs.com") ||
+    baseUrl.includes("dashscope-intl.aliyuncs.com") ||
+    baseUrl.includes("dashscope-us.aliyuncs.com")
+  );
 }
 
 function isAnthropicMessagesModel(model: Model<Api>): model is Model<"anthropic-messages"> {
@@ -48,32 +40,27 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
     }
   }
 
-  if (!isOpenAiCompletionsModel(model)) {
+  const isZai = model.provider === "zai" || baseUrl.includes("api.z.ai");
+  const isMoonshot =
+    model.provider === "moonshot" ||
+    baseUrl.includes("moonshot.ai") ||
+    baseUrl.includes("moonshot.cn");
+  const isDashScope =
+    model.provider === "dashscope" ||
+    model.provider === "bailian" ||
+    isDashScopeCompatibleEndpoint(baseUrl);
+  if ((!isZai && !isMoonshot && !isDashScope) || !isOpenAiCompletionsModel(model)) {
     return model;
   }
 
-  // The `developer` message role is an OpenAI-native convention. All other
-  // openai-completions backends (proxies, Qwen, GLM, DeepSeek, Kimi, etc.)
-  // only recognise `system`. Force supportsDeveloperRole=false for any model
-  // whose baseUrl is not a known native OpenAI endpoint, unless the caller
-  // has already pinned the value explicitly.
-  const compat = model.compat ?? undefined;
+  const openaiModel = model;
+  const compat = openaiModel.compat ?? undefined;
   if (compat?.supportsDeveloperRole === false) {
     return model;
   }
-  // When baseUrl is empty the pi-ai library defaults to api.openai.com, so
-  // leave compat unchanged and let the existing default behaviour apply.
-  // Note: an explicit supportsDeveloperRole: true is intentionally overridden
-  // here for non-native endpoints — those backends would return a 400 if we
-  // sent `developer`, so safety takes precedence over the caller's hint.
-  const needsForce = baseUrl ? !isOpenAINativeEndpoint(baseUrl) : false;
-  if (!needsForce) {
-    return model;
-  }
 
-  // Return a new object — do not mutate the caller's model reference.
-  return {
-    ...model,
-    compat: compat ? { ...compat, supportsDeveloperRole: false } : { supportsDeveloperRole: false },
-  } as typeof model;
+  openaiModel.compat = compat
+    ? { ...compat, supportsDeveloperRole: false }
+    : { supportsDeveloperRole: false };
+  return openaiModel;
 }
