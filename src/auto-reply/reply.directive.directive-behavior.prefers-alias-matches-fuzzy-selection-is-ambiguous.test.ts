@@ -95,43 +95,19 @@ describe("directive behavior", () => {
     expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
   }
 
-  it("supports fuzzy model matches on /model directive", async () => {
+  it("supports unambiguous fuzzy model matches across /model forms", async () => {
     await withTempHome(async (home) => {
       const storePath = path.join(home, "sessions.json");
 
-      const res = await runMoonshotModelDirective({
-        home,
-        storePath,
-        body: "/model kimi",
-      });
-
-      expectMoonshotSelectionFromResponse({ response: res, storePath });
-    });
-  });
-  it("resolves provider-less exact model ids via fuzzy matching when unambiguous", async () => {
-    await withTempHome(async (home) => {
-      const storePath = path.join(home, "sessions.json");
-
-      const res = await runMoonshotModelDirective({
-        home,
-        storePath,
-        body: "/model kimi-k2-0905-preview",
-      });
-
-      expectMoonshotSelectionFromResponse({ response: res, storePath });
-    });
-  });
-  it("supports fuzzy matches within a provider on /model provider/model", async () => {
-    await withTempHome(async (home) => {
-      const storePath = path.join(home, "sessions.json");
-
-      const res = await runMoonshotModelDirective({
-        home,
-        storePath,
-        body: "/model moonshot/kimi",
-      });
-
-      expectMoonshotSelectionFromResponse({ response: res, storePath });
+      for (const body of ["/model kimi", "/model kimi-k2-0905-preview", "/model moonshot/kimi"]) {
+        const res = await runMoonshotModelDirective({
+          home,
+          storePath,
+          body,
+        });
+        expectMoonshotSelectionFromResponse({ response: res, storePath });
+      }
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
   it("picks the best fuzzy match when multiple models match", async () => {
@@ -304,7 +280,7 @@ describe("directive behavior", () => {
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
-  it("queues a system event when switching models", async () => {
+  it("queues system events for model, elevated, and reasoning directives", async () => {
     await withTempHome(async (home) => {
       drainSystemEvents(MAIN_SESSION_KEY);
       await getReplyFromConfig(
@@ -313,13 +289,9 @@ describe("directive behavior", () => {
         makeModelSwitchConfig(home),
       );
 
-      const events = drainSystemEvents(MAIN_SESSION_KEY);
+      let events = drainSystemEvents(MAIN_SESSION_KEY);
       expect(events).toContain("Model switched to Opus (anthropic/claude-opus-4-5).");
-      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
-    });
-  });
-  it("queues a system event when toggling elevated", async () => {
-    await withTempHome(async (home) => {
+
       drainSystemEvents(MAIN_SESSION_KEY);
 
       await getReplyFromConfig(
@@ -338,12 +310,9 @@ describe("directive behavior", () => {
         ),
       );
 
-      const events = drainSystemEvents(MAIN_SESSION_KEY);
+      events = drainSystemEvents(MAIN_SESSION_KEY);
       expect(events.some((e) => e.includes("Elevated ASK"))).toBe(true);
-    });
-  });
-  it("queues a system event when toggling reasoning", async () => {
-    await withTempHome(async (home) => {
+
       drainSystemEvents(MAIN_SESSION_KEY);
 
       await getReplyFromConfig(
@@ -358,8 +327,9 @@ describe("directive behavior", () => {
         makeWhatsAppDirectiveConfig(home, { model: { primary: "openai/gpt-4.1-mini" } }),
       );
 
-      const events = drainSystemEvents(MAIN_SESSION_KEY);
+      events = drainSystemEvents(MAIN_SESSION_KEY);
       expect(events.some((e) => e.includes("Reasoning STREAM"))).toBe(true);
+      expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
     });
   });
 });
