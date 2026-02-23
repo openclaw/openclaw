@@ -1,0 +1,133 @@
+name: Upstream Sync
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout else-core
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/openclaw/openclaw.git
+          git fetch upstream main
+
+      - name: Check for new commits
+        id: check
+        run: |
+          UPSTREAM_SHA=$(git rev-parse upstream/main)
+          LOCAL_SHA=$(git rev-parse origin/main)
+          if [ "$UPSTREAM_SHA" = "$LOCAL_SHA" ]; then
+            echo "No new upstream commits."
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          else
+            COUNT=$(git rev-list origin/main..upstream/main --count)
+            echo "Found $COUNT new upstream commits."
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            echo "commit_count=$COUNT" >> "$GITHUB_OUTPUT"
+
+            git log origin/main..upstream/main --oneline --no-merges | head -50 > /tmp/commit-summary.txt
+            {
+              echo 'summary<<SUMMARY_EOF'
+              cat /tmp/commit-summary.txt
+              echo 'SUMMARY_EOF'
+            } >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create sync branch and merge
+        if: steps.check.outputs.has_changes == 'true'
+        id: merge
+        run: |
+          BRANCH="sync/upstream-$(date +%Y-%m-%d)"
+          git checkout -b "$BRANCH"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+          if git merge upstream/main --no-edit; then
+            echo "merge_clean=true" >> "$GITHUB_OUTPUT"
+            echo "Merge succeeded without conflicts."
+          else
+            echo "merge_clean=false" >> "$GITHUB_OUTPUT"
+            CONFLICTS=$(git diff --name-only --diff-filter=U | tr '\n' ', ')
+            echo "conflicts=$CONFLICTS" >> "$GITHUB_OUTPUT"
+            git add -A
+            git commit --no-edit -m "sync: merge upstream/main (conflicts present)"
+          fi
+
+      - name: Push sync branch
+        if: steps.check.outputs.has_changes == 'true'
+        run: |
+          git push origin "${{ steps.merge.outputs.branch }}"
+
+      - name: Create PR (clean merge)
+        if: steps.check.outputs.has_changes == 'true' && steps.merge.outputs.merge_clean == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr create \
+            --title "sync: merge ${{ steps.check.outputs.commit_count }} upstream commits ($(date +%Y-%m-%d))" \
+            --body "## Upstream Sync
+
+          **${{ steps.check.outputs.commit_count }}** new commits from [openclaw/openclaw](https://github.com/openclaw/openclaw).
+
+          ### Commits
+          \`\`\`
+          ${{ steps.check.outputs.summary }}
+          \`\`\`
+
+          **Status:** Clean merge, no conflicts." \
+            --base main \
+            --head "${{ steps.merge.outputs.branch }}"
+
+      - name: Create draft PR (conflicts)
+        if: steps.check.outputs.has_changes == 'true' && steps.merge.outputs.merge_clean == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr create \
+            --title "sync: merge ${{ steps.check.outputs.commit_count }} upstream commits ($(date +%Y-%m-%d)) — CONFLICTS" \
+            --body "## Upstream Sync — Conflicts Detected
+
+          **${{ steps.check.outputs.commit_count }}** new commits from [openclaw/openclaw](https://github.com/openclaw/openclaw).
+
+          ### Conflicted Files
+          \`\`\`
+          ${{ steps.merge.outputs.conflicts }}
+          \`\`\`
+
+          ### Commits
+          \`\`\`
+          ${{ steps.check.outputs.summary }}
+          \`\`\`
+
+          **Action required:** Checkout this branch, resolve conflicts, and push." \
+            --base main \
+            --head "${{ steps.merge.outputs.branch }}" \
+            --draft \
+            --label "conflicts"
+
+      - name: Alert on failure
+        if: failure() && steps.check.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.AMERICAN_CLAW_DISPATCH_TOKEN }}
+        run: |
+          gh api repos/justuseapen/american-claw/dispatches \
+            -f event_type="sync-failure" \
+            -f 'client_payload[error]=Upstream sync workflow failed' \
+            -f 'client_payload[run_url]=${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
