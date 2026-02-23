@@ -66,6 +66,68 @@ async function dispatchRequest(
 }
 
 describe("gateway plugin HTTP auth boundary", () => {
+  test("applies default security headers and optional strict transport security", async () => {
+    const resolvedAuth: ResolvedGatewayAuth = {
+      mode: "none",
+      token: undefined,
+      password: undefined,
+      allowTailscale: false,
+    };
+
+    await withTempConfig({
+      cfg: { gateway: { trustedProxies: [] } },
+      prefix: "openclaw-plugin-http-security-headers-test-",
+      run: async () => {
+        const withoutHsts = createGatewayHttpServer({
+          canvasHost: null,
+          clients: new Set(),
+          controlUiEnabled: false,
+          controlUiBasePath: "/__control__",
+          openAiChatCompletionsEnabled: false,
+          openResponsesEnabled: false,
+          handleHooksRequest: async () => false,
+          resolvedAuth,
+        });
+        const withoutHstsResponse = createResponse();
+        await dispatchRequest(
+          withoutHsts,
+          createRequest({ path: "/missing" }),
+          withoutHstsResponse.res,
+        );
+        expect(withoutHstsResponse.setHeader).toHaveBeenCalledWith(
+          "X-Content-Type-Options",
+          "nosniff",
+        );
+        expect(withoutHstsResponse.setHeader).toHaveBeenCalledWith(
+          "Referrer-Policy",
+          "no-referrer",
+        );
+        expect(withoutHstsResponse.setHeader).not.toHaveBeenCalledWith(
+          "Strict-Transport-Security",
+          expect.any(String),
+        );
+
+        const withHsts = createGatewayHttpServer({
+          canvasHost: null,
+          clients: new Set(),
+          controlUiEnabled: false,
+          controlUiBasePath: "/__control__",
+          openAiChatCompletionsEnabled: false,
+          openResponsesEnabled: false,
+          strictTransportSecurityHeader: "max-age=31536000; includeSubDomains",
+          handleHooksRequest: async () => false,
+          resolvedAuth,
+        });
+        const withHstsResponse = createResponse();
+        await dispatchRequest(withHsts, createRequest({ path: "/missing" }), withHstsResponse.res);
+        expect(withHstsResponse.setHeader).toHaveBeenCalledWith(
+          "Strict-Transport-Security",
+          "max-age=31536000; includeSubDomains",
+        );
+      },
+    });
+  });
+
   test("requires gateway auth for /api/channels/* plugin routes and allows authenticated pass-through", async () => {
     const resolvedAuth: ResolvedGatewayAuth = {
       mode: "token",
