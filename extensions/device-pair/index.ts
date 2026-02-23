@@ -1,7 +1,12 @@
-import { spawn } from "node:child_process";
 import os from "node:os";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { approveDevicePairing, listDevicePairing } from "openclaw/plugin-sdk";
+import {
+  approveDevicePairing,
+  listDevicePairing,
+  resolveGatewayBindUrl,
+  runPluginCommandWithTimeout,
+  resolveTailnetHostWithRunner,
+} from "openclaw/plugin-sdk";
 import qrcode from "qrcode-terminal";
 
 function renderQrAscii(data: string): Promise<string> {
@@ -36,77 +41,6 @@ type ResolveAuthResult = {
   label?: string;
   error?: string;
 };
-
-type CommandResult = {
-  code: number;
-  stdout: string;
-  stderr: string;
-};
-
-async function runFixedCommandWithTimeout(
-  argv: string[],
-  timeoutMs: number,
-): Promise<CommandResult> {
-  return await new Promise((resolve) => {
-    const [command, ...args] = argv;
-    if (!command) {
-      resolve({ code: 1, stdout: "", stderr: "command is required" });
-      return;
-    }
-    const proc = spawn(command, args, {
-      stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env },
-    });
-
-    let stdout = "";
-    let stderr = "";
-    let settled = false;
-    let timer: NodeJS.Timeout | null = null;
-
-    const finalize = (result: CommandResult) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      if (timer) {
-        clearTimeout(timer);
-      }
-      resolve(result);
-    };
-
-    proc.stdout?.on("data", (chunk: Buffer | string) => {
-      stdout += chunk.toString();
-    });
-    proc.stderr?.on("data", (chunk: Buffer | string) => {
-      stderr += chunk.toString();
-    });
-
-    timer = setTimeout(() => {
-      proc.kill("SIGKILL");
-      finalize({
-        code: 124,
-        stdout,
-        stderr: stderr || `command timed out after ${timeoutMs}ms`,
-      });
-    }, timeoutMs);
-
-    proc.on("error", (err) => {
-      finalize({
-        code: 1,
-        stdout,
-        stderr: err.message,
-      });
-    });
-
-    proc.on("close", (code) => {
-      finalize({
-        code: code ?? 1,
-        stdout,
-        stderr,
-      });
-    });
-  });
-}
 
 function normalizeUrl(raw: string, schemeFallback: "ws" | "wss"): string | null {
   const candidate = raw.trim();
@@ -239,48 +173,12 @@ function pickTailnetIPv4(): string | null {
 }
 
 async function resolveTailnetHost(): Promise<string | null> {
-  const candidates = ["tailscale", "/Applications/Tailscale.app/Contents/MacOS/Tailscale"];
-  for (const candidate of candidates) {
-    try {
-      const result = await runFixedCommandWithTimeout([candidate, "status", "--json"], 5000);
-      if (result.code !== 0) {
-        continue;
-      }
-      const raw = result.stdout.trim();
-      if (!raw) {
-        continue;
-      }
-      const parsed = parsePossiblyNoisyJsonObject(raw);
-      const self =
-        typeof parsed.Self === "object" && parsed.Self !== null
-          ? (parsed.Self as Record<string, unknown>)
-          : undefined;
-      const dns = typeof self?.DNSName === "string" ? self.DNSName : undefined;
-      if (dns && dns.length > 0) {
-        return dns.replace(/\.$/, "");
-      }
-      const ips = Array.isArray(self?.TailscaleIPs) ? (self?.TailscaleIPs as string[]) : [];
-      if (ips.length > 0) {
-        return ips[0] ?? null;
-      }
-    } catch {
-      continue;
-    }
-  }
-  return null;
-}
-
-function parsePossiblyNoisyJsonObject(raw: string): Record<string, unknown> {
-  const start = raw.indexOf("{");
-  const end = raw.lastIndexOf("}");
-  if (start === -1 || end <= start) {
-    return {};
-  }
-  try {
-    return JSON.parse(raw.slice(start, end + 1)) as Record<string, unknown>;
-  } catch {
-    return {};
-  }
+  return await resolveTailnetHostWithRunner((argv, opts) =>
+    runPluginCommandWithTimeout({
+      argv,
+      timeoutMs: opts.timeoutMs,
+    }),
+  );
 }
 
 function resolveAuth(cfg: OpenClawPluginApi["config"]): ResolveAuthResult {
@@ -365,29 +263,16 @@ async function resolveGatewayUrl(api: OpenClawPluginApi): Promise<ResolveUrlResu
     }
   }
 
-  const bind = cfg.gateway?.bind ?? "loopback";
-  if (bind === "custom") {
-    const host = cfg.gateway?.customBindHost?.trim();
-    if (host) {
-      return { url: `${scheme}://${host}:${port}`, source: "gateway.bind=custom" };
-    }
-    return { error: "gateway.bind=custom requires gateway.customBindHost." };
-  }
-
-  if (bind === "tailnet") {
-    const host = pickTailnetIPv4();
-    if (host) {
-      return { url: `${scheme}://${host}:${port}`, source: "gateway.bind=tailnet" };
-    }
-    return { error: "gateway.bind=tailnet set, but no tailnet IP was found." };
-  }
-
-  if (bind === "lan") {
-    const host = pickLanIPv4();
-    if (host) {
-      return { url: `${scheme}://${host}:${port}`, source: "gateway.bind=lan" };
-    }
-    return { error: "gateway.bind=lan set, but no private LAN IP was found." };
+  const bindResult = resolveGatewayBindUrl({
+    bind: cfg.gateway?.bind,
+    customBindHost: cfg.gateway?.customBindHost,
+    scheme,
+    port,
+    pickTailnetHost: pickTailnetIPv4,
+    pickLanHost: pickLanIPv4,
+  });
+  if (bindResult) {
+    return bindResult;
   }
 
   return {

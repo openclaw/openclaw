@@ -1,11 +1,18 @@
 import type { ChildProcess } from "node:child_process";
-import type { OpenClawConfig, MarkdownTableMode, RuntimeEnv } from "openclaw/plugin-sdk";
+import type {
+  MarkdownTableMode,
+  OpenClawConfig,
+  OutboundReplyPayload,
+  RuntimeEnv,
+} from "openclaw/plugin-sdk";
 import {
   createReplyPrefixOptions,
+  resolveOutboundMediaUrls,
   mergeAllowlist,
   resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveSenderCommandAuthorization,
+  sendMediaWithLeadingCaption,
   summarizeMapping,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk";
@@ -392,7 +399,7 @@ async function processMessage(
 }
 
 async function deliverZalouserReply(params: {
-  payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string };
+  payload: OutboundReplyPayload;
   profile: string;
   chatId: string;
   isGroup: boolean;
@@ -408,29 +415,23 @@ async function deliverZalouserReply(params: {
   const tableMode = params.tableMode ?? "code";
   const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
 
-  const mediaList = payload.mediaUrls?.length
-    ? payload.mediaUrls
-    : payload.mediaUrl
-      ? [payload.mediaUrl]
-      : [];
-
-  if (mediaList.length > 0) {
-    let first = true;
-    for (const mediaUrl of mediaList) {
-      const caption = first ? text : undefined;
-      first = false;
-      try {
-        logVerbose(core, runtime, `Sending media to ${chatId}`);
-        await sendMessageZalouser(chatId, caption ?? "", {
-          profile,
-          mediaUrl,
-          isGroup,
-        });
-        statusSink?.({ lastOutboundAt: Date.now() });
-      } catch (err) {
-        runtime.error(`Zalouser media send failed: ${String(err)}`);
-      }
-    }
+  const sentMedia = await sendMediaWithLeadingCaption({
+    mediaUrls: resolveOutboundMediaUrls(payload),
+    caption: text,
+    send: async ({ mediaUrl, caption }) => {
+      logVerbose(core, runtime, `Sending media to ${chatId}`);
+      await sendMessageZalouser(chatId, caption ?? "", {
+        profile,
+        mediaUrl,
+        isGroup,
+      });
+      statusSink?.({ lastOutboundAt: Date.now() });
+    },
+    onError: (error) => {
+      runtime.error(`Zalouser media send failed: ${String(error)}`);
+    },
+  });
+  if (sentMedia) {
     return;
   }
 

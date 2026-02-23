@@ -9,9 +9,13 @@ import {
 } from "./attachments.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 
-vi.mock("openclaw/plugin-sdk", () => ({
-  isPrivateIpAddress: () => false,
-}));
+vi.mock("openclaw/plugin-sdk", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk")>();
+  return {
+    ...actual,
+    isPrivateIpAddress: () => false,
+  };
+});
 
 /** Mock DNS resolver that always returns a public IP (for anti-SSRF validation in tests). */
 const publicResolveFn = async () => ({ address: "13.107.136.10" });
