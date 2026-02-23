@@ -187,6 +187,37 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.cacheRetention).toBeUndefined();
   });
 
+  it("passes through explicit cacheRetention for Anthropic Bedrock models", () => {
+    const { calls, agent } = createOptionsCaptureAgent();
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "amazon-bedrock/us.anthropic.claude-opus-4-6-v1": {
+              params: {
+                cacheRetention: "long",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    applyExtraParamsToAgent(agent, cfg, "amazon-bedrock", "us.anthropic.claude-opus-4-6-v1");
+
+    const model = {
+      api: "openai-completions",
+      provider: "amazon-bedrock",
+      id: "us.anthropic.claude-opus-4-6-v1",
+    } as Model<"openai-completions">;
+    const context: Context = { messages: [] };
+
+    void agent.streamFn?.(model, context, {});
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.cacheRetention).toBe("long");
+  });
+
   it("adds Anthropic 1M beta header when context1m is enabled for Opus/Sonnet", () => {
     const { calls, agent } = createOptionsCaptureAgent();
     const cfg = buildAnthropicModelConfig("anthropic/claude-opus-4-6", { context1m: true });
