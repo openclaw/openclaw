@@ -14,6 +14,7 @@ type EnforcerState = {
 
 export class ReplyChainEnforcer {
   private states = new Map<SessionKey, EnforcerState>();
+  private recoveryRuns = new Set<SessionKey>();
   private timer: NodeJS.Timeout | null = null;
   private logger = createSubsystemLogger("watchdog");
 
@@ -80,6 +81,17 @@ export class ReplyChainEnforcer {
    */
   public onChatFinal(sessionKey: SessionKey, text: string) {
     if (!this.config.enabled) {
+      return;
+    }
+
+    // Don't re-arm from watchdog recovery runs — they're fire-and-forget
+    if (this.recoveryRuns.has(sessionKey)) {
+      this.recoveryRuns.delete(sessionKey);
+      this.logger.info("DISARM (watchdog recovery run complete)", {
+        key: sessionKey,
+        textPreview: (text?.trim() ?? "").slice(0, 120),
+      });
+      this.setState(sessionKey, "disarmed", "Watchdog recovery complete");
       return;
     }
 
@@ -170,6 +182,10 @@ export class ReplyChainEnforcer {
 
         // Disarm to prevent immediate re-trigger
         this.setState(key, "disarmed", "Watchdog Triggered");
+
+        // Mark this session as having an active recovery run
+        // so onChatFinal won't re-arm when the response arrives
+        this.recoveryRuns.add(key);
 
         // Fire recovery — noFallback prevents redirecting to main session
         // if the target session isn't in the store (avoids spamming wrong session)

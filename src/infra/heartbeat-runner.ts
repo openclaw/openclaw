@@ -384,23 +384,14 @@ async function restoreHeartbeatUpdatedAt(params: {
  * This removes the user+assistant turns that were written during a HEARTBEAT_OK run,
  * preventing context pollution from zero-information exchanges.
  */
-async function pruneHeartbeatTranscript(params: {
+async function pruneHeartbeatTranscript(_params: {
   transcriptPath?: string;
   preHeartbeatSize?: number;
 }) {
-  const { transcriptPath, preHeartbeatSize } = params;
-  if (!transcriptPath || typeof preHeartbeatSize !== "number" || preHeartbeatSize < 0) {
-    return;
-  }
-  try {
-    const stat = await fs.stat(transcriptPath);
-    // Only truncate if the file has grown during the heartbeat run
-    if (stat.size > preHeartbeatSize) {
-      await fs.truncate(transcriptPath, preHeartbeatSize);
-    }
-  } catch {
-    // File may not exist or may have been removed - ignore errors
-  }
+  // Disabled: pruning heartbeat turns from transcripts causes visibility issues
+  // and interfered with the watchdog (truncation triggered file watcher re-arms).
+  // Heartbeat turns are lightweight — keeping them is safer than erasing them.
+  return;
 }
 
 /**
