@@ -276,13 +276,25 @@ function createAnthropicBetaHeadersWrapper(
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
+    const isOauth = isAnthropicOAuthApiKey(options?.apiKey);
+    const requestedContext1m = betas.includes(ANTHROPIC_CONTEXT_1M_BETA);
+    const effectiveBetas =
+      isOauth && requestedContext1m
+        ? betas.filter((beta) => beta !== ANTHROPIC_CONTEXT_1M_BETA)
+        : betas;
+    if (isOauth && requestedContext1m) {
+      log.warn(
+        `ignoring context1m for OAuth token auth on ${model.provider}/${model.id}; Anthropic rejects context-1m beta with OAuth auth`,
+      );
+    }
+
     // Preserve the betas pi-ai's createClient would inject for the given token type.
     // Without this, our options.headers["anthropic-beta"] overwrites the pi-ai
     // defaultHeaders via Object.assign, stripping critical betas like oauth-2025-04-20.
-    const piAiBetas = isAnthropicOAuthApiKey(options?.apiKey)
+    const piAiBetas = isOauth
       ? (PI_AI_OAUTH_ANTHROPIC_BETAS as readonly string[])
       : (PI_AI_DEFAULT_ANTHROPIC_BETAS as readonly string[]);
-    const allBetas = [...new Set([...piAiBetas, ...betas])];
+    const allBetas = [...new Set([...piAiBetas, ...effectiveBetas])];
     return underlying(model, context, {
       ...options,
       headers: mergeAnthropicBetaHeader(options?.headers, allBetas),
