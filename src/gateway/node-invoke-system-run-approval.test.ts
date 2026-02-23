@@ -82,4 +82,47 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     expect(params.approved).toBe(true);
     expect(params.approvalDecision).toBe("allow-once");
   });
+
+  test("rejects env-assignment shell wrapper when approval command omits env prelude", () => {
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["/usr/bin/env", "BASH_ENV=/tmp/payload.sh", "bash", "-lc", "echo SAFE"],
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      client,
+      execApprovalManager: manager(makeRecord("echo SAFE")),
+      nowMs: now,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("unreachable");
+    }
+    expect(result.message).toContain("approval id does not match request");
+    expect(result.details?.code).toBe("APPROVAL_REQUEST_MISMATCH");
+  });
+
+  test("accepts env-assignment shell wrapper only when approval command matches full argv text", () => {
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["/usr/bin/env", "BASH_ENV=/tmp/payload.sh", "bash", "-lc", "echo SAFE"],
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      client,
+      execApprovalManager: manager(
+        makeRecord('/usr/bin/env BASH_ENV=/tmp/payload.sh bash -lc "echo SAFE"'),
+      ),
+      nowMs: now,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      throw new Error("unreachable");
+    }
+    const params = result.params as Record<string, unknown>;
+    expect(params.approved).toBe(true);
+    expect(params.approvalDecision).toBe("allow-once");
+  });
 });
