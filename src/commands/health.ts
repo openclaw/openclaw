@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import { buildGatewayConnectionDetails, callGateway } from "../gateway/call.js";
+import type { ChannelRuntimeSnapshot } from "../gateway/server-channels.js";
 import { info } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -348,6 +349,7 @@ export const formatHealthChannelLines = (
 export async function getHealthSnapshot(params?: {
   timeoutMs?: number;
   probe?: boolean;
+  runtimeSnapshot?: ChannelRuntimeSnapshot;
 }): Promise<HealthSummary> {
   const timeoutMs = params?.timeoutMs;
   const cfg = loadConfig();
@@ -450,10 +452,19 @@ export async function getHealthSnapshot(params?: {
         debugHealth("probe.bot", { channel: plugin.id, accountId, username: bot.username });
       }
 
+      // Merge live runtime state (running, connected, timestamps, botTokenSource, etc.)
+      // from the gateway's in-memory channel manager when available.
+      const runtimeState =
+        params?.runtimeSnapshot?.channelAccounts?.[plugin.id]?.[accountId] ??
+        (accountId === defaultAccountId
+          ? params?.runtimeSnapshot?.channels?.[plugin.id]
+          : undefined);
+
       const snapshot: ChannelAccountSnapshot = {
         accountId,
         enabled,
         configured,
+        ...runtimeState,
       };
       if (probe !== undefined) {
         snapshot.probe = probe;
