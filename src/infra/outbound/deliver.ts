@@ -219,6 +219,26 @@ export type ExecutionWatchdogResult = {
   reason: "execution_window_exceeded" | null;
 };
 
+type MissionControlClient = {
+  createTask: (params: {
+    title: string;
+    type: "STORY" | "CHORE";
+    ownerAgent: string;
+    nextAction: string;
+    status: "backlog";
+  }) => Promise<{ taskId: string; link: string }>;
+  ensureLeaseActive: (params: { taskId: string; agentId: string }) => Promise<{ active: boolean }>;
+};
+
+type MissionControlBindingResult = {
+  proceed: boolean;
+  text: string;
+  taskId?: string;
+  taskLink?: string;
+  createdTask?: boolean;
+  blockedReason?: string;
+};
+
 const hasGecLegalEndState = (text: string): boolean => {
   const upper = text.toUpperCase();
   return GEC_LEGAL_END_STATES.some((token) => upper.includes(token));
@@ -228,6 +248,10 @@ const isDecisionRequestText = (text: string): boolean => GEC_DECISION_RE.test(te
 const GEC_EXECUTION_INTENT_RE =
   /\b(i['’]m\s+executing|i\s+am\s+executing|running\s+end-to-end|working\s+on\s+it|executing\s+now|starting\s+execution)\b/i;
 const GEC_EXECUTION_WINDOW_DEFAULT_MINS = 10;
+const MC_TASK_RE = /\btask(?:[_ -]?id)?\s*[:=]\s*([A-Za-z0-9_-]+)/i;
+const MC_TASK_LINK_RE = /https?:\/\/\S+\/tasks\/([A-Za-z0-9_-]+)/i;
+const NON_TRIVIAL_RE =
+  /\b(code changes?|file writes?|deploy(?:ment)?|multi-step|checkpoint plan|closure packet|blocked packet|running tests?|\bbuild\b|executing now|i['’]ll do this now|implement|patch|commit|pr\b)\b/i;
 
 const resolveExecutionWindowMs = (): number => {
   const raw = process.env.GEC_EXECUTION_WINDOW_MINS;
@@ -239,6 +263,165 @@ const resolveExecutionWindowMs = (): number => {
 const hasProofSignal = (text: string): boolean => hasGecLegalEndState(text);
 
 const hasExecutionIntent = (text: string): boolean => GEC_EXECUTION_INTENT_RE.test(text);
+const isNonTrivialExecution = (text: string): boolean => NON_TRIVIAL_RE.test(text);
+
+const extractTaskIdFromText = (text: string): string | undefined => {
+  const direct = MC_TASK_RE.exec(text)?.[1];
+  if (direct) {
+    return direct;
+  }
+  return MC_TASK_LINK_RE.exec(text)?.[1];
+};
+
+const chooseDefaultOwnerAgent = (text: string): string =>
+  /\b(product|spec|priorit|roadmap|acceptance criteria)\b/i.test(text)
+    ? "ava-product-manager"
+    : "cb-router";
+
+const normalizeMcBaseUrl = (): string =>
+  (process.env.MC_APP_BASE_URL ?? "https://mission-control.local").replace(/\/$/, "");
+
+const buildBlockedPacket = (reason: string): string =>
+  `BLOCKED PACKET\nMissing requirement: ${reason}\nRequired next step: restore Mission Control connectivity/credentials and retry.`;
+
+const ensureMcLinkOnPacket = (text: string, taskLink?: string): string => {
+  if (!taskLink) {
+    return text;
+  }
+  if (!hasGecLegalEndState(text)) {
+    return text;
+  }
+  if (text.startsWith("MC Task:")) {
+    return text;
+  }
+  return `MC Task: ${taskLink}\n${text}`;
+};
+
+const createMissionControlClient = (): MissionControlClient => {
+  const apiBase = process.env.MC_API_URL?.replace(/\/$/, "");
+  const token = process.env.MC_API_TOKEN;
+  const appBase = normalizeMcBaseUrl();
+  return {
+    createTask: async ({ title, type, ownerAgent, nextAction, status }) => {
+      if (!apiBase || !token) {
+        throw new Error("MC connectivity / credentials missing (MC_API_URL or MC_API_TOKEN)");
+      }
+      const res = await fetch(`${apiBase}/tasks`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ title, type, ownerAgent, nextAction, status }),
+      });
+      if (!res.ok) {
+        throw new Error(`MC task create failed: HTTP ${res.status}`);
+      }
+      const json = (await res.json()) as { taskId?: string; id?: string; link?: string };
+      const taskId = json.taskId ?? json.id;
+      if (!taskId) {
+        throw new Error("MC task create failed: missing taskId in response");
+      }
+      return {
+        taskId,
+        link: json.link ?? `${appBase}/tasks/${taskId}`,
+      };
+    },
+    ensureLeaseActive: async ({ taskId, agentId }) => {
+      if (!apiBase || !token) {
+        throw new Error("MC connectivity / credentials missing (MC_API_URL or MC_API_TOKEN)");
+      }
+      const res = await fetch(`${apiBase}/tasks/${taskId}/lease`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ agentId, state: "ACTIVE" }),
+      });
+      if (!res.ok) {
+        throw new Error(`MC lease activation failed: HTTP ${res.status}`);
+      }
+      return { active: true };
+    },
+  };
+};
+
+export async function ensureMissionControlBinding(params: {
+  text: string;
+  taskId?: string;
+  taskLink?: string;
+  agentId: string;
+  client?: MissionControlClient;
+}): Promise<MissionControlBindingResult> {
+  const raw = (params.text ?? "").trim();
+  if (!raw || !isNonTrivialExecution(raw)) {
+    return { proceed: true, text: raw, taskId: params.taskId, taskLink: params.taskLink };
+  }
+  const client = params.client ?? createMissionControlClient();
+  let taskId = params.taskId ?? extractTaskIdFromText(raw);
+  let taskLink = params.taskLink;
+
+  if (!taskId) {
+    try {
+      const created = await client.createTask({
+        title: raw.slice(0, 120),
+        type: /\bdeploy|infra|ops\b/i.test(raw) ? "CHORE" : "STORY",
+        ownerAgent: chooseDefaultOwnerAgent(raw),
+        nextAction: "Execute one bounded checkpoint and report proof.",
+        status: "backlog",
+      });
+      taskId = created.taskId;
+      taskLink = created.link;
+      const checkpoint = `CHECKPOINT PLAN\n1) Task created: ${taskLink}\n2) Acquire ACTIVE lease for executor agent. Proof: lease ACTIVE for ${params.agentId}.\n3) Execute exactly one bounded step and report evidence linked to task ${taskId}.`;
+      return {
+        proceed: false,
+        createdTask: true,
+        text: ensureMcLinkOnPacket(checkpoint, taskLink),
+        taskId,
+        taskLink,
+      };
+    } catch (err) {
+      return {
+        proceed: false,
+        text: buildBlockedPacket(String(err)),
+        blockedReason: String(err),
+      };
+    }
+  }
+
+  if (!taskLink) {
+    taskLink = `${normalizeMcBaseUrl()}/tasks/${taskId}`;
+  }
+
+  try {
+    const lease = await client.ensureLeaseActive({ taskId, agentId: params.agentId });
+    if (!lease.active) {
+      return {
+        proceed: false,
+        text: buildBlockedPacket("MC lease is not ACTIVE"),
+        taskId,
+        taskLink,
+        blockedReason: "MC lease is not ACTIVE",
+      };
+    }
+  } catch (err) {
+    return {
+      proceed: false,
+      text: buildBlockedPacket(String(err)),
+      taskId,
+      taskLink,
+      blockedReason: String(err),
+    };
+  }
+
+  return {
+    proceed: true,
+    text: ensureMcLinkOnPacket(raw, taskLink),
+    taskId,
+    taskLink,
+  };
+}
 
 export function buildGecCheckpointPlan(originalText: string): string {
   const objective = (originalText || "Execution update").replace(/\s+/g, " ").trim().slice(0, 220);
@@ -576,15 +759,48 @@ async function deliverOutboundPayloadsCore(
     startedAtMs: Date.now(),
     lastProofAtMs: Date.now(),
   };
+  let boundTaskId: string | undefined;
+  let boundTaskLink: string | undefined;
   for (const payload of normalizedPayloads) {
     const payloadSummary: NormalizedOutboundPayload = {
       text: payload.text ?? "",
       mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
       channelData: payload.channelData,
     };
+    const mcBinding = await ensureMissionControlBinding({
+      text: payloadSummary.text,
+      taskId: boundTaskId,
+      taskLink: boundTaskLink,
+      agentId: params.agentId ?? "cb-router",
+    });
+    if (mcBinding.taskId) {
+      boundTaskId = mcBinding.taskId;
+    }
+    if (mcBinding.taskLink) {
+      boundTaskLink = mcBinding.taskLink;
+    }
+    payloadSummary.text = mcBinding.text;
+
+    if (mcBinding.blockedReason) {
+      if (sessionKeyForInternalHooks) {
+        void triggerInternalHook(
+          createInternalHookEvent("message", "policy_violation", sessionKeyForInternalHooks, {
+            policy: "global_execution_constitution",
+            gecVersion: GEC_VERSION,
+            reason: "MISSION_CONTROL_BINDING_FAILED",
+            channelId: channel,
+            accountId: accountId ?? undefined,
+            conversationId: to,
+            originalContent: payload.text ?? "",
+            rewrittenContent: mcBinding.text,
+          }),
+        ).catch(() => {});
+      }
+    }
+
     const gec = enforceGlobalExecutionConstitution(payloadSummary.text);
     if (gec.blocked) {
-      payloadSummary.text = gec.rewrittenText;
+      payloadSummary.text = ensureMcLinkOnPacket(gec.rewrittenText, boundTaskLink);
       if (sessionKeyForInternalHooks) {
         void triggerInternalHook(
           createInternalHookEvent("message", "policy_violation", sessionKeyForInternalHooks, {
@@ -604,6 +820,7 @@ async function deliverOutboundPayloadsCore(
         );
       }
     }
+    let abortAfterThisPayload = !mcBinding.proceed;
     const emitMessageSent = (params: {
       success: boolean;
       content: string;
@@ -678,7 +895,6 @@ async function deliverOutboundPayloadsCore(
         }
       }
 
-      let abortAfterThisPayload = false;
       const watchdog = evaluateExecutionWatchdog({
         text: payloadSummary.text,
         state: watchdogState,
@@ -686,10 +902,10 @@ async function deliverOutboundPayloadsCore(
       watchdogState = watchdog.state;
       if (watchdog.timedOut) {
         abortAfterThisPayload = true;
-        payloadSummary.text = watchdog.rewrittenText;
+        payloadSummary.text = ensureMcLinkOnPacket(watchdog.rewrittenText, boundTaskLink);
         effectivePayload = {
           ...effectivePayload,
-          text: watchdog.rewrittenText,
+          text: payloadSummary.text,
         };
         if (sessionKeyForInternalHooks) {
           void triggerInternalHook(
