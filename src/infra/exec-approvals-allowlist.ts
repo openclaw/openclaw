@@ -122,6 +122,14 @@ function evaluateSegments(
   const segmentSatisfiedBy: ExecSegmentSatisfiedBy[] = [];
 
   const satisfied = segments.every((segment) => {
+    if (segment.resolution?.policyBlocked === true) {
+      segmentSatisfiedBy.push(null);
+      return false;
+    }
+    const effectiveArgv =
+      segment.resolution?.effectiveArgv && segment.resolution.effectiveArgv.length > 0
+        ? segment.resolution.effectiveArgv
+        : segment.argv;
     const candidatePath = resolveAllowlistCandidatePath(segment.resolution, params.cwd);
     const candidateResolution =
       candidatePath && segment.resolution
@@ -132,7 +140,7 @@ function evaluateSegments(
       matches.push(match);
     }
     const safe = isSafeBinUsage({
-      argv: segment.argv,
+      argv: effectiveArgv,
       resolution: segment.resolution,
       safeBins: params.safeBins,
       safeBinProfiles: params.safeBinProfiles,

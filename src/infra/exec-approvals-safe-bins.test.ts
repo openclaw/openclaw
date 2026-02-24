@@ -221,6 +221,14 @@ describe("exec approvals safe bins", () => {
       safeBins: ["sort"],
       executableName: "sort",
     },
+    {
+      name: "rejects unknown short options in safe-bin mode",
+      argv: ["tr", "-S", "a", "b"],
+      resolvedPath: "/usr/bin/tr",
+      expected: false,
+      safeBins: ["tr"],
+      executableName: "tr",
+    },
   ];
 
   for (const testCase of cases) {
@@ -463,5 +471,22 @@ describe("exec approvals safe bins", () => {
     expect(result.allowlistSatisfied).toBe(false);
     expect(result.segmentSatisfiedBy).toEqual([null]);
     expect(result.segments[0]?.resolution?.resolvedPath).toBe(fakeHead);
+  });
+
+  it("fails closed for semantic env wrappers in allowlist mode", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const result = evaluateShellAllowlist({
+      command: "env -S 'sh -c \"echo pwned\"' tr",
+      allowlist: [{ pattern: "/usr/bin/tr" }],
+      safeBins: normalizeSafeBins(["tr"]),
+      cwd: "/tmp",
+      platform: process.platform,
+    });
+    expect(result.analysisOk).toBe(true);
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(result.segmentSatisfiedBy).toEqual([null]);
+    expect(result.segments[0]?.resolution?.policyBlocked).toBe(true);
   });
 });
