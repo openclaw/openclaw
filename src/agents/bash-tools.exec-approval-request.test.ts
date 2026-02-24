@@ -102,6 +102,55 @@ describe("requestExecApprovalDecision", () => {
     ).resolves.toBeNull();
   });
 
+  it("uses registration response id when waiting for decision", async () => {
+    vi.mocked(callGatewayTool)
+      .mockResolvedValueOnce({
+        status: "accepted",
+        id: "server-assigned-id",
+        expiresAtMs: DEFAULT_APPROVAL_TIMEOUT_MS,
+      })
+      .mockResolvedValueOnce({ decision: "allow-once" });
+
+    await expect(
+      requestExecApprovalDecision({
+        id: "client-id",
+        command: "echo hi",
+        cwd: "/tmp",
+        host: "gateway",
+        security: "allowlist",
+        ask: "on-miss",
+      }),
+    ).resolves.toBe("allow-once");
+
+    expect(callGatewayTool).toHaveBeenNthCalledWith(
+      2,
+      "exec.approval.waitDecision",
+      { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
+      { id: "server-assigned-id" },
+    );
+  });
+
+  it("treats expired-or-missing waitDecision as null decision", async () => {
+    vi.mocked(callGatewayTool)
+      .mockResolvedValueOnce({
+        status: "accepted",
+        id: "approval-id",
+        expiresAtMs: DEFAULT_APPROVAL_TIMEOUT_MS,
+      })
+      .mockRejectedValueOnce(new Error("approval expired or not found"));
+
+    await expect(
+      requestExecApprovalDecision({
+        id: "approval-id",
+        command: "echo hi",
+        cwd: "/tmp",
+        host: "gateway",
+        security: "allowlist",
+        ask: "on-miss",
+      }),
+    ).resolves.toBeNull();
+  });
+
   it("returns final decision directly when gateway already replies with decision", async () => {
     vi.mocked(callGatewayTool).mockResolvedValue({ decision: "deny", id: "approval-id" });
 
