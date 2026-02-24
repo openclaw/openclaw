@@ -28,8 +28,7 @@ import {
 import { applyTargetToParams } from "./channel-target.js";
 import type { OutboundSendDeps } from "./deliver.js";
 import {
-  hydrateSendAttachmentParams,
-  hydrateSetGroupIconParams,
+  hydrateAttachmentParamsForAction,
   normalizeSandboxMediaList,
   normalizeSandboxMediaParams,
   parseButtonsParam,
@@ -767,20 +766,10 @@ export async function runMessageAction(
 
   await normalizeSandboxMediaParams({
     args: params,
-    sandboxRoot: mediaPolicy.mode === "sandbox" ? mediaPolicy.sandboxRoot : undefined,
-  });
-
-  await hydrateSendAttachmentParams({
-    cfg,
-    channel,
-    accountId,
-    args: params,
-    action,
-    dryRun,
     mediaPolicy,
   });
 
-  await hydrateSetGroupIconParams({
+  await hydrateAttachmentParamsForAction({
     cfg,
     channel,
     accountId,
