@@ -86,16 +86,25 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
   val manualHost by viewModel.manualHost.collectAsState()
   val manualPort by viewModel.manualPort.collectAsState()
   val manualTls by viewModel.manualTls.collectAsState()
+  val manualEnabled by viewModel.manualEnabled.collectAsState()
   val gatewayToken by viewModel.gatewayToken.collectAsState()
   val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
 
   var advancedOpen by rememberSaveable { mutableStateOf(false) }
-  var inputMode by rememberSaveable { mutableStateOf(ConnectInputMode.SetupCode) }
+  var inputMode by
+    remember(manualEnabled, manualHost, gatewayToken) {
+      mutableStateOf(
+        if (manualEnabled || manualHost.isNotBlank() || gatewayToken.trim().isNotEmpty()) {
+          ConnectInputMode.Manual
+        } else {
+          ConnectInputMode.SetupCode
+        },
+      )
+    }
   var setupCode by rememberSaveable { mutableStateOf("") }
   var manualHostInput by rememberSaveable { mutableStateOf(manualHost.ifBlank { "10.0.2.2" }) }
   var manualPortInput by rememberSaveable { mutableStateOf(manualPort.toString()) }
   var manualTlsInput by rememberSaveable { mutableStateOf(manualTls) }
-  var tokenInput by rememberSaveable { mutableStateOf(gatewayToken) }
   var passwordInput by rememberSaveable { mutableStateOf("") }
   var validationText by rememberSaveable { mutableStateOf<String?>(null) }
 
@@ -192,7 +201,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
             manualHost = manualHostInput,
             manualPort = manualPortInput,
             manualTls = manualTlsInput,
-            token = tokenInput,
+            token = gatewayToken,
             password = passwordInput,
           )
 
@@ -211,7 +220,9 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
         viewModel.setManualHost(config.host)
         viewModel.setManualPort(config.port)
         viewModel.setManualTls(config.tls)
-        viewModel.setGatewayToken(config.token)
+        if (config.token.isNotBlank()) {
+          viewModel.setGatewayToken(config.token)
+        }
         viewModel.setGatewayPassword(config.password)
         viewModel.connectManual()
       },
@@ -380,8 +391,8 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
 
             Text("Token (optional)", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
             OutlinedTextField(
-              value = tokenInput,
-              onValueChange = { tokenInput = it },
+              value = gatewayToken,
+              onValueChange = { viewModel.setGatewayToken(it) },
               placeholder = { Text("token", style = mobileBody, color = mobileTextTertiary) },
               modifier = Modifier.fillMaxWidth(),
               singleLine = true,
@@ -410,6 +421,15 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
           }
 
           HorizontalDivider(color = mobileBorder)
+
+          Text(
+            "Debug snapshot: mode=${if (inputMode == ConnectInputMode.SetupCode) "setup" else "manual"}, manualEnabled=$manualEnabled, tokenLen=${gatewayToken.trim().length}",
+            style = mobileCaption1,
+            color = mobileTextSecondary,
+          )
+          TextButton(onClick = { viewModel.logGatewayDebugSnapshot(source = "connect_tab") }) {
+            Text("Log gateway debug snapshot", style = mobileCallout.copy(fontWeight = FontWeight.SemiBold), color = mobileAccent)
+          }
 
           TextButton(onClick = { viewModel.setOnboardingCompleted(false) }) {
             Text("Run onboarding again", style = mobileCallout.copy(fontWeight = FontWeight.SemiBold), color = mobileAccent)

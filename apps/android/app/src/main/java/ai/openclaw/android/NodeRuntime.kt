@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.SystemClock
+import android.util.Log
 import androidx.core.content.ContextCompat
 import ai.openclaw.android.chat.ChatController
 import ai.openclaw.android.chat.ChatMessage
@@ -532,6 +533,15 @@ class NodeRuntime(context: Context) {
 
   fun setTalkEnabled(value: Boolean) {
     prefs.setTalkEnabled(value)
+  }
+
+  fun logGatewayDebugSnapshot(source: String = "manual") {
+    val flowToken = gatewayToken.value.trim()
+    val loadedToken = prefs.loadGatewayToken().orEmpty()
+    Log.i(
+      "OpenClawGatewayDebug",
+      "source=$source manualEnabled=${manualEnabled.value} host=${manualHost.value} port=${manualPort.value} tls=${manualTls.value} flowTokenLen=${flowToken.length} loadTokenLen=${loadedToken.length} connected=${isConnected.value} status=${statusText.value}",
+    )
   }
 
   fun refreshGatewayConnection() {
