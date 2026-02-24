@@ -134,6 +134,25 @@ describe("normalizeSlackChannelType", () => {
   it("prefers explicit channel_type values", () => {
     expect(normalizeSlackChannelType("mpim", "C123")).toBe("mpim");
   });
+
+  it("overrides wrong channel_type for D-prefix DM channels", () => {
+    // Slack DM channel IDs always start with "D" — if the event
+    // reports a wrong channel_type, the D-prefix should win.
+    expect(normalizeSlackChannelType("channel", "D123")).toBe("im");
+    expect(normalizeSlackChannelType("group", "D456")).toBe("im");
+    expect(normalizeSlackChannelType("mpim", "D789")).toBe("im");
+  });
+
+  it("preserves correct channel_type for D-prefix DM channels", () => {
+    expect(normalizeSlackChannelType("im", "D123")).toBe("im");
+  });
+
+  it("does not override G-prefix channel_type (ambiguous prefix)", () => {
+    // G-prefix can be either "group" (private channel) or "mpim" (group DM)
+    // — trust the provided channel_type since the prefix is ambiguous.
+    expect(normalizeSlackChannelType("group", "G123")).toBe("group");
+    expect(normalizeSlackChannelType("mpim", "G456")).toBe("mpim");
+  });
 });
 
 describe("resolveSlackSystemEventSessionKey", () => {

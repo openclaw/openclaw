@@ -38,15 +38,20 @@ export function normalizeSlackChannelType(
   channelId?: string | null,
 ): SlackMessageEvent["channel_type"] {
   const normalized = channelType?.trim().toLowerCase();
+  const inferred = inferSlackChannelType(channelId);
   if (
     normalized === "im" ||
     normalized === "mpim" ||
     normalized === "channel" ||
     normalized === "group"
   ) {
+    // D-prefix channel IDs are always DMs — override a contradicting channel_type.
+    if (inferred === "im" && normalized !== "im") {
+      return "im";
+    }
     return normalized;
   }
-  return inferSlackChannelType(channelId) ?? "channel";
+  return inferred ?? "channel";
 }
 
 export type SlackMonitorContext = {
