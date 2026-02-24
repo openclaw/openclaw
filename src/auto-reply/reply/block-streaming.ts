@@ -2,6 +2,7 @@ import { getChannelDock } from "../../channels/dock.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { BlockStreamingCoalesceConfig } from "../../config/types.js";
+import { resolveAccountEntry } from "../../routing/account-lookup.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
@@ -45,7 +46,7 @@ function resolveProviderBlockStreamingCoalesce(params: {
   }
   const normalizedAccountId = normalizeAccountId(accountId);
   const typed = providerCfg as ProviderBlockStreamingConfig;
-  const accountCfg = typed.accounts?.[normalizedAccountId];
+  const accountCfg = resolveAccountEntry(typed.accounts, normalizedAccountId);
   return accountCfg?.blockStreamingCoalesce ?? typed.blockStreamingCoalesce;
 }
 
