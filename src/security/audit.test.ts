@@ -103,6 +103,7 @@ function expectNoFinding(res: SecurityAuditReport, checkId: string): void {
 describe("security audit", () => {
   let fixtureRoot = "";
   let caseId = 0;
+  let channelSecurityStateDir = "";
 
   const makeTmpDir = async (label: string) => {
     const dir = path.join(fixtureRoot, `case-${caseId++}-${label}`);
@@ -110,14 +111,23 @@ describe("security audit", () => {
     return dir;
   };
 
-  const withStateDir = async (label: string, fn: (tmp: string) => Promise<void>) => {
-    const tmp = await makeTmpDir(label);
-    await fs.mkdir(path.join(tmp, "credentials"), { recursive: true, mode: 0o700 });
-    await withEnvAsync({ OPENCLAW_STATE_DIR: tmp }, async () => await fn(tmp));
+  const withChannelSecurityStateDir = async (fn: (tmp: string) => Promise<void>) => {
+    const credentialsDir = path.join(channelSecurityStateDir, "credentials");
+    await fs.rm(credentialsDir, { recursive: true, force: true });
+    await fs.mkdir(credentialsDir, { recursive: true, mode: 0o700 });
+    await withEnvAsync(
+      { OPENCLAW_STATE_DIR: channelSecurityStateDir },
+      async () => await fn(channelSecurityStateDir),
+    );
   };
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-"));
+    channelSecurityStateDir = path.join(fixtureRoot, "channel-security");
+    await fs.mkdir(path.join(channelSecurityStateDir, "credentials"), {
+      recursive: true,
+      mode: 0o700,
+    });
   });
 
   afterAll(async () => {
@@ -1367,7 +1377,7 @@ describe("security audit", () => {
   });
 
   it("flags Discord native commands without a guild user allowlist", async () => {
-    await withStateDir("discord", async () => {
+    await withChannelSecurityStateDir(async () => {
       const cfg: OpenClawConfig = {
         channels: {
           discord: {
@@ -1404,7 +1414,7 @@ describe("security audit", () => {
   });
 
   it("does not flag Discord slash commands when dm.allowFrom includes a Discord snowflake id", async () => {
-    await withStateDir("discord-allowfrom-snowflake", async () => {
+    await withChannelSecurityStateDir(async () => {
       const cfg: OpenClawConfig = {
         channels: {
           discord: {
@@ -1441,7 +1451,7 @@ describe("security audit", () => {
   });
 
   it("warns when Discord allowlists contain name-based entries", async () => {
-    await withStateDir("discord-name-based-allowlist", async (tmp) => {
+    await withChannelSecurityStateDir(async (tmp) => {
       await fs.writeFile(
         path.join(tmp, "credentials", "discord-allowFrom.json"),
         JSON.stringify({ version: 1, allowFrom: ["team.owner"] }),
@@ -1491,7 +1501,7 @@ describe("security audit", () => {
   });
 
   it("does not warn when Discord allowlists use ID-style entries only", async () => {
-    await withStateDir("discord-id-only-allowlist", async () => {
+    await withChannelSecurityStateDir(async () => {
       const cfg: OpenClawConfig = {
         channels: {
           discord: {
@@ -1534,7 +1544,7 @@ describe("security audit", () => {
   });
 
   it("flags Discord slash commands when access-group enforcement is disabled and no users allowlist exists", async () => {
-    await withStateDir("discord-open", async () => {
+    await withChannelSecurityStateDir(async () => {
       const cfg: OpenClawConfig = {
         commands: { useAccessGroups: false },
         channels: {
@@ -1572,7 +1582,7 @@ describe("security audit", () => {
   });
 
   it("flags Slack slash commands without a channel users allowlist", async () => {
-    await withStateDir("slack", async () => {
+    await withChannelSecurityStateDir(async () => {
       const cfg: OpenClawConfig = {
         channels: {
           slack: {
@@ -1604,7 +1614,7 @@ describe("security audit", () => {
   });
 
   it("flags Slack slash commands when access-group enforcement is disabled", async () => {
-    await withStateDir("slack-open", async () => {
+    await withChannelSecurityStateDir(async () => {
       const cfg: OpenClawConfig = {
         commands: { useAccessGroups: false },
         channels: {
@@ -1637,7 +1647,7 @@ describe("security audit", () => {
   });
 
   it("flags Telegram group commands without a sender allowlist", async () => {
-    await withStateDir("telegram", async () => {
+    await withChannelSecurityStateDir(async () => {
       const cfg: OpenClawConfig = {
         channels: {
           telegram: {
@@ -1668,7 +1678,7 @@ describe("security audit", () => {
   });
 
   it("warns when Telegram allowFrom entries are non-numeric (legacy @username configs)", async () => {
-    await withStateDir("telegram-invalid-allowfrom", async () => {
+    await withChannelSecurityStateDir(async () => {
       const cfg: OpenClawConfig = {
         channels: {
           telegram: {

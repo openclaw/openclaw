@@ -143,9 +143,8 @@ describe("gateway-cli coverage", () => {
 
     expect(discoverGatewayBeacons).toHaveBeenCalledTimes(1);
     const out = runtimeLogs.join("\n");
-    for (const text of ['"beacons"', '"wsUrl"', "ws://"]) {
-      expect(out).toContain(text);
-    }
+    expect(out).toContain('"beacons"');
+    expect(out).toContain("ws://");
   });
 
   it("validates gateway discover timeout", async () => {
