@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { detectMime } from "../media/mime.js";
-import { resolveFileWithinRoot } from "./file-resolver.js";
+import { mimeForCanvasFile, resolveFileWithinRoot } from "./file-resolver.js";
 
 export const A2UI_PATH = "/__openclaw__/a2ui";
 
@@ -180,11 +180,10 @@ export async function handleA2uiHttpRequest(
   }
 
   try {
-    const lower = result.realPath.toLowerCase();
-    const mime =
-      lower.endsWith(".html") || lower.endsWith(".htm")
-        ? "text/html"
-        : ((await detectMime({ filePath: result.realPath })) ?? "application/octet-stream");
+    const mime = mimeForCanvasFile(
+      result.realPath,
+      await detectMime({ filePath: result.realPath }),
+    );
     res.setHeader("Cache-Control", "no-store");
 
     if (req.method === "HEAD") {

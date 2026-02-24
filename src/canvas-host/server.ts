@@ -17,7 +17,7 @@ import {
   handleA2uiHttpRequest,
   injectCanvasLiveReload,
 } from "./a2ui.js";
-import { normalizeUrlPath, resolveFileWithinRoot } from "./file-resolver.js";
+import { mimeForCanvasFile, normalizeUrlPath, resolveFileWithinRoot } from "./file-resolver.js";
 
 export type CanvasHostOpts = {
   runtime: RuntimeEnv;
@@ -352,11 +352,7 @@ export async function createCanvasHostHandler(
         await handle.close().catch(() => {});
       }
 
-      const lower = realPath.toLowerCase();
-      const mime =
-        lower.endsWith(".html") || lower.endsWith(".htm")
-          ? "text/html"
-          : ((await detectMime({ filePath: realPath })) ?? "application/octet-stream");
+      const mime = mimeForCanvasFile(realPath, await detectMime({ filePath: realPath }));
 
       res.setHeader("Cache-Control", "no-store");
       if (mime === "text/html") {

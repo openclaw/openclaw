@@ -336,11 +336,12 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
     func shouldAutoNavigateToA2UI(lastAutoTarget: String?) -> Bool {
         let trimmed = (self.currentTarget ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty || trimmed == "/" { return true }
+        // Already showing the last auto-navigated target; no reload needed.
         if let lastAuto = lastAutoTarget?.trimmingCharacters(in: .whitespacesAndNewlines),
            !lastAuto.isEmpty,
            trimmed == lastAuto
         {
-            return true
+            return false
         }
         return false
     }
