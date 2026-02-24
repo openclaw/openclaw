@@ -17,7 +17,12 @@ function isExpectedPathError(error: unknown): boolean {
 }
 
 export function sameFileIdentity(left: fs.Stats, right: fs.Stats): boolean {
-  return left.dev === right.dev && left.ino === right.ino;
+  // On Windows, lstatSync (by path) may return dev=0 while fstatSync (by fd)
+  // returns the real volume serial number.  When either dev is 0, fall back to
+  // ino-only comparison which is still unique within a single volume.
+  const devMatch =
+    left.dev === right.dev || (process.platform === "win32" && (left.dev === 0 || right.dev === 0));
+  return devMatch && left.ino === right.ino;
 }
 
 export function openVerifiedFileSync(params: {
