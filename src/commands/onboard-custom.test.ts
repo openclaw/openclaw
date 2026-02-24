@@ -116,6 +116,35 @@ describe("promptCustomApiConfig", () => {
     expectOpenAiCompatResult({ prompter, textCalls: 5, selectCalls: 1, result });
   });
 
+  it("uses expanded max_tokens for openai verification probes", async () => {
+    const prompter = createTestPrompter({
+      text: ["https://example.com/v1", "test-key", "detected-model", "custom", "alias"],
+      select: ["openai"],
+    });
+    const fetchMock = stubFetchSequence([{ ok: true }]);
+
+    await runPromptCustomApi(prompter);
+
+    const firstCall = fetchMock.mock.calls[0]?.[1] as { body?: string } | undefined;
+    expect(firstCall?.body).toBeDefined();
+    expect(JSON.parse(firstCall?.body ?? "{}")).toMatchObject({ max_tokens: 1024 });
+  });
+
+  it("uses expanded max_tokens for anthropic verification probes", async () => {
+    const prompter = createTestPrompter({
+      text: ["https://example.com", "test-key", "detected-model", "custom", "alias"],
+      select: ["unknown"],
+    });
+    const fetchMock = stubFetchSequence([{ ok: false, status: 404 }, { ok: true }]);
+
+    await runPromptCustomApi(prompter);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const secondCall = fetchMock.mock.calls[1]?.[1] as { body?: string } | undefined;
+    expect(secondCall?.body).toBeDefined();
+    expect(JSON.parse(secondCall?.body ?? "{}")).toMatchObject({ max_tokens: 1024 });
+  });
+
   it("re-prompts base url when unknown detection fails", async () => {
     const prompter = createTestPrompter({
       text: [
