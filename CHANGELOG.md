@@ -21,6 +21,7 @@ Docs: https://docs.openclaw.ai
 - Security/Channels: unify dangerous name-matching policy checks (`dangerouslyAllowNameMatching`) across core and extension channels, share mutable-allowlist detectors between `openclaw doctor` and `openclaw security audit`, and scan all configured accounts (not only the default account) in channel security audit findings.
 - Security/Exec approvals: enforce canonical wrapper execution plans across allowlist analysis and runtime execution (node host + gateway host), fail closed on semantic `env` wrapper usage, and reject unknown short safe-bin flags to prevent `env -S/--split-string` interpretation-mismatch bypasses. This ships in the next npm release. Thanks @tdjackey for reporting.
 - Security/Image tool: enforce `tools.fs.workspaceOnly` for sandboxed `image` path resolution so mounted out-of-workspace paths are blocked before media bytes are loaded/sent to vision providers. This ships in the next npm release. Thanks @tdjackey for reporting.
+- Security/Session export: harden exported HTML image rendering against data-URL attribute injection by validating image MIME/base64 fields, rejecting malformed base64 input in media ingestion paths, and dropping invalid tool-image payloads.
 
 ## 2026.2.23 (Unreleased)
 
