@@ -86,6 +86,7 @@
 
 - stable: tagged releases only (e.g. `vYYYY.M.D`), npm dist-tag `latest`.
 - beta: prerelease tags `vYYYY.M.D-beta.N`, npm dist-tag `beta` (may ship without macOS app).
+- beta naming: prefer `-beta.N`; do not mint new `-1/-2` betas. Legacy `vYYYY.M.D-<patch>` and `vYYYY.M.D.beta.N` remain recognized.
 - dev: moving head on `main` (no tag; git checkout main).
 
 ## Testing Guidelines
