@@ -104,6 +104,17 @@ function makeRuntime() {
   };
 }
 
+function expectModelRegistryUnavailable(
+  runtime: ReturnType<typeof makeRuntime>,
+  expectedDetail: string,
+) {
+  expect(runtime.error).toHaveBeenCalledTimes(1);
+  expect(runtime.error.mock.calls[0]?.[0]).toContain("Model registry unavailable:");
+  expect(runtime.error.mock.calls[0]?.[0]).toContain(expectedDetail);
+  expect(runtime.log).not.toHaveBeenCalled();
+  expect(process.exitCode).toBe(1);
+}
+
 beforeEach(() => {
   previousExitCode = process.exitCode;
   process.exitCode = undefined;
@@ -189,30 +200,6 @@ describe("models list/status", () => {
     return JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
   }
 
-  async function runAvailabilityFallbackCase(params: {
-    setup?: () => void;
-    expectedErrorDetail: string;
-  }) {
-    configureGoogleAntigravityModel("claude-opus-4-6-thinking");
-    enableGoogleAntigravityAuthProfile();
-    const runtime = makeRuntime();
-
-    modelRegistryState.models = [
-      makeGoogleAntigravityTemplate("claude-opus-4-5-thinking", "Claude Opus 4.5 Thinking"),
-    ];
-    modelRegistryState.available = [];
-    params.setup?.();
-    await modelsListCommand({ json: true }, runtime);
-
-    expect(runtime.error).toHaveBeenCalledTimes(1);
-    expect(runtime.error.mock.calls[0]?.[0]).toContain("falling back to auth heuristics");
-    expect(runtime.error.mock.calls[0]?.[0]).toContain(params.expectedErrorDetail);
-    const payload = parseJsonLog(runtime);
-    expect(payload.models[0]?.key).toBe("google-antigravity/claude-opus-4-6-thinking");
-    expect(payload.models[0]?.missing).toBe(false);
-    expect(payload.models[0]?.available).toBe(true);
-  }
-
   async function expectZaiProviderFilter(provider: string) {
     setDefaultZaiRegistry();
     const runtime = makeRuntime();
@@ -229,49 +216,6 @@ describe("models list/status", () => {
     setDefaultModel("z.ai/glm-4.7");
     modelRegistryState.models = [ZAI_MODEL, OPENAI_MODEL];
     modelRegistryState.available = available ? [ZAI_MODEL, OPENAI_MODEL] : [];
-  }
-
-  function setupGoogleAntigravityTemplateCase(params: {
-    configuredModelId: string;
-    templateId: string;
-    templateName: string;
-    available?: boolean;
-  }) {
-    configureGoogleAntigravityModel(params.configuredModelId);
-    const template = makeGoogleAntigravityTemplate(params.templateId, params.templateName);
-    modelRegistryState.models = [template];
-    modelRegistryState.available = params.available ? [template] : [];
-    return template;
-  }
-
-  async function runGoogleAntigravityListCase(params: {
-    configuredModelId: string;
-    templateId: string;
-    templateName: string;
-    available?: boolean;
-    withAuthProfile?: boolean;
-  }) {
-    setupGoogleAntigravityTemplateCase(params);
-    if (params.withAuthProfile) {
-      enableGoogleAntigravityAuthProfile();
-    }
-    const runtime = makeRuntime();
-    await modelsListCommand({ json: true }, runtime);
-    return parseJsonLog(runtime);
-  }
-
-  function expectAntigravityModel(
-    payload: Record<string, unknown>,
-    params: { key: string; available: boolean; includesTags?: boolean },
-  ) {
-    const model = (payload.models as Array<Record<string, unknown>>)[0] ?? {};
-    expect(model.key).toBe(params.key);
-    expect(model.missing).toBe(false);
-    expect(model.available).toBe(params.available);
-    if (params.includesTags) {
-      expect(model.tags).toContain("default");
-      expect(model.tags).toContain("configured");
-    }
   }
 
   beforeAll(async () => {
@@ -329,114 +273,6 @@ describe("models list/status", () => {
     expect(payload.models[0]?.available).toBe(false);
   });
 
-  it.each([
-    {
-      name: "thinking",
-      configuredModelId: "claude-opus-4-6-thinking",
-      templateId: "claude-opus-4-5-thinking",
-      templateName: "Claude Opus 4.5 Thinking",
-      expectedKey: "google-antigravity/claude-opus-4-6-thinking",
-    },
-    {
-      name: "non-thinking",
-      configuredModelId: "claude-opus-4-6",
-      templateId: "claude-opus-4-5",
-      templateName: "Claude Opus 4.5",
-      expectedKey: "google-antigravity/claude-opus-4-6",
-    },
-  ] as const)(
-    "models list resolves antigravity opus 4.6 $name from 4.5 template",
-    async ({ configuredModelId, templateId, templateName, expectedKey }) => {
-      const payload = await runGoogleAntigravityListCase({
-        configuredModelId,
-        templateId,
-        templateName,
-      });
-      expectAntigravityModel(payload, {
-        key: expectedKey,
-        available: false,
-        includesTags: true,
-      });
-    },
-  );
-
-  it.each([
-    {
-      name: "thinking",
-      configuredModelId: "claude-opus-4-6-thinking",
-      templateId: "claude-opus-4-5-thinking",
-      templateName: "Claude Opus 4.5 Thinking",
-      expectedKey: "google-antigravity/claude-opus-4-6-thinking",
-    },
-    {
-      name: "non-thinking",
-      configuredModelId: "claude-opus-4-6",
-      templateId: "claude-opus-4-5",
-      templateName: "Claude Opus 4.5",
-      expectedKey: "google-antigravity/claude-opus-4-6",
-    },
-  ] as const)(
-    "models list marks synthesized antigravity opus 4.6 $name as available when template is available",
-    async ({ configuredModelId, templateId, templateName, expectedKey }) => {
-      const payload = await runGoogleAntigravityListCase({
-        configuredModelId,
-        templateId,
-        templateName,
-        available: true,
-      });
-      expectAntigravityModel(payload, {
-        key: expectedKey,
-        available: true,
-      });
-    },
-  );
-
-  it("models list prefers registry availability over provider auth heuristics", async () => {
-    const payload = await runGoogleAntigravityListCase({
-      configuredModelId: "claude-opus-4-6-thinking",
-      templateId: "claude-opus-4-5-thinking",
-      templateName: "Claude Opus 4.5 Thinking",
-      withAuthProfile: true,
-    });
-    expectAntigravityModel(payload, {
-      key: "google-antigravity/claude-opus-4-6-thinking",
-      available: false,
-    });
-    listProfilesForProvider.mockReturnValue([]);
-  });
-
-  it("models list falls back to auth heuristics when registry availability is unavailable", async () => {
-    await runAvailabilityFallbackCase({
-      setup: () => {
-        modelRegistryState.getAvailableError = Object.assign(
-          new Error("availability unsupported: getAvailable failed"),
-          { code: "MODEL_AVAILABILITY_UNAVAILABLE" },
-        );
-      },
-      expectedErrorDetail: "getAvailable failed",
-    });
-  });
-
-  it("models list falls back to auth heuristics when getAvailable returns invalid shape", async () => {
-    await runAvailabilityFallbackCase({
-      setup: () => {
-        modelRegistryState.available = { bad: true } as unknown as Array<Record<string, unknown>>;
-      },
-      expectedErrorDetail: "non-array value",
-    });
-  });
-
-  it("models list falls back to auth heuristics when getAvailable throws", async () => {
-    await runAvailabilityFallbackCase({
-      setup: () => {
-        modelRegistryState.getAvailableError = new Error(
-          "availability unsupported: getAvailable failed",
-        );
-      },
-      expectedErrorDetail: "availability unsupported: getAvailable failed",
-    });
-  });
-
   it("models list does not treat availability-unavailable code as discovery fallback", async () => {
     configureGoogleAntigravityModel("claude-opus-4-6-thinking");
     modelRegistryState.getAllError = Object.assign(new Error("model discovery failed"), {
@@ -445,12 +281,8 @@ describe("models list/status", () => {
     const runtime = makeRuntime();
     await modelsListCommand({ json: true }, runtime);
 
-    expect(runtime.error).toHaveBeenCalledTimes(1);
-    expect(runtime.error.mock.calls[0]?.[0]).toContain("Model registry unavailable:");
-    expect(runtime.error.mock.calls[0]?.[0]).toContain("model discovery failed");
+    expectModelRegistryUnavailable(runtime, "model discovery failed");
     expect(runtime.error.mock.calls[0]?.[0]).not.toContain("configured models may appear missing");
-    expect(runtime.log).not.toHaveBeenCalled();
-    expect(process.exitCode).toBe(1);
   });
 
   it("models list fails fast when registry model discovery is unavailable", async () => {
@@ -465,11 +297,7 @@ describe("models list/status", () => {
     modelRegistryState.available = [];
     await modelsListCommand({ json: true }, runtime);
 
-    expect(runtime.error).toHaveBeenCalledTimes(1);
-    expect(runtime.error.mock.calls[0]?.[0]).toContain("Model registry unavailable:");
-    expect(runtime.error.mock.calls[0]?.[0]).toContain("model discovery unavailable");
-    expect(runtime.log).not.toHaveBeenCalled();
-    expect(process.exitCode).toBe(1);
+    expectModelRegistryUnavailable(runtime, "model discovery unavailable");
   });
 
   it("loadModelRegistry throws when model discovery is unavailable", async () => {

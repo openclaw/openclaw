@@ -107,6 +107,10 @@ Set config under `plugins.entries.voice-call.config`:
           streaming: {
             enabled: true,
             streamPath: "/voice/stream",
+            preStartTimeoutMs: 5000,
+            maxPendingConnections: 32,
+            maxPendingConnectionsPerIp: 4,
+            maxConnections: 128,
           },
         },
       },
@@ -125,6 +129,11 @@ Notes:
 - If you use ngrok free tier, set `publicUrl` to the exact ngrok URL; signature verification is always enforced.
 - `tunnel.allowNgrokFreeTierLoopbackBypass: true` allows Twilio webhooks with invalid signatures **only** when `tunnel.provider="ngrok"` and `serve.bind` is loopback (ngrok local agent). Use for local dev only.
 - Ngrok free tier URLs can change or add interstitial behavior; if `publicUrl` drifts, Twilio signatures will fail. For production, prefer a stable domain or Tailscale funnel.
+- Streaming security defaults:
+  - `streaming.preStartTimeoutMs` closes sockets that never send a valid `start` frame.
+  - `streaming.maxPendingConnections` caps total unauthenticated pre-start sockets.
+  - `streaming.maxPendingConnectionsPerIp` caps unauthenticated pre-start sockets per source IP.
+  - `streaming.maxConnections` caps total open media stream sockets (pending + active).
 
 ## Stale call reaper
 
@@ -167,6 +176,12 @@ headers are trusted.
 
 `webhookSecurity.trustedProxyIPs` only trusts forwarded headers when the request
 remote IP matches the list.
+
+Webhook replay protection is enabled for Twilio and Plivo. Replayed valid webhook
+requests are acknowledged but skipped for side effects.
+
+Twilio conversation turns include a per-turn token in `<Gather>` callbacks, so
+stale/replayed speech callbacks cannot satisfy a newer pending transcript turn.
 
 Example with a stable public host:
 

@@ -1,6 +1,10 @@
+import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
+import { generateSecureToken } from "../../infra/secure-random.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import type { PluginHookBeforeAgentStartResult } from "../../plugins/types.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
@@ -9,6 +13,7 @@ import {
   markAuthProfileFailure,
   markAuthProfileGood,
   markAuthProfileUsed,
+  resolveProfilesUnavailableReason,
 } from "../auth-profiles.js";
 import {
   CONTEXT_WINDOW_HARD_MIN_TOKENS,
@@ -99,7 +104,7 @@ const createUsageAccumulator = (): UsageAccumulator => ({
 });
 
 function createCompactionDiagId(): string {
-  return `ovf-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  return `ovf-${Date.now().toString(36)}-${generateSecureToken(4)}`;
 }
 
 // Defensive guard for the outer run loop across all retry branches.
@@ -227,7 +232,7 @@ export async function runEmbeddedPiAgent(
       let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
       const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
       const fallbackConfigured =
-        (params.config?.agents?.defaults?.model?.fallbacks?.length ?? 0) > 0;
+        resolveAgentModelFallbackValues(params.config?.agents?.defaults?.model).length > 0;
       await ensureOpenClawModelsJson(params.config, agentDir);
 
       // Run before_model_resolve hooks early so plugins can override the
@@ -236,6 +241,7 @@ export async function runEmbeddedPiAgent(
       // Legacy compatibility: before_agent_start is also checked for override
       // fields if present. New hook takes precedence when both are set.
       let modelResolveOverride: { providerOverride?: string; modelOverride?: string } | undefined;
+      let legacyBeforeAgentStartResult: PluginHookBeforeAgentStartResult | undefined;
       const hookRunner = getGlobalHookRunner();
       const hookCtx = {
         agentId: workspaceResolution.agentId,
@@ -256,14 +262,16 @@ export async function runEmbeddedPiAgent(
       }
       if (hookRunner?.hasHooks("before_agent_start")) {
         try {
-          const legacyResult = await hookRunner.runBeforeAgentStart(
+          legacyBeforeAgentStartResult = await hookRunner.runBeforeAgentStart(
             { prompt: params.prompt },
             hookCtx,
           );
           modelResolveOverride = {
             providerOverride:
-              modelResolveOverride?.providerOverride ?? legacyResult?.providerOverride,
-            modelOverride: modelResolveOverride?.modelOverride ?? legacyResult?.modelOverride,
+              modelResolveOverride?.providerOverride ??
+              legacyBeforeAgentStartResult?.providerOverride,
+            modelOverride:
+              modelResolveOverride?.modelOverride ?? legacyBeforeAgentStartResult?.modelOverride,
           };
         } catch (hookErr) {
           log.warn(
@@ -358,9 +366,18 @@ export async function runEmbeddedPiAgent(
       const resolveAuthProfileFailoverReason = (params: {
         allInCooldown: boolean;
         message: string;
+        profileIds?: Array<string | undefined>;
       }): FailoverReason => {
         if (params.allInCooldown) {
-          return "rate_limit";
+          const profileIds = (params.profileIds ?? profileCandidates).filter(
+            (id): id is string => typeof id === "string" && id.length > 0,
+          );
+          return (
+            resolveProfilesUnavailableReason({
+              store: authStore,
+              profileIds,
+            }) ?? "rate_limit"
+          );
         }
         const classified = classifyFailoverReason(params.message);
         return classified ?? "auth";
@@ -379,6 +396,7 @@ export async function runEmbeddedPiAgent(
         const reason = resolveAuthProfileFailoverReason({
           allInCooldown: params.allInCooldown,
           message,
+          profileIds: profileCandidates,
         });
         if (fallbackConfigured) {
           throw new FailoverError(message, {
@@ -495,6 +513,24 @@ export async function runEmbeddedPiAgent(
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
+      const maybeMarkAuthProfileFailure = async (failure: {
+        profileId?: string;
+        reason?: Parameters<typeof markAuthProfileFailure>[0]["reason"] | null;
+        config?: RunEmbeddedPiAgentParams["config"];
+        agentDir?: RunEmbeddedPiAgentParams["agentDir"];
+      }) => {
+        const { profileId, reason } = failure;
+        if (!profileId || !reason || reason === "timeout") {
+          return;
+        }
+        await markAuthProfileFailure({
+          store: authStore,
+          profileId,
+          reason,
+          cfg: params.config,
+          agentDir,
+        });
+      };
       try {
         while (true) {
           if (runLoopIterations >= MAX_RUN_LOOP_ITERATIONS) {
@@ -548,6 +584,7 @@ export async function runEmbeddedPiAgent(
             senderIsOwner: params.senderIsOwner,
             currentChannelId: params.currentChannelId,
             currentThreadTs: params.currentThreadTs,
+            currentMessageId: params.currentMessageId,
             replyToMode: params.replyToMode,
             hasRepliedRef: params.hasRepliedRef,
             sessionFile: params.sessionFile,
@@ -564,6 +601,7 @@ export async function runEmbeddedPiAgent(
             authStorage,
             modelRegistry,
             agentId: workspaceResolution.agentId,
+            legacyBeforeAgentStartResult,
             thinkLevel,
             verboseLevel: params.verboseLevel,
             reasoningLevel: params.reasoningLevel,
@@ -863,15 +901,10 @@ export async function runEmbeddedPiAgent(
               };
             }
             const promptFailoverReason = classifyFailoverReason(errorText);
-            if (promptFailoverReason && promptFailoverReason !== "timeout" && lastProfileId) {
-              await markAuthProfileFailure({
-                store: authStore,
-                profileId: lastProfileId,
-                reason: promptFailoverReason,
-                cfg: params.config,
-                agentDir: params.agentDir,
-              });
-            }
+            await maybeMarkAuthProfileFailure({
+              profileId: lastProfileId,
+              reason: promptFailoverReason,
+            });
             if (
               isFailoverErrorMessage(errorText) &&
               promptFailoverReason !== "timeout" &&
@@ -943,8 +976,8 @@ export async function runEmbeddedPiAgent(
             );
           }
 
-          // Treat timeout as potential rate limit (Antigravity hangs on rate limit)
-          // But exclude post-prompt compaction timeouts (model succeeded; no profile issue)
+          // Rotate on timeout to try another account/model path in this turn,
+          // but exclude post-prompt compaction timeouts (model succeeded; no profile issue).
           const shouldRotate =
             (!aborted && failoverFailure) || (timedOut && !timedOutDuringCompaction);
 
@@ -954,17 +987,15 @@ export async function runEmbeddedPiAgent(
                 timedOut || assistantFailoverReason === "timeout"
                   ? "timeout"
                   : (assistantFailoverReason ?? "unknown");
-              await markAuthProfileFailure({
-                store: authStore,
+              // Skip cooldown for timeouts: a timeout is model/network-specific,
+              // not an auth issue. Marking the profile would poison fallback models
+              // on the same provider (e.g. gpt-5.3 timeout blocks gpt-5.2).
+              await maybeMarkAuthProfileFailure({
                 profileId: lastProfileId,
                 reason,
-                cfg: params.config,
-                agentDir: params.agentDir,
               });
               if (timedOut && !isProbeSession) {
-                log.warn(
-                  `Profile ${lastProfileId} timed out (possible rate limit). Trying next account...`,
-                );
+                log.warn(`Profile ${lastProfileId} timed out. Trying next account...`);
               }
               if (cloudCodeAssistFormatError) {
                 log.warn(
@@ -1050,6 +1081,7 @@ export async function runEmbeddedPiAgent(
             toolResultFormat: resolvedToolResultFormat,
             suppressToolErrorWarnings: params.suppressToolErrorWarnings,
             inlineToolResultsAllowed: false,
+            didSendViaMessagingTool: attempt.didSendViaMessagingTool,
           });
 
           // Timeout aborts can leave the run without any assistant payloads.
@@ -1107,7 +1139,7 @@ export async function runEmbeddedPiAgent(
               pendingToolCalls: attempt.clientToolCall
                 ? [
                     {
-                      id: `call_${Date.now()}`,
+                      id: randomBytes(5).toString("hex").slice(0, 9),
                       name: attempt.clientToolCall.name,
                       arguments: JSON.stringify(attempt.clientToolCall.params),
                     },

@@ -1,8 +1,11 @@
 import {
   buildChannelConfigSchema,
+  buildTokenChannelStatusSummary,
   DEFAULT_ACCOUNT_ID,
   LineConfigSchema,
   processLineMessage,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
   type ChannelPlugin,
   type ChannelStatusIssue,
   type OpenClawConfig,
@@ -161,9 +164,12 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       };
     },
     collectWarnings: ({ account, cfg }) => {
-      const defaultGroupPolicy = (cfg.channels?.defaults as { groupPolicy?: string } | undefined)
-        ?.groupPolicy;
-      const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
+      const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
+        providerConfigPresent: cfg.channels?.line !== undefined,
+        groupPolicy: account.config.groupPolicy,
+        defaultGroupPolicy,
+      });
       if (groupPolicy !== "open") {
         return [];
       }
@@ -590,17 +596,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = {
       }
       return issues;
     },
-    buildChannelSummary: ({ snapshot }) => ({
-      configured: snapshot.configured ?? false,
-      tokenSource: snapshot.tokenSource ?? "none",
-      running: snapshot.running ?? false,
-      mode: snapshot.mode ?? null,
-      lastStartAt: snapshot.lastStartAt ?? null,
-      lastStopAt: snapshot.lastStopAt ?? null,
-      lastError: snapshot.lastError ?? null,
-      probe: snapshot.probe,
-      lastProbeAt: snapshot.lastProbeAt ?? null,
-    }),
+    buildChannelSummary: ({ snapshot }) => buildTokenChannelStatusSummary(snapshot),
     probeAccount: async ({ account, timeoutMs }) =>
       getLineRuntime().channel.line.probeLineBot(account.channelAccessToken, timeoutMs),
     buildAccountSnapshot: ({ account, runtime, probe }) => {

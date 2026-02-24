@@ -208,8 +208,8 @@ describe("resolveWhatsAppOutboundTarget", () => {
     });
   });
 
-  describe("other modes (allow all valid targets)", () => {
-    it("allows message in null mode", () => {
+  describe("explicit/custom modes", () => {
+    it("allows message in null mode when allowList is not set", () => {
       vi.mocked(normalize.normalizeWhatsAppTarget).mockReturnValueOnce("+11234567890");
       vi.mocked(normalize.isWhatsAppGroupJid).mockReturnValueOnce(false);
 
@@ -223,7 +223,7 @@ describe("resolveWhatsAppOutboundTarget", () => {
       );
     });
 
-    it("allows message in undefined mode", () => {
+    it("allows message in undefined mode when allowList is not set", () => {
       vi.mocked(normalize.normalizeWhatsAppTarget).mockReturnValueOnce("+11234567890");
       vi.mocked(normalize.isWhatsAppGroupJid).mockReturnValueOnce(false);
 
@@ -237,16 +237,29 @@ describe("resolveWhatsAppOutboundTarget", () => {
       );
     });
 
-    it("allows message in custom mode string", () => {
+    it("enforces allowList in custom mode string", () => {
       vi.mocked(normalize.normalizeWhatsAppTarget)
         .mockReturnValueOnce("+19876543210") // for allowFrom[0] (happens first!)
         .mockReturnValueOnce("+11234567890"); // for 'to' param (happens second)
       vi.mocked(normalize.isWhatsAppGroupJid).mockReturnValueOnce(false);
 
+      expectResolutionError({
+        to: "+11234567890",
+        allowFrom: ["+19876543210"],
+        mode: "broadcast",
+      });
+    });
+
+    it("allows message in custom mode string when target is in allowList", () => {
+      vi.mocked(normalize.normalizeWhatsAppTarget)
+        .mockReturnValueOnce("+11234567890") // for allowFrom[0]
+        .mockReturnValueOnce("+11234567890"); // for 'to' param
+      vi.mocked(normalize.isWhatsAppGroupJid).mockReturnValueOnce(false);
+
       expectResolutionOk(
         {
           to: "+11234567890",
-          allowFrom: ["+19876543210"],
+          allowFrom: ["+11234567890"],
           mode: "broadcast",
         },
         "+11234567890",

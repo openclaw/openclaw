@@ -480,8 +480,7 @@ final class AppState {
                             remote.removeValue(forKey: "url")
                             remoteChanged = true
                         }
-                    } else {
-                        let normalizedUrl = GatewayRemoteConfig.normalizeGatewayUrlString(trimmedUrl) ?? trimmedUrl
+                    } else if let normalizedUrl = GatewayRemoteConfig.normalizeGatewayUrlString(trimmedUrl) {
                         if (remote["url"] as? String) != normalizedUrl {
                             remote["url"] = normalizedUrl
                             remoteChanged = true

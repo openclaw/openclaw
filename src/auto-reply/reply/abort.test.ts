@@ -42,6 +42,39 @@ vi.mock("../../agents/subagent-registry.js", () => ({
 }));
 
 describe("abort detection", () => {
+  async function writeSessionStore(
+    storePath: string,
+    sessionIdsByKey: Record<string, string>,
+    nowMs = Date.now(),
+  ) {
+    const storeEntries = Object.fromEntries(
+      Object.entries(sessionIdsByKey).map(([key, sessionId]) => [
+        key,
+        { sessionId, updatedAt: nowMs },
+      ]),
+    );
+    await fs.writeFile(storePath, JSON.stringify(storeEntries, null, 2));
+  }
+
+  async function createAbortConfig(params?: {
+    commandsTextEnabled?: boolean;
+    sessionIdsByKey?: Record<string, string>;
+    nowMs?: number;
+  }) {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-abort-"));
+    const storePath = path.join(root, "sessions.json");
+    const cfg = {
+      session: { store: storePath },
+      ...(typeof params?.commandsTextEnabled === "boolean"
+        ? { commands: { text: params.commandsTextEnabled } }
+        : {}),
+    } as OpenClawConfig;
+    if (params?.sessionIdsByKey) {
+      await writeSessionStore(storePath, params.sessionIdsByKey, params.nowMs);
+    }
+    return { root, storePath, cfg };
+  }
+
   async function runStopCommand(params: {
     cfg: OpenClawConfig;
     sessionKey: string;
@@ -89,25 +122,82 @@ describe("abort detection", () => {
     expect(result.triggerBodyNormalized).toBe("/stop");
   });
 
-  it("isAbortTrigger matches bare word triggers (without slash)", () => {
-    expect(isAbortTrigger("stop")).toBe(true);
-    expect(isAbortTrigger("esc")).toBe(true);
-    expect(isAbortTrigger("abort")).toBe(true);
-    expect(isAbortTrigger("wait")).toBe(true);
-    expect(isAbortTrigger("exit")).toBe(true);
-    expect(isAbortTrigger("interrupt")).toBe(true);
+  it("isAbortTrigger matches standalone abort trigger phrases", () => {
+    const positives = [
+      "stop",
+      "esc",
+      "abort",
+      "wait",
+      "exit",
+      "interrupt",
+      "stop openclaw",
+      "openclaw stop",
+      "stop action",
+      "stop current action",
+      "stop run",
+      "stop current run",
+      "stop agent",
+      "stop the agent",
+      "stop don't do anything",
+      "stop dont do anything",
+      "stop do not do anything",
+      "stop doing anything",
+      "please stop",
+      "stop please",
+      "STOP OPENCLAW",
+      "stop openclaw!!!",
+      "stop don’t do anything",
+      "detente",
+      "detén",
+      "arrête",
+      "停止",
+      "やめて",
+      "止めて",
+      "रुको",
+      "توقف",
+      "стоп",
+      "остановись",
+      "останови",
+      "остановить",
+      "прекрати",
+      "halt",
+      "anhalten",
+      "aufhören",
+      "hoer auf",
+      "stopp",
+      "pare",
+    ];
+    for (const candidate of positives) {
+      expect(isAbortTrigger(candidate)).toBe(true);
+    }
+
     expect(isAbortTrigger("hello")).toBe(false);
-    // /stop is NOT matched by isAbortTrigger - it's handled separately
+    expect(isAbortTrigger("do not do that")).toBe(false);
+    // /stop is NOT matched by isAbortTrigger - it's handled separately.
     expect(isAbortTrigger("/stop")).toBe(false);
   });
 
   it("isAbortRequestText aligns abort command semantics", () => {
     expect(isAbortRequestText("/stop")).toBe(true);
+    expect(isAbortRequestText("/STOP")).toBe(true);
+    expect(isAbortRequestText("/stop!!!")).toBe(true);
+    expect(isAbortRequestText("/Stop!!!")).toBe(true);
     expect(isAbortRequestText("stop")).toBe(true);
+    expect(isAbortRequestText("Stop")).toBe(true);
+    expect(isAbortRequestText("STOP")).toBe(true);
+    expect(isAbortRequestText("stop action")).toBe(true);
+    expect(isAbortRequestText("stop openclaw!!!")).toBe(true);
+    expect(isAbortRequestText("やめて")).toBe(true);
+    expect(isAbortRequestText("остановись")).toBe(true);
+    expect(isAbortRequestText("halt")).toBe(true);
+    expect(isAbortRequestText("stopp")).toBe(true);
+    expect(isAbortRequestText("pare")).toBe(true);
+    expect(isAbortRequestText(" توقف ")).toBe(true);
     expect(isAbortRequestText("/stop@openclaw_bot", { botUsername: "openclaw_bot" })).toBe(true);
+    expect(isAbortRequestText("/Stop@openclaw_bot", { botUsername: "openclaw_bot" })).toBe(true);
 
     expect(isAbortRequestText("/status")).toBe(false);
-    expect(isAbortRequestText("stop please")).toBe(false);
+    expect(isAbortRequestText("do not do that")).toBe(false);
     expect(isAbortRequestText("/abort")).toBe(false);
   });
 
@@ -142,9 +232,7 @@ describe("abort detection", () => {
   });
 
   it("fast-aborts even when text commands are disabled", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-abort-"));
-    const storePath = path.join(root, "sessions.json");
-    const cfg = { session: { store: storePath }, commands: { text: false } } as OpenClawConfig;
+    const { cfg } = await createAbortConfig({ commandsTextEnabled: false });
 
     const result = await runStopCommand({
       cfg,
@@ -157,24 +245,11 @@ describe("abort detection", () => {
   });
 
   it("fast-abort clears queued followups and session lane", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-abort-"));
-    const storePath = path.join(root, "sessions.json");
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
     const sessionKey = "telegram:123";
     const sessionId = "session-123";
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          [sessionKey]: {
-            sessionId,
-            updatedAt: Date.now(),
-          },
-        },
-        null,
-        2,
-      ),
-    );
+    const { root, cfg } = await createAbortConfig({
+      sessionIdsByKey: { [sessionKey]: sessionId },
+    });
     const followupRun: FollowupRun = {
       prompt: "queued",
       enqueuedAt: Date.now(),
@@ -215,30 +290,16 @@ describe("abort detection", () => {
   });
 
   it("fast-abort stops active subagent runs for requester session", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-abort-"));
-    const storePath = path.join(root, "sessions.json");
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
     const sessionKey = "telegram:parent";
     const childKey = "agent:main:subagent:child-1";
     const sessionId = "session-parent";
     const childSessionId = "session-child";
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          [sessionKey]: {
-            sessionId,
-            updatedAt: Date.now(),
-          },
-          [childKey]: {
-            sessionId: childSessionId,
-            updatedAt: Date.now(),
-          },
-        },
-        null,
-        2,
-      ),
-    );
+    const { cfg } = await createAbortConfig({
+      sessionIdsByKey: {
+        [sessionKey]: sessionId,
+        [childKey]: childSessionId,
+      },
+    });
 
     subagentRegistryMocks.listSubagentRunsForRequester.mockReturnValueOnce([
       {
@@ -264,36 +325,19 @@ describe("abort detection", () => {
   });
 
   it("cascade stop kills depth-2 children when stopping depth-1 agent", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-abort-"));
-    const storePath = path.join(root, "sessions.json");
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
     const sessionKey = "telegram:parent";
     const depth1Key = "agent:main:subagent:child-1";
     const depth2Key = "agent:main:subagent:child-1:subagent:grandchild-1";
     const sessionId = "session-parent";
     const depth1SessionId = "session-child";
     const depth2SessionId = "session-grandchild";
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          [sessionKey]: {
-            sessionId,
-            updatedAt: Date.now(),
-          },
-          [depth1Key]: {
-            sessionId: depth1SessionId,
-            updatedAt: Date.now(),
-          },
-          [depth2Key]: {
-            sessionId: depth2SessionId,
-            updatedAt: Date.now(),
-          },
-        },
-        null,
-        2,
-      ),
-    );
+    const { cfg } = await createAbortConfig({
+      sessionIdsByKey: {
+        [sessionKey]: sessionId,
+        [depth1Key]: depth1SessionId,
+        [depth2Key]: depth2SessionId,
+      },
+    });
 
     // First call: main session lists depth-1 children
     // Second call (cascade): depth-1 session lists depth-2 children
@@ -337,36 +381,20 @@ describe("abort detection", () => {
   });
 
   it("cascade stop traverses ended depth-1 parents to stop active depth-2 children", async () => {
-    subagentRegistryMocks.listSubagentRunsForRequester.mockReset();
+    subagentRegistryMocks.listSubagentRunsForRequester.mockClear();
     subagentRegistryMocks.markSubagentRunTerminated.mockClear();
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-abort-"));
-    const storePath = path.join(root, "sessions.json");
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
     const sessionKey = "telegram:parent";
     const depth1Key = "agent:main:subagent:child-ended";
     const depth2Key = "agent:main:subagent:child-ended:subagent:grandchild-active";
     const now = Date.now();
-    await fs.writeFile(
-      storePath,
-      JSON.stringify(
-        {
-          [sessionKey]: {
-            sessionId: "session-parent",
-            updatedAt: now,
-          },
-          [depth1Key]: {
-            sessionId: "session-child-ended",
-            updatedAt: now,
-          },
-          [depth2Key]: {
-            sessionId: "session-grandchild-active",
-            updatedAt: now,
-          },
-        },
-        null,
-        2,
-      ),
-    );
+    const { cfg } = await createAbortConfig({
+      nowMs: now,
+      sessionIdsByKey: {
+        [sessionKey]: "session-parent",
+        [depth1Key]: "session-child-ended",
+        [depth2Key]: "session-grandchild-active",
+      },
+    });
 
     // main -> ended depth-1 parent
     // depth-1 parent -> active depth-2 child

@@ -26,7 +26,9 @@ export async function resolveSenderCommandAuthorization(
 }> {
   const shouldComputeAuth = params.shouldComputeCommandAuthorized(params.rawBody, params.cfg);
   const storeAllowFrom =
-    !params.isGroup && (params.dmPolicy !== "open" || shouldComputeAuth)
+    !params.isGroup &&
+    params.dmPolicy !== "allowlist" &&
+    (params.dmPolicy !== "open" || shouldComputeAuth)
       ? await params.readAllowFromStore().catch(() => [])
       : [];
   const effectiveAllowFrom = [...params.configuredAllowFrom, ...storeAllowFrom];

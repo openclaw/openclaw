@@ -13,7 +13,7 @@ Report vulnerabilities directly to the repository where the issue lives:
 - **ClawHub** — [openclaw/clawhub](https://github.com/openclaw/clawhub)
 - **Trust and threat model** — [openclaw/trust](https://github.com/openclaw/trust)
 
-For issues that don't fit a specific repo, or if you're unsure, email **security@openclaw.ai** and we'll route it.
+For issues that don't fit a specific repo, or if you're unsure, email **[security@openclaw.ai](mailto:security@openclaw.ai)** and we'll route it.
 
 For full reporting instructions see our [Trust page](https://trust.openclaw.ai).
 
@@ -30,6 +30,40 @@ For full reporting instructions see our [Trust page](https://trust.openclaw.ai).
 
 Reports without reproduction steps, demonstrated impact, and remediation advice will be deprioritized. Given the volume of AI-generated scanner findings, we must ensure we're receiving vetted reports from researchers who understand the issues.
 
+### Report Acceptance Gate (Triage Fast Path)
+
+For fastest triage, include all of the following:
+
+- Exact vulnerable path (`file`, function, and line range) on a current revision.
+- Tested version details (OpenClaw version and/or commit SHA).
+- Reproducible PoC against latest `main` or latest released version.
+- Demonstrated impact tied to OpenClaw's documented trust boundaries.
+- For exposed-secret reports: proof the credential is OpenClaw-owned (or grants access to OpenClaw-operated infrastructure/services).
+- Explicit statement that the report does not rely on adversarial operators sharing one gateway host/config.
+- Scope check explaining why the report is **not** covered by the Out of Scope section below.
+
+Reports that miss these requirements may be closed as `invalid` or `no-action`.
+
+### Common False-Positive Patterns
+
+These are frequently reported but are typically closed with no code change:
+
+- Prompt-injection-only chains without a boundary bypass (prompt injection is out of scope).
+- Operator-intended local features (for example TUI local `!` shell) presented as remote injection.
+- Authorized user-triggered local actions presented as privilege escalation. Example: an allowlisted/owner sender running `/export-session /absolute/path.html` to write on the host. In this trust model, authorized user actions are trusted host actions unless you demonstrate an auth/sandbox/boundary bypass.
+- Reports that assume per-user multi-tenant authorization on a shared gateway host/config.
+- ReDoS/DoS claims that require trusted operator configuration input (for example catastrophic regex in `sessionFilter` or `logging.redactPatterns`) without a trust-boundary bypass.
+- Missing HSTS findings on default local/loopback deployments.
+- Slack webhook signature findings when HTTP mode already uses signing-secret verification.
+- Discord inbound webhook signature findings for paths not used by this repo's Discord integration.
+- Scanner-only claims against stale/nonexistent paths, or claims without a working repro.
+
+### Duplicate Report Handling
+
+- Search existing advisories before filing.
+- Include likely duplicate GHSA IDs in your report when applicable.
+- Maintainers may close lower-quality/later duplicates in favor of the earliest high-quality canonical report.
+
 ## Security & Trust
 
 **Jamieson O'Reilly** ([@theonejvo](https://twitter.com/theonejvo)) is Security & Trust at OpenClaw. Jamieson is the founder of [Dvuln](https://dvuln.com) and brings extensive experience in offensive security, penetration testing, and security program development.
@@ -43,12 +77,34 @@ The best way to help the project right now is by sending PRs.
 
 When patching a GHSA via `gh api`, include `X-GitHub-Api-Version: 2022-11-28` (or newer). Without it, some fields (notably CVSS) may not persist even if the request returns 200.
 
+## Operator Trust Model (Important)
+
+OpenClaw does **not** model one gateway as a multi-tenant, adversarial user boundary.
+
+- Authenticated Gateway callers are treated as trusted operators for that gateway instance.
+- Session identifiers (`sessionKey`, session IDs, labels) are routing controls, not per-user authorization boundaries.
+- If one operator can view data from another operator on the same gateway, that is expected in this trust model.
+- OpenClaw can technically run multiple gateway instances on one machine, but recommended operations are clean separation by trust boundary.
+- Recommended mode: one user per machine/host (or VPS), one gateway for that user, and one or more agents inside that gateway.
+- If multiple users need OpenClaw, use one VPS (or host/OS user boundary) per user.
+- For advanced setups, multiple gateways on one machine are possible, but only with strict isolation and are not the recommended default.
+- Exec behavior is host-first by default: `agents.defaults.sandbox.mode` defaults to `off`.
+- `tools.exec.host` defaults to `sandbox` as a routing preference, but if sandbox runtime is not active for the session, exec runs on the gateway host.
+- Implicit exec calls (no explicit host in the tool call) follow the same behavior.
+- This is expected in OpenClaw's one-user trusted-operator model. If you need isolation, enable sandbox mode (`non-main`/`all`) and keep strict tool policy.
+
 ## Out of Scope
 
 - Public Internet Exposure
 - Using OpenClaw in ways that the docs recommend not to
-- Deployments where mutually untrusted/adversarial operators share one gateway host and config
-- Prompt injection attacks
+- Deployments where mutually untrusted/adversarial operators share one gateway host and config (for example, reports expecting per-operator isolation for `sessions.list`, `sessions.preview`, `chat.history`, or similar control-plane reads)
+- Prompt-injection-only attacks (without a policy/auth/sandbox boundary bypass)
+- Reports that require write access to trusted local state (`~/.openclaw`, workspace files like `MEMORY.md` / `memory/*.md`)
+- Reports where the only demonstrated impact is an already-authorized sender intentionally invoking a local-action command (for example `/export-session` writing to an absolute host path) without bypassing auth, sandbox, or another documented boundary
+- Any report whose only claim is that an operator-enabled `dangerous*`/`dangerously*` config option weakens defaults (these are explicit break-glass tradeoffs by design)
+- Reports that depend on trusted operator-supplied configuration values to trigger availability impact (for example custom regex patterns). These may still be fixed as defense-in-depth hardening, but are not security-boundary bypasses.
+- Exposed secrets that are third-party/user-controlled credentials (not OpenClaw-owned and not granting access to OpenClaw-operated infrastructure/services) without demonstrated OpenClaw impact
+- Reports whose only claim is host-side exec when sandbox runtime is disabled/unavailable (documented default behavior in the trusted-operator model), without a boundary bypass.
 
 ## Deployment Assumptions
 
@@ -57,6 +113,43 @@ OpenClaw security guidance assumes:
 - The host where OpenClaw runs is within a trusted OS/admin boundary.
 - Anyone who can modify `~/.openclaw` state/config (including `openclaw.json`) is effectively a trusted operator.
 - A single Gateway shared by mutually untrusted people is **not a recommended setup**. Use separate gateways (or at minimum separate OS users/hosts) per trust boundary.
+- Authenticated Gateway callers are treated as trusted operators. Session identifiers (for example `sessionKey`) are routing controls, not per-user authorization boundaries.
+- Multiple gateway instances can run on one machine, but the recommended model is clean per-user isolation (prefer one host/VPS per user).
+
+## One-User Trust Model (Personal Assistant)
+
+OpenClaw's security model is "personal assistant" (one trusted operator, potentially many agents), not "shared multi-tenant bus."
+
+- If multiple people can message the same tool-enabled agent (for example a shared Slack workspace), they can all steer that agent within its granted permissions.
+- Session or memory scoping reduces context bleed, but does **not** create per-user host authorization boundaries.
+- For mixed-trust or adversarial users, isolate by OS user/host/gateway and use separate credentials per boundary.
+- A company-shared agent can be a valid setup when users are in the same trust boundary and the agent is strictly business-only.
+- For company-shared setups, use a dedicated machine/VM/container and dedicated accounts; avoid mixing personal data on that runtime.
+- If that host/browser profile is logged into personal accounts (for example Apple/Google/personal password manager), you have collapsed the boundary and increased personal-data exposure risk.
+
+## Agent and Model Assumptions
+
+- The model/agent is **not** a trusted principal. Assume prompt/content injection can manipulate behavior.
+- Security boundaries come from host/config trust, auth, tool policy, sandboxing, and exec approvals.
+- Prompt injection by itself is not a vulnerability report unless it crosses one of those boundaries.
+
+## Gateway and Node trust concept
+
+OpenClaw separates routing from execution, but both remain inside the same operator trust boundary:
+
+- **Gateway** is the control plane. If a caller passes Gateway auth, they are treated as a trusted operator for that Gateway.
+- **Node** is an execution extension of the Gateway. Pairing a node grants operator-level remote capability on that node.
+- **Exec approvals** (allowlist/ask UI) are operator guardrails to reduce accidental command execution, not a multi-tenant authorization boundary.
+- For untrusted-user isolation, split by trust boundary: separate gateways and separate OS users/hosts per boundary.
+
+## Workspace Memory Trust Boundary
+
+`MEMORY.md` and `memory/*.md` are plain workspace files and are treated as trusted local operator state.
+
+- If someone can edit workspace memory files, they already crossed the trusted operator boundary.
+- Memory search indexing/recall over those files is expected behavior, not a sandbox/security boundary.
+- Example report pattern considered out of scope: "attacker writes malicious content into `memory/*.md`, then `memory_search` returns it."
+- If you need isolation between mutually untrusted users, split by OS user or host and run separate gateways.
 
 ## Plugin Trust Boundary
 
@@ -75,7 +168,7 @@ For threat model + hardening guidance (including `openclaw security audit --deep
 ### Tool filesystem hardening
 
 - `tools.exec.applyPatch.workspaceOnly: true` (recommended): keeps `apply_patch` writes/deletes within the configured workspace directory.
-- `tools.fs.workspaceOnly: true` (optional): restricts `read`/`write`/`edit`/`apply_patch` paths to the workspace directory.
+- `tools.fs.workspaceOnly: true` (optional): restricts `read`/`write`/`edit`/`apply_patch` paths and native prompt image auto-load paths to the workspace directory.
 - Avoid setting `tools.exec.applyPatch.workspaceOnly: false` unless you fully trust who can trigger tool execution.
 
 ### Web Interface Safety
@@ -85,6 +178,10 @@ OpenClaw's web interface (Gateway Control UI + HTTP endpoints) is intended for *
 - Recommended: keep the Gateway **loopback-only** (`127.0.0.1` / `::1`).
   - Config: `gateway.bind="loopback"` (default).
   - CLI: `openclaw gateway run --bind loopback`.
+- `gateway.controlUi.dangerouslyDisableDeviceAuth` is intended for localhost-only break-glass use.
+  - OpenClaw keeps deployment flexibility by design and does not hard-forbid non-local setups.
+  - Non-local and other risky configurations are surfaced by `openclaw security audit` as dangerous findings.
+  - This operator-selected tradeoff is by design and not, by itself, a security vulnerability.
 - Canvas host note: network-visible canvas is **intentional** for trusted node scenarios (LAN/tailnet).
   - Expected setup: non-loopback bind + Gateway auth (token/password/trusted-proxy) + firewall/tailnet controls.
   - Expected routes: `/__openclaw__/canvas/`, `/__openclaw__/a2ui/`.

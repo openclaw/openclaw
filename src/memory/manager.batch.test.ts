@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useFastShortTimeouts } from "../../test/helpers/fast-short-timeouts.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 import { createOpenAIEmbeddingProviderMock } from "./test-embeddings-mock.js";
@@ -24,22 +25,6 @@ describe("memory indexing with OpenAI batches", () => {
   let memoryDir: string;
   let indexPath: string;
   let manager: MemoryIndexManager | null = null;
-
-  function useFastShortTimeouts() {
-    const realSetTimeout = setTimeout;
-    const spy = vi.spyOn(global, "setTimeout").mockImplementation(((
-      handler: TimerHandler,
-      timeout?: number,
-      ...args: unknown[]
-    ) => {
-      const delay = typeof timeout === "number" ? timeout : 0;
-      if (delay > 0 && delay <= 2000) {
-        return realSetTimeout(handler, 0, ...args);
-      }
-      return realSetTimeout(handler, delay, ...args);
-    }) as typeof setTimeout);
-    return () => spy.mockRestore();
-  }
 
   async function readOpenAIBatchUploadRequests(body: FormData) {
     let uploadedRequests: Array<{ custom_id?: string }> = [];

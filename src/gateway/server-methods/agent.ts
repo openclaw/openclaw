@@ -15,6 +15,7 @@ import {
   resolveAgentDeliveryPlan,
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
+import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { classifySessionKeyShape, normalizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
@@ -191,6 +192,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       extraSystemPrompt?: string;
       idempotencyKey: string;
       timeout?: number;
+      bestEffortDeliver?: boolean;
       label?: string;
       spawnedBy?: string;
       inputProvenance?: InputProvenance;
@@ -215,8 +217,10 @@ export const agentHandlers: GatewayRequestHandlers = {
       return;
     }
     const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(request.attachments);
+    const requestedBestEffortDeliver =
+      typeof request.bestEffortDeliver === "boolean" ? request.bestEffortDeliver : undefined;
 
-    let message = request.message.trim();
+    let message = (request.message ?? "").trim();
     let images: Array<{ type: "image"; data: string; mimeType: string }> = [];
     if (normalizedAttachments.length > 0) {
       try {
@@ -309,7 +313,7 @@ export const agentHandlers: GatewayRequestHandlers = {
     }
     let resolvedSessionId = request.sessionId?.trim() || undefined;
     let sessionEntry: SessionEntry | undefined;
-    let bestEffortDeliver = false;
+    let bestEffortDeliver = requestedBestEffortDeliver ?? false;
     let cfgForAgent: ReturnType<typeof loadConfig> | undefined;
     let resolvedSessionKey = requestedSessionKey;
     let skipTimestampInjection = false;
@@ -447,7 +451,9 @@ export const agentHandlers: GatewayRequestHandlers = {
           sessionKey: canonicalSessionKey,
           clientRunId: idem,
         });
-        bestEffortDeliver = true;
+        if (requestedBestEffortDeliver === undefined) {
+          bestEffortDeliver = true;
+        }
       }
       registerAgentRunContext(idem, { sessionKey: canonicalSessionKey });
     }
@@ -490,22 +496,53 @@ export const agentHandlers: GatewayRequestHandlers = {
       wantsDelivery,
     });
 
-    const resolvedChannel = deliveryPlan.resolvedChannel;
-    const deliveryTargetMode = deliveryPlan.deliveryTargetMode;
-    const resolvedAccountId = deliveryPlan.resolvedAccountId;
+    let resolvedChannel = deliveryPlan.resolvedChannel;
+    let deliveryTargetMode = deliveryPlan.deliveryTargetMode;
+    let resolvedAccountId = deliveryPlan.resolvedAccountId;
     let resolvedTo = deliveryPlan.resolvedTo;
+    let effectivePlan = deliveryPlan;
+
+    if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
+      const cfgResolved = cfgForAgent ?? cfg;
+      try {
+        const selection = await resolveMessageChannelSelection({ cfg: cfgResolved });
+        resolvedChannel = selection.channel;
+        deliveryTargetMode = deliveryTargetMode ?? "implicit";
+        effectivePlan = {
+          ...deliveryPlan,
+          resolvedChannel,
+          deliveryTargetMode,
+          resolvedAccountId,
+        };
+      } catch (err) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
+        return;
+      }
+    }
 
     if (!resolvedTo && isDeliverableMessageChannel(resolvedChannel)) {
       const cfgResolved = cfgForAgent ?? cfg;
       const fallback = resolveAgentOutboundTarget({
         cfg: cfgResolved,
-        plan: deliveryPlan,
-        targetMode: "implicit",
+        plan: effectivePlan,
+        targetMode: deliveryTargetMode ?? "implicit",
         validateExplicitTarget: false,
       });
       if (fallback.resolvedTarget?.ok) {
         resolvedTo = fallback.resolvedTo;
       }
+    }
+
+    if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "delivery channel is required: pass --channel/--reply-channel or use a main session with a previous channel",
+        ),
+      );
+      return;
     }
 
     const deliver = request.deliver === true && resolvedChannel !== INTERNAL_MESSAGE_CHANNEL;
@@ -663,7 +700,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       return;
     }
     const p = params;
-    const runId = p.runId.trim();
+    const runId = (p.runId ?? "").trim();
     const timeoutMs =
       typeof p.timeoutMs === "number" && Number.isFinite(p.timeoutMs)
         ? Math.max(0, Math.floor(p.timeoutMs))

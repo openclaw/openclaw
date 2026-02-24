@@ -114,6 +114,52 @@ function makeSessionMemoryConfig(tempDir: string, messages?: number): OpenClawCo
   } satisfies OpenClawConfig;
 }
 
+async function createSessionMemoryWorkspace(params?: {
+  activeSession?: { name: string; content: string };
+}): Promise<{ tempDir: string; sessionsDir: string; activeSessionFile?: string }> {
+  const tempDir = await makeTempWorkspace("openclaw-session-memory-");
+  const sessionsDir = path.join(tempDir, "sessions");
+  await fs.mkdir(sessionsDir, { recursive: true });
+
+  if (!params?.activeSession) {
+    return { tempDir, sessionsDir };
+  }
+
+  const activeSessionFile = await writeWorkspaceFile({
+    dir: sessionsDir,
+    name: params.activeSession.name,
+    content: params.activeSession.content,
+  });
+  return { tempDir, sessionsDir, activeSessionFile };
+}
+
+async function loadMemoryFromActiveSessionPointer(params: {
+  tempDir: string;
+  activeSessionFile: string;
+}): Promise<string> {
+  const { memoryContent } = await runNewWithPreviousSessionEntry({
+    tempDir: params.tempDir,
+    previousSessionEntry: {
+      sessionId: "test-123",
+      sessionFile: params.activeSessionFile,
+    },
+  });
+  return memoryContent;
+}
+
+function expectMemoryConversation(params: {
+  memoryContent: string;
+  user: string;
+  assistant: string;
+  absent?: string;
+}) {
+  expect(params.memoryContent).toContain(`user: ${params.user}`);
+  expect(params.memoryContent).toContain(`assistant: ${params.assistant}`);
+  if (params.absent) {
+    expect(params.memoryContent).not.toContain(params.absent);
+  }
+}
+
 describe("session-memory hook", () => {
   it("skips non-command events", async () => {
     const tempDir = await makeTempWorkspace("openclaw-session-memory-");
@@ -289,14 +335,8 @@ describe("session-memory hook", () => {
   });
 
   it("falls back to latest .jsonl.reset.* transcript when active file is empty", async () => {
-    const tempDir = await makeTempWorkspace("openclaw-session-memory-");
-    const sessionsDir = path.join(tempDir, "sessions");
-    await fs.mkdir(sessionsDir, { recursive: true });
-
-    const activeSessionFile = await writeWorkspaceFile({
-      dir: sessionsDir,
-      name: "test-session.jsonl",
-      content: "",
+    const { tempDir, sessionsDir, activeSessionFile } = await createSessionMemoryWorkspace({
+      activeSession: { name: "test-session.jsonl", content: "" },
     });
 
     // Simulate /new rotation where useful content is now in .reset.* file
@@ -314,7 +354,7 @@ describe("session-memory hook", () => {
       tempDir,
       previousSessionEntry: {
         sessionId: "test-123",
-        sessionFile: activeSessionFile,
+        sessionFile: activeSessionFile!,
       },
     });
 
@@ -323,9 +363,7 @@ describe("session-memory hook", () => {
   });
 
   it("handles reset-path session pointers from previousSessionEntry", async () => {
-    const tempDir = await makeTempWorkspace("openclaw-session-memory-");
-    const sessionsDir = path.join(tempDir, "sessions");
-    await fs.mkdir(sessionsDir, { recursive: true });
+    const { tempDir, sessionsDir } = await createSessionMemoryWorkspace();
 
     const sessionId = "reset-pointer-session";
     const resetSessionFile = await writeWorkspaceFile({
@@ -352,9 +390,7 @@ describe("session-memory hook", () => {
   });
 
   it("recovers transcript when previousSessionEntry.sessionFile is missing", async () => {
-    const tempDir = await makeTempWorkspace("openclaw-session-memory-");
-    const sessionsDir = path.join(tempDir, "sessions");
-    await fs.mkdir(sessionsDir, { recursive: true });
+    const { tempDir, sessionsDir } = await createSessionMemoryWorkspace();
 
     const sessionId = "missing-session-file";
     await writeWorkspaceFile({
@@ -385,14 +421,8 @@ describe("session-memory hook", () => {
   });
 
   it("prefers the newest reset transcript when multiple reset candidates exist", async () => {
-    const tempDir = await makeTempWorkspace("openclaw-session-memory-");
-    const sessionsDir = path.join(tempDir, "sessions");
-    await fs.mkdir(sessionsDir, { recursive: true });
-
-    const activeSessionFile = await writeWorkspaceFile({
-      dir: sessionsDir,
-      name: "test-session.jsonl",
-      content: "",
+    const { tempDir, sessionsDir, activeSessionFile } = await createSessionMemoryWorkspace({
+      activeSession: { name: "test-session.jsonl", content: "" },
     });
 
     await writeWorkspaceFile({
@@ -412,17 +442,50 @@ describe("session-memory hook", () => {
       ]),
     });
 
-    const { memoryContent } = await runNewWithPreviousSessionEntry({
+    const memoryContent = await loadMemoryFromActiveSessionPointer({
       tempDir,
-      previousSessionEntry: {
-        sessionId: "test-123",
-        sessionFile: activeSessionFile,
+      activeSessionFile: activeSessionFile!,
+    });
+
+    expectMemoryConversation({
+      memoryContent,
+      user: "Newest rotated transcript",
+      assistant: "Newest summary",
+      absent: "Older rotated transcript",
+    });
+  });
+
+  it("prefers active transcript when it is non-empty even with reset candidates", async () => {
+    const { tempDir, sessionsDir, activeSessionFile } = await createSessionMemoryWorkspace({
+      activeSession: {
+        name: "test-session.jsonl",
+        content: createMockSessionContent([
+          { role: "user", content: "Active transcript message" },
+          { role: "assistant", content: "Active transcript summary" },
+        ]),
       },
     });
 
-    expect(memoryContent).toContain("user: Newest rotated transcript");
-    expect(memoryContent).toContain("assistant: Newest summary");
-    expect(memoryContent).not.toContain("Older rotated transcript");
+    await writeWorkspaceFile({
+      dir: sessionsDir,
+      name: "test-session.jsonl.reset.2026-02-16T22-26-34.000Z",
+      content: createMockSessionContent([
+        { role: "user", content: "Reset fallback message" },
+        { role: "assistant", content: "Reset fallback summary" },
+      ]),
+    });
+
+    const memoryContent = await loadMemoryFromActiveSessionPointer({
+      tempDir,
+      activeSessionFile: activeSessionFile!,
+    });
+
+    expectMemoryConversation({
+      memoryContent,
+      user: "Active transcript message",
+      assistant: "Active transcript summary",
+      absent: "Reset fallback message",
+    });
   });
 
   it("handles empty session files gracefully", async () => {

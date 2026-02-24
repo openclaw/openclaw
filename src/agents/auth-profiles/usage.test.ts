@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AuthProfileStore } from "./types.js";
+import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
 import {
   clearAuthProfileCooldown,
   clearExpiredCooldowns,
   isProfileInCooldown,
+  markAuthProfileFailure,
+  resolveProfilesUnavailableReason,
   resolveProfileUnusableUntil,
 } from "./usage.js";
 
@@ -25,6 +27,16 @@ function makeStore(usageStats: AuthProfileStore["usageStats"]): AuthProfileStore
     },
     usageStats,
   };
+}
+
+function expectProfileErrorStateCleared(
+  stats: NonNullable<AuthProfileStore["usageStats"]>[string] | undefined,
+) {
+  expect(stats?.cooldownUntil).toBeUndefined();
+  expect(stats?.disabledUntil).toBeUndefined();
+  expect(stats?.disabledReason).toBeUndefined();
+  expect(stats?.errorCount).toBe(0);
+  expect(stats?.failureCounts).toBeUndefined();
 }
 
 describe("resolveProfileUnusableUntil", () => {
@@ -71,6 +83,101 @@ describe("isProfileInCooldown", () => {
       },
     });
     expect(isProfileInCooldown(store, "anthropic:default")).toBe(true);
+  });
+});
+
+describe("resolveProfilesUnavailableReason", () => {
+  it("prefers active disabledReason when profiles are disabled", () => {
+    const now = Date.now();
+    const store = makeStore({
+      "anthropic:default": {
+        disabledUntil: now + 60_000,
+        disabledReason: "billing",
+      },
+    });
+
+    expect(
+      resolveProfilesUnavailableReason({
+        store,
+        profileIds: ["anthropic:default"],
+        now,
+      }),
+    ).toBe("billing");
+  });
+
+  it("uses recorded non-rate-limit failure counts for active cooldown windows", () => {
+    const now = Date.now();
+    const store = makeStore({
+      "anthropic:default": {
+        cooldownUntil: now + 60_000,
+        failureCounts: { auth: 3, rate_limit: 1 },
+      },
+    });
+
+    expect(
+      resolveProfilesUnavailableReason({
+        store,
+        profileIds: ["anthropic:default"],
+        now,
+      }),
+    ).toBe("auth");
+  });
+
+  it("falls back to rate_limit when active cooldown has no reason history", () => {
+    const now = Date.now();
+    const store = makeStore({
+      "anthropic:default": {
+        cooldownUntil: now + 60_000,
+      },
+    });
+
+    expect(
+      resolveProfilesUnavailableReason({
+        store,
+        profileIds: ["anthropic:default"],
+        now,
+      }),
+    ).toBe("rate_limit");
+  });
+
+  it("ignores expired windows and returns null when no profile is actively unavailable", () => {
+    const now = Date.now();
+    const store = makeStore({
+      "anthropic:default": {
+        cooldownUntil: now - 1_000,
+        failureCounts: { auth: 5 },
+      },
+      "anthropic:backup": {
+        disabledUntil: now - 500,
+        disabledReason: "billing",
+      },
+    });
+
+    expect(
+      resolveProfilesUnavailableReason({
+        store,
+        profileIds: ["anthropic:default", "anthropic:backup"],
+        now,
+      }),
+    ).toBeNull();
+  });
+
+  it("breaks ties by reason priority for equal active failure counts", () => {
+    const now = Date.now();
+    const store = makeStore({
+      "anthropic:default": {
+        cooldownUntil: now + 60_000,
+        failureCounts: { timeout: 2, auth: 2 },
+      },
+    });
+
+    expect(
+      resolveProfilesUnavailableReason({
+        store,
+        profileIds: ["anthropic:default"],
+        now,
+      }),
+    ).toBe("auth");
   });
 });
 
@@ -201,11 +308,7 @@ describe("clearExpiredCooldowns", () => {
     expect(clearExpiredCooldowns(store)).toBe(true);
 
     const stats = store.usageStats?.["anthropic:default"];
-    expect(stats?.cooldownUntil).toBeUndefined();
-    expect(stats?.disabledUntil).toBeUndefined();
-    expect(stats?.disabledReason).toBeUndefined();
-    expect(stats?.errorCount).toBe(0);
-    expect(stats?.failureCounts).toBeUndefined();
+    expectProfileErrorStateCleared(stats);
   });
 
   it("processes multiple profiles independently", () => {
@@ -313,11 +416,7 @@ describe("clearAuthProfileCooldown", () => {
     await clearAuthProfileCooldown({ store, profileId: "anthropic:default" });
 
     const stats = store.usageStats?.["anthropic:default"];
-    expect(stats?.cooldownUntil).toBeUndefined();
-    expect(stats?.disabledUntil).toBeUndefined();
-    expect(stats?.disabledReason).toBeUndefined();
-    expect(stats?.errorCount).toBe(0);
-    expect(stats?.failureCounts).toBeUndefined();
+    expectProfileErrorStateCleared(stats);
   });
 
   it("preserves lastUsed and lastFailureAt timestamps", async () => {
@@ -344,4 +443,117 @@ describe("clearAuthProfileCooldown", () => {
     await clearAuthProfileCooldown({ store, profileId: "nonexistent" });
     expect(store.usageStats).toBeUndefined();
   });
+});
+
+describe("markAuthProfileFailure — active windows do not extend on retry", () => {
+  // Regression for https://github.com/openclaw/openclaw/issues/23516
+  // When all providers are at saturation backoff (60 min) and retries fire every 30 min,
+  // each retry was resetting cooldownUntil to now+60m, preventing recovery.
+  type WindowStats = ProfileUsageStats;
+
+  async function markFailureAt(params: {
+    store: ReturnType<typeof makeStore>;
+    now: number;
+    reason: "rate_limit" | "billing";
+  }): Promise<void> {
+    vi.useFakeTimers();
+    vi.setSystemTime(params.now);
+    try {
+      await markAuthProfileFailure({
+        store: params.store,
+        profileId: "anthropic:default",
+        reason: params.reason,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  const activeWindowCases = [
+    {
+      label: "cooldownUntil",
+      reason: "rate_limit" as const,
+      buildUsageStats: (now: number): WindowStats => ({
+        cooldownUntil: now + 50 * 60 * 1000,
+        errorCount: 3,
+        lastFailureAt: now - 10 * 60 * 1000,
+      }),
+      readUntil: (stats: WindowStats | undefined) => stats?.cooldownUntil,
+    },
+    {
+      label: "disabledUntil",
+      reason: "billing" as const,
+      buildUsageStats: (now: number): WindowStats => ({
+        disabledUntil: now + 20 * 60 * 60 * 1000,
+        disabledReason: "billing",
+        errorCount: 5,
+        failureCounts: { billing: 5 },
+        lastFailureAt: now - 60_000,
+      }),
+      readUntil: (stats: WindowStats | undefined) => stats?.disabledUntil,
+    },
+  ];
+
+  for (const testCase of activeWindowCases) {
+    it(`keeps active ${testCase.label} unchanged on retry`, async () => {
+      const now = 1_000_000;
+      const existingStats = testCase.buildUsageStats(now);
+      const existingUntil = testCase.readUntil(existingStats);
+      const store = makeStore({ "anthropic:default": existingStats });
+
+      await markFailureAt({
+        store,
+        now,
+        reason: testCase.reason,
+      });
+
+      const stats = store.usageStats?.["anthropic:default"];
+      expect(testCase.readUntil(stats)).toBe(existingUntil);
+    });
+  }
+
+  const expiredWindowCases = [
+    {
+      label: "cooldownUntil",
+      reason: "rate_limit" as const,
+      buildUsageStats: (now: number): WindowStats => ({
+        cooldownUntil: now - 60_000,
+        errorCount: 3,
+        lastFailureAt: now - 60_000,
+      }),
+      expectedUntil: (now: number) => now + 60 * 60 * 1000,
+      readUntil: (stats: WindowStats | undefined) => stats?.cooldownUntil,
+    },
+    {
+      label: "disabledUntil",
+      reason: "billing" as const,
+      buildUsageStats: (now: number): WindowStats => ({
+        disabledUntil: now - 60_000,
+        disabledReason: "billing",
+        errorCount: 5,
+        failureCounts: { billing: 2 },
+        lastFailureAt: now - 60_000,
+      }),
+      expectedUntil: (now: number) => now + 20 * 60 * 60 * 1000,
+      readUntil: (stats: WindowStats | undefined) => stats?.disabledUntil,
+    },
+  ];
+
+  for (const testCase of expiredWindowCases) {
+    it(`recomputes ${testCase.label} after the previous window expires`, async () => {
+      const now = 1_000_000;
+      const store = makeStore({
+        "anthropic:default": testCase.buildUsageStats(now),
+      });
+
+      await markFailureAt({
+        store,
+        now,
+        reason: testCase.reason,
+      });
+
+      const stats = store.usageStats?.["anthropic:default"];
+      expect(testCase.readUntil(stats)).toBe(testCase.expectedUntil(now));
+    });
+  }
 });

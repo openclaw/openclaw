@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import net from "node:net";
 import path from "node:path";
 import { resolveConfigPath, resolveGatewayLockDir, resolveStateDir } from "../config/paths.js";
 import { isPidAlive } from "../shared/pid-alive.js";
@@ -8,6 +9,7 @@ import { isPidAlive } from "../shared/pid-alive.js";
 const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_POLL_INTERVAL_MS = 100;
 const DEFAULT_STALE_MS = 30_000;
+const DEFAULT_PORT_PROBE_TIMEOUT_MS = 1000;
 
 type LockPayload = {
   pid: number;
@@ -29,6 +31,7 @@ export type GatewayLockOptions = {
   staleMs?: number;
   allowInTests?: boolean;
   platform?: NodeJS.Platform;
+  port?: number;
 };
 
 export class GatewayLockError extends Error {
@@ -100,11 +103,47 @@ function readLinuxStartTime(pid: number): number | null {
   }
 }
 
-function resolveGatewayOwnerStatus(
+async function checkPortFree(port: number, host = "127.0.0.1"): Promise<boolean> {
+  return await new Promise<boolean>((resolve) => {
+    const socket = net.createConnection({ port, host });
+    let settled = false;
+    const finish = (result: boolean) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timer);
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(result);
+    };
+    const timer = setTimeout(() => {
+      // Conservative for liveness checks: timeout usually means no responsive
+      // local listener, so treat the lock owner as stale.
+      finish(true);
+    }, DEFAULT_PORT_PROBE_TIMEOUT_MS);
+    socket.once("connect", () => {
+      finish(false);
+    });
+    socket.once("error", () => {
+      finish(true);
+    });
+  });
+}
+
+async function resolveGatewayOwnerStatus(
   pid: number,
   payload: LockPayload | null,
   platform: NodeJS.Platform,
-): LockOwnerStatus {
+  port: number | undefined,
+): Promise<LockOwnerStatus> {
+  if (port != null) {
+    const portFree = await checkPortFree(port);
+    if (portFree) {
+      return "dead";
+    }
+  }
+
   if (!isPidAlive(pid)) {
     return "dead";
   }
@@ -178,6 +217,7 @@ export async function acquireGatewayLock(
   const pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const staleMs = opts.staleMs ?? DEFAULT_STALE_MS;
   const platform = opts.platform ?? process.platform;
+  const port = opts.port;
   const { lockPath, configPath } = resolveGatewayLockPath(env);
   await fs.mkdir(path.dirname(lockPath), { recursive: true });
 
@@ -214,7 +254,7 @@ export async function acquireGatewayLock(
       lastPayload = await readLockPayload(lockPath);
       const ownerPid = lastPayload?.pid;
       const ownerStatus = ownerPid
-        ? resolveGatewayOwnerStatus(ownerPid, lastPayload, platform)
+        ? await resolveGatewayOwnerStatus(ownerPid, lastPayload, platform, port)
         : "unknown";
       if (ownerStatus === "dead" && ownerPid) {
         await fs.rm(lockPath, { force: true });
@@ -231,7 +271,11 @@ export async function acquireGatewayLock(
             const st = await fs.stat(lockPath);
             stale = Date.now() - st.mtimeMs > staleMs;
           } catch {
-            stale = true;
+            // On Windows or locked filesystems we may be unable to stat the
+            // lock file even though the existing gateway is still healthy.
+            // Treat the lock as non-stale so we keep waiting instead of
+            // forcefully removing another gateway's lock.
+            stale = false;
           }
         }
         if (stale) {

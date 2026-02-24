@@ -4,6 +4,8 @@ import type { ImageContent } from "@mariozechner/pi-ai";
 import { resolveUserPath } from "../../../utils.js";
 import { loadWebMedia } from "../../../web/media.js";
 import type { ImageSanitizationLimits } from "../../image-sanitization.js";
+import { resolveSandboxedBridgeMediaPath } from "../../sandbox-media-paths.js";
+import { assertSandboxPath } from "../../sandbox-paths.js";
 import type { SandboxFsBridge } from "../../sandbox/fs-bridge.js";
 import { sanitizeImageBlocks } from "../../tool-images.js";
 import { log } from "../logger.js";
@@ -181,6 +183,7 @@ export async function loadImageFromRef(
   workspaceDir: string,
   options?: {
     maxBytes?: number;
+    workspaceOnly?: boolean;
     sandbox?: { root: string; bridge: SandboxFsBridge };
   },
 ): Promise<ImageContent | null> {
@@ -197,11 +200,15 @@ export async function loadImageFromRef(
     if (ref.type === "path") {
       if (options?.sandbox) {
         try {
-          const resolved = options.sandbox.bridge.resolvePath({
-            filePath: targetPath,
-            cwd: options.sandbox.root,
+          const resolved = await resolveSandboxedBridgeMediaPath({
+            sandbox: {
+              root: options.sandbox.root,
+              bridge: options.sandbox.bridge,
+              workspaceOnly: options.workspaceOnly,
+            },
+            mediaPath: targetPath,
           });
-          targetPath = resolved.hostPath;
+          targetPath = resolved.resolved;
         } catch (err) {
           log.debug(
             `Native image: sandbox validation failed for ${ref.resolved}: ${err instanceof Error ? err.message : String(err)}`,
@@ -210,6 +217,14 @@ export async function loadImageFromRef(
         }
       } else if (!path.isAbsolute(targetPath)) {
         targetPath = path.resolve(workspaceDir, targetPath);
+      }
+      if (options?.workspaceOnly && !options?.sandbox) {
+        const root = options?.sandbox?.root ?? workspaceDir;
+        await assertSandboxPath({
+          filePath: targetPath,
+          cwd: root,
+          root,
+        });
       }
     }
 
@@ -361,6 +376,7 @@ export async function detectAndLoadPromptImages(params: {
   historyMessages?: unknown[];
   maxBytes?: number;
   maxDimensionPx?: number;
+  workspaceOnly?: boolean;
   sandbox?: { root: string; bridge: SandboxFsBridge };
 }): Promise<{
   /** Images for the current prompt (existingImages + detected in current prompt) */
@@ -422,6 +438,7 @@ export async function detectAndLoadPromptImages(params: {
   for (const ref of allRefs) {
     const image = await loadImageFromRef(ref, params.workspaceDir, {
       maxBytes: params.maxBytes,
+      workspaceOnly: params.workspaceOnly,
       sandbox: params.sandbox,
     });
     if (image) {

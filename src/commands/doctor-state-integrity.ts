@@ -2,12 +2,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import {
+  formatSessionArchiveTimestamp,
+  isPrimarySessionTranscriptFileName,
   loadSessionStore,
   resolveMainSessionKey,
   resolveSessionFilePath,
+  resolveSessionFilePathOptions,
   resolveSessionTranscriptsDirForAgent,
   resolveStorePath,
 } from "../config/sessions.js";
@@ -132,6 +136,59 @@ function findOtherStateDirs(stateDir: string): string[] {
   return found;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isPairingPolicy(value: unknown): boolean {
+  return typeof value === "string" && value.trim().toLowerCase() === "pairing";
+}
+
+function hasPairingPolicy(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (isPairingPolicy(value.dmPolicy)) {
+    return true;
+  }
+  if (isRecord(value.dm) && isPairingPolicy(value.dm.policy)) {
+    return true;
+  }
+  if (!isRecord(value.accounts)) {
+    return false;
+  }
+  for (const accountCfg of Object.values(value.accounts)) {
+    if (hasPairingPolicy(accountCfg)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
+  if (env.OPENCLAW_OAUTH_DIR?.trim()) {
+    return true;
+  }
+  const channels = cfg.channels;
+  if (!isRecord(channels)) {
+    return false;
+  }
+  // WhatsApp auth always uses the credentials tree.
+  if (isRecord(channels.whatsapp)) {
+    return true;
+  }
+  // Pairing allowlists are persisted under credentials/<channel>-allowFrom.json.
+  for (const [channelId, channelCfg] of Object.entries(channels)) {
+    if (channelId === "defaults" || channelId === "modelByChannel") {
+      continue;
+    }
+    if (hasPairingPolicy(channelCfg)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export async function noteStateIntegrity(
   cfg: OpenClawConfig,
   prompter: DoctorPrompterLike,
@@ -148,11 +205,13 @@ export async function noteStateIntegrity(
   const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId, env, homedir);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
   const storeDir = path.dirname(storePath);
+  const absoluteStorePath = path.resolve(storePath);
   const displayStateDir = shortenHomePath(stateDir);
   const displayOauthDir = shortenHomePath(oauthDir);
   const displaySessionsDir = shortenHomePath(sessionsDir);
   const displayStoreDir = shortenHomePath(storeDir);
   const displayConfigPath = configPath ? shortenHomePath(configPath) : undefined;
+  const requireOAuthDir = shouldRequireOAuthDir(cfg, env);
 
   let stateDirExists = existsDir(stateDir);
   if (!stateDirExists) {
@@ -202,8 +261,15 @@ export async function noteStateIntegrity(
   }
   if (stateDirExists && process.platform !== "win32") {
     try {
-      const stat = fs.statSync(stateDir);
-      if ((stat.mode & 0o077) !== 0) {
+      const dirLstat = fs.lstatSync(stateDir);
+      const isDirSymlink = dirLstat.isSymbolicLink();
+      // For symlinks, check the resolved target permissions instead of the
+      // symlink itself (which always reports 777). Skip the warning only when
+      // the target lives in a known immutable store (e.g. /nix/store/).
+      const stat = isDirSymlink ? fs.statSync(stateDir) : dirLstat;
+      const resolvedDir = isDirSymlink ? fs.realpathSync(stateDir) : stateDir;
+      const isImmutableStore = resolvedDir.startsWith("/nix/store/");
+      if (!isImmutableStore && (stat.mode & 0o077) !== 0) {
         warnings.push(
           `- State directory permissions are too open (${displayStateDir}). Recommend chmod 700.`,
         );
@@ -223,10 +289,14 @@ export async function noteStateIntegrity(
 
   if (configPath && existsFile(configPath) && process.platform !== "win32") {
     try {
-      const linkStat = fs.lstatSync(configPath);
-      const stat = fs.statSync(configPath);
-      const isSymlink = linkStat.isSymbolicLink();
-      if (!isSymlink && (stat.mode & 0o077) !== 0) {
+      const configLstat = fs.lstatSync(configPath);
+      const isSymlink = configLstat.isSymbolicLink();
+      // For symlinks, check the resolved target permissions. Skip the warning
+      // only when the target lives in an immutable store (e.g. /nix/store/).
+      const stat = isSymlink ? fs.statSync(configPath) : configLstat;
+      const resolvedConfig = isSymlink ? fs.realpathSync(configPath) : configPath;
+      const isImmutableConfig = resolvedConfig.startsWith("/nix/store/");
+      if (!isImmutableConfig && (stat.mode & 0o077) !== 0) {
         warnings.push(
           `- Config file is group/world readable (${displayConfigPath ?? configPath}). Recommend chmod 600.`,
         );
@@ -250,7 +320,13 @@ export async function noteStateIntegrity(
     const dirCandidates = new Map<string, string>();
     dirCandidates.set(sessionsDir, "Sessions dir");
     dirCandidates.set(storeDir, "Session store dir");
-    dirCandidates.set(oauthDir, "OAuth dir");
+    if (requireOAuthDir) {
+      dirCandidates.set(oauthDir, "OAuth dir");
+    } else if (!existsDir(oauthDir)) {
+      warnings.push(
+        `- OAuth dir not present (${displayOauthDir}). Skipping create because no WhatsApp/pairing channel config is active.`,
+      );
+    }
     const displayDirFor = (dir: string) => {
       if (dir === sessionsDir) {
         return displaySessionsDir;
@@ -326,6 +402,7 @@ export async function noteStateIntegrity(
   }
 
   const store = loadSessionStore(storePath);
+  const sessionPathOpts = resolveSessionFilePathOptions({ agentId, storePath });
   const entries = Object.entries(store).filter(([, entry]) => entry && typeof entry === "object");
   if (entries.length > 0) {
     const recent = entries
@@ -341,21 +418,27 @@ export async function noteStateIntegrity(
       if (!sessionId) {
         return false;
       }
-      const transcriptPath = resolveSessionFilePath(sessionId, entry, {
-        agentId,
-      });
+      const transcriptPath = resolveSessionFilePath(sessionId, entry, sessionPathOpts);
       return !existsFile(transcriptPath);
     });
     if (missing.length > 0) {
       warnings.push(
-        `- ${missing.length}/${recent.length} recent sessions are missing transcripts. Check for deleted session files or split state dirs.`,
+        [
+          `- ${missing.length}/${recent.length} recent sessions are missing transcripts.`,
+          `  Verify sessions in store: ${formatCliCommand(`openclaw sessions --store "${absoluteStorePath}"`)}`,
+          `  Preview cleanup impact: ${formatCliCommand(`openclaw sessions cleanup --store "${absoluteStorePath}" --dry-run`)}`,
+        ].join("\n"),
       );
     }
 
     const mainKey = resolveMainSessionKey(cfg);
     const mainEntry = store[mainKey];
     if (mainEntry?.sessionId) {
-      const transcriptPath = resolveSessionFilePath(mainEntry.sessionId, mainEntry, { agentId });
+      const transcriptPath = resolveSessionFilePath(
+        mainEntry.sessionId,
+        mainEntry,
+        sessionPathOpts,
+      );
       if (!existsFile(transcriptPath)) {
         warnings.push(
           `- Main session transcript missing (${shortenHomePath(transcriptPath)}). History will appear to reset.`,
@@ -366,6 +449,54 @@ export async function noteStateIntegrity(
           warnings.push(
             `- Main session transcript has only ${lineCount} line. Session history may not be appending.`,
           );
+        }
+      }
+    }
+  }
+
+  if (existsDir(sessionsDir)) {
+    const referencedTranscriptPaths = new Set<string>();
+    for (const [, entry] of entries) {
+      if (!entry?.sessionId) {
+        continue;
+      }
+      try {
+        referencedTranscriptPaths.add(
+          path.resolve(resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts)),
+        );
+      } catch {
+        // ignore invalid legacy paths
+      }
+    }
+    const sessionDirEntries = fs.readdirSync(sessionsDir, { withFileTypes: true });
+    const orphanTranscriptPaths = sessionDirEntries
+      .filter((entry) => entry.isFile() && isPrimarySessionTranscriptFileName(entry.name))
+      .map((entry) => path.resolve(path.join(sessionsDir, entry.name)))
+      .filter((filePath) => !referencedTranscriptPaths.has(filePath));
+    if (orphanTranscriptPaths.length > 0) {
+      warnings.push(
+        `- Found ${orphanTranscriptPaths.length} orphan transcript file(s) in ${displaySessionsDir}. They are not referenced by sessions.json and can consume disk over time.`,
+      );
+      const archiveOrphans = await prompter.confirmSkipInNonInteractive({
+        message: `Archive ${orphanTranscriptPaths.length} orphan transcript file(s) in ${displaySessionsDir}?`,
+        initialValue: false,
+      });
+      if (archiveOrphans) {
+        let archived = 0;
+        const archivedAt = formatSessionArchiveTimestamp();
+        for (const orphanPath of orphanTranscriptPaths) {
+          const archivedPath = `${orphanPath}.deleted.${archivedAt}`;
+          try {
+            fs.renameSync(orphanPath, archivedPath);
+            archived += 1;
+          } catch (err) {
+            warnings.push(
+              `- Failed to archive orphan transcript ${shortenHomePath(orphanPath)}: ${String(err)}`,
+            );
+          }
+        }
+        if (archived > 0) {
+          changes.push(`- Archived ${archived} orphan transcript file(s) in ${displaySessionsDir}`);
         }
       }
     }

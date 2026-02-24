@@ -77,8 +77,8 @@ Table 2:
 });
 
 describe("extractCodeBlocks", () => {
-  it("extracts a code block with language", () => {
-    const text = `Here is some code:
+  it("extracts code blocks across language/no-language/multiple variants", () => {
+    const withLanguage = `Here is some code:
 
 \`\`\`javascript
 const x = 1;
@@ -86,31 +86,23 @@ console.log(x);
 \`\`\`
 
 And more text.`;
+    const withLanguageResult = extractCodeBlocks(withLanguage);
+    expect(withLanguageResult.codeBlocks).toHaveLength(1);
+    expect(withLanguageResult.codeBlocks[0].language).toBe("javascript");
+    expect(withLanguageResult.codeBlocks[0].code).toBe("const x = 1;\nconsole.log(x);");
+    expect(withLanguageResult.textWithoutCode).toContain("Here is some code:");
+    expect(withLanguageResult.textWithoutCode).toContain("And more text.");
+    expect(withLanguageResult.textWithoutCode).not.toContain("```");
 
-    const { codeBlocks, textWithoutCode } = extractCodeBlocks(text);
-
-    expect(codeBlocks).toHaveLength(1);
-    expect(codeBlocks[0].language).toBe("javascript");
-    expect(codeBlocks[0].code).toBe("const x = 1;\nconsole.log(x);");
-    expect(textWithoutCode).toContain("Here is some code:");
-    expect(textWithoutCode).toContain("And more text.");
-    expect(textWithoutCode).not.toContain("```");
-  });
-
-  it("extracts a code block without language", () => {
-    const text = `\`\`\`
+    const withoutLanguage = `\`\`\`
 plain code
 \`\`\``;
+    const withoutLanguageResult = extractCodeBlocks(withoutLanguage);
+    expect(withoutLanguageResult.codeBlocks).toHaveLength(1);
+    expect(withoutLanguageResult.codeBlocks[0].language).toBeUndefined();
+    expect(withoutLanguageResult.codeBlocks[0].code).toBe("plain code");
 
-    const { codeBlocks } = extractCodeBlocks(text);
-
-    expect(codeBlocks).toHaveLength(1);
-    expect(codeBlocks[0].language).toBeUndefined();
-    expect(codeBlocks[0].code).toBe("plain code");
-  });
-
-  it("extracts multiple code blocks", () => {
-    const text = `\`\`\`python
+    const multiple = `\`\`\`python
 print("hello")
 \`\`\`
 
@@ -119,12 +111,10 @@ Some text
 \`\`\`bash
 echo "world"
 \`\`\``;
-
-    const { codeBlocks } = extractCodeBlocks(text);
-
-    expect(codeBlocks).toHaveLength(2);
-    expect(codeBlocks[0].language).toBe("python");
-    expect(codeBlocks[1].language).toBe("bash");
+    const multipleResult = extractCodeBlocks(multiple);
+    expect(multipleResult.codeBlocks).toHaveLength(2);
+    expect(multipleResult.codeBlocks[0].language).toBe("python");
+    expect(multipleResult.codeBlocks[1].language).toBe("bash");
   });
 });
 
@@ -142,27 +132,20 @@ describe("extractLinks", () => {
 });
 
 describe("stripMarkdown", () => {
-  it("strips bold markers", () => {
-    expect(stripMarkdown("This is **bold** text")).toBe("This is bold text");
-    expect(stripMarkdown("This is __bold__ text")).toBe("This is bold text");
-  });
-
-  it("strips italic markers", () => {
-    expect(stripMarkdown("This is *italic* text")).toBe("This is italic text");
-    expect(stripMarkdown("This is _italic_ text")).toBe("This is italic text");
-  });
-
-  it("strips strikethrough markers", () => {
-    expect(stripMarkdown("This is ~~deleted~~ text")).toBe("This is deleted text");
-  });
-
-  it("removes horizontal rules", () => {
-    expect(stripMarkdown("Above\n---\nBelow")).toBe("Above\n\nBelow");
-    expect(stripMarkdown("Above\n***\nBelow")).toBe("Above\n\nBelow");
-  });
-
-  it("strips inline code markers", () => {
-    expect(stripMarkdown("Use `const` keyword")).toBe("Use const keyword");
+  it("strips inline markdown marker variants", () => {
+    const cases = [
+      ["strips bold **", "This is **bold** text", "This is bold text"],
+      ["strips bold __", "This is __bold__ text", "This is bold text"],
+      ["strips italic *", "This is *italic* text", "This is italic text"],
+      ["strips italic _", "This is _italic_ text", "This is italic text"],
+      ["strips strikethrough", "This is ~~deleted~~ text", "This is deleted text"],
+      ["removes hr ---", "Above\n---\nBelow", "Above\n\nBelow"],
+      ["removes hr ***", "Above\n***\nBelow", "Above\n\nBelow"],
+      ["strips inline code markers", "Use `const` keyword", "Use const keyword"],
+    ] as const;
+    for (const [name, input, expected] of cases) {
+      expect(stripMarkdown(input), name).toBe(expected);
+    }
   });
 
   it("handles complex markdown", () => {

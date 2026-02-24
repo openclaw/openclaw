@@ -218,9 +218,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       }
 
       const senderName = await getMemberDisplayName(roomId, senderId);
-      const storeAllowFrom = await core.channel.pairing
-        .readAllowFromStore("matrix")
-        .catch(() => []);
+      const storeAllowFrom =
+        dmPolicy === "allowlist"
+          ? []
+          : await core.channel.pairing.readAllowFromStore("matrix").catch(() => []);
       const effectiveAllowFrom = normalizeMatrixAllowList([...allowFrom, ...storeAllowFrom]);
       const groupAllowFrom = cfg.channels?.matrix?.groupAllowFrom ?? [];
       const effectiveGroupAllowFrom = normalizeMatrixAllowList(groupAllowFrom);

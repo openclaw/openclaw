@@ -14,6 +14,7 @@ import { resolveControlCommandGate } from "../../channels/command-gating.js";
 import { logInboundDrop } from "../../channels/logging.js";
 import { resolveMentionGatingWithBypass } from "../../channels/mention-gating.js";
 import { loadConfig } from "../../config/config.js";
+import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { recordChannelActivity } from "../../infra/channel-activity.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -178,7 +179,8 @@ export async function preflightDiscordMessage(
       return null;
     }
     if (dmPolicy !== "open") {
-      const storeAllowFrom = await readChannelAllowFromStore("discord").catch(() => []);
+      const storeAllowFrom =
+        dmPolicy === "allowlist" ? [] : await readChannelAllowFromStore("discord").catch(() => []);
       const effectiveAllowFrom = [...(params.allowFrom ?? []), ...storeAllowFrom];
       const allowList = normalizeDiscordAllowList(effectiveAllowFrom, ["discord:", "user:", "pk:"]);
       const allowMatch = allowList
@@ -189,6 +191,7 @@ export async function preflightDiscordMessage(
               name: sender.name,
               tag: sender.tag,
             },
+            allowNameMatching: isDangerousNameMatchingEnabled(params.discordConfig),
           })
         : { allowed: false };
       const allowMatchMeta = formatAllowlistMatchMeta(allowMatch);
@@ -562,6 +565,7 @@ export async function preflightDiscordMessage(
     guildInfo,
     memberRoleIds,
     sender,
+    allowNameMatching: isDangerousNameMatchingEnabled(params.discordConfig),
   });
 
   if (!isDirectMessage) {
@@ -571,11 +575,15 @@ export async function preflightDiscordMessage(
       "pk:",
     ]);
     const ownerOk = ownerAllowList
-      ? allowListMatches(ownerAllowList, {
-          id: sender.id,
-          name: sender.name,
-          tag: sender.tag,
-        })
+      ? allowListMatches(
+          ownerAllowList,
+          {
+            id: sender.id,
+            name: sender.name,
+            tag: sender.tag,
+          },
+          { allowNameMatching: isDangerousNameMatchingEnabled(params.discordConfig) },
+        )
       : false;
     const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
     const commandGate = resolveControlCommandGate({

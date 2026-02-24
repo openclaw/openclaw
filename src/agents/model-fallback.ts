@@ -1,8 +1,13 @@
 import type { OpenClawConfig } from "../config/config.js";
 import {
+  resolveAgentModelFallbackValues,
+  resolveAgentModelPrimaryValue,
+} from "../config/model-input.js";
+import {
   ensureAuthProfileStore,
   getSoonestCooldownExpiry,
   isProfileInCooldown,
+  resolveProfilesUnavailableReason,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
@@ -150,26 +155,13 @@ function resolveImageFallbackCandidates(params: {
   if (params.modelOverride?.trim()) {
     addRaw(params.modelOverride, false);
   } else {
-    const imageModel = params.cfg?.agents?.defaults?.imageModel as
-      | { primary?: string }
-      | string
-      | undefined;
-    const primary = typeof imageModel === "string" ? imageModel.trim() : imageModel?.primary;
+    const primary = resolveAgentModelPrimaryValue(params.cfg?.agents?.defaults?.imageModel);
     if (primary?.trim()) {
       addRaw(primary, false);
     }
   }
 
-  const imageFallbacks = (() => {
-    const imageModel = params.cfg?.agents?.defaults?.imageModel as
-      | { fallbacks?: string[] }
-      | string
-      | undefined;
-    if (imageModel && typeof imageModel === "object") {
-      return imageModel.fallbacks ?? [];
-    }
-    return [];
-  })();
+  const imageFallbacks = resolveAgentModelFallbackValues(params.cfg?.agents?.defaults?.imageModel);
 
   for (const raw of imageFallbacks) {
     addRaw(raw, true);
@@ -219,14 +211,7 @@ function resolveFallbackCandidates(params: {
     if (!sameModelCandidate(normalizedPrimary, configuredPrimary)) {
       return []; // Override model failed → go straight to configured default
     }
-    const model = params.cfg?.agents?.defaults?.model as
-      | { fallbacks?: string[] }
-      | string
-      | undefined;
-    if (model && typeof model === "object") {
-      return model.fallbacks ?? [];
-    }
-    return [];
+    return resolveAgentModelFallbackValues(params.cfg?.agents?.defaults?.model);
   })();
 
   for (const raw of modelFallbacks) {
@@ -342,12 +327,18 @@ export async function runWithModelFallback<T>(params: {
           profileIds,
         });
         if (!shouldProbe) {
+          const inferredReason =
+            resolveProfilesUnavailableReason({
+              store: authStore,
+              profileIds,
+              now,
+            }) ?? "rate_limit";
           // Skip without attempting
           attempts.push({
             provider: candidate.provider,
             model: candidate.model,
             error: `Provider ${candidate.provider} is in cooldown (all profiles unavailable)`,
-            reason: "rate_limit",
+            reason: inferredReason,
           });
           continue;
         }

@@ -10,24 +10,13 @@ import {
   BlockStreamingCoalesceSchema,
   CliBackendSchema,
   HumanDelaySchema,
+  TypingModeSchema,
 } from "./zod-schema.core.js";
 
 export const AgentDefaultsSchema = z
   .object({
-    model: z
-      .object({
-        primary: z.string().optional(),
-        fallbacks: z.array(z.string()).optional(),
-      })
-      .strict()
-      .optional(),
-    imageModel: z
-      .object({
-        primary: z.string().optional(),
-        fallbacks: z.array(z.string()).optional(),
-      })
-      .strict()
-      .optional(),
+    model: AgentModelSchema.optional(),
+    imageModel: AgentModelSchema.optional(),
     models: z
       .record(
         z.string(),
@@ -130,14 +119,7 @@ export const AgentDefaultsSchema = z
     mediaMaxMb: z.number().positive().optional(),
     imageMaxDimensionPx: z.number().int().positive().optional(),
     typingIntervalSeconds: z.number().int().positive().optional(),
-    typingMode: z
-      .union([
-        z.literal("never"),
-        z.literal("instant"),
-        z.literal("thinking"),
-        z.literal("message"),
-      ])
-      .optional(),
+    typingMode: TypingModeSchema.optional(),
     heartbeat: HeartbeatSchema,
     maxConcurrent: z.number().int().positive().optional(),
     subagents: z
@@ -164,6 +146,8 @@ export const AgentDefaultsSchema = z
         archiveAfterMinutes: z.number().int().positive().optional(),
         model: AgentModelSchema.optional(),
         thinking: z.string().optional(),
+        runTimeoutSeconds: z.number().int().min(0).optional(),
+        announceTimeoutMs: z.number().int().positive().optional(),
       })
       .strict()
       .optional(),

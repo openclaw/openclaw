@@ -75,10 +75,10 @@ type RunWithModelFallbackParams = {
 };
 
 beforeEach(() => {
-  runEmbeddedPiAgentMock.mockReset();
-  runCliAgentMock.mockReset();
-  runWithModelFallbackMock.mockReset();
-  runtimeErrorMock.mockReset();
+  runEmbeddedPiAgentMock.mockClear();
+  runCliAgentMock.mockClear();
+  runWithModelFallbackMock.mockClear();
+  runtimeErrorMock.mockClear();
 
   // Default: no provider switch; execute the chosen provider+model.
   runWithModelFallbackMock.mockImplementation(
@@ -876,6 +876,19 @@ describe("runReplyAgent messaging tool suppression", () => {
     expect(result).toMatchObject({ text: "hello world!" });
   });
 
+  it("keeps final reply when text matches a cross-target messaging send", async () => {
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      messagingToolSentTexts: ["hello world!"],
+      messagingToolSentTargets: [{ tool: "discord", provider: "discord", to: "channel:C1" }],
+      meta: {},
+    });
+
+    const result = await createRun("slack");
+
+    expect(result).toMatchObject({ text: "hello world!" });
+  });
+
   it("delivers replies when account ids do not match", async () => {
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "hello world!" }],
@@ -959,6 +972,43 @@ describe("runReplyAgent messaging tool suppression", () => {
     expect(store[sessionKey]?.totalTokens).toBe(42_000);
     expect(store[sessionKey]?.totalTokensFresh).toBe(true);
     expect(store[sessionKey]?.model).toBe("claude-opus-4-5");
+  });
+
+  it("persists totalTokens from promptTokens when provider omits usage", async () => {
+    const storePath = path.join(
+      await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-store-")),
+      "sessions.json",
+    );
+    const sessionKey = "main";
+    const entry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      inputTokens: 111,
+      outputTokens: 22,
+    };
+    await saveSessionStore(storePath, { [sessionKey]: entry });
+
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      messagingToolSentTexts: ["different message"],
+      messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
+      meta: {
+        agentMeta: {
+          promptTokens: 41_000,
+          model: "claude-opus-4-5",
+          provider: "anthropic",
+        },
+      },
+    });
+
+    const result = await createRun("slack", { storePath, sessionKey });
+
+    expect(result).toBeUndefined();
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store[sessionKey]?.totalTokens).toBe(41_000);
+    expect(store[sessionKey]?.totalTokensFresh).toBe(true);
+    expect(store[sessionKey]?.inputTokens).toBe(111);
+    expect(store[sessionKey]?.outputTokens).toBe(22);
   });
 });
 
@@ -1129,8 +1179,8 @@ describe("runReplyAgent fallback reasoning tags", () => {
     });
     runWithModelFallbackMock.mockImplementationOnce(
       async ({ run }: RunWithModelFallbackParams) => ({
-        result: await run("google-antigravity", "gemini-3"),
-        provider: "google-antigravity",
+        result: await run("google-gemini-cli", "gemini-3"),
+        provider: "google-gemini-cli",
         model: "gemini-3",
       }),
     );
@@ -1149,8 +1199,8 @@ describe("runReplyAgent fallback reasoning tags", () => {
       return { payloads: [{ text: "ok" }], meta: {} };
     });
     runWithModelFallbackMock.mockImplementation(async ({ run }: RunWithModelFallbackParams) => ({
-      result: await run("google-antigravity", "gemini-3"),
-      provider: "google-antigravity",
+      result: await run("google-gemini-cli", "gemini-3"),
+      provider: "google-gemini-cli",
       model: "gemini-3",
     }));
 

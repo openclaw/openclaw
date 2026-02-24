@@ -255,6 +255,7 @@ export async function startGatewayServer(
     openAiChatCompletionsEnabled,
     openResponsesEnabled,
     openResponsesConfig,
+    strictTransportSecurityHeader,
     controlUiBasePath,
     controlUiRoot: controlUiRootOverride,
     resolvedAuth,
@@ -333,6 +334,7 @@ export async function startGatewayServer(
     openAiChatCompletionsEnabled,
     openResponsesEnabled,
     openResponsesConfig,
+    strictTransportSecurityHeader,
     resolvedAuth,
     gatewayTls,
     hooksConfig: () => hooksConfig,
@@ -558,6 +560,17 @@ export async function startGatewayServer(
       nodeUnsubscribe,
       nodeUnsubscribeAll,
       hasConnectedMobileNode: hasMobileNodeConnected,
+      hasExecApprovalClients: () => {
+        for (const gatewayClient of clients) {
+          const scopes = Array.isArray(gatewayClient.connect.scopes)
+            ? gatewayClient.connect.scopes
+            : [];
+          if (scopes.includes("operator.admin") || scopes.includes("operator.approvals")) {
+            return true;
+          }
+        }
+        return false;
+      },
       nodeRegistry,
       agentRunSeq,
       chatAbortControllers,
@@ -588,22 +601,26 @@ export async function startGatewayServer(
     log,
     isNixMode,
   });
-  scheduleGatewayUpdateCheck({
-    cfg: cfgAtStart,
-    log,
-    isNixMode,
-    onUpdateAvailableChange: (updateAvailable) => {
-      const payload: GatewayUpdateAvailableEventPayload = { updateAvailable };
-      broadcast(GATEWAY_EVENT_UPDATE_AVAILABLE, payload, { dropIfSlow: true });
-    },
-  });
-  const tailscaleCleanup = await startGatewayTailscaleExposure({
-    tailscaleMode,
-    resetOnExit: tailscaleConfig.resetOnExit,
-    port,
-    controlUiBasePath,
-    logTailscale,
-  });
+  const stopGatewayUpdateCheck = minimalTestGateway
+    ? () => {}
+    : scheduleGatewayUpdateCheck({
+        cfg: cfgAtStart,
+        log,
+        isNixMode,
+        onUpdateAvailableChange: (updateAvailable) => {
+          const payload: GatewayUpdateAvailableEventPayload = { updateAvailable };
+          broadcast(GATEWAY_EVENT_UPDATE_AVAILABLE, payload, { dropIfSlow: true });
+        },
+      });
+  const tailscaleCleanup = minimalTestGateway
+    ? null
+    : await startGatewayTailscaleExposure({
+        tailscaleMode,
+        resetOnExit: tailscaleConfig.resetOnExit,
+        port,
+        controlUiBasePath,
+        logTailscale,
+      });
 
   let browserControl: Awaited<ReturnType<typeof startBrowserControlServerIfEnabled>> = null;
   ({ browserControl, pluginServices } = await startGatewaySidecars({
@@ -676,6 +693,7 @@ export async function startGatewayServer(
     pluginServices,
     cron,
     heartbeatRunner,
+    updateCheckStop: stopGatewayUpdateCheck,
     nodePresenceTimers,
     broadcast,
     tickInterval,

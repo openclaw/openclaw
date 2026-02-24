@@ -22,11 +22,6 @@ export function isReasoningTagProvider(provider: string | undefined | null): boo
     return true;
   }
 
-  // Handle google-antigravity and its model variations (e.g. google-antigravity/gemini-3)
-  if (normalized.includes("google-antigravity")) {
-    return true;
-  }
-
   // Handle Minimax (M2.1 is chatty/reasoning-like)
   if (normalized.includes("minimax")) {
     return true;

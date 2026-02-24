@@ -62,6 +62,7 @@ import {
 } from "./bot/helpers.js";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
 import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
+import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
 import {
   buildTelegramStatusReactionVariants,
   resolveTelegramAllowedEmojiReactions,
@@ -197,11 +198,12 @@ export const buildTelegramMessageContext = async ({
       : null;
   const sessionKey = threadKeys?.sessionKey ?? baseSessionKey;
   const mentionRegexes = buildMentionRegexes(cfg, route.agentId);
-  const effectiveDmAllow = normalizeAllowFromWithStore({ allowFrom, storeAllowFrom });
+  const effectiveDmAllow = normalizeAllowFromWithStore({ allowFrom, storeAllowFrom, dmPolicy });
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
   const effectiveGroupAllow = normalizeAllowFromWithStore({
     allowFrom: groupAllowOverride ?? groupAllowFrom,
     storeAllowFrom,
+    dmPolicy,
   });
   const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
   const senderId = msg.from?.id ? String(msg.from.id) : "";
@@ -613,14 +615,22 @@ export const buildTelegramMessageContext = async ({
 
   const replyTarget = describeReplyTarget(msg);
   const forwardOrigin = normalizeForwardedContext(msg);
+  // Build forward annotation for reply target if it was itself a forwarded message (issue #9619)
+  const replyForwardAnnotation = replyTarget?.forwardedFrom
+    ? `[Forwarded from ${replyTarget.forwardedFrom.from}${
+        replyTarget.forwardedFrom.date
+          ? ` at ${new Date(replyTarget.forwardedFrom.date * 1000).toISOString()}`
+          : ""
+      }]\n`
+    : "";
   const replySuffix = replyTarget
     ? replyTarget.kind === "quote"
       ? `\n\n[Quoting ${replyTarget.sender}${
           replyTarget.id ? ` id:${replyTarget.id}` : ""
-        }]\n"${replyTarget.body}"\n[/Quoting]`
+        }]\n${replyForwardAnnotation}"${replyTarget.body}"\n[/Quoting]`
       : `\n\n[Replying to ${replyTarget.sender}${
           replyTarget.id ? ` id:${replyTarget.id}` : ""
-        }]\n${replyTarget.body}\n[/Replying]`
+        }]\n${replyForwardAnnotation}${replyTarget.body}\n[/Replying]`
     : "";
   const forwardPrefix = forwardOrigin
     ? `[Forwarded from ${forwardOrigin.from}${
@@ -674,13 +684,10 @@ export const buildTelegramMessageContext = async ({
     });
   }
 
-  const skillFilter = firstDefined(topicConfig?.skills, groupConfig?.skills);
-  const systemPromptParts = [
-    groupConfig?.systemPrompt?.trim() || null,
-    topicConfig?.systemPrompt?.trim() || null,
-  ].filter((entry): entry is string => Boolean(entry));
-  const groupSystemPrompt =
-    systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
+  const { skillFilter, groupSystemPrompt } = resolveTelegramGroupPromptSettings({
+    groupConfig,
+    topicConfig,
+  });
   const commandBody = normalizeCommandBody(rawBody, { botUsername });
   const inboundHistory =
     isGroup && historyKey && historyLimit > 0
@@ -715,6 +722,15 @@ export const buildTelegramMessageContext = async ({
     ReplyToBody: replyTarget?.body,
     ReplyToSender: replyTarget?.sender,
     ReplyToIsQuote: replyTarget?.kind === "quote" ? true : undefined,
+    // Forward context from reply target (issue #9619: forward + comment bundling)
+    ReplyToForwardedFrom: replyTarget?.forwardedFrom?.from,
+    ReplyToForwardedFromType: replyTarget?.forwardedFrom?.fromType,
+    ReplyToForwardedFromId: replyTarget?.forwardedFrom?.fromId,
+    ReplyToForwardedFromUsername: replyTarget?.forwardedFrom?.fromUsername,
+    ReplyToForwardedFromTitle: replyTarget?.forwardedFrom?.fromTitle,
+    ReplyToForwardedDate: replyTarget?.forwardedFrom?.date
+      ? replyTarget.forwardedFrom.date * 1000
+      : undefined,
     ForwardedFrom: forwardOrigin?.from,
     ForwardedFromType: forwardOrigin?.fromType,
     ForwardedFromId: forwardOrigin?.fromId,
@@ -764,7 +780,7 @@ export const buildTelegramMessageContext = async ({
       ? {
           sessionKey: route.mainSessionKey,
           channel: "telegram",
-          to: String(chatId),
+          to: `telegram:${chatId}`,
           accountId: route.accountId,
           // Preserve DM topic threadId for replies (fixes #8891)
           threadId: dmThreadId != null ? String(dmThreadId) : undefined,

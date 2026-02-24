@@ -11,6 +11,8 @@ import {
   PAIRING_APPROVED_MESSAGE,
   resolveChannelMediaMaxBytes,
   resolveGoogleChatGroupRequireMention,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
   setAccountEnabledInConfigSection,
   type ChannelDock,
   type ChannelMessageActionAdapter,
@@ -198,8 +200,12 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
     },
     collectWarnings: ({ account, cfg }) => {
       const warnings: string[] = [];
-      const defaultGroupPolicy = cfg.channels?.defaults?.groupPolicy;
-      const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+      const defaultGroupPolicy = resolveDefaultGroupPolicy(cfg);
+      const { groupPolicy } = resolveAllowlistProviderRuntimeGroupPolicy({
+        providerConfigPresent: cfg.channels?.googlechat !== undefined,
+        groupPolicy: account.config.groupPolicy,
+        defaultGroupPolicy,
+      });
       if (groupPolicy === "open") {
         warnings.push(
           `- Google Chat spaces: groupPolicy="open" allows any space to trigger (mention-gated). Set channels.googlechat.groupPolicy="allowlist" and configure channels.googlechat.groups.`,

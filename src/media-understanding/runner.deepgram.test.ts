@@ -1,45 +1,11 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
-import {
-  buildProviderRegistry,
-  createMediaAttachmentCache,
-  normalizeMediaAttachments,
-  runCapability,
-} from "./runner.js";
-
-async function withAudioFixture(
-  run: (params: {
-    ctx: MsgContext;
-    media: ReturnType<typeof normalizeMediaAttachments>;
-    cache: ReturnType<typeof createMediaAttachmentCache>;
-  }) => Promise<void>,
-) {
-  const originalPath = process.env.PATH;
-  process.env.PATH = "";
-  const tmpPath = path.join(os.tmpdir(), `openclaw-deepgram-${Date.now()}.wav`);
-  await fs.writeFile(tmpPath, Buffer.from("RIFF"));
-  const ctx: MsgContext = { MediaPath: tmpPath, MediaType: "audio/wav" };
-  const media = normalizeMediaAttachments(ctx);
-  const cache = createMediaAttachmentCache(media, {
-    localPathRoots: [path.dirname(tmpPath)],
-  });
-
-  try {
-    await run({ ctx, media, cache });
-  } finally {
-    process.env.PATH = originalPath;
-    await cache.cleanup();
-    await fs.unlink(tmpPath).catch(() => {});
-  }
-}
+import { buildProviderRegistry, runCapability } from "./runner.js";
+import { withAudioFixture } from "./runner.test-utils.js";
 
 describe("runCapability deepgram provider options", () => {
   it("merges provider options, headers, and baseUrl overrides", async () => {
-    await withAudioFixture(async ({ ctx, media, cache }) => {
+    await withAudioFixture("openclaw-deepgram", async ({ ctx, media, cache }) => {
       let seenQuery: Record<string, string | number | boolean> | undefined;
       let seenBaseUrl: string | undefined;
       let seenHeaders: Record<string, string> | undefined;

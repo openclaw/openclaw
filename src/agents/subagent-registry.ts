@@ -1,4 +1,10 @@
 import { loadConfig } from "../config/config.js";
+import {
+  loadSessionStore,
+  resolveAgentIdFromSessionKey,
+  resolveStorePath,
+  type SessionEntry,
+} from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { defaultRuntime } from "../runtime.js";
@@ -59,6 +65,7 @@ const MAX_ANNOUNCE_RETRY_COUNT = 3;
  * succeeded. Guards against stale registry entries surviving gateway restarts.
  */
 const ANNOUNCE_EXPIRY_MS = 5 * 60_000; // 5 minutes
+type SubagentRunOrphanReason = "missing-session-entry" | "missing-session-id";
 
 function resolveAnnounceRetryDelayMs(retryCount: number) {
   const boundedRetryCount = Math.max(0, Math.min(retryCount, 10));
@@ -80,6 +87,119 @@ function logAnnounceGiveUp(entry: SubagentRunRecord, reason: "retry-limit" | "ex
 
 function persistSubagentRuns() {
   persistSubagentRunsToDisk(subagentRuns);
+}
+
+function findSessionEntryByKey(store: Record<string, SessionEntry>, sessionKey: string) {
+  const direct = store[sessionKey];
+  if (direct) {
+    return direct;
+  }
+  const normalized = sessionKey.toLowerCase();
+  for (const [key, entry] of Object.entries(store)) {
+    if (key.toLowerCase() === normalized) {
+      return entry;
+    }
+  }
+  return undefined;
+}
+
+function resolveSubagentRunOrphanReason(params: {
+  entry: SubagentRunRecord;
+  storeCache?: Map<string, Record<string, SessionEntry>>;
+}): SubagentRunOrphanReason | null {
+  const childSessionKey = params.entry.childSessionKey?.trim();
+  if (!childSessionKey) {
+    return "missing-session-entry";
+  }
+  try {
+    const cfg = loadConfig();
+    const agentId = resolveAgentIdFromSessionKey(childSessionKey);
+    const storePath = resolveStorePath(cfg.session?.store, { agentId });
+    let store = params.storeCache?.get(storePath);
+    if (!store) {
+      store = loadSessionStore(storePath);
+      params.storeCache?.set(storePath, store);
+    }
+    const sessionEntry = findSessionEntryByKey(store, childSessionKey);
+    if (!sessionEntry) {
+      return "missing-session-entry";
+    }
+    if (typeof sessionEntry.sessionId !== "string" || !sessionEntry.sessionId.trim()) {
+      return "missing-session-id";
+    }
+    return null;
+  } catch {
+    // Best-effort guard: avoid false orphan pruning on transient read/config failures.
+    return null;
+  }
+}
+
+function reconcileOrphanedRun(params: {
+  runId: string;
+  entry: SubagentRunRecord;
+  reason: SubagentRunOrphanReason;
+  source: "restore" | "resume";
+}) {
+  const now = Date.now();
+  let changed = false;
+  if (typeof params.entry.endedAt !== "number") {
+    params.entry.endedAt = now;
+    changed = true;
+  }
+  const orphanOutcome: SubagentRunOutcome = {
+    status: "error",
+    error: `orphaned subagent run (${params.reason})`,
+  };
+  if (!runOutcomesEqual(params.entry.outcome, orphanOutcome)) {
+    params.entry.outcome = orphanOutcome;
+    changed = true;
+  }
+  if (params.entry.endedReason !== SUBAGENT_ENDED_REASON_ERROR) {
+    params.entry.endedReason = SUBAGENT_ENDED_REASON_ERROR;
+    changed = true;
+  }
+  if (params.entry.cleanupHandled !== true) {
+    params.entry.cleanupHandled = true;
+    changed = true;
+  }
+  if (typeof params.entry.cleanupCompletedAt !== "number") {
+    params.entry.cleanupCompletedAt = now;
+    changed = true;
+  }
+  const removed = subagentRuns.delete(params.runId);
+  resumedRuns.delete(params.runId);
+  if (!removed && !changed) {
+    return false;
+  }
+  defaultRuntime.log(
+    `[warn] Subagent orphan run pruned source=${params.source} run=${params.runId} child=${params.entry.childSessionKey} reason=${params.reason}`,
+  );
+  return true;
+}
+
+function reconcileOrphanedRestoredRuns() {
+  const storeCache = new Map<string, Record<string, SessionEntry>>();
+  let changed = false;
+  for (const [runId, entry] of subagentRuns.entries()) {
+    const orphanReason = resolveSubagentRunOrphanReason({
+      entry,
+      storeCache,
+    });
+    if (!orphanReason) {
+      continue;
+    }
+    if (
+      reconcileOrphanedRun({
+        runId,
+        entry,
+        reason: orphanReason,
+        source: "restore",
+      })
+    ) {
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 const resumedRuns = new Set<string>();
@@ -225,6 +345,20 @@ function resumeSubagentRun(runId: string) {
   if (!entry) {
     return;
   }
+  const orphanReason = resolveSubagentRunOrphanReason({ entry });
+  if (orphanReason) {
+    if (
+      reconcileOrphanedRun({
+        runId,
+        entry,
+        reason: orphanReason,
+        source: "resume",
+      })
+    ) {
+      persistSubagentRuns();
+    }
+    return;
+  }
   if (entry.cleanupCompletedAt) {
     return;
   }
@@ -288,6 +422,12 @@ function restoreSubagentRunsOnce() {
       mergeOnly: true,
     });
     if (restoredCount === 0) {
+      return;
+    }
+    if (reconcileOrphanedRestoredRuns()) {
+      persistSubagentRuns();
+    }
+    if (subagentRuns.size === 0) {
       return;
     }
     // Resume pending work.

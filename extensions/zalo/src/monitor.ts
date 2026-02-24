@@ -1,13 +1,16 @@
 import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { OpenClawConfig, MarkdownTableMode } from "openclaw/plugin-sdk";
+import type { MarkdownTableMode, OpenClawConfig, OutboundReplyPayload } from "openclaw/plugin-sdk";
 import {
+  createDedupeCache,
   createReplyPrefixOptions,
   readJsonBodyWithLimit,
   registerWebhookTarget,
   rejectNonPostWebhookRequest,
   resolveSingleWebhookTarget,
   resolveSenderCommandAuthorization,
+  resolveOutboundMediaUrls,
+  sendMediaWithLeadingCaption,
   resolveWebhookPath,
   resolveWebhookTargets,
   requestBodyErrorToText,
@@ -92,7 +95,10 @@ type WebhookTarget = {
 
 const webhookTargets = new Map<string, WebhookTarget[]>();
 const webhookRateLimits = new Map<string, WebhookRateLimitState>();
-const recentWebhookEvents = new Map<string, number>();
+const recentWebhookEvents = createDedupeCache({
+  ttlMs: ZALO_WEBHOOK_REPLAY_WINDOW_MS,
+  maxSize: 5000,
+});
 const webhookStatusCounters = new Map<string, number>();
 
 function isJsonContentType(value: string | string[] | undefined): boolean {
@@ -141,22 +147,7 @@ function isReplayEvent(update: ZaloUpdate, nowMs: number): boolean {
     return false;
   }
   const key = `${update.event_name}:${messageId}`;
-  const seenAt = recentWebhookEvents.get(key);
-  recentWebhookEvents.set(key, nowMs);
-
-  if (seenAt && nowMs - seenAt < ZALO_WEBHOOK_REPLAY_WINDOW_MS) {
-    return true;
-  }
-
-  if (recentWebhookEvents.size > 5000) {
-    for (const [eventKey, timestamp] of recentWebhookEvents) {
-      if (nowMs - timestamp >= ZALO_WEBHOOK_REPLAY_WINDOW_MS) {
-        recentWebhookEvents.delete(eventKey);
-      }
-    }
-  }
-
-  return false;
+  return recentWebhookEvents.check(key, nowMs);
 }
 
 function recordWebhookStatus(
@@ -447,7 +438,7 @@ async function handleImageMessage(
   if (photo) {
     try {
       const maxBytes = mediaMaxMb * 1024 * 1024;
-      const fetched = await core.channel.media.fetchRemoteMedia({ url: photo });
+      const fetched = await core.channel.media.fetchRemoteMedia({ url: photo, maxBytes });
       const saved = await core.channel.media.saveMediaBuffer(
         fetched.buffer,
         fetched.contentType,
@@ -692,7 +683,7 @@ async function processMessageWithPipeline(params: {
 }
 
 async function deliverZaloReply(params: {
-  payload: { text?: string; mediaUrls?: string[]; mediaUrl?: string };
+  payload: OutboundReplyPayload;
   token: string;
   chatId: string;
   runtime: ZaloRuntimeEnv;
@@ -707,24 +698,18 @@ async function deliverZaloReply(params: {
   const tableMode = params.tableMode ?? "code";
   const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
 
-  const mediaList = payload.mediaUrls?.length
-    ? payload.mediaUrls
-    : payload.mediaUrl
-      ? [payload.mediaUrl]
-      : [];
-
-  if (mediaList.length > 0) {
-    let first = true;
-    for (const mediaUrl of mediaList) {
-      const caption = first ? text : undefined;
-      first = false;
-      try {
-        await sendPhoto(token, { chat_id: chatId, photo: mediaUrl, caption }, fetcher);
-        statusSink?.({ lastOutboundAt: Date.now() });
-      } catch (err) {
-        runtime.error?.(`Zalo photo send failed: ${String(err)}`);
-      }
-    }
+  const sentMedia = await sendMediaWithLeadingCaption({
+    mediaUrls: resolveOutboundMediaUrls(payload),
+    caption: text,
+    send: async ({ mediaUrl, caption }) => {
+      await sendPhoto(token, { chat_id: chatId, photo: mediaUrl, caption }, fetcher);
+      statusSink?.({ lastOutboundAt: Date.now() });
+    },
+    onError: (error) => {
+      runtime.error?.(`Zalo photo send failed: ${String(error)}`);
+    },
+  });
+  if (sentMedia) {
     return;
   }
 

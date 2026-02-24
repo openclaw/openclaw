@@ -91,7 +91,7 @@ vi.mock("../../config/sessions.js", async (importOriginal) => {
 describe("agent components", () => {
   const createCfg = (): OpenClawConfig => ({}) as OpenClawConfig;
 
-  const createDmButtonInteraction = (overrides: Partial<ButtonInteraction> = {}) => {
+  const createBaseDmInteraction = (overrides: Record<string, unknown> = {}) => {
     const reply = vi.fn().mockResolvedValue(undefined);
     const defer = vi.fn().mockResolvedValue(undefined);
     const interaction = {
@@ -100,28 +100,37 @@ describe("agent components", () => {
       defer,
       reply,
       ...overrides,
-    } as unknown as ButtonInteraction;
+    };
     return { interaction, defer, reply };
+  };
+
+  const createDmButtonInteraction = (overrides: Partial<ButtonInteraction> = {}) => {
+    const { interaction, defer, reply } = createBaseDmInteraction(
+      overrides as Record<string, unknown>,
+    );
+    return {
+      interaction: interaction as unknown as ButtonInteraction,
+      defer,
+      reply,
+    };
   };
 
   const createDmSelectInteraction = (overrides: Partial<StringSelectMenuInteraction> = {}) => {
-    const reply = vi.fn().mockResolvedValue(undefined);
-    const defer = vi.fn().mockResolvedValue(undefined);
-    const interaction = {
-      rawData: { channel_id: "dm-channel" },
-      user: { id: "123456789", username: "Alice", discriminator: "1234" },
+    const { interaction, defer, reply } = createBaseDmInteraction({
       values: ["alpha"],
+      ...(overrides as Record<string, unknown>),
+    });
+    return {
+      interaction: interaction as unknown as StringSelectMenuInteraction,
       defer,
       reply,
-      ...overrides,
-    } as unknown as StringSelectMenuInteraction;
-    return { interaction, defer, reply };
+    };
   };
 
   beforeEach(() => {
-    readAllowFromStoreMock.mockReset().mockResolvedValue([]);
-    upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
-    enqueueSystemEventMock.mockReset();
+    readAllowFromStoreMock.mockClear().mockResolvedValue([]);
+    upsertPairingRequestMock.mockClear().mockResolvedValue({ code: "PAIRCODE", created: true });
+    enqueueSystemEventMock.mockClear();
   });
 
   it("sends pairing reply when DM sender is not allowlisted", async () => {
@@ -140,7 +149,7 @@ describe("agent components", () => {
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });
 
-  it("allows DM interactions when pairing store allowlist matches", async () => {
+  it("blocks DM interactions when only pairing store entries match in allowlist mode", async () => {
     readAllowFromStoreMock.mockResolvedValue(["123456789"]);
     const button = createAgentComponentButton({
       cfg: createCfg(),
@@ -152,14 +161,16 @@ describe("agent components", () => {
     await button.run(interaction, { componentId: "hello" } as ComponentData);
 
     expect(defer).toHaveBeenCalledWith({ ephemeral: true });
-    expect(reply).toHaveBeenCalledWith({ content: "✓" });
-    expect(enqueueSystemEventMock).toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith({ content: "You are not authorized to use this button." });
+    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+    expect(readAllowFromStoreMock).not.toHaveBeenCalled();
   });
 
   it("matches tag-based allowlist entries for DM select menus", async () => {
     const select = createAgentSelectMenu({
       cfg: createCfg(),
       accountId: "default",
+      discordConfig: { dangerouslyAllowNameMatching: true } as DiscordAccountConfig,
       dmPolicy: "allowlist",
       allowFrom: ["Alice#1234"],
     });
@@ -281,17 +292,17 @@ describe("discord component interactions", () => {
   beforeEach(() => {
     clearDiscordComponentEntries();
     lastDispatchCtx = undefined;
-    readAllowFromStoreMock.mockReset().mockResolvedValue([]);
-    upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "PAIRCODE", created: true });
-    enqueueSystemEventMock.mockReset();
-    dispatchReplyMock.mockReset().mockImplementation(async (params: DispatchParams) => {
+    readAllowFromStoreMock.mockClear().mockResolvedValue([]);
+    upsertPairingRequestMock.mockClear().mockResolvedValue({ code: "PAIRCODE", created: true });
+    enqueueSystemEventMock.mockClear();
+    dispatchReplyMock.mockClear().mockImplementation(async (params: DispatchParams) => {
       lastDispatchCtx = params.ctx;
       await params.dispatcherOptions.deliver({ text: "ok" });
     });
-    deliverDiscordReplyMock.mockReset();
-    recordInboundSessionMock.mockReset().mockResolvedValue(undefined);
-    readSessionUpdatedAtMock.mockReset().mockReturnValue(undefined);
-    resolveStorePathMock.mockReset().mockReturnValue("/tmp/openclaw-sessions-test.json");
+    deliverDiscordReplyMock.mockClear();
+    recordInboundSessionMock.mockClear().mockResolvedValue(undefined);
+    readSessionUpdatedAtMock.mockClear().mockReturnValue(undefined);
+    resolveStorePathMock.mockClear().mockReturnValue("/tmp/openclaw-sessions-test.json");
   });
 
   it("routes button clicks with reply references", async () => {
@@ -416,13 +427,20 @@ describe("resolveDiscordOwnerAllowFrom", () => {
     expect(result).toEqual(["123"]);
   });
 
-  it("returns the normalized name slug for name matches", () => {
-    const result = resolveDiscordOwnerAllowFrom({
+  it("returns the normalized name slug for name matches only when enabled", () => {
+    const defaultResult = resolveDiscordOwnerAllowFrom({
       channelConfig: { allowed: true, users: ["Some User"] } as DiscordChannelConfigResolved,
       sender: { id: "999", name: "Some User" },
     });
+    expect(defaultResult).toBeUndefined();
 
-    expect(result).toEqual(["some-user"]);
+    const enabledResult = resolveDiscordOwnerAllowFrom({
+      channelConfig: { allowed: true, users: ["Some User"] } as DiscordChannelConfigResolved,
+      sender: { id: "999", name: "Some User" },
+      allowNameMatching: true,
+    });
+
+    expect(enabledResult).toEqual(["some-user"]);
   });
 });
 
@@ -631,105 +649,133 @@ describe("resolveDiscordPresenceUpdate", () => {
 });
 
 describe("resolveDiscordAutoThreadContext", () => {
-  it("returns null when no createdThreadId", () => {
-    expect(
-      resolveDiscordAutoThreadContext({
+  it("returns null without a created thread and re-keys context when present", () => {
+    const cases = [
+      {
+        name: "no created thread",
+        createdThreadId: undefined,
+        expectedNull: true,
+      },
+      {
+        name: "created thread",
+        createdThreadId: "thread",
+        expectedNull: false,
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const context = resolveDiscordAutoThreadContext({
         agentId: "agent",
         channel: "discord",
         messageChannelId: "parent",
-        createdThreadId: undefined,
-      }),
-    ).toBeNull();
-  });
+        createdThreadId: testCase.createdThreadId,
+      });
 
-  it("re-keys session context to the created thread", () => {
-    const context = resolveDiscordAutoThreadContext({
-      agentId: "agent",
-      channel: "discord",
-      messageChannelId: "parent",
-      createdThreadId: "thread",
-    });
-    expect(context).not.toBeNull();
-    expect(context?.To).toBe("channel:thread");
-    expect(context?.From).toBe("discord:channel:thread");
-    expect(context?.OriginatingTo).toBe("channel:thread");
-    expect(context?.SessionKey).toBe(
-      buildAgentSessionKey({
-        agentId: "agent",
-        channel: "discord",
-        peer: { kind: "channel", id: "thread" },
-      }),
-    );
-    expect(context?.ParentSessionKey).toBe(
-      buildAgentSessionKey({
-        agentId: "agent",
-        channel: "discord",
-        peer: { kind: "channel", id: "parent" },
-      }),
-    );
+      if (testCase.expectedNull) {
+        expect(context, testCase.name).toBeNull();
+        continue;
+      }
+
+      expect(context, testCase.name).not.toBeNull();
+      expect(context?.To, testCase.name).toBe("channel:thread");
+      expect(context?.From, testCase.name).toBe("discord:channel:thread");
+      expect(context?.OriginatingTo, testCase.name).toBe("channel:thread");
+      expect(context?.SessionKey, testCase.name).toBe(
+        buildAgentSessionKey({
+          agentId: "agent",
+          channel: "discord",
+          peer: { kind: "channel", id: "thread" },
+        }),
+      );
+      expect(context?.ParentSessionKey, testCase.name).toBe(
+        buildAgentSessionKey({
+          agentId: "agent",
+          channel: "discord",
+          peer: { kind: "channel", id: "parent" },
+        }),
+      );
+    }
   });
 });
 
 describe("resolveDiscordReplyDeliveryPlan", () => {
-  it("uses reply references when posting to the original target", () => {
-    const plan = resolveDiscordReplyDeliveryPlan({
-      replyTarget: "channel:parent",
-      replyToMode: "all",
-      messageId: "m1",
-      threadChannel: null,
-      createdThreadId: null,
-    });
-    expect(plan.deliverTarget).toBe("channel:parent");
-    expect(plan.replyTarget).toBe("channel:parent");
-    expect(plan.replyReference.use()).toBe("m1");
-  });
+  it("applies delivery targets and reply reference behavior across thread modes", () => {
+    const cases = [
+      {
+        name: "original target with reply references",
+        input: {
+          replyTarget: "channel:parent" as const,
+          replyToMode: "all" as const,
+          messageId: "m1",
+          threadChannel: null,
+          createdThreadId: null,
+        },
+        expectedDeliverTarget: "channel:parent",
+        expectedReplyTarget: "channel:parent",
+        expectedReplyReferenceCalls: ["m1"],
+      },
+      {
+        name: "created thread disables reply references",
+        input: {
+          replyTarget: "channel:parent" as const,
+          replyToMode: "all" as const,
+          messageId: "m1",
+          threadChannel: null,
+          createdThreadId: "thread",
+        },
+        expectedDeliverTarget: "channel:thread",
+        expectedReplyTarget: "channel:thread",
+        expectedReplyReferenceCalls: [undefined],
+      },
+      {
+        name: "thread + off mode",
+        input: {
+          replyTarget: "channel:thread" as const,
+          replyToMode: "off" as const,
+          messageId: "m1",
+          threadChannel: { id: "thread" },
+          createdThreadId: null,
+        },
+        expectedDeliverTarget: "channel:thread",
+        expectedReplyTarget: "channel:thread",
+        expectedReplyReferenceCalls: [undefined],
+      },
+      {
+        name: "thread + all mode",
+        input: {
+          replyTarget: "channel:thread" as const,
+          replyToMode: "all" as const,
+          messageId: "m1",
+          threadChannel: { id: "thread" },
+          createdThreadId: null,
+        },
+        expectedDeliverTarget: "channel:thread",
+        expectedReplyTarget: "channel:thread",
+        expectedReplyReferenceCalls: ["m1", "m1"],
+      },
+      {
+        name: "thread + first mode",
+        input: {
+          replyTarget: "channel:thread" as const,
+          replyToMode: "first" as const,
+          messageId: "m1",
+          threadChannel: { id: "thread" },
+          createdThreadId: null,
+        },
+        expectedDeliverTarget: "channel:thread",
+        expectedReplyTarget: "channel:thread",
+        expectedReplyReferenceCalls: ["m1", undefined],
+      },
+    ] as const;
 
-  it("disables reply references when autoThread creates a new thread", () => {
-    const plan = resolveDiscordReplyDeliveryPlan({
-      replyTarget: "channel:parent",
-      replyToMode: "all",
-      messageId: "m1",
-      threadChannel: null,
-      createdThreadId: "thread",
-    });
-    expect(plan.deliverTarget).toBe("channel:thread");
-    expect(plan.replyTarget).toBe("channel:thread");
-    expect(plan.replyReference.use()).toBeUndefined();
-  });
-
-  it("respects replyToMode off even inside a thread", () => {
-    const plan = resolveDiscordReplyDeliveryPlan({
-      replyTarget: "channel:thread",
-      replyToMode: "off",
-      messageId: "m1",
-      threadChannel: { id: "thread" },
-      createdThreadId: null,
-    });
-    expect(plan.replyReference.use()).toBeUndefined();
-  });
-
-  it("uses existingId when inside a thread with replyToMode all", () => {
-    const plan = resolveDiscordReplyDeliveryPlan({
-      replyTarget: "channel:thread",
-      replyToMode: "all",
-      messageId: "m1",
-      threadChannel: { id: "thread" },
-      createdThreadId: null,
-    });
-    expect(plan.replyReference.use()).toBe("m1");
-    expect(plan.replyReference.use()).toBe("m1");
-  });
-
-  it("uses existingId only on first call with replyToMode first inside a thread", () => {
-    const plan = resolveDiscordReplyDeliveryPlan({
-      replyTarget: "channel:thread",
-      replyToMode: "first",
-      messageId: "m1",
-      threadChannel: { id: "thread" },
-      createdThreadId: null,
-    });
-    expect(plan.replyReference.use()).toBe("m1");
-    expect(plan.replyReference.use()).toBeUndefined();
+    for (const testCase of cases) {
+      const plan = resolveDiscordReplyDeliveryPlan(testCase.input);
+      expect(plan.deliverTarget, testCase.name).toBe(testCase.expectedDeliverTarget);
+      expect(plan.replyTarget, testCase.name).toBe(testCase.expectedReplyTarget);
+      for (const expected of testCase.expectedReplyReferenceCalls) {
+        expect(plan.replyReference.use(), testCase.name).toBe(expected);
+      }
+    }
   });
 });
 
@@ -751,34 +797,35 @@ describe("maybeCreateDiscordAutoThread", () => {
     };
   }
 
-  it("returns existing thread ID when creation fails due to race condition", async () => {
-    const client = {
-      rest: {
-        post: async () => {
-          throw new Error("A thread has already been created on this message");
-        },
-        get: async () => ({ thread: { id: "existing-thread" } }),
+  it("handles create-thread failures with and without an existing thread", async () => {
+    const cases = [
+      {
+        name: "race condition returns existing thread",
+        postError: "A thread has already been created on this message",
+        getResponse: { thread: { id: "existing-thread" } },
+        expected: "existing-thread",
       },
-    } as unknown as Client;
-
-    const result = await maybeCreateDiscordAutoThread(createAutoThreadParams(client));
-
-    expect(result).toBe("existing-thread");
-  });
-
-  it("returns undefined when creation fails and no existing thread found", async () => {
-    const client = {
-      rest: {
-        post: async () => {
-          throw new Error("Some other error");
-        },
-        get: async () => ({ thread: null }),
+      {
+        name: "other error returns undefined",
+        postError: "Some other error",
+        getResponse: { thread: null },
+        expected: undefined,
       },
-    } as unknown as Client;
+    ] as const;
 
-    const result = await maybeCreateDiscordAutoThread(createAutoThreadParams(client));
+    for (const testCase of cases) {
+      const client = {
+        rest: {
+          post: async () => {
+            throw new Error(testCase.postError);
+          },
+          get: async () => testCase.getResponse,
+        },
+      } as unknown as Client;
 
-    expect(result).toBeUndefined();
+      const result = await maybeCreateDiscordAutoThread(createAutoThreadParams(client));
+      expect(result, testCase.name).toBe(testCase.expected);
+    }
   });
 });
 
@@ -809,38 +856,50 @@ describe("resolveDiscordAutoThreadReplyPlan", () => {
     };
   }
 
-  it("switches delivery + session context to the created thread", async () => {
-    const plan = await resolveDiscordAutoThreadReplyPlan(createAutoThreadPlanParams());
-    expect(plan.deliverTarget).toBe("channel:thread");
-    expect(plan.replyReference.use()).toBeUndefined();
-    expect(plan.autoThreadContext?.SessionKey).toBe(
-      buildAgentSessionKey({
-        agentId: "agent",
-        channel: "discord",
-        peer: { kind: "channel", id: "thread" },
-      }),
-    );
-  });
+  it("applies auto-thread reply planning across created, existing, and disabled modes", async () => {
+    const cases = [
+      {
+        name: "created thread",
+        params: undefined,
+        expectedDeliverTarget: "channel:thread",
+        expectedReplyReference: undefined,
+        expectedSessionKey: buildAgentSessionKey({
+          agentId: "agent",
+          channel: "discord",
+          peer: { kind: "channel", id: "thread" },
+        }),
+      },
+      {
+        name: "existing thread channel",
+        params: {
+          threadChannel: { id: "thread" },
+        },
+        expectedDeliverTarget: "channel:thread",
+        expectedReplyReference: "m1",
+        expectedSessionKey: null,
+      },
+      {
+        name: "autoThread disabled",
+        params: {
+          channelConfig: { autoThread: false } as unknown as DiscordChannelConfigResolved,
+        },
+        expectedDeliverTarget: "channel:parent",
+        expectedReplyReference: "m1",
+        expectedSessionKey: null,
+      },
+    ] as const;
 
-  it("routes replies to an existing thread channel", async () => {
-    const plan = await resolveDiscordAutoThreadReplyPlan(
-      createAutoThreadPlanParams({
-        threadChannel: { id: "thread" },
-      }),
-    );
-    expect(plan.deliverTarget).toBe("channel:thread");
-    expect(plan.replyTarget).toBe("channel:thread");
-    expect(plan.replyReference.use()).toBe("m1");
-    expect(plan.autoThreadContext).toBeNull();
-  });
-
-  it("does nothing when autoThread is disabled", async () => {
-    const plan = await resolveDiscordAutoThreadReplyPlan(
-      createAutoThreadPlanParams({
-        channelConfig: { autoThread: false } as unknown as DiscordChannelConfigResolved,
-      }),
-    );
-    expect(plan.deliverTarget).toBe("channel:parent");
-    expect(plan.autoThreadContext).toBeNull();
+    for (const testCase of cases) {
+      const plan = await resolveDiscordAutoThreadReplyPlan(
+        createAutoThreadPlanParams(testCase.params),
+      );
+      expect(plan.deliverTarget, testCase.name).toBe(testCase.expectedDeliverTarget);
+      expect(plan.replyReference.use(), testCase.name).toBe(testCase.expectedReplyReference);
+      if (testCase.expectedSessionKey == null) {
+        expect(plan.autoThreadContext, testCase.name).toBeNull();
+      } else {
+        expect(plan.autoThreadContext?.SessionKey, testCase.name).toBe(testCase.expectedSessionKey);
+      }
+    }
   });
 });

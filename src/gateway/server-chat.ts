@@ -4,6 +4,7 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
+import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { loadSessionEntry } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
@@ -287,16 +288,20 @@ export function createAgentEventHandler({
     seq: number,
     text: string,
   ) => {
+    const cleaned = stripInlineDirectiveTagsForDisplay(text).text;
     // Always buffer the full text (including NO_REPLY suffix) so onChatFinal
     // sees the complete output for watchdog sign-off detection.
     // Suppression of silent replies happens at the final emission layer.
     chatRunState.buffers.set(clientRunId, text);
+    if (!cleaned) {
+      return;
+    }
     // Suppress full and partial silent tokens (e.g. "NO" before "_REPLY" arrives)
     if (
-      isSilentReplyText(text, SILENT_REPLY_TOKEN) ||
-      (text.trim().length >= 2 &&
-        SILENT_REPLY_TOKEN.startsWith(text.trim().toUpperCase()) &&
-        /^[A-Z_]+$/i.test(text.trim()))
+      isSilentReplyText(cleaned, SILENT_REPLY_TOKEN) ||
+      (cleaned.trim().length >= 2 &&
+        SILENT_REPLY_TOKEN.startsWith(cleaned.trim().toUpperCase()) &&
+        /^[A-Z_]+$/i.test(cleaned.trim()))
     ) {
       return;
     }
@@ -316,7 +321,7 @@ export function createAgentEventHandler({
       state: "delta" as const,
       message: {
         role: "assistant",
-        content: [{ type: "text", text }],
+        content: [{ type: "text", text: cleaned }],
         timestamp: now,
       },
     };
@@ -333,7 +338,9 @@ export function createAgentEventHandler({
     jobState: "done" | "error",
     error?: unknown,
   ) => {
-    const bufferedText = chatRunState.buffers.get(clientRunId)?.trim() ?? "";
+    const bufferedText = stripInlineDirectiveTagsForDisplay(
+      chatRunState.buffers.get(clientRunId) ?? "",
+    ).text.trim();
     const normalizedHeartbeatText = normalizeHeartbeatChatFinalText({
       runId: clientRunId,
       sourceRunId,

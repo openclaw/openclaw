@@ -1,5 +1,6 @@
 import type { ChannelType, Client, Message } from "@buape/carbon";
 import { StickerFormatType, type APIAttachment, type APIStickerItem } from "discord-api-types/v10";
+import { buildMediaPayload } from "../../channels/plugins/media-payload.js";
 import { logVerbose } from "../../globals.js";
 import { fetchRemoteMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
@@ -218,6 +219,7 @@ async function appendResolvedMediaFromAttachments(params: {
       const fetched = await fetchRemoteMedia({
         url: attachment.url,
         filePathHint: attachment.filename ?? attachment.url,
+        maxBytes: params.maxBytes,
       });
       const saved = await saveMediaBuffer(
         fetched.buffer,
@@ -307,6 +309,7 @@ async function appendResolvedMediaFromStickers(params: {
         const fetched = await fetchRemoteMedia({
           url: candidate.url,
           filePathHint: candidate.fileName,
+          maxBytes: params.maxBytes,
         });
         const saved = await saveMediaBuffer(
           fetched.buffer,
@@ -502,15 +505,5 @@ export function buildDiscordMediaPayload(
   MediaUrls?: string[];
   MediaTypes?: string[];
 } {
-  const first = mediaList[0];
-  const mediaPaths = mediaList.map((media) => media.path);
-  const mediaTypes = mediaList.map((media) => media.contentType).filter(Boolean) as string[];
-  return {
-    MediaPath: first?.path,
-    MediaType: first?.contentType,
-    MediaUrl: first?.path,
-    MediaPaths: mediaPaths.length > 0 ? mediaPaths : undefined,
-    MediaUrls: mediaPaths.length > 0 ? mediaPaths : undefined,
-    MediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
-  };
+  return buildMediaPayload(mediaList);
 }

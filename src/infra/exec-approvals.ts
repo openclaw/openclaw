@@ -16,6 +16,7 @@ export type ExecApprovalRequest = {
   request: {
     command: string;
     cwd?: string | null;
+    nodeId?: string | null;
     host?: string | null;
     security?: string | null;
     ask?: string | null;
@@ -32,6 +33,7 @@ export type ExecApprovalResolved = {
   decision: ExecApprovalDecision;
   resolvedBy?: string | null;
   ts: number;
+  request?: ExecApprovalRequest["request"];
 };
 
 export type ExecApprovalsDefaults = {

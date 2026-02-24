@@ -1,13 +1,18 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import {
+  GROUP_POLICY_BLOCKED_LABEL,
   createReplyPrefixOptions,
   readJsonBodyWithLimit,
   registerWebhookTarget,
   rejectNonPostWebhookRequest,
+  isDangerousNameMatchingEnabled,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
   resolveSingleWebhookTargetAsync,
   resolveWebhookPath,
   resolveWebhookTargets,
+  warnMissingProviderGroupPolicyFallbackOnce,
   requestBodyErrorToText,
   resolveMentionGatingWithBypass,
 } from "openclaw/plugin-sdk";
@@ -283,6 +288,7 @@ export function isSenderAllowed(
   senderId: string,
   senderEmail: string | undefined,
   allowFrom: string[],
+  allowNameMatching = false,
 ) {
   if (allowFrom.includes("*")) {
     return true;
@@ -301,8 +307,8 @@ export function isSenderAllowed(
       return normalizeUserId(withoutPrefix) === normalizedSenderId;
     }
 
-    // Raw email allowlist entries remain supported for usability.
-    if (normalizedEmail && isEmailLike(withoutPrefix)) {
+    // Raw email allowlist entries are a break-glass override.
+    if (allowNameMatching && normalizedEmail && isEmailLike(withoutPrefix)) {
       return withoutPrefix === normalizedEmail;
     }
 
@@ -405,6 +411,7 @@ async function processMessageWithPipeline(params: {
   const senderId = sender?.name ?? "";
   const senderName = sender?.displayName ?? "";
   const senderEmail = sender?.email ?? undefined;
+  const allowNameMatching = isDangerousNameMatchingEnabled(account.config);
 
   const allowBots = account.config.allowBots === true;
   if (!allowBots) {
@@ -426,8 +433,20 @@ async function processMessageWithPipeline(params: {
     return;
   }
 
-  const defaultGroupPolicy = config.channels?.defaults?.groupPolicy;
-  const groupPolicy = account.config.groupPolicy ?? defaultGroupPolicy ?? "allowlist";
+  const defaultGroupPolicy = resolveDefaultGroupPolicy(config);
+  const { groupPolicy, providerMissingFallbackApplied } =
+    resolveAllowlistProviderRuntimeGroupPolicy({
+      providerConfigPresent: config.channels?.googlechat !== undefined,
+      groupPolicy: account.config.groupPolicy,
+      defaultGroupPolicy,
+    });
+  warnMissingProviderGroupPolicyFallbackOnce({
+    providerMissingFallbackApplied,
+    providerKey: "googlechat",
+    accountId: account.accountId,
+    blockedLabel: GROUP_POLICY_BLOCKED_LABEL.space,
+    log: (message) => logVerbose(core, runtime, message),
+  });
   const groupConfigResolved = resolveGroupConfig({
     groupId: spaceId,
     groupName: space.displayName ?? null,
@@ -473,6 +492,7 @@ async function processMessageWithPipeline(params: {
         senderId,
         senderEmail,
         groupUsers.map((v) => String(v)),
+        allowNameMatching,
       );
       if (!ok) {
         logVerbose(core, runtime, `drop group message (sender not allowed, ${senderId})`);
@@ -485,14 +505,19 @@ async function processMessageWithPipeline(params: {
   const configAllowFrom = (account.config.dm?.allowFrom ?? []).map((v) => String(v));
   const shouldComputeAuth = core.channel.commands.shouldComputeCommandAuthorized(rawBody, config);
   const storeAllowFrom =
-    !isGroup && (dmPolicy !== "open" || shouldComputeAuth)
+    !isGroup && dmPolicy !== "allowlist" && (dmPolicy !== "open" || shouldComputeAuth)
       ? await core.channel.pairing.readAllowFromStore("googlechat").catch(() => [])
       : [];
   const effectiveAllowFrom = [...configAllowFrom, ...storeAllowFrom];
   warnDeprecatedUsersEmailEntries(core, runtime, effectiveAllowFrom);
   const commandAllowFrom = isGroup ? groupUsers.map((v) => String(v)) : effectiveAllowFrom;
   const useAccessGroups = config.commands?.useAccessGroups !== false;
-  const senderAllowedForCommands = isSenderAllowed(senderId, senderEmail, commandAllowFrom);
+  const senderAllowedForCommands = isSenderAllowed(
+    senderId,
+    senderEmail,
+    commandAllowFrom,
+    allowNameMatching,
+  );
   const commandAuthorized = shouldComputeAuth
     ? core.channel.commands.resolveCommandAuthorizedFromAuthorizers({
         useAccessGroups,
