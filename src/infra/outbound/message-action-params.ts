@@ -279,9 +279,10 @@ async function hydrateAttachmentPayload(params: {
 
 export async function normalizeSandboxMediaParams(params: {
   args: Record<string, unknown>;
-  sandboxRoot?: string;
+  mediaPolicy: AttachmentMediaPolicy;
 }): Promise<void> {
-  const sandboxRoot = params.sandboxRoot?.trim();
+  const sandboxRoot =
+    params.mediaPolicy.mode === "sandbox" ? params.mediaPolicy.sandboxRoot.trim() : undefined;
   const mediaKeys: Array<"media" | "path" | "filePath"> = ["media", "path", "filePath"];
   for (const key of mediaKeys) {
     const raw = readStringParam(params.args, key, { trim: false });
@@ -362,7 +363,7 @@ async function hydrateAttachmentActionPayload(params: {
   });
 }
 
-export async function hydrateSetGroupIconParams(params: {
+export async function hydrateAttachmentParamsForAction(params: {
   cfg: OpenClawConfig;
   channel: ChannelId;
   accountId?: string | null;
@@ -371,25 +372,18 @@ export async function hydrateSetGroupIconParams(params: {
   dryRun?: boolean;
   mediaPolicy: AttachmentMediaPolicy;
 }): Promise<void> {
-  if (params.action !== "setGroupIcon") {
+  if (params.action !== "sendAttachment" && params.action !== "setGroupIcon") {
     return;
   }
-  await hydrateAttachmentActionPayload(params);
-}
-
-export async function hydrateSendAttachmentParams(params: {
-  cfg: OpenClawConfig;
-  channel: ChannelId;
-  accountId?: string | null;
-  args: Record<string, unknown>;
-  action: ChannelMessageActionName;
-  dryRun?: boolean;
-  mediaPolicy: AttachmentMediaPolicy;
-}): Promise<void> {
-  if (params.action !== "sendAttachment") {
-    return;
-  }
-  await hydrateAttachmentActionPayload({ ...params, allowMessageCaptionFallback: true });
+  await hydrateAttachmentActionPayload({
+    cfg: params.cfg,
+    channel: params.channel,
+    accountId: params.accountId,
+    args: params.args,
+    dryRun: params.dryRun,
+    mediaPolicy: params.mediaPolicy,
+    allowMessageCaptionFallback: params.action === "sendAttachment",
+  });
 }
 
 export function parseButtonsParam(params: Record<string, unknown>): void {
