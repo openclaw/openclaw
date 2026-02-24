@@ -1,119 +1,113 @@
 # OpenClaw Android UI Style Guide
 
-Scope: `apps/android` native app (Kotlin + Jetpack Compose).  
-Goal: cohesive, high-clarity UI with deterministic behavior.
+Scope: all native Android UI in `apps/android` (Jetpack Compose).
+Goal: one coherent visual system across onboarding, settings, and future screens.
 
 ## 1. Design Direction
 
-- Utility first: each screen has one obvious primary action.
-- Calm surface: strong text contrast, restrained accents, minimal chrome.
-- Progressive disclosure: advanced controls behind explicit affordances.
-- Deterministic flow: validate early, block invalid progression, no hidden state.
+- Clean, quiet surfaces.
+- Strong readability first.
+- One clear primary action per screen state.
+- Progressive disclosure for advanced controls.
+- Deterministic flows: validate early, fail clearly.
 
-## 2. Source Of Truth
+## 2. Style Baseline
 
-Design and UI behavior anchors:
+The onboarding flow defines the current visual baseline.
+New screens should match that language unless there is a strong product reason not to.
+
+Baseline traits:
+
+- Light neutral background with subtle depth.
+- Clear blue accent for active/primary states.
+- Strong border hierarchy for structure.
+- Medium/semibold typography (no thin text).
+- Divider-and-spacing layout over heavy card nesting.
+
+## 3. Core Tokens
+
+Use these as shared design tokens for new Compose UI.
+
+- Background gradient: `#FFFFFF`, `#F7F8FA`, `#EFF1F5`
+- Surface: `#F6F7FA`
+- Border: `#E5E7EC`
+- Border strong: `#D6DAE2`
+- Text primary: `#17181C`
+- Text secondary: `#4D5563`
+- Text tertiary: `#8A92A2`
+- Accent primary: `#1D5DD8`
+- Accent soft: `#ECF3FF`
+- Success: `#2F8C5A`
+- Warning: `#C8841A`
+
+Rule: do not introduce random per-screen colors when an existing token fits.
+
+## 4. Typography
+
+Primary type family: Manrope (`400/500/600/700`).
+
+Recommended scale:
+
+- Display: `34sp / 40sp`, bold
+- Section title: `24sp / 30sp`, semibold
+- Headline/action: `16sp / 22sp`, semibold
+- Body: `15sp / 22sp`, medium
+- Callout/helper: `14sp / 20sp`, medium
+- Caption 1: `12sp / 16sp`, medium
+- Caption 2: `11sp / 14sp`, medium
+
+Use monospace only for commands, setup codes, endpoint-like values.
+Hard rule: avoid ultra-thin weights on light backgrounds.
+
+## 5. Layout And Spacing
+
+- Respect safe drawing insets.
+- Keep content hierarchy mostly via spacing + dividers.
+- Prefer vertical rhythm from `8/10/12/14/20dp`.
+- Use pinned bottom actions for multi-step or high-importance flows.
+- Avoid unnecessary container nesting.
+
+## 6. Buttons And Actions
+
+- Primary action: filled accent button, visually dominant.
+- Secondary action: lower emphasis (outlined/text/surface button).
+- Icon-only buttons must remain legible and >=44dp target.
+- Back buttons in action rows use rounded-square shape, not circular by default.
+
+## 7. Inputs And Forms
+
+- Always show explicit label or clear context title.
+- Keep helper copy short and actionable.
+- Validate before advancing steps.
+- Prefer immediate inline errors over hidden failure states.
+- Keep optional advanced fields explicit (`Manual`, `Advanced`, etc.).
+
+## 8. Progress And Multi-Step Flows
+
+- Use clear step count (`Step X of N`).
+- Use labeled progress rail/indicator when steps are discrete.
+- Keep navigation predictable: back/next behavior should never surprise.
+
+## 9. Accessibility
+
+- Minimum practical touch target: `44dp`.
+- Do not rely on color alone for status.
+- Preserve high contrast for all text tiers.
+- Add meaningful `contentDescription` for icon-only controls.
+
+## 10. Architecture Rules
+
+- Durable UI state in `MainViewModel`.
+- Composables: state in, callbacks out.
+- No business/network logic in composables.
+- Keep side effects explicit (`LaunchedEffect`, activity result APIs).
+
+## 11. Source Of Truth
 
 - `app/src/main/java/ai/openclaw/android/ui/OpenClawTheme.kt`
+- `app/src/main/java/ai/openclaw/android/ui/OnboardingFlow.kt`
 - `app/src/main/java/ai/openclaw/android/ui/RootScreen.kt`
 - `app/src/main/java/ai/openclaw/android/ui/SettingsSheet.kt`
-- `app/src/main/java/ai/openclaw/android/ui/chat/*`
 - `app/src/main/java/ai/openclaw/android/MainViewModel.kt`
 
-If design changes, update shared theme/primitives first, then feature screens.
-
-## 3. Tokens And Theming
-
-Do not introduce ad-hoc style values in feature composables.
-
-### Color + Typography
-
-- Prefer `MaterialTheme.colorScheme` and `MaterialTheme.typography`.
-- Reuse `overlayContainerColor()` and `overlayIconColor()` for overlay controls.
-- Avoid raw `Color(...)` literals except explicit semantic state cues.
-- Keep text hierarchy clear: headline/body/supporting label styles, no random font sizes.
-
-### Spacing + Shape
-
-- Keep spacing rhythm consistent (`8/10/12/16/20.dp`).
-- Prefer section grouping via spacing/dividers before adding card containers.
-- Use elevation sparingly; only where interaction hierarchy needs it.
-
-## 4. Layout System
-
-- Base layout: `Box`/`Column` with `WindowInsets.safeDrawing` handling.
-- Keep overlays above `AndroidView` content when touch priority matters.
-- Structure by intent:
-  - status/hero
-  - core controls
-  - optional advanced controls
-- Prefer rails/dividers over card stacks.
-
-## 5. Compose Architecture Rules
-
-- State hoisting:
-  - durable state in `MainViewModel`
-  - composables receive state + callbacks
-- Composable APIs:
-  - include `modifier: Modifier = Modifier`
-  - avoid hidden global state
-- Side effects:
-  - use `LaunchedEffect` / activity result APIs
-  - no blocking work in composition
-- Recomposition hygiene:
-  - `remember`/derived values for computed UI state
-  - avoid allocating heavy objects on every recomposition
-
-## 6. Component Rules
-
-### Primary / secondary actions
-
-- One dominant primary action per context.
-- Secondary actions visibly lower emphasis.
-- Avoid duplicate actions that perform the same deterministic step.
-
-### Inputs + controls
-
-- Clear labels + concise helper text.
-- Keep compact fields side-by-side only when both are short and related.
-- Advanced settings collapsed by default.
-
-### WebView and mixed UI
-
-- Keep WebView behavior encapsulated in `AndroidView` wrappers.
-- Guard verbose logs and diagnostics behind `BuildConfig.DEBUG`.
-
-## 7. Copy Style
-
-- Short, operational, direct.
-- One helper sentence when possible.
-- No repeated status messaging in multiple UI regions.
-- Remove filler subtitles that do not change user action.
-
-## 8. Accessibility + Usability
-
-- Touch targets >= 44dp where practical.
-- Do not rely on color alone for state.
-- Provide meaningful `contentDescription` for icon-only controls.
-- Preserve contrast for status, secondary text, and disabled states.
-
-## 9. Anti-Patterns (Do Not Add)
-
-- Hardcoded theme values sprinkled across screens.
-- Business/network logic inside composables.
-- Card-inside-card nesting for simple layout.
-- Duplicate status pills/header messages for same state.
-- Long unbounded helper prose under every control.
-
-## 10. New Screen Checklist
-
-1. Uses shared theme primitives (`MaterialTheme`, existing helpers), no random style constants.
-2. Keeps durable state in ViewModel; UI is state + callbacks.
-3. Has one clear primary action.
-4. Uses spacing/divider-led hierarchy; cards only when needed.
-5. Advanced controls collapsed by default.
-6. Copy is concise; no duplicate status text.
-7. Insets and touch targets are correct.
-8. `./gradlew :app:lintDebug` passes.
-9. `./gradlew :app:testDebugUnitTest` passes for touched logic.
-10. Visual check on API 35 phone emulator and API 31 compatibility emulator.
+If style and implementation diverge, update both in the same change.
