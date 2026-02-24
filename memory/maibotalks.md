@@ -46,21 +46,34 @@ related:
 | 2026-02-22 | **App Store 심사 제출** (v1.0.0)                      | 🟡 심사 대기 |
 | 2026-02-24 | botalks-web GitHub Pages 배포 (privacy/terms/support) | ✅ 완료      |
 | 2026-02-24 | 심사 긴급 수정 가이드 (I007) 작성                     | ✅ 완료      |
+| 2026-02-24 | ASC Support URL + Marketing URL 변경                  | ✅ 완료      |
+| 2026-02-24 | ASC Privacy Policy URL + Review Notes + Description   | 🔴 미완료    |
 
-## ⚠️ App Store 심사 — 긴급 수정 필요
+## ⚠️ App Store 심사 — URL 수정 진행 중
 
-**상태:** 심사 대기 중 (2026-02-22 제출)
-**문제:** 제출 시 URL(`botalks.app`)이 존재하지 않음 → 리젝 위험
+**상태:** 심사 대기 중 (2026-02-22 제출) → URL 수정 진행 중 (2026-02-24)
+**문제:** 제출 시 `botalks.app` 도메인 미존재 → 리젝 위험
+**해결:** GitHub Pages 배포 (`jini92.github.io/botalks-web/`) → App Store Connect URL 교체
 
-**해결:** GitHub Pages 배포 완료 → **지니님이 App Store Connect에서 URL 수정 필요**
+### botalks-web 정적 사이트
 
-| 항목             | 새 URL                                        |
-| ---------------- | --------------------------------------------- |
-| 개인정보처리방침 | https://jini92.github.io/botalks-web/privacy/ |
-| 이용약관         | https://jini92.github.io/botalks-web/terms/   |
-| 고객지원         | https://jini92.github.io/botalks-web/support/ |
-| 마케팅           | https://jini92.github.io/botalks-web/         |
+- **로컬:** `C:\TEST\botalks-web\` (순수 HTML/CSS)
+- **GitHub:** `jini92/botalks-web`
+- **URL:** `https://jini92.github.io/botalks-web/`
+- **페이지:** 메인, privacy(EN/KO), terms, support — 모두 200 OK 확인
 
+### App Store Connect 수정 현황 (2026-02-24)
+
+| 항목               | 기존 URL                    | 새 URL                                         | 상태 |
+| ------------------ | --------------------------- | ---------------------------------------------- | ---- |
+| Support URL        | `botalks.app/support`       | `jini92.github.io/botalks-web/support/`        | ✅   |
+| Marketing URL      | `botalks.app`               | `jini92.github.io/botalks-web/`                | ✅   |
+| Privacy Policy URL | `botalks.app/privacy`       | `jini92.github.io/botalks-web/privacy/`        | ❌   |
+| Review Notes       | 기존 메모                   | I007 가이드 참고 (건너뛰기 버튼 설명 등)       | ❌   |
+| Description 내 URL | `botalks.app/privacy,terms` | `jini92.github.io/botalks-web/privacy/,terms/` | ❌   |
+| 저장               | —                           | —                                              | ❌   |
+
+**잔여 작업:** Privacy Policy URL + Review Notes + Description URL 수정 → 저장 → 재제출
 **상세 가이드:** `docs/I007-appstore-review-fix.md`
 
 ## Tech Intelligence 인사이트 (2026-02-24)
@@ -155,10 +168,17 @@ related:
 
 ## 다음 액션
 
-- [ ] Apple Developer 가입 ($99/yr) — 신청 완료, 인증 절차 중 (2026-02-21)
-- [ ] Google Play Developer 가입 ($ — 신청 완료, 인증 절차 중 (2026-02-21)25)
-- [ ] EAS Build (iOS/Android)
-- [ ] 앱스토어 제출
+- [x] Apple Developer 가입 ($99/yr) — 완료
+- [ ] Google Play Developer 가입 ($25) — 신청 완료, 인증 절차 중 (2026-02-21)
+- [x] EAS Build (iOS) — 완료 (빌드 ID: b308162e)
+- [x] App Store 심사 제출 — 완료 (2026-02-22)
+- [ ] **🔴 ASC Privacy Policy URL 변경** → `https://jini92.github.io/botalks-web/privacy/`
+- [ ] **🔴 ASC Review Notes 업데이트** → I007 가이드 참고
+- [ ] **🔴 ASC Description 내 old URL 수정** → `botalks.app` → `jini92.github.io/botalks-web/`
+- [ ] **🔴 ASC 저장 + 심사 재제출**
+- [ ] `botalks.app` 커스텀 도메인 구매 → GitHub Pages CNAME 연결
+- [ ] EAS Build (Android) + Google Play 제출
+- [ ] Tailscale funnel/VPS 데모 Gateway (다음 버전 심사용)
 
 ## 아키텍처 변경 이력
 
