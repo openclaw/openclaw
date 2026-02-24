@@ -528,13 +528,14 @@ export async function runEmbeddedPiAgent(
         config?: RunEmbeddedPiAgentParams["config"];
         agentDir?: RunEmbeddedPiAgentParams["agentDir"];
       }) => {
-        const { profileId, reason } = failure;
+        const { profileId, modelKey, reason } = failure;
         if (!profileId || !reason || reason === "timeout") {
           return;
         }
         await markAuthProfileFailure({
           store: authStore,
           profileId,
+          modelKey,
           reason,
           cfg: params.config,
           agentDir,
@@ -912,6 +913,7 @@ export async function runEmbeddedPiAgent(
             const promptFailoverReason = classifyFailoverReason(errorText);
             await maybeMarkAuthProfileFailure({
               profileId: lastProfileId,
+              modelKey: lastModelId,
               reason: promptFailoverReason,
             });
             if (
