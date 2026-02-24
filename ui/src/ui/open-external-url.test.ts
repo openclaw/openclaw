@@ -55,6 +55,18 @@ describe("resolveSafeExternalUrl", () => {
     ).toBeNull();
   });
 
+  it("rejects base64-encoded SVG data image URLs", () => {
+    expect(
+      resolveSafeExternalUrl(
+        "data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIC8+",
+        baseHref,
+        {
+          allowDataImage: true,
+        },
+      ),
+    ).toBeNull();
+  });
+
   it("rejects data image URLs unless explicitly enabled", () => {
     expect(resolveSafeExternalUrl("data:image/png;base64,iVBORw0KGgo=", baseHref)).toBeNull();
   });
