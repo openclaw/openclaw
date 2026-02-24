@@ -11,6 +11,10 @@ import { shouldHandleTextCommands } from "../commands-text-routing.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
+import type { TypingController } from "./typing.js";
+import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
+import { listChatCommands, shouldHandleTextCommands } from "../commands-registry.js";
+import { listSkillCommandsForWorkspace } from "../skill-commands.js";
 import { resolveBlockStreamingChunking } from "./block-streaming.js";
 import { buildCommandContext } from "./commands-context.js";
 import { type InlineDirectives, parseInlineDirectives } from "./directive-handling.parse.js";
@@ -21,7 +25,6 @@ import { CURRENT_MESSAGE_MARKER, stripMentions, stripStructuralPrefixes } from "
 import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
 import { formatElevatedUnavailableMessage, resolveElevatedPermissions } from "./reply-elevated.js";
 import { stripInlineStatus } from "./reply-inline.js";
-import type { TypingController } from "./typing.js";
 
 type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 type ExecOverrides = Pick<ExecToolDefaults, "host" | "security" | "ask" | "node">;
@@ -400,12 +403,14 @@ export async function resolveReplyDirectives(params: {
     directives.verboseLevel ??
     (sessionEntry?.verboseLevel as VerboseLevel | undefined) ??
     (agentCfg?.verboseDefault as VerboseLevel | undefined);
+  const agentReasoningDefault = agentEntry?.reasoningDefault as ReasoningLevel | undefined;
+  const hasAgentReasoningDefault = agentReasoningDefault !== undefined;
   let resolvedReasoningLevel: ReasoningLevel =
     directives.reasoningLevel ??
     (sessionEntry?.reasoningLevel as ReasoningLevel | undefined) ??
+    agentReasoningDefault ??
+    (agentCfg?.reasoningDefault as ReasoningLevel | undefined) ??
     "off";
-  const agentReasoningDefault = agentEntry?.reasoningDefault as ReasoningLevel | undefined;
-  const hasAgentReasoningDefault = agentReasoningDefault !== undefined;
   const resolvedElevatedLevel = elevatedAllowed
     ? (directives.elevatedLevel ??
       (sessionEntry?.elevatedLevel as ElevatedLevel | undefined) ??
@@ -463,7 +468,9 @@ export async function resolveReplyDirectives(params: {
   // be emitted as visible "Reasoning:" messages.
   const reasoningExplicitlySet =
     directives.reasoningLevel !== undefined ||
-    (sessionEntry?.reasoningLevel !== undefined && sessionEntry?.reasoningLevel !== null);
+    (sessionEntry?.reasoningLevel !== undefined && sessionEntry?.reasoningLevel !== null) ||
+    hasAgentReasoningDefault ||
+    agentCfg?.reasoningDefault !== undefined;
   const thinkingActive = resolvedThinkLevelWithDefault !== "off";
   if (!reasoningExplicitlySet && resolvedReasoningLevel === "off" && !thinkingActive) {
     if (hasAgentReasoningDefault) {
