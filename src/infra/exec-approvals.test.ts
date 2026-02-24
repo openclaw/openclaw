@@ -1,7 +1,6 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { isSafeBinUsage } from "./exec-approvals-allowlist.js";
 import { makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
 import {
@@ -21,7 +20,6 @@ import {
   requiresExecApproval,
   resolveCommandResolution,
   resolveCommandResolutionFromArgv,
-  resolveExecApprovals,
   resolveExecApprovalsFromFile,
   resolveExecApprovalsPath,
   resolveExecApprovalsSocketPath,
@@ -858,10 +856,6 @@ describe("exec approvals allowlist evaluation", () => {
       safeBins: normalizeSafeBins(["jq"]),
       cwd: "/tmp",
     });
-    if (process.platform === "win32") {
-      expect(result.allowlistSatisfied).toBe(false);
-      return;
-    }
     expect(result.allowlistSatisfied).toBe(true);
     expect(result.allowlistMatches.map((entry) => entry.pattern)).toEqual(["/usr/bin/tool"]);
     expect(result.segmentSatisfiedBy).toEqual(["allowlist", "safeBins"]);
@@ -925,35 +919,18 @@ describe("exec approvals policy helpers", () => {
 
 describe("exec approvals wildcard agent", () => {
   it("merges wildcard allowlist entries with agent entries", () => {
-    const dir = makeTempDir();
-    const homedirSpy = vi.spyOn(os, "homedir").mockReturnValue(dir);
-
-    try {
-      const approvalsPath = path.join(dir, ".openclaw", "exec-approvals.json");
-      fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
-      fs.writeFileSync(
-        approvalsPath,
-        JSON.stringify(
-          {
-            version: 1,
-            agents: {
-              "*": { allowlist: [{ pattern: "/bin/hostname" }] },
-              main: { allowlist: [{ pattern: "/usr/bin/uname" }] },
-            },
-          },
-          null,
-          2,
-        ),
-      );
-
-      const resolved = resolveExecApprovals("main");
-      expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual([
-        "/bin/hostname",
-        "/usr/bin/uname",
-      ]);
-    } finally {
-      homedirSpy.mockRestore();
-    }
+    const file: ExecApprovalsFile = {
+      version: 1,
+      agents: {
+        "*": { allowlist: [{ pattern: "/bin/hostname" }] },
+        main: { allowlist: [{ pattern: "/usr/bin/uname" }] },
+      },
+    };
+    const resolved = resolveExecApprovalsFromFile({ file, agentId: "main" });
+    expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual([
+      "/bin/hostname",
+      "/usr/bin/uname",
+    ]);
   });
 });
 

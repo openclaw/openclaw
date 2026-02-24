@@ -233,9 +233,6 @@ describe("exec approvals safe bins", () => {
 
   for (const testCase of cases) {
     it(testCase.name, () => {
-      if (process.platform === "win32") {
-        return;
-      }
       const cwd = testCase.cwd ?? makeTempDir();
       testCase.setup?.(cwd);
       const executableName = testCase.executableName ?? "jq";
@@ -254,9 +251,6 @@ describe("exec approvals safe bins", () => {
   }
 
   it("supports injected trusted safe-bin dirs for tests/callers", () => {
-    if (process.platform === "win32") {
-      return;
-    }
     const ok = isSafeBinUsage({
       argv: ["jq", ".foo"],
       resolution: {
@@ -271,6 +265,7 @@ describe("exec approvals safe bins", () => {
   });
 
   it("supports injected platform for deterministic safe-bin checks", () => {
+    // After removing the blanket Windows guard, safeBins are functional on all platforms.
     const ok = isSafeBinUsage({
       argv: ["jq", ".foo"],
       resolution: {
@@ -281,13 +276,10 @@ describe("exec approvals safe bins", () => {
       safeBins: normalizeSafeBins(["jq"]),
       platform: "win32",
     });
-    expect(ok).toBe(false);
+    expect(ok).toBe(true);
   });
 
   it("supports injected trusted path checker for deterministic callers", () => {
-    if (process.platform === "win32") {
-      return;
-    }
     const baseParams = {
       argv: ["jq", ".foo"],
       resolution: {
@@ -334,9 +326,6 @@ describe("exec approvals safe bins", () => {
   });
 
   it("does not auto-allow unprofiled safe-bin entries", () => {
-    if (process.platform === "win32") {
-      return;
-    }
     const result = evaluateShellAllowlist({
       command: "python3 -c \"print('owned')\"",
       allowlist: [],
@@ -348,9 +337,6 @@ describe("exec approvals safe bins", () => {
   });
 
   it("allows caller-defined custom safe-bin profiles", () => {
-    if (process.platform === "win32") {
-      return;
-    }
     const safeBinProfiles = resolveSafeBinProfiles({
       echo: {
         maxPositional: 1,
@@ -381,9 +367,6 @@ describe("exec approvals safe bins", () => {
   });
 
   it("blocks sort output flags independent of file existence", () => {
-    if (process.platform === "win32") {
-      return;
-    }
     const cwd = makeTempDir();
     fs.writeFileSync(path.join(cwd, "existing.txt"), "x");
     const resolution = {
@@ -413,9 +396,6 @@ describe("exec approvals safe bins", () => {
   });
 
   it("threads trusted safe-bin dirs through allowlist evaluation", () => {
-    if (process.platform === "win32") {
-      return;
-    }
     const analysis = {
       ok: true as const,
       segments: [
@@ -474,9 +454,6 @@ describe("exec approvals safe bins", () => {
   });
 
   it("fails closed for semantic env wrappers in allowlist mode", () => {
-    if (process.platform === "win32") {
-      return;
-    }
     const result = evaluateShellAllowlist({
       command: "env -S 'sh -c \"echo pwned\"' tr",
       allowlist: [{ pattern: "/usr/bin/tr" }],
