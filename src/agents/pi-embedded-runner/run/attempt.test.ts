@@ -1,8 +1,10 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../../config/config.js";
 import {
   injectHistoryImagesIntoMessages,
+  resolveAttemptFsWorkspaceOnly,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
 } from "./attempt.js";
@@ -116,5 +118,47 @@ describe("resolvePromptModeForSession", () => {
   it("uses full mode for cron sessions", () => {
     expect(resolvePromptModeForSession("agent:main:cron:job-1")).toBe("full");
     expect(resolvePromptModeForSession("agent:main:cron:job-1:run:run-abc")).toBe("full");
+  });
+});
+
+describe("resolveAttemptFsWorkspaceOnly", () => {
+  it("uses global tools.fs.workspaceOnly when agent has no override", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        fs: { workspaceOnly: true },
+      },
+    };
+
+    expect(
+      resolveAttemptFsWorkspaceOnly({
+        config: cfg,
+        sessionAgentId: "main",
+      }),
+    ).toBe(true);
+  });
+
+  it("prefers agent-specific tools.fs.workspaceOnly override", () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        fs: { workspaceOnly: true },
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            tools: {
+              fs: { workspaceOnly: false },
+            },
+          },
+        ],
+      },
+    };
+
+    expect(
+      resolveAttemptFsWorkspaceOnly({
+        config: cfg,
+        sessionAgentId: "main",
+      }),
+    ).toBe(false);
   });
 });
