@@ -4,6 +4,7 @@ import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveBrowserConfig } from "./config.js";
 import { ensureBrowserControlAuth, resolveBrowserControlAuth } from "./control-auth.js";
+import { ensureExtensionUpToDate } from "./extension-update.js";
 import { isPwAiLoaded } from "./pw-ai-state.js";
 import { registerBrowserRoutes } from "./routes/index.js";
 import type { BrowserRouteRegistrar } from "./routes/types.js";
@@ -80,6 +81,17 @@ export async function startBrowserControlServerFromConfig(): Promise<BrowserServ
     resolved,
     profiles: new Map(),
   };
+
+  try {
+    const updated = await ensureExtensionUpToDate();
+    if (updated) {
+      logServer.info(
+        "Chrome extension auto-updated (stale bundle detected). Reload in chrome://extensions.",
+      );
+    }
+  } catch {
+    // Best-effort; never block server startup.
+  }
 
   await ensureExtensionRelayForProfiles({
     resolved,

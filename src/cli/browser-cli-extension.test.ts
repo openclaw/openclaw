@@ -50,12 +50,53 @@ vi.mock("node:fs", async (importOriginal) => {
   const pathMod = await import("node:path");
   const absInMock = (p: string) => pathMod.resolve(p);
 
+  function readdirSyncMock(p: string, opts?: { withFileTypes?: boolean }) {
+    const resolved = absInMock(p);
+    if (!state.entries.has(resolved)) {
+      throw Object.assign(new Error(`ENOENT: ${p}`), { code: "ENOENT" });
+    }
+    const prefix = `${resolved}${pathMod.sep}`;
+    const seen = new Set<string>();
+    const items: Array<{ name: string; kind: "file" | "dir" }> = [];
+    for (const [key, entry] of state.entries.entries()) {
+      if (!key.startsWith(prefix)) {
+        continue;
+      }
+      const rel = key.slice(prefix.length);
+      const name = rel.split(pathMod.sep)[0];
+      if (!name || seen.has(name)) {
+        continue;
+      }
+      seen.add(name);
+      items.push({ name, kind: entry.kind });
+    }
+    if (opts?.withFileTypes) {
+      return items.map((i) => ({
+        name: i.name,
+        isFile: () => i.kind === "file",
+        isDirectory: () => i.kind === "dir",
+      }));
+    }
+    return items.map((i) => i.name);
+  }
+
   const wrapped = {
     ...actual,
     existsSync: (p: string) => state.entries.has(absInMock(p)),
     mkdirSync: (p: string, _opts?: unknown) => {
       setDir(p);
     },
+    readFileSync: (p: string, opts?: unknown) => {
+      const resolved = absInMock(String(p));
+      const entry = state.entries.get(resolved);
+      if (!entry || entry.kind !== "file") {
+        throw Object.assign(new Error(`ENOENT: ${p}`), { code: "ENOENT" });
+      }
+      const wantString =
+        typeof opts === "string" || (opts && typeof opts === "object" && "encoding" in opts);
+      return wantString ? entry.content : Buffer.from(entry.content);
+    },
+    readdirSync: readdirSyncMock,
     writeFileSync: (p: string, content: string) => {
       setFile(p, content);
     },
@@ -106,10 +147,17 @@ vi.mock("../runtime.js", () => ({
 let resolveBundledExtensionRootDir: typeof import("./browser-cli-extension.js").resolveBundledExtensionRootDir;
 let installChromeExtension: typeof import("./browser-cli-extension.js").installChromeExtension;
 let registerBrowserExtensionCommands: typeof import("./browser-cli-extension.js").registerBrowserExtensionCommands;
+let computeExtensionHash: typeof import("./browser-cli-extension.js").computeExtensionHash;
+let ensureExtensionUpToDate: typeof import("./browser-cli-extension.js").ensureExtensionUpToDate;
 
 beforeAll(async () => {
-  ({ resolveBundledExtensionRootDir, installChromeExtension, registerBrowserExtensionCommands } =
-    await import("./browser-cli-extension.js"));
+  ({
+    resolveBundledExtensionRootDir,
+    installChromeExtension,
+    registerBrowserExtensionCommands,
+    computeExtensionHash,
+    ensureExtensionUpToDate,
+  } = await import("./browser-cli-extension.js"));
 });
 
 beforeEach(() => {
@@ -168,6 +216,20 @@ describe("browser extension install (fs-mocked)", () => {
     expect(result.path.includes("node_modules")).toBe(false);
   });
 
+  it("writes bundle hash after install", async () => {
+    const tmp = abs("/tmp/openclaw-ext-hash");
+    const sourceDir = path.join(tmp, "source-ext");
+    writeManifest(sourceDir);
+    setFile(path.join(sourceDir, "background.js"), "console.log('v1')");
+
+    const result = await installChromeExtension({ stateDir: tmp, sourceDir });
+
+    const hashEntry = state.entries.get(abs(path.join(result.path, ".bundle-hash")));
+    expect(hashEntry).toBeDefined();
+    expect(hashEntry?.kind).toBe("file");
+    expect((hashEntry as { content: string }).content.length).toBeGreaterThan(0);
+  });
+
   it("copies extension path to clipboard", async () => {
     const tmp = abs("/tmp/openclaw-ext-path");
     await withEnvAsync({ OPENCLAW_STATE_DIR: tmp }, async () => {
@@ -186,5 +248,99 @@ describe("browser extension install (fs-mocked)", () => {
       await program.parseAsync(["browser", "extension", "path"], { from: "user" });
       expect(copyToClipboard).toHaveBeenCalledWith(dir);
     });
+  });
+});
+
+describe("computeExtensionHash (fs-mocked)", () => {
+  it("returns deterministic hash for same content", () => {
+    const dir = abs("/tmp/openclaw-hash-det");
+    writeManifest(dir);
+    setFile(path.join(dir, "background.js"), "alert(1)");
+
+    const h1 = computeExtensionHash(dir);
+    const h2 = computeExtensionHash(dir);
+    expect(h1).toBe(h2);
+    expect(h1.length).toBe(16);
+  });
+
+  it("returns different hash when file content changes", () => {
+    const dir1 = abs("/tmp/openclaw-hash-v1");
+    writeManifest(dir1);
+    setFile(path.join(dir1, "background.js"), "v1");
+
+    const dir2 = abs("/tmp/openclaw-hash-v2");
+    writeManifest(dir2);
+    setFile(path.join(dir2, "background.js"), "v2");
+
+    expect(computeExtensionHash(dir1)).not.toBe(computeExtensionHash(dir2));
+  });
+
+  it("returns empty string for non-existent directory", () => {
+    expect(computeExtensionHash(abs("/tmp/no-such-dir"))).toBe("");
+  });
+
+  it("ignores .bundle-hash file in hash computation", () => {
+    const dir = abs("/tmp/openclaw-hash-ignore");
+    writeManifest(dir);
+    setFile(path.join(dir, "background.js"), "code");
+    const hashBefore = computeExtensionHash(dir);
+
+    setFile(path.join(dir, ".bundle-hash"), "some-old-hash");
+    const hashAfter = computeExtensionHash(dir);
+
+    expect(hashBefore).toBe(hashAfter);
+  });
+});
+
+describe("ensureExtensionUpToDate (fs-mocked)", () => {
+  it("skips when extension was never installed", async () => {
+    const tmp = abs("/tmp/openclaw-auto-never");
+    const result = await ensureExtensionUpToDate({ stateDir: tmp });
+    expect(result).toBe(false);
+  });
+
+  it("re-installs when hash file is missing (pre-hash install)", async () => {
+    const tmp = abs("/tmp/openclaw-auto-nohash");
+    const sourceDir = path.join(tmp, "source");
+    writeManifest(sourceDir);
+    setFile(path.join(sourceDir, "background.js"), "new-code");
+
+    // Simulate a pre-hash install (no .bundle-hash file)
+    const installed = path.join(tmp, "browser", "chrome-extension");
+    writeManifest(installed);
+    setFile(path.join(installed, "background.js"), "old-code");
+
+    const result = await ensureExtensionUpToDate({ stateDir: tmp, sourceDir });
+    expect(result).toBe(true);
+
+    const hashEntry = state.entries.get(abs(path.join(installed, ".bundle-hash")));
+    expect(hashEntry).toBeDefined();
+  });
+
+  it("skips when hashes match", async () => {
+    const tmp = abs("/tmp/openclaw-auto-match");
+    const sourceDir = path.join(tmp, "source");
+    writeManifest(sourceDir);
+    setFile(path.join(sourceDir, "background.js"), "code");
+
+    await installChromeExtension({ stateDir: tmp, sourceDir });
+
+    const result = await ensureExtensionUpToDate({ stateDir: tmp, sourceDir });
+    expect(result).toBe(false);
+  });
+
+  it("re-installs when bundled extension changes", async () => {
+    const tmp = abs("/tmp/openclaw-auto-stale");
+    const sourceDir = path.join(tmp, "source");
+    writeManifest(sourceDir);
+    setFile(path.join(sourceDir, "background.js"), "v1");
+
+    await installChromeExtension({ stateDir: tmp, sourceDir });
+
+    // Simulate updating the bundled extension (new CLI version)
+    setFile(path.join(sourceDir, "background.js"), "v2");
+
+    const result = await ensureExtensionUpToDate({ stateDir: tmp, sourceDir });
+    expect(result).toBe(true);
   });
 });
