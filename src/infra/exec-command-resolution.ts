@@ -212,6 +212,9 @@ export function matchAllowlist(
     if (!pattern) {
       continue;
     }
+    if (pattern === "*" || pattern === "**") {
+      return entry;
+    }
     const hasPath = pattern.includes("/") || pattern.includes("\\") || pattern.includes("~");
     if (!hasPath) {
       continue;
