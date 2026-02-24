@@ -30,12 +30,24 @@ function createOps(params: {
   const broadcast = vi.fn();
   const nodeSendToSession = vi.fn();
   const removeChatRun = vi.fn();
+  const chatBlockBases = new Map<string, string>();
+  const chatLastBlockTexts = new Map<string, string>();
+  const chatRunBuffers = new Map(buffer !== undefined ? [[runId, buffer]] : []);
+  const chatDeltaSentAt = new Map([[runId, Date.now()]]);
 
   return {
     chatAbortControllers: new Map([[runId, entry]]),
-    chatRunBuffers: new Map(buffer !== undefined ? [[runId, buffer]] : []),
-    chatDeltaSentAt: new Map([[runId, Date.now()]]),
+    chatRunBuffers,
+    chatDeltaSentAt,
+    chatBlockBases,
+    chatLastBlockTexts,
     chatAbortedRuns: new Map(),
+    deleteChatRunBufferState: (clientRunId: string) => {
+      chatRunBuffers.delete(clientRunId);
+      chatDeltaSentAt.delete(clientRunId);
+      chatBlockBases.delete(clientRunId);
+      chatLastBlockTexts.delete(clientRunId);
+    },
     removeChatRun,
     agentRunSeq: new Map(),
     broadcast,

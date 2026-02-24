@@ -85,6 +85,9 @@ function createChatAbortContext(overrides: Record<string, unknown> = {}): {
   chatAbortControllers: Map<string, ReturnType<typeof createActiveRun>>;
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
+  chatBlockBases: Map<string, string>;
+  chatLastBlockTexts: Map<string, string>;
+  deleteChatRunBufferState: (clientRunId: string) => void;
   chatAbortedRuns: Map<string, number>;
   removeChatRun: ReturnType<typeof vi.fn>;
   agentRunSeq: Map<string, number>;
@@ -93,10 +96,23 @@ function createChatAbortContext(overrides: Record<string, unknown> = {}): {
   logGateway: { warn: ReturnType<typeof vi.fn> };
   dedupe?: { get: ReturnType<typeof vi.fn> };
 } {
+  const chatRunBuffers = new Map<string, string>();
+  const chatDeltaSentAt = new Map<string, number>();
+  const chatBlockBases = new Map<string, string>();
+  const chatLastBlockTexts = new Map<string, string>();
+
   return {
     chatAbortControllers: new Map(),
-    chatRunBuffers: new Map(),
-    chatDeltaSentAt: new Map(),
+    chatRunBuffers,
+    chatDeltaSentAt,
+    chatBlockBases,
+    chatLastBlockTexts,
+    deleteChatRunBufferState: (clientRunId: string) => {
+      chatRunBuffers.delete(clientRunId);
+      chatDeltaSentAt.delete(clientRunId);
+      chatBlockBases.delete(clientRunId);
+      chatLastBlockTexts.delete(clientRunId);
+    },
     chatAbortedRuns: new Map<string, number>(),
     removeChatRun: vi
       .fn()

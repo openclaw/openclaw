@@ -110,6 +110,9 @@ function createChatContext(): Pick<
   | "chatAbortControllers"
   | "chatRunBuffers"
   | "chatDeltaSentAt"
+  | "chatBlockBases"
+  | "chatLastBlockTexts"
+  | "deleteChatRunBufferState"
   | "chatAbortedRuns"
   | "removeChatRun"
   | "dedupe"
@@ -123,6 +126,9 @@ function createChatContext(): Pick<
     chatAbortControllers: new Map(),
     chatRunBuffers: new Map(),
     chatDeltaSentAt: new Map(),
+    chatBlockBases: new Map(),
+    chatLastBlockTexts: new Map(),
+    deleteChatRunBufferState: vi.fn(),
     chatAbortedRuns: new Map(),
     removeChatRun: vi.fn(),
     dedupe: new Map(),

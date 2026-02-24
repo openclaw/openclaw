@@ -143,20 +143,35 @@ export function createChatRunRegistry(): ChatRunRegistry {
 export type ChatRunState = {
   registry: ChatRunRegistry;
   buffers: Map<string, string>;
+  blockBases: Map<string, string>;
+  lastBlockTexts: Map<string, string>;
   deltaSentAt: Map<string, number>;
   abortedRuns: Map<string, number>;
+  /** Delete all buffer/delta state for a run (buffers, blockBases, lastBlockTexts, deltaSentAt). */
+  deleteRunBufferState: (clientRunId: string) => void;
   clear: () => void;
 };
 
 export function createChatRunState(): ChatRunState {
   const registry = createChatRunRegistry();
   const buffers = new Map<string, string>();
+  const blockBases = new Map<string, string>();
+  const lastBlockTexts = new Map<string, string>();
   const deltaSentAt = new Map<string, number>();
   const abortedRuns = new Map<string, number>();
+
+  const deleteRunBufferState = (clientRunId: string) => {
+    buffers.delete(clientRunId);
+    blockBases.delete(clientRunId);
+    lastBlockTexts.delete(clientRunId);
+    deltaSentAt.delete(clientRunId);
+  };
 
   const clear = () => {
     registry.clear();
     buffers.clear();
+    blockBases.clear();
+    lastBlockTexts.clear();
     deltaSentAt.clear();
     abortedRuns.clear();
   };
@@ -164,8 +179,11 @@ export function createChatRunState(): ChatRunState {
   return {
     registry,
     buffers,
+    blockBases,
+    lastBlockTexts,
     deltaSentAt,
     abortedRuns,
+    deleteRunBufferState,
     clear,
   };
 }
@@ -291,10 +309,25 @@ export function createAgentEventHandler({
     if (isSilentReplyText(cleaned, SILENT_REPLY_TOKEN)) {
       return;
     }
-    chatRunState.buffers.set(clientRunId, cleaned);
     if (shouldHideHeartbeatChatOutput(clientRunId, sourceRunId)) {
       return;
     }
+    // Detect new text block: when the incoming text doesn't continue from the
+    // previous block's text, a tool call happened in between and the agent
+    // started a fresh text block.  Finalize the previous block into the base.
+    // Safety: the agent runner guarantees monotonic prefix growth within a block
+    // (non-prefix updates are suppressed in pi-embedded-subscribe.handlers.messages.ts).
+    const lastBlock = chatRunState.lastBlockTexts.get(clientRunId);
+    if (lastBlock !== undefined && !text.startsWith(lastBlock)) {
+      const base = chatRunState.blockBases.get(clientRunId) ?? "";
+      chatRunState.blockBases.set(clientRunId, base ? base + "\n\n" + lastBlock : lastBlock);
+    }
+    chatRunState.lastBlockTexts.set(clientRunId, text);
+
+    // Full text = all previous blocks + current block
+    const base = chatRunState.blockBases.get(clientRunId) ?? "";
+    const fullText = base ? base + "\n\n" + text : text;
+    chatRunState.buffers.set(clientRunId, fullText);
     const now = Date.now();
     const last = chatRunState.deltaSentAt.get(clientRunId) ?? 0;
     if (now - last < 150) {
@@ -324,6 +357,15 @@ export function createAgentEventHandler({
     jobState: "done" | "error",
     error?: unknown,
   ) => {
+    // Finalize any in-progress block into the buffer so the final payload
+    // contains all blocks even when lifecycle "end" fires without a trailing
+    // assistant delta after the last block boundary.
+    const lastBlock = chatRunState.lastBlockTexts.get(clientRunId);
+    if (lastBlock !== undefined) {
+      const base = chatRunState.blockBases.get(clientRunId) ?? "";
+      const fullText = base ? base + "\n\n" + lastBlock : lastBlock;
+      chatRunState.buffers.set(clientRunId, fullText);
+    }
     const bufferedText = stripInlineDirectiveTagsForDisplay(
       chatRunState.buffers.get(clientRunId) ?? "",
     ).text.trim();
@@ -335,8 +377,7 @@ export function createAgentEventHandler({
     const text = normalizedHeartbeatText.text.trim();
     const shouldSuppressSilent =
       normalizedHeartbeatText.suppress || isSilentReplyText(text, SILENT_REPLY_TOKEN);
-    chatRunState.buffers.delete(clientRunId);
-    chatRunState.deltaSentAt.delete(clientRunId);
+    chatRunState.deleteRunBufferState(clientRunId);
     if (jobState === "done") {
       const payload = {
         runId: clientRunId,
@@ -483,8 +524,7 @@ export function createAgentEventHandler({
       } else if (isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {
         chatRunState.abortedRuns.delete(clientRunId);
         chatRunState.abortedRuns.delete(evt.runId);
-        chatRunState.buffers.delete(clientRunId);
-        chatRunState.deltaSentAt.delete(clientRunId);
+        chatRunState.deleteRunBufferState(clientRunId);
         if (chatLink) {
           chatRunState.registry.remove(evt.runId, clientRunId, sessionKey);
         }

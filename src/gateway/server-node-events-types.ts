@@ -22,6 +22,9 @@ export type NodeEventContext = {
   chatAbortedRuns: Map<string, number>;
   chatRunBuffers: Map<string, string>;
   chatDeltaSentAt: Map<string, number>;
+  chatBlockBases: Map<string, string>;
+  chatLastBlockTexts: Map<string, string>;
+  deleteChatRunBufferState: (clientRunId: string) => void;
   dedupe: Map<string, DedupeEntry>;
   agentRunSeq: Map<string, number>;
   getHealthCache: () => HealthSummary | null;
