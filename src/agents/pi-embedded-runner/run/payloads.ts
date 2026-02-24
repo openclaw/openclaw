@@ -323,6 +323,7 @@ export function buildEmbeddedRunPayloads(params: {
       mediaUrls: item.media?.length ? item.media : undefined,
       mediaUrl: item.media?.[0],
       isError: item.isError,
+      isReasoning: item.isReasoning,
       replyToId: item.replyToId,
       replyToTag: item.replyToTag,
       replyToCurrent: item.replyToCurrent,
