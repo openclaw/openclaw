@@ -199,8 +199,11 @@ describe("shell env fallback", () => {
   });
 
   it("uses SHELL when it is explicitly registered in /etc/shells", () => {
-    withEtcShells(["/bin/sh", "/usr/bin/zsh-trusted"], () => {
-      const trustedShell = "/usr/bin/zsh-trusted";
+    const trustedShell =
+      process.platform === "win32"
+        ? "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        : "/usr/bin/zsh-trusted";
+    withEtcShells(["/bin/sh", trustedShell], () => {
       const { res, exec } = runShellEnvFallbackForShell(trustedShell);
 
       expect(res.ok).toBe(true);
