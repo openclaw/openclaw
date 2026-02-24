@@ -159,6 +159,19 @@ Plugins/extensions are loaded **in-process** with the Gateway and are treated as
 - Runtime helpers (for example `runtime.system.runCommandWithTimeout`) are convenience APIs, not a sandbox boundary.
 - Only install plugins you trust, and prefer `plugins.allow` to pin explicit trusted plugin ids.
 
+## Temp Folder Boundary (Media/Sandbox)
+
+OpenClaw uses a dedicated temp root for local media handoff and sandbox-adjacent temp artifacts:
+
+- Preferred temp root: `/tmp/openclaw` (when available and safe on the host).
+- Fallback temp root: `os.tmpdir()/openclaw` (or `openclaw-<uid>` on multi-user hosts).
+
+Security boundary notes:
+
+- Sandbox media validation allows absolute temp paths only under the OpenClaw-managed temp root.
+- Arbitrary host tmp paths are not treated as trusted media roots.
+- Plugin/extension code should use OpenClaw temp helpers (`resolvePreferredOpenClawTmpDir`, `buildRandomTempFilePath`, `withTempDownloadPath`) rather than raw `os.tmpdir()` defaults when handling media files.
+
 ## Operational Guidance
 
 For threat model + hardening guidance (including `openclaw security audit --deep` and `--fix`), see:
