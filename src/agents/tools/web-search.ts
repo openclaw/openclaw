@@ -1,6 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import { formatCliCommand } from "../../cli/command-format.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { fetchWithSsrFGuard } from "../../infra/net/fetch-guard.js";
 import { defaultRuntime } from "../../runtime.js";
 import { wrapWebContent } from "../../security/external-content.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
@@ -42,6 +43,7 @@ const KIMI_WEB_SEARCH_TOOL = {
 const SEARCH_CACHE = new Map<string, CacheEntry<Record<string, unknown>>>();
 const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
 const BRAVE_FRESHNESS_RANGE = /^(\d{4}-\d{2}-\d{2})to(\d{4}-\d{2}-\d{2})$/;
+const TRUSTED_NETWORK_SSRF_POLICY = { dangerouslyAllowPrivateNetwork: true } as const;
 
 const WebSearchSchema = Type.Object({
   query: Type.String({ description: "Search query string." }),
@@ -681,12 +683,17 @@ const REDIRECT_TIMEOUT_MS = 5000;
  */
 async function resolveRedirectUrl(url: string): Promise<string> {
   try {
-    const res = await fetch(url, {
-      method: "HEAD",
-      redirect: "follow",
-      signal: withTimeout(undefined, REDIRECT_TIMEOUT_MS),
+    const { finalUrl, release } = await fetchWithSsrFGuard({
+      url,
+      init: { method: "HEAD" },
+      timeoutMs: REDIRECT_TIMEOUT_MS,
+      policy: TRUSTED_NETWORK_SSRF_POLICY,
     });
-    return res.url || url;
+    try {
+      return finalUrl || url;
+    } finally {
+      await release();
+    }
   } catch {
     return url;
   }
@@ -1345,4 +1352,5 @@ export const __testing = {
   resolveKimiModel,
   resolveKimiBaseUrl,
   extractKimiCitations,
+  resolveRedirectUrl,
 } as const;
