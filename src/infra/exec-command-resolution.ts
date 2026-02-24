@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ExecAllowlistEntry } from "./exec-approvals.js";
-import { unwrapDispatchWrappersForResolution } from "./exec-wrapper-resolution.js";
+import { resolveDispatchWrapperExecutionPlan } from "./exec-wrapper-resolution.js";
 import { expandHomePrefix } from "./home-dir.js";
 
 export const DEFAULT_SAFE_BINS = ["jq", "cut", "uniq", "head", "tail", "tr", "wc"];
@@ -10,6 +10,10 @@ export type CommandResolution = {
   rawExecutable: string;
   resolvedPath?: string;
   executableName: string;
+  effectiveArgv?: string[];
+  wrapperChain?: string[];
+  policyBlocked?: boolean;
+  blockedWrapper?: string;
 };
 
 function isExecutableFile(filePath: string): boolean {
@@ -93,7 +97,14 @@ export function resolveCommandResolution(
   }
   const resolvedPath = resolveExecutablePath(rawExecutable, cwd, env);
   const executableName = resolvedPath ? path.basename(resolvedPath) : rawExecutable;
-  return { rawExecutable, resolvedPath, executableName };
+  return {
+    rawExecutable,
+    resolvedPath,
+    executableName,
+    effectiveArgv: [rawExecutable],
+    wrapperChain: [],
+    policyBlocked: false,
+  };
 }
 
 export function resolveCommandResolutionFromArgv(
@@ -101,14 +112,23 @@ export function resolveCommandResolutionFromArgv(
   cwd?: string,
   env?: NodeJS.ProcessEnv,
 ): CommandResolution | null {
-  const effectiveArgv = unwrapDispatchWrappersForResolution(argv);
+  const plan = resolveDispatchWrapperExecutionPlan(argv);
+  const effectiveArgv = plan.argv;
   const rawExecutable = effectiveArgv[0]?.trim();
   if (!rawExecutable) {
     return null;
   }
   const resolvedPath = resolveExecutablePath(rawExecutable, cwd, env);
   const executableName = resolvedPath ? path.basename(resolvedPath) : rawExecutable;
-  return { rawExecutable, resolvedPath, executableName };
+  return {
+    rawExecutable,
+    resolvedPath,
+    executableName,
+    effectiveArgv,
+    wrapperChain: plan.wrappers,
+    policyBlocked: plan.policyBlocked,
+    blockedWrapper: plan.blockedWrapper,
+  };
 }
 
 function normalizeMatchTarget(value: string): string {

@@ -79,6 +79,7 @@ const NICE_OPTIONS_WITH_VALUE = new Set(["-n", "--adjustment", "--priority"]);
 const STDBUF_OPTIONS_WITH_VALUE = new Set(["-i", "--input", "-o", "--output", "-e", "--error"]);
 const TIMEOUT_FLAG_OPTIONS = new Set(["--foreground", "--preserve-status", "-v", "--verbose"]);
 const TIMEOUT_OPTIONS_WITH_VALUE = new Set(["-k", "--kill-after", "-s", "--signal"]);
+const TRANSPARENT_DISPATCH_WRAPPERS = new Set(["nice", "nohup", "stdbuf", "timeout"]);
 
 type ShellWrapperKind = "posix" | "cmd" | "powershell";
 
@@ -348,6 +349,13 @@ export type DispatchWrapperUnwrapResult =
   | { kind: "blocked"; wrapper: string }
   | { kind: "unwrapped"; wrapper: string; argv: string[] };
 
+export type DispatchWrapperExecutionPlan = {
+  argv: string[];
+  wrappers: string[];
+  policyBlocked: boolean;
+  blockedWrapper?: string;
+};
+
 function blockDispatchWrapper(wrapper: string): DispatchWrapperUnwrapResult {
   return { kind: "blocked", wrapper };
 }
@@ -394,15 +402,48 @@ export function unwrapDispatchWrappersForResolution(
   argv: string[],
   maxDepth = MAX_DISPATCH_WRAPPER_DEPTH,
 ): string[] {
+  const plan = resolveDispatchWrapperExecutionPlan(argv, maxDepth);
+  return plan.argv;
+}
+
+function isSemanticDispatchWrapperUsage(wrapper: string, argv: string[]): boolean {
+  if (wrapper === "env") {
+    return envInvocationUsesModifiers(argv);
+  }
+  return !TRANSPARENT_DISPATCH_WRAPPERS.has(wrapper);
+}
+
+export function resolveDispatchWrapperExecutionPlan(
+  argv: string[],
+  maxDepth = MAX_DISPATCH_WRAPPER_DEPTH,
+): DispatchWrapperExecutionPlan {
   let current = argv;
+  const wrappers: string[] = [];
   for (let depth = 0; depth < maxDepth; depth += 1) {
     const unwrap = unwrapKnownDispatchWrapperInvocation(current);
+    if (unwrap.kind === "blocked") {
+      return {
+        argv: current,
+        wrappers,
+        policyBlocked: true,
+        blockedWrapper: unwrap.wrapper,
+      };
+    }
     if (unwrap.kind !== "unwrapped" || unwrap.argv.length === 0) {
       break;
     }
+    wrappers.push(unwrap.wrapper);
+    if (isSemanticDispatchWrapperUsage(unwrap.wrapper, current)) {
+      return {
+        argv: current,
+        wrappers,
+        policyBlocked: true,
+        blockedWrapper: unwrap.wrapper,
+      };
+    }
     current = unwrap.argv;
   }
-  return current;
+  return { argv: current, wrappers, policyBlocked: false };
 }
 
 function hasEnvManipulationBeforeShellWrapperInternal(
