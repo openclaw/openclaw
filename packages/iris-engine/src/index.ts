@@ -1,18 +1,19 @@
 /**
  * @irisclaw/iris-engine
  *
- * Parallel agent engine for iris-claw.
- * Drop-in replacement for @mariozechner/pi-agent-core's sequential loop.
+ * Branded re-export of the iris parallel agent engine.
+ * The actual implementation lives in packages/iris-agent-core which overrides
+ * @mariozechner/pi-agent-core for the entire dependency tree.
  */
 
-// Core parallel loop — use these instead of pi-agent-core's agentLoop
-export { agentLoop, agentLoopContinue } from "./agent-loop.js";
+// Re-export the parallel loop functions
+export { agentLoop, agentLoopContinue } from "@mariozechner/pi-agent-core";
 
-// Full agent class with parallel execution built-in
-export { IrisAgent } from "./iris-agent.js";
+// Re-export the parallel-capable agent as IrisAgent (our branded name)
+export { IrisAgent } from "@mariozechner/pi-agent-core";
 export type { IrisAgentOptions } from "./iris-agent.js";
 
-// Re-export types from pi-agent-core for convenience
+// Re-export all types
 export type {
   AgentContext,
   AgentEvent,
