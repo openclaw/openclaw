@@ -38,7 +38,6 @@ New install? Start here: [Getting started](https://docs.openclaw.ai/start/gettin
 
 **Subscriptions (OAuth):**
 
-- **[Anthropic](https://www.anthropic.com/)** (Claude Pro/Max)
 - **[OpenAI](https://openai.com/)** (ChatGPT/Codex)
 
 Model note: while any model is supported, I strongly recommend **Anthropic Pro/Max (100/200) + Opus 4.6** for long‑context strength and better prompt‑injection resistance. See [Onboarding](https://docs.openclaw.ai/start/onboarding).
