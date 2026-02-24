@@ -94,7 +94,10 @@ load_teams_from_xcode_managed_profiles() {
         | /usr/bin/python3 -c '
 import plistlib, sys
 try:
-    d = plistlib.load(sys.stdin.buffer)
+    raw = sys.stdin.buffer.read()
+    if not raw:
+        raise SystemExit(0)
+    d = plistlib.loads(raw)
     for tid in d.get("TeamIdentifier", []):
         print(tid)
 except Exception:
