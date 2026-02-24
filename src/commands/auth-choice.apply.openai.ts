@@ -4,7 +4,11 @@ import {
   normalizeApiKeyInput,
   validateApiKeyInput,
 } from "./auth-choice.api-key.js";
-import { createAuthChoiceAgentModelNoter } from "./auth-choice.apply-helpers.js";
+import {
+  createAuthChoiceAgentModelNoter,
+  normalizeSecretInputModeInput,
+  resolveSecretInputModeForEnvSelection,
+} from "./auth-choice.apply-helpers.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 import { isRemoteEnvironment } from "./oauth-env.js";
@@ -24,6 +28,7 @@ import {
 export async function applyAuthChoiceOpenAI(
   params: ApplyAuthChoiceParams,
 ): Promise<ApplyAuthChoiceResult | null> {
+  const requestedSecretInputMode = normalizeSecretInputModeInput(params.opts?.secretInputMode);
   const noteAgentModel = createAuthChoiceAgentModelNoter(params);
   let authChoice = params.authChoice;
   if (authChoice === "apiKey" && params.opts?.tokenProvider === "openai") {
@@ -57,7 +62,11 @@ export async function applyAuthChoiceOpenAI(
         initialValue: true,
       });
       if (useExisting) {
-        await setOpenaiApiKey(envKey.apiKey, params.agentDir);
+        const mode = await resolveSecretInputModeForEnvSelection({
+          prompter: params.prompter,
+          explicitMode: requestedSecretInputMode,
+        });
+        await setOpenaiApiKey(envKey.apiKey, params.agentDir, { secretInputMode: mode });
         nextConfig = applyAuthProfileConfig(nextConfig, {
           profileId: "openai:default",
           provider: "openai",
@@ -78,7 +87,9 @@ export async function applyAuthChoiceOpenAI(
     }
 
     const trimmed = normalizeApiKeyInput(String(key));
-    await setOpenaiApiKey(trimmed, params.agentDir);
+    await setOpenaiApiKey(trimmed, params.agentDir, {
+      secretInputMode: requestedSecretInputMode,
+    });
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "openai:default",
       provider: "openai",
