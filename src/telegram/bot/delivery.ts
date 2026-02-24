@@ -582,7 +582,10 @@ async function sendTelegramText(
     const res = await withTelegramApiErrorLogging({
       operation: "sendMessage",
       runtime,
-      shouldLog: (err) => !PARSE_ERR_RE.test(formatErrorMessage(err)),
+      shouldLog: (err) => {
+        const errText = formatErrorMessage(err);
+        return !PARSE_ERR_RE.test(errText) && !EMPTY_TEXT_ERR_RE.test(errText);
+      },
       fn: () =>
         bot.api.sendMessage(chatId, htmlText, {
           parse_mode: "HTML",
