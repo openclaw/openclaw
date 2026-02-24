@@ -1,14 +1,8 @@
 import path from "node:path";
 
-const DEFAULT_SAFE_BIN_TRUSTED_DIRS = [
-  "/bin",
-  "/usr/bin",
-  "/usr/local/bin",
-  "/opt/homebrew/bin",
-  "/opt/local/bin",
-  "/snap/bin",
-  "/run/current-system/sw/bin",
-];
+// Keep defaults to OS-managed immutable bins only.
+// User/package-manager bins must be opted in via tools.exec.safeBinTrustedDirs.
+const DEFAULT_SAFE_BIN_TRUSTED_DIRS = ["/bin", "/usr/bin"];
 
 type TrustedSafeBinDirsParams = {
   baseDirs?: readonly string[];
