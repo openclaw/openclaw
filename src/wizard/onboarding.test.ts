@@ -500,26 +500,8 @@ describe("runOnboardingWizard", () => {
     );
     ensureWorkspaceAndSessions.mockRejectedValueOnce(eaccesError);
 
-    const prompter: WizardPrompter = {
-      intro: vi.fn(async () => {}),
-      outro: vi.fn(async () => {}),
-      note: vi.fn(async () => {}),
-      select: vi.fn(
-        async (_params: WizardSelectParams<unknown>) => "quickstart",
-      ) as unknown as WizardPrompter["select"],
-      multiselect: vi.fn(async () => []),
-      text: vi.fn(async () => ""),
-      confirm: vi.fn(async () => false),
-      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-    };
-
-    const runtime: RuntimeEnv = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn((code: number) => {
-        throw new Error(`exit:${code}`);
-      }),
-    };
+    const prompter = buildWizardPrompter();
+    const runtime = createRuntime({ throwsOnExit: true });
 
     await expect(
       runOnboardingWizard(
@@ -550,26 +532,8 @@ describe("runOnboardingWizard", () => {
     );
     ensureWorkspaceAndSessions.mockRejectedValueOnce(eaccesError);
 
-    const prompter: WizardPrompter = {
-      intro: vi.fn(async () => {}),
-      outro: vi.fn(async () => {}),
-      note: vi.fn(async () => {}),
-      select: vi.fn(
-        async (_params: WizardSelectParams<unknown>) => "quickstart",
-      ) as unknown as WizardPrompter["select"],
-      multiselect: vi.fn(async () => []),
-      text: vi.fn(async () => ""),
-      confirm: vi.fn(async () => false),
-      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-    };
-
-    const runtime: RuntimeEnv = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn((code: number) => {
-        throw new Error(`exit:${code}`);
-      }),
-    };
+    const prompter = buildWizardPrompter();
+    const runtime = createRuntime({ throwsOnExit: true });
 
     await expect(
       runOnboardingWizard(
@@ -600,33 +564,15 @@ describe("runOnboardingWizard", () => {
     });
     ensureWorkspaceAndSessions.mockRejectedValueOnce(enoentError);
 
-    const prompter: WizardPrompter = {
-      intro: vi.fn(async () => {}),
-      outro: vi.fn(async () => {}),
-      note: vi.fn(async () => {}),
-      select: vi.fn(
-        async (_params: WizardSelectParams<unknown>) => "quickstart",
-      ) as unknown as WizardPrompter["select"],
-      multiselect: vi.fn(async () => []),
-      text: vi.fn(async () => ""),
-      confirm: vi.fn(async () => false),
-      progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
-    };
-
-    const runtime: RuntimeEnv = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn((code: number) => {
-        throw new Error(`exit:${code}`);
-      }),
-    };
+    const prompter = buildWizardPrompter();
+    const runtime = createRuntime({ throwsOnExit: true });
 
     await expect(
       runOnboardingWizard(
         {
           acceptRisk: true,
           flow: "quickstart",
-          workspace: "/root/workspace",
+          workspace: "/tmp/nonexistent/deep/path",
           authChoice: "skip",
           installDaemon: false,
           skipProviders: true,
@@ -638,5 +584,7 @@ describe("runOnboardingWizard", () => {
         prompter,
       ),
     ).rejects.toThrow("ENOENT");
+
+    expect(prompter.outro).not.toHaveBeenCalled();
   });
 });
