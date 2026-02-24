@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
 import {
+  checkAuthProfileRateLimit,
   clearAuthProfileCooldown,
+  clearAuthProfileRateLimitWindow,
   clearExpiredCooldowns,
   isProfileInCooldown,
   markAuthProfileFailure,
@@ -17,6 +19,10 @@ vi.mock("./store.js", async (importOriginal) => {
     saveAuthProfileStore: vi.fn(),
   };
 });
+
+vi.mock("../../security/security-events.js", () => ({
+  emitSecurityEvent: vi.fn(),
+}));
 
 function makeStore(usageStats: AuthProfileStore["usageStats"]): AuthProfileStore {
   return {
@@ -556,4 +562,92 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
       expect(testCase.readUntil(stats)).toBe(testCase.expectedUntil(now));
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// checkAuthProfileRateLimit
+// ---------------------------------------------------------------------------
+
+describe("checkAuthProfileRateLimit", () => {
+  const profileId = "test:rate-limit-profile";
+  const opts = { windowMs: 1_000, maxAttempts: 3 };
+
+  // Ensure a clean window before each test.
+  function setup() {
+    clearAuthProfileRateLimitWindow(profileId);
+  }
+
+  it("allows attempts below the threshold", () => {
+    setup();
+    expect(checkAuthProfileRateLimit(profileId, opts).allowed).toBe(true);
+    expect(checkAuthProfileRateLimit(profileId, opts).allowed).toBe(true);
+    expect(checkAuthProfileRateLimit(profileId, opts).allowed).toBe(true);
+  });
+
+  it("blocks the (maxAttempts+1)th attempt and returns retryAfterMs", () => {
+    setup();
+    for (let i = 0; i < opts.maxAttempts; i++) {
+      checkAuthProfileRateLimit(profileId, opts);
+    }
+    const result = checkAuthProfileRateLimit(profileId, opts);
+    expect(result.allowed).toBe(false);
+    expect(typeof result.retryAfterMs).toBe("number");
+    expect(result.retryAfterMs).toBeGreaterThan(0);
+  });
+
+  it("emits auth_rate_limited security event when blocked", async () => {
+    setup();
+    const { emitSecurityEvent } = await import("../../security/security-events.js");
+    const spy = vi.mocked(emitSecurityEvent);
+    spy.mockClear();
+
+    for (let i = 0; i < opts.maxAttempts; i++) {
+      checkAuthProfileRateLimit(profileId, opts);
+    }
+    checkAuthProfileRateLimit(profileId, opts);
+
+    expect(spy).toHaveBeenCalledOnce();
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "auth_rate_limited", severity: "warn" }),
+    );
+  });
+
+  it("allows again after the window expires", async () => {
+    setup();
+    const shortOpts = { windowMs: 10, maxAttempts: 2 };
+
+    checkAuthProfileRateLimit(profileId, shortOpts);
+    checkAuthProfileRateLimit(profileId, shortOpts);
+    expect(checkAuthProfileRateLimit(profileId, shortOpts).allowed).toBe(false);
+
+    // Wait for window to expire
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(checkAuthProfileRateLimit(profileId, shortOpts).allowed).toBe(true);
+  });
+
+  it("clearAuthProfileRateLimitWindow resets the window", () => {
+    setup();
+    for (let i = 0; i < opts.maxAttempts; i++) {
+      checkAuthProfileRateLimit(profileId, opts);
+    }
+    expect(checkAuthProfileRateLimit(profileId, opts).allowed).toBe(false);
+
+    clearAuthProfileRateLimitWindow(profileId);
+    expect(checkAuthProfileRateLimit(profileId, opts).allowed).toBe(true);
+  });
+
+  it("isolates windows per profileId", () => {
+    const other = "test:other-profile";
+    clearAuthProfileRateLimitWindow(profileId);
+    clearAuthProfileRateLimitWindow(other);
+
+    for (let i = 0; i < opts.maxAttempts; i++) {
+      checkAuthProfileRateLimit(profileId, opts);
+    }
+    expect(checkAuthProfileRateLimit(profileId, opts).allowed).toBe(false);
+    expect(checkAuthProfileRateLimit(other, opts).allowed).toBe(true);
+
+    clearAuthProfileRateLimitWindow(other);
+  });
 });
