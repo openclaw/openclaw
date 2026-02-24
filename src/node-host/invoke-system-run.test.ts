@@ -120,12 +120,25 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     );
   });
 
-  it("runs canonical argv in allowlist mode for transparent env wrappers", async () => {
+  it("handles transparent env wrappers in allowlist mode", async () => {
     const { runCommand, sendInvokeResult } = await runSystemInvoke({
       preferMacAppExecHost: false,
       security: "allowlist",
       command: ["env", "tr", "a", "b"],
     });
+    if (process.platform === "win32") {
+      expect(runCommand).not.toHaveBeenCalled();
+      expect(sendInvokeResult).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ok: false,
+          error: expect.objectContaining({
+            message: expect.stringContaining("allowlist miss"),
+          }),
+        }),
+      );
+      return;
+    }
+
     expect(runCommand).toHaveBeenCalledWith(["tr", "a", "b"], undefined, undefined, undefined);
     expect(sendInvokeResult).toHaveBeenCalledWith(
       expect.objectContaining({
