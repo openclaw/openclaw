@@ -37,6 +37,9 @@ OpenClaw assumes the host and config boundary are trusted:
 - If someone can modify Gateway host state/config (`~/.openclaw`, including `openclaw.json`), treat them as a trusted operator.
 - Running one Gateway for multiple mutually untrusted/adversarial operators is **not a recommended setup**.
 - For mixed-trust teams, split trust boundaries with separate gateways (or at minimum separate OS users/hosts).
+- OpenClaw can run multiple gateway instances on one machine, but recommended operations favor clean trust-boundary separation.
+- Recommended default: one user per machine/host (or VPS), one gateway for that user, and one or more agents in that gateway.
+- If multiple users want OpenClaw, use one VPS/host per user.
 
 ### Practical consequence (operator trust boundary)
 
@@ -46,6 +49,7 @@ Inside one Gateway instance, authenticated operator access is a trusted control-
 - Session identifiers (`sessionKey`, session IDs, labels) are routing selectors, not authorization tokens.
 - Example: expecting per-operator isolation for methods like `sessions.list`, `sessions.preview`, or `chat.history` is outside this model.
 - If you need adversarial-user isolation, run separate gateways per trust boundary.
+- Multiple gateways on one machine are technically possible, but not the recommended baseline for multi-user isolation.
 
 ## Trust boundary matrix
 
