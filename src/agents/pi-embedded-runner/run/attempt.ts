@@ -11,6 +11,7 @@ import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
+import { isAbortError } from "../../../infra/unhandled-rejections.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
@@ -1222,15 +1223,6 @@ export async function runEmbeddedAttempt(
         err.name = "AbortError";
         return err;
       };
-      const isAbortError = (err: unknown): boolean =>
-        err instanceof Error
-          ? err.name === "AbortError"
-          : Boolean(
-              err &&
-              typeof err === "object" &&
-              "name" in err &&
-              (err as { name?: unknown }).name === "AbortError",
-            );
       const abortRun = (isTimeout = false, reason?: unknown) => {
         aborted = true;
         if (isTimeout) {
