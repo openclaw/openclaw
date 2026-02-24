@@ -35,7 +35,10 @@ type DispatchInboundParams = {
       text?: string;
       isReasoning?: boolean;
     }) => boolean | Promise<boolean>;
-    sendFinalReply: (payload: { text?: string }) => boolean | Promise<boolean>;
+    sendFinalReply: (payload: {
+      text?: string;
+      isReasoning?: boolean;
+    }) => boolean | Promise<boolean>;
   };
   replyOptions?: {
     onReasoningStream?: () => Promise<void> | void;
@@ -449,7 +452,7 @@ describe("processDiscordMessage draft streaming", () => {
       await params?.dispatcher.sendFinalReply({
         text: "Reasoning:\nthis should stay internal",
         isReasoning: true,
-      } as never);
+      });
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
     });
 
