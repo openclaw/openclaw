@@ -158,6 +158,7 @@ export async function keychainAvailable(
   if (platform === "linux") {
     return linuxKeychainAvailable();
   }
+  // TODO: Windows Credential Manager not yet implemented; falls back to passphrase
   return false;
 }
 
