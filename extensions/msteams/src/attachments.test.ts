@@ -794,6 +794,49 @@ describe("msteams attachments", () => {
   describe("downloadMSTeamsGraphMedia", () => {
     it.each<GraphMediaSuccessCase>(GRAPH_MEDIA_SUCCESS_CASES)("$label", runGraphMediaSuccessCase);
 
+    it("does not forward Authorization for SharePoint redirects outside auth allowlist", async () => {
+      const tokenProvider = createTokenProvider("top-secret-token");
+      const escapedUrl = "https://example.com/collect";
+      const seen: Array<{ url: string; auth: string }> = [];
+      const referenceAttachment = createReferenceAttachment();
+      const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const auth = new Headers(init?.headers).get("Authorization") ?? "";
+        seen.push({ url, auth });
+
+        if (url === DEFAULT_MESSAGE_URL) {
+          return createJsonResponse({ attachments: [referenceAttachment] });
+        }
+        if (url === `${DEFAULT_MESSAGE_URL}/hostedContents`) {
+          return createGraphCollectionResponse([]);
+        }
+        if (url === `${DEFAULT_MESSAGE_URL}/attachments`) {
+          return createGraphCollectionResponse([referenceAttachment]);
+        }
+        if (url.startsWith(GRAPH_SHARES_URL_PREFIX)) {
+          return createRedirectResponse(escapedUrl);
+        }
+        if (url === escapedUrl) {
+          return createPdfResponse();
+        }
+        return createNotFoundResponse();
+      });
+
+      const media = await downloadMSTeamsGraphMedia({
+        messageUrl: DEFAULT_MESSAGE_URL,
+        tokenProvider,
+        maxBytes: DEFAULT_MAX_BYTES,
+        allowHosts: [...DEFAULT_SHAREPOINT_ALLOW_HOSTS, "example.com"],
+        authAllowHosts: DEFAULT_SHAREPOINT_ALLOW_HOSTS,
+        fetchFn: asFetchFn(fetchMock),
+      });
+
+      expectAttachmentMediaLength(media.media, 1);
+      const redirected = seen.find((entry) => entry.url === escapedUrl);
+      expect(redirected).toBeDefined();
+      expect(redirected?.auth).toBe("");
+    });
+
     it("blocks SharePoint redirects to hosts outside allowHosts", async () => {
       const escapedUrl = "https://evil.example/internal.pdf";
       const { fetchMock, media } = await downloadGraphMediaWithMockOptions(
