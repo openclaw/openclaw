@@ -126,6 +126,15 @@ OpenClaw's security model is "personal assistant" (one trusted operator, potenti
 - Security boundaries come from host/config trust, auth, tool policy, sandboxing, and exec approvals.
 - Prompt injection by itself is not a vulnerability report unless it crosses one of those boundaries.
 
+## Gateway and Node trust concept
+
+OpenClaw separates routing from execution, but both remain inside the same operator trust boundary:
+
+- **Gateway** is the control plane. If a caller passes Gateway auth, they are treated as a trusted operator for that Gateway.
+- **Node** is an execution extension of the Gateway. Pairing a node grants operator-level remote capability on that node.
+- **Exec approvals** (allowlist/ask UI) are operator guardrails to reduce accidental command execution, not a multi-tenant authorization boundary.
+- For untrusted-user isolation, split by trust boundary: separate gateways and separate OS users/hosts per boundary.
+
 ## Workspace Memory Trust Boundary
 
 `MEMORY.md` and `memory/*.md` are plain workspace files and are treated as trusted local operator state.
