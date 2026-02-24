@@ -243,8 +243,8 @@ export function createSynologyChatPlugin() {
             const rt = getSynologyRuntime();
             const currentCfg = await rt.config.loadConfig();
 
-            // Build MsgContext (same format as LINE/Signal/etc.)
-            const msgCtx = {
+            // Build MsgContext using SDK's finalizeInboundContext for proper normalization
+            const msgCtx = rt.channel.reply.finalizeInboundContext({
               Body: msg.body,
               RawBody: msg.body,
               CommandBody: msg.body,
@@ -252,8 +252,8 @@ export function createSynologyChatPlugin() {
               To: `synology-chat:${msg.from}`,
               SessionKey: msg.sessionKey,
               AccountId: account.accountId,
-              OriginatingChannel: CHANNEL_ID as any,
-              OriginatingTo: msg.from,
+              OriginatingChannel: CHANNEL_ID,
+              OriginatingTo: `synology-chat:${msg.from}`,
               ChatType: msg.chatType,
               SenderName: msg.senderName,
               SenderId: msg.from,
@@ -262,7 +262,7 @@ export function createSynologyChatPlugin() {
               ConversationLabel: msg.senderName || msg.from,
               Timestamp: Date.now(),
               CommandAuthorized: true,
-            };
+            });
 
             // Dispatch via the SDK's buffered block dispatcher
             await rt.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
