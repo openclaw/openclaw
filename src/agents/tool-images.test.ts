@@ -107,4 +107,22 @@ describe("tool image sanitizing", () => {
     const image = getImageBlock(out);
     expect(image.mimeType).toBe("image/jpeg");
   });
+
+  it("drops malformed image base64 payloads", async () => {
+    const blocks = [
+      {
+        type: "image" as const,
+        data: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2N4j8AAAAASUVORK5CYII=" onerror="alert(1)',
+        mimeType: "image/png",
+      },
+    ];
+
+    const out = await sanitizeContentBlocksImages(blocks, "test");
+    expect(out).toEqual([
+      {
+        type: "text",
+        text: "[test] omitted image payload: invalid base64",
+      },
+    ]);
+  });
 });

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthChoice } from "./auth-choice.js";
 import {
@@ -72,8 +73,11 @@ describe("applyAuthChoice (moonshot)", () => {
     expect(text).toHaveBeenCalledWith(
       expect.objectContaining({ message: "Enter Moonshot API key (.cn)" }),
     );
-    expect(result.config.agents?.defaults?.model?.primary).toBe("anthropic/claude-opus-4-5");
+    expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
+      "anthropic/claude-opus-4-5",
+    );
     expect(result.config.models?.providers?.moonshot?.baseUrl).toBe("https://api.moonshot.cn/v1");
+    expect(result.config.models?.providers?.moonshot?.models?.[0]?.input).toContain("image");
     expect(result.agentModelOverride).toBe("moonshot/kimi-k2.5");
 
     const parsed = await readAuthProfiles();
@@ -88,8 +92,11 @@ describe("applyAuthChoice (moonshot)", () => {
       setDefaultModel: true,
     });
 
-    expect(result.config.agents?.defaults?.model?.primary).toBe("moonshot/kimi-k2.5");
+    expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
+      "moonshot/kimi-k2.5",
+    );
     expect(result.config.models?.providers?.moonshot?.baseUrl).toBe("https://api.moonshot.cn/v1");
+    expect(result.config.models?.providers?.moonshot?.models?.[0]?.input).toContain("image");
     expect(result.agentModelOverride).toBeUndefined();
 
     const parsed = await readAuthProfiles();

@@ -64,6 +64,24 @@ describe("downloadBlueBubblesAttachment", () => {
     setBlueBubblesRuntime(runtimeStub);
   });
 
+  async function expectAttachmentTooLarge(params: { bufferBytes: number; maxBytes?: number }) {
+    const largeBuffer = new Uint8Array(params.bufferBytes);
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers(),
+      arrayBuffer: () => Promise.resolve(largeBuffer.buffer),
+    });
+
+    const attachment: BlueBubblesAttachment = { guid: "att-large" };
+    await expect(
+      downloadBlueBubblesAttachment(attachment, {
+        serverUrl: "http://localhost:1234",
+        password: "test",
+        ...(params.maxBytes === undefined ? {} : { maxBytes: params.maxBytes }),
+      }),
+    ).rejects.toThrow("too large");
+  }
+
   it("throws when guid is missing", async () => {
     const attachment: BlueBubblesAttachment = {};
     await expect(
@@ -175,38 +193,14 @@ describe("downloadBlueBubblesAttachment", () => {
   });
 
   it("throws when attachment exceeds max bytes", async () => {
-    const largeBuffer = new Uint8Array(10 * 1024 * 1024);
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      headers: new Headers(),
-      arrayBuffer: () => Promise.resolve(largeBuffer.buffer),
+    await expectAttachmentTooLarge({
+      bufferBytes: 10 * 1024 * 1024,
+      maxBytes: 5 * 1024 * 1024,
     });
-
-    const attachment: BlueBubblesAttachment = { guid: "att-large" };
-    await expect(
-      downloadBlueBubblesAttachment(attachment, {
-        serverUrl: "http://localhost:1234",
-        password: "test",
-        maxBytes: 5 * 1024 * 1024,
-      }),
-    ).rejects.toThrow("too large");
   });
 
   it("uses default max bytes when not specified", async () => {
-    const largeBuffer = new Uint8Array(9 * 1024 * 1024);
-    mockFetch.mockResolvedValueOnce({
-      ok: true,
-      headers: new Headers(),
-      arrayBuffer: () => Promise.resolve(largeBuffer.buffer),
-    });
-
-    const attachment: BlueBubblesAttachment = { guid: "att-large" };
-    await expect(
-      downloadBlueBubblesAttachment(attachment, {
-        serverUrl: "http://localhost:1234",
-        password: "test",
-      }),
-    ).rejects.toThrow("too large");
+    await expectAttachmentTooLarge({ bufferBytes: 9 * 1024 * 1024 });
   });
 
   it("uses attachment mimeType as fallback when response has no content-type", async () => {
@@ -273,6 +267,49 @@ describe("downloadBlueBubblesAttachment", () => {
     expect(calledUrl).toContain("config-server:5678");
     expect(calledUrl).toContain("password=config-password");
     expect(result.buffer).toEqual(new Uint8Array([1]));
+  });
+
+  it("passes ssrfPolicy with allowPrivateNetwork when config enables it", async () => {
+    const mockBuffer = new Uint8Array([1]);
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers(),
+      arrayBuffer: () => Promise.resolve(mockBuffer.buffer),
+    });
+
+    const attachment: BlueBubblesAttachment = { guid: "att-ssrf" };
+    await downloadBlueBubblesAttachment(attachment, {
+      cfg: {
+        channels: {
+          bluebubbles: {
+            serverUrl: "http://localhost:1234",
+            password: "test",
+            allowPrivateNetwork: true,
+          },
+        },
+      },
+    });
+
+    const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(fetchMediaArgs.ssrfPolicy).toEqual({ allowPrivateNetwork: true });
+  });
+
+  it("does not pass ssrfPolicy when allowPrivateNetwork is not set", async () => {
+    const mockBuffer = new Uint8Array([1]);
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      headers: new Headers(),
+      arrayBuffer: () => Promise.resolve(mockBuffer.buffer),
+    });
+
+    const attachment: BlueBubblesAttachment = { guid: "att-no-ssrf" };
+    await downloadBlueBubblesAttachment(attachment, {
+      serverUrl: "http://localhost:1234",
+      password: "test",
+    });
+
+    const fetchMediaArgs = fetchRemoteMediaMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(fetchMediaArgs.ssrfPolicy).toBeUndefined();
   });
 });
 

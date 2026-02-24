@@ -44,6 +44,16 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it("allows RFC2544 benchmark range IPv4 literal URLs when explicitly opted in", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(new Response("ok", { status: 200 }));
+    const result = await fetchWithSsrFGuard({
+      url: "http://198.18.0.153/file",
+      fetchImpl,
+      policy: { allowRfc2544BenchmarkRange: true },
+    });
+    expect(result.response.status).toBe(200);
+  });
+
   it("blocks redirect chains that hop to private hosts", async () => {
     const lookupFn = vi.fn(async () => [
       { address: "93.184.216.34", family: 4 },

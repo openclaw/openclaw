@@ -84,7 +84,8 @@ export async function detectGlobalInstallManagerForRoot(
     const globalReal = await tryRealpath(globalRoot);
     for (const name of ALL_PACKAGE_NAMES) {
       const expected = path.join(globalReal, name);
-      if (path.resolve(expected) === path.resolve(pkgReal)) {
+      const expectedReal = await tryRealpath(expected);
+      if (path.resolve(expectedReal) === path.resolve(pkgReal)) {
         return manager;
       }
     }
@@ -94,7 +95,8 @@ export async function detectGlobalInstallManagerForRoot(
   const bunGlobalReal = await tryRealpath(bunGlobalRoot);
   for (const name of ALL_PACKAGE_NAMES) {
     const bunExpected = path.join(bunGlobalReal, name);
-    if (path.resolve(bunExpected) === path.resolve(pkgReal)) {
+    const bunExpectedReal = await tryRealpath(bunExpected);
+    if (path.resolve(bunExpectedReal) === path.resolve(pkgReal)) {
       return "bun";
     }
   }

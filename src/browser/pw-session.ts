@@ -13,7 +13,11 @@ import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { appendCdpPath, fetchJson, getHeadersWithAuth, withCdpSocket } from "./cdp.helpers.js";
 import { normalizeCdpWsUrl } from "./cdp.js";
 import { getChromeWebSocketUrl } from "./chrome.js";
-import { assertBrowserNavigationAllowed, withBrowserNavigationPolicy } from "./navigation-guard.js";
+import {
+  assertBrowserNavigationAllowed,
+  assertBrowserNavigationResultAllowed,
+  withBrowserNavigationPolicy,
+} from "./navigation-guard.js";
 
 // Enable stealth mode to evade bot detection
 chromium.use(StealthPlugin());
@@ -742,12 +746,17 @@ export async function createPageViaPlaywright(opts: {
   // Navigate to the URL
   const targetUrl = opts.url.trim() || "about:blank";
   if (targetUrl !== "about:blank") {
+    const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy);
     await assertBrowserNavigationAllowed({
       url: targetUrl,
-      ...withBrowserNavigationPolicy(opts.ssrfPolicy),
+      ...navigationPolicy,
     });
     await page.goto(targetUrl, { timeout: 30_000 }).catch(() => {
       // Navigation might fail for some URLs, but page is still created
+    });
+    await assertBrowserNavigationResultAllowed({
+      url: page.url(),
+      ...navigationPolicy,
     });
   }
 

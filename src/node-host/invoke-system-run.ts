@@ -14,6 +14,7 @@ import {
   type ExecAsk,
   type ExecCommandSegment,
   type ExecSecurity,
+  type SkillBinTrustEntry,
 } from "../infra/exec-approvals.js";
 import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../infra/exec-host.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
@@ -32,9 +33,43 @@ type SystemRunInvokeResult = {
   payloadJSON?: string | null;
   error?: { code?: string; message?: string } | null;
 };
-export { formatSystemRunAllowlistMissMessage } from "./exec-policy.js";
 
-export async function handleSystemRunInvoke(opts: {
+type SystemRunDeniedReason =
+  | "security=deny"
+  | "approval-required"
+  | "allowlist-miss"
+  | "execution-plan-miss"
+  | "companion-unavailable"
+  | "permission:screenRecording";
+
+type SystemRunExecutionContext = {
+  sessionKey: string;
+  runId: string;
+  cmdText: string;
+};
+
+type SystemRunAllowlistAnalysis = {
+  analysisOk: boolean;
+  allowlistMatches: ExecAllowlistEntry[];
+  allowlistSatisfied: boolean;
+  segments: ExecCommandSegment[];
+};
+
+function normalizeDeniedReason(reason: string | null | undefined): SystemRunDeniedReason {
+  switch (reason) {
+    case "security=deny":
+    case "approval-required":
+    case "allowlist-miss":
+    case "execution-plan-miss":
+    case "companion-unavailable":
+    case "permission:screenRecording":
+      return reason;
+    default:
+      return "approval-required";
+  }
+}
+
+export type HandleSystemRunInvokeOptions = {
   client: GatewayClient;
   params: SystemRunParams;
   skillBins: SkillBinsProvider;
@@ -71,7 +106,161 @@ export async function handleSystemRunInvoke(opts: {
     };
   }) => Promise<void>;
   preferMacAppExecHost: boolean;
-}): Promise<void> {
+};
+
+async function sendSystemRunDenied(
+  opts: Pick<
+    HandleSystemRunInvokeOptions,
+    "client" | "sendNodeEvent" | "buildExecEventPayload" | "sendInvokeResult"
+  >,
+  execution: SystemRunExecutionContext,
+  params: {
+    reason: SystemRunDeniedReason;
+    message: string;
+  },
+) {
+  await opts.sendNodeEvent(
+    opts.client,
+    "exec.denied",
+    opts.buildExecEventPayload({
+      sessionKey: execution.sessionKey,
+      runId: execution.runId,
+      host: "node",
+      command: execution.cmdText,
+      reason: params.reason,
+    }),
+  );
+  await opts.sendInvokeResult({
+    ok: false,
+    error: { code: "UNAVAILABLE", message: params.message },
+  });
+}
+
+function evaluateSystemRunAllowlist(params: {
+  shellCommand: string | null;
+  argv: string[];
+  approvals: ReturnType<typeof resolveExecApprovals>;
+  security: ExecSecurity;
+  safeBins: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["safeBins"];
+  safeBinProfiles: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["safeBinProfiles"];
+  trustedSafeBinDirs: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["trustedSafeBinDirs"];
+  cwd: string | undefined;
+  env: Record<string, string> | undefined;
+  skillBins: SkillBinTrustEntry[];
+  autoAllowSkills: boolean;
+}): SystemRunAllowlistAnalysis {
+  if (params.shellCommand) {
+    const allowlistEval = evaluateShellAllowlist({
+      command: params.shellCommand,
+      allowlist: params.approvals.allowlist,
+      safeBins: params.safeBins,
+      safeBinProfiles: params.safeBinProfiles,
+      cwd: params.cwd,
+      env: params.env,
+      trustedSafeBinDirs: params.trustedSafeBinDirs,
+      skillBins: params.skillBins,
+      autoAllowSkills: params.autoAllowSkills,
+      platform: process.platform,
+    });
+    return {
+      analysisOk: allowlistEval.analysisOk,
+      allowlistMatches: allowlistEval.allowlistMatches,
+      allowlistSatisfied:
+        params.security === "allowlist" && allowlistEval.analysisOk
+          ? allowlistEval.allowlistSatisfied
+          : false,
+      segments: allowlistEval.segments,
+    };
+  }
+
+  const analysis = analyzeArgvCommand({ argv: params.argv, cwd: params.cwd, env: params.env });
+  const allowlistEval = evaluateExecAllowlist({
+    analysis,
+    allowlist: params.approvals.allowlist,
+    safeBins: params.safeBins,
+    safeBinProfiles: params.safeBinProfiles,
+    cwd: params.cwd,
+    trustedSafeBinDirs: params.trustedSafeBinDirs,
+    skillBins: params.skillBins,
+    autoAllowSkills: params.autoAllowSkills,
+  });
+  return {
+    analysisOk: analysis.ok,
+    allowlistMatches: allowlistEval.allowlistMatches,
+    allowlistSatisfied:
+      params.security === "allowlist" && analysis.ok ? allowlistEval.allowlistSatisfied : false,
+    segments: analysis.segments,
+  };
+}
+
+function resolvePlannedAllowlistArgv(params: {
+  security: ExecSecurity;
+  shellCommand: string | null;
+  policy: {
+    approvedByAsk: boolean;
+    analysisOk: boolean;
+    allowlistSatisfied: boolean;
+  };
+  segments: ExecCommandSegment[];
+}): string[] | undefined | null {
+  if (
+    params.security !== "allowlist" ||
+    params.policy.approvedByAsk ||
+    params.shellCommand ||
+    !params.policy.analysisOk ||
+    !params.policy.allowlistSatisfied ||
+    params.segments.length !== 1
+  ) {
+    return undefined;
+  }
+  const plannedAllowlistArgv = params.segments[0]?.resolution?.effectiveArgv;
+  return plannedAllowlistArgv && plannedAllowlistArgv.length > 0 ? plannedAllowlistArgv : null;
+}
+
+function resolveSystemRunExecArgv(params: {
+  plannedAllowlistArgv: string[] | undefined;
+  argv: string[];
+  security: ExecSecurity;
+  isWindows: boolean;
+  policy: {
+    approvedByAsk: boolean;
+    analysisOk: boolean;
+    allowlistSatisfied: boolean;
+  };
+  shellCommand: string | null;
+  segments: ExecCommandSegment[];
+}): string[] {
+  let execArgv = params.plannedAllowlistArgv ?? params.argv;
+  if (
+    params.security === "allowlist" &&
+    params.isWindows &&
+    !params.policy.approvedByAsk &&
+    params.shellCommand &&
+    params.policy.analysisOk &&
+    params.policy.allowlistSatisfied &&
+    params.segments.length === 1 &&
+    params.segments[0]?.argv.length > 0
+  ) {
+    execArgv = params.segments[0].argv;
+  }
+  return execArgv;
+}
+
+function applyOutputTruncation(result: RunResult) {
+  if (!result.truncated) {
+    return;
+  }
+  const suffix = "... (truncated)";
+  if (result.stderr.trim().length > 0) {
+    result.stderr = `${result.stderr}\n${suffix}`;
+  } else {
+    result.stdout = `${result.stdout}\n${suffix}`;
+  }
+}
+
+export { formatSystemRunAllowlistMissMessage } from "./exec-policy.js";
+
+export async function handleSystemRunInvoke(opts: HandleSystemRunInvokeOptions): Promise<void> {
   const command = resolveSystemRunCommand({
     command: opts.params.command,
     rawCommand: opts.params.rawCommand,
@@ -111,6 +300,7 @@ export async function handleSystemRunInvoke(opts: {
   const autoAllowSkills = approvals.agent.autoAllowSkills;
   const sessionKey = opts.params.sessionKey?.trim() || "node";
   const runId = opts.params.runId?.trim() || crypto.randomUUID();
+  const execution: SystemRunExecutionContext = { sessionKey, runId, cmdText };
   const approvalDecision = resolveExecApprovalDecision(opts.params.approvalDecision);
   const envOverrides = sanitizeSystemRunEnvOverrides({
     overrides: opts.params.env ?? undefined,
@@ -121,47 +311,20 @@ export async function handleSystemRunInvoke(opts: {
     global: cfg.tools?.exec,
     local: agentExec,
   });
-  const bins = autoAllowSkills ? await opts.skillBins.current() : new Set<string>();
-  let analysisOk = false;
-  let allowlistMatches: ExecAllowlistEntry[] = [];
-  let allowlistSatisfied = false;
-  let segments: ExecCommandSegment[] = [];
-  if (shellCommand) {
-    const allowlistEval = evaluateShellAllowlist({
-      command: shellCommand,
-      allowlist: approvals.allowlist,
-      safeBins,
-      safeBinProfiles,
-      cwd: opts.params.cwd ?? undefined,
-      env,
-      trustedSafeBinDirs,
-      skillBins: bins,
-      autoAllowSkills,
-      platform: process.platform,
-    });
-    analysisOk = allowlistEval.analysisOk;
-    allowlistMatches = allowlistEval.allowlistMatches;
-    allowlistSatisfied =
-      security === "allowlist" && analysisOk ? allowlistEval.allowlistSatisfied : false;
-    segments = allowlistEval.segments;
-  } else {
-    const analysis = analyzeArgvCommand({ argv, cwd: opts.params.cwd ?? undefined, env });
-    const allowlistEval = evaluateExecAllowlist({
-      analysis,
-      allowlist: approvals.allowlist,
-      safeBins,
-      safeBinProfiles,
-      cwd: opts.params.cwd ?? undefined,
-      trustedSafeBinDirs,
-      skillBins: bins,
-      autoAllowSkills,
-    });
-    analysisOk = analysis.ok;
-    allowlistMatches = allowlistEval.allowlistMatches;
-    allowlistSatisfied =
-      security === "allowlist" && analysisOk ? allowlistEval.allowlistSatisfied : false;
-    segments = analysis.segments;
-  }
+  const bins = autoAllowSkills ? await opts.skillBins.current() : [];
+  let { analysisOk, allowlistMatches, allowlistSatisfied, segments } = evaluateSystemRunAllowlist({
+    shellCommand,
+    argv,
+    approvals,
+    security,
+    safeBins,
+    safeBinProfiles,
+    trustedSafeBinDirs,
+    cwd: opts.params.cwd ?? undefined,
+    env,
+    skillBins: bins,
+    autoAllowSkills,
+  });
   const isWindows = process.platform === "win32";
   const cmdInvocation = shellCommand
     ? opts.isCmdExeInvocation(segments[0]?.argv ?? [])
@@ -180,20 +343,32 @@ export async function handleSystemRunInvoke(opts: {
   analysisOk = policy.analysisOk;
   allowlistSatisfied = policy.allowlistSatisfied;
   if (!policy.allowed) {
-    await opts.sendNodeEvent(
-      opts.client,
-      "exec.denied",
-      opts.buildExecEventPayload({
-        sessionKey,
-        runId,
-        host: "node",
-        command: cmdText,
-        reason: policy.eventReason,
-      }),
-    );
-    await opts.sendInvokeResult({
-      ok: false,
-      error: { code: "UNAVAILABLE", message: policy.errorMessage },
+    await sendSystemRunDenied(opts, execution, {
+      reason: policy.eventReason,
+      message: policy.errorMessage,
+    });
+    return;
+  }
+
+  // Fail closed if policy/runtime drift re-allows unapproved shell wrappers.
+  if (security === "allowlist" && shellCommand && !policy.approvedByAsk) {
+    await sendSystemRunDenied(opts, execution, {
+      reason: "approval-required",
+      message: "SYSTEM_RUN_DENIED: approval required",
+    });
+    return;
+  }
+
+  const plannedAllowlistArgv = resolvePlannedAllowlistArgv({
+    security,
+    shellCommand,
+    policy,
+    segments,
+  });
+  if (plannedAllowlistArgv === null) {
+    await sendSystemRunDenied(opts, execution, {
+      reason: "execution-plan-miss",
+      message: "SYSTEM_RUN_DENIED: execution plan mismatch",
     });
     return;
   }
@@ -201,7 +376,7 @@ export async function handleSystemRunInvoke(opts: {
   const useMacAppExec = opts.preferMacAppExecHost;
   if (useMacAppExec) {
     const execRequest: ExecHostRequest = {
-      command: argv,
+      command: plannedAllowlistArgv ?? argv,
       rawCommand: rawCommand || shellCommand || null,
       cwd: opts.params.cwd ?? null,
       env: envOverrides ?? null,
@@ -214,42 +389,16 @@ export async function handleSystemRunInvoke(opts: {
     const response = await opts.runViaMacAppExecHost({ approvals, request: execRequest });
     if (!response) {
       if (opts.execHostEnforced || !opts.execHostFallbackAllowed) {
-        await opts.sendNodeEvent(
-          opts.client,
-          "exec.denied",
-          opts.buildExecEventPayload({
-            sessionKey,
-            runId,
-            host: "node",
-            command: cmdText,
-            reason: "companion-unavailable",
-          }),
-        );
-        await opts.sendInvokeResult({
-          ok: false,
-          error: {
-            code: "UNAVAILABLE",
-            message: "COMPANION_APP_UNAVAILABLE: macOS app exec host unreachable",
-          },
+        await sendSystemRunDenied(opts, execution, {
+          reason: "companion-unavailable",
+          message: "COMPANION_APP_UNAVAILABLE: macOS app exec host unreachable",
         });
         return;
       }
     } else if (!response.ok) {
-      const reason = response.error.reason ?? "approval-required";
-      await opts.sendNodeEvent(
-        opts.client,
-        "exec.denied",
-        opts.buildExecEventPayload({
-          sessionKey,
-          runId,
-          host: "node",
-          command: cmdText,
-          reason,
-        }),
-      );
-      await opts.sendInvokeResult({
-        ok: false,
-        error: { code: "UNAVAILABLE", message: response.error.message },
+      await sendSystemRunDenied(opts, execution, {
+        reason: normalizeDeniedReason(response.error.reason),
+        message: response.error.message,
       });
       return;
     } else {
@@ -297,37 +446,22 @@ export async function handleSystemRunInvoke(opts: {
   }
 
   if (opts.params.needsScreenRecording === true) {
-    await opts.sendNodeEvent(
-      opts.client,
-      "exec.denied",
-      opts.buildExecEventPayload({
-        sessionKey,
-        runId,
-        host: "node",
-        command: cmdText,
-        reason: "permission:screenRecording",
-      }),
-    );
-    await opts.sendInvokeResult({
-      ok: false,
-      error: { code: "UNAVAILABLE", message: "PERMISSION_MISSING: screenRecording" },
+    await sendSystemRunDenied(opts, execution, {
+      reason: "permission:screenRecording",
+      message: "PERMISSION_MISSING: screenRecording",
     });
     return;
   }
 
-  let execArgv = argv;
-  if (
-    security === "allowlist" &&
-    isWindows &&
-    !policy.approvedByAsk &&
-    shellCommand &&
-    policy.analysisOk &&
-    policy.allowlistSatisfied &&
-    segments.length === 1 &&
-    segments[0]?.argv.length > 0
-  ) {
-    execArgv = segments[0].argv;
-  }
+  const execArgv = resolveSystemRunExecArgv({
+    plannedAllowlistArgv: plannedAllowlistArgv ?? undefined,
+    argv,
+    security,
+    isWindows,
+    policy,
+    shellCommand,
+    segments,
+  });
 
   const result = await opts.runCommand(
     execArgv,
@@ -335,14 +469,7 @@ export async function handleSystemRunInvoke(opts: {
     env,
     opts.params.timeoutMs ?? undefined,
   );
-  if (result.truncated) {
-    const suffix = "... (truncated)";
-    if (result.stderr.trim().length > 0) {
-      result.stderr = `${result.stderr}\n${suffix}`;
-    } else {
-      result.stdout = `${result.stdout}\n${suffix}`;
-    }
-  }
+  applyOutputTruncation(result);
   await opts.sendExecFinishedEvent({ sessionKey, runId, cmdText, result });
 
   await opts.sendInvokeResult({

@@ -687,16 +687,18 @@ export const nodeHandlers: GatewayRequestHandlers = {
         allowlist,
       });
       if (!allowed.ok) {
+        const hint = buildNodeCommandRejectionHint(allowed.reason, command, nodeSession);
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "node command not allowed", {
+          errorShape(ErrorCodes.INVALID_REQUEST, hint, {
             details: { reason: allowed.reason, command },
           }),
         );
         return;
       }
       const forwardedParams = sanitizeNodeInvokeParamsForForwarding({
+        nodeId,
         command,
         rawParams: p.params,
         client,
@@ -784,3 +786,21 @@ export const nodeHandlers: GatewayRequestHandlers = {
     });
   },
 };
+
+function buildNodeCommandRejectionHint(
+  reason: string,
+  command: string,
+  node: { platform?: string } | undefined,
+): string {
+  const platform = node?.platform ?? "unknown";
+  if (reason === "command not declared by node") {
+    return `node command not allowed: the node (platform: ${platform}) does not support "${command}"`;
+  }
+  if (reason === "command not allowlisted") {
+    return `node command not allowed: "${command}" is not in the allowlist for platform "${platform}"`;
+  }
+  if (reason === "node did not declare commands") {
+    return `node command not allowed: the node did not declare any supported commands`;
+  }
+  return `node command not allowed: ${reason}`;
+}

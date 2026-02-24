@@ -28,6 +28,7 @@ describe("shell env fallback", () => {
   }
 
   function runShellEnvFallbackForShell(shell: string) {
+    resetShellPathCacheForTests();
     const env: NodeJS.ProcessEnv = { SHELL: shell };
     const exec = vi.fn(() => Buffer.from("OPENAI_API_KEY=from-shell\0"));
     const res = loadShellEnvFallback({
@@ -56,6 +57,23 @@ describe("shell env fallback", () => {
     expect(receivedEnv?.ZDOTDIR).toBeUndefined();
     expect(receivedEnv?.SHELL).toBeUndefined();
     expect(receivedEnv?.HOME).toBe(os.homedir());
+  }
+
+  function withEtcShells(shells: string[], fn: () => void) {
+    const etcShellsContent = `${shells.join("\n")}\n`;
+    const readFileSyncSpy = vi
+      .spyOn(fs, "readFileSync")
+      .mockImplementation((filePath, encoding) => {
+        if (filePath === "/etc/shells" && encoding === "utf8") {
+          return etcShellsContent;
+        }
+        throw new Error(`Unexpected readFileSync(${String(filePath)}) in test`);
+      });
+    try {
+      fn();
+    } finally {
+      readFileSyncSpy.mockRestore();
+    }
   }
 
   it("is disabled by default", () => {
@@ -170,19 +188,28 @@ describe("shell env fallback", () => {
     expect(exec).toHaveBeenCalledWith("/bin/sh", ["-l", "-c", "env -0"], expect.any(Object));
   });
 
-  it("uses trusted absolute SHELL path when executable on posix-style paths", () => {
-    const accessSyncSpy = vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
-    try {
-      const trustedShell = "/usr/bin/zsh-trusted";
-      const { res, exec } = runShellEnvFallbackForShell(trustedShell);
-      const expectedShell = process.platform === "win32" ? "/bin/sh" : trustedShell;
+  it("falls back to /bin/sh when SHELL is absolute but not registered in /etc/shells", () => {
+    withEtcShells(["/bin/sh", "/bin/bash", "/bin/zsh"], () => {
+      const { res, exec } = runShellEnvFallbackForShell("/opt/homebrew/bin/evil-shell");
 
       expect(res.ok).toBe(true);
       expect(exec).toHaveBeenCalledTimes(1);
-      expect(exec).toHaveBeenCalledWith(expectedShell, ["-l", "-c", "env -0"], expect.any(Object));
-    } finally {
-      accessSyncSpy.mockRestore();
-    }
+      expect(exec).toHaveBeenCalledWith("/bin/sh", ["-l", "-c", "env -0"], expect.any(Object));
+    });
+  });
+
+  it("uses SHELL when it is explicitly registered in /etc/shells", () => {
+    const trustedShell =
+      process.platform === "win32"
+        ? "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"
+        : "/usr/bin/zsh-trusted";
+    withEtcShells(["/bin/sh", trustedShell], () => {
+      const { res, exec } = runShellEnvFallbackForShell(trustedShell);
+
+      expect(res.ok).toBe(true);
+      expect(exec).toHaveBeenCalledTimes(1);
+      expect(exec).toHaveBeenCalledWith(trustedShell, ["-l", "-c", "env -0"], expect.any(Object));
+    });
   });
 
   it("sanitizes startup-related env vars before shell fallback exec", () => {

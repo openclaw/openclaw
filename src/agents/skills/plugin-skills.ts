@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   normalizePluginsConfig,
-  resolveEnableState,
+  resolveEffectiveEnableState,
   resolveMemorySlotDecision,
 } from "../../plugins/config-state.js";
 import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
@@ -12,10 +12,10 @@ import { loadPluginManifestRegistry } from "../../plugins/manifest-registry.js";
 const log = createSubsystemLogger("skills");
 
 export function resolvePluginSkillDirs(params: {
-  workspaceDir: string;
+  workspaceDir: string | undefined;
   config?: OpenClawConfig;
 }): string[] {
-  const workspaceDir = params.workspaceDir.trim();
+  const workspaceDir = (params.workspaceDir ?? "").trim();
   if (!workspaceDir) {
     return [];
   }
@@ -36,7 +36,12 @@ export function resolvePluginSkillDirs(params: {
     if (!record.skills || record.skills.length === 0) {
       continue;
     }
-    const enableState = resolveEnableState(record.id, record.origin, normalizedPlugins);
+    const enableState = resolveEffectiveEnableState({
+      id: record.id,
+      origin: record.origin,
+      config: normalizedPlugins,
+      rootConfig: params.config,
+    });
     if (!enableState.enabled) {
       continue;
     }

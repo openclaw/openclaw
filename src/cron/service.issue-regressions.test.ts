@@ -605,6 +605,53 @@ describe("Cron issue regressions", () => {
     cron.stop();
   });
 
+  it("keeps telegram delivery target writeback after manual cron.run", async () => {
+    const store = await makeStorePath();
+    const originalTarget = "https://t.me/obviyus";
+    const rewrittenTarget = "-10012345/6789";
+    const runIsolatedAgentJob = vi.fn(async (params: { job: { id: string } }) => {
+      const raw = await fs.readFile(store.storePath, "utf-8");
+      const persisted = JSON.parse(raw) as { version: number; jobs: CronJob[] };
+      const targetJob = persisted.jobs.find((job) => job.id === params.job.id);
+      if (targetJob?.delivery?.channel === "telegram") {
+        targetJob.delivery.to = rewrittenTarget;
+      }
+      await fs.writeFile(store.storePath, JSON.stringify(persisted, null, 2), "utf-8");
+      return { status: "ok" as const, summary: "done", delivered: true };
+    });
+
+    const cron = await startCronForStore({
+      storePath: store.storePath,
+      runIsolatedAgentJob,
+    });
+    const job = await cron.add({
+      name: "manual-writeback",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "test" },
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: originalTarget,
+      },
+    });
+
+    const result = await cron.run(job.id, "force");
+    expect(result).toEqual({ ok: true, ran: true });
+
+    const persisted = JSON.parse(await fs.readFile(store.storePath, "utf8")) as {
+      jobs: CronJob[];
+    };
+    const persistedJob = persisted.jobs.find((entry) => entry.id === job.id);
+    expect(persistedJob?.delivery?.to).toBe(rewrittenTarget);
+    expect(persistedJob?.state.lastStatus).toBe("ok");
+    expect(persistedJob?.state.lastDelivered).toBe(true);
+
+    cron.stop();
+  });
+
   it("#13845: one-shot jobs with terminal statuses do not re-fire on restart", async () => {
     const store = await makeStorePath();
     const pastAt = Date.parse("2026-02-06T09:00:00.000Z");

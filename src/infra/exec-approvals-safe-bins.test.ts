@@ -82,6 +82,41 @@ describe("exec approvals safe bins", () => {
       label: "blocks sort external program flag",
     }),
     ...buildDeniedFlagVariantCases({
+      executableName: "sort",
+      resolvedPath: "/usr/bin/sort",
+      flag: "--compress-prog",
+      takesValue: true,
+      label: "blocks sort denied flag abbreviations",
+    }),
+    ...buildDeniedFlagVariantCases({
+      executableName: "sort",
+      resolvedPath: "/usr/bin/sort",
+      flag: "--files0-fro",
+      takesValue: true,
+      label: "blocks sort denied flag abbreviations",
+    }),
+    ...buildDeniedFlagVariantCases({
+      executableName: "sort",
+      resolvedPath: "/usr/bin/sort",
+      flag: "--random-source",
+      takesValue: true,
+      label: "blocks sort filesystem-dependent flags",
+    }),
+    ...buildDeniedFlagVariantCases({
+      executableName: "sort",
+      resolvedPath: "/usr/bin/sort",
+      flag: "--temporary-directory",
+      takesValue: true,
+      label: "blocks sort filesystem-dependent flags",
+    }),
+    ...buildDeniedFlagVariantCases({
+      executableName: "sort",
+      resolvedPath: "/usr/bin/sort",
+      flag: "-T",
+      takesValue: true,
+      label: "blocks sort filesystem-dependent flags",
+    }),
+    ...buildDeniedFlagVariantCases({
       executableName: "grep",
       resolvedPath: "/usr/bin/grep",
       flag: "-R",
@@ -123,6 +158,13 @@ describe("exec approvals safe bins", () => {
       takesValue: true,
       label: "blocks wc file-list flag",
     }),
+    ...buildDeniedFlagVariantCases({
+      executableName: "wc",
+      resolvedPath: "/usr/bin/wc",
+      flag: "--files0-fro",
+      takesValue: true,
+      label: "blocks wc denied flag abbreviations",
+    }),
   ];
 
   const cases: SafeBinCase[] = [
@@ -162,6 +204,30 @@ describe("exec approvals safe bins", () => {
       expected: false,
       safeBins: ["grep"],
       executableName: "grep",
+    },
+    {
+      name: "rejects unknown long options in safe-bin mode",
+      argv: ["sort", "--totally-unknown=1"],
+      resolvedPath: "/usr/bin/sort",
+      expected: false,
+      safeBins: ["sort"],
+      executableName: "sort",
+    },
+    {
+      name: "rejects ambiguous long-option abbreviations in safe-bin mode",
+      argv: ["sort", "--f=1"],
+      resolvedPath: "/usr/bin/sort",
+      expected: false,
+      safeBins: ["sort"],
+      executableName: "sort",
+    },
+    {
+      name: "rejects unknown short options in safe-bin mode",
+      argv: ["tr", "-S", "a", "b"],
+      resolvedPath: "/usr/bin/tr",
+      expected: false,
+      safeBins: ["tr"],
+      executableName: "tr",
     },
   ];
 
@@ -405,5 +471,22 @@ describe("exec approvals safe bins", () => {
     expect(result.allowlistSatisfied).toBe(false);
     expect(result.segmentSatisfiedBy).toEqual([null]);
     expect(result.segments[0]?.resolution?.resolvedPath).toBe(fakeHead);
+  });
+
+  it("fails closed for semantic env wrappers in allowlist mode", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const result = evaluateShellAllowlist({
+      command: "env -S 'sh -c \"echo pwned\"' tr",
+      allowlist: [{ pattern: "/usr/bin/tr" }],
+      safeBins: normalizeSafeBins(["tr"]),
+      cwd: "/tmp",
+      platform: process.platform,
+    });
+    expect(result.analysisOk).toBe(true);
+    expect(result.allowlistSatisfied).toBe(false);
+    expect(result.segmentSatisfiedBy).toEqual([null]);
+    expect(result.segments[0]?.resolution?.policyBlocked).toBe(true);
   });
 });

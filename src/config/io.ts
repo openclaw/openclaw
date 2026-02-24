@@ -39,6 +39,7 @@ import { applyMergePatch } from "./merge-patch.js";
 import { normalizeExecSafeBinProfilesInConfig } from "./normalize-exec-safe-bin.js";
 import { normalizeConfigPaths } from "./normalize-paths.js";
 import { resolveConfigPath, resolveDefaultConfigCandidates, resolveStateDir } from "./paths.js";
+import { isBlockedObjectKey } from "./prototype-keys.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
 import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import {
@@ -61,6 +62,7 @@ const SHELL_ENV_EXPECTED_KEYS = [
   "AI_GATEWAY_API_KEY",
   "MINIMAX_API_KEY",
   "SYNTHETIC_API_KEY",
+  "KILOCODE_API_KEY",
   "ELEVENLABS_API_KEY",
   "TELEGRAM_BOT_TOKEN",
   "DISCORD_BOT_TOKEN",
@@ -69,6 +71,9 @@ const SHELL_ENV_EXPECTED_KEYS = [
   "OPENCLAW_GATEWAY_TOKEN",
   "OPENCLAW_GATEWAY_PASSWORD",
 ];
+
+const OPEN_DM_POLICY_ALLOW_FROM_RE =
+  /^(?<policyPath>[a-z0-9_.-]+)\s*=\s*"open"\s+requires\s+(?<allowPath>[a-z0-9_.-]+)(?:\s+\(or\s+[a-z0-9_.-]+\))?\s+to include "\*"$/i;
 
 const CONFIG_AUDIT_LOG_FILENAME = "config-audit.jsonl";
 const loggedInvalidConfigs = new Set<string>();
@@ -135,6 +140,27 @@ function hashConfigRaw(raw: string | null): string {
     .digest("hex");
 }
 
+function formatConfigValidationFailure(pathLabel: string, issueMessage: string): string {
+  const match = issueMessage.match(OPEN_DM_POLICY_ALLOW_FROM_RE);
+  const policyPath = match?.groups?.policyPath?.trim();
+  const allowPath = match?.groups?.allowPath?.trim();
+  if (!policyPath || !allowPath) {
+    return `Config validation failed: ${pathLabel}: ${issueMessage}`;
+  }
+
+  return [
+    `Config validation failed: ${pathLabel}`,
+    "",
+    `Configuration mismatch: ${policyPath} is "open", but ${allowPath} does not include "*".`,
+    "",
+    "Fix with:",
+    `  openclaw config set ${allowPath} '["*"]'`,
+    "",
+    "Or switch policy:",
+    `  openclaw config set ${policyPath} "pairing"`,
+  ].join("\n");
+}
+
 function isNumericPathSegment(raw: string): boolean {
   return /^[0-9]+$/.test(raw);
 }
@@ -143,76 +169,104 @@ function isWritePlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function unsetPathForWrite(root: Record<string, unknown>, pathSegments: string[]): boolean {
-  if (pathSegments.length === 0) {
-    return false;
+function hasOwnObjectKey(value: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+const WRITE_PRUNED_OBJECT = Symbol("write-pruned-object");
+
+type UnsetPathWriteResult = {
+  changed: boolean;
+  value: unknown;
+};
+
+function unsetPathForWriteAt(
+  value: unknown,
+  pathSegments: string[],
+  depth: number,
+): UnsetPathWriteResult {
+  if (depth >= pathSegments.length) {
+    return { changed: false, value };
   }
+  const segment = pathSegments[depth];
+  const isLeaf = depth === pathSegments.length - 1;
 
-  const traversal: Array<{ container: unknown; key: string | number }> = [];
-  let cursor: unknown = root;
-
-  for (let i = 0; i < pathSegments.length - 1; i += 1) {
-    const segment = pathSegments[i];
-    if (Array.isArray(cursor)) {
-      if (!isNumericPathSegment(segment)) {
-        return false;
-      }
-      const index = Number.parseInt(segment, 10);
-      if (!Number.isFinite(index) || index < 0 || index >= cursor.length) {
-        return false;
-      }
-      traversal.push({ container: cursor, key: index });
-      cursor = cursor[index];
-      continue;
+  if (Array.isArray(value)) {
+    if (!isNumericPathSegment(segment)) {
+      return { changed: false, value };
     }
-    if (!isWritePlainObject(cursor) || !(segment in cursor)) {
-      return false;
+    const index = Number.parseInt(segment, 10);
+    if (!Number.isFinite(index) || index < 0 || index >= value.length) {
+      return { changed: false, value };
     }
-    traversal.push({ container: cursor, key: segment });
-    cursor = cursor[segment];
-  }
-
-  const leaf = pathSegments[pathSegments.length - 1];
-  if (Array.isArray(cursor)) {
-    if (!isNumericPathSegment(leaf)) {
-      return false;
+    if (isLeaf) {
+      const next = value.slice();
+      next.splice(index, 1);
+      return { changed: true, value: next };
     }
-    const index = Number.parseInt(leaf, 10);
-    if (!Number.isFinite(index) || index < 0 || index >= cursor.length) {
-      return false;
+    const child = unsetPathForWriteAt(value[index], pathSegments, depth + 1);
+    if (!child.changed) {
+      return { changed: false, value };
     }
-    cursor.splice(index, 1);
-  } else {
-    if (!isWritePlainObject(cursor) || !(leaf in cursor)) {
-      return false;
-    }
-    delete cursor[leaf];
-  }
-
-  // Prune now-empty object branches after unsetting to avoid dead config scaffolding.
-  for (let i = traversal.length - 1; i >= 0; i -= 1) {
-    const { container, key } = traversal[i];
-    let child: unknown;
-    if (Array.isArray(container)) {
-      child = typeof key === "number" ? container[key] : undefined;
-    } else if (isWritePlainObject(container)) {
-      child = container[String(key)];
+    const next = value.slice();
+    if (child.value === WRITE_PRUNED_OBJECT) {
+      next.splice(index, 1);
     } else {
-      break;
+      next[index] = child.value;
     }
-    if (!isWritePlainObject(child) || Object.keys(child).length > 0) {
-      break;
-    }
-    if (Array.isArray(container) && typeof key === "number") {
-      if (key >= 0 && key < container.length) {
-        container.splice(key, 1);
-      }
-    } else if (isWritePlainObject(container)) {
-      delete container[String(key)];
-    }
+    return { changed: true, value: next };
   }
 
-  return true;
+  if (
+    isBlockedObjectKey(segment) ||
+    !isWritePlainObject(value) ||
+    !hasOwnObjectKey(value, segment)
+  ) {
+    return { changed: false, value };
+  }
+  if (isLeaf) {
+    const next: Record<string, unknown> = { ...value };
+    delete next[segment];
+    return {
+      changed: true,
+      value: Object.keys(next).length === 0 ? WRITE_PRUNED_OBJECT : next,
+    };
+  }
+
+  const child = unsetPathForWriteAt(value[segment], pathSegments, depth + 1);
+  if (!child.changed) {
+    return { changed: false, value };
+  }
+  const next: Record<string, unknown> = { ...value };
+  if (child.value === WRITE_PRUNED_OBJECT) {
+    delete next[segment];
+  } else {
+    next[segment] = child.value;
+  }
+  return {
+    changed: true,
+    value: Object.keys(next).length === 0 ? WRITE_PRUNED_OBJECT : next,
+  };
+}
+
+function unsetPathForWrite(
+  root: OpenClawConfig,
+  pathSegments: string[],
+): { changed: boolean; next: OpenClawConfig } {
+  if (pathSegments.length === 0) {
+    return { changed: false, next: root };
+  }
+  const result = unsetPathForWriteAt(root, pathSegments, 0);
+  if (!result.changed) {
+    return { changed: false, next: root };
+  }
+  if (result.value === WRITE_PRUNED_OBJECT) {
+    return { changed: true, next: {} };
+  }
+  if (isWritePlainObject(result.value)) {
+    return { changed: true, next: coerceConfig(result.value) };
+  }
+  return { changed: false, next: root };
 }
 
 export function resolveConfigSnapshotHash(snapshot: {
@@ -906,6 +960,25 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         envSnapshotForRestore: readResolution.envSnapshotForRestore,
       };
     } catch (err) {
+      const nodeErr = err as NodeJS.ErrnoException;
+      let message: string;
+      if (nodeErr?.code === "EACCES") {
+        // Permission denied — common in Docker/container deployments where the
+        // config file is owned by root but the gateway runs as a non-root user.
+        const uid = process.getuid?.();
+        const uidHint = typeof uid === "number" ? String(uid) : "$(id -u)";
+        message = [
+          `read failed: ${String(err)}`,
+          ``,
+          `Config file is not readable by the current process. If running in a container`,
+          `or 1-click deployment, fix ownership with:`,
+          `  chown ${uidHint} "${configPath}"`,
+          `Then restart the gateway.`,
+        ].join("\n");
+        deps.logger.error(message);
+      } else {
+        message = `read failed: ${String(err)}`;
+      }
       return {
         snapshot: {
           path: configPath,
@@ -916,7 +989,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
           valid: false,
           config: {},
           hash: hashConfigRaw(null),
-          issues: [{ path: "", message: `read failed: ${String(err)}` }],
+          issues: [{ path: "", message }],
           warnings: [],
           legacyIssues: [],
         },
@@ -970,7 +1043,8 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     if (!validated.ok) {
       const issue = validated.issues[0];
       const pathLabel = issue?.path ? issue.path : "<root>";
-      throw new Error(`Config validation failed: ${pathLabel}: ${issue?.message ?? "invalid"}`);
+      const issueMessage = issue?.message ?? "invalid";
+      throw new Error(formatConfigValidationFailure(pathLabel, issueMessage));
     }
     if (validated.warnings.length > 0) {
       const details = validated.warnings
@@ -1011,16 +1085,20 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
 
     const dir = path.dirname(configPath);
     await deps.fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
-    const outputConfig =
+    const outputConfigBase =
       envRefMap && changedPaths
         ? (restoreEnvRefsFromMap(cfgToWrite, "", envRefMap, changedPaths) as OpenClawConfig)
         : cfgToWrite;
+    let outputConfig = outputConfigBase;
     if (options.unsetPaths?.length) {
       for (const unsetPath of options.unsetPaths) {
         if (!Array.isArray(unsetPath) || unsetPath.length === 0) {
           continue;
         }
-        unsetPathForWrite(outputConfig as Record<string, unknown>, unsetPath);
+        const unsetResult = unsetPathForWrite(outputConfig, unsetPath);
+        if (unsetResult.changed) {
+          outputConfig = unsetResult.next;
+        }
       }
     }
     // Do NOT apply runtime defaults when writing — user config should only contain
