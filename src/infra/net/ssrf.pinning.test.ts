@@ -172,6 +172,16 @@ describe("ssrf pinning", () => {
     ]);
   });
 
+  it("uses DNS family metadata for ordering (not address string heuristics)", async () => {
+    const lookup = vi.fn(async () => [
+      { address: "2606:2800:220:1:248:1893:25c8:1946", family: 4 },
+      { address: "93.184.216.34", family: 6 },
+    ]) as unknown as LookupFn;
+
+    const pinned = await resolvePinnedHostname("example.com", lookup);
+    expect(pinned.addresses).toEqual(["2606:2800:220:1:248:1893:25c8:1946", "93.184.216.34"]);
+  });
+
   it("allows ISATAP embedded private IPv4 when private network is explicitly enabled", async () => {
     const lookup = vi.fn(async () => [
       { address: "2001:db8:1234::5efe:127.0.0.1", family: 6 },
