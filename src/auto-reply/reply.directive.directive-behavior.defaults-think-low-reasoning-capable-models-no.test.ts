@@ -112,7 +112,7 @@ async function runReasoningDefaultCase(params: {
 describe("directive behavior", () => {
   installDirectiveBehaviorE2EHooks();
 
-  it("shows /think defaults for reasoning and non-reasoning models", async () => {
+  it("covers /think status and reasoning defaults for reasoning and non-reasoning models", async () => {
     await withTempHome(async (home) => {
       await expectThinkStatusForReasoningModel({
         home,
@@ -125,6 +125,25 @@ describe("directive behavior", () => {
         expectedLevel: "off",
       });
       expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+
+      vi.mocked(runEmbeddedPiAgent).mockClear();
+
+      for (const scenario of [
+        {
+          expectedThinkLevel: "low" as const,
+          expectedReasoningLevel: "off" as const,
+        },
+        {
+          expectedThinkLevel: "off" as const,
+          expectedReasoningLevel: "on" as const,
+          thinkingDefault: "off" as const,
+        },
+      ]) {
+        await runReasoningDefaultCase({
+          home,
+          ...scenario,
+        });
+      }
     });
   });
   it("renders model list and status variants across catalog/config combinations", async () => {
@@ -280,26 +299,6 @@ describe("directive behavior", () => {
 
       expect(replyTexts(inlineThinkRes)).toContain("done");
       expect(runEmbeddedPiAgent).toHaveBeenCalledOnce();
-    });
-  });
-  it("applies reasoning defaults based on thinkingDefault configuration", async () => {
-    await withTempHome(async (home) => {
-      for (const scenario of [
-        {
-          expectedThinkLevel: "low" as const,
-          expectedReasoningLevel: "off" as const,
-        },
-        {
-          expectedThinkLevel: "off" as const,
-          expectedReasoningLevel: "on" as const,
-          thinkingDefault: "off" as const,
-        },
-      ]) {
-        await runReasoningDefaultCase({
-          home,
-          ...scenario,
-        });
-      }
     });
   });
   it("passes elevated defaults when sender is approved", async () => {
