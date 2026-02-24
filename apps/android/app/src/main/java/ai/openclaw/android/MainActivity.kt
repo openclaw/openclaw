@@ -1,9 +1,7 @@
 package ai.openclaw.android
 
-import android.Manifest
 import android.content.pm.ApplicationInfo
 import android.os.Bundle
-import android.os.Build
 import android.view.WindowManager
 import android.webkit.WebView
 import androidx.activity.ComponentActivity
@@ -11,7 +9,6 @@ import androidx.activity.compose.setContent
 import androidx.activity.viewModels
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
-import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -32,8 +29,6 @@ class MainActivity : ComponentActivity() {
     val isDebuggable = (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
     WebView.setWebContentsDebuggingEnabled(isDebuggable)
     applyImmersiveMode()
-    requestDiscoveryPermissionsIfNeeded()
-    requestNotificationPermissionIfNeeded()
     NodeForegroundService.start(this)
     permissionRequester = PermissionRequester(this)
     screenCaptureRequester = ScreenCaptureRequester(this)
@@ -92,39 +87,5 @@ class MainActivity : ComponentActivity() {
     controller.systemBarsBehavior =
       WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
     controller.hide(WindowInsetsCompat.Type.systemBars())
-  }
-
-  private fun requestDiscoveryPermissionsIfNeeded() {
-    if (Build.VERSION.SDK_INT >= 33) {
-      val ok =
-        ContextCompat.checkSelfPermission(
-          this,
-          Manifest.permission.NEARBY_WIFI_DEVICES,
-        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-      if (!ok) {
-        requestPermissions(arrayOf(Manifest.permission.NEARBY_WIFI_DEVICES), 100)
-      }
-    } else {
-      val ok =
-        ContextCompat.checkSelfPermission(
-          this,
-          Manifest.permission.ACCESS_FINE_LOCATION,
-        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-      if (!ok) {
-        requestPermissions(arrayOf(Manifest.permission.ACCESS_FINE_LOCATION), 101)
-      }
-    }
-  }
-
-  private fun requestNotificationPermissionIfNeeded() {
-    if (Build.VERSION.SDK_INT < 33) return
-    val ok =
-      ContextCompat.checkSelfPermission(
-        this,
-        Manifest.permission.POST_NOTIFICATIONS,
-      ) == android.content.pm.PackageManager.PERMISSION_GRANTED
-    if (!ok) {
-      requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 102)
-    }
   }
 }
