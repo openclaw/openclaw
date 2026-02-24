@@ -101,6 +101,7 @@ const TARGET_KEYS = [
   "models.providers.*.auth",
   "models.providers.*.authHeader",
   "gateway.reload.mode",
+  "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
   "gateway.controlUi.allowInsecureAuth",
   "gateway.controlUi.dangerouslyDisableDeviceAuth",
   "cron",
@@ -110,6 +111,9 @@ const TARGET_KEYS = [
   "cron.webhook",
   "cron.webhookToken",
   "cron.sessionRetention",
+  "cron.runLog",
+  "cron.runLog.maxBytes",
+  "cron.runLog.keepLines",
   "session",
   "session.scope",
   "session.dmScope",
@@ -150,6 +154,9 @@ const TARGET_KEYS = [
   "session.maintenance.pruneDays",
   "session.maintenance.maxEntries",
   "session.maintenance.rotateBytes",
+  "session.maintenance.resetArchiveRetention",
+  "session.maintenance.maxDiskBytes",
+  "session.maintenance.highWaterBytes",
   "approvals",
   "approvals.exec",
   "approvals.exec.enabled",
@@ -513,6 +520,7 @@ const FINAL_BACKLOG_TARGET_KEYS = [
   "browser.snapshotDefaults.mode",
   "browser.ssrfPolicy",
   "browser.ssrfPolicy.allowPrivateNetwork",
+  "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork",
   "browser.ssrfPolicy.allowedHostnames",
   "browser.ssrfPolicy.hostnameAllowlist",
   "diagnostics.enabled",
@@ -663,6 +671,27 @@ describe("config help copy quality", () => {
     const deprecated = FIELD_HELP["session.maintenance.pruneDays"];
     expect(/deprecated/i.test(deprecated)).toBe(true);
     expect(deprecated.includes("session.maintenance.pruneAfter")).toBe(true);
+
+    const resetRetention = FIELD_HELP["session.maintenance.resetArchiveRetention"];
+    expect(resetRetention.includes(".reset.")).toBe(true);
+    expect(/false/i.test(resetRetention)).toBe(true);
+
+    const maxDisk = FIELD_HELP["session.maintenance.maxDiskBytes"];
+    expect(maxDisk.includes("500mb")).toBe(true);
+
+    const highWater = FIELD_HELP["session.maintenance.highWaterBytes"];
+    expect(highWater.includes("80%")).toBe(true);
+  });
+
+  it("documents cron run-log retention controls", () => {
+    const runLog = FIELD_HELP["cron.runLog"];
+    expect(runLog.includes("cron/runs")).toBe(true);
+
+    const maxBytes = FIELD_HELP["cron.runLog.maxBytes"];
+    expect(maxBytes.includes("2mb")).toBe(true);
+
+    const keepLines = FIELD_HELP["cron.runLog.keepLines"];
+    expect(keepLines.includes("2000")).toBe(true);
   });
 
   it("documents approvals filters and target semantics", () => {

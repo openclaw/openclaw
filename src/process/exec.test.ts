@@ -105,12 +105,12 @@ describe("runCommandWithTimeout", () => {
           "clearInterval(ticker);",
           "process.exit(0);",
           "}",
-          "}, 40);",
+          "}, 12);",
         ].join(" "),
       ],
       {
         timeoutMs: 5_000,
-        noOutputTimeoutMs: 500,
+        noOutputTimeoutMs: 120,
       },
     );
 

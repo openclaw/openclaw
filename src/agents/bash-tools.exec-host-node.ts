@@ -14,7 +14,10 @@ import {
 import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 import { logInfo } from "../logger.js";
-import { requestExecApprovalDecisionForHost } from "./bash-tools.exec-approval-request.js";
+import {
+  registerExecApprovalRequestForHost,
+  waitForExecApprovalDecision,
+} from "./bash-tools.exec-approval-request.js";
 import {
   DEFAULT_APPROVAL_TIMEOUT_MS,
   createApprovalSlug,
@@ -180,24 +183,39 @@ export async function executeNodeHostCommand(
   if (requiresAsk) {
     const approvalId = crypto.randomUUID();
     const approvalSlug = createApprovalSlug(approvalId);
-    const expiresAtMs = Date.now() + DEFAULT_APPROVAL_TIMEOUT_MS;
     const contextKey = `exec:${approvalId}`;
     const noticeSeconds = Math.max(1, Math.round(params.approvalRunningNoticeMs / 1000));
     const warningText = params.warnings.length ? `${params.warnings.join("\n")}\n\n` : "";
+    let expiresAtMs = Date.now() + DEFAULT_APPROVAL_TIMEOUT_MS;
+    let preResolvedDecision: string | null | undefined;
+
+    try {
+      // Register first so the returned approval ID is actionable immediately.
+      const registration = await registerExecApprovalRequestForHost({
+        approvalId,
+        command: params.command,
+        workdir: params.workdir,
+        host: "node",
+        nodeId,
+        security: hostSecurity,
+        ask: hostAsk,
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+      });
+      expiresAtMs = registration.expiresAtMs;
+      preResolvedDecision = registration.finalDecision;
+    } catch (err) {
+      throw new Error(`Exec approval registration failed: ${String(err)}`, { cause: err });
+    }
 
     void (async () => {
-      let decision: string | null = null;
+      let decision: string | null = preResolvedDecision ?? null;
       try {
-        decision = await requestExecApprovalDecisionForHost({
-          approvalId,
-          command: params.command,
-          workdir: params.workdir,
-          host: "node",
-          security: hostSecurity,
-          ask: hostAsk,
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-        });
+        // Some gateways may return a final decision inline during registration.
+        // Only call waitDecision when registration did not already carry one.
+        if (preResolvedDecision === undefined) {
+          decision = await waitForExecApprovalDecision(approvalId);
+        }
       } catch {
         emitExecSystemEvent(
           `Exec denied (node=${nodeId} id=${approvalId}, approval-request-failed): ${params.command}`,

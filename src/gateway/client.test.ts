@@ -132,6 +132,22 @@ function createClientWithIdentity(
   });
 }
 
+function expectSecurityConnectError(
+  onConnectError: ReturnType<typeof vi.fn>,
+  params?: { expectTailscaleHint?: boolean },
+) {
+  expect(onConnectError).toHaveBeenCalledWith(
+    expect.objectContaining({
+      message: expect.stringContaining("SECURITY ERROR"),
+    }),
+  );
+  const error = onConnectError.mock.calls[0]?.[0] as Error;
+  expect(error.message).toContain("openclaw doctor --fix");
+  if (params?.expectTailscaleHint) {
+    expect(error.message).toContain("Tailscale Serve/Funnel");
+  }
+}
+
 describe("GatewayClient security checks", () => {
   beforeEach(() => {
     wsInstances.length = 0;
@@ -146,14 +162,7 @@ describe("GatewayClient security checks", () => {
 
     client.start();
 
-    expect(onConnectError).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: expect.stringContaining("SECURITY ERROR"),
-      }),
-    );
-    const error = onConnectError.mock.calls[0]?.[0] as Error;
-    expect(error.message).toContain("openclaw doctor --fix");
-    expect(error.message).toContain("Tailscale Serve/Funnel");
+    expectSecurityConnectError(onConnectError, { expectTailscaleHint: true });
     expect(wsInstances.length).toBe(0); // No WebSocket created
     client.stop();
   });
@@ -168,13 +177,7 @@ describe("GatewayClient security checks", () => {
     // Should not throw
     expect(() => client.start()).not.toThrow();
 
-    expect(onConnectError).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: expect.stringContaining("SECURITY ERROR"),
-      }),
-    );
-    const error = onConnectError.mock.calls[0]?.[0] as Error;
-    expect(error.message).toContain("openclaw doctor --fix");
+    expectSecurityConnectError(onConnectError);
     expect(wsInstances.length).toBe(0); // No WebSocket created
     client.stop();
   });

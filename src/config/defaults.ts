@@ -410,10 +410,19 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
   if (authMode === "api_key") {
     const nextModels = defaults.models ? { ...defaults.models } : {};
     let modelsMutated = false;
+    const isAnthropicCacheRetentionTarget = (
+      parsed: { provider: string; model: string } | null | undefined,
+    ): parsed is { provider: string; model: string } =>
+      Boolean(
+        parsed &&
+        (parsed.provider === "anthropic" ||
+          (parsed.provider === "amazon-bedrock" &&
+            parsed.model.toLowerCase().includes("anthropic.claude"))),
+      );
 
     for (const [key, entry] of Object.entries(nextModels)) {
       const parsed = parseModelRef(key, "anthropic");
-      if (!parsed || parsed.provider !== "anthropic") {
+      if (!isAnthropicCacheRetentionTarget(parsed)) {
         continue;
       }
       const current = entry ?? {};
@@ -433,7 +442,7 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
     );
     if (primary) {
       const parsedPrimary = parseModelRef(primary, "anthropic");
-      if (parsedPrimary?.provider === "anthropic") {
+      if (isAnthropicCacheRetentionTarget(parsedPrimary)) {
         const key = `${parsedPrimary.provider}/${parsedPrimary.model}`;
         const entry = nextModels[key];
         const current = entry ?? {};

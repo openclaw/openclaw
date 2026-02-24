@@ -16,7 +16,11 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../config/sessions.js", () => ({
-  loadSessionStore: () => ({}),
+  loadSessionStore: () => ({
+    "agent:main:subagent:child-1": { sessionId: "sess-child-1", updatedAt: 1 },
+    "agent:main:subagent:expired-child": { sessionId: "sess-expired", updatedAt: 1 },
+    "agent:main:subagent:retry-budget": { sessionId: "sess-retry", updatedAt: 1 },
+  }),
   resolveAgentIdFromSessionKey: (key: string) => {
     const match = key.match(/^agent:([^:]+)/);
     return match?.[1] ?? "main";

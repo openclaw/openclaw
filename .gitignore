@@ -98,6 +98,7 @@ package-lock.json
 .agents/
 .agents
 .agent/
+skills-lock.json
 
 # Local iOS signing overrides
 apps/ios/LocalSigning.xcconfig

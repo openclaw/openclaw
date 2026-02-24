@@ -681,6 +681,9 @@ export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): Secu
         });
         continue;
       }
+      if (blocked.kind !== "covers" && blocked.kind !== "targets") {
+        continue;
+      }
       const verb = blocked.kind === "covers" ? "covers" : "targets";
       findings.push({
         checkId: "sandbox.dangerous_bind_mount",

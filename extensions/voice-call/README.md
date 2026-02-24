@@ -175,5 +175,7 @@ Actions:
 ## Notes
 
 - Uses webhook signature verification for Twilio/Telnyx/Plivo.
+- Adds replay protection for Twilio and Plivo webhooks (valid duplicate callbacks are ignored safely).
+- Twilio speech turns include a per-turn token so stale/replayed callbacks cannot complete a newer turn.
 - `responseModel` / `responseSystemPrompt` control AI auto-responses.
 - Media streaming requires `ws` and OpenAI Realtime API key.
