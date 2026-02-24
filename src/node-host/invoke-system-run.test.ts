@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { ExecHostResponse } from "../infra/exec-host.js";
 import { handleSystemRunInvoke, formatSystemRunAllowlistMissMessage } from "./invoke-system-run.js";
@@ -146,5 +149,68 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         }),
       }),
     );
+  });
+
+  it("denies ./sh wrapper spoof in allowlist on-miss mode before execution", async () => {
+    const marker = path.join(os.tmpdir(), `openclaw-wrapper-spoof-${process.pid}-${Date.now()}`);
+    const runCommand = vi.fn(async () => {
+      fs.writeFileSync(marker, "executed");
+      return {
+        success: true,
+        stdout: "local-ok",
+        stderr: "",
+        timedOut: false,
+        truncated: false,
+        exitCode: 0,
+        error: null,
+      };
+    });
+    const sendInvokeResult = vi.fn(async () => {});
+    const sendNodeEvent = vi.fn(async () => {});
+
+    await handleSystemRunInvoke({
+      client: {} as never,
+      params: {
+        command: ["./sh", "-lc", "/bin/echo approved-only"],
+        sessionKey: "agent:main:main",
+      },
+      skillBins: {
+        current: async () => new Set<string>(),
+      },
+      execHostEnforced: false,
+      execHostFallbackAllowed: true,
+      resolveExecSecurity: () => "allowlist",
+      resolveExecAsk: () => "on-miss",
+      isCmdExeInvocation: () => false,
+      sanitizeEnv: () => undefined,
+      runCommand,
+      runViaMacAppExecHost: vi.fn(async () => null),
+      sendNodeEvent,
+      buildExecEventPayload: (payload) => payload,
+      sendInvokeResult,
+      sendExecFinishedEvent: vi.fn(async () => {}),
+      preferMacAppExecHost: false,
+    });
+
+    expect(runCommand).not.toHaveBeenCalled();
+    expect(fs.existsSync(marker)).toBe(false);
+    expect(sendNodeEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      "exec.denied",
+      expect.objectContaining({ reason: "approval-required" }),
+    );
+    expect(sendInvokeResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ok: false,
+        error: expect.objectContaining({
+          message: "SYSTEM_RUN_DENIED: approval required",
+        }),
+      }),
+    );
+    try {
+      fs.unlinkSync(marker);
+    } catch {
+      // no-op
+    }
   });
 });
