@@ -200,6 +200,13 @@ function renderMessageImages(images: ImageBlock[]) {
     return nothing;
   }
 
+  const openImage = (url: string) => {
+    const opened = window.open(url, "_blank", "noopener,noreferrer");
+    if (opened) {
+      opened.opener = null;
+    }
+  };
+
   return html`
     <div class="chat-message-images">
       ${images.map(
@@ -208,7 +215,7 @@ function renderMessageImages(images: ImageBlock[]) {
             src=${img.url}
             alt=${img.alt ?? "Attached image"}
             class="chat-message-image"
-            @click=${() => window.open(img.url, "_blank")}
+            @click=${() => openImage(img.url)}
           />
         `,
       )}
