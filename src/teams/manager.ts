@@ -4,7 +4,9 @@
  * Based on OpenClaw Agent Teams Design (2026-02-23)
  */
 
+import { readFile } from "node:fs/promises";
 import { TeamLedger } from "./ledger.js";
+import { getTeamConfigPath } from "./storage.js";
 import type { Task, TeamMember, TeamMessage } from "./types.js";
 
 /**
@@ -81,6 +83,15 @@ interface TeamConfig {
   description?: string;
   /** Agent type for team lead */
   agent_type?: string;
+  /** Lead session key */
+  lead?: string;
+  /** Team metadata */
+  metadata?: {
+    createdAt?: number;
+    updatedAt?: number;
+    status?: string;
+    [key: string]: unknown;
+  };
 }
 
 /**
@@ -594,6 +605,15 @@ export class TeamManager {
 
     const db = this.ledger.getDb();
     db.prepare("DELETE FROM messages").run();
+  }
+
+  /**
+   * Get team configuration from config.json file
+   */
+  async getTeamConfig(): Promise<TeamConfig> {
+    const configPath = getTeamConfigPath(this.stateDir, this.teamName);
+    const content = await readFile(configPath, "utf-8");
+    return JSON.parse(content);
   }
 
   /**

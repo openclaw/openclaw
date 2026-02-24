@@ -77,13 +77,14 @@ describe("TaskCreate Tool", () => {
 
       expect(validateTeamNameOrThrow).toHaveBeenCalledWith("my-team");
       expect(getTeamManager).toHaveBeenCalledWith("my-team", process.cwd());
-      expect(mockManager.createTask).toHaveBeenCalledWith({
-        subject: "Implement feature",
-        description: "Detailed description of the feature",
-        activeForm: undefined,
-        dependsOn: undefined,
-        metadata: undefined,
-      });
+      expect(mockManager.createTask).toHaveBeenCalledWith(
+        "Implement feature",
+        "Detailed description of the feature",
+        {
+          activeForm: undefined,
+          metadata: undefined,
+        },
+      );
 
       const details = result.details as TaskCreateResultData;
       expect(details.taskId).toBe("test-task-uuid-1234");
@@ -145,6 +146,8 @@ describe("TaskCreate Tool", () => {
       });
 
       expect(mockManager.createTask).toHaveBeenCalledWith(
+        "Run tests",
+        "Execute test suite",
         expect.objectContaining({
           activeForm: "Running tests",
         }),
@@ -166,6 +169,8 @@ describe("TaskCreate Tool", () => {
       });
 
       expect(mockManager.createTask).toHaveBeenCalledWith(
+        "Test task",
+        "Test description",
         expect.objectContaining({
           activeForm: undefined,
         }),
@@ -196,6 +201,8 @@ describe("TaskCreate Tool", () => {
       });
 
       expect(mockManager.createTask).toHaveBeenCalledWith(
+        "Fix bug",
+        "Critical bug fix",
         expect.objectContaining({
           metadata,
         }),
@@ -227,6 +234,8 @@ describe("TaskCreate Tool", () => {
       });
 
       expect(mockManager.createTask).toHaveBeenCalledWith(
+        "Complex task",
+        "Task with complex metadata",
         expect.objectContaining({
           metadata,
         }),
@@ -248,6 +257,8 @@ describe("TaskCreate Tool", () => {
       });
 
       expect(mockManager.createTask).toHaveBeenCalledWith(
+        "Test task",
+        "Test description",
         expect.objectContaining({
           metadata: undefined,
         }),
@@ -273,11 +284,11 @@ describe("TaskCreate Tool", () => {
         dependsOn,
       });
 
-      expect(mockManager.createTask).toHaveBeenCalledWith(
-        expect.objectContaining({
-          dependsOn,
-        }),
-      );
+      // Dependencies should be added via addTaskDependency
+      expect(mockManager.addTaskDependency).toHaveBeenCalledTimes(3);
+      expect(mockManager.addTaskDependency).toHaveBeenCalledWith("test-task-uuid-1234", "task-1");
+      expect(mockManager.addTaskDependency).toHaveBeenCalledWith("test-task-uuid-1234", "task-2");
+      expect(mockManager.addTaskDependency).toHaveBeenCalledWith("test-task-uuid-1234", "task-3");
     });
 
     it("should handle empty dependsOn array", async () => {
@@ -296,11 +307,8 @@ describe("TaskCreate Tool", () => {
         dependsOn: [],
       });
 
-      expect(mockManager.createTask).toHaveBeenCalledWith(
-        expect.objectContaining({
-          dependsOn: [],
-        }),
-      );
+      // Empty array should not call addTaskDependency
+      expect(mockManager.addTaskDependency).not.toHaveBeenCalled();
     });
 
     it("should handle missing dependsOn gracefully", async () => {
@@ -318,11 +326,8 @@ describe("TaskCreate Tool", () => {
         description: "Test description",
       });
 
-      expect(mockManager.createTask).toHaveBeenCalledWith(
-        expect.objectContaining({
-          dependsOn: undefined,
-        }),
-      );
+      // Missing dependsOn should not call addTaskDependency
+      expect(mockManager.addTaskDependency).not.toHaveBeenCalled();
     });
 
     it("should pass dependencies through to manager", async () => {
@@ -342,10 +347,14 @@ describe("TaskCreate Tool", () => {
         dependsOn,
       });
 
-      expect(mockManager.createTask).toHaveBeenCalledWith(
-        expect.objectContaining({
-          dependsOn,
-        }),
+      expect(mockManager.addTaskDependency).toHaveBeenCalledTimes(2);
+      expect(mockManager.addTaskDependency).toHaveBeenCalledWith(
+        "test-task-uuid-1234",
+        "existing-task-1",
+      );
+      expect(mockManager.addTaskDependency).toHaveBeenCalledWith(
+        "test-task-uuid-1234",
+        "existing-task-2",
       );
     });
   });
@@ -516,11 +525,10 @@ describe("TaskCreate Tool", () => {
         dependsOn: ["task-1", "task-2"],
       });
 
-      expect(mockManager.createTask).toHaveBeenCalledWith(
-        expect.objectContaining({
-          dependsOn: ["task-1", "task-2"],
-        }),
-      );
+      // Verify addTaskDependency was called for each dependency
+      expect(mockManager.addTaskDependency).toHaveBeenCalledTimes(2);
+      expect(mockManager.addTaskDependency).toHaveBeenCalledWith("test-task-uuid-1234", "task-1");
+      expect(mockManager.addTaskDependency).toHaveBeenCalledWith("test-task-uuid-1234", "task-2");
       expect(result.details.taskId).toBe("test-task-uuid-1234");
       expect((result.details as TaskCreateResultData).status).toBe("pending");
     });

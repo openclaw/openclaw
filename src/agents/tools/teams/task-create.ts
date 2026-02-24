@@ -43,19 +43,23 @@ export function createTaskCreateTool(_opts?: { agentSessionKey?: string }): AnyA
       const manager = getTeamManager(teamName, teamsDir);
 
       // Create task
-      const taskId = manager.createTask({
-        subject,
-        description,
+      const task = manager.createTask(subject, description, {
         activeForm,
-        dependsOn,
         metadata,
       });
 
+      // Handle dependsOn if provided
+      if (dependsOn && dependsOn.length > 0) {
+        for (const depId of dependsOn) {
+          manager.addTaskDependency(task.id, depId);
+        }
+      }
+
       return jsonResult({
-        taskId: taskId.id,
+        taskId: task.id,
         teamName,
         status: "pending",
-        message: `Task '${subject}' created with ID ${taskId.id}`,
+        message: `Task '${subject}' created with ID ${task.id}`,
       });
     },
   };
