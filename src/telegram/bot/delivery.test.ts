@@ -278,6 +278,25 @@ describe("deliverReplies", () => {
     );
   });
 
+  it("throws when formatted and plain fallback text are both empty", async () => {
+    const runtime = { error: vi.fn(), log: vi.fn() };
+    const sendMessage = vi.fn();
+    const bot = { api: { sendMessage } } as unknown as Bot;
+
+    await expect(
+      deliverReplies({
+        replies: [{ text: "   " }],
+        chatId: "123",
+        token: "tok",
+        runtime,
+        bot,
+        replyToMode: "off",
+        textLimit: 4000,
+      }),
+    ).rejects.toThrow("empty formatted text and empty plain fallback");
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("uses reply_to_message_id when quote text is provided", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({
