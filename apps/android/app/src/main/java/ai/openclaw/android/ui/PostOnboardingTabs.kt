@@ -1,9 +1,5 @@
 package ai.openclaw.android.ui
 
-import android.Manifest
-import android.content.pm.PackageManager
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
@@ -30,8 +26,6 @@ import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -47,10 +41,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
 import ai.openclaw.android.MainViewModel
 
 private enum class HomeTab(
@@ -122,8 +114,8 @@ fun PostOnboardingTabs(viewModel: MainViewModel, modifier: Modifier = Modifier) 
       when (activeTab) {
         HomeTab.Connect -> ConnectTabScreen(viewModel = viewModel)
         HomeTab.Chat -> ChatSheet(viewModel = viewModel)
-        HomeTab.Voice -> VoiceTabScreen(viewModel = viewModel)
-        HomeTab.Screen -> ScreenTabScreen(viewModel = viewModel)
+        HomeTab.Voice -> ComingSoonTabScreen(label = "VOICE", title = "Coming soon", description = "Voice mode is coming soon.")
+        HomeTab.Screen -> ComingSoonTabScreen(label = "SCREEN", title = "Coming soon", description = "Screen mode is coming soon.")
         HomeTab.Settings -> SettingsSheet(viewModel = viewModel)
       }
     }
@@ -279,85 +271,20 @@ private fun BottomTabBar(
 }
 
 @Composable
-private fun VoiceTabScreen(viewModel: MainViewModel) {
-  val context = LocalContext.current
-  val talkEnabled by viewModel.talkEnabled.collectAsState()
-  val talkStatusText by viewModel.talkStatusText.collectAsState()
-  val talkIsListening by viewModel.talkIsListening.collectAsState()
-  val talkIsSpeaking by viewModel.talkIsSpeaking.collectAsState()
-  val seamColorArgb by viewModel.seamColorArgb.collectAsState()
-
-  val seamColor = remember(seamColorArgb) { Color(seamColorArgb) }
-
-  val audioPermissionLauncher =
-    rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-      if (granted) {
-        viewModel.setTalkEnabled(true)
-      }
-    }
-
+private fun ComingSoonTabScreen(
+  label: String,
+  title: String,
+  description: String,
+) {
   Box(modifier = Modifier.fillMaxSize().padding(horizontal = 22.dp, vertical = 18.dp)) {
-    if (talkEnabled) {
-      TalkOrbOverlay(
-        seamColor = seamColor,
-        statusText = talkStatusText,
-        isListening = talkIsListening,
-        isSpeaking = talkIsSpeaking,
-        modifier = Modifier.align(Alignment.Center),
-      )
-    } else {
-      Column(
-        modifier = Modifier.align(Alignment.Center),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-      ) {
-        Text("VOICE", style = mobileCaption1.copy(fontWeight = FontWeight.Bold), color = mobileAccent)
-        Text("Talk Mode", style = mobileTitle1, color = mobileText)
-        Text(
-          "Enable voice controls and watch live listening/speaking state.",
-          style = mobileBody,
-          color = mobileTextSecondary,
-        )
-      }
-    }
-
-    Button(
-      onClick = {
-        if (talkEnabled) {
-          viewModel.setTalkEnabled(false)
-          return@Button
-        }
-        val micOk =
-          ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) ==
-            PackageManager.PERMISSION_GRANTED
-        if (micOk) {
-          viewModel.setTalkEnabled(true)
-        } else {
-          audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-        }
-      },
-      modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth(),
-      shape = RoundedCornerShape(14.dp),
-      colors =
-        ButtonDefaults.buttonColors(
-          containerColor = if (talkEnabled) mobileDanger else mobileAccent,
-          contentColor = Color.White,
-        ),
+    Column(
+      modifier = Modifier.align(Alignment.Center),
+      horizontalAlignment = Alignment.CenterHorizontally,
+      verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-      Text(
-        if (talkEnabled) "Disable Talk Mode" else "Enable Talk Mode",
-        style = mobileHeadline.copy(fontWeight = FontWeight.Bold),
-      )
+      Text(label, style = mobileCaption1.copy(fontWeight = FontWeight.Bold), color = mobileAccent)
+      Text(title, style = mobileTitle1, color = mobileText)
+      Text(description, style = mobileBody, color = mobileTextSecondary)
     }
-  }
-}
-
-@Composable
-private fun ScreenTabScreen(viewModel: MainViewModel) {
-  val cameraFlashToken by viewModel.cameraFlashToken.collectAsState()
-
-  Box(modifier = Modifier.fillMaxSize()) {
-    CanvasScreen(viewModel = viewModel, modifier = Modifier.fillMaxSize())
-    CameraFlashOverlay(token = cameraFlashToken, modifier = Modifier.fillMaxSize())
   }
 }
