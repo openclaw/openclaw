@@ -228,6 +228,7 @@ export async function ensureSandboxBrowser(params: {
       },
       configHash: expectedHash,
       includeBinds: false,
+      bindSourceRoots: [params.workspaceDir, params.agentWorkspaceDir],
     });
     const mainMountSuffix =
       params.cfg.workspaceAccess === "ro" && params.workspaceDir === params.agentWorkspaceDir
