@@ -142,6 +142,12 @@ describe("gateway plugin HTTP auth boundary", () => {
       run: async () => {
         const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
           const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+          if (pathname === "/api/channels") {
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "application/json; charset=utf-8");
+            res.end(JSON.stringify({ ok: true, route: "channel-root" }));
+            return true;
+          }
           if (pathname === "/api/channels/nostr/default/profile") {
             res.statusCode = 200;
             res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -177,6 +183,16 @@ describe("gateway plugin HTTP auth boundary", () => {
         );
         expect(unauthenticated.res.statusCode).toBe(401);
         expect(unauthenticated.getBody()).toContain("Unauthorized");
+        expect(handlePluginRequest).not.toHaveBeenCalled();
+
+        const unauthenticatedRoot = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({ path: "/api/channels" }),
+          unauthenticatedRoot.res,
+        );
+        expect(unauthenticatedRoot.res.statusCode).toBe(401);
+        expect(unauthenticatedRoot.getBody()).toContain("Unauthorized");
         expect(handlePluginRequest).not.toHaveBeenCalled();
 
         const authenticated = createResponse();
