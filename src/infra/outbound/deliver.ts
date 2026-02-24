@@ -278,11 +278,46 @@ const chooseDefaultOwnerAgent = (text: string): string =>
     ? "ava-product-manager"
     : "cb-router";
 
-const normalizeMcBaseUrl = (): string =>
-  (process.env.MC_APP_BASE_URL ?? "https://mission-control.local").replace(/\/$/, "");
+let mcBindingLogEmitted = false;
+
+const resolveMcTimeoutMs = (): number => {
+  const parsed = Number(process.env.MC_TIMEOUT_MS ?? "7000");
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 7000;
+  }
+  return Math.floor(parsed);
+};
+
+const deriveAppBaseFromApiUrl = (apiUrl: string): string => {
+  const trimmed = apiUrl.replace(/\/$/, "");
+  return trimmed.replace(/\/api$/i, "");
+};
+
+const resolveMcBaseUrl = (): string | null => {
+  const explicit = process.env.MC_APP_BASE_URL?.trim();
+  if (explicit) {
+    return explicit.replace(/\/$/, "");
+  }
+  const api = process.env.MC_API_URL?.trim();
+  if (!api) {
+    return null;
+  }
+  return deriveAppBaseFromApiUrl(api);
+};
+
+const missingMcVars = (): string[] => {
+  const missing: string[] = [];
+  if (!process.env.MC_API_URL?.trim()) {
+    missing.push("MC_API_URL");
+  }
+  if (!process.env.MC_API_TOKEN?.trim()) {
+    missing.push("MC_API_TOKEN");
+  }
+  return missing;
+};
 
 const buildBlockedPacket = (reason: string): string =>
-  `BLOCKED PACKET\nMissing requirement: ${reason}\nRequired next step: restore Mission Control connectivity/credentials and retry.`;
+  `BLOCKED PACKET\nMissing requirement: ${reason}\nRequired next step: set required Mission Control env vars and retry.`;
 
 const ensureMcLinkOnPacket = (text: string, taskLink?: string): string => {
   if (!taskLink) {
@@ -298,21 +333,35 @@ const ensureMcLinkOnPacket = (text: string, taskLink?: string): string => {
 };
 
 const createMissionControlClient = (): MissionControlClient => {
-  const apiBase = process.env.MC_API_URL?.replace(/\/$/, "");
-  const token = process.env.MC_API_TOKEN;
-  const appBase = normalizeMcBaseUrl();
+  const apiBase = process.env.MC_API_URL?.trim().replace(/\/$/, "");
+  const token = process.env.MC_API_TOKEN?.trim();
+  const appBase = resolveMcBaseUrl();
+  const timeoutMs = resolveMcTimeoutMs();
+  const missing = missingMcVars();
+
+  if (missing.length === 0 && !mcBindingLogEmitted && apiBase && token) {
+    console.log(`[MC_BINDING] enabled url=${apiBase} token=present timeout_ms=${timeoutMs}`);
+    mcBindingLogEmitted = true;
+  }
+
   return {
     createTask: async ({ title, type, ownerAgent, nextAction, status }) => {
       if (!apiBase || !token) {
-        throw new Error("MC connectivity / credentials missing (MC_API_URL or MC_API_TOKEN)");
+        throw new Error(`Missing required vars: ${missingMcVars().join(", ")}`);
       }
       const res = await fetch(`${apiBase}/tasks`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
+          ...(process.env.MC_TENANT?.trim()
+            ? {
+                "X-MC-Tenant": process.env.MC_TENANT.trim(),
+              }
+            : {}),
         },
         body: JSON.stringify({ title, type, ownerAgent, nextAction, status }),
+        signal: AbortSignal.timeout(timeoutMs),
       });
       if (!res.ok) {
         throw new Error(`MC task create failed: HTTP ${res.status}`);
@@ -322,22 +371,29 @@ const createMissionControlClient = (): MissionControlClient => {
       if (!taskId) {
         throw new Error("MC task create failed: missing taskId in response");
       }
+      const resolvedAppBase = appBase ?? deriveAppBaseFromApiUrl(apiBase);
       return {
         taskId,
-        link: json.link ?? `${appBase}/tasks/${taskId}`,
+        link: json.link ?? `${resolvedAppBase}/tasks/${taskId}`,
       };
     },
     ensureLeaseActive: async ({ taskId, agentId }) => {
       if (!apiBase || !token) {
-        throw new Error("MC connectivity / credentials missing (MC_API_URL or MC_API_TOKEN)");
+        throw new Error(`Missing required vars: ${missingMcVars().join(", ")}`);
       }
       const res = await fetch(`${apiBase}/tasks/${taskId}/lease`, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
           "Content-Type": "application/json",
+          ...(process.env.MC_TENANT?.trim()
+            ? {
+                "X-MC-Tenant": process.env.MC_TENANT.trim(),
+              }
+            : {}),
         },
         body: JSON.stringify({ agentId, state: "ACTIVE" }),
+        signal: AbortSignal.timeout(timeoutMs),
       });
       if (!res.ok) {
         throw new Error(`MC lease activation failed: HTTP ${res.status}`);
@@ -391,7 +447,18 @@ export async function ensureMissionControlBinding(params: {
   }
 
   if (!taskLink) {
-    taskLink = `${normalizeMcBaseUrl()}/tasks/${taskId}`;
+    const appBase = resolveMcBaseUrl();
+    if (!appBase) {
+      return {
+        proceed: false,
+        text: buildBlockedPacket(
+          "Missing required vars: MC_API_URL (or MC_APP_BASE_URL for link formatting)",
+        ),
+        taskId,
+        blockedReason: "Missing required vars: MC_API_URL (or MC_APP_BASE_URL for link formatting)",
+      };
+    }
+    taskLink = `${appBase}/tasks/${taskId}`;
   }
 
   try {
