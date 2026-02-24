@@ -303,7 +303,7 @@ describe("gateway server auth/connect", () => {
       try {
         const ws = await openWs(port);
         const handshakeTimeoutMs = getHandshakeTimeoutMs();
-        const closed = await waitForWsClose(ws, handshakeTimeoutMs + 120);
+        const closed = await waitForWsClose(ws, handshakeTimeoutMs + 60);
         expect(closed).toBe(true);
       } finally {
         if (prevHandshakeTimeout === undefined) {
