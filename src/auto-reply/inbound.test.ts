@@ -112,7 +112,9 @@ describe("finalizeInboundContext", () => {
     expect(out.Body).toBe("a\nb\nc");
     expect(out.RawBody).toBe("raw\nline");
     // Prefer clean text over legacy envelope-shaped Body when RawBody is present.
-    expect(out.BodyForAgent).toBe("raw\nline");
+    // BodyForAgent gets a timestamp prefix (see #25334).
+    expect(out.BodyForAgent).toContain("raw\nline");
+    expect(out.BodyForAgent).toMatch(/^\[.*\d{4}-\d{2}-\d{2} \d{2}:\d{2}.*\] raw\nline$/);
     expect(out.BodyForCommands).toBe("raw\nline");
     expect(out.CommandAuthorized).toBe(false);
     expect(out.ChatType).toBe("channel");
@@ -144,7 +146,9 @@ describe("finalizeInboundContext", () => {
 
     const out = finalizeInboundContext(ctx);
     expect(out.Body).toBe("C:\\Work\\nxxx\\README.md");
-    expect(out.BodyForAgent).toBe("C:\\Work\\nxxx\\README.md");
+    // BodyForAgent gets a timestamp prefix (see #25334).
+    expect(out.BodyForAgent).toContain("C:\\Work\\nxxx\\README.md");
+    expect(out.BodyForAgent).toMatch(/^\[.*\d{4}-\d{2}-\d{2} \d{2}:\d{2}.*\]/);
     expect(out.BodyForCommands).toBe("C:\\Work\\nxxx\\README.md");
   });
 
