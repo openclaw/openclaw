@@ -145,6 +145,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     const record = approvalManager.create(
       {
         host: "node",
+        nodeId: "node-1",
         command: "echo SAFE",
         cwd: null,
         agentId: null,
@@ -170,6 +171,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     };
 
     const first = sanitizeSystemRunParamsForForwarding({
+      nodeId: "node-1",
       rawParams: params,
       client,
       execApprovalManager: approvalManager,
@@ -178,6 +180,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     expectAllowOnceForwardingResult(first);
 
     const second = sanitizeSystemRunParamsForForwarding({
+      nodeId: "node-1",
       rawParams: params,
       client,
       execApprovalManager: approvalManager,

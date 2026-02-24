@@ -40,7 +40,7 @@ const TELEGRAM_MEDIA_SSRF_POLICY = {
   // resolution maps to private/internal ranges in restricted networks.
   allowedHostnames: ["api.telegram.org"],
   allowRfc2544BenchmarkRange: true,
-} as const;
+};
 
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
