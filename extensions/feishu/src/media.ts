@@ -359,18 +359,7 @@ export async function sendAudioFeishu(params: {
   accountId?: string;
 }): Promise<SendMediaResult> {
   const { cfg, to, fileKey, duration, replyToMessageId, accountId } = params;
-  const account = resolveFeishuAccount({ cfg, accountId });
-  if (!account.configured) {
-    throw new Error(`Feishu account "${account.accountId}" not configured`);
-  }
-
-  const client = createFeishuClient(account);
-  const receiveId = normalizeFeishuTarget(to);
-  if (!receiveId) {
-    throw new Error(`Invalid Feishu target: ${to}`);
-  }
-
-  const receiveIdType = resolveReceiveIdType(receiveId);
+  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
   const contentObj: Record<string, unknown> = { file_key: fileKey };
   if (typeof duration === "number" && duration > 0) {
     contentObj.duration = String(duration);
