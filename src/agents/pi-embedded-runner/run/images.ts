@@ -2,7 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import { resolveUserPath } from "../../../utils.js";
-import { loadWebMedia } from "../../../web/media.js";
+import { getDefaultLocalRoots, loadWebMedia } from "../../../web/media.js";
 import type { ImageSanitizationLimits } from "../../image-sanitization.js";
 import {
   createSandboxBridgeReadFile,
@@ -233,14 +233,17 @@ export async function loadImageFromRef(
       });
     }
 
-    // loadWebMedia handles local file paths (including file:// URLs)
+    // loadWebMedia handles local file paths (including file:// URLs).
+    // Pass the workspace dir as an allowed local root so the workspace-* guard
+    // in assertLocalMediaAllowed does not block the agent's own workspace.
+    const localRoots = [...getDefaultLocalRoots(), workspaceDir];
     const media = options?.sandbox
       ? await loadWebMedia(targetPath, {
           maxBytes: options.maxBytes,
           sandboxValidated: true,
           readFile: createSandboxBridgeReadFile({ sandbox: options.sandbox }),
         })
-      : await loadWebMedia(targetPath, options?.maxBytes);
+      : await loadWebMedia(targetPath, options?.maxBytes, { localRoots });
 
     if (media.kind !== "image") {
       log.debug(`Native image: not an image file: ${targetPath} (got ${media.kind})`);
