@@ -251,6 +251,9 @@ describe("exec approvals safe bins", () => {
   }
 
   it("supports injected trusted safe-bin dirs for tests/callers", () => {
+    if (process.platform === "win32") {
+      return; // trustedSafeBinDirs uses Unix paths; path.resolve differs on Windows
+    }
     const ok = isSafeBinUsage({
       argv: ["jq", ".foo"],
       resolution: {
@@ -396,6 +399,9 @@ describe("exec approvals safe bins", () => {
   });
 
   it("threads trusted safe-bin dirs through allowlist evaluation", () => {
+    if (process.platform === "win32") {
+      return; // trustedSafeBinDirs uses Unix paths; path.resolve differs on Windows
+    }
     const analysis = {
       ok: true as const,
       segments: [
