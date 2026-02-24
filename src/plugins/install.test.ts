@@ -513,6 +513,50 @@ describe("installPluginFromDir", () => {
     expect(manifest.devDependencies?.openclaw).toBeUndefined();
     expect(manifest.devDependencies?.vitest).toBe("^3.0.0");
   });
+
+  it("uses openclaw.plugin.json id as install key when it differs from package name", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/cognee-openclaw",
+        version: "0.0.1",
+        openclaw: { extensions: ["./dist/index.js"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export {};", "utf-8");
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "memory-cognee",
+        configSchema: { type: "object", properties: {} },
+      }),
+      "utf-8",
+    );
+
+    const infoMessages: string[] = [];
+    const res = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+      logger: { info: (msg: string) => infoMessages.push(msg), warn: () => {} },
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.pluginId).toBe("memory-cognee");
+    expect(res.targetDir).toBe(path.join(extensionsDir, "memory-cognee"));
+    expect(
+      infoMessages.some((msg) =>
+        msg.includes(
+          'Plugin manifest id "memory-cognee" differs from npm package name "cognee-openclaw"',
+        ),
+      ),
+    ).toBe(true);
+  });
 });
 
 describe("installPluginFromNpmSpec", () => {
