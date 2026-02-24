@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
-import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -72,12 +71,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
-import androidx.core.net.toUri
 import ai.openclaw.android.LocationMode
 import ai.openclaw.android.MainViewModel
 import ai.openclaw.android.R
-import java.util.Locale
-import org.json.JSONObject
 
 private enum class OnboardingStep(val index: Int, val label: String) {
   Welcome(1, "Welcome"),
@@ -90,19 +86,6 @@ private enum class GatewayInputMode {
   SetupCode,
   Manual,
 }
-
-private data class ParsedGateway(
-  val host: String,
-  val port: Int,
-  val tls: Boolean,
-  val displayUrl: String,
-)
-
-private data class SetupCodePayload(
-  val url: String,
-  val token: String?,
-  val password: String?,
-)
 
 private val onboardingBackgroundGradient =
   listOf(
@@ -377,7 +360,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
             )
           OnboardingStep.FinalCheck ->
             FinalStep(
-              parsedGateway = parseGateway(gatewayUrl),
+              parsedGateway = parseGatewayEndpoint(gatewayUrl),
               statusText = statusText,
               isConnected = isConnected,
               serverName = serverName,
@@ -444,12 +427,12 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
             Button(
               onClick = {
                 if (gatewayInputMode == GatewayInputMode.SetupCode) {
-                  val parsedSetup = decodeSetupCode(setupCode)
+                  val parsedSetup = decodeGatewaySetupCode(setupCode)
                   if (parsedSetup == null) {
                     gatewayError = "Invalid setup code."
                     return@Button
                   }
-                  val parsedGateway = parseGateway(parsedSetup.url)
+                  val parsedGateway = parseGatewayEndpoint(parsedSetup.url)
                   if (parsedGateway == null) {
                     gatewayError = "Setup code has invalid gateway URL."
                     return@Button
@@ -458,8 +441,8 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                   parsedSetup.token?.let { viewModel.setGatewayToken(it) }
                   gatewayPassword = parsedSetup.password.orEmpty()
                 } else {
-                  val manualUrl = composeManualGatewayUrl(manualHost, manualPort, manualTls)
-                  val parsedGateway = manualUrl?.let(::parseGateway)
+                  val manualUrl = composeGatewayManualUrl(manualHost, manualPort, manualTls)
+                  val parsedGateway = manualUrl?.let(::parseGatewayEndpoint)
                   if (parsedGateway == null) {
                     gatewayError = "Manual endpoint is invalid."
                     return@Button
@@ -524,7 +507,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
             } else {
               Button(
                 onClick = {
-                  val parsed = parseGateway(gatewayUrl)
+                  val parsed = parseGatewayEndpoint(gatewayUrl)
                   if (parsed == null) {
                     step = OnboardingStep.Gateway
                     gatewayError = "Invalid gateway URL."
@@ -639,8 +622,8 @@ private fun GatewayStep(
   onTokenChange: (String) -> Unit,
   onPasswordChange: (String) -> Unit,
 ) {
-  val resolvedEndpoint = remember(setupCode) { decodeSetupCode(setupCode)?.url?.let { parseGateway(it)?.displayUrl } }
-  val manualResolvedEndpoint = remember(manualHost, manualPort, manualTls) { composeManualGatewayUrl(manualHost, manualPort, manualTls)?.let { parseGateway(it)?.displayUrl } }
+  val resolvedEndpoint = remember(setupCode) { decodeGatewaySetupCode(setupCode)?.url?.let { parseGatewayEndpoint(it)?.displayUrl } }
+  val manualResolvedEndpoint = remember(manualHost, manualPort, manualTls) { composeGatewayManualUrl(manualHost, manualPort, manualTls)?.let { parseGatewayEndpoint(it)?.displayUrl } }
 
   StepShell(title = "Gateway Connection") {
     GuideBlock(title = "Get setup code + gateway URL") {
@@ -1046,7 +1029,7 @@ private fun PermissionToggleRow(
 
 @Composable
 private fun FinalStep(
-  parsedGateway: ParsedGateway?,
+  parsedGateway: GatewayEndpointConfig?,
   statusText: String,
   isConnected: Boolean,
   serverName: String?,
@@ -1132,62 +1115,6 @@ private fun Bullet(text: String) {
   }
 }
 
-private fun parseGateway(rawInput: String): ParsedGateway? {
-  val raw = rawInput.trim()
-  if (raw.isEmpty()) return null
-
-  val normalized = if (raw.contains("://")) raw else "https://$raw"
-  val uri = normalized.toUri()
-  val host = uri.host?.trim().orEmpty()
-  if (host.isEmpty()) return null
-
-  val scheme = uri.scheme?.trim()?.lowercase(Locale.US).orEmpty()
-  val tls =
-    when (scheme) {
-      "ws", "http" -> false
-      "wss", "https" -> true
-      else -> true
-    }
-  val port = uri.port.takeIf { it in 1..65535 } ?: 18789
-  val displayUrl = "${if (tls) "https" else "http"}://$host:$port"
-
-  return ParsedGateway(host = host, port = port, tls = tls, displayUrl = displayUrl)
-}
-
-private fun decodeSetupCode(rawInput: String): SetupCodePayload? {
-  val trimmed = rawInput.trim()
-  if (trimmed.isEmpty()) return null
-
-  val padded =
-    trimmed
-      .replace('-', '+')
-      .replace('_', '/')
-      .let { normalized ->
-        val remainder = normalized.length % 4
-        if (remainder == 0) normalized else normalized + "=".repeat(4 - remainder)
-      }
-
-  return try {
-    val decoded = String(Base64.decode(padded, Base64.DEFAULT), Charsets.UTF_8)
-    val obj = JSONObject(decoded)
-    val url = obj.optString("url").trim()
-    if (url.isEmpty()) return null
-    val token = obj.optString("token").trim().ifEmpty { null }
-    val password = obj.optString("password").trim().ifEmpty { null }
-    SetupCodePayload(url = url, token = token, password = password)
-  } catch (_: Throwable) {
-    null
-  }
-}
-
 private fun isPermissionGranted(context: Context, permission: String): Boolean {
   return ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
-}
-
-private fun composeManualGatewayUrl(hostInput: String, portInput: String, tls: Boolean): String? {
-  val host = hostInput.trim()
-  val port = portInput.trim().toIntOrNull() ?: return null
-  if (host.isEmpty() || port !in 1..65535) return null
-  val scheme = if (tls) "https" else "http"
-  return "$scheme://$host:$port"
 }
