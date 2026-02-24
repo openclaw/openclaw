@@ -2,10 +2,10 @@ import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { AssistantIdentity } from "../assistant-identity.ts";
 import { toSanitizedMarkdownHtml } from "../markdown.ts";
+import { openExternalUrlSafe } from "../open-external-url.ts";
 import { detectTextDirection } from "../text-direction.ts";
 import type { MessageGroup } from "../types/chat-types.ts";
 import { renderCopyAsMarkdownButton } from "./copy-as-markdown.ts";
-import { resolveSafeImageOpenUrl } from "./image-open.ts";
 import {
   extractTextCached,
   extractThinkingCached,
@@ -202,15 +202,7 @@ function renderMessageImages(images: ImageBlock[]) {
   }
 
   const openImage = (url: string) => {
-    const safeUrl = resolveSafeImageOpenUrl(url, window.location.href);
-    if (!safeUrl) {
-      return;
-    }
-
-    const opened = window.open(safeUrl, "_blank", "noopener,noreferrer");
-    if (opened) {
-      opened.opener = null;
-    }
+    openExternalUrlSafe(url, { allowDataImage: true });
   };
 
   return html`
