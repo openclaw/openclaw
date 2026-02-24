@@ -4,8 +4,7 @@ import {
   addAllowlistEntry,
   type ExecAsk,
   type ExecSecurity,
-  buildSafeBinsShellCommand,
-  buildSafeShellCommand,
+  buildEnforcedShellCommand,
   evaluateShellAllowlist,
   maxAsk,
   minSecurity,
@@ -83,6 +82,18 @@ export async function processGatewayAllowlist(
   const analysisOk = allowlistEval.analysisOk;
   const allowlistSatisfied =
     hostSecurity === "allowlist" && analysisOk ? allowlistEval.allowlistSatisfied : false;
+  let enforcedCommand: string | undefined;
+  if (hostSecurity === "allowlist" && analysisOk && allowlistSatisfied) {
+    const enforced = buildEnforcedShellCommand({
+      command: params.command,
+      segments: allowlistEval.segments,
+      platform: process.platform,
+    });
+    if (!enforced.ok || !enforced.command) {
+      throw new Error(`exec denied: allowlist execution plan unavailable (${enforced.reason})`);
+    }
+    enforcedCommand = enforced.command;
+  }
   const obfuscation = detectCommandObfuscation(params.command);
   if (obfuscation.detected) {
     logInfo(`exec: obfuscation detected (gateway): ${obfuscation.reasons.join(", ")}`);
@@ -216,6 +227,7 @@ export async function processGatewayAllowlist(
       try {
         run = await runExecProcess({
           command: params.command,
+          execCommand: enforcedCommand,
           workdir: params.workdir,
           env: params.env,
           sandbox: undefined,
@@ -294,43 +306,7 @@ export async function processGatewayAllowlist(
     throw new Error("exec denied: allowlist miss");
   }
 
-  let execCommandOverride: string | undefined;
-  // If allowlist uses safeBins, sanitize only those stdin-only segments:
-  // disable glob/var expansion by forcing argv tokens to be literal via single-quoting.
-  if (
-    hostSecurity === "allowlist" &&
-    analysisOk &&
-    allowlistSatisfied &&
-    allowlistEval.segmentSatisfiedBy.some((by) => by === "safeBins")
-  ) {
-    const safe = buildSafeBinsShellCommand({
-      command: params.command,
-      segments: allowlistEval.segments,
-      segmentSatisfiedBy: allowlistEval.segmentSatisfiedBy,
-      platform: process.platform,
-    });
-    if (!safe.ok || !safe.command) {
-      // Fallback: quote everything (safe, but may change glob behavior).
-      const fallback = buildSafeShellCommand({
-        command: params.command,
-        platform: process.platform,
-      });
-      if (!fallback.ok || !fallback.command) {
-        throw new Error(`exec denied: safeBins sanitize failed (${safe.reason ?? "unknown"})`);
-      }
-      params.warnings.push(
-        "Warning: safeBins hardening used fallback quoting due to parser mismatch.",
-      );
-      execCommandOverride = fallback.command;
-    } else {
-      params.warnings.push(
-        "Warning: safeBins hardening disabled glob/variable expansion for stdin-only segments.",
-      );
-      execCommandOverride = safe.command;
-    }
-  }
-
   recordMatchedAllowlistUse(allowlistEval.segments[0]?.resolution?.resolvedPath);
 
-  return { execCommandOverride };
+  return { execCommandOverride: enforcedCommand };
 }
