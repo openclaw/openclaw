@@ -276,3 +276,42 @@ export async function uploadMattermostFile(
   }
   return info;
 }
+
+/**
+ * Update an existing Mattermost post (partial patch).
+ * Requires `edit_post` (own) or `edit_others_posts` permission.
+ * @see https://api.mattermost.com/#tag/posts/operation/PatchPost
+ */
+export async function patchMattermostPost(
+  client: MattermostClient,
+  params: {
+    postId: string;
+    message?: string;
+    props?: Record<string, unknown>;
+    fileIds?: string[];
+  },
+): Promise<MattermostPost> {
+  const body: Record<string, unknown> = {};
+  if (params.message !== undefined) body.message = params.message;
+  if (params.props !== undefined) body.props = params.props;
+  if (params.fileIds !== undefined) body.file_ids = params.fileIds;
+
+  return await client.request<MattermostPost>(`/posts/${params.postId}/patch`, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+}
+
+/**
+ * Delete a Mattermost post.
+ * Requires `delete_post` (own) or `delete_others_posts` permission.
+ * @see https://api.mattermost.com/#tag/posts/operation/DeletePost
+ */
+export async function deleteMattermostPost(
+  client: MattermostClient,
+  postId: string,
+): Promise<void> {
+  await client.request<unknown>(`/posts/${postId}`, {
+    method: "DELETE",
+  });
+}
