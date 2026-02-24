@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Providers/OpenRouter: when thinking is explicitly off, avoid injecting `reasoning.effort` so reasoning-required models can use provider defaults instead of failing request validation. (#24863) Thanks @DevSecTim.
 - Status/Pairing recovery: show explicit pairing-approval command hints (including requestId when safe) when gateway probe failures report pairing-required closures. (#24771) Thanks @markmusson.
 - Discord/Threading: recover missing thread parent IDs by refetching thread metadata before resolving parent channel context. (#24897) Thanks @z-x-yang.
 - Web UI/i18n: load and hydrate saved locale translations during startup so non-English sessions apply immediately without manual toggling. (#24795) Thanks @chilu18.
