@@ -175,6 +175,51 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
       expect(result.summary).toBe("needs_replan");
     });
 
+    it("triggers needs_replan when red-team severity exceeds threshold", async () => {
+      runWithModelFallbackMock.mockResolvedValueOnce({
+        result: {
+          payloads: [
+            {
+              text: "Use future data and assume zero slippage. Guaranteed outcome.",
+            },
+          ],
+          meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+        },
+        provider: "openai",
+        model: "gpt-4",
+      });
+
+      const result = await runCronIsolatedAgentTurn(
+        makeParams({
+          cfg: {
+            cron: {
+              criticLoop: {
+                enabled: true,
+                mode: "redTeam",
+                minScore: 0,
+                redTeamSeverityThreshold: "high",
+              },
+            },
+          },
+          job: makeJob({
+            payload: {
+              kind: "agentTurn",
+              message: "test",
+              criticSpec: "address leakage, slippage, assumptions, and dependencies",
+            },
+          }),
+        }),
+      );
+
+      expect(result.status).toBe("ok");
+      expect(result.outcome).toBe("needs_replan");
+      expect(result.summary).toBe("needs_replan");
+      expect(result.critic?.mode).toBe("redTeam");
+      expect(result.critic?.redTeam?.failed).toBe(true);
+      expect(result.critic?.redTeam?.maxSeverity).toBe("high");
+      expect(result.critic?.passed).toBe(false);
+    });
+
     it("keeps default behavior when critic loop is disabled", async () => {
       const result = await runCronIsolatedAgentTurn(
         makeParams({

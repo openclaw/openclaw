@@ -26,7 +26,6 @@ export type CronFailureDestinationConfig = {
   accountId?: string;
   mode?: "announce" | "webhook";
 };
-
 export type CronCriticLoopMode = "score" | "redTeam";
 
 export type CronCriticSeverityThreshold = "low" | "medium" | "high" | "critical";

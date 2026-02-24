@@ -786,9 +786,11 @@ export async function runCronIsolatedAgentTurn(params: {
   const criticEvaluation = evaluateExecutorOutputCritic({
     enabled: cfgWithAgentDefaults.cron?.criticLoop?.enabled === true,
     killSwitch: process.env.OPENCLAW_CRITIC_LOOP_DISABLED === "1",
+    mode: cfgWithAgentDefaults.cron?.criticLoop?.mode,
     spec: agentPayload?.criticSpec ?? cfgWithAgentDefaults.cron?.criticLoop?.defaultSpec,
     output: synthesizedText,
     threshold: agentPayload?.criticThreshold ?? cfgWithAgentDefaults.cron?.criticLoop?.minScore,
+    redTeamSeverityThreshold: cfgWithAgentDefaults.cron?.criticLoop?.redTeamSeverityThreshold,
   });
   criticForRun = criticEvaluation ?? undefined;
   const criticOutcome = criticEvaluation?.outcome;

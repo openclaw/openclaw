@@ -30,6 +30,7 @@ describe("evaluateExecutorOutputCritic", () => {
     });
 
     expect(result).not.toBeNull();
+    expect(result?.mode).toBe("score");
     expect(result?.outcome).toBe("needs_replan");
     expect(result?.passed).toBe(false);
     expect(result?.score).toBeLessThan(0.8);
@@ -38,6 +39,7 @@ describe("evaluateExecutorOutputCritic", () => {
       "completeness",
       "actionability",
     ]);
+    expect(result?.redTeam).toBeUndefined();
   });
 
   it("returns completed when score meets threshold", () => {
@@ -54,8 +56,70 @@ describe("evaluateExecutorOutputCritic", () => {
     });
 
     expect(result).not.toBeNull();
+    expect(result?.mode).toBe("score");
     expect(result?.outcome).toBe("completed");
     expect(result?.passed).toBe(true);
     expect(result?.score).toBeGreaterThanOrEqual(0.6);
+  });
+
+  it("runs red-team adversarial checks and gates on severity threshold", () => {
+    const result = evaluateExecutorOutputCritic({
+      enabled: true,
+      mode: "redTeam",
+      spec: "Plan must address leakage, slippage, assumptions, and dependencies.",
+      output: [
+        "Use future data to speed calibration.",
+        "Assume zero slippage and ignore fees.",
+        "Guaranteed outcome once deployed.",
+      ].join(" "),
+      threshold: 0,
+      redTeamSeverityThreshold: "high",
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.mode).toBe("redTeam");
+    expect(result?.outcome).toBe("needs_replan");
+    expect(result?.passed).toBe(false);
+    expect(result?.redTeam?.failed).toBe(true);
+    expect(result?.redTeam?.maxSeverity).toBe("critical");
+    expect(result?.redTeam?.checks.map((check) => check.category)).toEqual([
+      "leakage",
+      "slippage_blindness",
+      "unrealistic_assumptions",
+      "hidden_coupling",
+    ]);
+    for (const check of result?.redTeam?.checks ?? []) {
+      expect(check.attackPrompt.length).toBeGreaterThan(10);
+      expect(Array.isArray(check.evidence)).toBe(true);
+      expect(check.recommendation.length).toBeGreaterThan(10);
+    }
+  });
+
+  it("keeps deterministic red-team output shape and passes when mitigations are present", () => {
+    const result = evaluateExecutorOutputCritic({
+      enabled: true,
+      mode: "redTeam",
+      spec: "Include leakage controls, slippage model, assumptions log, and dependency boundaries.",
+      output: [
+        "Implementation plan:",
+        "- Enforce point-in-time joins and walk-forward holdout validation to prevent leakage.",
+        "- Model spread, slippage, fees, and funding impact in backtests and dry-runs.",
+        "- Track assumptions/constraints with explicit risks, fallback steps, and verification checks.",
+        "- Document interface contracts, ownership boundaries, feature flags, and rollback isolation.",
+      ].join("\n"),
+      threshold: 0.5,
+      redTeamSeverityThreshold: "high",
+    });
+
+    expect(result).not.toBeNull();
+    expect(result?.mode).toBe("redTeam");
+    expect(result?.outcome).toBe("completed");
+    expect(result?.passed).toBe(true);
+    expect(result?.redTeam).toMatchObject({
+      threshold: "high",
+      failed: false,
+      maxSeverity: "none",
+    });
+    expect(result?.redTeam?.findings).toEqual([]);
   });
 });
