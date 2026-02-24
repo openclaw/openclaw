@@ -84,6 +84,7 @@ vi.mock("../deliver-reply.js", () => ({
   deliverWebReply: deliverWebReplyMock,
 }));
 
+import { updateLastRouteInBackground } from "./last-route.js";
 import { processMessage } from "./process-message.js";
 
 describe("web processMessage inbound contract", () => {
@@ -301,5 +302,59 @@ describe("web processMessage inbound contract", () => {
     // oxlint-disable-next-line typescript/no-explicit-any
     const replyOptions = (capturedDispatchParams as any)?.replyOptions;
     expect(replyOptions?.disableBlockStreaming).toBe(true);
+  });
+
+  it("updates main last route for DM when session key matches main session key", async () => {
+    const updateLastRouteMock = vi.mocked(updateLastRouteInBackground);
+    updateLastRouteMock.mockClear();
+
+    const args = makeProcessMessageArgs({
+      routeSessionKey: "agent:main:whatsapp:direct:+1000",
+      groupHistoryKey: "+1000",
+      msg: {
+        id: "msg-last-route-1",
+        from: "+1000",
+        to: "+2000",
+        chatType: "direct",
+        body: "hello",
+        senderE164: "+1000",
+      },
+    });
+    args.route = {
+      ...args.route,
+      sessionKey: "agent:main:whatsapp:direct:+1000",
+      mainSessionKey: "agent:main:whatsapp:direct:+1000",
+    };
+
+    await processMessage(args);
+
+    expect(updateLastRouteMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not update main last route for isolated DM scope sessions", async () => {
+    const updateLastRouteMock = vi.mocked(updateLastRouteInBackground);
+    updateLastRouteMock.mockClear();
+
+    const args = makeProcessMessageArgs({
+      routeSessionKey: "agent:main:whatsapp:dm:+1000:peer:+3000",
+      groupHistoryKey: "+3000",
+      msg: {
+        id: "msg-last-route-2",
+        from: "+3000",
+        to: "+2000",
+        chatType: "direct",
+        body: "hello",
+        senderE164: "+3000",
+      },
+    });
+    args.route = {
+      ...args.route,
+      sessionKey: "agent:main:whatsapp:dm:+1000:peer:+3000",
+      mainSessionKey: "agent:main:whatsapp:direct:+1000",
+    };
+
+    await processMessage(args);
+
+    expect(updateLastRouteMock).not.toHaveBeenCalled();
   });
 });
