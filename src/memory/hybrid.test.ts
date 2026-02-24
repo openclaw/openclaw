@@ -95,4 +95,47 @@ describe("memory hybrid helpers", () => {
     expect(merged[0]?.snippet).toBe("kw-a");
     expect(merged[0]?.score).toBeCloseTo(0.5 * 0.2 + 0.5 * 1.0);
   });
+
+  it("mergeHybridResults applies regime/stress penalty to final score when enabled", async () => {
+    const merged = await mergeHybridResults({
+      vectorWeight: 1,
+      textWeight: 0,
+      vector: [
+        {
+          id: "a",
+          path: "memory/a.md",
+          startLine: 1,
+          endLine: 2,
+          source: "memory",
+          snippet: "vec-a",
+          vectorScore: 0.9,
+        },
+        {
+          id: "b",
+          path: "memory/b.md",
+          startLine: 3,
+          endLine: 4,
+          source: "memory",
+          snippet: "vec-b",
+          vectorScore: 0.5,
+        },
+      ],
+      keyword: [],
+      stressScoring: {
+        enabled: true,
+        instabilityWeight: 0.25,
+        stressWeight: 0.5,
+        regimeSplit: { mode: "index", splitIndex: 1 },
+        scenarios: [{ name: "drawdown", multiplier: 0.8 }],
+      },
+    });
+
+    // base scores: [0.9, 0.5]
+    // instability penalty: 0.25 * |0.9 - 0.5| = 0.1
+    // stress penalties: a => 0.5*(0.9-0.72)=0.09, b => 0.5*(0.5-0.4)=0.05
+    expect(merged[0]?.path).toBe("memory/a.md");
+    expect(merged[0]?.score).toBeCloseTo(0.71);
+    expect(merged[1]?.path).toBe("memory/b.md");
+    expect(merged[1]?.score).toBeCloseTo(0.35);
+  });
 });
