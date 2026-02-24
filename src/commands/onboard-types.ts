@@ -73,6 +73,7 @@ export type AuthChoiceGroupId =
   | "venice"
   | "mistral"
   | "qwen"
+  | "apertis"
   | "together"
   | "huggingface"
   | "qianfan"
