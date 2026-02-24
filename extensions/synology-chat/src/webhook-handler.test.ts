@@ -1,3 +1,5 @@
+import { EventEmitter } from "node:events";
+import type { IncomingMessage } from "node:http";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { makeFormBody, makeReq, makeRes } from "./test-http-utils.js";
 import type { ResolvedSynologyChatAccount } from "./types.js";
@@ -28,6 +30,24 @@ function makeAccount(
     allowInsecureSsl: true,
     ...overrides,
   };
+}
+
+function makeStalledReq(method: string): IncomingMessage {
+  const req = new EventEmitter() as IncomingMessage & {
+    destroyed: boolean;
+    destroy: () => void;
+  };
+  req.method = method;
+  req.headers = {};
+  req.socket = { remoteAddress: "127.0.0.1" } as any;
+  req.destroyed = false;
+  req.destroy = () => {
+    if (req.destroyed) {
+      return;
+    }
+    req.destroyed = true;
+  };
+  return req;
 }
 
 const validBody = makeFormBody({
@@ -93,6 +113,29 @@ describe("createWebhookHandler", () => {
     await handler(req, res);
 
     expect(res._status).toBe(400);
+  });
+
+  it("returns 408 when request body times out", async () => {
+    vi.useFakeTimers();
+    try {
+      const handler = createWebhookHandler({
+        account: makeAccount(),
+        deliver: vi.fn(),
+        log,
+      });
+
+      const req = makeStalledReq("POST");
+      const res = makeRes();
+      const run = handler(req, res);
+
+      await vi.advanceTimersByTimeAsync(30_000);
+      await run;
+
+      expect(res._status).toBe(408);
+      expect(res._body).toContain("timeout");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("returns 401 for invalid token", async () => {
