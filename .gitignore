@@ -83,7 +83,7 @@ apps/ios/*.mobileprovision
 docs/.local/
 IDENTITY.md
 USER.md
-.tgz
+*.tgz
 .idea
 
 # local tooling
