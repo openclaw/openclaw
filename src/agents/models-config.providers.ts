@@ -685,6 +685,12 @@ function buildOpenrouterProvider(): ProviderConfig {
       {
         id: OPENROUTER_DEFAULT_MODEL_ID,
         name: "OpenRouter Auto",
+        // reasoning: false here is a catalog default only; it does NOT cause
+        // `reasoning.effort: "none"` to be sent for the "auto" routing model.
+        // applyExtraParamsToAgent skips the reasoning effort injection for
+        // model id "auto" because it dynamically routes to any OpenRouter model
+        // (including ones where reasoning is mandatory and cannot be disabled).
+        // See: openclaw/openclaw#24851
         reasoning: false,
         input: ["text", "image"],
         cost: OPENROUTER_DEFAULT_COST,
