@@ -149,6 +149,56 @@ Related:
 - [/gateway/remote](/gateway/remote)
 - [/cli/devices](/cli/devices)
 
+## 1008 invalid request frame or invalid handshake
+
+If the dashboard or a custom WebSocket client fails with close code `1008` and
+reason `invalid request frame` (or `invalid handshake`), the gateway rejected
+the first WebSocket frame before auth completed.
+
+The required first frame is an RPC request:
+
+- `type`: `"req"`
+- `method`: `"connect"`
+- Literal pair check: `"type":"req"` and `"method":"connect"`
+
+Example shape:
+
+```json
+{
+  "type": "req",
+  "id": "c1",
+  "method": "connect",
+  "params": {
+    "minProtocol": 3,
+    "maxProtocol": 3,
+    "client": {
+      "id": "openclaw-control-ui",
+      "version": "dev",
+      "platform": "web",
+      "mode": "webchat"
+    }
+  }
+}
+```
+
+Common causes:
+
+- Stale dashboard/control-ui bundle talking an older handshake format.
+- Wrong endpoint/proxy rewriting WS traffic to non-gateway frames.
+- Custom client sending legacy `type:"handshake"` style payloads.
+
+Quick fixes:
+
+1. Hard-refresh the Control UI and reconnect.
+2. Confirm you are connecting to the gateway WS endpoint and correct port.
+3. If you run custom clients, send `type:"req"` + `method:"connect"` as the first frame.
+4. Upgrade client and gateway together when protocol versions diverge.
+
+Related:
+
+- [/help/faq#what-does-invalid-handshake-code-1008-mean](/help/faq#what-does-invalid-handshake-code-1008-mean)
+- [/gateway/protocol](/gateway/protocol)
+
 ## Gateway service not running
 
 Use this when service is installed but process does not stay up.
