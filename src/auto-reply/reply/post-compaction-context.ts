@@ -33,9 +33,8 @@ export async function readPostCompactionContext(workspaceDir: string): Promise<s
 
     return (
       "[Post-compaction context refresh]\n\n" +
-      "Session was just compacted. The conversation summary above is a hint, NOT a substitute for your startup sequence. " +
-      "Execute your Session Startup sequence now — read the required files before responding to the user.\n\n" +
-      "Critical rules from AGENTS.md:\n\n" +
+      "Session was just compacted. The conversation summary above provides prior context.\n\n" +
+      "Relevant rules from AGENTS.md:\n\n" +
       safeContent
     );
   } catch {

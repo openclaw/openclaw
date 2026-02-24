@@ -2,14 +2,75 @@ import fs from "node:fs";
 import path from "node:path";
 
 // Default required files — constants, extensible to config later
-const DEFAULT_REQUIRED_READS: Array<string | RegExp> = [
-  "WORKFLOW_AUTO.md",
-  /memory\/\d{4}-\d{2}-\d{2}\.md/, // daily memory files
-];
+const DEFAULT_REQUIRED_READS: Array<string | RegExp> = [];
+
+/**
+ * Check whether any files matching a RegExp pattern exist under a directory.
+ * Performs a bounded recursive scan (max depth 3) to avoid perf issues.
+ */
+function hasFilesMatchingPattern(dir: string, pattern: RegExp, maxDepth = 3): boolean {
+  if (maxDepth < 0) {
+    return false;
+  }
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  for (const entry of entries) {
+    const rel = path.relative(dir, path.join(dir, entry.name));
+    if (entry.isFile()) {
+      const normalizedRel = rel.split(path.sep).join("/");
+      if (pattern.test(normalizedRel)) {
+        return true;
+      }
+    } else if (entry.isDirectory() && !entry.name.startsWith(".")) {
+      const subDir = path.join(dir, entry.name);
+      // Check recursively, adjusting pattern to match from workspace root
+      if (hasFilesMatchingPatternFromRoot(subDir, pattern, dir, maxDepth - 1)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** Recursive helper that matches relative paths from the workspace root. */
+function hasFilesMatchingPatternFromRoot(
+  dir: string,
+  pattern: RegExp,
+  workspaceDir: string,
+  maxDepth: number,
+): boolean {
+  if (maxDepth < 0) {
+    return false;
+  }
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return false;
+  }
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    const rel = path.relative(workspaceDir, fullPath).split(path.sep).join("/");
+    if (entry.isFile() && pattern.test(rel)) {
+      return true;
+    }
+    if (entry.isDirectory() && !entry.name.startsWith(".")) {
+      if (hasFilesMatchingPatternFromRoot(fullPath, pattern, workspaceDir, maxDepth - 1)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
 
 /**
  * Audit whether agent read required startup files after compaction.
  * Returns list of missing file patterns.
+ * Skips any required file/pattern that doesn't actually exist on disk.
  */
 export function auditPostCompactionReads(
   readFilePaths: string[],
@@ -22,12 +83,19 @@ export function auditPostCompactionReads(
   for (const required of requiredReads) {
     if (typeof required === "string") {
       const requiredResolved = path.resolve(workspaceDir, required);
+      if (!fs.existsSync(requiredResolved)) {
+        continue; // Don't require reading a file that doesn't exist
+      }
       const found = normalizedReads.some((r) => r === requiredResolved);
       if (!found) {
         missingPatterns.push(required);
       }
     } else {
-      // RegExp — match against relative paths from workspace
+      // RegExp — skip if no matching files exist in workspace
+      if (!hasFilesMatchingPattern(workspaceDir, required)) {
+        continue;
+      }
+      // Match against relative paths from workspace
       const found = readFilePaths.some((p) => {
         const rel = path.relative(workspaceDir, path.resolve(workspaceDir, p));
         // Normalize to forward slashes for cross-platform RegExp matching
