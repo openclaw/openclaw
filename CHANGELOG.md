@@ -13,7 +13,7 @@ Docs: https://docs.openclaw.ai
 
 - Subagents/Sessions: add `agents.defaults.subagents.runTimeoutSeconds` so `sessions_spawn` can inherit a configurable default timeout when the tool call omits `runTimeoutSeconds` (unset remains `0`, meaning no timeout). (#24594) Thanks @mitchmcalister.
 - Config/Kilo Gateway: Kilo provider flow now surfaces an updated list of models. (#24921) thanks @gumadeiras.
-- Auto-reply/Abort shortcuts: expand standalone stop phrases (`stop openclaw`, `stop action`, `stop run`, `stop agent`, `please stop`, and related variants) and accept trailing punctuation (for example `STOP OPENCLAW!!!`) so emergency stop messages are caught more reliably.
+- Auto-reply/Abort shortcuts: expand standalone stop phrases (`stop openclaw`, `stop action`, `stop run`, `stop agent`, `please stop`, and related variants), accept trailing punctuation (for example `STOP OPENCLAW!!!`), and add multilingual stop keywords (including ES/FR/ZH/HI/AR/JP/DE/PT/RU forms) so emergency stop messages are caught more reliably. Thanks @steipete and @vincentkoc.
 
 ### Fixes
 
@@ -62,6 +62,7 @@ Docs: https://docs.openclaw.ai
 - Subagents/Registry: prune orphaned restored runs (missing child session/sessionId) before retry/announce resume to prevent zombie entries and stale completion retries, and clarify status output to report bootstrap-file presence semantics. (#24244) Thanks @HeMuling.
 - Subagents/Announce queue: add exponential backoff when queue-drain delivery fails to reduce retry storms. (#24783)
 - Doctor/UX: suppress the redundant "Run doctor --fix" hint when already in fix mode with no changes. (#24666)
+- CLI/Doctor: correct stale recovery hints to use valid commands (`openclaw gateway status --deep` and `openclaw configure --section model`). (#24485) Thanks @chilu18.
 - Doctor/Nix: skip false-positive permission warnings for Nix store symlinks in state-integrity checks. (#24901)
 - Update/Systemd: back up an existing systemd unit before overwriting it during update flows. (#24350, #24937)
 - Install/Global detection: resolve symlinks when detecting pnpm/bun global install paths. (#24744)
