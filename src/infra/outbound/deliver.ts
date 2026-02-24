@@ -192,6 +192,7 @@ function createChannelOutboundContextBase(
 
 const isAbortError = (err: unknown): boolean => err instanceof Error && err.name === "AbortError";
 
+const GEC_VERSION = "1.0.0";
 const GEC_LEGAL_END_STATES = ["CLOSURE PACKET", "BLOCKED PACKET", "CHECKPOINT PLAN"];
 const GEC_HEDGING_RE = /\b(if you want|would you like me to|i can|let me know if)\b/i;
 const GEC_PROMISE_RE =
@@ -504,6 +505,7 @@ async function deliverOutboundPayloadsCore(
         void triggerInternalHook(
           createInternalHookEvent("message", "policy_violation", sessionKeyForInternalHooks, {
             policy: "global_execution_constitution",
+            gecVersion: GEC_VERSION,
             reason: gec.reason,
             channelId: channel,
             accountId: accountId ?? undefined,
@@ -514,7 +516,7 @@ async function deliverOutboundPayloadsCore(
         ).catch(() => {});
       } else {
         console.warn(
-          `[POLICY_VIOLATION] global_execution_constitution channel=${channel} reason=${gec.reason}`,
+          `[POLICY_VIOLATION] global_execution_constitution gec_version=${GEC_VERSION} channel=${channel} reason=${gec.reason}`,
         );
       }
     }
