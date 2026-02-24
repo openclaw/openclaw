@@ -264,7 +264,7 @@ export function buildCaptionCard(text: string): Record<string, unknown> {
       elements: [
         {
           tag: "markdown",
-          content: `<font color="grey">${text}</font>`,
+          content: `<font color="grey">${text.replaceAll("<", "&lt;").replaceAll(">", "&gt;")}</font>`,
         },
       ],
     },
