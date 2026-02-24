@@ -226,6 +226,12 @@ export function createSynologyChatPlugin() {
           );
           return { stop: () => {} };
         }
+        if (account.dmPolicy === "allowlist" && account.allowedUserIds.length === 0) {
+          log?.warn?.(
+            `Synology Chat account ${accountId} has dmPolicy=allowlist but empty allowedUserIds; refusing to start route`,
+          );
+          return { stop: () => {} };
+        }
 
         log?.info?.(
           `Starting Synology Chat channel (account: ${accountId}, path: ${account.webhookPath})`,
