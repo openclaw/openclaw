@@ -258,8 +258,6 @@ export type ExecToolConfig = {
    * Default false to reduce context noise.
    */
   notifyOnExitEmptySuccess?: boolean;
-  /** Background follow-up mode: "poll" (default) or "notify" to reduce token usage. */
-  backgroundMode?: "poll" | "notify";
   /** apply_patch subtool configuration (experimental). */
   applyPatch?: {
     /** Enable apply_patch for OpenAI models (default: false). */
