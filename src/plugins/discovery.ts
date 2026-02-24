@@ -313,10 +313,16 @@ function deriveIdHint(params: {
     ? (rawPackageName.split("/").pop() ?? rawPackageName)
     : rawPackageName;
 
+  // Strip the "openclaw-" prefix for unscoped packages so the hint matches
+  // the plugin's manifest id (example: openclaw-groupme -> groupme).
+  // This mirrors the scope-stripping logic above — both serve the same
+  // namespacing purpose.
+  const stripped = unscoped.startsWith("openclaw-") ? unscoped.slice("openclaw-".length) : unscoped;
+
   if (!params.hasMultipleExtensions) {
-    return unscoped;
+    return stripped;
   }
-  return `${unscoped}/${base}`;
+  return `${stripped}/${base}`;
 }
 
 function addCandidate(params: {
