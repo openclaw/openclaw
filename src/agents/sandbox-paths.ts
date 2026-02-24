@@ -187,7 +187,28 @@ async function resolveAllowedTmpMediaPath(params: {
     return undefined;
   }
   await assertNoSymlinkEscape(path.relative(openClawTmpDir, resolved), openClawTmpDir);
+  await assertNoHardlinkedFinalPath(resolved, openClawTmpDir);
   return resolved;
+}
+
+async function assertNoHardlinkedFinalPath(filePath: string, root: string): Promise<void> {
+  let stat: Awaited<ReturnType<typeof fs.stat>>;
+  try {
+    stat = await fs.stat(filePath);
+  } catch (err) {
+    if (isNotFoundPathError(err)) {
+      return;
+    }
+    throw err;
+  }
+  if (!stat.isFile()) {
+    return;
+  }
+  if (stat.nlink > 1) {
+    throw new Error(
+      `Hardlinked tmp media path is not allowed under sandbox root (${shortPath(root)}): ${shortPath(filePath)}`,
+    );
+  }
 }
 
 async function assertNoSymlinkEscape(
