@@ -20,6 +20,8 @@ import { DANGEROUS_ACP_TOOLS } from "../security/dangerous-tools.js";
 const SAFE_AUTO_APPROVE_TOOL_IDS = new Set(["read", "search", "web_search", "memory_search"]);
 const TRUSTED_SAFE_TOOL_ALIASES = new Set(["search"]);
 const READ_TOOL_PATH_KEYS = ["path", "file_path", "filePath"];
+const TOOL_NAME_MAX_LENGTH = 128;
+const TOOL_NAME_PATTERN = /^[a-z0-9._-]+$/;
 const TOOL_KIND_BY_ID = new Map<string, string>([
   ["read", "read"],
   ["search", "search"],
@@ -59,7 +61,10 @@ function readFirstStringValue(
 
 function normalizeToolName(value: string): string | undefined {
   const normalized = value.trim().toLowerCase();
-  if (!normalized) {
+  if (!normalized || normalized.length > TOOL_NAME_MAX_LENGTH) {
+    return undefined;
+  }
+  if (!TOOL_NAME_PATTERN.test(normalized)) {
     return undefined;
   }
   return normalized;
@@ -70,7 +75,7 @@ function parseToolNameFromTitle(title: string | undefined | null): string | unde
     return undefined;
   }
   const head = title.split(":", 1)[0]?.trim();
-  if (!head || !/^[a-zA-Z0-9._-]+$/.test(head)) {
+  if (!head) {
     return undefined;
   }
   return normalizeToolName(head);
