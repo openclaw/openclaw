@@ -12,7 +12,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -37,13 +36,9 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.ExpandLess
-import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
@@ -52,7 +47,6 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -69,14 +63,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import ai.openclaw.android.BuildConfig
 import ai.openclaw.android.LocationMode
 import ai.openclaw.android.MainViewModel
-import ai.openclaw.android.NodeForegroundService
 import ai.openclaw.android.VoiceWakeMode
 import ai.openclaw.android.WakeWords
 
@@ -93,22 +85,10 @@ fun SettingsSheet(viewModel: MainViewModel) {
   val voiceWakeMode by viewModel.voiceWakeMode.collectAsState()
   val voiceWakeStatusText by viewModel.voiceWakeStatusText.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
-  val manualEnabled by viewModel.manualEnabled.collectAsState()
-  val manualHost by viewModel.manualHost.collectAsState()
-  val manualPort by viewModel.manualPort.collectAsState()
-  val manualTls by viewModel.manualTls.collectAsState()
-  val gatewayToken by viewModel.gatewayToken.collectAsState()
   val canvasDebugStatusEnabled by viewModel.canvasDebugStatusEnabled.collectAsState()
-  val statusText by viewModel.statusText.collectAsState()
-  val serverName by viewModel.serverName.collectAsState()
-  val remoteAddress by viewModel.remoteAddress.collectAsState()
-  val gateways by viewModel.gateways.collectAsState()
-  val discoveryStatusText by viewModel.discoveryStatusText.collectAsState()
-  val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
 
   val listState = rememberLazyListState()
   val (wakeWordsText, setWakeWordsText) = remember { mutableStateOf("") }
-  val (advancedExpanded, setAdvancedExpanded) = remember { mutableStateOf(false) }
   val focusManager = LocalFocusManager.current
   var wakeWordsHadFocus by remember { mutableStateOf(false) }
   val deviceModel =
@@ -135,31 +115,6 @@ fun SettingsSheet(viewModel: MainViewModel) {
       trailingIconColor = mobileTextSecondary,
       leadingIconColor = mobileTextSecondary,
     )
-
-  if (pendingTrust != null) {
-    val prompt = pendingTrust!!
-    AlertDialog(
-      onDismissRequest = { viewModel.declineGatewayTrustPrompt() },
-      title = { Text("Trust this gateway?") },
-      text = {
-        Text(
-          "First-time TLS connection.\n\n" +
-            "Verify this SHA-256 fingerprint out-of-band before trusting:\n" +
-            prompt.fingerprintSha256,
-        )
-      },
-      confirmButton = {
-        TextButton(onClick = { viewModel.acceptGatewayTrustPrompt() }) {
-          Text("Trust and connect")
-        }
-      },
-      dismissButton = {
-        TextButton(onClick = { viewModel.declineGatewayTrustPrompt() }) {
-          Text("Cancel")
-        }
-      },
-    )
-  }
 
   LaunchedEffect(wakeWords) { setWakeWordsText(wakeWords.joinToString(", ")) }
   val commitWakeWords = {
@@ -289,22 +244,6 @@ fun SettingsSheet(viewModel: MainViewModel) {
     }
   }
 
-  val visibleGateways =
-    if (isConnected && remoteAddress != null) {
-      gateways.filterNot { "${it.host}:${it.port}" == remoteAddress }
-    } else {
-      gateways
-    }
-
-  val gatewayDiscoveryFooterText =
-    if (visibleGateways.isEmpty()) {
-      discoveryStatusText
-    } else if (isConnected) {
-      "Discovery active • ${visibleGateways.size} other gateway${if (visibleGateways.size == 1) "" else "s"} found"
-    } else {
-      "Discovery active • ${visibleGateways.size} gateway${if (visibleGateways.size == 1) "" else "s"} found"
-    }
-
   Box(
     modifier =
       Modifier
@@ -329,9 +268,9 @@ fun SettingsSheet(viewModel: MainViewModel) {
             style = mobileCaption1.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
             color = mobileAccent,
           )
-          Text("Device + Gateway Configuration", style = mobileTitle2, color = mobileText)
+          Text("Device Configuration", style = mobileTitle2, color = mobileText)
           Text(
-            "Manage capabilities, connection mode, permissions, and diagnostics.",
+            "Manage capabilities, permissions, and diagnostics.",
             style = mobileCallout,
             color = mobileTextSecondary,
           )
@@ -339,7 +278,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
       }
       item { HorizontalDivider(color = mobileBorder) }
 
-    // Order parity: Node → Gateway → Voice → Camera → Messaging → Location → Screen.
+    // Order parity: Node → Voice → Camera → Messaging → Location → Screen.
       item {
         Text(
           "NODE",
@@ -360,194 +299,6 @@ fun SettingsSheet(viewModel: MainViewModel) {
       item { Text("Instance ID: $instanceId", style = mobileCallout.copy(fontFamily = FontFamily.Monospace), color = mobileTextSecondary) }
       item { Text("Device: $deviceModel", style = mobileCallout, color = mobileTextSecondary) }
       item { Text("Version: $appVersion", style = mobileCallout, color = mobileTextSecondary) }
-
-      item { HorizontalDivider(color = mobileBorder) }
-
-    // Gateway
-      item {
-        Text(
-          "GATEWAY",
-          style = mobileCaption1.copy(fontWeight = FontWeight.Bold, letterSpacing = 1.sp),
-          color = mobileAccent,
-        )
-      }
-      item { ListItem(modifier = settingsRowModifier(), colors = listItemColors, headlineContent = { Text("Status", style = mobileHeadline) }, supportingContent = { Text(statusText, style = mobileCallout) }) }
-    if (serverName != null) {
-        item { ListItem(modifier = settingsRowModifier(), colors = listItemColors, headlineContent = { Text("Server", style = mobileHeadline) }, supportingContent = { Text(serverName!!, style = mobileCallout) }) }
-    }
-    if (remoteAddress != null) {
-        item { ListItem(modifier = settingsRowModifier(), colors = listItemColors, headlineContent = { Text("Address", style = mobileHeadline) }, supportingContent = { Text(remoteAddress!!, style = mobileCallout.copy(fontFamily = FontFamily.Monospace)) }) }
-    }
-    item {
-      // UI sanity: "Disconnect" only when we have an active remote.
-      if (isConnected && remoteAddress != null) {
-        Button(
-          onClick = {
-            viewModel.disconnect()
-            NodeForegroundService.stop(context)
-          },
-          colors = settingsDangerButtonColors(),
-          shape = RoundedCornerShape(14.dp),
-        ) {
-          Text("Disconnect", style = mobileHeadline.copy(fontWeight = FontWeight.Bold))
-        }
-      }
-    }
-
-      item { HorizontalDivider(color = mobileBorder) }
-
-    if (!isConnected || visibleGateways.isNotEmpty()) {
-      item {
-        Text(
-          if (isConnected) "Other Gateways" else "Discovered Gateways",
-          style = mobileHeadline,
-          color = mobileText,
-        )
-      }
-      if (!isConnected && visibleGateways.isEmpty()) {
-        item { Text("No gateways found yet.", style = mobileCallout, color = mobileTextSecondary) }
-      } else {
-        items(items = visibleGateways, key = { it.stableId }) { gateway ->
-          val detailLines =
-            buildList {
-              add("IP: ${gateway.host}:${gateway.port}")
-              gateway.lanHost?.let { add("LAN: $it") }
-              gateway.tailnetDns?.let { add("Tailnet: $it") }
-              if (gateway.gatewayPort != null || gateway.canvasPort != null) {
-                val gw = (gateway.gatewayPort ?: gateway.port).toString()
-                val canvas = gateway.canvasPort?.toString() ?: "—"
-                add("Ports: gw $gw · canvas $canvas")
-              }
-            }
-          ListItem(
-            modifier = settingsRowModifier(),
-            colors = listItemColors,
-            headlineContent = { Text(gateway.name, style = mobileHeadline) },
-            supportingContent = {
-              Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                detailLines.forEach { line ->
-                  Text(line, style = mobileCallout, color = mobileTextSecondary)
-                }
-              }
-            },
-            trailingContent = {
-              Button(
-                onClick = {
-                  NodeForegroundService.start(context)
-                  viewModel.connect(gateway)
-                },
-                colors = settingsPrimaryButtonColors(),
-                shape = RoundedCornerShape(14.dp),
-              ) {
-                Text("Connect", style = mobileCallout.copy(fontWeight = FontWeight.Bold))
-              }
-            },
-          )
-        }
-      }
-      item {
-        Text(
-          gatewayDiscoveryFooterText,
-          modifier = Modifier.fillMaxWidth(),
-          textAlign = TextAlign.Center,
-          style = mobileCaption1,
-          color = mobileTextSecondary,
-        )
-      }
-    }
-
-      item { HorizontalDivider(color = mobileBorder) }
-
-    item {
-      ListItem(
-        modifier = settingsRowModifier().then(Modifier.clickable { setAdvancedExpanded(!advancedExpanded) }),
-        colors = listItemColors,
-        headlineContent = { Text("Advanced", style = mobileHeadline) },
-        supportingContent = { Text("Manual gateway connection", style = mobileCallout) },
-        trailingContent = {
-          Icon(
-            imageVector = if (advancedExpanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-            contentDescription = if (advancedExpanded) "Collapse" else "Expand",
-            tint = mobileTextSecondary,
-          )
-        },
-      )
-    }
-    item {
-      AnimatedVisibility(visible = advancedExpanded) {
-        Column(
-          verticalArrangement = Arrangement.spacedBy(10.dp),
-          modifier =
-            Modifier
-              .fillMaxWidth()
-              .border(width = 1.dp, color = mobileBorder, shape = RoundedCornerShape(14.dp))
-              .background(mobileSurface, RoundedCornerShape(14.dp))
-              .padding(12.dp),
-        ) {
-          ListItem(
-            modifier = settingsRowModifier(),
-            colors = listItemColors,
-            headlineContent = { Text("Use Manual Gateway", style = mobileHeadline) },
-            supportingContent = { Text("Use this when discovery is blocked.", style = mobileCallout) },
-            trailingContent = { Switch(checked = manualEnabled, onCheckedChange = viewModel::setManualEnabled) },
-          )
-
-          OutlinedTextField(
-            value = manualHost,
-            onValueChange = viewModel::setManualHost,
-            label = { Text("Host", style = mobileCaption1, color = mobileTextSecondary) },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = manualEnabled,
-            textStyle = mobileBody.copy(color = mobileText),
-            colors = settingsTextFieldColors(),
-          )
-          OutlinedTextField(
-            value = manualPort.toString(),
-            onValueChange = { v -> viewModel.setManualPort(v.toIntOrNull() ?: 0) },
-            label = { Text("Port", style = mobileCaption1, color = mobileTextSecondary) },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = manualEnabled,
-            textStyle = mobileBody.copy(fontFamily = FontFamily.Monospace, color = mobileText),
-            colors = settingsTextFieldColors(),
-          )
-          OutlinedTextField(
-            value = gatewayToken,
-            onValueChange = viewModel::setGatewayToken,
-            label = { Text("Gateway Token", style = mobileCaption1, color = mobileTextSecondary) },
-            modifier = Modifier.fillMaxWidth(),
-            enabled = manualEnabled,
-            singleLine = true,
-            textStyle = mobileBody.copy(color = mobileText),
-            colors = settingsTextFieldColors(),
-          )
-          ListItem(
-            modifier = settingsRowModifier().alpha(if (manualEnabled) 1f else 0.5f),
-            colors = listItemColors,
-            headlineContent = { Text("Require TLS", style = mobileHeadline) },
-            supportingContent = { Text("Pin the gateway certificate on first connect.", style = mobileCallout) },
-            trailingContent = { Switch(checked = manualTls, onCheckedChange = viewModel::setManualTls, enabled = manualEnabled) },
-          )
-
-          val hostOk = manualHost.trim().isNotEmpty()
-          val portOk = manualPort in 1..65535
-          Button(
-            onClick = {
-              NodeForegroundService.start(context)
-              viewModel.connectManual()
-            },
-            enabled = manualEnabled && hostOk && portOk,
-            colors = settingsPrimaryButtonColors(),
-            shape = RoundedCornerShape(14.dp),
-          ) {
-            Text("Connect (Manual)", style = mobileCallout.copy(fontWeight = FontWeight.Bold))
-          }
-
-          TextButton(onClick = { viewModel.setOnboardingCompleted(false) }) {
-            Text("Run onboarding again", style = mobileCallout.copy(fontWeight = FontWeight.SemiBold), color = mobileAccent)
-          }
-        }
-      }
-    }
 
       item { HorizontalDivider(color = mobileBorder) }
 
