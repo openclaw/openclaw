@@ -228,4 +228,47 @@ describe("buildSandboxCreateArgs", () => {
     }
     expect(customVFlags).toHaveLength(0);
   });
+
+  it("blocks bind sources outside runtime allowlist roots", () => {
+    const cfg = createSandboxConfig({}, ["/opt/external:/data:rw"]);
+    expect(() =>
+      buildSandboxCreateArgs({
+        name: "openclaw-sbx-outside-roots",
+        cfg,
+        scopeKey: "main",
+        createdAtMs: 1700000000000,
+        bindSourceRoots: ["/tmp/workspace", "/tmp/agent"],
+      }),
+    ).toThrow(/outside allowed roots/);
+  });
+
+  it("allows bind sources outside runtime allowlist with explicit override", () => {
+    const cfg = createSandboxConfig({}, ["/opt/external:/data:rw"]);
+    const args = buildSandboxCreateArgs({
+      name: "openclaw-sbx-outside-roots-override",
+      cfg,
+      scopeKey: "main",
+      createdAtMs: 1700000000000,
+      bindSourceRoots: ["/tmp/workspace", "/tmp/agent"],
+      allowSourcesOutsideAllowedRoots: true,
+    });
+    expect(args).toEqual(expect.arrayContaining(["-v", "/opt/external:/data:rw"]));
+  });
+
+  it("blocks reserved /workspace target bind mounts by default", () => {
+    const cfg = createSandboxConfig({}, ["/tmp/override:/workspace:rw"]);
+    expectBuildToThrow("openclaw-sbx-reserved-target", cfg, /reserved container path/);
+  });
+
+  it("allows reserved /workspace target bind mounts with explicit dangerous override", () => {
+    const cfg = createSandboxConfig({}, ["/tmp/override:/workspace:rw"]);
+    const args = buildSandboxCreateArgs({
+      name: "openclaw-sbx-reserved-target-override",
+      cfg,
+      scopeKey: "main",
+      createdAtMs: 1700000000000,
+      allowReservedContainerTargets: true,
+    });
+    expect(args).toEqual(expect.arrayContaining(["-v", "/tmp/override:/workspace:rw"]));
+  });
 });
