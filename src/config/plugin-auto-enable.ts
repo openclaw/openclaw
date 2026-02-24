@@ -502,8 +502,7 @@ export function applyPluginAutoEnable(params: {
   manifestRegistry?: PluginManifestRegistry;
 }): PluginAutoEnableResult {
   const env = params.env ?? process.env;
-  const registry =
-    params.manifestRegistry ?? loadPluginManifestRegistry({ config: params.config });
+  const registry = params.manifestRegistry ?? loadPluginManifestRegistry({ config: params.config });
   const configured = resolveConfiguredPlugins(params.config, env, registry);
   if (configured.length === 0) {
     return { config: params.config, changes: [] };
