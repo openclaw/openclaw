@@ -126,7 +126,43 @@ If you run `--deep`, OpenClaw also attempts a best-effort live Gateway probe.
 
 ## Zero Trust Hardening
 
-OpenClaw ships several defense-in-depth features under the unified `security` config namespace. Each can be enabled independently.
+OpenClaw ships several defense-in-depth features. Each can be enabled independently.
+
+### Scoped and short-lived gateway tokens
+
+Replace static bearer tokens with scoped, time-bounded tokens for Gateway authentication. Each token is HMAC-SHA256 signed and carries an explicit role, permission scopes, and expiration:
+
+```json5
+{
+  gateway: {
+    auth: {
+      mode: "token",
+      scopedTokens: {
+        enabled: true,
+        defaultTtlSeconds: 86400, // 24h
+        maxTtlSeconds: 2592000, // 30d
+        allowLegacyStaticTokens: true,
+      },
+    },
+  },
+}
+```
+
+Available scopes: `operator.admin`, `operator.read`, `operator.write`, `operator.approvals`, `operator.pairing`.
+
+CLI helpers:
+
+```bash
+openclaw token create --role operator --scope read,write --ttl 24h
+openclaw token list
+openclaw token revoke <jti>
+openclaw token revoke-all
+openclaw token rotate --ttl 12h
+```
+
+Tokens are prefixed with `osc_` for easy identification. The signing key is auto-generated and stored at `~/.openclaw/identity/token-signing.key`. Key rotation supports a configurable grace period (`rotationGraceSeconds`) during which old tokens remain valid.
+
+Addresses threat **T-ACCESS-003** (token theft — scoped tokens limit blast radius and short TTLs reduce the window of exposure).
 
 ### Credential encryption at rest (Vault)
 

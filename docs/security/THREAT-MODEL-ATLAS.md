@@ -193,15 +193,15 @@ Nothing is explicitly out of scope for this threat model.
 
 #### T-ACCESS-003: Token Theft
 
-| Attribute               | Value                                                                     |
-| ----------------------- | ------------------------------------------------------------------------- |
-| **ATLAS ID**            | AML.T0040 - AI Model Inference API Access                                 |
-| **Description**         | Attacker steals authentication tokens from config files                   |
-| **Attack Vector**       | Malware, unauthorized device access, config backup exposure               |
-| **Affected Components** | ~/.openclaw/credentials/, config storage                                  |
-| **Current Mitigations** | File permissions, AES-256-GCM vault encryption at rest (`security.vault`) |
-| **Residual Risk**       | Medium - Mitigated when vault is enabled; plaintext if vault is off       |
-| **Recommendations**     | Enable vault encryption, add token rotation                               |
+| Attribute               | Value                                                                                                                                                                          |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **ATLAS ID**            | AML.T0040 - AI Model Inference API Access                                                                                                                                      |
+| **Description**         | Attacker steals authentication tokens from config files                                                                                                                        |
+| **Attack Vector**       | Malware, unauthorized device access, config backup exposure                                                                                                                    |
+| **Affected Components** | ~/.openclaw/credentials/, config storage                                                                                                                                       |
+| **Current Mitigations** | File permissions, AES-256-GCM vault encryption at rest (`security.vault`), scoped short-lived tokens (`gateway.auth.scopedTokens`) with HMAC-SHA256 signing and TTL expiration |
+| **Residual Risk**       | Low - Vault encrypts credentials at rest; scoped tokens limit blast radius and expire automatically                                                                            |
+| **Recommendations**     | Enable vault encryption, use scoped tokens with short TTLs, rotate signing keys periodically                                                                                   |
 
 ---
 
@@ -486,22 +486,22 @@ Current patterns in `moderation.ts`:
 
 ### 5.1 Likelihood vs Impact
 
-| Threat ID     | Likelihood | Impact   | Risk Level   | Priority                      |
-| ------------- | ---------- | -------- | ------------ | ----------------------------- |
-| T-EXEC-001    | High       | Critical | **Critical** | P0                            |
-| T-PERSIST-001 | High       | Critical | **Critical** | P0                            |
-| T-EXFIL-003   | Medium     | Critical | **Critical** | P0                            |
-| T-IMPACT-001  | Medium     | Critical | **High**     | P1                            |
-| T-EXEC-002    | High       | High     | **High**     | P1                            |
-| T-EXEC-004    | Medium     | High     | **High**     | P1                            |
-| T-ACCESS-003  | Medium     | High     | **Medium**   | P1 (mitigated: vault)         |
-| T-EXFIL-001   | Medium     | High     | **High**     | P1                            |
-| T-IMPACT-002  | High       | Medium   | **Medium**   | P1 (mitigated: rate limiting) |
-| T-EVADE-001   | High       | Medium   | **Medium**   | P2                            |
-| T-ACCESS-001  | Low        | High     | **Medium**   | P2                            |
-| T-ACCESS-002  | Low        | High     | **Medium**   | P2                            |
-| T-PERSIST-002 | Low        | High     | **Medium**   | P2                            |
-| T-PERSIST-003 | Low        | Medium   | **Low**      | P2 (mitigated: integrity)     |
+| Threat ID     | Likelihood | Impact   | Risk Level   | Priority                              |
+| ------------- | ---------- | -------- | ------------ | ------------------------------------- |
+| T-EXEC-001    | High       | Critical | **Critical** | P0                                    |
+| T-PERSIST-001 | High       | Critical | **Critical** | P0                                    |
+| T-EXFIL-003   | Medium     | Critical | **Critical** | P0                                    |
+| T-IMPACT-001  | Medium     | Critical | **High**     | P1                                    |
+| T-EXEC-002    | High       | High     | **High**     | P1                                    |
+| T-EXEC-004    | Medium     | High     | **High**     | P1                                    |
+| T-ACCESS-003  | Medium     | High     | **Low**      | P1 (mitigated: vault + scoped tokens) |
+| T-EXFIL-001   | Medium     | High     | **High**     | P1                                    |
+| T-IMPACT-002  | High       | Medium   | **Medium**   | P1 (mitigated: rate limiting)         |
+| T-EVADE-001   | High       | Medium   | **Medium**   | P2                                    |
+| T-ACCESS-001  | Low        | High     | **Medium**   | P2                                    |
+| T-ACCESS-002  | Low        | High     | **Medium**   | P2                                    |
+| T-PERSIST-002 | Low        | High     | **Medium**   | P2                                    |
+| T-PERSIST-003 | Low        | Medium   | **Low**      | P2 (mitigated: integrity)             |
 
 ### 5.2 Critical Path Attack Chains
 
@@ -540,12 +540,12 @@ T-EXEC-002 → T-EXFIL-001 → External exfiltration
 
 ### 6.2 Short-term (P1)
 
-| ID    | Recommendation                           | Addresses    | Status                                    |
-| ----- | ---------------------------------------- | ------------ | ----------------------------------------- |
-| R-004 | Implement rate limiting                  | T-IMPACT-002 | **Done** — `security.messageRateLimit`    |
-| R-005 | Add token encryption at rest             | T-ACCESS-003 | **Done** — `security.vault` (AES-256-GCM) |
-| R-006 | Improve exec approval UX and validation  | T-EXEC-004   | Open                                      |
-| R-007 | Implement URL allowlisting for web_fetch | T-EXFIL-001  | Open                                      |
+| ID    | Recommendation                           | Addresses    | Status                                                                                  |
+| ----- | ---------------------------------------- | ------------ | --------------------------------------------------------------------------------------- |
+| R-004 | Implement rate limiting                  | T-IMPACT-002 | **Done** — `security.messageRateLimit`                                                  |
+| R-005 | Add token encryption at rest             | T-ACCESS-003 | **Done** — `security.vault` (AES-256-GCM) + scoped tokens (`gateway.auth.scopedTokens`) |
+| R-006 | Improve exec approval UX and validation  | T-EXEC-004   | Open                                                                                    |
+| R-007 | Implement URL allowlisting for web_fetch | T-EXFIL-001  | Open                                                                                    |
 
 ### 6.3 Medium-term (P2)
 
