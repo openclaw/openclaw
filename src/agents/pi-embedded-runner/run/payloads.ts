@@ -108,6 +108,7 @@ export function buildEmbeddedRunPayloads(params: {
   mediaUrls?: string[];
   replyToId?: string;
   isError?: boolean;
+  isReasoning?: boolean;
   audioAsVoice?: boolean;
   replyToTag?: boolean;
   replyToCurrent?: boolean;
@@ -116,6 +117,7 @@ export function buildEmbeddedRunPayloads(params: {
     text: string;
     media?: string[];
     isError?: boolean;
+    isReasoning?: boolean;
     audioAsVoice?: boolean;
     replyToId?: string;
     replyToTag?: boolean;
