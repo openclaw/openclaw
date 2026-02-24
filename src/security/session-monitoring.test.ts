@@ -255,4 +255,57 @@ describe("SessionRiskMonitor", () => {
       expect(monitor.isEnabled()).toBe(false);
     });
   });
+
+  describe("session isolation", () => {
+    it("isSessionIsolated returns false for unknown sessions", () => {
+      expect(monitor.isSessionIsolated("unknown")).toBe(false);
+    });
+
+    it("isolateSession marks a session as isolated", () => {
+      monitor.isolateSession("session-iso");
+      expect(monitor.isSessionIsolated("session-iso")).toBe(true);
+    });
+
+    it("releaseSession lifts isolation", () => {
+      monitor.isolateSession("session-release");
+      expect(monitor.isSessionIsolated("session-release")).toBe(true);
+      monitor.releaseSession("session-release");
+      expect(monitor.isSessionIsolated("session-release")).toBe(false);
+    });
+
+    it("auto-isolates when score crosses threshold * 1.5", () => {
+      // threshold=70, critical=105. Stack enough risk factors to hit 105.
+      // PRIVILEGE_COMMAND(25) * 3 = 75 → triggers warn alert
+      // ABUSE_PATTERN_MATCH(30) = 105 → triggers critical + auto-isolate
+      const sessionKey = "session-auto-iso";
+      monitor.addRiskFactor(sessionKey, "PRIVILEGE_COMMAND"); // 25
+      monitor.addRiskFactor(sessionKey, "PRIVILEGE_COMMAND"); // 50
+      monitor.addRiskFactor(sessionKey, "PRIVILEGE_COMMAND"); // 75 → alert (alertedAt set)
+      // alertedAt is set after first alert; re-trigger by clearing alertedAt to allow
+      // the monitor to re-alert (score keeps climbing but alertedAt blocks).
+      // Directly add enough to reach 105.
+      monitor.addRiskFactor(sessionKey, "ABUSE_PATTERN_MATCH"); // 105
+
+      expect(monitor.isSessionIsolated(sessionKey)).toBe(true);
+    });
+
+    it("clearSession removes isolation", () => {
+      monitor.isolateSession("session-clear");
+      monitor.clearSession("session-clear");
+      expect(monitor.isSessionIsolated("session-clear")).toBe(false);
+    });
+
+    it("clearAllSessions removes all isolation", () => {
+      monitor.isolateSession("session-a");
+      monitor.isolateSession("session-b");
+      monitor.clearAllSessions();
+      expect(monitor.isSessionIsolated("session-a")).toBe(false);
+      expect(monitor.isSessionIsolated("session-b")).toBe(false);
+    });
+
+    it("does not isolate a different session", () => {
+      monitor.isolateSession("session-bad");
+      expect(monitor.isSessionIsolated("session-good")).toBe(false);
+    });
+  });
 });

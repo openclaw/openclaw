@@ -134,6 +134,17 @@ export async function runBeforeToolCallHook(args: {
 
   // Security tool abuse gate: check for throttle + record call in the security monitor.
   if (args.ctx?.agentId) {
+    // Session isolation gate: block all tool dispatch for isolated sessions.
+    if (args.ctx.sessionKey) {
+      const { isSessionIsolated } = await import("../security/session-monitoring.js");
+      if (isSessionIsolated(args.ctx.sessionKey)) {
+        log.error(
+          `blocking tool=${toolName} sessionKey=${args.ctx.sessionKey}: session is isolated`,
+        );
+        return { blocked: true, reason: "Session is isolated due to critical risk score" };
+      }
+    }
+
     const { recordToolCall: recordSecurityToolCall, shouldThrottle } =
       await import("../security/tool-monitoring.js");
 

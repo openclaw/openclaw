@@ -87,10 +87,15 @@ export type RiskFactorName = keyof typeof RISK_FACTORS;
 // Session Risk Monitor
 // -----------------------------------------------------------------------------
 
+/** Critical score multiplier: sessions exceeding threshold*CRITICAL_MULTIPLIER are auto-isolated */
+const CRITICAL_MULTIPLIER = 1.5;
+
 export class SessionRiskMonitor {
   private config: Required<SessionMonitoringConfig>;
   private sessions = new Map<string, SessionRiskProfile>();
   private lastDecayRun = Date.now();
+  /** sessionKeys of sessions that have been isolated and should have tool dispatch blocked */
+  private isolatedSessions = new Set<string>();
 
   constructor(config?: SessionMonitoringConfig) {
     this.config = {
@@ -155,10 +160,17 @@ export class SessionRiskMonitor {
       totalScore: session.totalScore,
     });
 
-    // Check threshold
+    // Check threshold — warn alert fires once; critical auto-isolates independently
+    const criticalThreshold = this.config.threshold * CRITICAL_MULTIPLIER;
     if (session.totalScore >= this.config.threshold && !session.alertedAt) {
       this.emitHighRiskAlert(session);
       session.alertedAt = now;
+    } else if (
+      session.totalScore >= criticalThreshold &&
+      !this.isolatedSessions.has(session.sessionKey)
+    ) {
+      // Score crossed critical after the initial warn alert was already sent
+      this.isolateSession(session.sessionKey);
     }
 
     return session;
@@ -217,17 +229,19 @@ export class SessionRiskMonitor {
   }
 
   /**
-   * Clear a session's risk profile.
+   * Clear a session's risk profile and release any isolation.
    */
   clearSession(sessionKey: string): void {
     this.sessions.delete(sessionKey);
+    this.isolatedSessions.delete(sessionKey);
   }
 
   /**
-   * Clear all sessions.
+   * Clear all sessions and release all isolation.
    */
   clearAllSessions(): void {
     this.sessions.clear();
+    this.isolatedSessions.clear();
   }
 
   /**
@@ -358,19 +372,67 @@ export class SessionRiskMonitor {
     }
   }
 
+  /**
+   * Isolate a session, blocking further tool dispatch for it.
+   * Also emits a security event when the session is newly isolated.
+   */
+  isolateSession(sessionKey: string): void {
+    if (this.isolatedSessions.has(sessionKey)) {
+      return; // already isolated
+    }
+    this.isolatedSessions.add(sessionKey);
+    const session = this.sessions.get(sessionKey);
+
+    log.warn("session isolated", {
+      sessionKey,
+      agentId: session?.agentId,
+      score: session?.totalScore,
+    });
+
+    emitSecurityEvent({
+      type: "session_anomaly",
+      severity: "critical",
+      source: "session-monitoring",
+      message: `Session isolated due to critical risk: ${sessionKey}`,
+      sessionKey,
+      agentId: session?.agentId,
+      details: {
+        score: session?.totalScore ?? 0,
+        factorCount: session?.factors.length ?? 0,
+      },
+      remediation: "Investigate session activity; use releaseSession() to restore after review",
+    });
+  }
+
+  /**
+   * Release an isolated session (e.g. after manual review).
+   */
+  releaseSession(sessionKey: string): void {
+    this.isolatedSessions.delete(sessionKey);
+  }
+
+  /**
+   * Check whether a session is currently isolated.
+   */
+  isSessionIsolated(sessionKey: string): boolean {
+    return this.isolatedSessions.has(sessionKey);
+  }
+
   private emitHighRiskAlert(session: SessionRiskProfile): void {
     const summary = this.toSummary(session);
+    const isCritical = session.totalScore >= this.config.threshold * CRITICAL_MULTIPLIER;
 
     log.warn("high-risk session detected", {
       sessionKey: session.sessionKey,
       score: session.totalScore,
       threshold: this.config.threshold,
       topFactors: summary.topFactors,
+      isolated: isCritical,
     });
 
     emitSecurityEvent({
       type: "session_anomaly",
-      severity: session.totalScore >= this.config.threshold * 1.5 ? "critical" : "warn",
+      severity: isCritical ? "critical" : "warn",
       source: "session-monitoring",
       message: `High-risk session detected: score ${session.totalScore} (threshold: ${this.config.threshold})`,
       sessionKey: session.sessionKey,
@@ -387,6 +449,11 @@ export class SessionRiskMonitor {
       },
       remediation: "Review session activity for malicious behavior",
     });
+
+    // Auto-isolate at critical threshold
+    if (isCritical) {
+      this.isolateSession(session.sessionKey);
+    }
   }
 }
 
@@ -433,4 +500,25 @@ export function addSessionRiskFactor(
  */
 export function getHighRiskSessions(): SessionRiskSummary[] {
   return getSessionRiskMonitor().getHighRiskSessions();
+}
+
+/**
+ * Isolate a session using the default monitor, blocking tool dispatch.
+ */
+export function isolateSession(sessionKey: string): void {
+  getSessionRiskMonitor().isolateSession(sessionKey);
+}
+
+/**
+ * Release an isolated session using the default monitor.
+ */
+export function releaseSession(sessionKey: string): void {
+  getSessionRiskMonitor().releaseSession(sessionKey);
+}
+
+/**
+ * Check whether a session is currently isolated using the default monitor.
+ */
+export function isSessionIsolated(sessionKey: string): boolean {
+  return getSessionRiskMonitor().isSessionIsolated(sessionKey);
 }
