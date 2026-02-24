@@ -674,6 +674,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           },
           filePathHint: fileId,
           maxBytes: mediaMaxBytes,
+          // Allow fetching from the Mattermost server host (may be localhost or
+          // a private IP). Without this, SSRF guards block media downloads.
+          // Credit: #22594 (@webclerk)
+          ssrfPolicy: { allowedHostnames: [new URL(client.baseUrl).hostname] },
         });
         const saved = await core.channel.media.saveMediaBuffer(
           fetched.buffer,
