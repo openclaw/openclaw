@@ -1,20 +1,12 @@
-import { beforeAll, describe, expect, it } from "vitest";
-
-let resolveSandboxScope: typeof import("./sandbox.js").resolveSandboxScope;
-let resolveSandboxDockerConfig: typeof import("./sandbox.js").resolveSandboxDockerConfig;
-let resolveSandboxBrowserConfig: typeof import("./sandbox.js").resolveSandboxBrowserConfig;
-let resolveSandboxPruneConfig: typeof import("./sandbox.js").resolveSandboxPruneConfig;
+import { describe, expect, it } from "vitest";
+import {
+  resolveSandboxBrowserConfig,
+  resolveSandboxDockerConfig,
+  resolveSandboxPruneConfig,
+  resolveSandboxScope,
+} from "./sandbox/config.js";
 
 describe("sandbox config merges", () => {
-  beforeAll(async () => {
-    ({
-      resolveSandboxScope,
-      resolveSandboxDockerConfig,
-      resolveSandboxBrowserConfig,
-      resolveSandboxPruneConfig,
-    } = await import("./sandbox.js"));
-  });
-
   it("resolves sandbox scope deterministically", () => {
     expect(resolveSandboxScope({})).toBe("agent");
     expect(resolveSandboxScope({ perSession: true })).toBe("session");
