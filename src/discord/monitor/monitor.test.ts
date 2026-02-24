@@ -355,7 +355,9 @@ describe("discord component interactions", () => {
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
     expect(reply).toHaveBeenCalledWith({ content: "✓" });
-    expect(lastDispatchCtx?.BodyForAgent).toBe('Clicked "Approve".');
+    // BodyForAgent gets a timestamp prefix (see #25334).
+    expect(lastDispatchCtx?.BodyForAgent).toContain('Clicked "Approve".');
+    expect(lastDispatchCtx?.BodyForAgent).toMatch(/^\[.*\d{4}-\d{2}-\d{2} \d{2}:\d{2}.*\]/);
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
     expect(deliverDiscordReplyMock).toHaveBeenCalledTimes(1);
     expect(deliverDiscordReplyMock.mock.calls[0]?.[0]?.replyToId).toBe("msg-1");
