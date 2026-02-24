@@ -368,6 +368,19 @@ describe("connectGateway", () => {
     expect(host.lastErrorCode).toBe("AUTH_TOKEN_MISMATCH");
   });
 
+  it("shows protocol-mismatch guidance for 1008 invalid request frame", () => {
+    const host = createHost();
+
+    connectGateway(host);
+    const client = gatewayClientInstances[0];
+    expect(client).toBeDefined();
+
+    client.emitClose({ code: 1008, reason: "invalid request frame" });
+
+    expect(host.lastError).toContain("protocol mismatch");
+    expect(host.lastError).toContain("refresh the Control UI");
+  });
+
   it("surfaces shutdown restart reasons before the socket closes", () => {
     const host = createHost();
 
