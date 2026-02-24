@@ -18,6 +18,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       id: "approval-1",
       request: {
         host: "node",
+        nodeId: "node-1",
         command,
         cwd: null,
         agentId: null,
@@ -61,6 +62,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
         approved: true,
         approvalDecision: "allow-once",
       },
+      nodeId: "node-1",
       client,
       execApprovalManager: manager(makeRecord("echo")),
       nowMs: now,
@@ -82,6 +84,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
         approved: true,
         approvalDecision: "allow-once",
       },
+      nodeId: "node-1",
       client,
       execApprovalManager: manager(makeRecord("echo SAFE&&whoami")),
       nowMs: now,
@@ -97,6 +100,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
         approved: true,
         approvalDecision: "allow-once",
       },
+      nodeId: "node-1",
       client,
       execApprovalManager: manager(makeRecord("echo SAFE")),
       nowMs: now,
@@ -117,6 +121,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
         approved: true,
         approvalDecision: "allow-once",
       },
+      nodeId: "node-1",
       client,
       execApprovalManager: manager(
         makeRecord('/usr/bin/env BASH_ENV=/tmp/payload.sh bash -lc "echo SAFE"'),
@@ -124,5 +129,49 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       nowMs: now,
     });
     expectAllowOnceForwardingResult(result);
+  });
+
+  test("rejects approval ids that do not bind a nodeId", () => {
+    const record = makeRecord("echo SAFE");
+    record.request.nodeId = null;
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["echo", "SAFE"],
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client,
+      execApprovalManager: manager(record),
+      nowMs: now,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("unreachable");
+    }
+    expect(result.message).toContain("missing node binding");
+    expect(result.details?.code).toBe("APPROVAL_NODE_BINDING_MISSING");
+  });
+
+  test("rejects approval ids replayed against a different nodeId", () => {
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["echo", "SAFE"],
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-2",
+      client,
+      execApprovalManager: manager(makeRecord("echo SAFE")),
+      nowMs: now,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("unreachable");
+    }
+    expect(result.message).toContain("not valid for this node");
+    expect(result.details?.code).toBe("APPROVAL_NODE_MISMATCH");
   });
 });

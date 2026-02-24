@@ -114,6 +114,7 @@ function pickSystemRunParams(raw: Record<string, unknown>): Record<string, unkno
  * bypassing node-host approvals by injecting control fields into `node.invoke`.
  */
 export function sanitizeSystemRunParamsForForwarding(opts: {
+  nodeId?: string | null;
   rawParams: unknown;
   client: ApprovalClient | null;
   execApprovalManager?: ApprovalLookup;
@@ -185,6 +186,30 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
       ok: false,
       message: "approval expired",
       details: { code: "APPROVAL_EXPIRED", runId },
+    };
+  }
+
+  const targetNodeId = normalizeString(opts.nodeId);
+  if (!targetNodeId) {
+    return {
+      ok: false,
+      message: "node.invoke requires nodeId",
+      details: { code: "MISSING_NODE_ID", runId },
+    };
+  }
+  const approvalNodeId = normalizeString(snapshot.request.nodeId);
+  if (!approvalNodeId) {
+    return {
+      ok: false,
+      message: "approval id missing node binding",
+      details: { code: "APPROVAL_NODE_BINDING_MISSING", runId },
+    };
+  }
+  if (approvalNodeId !== targetNodeId) {
+    return {
+      ok: false,
+      message: "approval id not valid for this node",
+      details: { code: "APPROVAL_NODE_MISMATCH", runId },
     };
   }
 
