@@ -118,7 +118,7 @@ describe("gateway server cron", () => {
     vi.useRealTimers();
   });
 
-  test("handles cron CRUD, normalization, and patch semantics", { timeout: 120_000 }, async () => {
+  test("handles cron CRUD, normalization, and patch semantics", { timeout: 20_000 }, async () => {
     const { prevSkipCron, dir } = await setupCronTestRun({
       tempPrefix: "openclaw-gw-cron-",
       sessionConfig: { mainKey: "primary" },
