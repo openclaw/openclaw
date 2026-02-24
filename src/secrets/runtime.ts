@@ -13,9 +13,8 @@ import {
 } from "../config/config.js";
 import { isSecretRef, type SecretRef } from "../config/types.secrets.js";
 import { resolveUserPath } from "../utils.js";
-import { readJsonPointer } from "./json-pointer.js";
-import { isNonEmptyString, isRecord, normalizePositiveInt } from "./shared.js";
-import { decryptSopsJsonFile, DEFAULT_SOPS_TIMEOUT_MS } from "./sops.js";
+import { resolveSecretRefValue, type SecretRefResolveCache } from "./resolve.js";
+import { isNonEmptyString, isRecord } from "./shared.js";
 
 type SecretResolverWarningCode = "SECRETS_REF_OVERRIDES_PLAINTEXT";
 
@@ -32,10 +31,9 @@ export type PreparedSecretsRuntimeSnapshot = {
   warnings: SecretResolverWarning[];
 };
 
-type ResolverContext = {
+type ResolverContext = SecretRefResolveCache & {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-  fileSecretsPromise: Promise<unknown> | null;
 };
 
 type ProviderLike = {
@@ -74,48 +72,15 @@ function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecret
   };
 }
 
-async function decryptSopsFile(config: OpenClawConfig): Promise<unknown> {
-  const fileSource = config.secrets?.sources?.file;
-  if (!fileSource) {
-    throw new Error(
-      `Secret reference source "file" is not configured. Configure secrets.sources.file first.`,
-    );
-  }
-  if (fileSource.type !== "sops") {
-    throw new Error(`Unsupported secrets.sources.file.type "${String(fileSource.type)}".`);
-  }
-
-  const resolvedPath = resolveUserPath(fileSource.path);
-  const timeoutMs = normalizePositiveInt(fileSource.timeoutMs, DEFAULT_SOPS_TIMEOUT_MS);
-  return await decryptSopsJsonFile({
-    path: resolvedPath,
-    timeoutMs,
-    missingBinaryMessage:
-      "sops binary not found in PATH. Install sops >= 3.9.0 or disable secrets.sources.file.",
+async function resolveSecretRefValueFromContext(
+  ref: SecretRef,
+  context: ResolverContext,
+): Promise<unknown> {
+  return await resolveSecretRefValue(ref, {
+    config: context.config,
+    env: context.env,
+    cache: context,
   });
-}
-
-async function resolveSecretRefValue(ref: SecretRef, context: ResolverContext): Promise<unknown> {
-  const id = ref.id.trim();
-  if (!id) {
-    throw new Error(`Secret reference id is empty.`);
-  }
-
-  if (ref.source === "env") {
-    const envValue = context.env[id];
-    if (!isNonEmptyString(envValue)) {
-      throw new Error(`Environment variable "${id}" is missing or empty.`);
-    }
-    return envValue;
-  }
-
-  if (ref.source === "file") {
-    context.fileSecretsPromise ??= decryptSopsFile(context.config);
-    const payload = await context.fileSecretsPromise;
-    return readJsonPointer(payload, id, { onMissing: "throw" });
-  }
-
-  throw new Error(`Unsupported secret source "${String((ref as { source?: unknown }).source)}".`);
 }
 
 async function resolveGoogleChatServiceAccount(
@@ -137,7 +102,7 @@ async function resolveGoogleChatServiceAccount(
       message: `${path}: serviceAccountRef is set; runtime will ignore plaintext serviceAccount.`,
     });
   }
-  target.serviceAccount = await resolveSecretRefValue(ref, context);
+  target.serviceAccount = await resolveSecretRefValueFromContext(ref, context);
 }
 
 async function resolveConfigSecretRefs(params: {
@@ -152,7 +117,7 @@ async function resolveConfigSecretRefs(params: {
       if (!isSecretRef(provider.apiKey)) {
         continue;
       }
-      const resolvedValue = await resolveSecretRefValue(provider.apiKey, params.context);
+      const resolvedValue = await resolveSecretRefValueFromContext(provider.apiKey, params.context);
       if (!isNonEmptyString(resolvedValue)) {
         throw new Error(
           `models.providers.${providerId}.apiKey resolved to a non-string or empty value.`,
@@ -207,7 +172,7 @@ async function resolveAuthStoreSecretRefs(params: {
         });
       }
       if (keyRef) {
-        const resolvedValue = await resolveSecretRefValue(keyRef, params.context);
+        const resolvedValue = await resolveSecretRefValueFromContext(keyRef, params.context);
         if (!isNonEmptyString(resolvedValue)) {
           throw new Error(`auth profile "${profileId}" keyRef resolved to an empty value.`);
         }
@@ -227,7 +192,7 @@ async function resolveAuthStoreSecretRefs(params: {
         });
       }
       if (tokenRef) {
-        const resolvedValue = await resolveSecretRefValue(tokenRef, params.context);
+        const resolvedValue = await resolveSecretRefValueFromContext(tokenRef, params.context);
         if (!isNonEmptyString(resolvedValue)) {
           throw new Error(`auth profile "${profileId}" tokenRef resolved to an empty value.`);
         }
