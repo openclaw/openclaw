@@ -156,6 +156,26 @@ describe("createWebhookHandler", () => {
     });
   });
 
+  it("returns 403 when allowlist policy is set with empty allowedUserIds", async () => {
+    const deliver = vi.fn();
+    const handler = createWebhookHandler({
+      account: makeAccount({
+        dmPolicy: "allowlist",
+        allowedUserIds: [],
+      }),
+      deliver,
+      log,
+    });
+
+    const req = makeReq("POST", validBody);
+    const res = makeRes();
+    await handler(req, res);
+
+    expect(res._status).toBe(403);
+    expect(res._body).toContain("Allowlist is empty");
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
   it("returns 403 when DMs are disabled", async () => {
     await expectForbiddenByPolicy({
       account: { dmPolicy: "disabled" },
