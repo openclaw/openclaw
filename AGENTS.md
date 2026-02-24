@@ -5,11 +5,20 @@
 
 ## Project Structure
 
-- **Source**: `src/` (CLI in `src/cli`, commands in `src/commands`, infra in `src/infra`)
-- **Tests**: Colocated `*.test.ts`; e2e tests in `*.e2e.test.ts`
-- **Output**: `dist/`
-- **Plugins**: `extensions/*` (workspace packages)
-- **Messaging channels**: `src/telegram`, `src/discord`, `src/slack`, `src/signal`, `src/imessage`, `src/web`, `src/channels`, `src/routing`
+| Directory                                                     | Purpose                                             |
+| ------------------------------------------------------------- | --------------------------------------------------- |
+| `src/`                                                        | Main source code (CLI, agents, gateway, channels)   |
+| `src/cli/`                                                    | CLI commands and program setup                      |
+| `src/agents/`                                                 | AI agent execution, tools, sessions                 |
+| `src/gateway/`                                                | WebSocket/HTTP gateway server                       |
+| `src/config/`                                                 | Configuration loading and types (modular)           |
+| `src/plugin-sdk/`                                             | Plugin SDK for extensions                           |
+| `src/{telegram,discord,slack,signal,whatsapp,imessage,line}/` | Messaging channel implementations                   |
+| `extensions/`                                                 | Plugin extensions (workspace packages)              |
+| `apps/`                                                       | Mobile/desktop companion apps (iOS, Android, macOS) |
+| `packages/`                                                   | Workspace packages (clawdbot, moltbot)              |
+| `test/`                                                       | Test setup files                                    |
+| `dist/`                                                       | Build output                                        |
 
 ## Build, Test, and Development Commands
 
@@ -20,35 +29,41 @@ pnpm install
 # Build
 pnpm build
 
-# Type check (faster than build)
+# Type check (faster than full build)
 pnpm tsgo
 
-# Lint and format check
+# Lint and format check (run before commits)
 pnpm check
 
-# Format fix
+# Auto-fix formatting issues
 pnpm format:fix
 
-# Run all tests
+# Run all unit tests
 pnpm test
+
+# Run fast unit tests only (excludes gateway, extensions)
+pnpm test:fast
 
 # Run single test file
 pnpm test src/path/to/file.test.ts
 
-# Run tests with coverage
-pnpm test:coverage
+# Run tests matching a pattern
+pnpm test -- --grep "test pattern"
 
 # Run tests in watch mode
 pnpm test:watch
 
-# Run fast unit tests only
-pnpm test:fast
+# Run tests with coverage
+pnpm test:coverage
 
 # Run e2e tests
 pnpm test:e2e
 
 # Run CLI in dev mode
 pnpm openclaw <command>
+
+# Run gateway in dev mode
+pnpm gateway:dev
 ```
 
 ## Code Style Guidelines
@@ -56,16 +71,18 @@ pnpm openclaw <command>
 ### TypeScript
 
 - **Language**: TypeScript (ESM), strict mode enabled
-- **Target**: ES2023, Node 22+
+- **Target**: ES2023, Node 20+
 - **Module**: NodeNext with NodeNext resolution
 - **Avoid**: `any`, `@ts-nocheck`, `@ts-ignore`, `@ts-expect-error`
 - **Type imports**: Use `import type { X }` for type-only imports
+- **No explicit any**: Never use `as any` or disable lint rules to suppress type errors
 
 ### Imports
 
 ```typescript
-// Type imports
+// Type imports (use for types only)
 import type { Bot } from "grammy";
+import type { GatewayServiceEnv } from "./service-types.js";
 
 // Named imports with .js extension (required for ESM)
 import { resolveAgentDir } from "../agents/agent-scope.js";
@@ -74,26 +91,27 @@ import { loadModelCatalog } from "../agents/model-catalog.js";
 
 ### Naming Conventions
 
-- **Product**: Use **OpenClaw** for headings and documentation
-- **CLI/Package**: Use `openclaw` for commands, package names, paths, config keys
-- **Files**: kebab-case for filenames, matching class/function names with `.ts` extension
-- **Classes**: PascalCase
-- **Functions/Variables**: camelCase
-- **Constants**: SCREAMING_SNAKE_CASE for true constants
+| Type                | Convention           | Example                |
+| ------------------- | -------------------- | ---------------------- |
+| Product             | **OpenClaw**         | OpenClaw Gateway       |
+| CLI/Package         | `openclaw`           | `openclaw gateway run` |
+| Files               | kebab-case           | `agent-scope.ts`       |
+| Classes             | PascalCase           | `GatewayServer`        |
+| Functions/Variables | camelCase            | `resolveSessionKey`    |
+| Constants           | SCREAMING_SNAKE_CASE | `GATEWAY_DEFAULT_PORT` |
 
 ### Error Handling
 
 - Always handle errors explicitly; never use empty catch blocks
 - Log errors with context using `runtime.error?.()` or `log.error()`
 - For user-facing errors, provide actionable messages
-- Example pattern:
+- Use `String(err)` for safe error message extraction
 
 ```typescript
 try {
   await someAsyncOperation();
 } catch (err) {
   runtime.error?.(danger(`operation failed: ${String(err)}`));
-  // Optionally notify user or re-throw
   throw err;
 }
 ```
@@ -115,16 +133,17 @@ try {
 ## Testing Guidelines
 
 - **Framework**: Vitest with V8 coverage
-- **Coverage thresholds**: 70% lines/branches/functions/statements
+- **Config**: `vitest.config.ts` (all), `vitest.unit.config.ts` (fast unit)
+- **Coverage thresholds**: 70% lines/functions/statements, 55% branches
 - **Test naming**: Match source files with `.test.ts` suffix
+- **Test patterns**: `.test.ts` (unit), `.e2e.test.ts` (e2e), `.live.test.ts` (live API)
 - **Max workers**: 16 (do not increase)
-- **Test patterns**:
 
 ```typescript
 // Use vi.hoisted for mock hoisting
 const mockFn = vi.hoisted(() => vi.fn());
 
-// Use describe/it blocks
+// Standard test structure
 describe("MyClass", () => {
   it("should do something", () => {
     expect(true).toBe(true);
@@ -135,7 +154,10 @@ describe("MyClass", () => {
 ## Commit Guidelines
 
 - Use `scripts/committer "<msg>" <file...>` for scoped commits
-- Action-oriented commit messages: `fix(telegram): send error notification on dispatch failure`
+- Action-oriented commit messages with scope:
+  - `fix(telegram): send error notification on dispatch failure`
+  - `feat(gateway): add WebSocket reconnection logic`
+  - `refactor(agents): extract session management`
 - Group related changes; avoid bundling unrelated refactors
 
 ## Important Constraints
@@ -146,16 +168,18 @@ describe("MyClass", () => {
 4. **Never** use prototype mutation for sharing class behavior
 5. **Always** run `pnpm check` before commits
 6. **Always** consider all messaging channels when refactoring shared logic
+7. **Always** use `.js` extension in imports for ESM compatibility
 
 ## Useful File Locations
 
-| Purpose          | Path                                        |
-| ---------------- | ------------------------------------------- |
-| CLI entry        | `src/index.ts`, `openclaw.mjs`              |
-| Config types     | `src/config/types.ts`                       |
-| Gateway server   | `src/gateway/`                              |
-| Telegram channel | `src/telegram/`                             |
-| Agent runner     | `src/agents/pi-embedded-runner/`            |
-| Plugin SDK       | `src/plugin-sdk/`                           |
-| Test setup       | `test/setup.ts`                             |
-| Vitest config    | `vitest.config.ts`, `vitest.unit.config.ts` |
+| Purpose           | Path                                               |
+| ----------------- | -------------------------------------------------- |
+| CLI entry         | `src/index.ts`, `openclaw.mjs`                     |
+| Config types      | `src/config/types.ts` (re-exports modular types)   |
+| Gateway server    | `src/gateway/server.ts`                            |
+| Telegram channel  | `src/telegram/`                                    |
+| Agent runner      | `src/agents/pi-embedded-runner.ts`                 |
+| Plugin SDK        | `src/plugin-sdk/index.ts`                          |
+| Test setup        | `test/setup.ts`                                    |
+| Vitest config     | `vitest.config.ts`, `vitest.unit.config.ts`        |
+| LaunchAgent plist | `~/Library/LaunchAgents/ai.openclaw.gateway.plist` |
