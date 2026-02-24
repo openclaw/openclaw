@@ -12,15 +12,6 @@ export type EncryptedEnvelope = {
   ciphertext: string;
 };
 
-export type VaultConfig = {
-  /** Whether credential encryption is enabled. Default: true when keychain is available. */
-  enabled?: boolean;
-  /** Key storage backend. Default: "auto" (prefers keychain, falls back to passphrase). */
-  backend?: "keychain" | "passphrase" | "auto";
-  /** Auto-encrypt plaintext credentials on read. Default: true. */
-  migrateOnLoad?: boolean;
-};
-
 export type VaultOptions = {
   backend: "keychain" | "passphrase" | "auto";
   stateDir: string;
