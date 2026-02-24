@@ -26,7 +26,6 @@ type LockPayload = {
 
 type HeldLock = {
   count: number;
-  handle: fs.FileHandle;
   lockPath: string;
 };
 
@@ -127,7 +126,6 @@ async function releaseLock(mapKey: string): Promise<void> {
   }
 
   HELD_WORKSPACE_LOCKS.delete(mapKey);
-  await held.handle.close().catch(() => undefined);
   await fs.rm(held.lockPath, { force: true }).catch(() => undefined);
 }
 
@@ -166,7 +164,8 @@ export async function acquireWorkspaceLock(
         kind,
       };
       await handle.writeFile(JSON.stringify(payload), "utf8");
-      HELD_WORKSPACE_LOCKS.set(mapKey, { count: 1, handle, lockPath });
+      await handle.close();
+      HELD_WORKSPACE_LOCKS.set(mapKey, { count: 1, lockPath });
       return {
         lockPath,
         release: () => releaseLock(mapKey),
