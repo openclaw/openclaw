@@ -174,7 +174,7 @@ export async function handleToolExecutionStart(
   // Flush pending block replies to preserve message boundaries before tool execution.
   ctx.flushBlockReplyBuffer();
   if (ctx.params.onBlockReplyFlush) {
-    void ctx.params.onBlockReplyFlush();
+    await ctx.params.onBlockReplyFlush();
   }
 
   const rawToolName = String(evt.toolName);
