@@ -19,6 +19,7 @@ import type {
   PluginHookBeforePromptBuildResult,
   PluginHookBeforeCompactionEvent,
   PluginHookLlmInputEvent,
+  PluginHookLlmInputResult,
   PluginHookLlmOutputEvent,
   PluginHookBeforeResetEvent,
   PluginHookBeforeToolCallEvent,
@@ -138,12 +139,37 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   const mergeBeforePromptBuild = (
     acc: PluginHookBeforePromptBuildResult | undefined,
     next: PluginHookBeforePromptBuildResult,
-  ): PluginHookBeforePromptBuildResult => ({
-    systemPrompt: next.systemPrompt ?? acc?.systemPrompt,
-    prependContext:
-      acc?.prependContext && next.prependContext
-        ? `${acc.prependContext}\n\n${next.prependContext}`
-        : (next.prependContext ?? acc?.prependContext),
+  ): PluginHookBeforePromptBuildResult => {
+    // If handler returns both appendSystemPrompt and prependContext with same content,
+    // it's using fallback pattern — prefer appendSystemPrompt, skip prependContext
+    const nextPrependContext =
+      next.appendSystemPrompt &&
+      next.prependContext &&
+      next.appendSystemPrompt === next.prependContext
+        ? undefined
+        : next.prependContext;
+
+    return {
+      systemPrompt: next.systemPrompt ?? acc?.systemPrompt,
+      prependContext:
+        acc?.prependContext && nextPrependContext
+          ? `${acc.prependContext}\n\n${nextPrependContext}`
+          : (nextPrependContext ?? acc?.prependContext),
+      appendSystemPrompt:
+        acc?.appendSystemPrompt && next.appendSystemPrompt
+          ? `${acc.appendSystemPrompt}\n\n${next.appendSystemPrompt}`
+          : (next.appendSystemPrompt ?? acc?.appendSystemPrompt),
+    };
+  };
+
+  const mergeLlmInputResult = (
+    acc: PluginHookLlmInputResult | undefined,
+    next: PluginHookLlmInputResult,
+  ): PluginHookLlmInputResult => ({
+    appendSystemPrompt:
+      acc?.appendSystemPrompt && next.appendSystemPrompt
+        ? `${acc.appendSystemPrompt}\n\n${next.appendSystemPrompt}`
+        : (next.appendSystemPrompt ?? acc?.appendSystemPrompt),
   });
 
   const mergeSubagentSpawningResult = (
@@ -240,7 +266,8 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
         )(event, ctx);
 
         if (handlerResult !== undefined && handlerResult !== null) {
-          if (mergeResults && result !== undefined) {
+          // Always go through merge to apply per-handler transformations (e.g., fallback pattern)
+          if (mergeResults) {
             result = mergeResults(result, handlerResult);
           } else {
             result = handlerResult;
@@ -323,11 +350,19 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
 
   /**
    * Run llm_input hook.
-   * Allows plugins to observe the exact input payload sent to the LLM.
-   * Runs in parallel (fire-and-forget).
+   * Allows plugins to observe the input payload sent to the LLM and optionally
+   * inject context by returning { appendSystemPrompt: string }.
    */
-  async function runLlmInput(event: PluginHookLlmInputEvent, ctx: PluginHookAgentContext) {
-    return runVoidHook("llm_input", event, ctx);
+  async function runLlmInput(
+    event: PluginHookLlmInputEvent,
+    ctx: PluginHookAgentContext,
+  ): Promise<PluginHookLlmInputResult | undefined> {
+    return runModifyingHook<"llm_input", PluginHookLlmInputResult>(
+      "llm_input",
+      event,
+      ctx,
+      mergeLlmInputResult,
+    );
   }
 
   /**

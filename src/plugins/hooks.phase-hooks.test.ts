@@ -72,4 +72,45 @@ describe("phase hooks merger", () => {
     expect(result?.prependContext).toBe("context A\n\ncontext B");
     expect(result?.systemPrompt).toBe("system A");
   });
+
+  it("before_prompt_build skips prependContext when same as appendSystemPrompt (fallback pattern)", async () => {
+    // Handler returns both with same content — fallback pattern
+    // Should use appendSystemPrompt, skip prependContext
+    addTypedHook(
+      registry,
+      "before_prompt_build",
+      "plugin",
+      () => ({
+        appendSystemPrompt: "memory context here",
+        prependContext: "memory context here", // same content = fallback
+      }),
+      10,
+    );
+
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, {});
+
+    expect(result?.appendSystemPrompt).toBe("memory context here");
+    expect(result?.prependContext).toBeUndefined();
+  });
+
+  it("before_prompt_build uses both when appendSystemPrompt differs from prependContext", async () => {
+    // Handler returns both with different content — legitimate dual use
+    addTypedHook(
+      registry,
+      "before_prompt_build",
+      "plugin",
+      () => ({
+        appendSystemPrompt: "instructions for the model",
+        prependContext: "context for user prompt",
+      }),
+      10,
+    );
+
+    const runner = createHookRunner(registry);
+    const result = await runner.runBeforePromptBuild({ prompt: "test", messages: [] }, {});
+
+    expect(result?.appendSystemPrompt).toBe("instructions for the model");
+    expect(result?.prependContext).toBe("context for user prompt");
+  });
 });
