@@ -17,10 +17,16 @@ import {
 import { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { parseToolsBySenderTypedKey } from "../config/types.tools.js";
+import { resolveCommandResolutionFromArgv } from "../infra/exec-command-resolution.js";
 import {
   listInterpreterLikeSafeBins,
   resolveMergedSafeBinProfileFixtures,
 } from "../infra/exec-safe-bin-runtime-policy.js";
+import {
+  getTrustedSafeBinDirs,
+  isTrustedSafeBinPath,
+  normalizeTrustedSafeBinDirs,
+} from "../infra/exec-safe-bin-trust.js";
 import {
   isDiscordMutableAllowEntry,
   isGoogleChatMutableAllowEntry,
@@ -1001,6 +1007,13 @@ type ExecSafeBinScopeRef = {
   safeBins: string[];
   exec: Record<string, unknown>;
   mergedProfiles: Record<string, unknown>;
+  trustedSafeBinDirs: ReadonlySet<string>;
+};
+
+type ExecSafeBinTrustedDirHintHit = {
+  scopePath: string;
+  bin: string;
+  resolvedPath: string;
 };
 
 function normalizeConfiguredSafeBins(entries: unknown): string[] {
@@ -1016,9 +1029,19 @@ function normalizeConfiguredSafeBins(entries: unknown): string[] {
   ).toSorted();
 }
 
+function normalizeConfiguredTrustedSafeBinDirs(entries: unknown): string[] {
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+  return normalizeTrustedSafeBinDirs(
+    entries.filter((entry): entry is string => typeof entry === "string"),
+  );
+}
+
 function collectExecSafeBinScopes(cfg: OpenClawConfig): ExecSafeBinScopeRef[] {
   const scopes: ExecSafeBinScopeRef[] = [];
   const globalExec = asObjectRecord(cfg.tools?.exec);
+  const globalTrustedDirs = normalizeConfiguredTrustedSafeBinDirs(globalExec?.safeBinTrustedDirs);
   if (globalExec) {
     const safeBins = normalizeConfiguredSafeBins(globalExec.safeBins);
     if (safeBins.length > 0) {
@@ -1030,6 +1053,9 @@ function collectExecSafeBinScopes(cfg: OpenClawConfig): ExecSafeBinScopeRef[] {
           resolveMergedSafeBinProfileFixtures({
             global: globalExec,
           }) ?? {},
+        trustedSafeBinDirs: getTrustedSafeBinDirs({
+          extraDirs: globalTrustedDirs,
+        }),
       });
     }
   }
@@ -1055,6 +1081,12 @@ function collectExecSafeBinScopes(cfg: OpenClawConfig): ExecSafeBinScopeRef[] {
           global: globalExec,
           local: agentExec,
         }) ?? {},
+      trustedSafeBinDirs: getTrustedSafeBinDirs({
+        extraDirs: [
+          ...globalTrustedDirs,
+          ...normalizeConfiguredTrustedSafeBinDirs(agentExec.safeBinTrustedDirs),
+        ],
+      }),
     });
   }
   return scopes;
@@ -1072,6 +1104,32 @@ function scanExecSafeBinCoverage(cfg: OpenClawConfig): ExecSafeBinCoverageHit[] 
         scopePath: scope.scopePath,
         bin,
         isInterpreter: interpreterBins.has(bin),
+      });
+    }
+  }
+  return hits;
+}
+
+function scanExecSafeBinTrustedDirHints(cfg: OpenClawConfig): ExecSafeBinTrustedDirHintHit[] {
+  const hits: ExecSafeBinTrustedDirHintHit[] = [];
+  for (const scope of collectExecSafeBinScopes(cfg)) {
+    for (const bin of scope.safeBins) {
+      const resolution = resolveCommandResolutionFromArgv([bin]);
+      if (!resolution?.resolvedPath) {
+        continue;
+      }
+      if (
+        isTrustedSafeBinPath({
+          resolvedPath: resolution.resolvedPath,
+          trustedDirs: scope.trustedSafeBinDirs,
+        })
+      ) {
+        continue;
+      }
+      hits.push({
+        scopePath: scope.scopePath,
+        bin,
+        resolvedPath: resolution.resolvedPath,
       });
     }
   }
@@ -1485,6 +1543,25 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       }
       lines.push(
         `- Run "${formatCliCommand("openclaw doctor --fix")}" to scaffold missing custom safeBinProfiles entries.`,
+      );
+      note(lines.join("\n"), "Doctor warnings");
+    }
+
+    const safeBinTrustedDirHints = scanExecSafeBinTrustedDirHints(candidate);
+    if (safeBinTrustedDirHints.length > 0) {
+      const lines = safeBinTrustedDirHints
+        .slice(0, 5)
+        .map(
+          (hit) =>
+            `- ${hit.scopePath}.safeBins entry '${hit.bin}' resolves to '${hit.resolvedPath}' outside trusted safe-bin dirs.`,
+        );
+      if (safeBinTrustedDirHints.length > 5) {
+        lines.push(
+          `- ${safeBinTrustedDirHints.length - 5} more safeBins entries resolve outside trusted safe-bin dirs.`,
+        );
+      }
+      lines.push(
+        "- If intentional, add the binary directory to tools.exec.safeBinTrustedDirs (global or agent scope).",
       );
       note(lines.join("\n"), "Doctor warnings");
     }
