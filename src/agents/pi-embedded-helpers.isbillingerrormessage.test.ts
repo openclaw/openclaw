@@ -84,6 +84,17 @@ describe("isBillingErrorMessage", () => {
       expect(isBillingErrorMessage(sample)).toBe(true);
     }
   });
+  it("matches OpenRouter 402 credit exhaustion errors", () => {
+    const samples = [
+      "402 This request requires more credits, or fewer max_tokens. You requested up to 32000 tokens, but can only afford 11771. To increase, visit https://openrouter.ai/settings/keys and create a key with a higher monthly limit",
+      "402 This request requires more credits, or fewer max_tokens. You requested up to 32000 tokens, but can only afford 8946.",
+      "requires more credits",
+      "can only afford 11771",
+    ];
+    for (const sample of samples) {
+      expect(isBillingErrorMessage(sample)).toBe(true);
+    }
+  });
   it("does not false-positive on issue IDs or text containing 402", () => {
     const falsePositives = [
       "Fixed issue CHE-402 in the latest release",
@@ -380,6 +391,16 @@ describe("isLikelyContextOverflowError", () => {
     }
   });
 
+  it("excludes billing errors that contain token/limit language", () => {
+    const samples = [
+      "402 This request requires more credits, or fewer max_tokens. You requested up to 32000 tokens, but can only afford 11771. To increase, visit https://openrouter.ai/settings/keys and create a key with a higher monthly limit",
+      "402 This request requires more credits, or fewer max_tokens. You requested up to 32000 tokens, but can only afford 8946.",
+    ];
+    for (const sample of samples) {
+      expect(isLikelyContextOverflowError(sample)).toBe(false);
+    }
+  });
+
   it("excludes reasoning-required invalid-request errors", () => {
     const samples = [
       "400 Reasoning is mandatory for this endpoint and cannot be disabled.",
@@ -546,5 +567,12 @@ describe("classifyFailoverReason", () => {
         '{"type":"error","error":{"type":"api_error","message":"Internal server error"}}',
       ),
     ).toBe("timeout");
+  });
+  it("classifies OpenRouter 402 credit exhaustion as billing", () => {
+    expect(
+      classifyFailoverReason(
+        "402 This request requires more credits, or fewer max_tokens. You requested up to 32000 tokens, but can only afford 11771.",
+      ),
+    ).toBe("billing");
   });
 });
