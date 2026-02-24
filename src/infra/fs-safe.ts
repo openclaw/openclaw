@@ -40,6 +40,23 @@ const OPEN_READ_FLAGS = fsConstants.O_RDONLY | (SUPPORTS_NOFOLLOW ? fsConstants.
 
 const ensureTrailingSep = (value: string) => (value.endsWith(path.sep) ? value : value + path.sep);
 
+/**
+ * Compare file stats for identity verification.
+ * On Windows, device IDs (dev) are unreliable and may differ between
+ * handle.stat() and fs.lstat() for the same file. We skip dev comparison
+ * on Windows and rely solely on inode (ino) matching.
+ */
+function statsMatch(stat1: Stats, stat2: Stats): boolean {
+  if (stat1.ino !== stat2.ino) {
+    return false;
+  }
+  // On Windows, dev values are unreliable across different stat sources
+  if (process.platform !== "win32" && stat1.dev !== stat2.dev) {
+    return false;
+  }
+  return true;
+}
+
 async function openVerifiedLocalFile(filePath: string): Promise<SafeOpenResult> {
   let handle: FileHandle;
   try {
@@ -62,13 +79,13 @@ async function openVerifiedLocalFile(filePath: string): Promise<SafeOpenResult> 
     if (!stat.isFile()) {
       throw new SafeOpenError("not-file", "not a file");
     }
-    if (stat.ino !== lstat.ino || stat.dev !== lstat.dev) {
+    if (!statsMatch(stat, lstat)) {
       throw new SafeOpenError("path-mismatch", "path changed during read");
     }
 
     const realPath = await fs.realpath(filePath);
     const realStat = await fs.stat(realPath);
-    if (stat.ino !== realStat.ino || stat.dev !== realStat.dev) {
+    if (!statsMatch(stat, realStat)) {
       throw new SafeOpenError("path-mismatch", "path mismatch");
     }
 
