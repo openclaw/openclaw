@@ -90,7 +90,7 @@ describe("maybeApplyApiKeyFromOption", () => {
     });
 
     expect(result).toBe("opt-key");
-    expect(setCredential).toHaveBeenCalledWith("opt-key");
+    expect(setCredential).toHaveBeenCalledWith("opt-key", undefined);
   });
 
   it("matches provider with whitespace/case normalization", async () => {
@@ -105,7 +105,7 @@ describe("maybeApplyApiKeyFromOption", () => {
     });
 
     expect(result).toBe("opt-key");
-    expect(setCredential).toHaveBeenCalledWith("opt-key");
+    expect(setCredential).toHaveBeenCalledWith("opt-key", undefined);
   });
 
   it("skips when provider does not match", async () => {
@@ -132,7 +132,7 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
     });
 
     expect(result).toBe("env-key");
-    expect(setCredential).toHaveBeenCalledWith("env-key");
+    expect(setCredential).toHaveBeenCalledWith("env-key", "plaintext");
     expect(text).not.toHaveBeenCalled();
   });
 
@@ -143,7 +143,7 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
     });
 
     expect(result).toBe("prompted-key");
-    expect(setCredential).toHaveBeenCalledWith("prompted-key");
+    expect(setCredential).toHaveBeenCalledWith("prompted-key", undefined);
     expect(text).toHaveBeenCalledWith(
       expect.objectContaining({
         message: "Enter key",
@@ -176,7 +176,7 @@ describe("ensureApiKeyFromOptionEnvOrPrompt", () => {
     });
 
     expect(result).toBe("opts-key");
-    expect(setCredential).toHaveBeenCalledWith("opts-key");
+    expect(setCredential).toHaveBeenCalledWith("opts-key", undefined);
     expect(note).not.toHaveBeenCalled();
     expect(confirm).not.toHaveBeenCalled();
     expect(text).not.toHaveBeenCalled();
@@ -211,6 +211,6 @@ describe("ensureApiKeyFromOptionEnvOrPrompt", () => {
     expect(note).toHaveBeenCalledWith("MiniMax note", "MiniMax");
     expect(confirm).toHaveBeenCalled();
     expect(text).not.toHaveBeenCalled();
-    expect(setCredential).toHaveBeenCalledWith("env-key");
+    expect(setCredential).toHaveBeenCalledWith("env-key", "plaintext");
   });
 });
