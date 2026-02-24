@@ -145,10 +145,12 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
       if (dmPolicy !== "open") {
         const effectiveAllowFrom = [...allowFrom.map((v) => String(v)), ...storedAllowFrom];
+        const allowNameMatching = msteamsCfg.dangerouslyAllowNameMatching === true;
         const allowMatch = resolveMSTeamsAllowlistMatch({
           allowFrom: effectiveAllowFrom,
           senderId,
           senderName,
+          allowNameMatching,
         });
 
         if (!allowMatch.allowed) {
@@ -226,10 +228,12 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           return;
         }
         if (effectiveGroupAllowFrom.length > 0) {
+          const allowNameMatching = msteamsCfg.dangerouslyAllowNameMatching === true;
           const allowMatch = resolveMSTeamsAllowlistMatch({
             allowFrom: effectiveGroupAllowFrom,
             senderId,
             senderName,
+            allowNameMatching,
           });
           if (!allowMatch.allowed) {
             log.debug?.("dropping group message (not in groupAllowFrom)", {
@@ -248,12 +252,14 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       allowFrom: effectiveDmAllowFrom,
       senderId,
       senderName,
+      allowNameMatching: msteamsCfg?.dangerouslyAllowNameMatching === true,
     });
     const groupAllowedForCommands = isMSTeamsGroupAllowed({
       groupPolicy: "allowlist",
       allowFrom: effectiveGroupAllowFrom,
       senderId,
       senderName,
+      allowNameMatching: msteamsCfg?.dangerouslyAllowNameMatching === true,
     });
     const hasControlCommandInMessage = core.channel.text.hasControlCommand(text, cfg);
     const commandGate = resolveControlCommandGate({

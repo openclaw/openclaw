@@ -178,10 +178,25 @@ export async function collectChannelSecurityFindings(params: {
       continue;
     }
 
+    const accountConfig = (account as { config?: Record<string, unknown> } | null | undefined)
+      ?.config;
+    if (accountConfig?.dangerouslyAllowNameMatching === true) {
+      findings.push({
+        checkId: `channels.${plugin.id}.allowFrom.dangerous_name_matching_enabled`,
+        severity: "info",
+        title: `${plugin.meta.label ?? plugin.id} dangerous name matching is enabled`,
+        detail:
+          "dangerouslyAllowNameMatching=true re-enables mutable name/email/tag matching for sender authorization. This is a break-glass compatibility mode, not a hardened default.",
+        remediation:
+          "Prefer stable sender IDs in allowlists, then disable dangerouslyAllowNameMatching.",
+      });
+    }
+
     if (plugin.id === "discord") {
       const discordCfg =
         (account as { config?: Record<string, unknown> } | null)?.config ??
         ({} as Record<string, unknown>);
+      const dangerousNameMatchingEnabled = discordCfg.dangerouslyAllowNameMatching === true;
       const storeAllowFrom = await readChannelAllowFromStore("discord").catch(() => []);
       const discordNameBasedAllowEntries = new Set<string>();
       addDiscordNameBasedEntries({
@@ -236,13 +251,18 @@ export async function collectChannelSecurityFindings(params: {
             : "";
         findings.push({
           checkId: "channels.discord.allowFrom.name_based_entries",
-          severity: "warn",
-          title: "Discord allowlist contains name or tag entries",
-          detail:
-            "Discord name/tag allowlist matching uses normalized slugs and can collide across users. " +
-            `Found: ${examples.join(", ")}${more}.`,
-          remediation:
-            "Prefer stable Discord IDs (or <@id>/user:<id>/pk:<id>) in channels.discord.allowFrom and channels.discord.guilds.*.users.",
+          severity: dangerousNameMatchingEnabled ? "info" : "warn",
+          title: dangerousNameMatchingEnabled
+            ? "Discord allowlist uses break-glass name/tag matching"
+            : "Discord allowlist contains name or tag entries",
+          detail: dangerousNameMatchingEnabled
+            ? "Discord name/tag allowlist matching is explicitly enabled via dangerouslyAllowNameMatching. This mutable-identity mode is operator-selected break-glass behavior and out-of-scope for vulnerability reports by itself. " +
+              `Found: ${examples.join(", ")}${more}.`
+            : "Discord name/tag allowlist matching uses normalized slugs and can collide across users. " +
+              `Found: ${examples.join(", ")}${more}.`,
+          remediation: dangerousNameMatchingEnabled
+            ? "Prefer stable Discord IDs (or <@id>/user:<id>/pk:<id>), then disable dangerouslyAllowNameMatching."
+            : "Prefer stable Discord IDs (or <@id>/user:<id>/pk:<id>) in channels.discord.allowFrom and channels.discord.guilds.*.users, or explicitly opt in with dangerouslyAllowNameMatching=true if you accept the risk.",
         });
       }
       const nativeEnabled = resolveNativeCommandsEnabled({

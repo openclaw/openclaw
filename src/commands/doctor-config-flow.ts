@@ -578,6 +578,400 @@ function maybeRepairDiscordNumericIds(cfg: OpenClawConfig): {
   return { config: next, changes };
 }
 
+type MutableAllowlistHit = {
+  channel: string;
+  path: string;
+  entry: string;
+  dangerousFlagPath: string;
+};
+
+function collectProviderAccountScopes(
+  cfg: OpenClawConfig,
+  provider: string,
+): Array<{ prefix: string; account: Record<string, unknown> }> {
+  const scopes: Array<{ prefix: string; account: Record<string, unknown> }> = [];
+  const channels = asObjectRecord(cfg.channels);
+  if (!channels) {
+    return scopes;
+  }
+  const providerCfg = asObjectRecord(channels[provider]);
+  if (!providerCfg) {
+    return scopes;
+  }
+  scopes.push({ prefix: `channels.${provider}`, account: providerCfg });
+  const accounts = asObjectRecord(providerCfg.accounts);
+  if (!accounts) {
+    return scopes;
+  }
+  for (const key of Object.keys(accounts)) {
+    const account = asObjectRecord(accounts[key]);
+    if (!account) {
+      continue;
+    }
+    scopes.push({ prefix: `channels.${provider}.accounts.${key}`, account });
+  }
+  return scopes;
+}
+
+function isDiscordMutableAllowEntry(raw: string): boolean {
+  const text = raw.trim();
+  if (!text || text === "*") {
+    return false;
+  }
+  const maybeMentionId = text.replace(/^<@!?/, "").replace(/>$/, "");
+  if (/^\d+$/.test(maybeMentionId)) {
+    return false;
+  }
+  for (const prefix of ["discord:", "user:", "pk:"]) {
+    if (!text.startsWith(prefix)) {
+      continue;
+    }
+    return text.slice(prefix.length).trim().length === 0;
+  }
+  return true;
+}
+
+function isSlackMutableAllowEntry(raw: string): boolean {
+  const text = raw.trim();
+  if (!text || text === "*") {
+    return false;
+  }
+  const mentionMatch = text.match(/^<@([A-Z0-9]+)>$/i);
+  if (mentionMatch && /^[A-Z0-9]{8,}$/i.test(mentionMatch[1] ?? "")) {
+    return false;
+  }
+  const withoutPrefix = text.replace(/^(slack|user):/i, "").trim();
+  if (/^[UWBCGDT][A-Z0-9]{2,}$/.test(withoutPrefix)) {
+    return false;
+  }
+  if (/^[A-Z0-9]{8,}$/i.test(withoutPrefix)) {
+    return false;
+  }
+  return true;
+}
+
+function isGoogleChatMutableAllowEntry(raw: string): boolean {
+  const text = raw.trim();
+  if (!text || text === "*") {
+    return false;
+  }
+  const withoutPrefix = text.replace(/^(googlechat|google-chat|gchat):/i, "").trim();
+  if (!withoutPrefix) {
+    return false;
+  }
+  const withoutUsers = withoutPrefix.replace(/^users\//i, "");
+  return withoutUsers.includes("@");
+}
+
+function isMSTeamsMutableAllowEntry(raw: string): boolean {
+  const text = raw.trim();
+  if (!text || text === "*") {
+    return false;
+  }
+  const withoutPrefix = text.replace(/^(msteams|user):/i, "").trim();
+  return /\s/.test(withoutPrefix) || withoutPrefix.includes("@");
+}
+
+function isMattermostMutableAllowEntry(raw: string): boolean {
+  const text = raw.trim();
+  if (!text || text === "*") {
+    return false;
+  }
+  const normalized = text
+    .replace(/^(mattermost|user):/i, "")
+    .replace(/^@/, "")
+    .trim()
+    .toLowerCase();
+  // Mattermost user IDs are stable 26-char lowercase/number tokens.
+  if (/^[a-z0-9]{26}$/.test(normalized)) {
+    return false;
+  }
+  return true;
+}
+
+function isIrcMutableAllowEntry(raw: string): boolean {
+  const text = raw.trim().toLowerCase();
+  if (!text || text === "*") {
+    return false;
+  }
+  const normalized = text
+    .replace(/^irc:/, "")
+    .replace(/^user:/, "")
+    .trim();
+  return !normalized.includes("!") && !normalized.includes("@");
+}
+
+function addMutableAllowlistHits(params: {
+  hits: MutableAllowlistHit[];
+  pathLabel: string;
+  list: unknown;
+  detector: (entry: string) => boolean;
+  channel: string;
+  dangerousFlagPath: string;
+}) {
+  if (!Array.isArray(params.list)) {
+    return;
+  }
+  for (const entry of params.list) {
+    const text = String(entry).trim();
+    if (!text || text === "*") {
+      continue;
+    }
+    if (!params.detector(text)) {
+      continue;
+    }
+    params.hits.push({
+      channel: params.channel,
+      path: params.pathLabel,
+      entry: text,
+      dangerousFlagPath: params.dangerousFlagPath,
+    });
+  }
+}
+
+function scanMutableAllowlistEntries(cfg: OpenClawConfig): MutableAllowlistHit[] {
+  const hits: MutableAllowlistHit[] = [];
+
+  for (const scope of collectProviderAccountScopes(cfg, "discord")) {
+    const dangerousFlagPath = `${scope.prefix}.dangerouslyAllowNameMatching`;
+    if (scope.account.dangerouslyAllowNameMatching === true) {
+      continue;
+    }
+    addMutableAllowlistHits({
+      hits,
+      pathLabel: `${scope.prefix}.allowFrom`,
+      list: scope.account.allowFrom,
+      detector: isDiscordMutableAllowEntry,
+      channel: "discord",
+      dangerousFlagPath,
+    });
+    const dm = asObjectRecord(scope.account.dm);
+    if (dm) {
+      addMutableAllowlistHits({
+        hits,
+        pathLabel: `${scope.prefix}.dm.allowFrom`,
+        list: dm.allowFrom,
+        detector: isDiscordMutableAllowEntry,
+        channel: "discord",
+        dangerousFlagPath,
+      });
+    }
+    const guilds = asObjectRecord(scope.account.guilds);
+    if (!guilds) {
+      continue;
+    }
+    for (const [guildId, guildRaw] of Object.entries(guilds)) {
+      const guild = asObjectRecord(guildRaw);
+      if (!guild) {
+        continue;
+      }
+      addMutableAllowlistHits({
+        hits,
+        pathLabel: `${scope.prefix}.guilds.${guildId}.users`,
+        list: guild.users,
+        detector: isDiscordMutableAllowEntry,
+        channel: "discord",
+        dangerousFlagPath,
+      });
+      const channels = asObjectRecord(guild.channels);
+      if (!channels) {
+        continue;
+      }
+      for (const [channelId, channelRaw] of Object.entries(channels)) {
+        const channel = asObjectRecord(channelRaw);
+        if (!channel) {
+          continue;
+        }
+        addMutableAllowlistHits({
+          hits,
+          pathLabel: `${scope.prefix}.guilds.${guildId}.channels.${channelId}.users`,
+          list: channel.users,
+          detector: isDiscordMutableAllowEntry,
+          channel: "discord",
+          dangerousFlagPath,
+        });
+      }
+    }
+  }
+
+  for (const scope of collectProviderAccountScopes(cfg, "slack")) {
+    const dangerousFlagPath = `${scope.prefix}.dangerouslyAllowNameMatching`;
+    if (scope.account.dangerouslyAllowNameMatching === true) {
+      continue;
+    }
+    addMutableAllowlistHits({
+      hits,
+      pathLabel: `${scope.prefix}.allowFrom`,
+      list: scope.account.allowFrom,
+      detector: isSlackMutableAllowEntry,
+      channel: "slack",
+      dangerousFlagPath,
+    });
+    const dm = asObjectRecord(scope.account.dm);
+    if (dm) {
+      addMutableAllowlistHits({
+        hits,
+        pathLabel: `${scope.prefix}.dm.allowFrom`,
+        list: dm.allowFrom,
+        detector: isSlackMutableAllowEntry,
+        channel: "slack",
+        dangerousFlagPath,
+      });
+    }
+    const channels = asObjectRecord(scope.account.channels);
+    if (!channels) {
+      continue;
+    }
+    for (const [channelKey, channelRaw] of Object.entries(channels)) {
+      const channel = asObjectRecord(channelRaw);
+      if (!channel) {
+        continue;
+      }
+      addMutableAllowlistHits({
+        hits,
+        pathLabel: `${scope.prefix}.channels.${channelKey}.users`,
+        list: channel.users,
+        detector: isSlackMutableAllowEntry,
+        channel: "slack",
+        dangerousFlagPath,
+      });
+    }
+  }
+
+  for (const scope of collectProviderAccountScopes(cfg, "googlechat")) {
+    const dangerousFlagPath = `${scope.prefix}.dangerouslyAllowNameMatching`;
+    if (scope.account.dangerouslyAllowNameMatching === true) {
+      continue;
+    }
+    addMutableAllowlistHits({
+      hits,
+      pathLabel: `${scope.prefix}.groupAllowFrom`,
+      list: scope.account.groupAllowFrom,
+      detector: isGoogleChatMutableAllowEntry,
+      channel: "googlechat",
+      dangerousFlagPath,
+    });
+    const dm = asObjectRecord(scope.account.dm);
+    if (dm) {
+      addMutableAllowlistHits({
+        hits,
+        pathLabel: `${scope.prefix}.dm.allowFrom`,
+        list: dm.allowFrom,
+        detector: isGoogleChatMutableAllowEntry,
+        channel: "googlechat",
+        dangerousFlagPath,
+      });
+    }
+    const groups = asObjectRecord(scope.account.groups);
+    if (!groups) {
+      continue;
+    }
+    for (const [groupKey, groupRaw] of Object.entries(groups)) {
+      const group = asObjectRecord(groupRaw);
+      if (!group) {
+        continue;
+      }
+      addMutableAllowlistHits({
+        hits,
+        pathLabel: `${scope.prefix}.groups.${groupKey}.users`,
+        list: group.users,
+        detector: isGoogleChatMutableAllowEntry,
+        channel: "googlechat",
+        dangerousFlagPath,
+      });
+    }
+  }
+
+  for (const scope of collectProviderAccountScopes(cfg, "msteams")) {
+    const dangerousFlagPath = `${scope.prefix}.dangerouslyAllowNameMatching`;
+    if (scope.account.dangerouslyAllowNameMatching === true) {
+      continue;
+    }
+    addMutableAllowlistHits({
+      hits,
+      pathLabel: `${scope.prefix}.allowFrom`,
+      list: scope.account.allowFrom,
+      detector: isMSTeamsMutableAllowEntry,
+      channel: "msteams",
+      dangerousFlagPath,
+    });
+    addMutableAllowlistHits({
+      hits,
+      pathLabel: `${scope.prefix}.groupAllowFrom`,
+      list: scope.account.groupAllowFrom,
+      detector: isMSTeamsMutableAllowEntry,
+      channel: "msteams",
+      dangerousFlagPath,
+    });
+  }
+
+  for (const scope of collectProviderAccountScopes(cfg, "mattermost")) {
+    const dangerousFlagPath = `${scope.prefix}.dangerouslyAllowNameMatching`;
+    if (scope.account.dangerouslyAllowNameMatching === true) {
+      continue;
+    }
+    addMutableAllowlistHits({
+      hits,
+      pathLabel: `${scope.prefix}.allowFrom`,
+      list: scope.account.allowFrom,
+      detector: isMattermostMutableAllowEntry,
+      channel: "mattermost",
+      dangerousFlagPath,
+    });
+    addMutableAllowlistHits({
+      hits,
+      pathLabel: `${scope.prefix}.groupAllowFrom`,
+      list: scope.account.groupAllowFrom,
+      detector: isMattermostMutableAllowEntry,
+      channel: "mattermost",
+      dangerousFlagPath,
+    });
+  }
+
+  for (const scope of collectProviderAccountScopes(cfg, "irc")) {
+    const dangerousFlagPath = `${scope.prefix}.dangerouslyAllowNameMatching`;
+    if (scope.account.dangerouslyAllowNameMatching === true) {
+      continue;
+    }
+    addMutableAllowlistHits({
+      hits,
+      pathLabel: `${scope.prefix}.allowFrom`,
+      list: scope.account.allowFrom,
+      detector: isIrcMutableAllowEntry,
+      channel: "irc",
+      dangerousFlagPath,
+    });
+    addMutableAllowlistHits({
+      hits,
+      pathLabel: `${scope.prefix}.groupAllowFrom`,
+      list: scope.account.groupAllowFrom,
+      detector: isIrcMutableAllowEntry,
+      channel: "irc",
+      dangerousFlagPath,
+    });
+    const groups = asObjectRecord(scope.account.groups);
+    if (!groups) {
+      continue;
+    }
+    for (const [groupKey, groupRaw] of Object.entries(groups)) {
+      const group = asObjectRecord(groupRaw);
+      if (!group) {
+        continue;
+      }
+      addMutableAllowlistHits({
+        hits,
+        pathLabel: `${scope.prefix}.groups.${groupKey}.allowFrom`,
+        list: group.allowFrom,
+        detector: isIrcMutableAllowEntry,
+        channel: "irc",
+        dangerousFlagPath,
+      });
+    }
+  }
+
+  return hits;
+}
+
 /**
  * Scan all channel configs for dmPolicy="open" without allowFrom including "*".
  * This configuration is rejected by the schema validator but can easily occur when
@@ -1207,6 +1601,34 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       );
       note(lines.join("\n"), "Doctor warnings");
     }
+  }
+
+  const mutableAllowlistHits = scanMutableAllowlistEntries(candidate);
+  if (mutableAllowlistHits.length > 0) {
+    const channels = Array.from(new Set(mutableAllowlistHits.map((hit) => hit.channel))).toSorted();
+    const exampleLines = mutableAllowlistHits
+      .slice(0, 8)
+      .map((hit) => `- ${hit.path}: ${hit.entry}`)
+      .join("\n");
+    const remaining =
+      mutableAllowlistHits.length > 8
+        ? `- +${mutableAllowlistHits.length - 8} more mutable allowlist entries.`
+        : null;
+    const flagPaths = Array.from(new Set(mutableAllowlistHits.map((hit) => hit.dangerousFlagPath)));
+    const flagHint =
+      flagPaths.length === 1
+        ? flagPaths[0]
+        : `${flagPaths[0]} (and ${flagPaths.length - 1} other scope flags)`;
+    note(
+      [
+        `- Found ${mutableAllowlistHits.length} mutable allowlist ${mutableAllowlistHits.length === 1 ? "entry" : "entries"} across ${channels.join(", ")} while name matching is disabled by default.`,
+        exampleLines,
+        ...(remaining ? [remaining] : []),
+        `- Option A (break-glass): enable ${flagHint}=true to keep name/email/nick matching.`,
+        "- Option B (recommended): resolve names/emails/nicks to stable sender IDs and rewrite the allowlist entries.",
+      ].join("\n"),
+      "Doctor warnings",
+    );
   }
 
   const unknown = stripUnknownConfigKeys(candidate);

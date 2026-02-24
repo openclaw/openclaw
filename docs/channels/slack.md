@@ -171,6 +171,7 @@ For actions/directory reads, user token can be preferred when configured. For wr
 
     - channel allowlist entries and DM allowlist entries are resolved at startup when token access allows
     - unresolved entries are kept as configured
+    - inbound authorization matching is ID-first by default; direct username/slug matching requires `channels.slack.dangerouslyAllowNameMatching: true`
 
   </Tab>
 
@@ -513,6 +514,7 @@ Primary reference:
   High-signal Slack fields:
   - mode/auth: `mode`, `botToken`, `appToken`, `signingSecret`, `webhookPath`, `accounts.*`
   - DM access: `dm.enabled`, `dmPolicy`, `allowFrom` (legacy: `dm.policy`, `dm.allowFrom`), `dm.groupEnabled`, `dm.groupChannels`
+  - compatibility toggle: `dangerouslyAllowNameMatching` (break-glass; keep off unless needed)
   - channel access: `groupPolicy`, `channels.*`, `channels.*.users`, `channels.*.requireMention`
   - threading/history: `replyToMode`, `replyToModeByChatType`, `thread.*`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
   - delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `streaming`, `nativeStreaming`
