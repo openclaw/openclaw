@@ -321,6 +321,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 ```
 
 - Service account JSON: inline (`serviceAccount`) or file-based (`serviceAccountFile`).
+- Service account SecretRef is also supported (`serviceAccountRef`).
 - Env fallbacks: `GOOGLE_CHAT_SERVICE_ACCOUNT` or `GOOGLE_CHAT_SERVICE_ACCOUNT_FILE`.
 - Use `spaces/<spaceId>` or `users/<userId>` for delivery targets.
 - `channels.googlechat.dangerouslyAllowNameMatching` re-enables mutable email principal matching (break-glass compatibility mode).
@@ -1986,7 +1987,7 @@ See [Local Models](/gateway/local-models). TL;DR: run MiniMax M2.1 via LM Studio
     },
     entries: {
       "nano-banana-pro": {
-        apiKey: "GEMINI_KEY_HERE",
+        apiKey: { source: "env", id: "GEMINI_API_KEY" }, // or plaintext string
         env: { GEMINI_API_KEY: "GEMINI_KEY_HERE" },
       },
       peekaboo: { enabled: true },
@@ -1998,7 +1999,7 @@ See [Local Models](/gateway/local-models). TL;DR: run MiniMax M2.1 via LM Studio
 
 - `allowBundled`: optional allowlist for bundled skills only (managed/workspace skills unaffected).
 - `entries.<skillKey>.enabled: false` disables a skill even if bundled/installed.
-- `entries.<skillKey>.apiKey`: convenience for skills declaring a primary env var.
+- `entries.<skillKey>.apiKey`: convenience for skills declaring a primary env var (plaintext string or SecretRef object).
 
 ---
 
@@ -2384,6 +2385,57 @@ Reference env vars in any config string with `${VAR_NAME}`:
 
 ---
 
+## Secrets
+
+Secret refs are additive: plaintext values still work.
+
+### `SecretRef`
+
+Use one object shape:
+
+```json5
+{ source: "env" | "file", id: "..." }
+```
+
+Validation:
+
+- `source: "env"` id pattern: `^[A-Z][A-Z0-9_]{0,127}$`
+- `source: "file"` id: absolute JSON pointer (for example `"/providers/openai/apiKey"`)
+
+### Supported fields in config
+
+- `models.providers.<provider>.apiKey`
+- `skills.entries.<skillKey>.apiKey`
+- `channels.googlechat.serviceAccount`
+- `channels.googlechat.serviceAccountRef`
+- `channels.googlechat.accounts.<accountId>.serviceAccount`
+- `channels.googlechat.accounts.<accountId>.serviceAccountRef`
+
+### Secret sources config
+
+```json5
+{
+  secrets: {
+    sources: {
+      env: { type: "env" }, // optional
+      file: {
+        type: "sops",
+        path: "~/.openclaw/secrets.enc.json",
+        timeoutMs: 5000,
+      },
+    },
+  },
+}
+```
+
+Notes:
+
+- `file` source requires `sops` in `PATH` (`sops >= 3.9.0`).
+- `timeoutMs` defaults to `5000`.
+- File payload must decrypt to a JSON object; `id` is resolved via JSON pointer.
+
+---
+
 ## Auth storage
 
 ```json5
@@ -2401,8 +2453,11 @@ Reference env vars in any config string with `${VAR_NAME}`:
 ```
 
 - Per-agent auth profiles stored at `<agentDir>/auth-profiles.json`.
+- Auth profiles support value-level refs (`keyRef` for `api_key`, `tokenRef` for `token`).
+- Static runtime credentials come from in-memory resolved snapshots; legacy static `auth.json` entries are scrubbed when discovered.
 - Legacy OAuth imports from `~/.openclaw/credentials/oauth.json`.
 - See [OAuth](/concepts/oauth).
+- Secrets runtime behavior and migration tooling: [Secrets Management](/gateway/secrets).
 
 ---
 
