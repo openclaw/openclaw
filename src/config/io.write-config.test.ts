@@ -134,7 +134,7 @@ describe("config io write", () => {
         logger: silentLogger,
       });
 
-      const invalidConfig = {
+      const invalidConfig: OpenClawConfig = {
         channels: {
           telegram: {
             dmPolicy: "open",
