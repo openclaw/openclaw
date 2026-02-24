@@ -41,6 +41,20 @@ export KILOCODE_API_KEY="your-api-key"
 }
 ```
 
+## Surfaced model refs
+
+The built-in Kilo Gateway catalog currently surfaces these model refs:
+
+- `kilocode/anthropic/claude-opus-4.6` (default)
+- `kilocode/z-ai/glm-5:free`
+- `kilocode/minimax/minimax-m2.5:free`
+- `kilocode/anthropic/claude-sonnet-4.5`
+- `kilocode/openai/gpt-5.2`
+- `kilocode/google/gemini-3-pro-preview`
+- `kilocode/google/gemini-3-flash-preview`
+- `kilocode/x-ai/grok-code-fast-1`
+- `kilocode/moonshotai/kimi-k2.5`
+
 ## Notes
 
 - Model refs are `kilocode/<provider>/<model>` (e.g., `kilocode/anthropic/claude-opus-4.6`).
