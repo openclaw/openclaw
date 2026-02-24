@@ -51,29 +51,35 @@ related:
 
 ## ⚠️ App Store 심사 — URL 수정 진행 중
 
-**상태:** 심사 대기 중 (2026-02-22 제출) → URL 수정 진행 중 (2026-02-24)
+**상태:** 심사 대기 중 (2026-02-22 제출) → 도메인 등록 + URL 수정 진행 중 (2026-02-24)
 **문제:** 제출 시 `botalks.app` 도메인 미존재 → 리젝 위험
-**해결:** GitHub Pages 배포 (`jini92.github.io/botalks-web/`) → App Store Connect URL 교체
+**해결:** ✅ `botalks.app` 도메인 등록 (whois.co.kr) + GitHub Pages 연결
 
 ### botalks-web 정적 사이트
 
 - **로컬:** `C:\TEST\botalks-web\` (순수 HTML/CSS)
 - **GitHub:** `jini92/botalks-web`
-- **URL:** `https://jini92.github.io/botalks-web/`
-- **페이지:** 메인, privacy(EN/KO), terms, support — 모두 200 OK 확인
+- **URL:** `https://botalks.app/` (커스텀 도메인)
+- **페이지:** 메인(`/`), privacy(`/privacy/`, `/privacy/ko/`), terms(`/terms/`), support(`/support/`)
 
-### App Store Connect 수정 현황 (2026-02-24)
+### botalks.app 도메인 설정
 
-| 항목               | 기존 URL                    | 새 URL                                         | 상태 |
-| ------------------ | --------------------------- | ---------------------------------------------- | ---- |
-| Support URL        | `botalks.app/support`       | `jini92.github.io/botalks-web/support/`        | ✅   |
-| Marketing URL      | `botalks.app`               | `jini92.github.io/botalks-web/`                | ✅   |
-| Privacy Policy URL | `botalks.app/privacy`       | `jini92.github.io/botalks-web/privacy/`        | ❌   |
-| Review Notes       | 기존 메모                   | I007 가이드 참고 (건너뛰기 버튼 설명 등)       | ❌   |
-| Description 내 URL | `botalks.app/privacy,terms` | `jini92.github.io/botalks-web/privacy/,terms/` | ❌   |
-| 저장               | —                           | —                                              | ❌   |
+- **등록:** whois.co.kr (2026-02-24)
+- **DNS:** A 레코드 4개 필요 → `185.199.108.153` / `109` / `110` / `111`
+- **GitHub Pages CNAME:** 설정 완료 (CNAME 파일 + `gh api` 설정)
+- **HTTPS:** DNS 전파 후 GitHub가 Let's Encrypt 자동 발급
 
-**잔여 작업:** Privacy Policy URL + Review Notes + Description URL 수정 → 저장 → 재제출
+### App Store Connect URL — 최종 정리
+
+| 항목               | 최종 URL                       | ASC 수정 |
+| ------------------ | ------------------------------ | -------- |
+| Privacy Policy URL | `https://botalks.app/privacy/` | ❌ 필요  |
+| Support URL        | `https://botalks.app/support/` | ✅ 완료  |
+| Marketing URL      | `https://botalks.app/`         | ✅ 완료  |
+| Review Notes       | I007 가이드 참고               | ❌ 필요  |
+| Description 내 URL | privacy/, terms/ 수정          | ❌ 필요  |
+
+**잔여 작업:** DNS 전파 확인 → ASC에서 Support/Marketing URL도 `botalks.app`으로 재변경 → Privacy + Review Notes + Description 수정 → 저장 → 재제출
 **상세 가이드:** `docs/I007-appstore-review-fix.md`
 
 ## Tech Intelligence 인사이트 (2026-02-24)
