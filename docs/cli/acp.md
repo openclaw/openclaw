@@ -49,6 +49,13 @@ openclaw acp client --server-args --url wss://gateway-host:18789 --token-file ~/
 openclaw acp client --server "node" --server-args openclaw.mjs acp --url ws://127.0.0.1:19001
 ```
 
+Permission model (client debug mode):
+
+- Auto-approval is allowlist-based and only applies to trusted core tool IDs.
+- `read` auto-approval is scoped to the current working directory (`--cwd` when set).
+- Unknown/non-core tool names, out-of-scope reads, and dangerous tools always require explicit prompt approval.
+- Server-provided `toolCall.kind` is treated as untrusted metadata (not an authorization source).
+
 ## How to use this
 
 Use ACP when an IDE (or other client) speaks Agent Client Protocol and you want

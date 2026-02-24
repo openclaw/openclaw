@@ -320,3 +320,7 @@ export function resolveCoreToolProfiles(toolId: string): ToolProfileId[] {
   }
   return [...tool.profiles];
 }
+
+export function isKnownCoreToolId(toolId: string): boolean {
+  return CORE_TOOL_BY_ID.has(toolId);
+}
