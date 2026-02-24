@@ -82,6 +82,8 @@ const OPEN_DM_POLICY_ALLOW_FROM_RE =
 
 const CONFIG_AUDIT_LOG_FILENAME = "config-audit.jsonl";
 const loggedInvalidConfigs = new Set<string>();
+// Deduplicate config warnings so repeated reloads don't spam the log
+const loggedConfigWarnings = new Set<string>();
 
 type ConfigWriteAuditResult = "rename" | "copy-fallback" | "failed";
 
@@ -553,9 +555,12 @@ function warnOnConfigMiskeys(raw: unknown, logger: Pick<typeof console, "warn">)
     return;
   }
   if ("token" in (gateway as Record<string, unknown>)) {
-    logger.warn(
-      'Config uses "gateway.token". This key is ignored; use "gateway.auth.token" instead.',
-    );
+    const msg =
+      'Config uses "gateway.token". This key is ignored; use "gateway.auth.token" instead.';
+    if (!loggedConfigWarnings.has(msg)) {
+      loggedConfigWarnings.add(msg);
+      logger.warn(msg);
+    }
   }
 }
 
@@ -581,9 +586,11 @@ function warnIfConfigFromFuture(cfg: OpenClawConfig, logger: Pick<typeof console
     return;
   }
   if (cmp < 0) {
-    logger.warn(
-      `Config was last written by a newer OpenClaw (${touched}); current version is ${VERSION}.`,
-    );
+    const msg = `Config was last written by a newer OpenClaw (${touched}); current version is ${VERSION}.`;
+    if (!loggedConfigWarnings.has(msg)) {
+      loggedConfigWarnings.add(msg);
+      logger.warn(msg);
+    }
   }
 }
 
@@ -729,7 +736,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         const details = validated.warnings
           .map((iss) => `- ${iss.path || "<root>"}: ${iss.message}`)
           .join("\n");
-        deps.logger.warn(`Config warnings:\\n${details}`);
+        if (!loggedConfigWarnings.has(details)) {
+          loggedConfigWarnings.add(details);
+          deps.logger.warn(`Config warnings:\\n${details}`);
+        }
       }
       warnIfConfigFromFuture(validated.config, deps.logger);
       const cfg = applyTalkConfigNormalization(
@@ -1077,7 +1087,10 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       const details = validated.warnings
         .map((warning) => `- ${warning.path}: ${warning.message}`)
         .join("\n");
-      deps.logger.warn(`Config warnings:\n${details}`);
+      if (!loggedConfigWarnings.has(details)) {
+        loggedConfigWarnings.add(details);
+        deps.logger.warn(`Config warnings:\n${details}`);
+      }
     }
 
     // Restore ${VAR} env var references that were resolved during config loading.
