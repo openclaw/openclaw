@@ -33,10 +33,6 @@ function matchesExactOrPrefix(id: string, values: string[]): boolean {
   return values.some((value) => id === value || id.startsWith(value));
 }
 
-function matchesAny(id: string, values: string[]): boolean {
-  return values.some((value) => id.includes(value));
-}
-
 export function isModernModelRef(ref: ModelRef): boolean {
   const provider = ref.provider?.trim().toLowerCase() ?? "";
   const id = ref.id?.trim().toLowerCase() ?? "";
@@ -58,10 +54,6 @@ export function isModernModelRef(ref: ModelRef): boolean {
 
   if (provider === "google" || provider === "google-gemini-cli") {
     return matchesPrefix(id, GOOGLE_PREFIXES);
-  }
-
-  if (provider === "google-antigravity") {
-    return matchesPrefix(id, GOOGLE_PREFIXES) || matchesPrefix(id, ANTHROPIC_PREFIXES);
   }
 
   if (provider === "zai") {
@@ -89,15 +81,9 @@ export function isModernModelRef(ref: ModelRef): boolean {
   }
 
   if (provider === "openrouter" || provider === "opencode") {
-    return matchesAny(id, [
-      ...ANTHROPIC_PREFIXES,
-      ...OPENAI_MODELS,
-      ...CODEX_MODELS,
-      ...GOOGLE_PREFIXES,
-      ...ZAI_PREFIXES,
-      ...MINIMAX_PREFIXES,
-      ...XAI_PREFIXES,
-    ]);
+    // OpenRouter/opencode are pass-through proxies; accept any model ID
+    // rather than restricting to a static prefix list.
+    return true;
   }
 
   return false;

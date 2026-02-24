@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.2.22",
+  "version": "2026.2.23",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -142,17 +142,17 @@
     "@aws-sdk/client-bedrock": "^3.995.0",
     "@buape/carbon": "0.0.0-beta-20260216184201",
     "@clack/prompts": "^1.0.1",
-    "@discordjs/opus": "^0.10.0",
     "@discordjs/voice": "^0.19.0",
     "@grammyjs/runner": "^2.0.3",
     "@grammyjs/transformer-throttler": "^1.2.1",
     "@homebridge/ciao": "^1.3.5",
+    "@larksuiteoapi/node-sdk": "^1.59.0",
     "@line/bot-sdk": "^10.6.0",
     "@lydell/node-pty": "1.2.0-beta.3",
-    "@mariozechner/pi-agent-core": "0.54.0",
-    "@mariozechner/pi-ai": "0.54.0",
-    "@mariozechner/pi-coding-agent": "0.54.0",
-    "@mariozechner/pi-tui": "0.54.0",
+    "@mariozechner/pi-agent-core": "0.54.1",
+    "@mariozechner/pi-ai": "0.54.1",
+    "@mariozechner/pi-coding-agent": "0.54.1",
+    "@mariozechner/pi-tui": "0.54.1",
     "@mozilla/readability": "^0.6.0",
     "@sinclair/typebox": "0.34.48",
     "@slack/bolt": "^4.6.0",
@@ -170,6 +170,7 @@
     "file-type": "^21.3.0",
     "grammy": "^1.40.0",
     "https-proxy-agent": "^7.0.6",
+    "ipaddr.js": "^2.3.0",
     "jiti": "^2.6.1",
     "json5": "^2.2.3",
     "jszip": "^3.10.1",
@@ -200,7 +201,7 @@
     "@types/node": "^25.3.0",
     "@types/qrcode-terminal": "^0.12.2",
     "@types/ws": "^8.18.1",
-    "@typescript/native-preview": "7.0.0-dev.20260221.1",
+    "@typescript/native-preview": "7.0.0-dev.20260222.1",
     "@vitest/coverage-v8": "^4.0.18",
     "lit": "^3.3.2",
     "oxfmt": "0.34.0",
@@ -215,6 +216,9 @@
   "peerDependencies": {
     "@napi-rs/canvas": "^0.1.89",
     "node-llama-cpp": "3.15.1"
+  },
+  "optionalDependencies": {
+    "@discordjs/opus": "^0.10.0"
   },
   "engines": {
     "node": ">=22.12.0"

@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { lookupContextTokens } from "../agents/context.js";
+import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveModelAuthMode } from "../agents/model-auth.js";
 import {
@@ -243,7 +243,20 @@ const readUsageFromSessionLog = (
   }
 
   try {
-    const lines = fs.readFileSync(logPath, "utf-8").split(/\n+/);
+    // Read the tail only; we only need the most recent usage entries.
+    const TAIL_BYTES = 8192;
+    const stat = fs.statSync(logPath);
+    const offset = Math.max(0, stat.size - TAIL_BYTES);
+    const buf = Buffer.alloc(Math.min(TAIL_BYTES, stat.size));
+    const fd = fs.openSync(logPath, "r");
+    try {
+      fs.readSync(fd, buf, 0, buf.length, offset);
+    } finally {
+      fs.closeSync(fd);
+    }
+    const tail = buf.toString("utf-8");
+    const lines = (offset > 0 ? tail.slice(tail.indexOf("\n") + 1) : tail).split(/\n+/);
+
     let input = 0;
     let output = 0;
     let promptTokens = 0;
@@ -270,7 +283,7 @@ const readUsageFromSessionLog = (
         }
         model = parsed.message?.model ?? parsed.model ?? model;
       } catch {
-        // ignore bad lines
+        // ignore bad lines (including a truncated first tail line)
       }
     }
 
@@ -398,12 +411,29 @@ const formatVoiceModeLine = (
 export function buildStatusMessage(args: StatusArgs): string {
   const now = args.now ?? Date.now();
   const entry = args.sessionEntry;
+  const selectionConfig = {
+    agents: {
+      defaults: args.agent ?? {},
+    },
+  } as OpenClawConfig;
+  const contextConfig = args.config
+    ? ({
+        ...args.config,
+        agents: {
+          ...args.config.agents,
+          defaults: {
+            ...args.config.agents?.defaults,
+            ...args.agent,
+          },
+        },
+      } as OpenClawConfig)
+    : ({
+        agents: {
+          defaults: args.agent ?? {},
+        },
+      } as OpenClawConfig);
   const resolved = resolveConfiguredModelRef({
-    cfg: {
-      agents: {
-        defaults: args.agent ?? {},
-      },
-    } as OpenClawConfig,
+    cfg: selectionConfig,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
@@ -417,10 +447,13 @@ export function buildStatusMessage(args: StatusArgs): string {
   let activeProvider = modelRefs.active.provider;
   let activeModel = modelRefs.active.model;
   let contextTokens =
-    entry?.contextTokens ??
-    args.agent?.contextTokens ??
-    lookupContextTokens(activeModel) ??
-    DEFAULT_CONTEXT_TOKENS;
+    resolveContextTokensForModel({
+      cfg: contextConfig,
+      provider: activeProvider,
+      model: activeModel,
+      contextTokensOverride: entry?.contextTokens ?? args.agent?.contextTokens,
+      fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+    }) ?? DEFAULT_CONTEXT_TOKENS;
 
   let inputTokens = entry?.inputTokens;
   let outputTokens = entry?.outputTokens;
@@ -457,7 +490,12 @@ export function buildStatusMessage(args: StatusArgs): string {
         }
       }
       if (!contextTokens && logUsage.model) {
-        contextTokens = lookupContextTokens(logUsage.model) ?? contextTokens;
+        contextTokens =
+          resolveContextTokensForModel({
+            cfg: contextConfig,
+            model: logUsage.model,
+            fallbackContextTokens: contextTokens ?? undefined,
+          }) ?? contextTokens;
       }
       if (!inputTokens || inputTokens === 0) {
         inputTokens = logUsage.input;

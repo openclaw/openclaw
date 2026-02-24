@@ -12,6 +12,7 @@ import { getCustomProviderApiKey } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { loadConfig } from "../config/config.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
+import { resolveRequiredHomeDir } from "./home-dir.js";
 import type { UsageProviderId } from "./provider-usage.types.js";
 
 export type ProviderAuth = {
@@ -58,7 +59,12 @@ function resolveZaiApiKey(): string | undefined {
   }
 
   try {
-    const authPath = path.join(os.homedir(), ".pi", "agent", "auth.json");
+    const authPath = path.join(
+      resolveRequiredHomeDir(process.env, os.homedir),
+      ".pi",
+      "agent",
+      "auth.json",
+    );
     if (!fs.existsSync(authPath)) {
       return undefined;
     }
@@ -152,7 +158,7 @@ async function resolveOAuthToken(params: {
       });
       if (resolved) {
         let token = resolved.apiKey;
-        if (params.provider === "google-gemini-cli" || params.provider === "google-antigravity") {
+        if (params.provider === "google-gemini-cli") {
           const parsed = parseGoogleToken(resolved.apiKey);
           token = parsed?.token ?? resolved.apiKey;
         }
@@ -182,7 +188,6 @@ function resolveOAuthProviders(agentDir?: string): UsageProviderId[] {
     "anthropic",
     "github-copilot",
     "google-gemini-cli",
-    "google-antigravity",
     "openai-codex",
   ] satisfies UsageProviderId[];
   const isOAuthLikeCredential = (id: string) => {

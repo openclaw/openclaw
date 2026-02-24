@@ -17,6 +17,12 @@ const mockSock = {
   logger: { child: () => ({}) },
 } as never;
 
+async function expectMimetype(message: Record<string, unknown>, expected: string) {
+  const result = await downloadInboundMedia({ message } as never, mockSock);
+  expect(result).toBeDefined();
+  expect(result?.mimetype).toBe(expected);
+}
+
 describe("downloadInboundMedia", () => {
   it("returns undefined for messages without media", async () => {
     const msg = { message: { conversation: "hello" } } as never;
@@ -25,66 +31,26 @@ describe("downloadInboundMedia", () => {
   });
 
   it("uses explicit mimetype from audioMessage when present", async () => {
-    const msg = {
-      message: { audioMessage: { mimetype: "audio/mp4", ptt: true } },
-    } as never;
-    const result = await downloadInboundMedia(msg, mockSock);
-    expect(result).toBeDefined();
-    expect(result?.mimetype).toBe("audio/mp4");
+    await expectMimetype({ audioMessage: { mimetype: "audio/mp4", ptt: true } }, "audio/mp4");
   });
 
-  it("defaults to audio/ogg for voice messages without explicit MIME", async () => {
-    const msg = {
-      message: { audioMessage: { ptt: true } },
-    } as never;
-    const result = await downloadInboundMedia(msg, mockSock);
-    expect(result).toBeDefined();
-    expect(result?.mimetype).toBe("audio/ogg; codecs=opus");
-  });
-
-  it("defaults to audio/ogg for audio messages without MIME or ptt flag", async () => {
-    const msg = {
-      message: { audioMessage: {} },
-    } as never;
-    const result = await downloadInboundMedia(msg, mockSock);
-    expect(result).toBeDefined();
-    expect(result?.mimetype).toBe("audio/ogg; codecs=opus");
+  it.each([
+    { name: "voice messages without explicit MIME", audioMessage: { ptt: true } },
+    { name: "audio messages without MIME or ptt flag", audioMessage: {} },
+  ])("defaults to audio/ogg for $name", async ({ audioMessage }) => {
+    await expectMimetype({ audioMessage }, "audio/ogg; codecs=opus");
   });
 
   it("uses explicit mimetype from imageMessage when present", async () => {
-    const msg = {
-      message: { imageMessage: { mimetype: "image/png" } },
-    } as never;
-    const result = await downloadInboundMedia(msg, mockSock);
-    expect(result).toBeDefined();
-    expect(result?.mimetype).toBe("image/png");
+    await expectMimetype({ imageMessage: { mimetype: "image/png" } }, "image/png");
   });
 
-  it("defaults to image/jpeg for images without explicit MIME", async () => {
-    const msg = {
-      message: { imageMessage: {} },
-    } as never;
-    const result = await downloadInboundMedia(msg, mockSock);
-    expect(result).toBeDefined();
-    expect(result?.mimetype).toBe("image/jpeg");
-  });
-
-  it("defaults to video/mp4 for video messages without explicit MIME", async () => {
-    const msg = {
-      message: { videoMessage: {} },
-    } as never;
-    const result = await downloadInboundMedia(msg, mockSock);
-    expect(result).toBeDefined();
-    expect(result?.mimetype).toBe("video/mp4");
-  });
-
-  it("defaults to image/webp for sticker messages without explicit MIME", async () => {
-    const msg = {
-      message: { stickerMessage: {} },
-    } as never;
-    const result = await downloadInboundMedia(msg, mockSock);
-    expect(result).toBeDefined();
-    expect(result?.mimetype).toBe("image/webp");
+  it.each([
+    { name: "image", message: { imageMessage: {} }, mimetype: "image/jpeg" },
+    { name: "video", message: { videoMessage: {} }, mimetype: "video/mp4" },
+    { name: "sticker", message: { stickerMessage: {} }, mimetype: "image/webp" },
+  ])("defaults MIME for $name messages without explicit MIME", async ({ message, mimetype }) => {
+    await expectMimetype(message, mimetype);
   });
 
   it("preserves fileName from document messages", async () => {

@@ -60,6 +60,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       dmEnabled: true,
       dmPolicy: "open",
       allowFrom: [],
+      allowNameMatching: false,
       groupDmEnabled: true,
       groupDmChannels: [],
       defaultRequireMention: params.defaultRequireMention ?? true,
@@ -166,6 +167,19 @@ describe("slack prepareSlackMessage inbound contract", () => {
         thread: { initialHistoryLimit: 20 },
       },
     };
+  }
+
+  function createThreadReplyMessage(overrides: Partial<SlackMessageEvent>): SlackMessageEvent {
+    return createSlackMessage({
+      channel: "C123",
+      channel_type: "channel",
+      thread_ts: "100.000",
+      ...overrides,
+    });
+  }
+
+  function prepareThreadMessage(ctx: SlackMonitorContext, overrides: Partial<SlackMessageEvent>) {
+    return prepareMessageWith(ctx, createThreadAccount(), createThreadReplyMessage(overrides));
   }
 
   it("produces a finalized MsgContext", async () => {
@@ -298,17 +312,10 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
     slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
 
-    const prepared = await prepareMessageWith(
-      slackCtx,
-      createThreadAccount(),
-      createSlackMessage({
-        channel: "C123",
-        channel_type: "channel",
-        text: "current message",
-        ts: "101.000",
-        thread_ts: "100.000",
-      }),
-    );
+    const prepared = await prepareThreadMessage(slackCtx, {
+      text: "current message",
+      ts: "101.000",
+    });
 
     expect(prepared).toBeTruthy();
     expect(prepared!.ctxPayload.IsFirstThreadTurn).toBe(true);
@@ -318,7 +325,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(replies).toHaveBeenCalledTimes(2);
   });
 
-  it("does not mark first thread turn when thread session already exists in store", async () => {
+  it("keeps loading thread history when thread session already exists in store", async () => {
     const { storePath } = makeTmpStorePath();
     const cfg = {
       session: { store: storePath },
@@ -340,28 +347,35 @@ describe("slack prepareSlackMessage inbound contract", () => {
       JSON.stringify({ [threadKeys.sessionKey]: { updatedAt: Date.now() } }, null, 2),
     );
 
-    const replies = vi.fn().mockResolvedValue({
-      messages: [{ text: "starter", user: "U2", ts: "200.000" }],
-    });
+    const replies = vi
+      .fn()
+      .mockResolvedValueOnce({
+        messages: [{ text: "starter", user: "U2", ts: "200.000" }],
+      })
+      .mockResolvedValueOnce({
+        messages: [
+          { text: "starter", user: "U2", ts: "200.000" },
+          { text: "assistant follow-up", bot_id: "B1", ts: "200.500" },
+          { text: "user follow-up", user: "U1", ts: "200.800" },
+          { text: "current message", user: "U1", ts: "201.000" },
+        ],
+      });
     const slackCtx = createThreadSlackCtx({ cfg, replies });
     slackCtx.resolveUserName = async () => ({ name: "Alice" });
     slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
 
-    const prepared = await prepareMessageWith(
-      slackCtx,
-      createThreadAccount(),
-      createSlackMessage({
-        channel: "C123",
-        channel_type: "channel",
-        text: "reply in old thread",
-        ts: "201.000",
-        thread_ts: "200.000",
-      }),
-    );
+    const prepared = await prepareThreadMessage(slackCtx, {
+      text: "reply in old thread",
+      ts: "201.000",
+      thread_ts: "200.000",
+    });
 
     expect(prepared).toBeTruthy();
     expect(prepared!.ctxPayload.IsFirstThreadTurn).toBeUndefined();
-    expect(prepared!.ctxPayload.ThreadHistoryBody).toBeUndefined();
+    expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("assistant follow-up");
+    expect(prepared!.ctxPayload.ThreadHistoryBody).toContain("user follow-up");
+    expect(prepared!.ctxPayload.ThreadHistoryBody).not.toContain("current message");
+    expect(replies).toHaveBeenCalledTimes(2);
   });
 
   it("includes thread_ts and parent_user_id metadata in thread replies", async () => {

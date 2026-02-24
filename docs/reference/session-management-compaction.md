@@ -65,6 +65,44 @@ OpenClaw resolves these via `src/config/sessions.ts`.
 
 ---
 
+## Store maintenance and disk controls
+
+Session persistence has automatic maintenance controls (`session.maintenance`) for `sessions.json` and transcript artifacts:
+
+- `mode`: `warn` (default) or `enforce`
+- `pruneAfter`: stale-entry age cutoff (default `30d`)
+- `maxEntries`: cap entries in `sessions.json` (default `500`)
+- `rotateBytes`: rotate `sessions.json` when oversized (default `10mb`)
+- `resetArchiveRetention`: retention for `*.reset.<timestamp>` transcript archives (default: same as `pruneAfter`; `false` disables cleanup)
+- `maxDiskBytes`: optional sessions-directory budget
+- `highWaterBytes`: optional target after cleanup (default `80%` of `maxDiskBytes`)
+
+Enforcement order for disk budget cleanup (`mode: "enforce"`):
+
+1. Remove oldest archived or orphan transcript artifacts first.
+2. If still above the target, evict oldest session entries and their transcript files.
+3. Keep going until usage is at or below `highWaterBytes`.
+
+In `mode: "warn"`, OpenClaw reports potential evictions but does not mutate the store/files.
+
+Run maintenance on demand:
+
+```bash
+openclaw sessions cleanup --dry-run
+openclaw sessions cleanup --enforce
+```
+
+---
+
+## Cron sessions and run logs
+
+Isolated cron runs also create session entries/transcripts, and they have dedicated retention controls:
+
+- `cron.sessionRetention` (default `24h`) prunes old isolated cron run sessions from the session store (`false` disables).
+- `cron.runLog.maxBytes` + `cron.runLog.keepLines` prune `~/.openclaw/cron/runs/<jobId>.jsonl` files (defaults: `2_000_000` bytes and `2000` lines).
+
+---
+
 ## Session keys (`sessionKey`)
 
 A `sessionKey` identifies _which conversation bucket_ you’re in (routing + isolation).

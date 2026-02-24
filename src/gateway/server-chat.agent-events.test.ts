@@ -97,6 +97,66 @@ describe("agent event handler", () => {
     return nodeSendToSession.mock.calls.filter(([, event]) => event === "chat");
   }
 
+  const FALLBACK_LIFECYCLE_DATA = {
+    phase: "fallback",
+    selectedProvider: "fireworks",
+    selectedModel: "fireworks/minimax-m2p5",
+    activeProvider: "deepinfra",
+    activeModel: "moonshotai/Kimi-K2.5",
+  } as const;
+
+  function emitLifecycleEnd(
+    handler: ReturnType<typeof createHarness>["handler"],
+    runId: string,
+    seq = 2,
+  ) {
+    handler({
+      runId,
+      seq,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "end" },
+    });
+  }
+
+  function emitFallbackLifecycle(params: {
+    handler: ReturnType<typeof createHarness>["handler"];
+    runId: string;
+    seq?: number;
+    sessionKey?: string;
+  }) {
+    params.handler({
+      runId: params.runId,
+      seq: params.seq ?? 1,
+      stream: "lifecycle",
+      ts: Date.now(),
+      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+      data: { ...FALLBACK_LIFECYCLE_DATA },
+    });
+  }
+
+  function expectSingleAgentBroadcastPayload(broadcast: ReturnType<typeof vi.fn>) {
+    const broadcastAgentCalls = broadcast.mock.calls.filter(([event]) => event === "agent");
+    expect(broadcastAgentCalls).toHaveLength(1);
+    return broadcastAgentCalls[0]?.[1] as {
+      runId?: string;
+      sessionKey?: string;
+      stream?: string;
+      data?: Record<string, unknown>;
+    };
+  }
+
+  function expectSingleFinalChatPayload(broadcast: ReturnType<typeof vi.fn>) {
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(1);
+    const payload = chatCalls[0]?.[1] as {
+      state?: string;
+      message?: unknown;
+    };
+    expect(payload.state).toBe("final");
+    return payload;
+  }
+
   it("emits chat delta for assistant text-only events", () => {
     const { broadcast, nodeSendToSession, nowSpy } = emitRun1AssistantText(
       createHarness({ now: 1_000 }),
@@ -152,18 +212,9 @@ describe("agent event handler", () => {
       ts: Date.now(),
       data: { text: "NO_REPLY" },
     });
-    handler({
-      runId: "run-2",
-      seq: 2,
-      stream: "lifecycle",
-      ts: Date.now(),
-      data: { phase: "end" },
-    });
+    emitLifecycleEnd(handler, "run-2");
 
-    const chatCalls = chatBroadcastCalls(broadcast);
-    expect(chatCalls).toHaveLength(1);
-    const payload = chatCalls[0]?.[1] as { state?: string; message?: unknown };
-    expect(payload.state).toBe("final");
+    const payload = expectSingleFinalChatPayload(broadcast) as { message?: unknown };
     expect(payload.message).toBeUndefined();
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
     nowSpy?.mockRestore();
@@ -305,28 +356,10 @@ describe("agent event handler", () => {
       resolveSessionKeyForRun: () => "session-fallback",
     });
 
-    handler({
-      runId: "run-fallback",
-      seq: 1,
-      stream: "lifecycle",
-      ts: Date.now(),
-      data: {
-        phase: "fallback",
-        selectedProvider: "fireworks",
-        selectedModel: "fireworks/minimax-m2p5",
-        activeProvider: "deepinfra",
-        activeModel: "moonshotai/Kimi-K2.5",
-      },
-    });
+    emitFallbackLifecycle({ handler, runId: "run-fallback" });
 
     expect(broadcastToConnIds).not.toHaveBeenCalled();
-    const broadcastAgentCalls = broadcast.mock.calls.filter(([event]) => event === "agent");
-    expect(broadcastAgentCalls).toHaveLength(1);
-    const payload = broadcastAgentCalls[0]?.[1] as {
-      sessionKey?: string;
-      stream?: string;
-      data?: Record<string, unknown>;
-    };
+    const payload = expectSingleAgentBroadcastPayload(broadcast);
     expect(payload.stream).toBe("lifecycle");
     expect(payload.data?.phase).toBe("fallback");
     expect(payload.sessionKey).toBe("session-fallback");
@@ -345,28 +378,9 @@ describe("agent event handler", () => {
       clientRunId: "run-fallback-client",
     });
 
-    handler({
-      runId: "run-fallback-internal",
-      seq: 1,
-      stream: "lifecycle",
-      ts: Date.now(),
-      data: {
-        phase: "fallback",
-        selectedProvider: "fireworks",
-        selectedModel: "fireworks/minimax-m2p5",
-        activeProvider: "deepinfra",
-        activeModel: "moonshotai/Kimi-K2.5",
-      },
-    });
+    emitFallbackLifecycle({ handler, runId: "run-fallback-internal" });
 
-    const broadcastAgentCalls = broadcast.mock.calls.filter(([event]) => event === "agent");
-    expect(broadcastAgentCalls).toHaveLength(1);
-    const payload = broadcastAgentCalls[0]?.[1] as {
-      runId?: string;
-      sessionKey?: string;
-      stream?: string;
-      data?: Record<string, unknown>;
-    };
+    const payload = expectSingleAgentBroadcastPayload(broadcast);
     expect(payload.runId).toBe("run-fallback-client");
     expect(payload.stream).toBe("lifecycle");
     expect(payload.data?.phase).toBe("fallback");
@@ -382,24 +396,13 @@ describe("agent event handler", () => {
       resolveSessionKeyForRun: () => undefined,
     });
 
-    handler({
+    emitFallbackLifecycle({
+      handler,
       runId: "run-fallback-session-key",
-      seq: 1,
-      stream: "lifecycle",
-      ts: Date.now(),
       sessionKey: "session-from-event",
-      data: {
-        phase: "fallback",
-        selectedProvider: "fireworks",
-        selectedModel: "fireworks/minimax-m2p5",
-        activeProvider: "deepinfra",
-        activeModel: "moonshotai/Kimi-K2.5",
-      },
     });
 
-    const broadcastAgentCalls = broadcast.mock.calls.filter(([event]) => event === "agent");
-    expect(broadcastAgentCalls).toHaveLength(1);
-    const payload = broadcastAgentCalls[0]?.[1] as { sessionKey?: string };
+    const payload = expectSingleAgentBroadcastPayload(broadcast);
     expect(payload.sessionKey).toBe("session-from-event");
   });
 
@@ -464,18 +467,9 @@ describe("agent event handler", () => {
     expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(0);
 
-    handler({
-      runId: "run-heartbeat",
-      seq: 2,
-      stream: "lifecycle",
-      ts: Date.now(),
-      data: { phase: "end" },
-    });
+    emitLifecycleEnd(handler, "run-heartbeat");
 
-    const chatCalls = chatBroadcastCalls(broadcast);
-    expect(chatCalls).toHaveLength(1);
-    const finalPayload = chatCalls[0]?.[1] as { state?: string; message?: unknown };
-    expect(finalPayload.state).toBe("final");
+    const finalPayload = expectSingleFinalChatPayload(broadcast) as { message?: unknown };
     expect(finalPayload.message).toBeUndefined();
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
   });
@@ -506,21 +500,11 @@ describe("agent event handler", () => {
       },
     });
 
-    handler({
-      runId: "run-heartbeat-alert",
-      seq: 2,
-      stream: "lifecycle",
-      ts: Date.now(),
-      data: { phase: "end" },
-    });
+    emitLifecycleEnd(handler, "run-heartbeat-alert");
 
-    const chatCalls = chatBroadcastCalls(broadcast);
-    expect(chatCalls).toHaveLength(1);
-    const payload = chatCalls[0]?.[1] as {
-      state?: string;
+    const payload = expectSingleFinalChatPayload(broadcast) as {
       message?: { content?: Array<{ text?: string }> };
     };
-    expect(payload.state).toBe("final");
     expect(payload.message?.content?.[0]?.text).toBe(
       "Disk usage crossed 95 percent on /data and needs cleanup now.",
     );

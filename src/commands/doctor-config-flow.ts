@@ -14,7 +14,21 @@ import {
   migrateLegacyConfig,
   readConfigFileSnapshot,
 } from "../config/config.js";
+import { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
+import { parseToolsBySenderTypedKey } from "../config/types.tools.js";
+import {
+  listInterpreterLikeSafeBins,
+  resolveMergedSafeBinProfileFixtures,
+} from "../infra/exec-safe-bin-runtime-policy.js";
+import {
+  isDiscordMutableAllowEntry,
+  isGoogleChatMutableAllowEntry,
+  isIrcMutableAllowEntry,
+  isMSTeamsMutableAllowEntry,
+  isMattermostMutableAllowEntry,
+  isSlackMutableAllowEntry,
+} from "../security/mutable-allowlist-detectors.js";
 import { listTelegramAccountIds, resolveTelegramAccount } from "../telegram/accounts.js";
 import { note } from "../terminal/note.js";
 import { isRecord, resolveHomeDir } from "../utils.js";
@@ -573,6 +587,278 @@ function maybeRepairDiscordNumericIds(cfg: OpenClawConfig): {
   return { config: next, changes };
 }
 
+type MutableAllowlistHit = {
+  channel: string;
+  path: string;
+  entry: string;
+  dangerousFlagPath: string;
+};
+
+function addMutableAllowlistHits(params: {
+  hits: MutableAllowlistHit[];
+  pathLabel: string;
+  list: unknown;
+  detector: (entry: string) => boolean;
+  channel: string;
+  dangerousFlagPath: string;
+}) {
+  if (!Array.isArray(params.list)) {
+    return;
+  }
+  for (const entry of params.list) {
+    const text = String(entry).trim();
+    if (!text || text === "*") {
+      continue;
+    }
+    if (!params.detector(text)) {
+      continue;
+    }
+    params.hits.push({
+      channel: params.channel,
+      path: params.pathLabel,
+      entry: text,
+      dangerousFlagPath: params.dangerousFlagPath,
+    });
+  }
+}
+
+function scanMutableAllowlistEntries(cfg: OpenClawConfig): MutableAllowlistHit[] {
+  const hits: MutableAllowlistHit[] = [];
+
+  for (const scope of collectProviderDangerousNameMatchingScopes(cfg, "discord")) {
+    if (scope.dangerousNameMatchingEnabled) {
+      continue;
+    }
+    addMutableAllowlistHits({
+      hits,
+      pathLabel: `${scope.prefix}.allowFrom`,
+      list: scope.account.allowFrom,
+      detector: isDiscordMutableAllowEntry,
+      channel: "discord",
+      dangerousFlagPath: scope.dangerousFlagPath,
+    });
+    const dm = asObjectRecord(scope.account.dm);
+    if (dm) {
+      addMutableAllowlistHits({
+        hits,
+        pathLabel: `${scope.prefix}.dm.allowFrom`,
+        list: dm.allowFrom,
+        detector: isDiscordMutableAllowEntry,
+        channel: "discord",
+        dangerousFlagPath: scope.dangerousFlagPath,
+      });
+    }
+    const guilds = asObjectRecord(scope.account.guilds);
+    if (!guilds) {
+      continue;
+    }
+    for (const [guildId, guildRaw] of Object.entries(guilds)) {
+      const guild = asObjectRecord(guildRaw);
+      if (!guild) {
+        continue;
+      }
+      addMutableAllowlistHits({
+        hits,
+        pathLabel: `${scope.prefix}.guilds.${guildId}.users`,
+        list: guild.users,
+        detector: isDiscordMutableAllowEntry,
+        channel: "discord",
+        dangerousFlagPath: scope.dangerousFlagPath,
+      });
+      const channels = asObjectRecord(guild.channels);
+      if (!channels) {
+        continue;
+      }
+      for (const [channelId, channelRaw] of Object.entries(channels)) {
+        const channel = asObjectRecord(channelRaw);
+        if (!channel) {
+          continue;
+        }
+        addMutableAllowlistHits({
+          hits,
+          pathLabel: `${scope.prefix}.guilds.${guildId}.channels.${channelId}.users`,
+          list: channel.users,
+          detector: isDiscordMutableAllowEntry,
+          channel: "discord",
+          dangerousFlagPath: scope.dangerousFlagPath,
+        });
+      }
+    }
+  }
+
+  for (const scope of collectProviderDangerousNameMatchingScopes(cfg, "slack")) {
+    if (scope.dangerousNameMatchingEnabled) {
+      continue;
+    }
+    addMutableAllowlistHits({
+      hits,
+      pathLabel: `${scope.prefix}.allowFrom`,
+      list: scope.account.allowFrom,
+      detector: isSlackMutableAllowEntry,
+      channel: "slack",
+      dangerousFlagPath: scope.dangerousFlagPath,
+    });
+    const dm = asObjectRecord(scope.account.dm);
+    if (dm) {
+      addMutableAllowlistHits({
+        hits,
+        pathLabel: `${scope.prefix}.dm.allowFrom`,
+        list: dm.allowFrom,
+        detector: isSlackMutableAllowEntry,
+        channel: "slack",
+        dangerousFlagPath: scope.dangerousFlagPath,
+      });
+    }
+    const channels = asObjectRecord(scope.account.channels);
+    if (!channels) {
+      continue;
+    }
+    for (const [channelKey, channelRaw] of Object.entries(channels)) {
+      const channel = asObjectRecord(channelRaw);
+      if (!channel) {
+        continue;
+      }
+      addMutableAllowlistHits({
+        hits,
+        pathLabel: `${scope.prefix}.channels.${channelKey}.users`,
+        list: channel.users,
+        detector: isSlackMutableAllowEntry,
+        channel: "slack",
+        dangerousFlagPath: scope.dangerousFlagPath,
+      });
+    }
+  }
+
+  for (const scope of collectProviderDangerousNameMatchingScopes(cfg, "googlechat")) {
+    if (scope.dangerousNameMatchingEnabled) {
+      continue;
+    }
+    addMutableAllowlistHits({
+      hits,
+      pathLabel: `${scope.prefix}.groupAllowFrom`,
+      list: scope.account.groupAllowFrom,
+      detector: isGoogleChatMutableAllowEntry,
+      channel: "googlechat",
+      dangerousFlagPath: scope.dangerousFlagPath,
+    });
+    const dm = asObjectRecord(scope.account.dm);
+    if (dm) {
+      addMutableAllowlistHits({
+        hits,
+        pathLabel: `${scope.prefix}.dm.allowFrom`,
+        list: dm.allowFrom,
+        detector: isGoogleChatMutableAllowEntry,
+        channel: "googlechat",
+        dangerousFlagPath: scope.dangerousFlagPath,
+      });
+    }
+    const groups = asObjectRecord(scope.account.groups);
+    if (!groups) {
+      continue;
+    }
+    for (const [groupKey, groupRaw] of Object.entries(groups)) {
+      const group = asObjectRecord(groupRaw);
+      if (!group) {
+        continue;
+      }
+      addMutableAllowlistHits({
+        hits,
+        pathLabel: `${scope.prefix}.groups.${groupKey}.users`,
+        list: group.users,
+        detector: isGoogleChatMutableAllowEntry,
+        channel: "googlechat",
+        dangerousFlagPath: scope.dangerousFlagPath,
+      });
+    }
+  }
+
+  for (const scope of collectProviderDangerousNameMatchingScopes(cfg, "msteams")) {
+    if (scope.dangerousNameMatchingEnabled) {
+      continue;
+    }
+    addMutableAllowlistHits({
+      hits,
+      pathLabel: `${scope.prefix}.allowFrom`,
+      list: scope.account.allowFrom,
+      detector: isMSTeamsMutableAllowEntry,
+      channel: "msteams",
+      dangerousFlagPath: scope.dangerousFlagPath,
+    });
+    addMutableAllowlistHits({
+      hits,
+      pathLabel: `${scope.prefix}.groupAllowFrom`,
+      list: scope.account.groupAllowFrom,
+      detector: isMSTeamsMutableAllowEntry,
+      channel: "msteams",
+      dangerousFlagPath: scope.dangerousFlagPath,
+    });
+  }
+
+  for (const scope of collectProviderDangerousNameMatchingScopes(cfg, "mattermost")) {
+    if (scope.dangerousNameMatchingEnabled) {
+      continue;
+    }
+    addMutableAllowlistHits({
+      hits,
+      pathLabel: `${scope.prefix}.allowFrom`,
+      list: scope.account.allowFrom,
+      detector: isMattermostMutableAllowEntry,
+      channel: "mattermost",
+      dangerousFlagPath: scope.dangerousFlagPath,
+    });
+    addMutableAllowlistHits({
+      hits,
+      pathLabel: `${scope.prefix}.groupAllowFrom`,
+      list: scope.account.groupAllowFrom,
+      detector: isMattermostMutableAllowEntry,
+      channel: "mattermost",
+      dangerousFlagPath: scope.dangerousFlagPath,
+    });
+  }
+
+  for (const scope of collectProviderDangerousNameMatchingScopes(cfg, "irc")) {
+    if (scope.dangerousNameMatchingEnabled) {
+      continue;
+    }
+    addMutableAllowlistHits({
+      hits,
+      pathLabel: `${scope.prefix}.allowFrom`,
+      list: scope.account.allowFrom,
+      detector: isIrcMutableAllowEntry,
+      channel: "irc",
+      dangerousFlagPath: scope.dangerousFlagPath,
+    });
+    addMutableAllowlistHits({
+      hits,
+      pathLabel: `${scope.prefix}.groupAllowFrom`,
+      list: scope.account.groupAllowFrom,
+      detector: isIrcMutableAllowEntry,
+      channel: "irc",
+      dangerousFlagPath: scope.dangerousFlagPath,
+    });
+    const groups = asObjectRecord(scope.account.groups);
+    if (!groups) {
+      continue;
+    }
+    for (const [groupKey, groupRaw] of Object.entries(groups)) {
+      const group = asObjectRecord(groupRaw);
+      if (!group) {
+        continue;
+      }
+      addMutableAllowlistHits({
+        hits,
+        pathLabel: `${scope.prefix}.groups.${groupKey}.allowFrom`,
+        list: group.allowFrom,
+        detector: isIrcMutableAllowEntry,
+        channel: "irc",
+        dangerousFlagPath: scope.dangerousFlagPath,
+      });
+    }
+  }
+
+  return hits;
+}
+
 /**
  * Scan all channel configs for dmPolicy="open" without allowFrom including "*".
  * This configuration is rejected by the schema validator but can easily occur when
@@ -701,6 +987,248 @@ function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
   if (changes.length === 0) {
     return { config: cfg, changes: [] };
   }
+  return { config: next, changes };
+}
+
+type ExecSafeBinCoverageHit = {
+  scopePath: string;
+  bin: string;
+  isInterpreter: boolean;
+};
+
+type ExecSafeBinScopeRef = {
+  scopePath: string;
+  safeBins: string[];
+  exec: Record<string, unknown>;
+  mergedProfiles: Record<string, unknown>;
+};
+
+function normalizeConfiguredSafeBins(entries: unknown): string[] {
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+  return Array.from(
+    new Set(
+      entries
+        .map((entry) => (typeof entry === "string" ? entry.trim().toLowerCase() : ""))
+        .filter((entry) => entry.length > 0),
+    ),
+  ).toSorted();
+}
+
+function collectExecSafeBinScopes(cfg: OpenClawConfig): ExecSafeBinScopeRef[] {
+  const scopes: ExecSafeBinScopeRef[] = [];
+  const globalExec = asObjectRecord(cfg.tools?.exec);
+  if (globalExec) {
+    const safeBins = normalizeConfiguredSafeBins(globalExec.safeBins);
+    if (safeBins.length > 0) {
+      scopes.push({
+        scopePath: "tools.exec",
+        safeBins,
+        exec: globalExec,
+        mergedProfiles:
+          resolveMergedSafeBinProfileFixtures({
+            global: globalExec,
+          }) ?? {},
+      });
+    }
+  }
+  const agents = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  for (const agent of agents) {
+    if (!agent || typeof agent !== "object" || typeof agent.id !== "string") {
+      continue;
+    }
+    const agentExec = asObjectRecord(agent.tools?.exec);
+    if (!agentExec) {
+      continue;
+    }
+    const safeBins = normalizeConfiguredSafeBins(agentExec.safeBins);
+    if (safeBins.length === 0) {
+      continue;
+    }
+    scopes.push({
+      scopePath: `agents.list.${agent.id}.tools.exec`,
+      safeBins,
+      exec: agentExec,
+      mergedProfiles:
+        resolveMergedSafeBinProfileFixtures({
+          global: globalExec,
+          local: agentExec,
+        }) ?? {},
+    });
+  }
+  return scopes;
+}
+
+function scanExecSafeBinCoverage(cfg: OpenClawConfig): ExecSafeBinCoverageHit[] {
+  const hits: ExecSafeBinCoverageHit[] = [];
+  for (const scope of collectExecSafeBinScopes(cfg)) {
+    const interpreterBins = new Set(listInterpreterLikeSafeBins(scope.safeBins));
+    for (const bin of scope.safeBins) {
+      if (scope.mergedProfiles[bin]) {
+        continue;
+      }
+      hits.push({
+        scopePath: scope.scopePath,
+        bin,
+        isInterpreter: interpreterBins.has(bin),
+      });
+    }
+  }
+  return hits;
+}
+
+function maybeRepairExecSafeBinProfiles(cfg: OpenClawConfig): {
+  config: OpenClawConfig;
+  changes: string[];
+  warnings: string[];
+} {
+  const next = structuredClone(cfg);
+  const changes: string[] = [];
+  const warnings: string[] = [];
+
+  for (const scope of collectExecSafeBinScopes(next)) {
+    const interpreterBins = new Set(listInterpreterLikeSafeBins(scope.safeBins));
+    const missingBins = scope.safeBins.filter((bin) => !scope.mergedProfiles[bin]);
+    if (missingBins.length === 0) {
+      continue;
+    }
+    const profileHolder =
+      asObjectRecord(scope.exec.safeBinProfiles) ?? (scope.exec.safeBinProfiles = {});
+    for (const bin of missingBins) {
+      if (interpreterBins.has(bin)) {
+        warnings.push(
+          `- ${scope.scopePath}.safeBins includes interpreter/runtime '${bin}' without profile; remove it from safeBins or use explicit allowlist entries.`,
+        );
+        continue;
+      }
+      if (profileHolder[bin] !== undefined) {
+        continue;
+      }
+      profileHolder[bin] = {};
+      changes.push(
+        `- ${scope.scopePath}.safeBinProfiles.${bin}: added scaffold profile {} (review and tighten flags/positionals).`,
+      );
+    }
+  }
+
+  if (changes.length === 0 && warnings.length === 0) {
+    return { config: cfg, changes: [], warnings: [] };
+  }
+  return { config: next, changes, warnings };
+}
+
+type LegacyToolsBySenderKeyHit = {
+  toolsBySenderPath: Array<string | number>;
+  pathLabel: string;
+  key: string;
+  targetKey: string;
+};
+
+function collectLegacyToolsBySenderKeyHits(
+  value: unknown,
+  pathParts: Array<string | number>,
+  hits: LegacyToolsBySenderKeyHit[],
+) {
+  if (Array.isArray(value)) {
+    for (const [index, entry] of value.entries()) {
+      collectLegacyToolsBySenderKeyHits(entry, [...pathParts, index], hits);
+    }
+    return;
+  }
+  const record = asObjectRecord(value);
+  if (!record) {
+    return;
+  }
+
+  const toolsBySender = asObjectRecord(record.toolsBySender);
+  if (toolsBySender) {
+    const path = [...pathParts, "toolsBySender"];
+    const pathLabel = formatPath(path);
+    for (const rawKey of Object.keys(toolsBySender)) {
+      const trimmed = rawKey.trim();
+      if (!trimmed || trimmed === "*" || parseToolsBySenderTypedKey(trimmed)) {
+        continue;
+      }
+      hits.push({
+        toolsBySenderPath: path,
+        pathLabel,
+        key: rawKey,
+        targetKey: `id:${trimmed}`,
+      });
+    }
+  }
+
+  for (const [key, nested] of Object.entries(record)) {
+    if (key === "toolsBySender") {
+      continue;
+    }
+    collectLegacyToolsBySenderKeyHits(nested, [...pathParts, key], hits);
+  }
+}
+
+function scanLegacyToolsBySenderKeys(cfg: OpenClawConfig): LegacyToolsBySenderKeyHit[] {
+  const hits: LegacyToolsBySenderKeyHit[] = [];
+  collectLegacyToolsBySenderKeyHits(cfg, [], hits);
+  return hits;
+}
+
+function maybeRepairLegacyToolsBySenderKeys(cfg: OpenClawConfig): {
+  config: OpenClawConfig;
+  changes: string[];
+} {
+  const next = structuredClone(cfg);
+  const hits = scanLegacyToolsBySenderKeys(next);
+  if (hits.length === 0) {
+    return { config: cfg, changes: [] };
+  }
+
+  const summary = new Map<string, { migrated: number; dropped: number; examples: string[] }>();
+  let changed = false;
+
+  for (const hit of hits) {
+    const toolsBySender = asObjectRecord(resolvePathTarget(next, hit.toolsBySenderPath));
+    if (!toolsBySender || !(hit.key in toolsBySender)) {
+      continue;
+    }
+    const row = summary.get(hit.pathLabel) ?? { migrated: 0, dropped: 0, examples: [] };
+
+    if (toolsBySender[hit.targetKey] === undefined) {
+      toolsBySender[hit.targetKey] = toolsBySender[hit.key];
+      row.migrated++;
+      if (row.examples.length < 3) {
+        row.examples.push(`${hit.key} -> ${hit.targetKey}`);
+      }
+    } else {
+      row.dropped++;
+      if (row.examples.length < 3) {
+        row.examples.push(`${hit.key} (kept existing ${hit.targetKey})`);
+      }
+    }
+    delete toolsBySender[hit.key];
+    summary.set(hit.pathLabel, row);
+    changed = true;
+  }
+
+  if (!changed) {
+    return { config: cfg, changes: [] };
+  }
+
+  const changes: string[] = [];
+  for (const [pathLabel, row] of summary) {
+    if (row.migrated > 0) {
+      const suffix = row.examples.length > 0 ? ` (${row.examples.join(", ")})` : "";
+      changes.push(
+        `- ${pathLabel}: migrated ${row.migrated} legacy key${row.migrated === 1 ? "" : "s"} to typed id: entries${suffix}.`,
+      );
+    }
+    if (row.dropped > 0) {
+      changes.push(
+        `- ${pathLabel}: removed ${row.dropped} legacy key${row.dropped === 1 ? "" : "s"} where typed id: entries already existed.`,
+      );
+    }
+  }
+
   return { config: next, changes };
 }
 
@@ -859,6 +1387,25 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       pendingChanges = true;
       cfg = allowFromRepair.config;
     }
+
+    const toolsBySenderRepair = maybeRepairLegacyToolsBySenderKeys(candidate);
+    if (toolsBySenderRepair.changes.length > 0) {
+      note(toolsBySenderRepair.changes.join("\n"), "Doctor changes");
+      candidate = toolsBySenderRepair.config;
+      pendingChanges = true;
+      cfg = toolsBySenderRepair.config;
+    }
+
+    const safeBinProfileRepair = maybeRepairExecSafeBinProfiles(candidate);
+    if (safeBinProfileRepair.changes.length > 0) {
+      note(safeBinProfileRepair.changes.join("\n"), "Doctor changes");
+      candidate = safeBinProfileRepair.config;
+      pendingChanges = true;
+      cfg = safeBinProfileRepair.config;
+    }
+    if (safeBinProfileRepair.warnings.length > 0) {
+      note(safeBinProfileRepair.warnings.join("\n"), "Doctor warnings");
+    }
   } else {
     const hits = scanTelegramAllowFromUsernameEntries(candidate);
     if (hits.length > 0) {
@@ -892,6 +1439,83 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         "Doctor warnings",
       );
     }
+
+    const toolsBySenderHits = scanLegacyToolsBySenderKeys(candidate);
+    if (toolsBySenderHits.length > 0) {
+      const sample = toolsBySenderHits[0];
+      const sampleLabel = sample ? `${sample.pathLabel}.${sample.key}` : "toolsBySender";
+      note(
+        [
+          `- Found ${toolsBySenderHits.length} legacy untyped toolsBySender key${toolsBySenderHits.length === 1 ? "" : "s"} (for example ${sampleLabel}).`,
+          "- Untyped sender keys are deprecated; use explicit prefixes (id:, e164:, username:, name:).",
+          `- Run "${formatCliCommand("openclaw doctor --fix")}" to migrate legacy keys to typed id: entries.`,
+        ].join("\n"),
+        "Doctor warnings",
+      );
+    }
+
+    const safeBinCoverage = scanExecSafeBinCoverage(candidate);
+    if (safeBinCoverage.length > 0) {
+      const interpreterHits = safeBinCoverage.filter((hit) => hit.isInterpreter);
+      const customHits = safeBinCoverage.filter((hit) => !hit.isInterpreter);
+      const lines: string[] = [];
+      if (interpreterHits.length > 0) {
+        for (const hit of interpreterHits.slice(0, 5)) {
+          lines.push(
+            `- ${hit.scopePath}.safeBins includes interpreter/runtime '${hit.bin}' without profile.`,
+          );
+        }
+        if (interpreterHits.length > 5) {
+          lines.push(
+            `- ${interpreterHits.length - 5} more interpreter/runtime safeBins entries are missing profiles.`,
+          );
+        }
+      }
+      if (customHits.length > 0) {
+        for (const hit of customHits.slice(0, 5)) {
+          lines.push(
+            `- ${hit.scopePath}.safeBins entry '${hit.bin}' is missing safeBinProfiles.${hit.bin}.`,
+          );
+        }
+        if (customHits.length > 5) {
+          lines.push(
+            `- ${customHits.length - 5} more custom safeBins entries are missing profiles.`,
+          );
+        }
+      }
+      lines.push(
+        `- Run "${formatCliCommand("openclaw doctor --fix")}" to scaffold missing custom safeBinProfiles entries.`,
+      );
+      note(lines.join("\n"), "Doctor warnings");
+    }
+  }
+
+  const mutableAllowlistHits = scanMutableAllowlistEntries(candidate);
+  if (mutableAllowlistHits.length > 0) {
+    const channels = Array.from(new Set(mutableAllowlistHits.map((hit) => hit.channel))).toSorted();
+    const exampleLines = mutableAllowlistHits
+      .slice(0, 8)
+      .map((hit) => `- ${hit.path}: ${hit.entry}`)
+      .join("\n");
+    const remaining =
+      mutableAllowlistHits.length > 8
+        ? `- +${mutableAllowlistHits.length - 8} more mutable allowlist entries.`
+        : null;
+    const flagPaths = Array.from(new Set(mutableAllowlistHits.map((hit) => hit.dangerousFlagPath)));
+    const flagHint =
+      flagPaths.length === 1
+        ? flagPaths[0]
+        : `${flagPaths[0]} (and ${flagPaths.length - 1} other scope flags)`;
+    note(
+      [
+        `- Found ${mutableAllowlistHits.length} mutable allowlist ${mutableAllowlistHits.length === 1 ? "entry" : "entries"} across ${channels.join(", ")} while name matching is disabled by default.`,
+        exampleLines,
+        ...(remaining ? [remaining] : []),
+        `- Option A (break-glass): enable ${flagHint}=true to keep name/email/nick matching.`,
+        "- Option B (recommended): resolve names/emails/nicks to stable sender IDs and rewrite the allowlist entries.",
+      ].join("\n"),
+      "Doctor warnings",
+    );
   }
 
   const unknown = stripUnknownConfigKeys(candidate);

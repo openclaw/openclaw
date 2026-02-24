@@ -184,7 +184,7 @@ describe("discord allowlist helpers", () => {
     expect(normalizeDiscordSlug("Dev__Chat")).toBe("dev-chat");
   });
 
-  it("matches ids or names", () => {
+  it("matches ids by default and names only when enabled", () => {
     const allow = normalizeDiscordAllowList(
       ["123", "steipete", "Friends of OpenClaw"],
       ["discord:", "user:", "guild:", "channel:"],
@@ -194,8 +194,12 @@ describe("discord allowlist helpers", () => {
       throw new Error("Expected allow list to be normalized");
     }
     expect(allowListMatches(allow, { id: "123" })).toBe(true);
-    expect(allowListMatches(allow, { name: "steipete" })).toBe(true);
-    expect(allowListMatches(allow, { name: "friends-of-openclaw" })).toBe(true);
+    expect(allowListMatches(allow, { name: "steipete" })).toBe(false);
+    expect(allowListMatches(allow, { name: "friends-of-openclaw" })).toBe(false);
+    expect(allowListMatches(allow, { name: "steipete" }, { allowNameMatching: true })).toBe(true);
+    expect(
+      allowListMatches(allow, { name: "friends-of-openclaw" }, { allowNameMatching: true }),
+    ).toBe(true);
     expect(allowListMatches(allow, { name: "other" })).toBe(false);
   });
 
@@ -750,6 +754,31 @@ describe("discord reaction notification gating", () => {
         },
         expected: true,
       },
+      {
+        name: "allowlist mode does not match usernames by default",
+        input: {
+          mode: "allowlist" as const,
+          botId: "bot-1",
+          messageAuthorId: "user-1",
+          userId: "999",
+          userName: "trusted-user",
+          allowlist: ["trusted-user"] as string[],
+        },
+        expected: false,
+      },
+      {
+        name: "allowlist mode matches usernames when explicitly enabled",
+        input: {
+          mode: "allowlist" as const,
+          botId: "bot-1",
+          messageAuthorId: "user-1",
+          userId: "999",
+          userName: "trusted-user",
+          allowlist: ["trusted-user"] as string[],
+          allowNameMatching: true,
+        },
+        expected: true,
+      },
     ]);
 
     for (const testCase of cases) {
@@ -870,6 +899,7 @@ function makeReactionClient(options?: {
 
 function makeReactionListenerParams(overrides?: {
   botUserId?: string;
+  allowNameMatching?: boolean;
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
 }) {
   return {
@@ -877,6 +907,7 @@ function makeReactionListenerParams(overrides?: {
     accountId: "acc-1",
     runtime: {} as import("../runtime.js").RuntimeEnv,
     botUserId: overrides?.botUserId ?? "bot-1",
+    allowNameMatching: overrides?.allowNameMatching ?? false,
     guildEntries: overrides?.guildEntries,
     logger: {
       info: vi.fn(),

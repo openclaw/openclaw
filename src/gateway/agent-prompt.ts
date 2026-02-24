@@ -1,9 +1,22 @@
 import { buildHistoryContextFromEntries, type HistoryEntry } from "../auto-reply/reply/history.js";
+import { extractTextFromChatContent } from "../shared/chat-content.js";
 
 export type ConversationEntry = {
   role: "user" | "assistant" | "tool";
   entry: HistoryEntry;
 };
+
+/**
+ * Coerce body to string. Handles cases where body is a content array
+ * (e.g. [{type:"text", text:"hello"}]) that would serialize as
+ * [object Object] if used directly in a template literal.
+ */
+function safeBody(body: unknown): string {
+  if (typeof body === "string") {
+    return body;
+  }
+  return extractTextFromChatContent(body) ?? "";
+}
 
 export function buildAgentMessageFromConversationEntries(entries: ConversationEntry[]): string {
   if (entries.length === 0) {
@@ -31,10 +44,10 @@ export function buildAgentMessageFromConversationEntries(entries: ConversationEn
 
   const historyEntries = entries.slice(0, currentIndex).map((e) => e.entry);
   if (historyEntries.length === 0) {
-    return currentEntry.body;
+    return safeBody(currentEntry.body);
   }
 
-  const formatEntry = (entry: HistoryEntry) => `${entry.sender}: ${entry.body}`;
+  const formatEntry = (entry: HistoryEntry) => `${entry.sender}: ${safeBody(entry.body)}`;
   return buildHistoryContextFromEntries({
     entries: [...historyEntries, currentEntry],
     currentMessage: formatEntry(currentEntry),

@@ -17,7 +17,7 @@ vi.mock("../process/exec.js", () => ({
 }));
 
 beforeEach(() => {
-  runCommandWithTimeoutMock.mockReset();
+  runCommandWithTimeoutMock.mockClear();
   resetGmailSetupUtilsCachesForTest();
 });
 

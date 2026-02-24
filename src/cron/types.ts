@@ -28,6 +28,7 @@ export type CronDelivery = {
 export type CronDeliveryPatch = Partial<CronDelivery>;
 
 export type CronRunStatus = "ok" | "error" | "skipped";
+export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
 
 export type CronUsageSummary = {
   input_tokens?: number;
@@ -46,6 +47,8 @@ export type CronRunTelemetry = {
 export type CronRunOutcome = {
   status: CronRunStatus;
   error?: string;
+  /** Optional classifier for execution errors to guide fallback behavior. */
+  errorKind?: "delivery-target";
   summary?: string;
   sessionId?: string;
   sessionKey?: string;
@@ -86,6 +89,9 @@ export type CronJobState = {
   nextRunAtMs?: number;
   runningAtMs?: number;
   lastRunAtMs?: number;
+  /** Preferred execution outcome field. */
+  lastRunStatus?: CronRunStatus;
+  /** Back-compat alias for lastRunStatus. */
   lastStatus?: "ok" | "error" | "skipped";
   lastError?: string;
   lastDurationMs?: number;
@@ -93,6 +99,10 @@ export type CronJobState = {
   consecutiveErrors?: number;
   /** Number of consecutive schedule computation errors. Auto-disables job after threshold. */
   scheduleErrorCount?: number;
+  /** Explicit delivery outcome, separate from execution outcome. */
+  lastDeliveryStatus?: CronDeliveryStatus;
+  /** Delivery-specific error text when available. */
+  lastDeliveryError?: string;
   /** Whether the last run's output was delivered to the target channel. */
   lastDelivered?: boolean;
 };

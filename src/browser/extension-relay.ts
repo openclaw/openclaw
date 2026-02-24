@@ -7,6 +7,7 @@ import { isLoopbackAddress, isLoopbackHost } from "../gateway/net.js";
 import { rawDataToString } from "../infra/ws.js";
 import {
   probeAuthenticatedOpenClawRelay,
+  resolveRelayAcceptedTokensForPort,
   resolveRelayAuthTokenForPort,
 } from "./extension-relay-auth.js";
 
@@ -219,10 +220,12 @@ export async function ensureChromeExtensionRelayServer(opts: {
   }
 
   const relayAuthToken = resolveRelayAuthTokenForPort(info.port);
+  const relayAuthTokens = new Set(resolveRelayAcceptedTokensForPort(info.port));
 
   let extensionWs: WebSocket | null = null;
   const cdpClients = new Set<WebSocket>();
   const connectedTargets = new Map<string, ConnectedTarget>();
+  const extensionConnected = () => extensionWs?.readyState === WebSocket.OPEN;
 
   const pendingExtension = new Map<
     number,
@@ -364,8 +367,8 @@ export async function ensureChromeExtensionRelayServer(opts: {
     const path = url.pathname;
 
     if (path.startsWith("/json")) {
-      const token = getHeader(req, RELAY_AUTH_HEADER);
-      if (!token || token !== relayAuthToken) {
+      const token = getHeader(req, RELAY_AUTH_HEADER)?.trim();
+      if (!token || !relayAuthTokens.has(token)) {
         res.writeHead(401);
         res.end("Unauthorized");
         return;
@@ -386,7 +389,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
 
     if (path === "/extension/status") {
       res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ connected: Boolean(extensionWs) }));
+      res.end(JSON.stringify({ connected: extensionConnected() }));
       return;
     }
 
@@ -403,7 +406,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
         "Protocol-Version": "1.3",
       };
       // Only advertise the WS URL if a real extension is connected.
-      if (extensionWs) {
+      if (extensionConnected()) {
         payload.webSocketDebuggerUrl = cdpWsUrl;
       }
       res.writeHead(200, { "Content-Type": "application/json" });
@@ -427,20 +430,25 @@ export async function ensureChromeExtensionRelayServer(opts: {
       return;
     }
 
-    const activateMatch = path.match(/^\/json\/activate\/(.+)$/);
-    if (activateMatch && (req.method === "GET" || req.method === "PUT")) {
-      const targetId = decodeURIComponent(activateMatch[1] ?? "").trim();
+    const handleTargetActionRoute = (
+      match: RegExpMatchArray | null,
+      cdpMethod: "Target.activateTarget" | "Target.closeTarget",
+    ): boolean => {
+      if (!match || (req.method !== "GET" && req.method !== "PUT")) {
+        return false;
+      }
+      const targetId = decodeURIComponent(match[1] ?? "").trim();
       if (!targetId) {
         res.writeHead(400);
         res.end("targetId required");
-        return;
+        return true;
       }
       void (async () => {
         try {
           await sendToExtension({
             id: nextExtensionId++,
             method: "forwardCDPCommand",
-            params: { method: "Target.activateTarget", params: { targetId } },
+            params: { method: cdpMethod, params: { targetId } },
           });
         } catch {
           // ignore
@@ -448,30 +456,13 @@ export async function ensureChromeExtensionRelayServer(opts: {
       })();
       res.writeHead(200);
       res.end("OK");
+      return true;
+    };
+
+    if (handleTargetActionRoute(path.match(/^\/json\/activate\/(.+)$/), "Target.activateTarget")) {
       return;
     }
-
-    const closeMatch = path.match(/^\/json\/close\/(.+)$/);
-    if (closeMatch && (req.method === "GET" || req.method === "PUT")) {
-      const targetId = decodeURIComponent(closeMatch[1] ?? "").trim();
-      if (!targetId) {
-        res.writeHead(400);
-        res.end("targetId required");
-        return;
-      }
-      void (async () => {
-        try {
-          await sendToExtension({
-            id: nextExtensionId++,
-            method: "forwardCDPCommand",
-            params: { method: "Target.closeTarget", params: { targetId } },
-          });
-        } catch {
-          // ignore
-        }
-      })();
-      res.writeHead(200);
-      res.end("OK");
+    if (handleTargetActionRoute(path.match(/^\/json\/close\/(.+)$/), "Target.closeTarget")) {
       return;
     }
 
@@ -500,13 +491,22 @@ export async function ensureChromeExtensionRelayServer(opts: {
 
     if (pathname === "/extension") {
       const token = getRelayAuthTokenFromRequest(req, url);
-      if (!token || token !== relayAuthToken) {
+      if (!token || !relayAuthTokens.has(token)) {
         rejectUpgrade(socket, 401, "Unauthorized");
         return;
       }
-      if (extensionWs) {
+      if (extensionConnected()) {
         rejectUpgrade(socket, 409, "Extension already connected");
         return;
+      }
+      // MV3 worker reconnect races can leave a stale non-OPEN socket reference.
+      if (extensionWs && extensionWs.readyState !== WebSocket.OPEN) {
+        try {
+          extensionWs.terminate();
+        } catch {
+          // ignore
+        }
+        extensionWs = null;
       }
       wssExtension.handleUpgrade(req, socket, head, (ws) => {
         wssExtension.emit("connection", ws, req);
@@ -516,11 +516,11 @@ export async function ensureChromeExtensionRelayServer(opts: {
 
     if (pathname === "/cdp") {
       const token = getRelayAuthTokenFromRequest(req, url);
-      if (!token || token !== relayAuthToken) {
+      if (!token || !relayAuthTokens.has(token)) {
         rejectUpgrade(socket, 401, "Unauthorized");
         return;
       }
-      if (!extensionWs) {
+      if (!extensionConnected()) {
         rejectUpgrade(socket, 503, "Extension not connected");
         return;
       }
@@ -544,6 +544,9 @@ export async function ensureChromeExtensionRelayServer(opts: {
     }, 5000);
 
     ws.on("message", (data) => {
+      if (extensionWs !== ws) {
+        return;
+      }
       let parsed: ExtensionMessage | null = null;
       try {
         parsed = JSON.parse(rawDataToString(data)) as ExtensionMessage;
@@ -645,6 +648,9 @@ export async function ensureChromeExtensionRelayServer(opts: {
 
     ws.on("close", () => {
       clearInterval(ping);
+      if (extensionWs !== ws) {
+        return;
+      }
       extensionWs = null;
       for (const [, pending] of pendingExtension) {
         clearTimeout(pending.timer);
@@ -681,7 +687,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
         return;
       }
 
-      if (!extensionWs) {
+      if (!extensionConnected()) {
         sendResponseToCdp(ws, {
           id: cmd.id,
           sessionId: cmd.sessionId,
@@ -779,7 +785,7 @@ export async function ensureChromeExtensionRelayServer(opts: {
     port,
     baseUrl,
     cdpWsUrl: `ws://${host}:${port}/cdp`,
-    extensionConnected: () => Boolean(extensionWs),
+    extensionConnected,
     stop: async () => {
       relayRuntimeByPort.delete(port);
       try {

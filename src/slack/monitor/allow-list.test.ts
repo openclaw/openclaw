@@ -15,7 +15,7 @@ describe("slack/allow-list", () => {
     expect(normalizeSlackSlug(" #Ops.Room ")).toBe("#ops.room");
   });
 
-  it("matches wildcard, id, and prefixed name candidates", () => {
+  it("matches wildcard and id candidates by default", () => {
     expect(resolveSlackAllowListMatch({ allowList: ["*"], id: "u1", name: "alice" })).toEqual({
       allowed: true,
       matchKey: "*",
@@ -39,6 +39,15 @@ describe("slack/allow-list", () => {
         allowList: ["slack:alice"],
         id: "u2",
         name: "alice",
+      }),
+    ).toEqual({ allowed: false });
+
+    expect(
+      resolveSlackAllowListMatch({
+        allowList: ["slack:alice"],
+        id: "u2",
+        name: "alice",
+        allowNameMatching: true,
       }),
     ).toEqual({
       allowed: true,

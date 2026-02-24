@@ -39,6 +39,8 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import type { OpenClawConfig, loadConfig } from "../../config/config.js";
+import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
+import { resolveOpenProviderRuntimeGroupPolicy } from "../../config/runtime-group-policy.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -1275,11 +1277,15 @@ async function dispatchDiscordCommandInteraction(params: {
   );
   const ownerOk =
     ownerAllowList && user
-      ? allowListMatches(ownerAllowList, {
-          id: sender.id,
-          name: sender.name,
-          tag: sender.tag,
-        })
+      ? allowListMatches(
+          ownerAllowList,
+          {
+            id: sender.id,
+            name: sender.name,
+            tag: sender.tag,
+          },
+          { allowNameMatching: isDangerousNameMatchingEnabled(discordConfig) },
+        )
       : false;
   const guildInfo = resolveDiscordGuildEntry({
     guild: interaction.guild ?? undefined,
@@ -1329,8 +1335,13 @@ async function dispatchDiscordCommandInteraction(params: {
     const channelAllowlistConfigured =
       Boolean(guildInfo?.channels) && Object.keys(guildInfo?.channels ?? {}).length > 0;
     const channelAllowed = channelConfig?.allowed !== false;
+    const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
+      providerConfigPresent: cfg.channels?.discord !== undefined,
+      groupPolicy: discordConfig?.groupPolicy,
+      defaultGroupPolicy: cfg.channels?.defaults?.groupPolicy,
+    });
     const allowByPolicy = isDiscordGroupAllowedByPolicy({
-      groupPolicy: discordConfig?.groupPolicy ?? "open",
+      groupPolicy,
       guildAllowlisted: Boolean(guildInfo),
       channelAllowlistConfigured,
       channelAllowed,
@@ -1357,11 +1368,15 @@ async function dispatchDiscordCommandInteraction(params: {
       ];
       const allowList = normalizeDiscordAllowList(effectiveAllowFrom, ["discord:", "user:", "pk:"]);
       const permitted = allowList
-        ? allowListMatches(allowList, {
-            id: sender.id,
-            name: sender.name,
-            tag: sender.tag,
-          })
+        ? allowListMatches(
+            allowList,
+            {
+              id: sender.id,
+              name: sender.name,
+              tag: sender.tag,
+            },
+            { allowNameMatching: isDangerousNameMatchingEnabled(discordConfig) },
+          )
         : false;
       if (!permitted) {
         commandAuthorized = false;
@@ -1398,6 +1413,7 @@ async function dispatchDiscordCommandInteraction(params: {
       guildInfo,
       memberRoleIds,
       sender,
+      allowNameMatching: isDangerousNameMatchingEnabled(discordConfig),
     });
     const authorizers = useAccessGroups
       ? [
@@ -1503,6 +1519,7 @@ async function dispatchDiscordCommandInteraction(params: {
     channelConfig,
     guildInfo,
     sender: { id: sender.id, name: sender.name, tag: sender.tag },
+    allowNameMatching: isDangerousNameMatchingEnabled(discordConfig),
   });
   const ctxPayload = finalizeInboundContext({
     Body: prompt,

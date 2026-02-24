@@ -182,9 +182,7 @@ The `metadata.openclaw` object supports:
 The `handler.ts` file exports a `HookHandler` function:
 
 ```typescript
-import type { HookHandler } from "../../src/hooks/hooks.js";
-
-const myHandler: HookHandler = async (event) => {
+const myHandler = async (event) => {
   // Only trigger on 'new' command
   if (event.type !== "command" || event.action !== "new") {
     return;
@@ -305,13 +303,15 @@ Message events include rich context about the message:
 #### Example: Message Logger Hook
 
 ```typescript
-import type { HookHandler } from "../../src/hooks/hooks.js";
-import { isMessageReceivedEvent, isMessageSentEvent } from "../../src/hooks/internal-hooks.js";
+const isMessageReceivedEvent = (event: { type: string; action: string }) =>
+  event.type === "message" && event.action === "received";
+const isMessageSentEvent = (event: { type: string; action: string }) =>
+  event.type === "message" && event.action === "sent";
 
-const handler: HookHandler = async (event) => {
-  if (isMessageReceivedEvent(event)) {
+const handler = async (event) => {
+  if (isMessageReceivedEvent(event as { type: string; action: string })) {
     console.log(`[message-logger] Received from ${event.context.from}: ${event.context.content}`);
-  } else if (isMessageSentEvent(event)) {
+  } else if (isMessageSentEvent(event as { type: string; action: string })) {
     console.log(`[message-logger] Sent to ${event.context.to}: ${event.context.content}`);
   }
 };
@@ -364,9 +364,7 @@ This hook does something useful when you issue `/new`.
 ### 4. Create handler.ts
 
 ```typescript
-import type { HookHandler } from "../../src/hooks/hooks.js";
-
-const handler: HookHandler = async (event) => {
+const handler = async (event) => {
   if (event.type !== "command" || event.action !== "new") {
     return;
   }
@@ -793,13 +791,17 @@ Test your handlers in isolation:
 
 ```typescript
 import { test } from "vitest";
-import { createHookEvent } from "./src/hooks/hooks.js";
 import myHandler from "./hooks/my-hook/handler.js";
 
 test("my handler works", async () => {
-  const event = createHookEvent("command", "new", "test-session", {
-    foo: "bar",
-  });
+  const event = {
+    type: "command",
+    action: "new",
+    sessionKey: "test-session",
+    timestamp: new Date(),
+    messages: [],
+    context: { foo: "bar" },
+  };
 
   await myHandler(event);
 

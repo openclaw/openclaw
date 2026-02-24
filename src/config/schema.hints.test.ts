@@ -98,6 +98,30 @@ describe("mapSensitivePaths", () => {
     expect(result["merged.nested"]?.sensitive).toBe(undefined);
   });
 
+  it("maps sensitive fields nested under object catchall schemas", () => {
+    const schema = z.object({
+      custom: z.object({}).catchall(
+        z.object({
+          apiKey: z.string().register(sensitive),
+          label: z.string(),
+        }),
+      ),
+    });
+
+    const result = mapSensitivePaths(schema, "", {});
+    expect(result["custom.*.apiKey"]?.sensitive).toBe(true);
+    expect(result["custom.*.label"]?.sensitive).toBe(undefined);
+  });
+
+  it("does not mark plain catchall values sensitive by default", () => {
+    const schema = z.object({
+      env: z.object({}).catchall(z.string()),
+    });
+
+    const result = mapSensitivePaths(schema, "", {});
+    expect(result["env.*"]?.sensitive).toBe(undefined);
+  });
+
   it("main schema yields correct hints (samples)", () => {
     const schema = OpenClawSchema.toJSONSchema({
       target: "draft-07",

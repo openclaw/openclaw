@@ -46,6 +46,25 @@ function setupSessionState(cfg: OpenClawConfig, env: NodeJS.ProcessEnv, homeDir:
   fs.mkdirSync(path.dirname(storePath), { recursive: true });
 }
 
+function stateIntegrityText(): string {
+  return vi
+    .mocked(note)
+    .mock.calls.filter((call) => call[1] === "State integrity")
+    .map((call) => String(call[0]))
+    .join("\n");
+}
+
+const OAUTH_PROMPT_MATCHER = expect.objectContaining({
+  message: expect.stringContaining("Create OAuth dir at"),
+});
+
+async function runStateIntegrity(cfg: OpenClawConfig) {
+  setupSessionState(cfg, process.env, process.env.HOME ?? "");
+  const confirmSkipInNonInteractive = vi.fn(async () => false);
+  await noteStateIntegrity(cfg, { confirmSkipInNonInteractive });
+  return confirmSkipInNonInteractive;
+}
+
 describe("doctor state integrity oauth dir checks", () => {
   let envSnapshot: EnvSnapshot;
   let tempHome = "";
@@ -58,7 +77,7 @@ describe("doctor state integrity oauth dir checks", () => {
     process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openclaw");
     delete process.env.OPENCLAW_OAUTH_DIR;
     fs.mkdirSync(process.env.OPENCLAW_STATE_DIR, { recursive: true, mode: 0o700 });
-    vi.mocked(note).mockReset();
+    vi.mocked(note).mockClear();
   });
 
   afterEach(() => {
@@ -68,23 +87,11 @@ describe("doctor state integrity oauth dir checks", () => {
 
   it("does not prompt for oauth dir when no whatsapp/pairing config is active", async () => {
     const cfg: OpenClawConfig = {};
-    setupSessionState(cfg, process.env, tempHome);
-    const confirmSkipInNonInteractive = vi.fn(async () => false);
-
-    await noteStateIntegrity(cfg, { confirmSkipInNonInteractive });
-
-    expect(confirmSkipInNonInteractive).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: expect.stringContaining("Create OAuth dir at"),
-      }),
-    );
-    const stateIntegrityText = vi
-      .mocked(note)
-      .mock.calls.filter((call) => call[1] === "State integrity")
-      .map((call) => String(call[0]))
-      .join("\n");
-    expect(stateIntegrityText).toContain("OAuth dir not present");
-    expect(stateIntegrityText).not.toContain("CRITICAL: OAuth dir missing");
+    const confirmSkipInNonInteractive = await runStateIntegrity(cfg);
+    expect(confirmSkipInNonInteractive).not.toHaveBeenCalledWith(OAUTH_PROMPT_MATCHER);
+    const text = stateIntegrityText();
+    expect(text).toContain("OAuth dir not present");
+    expect(text).not.toContain("CRITICAL: OAuth dir missing");
   });
 
   it("prompts for oauth dir when whatsapp is configured", async () => {
@@ -93,22 +100,9 @@ describe("doctor state integrity oauth dir checks", () => {
         whatsapp: {},
       },
     };
-    setupSessionState(cfg, process.env, tempHome);
-    const confirmSkipInNonInteractive = vi.fn(async () => false);
-
-    await noteStateIntegrity(cfg, { confirmSkipInNonInteractive });
-
-    expect(confirmSkipInNonInteractive).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: expect.stringContaining("Create OAuth dir at"),
-      }),
-    );
-    const stateIntegrityText = vi
-      .mocked(note)
-      .mock.calls.filter((call) => call[1] === "State integrity")
-      .map((call) => String(call[0]))
-      .join("\n");
-    expect(stateIntegrityText).toContain("CRITICAL: OAuth dir missing");
+    const confirmSkipInNonInteractive = await runStateIntegrity(cfg);
+    expect(confirmSkipInNonInteractive).toHaveBeenCalledWith(OAUTH_PROMPT_MATCHER);
+    expect(stateIntegrityText()).toContain("CRITICAL: OAuth dir missing");
   });
 
   it("prompts for oauth dir when a channel dmPolicy is pairing", async () => {
@@ -119,15 +113,62 @@ describe("doctor state integrity oauth dir checks", () => {
         },
       },
     };
-    setupSessionState(cfg, process.env, tempHome);
-    const confirmSkipInNonInteractive = vi.fn(async () => false);
+    const confirmSkipInNonInteractive = await runStateIntegrity(cfg);
+    expect(confirmSkipInNonInteractive).toHaveBeenCalledWith(OAUTH_PROMPT_MATCHER);
+  });
 
+  it("prompts for oauth dir when OPENCLAW_OAUTH_DIR is explicitly configured", async () => {
+    process.env.OPENCLAW_OAUTH_DIR = path.join(tempHome, ".oauth");
+    const cfg: OpenClawConfig = {};
+    const confirmSkipInNonInteractive = await runStateIntegrity(cfg);
+    expect(confirmSkipInNonInteractive).toHaveBeenCalledWith(OAUTH_PROMPT_MATCHER);
+    expect(stateIntegrityText()).toContain("CRITICAL: OAuth dir missing");
+  });
+
+  it("detects orphan transcripts and offers archival remediation", async () => {
+    const cfg: OpenClawConfig = {};
+    setupSessionState(cfg, process.env, process.env.HOME ?? "");
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main", process.env, () => tempHome);
+    fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
+    const confirmSkipInNonInteractive = vi.fn(async (params: { message: string }) =>
+      params.message.includes("orphan transcript file"),
+    );
     await noteStateIntegrity(cfg, { confirmSkipInNonInteractive });
-
+    expect(stateIntegrityText()).toContain("orphan transcript file");
     expect(confirmSkipInNonInteractive).toHaveBeenCalledWith(
       expect.objectContaining({
-        message: expect.stringContaining("Create OAuth dir at"),
+        message: expect.stringContaining("orphan transcript file"),
       }),
     );
+    const files = fs.readdirSync(sessionsDir);
+    expect(files.some((name) => name.startsWith("orphan-session.jsonl.deleted."))).toBe(true);
+  });
+
+  it("prints openclaw-only verification hints when recent sessions are missing transcripts", async () => {
+    const cfg: OpenClawConfig = {};
+    setupSessionState(cfg, process.env, process.env.HOME ?? "");
+    const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:main": {
+            sessionId: "missing-transcript",
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    await noteStateIntegrity(cfg, { confirmSkipInNonInteractive: vi.fn(async () => false) });
+
+    const text = stateIntegrityText();
+    expect(text).toContain("recent sessions are missing transcripts");
+    expect(text).toMatch(/openclaw sessions --store ".*sessions\.json"/);
+    expect(text).toMatch(/openclaw sessions cleanup --store ".*sessions\.json" --dry-run/);
+    expect(text).not.toContain("--active");
+    expect(text).not.toContain(" ls ");
   });
 });

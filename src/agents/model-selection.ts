@@ -1,6 +1,7 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveAgentModelPrimaryValue, toAgentModelListLike } from "../config/model-input.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveAgentConfig, resolveAgentModelPrimary } from "./agent-scope.js";
+import { resolveAgentConfig, resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { normalizeGoogleModelId } from "./models-config.providers.js";
@@ -108,8 +109,22 @@ function normalizeProviderModelId(provider: string, model: string): string {
   if (provider === "anthropic") {
     return normalizeAnthropicModelId(model);
   }
+  if (provider === "vercel-ai-gateway" && !model.includes("/")) {
+    // Allow Vercel-specific Claude refs without an upstream prefix.
+    const normalizedAnthropicModel = normalizeAnthropicModelId(model);
+    if (normalizedAnthropicModel.startsWith("claude-")) {
+      return `anthropic/${normalizedAnthropicModel}`;
+    }
+  }
   if (provider === "google") {
     return normalizeGoogleModelId(model);
+  }
+  // OpenRouter-native models (e.g. "openrouter/aurora-alpha") need the full
+  // "openrouter/<name>" as the model ID sent to the API. Models from external
+  // providers already contain a slash (e.g. "anthropic/claude-sonnet-4-5") and
+  // are passed through as-is (#12924).
+  if (provider === "openrouter" && !model.includes("/")) {
+    return `openrouter/${model}`;
   }
   return model;
 }
@@ -252,13 +267,7 @@ export function resolveConfiguredModelRef(params: {
   defaultProvider: string;
   defaultModel: string;
 }): ModelRef {
-  const rawModel = (() => {
-    const raw = params.cfg.agents?.defaults?.model as { primary?: string } | string | undefined;
-    if (typeof raw === "string") {
-      return raw.trim();
-    }
-    return raw?.primary?.trim() ?? "";
-  })();
+  const rawModel = resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model) ?? "";
   if (rawModel) {
     const trimmed = rawModel.trim();
     const aliasIndex = buildModelAliasIndex({
@@ -296,7 +305,7 @@ export function resolveDefaultModelForAgent(params: {
   agentId?: string;
 }): ModelRef {
   const agentModelOverride = params.agentId
-    ? resolveAgentModelPrimary(params.cfg, params.agentId)
+    ? resolveAgentEffectiveModelPrimary(params.cfg, params.agentId)
     : undefined;
   const cfg =
     agentModelOverride && agentModelOverride.length > 0
@@ -307,9 +316,7 @@ export function resolveDefaultModelForAgent(params: {
             defaults: {
               ...params.cfg.agents?.defaults,
               model: {
-                ...(typeof params.cfg.agents?.defaults?.model === "object"
-                  ? params.cfg.agents.defaults.model
-                  : undefined),
+                ...toAgentModelListLike(params.cfg.agents?.defaults?.model),
                 primary: agentModelOverride,
               },
             },
@@ -350,7 +357,7 @@ export function resolveSubagentSpawnModelSelection(params: {
       cfg: params.cfg,
       agentId: params.agentId,
     }) ??
-    normalizeModelSelection(params.cfg.agents?.defaults?.model?.primary) ??
+    normalizeModelSelection(resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model)) ??
     `${runtimeDefault.provider}/${runtimeDefault.model}`
   );
 }
@@ -520,6 +527,21 @@ export function resolveThinkingDefault(params: {
     return "low";
   }
   return "off";
+}
+
+/** Default reasoning level when session/directive do not set it: "on" if model supports reasoning, else "off". */
+export function resolveReasoningDefault(params: {
+  provider: string;
+  model: string;
+  catalog?: ModelCatalogEntry[];
+}): "on" | "off" {
+  const key = modelKey(params.provider, params.model);
+  const candidate = params.catalog?.find(
+    (entry) =>
+      (entry.provider === params.provider && entry.id === params.model) ||
+      (entry.provider === key && entry.id === params.model),
+  );
+  return candidate?.reasoning === true ? "on" : "off";
 }
 
 /**

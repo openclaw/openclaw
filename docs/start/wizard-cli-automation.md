@@ -86,6 +86,16 @@ Add `--json` for a machine-readable summary.
       --gateway-bind loopback
     ```
   </Accordion>
+  <Accordion title="Mistral example">
+    ```bash
+    openclaw onboard --non-interactive \
+      --mode local \
+      --auth-choice mistral-api-key \
+      --mistral-api-key "$MISTRAL_API_KEY" \
+      --gateway-port 18789 \
+      --gateway-bind loopback
+    ```
+  </Accordion>
   <Accordion title="Synthetic example">
     ```bash
     openclaw onboard --non-interactive \

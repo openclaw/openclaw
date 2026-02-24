@@ -84,8 +84,8 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  state.runEmbeddedPiAgentMock.mockReset();
-  state.runCliAgentMock.mockReset();
+  state.runEmbeddedPiAgentMock.mockClear();
+  state.runCliAgentMock.mockClear();
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
 });
 
@@ -337,66 +337,62 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(typing.startTypingLoop).not.toHaveBeenCalled();
   });
 
-  it("suppresses partial streaming for NO_REPLY", async () => {
-    const onPartialReply = vi.fn();
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-      await params.onPartialReply?.({ text: "NO_REPLY" });
-      return { payloads: [{ text: "NO_REPLY" }], meta: {} };
-    });
+  it("suppresses NO_REPLY partials but allows normal No-prefix partials", async () => {
+    const cases = [
+      {
+        partials: ["NO_REPLY"],
+        finalText: "NO_REPLY",
+        expectedForwarded: [] as string[],
+        shouldType: false,
+      },
+      {
+        partials: ["NO_", "NO_RE", "NO_REPLY"],
+        finalText: "NO_REPLY",
+        expectedForwarded: [] as string[],
+        shouldType: false,
+      },
+      {
+        partials: ["No", "No, that is valid"],
+        finalText: "No, that is valid",
+        expectedForwarded: ["No", "No, that is valid"],
+        shouldType: true,
+      },
+    ] as const;
 
-    const { run, typing } = createMinimalRun({
-      opts: { isHeartbeat: false, onPartialReply },
-      typingMode: "message",
-    });
-    await run();
+    for (const testCase of cases) {
+      const onPartialReply = vi.fn();
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+        for (const text of testCase.partials) {
+          await params.onPartialReply?.({ text });
+        }
+        return { payloads: [{ text: testCase.finalText }], meta: {} };
+      });
 
-    expect(onPartialReply).not.toHaveBeenCalled();
-    expect(typing.startTypingOnText).not.toHaveBeenCalled();
-    expect(typing.startTypingLoop).not.toHaveBeenCalled();
-  });
+      const { run, typing } = createMinimalRun({
+        opts: { isHeartbeat: false, onPartialReply },
+        typingMode: "message",
+      });
+      await run();
 
-  it("suppresses partial streaming for NO_REPLY prefixes", async () => {
-    const onPartialReply = vi.fn();
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-      await params.onPartialReply?.({ text: "NO_" });
-      await params.onPartialReply?.({ text: "NO_RE" });
-      await params.onPartialReply?.({ text: "NO_REPLY" });
-      return { payloads: [{ text: "NO_REPLY" }], meta: {} };
-    });
+      if (testCase.expectedForwarded.length === 0) {
+        expect(onPartialReply).not.toHaveBeenCalled();
+      } else {
+        expect(onPartialReply).toHaveBeenCalledTimes(testCase.expectedForwarded.length);
+        testCase.expectedForwarded.forEach((text, index) => {
+          expect(onPartialReply).toHaveBeenNthCalledWith(index + 1, {
+            text,
+            mediaUrls: undefined,
+          });
+        });
+      }
 
-    const { run, typing } = createMinimalRun({
-      opts: { isHeartbeat: false, onPartialReply },
-      typingMode: "message",
-    });
-    await run();
-
-    expect(onPartialReply).not.toHaveBeenCalled();
-    expect(typing.startTypingOnText).not.toHaveBeenCalled();
-    expect(typing.startTypingLoop).not.toHaveBeenCalled();
-  });
-
-  it("does not suppress partial streaming for normal 'No' prefixes", async () => {
-    const onPartialReply = vi.fn();
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-      await params.onPartialReply?.({ text: "No" });
-      await params.onPartialReply?.({ text: "No, that is valid" });
-      return { payloads: [{ text: "No, that is valid" }], meta: {} };
-    });
-
-    const { run, typing } = createMinimalRun({
-      opts: { isHeartbeat: false, onPartialReply },
-      typingMode: "message",
-    });
-    await run();
-
-    expect(onPartialReply).toHaveBeenCalledTimes(2);
-    expect(onPartialReply).toHaveBeenNthCalledWith(1, { text: "No", mediaUrls: undefined });
-    expect(onPartialReply).toHaveBeenNthCalledWith(2, {
-      text: "No, that is valid",
-      mediaUrls: undefined,
-    });
-    expect(typing.startTypingOnText).toHaveBeenCalled();
-    expect(typing.startTypingLoop).not.toHaveBeenCalled();
+      if (testCase.shouldType) {
+        expect(typing.startTypingOnText).toHaveBeenCalled();
+      } else {
+        expect(typing.startTypingOnText).not.toHaveBeenCalled();
+      }
+      expect(typing.startTypingLoop).not.toHaveBeenCalled();
+    }
   });
 
   it("does not start typing on assistant message start without prior text in message mode", async () => {
@@ -488,41 +484,48 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
-  it("signals typing on tool results", async () => {
-    const onToolResult = vi.fn();
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-      await params.onToolResult?.({ text: "tooling", mediaUrls: [] });
-      return { payloads: [{ text: "final" }], meta: {} };
-    });
+  it("handles typing for normal and silent tool results", async () => {
+    const cases = [
+      {
+        toolText: "tooling",
+        shouldType: true,
+        shouldForward: true,
+      },
+      {
+        toolText: "NO_REPLY",
+        shouldType: false,
+        shouldForward: false,
+      },
+    ] as const;
 
-    const { run, typing } = createMinimalRun({
-      typingMode: "message",
-      opts: { onToolResult },
-    });
-    await run();
+    for (const testCase of cases) {
+      const onToolResult = vi.fn();
+      state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
+        await params.onToolResult?.({ text: testCase.toolText, mediaUrls: [] });
+        return { payloads: [{ text: "final" }], meta: {} };
+      });
 
-    expect(typing.startTypingOnText).toHaveBeenCalledWith("tooling");
-    expect(onToolResult).toHaveBeenCalledWith({
-      text: "tooling",
-      mediaUrls: [],
-    });
-  });
+      const { run, typing } = createMinimalRun({
+        typingMode: "message",
+        opts: { onToolResult },
+      });
+      await run();
 
-  it("skips typing for silent tool results", async () => {
-    const onToolResult = vi.fn();
-    state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-      await params.onToolResult?.({ text: "NO_REPLY", mediaUrls: [] });
-      return { payloads: [{ text: "final" }], meta: {} };
-    });
+      if (testCase.shouldType) {
+        expect(typing.startTypingOnText).toHaveBeenCalledWith(testCase.toolText);
+      } else {
+        expect(typing.startTypingOnText).not.toHaveBeenCalled();
+      }
 
-    const { run, typing } = createMinimalRun({
-      typingMode: "message",
-      opts: { onToolResult },
-    });
-    await run();
-
-    expect(typing.startTypingOnText).not.toHaveBeenCalled();
-    expect(onToolResult).not.toHaveBeenCalled();
+      if (testCase.shouldForward) {
+        expect(onToolResult).toHaveBeenCalledWith({
+          text: testCase.toolText,
+          mediaUrls: [],
+        });
+      } else {
+        expect(onToolResult).not.toHaveBeenCalled();
+      }
+    }
   });
 
   it("retries transient HTTP failures once with timer-driven backoff", async () => {
@@ -553,17 +556,16 @@ describe("runReplyAgent typing (heartbeat)", () => {
     const deliveryOrder: string[] = [];
     const onToolResult = vi.fn(async (payload: { text?: string }) => {
       // Simulate variable network latency: first result is slower than second
-      const delay = payload.text === "first" ? 50 : 10;
+      const delay = payload.text === "first" ? 5 : 1;
       await new Promise((r) => setTimeout(r, delay));
       deliveryOrder.push(payload.text ?? "");
     });
 
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-      // Fire two tool results without awaiting — simulates concurrent tool completion
-      void params.onToolResult?.({ text: "first", mediaUrls: [] });
-      void params.onToolResult?.({ text: "second", mediaUrls: [] });
-      // Small delay to let the chain settle before returning
-      await new Promise((r) => setTimeout(r, 150));
+      // Fire two tool results without awaiting each one; await both at the end.
+      const first = params.onToolResult?.({ text: "first", mediaUrls: [] });
+      const second = params.onToolResult?.({ text: "second", mediaUrls: [] });
+      await Promise.all([first, second]);
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
@@ -588,9 +590,9 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
 
     state.runEmbeddedPiAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
-      void params.onToolResult?.({ text: "first", mediaUrls: [] });
-      void params.onToolResult?.({ text: "second", mediaUrls: [] });
-      await new Promise((r) => setTimeout(r, 50));
+      const first = params.onToolResult?.({ text: "first", mediaUrls: [] });
+      const second = params.onToolResult?.({ text: "second", mediaUrls: [] });
+      await Promise.allSettled([first, second]);
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
@@ -979,100 +981,67 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
-  it("backfills fallback reason when fallback is already active", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      fallbackNoticeSelectedModel: "anthropic/claude",
-      fallbackNoticeActiveModel: "deepinfra/moonshotai/Kimi-K2.5",
-      modelProvider: "deepinfra",
-      model: "moonshotai/Kimi-K2.5",
-    };
-    const sessionStore = { main: sessionEntry };
+  it("updates fallback reason summary while fallback stays active", async () => {
+    const cases = [
+      {
+        existingReason: undefined,
+        reportedReason: "rate_limit",
+        expectedReason: "rate limit",
+      },
+      {
+        existingReason: "rate limit",
+        reportedReason: "timeout",
+        expectedReason: "timeout",
+      },
+    ] as const;
 
-    state.runEmbeddedPiAgentMock.mockResolvedValue({
-      payloads: [{ text: "final" }],
-      meta: {},
-    });
-    const fallbackSpy = vi
-      .spyOn(modelFallbackModule, "runWithModelFallback")
-      .mockImplementation(
-        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
-          result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
-          provider: "deepinfra",
-          model: "moonshotai/Kimi-K2.5",
-          attempts: [
-            {
-              provider: "anthropic",
-              model: "claude",
-              error: "Provider anthropic is in cooldown (all profiles unavailable)",
-              reason: "rate_limit",
-            },
-          ],
-        }),
-      );
-    try {
-      const { run } = createMinimalRun({
-        resolvedVerboseLevel: "on",
-        sessionEntry,
-        sessionStore,
-        sessionKey: "main",
+    for (const testCase of cases) {
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: Date.now(),
+        fallbackNoticeSelectedModel: "anthropic/claude",
+        fallbackNoticeActiveModel: "deepinfra/moonshotai/Kimi-K2.5",
+        ...(testCase.existingReason ? { fallbackNoticeReason: testCase.existingReason } : {}),
+        modelProvider: "deepinfra",
+        model: "moonshotai/Kimi-K2.5",
+      };
+      const sessionStore = { main: sessionEntry };
+
+      state.runEmbeddedPiAgentMock.mockResolvedValue({
+        payloads: [{ text: "final" }],
+        meta: {},
       });
-      const res = await run();
-      const firstText = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(firstText).not.toContain("Model Fallback:");
-      expect(sessionEntry.fallbackNoticeReason).toBe("rate limit");
-    } finally {
-      fallbackSpy.mockRestore();
-    }
-  });
-
-  it("refreshes fallback reason summary while fallback stays active", async () => {
-    const sessionEntry: SessionEntry = {
-      sessionId: "session",
-      updatedAt: Date.now(),
-      fallbackNoticeSelectedModel: "anthropic/claude",
-      fallbackNoticeActiveModel: "deepinfra/moonshotai/Kimi-K2.5",
-      fallbackNoticeReason: "rate limit",
-      modelProvider: "deepinfra",
-      model: "moonshotai/Kimi-K2.5",
-    };
-    const sessionStore = { main: sessionEntry };
-
-    state.runEmbeddedPiAgentMock.mockResolvedValue({
-      payloads: [{ text: "final" }],
-      meta: {},
-    });
-    const fallbackSpy = vi
-      .spyOn(modelFallbackModule, "runWithModelFallback")
-      .mockImplementation(
-        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
-          result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
-          provider: "deepinfra",
-          model: "moonshotai/Kimi-K2.5",
-          attempts: [
-            {
-              provider: "anthropic",
-              model: "claude",
-              error: "Provider anthropic is in cooldown (all profiles unavailable)",
-              reason: "timeout",
-            },
-          ],
-        }),
-      );
-    try {
-      const { run } = createMinimalRun({
-        resolvedVerboseLevel: "on",
-        sessionEntry,
-        sessionStore,
-        sessionKey: "main",
-      });
-      const res = await run();
-      const firstText = Array.isArray(res) ? res[0]?.text : res?.text;
-      expect(firstText).not.toContain("Model Fallback:");
-      expect(sessionEntry.fallbackNoticeReason).toBe("timeout");
-    } finally {
-      fallbackSpy.mockRestore();
+      const fallbackSpy = vi
+        .spyOn(modelFallbackModule, "runWithModelFallback")
+        .mockImplementation(
+          async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+            result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
+            provider: "deepinfra",
+            model: "moonshotai/Kimi-K2.5",
+            attempts: [
+              {
+                provider: "anthropic",
+                model: "claude",
+                error: "Provider anthropic is in cooldown (all profiles unavailable)",
+                reason: testCase.reportedReason,
+              },
+            ],
+          }),
+        );
+      try {
+        const { run } = createMinimalRun({
+          resolvedVerboseLevel: "on",
+          sessionEntry,
+          sessionStore,
+          sessionKey: "main",
+        });
+        const res = await run();
+        const firstText = Array.isArray(res) ? res[0]?.text : res?.text;
+        expect(firstText).not.toContain("Model Fallback:");
+        expect(sessionEntry.fallbackNoticeReason).toBe(testCase.expectedReason);
+      } finally {
+        fallbackSpy.mockRestore();
+      }
     }
   });
 

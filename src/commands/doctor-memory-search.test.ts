@@ -43,18 +43,19 @@ describe("noteMemorySearchHealth", () => {
       remote: { apiKey: "from-config" },
     });
 
-    await noteMemorySearchHealth(cfg);
+    await noteMemorySearchHealth(cfg, {});
 
     expect(note).not.toHaveBeenCalled();
     expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
   }
 
   beforeEach(() => {
-    note.mockReset();
+    note.mockClear();
     resolveDefaultAgentId.mockClear();
     resolveAgentDir.mockClear();
     resolveMemorySearchConfig.mockReset();
     resolveApiKeyForProvider.mockReset();
+    resolveApiKeyForProvider.mockRejectedValue(new Error("missing key"));
     resolveMemoryBackendConfig.mockReset();
     resolveMemoryBackendConfig.mockReturnValue({ backend: "builtin", citations: "auto" });
   });
@@ -70,7 +71,7 @@ describe("noteMemorySearchHealth", () => {
       remote: {},
     });
 
-    await noteMemorySearchHealth(cfg);
+    await noteMemorySearchHealth(cfg, {});
 
     expect(note).not.toHaveBeenCalled();
   });
@@ -95,7 +96,7 @@ describe("noteMemorySearchHealth", () => {
       mode: "api-key",
     });
 
-    await noteMemorySearchHealth(cfg);
+    await noteMemorySearchHealth(cfg, {});
 
     expect(resolveApiKeyForProvider).toHaveBeenCalledWith({
       provider: "google",
@@ -103,6 +104,64 @@ describe("noteMemorySearchHealth", () => {
       agentDir: "/tmp/agent-default",
     });
     expect(note).not.toHaveBeenCalled();
+  });
+
+  it("resolves mistral auth for explicit mistral embedding provider", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "mistral",
+      local: {},
+      remote: {},
+    });
+    resolveApiKeyForProvider.mockResolvedValue({
+      apiKey: "k",
+      source: "env: MISTRAL_API_KEY",
+      mode: "api-key",
+    });
+
+    await noteMemorySearchHealth(cfg);
+
+    expect(resolveApiKeyForProvider).toHaveBeenCalledWith({
+      provider: "mistral",
+      cfg,
+      agentDir: "/tmp/agent-default",
+    });
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("notes when gateway probe reports embeddings ready and CLI API key is missing", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "gemini",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: { checked: true, ready: true },
+    });
+
+    const message = note.mock.calls[0]?.[0] as string;
+    expect(message).toContain("reports memory embeddings are ready");
+  });
+
+  it("uses configure hint when gateway probe is unavailable and API key is missing", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "gemini",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: {
+        checked: true,
+        ready: false,
+        error: "gateway memory probe unavailable: timeout",
+      },
+    });
+
+    const message = note.mock.calls[0]?.[0] as string;
+    expect(message).toContain("Gateway memory probe for default agent is not ready");
+    expect(message).toContain("openclaw configure");
+    expect(message).not.toContain("auth add");
   });
 });
 

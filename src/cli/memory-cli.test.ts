@@ -33,7 +33,7 @@ beforeAll(async () => {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  getMemorySearchManager.mockReset();
+  getMemorySearchManager.mockClear();
   process.exitCode = undefined;
   setVerbose(false);
 });

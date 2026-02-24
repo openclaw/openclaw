@@ -22,4 +22,8 @@ describe("splitTelegramReasoningText", () => {
       answerText: text,
     });
   });
+
+  it("does not emit partial reasoning tag prefixes", () => {
+    expect(splitTelegramReasoningText("  <thi")).toEqual({});
+  });
 });

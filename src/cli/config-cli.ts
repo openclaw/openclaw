@@ -1,6 +1,8 @@
 import type { Command } from "commander";
 import JSON5 from "json5";
 import { readConfigFileSnapshot, writeConfigFile } from "../config/config.js";
+import { isBlockedObjectKey } from "../config/prototype-keys.js";
+import { redactConfigObject } from "../config/redact-snapshot.js";
 import { danger, info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -87,6 +89,18 @@ function parseValue(raw: string, opts: ConfigSetParseOpts): unknown {
   }
 }
 
+function hasOwnPathKey(value: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(value, key);
+}
+
+function validatePathSegments(path: PathSegment[]): void {
+  for (const segment of path) {
+    if (!isIndexSegment(segment) && isBlockedObjectKey(segment)) {
+      throw new Error(`Invalid path segment: ${segment}`);
+    }
+  }
+}
+
 function getAtPath(root: unknown, path: PathSegment[]): { found: boolean; value?: unknown } {
   let current: unknown = root;
   for (const segment of path) {
@@ -105,7 +119,7 @@ function getAtPath(root: unknown, path: PathSegment[]): { found: boolean; value?
       continue;
     }
     const record = current as Record<string, unknown>;
-    if (!(segment in record)) {
+    if (!hasOwnPathKey(record, segment)) {
       return { found: false };
     }
     current = record[segment];
@@ -135,7 +149,7 @@ function setAtPath(root: Record<string, unknown>, path: PathSegment[], value: un
       throw new Error(`Cannot traverse into "${segment}" (not an object)`);
     }
     const record = current as Record<string, unknown>;
-    const existing = record[segment];
+    const existing = hasOwnPathKey(record, segment) ? record[segment] : undefined;
     if (!existing || typeof existing !== "object") {
       record[segment] = nextIsIndex ? [] : {};
     }
@@ -176,7 +190,7 @@ function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]): boolea
       continue;
     }
     const record = current as Record<string, unknown>;
-    if (!(segment in record)) {
+    if (!hasOwnPathKey(record, segment)) {
       return false;
     }
     current = record[segment];
@@ -198,7 +212,7 @@ function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]): boolea
     return false;
   }
   const record = current as Record<string, unknown>;
-  if (!(last in record)) {
+  if (!hasOwnPathKey(record, last)) {
     return false;
   }
   delete record[last];
@@ -224,6 +238,7 @@ function parseRequiredPath(path: string): PathSegment[] {
   if (parsedPath.length === 0) {
     throw new Error("Path is empty.");
   }
+  validatePathSegments(parsedPath);
   return parsedPath;
 }
 
@@ -232,7 +247,8 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
   try {
     const parsedPath = parseRequiredPath(opts.path);
     const snapshot = await loadValidConfig(runtime);
-    const res = getAtPath(snapshot.config, parsedPath);
+    const redacted = redactConfigObject(snapshot.config);
+    const res = getAtPath(redacted, parsedPath);
     if (!res.found) {
       runtime.error(danger(`Config path not found: ${opts.path}`));
       runtime.exit(1);
@@ -272,7 +288,7 @@ export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv 
       runtime.exit(1);
       return;
     }
-    await writeConfigFile(next);
+    await writeConfigFile(next, { unsetPaths: [parsedPath] });
     runtime.log(info(`Removed ${opts.path}. Restart the gateway to apply.`));
   } catch (err) {
     runtime.error(danger(String(err)));
@@ -320,10 +336,7 @@ export function registerConfigCli(program: Command) {
     .option("--json", "Legacy alias for --strict-json", false)
     .action(async (path: string, value: string, opts) => {
       try {
-        const parsedPath = parsePath(path);
-        if (parsedPath.length === 0) {
-          throw new Error("Path is empty.");
-        }
+        const parsedPath = parseRequiredPath(path);
         const parsedValue = parseValue(value, {
           strictJson: Boolean(opts.strictJson || opts.json),
         });

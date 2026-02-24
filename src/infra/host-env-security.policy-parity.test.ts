@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 type HostEnvSecurityPolicy = {
   blockedKeys: string[];
+  blockedOverrideKeys?: string[];
   blockedPrefixes: string[];
 };
 
@@ -27,12 +28,17 @@ describe("host env security policy parity", () => {
     const swiftSource = fs.readFileSync(swiftPath, "utf8");
 
     const swiftBlockedKeys = parseSwiftStringArray(swiftSource, "private static let blockedKeys");
+    const swiftBlockedOverrideKeys = parseSwiftStringArray(
+      swiftSource,
+      "private static let blockedOverrideKeys",
+    );
     const swiftBlockedPrefixes = parseSwiftStringArray(
       swiftSource,
       "private static let blockedPrefixes",
     );
 
     expect(swiftBlockedKeys).toEqual(policy.blockedKeys);
+    expect(swiftBlockedOverrideKeys).toEqual(policy.blockedOverrideKeys ?? []);
     expect(swiftBlockedPrefixes).toEqual(policy.blockedPrefixes);
   });
 });

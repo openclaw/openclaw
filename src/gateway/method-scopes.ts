@@ -13,6 +13,8 @@ export type OperatorScope =
 
 export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
   ADMIN_SCOPE,
+  READ_SCOPE,
+  WRITE_SCOPE,
   APPROVALS_SCOPE,
   PAIRING_SCOPE,
 ];
@@ -41,6 +43,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
   ],
   [READ_SCOPE]: [
     "health",
+    "doctor.memory.status",
     "logs.tail",
     "channels.status",
     "status",
@@ -49,6 +52,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "tts.status",
     "tts.providers",
     "models.list",
+    "tools.catalog",
     "agents.list",
     "agent.identity.get",
     "skills.status",

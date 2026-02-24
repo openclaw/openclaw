@@ -39,6 +39,24 @@ function baseConfig(): OpenClawConfig {
   } as unknown as OpenClawConfig;
 }
 
+function resolveModelSelectionForCommand(params: {
+  command: string;
+  allowedModelKeys: Set<string>;
+  allowedModelCatalog: Array<{ provider: string; id: string }>;
+}) {
+  return resolveModelSelectionFromDirective({
+    directives: parseInlineDirectives(params.command),
+    cfg: { commands: { text: true } } as unknown as OpenClawConfig,
+    agentDir: "/tmp/agent",
+    defaultProvider: "anthropic",
+    defaultModel: "claude-opus-4-5",
+    aliasIndex: baseAliasIndex(),
+    allowedModelKeys: params.allowedModelKeys,
+    allowedModelCatalog: params.allowedModelCatalog,
+    provider: "anthropic",
+  });
+}
+
 describe("/model chat UX", () => {
   it("shows summary for /model with no args", async () => {
     const directives = parseInlineDirectives("/model");
@@ -111,6 +129,48 @@ describe("/model chat UX", () => {
       isDefault: true,
     });
     expect(resolved.errorText).toBeUndefined();
+  });
+
+  it("rejects numeric /model selections with a guided error", () => {
+    const resolved = resolveModelSelectionForCommand({
+      command: "/model 99",
+      allowedModelKeys: new Set(["anthropic/claude-opus-4-5", "openai/gpt-4o"]),
+      allowedModelCatalog: [],
+    });
+
+    expect(resolved.modelSelection).toBeUndefined();
+    expect(resolved.errorText).toContain("Numeric model selection is not supported in chat.");
+    expect(resolved.errorText).toContain("Browse: /models or /models <provider>");
+  });
+
+  it("treats explicit default /model selection as resettable default", () => {
+    const resolved = resolveModelSelectionForCommand({
+      command: "/model anthropic/claude-opus-4-5",
+      allowedModelKeys: new Set(["anthropic/claude-opus-4-5", "openai/gpt-4o"]),
+      allowedModelCatalog: [],
+    });
+
+    expect(resolved.errorText).toBeUndefined();
+    expect(resolved.modelSelection).toEqual({
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      isDefault: true,
+    });
+  });
+
+  it("keeps openrouter provider/model split for exact selections", () => {
+    const resolved = resolveModelSelectionForCommand({
+      command: "/model openrouter/anthropic/claude-opus-4-5",
+      allowedModelKeys: new Set(["openrouter/anthropic/claude-opus-4-5"]),
+      allowedModelCatalog: [],
+    });
+
+    expect(resolved.errorText).toBeUndefined();
+    expect(resolved.modelSelection).toEqual({
+      provider: "openrouter",
+      model: "anthropic/claude-opus-4-5",
+      isDefault: false,
+    });
   });
 });
 

@@ -9,6 +9,8 @@ const trustedRequesterRequiredByChannel: Readonly<
   discord: new Set<ChannelMessageActionName>(["timeout", "kick", "ban"]),
 };
 
+type ChannelActions = NonNullable<NonNullable<ReturnType<typeof getChannelPlugin>>["actions"]>;
+
 function requiresTrustedRequesterSender(ctx: ChannelMessageActionContext): boolean {
   const actions = trustedRequesterRequiredByChannel[ctx.channel];
   return Boolean(actions?.has(ctx.action) && ctx.toolContext);
@@ -29,43 +31,57 @@ export function listChannelMessageActions(cfg: OpenClawConfig): ChannelMessageAc
 }
 
 export function supportsChannelMessageButtons(cfg: OpenClawConfig): boolean {
-  for (const plugin of listChannelPlugins()) {
-    if (plugin.actions?.supportsButtons?.({ cfg })) {
-      return true;
-    }
-  }
-  return false;
+  return supportsMessageFeature(cfg, (actions) => actions?.supportsButtons?.({ cfg }) === true);
 }
 
 export function supportsChannelMessageButtonsForChannel(params: {
   cfg: OpenClawConfig;
   channel?: string;
 }): boolean {
-  if (!params.channel) {
-    return false;
-  }
-  const plugin = getChannelPlugin(params.channel as Parameters<typeof getChannelPlugin>[0]);
-  return plugin?.actions?.supportsButtons?.({ cfg: params.cfg }) === true;
+  return supportsMessageFeatureForChannel(
+    params,
+    (actions) => actions.supportsButtons?.(params) === true,
+  );
 }
 
 export function supportsChannelMessageCards(cfg: OpenClawConfig): boolean {
-  for (const plugin of listChannelPlugins()) {
-    if (plugin.actions?.supportsCards?.({ cfg })) {
-      return true;
-    }
-  }
-  return false;
+  return supportsMessageFeature(cfg, (actions) => actions?.supportsCards?.({ cfg }) === true);
 }
 
 export function supportsChannelMessageCardsForChannel(params: {
   cfg: OpenClawConfig;
   channel?: string;
 }): boolean {
+  return supportsMessageFeatureForChannel(
+    params,
+    (actions) => actions.supportsCards?.(params) === true,
+  );
+}
+
+function supportsMessageFeature(
+  cfg: OpenClawConfig,
+  check: (actions: ChannelActions) => boolean,
+): boolean {
+  for (const plugin of listChannelPlugins()) {
+    if (plugin.actions && check(plugin.actions)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function supportsMessageFeatureForChannel(
+  params: {
+    cfg: OpenClawConfig;
+    channel?: string;
+  },
+  check: (actions: ChannelActions) => boolean,
+): boolean {
   if (!params.channel) {
     return false;
   }
   const plugin = getChannelPlugin(params.channel as Parameters<typeof getChannelPlugin>[0]);
-  return plugin?.actions?.supportsCards?.({ cfg: params.cfg }) === true;
+  return plugin?.actions ? check(plugin.actions) : false;
 }
 
 export async function dispatchChannelMessageAction(

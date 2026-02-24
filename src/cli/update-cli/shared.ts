@@ -23,6 +23,7 @@ import { pathExists } from "../../utils.js";
 export type UpdateCommandOptions = {
   json?: boolean;
   restart?: boolean;
+  dryRun?: boolean;
   channel?: string;
   tag?: string;
   timeout?: string;

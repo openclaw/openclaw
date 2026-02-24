@@ -1,45 +1,19 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-
-type SearchImpl = () => Promise<unknown[]>;
-let searchImpl: SearchImpl = async () => [];
-
-const stubManager = {
-  search: vi.fn(async () => await searchImpl()),
-  readFile: vi.fn(),
-  status: () => ({
-    backend: "builtin" as const,
-    files: 1,
-    chunks: 1,
-    dirty: false,
-    workspaceDir: "/workspace",
-    dbPath: "/workspace/.memory/index.sqlite",
-    provider: "builtin",
-    model: "builtin",
-    requestedProvider: "builtin",
-    sources: ["memory" as const],
-    sourceCounts: [{ source: "memory" as const, files: 1, chunks: 1 }],
-  }),
-  sync: vi.fn(),
-  probeVectorAvailability: vi.fn(async () => true),
-  close: vi.fn(),
-};
-
-vi.mock("../../memory/index.js", () => ({
-  getMemorySearchManager: async () => ({ manager: stubManager }),
-}));
-
+import { beforeEach, describe, expect, it } from "vitest";
+import {
+  resetMemoryToolMockState,
+  setMemorySearchImpl,
+} from "../../../test/helpers/memory-tool-manager-mock.js";
 import { createMemorySearchTool } from "./memory-tool.js";
 
 describe("memory_search unavailable payloads", () => {
   beforeEach(() => {
-    searchImpl = async () => [];
-    vi.clearAllMocks();
+    resetMemoryToolMockState({ searchImpl: async () => [] });
   });
 
   it("returns explicit unavailable metadata for quota failures", async () => {
-    searchImpl = async () => {
+    setMemorySearchImpl(async () => {
       throw new Error("openai embeddings failed: 429 insufficient_quota");
-    };
+    });
 
     const tool = createMemorySearchTool({
       config: { agents: { list: [{ id: "main", default: true }] } },
@@ -60,9 +34,9 @@ describe("memory_search unavailable payloads", () => {
   });
 
   it("returns explicit unavailable metadata for non-quota failures", async () => {
-    searchImpl = async () => {
+    setMemorySearchImpl(async () => {
       throw new Error("embedding provider timeout");
-    };
+    });
 
     const tool = createMemorySearchTool({
       config: { agents: { list: [{ id: "main", default: true }] } },

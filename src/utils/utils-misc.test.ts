@@ -64,12 +64,6 @@ describe("isReasoningTagProvider", () => {
       value: "google-generative-ai",
       expected: true,
     },
-    { name: "returns true for google-antigravity", value: "google-antigravity", expected: true },
-    {
-      name: "returns true for google-antigravity model suffixes",
-      value: "google-antigravity/gemini-3",
-      expected: true,
-    },
     { name: "returns true for minimax", value: "minimax", expected: true },
     { name: "returns true for minimax-cn", value: "minimax-cn", expected: true },
     { name: "returns false for null", value: null, expected: false },

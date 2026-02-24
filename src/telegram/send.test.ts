@@ -9,7 +9,8 @@ import { clearSentMessageCache, recordSentMessage, wasSentByBot } from "./sent-m
 
 installTelegramSendTestHooks();
 
-const { botApi, botCtorSpy, loadConfig, loadWebMedia } = getTelegramSendTestMocks();
+const { botApi, botCtorSpy, loadConfig, loadWebMedia, maybePersistResolvedTelegramTarget } =
+  getTelegramSendTestMocks();
 const {
   buildInlineKeyboard,
   createForumTopicTelegram,
@@ -367,6 +368,48 @@ describe("sendMessageTelegram", () => {
     expect(sendMessage).toHaveBeenCalledWith("123", "hi", {
       parse_mode: "HTML",
     });
+  });
+
+  it("resolves t.me targets to numeric chat ids via getChat", async () => {
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 1,
+      chat: { id: "-100123" },
+    });
+    const getChat = vi.fn().mockResolvedValue({ id: -100123 });
+    const api = { sendMessage, getChat } as unknown as {
+      sendMessage: typeof sendMessage;
+      getChat: typeof getChat;
+    };
+
+    await sendMessageTelegram("https://t.me/mychannel", "hi", {
+      token: "tok",
+      api,
+    });
+
+    expect(getChat).toHaveBeenCalledWith("@mychannel");
+    expect(sendMessage).toHaveBeenCalledWith("-100123", "hi", {
+      parse_mode: "HTML",
+    });
+    expect(maybePersistResolvedTelegramTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rawTarget: "https://t.me/mychannel",
+        resolvedChatId: "-100123",
+      }),
+    );
+  });
+
+  it("fails clearly when a legacy target cannot be resolved", async () => {
+    const getChat = vi.fn().mockRejectedValue(new Error("400: Bad Request: chat not found"));
+    const api = { getChat } as unknown as {
+      getChat: typeof getChat;
+    };
+
+    await expect(
+      sendMessageTelegram("@missingchannel", "hi", {
+        token: "tok",
+        api,
+      }),
+    ).rejects.toThrow(/could not be resolved to a numeric chat ID/i);
   });
 
   it("includes thread params in media messages", async () => {
@@ -1100,6 +1143,31 @@ describe("reactMessageTelegram", () => {
 
     expect(setMessageReaction).toHaveBeenCalledWith("123", 456, testCase.expected);
   });
+
+  it("resolves legacy telegram targets before reacting", async () => {
+    const setMessageReaction = vi.fn().mockResolvedValue(undefined);
+    const getChat = vi.fn().mockResolvedValue({ id: -100123 });
+    const api = { setMessageReaction, getChat } as unknown as {
+      setMessageReaction: typeof setMessageReaction;
+      getChat: typeof getChat;
+    };
+
+    await reactMessageTelegram("@mychannel", 456, "✅", {
+      token: "tok",
+      api,
+    });
+
+    expect(getChat).toHaveBeenCalledWith("@mychannel");
+    expect(setMessageReaction).toHaveBeenCalledWith("-100123", 456, [
+      { type: "emoji", emoji: "✅" },
+    ]);
+    expect(maybePersistResolvedTelegramTarget).toHaveBeenCalledWith(
+      expect.objectContaining({
+        rawTarget: "@mychannel",
+        resolvedChatId: "-100123",
+      }),
+    );
+  });
 });
 
 describe("sendStickerTelegram", () => {
@@ -1271,88 +1339,70 @@ describe("shared send behaviors", () => {
 });
 
 describe("editMessageTelegram", () => {
-  it("handles button payload + parse fallback behavior", async () => {
-    const cases: Array<{
-      name: string;
-      setup: () => {
-        text: string;
-        buttons: Parameters<typeof buildInlineKeyboard>[0];
-      };
-      expectedCalls: number;
-      firstExpectNoReplyMarkup?: boolean;
-      firstExpectReplyMarkup?: Record<string, unknown>;
-      secondExpectReplyMarkup?: Record<string, unknown>;
-    }> = [
-      {
-        name: "buttons undefined keeps existing keyboard",
-        setup: () => {
-          botApi.editMessageText.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
-          return { text: "hi", buttons: undefined };
-        },
-        expectedCalls: 1,
-        firstExpectNoReplyMarkup: true,
-      },
-      {
-        name: "buttons empty clears keyboard",
-        setup: () => {
-          botApi.editMessageText.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
-          return { text: "hi", buttons: [] };
-        },
-        expectedCalls: 1,
-        firstExpectReplyMarkup: { inline_keyboard: [] },
-      },
-      {
-        name: "parse error fallback preserves cleared keyboard",
-        setup: () => {
-          botApi.editMessageText
-            .mockRejectedValueOnce(new Error("400: Bad Request: can't parse entities"))
-            .mockResolvedValueOnce({ message_id: 1, chat: { id: "123" } });
-          return { text: "<bad> html", buttons: [] };
-        },
-        expectedCalls: 2,
-        firstExpectReplyMarkup: { inline_keyboard: [] },
-        secondExpectReplyMarkup: { inline_keyboard: [] },
-      },
-    ];
+  it.each([
+    {
+      name: "buttons undefined keeps existing keyboard",
+      text: "hi",
+      buttons: undefined as Parameters<typeof buildInlineKeyboard>[0],
+      expectedCalls: 1,
+      firstExpectNoReplyMarkup: true,
+      parseFallback: false,
+    },
+    {
+      name: "buttons empty clears keyboard",
+      text: "hi",
+      buttons: [] as Parameters<typeof buildInlineKeyboard>[0],
+      expectedCalls: 1,
+      firstExpectReplyMarkup: { inline_keyboard: [] } as Record<string, unknown>,
+      parseFallback: false,
+    },
+    {
+      name: "parse error fallback preserves cleared keyboard",
+      text: "<bad> html",
+      buttons: [] as Parameters<typeof buildInlineKeyboard>[0],
+      expectedCalls: 2,
+      firstExpectReplyMarkup: { inline_keyboard: [] } as Record<string, unknown>,
+      secondExpectReplyMarkup: { inline_keyboard: [] } as Record<string, unknown>,
+      parseFallback: true,
+    },
+  ])("$name", async (testCase) => {
+    if (testCase.parseFallback) {
+      botApi.editMessageText
+        .mockRejectedValueOnce(new Error("400: Bad Request: can't parse entities"))
+        .mockResolvedValueOnce({ message_id: 1, chat: { id: "123" } });
+    } else {
+      botApi.editMessageText.mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+    }
 
-    for (const testCase of cases) {
-      botApi.editMessageText.mockReset();
-      botCtorSpy.mockReset();
-      const input = testCase.setup();
+    await editMessageTelegram("123", 1, testCase.text, {
+      token: "tok",
+      cfg: {},
+      buttons: testCase.buttons ? testCase.buttons.map((row) => [...row]) : testCase.buttons,
+    });
 
-      await editMessageTelegram("123", 1, input.text, {
-        token: "tok",
-        cfg: {},
-        buttons: input.buttons ? input.buttons.map((row) => [...row]) : input.buttons,
-      });
+    expect(botCtorSpy, testCase.name).toHaveBeenCalledTimes(1);
+    expect(botCtorSpy.mock.calls[0]?.[0], testCase.name).toBe("tok");
+    expect(botApi.editMessageText, testCase.name).toHaveBeenCalledTimes(testCase.expectedCalls);
 
-      expect(botCtorSpy, testCase.name).toHaveBeenCalledTimes(1);
-      expect(botCtorSpy.mock.calls[0]?.[0], testCase.name).toBe("tok");
-      expect(botApi.editMessageText, testCase.name).toHaveBeenCalledTimes(testCase.expectedCalls);
+    const firstParams = (botApi.editMessageText.mock.calls[0] ?? [])[3] as Record<string, unknown>;
+    expect(firstParams, testCase.name).toEqual(expect.objectContaining({ parse_mode: "HTML" }));
+    if ("firstExpectNoReplyMarkup" in testCase && testCase.firstExpectNoReplyMarkup) {
+      expect(firstParams, testCase.name).not.toHaveProperty("reply_markup");
+    }
+    if ("firstExpectReplyMarkup" in testCase && testCase.firstExpectReplyMarkup) {
+      expect(firstParams, testCase.name).toEqual(
+        expect.objectContaining({ reply_markup: testCase.firstExpectReplyMarkup }),
+      );
+    }
 
-      const firstParams = (botApi.editMessageText.mock.calls[0] ?? [])[3] as Record<
+    if ("secondExpectReplyMarkup" in testCase && testCase.secondExpectReplyMarkup) {
+      const secondParams = (botApi.editMessageText.mock.calls[1] ?? [])[3] as Record<
         string,
         unknown
       >;
-      expect(firstParams, testCase.name).toEqual(expect.objectContaining({ parse_mode: "HTML" }));
-      if ("firstExpectNoReplyMarkup" in testCase && testCase.firstExpectNoReplyMarkup) {
-        expect(firstParams, testCase.name).not.toHaveProperty("reply_markup");
-      }
-      if ("firstExpectReplyMarkup" in testCase && testCase.firstExpectReplyMarkup) {
-        expect(firstParams, testCase.name).toEqual(
-          expect.objectContaining({ reply_markup: testCase.firstExpectReplyMarkup }),
-        );
-      }
-
-      if ("secondExpectReplyMarkup" in testCase && testCase.secondExpectReplyMarkup) {
-        const secondParams = (botApi.editMessageText.mock.calls[1] ?? [])[3] as Record<
-          string,
-          unknown
-        >;
-        expect(secondParams, testCase.name).toEqual(
-          expect.objectContaining({ reply_markup: testCase.secondExpectReplyMarkup }),
-        );
-      }
+      expect(secondParams, testCase.name).toEqual(
+        expect.objectContaining({ reply_markup: testCase.secondExpectReplyMarkup }),
+      );
     }
   });
 

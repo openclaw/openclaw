@@ -91,6 +91,7 @@ export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export type { OpenClawConfig } from "../config/config.js";
 /** @deprecated Use OpenClawConfig instead */
 export type { OpenClawConfig as ClawdbotConfig } from "../config/config.js";
+export { isDangerousNameMatchingEnabled } from "../config/dangerous-name-matching.js";
 
 export type { FileLockHandle, FileLockOptions } from "./file-lock.js";
 export { acquireFileLock, withFileLock } from "./file-lock.js";
@@ -106,7 +107,9 @@ export type { WebhookTargetMatchResult } from "./webhook-targets.js";
 export type { AgentMediaPayload } from "./agent-media-payload.js";
 export { buildAgentMediaPayload } from "./agent-media-payload.js";
 export {
+  buildBaseAccountStatusSnapshot,
   buildBaseChannelStatusSummary,
+  buildTokenChannelStatusSummary,
   collectStatusIssuesFromLastError,
   createDefaultChannelRuntimeState,
 } from "./status-helpers.js";
@@ -133,6 +136,19 @@ export type {
   MSTeamsTeamConfig,
 } from "../config/types.js";
 export {
+  GROUP_POLICY_BLOCKED_LABEL,
+  resetMissingProviderGroupPolicyFallbackWarningsForTesting,
+  resolveAllowlistProviderRuntimeGroupPolicy,
+  resolveDefaultGroupPolicy,
+  resolveOpenProviderRuntimeGroupPolicy,
+  resolveRuntimeGroupPolicy,
+  type GroupPolicyDefaultsConfig,
+  type RuntimeGroupPolicyResolution,
+  type RuntimeGroupPolicyParams,
+  type ResolveProviderRuntimeGroupPolicyParams,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "../config/runtime-group-policy.js";
+export {
   DiscordConfigSchema,
   GoogleChatConfigSchema,
   IMessageConfigSchema,
@@ -150,6 +166,7 @@ export {
   MarkdownConfigSchema,
   MarkdownTableModeSchema,
   normalizeAllowFrom,
+  ReplyRuntimeConfigSchemaShape,
   requireOpenAllowFrom,
   TtsAutoSchema,
   TtsConfigSchema,
@@ -159,15 +176,42 @@ export {
 export { ToolPolicySchema } from "../config/zod-schema.agent-runtime.js";
 export type { RuntimeEnv } from "../runtime.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
-export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
+export {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  resolveThreadSessionKeys,
+} from "../routing/session-key.js";
 export { formatAllowFromLowercase, isAllowedParsedChatSender } from "./allow-from.js";
 export { resolveSenderCommandAuthorization } from "./command-auth.js";
 export { handleSlackMessageAction } from "./slack-message-actions.js";
 export { extractToolSend } from "./tool-send.js";
+export {
+  createNormalizedOutboundDeliverer,
+  formatTextWithAttachmentLinks,
+  normalizeOutboundReplyPayload,
+  resolveOutboundMediaUrls,
+  sendMediaWithLeadingCaption,
+} from "./reply-payload.js";
+export type { OutboundReplyPayload } from "./reply-payload.js";
 export { resolveChannelAccountConfigBasePath } from "./config-paths.js";
+export { buildMediaPayload } from "../channels/plugins/media-payload.js";
+export type { MediaPayload, MediaPayloadInput } from "../channels/plugins/media-payload.js";
+export { createLoggerBackedRuntime } from "./runtime.js";
 export { chunkTextForOutbound } from "./text-chunking.js";
 export { readJsonFileWithFallback, writeJsonFileAtomically } from "./json-store.js";
 export { buildRandomTempFilePath, withTempDownloadPath } from "./temp-path.js";
+export {
+  runPluginCommandWithTimeout,
+  type PluginCommandRunOptions,
+  type PluginCommandRunResult,
+} from "./run-command.js";
+export { resolveGatewayBindUrl } from "../shared/gateway-bind-url.js";
+export type { GatewayBindUrlResult } from "../shared/gateway-bind-url.js";
+export { resolveTailnetHostWithRunner } from "../shared/tailscale-status.js";
+export type {
+  TailscaleStatusCommandResult,
+  TailscaleStatusCommandRunner,
+} from "../shared/tailscale-status.js";
 export type { ChatType } from "../channels/chat-type.js";
 /** @deprecated Use ChatType instead */
 export type { RoutePeerKind } from "../routing/resolve-route.js";
@@ -175,6 +219,7 @@ export { resolveAckReaction } from "../agents/identity.js";
 export type { ReplyPayload } from "../auto-reply/types.js";
 export type { ChunkMode } from "../auto-reply/chunk.js";
 export { SILENT_REPLY_TOKEN, isSilentReplyText } from "../auto-reply/tokens.js";
+export { formatInboundFromLabel } from "../auto-reply/envelope.js";
 export {
   approveDevicePairing,
   listDevicePairing,
@@ -182,6 +227,12 @@ export {
 } from "../infra/device-pairing.js";
 export { createDedupeCache } from "../infra/dedupe.js";
 export type { DedupeCache } from "../infra/dedupe.js";
+export { createPersistentDedupe } from "./persistent-dedupe.js";
+export type {
+  PersistentDedupe,
+  PersistentDedupeCheckOptions,
+  PersistentDedupeOptions,
+} from "./persistent-dedupe.js";
 export { formatErrorMessage } from "../infra/errors.js";
 export {
   DEFAULT_WEBHOOK_BODY_TIMEOUT_MS,
@@ -443,8 +494,13 @@ export { whatsappOnboardingAdapter } from "../channels/plugins/onboarding/whatsa
 export { resolveWhatsAppHeartbeatRecipients } from "../channels/plugins/whatsapp-heartbeat.js";
 export {
   looksLikeWhatsAppTargetId,
+  normalizeWhatsAppAllowFromEntries,
   normalizeWhatsAppMessagingTarget,
 } from "../channels/plugins/normalize/whatsapp.js";
+export {
+  resolveWhatsAppGroupIntroHint,
+  resolveWhatsAppMentionStripPatterns,
+} from "../channels/plugins/whatsapp-shared.js";
 export { collectWhatsAppStatusIssues } from "../channels/plugins/status-issues/whatsapp.js";
 
 // Channel: BlueBubbles
@@ -482,3 +538,6 @@ export type { ProcessedLineMessage } from "../line/markdown-to-line.js";
 
 // Media utilities
 export { loadWebMedia, type WebMediaResult } from "../web/media.js";
+
+// Security utilities
+export { redactSensitiveText } from "../logging/redact.js";

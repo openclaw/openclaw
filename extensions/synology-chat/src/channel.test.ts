@@ -39,6 +39,7 @@ vi.mock("zod", () => ({
 }));
 
 const { createSynologyChatPlugin } = await import("./channel.js");
+const { registerPluginHttpRoute } = await import("openclaw/plugin-sdk");
 
 describe("createSynologyChatPlugin", () => {
   it("returns a plugin object with all required sections", () => {
@@ -57,6 +58,7 @@ describe("createSynologyChatPlugin", () => {
       const plugin = createSynologyChatPlugin();
       expect(plugin.meta.id).toBe("synology-chat");
       expect(plugin.meta.label).toBe("Synology Chat");
+      expect(plugin.meta.docsPath).toBe("/channels/synology-chat");
     });
   });
 
@@ -334,6 +336,40 @@ describe("createSynologyChatPlugin", () => {
       };
       const result = await plugin.gateway.startAccount(ctx);
       expect(typeof result.stop).toBe("function");
+    });
+
+    it("deregisters stale route before re-registering same account/path", async () => {
+      const unregisterFirst = vi.fn();
+      const unregisterSecond = vi.fn();
+      const registerMock = vi.mocked(registerPluginHttpRoute);
+      registerMock.mockReturnValueOnce(unregisterFirst).mockReturnValueOnce(unregisterSecond);
+
+      const plugin = createSynologyChatPlugin();
+      const ctx = {
+        cfg: {
+          channels: {
+            "synology-chat": {
+              enabled: true,
+              token: "t",
+              incomingUrl: "https://nas/incoming",
+              webhookPath: "/webhook/synology",
+            },
+          },
+        },
+        accountId: "default",
+        log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      };
+
+      const first = await plugin.gateway.startAccount(ctx);
+      const second = await plugin.gateway.startAccount(ctx);
+
+      expect(registerMock).toHaveBeenCalledTimes(2);
+      expect(unregisterFirst).toHaveBeenCalledTimes(1);
+      expect(unregisterSecond).not.toHaveBeenCalled();
+
+      // Clean up active route map so this module-level state doesn't leak across tests.
+      first.stop();
+      second.stop();
     });
   });
 });

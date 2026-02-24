@@ -18,6 +18,11 @@ async function expectSandboxRejection(media: string, sandboxRoot: string, patter
   await expect(resolveSandboxedMediaSource({ media, sandboxRoot })).rejects.toThrow(pattern);
 }
 
+function isPathInside(root: string, target: string): boolean {
+  const relative = path.relative(path.resolve(root), path.resolve(target));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
 describe("resolveSandboxedMediaSource", () => {
   // Group 1: /tmp paths (the bug fix)
   it.each([
@@ -57,11 +62,36 @@ describe("resolveSandboxedMediaSource", () => {
     });
   });
 
+  it("maps container /workspace absolute paths into sandbox root", async () => {
+    await withSandboxRoot(async (sandboxDir) => {
+      const result = await resolveSandboxedMediaSource({
+        media: "/workspace/media/pic.png",
+        sandboxRoot: sandboxDir,
+      });
+      expect(result).toBe(path.join(sandboxDir, "media", "pic.png"));
+    });
+  });
+
+  it("maps file:// URLs under /workspace into sandbox root", async () => {
+    await withSandboxRoot(async (sandboxDir) => {
+      const result = await resolveSandboxedMediaSource({
+        media: "file:///workspace/media/pic.png",
+        sandboxRoot: sandboxDir,
+      });
+      expect(result).toBe(path.join(sandboxDir, "media", "pic.png"));
+    });
+  });
+
   // Group 3: Rejections (security)
   it.each([
     {
       name: "paths outside sandbox root and tmpdir",
       media: "/etc/passwd",
+      expected: /sandbox/i,
+    },
+    {
+      name: "paths under similarly named container roots",
+      media: "/workspace-two/secret.txt",
       expected: /sandbox/i,
     },
     {
@@ -94,9 +124,15 @@ describe("resolveSandboxedMediaSource", () => {
     if (process.platform === "win32") {
       return;
     }
+    const outsideTmpTarget = path.resolve(process.cwd(), "package.json");
+    if (isPathInside(os.tmpdir(), outsideTmpTarget)) {
+      return;
+    }
+
     await withSandboxRoot(async (sandboxDir) => {
+      await fs.access(outsideTmpTarget);
       const symlinkPath = path.join(sandboxDir, "tmp-link-escape");
-      await fs.symlink("/etc/passwd", symlinkPath);
+      await fs.symlink(outsideTmpTarget, symlinkPath);
       await expectSandboxRejection(symlinkPath, sandboxDir, /symlink|sandbox/i);
     });
   });

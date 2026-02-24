@@ -295,11 +295,12 @@ async function loadWritableAllowlistAgent(opts: ExecApprovalsCliOpts): Promise<{
 type WritableAllowlistAgentContext = Awaited<ReturnType<typeof loadWritableAllowlistAgent>> & {
   trimmedPattern: string;
 };
+type AllowlistMutation = (context: WritableAllowlistAgentContext) => boolean | Promise<boolean>;
 
 async function runAllowlistMutation(
   pattern: string,
   opts: ExecApprovalsCliOpts,
-  mutate: (context: WritableAllowlistAgentContext) => boolean | Promise<boolean>,
+  mutate: AllowlistMutation,
 ): Promise<void> {
   try {
     const trimmedPattern = requireTrimmedNonEmpty(pattern, "Pattern required.");
@@ -320,6 +321,25 @@ async function runAllowlistMutation(
     defaultRuntime.error(formatCliError(err));
     defaultRuntime.exit(1);
   }
+}
+
+function registerAllowlistMutationCommand(params: {
+  allowlist: Command;
+  name: "add" | "remove";
+  description: string;
+  mutate: AllowlistMutation;
+}): Command {
+  const command = params.allowlist
+    .command(`${params.name} <pattern>`)
+    .description(params.description)
+    .option("--node <node>", "Target node id/name/IP")
+    .option("--gateway", "Force gateway approvals", false)
+    .option("--agent <id>", 'Agent id (defaults to "*")')
+    .action(async (pattern: string, opts: ExecApprovalsCliOpts) => {
+      await runAllowlistMutation(pattern, opts, params.mutate);
+    });
+  nodesCallOpts(command);
+  return command;
 }
 
 export function registerExecApprovalsCli(program: Command) {
@@ -416,63 +436,47 @@ export function registerExecApprovalsCli(program: Command) {
         )}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/approvals", "docs.openclaw.ai/cli/approvals")}\n`,
     );
 
-  const allowlistAdd = allowlist
-    .command("add <pattern>")
-    .description("Add a glob pattern to an allowlist")
-    .option("--node <node>", "Target node id/name/IP")
-    .option("--gateway", "Force gateway approvals", false)
-    .option("--agent <id>", 'Agent id (defaults to "*")')
-    .action(async (pattern: string, opts: ExecApprovalsCliOpts) => {
-      await runAllowlistMutation(
-        pattern,
-        opts,
-        ({ trimmedPattern, file, agent, agentKey, allowlistEntries }) => {
-          if (allowlistEntries.some((entry) => normalizeAllowlistEntry(entry) === trimmedPattern)) {
-            defaultRuntime.log("Already allowlisted.");
-            return false;
-          }
-          allowlistEntries.push({ pattern: trimmedPattern, lastUsedAt: Date.now() });
-          agent.allowlist = allowlistEntries;
-          file.agents = { ...file.agents, [agentKey]: agent };
-          return true;
-        },
-      );
-    });
-  nodesCallOpts(allowlistAdd);
+  registerAllowlistMutationCommand({
+    allowlist,
+    name: "add",
+    description: "Add a glob pattern to an allowlist",
+    mutate: ({ trimmedPattern, file, agent, agentKey, allowlistEntries }) => {
+      if (allowlistEntries.some((entry) => normalizeAllowlistEntry(entry) === trimmedPattern)) {
+        defaultRuntime.log("Already allowlisted.");
+        return false;
+      }
+      allowlistEntries.push({ pattern: trimmedPattern, lastUsedAt: Date.now() });
+      agent.allowlist = allowlistEntries;
+      file.agents = { ...file.agents, [agentKey]: agent };
+      return true;
+    },
+  });
 
-  const allowlistRemove = allowlist
-    .command("remove <pattern>")
-    .description("Remove a glob pattern from an allowlist")
-    .option("--node <node>", "Target node id/name/IP")
-    .option("--gateway", "Force gateway approvals", false)
-    .option("--agent <id>", 'Agent id (defaults to "*")')
-    .action(async (pattern: string, opts: ExecApprovalsCliOpts) => {
-      await runAllowlistMutation(
-        pattern,
-        opts,
-        ({ trimmedPattern, file, agent, agentKey, allowlistEntries }) => {
-          const nextEntries = allowlistEntries.filter(
-            (entry) => normalizeAllowlistEntry(entry) !== trimmedPattern,
-          );
-          if (nextEntries.length === allowlistEntries.length) {
-            defaultRuntime.log("Pattern not found.");
-            return false;
-          }
-          if (nextEntries.length === 0) {
-            delete agent.allowlist;
-          } else {
-            agent.allowlist = nextEntries;
-          }
-          if (isEmptyAgent(agent)) {
-            const agents = { ...file.agents };
-            delete agents[agentKey];
-            file.agents = Object.keys(agents).length > 0 ? agents : undefined;
-          } else {
-            file.agents = { ...file.agents, [agentKey]: agent };
-          }
-          return true;
-        },
+  registerAllowlistMutationCommand({
+    allowlist,
+    name: "remove",
+    description: "Remove a glob pattern from an allowlist",
+    mutate: ({ trimmedPattern, file, agent, agentKey, allowlistEntries }) => {
+      const nextEntries = allowlistEntries.filter(
+        (entry) => normalizeAllowlistEntry(entry) !== trimmedPattern,
       );
-    });
-  nodesCallOpts(allowlistRemove);
+      if (nextEntries.length === allowlistEntries.length) {
+        defaultRuntime.log("Pattern not found.");
+        return false;
+      }
+      if (nextEntries.length === 0) {
+        delete agent.allowlist;
+      } else {
+        agent.allowlist = nextEntries;
+      }
+      if (isEmptyAgent(agent)) {
+        const agents = { ...file.agents };
+        delete agents[agentKey];
+        file.agents = Object.keys(agents).length > 0 ? agents : undefined;
+      } else {
+        file.agents = { ...file.agents, [agentKey]: agent };
+      }
+      return true;
+    },
+  });
 }

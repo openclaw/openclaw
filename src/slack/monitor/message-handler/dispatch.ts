@@ -40,12 +40,14 @@ export function resolveSlackStreamingThreadHint(params: {
   replyToMode: "off" | "first" | "all";
   incomingThreadTs: string | undefined;
   messageTs: string | undefined;
+  isThreadReply?: boolean;
 }): string | undefined {
   return resolveSlackThreadTs({
     replyToMode: params.replyToMode,
     incomingThreadTs: params.incomingThreadTs,
     messageTs: params.messageTs,
     hasReplied: false,
+    isThreadReply: params.isThreadReply,
   });
 }
 
@@ -80,12 +82,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         channel: "slack",
         to: `user:${message.user}`,
         accountId: route.accountId,
+        threadId: prepared.ctxPayload.MessageThreadId,
       },
       ctx: prepared.ctxPayload,
     });
   }
 
-  const { statusThreadTs } = resolveSlackThreadTargets({
+  const { statusThreadTs, isThreadReply } = resolveSlackThreadTargets({
     message,
     replyToMode: ctx.replyToMode,
   });
@@ -102,6 +105,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     incomingThreadTs,
     messageTs,
     hasRepliedRef,
+    isThreadReply,
   });
 
   const typingTarget = statusThreadTs ? `${message.channel}/${statusThreadTs}` : message.channel;
@@ -166,6 +170,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     replyToMode: ctx.replyToMode,
     incomingThreadTs,
     messageTs,
+    isThreadReply,
   });
   const useStreaming = shouldUseStreaming({
     streamingEnabled,
@@ -184,6 +189,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       runtime,
       textLimit: ctx.textLimit,
       replyThreadTs,
+      replyToMode: ctx.replyToMode,
     });
     replyPlan.markSent();
   };
@@ -292,17 +298,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         hasStreamedMessage = false;
       }
 
-      const replyThreadTs = replyPlan.nextThreadTs();
-      await deliverReplies({
-        replies: [payload],
-        target: prepared.replyTarget,
-        token: ctx.botToken,
-        accountId: account.accountId,
-        runtime,
-        textLimit: ctx.textLimit,
-        replyThreadTs,
-      });
-      replyPlan.markSent();
+      await deliverNormally(payload);
     },
     onError: (err, info) => {
       runtime.error?.(danger(`slack ${info.kind} reply failed: ${String(err)}`));
@@ -362,6 +358,18 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     draftStream.update(trimmed);
     hasStreamedMessage = true;
   };
+  const onDraftBoundary =
+    useStreaming || !previewStreamingEnabled
+      ? undefined
+      : async () => {
+          if (hasStreamedMessage) {
+            draftStream.forceNewMessage();
+            hasStreamedMessage = false;
+            appendRenderedText = "";
+            appendSourceText = "";
+            statusUpdateCount = 0;
+          }
+        };
 
   const { queuedFinal, counts } = await dispatchInboundMessage({
     ctx: prepared.ctxPayload,
@@ -384,32 +392,8 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           : async (payload) => {
               updateDraftFromPartial(payload.text);
             },
-      onAssistantMessageStart: useStreaming
-        ? undefined
-        : !previewStreamingEnabled
-          ? undefined
-          : async () => {
-              if (hasStreamedMessage) {
-                draftStream.forceNewMessage();
-                hasStreamedMessage = false;
-                appendRenderedText = "";
-                appendSourceText = "";
-                statusUpdateCount = 0;
-              }
-            },
-      onReasoningEnd: useStreaming
-        ? undefined
-        : !previewStreamingEnabled
-          ? undefined
-          : async () => {
-              if (hasStreamedMessage) {
-                draftStream.forceNewMessage();
-                hasStreamedMessage = false;
-                appendRenderedText = "";
-                appendSourceText = "";
-                statusUpdateCount = 0;
-              }
-            },
+      onAssistantMessageStart: onDraftBoundary,
+      onReasoningEnd: onDraftBoundary,
     },
   });
   await draftStream.flush();

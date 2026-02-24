@@ -4,7 +4,13 @@ import path from "node:path";
 import { Command, Option } from "commander";
 import { resolveStateDir } from "../config/paths.js";
 import { routeLogsToStderr } from "../logging/console.js";
+import { formatDocsLink } from "../terminal/links.js";
+import { theme } from "../terminal/theme.js";
 import { pathExists } from "../utils.js";
+import {
+  buildFishOptionCompletionLine,
+  buildFishSubcommandCompletionLine,
+} from "./completion-fish.js";
 import { getCoreCliCommandNames, registerCoreCliByName } from "./program/command-registry.js";
 import { getProgramContext } from "./program/program-context.js";
 import { getSubCliEntries, registerSubCliByName } from "./program/register.subclis.js";
@@ -226,6 +232,11 @@ export function registerCompletionCli(program: Command) {
   program
     .command("completion")
     .description("Generate shell completion script")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/completion", "docs.openclaw.ai/cli/completion")}\n`,
+    )
     .addOption(
       new Option("-s, --shell <shell>", "Shell to generate completion for (default: zsh)").choices(
         COMPLETION_SHELLS,
@@ -598,26 +609,21 @@ function generateFishCompletion(program: Command): string {
     if (parents.length === 0) {
       // Subcommands of root
       for (const sub of cmd.commands) {
-        const desc = sub.description().replace(/'/g, "'\\''");
-        script += `complete -c ${rootCmd} -n "__fish_use_subcommand" -a "${sub.name()}" -d '${desc}'\n`;
+        script += buildFishSubcommandCompletionLine({
+          rootCmd,
+          condition: "__fish_use_subcommand",
+          name: sub.name(),
+          description: sub.description(),
+        });
       }
       // Options of root
       for (const opt of cmd.options) {
-        const flags = opt.flags.split(/[ ,|]+/);
-        const long = flags.find((f) => f.startsWith("--"))?.replace(/^--/, "");
-        const short = flags
-          .find((f) => f.startsWith("-") && !f.startsWith("--"))
-          ?.replace(/^-/, "");
-        const desc = opt.description.replace(/'/g, "'\\''");
-        let line = `complete -c ${rootCmd} -n "__fish_use_subcommand"`;
-        if (short) {
-          line += ` -s ${short}`;
-        }
-        if (long) {
-          line += ` -l ${long}`;
-        }
-        line += ` -d '${desc}'\n`;
-        script += line;
+        script += buildFishOptionCompletionLine({
+          rootCmd,
+          condition: "__fish_use_subcommand",
+          flags: opt.flags,
+          description: opt.description,
+        });
       }
     } else {
       // Nested commands
@@ -631,26 +637,21 @@ function generateFishCompletion(program: Command): string {
 
       // Subcommands
       for (const sub of cmd.commands) {
-        const desc = sub.description().replace(/'/g, "'\\''");
-        script += `complete -c ${rootCmd} -n "__fish_seen_subcommand_from ${cmdName}" -a "${sub.name()}" -d '${desc}'\n`;
+        script += buildFishSubcommandCompletionLine({
+          rootCmd,
+          condition: `__fish_seen_subcommand_from ${cmdName}`,
+          name: sub.name(),
+          description: sub.description(),
+        });
       }
       // Options
       for (const opt of cmd.options) {
-        const flags = opt.flags.split(/[ ,|]+/);
-        const long = flags.find((f) => f.startsWith("--"))?.replace(/^--/, "");
-        const short = flags
-          .find((f) => f.startsWith("-") && !f.startsWith("--"))
-          ?.replace(/^-/, "");
-        const desc = opt.description.replace(/'/g, "'\\''");
-        let line = `complete -c ${rootCmd} -n "__fish_seen_subcommand_from ${cmdName}"`;
-        if (short) {
-          line += ` -s ${short}`;
-        }
-        if (long) {
-          line += ` -l ${long}`;
-        }
-        line += ` -d '${desc}'\n`;
-        script += line;
+        script += buildFishOptionCompletionLine({
+          rootCmd,
+          condition: `__fish_seen_subcommand_from ${cmdName}`,
+          flags: opt.flags,
+          description: opt.description,
+        });
       }
     }
 

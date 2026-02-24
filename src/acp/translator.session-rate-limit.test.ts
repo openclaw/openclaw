@@ -1,5 +1,4 @@
 import type {
-  AgentSideConnection,
   LoadSessionRequest,
   NewSessionRequest,
   PromptRequest,
@@ -8,20 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import { createInMemorySessionStore } from "./session.js";
 import { AcpGatewayAgent } from "./translator.js";
-
-function createConnection(): AgentSideConnection {
-  return {
-    sessionUpdate: vi.fn(async () => {}),
-  } as unknown as AgentSideConnection;
-}
-
-function createGateway(
-  request: GatewayClient["request"] = vi.fn(async () => ({ ok: true })) as GatewayClient["request"],
-): GatewayClient {
-  return {
-    request,
-  } as unknown as GatewayClient;
-}
+import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
 
 function createNewSessionRequest(cwd = "/tmp"): NewSessionRequest {
   return {
@@ -52,10 +38,29 @@ function createPromptRequest(
   } as unknown as PromptRequest;
 }
 
+async function expectOversizedPromptRejected(params: { sessionId: string; text: string }) {
+  const request = vi.fn(async () => ({ ok: true })) as GatewayClient["request"];
+  const sessionStore = createInMemorySessionStore();
+  const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+    sessionStore,
+  });
+  await agent.loadSession(createLoadSessionRequest(params.sessionId));
+
+  await expect(agent.prompt(createPromptRequest(params.sessionId, params.text))).rejects.toThrow(
+    /maximum allowed size/i,
+  );
+  expect(request).not.toHaveBeenCalledWith("chat.send", expect.anything(), expect.anything());
+  const session = sessionStore.getSession(params.sessionId);
+  expect(session?.activeRunId).toBeNull();
+  expect(session?.abortController).toBeNull();
+
+  sessionStore.clearAllSessionsForTest();
+}
+
 describe("acp session creation rate limit", () => {
   it("rate limits excessive newSession bursts", async () => {
     const sessionStore = createInMemorySessionStore();
-    const agent = new AcpGatewayAgent(createConnection(), createGateway(), {
+    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
       sessionStore,
       sessionCreateRateLimit: {
         maxRequests: 2,
@@ -74,7 +79,7 @@ describe("acp session creation rate limit", () => {
 
   it("does not count loadSession refreshes for an existing session ID", async () => {
     const sessionStore = createInMemorySessionStore();
-    const agent = new AcpGatewayAgent(createConnection(), createGateway(), {
+    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(), {
       sessionStore,
       sessionCreateRateLimit: {
         maxRequests: 1,
@@ -94,42 +99,16 @@ describe("acp session creation rate limit", () => {
 
 describe("acp prompt size hardening", () => {
   it("rejects oversized prompt blocks without leaking active runs", async () => {
-    const request = vi.fn(async () => ({ ok: true })) as GatewayClient["request"];
-    const sessionStore = createInMemorySessionStore();
-    const agent = new AcpGatewayAgent(createConnection(), createGateway(request), {
-      sessionStore,
+    await expectOversizedPromptRejected({
+      sessionId: "prompt-limit-oversize",
+      text: "a".repeat(2 * 1024 * 1024 + 1),
     });
-    const sessionId = "prompt-limit-oversize";
-    await agent.loadSession(createLoadSessionRequest(sessionId));
-
-    await expect(
-      agent.prompt(createPromptRequest(sessionId, "a".repeat(2 * 1024 * 1024 + 1))),
-    ).rejects.toThrow(/maximum allowed size/i);
-    expect(request).not.toHaveBeenCalledWith("chat.send", expect.anything(), expect.anything());
-    const session = sessionStore.getSession(sessionId);
-    expect(session?.activeRunId).toBeNull();
-    expect(session?.abortController).toBeNull();
-
-    sessionStore.clearAllSessionsForTest();
   });
 
   it("rejects oversize final messages from cwd prefix without leaking active runs", async () => {
-    const request = vi.fn(async () => ({ ok: true })) as GatewayClient["request"];
-    const sessionStore = createInMemorySessionStore();
-    const agent = new AcpGatewayAgent(createConnection(), createGateway(request), {
-      sessionStore,
+    await expectOversizedPromptRejected({
+      sessionId: "prompt-limit-prefix",
+      text: "a".repeat(2 * 1024 * 1024),
     });
-    const sessionId = "prompt-limit-prefix";
-    await agent.loadSession(createLoadSessionRequest(sessionId));
-
-    await expect(
-      agent.prompt(createPromptRequest(sessionId, "a".repeat(2 * 1024 * 1024))),
-    ).rejects.toThrow(/maximum allowed size/i);
-    expect(request).not.toHaveBeenCalledWith("chat.send", expect.anything(), expect.anything());
-    const session = sessionStore.getSession(sessionId);
-    expect(session?.activeRunId).toBeNull();
-    expect(session?.abortController).toBeNull();
-
-    sessionStore.clearAllSessionsForTest();
   });
 });

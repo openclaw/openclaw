@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { serializePayload, type MessagePayloadObject, type RequestClient } from "@buape/carbon";
-import type { APIChannel } from "discord-api-types/v10";
 import { ChannelType, Routes } from "discord-api-types/v10";
 import { resolveChunkMode } from "../auto-reply/chunk.js";
 import { loadConfig } from "../config/config.js";
@@ -25,6 +24,7 @@ import {
   normalizeStickerIds,
   parseAndResolveRecipient,
   resolveChannelId,
+  resolveDiscordChannelType,
   resolveDiscordSendComponents,
   resolveDiscordSendEmbeds,
   sendDiscordMedia,
@@ -61,6 +61,31 @@ type DiscordChannelMessageResult = {
   id?: string | null;
   channel_id?: string | null;
 };
+
+async function sendDiscordThreadTextChunks(params: {
+  rest: RequestClient;
+  threadId: string;
+  chunks: readonly string[];
+  request: DiscordClientRequest;
+  maxLinesPerMessage?: number;
+  chunkMode: ReturnType<typeof resolveChunkMode>;
+  silent?: boolean;
+}): Promise<void> {
+  for (const chunk of params.chunks) {
+    await sendDiscordText(
+      params.rest,
+      params.threadId,
+      chunk,
+      undefined,
+      params.request,
+      params.maxLinesPerMessage,
+      undefined,
+      undefined,
+      params.chunkMode,
+      params.silent,
+    );
+  }
+}
 
 /** Discord thread names are capped at 100 characters. */
 const DISCORD_THREAD_NAME_LIMIT = 100;
@@ -123,13 +148,7 @@ export async function sendMessageDiscord(
   const { channelId } = await resolveChannelId(rest, recipient, request);
 
   // Forum/Media channels reject POST /messages; auto-create a thread post instead.
-  let channelType: number | undefined;
-  try {
-    const channel = (await rest.get(Routes.channel(channelId))) as APIChannel | undefined;
-    channelType = channel?.type;
-  } catch {
-    // If we can't fetch the channel, fall through to the normal send path.
-  }
+  const channelType = await resolveDiscordChannelType(rest, channelId);
 
   if (isForumLikeType(channelType)) {
     const threadName = deriveForumThreadName(textWithTables);
@@ -194,35 +213,25 @@ export async function sendMessageDiscord(
           chunkMode,
           opts.silent,
         );
-        for (const chunk of afterMediaChunks) {
-          await sendDiscordText(
-            rest,
-            threadId,
-            chunk,
-            undefined,
-            request,
-            accountInfo.config.maxLinesPerMessage,
-            undefined,
-            undefined,
-            chunkMode,
-            opts.silent,
-          );
-        }
+        await sendDiscordThreadTextChunks({
+          rest,
+          threadId,
+          chunks: afterMediaChunks,
+          request,
+          maxLinesPerMessage: accountInfo.config.maxLinesPerMessage,
+          chunkMode,
+          silent: opts.silent,
+        });
       } else {
-        for (const chunk of remainingChunks) {
-          await sendDiscordText(
-            rest,
-            threadId,
-            chunk,
-            undefined,
-            request,
-            accountInfo.config.maxLinesPerMessage,
-            undefined,
-            undefined,
-            chunkMode,
-            opts.silent,
-          );
-        }
+        await sendDiscordThreadTextChunks({
+          rest,
+          threadId,
+          chunks: remainingChunks,
+          request,
+          maxLinesPerMessage: accountInfo.config.maxLinesPerMessage,
+          chunkMode,
+          silent: opts.silent,
+        });
       }
     } catch (err) {
       throw await buildDiscordSendError(err, {

@@ -78,6 +78,32 @@ const runDrySend = (params: {
     action: "send",
   });
 
+async function expectSandboxMediaRewrite(params: {
+  sandboxDir: string;
+  media?: string;
+  message?: string;
+  expectedRelativePath: string;
+}) {
+  const result = await runDrySend({
+    cfg: slackConfig,
+    actionParams: {
+      channel: "slack",
+      target: "#C12345678",
+      ...(params.media ? { media: params.media } : {}),
+      ...(params.message ? { message: params.message } : {}),
+    },
+    sandboxRoot: params.sandboxDir,
+  });
+
+  expect(result.kind).toBe("send");
+  if (result.kind !== "send") {
+    throw new Error("expected send result");
+  }
+  expect(result.sendResult?.mediaUrl).toBe(
+    path.join(params.sandboxDir, params.expectedRelativePath),
+  );
+}
+
 function createAlwaysConfiguredPluginConfig(account: Record<string, unknown> = { enabled: true }) {
   return {
     listAccountIds: () => ["default"],
@@ -328,7 +354,7 @@ describe("runMessageAction context isolation", () => {
         cfg: slackConfig,
         actionParams: {
           channel: "telegram",
-          target: "telegram:@ops",
+          target: "@opsbot",
           message: "hi",
         },
         toolContext: { currentChannelId: "C12345678", currentChannelProvider: "slack" },
@@ -566,42 +592,33 @@ describe("runMessageAction sandboxed media validation", () => {
 
   it("rewrites sandbox-relative media paths", async () => {
     await withSandbox(async (sandboxDir) => {
-      const result = await runDrySend({
-        cfg: slackConfig,
-        actionParams: {
-          channel: "slack",
-          target: "#C12345678",
-          media: "./data/file.txt",
-          message: "",
-        },
-        sandboxRoot: sandboxDir,
+      await expectSandboxMediaRewrite({
+        sandboxDir,
+        media: "./data/file.txt",
+        message: "",
+        expectedRelativePath: path.join("data", "file.txt"),
       });
+    });
+  });
 
-      expect(result.kind).toBe("send");
-      if (result.kind !== "send") {
-        throw new Error("expected send result");
-      }
-      expect(result.sendResult?.mediaUrl).toBe(path.join(sandboxDir, "data", "file.txt"));
+  it("rewrites /workspace media paths to host sandbox root", async () => {
+    await withSandbox(async (sandboxDir) => {
+      await expectSandboxMediaRewrite({
+        sandboxDir,
+        media: "/workspace/data/file.txt",
+        message: "",
+        expectedRelativePath: path.join("data", "file.txt"),
+      });
     });
   });
 
   it("rewrites MEDIA directives under sandbox", async () => {
     await withSandbox(async (sandboxDir) => {
-      const result = await runDrySend({
-        cfg: slackConfig,
-        actionParams: {
-          channel: "slack",
-          target: "#C12345678",
-          message: "Hello\nMEDIA: ./data/note.ogg",
-        },
-        sandboxRoot: sandboxDir,
+      await expectSandboxMediaRewrite({
+        sandboxDir,
+        message: "Hello\nMEDIA: ./data/note.ogg",
+        expectedRelativePath: path.join("data", "note.ogg"),
       });
-
-      expect(result.kind).toBe("send");
-      if (result.kind !== "send") {
-        throw new Error("expected send result");
-      }
-      expect(result.sendResult?.mediaUrl).toBe(path.join(sandboxDir, "data", "note.ogg"));
     });
   });
 

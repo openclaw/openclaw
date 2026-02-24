@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { isSecureWebSocketUrl } from "../gateway/net.js";
 import type { GatewayBonjourBeacon } from "../infra/bonjour-discovery.js";
 import { discoverGatewayBeacons } from "../infra/bonjour-discovery.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
@@ -27,6 +28,17 @@ function ensureWsUrl(value: string): string {
     return DEFAULT_GATEWAY_URL;
   }
   return trimmed;
+}
+
+function validateGatewayWebSocketUrl(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("ws://") && !trimmed.startsWith("wss://")) {
+    return "URL must start with ws:// or wss://";
+  }
+  if (!isSecureWebSocketUrl(trimmed)) {
+    return "Use wss:// for remote hosts, or ws://127.0.0.1/localhost via SSH tunnel.";
+  }
+  return undefined;
 }
 
 export async function promptRemoteGatewayConfig(
@@ -95,7 +107,15 @@ export async function promptRemoteGatewayConfig(
         ],
       });
       if (mode === "direct") {
-        suggestedUrl = `ws://${host}:${port}`;
+        suggestedUrl = `wss://${host}:${port}`;
+        await prompter.note(
+          [
+            "Direct remote access defaults to TLS.",
+            `Using: ${suggestedUrl}`,
+            "If your gateway is loopback-only, choose SSH tunnel and keep ws://127.0.0.1:18789.",
+          ].join("\n"),
+          "Direct remote",
+        );
       } else {
         suggestedUrl = DEFAULT_GATEWAY_URL;
         await prompter.note(
@@ -115,10 +135,7 @@ export async function promptRemoteGatewayConfig(
   const urlInput = await prompter.text({
     message: "Gateway WebSocket URL",
     initialValue: suggestedUrl,
-    validate: (value) =>
-      String(value).trim().startsWith("ws://") || String(value).trim().startsWith("wss://")
-        ? undefined
-        : "URL must start with ws:// or wss://",
+    validate: (value) => validateGatewayWebSocketUrl(String(value)),
   });
   const url = ensureWsUrl(String(urlInput));
 

@@ -178,7 +178,7 @@ class GatewaySession(
     private val connectDeferred = CompletableDeferred<Unit>()
     private val closedDeferred = CompletableDeferred<Unit>()
     private val isClosed = AtomicBoolean(false)
-    private val connectNonceDeferred = CompletableDeferred<String?>()
+    private val connectNonceDeferred = CompletableDeferred<String>()
     private val client: OkHttpClient = buildClient()
     private var socket: WebSocket? = null
     private val loggerTag = "OpenClawGateway"
@@ -296,7 +296,7 @@ class GatewaySession(
       }
     }
 
-    private suspend fun sendConnect(connectNonce: String?) {
+    private suspend fun sendConnect(connectNonce: String) {
       val identity = identityStore.loadOrCreate()
       val storedToken = deviceAuthStore.loadToken(identity.deviceId, options.role)
       val trimmedToken = token?.trim().orEmpty()
@@ -332,7 +332,7 @@ class GatewaySession(
 
     private fun buildConnectParams(
       identity: DeviceIdentity,
-      connectNonce: String?,
+      connectNonce: String,
       authToken: String,
       authPassword: String?,
     ): JsonObject {
@@ -385,9 +385,7 @@ class GatewaySession(
             put("publicKey", JsonPrimitive(publicKey))
             put("signature", JsonPrimitive(signature))
             put("signedAt", JsonPrimitive(signedAtMs))
-            if (!connectNonce.isNullOrBlank()) {
-              put("nonce", JsonPrimitive(connectNonce))
-            }
+            put("nonce", JsonPrimitive(connectNonce))
           }
         } else {
           null
@@ -447,8 +445,8 @@ class GatewaySession(
         frame["payload"]?.let { it.toString() } ?: frame["payloadJSON"].asStringOrNull()
       if (event == "connect.challenge") {
         val nonce = extractConnectNonce(payloadJson)
-        if (!connectNonceDeferred.isCompleted) {
-          connectNonceDeferred.complete(nonce)
+        if (!connectNonceDeferred.isCompleted && !nonce.isNullOrBlank()) {
+          connectNonceDeferred.complete(nonce.trim())
         }
         return
       }
@@ -459,12 +457,11 @@ class GatewaySession(
       onEvent(event, payloadJson)
     }
 
-    private suspend fun awaitConnectNonce(): String? {
-      if (isLoopbackHost(endpoint.host)) return null
+    private suspend fun awaitConnectNonce(): String {
       return try {
         withTimeout(2_000) { connectNonceDeferred.await() }
-      } catch (_: Throwable) {
-        null
+      } catch (err: Throwable) {
+        throw IllegalStateException("connect challenge timeout", err)
       }
     }
 
@@ -595,14 +592,13 @@ class GatewaySession(
     scopes: List<String>,
     signedAtMs: Long,
     token: String?,
-    nonce: String?,
+    nonce: String,
   ): String {
     val scopeString = scopes.joinToString(",")
     val authToken = token.orEmpty()
-    val version = if (nonce.isNullOrBlank()) "v1" else "v2"
     val parts =
       mutableListOf(
-        version,
+        "v2",
         deviceId,
         clientId,
         clientMode,
@@ -610,10 +606,8 @@ class GatewaySession(
         scopeString,
         signedAtMs.toString(),
         authToken,
+        nonce,
       )
-    if (!nonce.isNullOrBlank()) {
-      parts.add(nonce)
-    }
     return parts.joinToString("|")
   }
 

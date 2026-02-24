@@ -92,6 +92,10 @@
       "destination": "/providers/moonshot"
     },
     {
+      "source": "/mistral",
+      "destination": "/providers/mistral"
+    },
+    {
       "source": "/openrouter",
       "destination": "/providers/openrouter"
     },
@@ -270,6 +274,10 @@
     {
       "source": "/start/clawd/",
       "destination": "/start/openclaw"
+    },
+    {
+      "source": "/start/pairing",
+      "destination": "/channels/pairing"
     },
     {
       "source": "/clawhub",
@@ -524,12 +532,12 @@
       "destination": "/channels/pairing"
     },
     {
-      "source": "/plans/cron-add-hardening",
-      "destination": "/experiments/plans/cron-add-hardening"
+      "source": "/experiments/plans/cron-add-hardening",
+      "destination": "/automation/cron-jobs"
     },
     {
-      "source": "/plans/group-policy-hardening",
-      "destination": "/experiments/plans/group-policy-hardening"
+      "source": "/experiments/plans/group-policy-hardening",
+      "destination": "/channels/groups"
     },
     {
       "source": "/poll",
@@ -891,9 +899,15 @@
                   "channels/mattermost",
                   "channels/signal",
                   "channels/imessage",
+                  "channels/bluebubbles",
                   "channels/msteams",
+                  "channels/synology-chat",
                   "channels/line",
                   "channels/matrix",
+                  "channels/nextcloud-talk",
+                  "channels/nostr",
+                  "channels/tlon",
+                  "channels/twitch",
                   "channels/zalo",
                   "channels/zalouser"
                 ]
@@ -1057,6 +1071,7 @@
                   "providers/bedrock",
                   "providers/vercel-ai-gateway",
                   "providers/moonshot",
+                  "providers/mistral",
                   "providers/minimax",
                   "providers/opencode",
                   "providers/glm",
@@ -1182,14 +1197,20 @@
                 "group": "CLI commands",
                 "pages": [
                   "cli/index",
+                  "cli/acp",
                   "cli/agent",
                   "cli/agents",
                   "cli/approvals",
                   "cli/browser",
                   "cli/channels",
+                  "cli/clawbot",
+                  "cli/completion",
+                  "cli/config",
                   "cli/configure",
                   "cli/cron",
+                  "cli/daemon",
                   "cli/dashboard",
+                  "cli/devices",
                   "cli/directory",
                   "cli/dns",
                   "cli/docs",
@@ -1201,10 +1222,12 @@
                   "cli/memory",
                   "cli/message",
                   "cli/models",
+                  "cli/node",
                   "cli/nodes",
                   "cli/onboard",
                   "cli/pairing",
                   "cli/plugins",
+                  "cli/qr",
                   "cli/reset",
                   "cli/sandbox",
                   "cli/security",
@@ -1216,7 +1239,8 @@
                   "cli/tui",
                   "cli/uninstall",
                   "cli/update",
-                  "cli/voicecall"
+                  "cli/voicecall",
+                  "cli/webhooks"
                 ]
               },
               {
@@ -1239,7 +1263,12 @@
               },
               {
                 "group": "Technical reference",
-                "pages": ["reference/wizard", "reference/token-use", "channels/grammy"]
+                "pages": [
+                  "reference/wizard",
+                  "reference/token-use",
+                  "reference/prompt-caching",
+                  "channels/grammy"
+                ]
               },
               {
                 "group": "Concept internals",
@@ -1263,8 +1292,6 @@
                 "group": "Experiments",
                 "pages": [
                   "experiments/onboarding-config-protocol",
-                  "experiments/plans/cron-add-hardening",
-                  "experiments/plans/group-policy-hardening",
                   "experiments/research/memory",
                   "experiments/proposals/model-config"
                 ]

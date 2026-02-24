@@ -1,4 +1,10 @@
 import type { ModelDefinitionConfig } from "../config/types.js";
+import {
+  buildVolcModelDefinition,
+  VOLC_MODEL_GLM_4_7,
+  VOLC_MODEL_KIMI_K2_5,
+  VOLC_SHARED_CODING_MODEL_CATALOG,
+} from "./volc-models.shared.js";
 
 export const DOUBAO_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3";
 export const DOUBAO_CODING_BASE_URL = "https://ark.cn-beijing.volces.com/api/coding/v3";
@@ -37,22 +43,8 @@ export const DOUBAO_MODEL_CATALOG = [
     contextWindow: 256000,
     maxTokens: 4096,
   },
-  {
-    id: "kimi-k2-5-260127",
-    name: "Kimi K2.5",
-    reasoning: false,
-    input: ["text", "image"] as const,
-    contextWindow: 256000,
-    maxTokens: 4096,
-  },
-  {
-    id: "glm-4-7-251222",
-    name: "GLM 4.7",
-    reasoning: false,
-    input: ["text", "image"] as const,
-    contextWindow: 200000,
-    maxTokens: 4096,
-  },
+  VOLC_MODEL_KIMI_K2_5,
+  VOLC_MODEL_GLM_4_7,
   {
     id: "deepseek-v3-2-251201",
     name: "DeepSeek V3.2",
@@ -69,58 +61,11 @@ export type DoubaoCodingCatalogEntry = (typeof DOUBAO_CODING_MODEL_CATALOG)[numb
 export function buildDoubaoModelDefinition(
   entry: DoubaoCatalogEntry | DoubaoCodingCatalogEntry,
 ): ModelDefinitionConfig {
-  return {
-    id: entry.id,
-    name: entry.name,
-    reasoning: entry.reasoning,
-    input: [...entry.input],
-    cost: DOUBAO_DEFAULT_COST,
-    contextWindow: entry.contextWindow,
-    maxTokens: entry.maxTokens,
-  };
+  return buildVolcModelDefinition(entry, DOUBAO_DEFAULT_COST);
 }
 
 export const DOUBAO_CODING_MODEL_CATALOG = [
-  {
-    id: "ark-code-latest",
-    name: "Ark Coding Plan",
-    reasoning: false,
-    input: ["text"] as const,
-    contextWindow: 256000,
-    maxTokens: 4096,
-  },
-  {
-    id: "doubao-seed-code",
-    name: "Doubao Seed Code",
-    reasoning: false,
-    input: ["text"] as const,
-    contextWindow: 256000,
-    maxTokens: 4096,
-  },
-  {
-    id: "glm-4.7",
-    name: "GLM 4.7 Coding",
-    reasoning: false,
-    input: ["text"] as const,
-    contextWindow: 200000,
-    maxTokens: 4096,
-  },
-  {
-    id: "kimi-k2-thinking",
-    name: "Kimi K2 Thinking",
-    reasoning: false,
-    input: ["text"] as const,
-    contextWindow: 256000,
-    maxTokens: 4096,
-  },
-  {
-    id: "kimi-k2.5",
-    name: "Kimi K2.5 Coding",
-    reasoning: false,
-    input: ["text"] as const,
-    contextWindow: 256000,
-    maxTokens: 4096,
-  },
+  ...VOLC_SHARED_CODING_MODEL_CATALOG,
   {
     id: "doubao-seed-code-preview-251028",
     name: "Doubao Seed Code Preview",

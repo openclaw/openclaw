@@ -183,7 +183,17 @@ describe("createTelegramBot", () => {
       getTelegramSequentialKey({
         message: mockMessage({ chat: mockChat({ id: 123 }), text: "stop please" }),
       }),
-    ).toBe("telegram:123");
+    ).toBe("telegram:123:control");
+    expect(
+      getTelegramSequentialKey({
+        message: mockMessage({ chat: mockChat({ id: 123 }), text: "остановись" }),
+      }),
+    ).toBe("telegram:123:control");
+    expect(
+      getTelegramSequentialKey({
+        message: mockMessage({ chat: mockChat({ id: 123 }), text: "halt" }),
+      }),
+    ).toBe("telegram:123:control");
     expect(
       getTelegramSequentialKey({
         message: mockMessage({ chat: mockChat({ id: 123 }), text: "/abort" }),
@@ -285,7 +295,8 @@ describe("createTelegramBot", () => {
         channels: { telegram: { dmPolicy: "pairing" } },
       });
       readChannelAllowFromStore.mockResolvedValue([]);
-      upsertChannelPairingRequest.mockReset();
+      upsertChannelPairingRequest.mockClear();
+      upsertChannelPairingRequest.mockResolvedValue({ code: "PAIRCODE", created: true });
       for (const result of testCase.upsertResults) {
         upsertChannelPairingRequest.mockResolvedValueOnce(result);
       }
@@ -443,6 +454,83 @@ describe("createTelegramBot", () => {
       getFile: async () => ({}),
     });
     expect(replySpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not persist update offset past pending updates", async () => {
+    // For this test we need sequentialize(...) to behave like a normal middleware and call next().
+    sequentializeSpy.mockImplementationOnce(
+      () => async (_ctx: unknown, next: () => Promise<void>) => {
+        await next();
+      },
+    );
+
+    const onUpdateId = vi.fn();
+    loadConfig.mockReturnValue({
+      channels: { telegram: { dmPolicy: "open", allowFrom: ["*"] } },
+    });
+
+    createTelegramBot({
+      token: "tok",
+      updateOffset: {
+        lastUpdateId: 100,
+        onUpdateId,
+      },
+    });
+
+    type Middleware = (
+      ctx: Record<string, unknown>,
+      next: () => Promise<void>,
+    ) => Promise<void> | void;
+
+    const middlewares = middlewareUseSpy.mock.calls
+      .map((call) => call[0])
+      .filter((fn): fn is Middleware => typeof fn === "function");
+
+    const runMiddlewareChain = async (
+      ctx: Record<string, unknown>,
+      finalNext: () => Promise<void>,
+    ) => {
+      let idx = -1;
+      const dispatch = async (i: number): Promise<void> => {
+        if (i <= idx) {
+          throw new Error("middleware dispatch called multiple times");
+        }
+        idx = i;
+        const fn = middlewares[i];
+        if (!fn) {
+          await finalNext();
+          return;
+        }
+        await fn(ctx, async () => dispatch(i + 1));
+      };
+      await dispatch(0);
+    };
+
+    let releaseUpdate101: (() => void) | undefined;
+    const update101Gate = new Promise<void>((resolve) => {
+      releaseUpdate101 = resolve;
+    });
+
+    // Start processing update 101 but keep it pending (simulates an update queued behind sequentialize()).
+    const p101 = runMiddlewareChain({ update: { update_id: 101 } }, async () => update101Gate);
+    // Let update 101 enter the chain and mark itself pending before 102 completes.
+    await Promise.resolve();
+
+    // Complete update 102 while 101 is still pending. The persisted watermark must not jump to 102.
+    await runMiddlewareChain({ update: { update_id: 102 } }, async () => {});
+
+    const persistedValues = onUpdateId.mock.calls.map((call) => Number(call[0]));
+    const maxPersisted = persistedValues.length > 0 ? Math.max(...persistedValues) : -Infinity;
+    expect(maxPersisted).toBeLessThan(101);
+
+    releaseUpdate101?.();
+    await p101;
+
+    // Once the pending update finishes, the watermark can safely catch up.
+    const persistedAfterDrain = onUpdateId.mock.calls.map((call) => Number(call[0]));
+    const maxPersistedAfterDrain =
+      persistedAfterDrain.length > 0 ? Math.max(...persistedAfterDrain) : -Infinity;
+    expect(maxPersistedAfterDrain).toBe(102);
   });
   it("allows distinct callback_query ids without update_id", async () => {
     loadConfig.mockReturnValue({
@@ -1682,10 +1770,19 @@ describe("createTelegramBot", () => {
       await Promise.all([first, second]);
       expect(replySpy).not.toHaveBeenCalled();
 
-      const flushTimerCall = [...setTimeoutSpy.mock.calls]
-        .toReversed()
-        .find((call) => call[1] === TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs);
-      const flushTimer = flushTimerCall?.[0] as (() => unknown) | undefined;
+      const flushTimerCallIndex = setTimeoutSpy.mock.calls.findLastIndex(
+        (call) => call[1] === TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs,
+      );
+      const flushTimer =
+        flushTimerCallIndex >= 0
+          ? (setTimeoutSpy.mock.calls[flushTimerCallIndex]?.[0] as (() => unknown) | undefined)
+          : undefined;
+      // Cancel the real timer so it cannot fire a second time after we manually invoke it.
+      if (flushTimerCallIndex >= 0) {
+        clearTimeout(
+          setTimeoutSpy.mock.results[flushTimerCallIndex]?.value as ReturnType<typeof setTimeout>,
+        );
+      }
       expect(flushTimer).toBeTypeOf("function");
       await flushTimer?.();
 
@@ -1795,5 +1892,249 @@ describe("createTelegramBot", () => {
 
     expect(replySpy).not.toHaveBeenCalled();
     fetchSpy.mockRestore();
+  });
+  it("notifies users when media download fails for direct messages", async () => {
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+    });
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () =>
+        Promise.reject(new Error("MediaFetchError: Failed to fetch media")),
+      );
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: 1234, type: "private" },
+          message_id: 411,
+          date: 1736380800,
+          photo: [{ file_id: "p1" }],
+          from: { id: 55, is_bot: false, first_name: "u" },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ file_path: "photos/p1.jpg" }),
+      });
+
+      expect(sendMessageSpy).toHaveBeenCalledWith(
+        1234,
+        "⚠️ Failed to download media. Please try again.",
+        { reply_to_message_id: 411 },
+      );
+      expect(replySpy).not.toHaveBeenCalled();
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+  it("processes remaining media group photos when one photo download fails", async () => {
+    onSpy.mockReset();
+    replySpy.mockReset();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: {
+            "-100777111222": {
+              enabled: true,
+              requireMention: false,
+            },
+          },
+        },
+      },
+    });
+
+    let fetchCallIndex = 0;
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
+      fetchCallIndex++;
+      if (fetchCallIndex === 2) {
+        throw new Error("MediaFetchError: Failed to fetch media");
+      }
+      return new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+        status: 200,
+        headers: { "content-type": "image/png" },
+      });
+    });
+
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
+      const handler = getOnHandler("channel_post") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+
+      const first = handler({
+        channelPost: {
+          chat: { id: -100777111222, type: "channel", title: "Wake Channel" },
+          message_id: 401,
+          caption: "partial album",
+          date: 1736380800,
+          media_group_id: "partial-album-1",
+          photo: [{ file_id: "p1" }],
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ file_path: "photos/p1.jpg" }),
+      });
+
+      const second = handler({
+        channelPost: {
+          chat: { id: -100777111222, type: "channel", title: "Wake Channel" },
+          message_id: 402,
+          date: 1736380801,
+          media_group_id: "partial-album-1",
+          photo: [{ file_id: "p2" }],
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ file_path: "photos/p2.jpg" }),
+      });
+
+      await Promise.all([first, second]);
+      expect(replySpy).not.toHaveBeenCalled();
+
+      const flushTimerCallIndex = setTimeoutSpy.mock.calls.findLastIndex(
+        (call) => call[1] === TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs,
+      );
+      const flushTimer =
+        flushTimerCallIndex >= 0
+          ? (setTimeoutSpy.mock.calls[flushTimerCallIndex]?.[0] as (() => unknown) | undefined)
+          : undefined;
+      // Cancel the real timer so it cannot fire a second time after we manually invoke it.
+      if (flushTimerCallIndex >= 0) {
+        clearTimeout(
+          setTimeoutSpy.mock.results[flushTimerCallIndex]?.value as ReturnType<typeof setTimeout>,
+        );
+      }
+      expect(flushTimer).toBeTypeOf("function");
+      await flushTimer?.();
+
+      expect(replySpy).toHaveBeenCalledTimes(1);
+      const payload = replySpy.mock.calls[0]?.[0] as { Body?: string; MediaPaths?: string[] };
+      expect(payload.Body).toContain("partial album");
+      expect(payload.MediaPaths).toHaveLength(1);
+    } finally {
+      setTimeoutSpy.mockRestore();
+      fetchSpy.mockRestore();
+    }
+  });
+  it("drops the media group when a non-recoverable media error occurs", async () => {
+    onSpy.mockReset();
+    replySpy.mockReset();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          groupPolicy: "open",
+          groups: {
+            "-100777111222": {
+              enabled: true,
+              requireMention: false,
+            },
+          },
+        },
+      },
+    });
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+    );
+
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      createTelegramBot({ token: "tok", testTimings: TELEGRAM_TEST_TIMINGS });
+      const handler = getOnHandler("channel_post") as (
+        ctx: Record<string, unknown>,
+      ) => Promise<void>;
+
+      const first = handler({
+        channelPost: {
+          chat: { id: -100777111222, type: "channel", title: "Wake Channel" },
+          message_id: 501,
+          caption: "fatal album",
+          date: 1736380800,
+          media_group_id: "fatal-album-1",
+          photo: [{ file_id: "p1" }],
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ file_path: "photos/p1.jpg" }),
+      });
+
+      const second = handler({
+        channelPost: {
+          chat: { id: -100777111222, type: "channel", title: "Wake Channel" },
+          message_id: 502,
+          date: 1736380801,
+          media_group_id: "fatal-album-1",
+          photo: [{ file_id: "p2" }],
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      await Promise.all([first, second]);
+      expect(replySpy).not.toHaveBeenCalled();
+
+      const flushTimerCallIndex = setTimeoutSpy.mock.calls.findLastIndex(
+        (call) => call[1] === TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs,
+      );
+      const flushTimer =
+        flushTimerCallIndex >= 0
+          ? (setTimeoutSpy.mock.calls[flushTimerCallIndex]?.[0] as (() => unknown) | undefined)
+          : undefined;
+      // Cancel the real timer so it cannot fire a second time after we manually invoke it.
+      if (flushTimerCallIndex >= 0) {
+        clearTimeout(
+          setTimeoutSpy.mock.results[flushTimerCallIndex]?.value as ReturnType<typeof setTimeout>,
+        );
+      }
+      expect(flushTimer).toBeTypeOf("function");
+      await flushTimer?.();
+
+      expect(replySpy).not.toHaveBeenCalled();
+    } finally {
+      setTimeoutSpy.mockRestore();
+      fetchSpy.mockRestore();
+    }
+  });
+  it("dedupes duplicate message updates by update_id", async () => {
+    onSpy.mockReset();
+    replySpy.mockReset();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    const ctx = {
+      update: { update_id: 111 },
+      message: {
+        chat: { id: 123, type: "private" },
+        from: { id: 456, username: "testuser" },
+        text: "hello",
+        date: 1736380800,
+        message_id: 42,
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    };
+
+    await handler(ctx);
+    await handler(ctx);
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { setVerbose } from "../../globals.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
+import type { LogLevel } from "../../logging/levels.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getCommandPath, getVerboseFlag, hasHelpOrVersion } from "../argv.js";
 import { emitCliBanner } from "../banner.js";
@@ -20,7 +21,33 @@ function setProcessTitleForCommand(actionCommand: Command) {
 }
 
 // Commands that need channel plugins loaded
-const PLUGIN_REQUIRED_COMMANDS = new Set(["message", "channels", "directory"]);
+const PLUGIN_REQUIRED_COMMANDS = new Set([
+  "message",
+  "channels",
+  "directory",
+  "configure",
+  "onboard",
+]);
+
+function getRootCommand(command: Command): Command {
+  let current = command;
+  while (current.parent) {
+    current = current.parent;
+  }
+  return current;
+}
+
+function getCliLogLevel(actionCommand: Command): LogLevel | undefined {
+  const root = getRootCommand(actionCommand);
+  if (typeof root.getOptionValueSource !== "function") {
+    return undefined;
+  }
+  if (root.getOptionValueSource("logLevel") !== "cli") {
+    return undefined;
+  }
+  const logLevel = root.opts<Record<string, unknown>>().logLevel;
+  return typeof logLevel === "string" ? (logLevel as LogLevel) : undefined;
+}
 
 export function registerPreActionHooks(program: Command, programVersion: string) {
   program.hook("preAction", async (_thisCommand, actionCommand) => {
@@ -40,6 +67,10 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     }
     const verbose = getVerboseFlag(argv, { includeDebug: true });
     setVerbose(verbose);
+    const cliLogLevel = getCliLogLevel(actionCommand);
+    if (cliLogLevel) {
+      process.env.OPENCLAW_LOG_LEVEL = cliLogLevel;
+    }
     if (!verbose) {
       process.env.NODE_NO_WARNINGS ??= "1";
     }

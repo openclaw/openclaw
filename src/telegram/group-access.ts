@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { ChannelGroupPolicy } from "../config/group-policy.js";
+import { resolveOpenProviderRuntimeGroupPolicy } from "../config/runtime-group-policy.js";
 import type {
   TelegramAccountConfig,
   TelegramGroupConfig,
@@ -72,6 +73,17 @@ export type TelegramGroupPolicyAccessResult =
       groupPolicy: "open" | "disabled" | "allowlist";
     };
 
+export const resolveTelegramRuntimeGroupPolicy = (params: {
+  providerConfigPresent: boolean;
+  groupPolicy?: TelegramAccountConfig["groupPolicy"];
+  defaultGroupPolicy?: TelegramAccountConfig["groupPolicy"];
+}) =>
+  resolveOpenProviderRuntimeGroupPolicy({
+    providerConfigPresent: params.providerConfigPresent,
+    groupPolicy: params.groupPolicy,
+    defaultGroupPolicy: params.defaultGroupPolicy,
+  });
+
 export const evaluateTelegramGroupPolicyAccess = (params: {
   isGroup: boolean;
   chatId: string | number;
@@ -90,20 +102,21 @@ export const evaluateTelegramGroupPolicyAccess = (params: {
   requireSenderForAllowlistAuthorization: boolean;
   checkChatAllowlist: boolean;
 }): TelegramGroupPolicyAccessResult => {
+  const { groupPolicy: runtimeFallbackPolicy } = resolveTelegramRuntimeGroupPolicy({
+    providerConfigPresent: params.cfg.channels?.telegram !== undefined,
+    groupPolicy: params.telegramCfg.groupPolicy,
+    defaultGroupPolicy: params.cfg.channels?.defaults?.groupPolicy,
+  });
   const fallbackPolicy =
-    firstDefined(
-      params.telegramCfg.groupPolicy,
-      params.cfg.channels?.defaults?.groupPolicy,
-      "open",
-    ) ?? "open";
+    firstDefined(params.telegramCfg.groupPolicy, params.cfg.channels?.defaults?.groupPolicy) ??
+    runtimeFallbackPolicy;
   const groupPolicy = params.useTopicAndGroupOverrides
     ? (firstDefined(
         params.topicConfig?.groupPolicy,
         params.groupConfig?.groupPolicy,
         params.telegramCfg.groupPolicy,
         params.cfg.channels?.defaults?.groupPolicy,
-        "open",
-      ) ?? "open")
+      ) ?? runtimeFallbackPolicy)
     : fallbackPolicy;
 
   if (!params.isGroup || !params.enforcePolicy) {

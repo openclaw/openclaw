@@ -2,6 +2,7 @@ const OPERATOR_ROLE = "operator";
 const OPERATOR_ADMIN_SCOPE = "operator.admin";
 const OPERATOR_READ_SCOPE = "operator.read";
 const OPERATOR_WRITE_SCOPE = "operator.write";
+const OPERATOR_SCOPE_PREFIX = "operator.";
 
 function normalizeScopeList(scopes: readonly string[]): string[] {
   const out = new Set<string>();
@@ -15,12 +16,14 @@ function normalizeScopeList(scopes: readonly string[]): string[] {
 }
 
 function operatorScopeSatisfied(requestedScope: string, granted: Set<string>): boolean {
+  if (granted.has(OPERATOR_ADMIN_SCOPE) && requestedScope.startsWith(OPERATOR_SCOPE_PREFIX)) {
+    return true;
+  }
   if (requestedScope === OPERATOR_READ_SCOPE) {
-    return (
-      granted.has(OPERATOR_READ_SCOPE) ||
-      granted.has(OPERATOR_WRITE_SCOPE) ||
-      granted.has(OPERATOR_ADMIN_SCOPE)
-    );
+    return granted.has(OPERATOR_READ_SCOPE) || granted.has(OPERATOR_WRITE_SCOPE);
+  }
+  if (requestedScope === OPERATOR_WRITE_SCOPE) {
+    return granted.has(OPERATOR_WRITE_SCOPE);
   }
   return granted.has(requestedScope);
 }

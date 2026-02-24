@@ -2,12 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { telegramPlugin } from "../../../extensions/telegram/src/channel.js";
-import { whatsappPlugin } from "../../../extensions/whatsapp/src/channel.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { typedCases } from "../../test-utils/typed-cases.js";
 import {
   ackDelivery,
@@ -15,6 +11,7 @@ import {
   type DeliverFn,
   enqueueDelivery,
   failDelivery,
+  isPermanentDeliveryError,
   loadPendingDeliveries,
   MAX_RETRIES,
   moveToFailed,
@@ -39,7 +36,7 @@ import {
   normalizeOutboundPayloads,
   normalizeOutboundPayloadsForJson,
 } from "./payloads.js";
-import { resolveOutboundTarget } from "./targets.js";
+import { runResolveOutboundTargetCoreTests } from "./targets.shared-test.js";
 
 describe("delivery-queue", () => {
   let tmpDir: string;
@@ -143,6 +140,30 @@ describe("delivery-queue", () => {
       const failedDir = path.join(queueDir, "failed");
       expect(fs.existsSync(path.join(queueDir, `${id}.json`))).toBe(false);
       expect(fs.existsSync(path.join(failedDir, `${id}.json`))).toBe(true);
+    });
+  });
+
+  describe("isPermanentDeliveryError", () => {
+    it.each([
+      "No conversation reference found for user:abc",
+      "Telegram send failed: chat not found (chat_id=user:123)",
+      "user not found",
+      "Bot was blocked by the user",
+      "Forbidden: bot was kicked from the group chat",
+      "chat_id is empty",
+      "Outbound not configured for channel: msteams",
+    ])("returns true for permanent error: %s", (msg) => {
+      expect(isPermanentDeliveryError(msg)).toBe(true);
+    });
+
+    it.each([
+      "network down",
+      "ETIMEDOUT",
+      "socket hang up",
+      "rate limited",
+      "500 Internal Server Error",
+    ])("returns false for transient error: %s", (msg) => {
+      expect(isPermanentDeliveryError(msg)).toBe(false);
     });
   });
 
@@ -267,6 +288,26 @@ describe("delivery-queue", () => {
       expect(entries).toHaveLength(1);
       expect(entries[0].retryCount).toBe(1);
       expect(entries[0].lastError).toBe("network down");
+    });
+
+    it("moves entries to failed/ immediately on permanent delivery errors", async () => {
+      const id = await enqueueDelivery(
+        { channel: "msteams", to: "user:abc", payloads: [{ text: "hi" }] },
+        tmpDir,
+      );
+      const deliver = vi
+        .fn()
+        .mockRejectedValue(new Error("No conversation reference found for user:abc"));
+      const log = createLog();
+      const { result } = await runRecovery({ deliver, log });
+
+      expect(result.failed).toBe(1);
+      expect(result.recovered).toBe(0);
+      const remaining = await loadPendingDeliveries(tmpDir);
+      expect(remaining).toHaveLength(0);
+      const failedDir = path.join(tmpDir, "delivery-queue", "failed");
+      expect(fs.existsSync(path.join(failedDir, `${id}.json`))).toBe(true);
+      expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("permanent error"));
     });
 
     it("passes skipQueue: true to prevent re-enqueueing during recovery", async () => {
@@ -914,102 +955,4 @@ describe("formatOutboundPayloadLog", () => {
   });
 });
 
-describe("resolveOutboundTarget", () => {
-  beforeEach(() => {
-    setActivePluginRegistry(
-      createTestRegistry([
-        { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
-        { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
-      ]),
-    );
-  });
-
-  afterEach(() => {
-    setActivePluginRegistry(createTestRegistry());
-  });
-
-  it.each([
-    {
-      name: "normalizes whatsapp target when provided",
-      input: { channel: "whatsapp" as const, to: " (555) 123-4567 " },
-      expected: { ok: true as const, to: "+5551234567" },
-    },
-    {
-      name: "keeps whatsapp group targets",
-      input: { channel: "whatsapp" as const, to: "120363401234567890@g.us" },
-      expected: { ok: true as const, to: "120363401234567890@g.us" },
-    },
-    {
-      name: "normalizes prefixed/uppercase whatsapp group targets",
-      input: {
-        channel: "whatsapp" as const,
-        to: " WhatsApp:120363401234567890@G.US ",
-      },
-      expected: { ok: true as const, to: "120363401234567890@g.us" },
-    },
-    {
-      name: "rejects whatsapp with empty target in explicit mode even with cfg allowFrom",
-      input: {
-        channel: "whatsapp" as const,
-        to: "",
-        cfg: { channels: { whatsapp: { allowFrom: ["+1555"] } } } as OpenClawConfig,
-        mode: "explicit" as const,
-      },
-      expectedErrorIncludes: "WhatsApp",
-    },
-    {
-      name: "rejects whatsapp with empty target and allowFrom (no silent fallback)",
-      input: { channel: "whatsapp" as const, to: "", allowFrom: ["+1555"] },
-      expectedErrorIncludes: "WhatsApp",
-    },
-    {
-      name: "rejects whatsapp with empty target and prefixed allowFrom (no silent fallback)",
-      input: {
-        channel: "whatsapp" as const,
-        to: "",
-        allowFrom: ["whatsapp:(555) 123-4567"],
-      },
-      expectedErrorIncludes: "WhatsApp",
-    },
-    {
-      name: "rejects invalid whatsapp target",
-      input: { channel: "whatsapp" as const, to: "wat" },
-      expectedErrorIncludes: "WhatsApp",
-    },
-    {
-      name: "rejects whatsapp without to when allowFrom missing",
-      input: { channel: "whatsapp" as const, to: " " },
-      expectedErrorIncludes: "WhatsApp",
-    },
-    {
-      name: "rejects whatsapp allowFrom fallback when invalid",
-      input: { channel: "whatsapp" as const, to: "", allowFrom: ["wat"] },
-      expectedErrorIncludes: "WhatsApp",
-    },
-  ])("$name", ({ input, expected, expectedErrorIncludes }) => {
-    const res = resolveOutboundTarget(input);
-    if (expected) {
-      expect(res).toEqual(expected);
-      return;
-    }
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.error.message).toContain(expectedErrorIncludes);
-    }
-  });
-
-  it("rejects invalid non-whatsapp targets", () => {
-    const cases = [
-      { input: { channel: "telegram" as const, to: " " }, expectedErrorIncludes: "Telegram" },
-      { input: { channel: "webchat" as const, to: "x" }, expectedErrorIncludes: "WebChat" },
-    ] as const;
-
-    for (const testCase of cases) {
-      const res = resolveOutboundTarget(testCase.input);
-      expect(res.ok).toBe(false);
-      if (!res.ok) {
-        expect(res.error.message).toContain(testCase.expectedErrorIncludes);
-      }
-    }
-  });
-});
+runResolveOutboundTargetCoreTests();
