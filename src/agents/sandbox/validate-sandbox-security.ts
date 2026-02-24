@@ -42,6 +42,10 @@ export type ValidateBindMountsOptions = {
   allowReservedContainerTargets?: boolean;
 };
 
+export type ValidateNetworkModeOptions = {
+  allowContainerNamespaceJoin?: boolean;
+};
+
 export type BlockedBindReason =
   | { kind: "targets"; blockedPath: string }
   | { kind: "covers"; blockedPath: string }
@@ -276,12 +280,28 @@ export function validateBindMounts(
   }
 }
 
-export function validateNetworkMode(network: string | undefined): void {
-  if (network && BLOCKED_NETWORK_MODES.has(network.trim().toLowerCase())) {
+export function validateNetworkMode(
+  network: string | undefined,
+  options?: ValidateNetworkModeOptions,
+): void {
+  const normalized = network?.trim().toLowerCase();
+  if (!normalized) {
+    return;
+  }
+
+  if (BLOCKED_NETWORK_MODES.has(normalized)) {
     throw new Error(
       `Sandbox security: network mode "${network}" is blocked. ` +
         'Network "host" mode bypasses container network isolation. ' +
         'Use "bridge" or "none" instead.',
+    );
+  }
+
+  if (normalized.startsWith("container:") && options?.allowContainerNamespaceJoin !== true) {
+    throw new Error(
+      `Sandbox security: network mode "${network}" is blocked by default. ` +
+        'Network "container:*" joins another container namespace and bypasses sandbox network isolation. ' +
+        "Use a custom bridge network, or set dangerouslyAllowContainerNamespaceJoin=true only when you fully trust this runtime.",
     );
   }
 }
@@ -312,10 +332,13 @@ export function validateSandboxSecurity(
     network?: string;
     seccompProfile?: string;
     apparmorProfile?: string;
+    dangerouslyAllowContainerNamespaceJoin?: boolean;
   } & ValidateBindMountsOptions,
 ): void {
   validateBindMounts(cfg.binds, cfg);
-  validateNetworkMode(cfg.network);
+  validateNetworkMode(cfg.network, {
+    allowContainerNamespaceJoin: cfg.dangerouslyAllowContainerNamespaceJoin === true,
+  });
   validateSeccompProfile(cfg.seccompProfile);
   validateApparmorProfile(cfg.apparmorProfile);
 }

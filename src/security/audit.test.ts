@@ -855,6 +855,31 @@ describe("security audit", () => {
     );
   });
 
+  it("flags container namespace join network mode in sandbox config", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            docker: {
+              network: "container:peer",
+            },
+          },
+        },
+      },
+    };
+    const res = await audit(cfg);
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "sandbox.dangerous_network_mode",
+          severity: "critical",
+          title: "Dangerous network mode in sandbox config",
+        }),
+      ]),
+    );
+  });
+
   it("checks sandbox browser bridge-network restrictions", async () => {
     const cases: Array<{
       name: string;
