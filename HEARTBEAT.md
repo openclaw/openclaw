@@ -105,6 +105,22 @@
 - 기회 스캔: 외부 지식에서 기여-수익 매트릭스 자동 스코어링 → Obsidian 리포트 저장
 - **이슈 있을 때만 알림**
 
+### 📈 M.AI.UPbit 시장 모니터링 (매일 05:30 KST)
+
+- `cd C:\TEST\M.AI.UPbit; python scripts/monitor.py`
+- 5대 코인 (BTC, ETH, XRP, SOL, DOGE) 가격/변동률/RSI 체크
+- **알림 조건:** 일간 ±5% 이상 변동 OR RSI 80↑/20↓ (과매수/과매도)
+- `has_alerts: true`일 때만 Discord DM 보고 (급등/급락/RSI 이상 상세 포함)
+- 정상이면 조용히
+
+### 📊 M.AI.UPbit 일일 분석 리포트 (매일 06:30 KST)
+
+- `cd C:\TEST\M.AI.UPbit; python scripts/daily_report.py`
+- BTC/ETH/XRP 기술 분석 (SMA, EMA, RSI, MACD, 볼린저밴드, 스토캐스틱)
+- 매매 시그널 + 종합 추천 (buy/sell/hold)
+- Obsidian 노트: `01.PROJECT/16.M.AI.UPbit/{날짜}_Daily_Report.md`
+- Discord DM 요약 보고
+
 ### 🌅 모닝 브리핑 (매일 06:00 KST)
 
 - 전체 프로젝트 git status 확인

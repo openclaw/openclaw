@@ -262,6 +262,69 @@ $headers = @{ "Authorization" = "Bearer $env:CLOUDFLARE_API_TOKEN" }
 Invoke-RestMethod -Uri "https://api.cloudflare.com/client/v4/accounts/$env:CLOUDFLARE_ACCOUNT_ID/r2/buckets/maibeauty-media" -Headers $headers
 ```
 
+### M.AI.UPbit (암호화폐 분석 엔진)
+
+**경로:** `C:\TEST\M.AI.UPbit`
+**패키지:** `maiupbit` v0.1.0 (Apache-2.0)
+
+**스크립트 (OpenClaw 직접 호출용):**
+
+```powershell
+# 코인 분석 (인증 불필요)
+cd C:\TEST\M.AI.UPbit; python scripts/analyze.py KRW-BTC
+# → JSON: indicators, signals, score, recommendation, current_price
+
+# 시장 모니터링 (인증 불필요)
+cd C:\TEST\M.AI.UPbit; python scripts/monitor.py
+# → JSON: status(5코인), alerts(급등/급락/RSI이상), has_alerts
+
+# 일일 리포트 (인증 불필요, 포트폴리오는 키 필요)
+cd C:\TEST\M.AI.UPbit; python scripts/daily_report.py
+# → JSON: date, portfolio, analysis[], recommendations[]
+
+# 포트폴리오 조회 (API 키 필요)
+cd C:\TEST\M.AI.UPbit; python scripts/portfolio.py
+# → JSON: assets[], total_value
+
+# 매매 실행 (API 키 필요 + --confirm 필수)
+cd C:\TEST\M.AI.UPbit; python scripts/trade.py buy KRW-BTC 50000
+# → 미리보기만 (--confirm 없으면 실행 안 됨)
+cd C:\TEST\M.AI.UPbit; python scripts/trade.py buy KRW-BTC 50000 --confirm
+# → 실제 매수 실행
+
+# LSTM 모델 학습 (GPU 권장)
+cd C:\TEST\M.AI.UPbit; python scripts/train_model.py KRW-BTC
+```
+
+**CLI (패키지 설치 후):**
+
+```powershell
+maiupbit analyze KRW-BTC --format json
+maiupbit portfolio --format json
+maiupbit trade buy KRW-BTC 50000 --confirm
+maiupbit recommend --method performance --top 5 --format json
+```
+
+**지니님 요청 패턴 → 실행 매핑:**
+
+| 지니님 말              | 실행                                                                |
+| ---------------------- | ------------------------------------------------------------------- |
+| "비트코인 분석해줘"    | `scripts/analyze.py KRW-BTC`                                        |
+| "이더리움 지금 어때?"  | `scripts/analyze.py KRW-ETH`                                        |
+| "시장 상황 알려줘"     | `scripts/monitor.py`                                                |
+| "내 포트폴리오 보여줘" | `scripts/portfolio.py`                                              |
+| "비트코인 5만원 사줘"  | `scripts/trade.py buy KRW-BTC 50000` (미리보기) → 확인 후 --confirm |
+| "리포트 만들어줘"      | `scripts/daily_report.py`                                           |
+| "추천 종목 알려줘"     | `maiupbit recommend --method performance --top 5 --format json`     |
+
+**⚠️ 매매 안전 규칙:**
+
+- `trade.py`는 **절대 --confirm 없이 실행 금지** (미리보기만 보여주고 지니님 확인 대기)
+- 지니님이 명시적으로 "실행해", "사줘", "팔아줘" + 금액 확인 후에만 --confirm
+- API 키: `.env`에 `UPBIT_ACCESS_KEY`, `UPBIT_SECRET_KEY` (현재 미설정)
+
+---
+
 ### Discord 노티 규칙
 
 - **절대 금지**: `#일반` 채널(1466615738512179394)에 메시지 전송 금지 (보안 위험)
