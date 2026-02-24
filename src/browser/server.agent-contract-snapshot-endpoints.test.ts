@@ -68,6 +68,9 @@ describe("browser control server", () => {
       cdpUrl: state.cdpBaseUrl,
       targetId: "abcd1234",
       url: "https://example.com",
+      ssrfPolicy: {
+        dangerouslyAllowPrivateNetwork: true,
+      },
     });
 
     const click = await postJson<{ ok: boolean }>(`${base}/act`, {
