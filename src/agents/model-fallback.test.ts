@@ -373,6 +373,37 @@ describe("runWithModelFallback", () => {
     });
   });
 
+  it("does not skip OpenRouter when legacy cooldown markers exist", async () => {
+    const provider = "openrouter";
+    const cfg = makeProviderFallbackCfg(provider);
+    const store = makeSingleProviderStore({
+      provider,
+      usageStat: {
+        cooldownUntil: Date.now() + 5 * 60_000,
+        disabledUntil: Date.now() + 10 * 60_000,
+        disabledReason: "billing",
+      },
+    });
+    const run = vi.fn().mockImplementation(async (providerId) => {
+      if (providerId === "openrouter") {
+        return "ok";
+      }
+      throw new Error(`unexpected provider: ${providerId}`);
+    });
+
+    const result = await runWithStoredAuth({
+      cfg,
+      store,
+      provider,
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0]?.[0]).toBe("openrouter");
+    expect(result.attempts).toEqual([]);
+  });
+
   it("propagates disabled reason when all profiles are unavailable", async () => {
     const now = Date.now();
     await expectSkippedUnavailableProvider({
