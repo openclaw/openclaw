@@ -51,10 +51,18 @@ describe("ssrf pinning", () => {
 
   it.each([
     { name: "RFC1918 private address", address: "10.0.0.8" },
-    { name: "RFC2544 benchmarking range", address: "198.18.0.1" },
+    { name: "TEST-NET-2 reserved range", address: "198.51.100.1" },
   ])("rejects blocked DNS results: $name", async ({ address }) => {
     const lookup = vi.fn(async () => [{ address, family: 4 }]) as unknown as LookupFn;
     await expect(resolvePinnedHostname("example.com", lookup)).rejects.toThrow(/private|internal/i);
+  });
+
+  it("allows RFC2544 benchmark range addresses (used by Telegram)", async () => {
+    const lookup = vi.fn(async () => [
+      { address: "198.18.0.153", family: 4 },
+    ]) as unknown as LookupFn;
+    const pinned = await resolvePinnedHostname("api.telegram.org", lookup);
+    expect(pinned.addresses).toContain("198.18.0.153");
   });
 
   it("falls back for non-matching hostnames", async () => {
