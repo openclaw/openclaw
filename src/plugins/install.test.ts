@@ -557,6 +557,43 @@ describe("installPluginFromDir", () => {
       ),
     ).toBe(true);
   });
+
+  it("normalizes scoped manifest ids to unscoped install keys", async () => {
+    const { pluginDir, extensionsDir } = setupPluginInstallDirs();
+    fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/cognee-openclaw",
+        version: "0.0.1",
+        openclaw: { extensions: ["./dist/index.js"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export {};", "utf-8");
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "@team/memory-cognee",
+        configSchema: { type: "object", properties: {} },
+      }),
+      "utf-8",
+    );
+
+    const res = await installPluginFromDir({
+      dirPath: pluginDir,
+      extensionsDir,
+      expectedPluginId: "memory-cognee",
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.pluginId).toBe("memory-cognee");
+    expect(res.targetDir).toBe(path.join(extensionsDir, "memory-cognee"));
+  });
 });
 
 describe("installPluginFromNpmSpec", () => {
