@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { withTempHome } from "../../test/helpers/temp-home.js";
+import * as noteModule from "../terminal/note.js";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 import { runDoctorConfigWithInput } from "./doctor-config-flow.test-utils.js";
 
@@ -52,6 +53,34 @@ describe("doctor config flow", () => {
     expect((result.cfg as Record<string, unknown>).gateway).toEqual({
       auth: { mode: "token", token: 123 },
     });
+  });
+
+  it("does not warn on mutable account allowlists when dangerous name matching is inherited", async () => {
+    const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
+    try {
+      await runDoctorConfigWithInput({
+        config: {
+          channels: {
+            slack: {
+              dangerouslyAllowNameMatching: true,
+              accounts: {
+                work: {
+                  allowFrom: ["alice"],
+                },
+              },
+            },
+          },
+        },
+        run: loadAndMaybeMigrateDoctorConfig,
+      });
+
+      const doctorWarnings = noteSpy.mock.calls
+        .filter((call) => call[1] === "Doctor warnings")
+        .map((call) => String(call[0]));
+      expect(doctorWarnings.some((line) => line.includes("mutable allowlist"))).toBe(false);
+    } finally {
+      noteSpy.mockRestore();
+    }
   });
 
   it("drops unknown keys on repair", async () => {
