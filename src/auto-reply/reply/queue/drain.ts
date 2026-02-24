@@ -111,11 +111,15 @@ export function scheduleFollowupDrain(
             break;
           }
           if (
-            !(await drainNextQueueItem(queue.items, async () => {
+            !(await drainNextQueueItem(queue.items, async (item) => {
               await runFollowup({
                 prompt: summaryPrompt,
                 run,
                 enqueuedAt: Date.now(),
+                originatingChannel: item.originatingChannel,
+                originatingTo: item.originatingTo,
+                originatingAccountId: item.originatingAccountId,
+                originatingThreadId: item.originatingThreadId,
               });
             }))
           ) {

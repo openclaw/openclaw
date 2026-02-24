@@ -98,13 +98,10 @@ export function createFollowupRunner(params: {
           cfg: queued.run.config,
         });
         if (!result.ok) {
-          // Log error and fall back to dispatcher if available.
+          // Keep origin isolation strict: do not fall back to the current
+          // dispatcher when explicit origin routing failed.
           const errorMsg = result.error ?? "unknown error";
           logVerbose(`followup queue: route-reply failed: ${errorMsg}`);
-          // Fallback: try the dispatcher if routing failed.
-          if (opts?.onBlockReply) {
-            await opts.onBlockReply(payload);
-          }
         }
       } else if (opts?.onBlockReply) {
         await opts.onBlockReply(payload);
@@ -259,10 +256,10 @@ export function createFollowupRunner(params: {
         sentMediaUrls: runResult.messagingToolSentMediaUrls ?? [],
       });
       const suppressMessagingToolReplies = shouldSuppressMessagingToolReplies({
-        messageProvider: queued.run.messageProvider,
+        messageProvider: queued.originatingChannel ?? queued.run.messageProvider,
         messagingToolSentTargets: runResult.messagingToolSentTargets,
         originatingTo: queued.originatingTo,
-        accountId: queued.run.agentAccountId,
+        accountId: queued.originatingAccountId ?? queued.run.agentAccountId,
       });
       const finalPayloads = suppressMessagingToolReplies ? [] : mediaFilteredPayloads;
 
