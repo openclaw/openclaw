@@ -4,6 +4,7 @@ import type { ImageContent } from "@mariozechner/pi-ai";
 import { resolveUserPath } from "../../../utils.js";
 import { loadWebMedia } from "../../../web/media.js";
 import type { ImageSanitizationLimits } from "../../image-sanitization.js";
+import { resolveSandboxedBridgeMediaPath } from "../../sandbox-media-paths.js";
 import { assertSandboxPath } from "../../sandbox-paths.js";
 import type { SandboxFsBridge } from "../../sandbox/fs-bridge.js";
 import { sanitizeImageBlocks } from "../../tool-images.js";
@@ -199,11 +200,15 @@ export async function loadImageFromRef(
     if (ref.type === "path") {
       if (options?.sandbox) {
         try {
-          const resolved = options.sandbox.bridge.resolvePath({
-            filePath: targetPath,
-            cwd: options.sandbox.root,
+          const resolved = await resolveSandboxedBridgeMediaPath({
+            sandbox: {
+              root: options.sandbox.root,
+              bridge: options.sandbox.bridge,
+              workspaceOnly: options.workspaceOnly,
+            },
+            mediaPath: targetPath,
           });
-          targetPath = resolved.hostPath;
+          targetPath = resolved.resolved;
         } catch (err) {
           log.debug(
             `Native image: sandbox validation failed for ${ref.resolved}: ${err instanceof Error ? err.message : String(err)}`,
@@ -213,7 +218,7 @@ export async function loadImageFromRef(
       } else if (!path.isAbsolute(targetPath)) {
         targetPath = path.resolve(workspaceDir, targetPath);
       }
-      if (options?.workspaceOnly) {
+      if (options?.workspaceOnly && !options?.sandbox) {
         const root = options?.sandbox?.root ?? workspaceDir;
         await assertSandboxPath({
           filePath: targetPath,
