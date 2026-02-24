@@ -87,6 +87,38 @@ describe("gateway sessions patch", () => {
     expect(res.entry.thinkingLevel).toBeUndefined();
   });
 
+  test("persists reasoningLevel=off (does not clear)", async () => {
+    const store: Record<string, SessionEntry> = {};
+    const res = await applySessionsPatchToStore({
+      cfg: {} as OpenClawConfig,
+      store,
+      storeKey: "agent:main:main",
+      patch: { key: "agent:main:main", reasoningLevel: "off" },
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.entry.reasoningLevel).toBe("off");
+  });
+
+  test("clears reasoningLevel when patch sets null", async () => {
+    const store: Record<string, SessionEntry> = {
+      "agent:main:main": { reasoningLevel: "stream" } as SessionEntry,
+    };
+    const res = await applySessionsPatchToStore({
+      cfg: {} as OpenClawConfig,
+      store,
+      storeKey: "agent:main:main",
+      patch: { key: "agent:main:main", reasoningLevel: null },
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.entry.reasoningLevel).toBeUndefined();
+  });
+
   test("persists elevatedLevel=off (does not clear)", async () => {
     const store: Record<string, SessionEntry> = {};
     const res = await applySessionsPatchToStore({
