@@ -525,6 +525,46 @@ describe("statusCommand", () => {
     expect(joined).toContain("devices list");
   });
 
+  it("does not render unsafe requestId content into approval command hints", async () => {
+    mocks.probeGateway.mockResolvedValueOnce({
+      ok: false,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: null,
+      error: "connect failed: pairing required (requestId: req-123;rm -rf /)",
+      close: { code: 1008, reason: "pairing required (requestId: req-123;rm -rf /)" },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+
+    runtimeLogMock.mockClear();
+    await statusCommand({}, runtime as never);
+    const joined = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
+    expect(joined).toContain("Gateway pairing approval required.");
+    expect(joined).not.toContain("devices approve req-123;rm -rf /");
+    expect(joined).toContain("devices approve --latest");
+  });
+
+  it("extracts requestId from close reason when error text omits it", async () => {
+    mocks.probeGateway.mockResolvedValueOnce({
+      ok: false,
+      url: "ws://127.0.0.1:18789",
+      connectLatencyMs: null,
+      error: "connect failed: pairing required",
+      close: { code: 1008, reason: "pairing required (requestId: req-close-456)" },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+
+    runtimeLogMock.mockClear();
+    await statusCommand({}, runtime as never);
+    const joined = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
+    expect(joined).toContain("devices approve req-close-456");
+  });
+
   it("includes sessions across agents in JSON output", async () => {
     const originalAgents = mocks.listAgentsForGateway.getMockImplementation();
     const originalResolveStorePath = mocks.resolveStorePath.getMockImplementation();
