@@ -1889,7 +1889,6 @@ extension TalkModeManager {
     struct TalkProviderConfigSelection {
         let provider: String
         let config: [String: Any]
-        let normalizedPayload: Bool
     }
 
     private static func normalizedTalkProviderID(_ raw: String?) -> String? {
@@ -1901,29 +1900,22 @@ extension TalkModeManager {
         guard let talk else { return nil }
         let rawProvider = talk["provider"] as? String
         let rawProviders = talk["providers"] as? [String: Any]
-        let hasNormalized = rawProvider != nil || rawProviders != nil
-        if hasNormalized {
-            let providers = rawProviders ?? [:]
-            let normalizedProviders = providers.reduce(into: [String: [String: Any]]()) { acc, entry in
-                guard
-                    let providerID = Self.normalizedTalkProviderID(entry.key),
-                    let config = entry.value as? [String: Any]
-                else { return }
-                acc[providerID] = config
-            }
-            let providerID =
-                Self.normalizedTalkProviderID(rawProvider) ??
-                normalizedProviders.keys.sorted().first ??
-                Self.defaultTalkProvider
-            return TalkProviderConfigSelection(
-                provider: providerID,
-                config: normalizedProviders[providerID] ?? [:],
-                normalizedPayload: true)
+        guard rawProvider != nil || rawProviders != nil else { return nil }
+        let providers = rawProviders ?? [:]
+        let normalizedProviders = providers.reduce(into: [String: [String: Any]]()) { acc, entry in
+            guard
+                let providerID = Self.normalizedTalkProviderID(entry.key),
+                let config = entry.value as? [String: Any]
+            else { return }
+            acc[providerID] = config
         }
+        let providerID =
+            Self.normalizedTalkProviderID(rawProvider) ??
+            normalizedProviders.keys.sorted().first ??
+            Self.defaultTalkProvider
         return TalkProviderConfigSelection(
-            provider: Self.defaultTalkProvider,
-            config: talk,
-            normalizedPayload: false)
+            provider: providerID,
+            config: normalizedProviders[providerID] ?? [:])
     }
 
     func reloadConfig() async {
@@ -1934,6 +1926,10 @@ extension TalkModeManager {
             guard let config = json["config"] as? [String: Any] else { return }
             let talk = config["talk"] as? [String: Any]
             let selection = Self.selectTalkProviderConfig(talk)
+            if talk != nil, selection == nil {
+                GatewayDiagnostics.log(
+                    "talk config ignored: legacy payload unsupported on iOS beta; expected talk.provider/providers")
+            }
             let activeProvider = selection?.provider ?? Self.defaultTalkProvider
             let activeConfig = selection?.config
             self.defaultVoiceId = (activeConfig?["voiceId"] as? String)?
@@ -1983,7 +1979,7 @@ extension TalkModeManager {
             if let interrupt = talk?["interruptOnSpeech"] as? Bool {
                 self.interruptOnSpeech = interrupt
             }
-            if selection?.normalizedPayload == true {
+            if selection != nil {
                 GatewayDiagnostics.log("talk config provider=\(activeProvider)")
             }
         } catch {
