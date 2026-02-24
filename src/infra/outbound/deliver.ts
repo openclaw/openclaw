@@ -216,6 +216,8 @@ type DeliverOutboundPayloadsCoreParams = {
     mediaUrls?: string[];
   };
   silent?: boolean;
+  /** Session key for internal hook dispatch (when `mirror` is not needed). */
+  sessionKey?: string;
 };
 
 type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & {
@@ -444,7 +446,7 @@ async function deliverOutboundPayloadsCore(
     return normalized ? [normalized] : [];
   });
   const hookRunner = getGlobalHookRunner();
-  const sessionKeyForInternalHooks = params.mirror?.sessionKey;
+  const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.sessionKey;
   for (const payload of normalizedPayloads) {
     const payloadSummary: NormalizedOutboundPayload = {
       text: payload.text ?? "",
