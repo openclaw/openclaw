@@ -307,16 +307,18 @@ class GatewaySession(
         val msg = res.error?.message ?: "connect failed"
         val hasStoredToken = !storedToken.isNullOrBlank()
         val canRetryWithShared = hasStoredToken && trimmedToken.isNotBlank()
-        if (hasStoredToken) {
-          deviceAuthStore.clearToken(identity.deviceId, options.role)
-        }
         if (canRetryWithShared) {
           val sharedPayload = buildConnectParams(identity, connectNonce, trimmedToken, password?.trim())
-          res = request("connect", sharedPayload, timeoutMs = 8_000)
-        }
-        if (!res.ok) {
-          val retryMsg = res.error?.message ?: msg
-          throw IllegalStateException(retryMsg)
+          val sharedRes = request("connect", sharedPayload, timeoutMs = 8_000)
+          if (!sharedRes.ok) {
+            val retryMsg = sharedRes.error?.message ?: msg
+            throw IllegalStateException(retryMsg)
+          }
+          // Stored device token was bypassed successfully; clear stale token for future connects.
+          deviceAuthStore.clearToken(identity.deviceId, options.role)
+          res = sharedRes
+        } else {
+          throw IllegalStateException(msg)
         }
       }
       handleConnectSuccess(res, identity.deviceId)
