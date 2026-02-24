@@ -355,7 +355,11 @@ export function chunkMarkdown(
     if (!firstEntry || !lastEntry) {
       return;
     }
-    const text = current.map((entry) => entry.line).join("\n");
+    let text = current.map((entry) => entry.line).join("\n");
+    // Safety net: if overlap carry caused text to exceed maxChars, truncate
+    if (text.length > maxChars) {
+      text = text.slice(0, maxChars);
+    }
     const startLine = firstEntry.lineNo;
     const endLine = lastEntry.lineNo;
     chunks.push({
@@ -368,7 +372,8 @@ export function chunkMarkdown(
   };
 
   const carryOverlap = () => {
-    if (overlapChars <= 0 || current.length === 0) {
+    const overlapCap = Math.min(overlapChars, Math.floor(maxChars / 2));
+    if (overlapCap <= 0 || current.length === 0) {
       current = [];
       currentChars = 0;
       return;
@@ -380,9 +385,13 @@ export function chunkMarkdown(
       if (!entry) {
         continue;
       }
-      acc += entry.line.length + 1;
+      const entrySize = entry.line.length + 1;
+      if (acc + entrySize > overlapCap && kept.length > 0) {
+        break;
+      }
+      acc += entrySize;
       kept.unshift(entry);
-      if (acc >= overlapChars) {
+      if (acc >= overlapCap) {
         break;
       }
     }
