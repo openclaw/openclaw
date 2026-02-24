@@ -338,6 +338,137 @@ function listGroupPolicyOpen(cfg: OpenClawConfig): string[] {
   return out;
 }
 
+function hasConfiguredGroupTargets(section: Record<string, unknown>): boolean {
+  const groupKeys = ["groups", "guilds", "channels", "rooms"];
+  return groupKeys.some((key) => {
+    const value = section[key];
+    return Boolean(value && typeof value === "object" && Object.keys(value).length > 0);
+  });
+}
+
+function listPotentialMultiUserSignals(cfg: OpenClawConfig): string[] {
+  const out = new Set<string>();
+  const channels = cfg.channels as Record<string, unknown> | undefined;
+  if (!channels || typeof channels !== "object") {
+    return [];
+  }
+
+  const inspectSection = (section: Record<string, unknown>, basePath: string) => {
+    const groupPolicy = typeof section.groupPolicy === "string" ? section.groupPolicy : null;
+    if (groupPolicy === "open") {
+      out.add(`${basePath}.groupPolicy="open"`);
+    } else if (groupPolicy === "allowlist" && hasConfiguredGroupTargets(section)) {
+      out.add(`${basePath}.groupPolicy="allowlist" with configured group targets`);
+    }
+
+    const dmPolicy = typeof section.dmPolicy === "string" ? section.dmPolicy : null;
+    if (dmPolicy === "open") {
+      out.add(`${basePath}.dmPolicy="open"`);
+    }
+
+    const allowFrom = Array.isArray(section.allowFrom) ? section.allowFrom : [];
+    if (allowFrom.some((entry) => String(entry).trim() === "*")) {
+      out.add(`${basePath}.allowFrom includes "*"`);
+    }
+
+    const groupAllowFrom = Array.isArray(section.groupAllowFrom) ? section.groupAllowFrom : [];
+    if (groupAllowFrom.some((entry) => String(entry).trim() === "*")) {
+      out.add(`${basePath}.groupAllowFrom includes "*"`);
+    }
+
+    const dm = section.dm;
+    if (dm && typeof dm === "object") {
+      const dmSection = dm as Record<string, unknown>;
+      const dmLegacyPolicy = typeof dmSection.policy === "string" ? dmSection.policy : null;
+      if (dmLegacyPolicy === "open") {
+        out.add(`${basePath}.dm.policy="open"`);
+      }
+      const dmAllowFrom = Array.isArray(dmSection.allowFrom) ? dmSection.allowFrom : [];
+      if (dmAllowFrom.some((entry) => String(entry).trim() === "*")) {
+        out.add(`${basePath}.dm.allowFrom includes "*"`);
+      }
+    }
+  };
+
+  for (const [channelId, value] of Object.entries(channels)) {
+    if (!value || typeof value !== "object") {
+      continue;
+    }
+    const section = value as Record<string, unknown>;
+    inspectSection(section, `channels.${channelId}`);
+    const accounts = section.accounts;
+    if (!accounts || typeof accounts !== "object") {
+      continue;
+    }
+    for (const [accountId, accountValue] of Object.entries(accounts)) {
+      if (!accountValue || typeof accountValue !== "object") {
+        continue;
+      }
+      inspectSection(
+        accountValue as Record<string, unknown>,
+        `channels.${channelId}.accounts.${accountId}`,
+      );
+    }
+  }
+
+  return Array.from(out);
+}
+
+function collectRiskyToolExposureContexts(cfg: OpenClawConfig): {
+  riskyContexts: string[];
+  hasRuntimeRisk: boolean;
+} {
+  const contexts: Array<{
+    label: string;
+    agentId?: string;
+    tools?: AgentToolsConfig;
+  }> = [{ label: "agents.defaults" }];
+  for (const agent of cfg.agents?.list ?? []) {
+    if (!agent || typeof agent !== "object" || typeof agent.id !== "string") {
+      continue;
+    }
+    contexts.push({
+      label: `agents.list.${agent.id}`,
+      agentId: agent.id,
+      tools: agent.tools,
+    });
+  }
+
+  const riskyContexts: string[] = [];
+  let hasRuntimeRisk = false;
+  for (const context of contexts) {
+    const sandboxMode = resolveSandboxConfigForAgent(cfg, context.agentId).mode;
+    const policies = resolveToolPolicies({
+      cfg,
+      agentTools: context.tools,
+      sandboxMode,
+      agentId: context.agentId ?? null,
+    });
+    const runtimeTools = ["exec", "process"].filter((tool) =>
+      isToolAllowedByPolicies(tool, policies),
+    );
+    const fsTools = ["read", "write", "edit", "apply_patch"].filter((tool) =>
+      isToolAllowedByPolicies(tool, policies),
+    );
+    const fsWorkspaceOnly = context.tools?.fs?.workspaceOnly ?? cfg.tools?.fs?.workspaceOnly;
+    const runtimeUnguarded = runtimeTools.length > 0 && sandboxMode !== "all";
+    const fsUnguarded = fsTools.length > 0 && sandboxMode !== "all" && fsWorkspaceOnly !== true;
+    if (!runtimeUnguarded && !fsUnguarded) {
+      continue;
+    }
+    if (runtimeUnguarded) {
+      hasRuntimeRisk = true;
+    }
+    riskyContexts.push(
+      `${context.label} (sandbox=${sandboxMode}; runtime=[${runtimeTools.join(", ") || "off"}]; fs=[${fsTools.join(", ") || "off"}]; fs.workspaceOnly=${
+        fsWorkspaceOnly === true ? "true" : "false"
+      })`,
+    );
+  }
+
+  return { riskyContexts, hasRuntimeRisk };
+}
+
 // --------------------------------------------------------------------------
 // Exported collectors
 // --------------------------------------------------------------------------
@@ -358,7 +489,9 @@ export function collectAttackSurfaceSummaryFindings(cfg: OpenClawConfig): Securi
     `\n` +
     `hooks.internal: ${internalHooksEnabled ? "enabled" : "disabled"}` +
     `\n` +
-    `browser control: ${browserEnabled ? "enabled" : "disabled"}`;
+    `browser control: ${browserEnabled ? "enabled" : "disabled"}` +
+    `\n` +
+    "trust model: personal assistant (one trusted operator boundary), not hostile multi-tenant on one shared gateway";
 
   return [
     {
@@ -1096,53 +1229,7 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
     });
   }
 
-  const contexts: Array<{
-    label: string;
-    agentId?: string;
-    tools?: AgentToolsConfig;
-  }> = [{ label: "agents.defaults" }];
-  for (const agent of cfg.agents?.list ?? []) {
-    if (!agent || typeof agent !== "object" || typeof agent.id !== "string") {
-      continue;
-    }
-    contexts.push({
-      label: `agents.list.${agent.id}`,
-      agentId: agent.id,
-      tools: agent.tools,
-    });
-  }
-
-  const riskyContexts: string[] = [];
-  let hasRuntimeRisk = false;
-  for (const context of contexts) {
-    const sandboxMode = resolveSandboxConfigForAgent(cfg, context.agentId).mode;
-    const policies = resolveToolPolicies({
-      cfg,
-      agentTools: context.tools,
-      sandboxMode,
-      agentId: context.agentId ?? null,
-    });
-    const runtimeTools = ["exec", "process"].filter((tool) =>
-      isToolAllowedByPolicies(tool, policies),
-    );
-    const fsTools = ["read", "write", "edit", "apply_patch"].filter((tool) =>
-      isToolAllowedByPolicies(tool, policies),
-    );
-    const fsWorkspaceOnly = context.tools?.fs?.workspaceOnly ?? cfg.tools?.fs?.workspaceOnly;
-    const runtimeUnguarded = runtimeTools.length > 0 && sandboxMode !== "all";
-    const fsUnguarded = fsTools.length > 0 && sandboxMode !== "all" && fsWorkspaceOnly !== true;
-    if (!runtimeUnguarded && !fsUnguarded) {
-      continue;
-    }
-    if (runtimeUnguarded) {
-      hasRuntimeRisk = true;
-    }
-    riskyContexts.push(
-      `${context.label} (sandbox=${sandboxMode}; runtime=[${runtimeTools.join(", ") || "off"}]; fs=[${fsTools.join(", ") || "off"}]; fs.workspaceOnly=${
-        fsWorkspaceOnly === true ? "true" : "false"
-      })`,
-    );
-  }
+  const { riskyContexts, hasRuntimeRisk } = collectRiskyToolExposureContexts(cfg);
 
   if (riskyContexts.length > 0) {
     findings.push({
@@ -1157,6 +1244,38 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
         'For open groups, prefer tools.profile="messaging" (or deny group:runtime/group:fs), set tools.fs.workspaceOnly=true, and use agents.defaults.sandbox.mode="all" for exposed agents.',
     });
   }
+
+  return findings;
+}
+
+export function collectLikelyMultiUserSetupFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+  const findings: SecurityAuditFinding[] = [];
+  const signals = listPotentialMultiUserSignals(cfg);
+  if (signals.length === 0) {
+    return findings;
+  }
+
+  const { riskyContexts, hasRuntimeRisk } = collectRiskyToolExposureContexts(cfg);
+  const impactLine = hasRuntimeRisk
+    ? "Runtime/process tools are exposed without full sandboxing in at least one context."
+    : "No unguarded runtime/process tools were detected by this heuristic.";
+  const riskyContextsDetail =
+    riskyContexts.length > 0
+      ? `Potential high-impact tool exposure contexts:\n${riskyContexts.map((line) => `- ${line}`).join("\n")}`
+      : "No unguarded runtime/filesystem contexts detected.";
+
+  findings.push({
+    checkId: "security.trust_model.multi_user_heuristic",
+    severity: "warn",
+    title: "Potential multi-user setup detected (personal-assistant model warning)",
+    detail:
+      "Heuristic signals indicate this gateway may be reachable by multiple users:\n" +
+      signals.map((signal) => `- ${signal}`).join("\n") +
+      `\n${impactLine}\n${riskyContextsDetail}\n` +
+      "OpenClaw's default security model is personal-assistant (one trusted operator boundary), not hostile multi-tenant isolation on one shared gateway.",
+    remediation:
+      'If users may be mutually untrusted, split trust boundaries (separate gateways + credentials, ideally separate OS users/hosts). If you intentionally run shared-user access, set agents.defaults.sandbox.mode="all", keep tools.fs.workspaceOnly=true, deny runtime/fs/web tools unless required, and keep personal/private identities + credentials off that runtime.',
+  });
 
   return findings;
 }
