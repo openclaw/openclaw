@@ -121,6 +121,42 @@ describe("mattermostPlugin", () => {
       });
     };
 
+    const runPostAction = async (params: {
+      action: "edit" | "delete";
+      input: Record<string, unknown>;
+      responseBody?: unknown;
+      status?: number;
+    }) => {
+      const cfg = createMattermostTestConfig();
+      const calls: Array<{ url: string; init?: RequestInit }> = [];
+      const status = params.status ?? (params.action === "delete" ? 204 : 200);
+      const responseBody =
+        params.responseBody ?? (params.action === "edit" ? { id: "POST1" } : null);
+      const fetchImpl = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+        const urlStr = typeof url === "string" ? url : url.toString();
+        calls.push({ url: urlStr, init });
+
+        return responseBody === null
+          ? new Response(null, { status })
+          : new Response(JSON.stringify(responseBody), {
+              status,
+              headers: { "content-type": "application/json" },
+            });
+      });
+
+      const result = await withMockedGlobalFetch(fetchImpl as unknown as typeof fetch, async () => {
+        return await mattermostPlugin.actions?.handleAction?.({
+          channel: "mattermost",
+          action: params.action,
+          params: params.input,
+          cfg,
+          accountId: "default",
+        } as any);
+      });
+
+      return { calls, result };
+    };
+
     it("exposes react when mattermost is configured", () => {
       const cfg: OpenClawConfig = {
         channels: {
@@ -135,8 +171,12 @@ describe("mattermostPlugin", () => {
       const actions = mattermostPlugin.actions?.listActions?.({ cfg }) ?? [];
       expect(actions).toContain("react");
       expect(actions).toContain("send");
+      expect(actions).toContain("edit");
+      expect(actions).toContain("delete");
       expect(mattermostPlugin.actions?.supportsAction?.({ action: "react" })).toBe(true);
       expect(mattermostPlugin.actions?.supportsAction?.({ action: "send" })).toBe(true);
+      expect(mattermostPlugin.actions?.supportsAction?.({ action: "edit" })).toBe(true);
+      expect(mattermostPlugin.actions?.supportsAction?.({ action: "delete" })).toBe(true);
     });
 
     it("hides react when mattermost is not configured", () => {
@@ -152,7 +192,7 @@ describe("mattermostPlugin", () => {
       expect(actions).toEqual([]);
     });
 
-    it("hides react when actions.reactions is false", () => {
+    it("keeps send, edit, and delete when actions.reactions is false", () => {
       const cfg: OpenClawConfig = {
         channels: {
           mattermost: {
@@ -165,8 +205,7 @@ describe("mattermostPlugin", () => {
       };
 
       const actions = mattermostPlugin.actions?.listActions?.({ cfg }) ?? [];
-      expect(actions).not.toContain("react");
-      expect(actions).toContain("send");
+      expect(actions).toEqual(["send", "edit", "delete"]);
     });
 
     it("respects per-account actions.reactions in listActions", () => {
@@ -244,6 +283,33 @@ describe("mattermostPlugin", () => {
       expect(result?.content).toEqual([
         { type: "text", text: "Removed reaction :thumbsup: from POST1" },
       ]);
+      expect(result?.details).toEqual({});
+    });
+
+    it("handles edit by patching the Mattermost post", async () => {
+      const { calls, result } = await runPostAction({
+        action: "edit",
+        input: { messageId: "POST1", message: "updated message" },
+      });
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.url).toBe("https://chat.example.com/api/v4/posts/POST1/patch");
+      expect(calls[0]?.init?.method).toBe("PUT");
+      expect(JSON.parse(calls[0]?.init?.body as string)).toEqual({ message: "updated message" });
+      expect(result?.content).toEqual([{ type: "text", text: "Edited post POST1" }]);
+      expect(result?.details).toEqual({ postId: "POST1" });
+    });
+
+    it("handles delete by deleting the Mattermost post", async () => {
+      const { calls, result } = await runPostAction({
+        action: "delete",
+        input: { messageId: "POST1" },
+      });
+
+      expect(calls).toHaveLength(1);
+      expect(calls[0]?.url).toBe("https://chat.example.com/api/v4/posts/POST1");
+      expect(calls[0]?.init?.method).toBe("DELETE");
+      expect(result?.content).toEqual([{ type: "text", text: "Deleted post POST1" }]);
       expect(result?.details).toEqual({});
     });
 
