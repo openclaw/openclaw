@@ -4,7 +4,11 @@ import {
   normalizeApiKeyInput,
   validateApiKeyInput,
 } from "./auth-choice.api-key.js";
-import { createAuthChoiceAgentModelNoter } from "./auth-choice.apply-helpers.js";
+import {
+  createAuthChoiceAgentModelNoter,
+  normalizeSecretInputModeInput,
+  resolveSecretInputModeForEnvSelection,
+} from "./auth-choice.apply-helpers.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 import {
@@ -25,11 +29,14 @@ export async function applyAuthChoiceXAI(
   let nextConfig = params.config;
   let agentModelOverride: string | undefined;
   const noteAgentModel = createAuthChoiceAgentModelNoter(params);
+  const requestedSecretInputMode = normalizeSecretInputModeInput(params.opts?.secretInputMode);
 
   let hasCredential = false;
   const optsKey = params.opts?.xaiApiKey?.trim();
   if (optsKey) {
-    setXaiApiKey(normalizeApiKeyInput(optsKey), params.agentDir);
+    setXaiApiKey(normalizeApiKeyInput(optsKey), params.agentDir, {
+      secretInputMode: requestedSecretInputMode,
+    });
     hasCredential = true;
   }
 
@@ -41,7 +48,11 @@ export async function applyAuthChoiceXAI(
         initialValue: true,
       });
       if (useExisting) {
-        setXaiApiKey(envKey.apiKey, params.agentDir);
+        const mode = await resolveSecretInputModeForEnvSelection({
+          prompter: params.prompter,
+          explicitMode: requestedSecretInputMode,
+        });
+        setXaiApiKey(envKey.apiKey, params.agentDir, { secretInputMode: mode });
         hasCredential = true;
       }
     }
@@ -52,7 +63,9 @@ export async function applyAuthChoiceXAI(
       message: "Enter xAI API key",
       validate: validateApiKeyInput,
     });
-    setXaiApiKey(normalizeApiKeyInput(String(key)), params.agentDir);
+    setXaiApiKey(normalizeApiKeyInput(String(key)), params.agentDir, {
+      secretInputMode: requestedSecretInputMode,
+    });
   }
 
   nextConfig = applyAuthProfileConfig(nextConfig, {
