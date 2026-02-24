@@ -38,6 +38,15 @@ OpenClaw assumes the host and config boundary are trusted:
 - Running one Gateway for multiple mutually untrusted/adversarial operators is **not a recommended setup**.
 - For mixed-trust teams, split trust boundaries with separate gateways (or at minimum separate OS users/hosts).
 
+### Practical consequence (operator trust boundary)
+
+Inside one Gateway instance, authenticated operator access is a trusted control-plane role, not a per-user tenant role.
+
+- Operators with read/control-plane access can inspect gateway session metadata/history by design.
+- Session identifiers (`sessionKey`, session IDs, labels) are routing selectors, not authorization tokens.
+- Example: expecting per-operator isolation for methods like `sessions.list`, `sessions.preview`, or `chat.history` is outside this model.
+- If you need adversarial-user isolation, run separate gateways per trust boundary.
+
 ## Trust boundary matrix
 
 Use this as the quick model when triaging risk:
@@ -57,6 +66,7 @@ These patterns are commonly reported and are usually closed as no-action unless 
 
 - Prompt-injection-only chains without a policy/auth/sandbox bypass.
 - Claims that assume hostile multi-tenant operation on one shared host/config.
+- Claims that classify normal operator read-path access (for example `sessions.list`/`sessions.preview`/`chat.history`) as IDOR in a shared-gateway setup.
 - Localhost-only deployment findings (for example HSTS on loopback-only gateway).
 - Discord inbound webhook signature findings for inbound paths that do not exist in this repo.
 - "Missing per-user authorization" findings that treat `sessionKey` as an auth token.
