@@ -84,4 +84,40 @@ describe("resolveTranscriptPolicy", () => {
     });
     expect(policy.validateAnthropicTurns).toBe(false);
   });
+
+  it("preserves thought signatures for Anthropic provider", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+      modelApi: "anthropic-messages",
+    });
+    expect(policy.preserveSignatures).toBe(true);
+  });
+
+  it("does not preserve thought signatures for Google Antigravity Claude (sanitizeMode is images-only)", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "google-antigravity",
+      modelId: "claude-sonnet-4-6",
+      modelApi: "google-antigravity",
+    });
+    expect(policy.preserveSignatures).toBe(false);
+  });
+
+  it("does not preserve thought signatures for Google Gemini", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "google",
+      modelId: "gemini-2.0-flash",
+      modelApi: "google-generative-ai",
+    });
+    expect(policy.preserveSignatures).toBe(false);
+  });
+
+  it("does not preserve thought signatures for OpenAI provider", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "openai",
+      modelId: "gpt-4o",
+      modelApi: "openai",
+    });
+    expect(policy.preserveSignatures).toBe(false);
+  });
 });
