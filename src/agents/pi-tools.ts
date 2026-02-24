@@ -458,6 +458,7 @@ export function createOpenClawCodingTools(options?: {
       agentDir: options?.agentDir,
       sandboxRoot,
       sandboxFsBridge,
+      workspaceOnly,
       workspaceDir: workspaceRoot,
       sandboxed: !!sandbox,
       config: options?.config,

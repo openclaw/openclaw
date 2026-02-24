@@ -12,6 +12,7 @@ import { runWithImageModelFallback } from "../model-fallback.js";
 import { resolveConfiguredModelRef } from "../model-selection.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
+import { assertSandboxPath } from "../sandbox-paths.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { normalizeWorkspaceDir } from "../workspace-dir.js";
 import type { AnyAgentTool } from "./common.js";
@@ -207,6 +208,7 @@ function buildImageContext(
 type ImageSandboxConfig = {
   root: string;
   bridge: SandboxFsBridge;
+  workspaceOnly?: boolean;
 };
 
 async function resolveSandboxedImagePath(params: {
@@ -220,6 +222,13 @@ async function resolveSandboxedImagePath(params: {
       filePath,
       cwd: params.sandbox.root,
     });
+    if (params.sandbox.workspaceOnly) {
+      await assertSandboxPath({
+        filePath: resolved.hostPath,
+        cwd: params.sandbox.root,
+        root: params.sandbox.root,
+      });
+    }
     return { resolved: resolved.hostPath };
   } catch (err) {
     const name = path.basename(filePath);
@@ -239,6 +248,13 @@ async function resolveSandboxedImagePath(params: {
       filePath: candidateRel,
       cwd: params.sandbox.root,
     });
+    if (params.sandbox.workspaceOnly) {
+      await assertSandboxPath({
+        filePath: out.hostPath,
+        cwd: params.sandbox.root,
+        root: params.sandbox.root,
+      });
+    }
     return { resolved: out.hostPath, rewrittenFrom: filePath };
   }
 }
@@ -336,6 +352,7 @@ export function createImageTool(options?: {
   agentDir?: string;
   workspaceDir?: string;
   sandbox?: ImageSandboxConfig;
+  workspaceOnly?: boolean;
   /** If true, the model has native vision capability and images in the prompt are auto-injected */
   modelHasVision?: boolean;
 }): AnyAgentTool | null {
@@ -444,7 +461,11 @@ export function createImageTool(options?: {
 
       const sandboxConfig =
         options?.sandbox && options?.sandbox.root.trim()
-          ? { root: options.sandbox.root.trim(), bridge: options.sandbox.bridge }
+          ? {
+              root: options.sandbox.root.trim(),
+              bridge: options.sandbox.bridge,
+              workspaceOnly: options.workspaceOnly === true,
+            }
           : null;
 
       // MARK: - Load and resolve each image

@@ -6,7 +6,13 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { createOpenClawCodingTools } from "../pi-tools.js";
-import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
+import type { SandboxContext } from "../sandbox.js";
+import type { SandboxFsBridge, SandboxResolvedPath } from "../sandbox/fs-bridge.js";
+import {
+  createHostSandboxFsBridge,
+  createSandboxFsBridgeFromResolver,
+} from "../test-helpers/host-sandbox-fs-bridge.js";
+import { createPiToolsSandboxContext } from "../test-helpers/pi-tools-sandbox-context.js";
 import { __testing, createImageTool, resolveImageModelConfigForTool } from "./image-tool.js";
 
 async function writeAuthProfiles(agentDir: string, profiles: unknown) {
@@ -44,6 +50,58 @@ async function withTempWorkspacePng(
   } finally {
     await fs.rm(workspaceParent, { recursive: true, force: true });
   }
+}
+
+function createUnsafeMountedBridge(params: {
+  root: string;
+  agentHostRoot: string;
+  workspaceContainerRoot?: string;
+}): SandboxFsBridge {
+  const root = path.resolve(params.root);
+  const agentHostRoot = path.resolve(params.agentHostRoot);
+  const workspaceContainerRoot = params.workspaceContainerRoot ?? "/workspace";
+
+  const resolvePath = (filePath: string, cwd?: string): SandboxResolvedPath => {
+    const hostPath =
+      filePath === "/agent" || filePath === "/agent/" || filePath.startsWith("/agent/")
+        ? path.join(
+            agentHostRoot,
+            filePath === "/agent" || filePath === "/agent/" ? "" : filePath.slice("/agent/".length),
+          )
+        : path.isAbsolute(filePath)
+          ? filePath
+          : path.resolve(cwd ?? root, filePath);
+
+    const relFromRoot = path.relative(root, hostPath);
+    const relativePath =
+      relFromRoot && !relFromRoot.startsWith("..") && !path.isAbsolute(relFromRoot)
+        ? relFromRoot.split(path.sep).filter(Boolean).join(path.posix.sep)
+        : filePath.replace(/\\/g, "/");
+
+    const containerPath = filePath.startsWith("/")
+      ? filePath.replace(/\\/g, "/")
+      : relativePath
+        ? path.posix.join(workspaceContainerRoot, relativePath)
+        : workspaceContainerRoot;
+
+    return { hostPath, relativePath, containerPath };
+  };
+
+  return createSandboxFsBridgeFromResolver(resolvePath);
+}
+
+function createSandbox(params: {
+  sandboxRoot: string;
+  agentRoot: string;
+  fsBridge: SandboxFsBridge;
+}): SandboxContext {
+  return createPiToolsSandboxContext({
+    workspaceDir: params.sandboxRoot,
+    agentWorkspaceDir: params.agentRoot,
+    workspaceAccess: "rw",
+    fsBridge: params.fsBridge,
+    tools: { allow: [], deny: [] },
+  });
 }
 
 function stubMinimaxOkFetch() {
@@ -501,6 +559,50 @@ describe("image tool implicit imageModel config", () => {
     await expect(tool.execute("t2", { image: "../escape.png" })).rejects.toThrow(
       /escapes sandbox root/i,
     );
+  });
+
+  it("applies tools.fs.workspaceOnly to image paths in sandbox mode", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-image-sandbox-"));
+    const agentDir = path.join(stateDir, "agent");
+    const sandboxRoot = path.join(stateDir, "sandbox");
+    await fs.mkdir(agentDir, { recursive: true });
+    await fs.mkdir(sandboxRoot, { recursive: true });
+    await fs.writeFile(path.join(agentDir, "secret.png"), Buffer.from(ONE_PIXEL_PNG_B64, "base64"));
+
+    const bridge = createUnsafeMountedBridge({ root: sandboxRoot, agentHostRoot: agentDir });
+    const sandbox = createSandbox({ sandboxRoot, agentRoot: agentDir, fsBridge: bridge });
+    const fetch = stubMinimaxOkFetch();
+    const cfg: OpenClawConfig = {
+      ...createMinimaxImageConfig(),
+      tools: { fs: { workspaceOnly: true } },
+    };
+
+    try {
+      const tools = createOpenClawCodingTools({
+        config: cfg,
+        agentDir,
+        sandbox,
+        workspaceDir: sandboxRoot,
+      });
+      const readTool = tools.find((candidate) => candidate.name === "read");
+      if (!readTool) {
+        throw new Error("expected read tool");
+      }
+      const imageTool = requireImageTool(tools.find((candidate) => candidate.name === "image"));
+
+      await expect(readTool.execute("t1", { path: "/agent/secret.png" })).rejects.toThrow(
+        /Path escapes sandbox root/i,
+      );
+      await expect(
+        imageTool.execute("t2", {
+          prompt: "Describe the image.",
+          image: "/agent/secret.png",
+        }),
+      ).rejects.toThrow(/Path escapes sandbox root/i);
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("rewrites inbound absolute paths into sandbox media/inbound", async () => {
