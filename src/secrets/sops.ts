@@ -2,15 +2,13 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { runExec } from "../process/exec.js";
+import { normalizePositiveInt } from "./shared.js";
 
 export const DEFAULT_SOPS_TIMEOUT_MS = 5_000;
 const MAX_SOPS_OUTPUT_BYTES = 10 * 1024 * 1024;
 
 function normalizeTimeoutMs(value: number | undefined): number {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return Math.max(1, Math.floor(value));
-  }
-  return DEFAULT_SOPS_TIMEOUT_MS;
+  return normalizePositiveInt(value, DEFAULT_SOPS_TIMEOUT_MS);
 }
 
 function isTimeoutError(message: string | undefined): boolean {
