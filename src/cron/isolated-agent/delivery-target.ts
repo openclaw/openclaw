@@ -42,6 +42,7 @@ export async function resolveDeliveryTarget(
   jobPayload: {
     channel?: "last" | ChannelId;
     to?: string;
+    accountId?: string;
     sessionKey?: string;
     accountId?: string;
   },
@@ -101,11 +102,14 @@ export async function resolveDeliveryTarget(
   const mode = resolved.mode as "explicit" | "implicit";
   let toCandidate = resolved.to;
 
-  // When the session has no lastAccountId (e.g. first-run isolated cron
-  // session), fall back to the agent's bound account from bindings config.
-  // This ensures the message tool in isolated sessions resolves the correct
-  // bot token for multi-account setups.
-  let accountId = resolved.accountId;
+  // Prefer an explicit accountId from the job's delivery config (set via
+  // --account on cron add/edit). Fall back to the session's lastAccountId,
+  // then to the agent's bound account from bindings config.
+  const explicitAccountId =
+    typeof jobPayload.accountId === "string" && jobPayload.accountId.trim()
+      ? jobPayload.accountId.trim()
+      : undefined;
+  let accountId = explicitAccountId ?? resolved.accountId;
   if (!accountId && channel) {
     const bindings = buildChannelAccountBindings(cfg);
     const byAgent = bindings.get(channel);

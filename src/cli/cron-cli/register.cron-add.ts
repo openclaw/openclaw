@@ -92,6 +92,7 @@ export function registerCronAddCommand(cron: Command) {
         "--to <dest>",
         "Delivery destination (E.164, Telegram chatId, or Discord channel/user)",
       )
+      .option("--account <id>", "Channel account id for delivery (multi-account setups)")
       .option("--best-effort-deliver", "Do not fail the job if delivery fails", false)
       .option("--json", "Output JSON", false)
       .action(async (opts: GatewayRpcOpts & Record<string, unknown>, cmd?: Command) => {
@@ -221,6 +222,15 @@ export function registerCronAddCommand(cron: Command) {
             throw new Error("--announce/--no-deliver require --session isolated.");
           }
 
+          const accountId =
+            typeof opts.account === "string" && opts.account.trim()
+              ? opts.account.trim()
+              : undefined;
+
+          if (accountId && (sessionTarget !== "isolated" || payload.kind !== "agentTurn")) {
+            throw new Error("--account requires an isolated agentTurn job with delivery.");
+          }
+
           const deliveryMode =
             sessionTarget === "isolated" && payload.kind === "agentTurn"
               ? hasAnnounce
@@ -265,6 +275,7 @@ export function registerCronAddCommand(cron: Command) {
                       ? opts.channel.trim()
                       : undefined,
                   to: typeof opts.to === "string" && opts.to.trim() ? opts.to.trim() : undefined,
+                  accountId,
                   bestEffort: opts.bestEffortDeliver ? true : undefined,
                 }
               : undefined,
