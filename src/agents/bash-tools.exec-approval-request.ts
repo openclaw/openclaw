@@ -9,6 +9,7 @@ export type RequestExecApprovalDecisionParams = {
   id: string;
   command: string;
   cwd: string;
+  nodeId?: string;
   host: "gateway" | "node";
   security: ExecSecurity;
   ask: ExecAsk;
@@ -27,6 +28,7 @@ export async function requestExecApprovalDecision(
       id: params.id,
       command: params.command,
       cwd: params.cwd,
+      nodeId: params.nodeId,
       host: params.host,
       security: params.security,
       ask: params.ask,
@@ -48,6 +50,7 @@ export async function requestExecApprovalDecisionForHost(params: {
   command: string;
   workdir: string;
   host: "gateway" | "node";
+  nodeId?: string;
   security: ExecSecurity;
   ask: ExecAsk;
   agentId?: string;
@@ -58,6 +61,7 @@ export async function requestExecApprovalDecisionForHost(params: {
     id: params.approvalId,
     command: params.command,
     cwd: params.workdir,
+    nodeId: params.nodeId,
     host: params.host,
     security: params.security,
     ask: params.ask,

@@ -482,6 +482,7 @@ export function createNodesTool(options?: {
                 id: approvalId,
                 command: cmdText,
                 cwd,
+                nodeId,
                 host: "node",
                 agentId,
                 sessionKey,

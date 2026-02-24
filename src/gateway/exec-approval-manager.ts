@@ -7,6 +7,7 @@ const RESOLVED_ENTRY_GRACE_MS = 15_000;
 export type ExecApprovalRequestPayload = {
   command: string;
   cwd?: string | null;
+  nodeId?: string | null;
   host?: string | null;
   security?: string | null;
   ask?: string | null;
