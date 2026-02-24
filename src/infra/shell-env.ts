@@ -8,13 +8,6 @@ import { sanitizeHostExecEnv } from "./host-env-security.js";
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_BUFFER_BYTES = 2 * 1024 * 1024;
 const DEFAULT_SHELL = "/bin/sh";
-const TRUSTED_SHELL_PREFIXES = [
-  "/bin/",
-  "/usr/bin/",
-  "/usr/local/bin/",
-  "/opt/homebrew/bin/",
-  "/run/current-system/sw/bin/",
-];
 let lastAppliedKeys: string[] = [];
 let cachedShellPath: string | null | undefined;
 let cachedEtcShells: Set<string> | null | undefined;
@@ -70,21 +63,7 @@ function isTrustedShellPath(shell: string): boolean {
 
   // Primary trust anchor: shell registered in /etc/shells.
   const registeredShells = readEtcShells();
-  if (registeredShells?.has(shell)) {
-    return true;
-  }
-
-  // Fallback for environments where /etc/shells is incomplete/unavailable.
-  if (!TRUSTED_SHELL_PREFIXES.some((prefix) => shell.startsWith(prefix))) {
-    return false;
-  }
-
-  try {
-    fs.accessSync(shell, fs.constants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
+  return registeredShells?.has(shell) === true;
 }
 
 function resolveShell(env: NodeJS.ProcessEnv): string {
