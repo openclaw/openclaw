@@ -67,8 +67,12 @@ function stripContextSafeContent(command: string): [stripped: string, wasStrippe
   let wasStripped = false;
 
   // Git commit messages - strip -m "..." or -m '...'
+  // Handles unclosed quotes and escaped quotes
   if (/^git\s+(commit|tag|stash)/.test(command)) {
-    const result = command.replace(/-m\s*["'][^"']*["']/g, '-m "[MESSAGE]"');
+    const result = command.replace(
+      /-m\s*(?:"(?:[^"\\]|\\.)*(?:"|$)|'(?:[^'\\]|\\.)*(?:'|$)|\S+)/g,
+      '-m "[MESSAGE]"',
+    );
     if (result !== command) {
       stripped = result;
       wasStripped = true;
@@ -111,6 +115,16 @@ function stripContextSafeContent(command: string): [stripped: string, wasStrippe
     const firstLine = command.split("\n")[0];
     if (/\|\s*(sh|bash|zsh|dash|python|ruby|perl|node)\b/.test(firstLine)) {
       // Don't strip - let normal detection handle the piped execution
+      return [command, false];
+    }
+    // Also check for pipe-to-shell AFTER the heredoc closing delimiter
+    // e.g.: cat << EOF\ndata\nEOF\n| bash
+    const delimiter = heredocMatch[1];
+    const delimiterClosePattern = new RegExp(
+      `^${delimiter}\\s*\\n\\s*\\|\\s*(sh|bash|zsh|dash|python|ruby|perl|node)\\b`,
+      "m",
+    );
+    if (delimiterClosePattern.test(command)) {
       return [command, false];
     }
     // Keep the first line so redirect targets (e.g. > SOUL.md) are still analyzed.
@@ -262,17 +276,16 @@ const PATTERNS: Record<string, PatternRule> = {
   },
   agent_memory_tampering: {
     patterns: [
-      // Redirect writes - use non-greedy match, exclude command separators
-      /(echo|cat|printf)[^;|&\n]*>\s*[^;|&\n]*memory\/[^;|&\n]*\.md/i,
+      // Only flag writes to root-level MEMORY.md, not the memory/ subdirectory
+      // Agents legitimately write to memory/*.md (daily notes)
+      /(echo|cat|printf)[^;|&\n]*>\s*[^;|&\n]*MEMORY\.md/i,
       /(echo|cat|printf)[^;|&\n]*>>\s*[^;|&\n]*MEMORY\.md/i,
       />\s*[^;|&\n]*\.clawdbot\/sessions/i,
       />\s*[^;|&\n]*\.openclaw\/sessions/i,
-      // cp/mv/tee to memory paths
-      /(cp|mv|install)\s+[^;|&\n]+\s+[^;|&\n]*memory\/[^;|&\n]*\.md/i,
+      // cp/mv/tee to memory paths - only root-level MEMORY.md
       /(cp|mv|install)\s+[^;|&\n]+\s+[^;|&\n]*MEMORY\.md/i,
       /(cp|mv|install)\s+[^;|&\n]+\s+[^;|&\n]*\.clawdbot\/sessions/i,
       /(cp|mv|install)\s+[^;|&\n]+\s+[^;|&\n]*\.openclaw\/sessions/i,
-      /tee\s+[^;|&\n]*memory\/[^;|&\n]*\.md/i,
       /tee\s+[^;|&\n]*MEMORY\.md/i,
     ],
     score: 55,
@@ -522,7 +535,7 @@ const PATTERNS: Record<string, PatternRule> = {
  */
 function normalizePaths(content: string): string {
   return content
-    .replace(/\/{2,}/g, "/") // Collapse // to /
+    .replace(/(?<!:)\/{2,}/g, "/") // Collapse // to / (but preserve ://)
     .replace(/\/\.\//g, "/"); // Remove /./
 }
 
@@ -600,10 +613,13 @@ function expandBareEscapes(content: string): string {
   );
 
   // Handle \NN (2-digit octal) for values that fit
-  result = result.replace(/\\([0-7]{2})(?![0-7])/g, (_m, oct: string) => {
-    const val = Number.parseInt(oct, 8);
-    return val < 128 ? String.fromCharCode(val) : _m;
-  });
+  // Skip on very long inputs to avoid potential backtracking
+  if (result.length <= 10_000) {
+    result = result.replace(/\\([0-7]{2})(?![0-7])/g, (_m, oct: string) => {
+      const val = Number.parseInt(oct, 8);
+      return val < 128 ? String.fromCharCode(val) : _m;
+    });
+  }
 
   return result;
 }
@@ -637,17 +653,24 @@ function checkPatterns(content: string): RubberBandMatch[] {
  * Extract and validate destination URLs
  */
 function checkDestination(content: string, allowedDestinations: string[]): string | null {
-  const urlMatch = content.match(/https?:\/\/([^/\s:]+)/i);
+  const urlMatch = content.match(/https?:\/\/([^/\s]+)/i);
   if (urlMatch) {
-    const host = urlMatch[1].toLowerCase();
+    const hostPort = urlMatch[1].toLowerCase();
+    // Extract hostname without port for subdomain matching
+    const host = hostPort.replace(/:\d+$/, "");
     for (const allowed of allowedDestinations) {
       const allowedLower = allowed.toLowerCase();
-      // Strict matching: exact match OR proper subdomain
-      if (host === allowedLower || host.endsWith(`.${allowedLower}`)) {
+      // Match against full host:port and bare hostname
+      if (
+        hostPort === allowedLower ||
+        host === allowedLower ||
+        host.endsWith(`.${allowedLower}`) ||
+        hostPort.endsWith(`.${allowedLower}`)
+      ) {
         return null; // Allowed
       }
     }
-    return host; // Suspicious destination
+    return hostPort; // Suspicious destination
   }
   return null;
 }
