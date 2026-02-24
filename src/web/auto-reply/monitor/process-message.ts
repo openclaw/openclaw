@@ -416,10 +416,9 @@ export async function processMessage(params: {
       onReplyStart: params.msg.sendComposing,
     },
     replyOptions: {
-      disableBlockStreaming:
-        typeof params.cfg.channels?.whatsapp?.blockStreaming === "boolean"
-          ? !params.cfg.channels.whatsapp.blockStreaming
-          : undefined,
+      // WhatsApp delivery intentionally suppresses non-final payloads.
+      // Keep block streaming disabled so final replies are still produced.
+      disableBlockStreaming: true,
       onModelSelected,
     },
   });
