@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import {
   deriveDeviceIdFromPublicKey,
+  type DeviceIdentity,
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
@@ -23,6 +24,22 @@ installGatewayTestHooks({ scope: "suite" });
 const NODE_CONNECT_TIMEOUT_MS = 3_000;
 const CONNECT_REQ_TIMEOUT_MS = 2_000;
 
+function createDeviceIdentity(): DeviceIdentity {
+  const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
+  const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
+  const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+  const publicKeyRaw = publicKeyRawBase64UrlFromPem(publicKeyPem);
+  const deviceId = deriveDeviceIdFromPublicKey(publicKeyRaw);
+  if (!deviceId) {
+    throw new Error("failed to create test device identity");
+  }
+  return {
+    deviceId,
+    publicKeyPem,
+    privateKeyPem,
+  };
+}
+
 async function expectNoForwardedInvoke(hasInvoke: () => boolean): Promise<void> {
   // Yield a couple of macrotasks so any accidental async forwarding would fire.
   await new Promise<void>((resolve) => setImmediate(resolve));
@@ -42,11 +59,26 @@ async function getConnectedNodeId(ws: WebSocket): Promise<string> {
   return nodeId;
 }
 
-async function requestAllowOnceApproval(ws: WebSocket, command: string): Promise<string> {
+async function getConnectedNodeIds(ws: WebSocket): Promise<string[]> {
+  const nodes = await rpcReq<{ nodes?: Array<{ nodeId: string; connected?: boolean }> }>(
+    ws,
+    "node.list",
+    {},
+  );
+  expect(nodes.ok).toBe(true);
+  return (nodes.payload?.nodes ?? []).filter((n) => n.connected).map((n) => n.nodeId);
+}
+
+async function requestAllowOnceApproval(
+  ws: WebSocket,
+  command: string,
+  nodeId: string,
+): Promise<string> {
   const approvalId = crypto.randomUUID();
   const requestP = rpcReq(ws, "exec.approval.request", {
     id: approvalId,
     command,
+    nodeId,
     cwd: null,
     host: "node",
     timeoutMs: 30_000,
@@ -161,7 +193,10 @@ describe("node.invoke approval bypass", () => {
     });
   };
 
-  const connectLinuxNode = async (onInvoke: (payload: unknown) => void) => {
+  const connectLinuxNode = async (
+    onInvoke: (payload: unknown) => void,
+    deviceIdentity?: DeviceIdentity,
+  ) => {
     let readyResolve: (() => void) | null = null;
     const ready = new Promise<void>((resolve) => {
       readyResolve = resolve;
@@ -180,6 +215,7 @@ describe("node.invoke approval bypass", () => {
       mode: GATEWAY_CLIENT_MODES.NODE,
       scopes: [],
       commands: ["system.run"],
+      deviceIdentity,
       onHelloOk: () => readyResolve?.(),
       onEvent: (evt) => {
         if (evt.event !== "node.invoke.request") {
@@ -295,7 +331,7 @@ describe("node.invoke approval bypass", () => {
     try {
       const nodeId = await getConnectedNodeId(wsApprover);
 
-      const approvalId = await requestAllowOnceApproval(wsApprover, "echo hi");
+      const approvalId = await requestAllowOnceApproval(wsApprover, "echo hi", nodeId);
       // Separate caller connection simulates per-call clients.
       const invoke = await rpcReq(wsCaller, "node.invoke", {
         nodeId,
@@ -316,7 +352,7 @@ describe("node.invoke approval bypass", () => {
       expect(lastInvokeParams?.["approvalDecision"]).toBe("allow-once");
       expect(lastInvokeParams?.["injected"]).toBeUndefined();
 
-      const replayApprovalId = await requestAllowOnceApproval(wsApprover, "echo hi");
+      const replayApprovalId = await requestAllowOnceApproval(wsApprover, "echo hi", nodeId);
       const invokeCountBeforeReplay = invokeCount;
       const replay = await rpcReq(wsOtherDevice, "node.invoke", {
         nodeId,
@@ -338,6 +374,65 @@ describe("node.invoke approval bypass", () => {
       wsCaller.close();
       wsOtherDevice.close();
       node.stop();
+    }
+  });
+
+  test("blocks cross-node replay on same device", async () => {
+    const invokeCounts = new Map<string, number>();
+    const onInvoke = (payload: unknown) => {
+      const obj = payload as { nodeId?: unknown };
+      const nodeId = typeof obj?.nodeId === "string" ? obj.nodeId : "";
+      if (!nodeId) {
+        return;
+      }
+      invokeCounts.set(nodeId, (invokeCounts.get(nodeId) ?? 0) + 1);
+    };
+    const nodeA = await connectLinuxNode(onInvoke, createDeviceIdentity());
+    const nodeB = await connectLinuxNode(onInvoke, createDeviceIdentity());
+
+    const wsApprover = await connectOperator(["operator.write", "operator.approvals"]);
+    const wsCaller = await connectOperator(["operator.write"]);
+
+    try {
+      await expect
+        .poll(async () => (await getConnectedNodeIds(wsApprover)).length, {
+          timeout: 3_000,
+          interval: 50,
+        })
+        .toBeGreaterThanOrEqual(2);
+      const connectedNodeIds = await getConnectedNodeIds(wsApprover);
+      const approvedNodeId = connectedNodeIds[0] ?? "";
+      const replayNodeId = connectedNodeIds.find((id) => id !== approvedNodeId) ?? "";
+      expect(approvedNodeId).toBeTruthy();
+      expect(replayNodeId).toBeTruthy();
+
+      const approvalId = await requestAllowOnceApproval(wsApprover, "echo hi", approvedNodeId);
+      const beforeReplayApprovedNode = invokeCounts.get(approvedNodeId) ?? 0;
+      const beforeReplayOtherNode = invokeCounts.get(replayNodeId) ?? 0;
+      const replay = await rpcReq(wsCaller, "node.invoke", {
+        nodeId: replayNodeId,
+        command: "system.run",
+        params: {
+          command: ["echo", "hi"],
+          rawCommand: "echo hi",
+          runId: approvalId,
+          approved: true,
+          approvalDecision: "allow-once",
+        },
+        idempotencyKey: crypto.randomUUID(),
+      });
+      expect(replay.ok).toBe(false);
+      expect(replay.error?.message ?? "").toContain("not valid for this node");
+      await expectNoForwardedInvoke(
+        () =>
+          (invokeCounts.get(approvedNodeId) ?? 0) > beforeReplayApprovedNode ||
+          (invokeCounts.get(replayNodeId) ?? 0) > beforeReplayOtherNode,
+      );
+    } finally {
+      wsApprover.close();
+      wsCaller.close();
+      nodeA.stop();
+      nodeB.stop();
     }
   });
 });
