@@ -104,11 +104,20 @@ const MemoryQmdSchema = z
   })
   .strict();
 
+const MemoryOpenMemorySchema = z
+  .object({
+    url: z.string(),
+    userId: z.string().optional(),
+    timeout: z.number().int().positive().optional(),
+  })
+  .strict();
+
 const MemorySchema = z
   .object({
-    backend: z.union([z.literal("builtin"), z.literal("qmd")]).optional(),
+    backend: z.union([z.literal("builtin"), z.literal("qmd"), z.literal("openmemory")]).optional(),
     citations: z.union([z.literal("auto"), z.literal("on"), z.literal("off")]).optional(),
     qmd: MemoryQmdSchema.optional(),
+    openmemory: MemoryOpenMemorySchema.optional(),
   })
   .strict()
   .optional();

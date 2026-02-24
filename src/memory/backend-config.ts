@@ -307,6 +307,25 @@ export function resolveMemoryBackendConfig(params: {
 }): ResolvedMemoryBackendConfig {
   const backend = params.cfg.memory?.backend ?? DEFAULT_BACKEND;
   const citations = params.cfg.memory?.citations ?? DEFAULT_CITATIONS;
+
+  // Handle OpenMemory backend
+  if (backend === "openmemory") {
+    const omCfg = params.cfg.memory?.openmemory;
+    if (!omCfg?.url) {
+      // No URL configured, fall back to builtin
+      return { backend: "builtin", citations };
+    }
+    return {
+      backend: "openmemory",
+      citations,
+      openmemory: {
+        url: omCfg.url,
+        userId: omCfg.userId,
+        timeout: omCfg.timeout,
+      },
+    };
+  }
+
   if (backend !== "qmd") {
     return { backend: "builtin", citations };
   }
