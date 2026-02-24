@@ -208,7 +208,13 @@ function shouldForceResponsesStore(model: {
   api?: unknown;
   provider?: unknown;
   baseUrl?: unknown;
+  compat?: { supportsStore?: boolean };
 }): boolean {
+  // Never force store=true when the model explicitly declares supportsStore=false
+  // (e.g. Azure OpenAI Responses API without server-side persistence).
+  if (model.compat?.supportsStore === false) {
+    return false;
+  }
   if (typeof model.api !== "string" || typeof model.provider !== "string") {
     return false;
   }
