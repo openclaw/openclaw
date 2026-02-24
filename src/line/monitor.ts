@@ -10,7 +10,7 @@ import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineBot } from "./bot.js";
-import { processLineMessage } from "./markdown-to-line.js";
+import { processLineMessage as processLineMessageRaw } from "./markdown-to-line.js";
 import { sendLineReplyChunks } from "./reply-chunks.js";
 import {
   replyMessageLine,
@@ -26,6 +26,7 @@ import {
   createLocationMessage,
 } from "./send.js";
 import { buildTemplateMessageFromPayload } from "./template-messages.js";
+import type { LineConfig } from "./types.js";
 import type { LineChannelData, ResolvedLineAccount } from "./types.js";
 import { createLineNodeWebhookHandler } from "./webhook-node.js";
 
@@ -222,7 +223,11 @@ export async function monitorLineProvider(
                 textLimit,
                 deps: {
                   buildTemplateMessageFromPayload,
-                  processLineMessage,
+                  processLineMessage: (text) =>
+                    processLineMessageRaw(text, {
+                      codeBlockDisplay: (config.channels?.line as LineConfig | undefined)
+                        ?.codeBlockDisplay,
+                    }),
                   chunkMarkdownText,
                   sendLineReplyChunks,
                   replyMessageLine,

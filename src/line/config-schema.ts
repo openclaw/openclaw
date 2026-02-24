@@ -17,6 +17,7 @@ const LineCommonConfigSchema = z.object({
   responsePrefix: z.string().optional(),
   mediaMaxMb: z.number().optional(),
   webhookPath: z.string().optional(),
+  codeBlockDisplay: z.enum(["flex", "inline"]).optional(),
 });
 
 const LineGroupConfigSchema = z

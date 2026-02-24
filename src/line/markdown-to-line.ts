@@ -381,7 +381,10 @@ export function stripMarkdown(text: string): string {
  * - Strips remaining markdown
  * - Returns processed text + Flex Messages
  */
-export function processLineMessage(text: string): ProcessedLineMessage {
+export function processLineMessage(
+  text: string,
+  opts?: { codeBlockDisplay?: "flex" | "inline" },
+): ProcessedLineMessage {
   const flexMessages: FlexMessage[] = [];
   let processedText = text;
 
@@ -394,13 +397,21 @@ export function processLineMessage(text: string): ProcessedLineMessage {
     flexMessages.push(toFlexMessage("Table", bubble));
   }
 
-  // 2. Extract and convert code blocks
-  const { codeBlocks, textWithoutCode } = extractCodeBlocks(processedText);
-  processedText = textWithoutCode;
+  // 2. Code blocks: extract to Flex bubbles (default) or keep inline as plain text
+  if (opts?.codeBlockDisplay === "inline") {
+    // Strip fences but keep code content in the text body
+    processedText = processedText.replace(MARKDOWN_CODE_BLOCK_REGEX, (_match, _lang, code) =>
+      (code as string).trim(),
+    );
+    MARKDOWN_CODE_BLOCK_REGEX.lastIndex = 0;
+  } else {
+    const { codeBlocks, textWithoutCode } = extractCodeBlocks(processedText);
+    processedText = textWithoutCode;
 
-  for (const block of codeBlocks) {
-    const bubble = convertCodeBlockToFlexBubble(block);
-    flexMessages.push(toFlexMessage("Code", bubble));
+    for (const block of codeBlocks) {
+      const bubble = convertCodeBlockToFlexBubble(block);
+      flexMessages.push(toFlexMessage("Code", bubble));
+    }
   }
 
   // 3. Handle links - convert [text](url) to plain text for display
