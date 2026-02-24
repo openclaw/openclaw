@@ -297,6 +297,95 @@ jobs:
           provenance: false
           push: true
 
+  # Build riscv64 image (QEMU-emulated, non-blocking, no slim variant)
+  build-riscv64:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 120
+    permissions:
+      packages: write
+      contents: read
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: riscv64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve image tags (riscv64)
+        id: tags
+        shell: bash
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        run: |
+          set -euo pipefail
+          tags=()
+          if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
+            tags+=("${IMAGE}:main-riscv64")
+          fi
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            version="${GITHUB_REF#refs/tags/v}"
+            tags+=("${IMAGE}:${version}-riscv64")
+          fi
+          if [[ ${#tags[@]} -eq 0 ]]; then
+            echo "::error::No riscv64 tags resolved for ref ${GITHUB_REF}"
+            exit 1
+          fi
+          {
+            echo "value<<EOF"
+            printf "%s\n" "${tags[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Resolve OCI labels (riscv64)
+        id: labels
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_SHA}"
+          if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
+            version="main"
+          fi
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            version="${GITHUB_REF#refs/tags/v}"
+          fi
+          created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          {
+            echo "value<<EOF"
+            echo "org.opencontainers.image.revision=${GITHUB_SHA}"
+            echo "org.opencontainers.image.version=${version}"
+            echo "org.opencontainers.image.created=${created}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push riscv64 image
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.riscv64
+          platforms: linux/riscv64
+          tags: ${{ steps.tags.outputs.value }}
+          labels: ${{ steps.labels.outputs.value }}
+          cache-from: type=gha,scope=docker-release-riscv64
+          cache-to: type=gha,mode=max,scope=docker-release-riscv64
+          provenance: false
+          push: true
+
   # Create multi-platform manifests
   create-manifest:
     needs: [approve_manual_backfill, build-amd64, build-arm64]
@@ -387,3 +476,62 @@ jobs:
           docker buildx imagetools create "${args[@]}" \
             ${{ needs.build-amd64.outputs.slim-digest }} \
             ${{ needs.build-arm64.outputs.slim-digest }}
+
+  # Update default manifest to include riscv64 when available
+  update-manifest:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+    needs: [build-amd64, build-arm64, build-riscv64, create-manifest]
+    if: needs.build-riscv64.outputs.digest != ''
+    steps:
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve manifest tags
+        id: tags
+        shell: bash
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+        run: |
+          set -euo pipefail
+          tags=()
+          if [[ "${GITHUB_REF}" == "refs/heads/main" ]]; then
+            tags+=("${IMAGE}:main")
+          fi
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            version="${GITHUB_REF#refs/tags/v}"
+            tags+=("${IMAGE}:${version}")
+            if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
+              tags+=("${IMAGE}:latest")
+            fi
+          fi
+          if [[ ${#tags[@]} -eq 0 ]]; then
+            echo "::error::No manifest tags resolved for ref ${GITHUB_REF}"
+            exit 1
+          fi
+          {
+            echo "value<<EOF"
+            printf "%s\n" "${tags[@]}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Update manifest with riscv64
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t tags <<< "${{ steps.tags.outputs.value }}"
+          args=()
+          for tag in "${tags[@]}"; do
+            [ -z "$tag" ] && continue
+            args+=("-t" "$tag")
+          done
+          docker buildx imagetools create "${args[@]}" \
+            ${{ needs.build-amd64.outputs.digest }} \
+            ${{ needs.build-arm64.outputs.digest }} \
+            ${{ needs.build-riscv64.outputs.digest }}
