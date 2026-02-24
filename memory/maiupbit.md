@@ -93,13 +93,21 @@ tests/unit/ (test_indicators — 7 tests passing)
 - [x] CLAUDE.md v0.1.0 반영
 - commit `fd54cec9`, pushed
 
-## 다음 액션 (Phase 5: 고도화)
+## Phase 5 완료 ✅ (2026-02-25)
 
-- [ ] UPbit API 키 설정 (.env) → 포트폴리오/매매 기능 활성화
-- [ ] models/ 테스트 (lstm, ensemble — tensorflow 의존)
-- [ ] Transformer 모델 추가
-- [ ] PyPI 퍼블리시
+- [x] UPbit API 키 설정 (.env) — 포트폴리오 연동 확인 (BTT 보유중)
+- [x] PyTorch Transformer 모델 (Multi-Head Self-Attention + Positional Encoding)
+- [x] CLI train 서브커맨드 추가 (`maiupbit train KRW-BTC --model transformer`)
+- [x] 모델 테스트 12개 추가 (148 passed, 3 skipped)
+- [x] **PyPI 퍼블리시** — https://pypi.org/project/maiupbit/0.1.0/
+- commit `e6e191bd`, pushed
+
+## 다음 액션 (Phase 6: 실전 운영)
+
+- [ ] Transformer 모델 실제 학습 (BTC 90일 데이터)
+- [ ] HEARTBEAT에 주간 모델 재학습 크론 추가
 - [ ] Jupyter 교육 노트북
+- [ ] README에 PyPI 배지 추가
 
 ## Phase 4 (미래)
 
