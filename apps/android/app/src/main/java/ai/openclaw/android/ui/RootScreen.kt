@@ -75,6 +75,13 @@ fun RootScreen(viewModel: MainViewModel) {
   val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
   val safeOverlayInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
   val context = LocalContext.current
+  val onboardingCompleted by viewModel.onboardingCompleted.collectAsState()
+
+  if (!onboardingCompleted) {
+    OnboardingFlow(viewModel = viewModel, modifier = Modifier.fillMaxSize())
+    return
+  }
+
   val serverName by viewModel.serverName.collectAsState()
   val statusText by viewModel.statusText.collectAsState()
   val cameraHud by viewModel.cameraHud.collectAsState()
