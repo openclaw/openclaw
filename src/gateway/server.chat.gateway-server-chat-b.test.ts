@@ -461,8 +461,10 @@ describe("gateway server chat", () => {
       testState.agentsConfig = undefined;
       testState.sessionStorePath = undefined;
       ws.close();
-      server.close();
-      for (const d of tempDirs) await fs.rm(d, { recursive: true, force: true });
+      void server.close();
+      for (const d of tempDirs) {
+        await fs.rm(d, { recursive: true, force: true });
+      }
     }
   });
 });
