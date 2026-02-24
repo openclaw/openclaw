@@ -12,6 +12,7 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
 import { loadWebMedia } from "../../web/media.js";
+import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import { runMessageAction } from "./message-action-runner.js";
 
 vi.mock("../../web/media.js", async () => {
@@ -622,10 +623,12 @@ describe("runMessageAction sandboxed media validation", () => {
     });
   });
 
-  it("allows media paths under os.tmpdir()", async () => {
+  it("allows media paths under preferred OpenClaw tmp root", async () => {
+    const tmpRoot = resolvePreferredOpenClawTmpDir();
+    await fs.mkdir(tmpRoot, { recursive: true });
     const sandboxDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-sandbox-"));
     try {
-      const tmpFile = path.join(os.tmpdir(), "test-media-image.png");
+      const tmpFile = path.join(tmpRoot, "test-media-image.png");
       const result = await runMessageAction({
         cfg: slackConfig,
         action: "send",
@@ -644,6 +647,21 @@ describe("runMessageAction sandboxed media validation", () => {
         throw new Error("expected send result");
       }
       expect(result.sendResult?.mediaUrl).toBe(tmpFile);
+      const hostTmpOutsideOpenClaw = path.join(os.tmpdir(), "outside-openclaw", "test-media.png");
+      await expect(
+        runMessageAction({
+          cfg: slackConfig,
+          action: "send",
+          params: {
+            channel: "slack",
+            target: "#C12345678",
+            media: hostTmpOutsideOpenClaw,
+            message: "",
+          },
+          sandboxRoot: sandboxDir,
+          dryRun: true,
+        }),
+      ).rejects.toThrow(/sandbox/i);
     } finally {
       await fs.rm(sandboxDir, { recursive: true, force: true });
     }
