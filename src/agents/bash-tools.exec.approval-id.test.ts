@@ -65,7 +65,9 @@ describe("exec approvals", () => {
 
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
       if (method === "exec.approval.request") {
-        // Approval request now carries the decision directly.
+        return { status: "accepted", id: (params as { id?: string })?.id };
+      }
+      if (method === "exec.approval.waitDecision") {
         return { decision: "allow-once" };
       }
       if (method === "node.invoke") {
@@ -191,6 +193,7 @@ describe("exec approvals", () => {
     expect(result.details.status).toBe("approval-pending");
     await approvalSeen;
     expect(calls).toContain("exec.approval.request");
+    expect(calls).toContain("exec.approval.waitDecision");
   });
 
   it("denies node obfuscated command when approval request times out", async () => {
@@ -204,6 +207,9 @@ describe("exec approvals", () => {
     vi.mocked(callGatewayTool).mockImplementation(async (method) => {
       calls.push(method);
       if (method === "exec.approval.request") {
+        return { status: "accepted", id: "approval-id" };
+      }
+      if (method === "exec.approval.waitDecision") {
         return {};
       }
       if (method === "node.invoke") {
@@ -237,6 +243,9 @@ describe("exec approvals", () => {
 
     vi.mocked(callGatewayTool).mockImplementation(async (method) => {
       if (method === "exec.approval.request") {
+        return { status: "accepted", id: "approval-id" };
+      }
+      if (method === "exec.approval.waitDecision") {
         return {};
       }
       return { ok: true };
