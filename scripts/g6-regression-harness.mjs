@@ -17,6 +17,19 @@ function shouldEmitDedup(key, windowMs, nowMs = Date.now()) {
   return true;
 }
 
+function isRuntimeBoundChannel(cfg, channel, accountId) {
+  const channelCfg = cfg?.channels?.[channel];
+  if (!channelCfg) {
+    return true;
+  }
+  const accountCfg = accountId ? channelCfg?.accounts?.[accountId] : undefined;
+  const resolved = accountCfg?.requiresRuntime ?? channelCfg?.requiresRuntime;
+  if (channel === "slack") {
+    return true;
+  }
+  return resolved !== false;
+}
+
 function buildCheckpoint(text) {
   const objective = (text || "Execution update").replace(/\s+/g, " ").trim().slice(0, 220);
   return `CHECKPOINT PLAN\n1) Capture objective + scope from request. Proof: objective statement logged.\n2) Execute exactly one bounded step toward objective. Proof: artifact path/command output.\n3) Return with one legal end state (Closure Packet / Blocked Packet / Checkpoint Plan) and evidence. Proof: end-state packet posted.\n\nObjective: ${objective}`;
@@ -217,6 +230,11 @@ for (let i = 0; i < 20; i += 1) {
   }
 }
 results.push(pass("6_no_spam_dedup", emitted === 1, `emitted=${emitted}`));
+
+// 7 slack hardening: requiresRuntime=false must still resolve runtime-bound
+const mockCfg = { channels: { slack: { requiresRuntime: false } } };
+const t7 = isRuntimeBoundChannel(mockCfg, "slack");
+results.push(pass("7_slack_always_runtime_bound", t7, `resolved=${t7}`));
 
 const allPass = results.every(Boolean);
 console.log(`\nRESULT: ${allPass ? "PASS" : "FAIL"}`);

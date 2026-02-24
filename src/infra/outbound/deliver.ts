@@ -292,6 +292,19 @@ const isRuntimeBoundChannel = (
   const accountFlag = accountCfg?.requiresRuntime;
   const channelFlag = channelCfg.requiresRuntime;
   const resolved = accountFlag ?? channelFlag;
+
+  if (channel === "slack") {
+    if (
+      resolved === false &&
+      shouldEmitDedup("policy_violation_config:slack_requiresRuntime_false", 5 * 60_000)
+    ) {
+      console.warn(
+        `[POLICY_VIOLATION_CONFIG] slack requiresRuntime=false is forbidden; forcing runtime-bound behavior`,
+      );
+    }
+    return true;
+  }
+
   return resolved !== false;
 };
 
