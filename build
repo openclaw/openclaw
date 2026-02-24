@@ -1,0 +1,7 @@
+pnpm install
+pnpm ui:build # auto-installs UI deps on first run
+pnpm build
+
+systemctl --user stop openclaw-gateway.service
+systemctl --user reset-failed openclaw-gateway.service
+systemctl --user start openclaw-gateway.service
