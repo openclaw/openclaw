@@ -69,6 +69,23 @@ describe("createLineNodeWebhookHandler", () => {
     expect(res.body).toBe("OK");
   });
 
+  it("returns 204 for HEAD", async () => {
+    const bot = { handleWebhook: vi.fn(async () => {}) };
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+    const handler = createLineNodeWebhookHandler({
+      channelSecret: "secret",
+      bot,
+      runtime,
+      readBody: async () => "",
+    });
+
+    const { res } = createRes();
+    await handler({ method: "HEAD", headers: {} } as unknown as IncomingMessage, res);
+
+    expect(res.statusCode).toBe(204);
+    expect(res.body).toBeUndefined();
+  });
+
   it("returns 200 for verification request (empty events, no signature)", async () => {
     const rawBody = JSON.stringify({ events: [] });
     const { bot, handler } = createPostWebhookTestHarness(rawBody);
@@ -82,14 +99,14 @@ describe("createLineNodeWebhookHandler", () => {
     expect(bot.handleWebhook).not.toHaveBeenCalled();
   });
 
-  it("returns 405 for non-GET/non-POST methods", async () => {
+  it("returns 405 for non-GET/HEAD/POST methods", async () => {
     const { bot, handler } = createPostWebhookTestHarness(JSON.stringify({ events: [] }));
 
     const { res, headers } = createRes();
     await handler({ method: "PUT", headers: {} } as unknown as IncomingMessage, res);
 
     expect(res.statusCode).toBe(405);
-    expect(headers.allow).toBe("GET, POST");
+    expect(headers.allow).toBe("GET, HEAD, POST");
     expect(bot.handleWebhook).not.toHaveBeenCalled();
   });
 

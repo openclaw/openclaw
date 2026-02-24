@@ -39,8 +39,13 @@ export function createLineNodeWebhookHandler(params: {
   const readBody = params.readBody ?? readLineWebhookRequestBody;
 
   return async (req: IncomingMessage, res: ServerResponse) => {
-    // Handle GET requests for webhook verification
-    if (req.method === "GET") {
+    // Some webhook validators and health probes use GET/HEAD.
+    if (req.method === "GET" || req.method === "HEAD") {
+      if (req.method === "HEAD") {
+        res.statusCode = 204;
+        res.end();
+        return;
+      }
       res.statusCode = 200;
       res.setHeader("Content-Type", "text/plain");
       res.end("OK");
@@ -50,7 +55,7 @@ export function createLineNodeWebhookHandler(params: {
     // Only accept POST requests
     if (req.method !== "POST") {
       res.statusCode = 405;
-      res.setHeader("Allow", "GET, POST");
+      res.setHeader("Allow", "GET, HEAD, POST");
       res.setHeader("Content-Type", "application/json");
       res.end(JSON.stringify({ error: "Method Not Allowed" }));
       return;
