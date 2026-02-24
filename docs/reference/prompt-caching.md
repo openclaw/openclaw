@@ -84,6 +84,14 @@ agents:
 
 Per-agent heartbeat is supported at `agents.list[].heartbeat`.
 
+### Cache style
+
+`cacheStyle` controls provider-specific cache hint injection strategy.
+
+- Default: depends on provider.
+- `"anthropic"`: injects `cache_control: { type: "ephemeral" }` breakpoints for prefix caching. Marks system/developer messages and the last user/assistant message.
+- `null`: force-disable.
+
 ## Provider behavior
 
 ### Anthropic (direct API)
@@ -96,9 +104,9 @@ Per-agent heartbeat is supported at `agents.list[].heartbeat`.
 - Anthropic Claude model refs (`amazon-bedrock/*anthropic.claude*`) support explicit `cacheRetention` pass-through.
 - Non-Anthropic Bedrock models are forced to `cacheRetention: "none"` at runtime.
 
-### OpenRouter Anthropic models
+### OpenRouter
 
-For `openrouter/anthropic/*` model refs, OpenClaw injects Anthropic `cache_control` on system/developer prompt blocks to improve prompt-cache reuse.
+- For `openrouter/anthropic/*` model refs, OpenClaw defaults to `cacheStyle: "anthropic"`, injecting `cache_control` on system/developer prompt blocks to improve prompt-cache reuse.
 
 ### Other providers
 
