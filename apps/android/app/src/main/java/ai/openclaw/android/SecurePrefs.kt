@@ -4,6 +4,7 @@ package ai.openclaw.android
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.util.Log
 import androidx.core.content.edit
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
@@ -13,6 +14,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonPrimitive
+import java.security.MessageDigest
 import java.util.UUID
 
 class SecurePrefs(context: Context) {
@@ -98,6 +100,10 @@ class SecurePrefs(context: Context) {
   private val _talkEnabled = MutableStateFlow(prefs.getBoolean("talk.enabled", false))
   val talkEnabled: StateFlow<Boolean> = _talkEnabled
 
+  init {
+    logGatewayToken("init.gateway.manual.token", _gatewayToken.value)
+  }
+
   fun setLastDiscoveredStableId(value: String) {
     val trimmed = value.trim()
     prefs.edit { putString("gateway.lastDiscoveredStableID", trimmed) }
@@ -152,8 +158,10 @@ class SecurePrefs(context: Context) {
   }
 
   fun setGatewayToken(value: String) {
-    prefs.edit { putString("gateway.manual.token", value) }
-    _gatewayToken.value = value
+    val trimmed = value.trim()
+    prefs.edit(commit = true) { putString("gateway.manual.token", trimmed) }
+    _gatewayToken.value = trimmed
+    logGatewayToken("setGatewayToken", trimmed)
   }
 
   fun setGatewayPassword(value: String) {
@@ -172,10 +180,15 @@ class SecurePrefs(context: Context) {
 
   fun loadGatewayToken(): String? {
     val manual = _gatewayToken.value.trim()
-    if (manual.isNotEmpty()) return manual
+    if (manual.isNotEmpty()) {
+      logGatewayToken("loadGatewayToken.manual", manual)
+      return manual
+    }
     val key = "gateway.token.${_instanceId.value}"
     val stored = prefs.getString(key, null)?.trim()
-    return stored?.takeIf { it.isNotEmpty() }
+    val resolved = stored?.takeIf { it.isNotEmpty() }
+    logGatewayToken("loadGatewayToken.legacy", resolved.orEmpty())
+    return resolved
   }
 
   fun saveGatewayToken(token: String) {
@@ -232,6 +245,21 @@ class SecurePrefs(context: Context) {
     val fresh = UUID.randomUUID().toString()
     prefs.edit { putString("node.instanceId", fresh) }
     return fresh
+  }
+
+  private fun logGatewayToken(event: String, value: String) {
+    val digest =
+      if (value.isBlank()) {
+        "empty"
+      } else {
+        try {
+          val bytes = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8))
+          bytes.take(4).joinToString("") { "%02x".format(it) }
+        } catch (_: Throwable) {
+          "hash_err"
+        }
+      }
+    Log.i("OpenClawSecurePrefs", "$event tokenLen=${value.length} tokenSha256Prefix=$digest")
   }
 
   private fun loadOrMigrateDisplayName(context: Context): String {

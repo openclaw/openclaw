@@ -201,12 +201,12 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
   val isConnected by viewModel.isConnected.collectAsState()
   val serverName by viewModel.serverName.collectAsState()
   val remoteAddress by viewModel.remoteAddress.collectAsState()
+  val persistedGatewayToken by viewModel.gatewayToken.collectAsState()
   val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
 
   var step by rememberSaveable { mutableStateOf(OnboardingStep.Welcome) }
   var setupCode by rememberSaveable { mutableStateOf("") }
   var gatewayUrl by rememberSaveable { mutableStateOf("") }
-  var gatewayToken by rememberSaveable { mutableStateOf("") }
   var gatewayPassword by rememberSaveable { mutableStateOf("") }
   var gatewayInputMode by rememberSaveable { mutableStateOf(GatewayInputMode.SetupCode) }
   var manualHost by rememberSaveable { mutableStateOf("10.0.2.2") }
@@ -337,7 +337,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
               manualHost = manualHost,
               manualPort = manualPort,
               manualTls = manualTls,
-              gatewayToken = gatewayToken,
+              gatewayToken = persistedGatewayToken,
               gatewayPassword = gatewayPassword,
               gatewayError = gatewayError,
               onInputModeChange = {
@@ -357,7 +357,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                 gatewayError = null
               },
               onManualTlsChange = { manualTls = it },
-              onTokenChange = { gatewayToken = it },
+              onTokenChange = viewModel::setGatewayToken,
               onPasswordChange = { gatewayPassword = it },
             )
           OnboardingStep.Permissions ->
@@ -455,7 +455,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                     return@Button
                   }
                   gatewayUrl = parsedSetup.url
-                  gatewayToken = parsedSetup.token.orEmpty()
+                  parsedSetup.token?.let { viewModel.setGatewayToken(it) }
                   gatewayPassword = parsedSetup.password.orEmpty()
                 } else {
                   val manualUrl = composeManualGatewayUrl(manualHost, manualPort, manualTls)
@@ -530,14 +530,16 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                     gatewayError = "Invalid gateway URL."
                     return@Button
                   }
-                  val token = gatewayToken.trim()
+                  val token = persistedGatewayToken.trim()
                   val password = gatewayPassword.trim()
                   attemptedConnect = true
                   viewModel.setManualEnabled(true)
                   viewModel.setManualHost(parsed.host)
                   viewModel.setManualPort(parsed.port)
                   viewModel.setManualTls(parsed.tls)
-                  viewModel.setGatewayToken(token)
+                  if (token.isNotEmpty()) {
+                    viewModel.setGatewayToken(token)
+                  }
                   viewModel.setGatewayPassword(password)
                   viewModel.connectManual()
                 },
