@@ -34,6 +34,13 @@ const MAX_TOOL_FAILURE_CHARS = 240;
 const DEFAULT_RECENT_TURNS_PRESERVE = 3;
 const MAX_RECENT_TURNS_PRESERVE = 12;
 const MAX_RECENT_TURN_TEXT_CHARS = 600;
+const REQUIRED_SUMMARY_SECTIONS = [
+  "## Decisions",
+  "## Open TODOs",
+  "## Constraints/Rules",
+  "## Pending user asks",
+  "## Exact identifiers",
+] as const;
 
 type ToolFailure = {
   toolCallId: string;
@@ -376,6 +383,20 @@ function formatPreservedTurnsSection(messages: AgentMessage[]): string {
   return `\n\n## Recent turns preserved verbatim\n${lines.join("\n")}`;
 }
 
+function buildCompactionStructureInstructions(customInstructions?: string): string {
+  const sectionsTemplate = [
+    "Produce a compact, factual summary with these exact section headings:",
+    ...REQUIRED_SUMMARY_SECTIONS,
+    "For ## Exact identifiers, preserve literal values exactly as seen (IDs, URLs, file paths, ports, hashes, dates, times).",
+    "Do not omit unresolved asks from the user.",
+  ].join("\n");
+  const custom = customInstructions?.trim();
+  if (!custom) {
+    return sectionsTemplate;
+  }
+  return `${sectionsTemplate}\n\nAdditional focus:\n${custom}`;
+}
+
 function appendSummarySection(summary: string, section: string): string {
   if (!section) {
     return summary;
@@ -563,6 +584,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       });
       messagesToSummarize = summaryTargetMessages;
       const preservedTurnsSection = formatPreservedTurnsSection(preservedRecentMessages);
+      const structuredInstructions = buildCompactionStructureInstructions(customInstructions);
 
       // Use adaptive chunk ratio based on message sizes, reserving headroom for
       // the summarization prompt, system prompt, previous summary, and reasoning budget
@@ -589,7 +611,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
               reserveTokens,
               maxChunkTokens,
               contextWindow: contextWindowTokens,
-              customInstructions,
+              customInstructions: structuredInstructions,
               summarizationInstructions,
               previousSummary: effectivePreviousSummary,
             })
@@ -605,7 +627,7 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
           reserveTokens,
           maxChunkTokens,
           contextWindow: contextWindowTokens,
-          customInstructions: TURN_PREFIX_INSTRUCTIONS,
+          customInstructions: `${TURN_PREFIX_INSTRUCTIONS}\n\n${structuredInstructions}`,
           summarizationInstructions,
           previousSummary: undefined,
         });
@@ -649,6 +671,7 @@ export const __testing = {
   formatToolFailuresSection,
   splitPreservedRecentTurns,
   formatPreservedTurnsSection,
+  buildCompactionStructureInstructions,
   appendSummarySection,
   resolveRecentTurnsPreserve,
   computeAdaptiveChunkRatio,
