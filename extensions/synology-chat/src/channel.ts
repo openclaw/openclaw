@@ -141,6 +141,11 @@ export function createSynologyChatPlugin() {
             '- Synology Chat: dmPolicy="open" allows any user to message the bot. Consider "allowlist" for production use.',
           );
         }
+        if (account.dmPolicy === "allowlist" && account.allowedUserIds.length === 0) {
+          warnings.push(
+            '- Synology Chat: dmPolicy="allowlist" with empty allowedUserIds blocks all senders. Add users or set dmPolicy="open".',
+          );
+        }
         return warnings;
       },
     },
