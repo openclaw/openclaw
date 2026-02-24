@@ -39,6 +39,7 @@ For fastest triage, include all of the following:
 - Reproducible PoC against latest `main` or latest released version.
 - Demonstrated impact tied to OpenClaw's documented trust boundaries.
 - For exposed-secret reports: proof the credential is OpenClaw-owned (or grants access to OpenClaw-operated infrastructure/services).
+- Explicit statement that the report does not rely on adversarial operators sharing one gateway host/config.
 - Scope check explaining why the report is **not** covered by the Out of Scope section below.
 
 Reports that miss these requirements may be closed as `invalid` or `no-action`.
@@ -75,11 +76,20 @@ The best way to help the project right now is by sending PRs.
 
 When patching a GHSA via `gh api`, include `X-GitHub-Api-Version: 2022-11-28` (or newer). Without it, some fields (notably CVSS) may not persist even if the request returns 200.
 
+## Operator Trust Model (Important)
+
+OpenClaw does **not** model one gateway as a multi-tenant, adversarial user boundary.
+
+- Authenticated Gateway callers are treated as trusted operators for that gateway instance.
+- Session identifiers (`sessionKey`, session IDs, labels) are routing controls, not per-user authorization boundaries.
+- If one operator can view data from another operator on the same gateway, that is expected in this trust model.
+- If you need adversarial-user isolation, split by trust boundary (separate OS users/hosts/gateways).
+
 ## Out of Scope
 
 - Public Internet Exposure
 - Using OpenClaw in ways that the docs recommend not to
-- Deployments where mutually untrusted/adversarial operators share one gateway host and config
+- Deployments where mutually untrusted/adversarial operators share one gateway host and config (for example, reports expecting per-operator isolation for `sessions.list`, `sessions.preview`, `chat.history`, or similar control-plane reads)
 - Prompt injection attacks
 - Reports that require write access to trusted local state (`~/.openclaw`, workspace files like `MEMORY.md` / `memory/*.md`)
 - Reports that depend on trusted operator-supplied configuration values to trigger availability impact (for example custom regex patterns). These may still be fixed as defense-in-depth hardening, but are not security-boundary bypasses.
