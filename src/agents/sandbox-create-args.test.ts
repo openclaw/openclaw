@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildSandboxCreateArgs, type SandboxDockerConfig } from "./sandbox.js";
+import { buildSandboxCreateArgs } from "./sandbox/docker.js";
+import type { SandboxDockerConfig } from "./sandbox/types.js";
 
 describe("buildSandboxCreateArgs", () => {
   function createSandboxConfig(
