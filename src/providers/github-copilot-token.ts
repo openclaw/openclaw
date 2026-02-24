@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
@@ -12,8 +13,11 @@ export type CachedCopilotToken = {
   updatedAt: number;
 };
 
-function resolveCopilotTokenCachePath(env: NodeJS.ProcessEnv = process.env) {
-  return path.join(resolveStateDir(env), "credentials", "github-copilot.token.json");
+function resolveCopilotTokenCachePath(githubToken: string, env: NodeJS.ProcessEnv = process.env) {
+  // Key the cache file per GitHub token so multiple Copilot profiles
+  // (different accounts) each get their own cached API token.
+  const hash = createHash("sha256").update(githubToken).digest("hex").slice(0, 12);
+  return path.join(resolveStateDir(env), "credentials", `github-copilot-${hash}.token.json`);
 }
 
 function isTokenUsable(cache: CachedCopilotToken, now = Date.now()): boolean {
@@ -92,7 +96,8 @@ export async function resolveCopilotApiToken(params: {
   baseUrl: string;
 }> {
   const env = params.env ?? process.env;
-  const cachePath = params.cachePath?.trim() || resolveCopilotTokenCachePath(env);
+  const cachePath =
+    params.cachePath?.trim() || resolveCopilotTokenCachePath(params.githubToken, env);
   const loadJsonFileFn = params.loadJsonFileImpl ?? loadJsonFile;
   const saveJsonFileFn = params.saveJsonFileImpl ?? saveJsonFile;
   const cached = loadJsonFileFn(cachePath) as CachedCopilotToken | undefined;
