@@ -11,6 +11,7 @@ import {
   normalizeSandboxHostPath,
   resolveSandboxHostPathViaExistingAncestor,
 } from "./host-paths.js";
+import { getBlockedNetworkModeReason } from "./network-mode.js";
 
 // Targeted denylist: host paths that should never be exposed inside sandbox containers.
 // Exported for reuse in security audit collectors.
@@ -31,7 +32,6 @@ export const BLOCKED_HOST_PATHS = [
   "/run/docker.sock",
 ];
 
-const BLOCKED_NETWORK_MODES = new Set(["host"]);
 const BLOCKED_SECCOMP_PROFILES = new Set(["unconfined"]);
 const BLOCKED_APPARMOR_PROFILES = new Set(["unconfined"]);
 const RESERVED_CONTAINER_TARGET_PATHS = ["/workspace", SANDBOX_AGENT_WORKSPACE_MOUNT];
@@ -284,12 +284,11 @@ export function validateNetworkMode(
   network: string | undefined,
   options?: ValidateNetworkModeOptions,
 ): void {
-  const normalized = network?.trim().toLowerCase();
-  if (!normalized) {
-    return;
-  }
-
-  if (BLOCKED_NETWORK_MODES.has(normalized)) {
+  const blockedReason = getBlockedNetworkModeReason({
+    network,
+    allowContainerNamespaceJoin: options?.allowContainerNamespaceJoin,
+  });
+  if (blockedReason === "host") {
     throw new Error(
       `Sandbox security: network mode "${network}" is blocked. ` +
         'Network "host" mode bypasses container network isolation. ' +
@@ -297,7 +296,7 @@ export function validateNetworkMode(
     );
   }
 
-  if (normalized.startsWith("container:") && options?.allowContainerNamespaceJoin !== true) {
+  if (blockedReason === "container_namespace_join") {
     throw new Error(
       `Sandbox security: network mode "${network}" is blocked by default. ` +
         'Network "container:*" joins another container namespace and bypasses sandbox network isolation. ' +
