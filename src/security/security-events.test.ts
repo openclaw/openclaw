@@ -478,6 +478,72 @@ describe("SecurityEventsManager", () => {
     });
   });
 
+  describe("credential redaction (G8)", () => {
+    const TOKEN = "sk-testkey123456789abcdef"; // matches sk-[A-Za-z0-9_-]{8,}
+
+    it("redacts token from event message before persisting", () => {
+      const event = manager.emit({
+        type: "injection_detected",
+        severity: "warn",
+        source: "test",
+        message: `Suspicious call with key=${TOKEN}`,
+      });
+
+      expect(event.message).not.toContain(TOKEN);
+    });
+
+    it("redacts token from details string values", () => {
+      const event = manager.emit({
+        type: "tool_abuse_detected",
+        severity: "warn",
+        source: "test",
+        message: "Tool abuse",
+        details: { apiKey: TOKEN, count: 5 },
+      });
+
+      expect(event.details.apiKey).not.toBe(TOKEN);
+      // Non-string details are unchanged
+      expect(event.details.count).toBe(5);
+    });
+
+    it("redacts token from remediation field", () => {
+      const event = manager.emit({
+        type: "auth_rate_limited",
+        severity: "warn",
+        source: "test",
+        message: "Rate limited",
+        remediation: `Revoke token ${TOKEN} immediately`,
+      });
+
+      expect(event.remediation).not.toContain(TOKEN);
+    });
+
+    it("redacted event is persisted without the token", () => {
+      manager.emit({
+        type: "injection_detected",
+        severity: "warn",
+        source: "test",
+        message: `Key leak: ${TOKEN}`,
+      });
+
+      const storePath = path.join(tempDir, "events.jsonl");
+      const content = fs.readFileSync(storePath, "utf8");
+      expect(content).not.toContain(TOKEN);
+    });
+
+    it("leaves benign messages unmodified", () => {
+      const message = "Normal event with no credentials";
+      const event = manager.emit({
+        type: "skill_scan_failed",
+        severity: "info",
+        source: "test",
+        message,
+      });
+
+      expect(event.message).toBe(message);
+    });
+  });
+
   describe("init", () => {
     it("should load events from file on init", async () => {
       const storePath = path.join(tempDir, "init-test.jsonl");

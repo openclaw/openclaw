@@ -9,6 +9,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
+import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
 
@@ -249,8 +250,12 @@ export class SecurityEventsManager {
       return dedupEntry.event;
     }
 
-    // Sanitize details
-    const sanitizedDetails = this.sanitizeDetails(params.details ?? {});
+    // Redact credentials from string fields before persisting
+    const safeMessage = redactSensitiveText(params.message);
+    const safeRemediation = params.remediation
+      ? redactSensitiveText(params.remediation)
+      : params.remediation;
+    const sanitizedDetails = this.sanitizeDetails(this.redactDetails(params.details ?? {}));
 
     // Create event
     const event: SecurityEvent = {
@@ -259,9 +264,9 @@ export class SecurityEventsManager {
       type: params.type,
       severity: params.severity,
       source: params.source,
-      message: params.message,
+      message: safeMessage,
       details: sanitizedDetails,
-      remediation: params.remediation,
+      remediation: safeRemediation,
       fingerprint,
       occurrences: 1,
       firstOccurrence: now,
@@ -479,6 +484,14 @@ export class SecurityEventsManager {
       size += entry.length - 2 + 1; // -2 for braces, +1 for comma
     }
     return truncated;
+  }
+
+  private redactDetails(details: Record<string, unknown>): Record<string, unknown> {
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(details)) {
+      result[key] = typeof value === "string" ? redactSensitiveText(value) : value;
+    }
+    return result;
   }
 
   private persistEvent(event: SecurityEvent): void {
