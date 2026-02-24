@@ -47,11 +47,15 @@ vi.mock("./onboard-helpers.js", () => ({
   ensureWorkspaceAndSessions: vi.fn(async () => {}),
 }));
 
-vi.mock("../agents/agent-scope.js", () => ({
-  resolveAgentDir: vi.fn(() => "/tmp/mock-agent-dir"),
-  resolveAgentWorkspaceDir: vi.fn(() => "/tmp/mock-workspace"),
-  resolveDefaultAgentId: vi.fn(() => "main"),
-}));
+vi.mock("../agents/agent-scope.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../agents/agent-scope.js")>();
+  return {
+    ...actual,
+    resolveAgentDir: vi.fn(() => "/tmp/mock-agent-dir"),
+    resolveAgentWorkspaceDir: vi.fn(() => "/tmp/mock-workspace"),
+    resolveDefaultAgentId: vi.fn(() => "main"),
+  };
+});
 
 vi.mock("../agents/auth-profiles/paths.js", () => ({
   resolveAuthStorePath: vi.fn(() => "/tmp/mock-auth-store.json"),
