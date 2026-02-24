@@ -1,13 +1,26 @@
-## OpenClaw Node (Android) (internal)
+## OpenClaw Android App
 
-Modern Android node app: connects to the **Gateway WebSocket** (`_openclaw-gw._tcp`) and exposes **Canvas + Chat + Camera**.
+Status: **extremely alpha**. The app is actively being rebuilt from the ground up.
 
-Notes:
-- The node keeps the connection alive via a **foreground service** (persistent notification with a Disconnect action).
-- Chat always uses the shared session key **`main`** (same session across iOS/macOS/WebChat/Android).
-- Supports modern Android only (`minSdk 31`, Kotlin + Jetpack Compose).
+### Rebuild Checklist
+
+- [x] New 4-step onboarding flow
+- [x] Connect tab with `Setup Code` + `Manual` modes
+- [x] Encrypted persistence for gateway setup/auth state
+- [x] Chat UI restyled
+- [x] Settings UI restyled and de-duplicated (gateway controls moved to Connect)
+- [ ] QR code scanning in onboarding
+- [ ] Performance improvements
+- [ ] Streaming support in chat UI
+- [ ] Request camera/location and other permissions in onboarding/settings flow
+- [ ] Push notifications for gateway/chat status updates
+- [ ] Security hardening (biometric lock, token handling, safer defaults)
+- [ ] Voice tab full functionality
+- [ ] Screen tab full functionality
+- [ ] Full end-to-end QA and release hardening
 
 ## Open in Android Studio
+
 - Open the folder `apps/android`.
 
 ## Build / Run
@@ -23,16 +36,19 @@ cd apps/android
 
 ## Connect / Pair
 
-1) Start the gateway (on your “master” machine):
+1) Start the gateway (on your main machine):
+
 ```bash
 pnpm openclaw gateway --port 18789 --verbose
 ```
 
 2) In the Android app:
-- Open **Settings**
-- Either select a discovered gateway under **Discovered Gateways**, or use **Advanced → Manual Gateway** (host + port).
+
+- Open the **Connect** tab.
+- Use **Setup Code** or **Manual** mode to connect.
 
 3) Approve pairing (on the gateway machine):
+
 ```bash
 openclaw nodes pending
 openclaw nodes approve <requestId>
@@ -49,3 +65,8 @@ More details: `docs/platforms/android.md`.
 - Camera:
   - `CAMERA` for `camera.snap` and `camera.clip`
   - `RECORD_AUDIO` for `camera.clip` when `includeAudio=true`
+
+## Contributions
+
+This Android app is currently being rebuilt.
+Maintainer: @obviyus. For issues/questions/contributions, please open an issue or reach out on Discord.
