@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
@@ -155,5 +158,50 @@ describe("secrets runtime snapshot", () => {
       type: "api_key",
       key: "sk-runtime",
     });
+  });
+
+  it("does not write inherited auth stores during runtime secret activation", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-runtime-"));
+    const stateDir = path.join(root, ".openclaw");
+    const mainAgentDir = path.join(stateDir, "agents", "main", "agent");
+    const workerStorePath = path.join(stateDir, "agents", "worker", "agent", "auth-profiles.json");
+    const prevStateDir = process.env.OPENCLAW_STATE_DIR;
+
+    try {
+      await fs.mkdir(mainAgentDir, { recursive: true });
+      await fs.writeFile(
+        path.join(mainAgentDir, "auth-profiles.json"),
+        JSON.stringify({
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              keyRef: { source: "env", id: "OPENAI_API_KEY" },
+            },
+          },
+        }),
+        "utf8",
+      );
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+
+      await prepareSecretsRuntimeSnapshot({
+        config: {
+          agents: {
+            list: [{ id: "worker" }],
+          },
+        },
+        env: { OPENAI_API_KEY: "sk-runtime-worker" },
+      });
+
+      await expect(fs.access(workerStorePath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      if (prevStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = prevStateDir;
+      }
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 });

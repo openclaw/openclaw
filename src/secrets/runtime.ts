@@ -3,7 +3,7 @@ import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
 import type { AuthProfileCredential, AuthProfileStore } from "../agents/auth-profiles.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
-  loadAuthProfileStoreForRuntime,
+  loadAuthProfileStoreForSecretsRuntime,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "../agents/auth-profiles.js";
 import {
@@ -14,6 +14,7 @@ import {
 import { isSecretRef, type SecretRef } from "../config/types.secrets.js";
 import { resolveUserPath } from "../utils.js";
 import { readJsonPointer } from "./json-pointer.js";
+import { isNonEmptyString, isRecord, normalizePositiveInt } from "./shared.js";
 import { decryptSopsJsonFile, DEFAULT_SOPS_TIMEOUT_MS } from "./sops.js";
 
 type SecretResolverWarningCode = "SECRETS_REF_OVERRIDES_PLAINTEXT";
@@ -73,14 +74,6 @@ function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecret
   };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
 async function decryptSopsFile(config: OpenClawConfig): Promise<unknown> {
   const fileSource = config.secrets?.sources?.file;
   if (!fileSource) {
@@ -93,10 +86,7 @@ async function decryptSopsFile(config: OpenClawConfig): Promise<unknown> {
   }
 
   const resolvedPath = resolveUserPath(fileSource.path);
-  const timeoutMs =
-    typeof fileSource.timeoutMs === "number" && Number.isFinite(fileSource.timeoutMs)
-      ? Math.max(1, Math.floor(fileSource.timeoutMs))
-      : DEFAULT_SOPS_TIMEOUT_MS;
+  const timeoutMs = normalizePositiveInt(fileSource.timeoutMs, DEFAULT_SOPS_TIMEOUT_MS);
   return await decryptSopsJsonFile({
     path: resolvedPath,
     timeoutMs,
@@ -275,7 +265,7 @@ export async function prepareSecretsRuntimeSnapshot(params: {
     warnings,
   });
 
-  const loadAuthStore = params.loadAuthStore ?? loadAuthProfileStoreForRuntime;
+  const loadAuthStore = params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime;
   const candidateDirs = params.agentDirs?.length
     ? [...new Set(params.agentDirs.map((entry) => resolveUserPath(entry)))]
     : collectCandidateAgentDirs(resolvedConfig);
