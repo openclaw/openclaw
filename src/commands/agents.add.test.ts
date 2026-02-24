@@ -168,11 +168,11 @@ describe("agents add model override guard", () => {
     await agentsAddCommand({ name: "worker" }, runtime);
 
     expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
-    const writtenConfig = writeConfigFileMock.mock.calls[0]![0] as OpenClawConfig;
-    const agentList = writtenConfig.agents?.list as
-      | Array<{ id?: string; model?: string }>
-      | undefined;
-    const agentEntry = agentList?.find((e) => e.id === "worker");
+    const written = writeConfigFileMock.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const agentEntry = (written?.agents as any)?.list?.find(
+      (e: { id?: string }) => e.id === "worker",
+    );
     expect(agentEntry?.model).toBe("claude-sonnet-4-20250514");
   });
 
@@ -201,11 +201,11 @@ describe("agents add model override guard", () => {
     await agentsAddCommand({ name: "worker" }, runtime);
 
     expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
-    const writtenConfig = writeConfigFileMock.mock.calls[0]![0] as OpenClawConfig;
-    const agentList = writtenConfig.agents?.list as
-      | Array<{ id?: string; model?: string }>
-      | undefined;
-    const agentEntry = agentList?.find((e) => e.id === "worker");
+    const written = writeConfigFileMock.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const agentEntry = (written?.agents as any)?.list?.find(
+      (e: { id?: string }) => e.id === "worker",
+    );
     expect(agentEntry?.model).toBeUndefined();
   });
 
@@ -234,11 +234,11 @@ describe("agents add model override guard", () => {
     await agentsAddCommand({ name: "worker" }, runtime);
 
     expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
-    const writtenConfig = writeConfigFileMock.mock.calls[0]![0] as OpenClawConfig;
-    const agentList = writtenConfig.agents?.list as
-      | Array<{ id?: string; model?: string }>
-      | undefined;
-    const agentEntry = agentList?.find((e) => e.id === "worker");
+    const written = writeConfigFileMock.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    // oxlint-disable-next-line typescript/no-explicit-any
+    const agentEntry = (written?.agents as any)?.list?.find(
+      (e: { id?: string }) => e.id === "worker",
+    );
     expect(agentEntry?.model).toBeUndefined();
   });
 });
