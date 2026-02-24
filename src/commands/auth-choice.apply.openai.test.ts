@@ -26,13 +26,13 @@ describe("applyAuthChoiceOpenAI", () => {
     await lifecycle.cleanup();
   });
 
-  it("writes env-backed OpenAI key as keyRef in auth profiles", async () => {
+  it("writes env-backed OpenAI key as plaintext by default", async () => {
     const agentDir = await setupTempState();
     process.env.OPENAI_API_KEY = "sk-openai-env";
 
     const confirm = vi.fn(async () => true);
     const text = vi.fn(async () => "unused");
-    const prompter = createWizardPrompter({ confirm, text }, { defaultSelect: "" });
+    const prompter = createWizardPrompter({ confirm, text }, { defaultSelect: "plaintext" });
     const runtime = createExitThrowingRuntime();
 
     const result = await applyAuthChoiceOpenAI({
@@ -53,6 +53,31 @@ describe("applyAuthChoiceOpenAI", () => {
     expect(primaryModel).toBe("openai/gpt-5.1-codex");
     expect(text).not.toHaveBeenCalled();
 
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, { key?: string; keyRef?: unknown }>;
+    }>(agentDir);
+    expect(parsed.profiles?.["openai:default"]?.key).toBe("sk-openai-env");
+    expect(parsed.profiles?.["openai:default"]?.keyRef).toBeUndefined();
+  });
+
+  it("writes env-backed OpenAI key as keyRef when secret-input-mode=ref", async () => {
+    const agentDir = await setupTempState();
+    process.env.OPENAI_API_KEY = "sk-openai-env";
+
+    const confirm = vi.fn(async () => true);
+    const text = vi.fn(async () => "unused");
+    const prompter = createWizardPrompter({ confirm, text }, { defaultSelect: "ref" });
+    const runtime = createExitThrowingRuntime();
+
+    const result = await applyAuthChoiceOpenAI({
+      authChoice: "openai-api-key",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+    });
+
+    expect(result).not.toBeNull();
     const parsed = await readAuthProfilesForAgent<{
       profiles?: Record<string, { key?: string; keyRef?: unknown }>;
     }>(agentDir);
