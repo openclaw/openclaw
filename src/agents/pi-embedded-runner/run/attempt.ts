@@ -620,6 +620,50 @@ export function resolveAttemptFsWorkspaceOnly(params: {
   });
 }
 
+/** Build legacy compaction params passed into context-engine afterTurn hooks. */
+export function buildAfterTurnLegacyCompactionParams(params: {
+  attempt: Pick<
+    EmbeddedRunAttemptParams,
+    | "sessionKey"
+    | "messageChannel"
+    | "messageProvider"
+    | "agentAccountId"
+    | "config"
+    | "skillsSnapshot"
+    | "senderIsOwner"
+    | "provider"
+    | "modelId"
+    | "thinkLevel"
+    | "reasoningLevel"
+    | "bashElevated"
+    | "extraSystemPrompt"
+    | "ownerNumbers"
+    | "authProfileId"
+  >;
+  workspaceDir: string;
+  agentDir: string;
+}): Partial<CompactEmbeddedPiSessionParams> {
+  return {
+    sessionKey: params.attempt.sessionKey,
+    messageChannel: params.attempt.messageChannel,
+    messageProvider: params.attempt.messageProvider,
+    agentAccountId: params.attempt.agentAccountId,
+    authProfileId: params.attempt.authProfileId,
+    workspaceDir: params.workspaceDir,
+    agentDir: params.agentDir,
+    config: params.attempt.config,
+    skillsSnapshot: params.attempt.skillsSnapshot,
+    senderIsOwner: params.attempt.senderIsOwner,
+    provider: params.attempt.provider,
+    model: params.attempt.modelId,
+    thinkLevel: params.attempt.thinkLevel,
+    reasoningLevel: params.attempt.reasoningLevel,
+    bashElevated: params.attempt.bashElevated,
+    extraSystemPrompt: params.attempt.extraSystemPrompt,
+    ownerNumbers: params.attempt.ownerNumbers,
+  };
+}
+
 function summarizeMessagePayload(msg: AgentMessage): { textChars: number; imageBlocks: number } {
   const content = (msg as { content?: unknown }).content;
   if (typeof content === "string") {
@@ -1808,24 +1852,11 @@ export async function runEmbeddedAttempt(
 
         // Let the active context engine run its post-turn lifecycle.
         if (params.contextEngine) {
-          const afterTurnLegacyCompactionParams: Partial<CompactEmbeddedPiSessionParams> = {
-            sessionKey: params.sessionKey,
-            messageChannel: params.messageChannel,
-            messageProvider: params.messageProvider,
-            agentAccountId: params.agentAccountId,
+          const afterTurnLegacyCompactionParams = buildAfterTurnLegacyCompactionParams({
+            attempt: params,
             workspaceDir: effectiveWorkspace,
             agentDir,
-            config: params.config,
-            skillsSnapshot: params.skillsSnapshot,
-            senderIsOwner: params.senderIsOwner,
-            provider: params.provider,
-            model: params.modelId,
-            thinkLevel: params.thinkLevel,
-            reasoningLevel: params.reasoningLevel,
-            bashElevated: params.bashElevated,
-            extraSystemPrompt: params.extraSystemPrompt,
-            ownerNumbers: params.ownerNumbers,
-          };
+          });
 
           if (typeof params.contextEngine.afterTurn === "function") {
             try {

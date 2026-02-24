@@ -19,6 +19,10 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   contextEngine?: ContextEngine;
   /** Resolved model context window in tokens for assemble/compact budgeting. */
   contextTokenBudget?: number;
+  /** Auth profile resolved for this attempt's provider/model call. */
+  authProfileId?: string;
+  /** Source for the resolved auth profile (user-locked or automatic). */
+  authProfileIdSource?: "auto" | "user";
   provider: string;
   modelId: string;
   model: Model<Api>;
