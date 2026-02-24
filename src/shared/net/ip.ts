@@ -28,13 +28,10 @@ const PRIVATE_OR_LOOPBACK_IPV6_RANGES = new Set<Ipv6Range>([
   "linkLocal",
   "uniqueLocal",
 ]);
-/**
- * RFC 2544 benchmark range (198.18.0.0/15).  Originally reserved for network
- * device benchmarking, but in practice used by real services — notably
- * Telegram's API/file servers resolve to addresses in this block.  We
- * therefore exempt it from the SSRF block list.
- */
 const RFC2544_BENCHMARK_PREFIX: [ipaddr.IPv4, number] = [ipaddr.IPv4.parse("198.18.0.0"), 15];
+export type Ipv4SpecialUseBlockOptions = {
+  allowRfc2544BenchmarkRange?: boolean;
+};
 
 const EMBEDDED_IPV4_SENTINEL_RULES: Array<{
   matches: (parts: number[]) => boolean;
@@ -253,14 +250,15 @@ export function isCarrierGradeNatIpv4Address(raw: string | undefined): boolean {
   return parsed.range() === "carrierGradeNat";
 }
 
-export function isBlockedSpecialUseIpv4Address(address: ipaddr.IPv4): boolean {
-  const range = address.range();
-  if (range === "reserved" && address.match(RFC2544_BENCHMARK_PREFIX)) {
-    // 198.18.0.0/15 is classified as "reserved" by ipaddr.js but is used by
-    // real public services (e.g. Telegram API).  Allow it through.
+export function isBlockedSpecialUseIpv4Address(
+  address: ipaddr.IPv4,
+  options: Ipv4SpecialUseBlockOptions = {},
+): boolean {
+  const inRfc2544BenchmarkRange = address.match(RFC2544_BENCHMARK_PREFIX);
+  if (inRfc2544BenchmarkRange && options.allowRfc2544BenchmarkRange === true) {
     return false;
   }
-  return BLOCKED_IPV4_SPECIAL_USE_RANGES.has(range);
+  return BLOCKED_IPV4_SPECIAL_USE_RANGES.has(address.range()) || inRfc2544BenchmarkRange;
 }
 
 function decodeIpv4FromHextets(high: number, low: number): ipaddr.IPv4 {

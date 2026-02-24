@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Telegram/Media SSRF: keep RFC2544 benchmark range (`198.18.0.0/15`) blocked by default, add an explicit SSRF-policy opt-in for Telegram media downloads, and keep other channels/URL fetch paths blocked. (#24982) Thanks @stakeswky.
 - Security/Shell env fallback: remove trusted-prefix shell-path fallback and only trust login shells explicitly registered in `/etc/shells`, defaulting to `/bin/sh` when `SHELL` is not registered. This ships in the next npm release. Thanks @tdjackey for reporting.
 - Security/Exec approvals: bind `host=node` approvals to explicit `nodeId`, reject cross-node replay of approved `system.run` requests, and include the target node in approval prompts. This ships in the next npm release. Thanks @tdjackey for reporting.
 - Security/Exec approvals: restore two-phase approval registration + wait-decision handling for gateway/node exec paths, requiring approval IDs to be registered before returning `approval-pending` and honoring server-assigned approval IDs during wait resolution to prevent orphaned `/approve` flows and immediate-return races (`ask:on-miss`). This ships in the next npm release. Thanks @vitalyis for reporting.
