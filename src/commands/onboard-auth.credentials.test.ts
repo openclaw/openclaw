@@ -106,12 +106,28 @@ describe("onboard auth credentials secret refs", () => {
     expect(parsed.profiles?.["cloudflare-ai-gateway:default"]?.key).toBeUndefined();
   });
 
-  it("stores env-backed openai key as keyRef", async () => {
+  it("keeps env-backed openai key as plaintext by default", async () => {
     const env = await setupAuthTestEnv("openclaw-onboard-auth-credentials-openai-");
     lifecycle.setStateDir(env.stateDir);
     process.env.OPENAI_API_KEY = "sk-openai-env";
 
     await setOpenaiApiKey("sk-openai-env");
+
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, { key?: string; keyRef?: unknown }>;
+    }>(env.agentDir);
+    expect(parsed.profiles?.["openai:default"]).toMatchObject({
+      key: "sk-openai-env",
+    });
+    expect(parsed.profiles?.["openai:default"]?.keyRef).toBeUndefined();
+  });
+
+  it("stores env-backed openai key as keyRef in ref mode", async () => {
+    const env = await setupAuthTestEnv("openclaw-onboard-auth-credentials-openai-ref-");
+    lifecycle.setStateDir(env.stateDir);
+    process.env.OPENAI_API_KEY = "sk-openai-env";
+
+    await setOpenaiApiKey("sk-openai-env", env.agentDir, { secretInputMode: "ref" });
 
     const parsed = await readAuthProfilesForAgent<{
       profiles?: Record<string, { key?: string; keyRef?: unknown }>;
