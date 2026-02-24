@@ -39,6 +39,7 @@ Docs: https://docs.openclaw.ai
 - Infra/Windows TOCTOU: handle Windows `dev=0` edge cases in same-file identity checks. (#24939)
 - Exec/Bash tools: clamp poll sleep duration to non-negative values in process polling loops. (#24889)
 - Subagents/Announce queue: add exponential backoff when queue-drain delivery fails to reduce retry storms. (#24783)
+- Sessions/Model overrides: keep stored sub-agent model overrides when `agents.defaults.models` is empty (allow-any mode) instead of resetting to defaults. (#21088) Thanks @Slats24.
 - Config/Kilo Gateway: Kilo provider flow now surfaces an updated list of models. (#24921) thanks @gumadeiras.
 - Agents/Tool warnings: suppress `sessions_send` relay errors from chat-facing warning payloads to avoid leaking transient inter-session transport failures. (#24740) Thanks @Glucksberg.
 - WhatsApp/Logging: redact outbound recipient identifiers in WhatsApp outbound + heartbeat logs and remove message/poll preview text from those log lines. (#24980) Thanks @coygeek.
