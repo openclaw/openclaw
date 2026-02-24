@@ -19,7 +19,7 @@ function makeEaccesFs(configPath: string) {
       writeFile: () => Promise.resolve(),
       appendFile: () => Promise.resolve(),
     },
-  } as unknown as typeof import("node:fs").default;
+  } as unknown as typeof import("node:fs");
 }
 
 describe("config io EACCES handling", () => {
