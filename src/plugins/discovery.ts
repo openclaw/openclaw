@@ -264,9 +264,15 @@ function deriveIdHint(params: {
 
   // Prefer the unscoped name so config keys stay stable even when the npm
   // package is scoped (example: @openclaw/voice-call -> voice-call).
-  const unscoped = rawPackageName.includes("/")
+  let unscoped = rawPackageName.includes("/")
     ? (rawPackageName.split("/").pop() ?? rawPackageName)
     : rawPackageName;
+  // Strip the "openclaw-" prefix for unscoped packages so the hint matches
+  // the manifest id (example: openclaw-groupme -> groupme). This mirrors the
+  // scope-stripping above — both serve the same namespacing purpose.
+  if (unscoped.startsWith("openclaw-")) {
+    unscoped = unscoped.slice("openclaw-".length);
+  }
 
   if (!params.hasMultipleExtensions) {
     return unscoped;
