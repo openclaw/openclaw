@@ -20,6 +20,10 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   async function runSystemInvoke(params: {
     preferMacAppExecHost: boolean;
     runViaResponse?: ExecHostResponse | null;
+    command?: string[];
+    security?: "full" | "allowlist";
+    ask?: "off" | "on-miss" | "always";
+    approved?: boolean;
   }) {
     const runCommand = vi.fn(async () => ({
       success: true,
@@ -37,8 +41,8 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     await handleSystemRunInvoke({
       client: {} as never,
       params: {
-        command: ["echo", "ok"],
-        approved: true,
+        command: params.command ?? ["echo", "ok"],
+        approved: params.approved ?? false,
         sessionKey: "agent:main:main",
       },
       skillBins: {
@@ -46,8 +50,8 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       },
       execHostEnforced: false,
       execHostFallbackAllowed: true,
-      resolveExecSecurity: () => "full",
-      resolveExecAsk: () => "off",
+      resolveExecSecurity: () => params.security ?? "full",
+      resolveExecAsk: () => params.ask ?? "off",
       isCmdExeInvocation: () => false,
       sanitizeEnv: () => undefined,
       runCommand,
@@ -109,6 +113,37 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       expect.objectContaining({
         ok: true,
         payloadJSON: expect.stringContaining("app-ok"),
+      }),
+    );
+  });
+
+  it("runs canonical argv in allowlist mode for transparent env wrappers", async () => {
+    const { runCommand, sendInvokeResult } = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      security: "allowlist",
+      command: ["env", "tr", "a", "b"],
+    });
+    expect(runCommand).toHaveBeenCalledWith(["tr", "a", "b"], undefined, undefined, undefined);
+    expect(sendInvokeResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ok: true,
+      }),
+    );
+  });
+
+  it("denies semantic env wrappers in allowlist mode", async () => {
+    const { runCommand, sendInvokeResult } = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      security: "allowlist",
+      command: ["env", "FOO=bar", "tr", "a", "b"],
+    });
+    expect(runCommand).not.toHaveBeenCalled();
+    expect(sendInvokeResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ok: false,
+        error: expect.objectContaining({
+          message: expect.stringContaining("allowlist miss"),
+        }),
       }),
     );
   });
