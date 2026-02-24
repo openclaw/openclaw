@@ -34,6 +34,8 @@ vi.mock("../infra/net/fetch-guard.js", () => ({
 }));
 
 installGatewayTestHooks({ scope: "suite" });
+const CRON_WAIT_INTERVAL_MS = 5;
+const CRON_WAIT_TIMEOUT_MS = 3_000;
 
 async function yieldToEventLoop() {
   await setImmediatePromise();
@@ -64,7 +66,7 @@ async function waitForCondition(check: () => boolean | Promise<boolean>, timeout
         throw new Error("condition not met");
       }
     },
-    { timeout: timeoutMs, interval: 10 },
+    { timeout: timeoutMs, interval: CRON_WAIT_INTERVAL_MS },
   );
 }
 
@@ -419,7 +421,7 @@ describe("gateway server cron", () => {
       await waitForCondition(async () => {
         raw = await fs.readFile(logPath, "utf-8").catch(() => "");
         return raw.trim().length > 0;
-      }, 5000);
+      }, CRON_WAIT_TIMEOUT_MS);
       const line = raw
         .split("\n")
         .map((l) => l.trim())
@@ -485,7 +487,7 @@ describe("gateway server cron", () => {
         const runsRes = await rpcReq(ws, "cron.runs", { id: autoJobId, limit: 10 });
         const runsPayload = runsRes.payload as { entries?: unknown } | undefined;
         return Array.isArray(runsPayload?.entries) && runsPayload.entries.length > 0;
-      }, 5000);
+      }, CRON_WAIT_TIMEOUT_MS);
       const autoEntries = (await rpcReq(ws, "cron.runs", { id: autoJobId, limit: 10 })).payload as
         | { entries?: Array<{ jobId?: unknown }> }
         | undefined;
@@ -569,7 +571,10 @@ describe("gateway server cron", () => {
       const notifyRunRes = await rpcReq(ws, "cron.run", { id: notifyJobId, mode: "force" }, 20_000);
       expect(notifyRunRes.ok).toBe(true);
 
-      await waitForCondition(() => fetchWithSsrFGuardMock.mock.calls.length === 1, 5000);
+      await waitForCondition(
+        () => fetchWithSsrFGuardMock.mock.calls.length === 1,
+        CRON_WAIT_TIMEOUT_MS,
+      );
       const [notifyArgs] = fetchWithSsrFGuardMock.mock.calls[0] as unknown as [
         {
           url?: string;
@@ -597,7 +602,10 @@ describe("gateway server cron", () => {
         20_000,
       );
       expect(legacyRunRes.ok).toBe(true);
-      await waitForCondition(() => fetchWithSsrFGuardMock.mock.calls.length === 2, 5000);
+      await waitForCondition(
+        () => fetchWithSsrFGuardMock.mock.calls.length === 2,
+        CRON_WAIT_TIMEOUT_MS,
+      );
       const [legacyArgs] = fetchWithSsrFGuardMock.mock.calls[1] as unknown as [
         {
           url?: string;
