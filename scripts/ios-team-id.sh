@@ -14,6 +14,21 @@ prefer_non_free_team="${IOS_PREFER_NON_FREE_TEAM:-1}"
 declare -a team_ids=()
 declare -a team_is_free=()
 declare -a team_names=()
+python_cmd=""
+
+detect_python() {
+  local candidate
+  for candidate in "${IOS_PYTHON_BIN:-}" python3 python /usr/bin/python3; do
+    [[ -n "$candidate" ]] || continue
+    if command -v "$candidate" >/dev/null 2>&1; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+python_cmd="$(detect_python || true)"
 
 append_team() {
   local candidate_id="$1"
@@ -36,13 +51,14 @@ append_team() {
 load_teams_from_xcode_preferences() {
   local plist_path="${HOME}/Library/Preferences/com.apple.dt.Xcode.plist"
   [[ -f "$plist_path" ]] || return 0
+  [[ -n "$python_cmd" ]] || return 0
 
   while IFS=$'\t' read -r team_id is_free team_name; do
     [[ -z "$team_id" ]] && continue
     append_team "$team_id" "${is_free:-0}" "${team_name:-}"
   done < <(
     plutil -extract IDEProvisioningTeams json -o - "$plist_path" 2>/dev/null \
-      | /usr/bin/python3 -c '
+      | "$python_cmd" -c '
 import json
 import sys
 
@@ -83,6 +99,7 @@ load_teams_from_legacy_defaults_key() {
 load_teams_from_xcode_managed_profiles() {
   local profiles_dir="${HOME}/Library/MobileDevice/Provisioning Profiles"
   [[ -d "$profiles_dir" ]] || return 0
+  [[ -n "$python_cmd" ]] || return 0
 
   while IFS= read -r team; do
     [[ -z "$team" ]] && continue
@@ -91,7 +108,7 @@ load_teams_from_xcode_managed_profiles() {
     for p in "${profiles_dir}"/*.mobileprovision; do
       [[ -f "$p" ]] || continue
       security cms -D -i "$p" 2>/dev/null \
-        | /usr/bin/python3 -c '
+        | "$python_cmd" -c '
 import plistlib, sys
 try:
     raw = sys.stdin.buffer.read()
