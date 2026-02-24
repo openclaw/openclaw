@@ -149,10 +149,12 @@ related:
 
 ## 수익화
 
-- 앱 유료 ₩9,900 (일회성 구매, 무료 없음)
-- 7일 트라이얼 후 구매 필수
+- **구독 모델** (D005-monetization-model.md)
+- 월간: ₩3,900/월 (글로벌 $2.99/월)
+- 연간: ₩29,900/년 (글로벌 $19.99/년) — 37% 할인
+- 무료 버전 없음, 무료 체험 없음
 - 사용자가 자기 OpenClaw Gateway 인프라 비용 부담
-- 구독 없음, 사용량 제한 없음
+- BEP: 월간 구독자 약 6명
 
 ## 사업 모델: OpenClaw 앱 팩토리 (A002)
 
@@ -178,11 +180,12 @@ related:
 - [ ] Google Play Developer 가입 ($25) — 신청 완료, 인증 절차 중 (2026-02-21)
 - [x] EAS Build (iOS) — 완료 (빌드 ID: b308162e)
 - [x] App Store 심사 제출 — 완료 (2026-02-22)
-- [ ] **🔴 ASC Privacy Policy URL 변경** → `https://jini92.github.io/botalks-web/privacy/`
-- [ ] **🔴 ASC Review Notes 업데이트** → I007 가이드 참고
-- [ ] **🔴 ASC Description 내 old URL 수정** → `botalks.app` → `jini92.github.io/botalks-web/`
-- [ ] **🔴 ASC 저장 + 심사 재제출**
-- [ ] `botalks.app` 커스텀 도메인 구매 → GitHub Pages CNAME 연결
+- [x] **ASC Privacy Policy URL** → `https://botalks.app/privacy/` ✅ (2026-02-24)
+- [x] **ASC Review Notes 업데이트** → 구독 모델 반영 ✅ (2026-02-24)
+- [x] **ASC Description** → 구독 모델로 수정 ✅ (2026-02-24)
+- [x] **ASC 프로모션 텍스트** → 구독 모델로 수정 ✅ (2026-02-24)
+- [x] **ASC 저장 완료** ✅ (2026-02-24)
+- [x] `botalks.app` 커스텀 도메인 등록 → GitHub Pages CNAME + HTTPS ✅ (2026-02-24)
 - [ ] EAS Build (Android) + Google Play 제출
 - [ ] Tailscale funnel/VPS 데모 Gateway (다음 버전 심사용)
 
