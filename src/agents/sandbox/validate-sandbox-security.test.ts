@@ -48,6 +48,11 @@ describe("validateBindMounts", () => {
   it("blocks dangerous bind source paths", () => {
     const cases = [
       {
+        name: "host root mount",
+        binds: ["/:/mnt/host"],
+        expected: /blocked path "\/"/,
+      },
+      {
         name: "etc mount",
         binds: ["/etc/passwd:/mnt/passwd:ro"],
         expected: /blocked path "\/etc"/,
