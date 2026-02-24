@@ -3,6 +3,7 @@ import {
   resolveSandboxConfigForAgent,
   resolveSandboxToolPolicyForAgent,
 } from "../agents/sandbox.js";
+import { isDangerousNetworkMode, normalizeNetworkMode } from "../agents/sandbox/network-mode.js";
 /**
  * Synchronous security audit collector functions.
  *
@@ -830,8 +831,8 @@ export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): Secu
     }
 
     const network = typeof docker.network === "string" ? docker.network : undefined;
-    const normalizedNetwork = network?.trim().toLowerCase();
-    if (normalizedNetwork === "host" || normalizedNetwork?.startsWith("container:")) {
+    const normalizedNetwork = normalizeNetworkMode(network);
+    if (isDangerousNetworkMode(network)) {
       const modeLabel = normalizedNetwork === "host" ? '"host"' : `"${network}"`;
       const detail =
         normalizedNetwork === "host"
