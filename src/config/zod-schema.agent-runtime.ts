@@ -124,6 +124,8 @@ export const SandboxDockerSchema = z
     dns: z.array(z.string()).optional(),
     extraHosts: z.array(z.string()).optional(),
     binds: z.array(z.string()).optional(),
+    dangerouslyAllowReservedContainerTargets: z.boolean().optional(),
+    dangerouslyAllowExternalBindSources: z.boolean().optional(),
   })
   .strict()
   .superRefine((data, ctx) => {

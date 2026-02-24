@@ -123,6 +123,48 @@ describe("validateBindMounts", () => {
       expectBindMountsToThrow([source], /non-absolute/, source);
     }
   });
+
+  it("blocks bind sources outside allowed roots when allowlist is configured", () => {
+    expect(() =>
+      validateBindMounts(["/opt/external:/data:ro"], {
+        allowedSourceRoots: ["/home/user/project"],
+      }),
+    ).toThrow(/outside allowed roots/);
+  });
+
+  it("allows bind sources in allowed roots when allowlist is configured", () => {
+    expect(() =>
+      validateBindMounts(["/home/user/project/cache:/data:ro"], {
+        allowedSourceRoots: ["/home/user/project"],
+      }),
+    ).not.toThrow();
+  });
+
+  it("allows bind sources outside allowed roots with explicit dangerous override", () => {
+    expect(() =>
+      validateBindMounts(["/opt/external:/data:ro"], {
+        allowedSourceRoots: ["/home/user/project"],
+        allowSourcesOutsideAllowedRoots: true,
+      }),
+    ).not.toThrow();
+  });
+
+  it("blocks reserved container target paths by default", () => {
+    expect(() =>
+      validateBindMounts([
+        "/home/user/project:/workspace:rw",
+        "/home/user/project:/agent/cache:rw",
+      ]),
+    ).toThrow(/reserved container path/);
+  });
+
+  it("allows reserved container target paths with explicit dangerous override", () => {
+    expect(() =>
+      validateBindMounts(["/home/user/project:/workspace:rw"], {
+        allowReservedContainerTargets: true,
+      }),
+    ).not.toThrow();
+  });
 });
 
 describe("validateNetworkMode", () => {
