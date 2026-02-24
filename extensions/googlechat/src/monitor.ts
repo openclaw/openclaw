@@ -6,6 +6,7 @@ import {
   readJsonBodyWithLimit,
   registerWebhookTarget,
   rejectNonPostWebhookRequest,
+  isDangerousNameMatchingEnabled,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveSingleWebhookTargetAsync,
@@ -410,7 +411,7 @@ async function processMessageWithPipeline(params: {
   const senderId = sender?.name ?? "";
   const senderName = sender?.displayName ?? "";
   const senderEmail = sender?.email ?? undefined;
-  const allowNameMatching = account.config.dangerouslyAllowNameMatching === true;
+  const allowNameMatching = isDangerousNameMatchingEnabled(account.config);
 
   const allowBots = account.config.allowBots === true;
   if (!allowBots) {
