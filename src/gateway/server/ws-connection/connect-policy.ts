@@ -35,7 +35,11 @@ export function resolveControlUiAuthPolicy(params: {
 export function shouldSkipControlUiPairing(
   policy: ControlUiAuthPolicy,
   sharedAuthOk: boolean,
+  trustedProxyAuthOk = false,
 ): boolean {
+  if (trustedProxyAuthOk) {
+    return true;
+  }
   return policy.allowBypass && sharedAuthOk;
 }
 
@@ -50,12 +54,16 @@ export function evaluateMissingDeviceIdentity(params: {
   role: GatewayRole;
   isControlUi: boolean;
   controlUiAuthPolicy: ControlUiAuthPolicy;
+  trustedProxyAuthOk?: boolean;
   sharedAuthOk: boolean;
   authOk: boolean;
   hasSharedAuth: boolean;
   isLocalClient: boolean;
 }): MissingDeviceIdentityDecision {
   if (params.hasDeviceIdentity) {
+    return { kind: "allow" };
+  }
+  if (params.isControlUi && params.trustedProxyAuthOk) {
     return { kind: "allow" };
   }
   if (params.isControlUi && !params.controlUiAuthPolicy.allowBypass) {
