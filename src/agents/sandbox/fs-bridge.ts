@@ -96,7 +96,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     const target = this.resolveResolvedPath(params);
     await this.assertPathSafety(target, { action: "read files" });
     const result = await this.runCommand('set -eu; cat -- "$1"', {
-      args: [target.containerPath],
+      args: [ensurePathNotInterpretedAsOption(target.containerPath)],
       signal: params.signal,
     });
     return result.stdout;
@@ -121,7 +121,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
         ? 'set -eu; cat >"$1"'
         : 'set -eu; dir=$(dirname -- "$1"); if [ "$dir" != "." ]; then mkdir -p -- "$dir"; fi; cat >"$1"';
     await this.runCommand(script, {
-      args: [target.containerPath],
+      args: [ensurePathNotInterpretedAsOption(target.containerPath)],
       stdin: buffer,
       signal: params.signal,
     });
@@ -132,7 +132,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     this.ensureWriteAccess(target, "create directories");
     await this.assertPathSafety(target, { action: "create directories", requireWritable: true });
     await this.runCommand('set -eu; mkdir -p -- "$1"', {
-      args: [target.containerPath],
+      args: [ensurePathNotInterpretedAsOption(target.containerPath)],
       signal: params.signal,
     });
   }
@@ -156,7 +156,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     );
     const rmCommand = flags.length > 0 ? `rm ${flags.join(" ")}` : "rm";
     await this.runCommand(`set -eu; ${rmCommand} -- "$1"`, {
-      args: [target.containerPath],
+      args: [ensurePathNotInterpretedAsOption(target.containerPath)],
       signal: params.signal,
     });
   }
@@ -183,7 +183,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     await this.runCommand(
       'set -eu; dir=$(dirname -- "$2"); if [ "$dir" != "." ]; then mkdir -p -- "$dir"; fi; mv -- "$1" "$2"',
       {
-        args: [from.containerPath, to.containerPath],
+        args: [ensurePathNotInterpretedAsOption(from.containerPath), ensurePathNotInterpretedAsOption(to.containerPath)],
         signal: params.signal,
       },
     );
@@ -197,7 +197,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     const target = this.resolveResolvedPath(params);
     await this.assertPathSafety(target, { action: "stat files" });
     const result = await this.runCommand('set -eu; stat -c "%F|%s|%Y" -- "$1"', {
-      args: [target.containerPath],
+      args: [ensurePathNotInterpretedAsOption(target.containerPath)],
       signal: params.signal,
       allowFailure: true,
     });
@@ -307,7 +307,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       'printf "%s%s\\n" "$canonical" "$suffix"',
     ].join("\n");
     const result = await this.runCommand(script, {
-      args: [params.containerPath, params.allowFinalSymlink ? "1" : "0"],
+      args: [ensurePathNotInterpretedAsOption(params.containerPath), params.allowFinalSymlink ? "1" : "0"],
     });
     const canonical = result.stdout.toString("utf8").trim();
     if (!canonical.startsWith("/")) {
@@ -361,6 +361,19 @@ function isPathInsidePosix(root: string, target: string): boolean {
     return true;
   }
   return target === root || target.startsWith(`${root}/`);
+}
+
+/**
+ * Ensure the path is not interpreted as a shell option.
+ * Paths starting with "-" can be interpreted as command options by the shell.
+ * Prepend "./" to prevent this interpretation.
+ */
+function ensurePathNotInterpretedAsOption(path: string): string {
+  // If path starts with a hyphen (either - or --), prepend ./ to prevent interpretation as option
+  if (path.startsWith("-") || path.startsWith("--")) {
+    return "./" + path;
+  }
+  return path;
 }
 
 async function assertNoHostSymlinkEscape(params: {
