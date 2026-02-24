@@ -41,19 +41,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import ai.openclaw.android.chat.ChatSessionEntry
 import ai.openclaw.android.ui.mobileAccent
 import ai.openclaw.android.ui.mobileAccentSoft
 import ai.openclaw.android.ui.mobileBorder
 import ai.openclaw.android.ui.mobileBorderStrong
 import ai.openclaw.android.ui.mobileCallout
 import ai.openclaw.android.ui.mobileCaption1
-import ai.openclaw.android.ui.mobileDanger
 import ai.openclaw.android.ui.mobileHeadline
 import ai.openclaw.android.ui.mobileSurface
 import ai.openclaw.android.ui.mobileText
@@ -62,9 +59,6 @@ import ai.openclaw.android.ui.mobileTextTertiary
 
 @Composable
 fun ChatComposer(
-  sessionKey: String,
-  sessions: List<ChatSessionEntry>,
-  mainSessionKey: String,
   healthOk: Boolean,
   thinkingLevel: String,
   pendingRunCount: Int,
@@ -72,7 +66,6 @@ fun ChatComposer(
   onPickImages: () -> Unit,
   onRemoveAttachment: (id: String) -> Unit,
   onSetThinkingLevel: (level: String) -> Unit,
-  onSelectSession: (sessionKey: String) -> Unit,
   onRefresh: () -> Unit,
   onAbort: () -> Unit,
   onSend: (text: String) -> Unit,
@@ -80,62 +73,10 @@ fun ChatComposer(
   var input by rememberSaveable { mutableStateOf("") }
   var showThinkingMenu by remember { mutableStateOf(false) }
 
-  val sessionOptions = resolveSessionChoices(sessionKey, sessions, mainSessionKey = mainSessionKey)
-  val currentSessionLabel =
-    friendlySessionName(sessionOptions.firstOrNull { it.key == sessionKey }?.displayName ?: sessionKey)
-
   val canSend = pendingRunCount == 0 && (input.trim().isNotEmpty() || attachments.isNotEmpty()) && healthOk
   val sendBusy = pendingRunCount > 0
 
   Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-    Row(
-      modifier = Modifier.fillMaxWidth(),
-      verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.SpaceBetween,
-    ) {
-      Text(
-        text = "SESSION",
-        style = mobileCaption1.copy(fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp),
-        color = mobileTextSecondary,
-      )
-      Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(
-          text = currentSessionLabel,
-          style = mobileCallout.copy(fontWeight = FontWeight.SemiBold),
-          color = mobileText,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
-        )
-        ConnectionPill(healthOk = healthOk)
-      }
-    }
-
-    Row(
-      modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-      for (entry in sessionOptions) {
-        val active = entry.key == sessionKey
-        Surface(
-          onClick = { onSelectSession(entry.key) },
-          shape = RoundedCornerShape(14.dp),
-          color = if (active) mobileAccent else Color.White,
-          border = BorderStroke(1.dp, if (active) Color(0xFF154CAD) else mobileBorderStrong),
-          tonalElevation = 0.dp,
-          shadowElevation = 0.dp,
-        ) {
-          Text(
-            text = friendlySessionName(entry.displayName ?: entry.key),
-            style = mobileCaption1.copy(fontWeight = if (active) FontWeight.Bold else FontWeight.SemiBold),
-            color = if (active) Color.White else mobileText,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-          )
-        }
-      }
-    }
-
     Row(
       modifier = Modifier.fillMaxWidth(),
       verticalAlignment = Alignment.CenterVertically,
@@ -193,10 +134,10 @@ fun ChatComposer(
     OutlinedTextField(
       value = input,
       onValueChange = { input = it },
-      modifier = Modifier.fillMaxWidth().height(108.dp),
+      modifier = Modifier.fillMaxWidth().height(92.dp),
       placeholder = { Text("Type a message", style = mobileBodyStyle(), color = mobileTextTertiary) },
-      minLines = 3,
-      maxLines = 6,
+      minLines = 2,
+      maxLines = 5,
       textStyle = mobileBodyStyle().copy(color = mobileText),
       shape = RoundedCornerShape(14.dp),
       colors = chatTextFieldColors(),
@@ -258,26 +199,6 @@ fun ChatComposer(
         Text("Send", style = mobileHeadline.copy(fontWeight = FontWeight.Bold))
       }
     }
-  }
-}
-
-@Composable
-private fun ConnectionPill(healthOk: Boolean) {
-  Surface(
-    shape = RoundedCornerShape(999.dp),
-    color = if (healthOk) ai.openclaw.android.ui.mobileSuccessSoft else ai.openclaw.android.ui.mobileWarningSoft,
-    border =
-      BorderStroke(
-        1.dp,
-        if (healthOk) ai.openclaw.android.ui.mobileSuccess.copy(alpha = 0.35f) else ai.openclaw.android.ui.mobileWarning.copy(alpha = 0.35f),
-      ),
-  ) {
-    Text(
-      text = if (healthOk) "Connected" else "Offline",
-      style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
-      color = if (healthOk) ai.openclaw.android.ui.mobileSuccess else ai.openclaw.android.ui.mobileWarning,
-      modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
-    )
   }
 }
 
