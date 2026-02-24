@@ -106,6 +106,9 @@ export function isRecoverableTelegramNetworkError(
     if (message && ALWAYS_RECOVERABLE_MESSAGES.has(message)) {
       return true;
     }
+    if (message && message.startsWith("network request for ") && message.endsWith(" failed!")) {
+      return true;
+    }
     if (allowMessageMatch && message) {
       if (RECOVERABLE_MESSAGE_SNIPPETS.some((snippet) => message.includes(snippet))) {
         return true;

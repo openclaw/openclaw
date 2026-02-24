@@ -54,6 +54,8 @@ async function getRelayPort() {
   const raw = stored.relayPort
   const n = Number.parseInt(String(raw || ''), 10)
   if (!Number.isFinite(n) || n <= 0 || n > 65535) return DEFAULT_PORT
+  // 18789 is the Gateway WS port, not the Relay Router
+  if (n === 18789) return DEFAULT_PORT
   return n
 }
 

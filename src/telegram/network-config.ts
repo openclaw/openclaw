@@ -93,12 +93,12 @@ export function resolveTelegramDnsResultOrderDecision(params?: {
     return { value: configValue, source: "config" };
   }
 
-  // Default to ipv4first on Node 22+ to avoid IPv6 issues
-  if (Number.isFinite(nodeMajor) && nodeMajor >= 22) {
-    return { value: "ipv4first", source: "default-node22" };
+  // Default to ipv4first to avoid IPv6 issues present globally across node versions
+  if (Number.isFinite(nodeMajor)) {
+    return { value: "ipv4first", source: "default-ipv4first" };
   }
 
-  return { value: null };
+  return { value: "ipv4first", source: "default" };
 }
 
 export function resetTelegramNetworkConfigStateForTests(): void {

@@ -1,5 +1,4 @@
 import { deriveRelayToken } from './background-utils.js'
-import { classifyRelayCheckException, classifyRelayCheckResponse } from './options-validation.js'
 
 const DEFAULT_PORT = 18792
 
@@ -7,6 +6,8 @@ function clampPort(value) {
   const n = Number.parseInt(String(value || ''), 10)
   if (!Number.isFinite(n)) return DEFAULT_PORT
   if (n <= 0 || n > 65535) return DEFAULT_PORT
+  // 18789 is the Gateway WS port, not the Relay Router
+  if (n === 18789) return DEFAULT_PORT
   return n
 }
 
@@ -14,6 +15,13 @@ function updateRelayUrl(port) {
   const el = document.getElementById('relay-url')
   if (!el) return
   el.textContent = `http://127.0.0.1:${port}/`
+}
+
+async function relayHeaders(port, gatewayToken) {
+  const token = String(gatewayToken || '').trim()
+  if (!token) return {}
+  const derivedToken = await deriveRelayToken(port, token)
+  return { 'x-openclaw-relay-token': derivedToken }
 }
 
 function setStatus(kind, message) {
@@ -30,21 +38,28 @@ async function checkRelayReachable(port, token) {
     setStatus('error', 'Gateway token required. Save your gateway token to connect.')
     return
   }
+  const ctrl = new AbortController()
+  const t = setTimeout(() => ctrl.abort(), 1200)
   try {
-    const relayToken = await deriveRelayToken(trimmedToken, port)
-    // Delegate the fetch to the background service worker to bypass
-    // CORS preflight on the custom x-openclaw-relay-token header.
-    const res = await chrome.runtime.sendMessage({
-      type: 'relayCheck',
-      url,
-      token: relayToken,
+    const headers = await relayHeaders(port, trimmedToken)
+    const res = await fetch(url, {
+      method: 'GET',
+      headers,
+      signal: ctrl.signal,
     })
-    const result = classifyRelayCheckResponse(res, port)
-    if (result.action === 'throw') throw new Error(result.error)
-    setStatus(result.kind, result.message)
-  } catch (err) {
-    const result = classifyRelayCheckException(err, port)
-    setStatus(result.kind, result.message)
+    if (res.status === 401) {
+      setStatus('error', 'Gateway token rejected. Check token and save again.')
+      return
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    setStatus('ok', `Relay reachable and authenticated at http://127.0.0.1:${port}/`)
+  } catch {
+    setStatus(
+      'error',
+      `Relay not reachable/authenticated at http://127.0.0.1:${port}/. Start OpenClaw browser relay and verify token.`,
+    )
+  } finally {
+    clearTimeout(t)
   }
 }
 

@@ -28,6 +28,36 @@ function resolveTelegramApiLogger(runtime?: RuntimeEnv, logger?: TelegramApiLogg
   return (message: string) => fallbackLogger.error(message);
 }
 
+function toPrintableLogValue(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value instanceof Error) {
+    return value.stack ?? value.message;
+  }
+  if (typeof value === "object" && value !== null) {
+    try {
+      return JSON.stringify(value);
+    } catch (err) {
+      return `[unserializable object: ${String(err)}]`;
+    }
+  }
+  return String(value);
+}
+
+function formatNestedRetryErrorContext(err: unknown): string {
+  if (typeof err !== "object" || err === null || !("error" in err)) {
+    return "error: undefined | cause: undefined | stack: undefined";
+  }
+  const nestedError = (err as { error?: unknown }).error;
+  if (typeof nestedError !== "object" || nestedError === null) {
+    return `error: ${toPrintableLogValue(nestedError)} | cause: undefined | stack: undefined`;
+  }
+  const cause = "cause" in nestedError ? (nestedError as { cause?: unknown }).cause : undefined;
+  const stack = "stack" in nestedError ? (nestedError as { stack?: unknown }).stack : undefined;
+  return `error: ${toPrintableLogValue(nestedError)} | cause: ${toPrintableLogValue(cause)} | stack: ${toPrintableLogValue(stack)}`;
+}
+
 export async function withTelegramApiErrorLogging<T>({
   operation,
   fn,
@@ -47,7 +77,7 @@ export async function withTelegramApiErrorLogging<T>({
         onRetry: (info) => {
           const log = resolveTelegramApiLogger(runtime, logger);
           log(
-            `telegram ${operation} retry ${info.attempt}/${info.maxAttempts - 1} in ${info.delayMs}ms due to: ${formatErrorMessage(info.err)}`,
+            `telegram ${operation} retry ${info.attempt}/${info.maxAttempts - 1} in ${info.delayMs}ms due to: ${formatErrorMessage(info.err)} (${formatNestedRetryErrorContext(info.err)})`,
           );
         },
       });
