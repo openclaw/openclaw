@@ -126,6 +126,7 @@ export const SandboxDockerSchema = z
     binds: z.array(z.string()).optional(),
     dangerouslyAllowReservedContainerTargets: z.boolean().optional(),
     dangerouslyAllowExternalBindSources: z.boolean().optional(),
+    dangerouslyAllowContainerNamespaceJoin: z.boolean().optional(),
   })
   .strict()
   .superRefine((data, ctx) => {
@@ -153,12 +154,22 @@ export const SandboxDockerSchema = z
         }
       }
     }
-    if (data.network?.trim().toLowerCase() === "host") {
+    const network = data.network?.trim().toLowerCase();
+    if (network === "host") {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ["network"],
         message:
           'Sandbox security: network mode "host" is blocked. Use "bridge" or "none" instead.',
+      });
+    }
+    if (network?.startsWith("container:") && data.dangerouslyAllowContainerNamespaceJoin !== true) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["network"],
+        message:
+          'Sandbox security: network mode "container:*" is blocked by default. ' +
+          "Use a custom bridge network, or set dangerouslyAllowContainerNamespaceJoin=true only when you fully trust this runtime.",
       });
     }
     if (data.seccompProfile?.trim().toLowerCase() === "unconfined") {
@@ -464,6 +475,21 @@ export const AgentSandboxSchema = z
     prune: SandboxPruneSchema,
   })
   .strict()
+  .superRefine((data, ctx) => {
+    const browserNetwork = data.browser?.network?.trim().toLowerCase();
+    if (
+      browserNetwork?.startsWith("container:") &&
+      data.docker?.dangerouslyAllowContainerNamespaceJoin !== true
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["browser", "network"],
+        message:
+          'Sandbox security: browser network mode "container:*" is blocked by default. ' +
+          "Set sandbox.docker.dangerouslyAllowContainerNamespaceJoin=true only when you fully trust this runtime.",
+      });
+    }
+  })
   .optional();
 
 const CommonToolPolicyFields = {

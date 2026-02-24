@@ -53,6 +53,37 @@ describe("sandbox docker config", () => {
     expect(res.ok).toBe(false);
   });
 
+  it("rejects container namespace join by default", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              network: "container:peer",
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
+
+  it("allows container namespace join with explicit dangerous override", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              network: "container:peer",
+              dangerouslyAllowContainerNamespaceJoin: true,
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
   it("rejects seccomp unconfined via Zod schema validation", () => {
     const res = validateConfigObject({
       agents: {
@@ -218,5 +249,38 @@ describe("sandbox browser binds config", () => {
       },
     });
     expect(res.ok).toBe(false);
+  });
+
+  it("rejects container namespace join in sandbox.browser config by default", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            browser: {
+              network: "container:peer",
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
+
+  it("allows container namespace join in sandbox.browser config with explicit dangerous override", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              dangerouslyAllowContainerNamespaceJoin: true,
+            },
+            browser: {
+              network: "container:peer",
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
   });
 });
