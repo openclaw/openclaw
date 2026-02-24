@@ -490,6 +490,40 @@ describe("runMessageAction sendAttachment hydration", () => {
     vi.mocked(loadWebMedia).mockImplementation(actual.loadWebMedia);
   }
 
+  async function expectRejectsLocalAbsolutePathWithoutSandbox(params: {
+    action: "sendAttachment" | "setGroupIcon";
+    target: string;
+    message?: string;
+    tempPrefix: string;
+  }) {
+    await restoreRealMediaLoader();
+
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), params.tempPrefix));
+    try {
+      const outsidePath = path.join(tempDir, "secret.txt");
+      await fs.writeFile(outsidePath, "secret", "utf8");
+
+      const actionParams: Record<string, unknown> = {
+        channel: "bluebubbles",
+        target: params.target,
+        media: outsidePath,
+      };
+      if (params.message) {
+        actionParams.message = params.message;
+      }
+
+      await expect(
+        runMessageAction({
+          cfg,
+          action: params.action,
+          params: actionParams,
+        }),
+      ).rejects.toThrow(/allowed directory|path-not-allowed/i);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  }
+
   it("hydrates buffer and filename from media for sendAttachment", async () => {
     const result = await runMessageAction({
       cfg,
@@ -548,52 +582,20 @@ describe("runMessageAction sendAttachment hydration", () => {
   });
 
   it("rejects local absolute path for sendAttachment when sandboxRoot is missing", async () => {
-    await restoreRealMediaLoader();
-
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-attachment-"));
-    try {
-      const outsidePath = path.join(tempDir, "secret.txt");
-      await fs.writeFile(outsidePath, "secret", "utf8");
-
-      await expect(
-        runMessageAction({
-          cfg,
-          action: "sendAttachment",
-          params: {
-            channel: "bluebubbles",
-            target: "+15551234567",
-            media: outsidePath,
-            message: "caption",
-          },
-        }),
-      ).rejects.toThrow(/allowed directory|path-not-allowed/i);
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+    await expectRejectsLocalAbsolutePathWithoutSandbox({
+      action: "sendAttachment",
+      target: "+15551234567",
+      message: "caption",
+      tempPrefix: "msg-attachment-",
+    });
   });
 
   it("rejects local absolute path for setGroupIcon when sandboxRoot is missing", async () => {
-    await restoreRealMediaLoader();
-
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-group-icon-"));
-    try {
-      const outsidePath = path.join(tempDir, "secret.txt");
-      await fs.writeFile(outsidePath, "secret", "utf8");
-
-      await expect(
-        runMessageAction({
-          cfg,
-          action: "setGroupIcon",
-          params: {
-            channel: "bluebubbles",
-            target: "group:123",
-            media: outsidePath,
-          },
-        }),
-      ).rejects.toThrow(/allowed directory|path-not-allowed/i);
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+    await expectRejectsLocalAbsolutePathWithoutSandbox({
+      action: "setGroupIcon",
+      target: "group:123",
+      tempPrefix: "msg-group-icon-",
+    });
   });
 });
 
