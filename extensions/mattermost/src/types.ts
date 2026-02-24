@@ -54,6 +54,8 @@ export type MattermostAccountConfig = {
     /** Enable message reaction actions. Default: true. */
     reactions?: boolean;
   };
+  /** Automatically create a thread on each inbound channel message before replying. */
+  autoThread?: boolean;
 };
 
 export type MattermostConfig = {

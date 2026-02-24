@@ -34,6 +34,7 @@ const MattermostAccountSchemaBase = z
         reactions: z.boolean().optional(),
       })
       .optional(),
+    autoThread: z.boolean().optional(),
   })
   .strict();
 

@@ -59,6 +59,21 @@ export function resolveIdentityName(cfg: OpenClawConfig, agentId: string): strin
   return entry?.identity?.name?.trim() || undefined;
 }
 
+export type ChatKind = "direct" | "group" | "channel";
+
+export function resolveAutoThreadRootId(params: {
+  postId: string;
+  rawRootId?: string | null;
+  chatKind: ChatKind;
+  autoThread: boolean;
+}): string | undefined {
+  const threadRootId = params.rawRootId?.trim() || undefined;
+  if (params.autoThread && params.chatKind !== "direct" && !threadRootId) {
+    return params.postId;
+  }
+  return threadRootId;
+}
+
 export function resolveThreadSessionKeys(params: {
   baseSessionKey: string;
   threadId?: string | null;
