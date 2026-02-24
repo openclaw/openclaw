@@ -621,7 +621,7 @@ describe("exec approvals allowlist evaluation", () => {
       analysis,
       allowlist: [],
       safeBins: new Set(),
-      skillBins: new Set(["skill-bin"]),
+      skillBins: [{ name: "skill-bin", resolvedPath: "/opt/skills/skill-bin" }],
       autoAllowSkills: true,
       cwd: "/tmp",
     });
@@ -647,7 +647,7 @@ describe("exec approvals allowlist evaluation", () => {
       analysis,
       allowlist: [],
       safeBins: new Set(),
-      skillBins: new Set(["skill-bin"]),
+      skillBins: [{ name: "skill-bin", resolvedPath: "/tmp/skill-bin" }],
       autoAllowSkills: true,
       cwd: "/tmp",
     });
@@ -673,7 +673,7 @@ describe("exec approvals allowlist evaluation", () => {
       analysis,
       allowlist: [],
       safeBins: new Set(),
-      skillBins: new Set(["skill-bin"]),
+      skillBins: [{ name: "skill-bin", resolvedPath: "/opt/skills/skill-bin" }],
       autoAllowSkills: true,
       cwd: "/tmp",
     });

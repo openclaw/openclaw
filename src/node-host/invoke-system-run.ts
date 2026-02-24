@@ -14,6 +14,7 @@ import {
   type ExecAsk,
   type ExecCommandSegment,
   type ExecSecurity,
+  type SkillBinTrustEntry,
 } from "../infra/exec-approvals.js";
 import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../infra/exec-host.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
@@ -145,7 +146,7 @@ function evaluateSystemRunAllowlist(params: {
   trustedSafeBinDirs: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["trustedSafeBinDirs"];
   cwd: string | undefined;
   env: Record<string, string> | undefined;
-  skillBins: Set<string>;
+  skillBins: SkillBinTrustEntry[];
   autoAllowSkills: boolean;
 }): SystemRunAllowlistAnalysis {
   if (params.shellCommand) {
@@ -310,7 +311,7 @@ export async function handleSystemRunInvoke(opts: HandleSystemRunInvokeOptions):
     global: cfg.tools?.exec,
     local: agentExec,
   });
-  const bins = autoAllowSkills ? await opts.skillBins.current() : new Set<string>();
+  const bins = autoAllowSkills ? await opts.skillBins.current() : [];
   let { analysisOk, allowlistMatches, allowlistSatisfied, segments } = evaluateSystemRunAllowlist({
     shellCommand,
     argv,
