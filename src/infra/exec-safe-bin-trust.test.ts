@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
@@ -5,6 +7,7 @@ import {
   buildTrustedSafeBinDirs,
   getTrustedSafeBinDirs,
   isTrustedSafeBinPath,
+  listWritableExplicitTrustedSafeBinDirs,
 } from "./exec-safe-bin-trust.js";
 
 describe("exec safe bin trust", () => {
@@ -68,5 +71,26 @@ describe("exec safe bin trust", () => {
       const refreshed = getTrustedSafeBinDirs({ refresh: true });
       expect(refreshed.has(path.resolve(injected))).toBe(false);
     });
+  });
+
+  it("flags explicitly trusted dirs that are group/world writable", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-safe-bin-trust-"));
+    try {
+      await fs.chmod(dir, 0o777);
+      const hits = listWritableExplicitTrustedSafeBinDirs([dir]);
+      expect(hits).toEqual([
+        {
+          dir: path.resolve(dir),
+          groupWritable: true,
+          worldWritable: true,
+        },
+      ]);
+    } finally {
+      await fs.chmod(dir, 0o755).catch(() => undefined);
+      await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    }
   });
 });
