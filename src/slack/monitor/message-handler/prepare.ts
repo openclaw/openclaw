@@ -142,6 +142,7 @@ export async function prepareSlackMessage(params: {
       const allowMatch = resolveSlackAllowListMatch({
         allowList: allowFromLower,
         id: directUserId,
+        allowNameMatching: ctx.allowNameMatching,
       });
       const allowMatchMeta = formatAllowlistMatchMeta(allowMatch);
       if (!allowMatch.allowed) {
@@ -244,6 +245,7 @@ export async function prepareSlackMessage(params: {
         allowList: channelConfig?.users,
         userId: senderId,
         userName: senderName,
+        allowNameMatching: ctx.allowNameMatching,
       })
     : true;
   if (isRoom && !channelUserAuthorized) {
@@ -263,6 +265,7 @@ export async function prepareSlackMessage(params: {
     allowList: allowFromLower,
     id: senderId,
     name: senderName,
+    allowNameMatching: ctx.allowNameMatching,
   }).allowed;
   const channelUsersAllowlistConfigured =
     isRoom && Array.isArray(channelConfig?.users) && channelConfig.users.length > 0;
@@ -272,6 +275,7 @@ export async function prepareSlackMessage(params: {
           allowList: channelConfig?.users,
           userId: senderId,
           userName: senderName,
+          allowNameMatching: ctx.allowNameMatching,
         })
       : false;
   const commandGate = resolveControlCommandGate({

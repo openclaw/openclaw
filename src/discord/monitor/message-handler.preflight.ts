@@ -190,6 +190,7 @@ export async function preflightDiscordMessage(
               name: sender.name,
               tag: sender.tag,
             },
+            allowNameMatching: params.discordConfig?.dangerouslyAllowNameMatching === true,
           })
         : { allowed: false };
       const allowMatchMeta = formatAllowlistMatchMeta(allowMatch);
@@ -563,6 +564,7 @@ export async function preflightDiscordMessage(
     guildInfo,
     memberRoleIds,
     sender,
+    allowNameMatching: params.discordConfig?.dangerouslyAllowNameMatching === true,
   });
 
   if (!isDirectMessage) {
@@ -572,11 +574,15 @@ export async function preflightDiscordMessage(
       "pk:",
     ]);
     const ownerOk = ownerAllowList
-      ? allowListMatches(ownerAllowList, {
-          id: sender.id,
-          name: sender.name,
-          tag: sender.tag,
-        })
+      ? allowListMatches(
+          ownerAllowList,
+          {
+            id: sender.id,
+            name: sender.name,
+            tag: sender.tag,
+          },
+          { allowNameMatching: params.discordConfig?.dangerouslyAllowNameMatching === true },
+        )
       : false;
     const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
     const commandGate = resolveControlCommandGate({

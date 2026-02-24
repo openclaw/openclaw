@@ -43,6 +43,11 @@ export type GoogleChatAccountConfig = {
   enabled?: boolean;
   /** Allow bot-authored messages to trigger replies (default: false). */
   allowBots?: boolean;
+  /**
+   * Break-glass override: allow mutable principal matching (raw email entries) in allowlists.
+   * Default behavior is ID-only matching.
+   */
+  dangerouslyAllowNameMatching?: boolean;
   /** Default mention requirement for space messages (default: true). */
   requireMention?: boolean;
   /**

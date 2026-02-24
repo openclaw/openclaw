@@ -77,6 +77,7 @@ const baseParams = () => ({
   dmEnabled: true,
   dmPolicy: "open" as const,
   allowFrom: [],
+  allowNameMatching: false,
   groupDmEnabled: true,
   groupDmChannels: [],
   defaultRequireMention: true,
