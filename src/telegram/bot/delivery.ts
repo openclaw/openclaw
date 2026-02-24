@@ -35,6 +35,9 @@ import type { StickerMetadata, TelegramContext } from "./types.js";
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
 const VOICE_FORBIDDEN_RE = /VOICE_MESSAGES_FORBIDDEN/;
 const FILE_TOO_BIG_RE = /file is too big/i;
+const TELEGRAM_MEDIA_SSRF_POLICY = {
+  allowRfc2544BenchmarkRange: true,
+} as const;
 
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
@@ -320,6 +323,7 @@ export async function resolveMedia(
       fetchImpl,
       filePathHint: filePath,
       maxBytes,
+      ssrfPolicy: TELEGRAM_MEDIA_SSRF_POLICY,
     });
     const originalName = fetched.fileName ?? filePath;
     return saveMediaBuffer(fetched.buffer, fetched.contentType, "inbound", maxBytes, originalName);
