@@ -16,13 +16,14 @@ describe("registerMatrixMonitorEvents", () => {
     sendReadReceiptMatrixMock.mockClear();
   });
 
-  function createHarness() {
+  function createHarness(options?: { getUserId?: ReturnType<typeof vi.fn> }) {
     const handlers = new Map<string, (...args: unknown[]) => void>();
+    const getUserId = options?.getUserId ?? vi.fn().mockResolvedValue("@bot:example.org");
     const client = {
       on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
         handlers.set(event, handler);
       }),
-      getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
+      getUserId,
       crypto: undefined,
     } as unknown as MatrixClient;
 
@@ -49,7 +50,7 @@ describe("registerMatrixMonitorEvents", () => {
       throw new Error("missing room.message handler");
     }
 
-    return { client, onRoomMessage, roomMessageHandler };
+    return { client, getUserId, onRoomMessage, roomMessageHandler, logVerboseMessage };
   }
 
   it("sends read receipt immediately for non-self messages", async () => {
@@ -91,6 +92,50 @@ describe("registerMatrixMonitorEvents", () => {
     await vi.waitFor(() => {
       expect(onRoomMessage).toHaveBeenCalledWith("!room:example.org", event);
     });
+    expect(sendReadReceiptMatrixMock).not.toHaveBeenCalled();
+  });
+
+  it("caches self user id across messages", async () => {
+    const { getUserId, roomMessageHandler } = createHarness();
+    const first = { event_id: "$e3", sender: "@alice:example.org" } as MatrixRawEvent;
+    const second = { event_id: "$e4", sender: "@bob:example.org" } as MatrixRawEvent;
+
+    roomMessageHandler("!room:example.org", first);
+    roomMessageHandler("!room:example.org", second);
+
+    await vi.waitFor(() => {
+      expect(sendReadReceiptMatrixMock).toHaveBeenCalledTimes(2);
+    });
+    expect(getUserId).toHaveBeenCalledTimes(1);
+  });
+
+  it("logs and continues when sending read receipt fails", async () => {
+    sendReadReceiptMatrixMock.mockRejectedValueOnce(new Error("network boom"));
+    const { roomMessageHandler, onRoomMessage, logVerboseMessage } = createHarness();
+    const event = { event_id: "$e5", sender: "@alice:example.org" } as MatrixRawEvent;
+
+    roomMessageHandler("!room:example.org", event);
+
+    await vi.waitFor(() => {
+      expect(onRoomMessage).toHaveBeenCalledWith("!room:example.org", event);
+      expect(logVerboseMessage).toHaveBeenCalledWith(
+        expect.stringContaining("matrix: early read receipt failed"),
+      );
+    });
+  });
+
+  it("skips read receipts if self-user lookup fails", async () => {
+    const { roomMessageHandler, onRoomMessage, getUserId } = createHarness({
+      getUserId: vi.fn().mockRejectedValue(new Error("cannot resolve self")),
+    });
+    const event = { event_id: "$e6", sender: "@alice:example.org" } as MatrixRawEvent;
+
+    roomMessageHandler("!room:example.org", event);
+
+    await vi.waitFor(() => {
+      expect(onRoomMessage).toHaveBeenCalledWith("!room:example.org", event);
+    });
+    expect(getUserId).toHaveBeenCalledTimes(1);
     expect(sendReadReceiptMatrixMock).not.toHaveBeenCalled();
   });
 });
