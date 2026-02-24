@@ -362,7 +362,7 @@ describe("downloadMessageResourceFeishu", () => {
 
   // Regression: Feishu API only supports type=image|file for messageResource.get.
   // Audio/video resources must use type=file, not type=audio (#8746).
-  it("audio uses type=file", async () => {
+  it("forwards provided type=file for non-image resources", async () => {
     const result = await downloadMessageResourceFeishu({
       cfg: {} as any,
       messageId: "om_audio_msg",
