@@ -753,10 +753,11 @@ export function buildSafeExternalPrompt(params: {
  * Checks if a session key indicates an external hook source.
  */
 export function isExternalHookSession(sessionKey: string): boolean {
+  const normalized = sessionKey.trim().toLowerCase();
   return (
-    sessionKey.startsWith("hook:gmail:") ||
-    sessionKey.startsWith("hook:webhook:") ||
-    sessionKey.startsWith("hook:") // Generic hook prefix
+    normalized.startsWith("hook:gmail:") ||
+    normalized.startsWith("hook:webhook:") ||
+    normalized.startsWith("hook:") // Generic hook prefix
   );
 }
 
@@ -764,13 +765,14 @@ export function isExternalHookSession(sessionKey: string): boolean {
  * Extracts the hook type from a session key.
  */
 export function getHookType(sessionKey: string): ExternalContentSource {
-  if (sessionKey.startsWith("hook:gmail:")) {
+  const normalized = sessionKey.trim().toLowerCase();
+  if (normalized.startsWith("hook:gmail:")) {
     return "email";
   }
-  if (sessionKey.startsWith("hook:webhook:")) {
+  if (normalized.startsWith("hook:webhook:")) {
     return "webhook";
   }
-  if (sessionKey.startsWith("hook:")) {
+  if (normalized.startsWith("hook:")) {
     return "webhook";
   }
   return "unknown";
