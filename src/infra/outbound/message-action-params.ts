@@ -178,6 +178,8 @@ async function hydrateAttachmentPayload(params: {
   contentTypeParam?: string | null;
   mediaHint?: string | null;
   fileHint?: string | null;
+  sandboxRoot?: string;
+  mediaLocalRoots?: readonly string[];
 }) {
   const contentTypeParam = params.contentTypeParam ?? undefined;
   const rawBuffer = readStringParam(params.args, "buffer", { trim: false });
@@ -201,12 +203,17 @@ async function hydrateAttachmentPayload(params: {
       channel: params.channel,
       accountId: params.accountId,
     });
-    // mediaSource already validated by normalizeSandboxMediaList; allow bypass but force explicit readFile.
-    const media = await loadWebMedia(mediaSource, {
-      maxBytes,
-      sandboxValidated: true,
-      readFile: (filePath: string) => fs.readFile(filePath),
-    });
+    const sandboxRoot = params.sandboxRoot?.trim();
+    const media = sandboxRoot
+      ? await loadWebMedia(mediaSource, {
+          maxBytes,
+          sandboxValidated: true,
+          readFile: (filePath: string) => fs.readFile(filePath),
+        })
+      : await loadWebMedia(mediaSource, {
+          maxBytes,
+          localRoots: params.mediaLocalRoots,
+        });
     params.args.buffer = media.buffer.toString("base64");
     if (!contentTypeParam && media.contentType) {
       params.args.contentType = media.contentType;
@@ -280,6 +287,8 @@ async function hydrateAttachmentActionPayload(params: {
   dryRun?: boolean;
   /** If caption is missing, copy message -> caption. */
   allowMessageCaptionFallback?: boolean;
+  sandboxRoot?: string;
+  mediaLocalRoots?: readonly string[];
 }): Promise<void> {
   const mediaHint = readStringParam(params.args, "media", { trim: false });
   const fileHint =
@@ -305,6 +314,8 @@ async function hydrateAttachmentActionPayload(params: {
     contentTypeParam,
     mediaHint,
     fileHint,
+    sandboxRoot: params.sandboxRoot,
+    mediaLocalRoots: params.mediaLocalRoots,
   });
 }
 
@@ -315,6 +326,8 @@ export async function hydrateSetGroupIconParams(params: {
   args: Record<string, unknown>;
   action: ChannelMessageActionName;
   dryRun?: boolean;
+  sandboxRoot?: string;
+  mediaLocalRoots?: readonly string[];
 }): Promise<void> {
   if (params.action !== "setGroupIcon") {
     return;
@@ -329,6 +342,8 @@ export async function hydrateSendAttachmentParams(params: {
   args: Record<string, unknown>;
   action: ChannelMessageActionName;
   dryRun?: boolean;
+  sandboxRoot?: string;
+  mediaLocalRoots?: readonly string[];
 }): Promise<void> {
   if (params.action !== "sendAttachment") {
     return;
