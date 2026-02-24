@@ -15,6 +15,10 @@ export type UsageLike = {
   completion_tokens?: number;
   cache_read_input_tokens?: number;
   cache_creation_input_tokens?: number;
+  // Moonshot/Kimi uses cached_tokens for cache read count (explicit caching API).
+  cached_tokens?: number;
+  // Kimi K2 uses prompt_tokens_details.cached_tokens for automatic prefix caching.
+  prompt_tokens_details?: { cached_tokens?: number };
   // Some agents/logs emit alternate naming.
   totalTokens?: number;
   total_tokens?: number;
@@ -64,7 +68,13 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
       raw.completionTokens ??
       raw.completion_tokens,
   );
-  const cacheRead = asFiniteNumber(raw.cacheRead ?? raw.cache_read ?? raw.cache_read_input_tokens);
+  const cacheRead = asFiniteNumber(
+    raw.cacheRead ??
+      raw.cache_read ??
+      raw.cache_read_input_tokens ??
+      raw.cached_tokens ??
+      raw.prompt_tokens_details?.cached_tokens,
+  );
   const cacheWrite = asFiniteNumber(
     raw.cacheWrite ?? raw.cache_write ?? raw.cache_creation_input_tokens,
   );
