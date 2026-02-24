@@ -102,19 +102,52 @@ tests/unit/ (test_indicators — 7 tests passing)
 - [x] **PyPI 퍼블리시** — https://pypi.org/project/maiupbit/0.1.0/
 - commit `e6e191bd`, pushed
 
-## 다음 액션 (Phase 6: 실전 운영)
+## Phase 7 완료 ✅ (2026-02-25)
+
+**강환국 퀀트 전략 6종 + 포트폴리오 백테스트 엔진**
+
+- [x] `maiupbit/strategies/` 모듈 신설
+  - `base.py` — Strategy Protocol (공통 인터페이스)
+  - `momentum.py` — 듀얼 모멘텀 전략 (DualMomentumStrategy)
+  - `volatility_breakout.py` — 래리 윌리엄스 변동성 돌파
+  - `multi_factor.py` — 멀티팩터 랭킹 (모멘텀+변동성+거래량)
+  - `allocation.py` — GTAA 자산배분 (Global Tactical Asset Allocation)
+  - `seasonal.py` — 시즌 필터 (할빙 사이클 기반 강세/약세장)
+  - `risk.py` — 리스크 관리 (손절/익절/포지션 사이징)
+- [x] `scripts/quant.py` — MAIBOT 연동 스크립트 (6 서브커맨드)
+- [x] 포트폴리오 백테스트 엔진
+- commit `e13e4a90`, pushed
+
+## Phase 8 완료 ✅ (2026-02-25)
+
+**LLMAnalyzer OpenAI/Ollama 듀얼 백엔드 + 모델 선정**
+
+- [x] LLMAnalyzer에 Ollama 로컬 LLM 백엔드 추가 (OpenAI 폴백)
+- [x] 모델 자동 선정 로직 (환경 변수 기반)
+- commit `5fde156d`, pushed
+
+## 다음 액션 (Phase 9 이후)
 
 - [ ] Transformer 모델 실제 학습 (BTC 90일 데이터)
 - [ ] HEARTBEAT에 주간 모델 재학습 크론 추가
 - [ ] Jupyter 교육 노트북
 - [ ] README에 PyPI 배지 추가
+- [ ] `pip install -e .` 전역 설치 (scripts/quant.py PYTHONPATH 이슈 해결)
+- [x] ~~HEARTBEAT에 퀀트 전략 주기 실행 크론 추가~~ → **등록 완료** (2026-02-25)
+  - `0f9d2724`: 퀀트 시즌 체크 (매일 06:35 KST)
+  - `a56da9fb`: 퀀트 모멘텀 리포트 (매주 월 07:00 KST)
+- [ ] Obsidian \_DASHBOARD.md Phase 7/8 반영
 
-## Phase 4 (미래)
+---
 
-- [ ] Transformer 모델 추가
-- [ ] 앙상블 모델 실전 적용
-- [ ] Jupyter 노트북 (분석 데모)
-- [ ] PyPI 퍼블리시
+## 점검 이력
+
+- 2026-02-25 08:05: Phase 7/8 종합 점검 완료
+  - 197 tests, 82.44% coverage ✅
+  - 전략 6종 실행 확인 (season JSON 정상)
+  - CLI quant 6 서브커맨드 동작 확인
+  - MAIBOT 연동: TOOLS.md ✅, HEARTBEAT.md ✅, 크론 2건 신규 등록
+  - docs I-001/T-001/PRD-v2 Phase 7/8 반영 완료
 
 ---
 
