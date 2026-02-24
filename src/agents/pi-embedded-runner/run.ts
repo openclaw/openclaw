@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
+import { buildActivityMeta } from "../../logging/activity/build.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookBeforeAgentStartResult } from "../../plugins/types.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
@@ -1343,6 +1344,16 @@ export async function runEmbeddedPiAgent(
 
           log.debug(
             `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
+            {
+              activity: buildActivityMeta({
+                kind: "run",
+                summary: aborted ? "embedded run aborted" : "embedded run done",
+                runId: params.runId,
+                sessionKey: params.sessionKey ?? params.sessionId,
+                status: aborted ? "error" : "ok",
+                durationMs: Date.now() - started,
+              }),
+            },
           );
           if (lastProfileId) {
             await markAuthProfileGood({

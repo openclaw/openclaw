@@ -171,7 +171,7 @@ export type LoggingConfig = {
   /** Maximum size of a single log file in bytes before writes are suppressed. Default: 500 MB. */
   maxFileBytes?: number;
   consoleLevel?: "silent" | "fatal" | "error" | "warn" | "info" | "debug" | "trace";
-  consoleStyle?: "pretty" | "compact" | "json";
+  consoleStyle?: "pretty" | "compact" | "json" | "activity";
   /** Redact sensitive tokens in tool summaries. Default: "tools". */
   redactSensitive?: "off" | "tools";
   /** Regex patterns used to redact sensitive tokens (defaults apply when unset). */

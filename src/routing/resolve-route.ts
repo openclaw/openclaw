@@ -3,7 +3,8 @@ import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { shouldLogVerbose } from "../globals.js";
-import { logDebug } from "../logger.js";
+import { buildActivityMeta } from "../logging/activity/build.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { listBindings } from "./bindings.js";
 import {
   buildAgentMainSessionKey,
@@ -57,6 +58,8 @@ export type ResolvedAgentRoute = {
 };
 
 export { DEFAULT_ACCOUNT_ID, DEFAULT_AGENT_ID } from "./session-key.js";
+
+const routingLog = createSubsystemLogger("routing");
 
 function normalizeToken(value: string | undefined | null): string {
   return (value ?? "").trim().toLowerCase();
@@ -619,11 +622,26 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   };
 
   if (shouldLogDebug) {
-    logDebug(
+    routingLog.debug(
       `[routing] resolveAgentRoute: channel=${channel} accountId=${accountId} peer=${formatPeer(peer)} guildId=${guildId || "none"} teamId=${teamId || "none"} bindings=${bindings.length}`,
+      {
+        activity: buildActivityMeta({
+          kind: "route",
+          channel,
+          summary: `resolve route for ${channel}`,
+          status: "ok",
+          extra: {
+            accountId,
+            peer: formatPeer(peer),
+            guildId: guildId || "none",
+            teamId: teamId || "none",
+            bindings: bindings.length,
+          },
+        }),
+      },
     );
     for (const entry of bindings) {
-      logDebug(
+      routingLog.debug(
         `[routing] binding: agentId=${entry.binding.agentId} accountPattern=${entry.match.accountPattern || "default"} peer=${formatNormalizedPeer(entry.match.peer)} guildId=${entry.match.guildId ?? "none"} teamId=${entry.match.teamId ?? "none"} roles=${entry.match.roles?.length ?? 0}`,
       );
     }
@@ -709,7 +727,21 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
     );
     if (matched) {
       if (shouldLogDebug) {
-        logDebug(`[routing] match: matchedBy=${tier.matchedBy} agentId=${matched.binding.agentId}`);
+        routingLog.debug(
+          `[routing] match: matchedBy=${tier.matchedBy} agentId=${matched.binding.agentId}`,
+          {
+            activity: buildActivityMeta({
+              kind: "route",
+              channel,
+              summary: `route matched (${tier.matchedBy})`,
+              status: "ok",
+              extra: {
+                matchedBy: tier.matchedBy,
+                agentId: matched.binding.agentId,
+              },
+            }),
+          },
+        );
       }
       return choose(matched.binding.agentId, tier.matchedBy);
     }

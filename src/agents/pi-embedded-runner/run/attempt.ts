@@ -11,6 +11,7 @@ import { resolveHeartbeatPrompt } from "../../../auto-reply/heartbeat.js";
 import { resolveChannelCapabilities } from "../../../config/channel-capabilities.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { getMachineDisplayName } from "../../../infra/machine-name.js";
+import { buildActivityMeta } from "../../../logging/activity/build.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type {
@@ -662,6 +663,21 @@ export async function runEmbeddedAttempt(
 
   log.debug(
     `embedded run start: runId=${params.runId} sessionId=${params.sessionId} provider=${params.provider} model=${params.modelId} thinking=${params.thinkLevel} messageChannel=${params.messageChannel ?? params.messageProvider ?? "unknown"}`,
+    {
+      activity: buildActivityMeta({
+        kind: "run",
+        summary: "embedded run start",
+        runId: params.runId,
+        sessionKey: params.sessionKey ?? params.sessionId,
+        channel: params.messageChannel ?? params.messageProvider ?? undefined,
+        status: "start",
+        extra: {
+          provider: params.provider,
+          model: params.modelId,
+          thinking: params.thinkLevel,
+        },
+      }),
+    },
   );
 
   await fs.mkdir(resolvedWorkspace, { recursive: true });
@@ -1524,7 +1540,18 @@ export async function runEmbeddedAttempt(
           }
         }
 
-        log.debug(`embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`);
+        log.debug(
+          `embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`,
+          {
+            activity: buildActivityMeta({
+              kind: "run",
+              summary: "prompt start",
+              runId: params.runId,
+              sessionKey: params.sessionKey ?? params.sessionId,
+              status: "start",
+            }),
+          },
+        );
         cacheTrace?.recordStage("prompt:before", {
           prompt: effectivePrompt,
           messages: activeSession.messages,
@@ -1634,6 +1661,16 @@ export async function runEmbeddedAttempt(
         } finally {
           log.debug(
             `embedded run prompt end: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - promptStartedAt}`,
+            {
+              activity: buildActivityMeta({
+                kind: "run",
+                summary: "prompt end",
+                runId: params.runId,
+                sessionKey: params.sessionKey ?? params.sessionId,
+                status: "done",
+                durationMs: Date.now() - promptStartedAt,
+              }),
+            },
           );
         }
 
