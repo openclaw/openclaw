@@ -546,7 +546,14 @@ export function applyExtraParamsToAgent(
 
   if (provider === "openrouter") {
     log.debug(`applying OpenRouter app attribution headers for ${provider}/${modelId}`);
-    agent.streamFn = createOpenRouterWrapper(agent.streamFn, thinkingLevel);
+    // "auto" is a dynamic routing model — we don't know which underlying model
+    // OpenRouter will select, and it may be a reasoning-required endpoint.
+    // Omit the thinkingLevel so we never inject `reasoning.effort: "none"`,
+    // which would cause a 400 on models where reasoning is mandatory.
+    // Users who need reasoning control should target a specific model ID.
+    // See: openclaw/openclaw#24851
+    const openRouterThinkingLevel = modelId === "auto" ? undefined : thinkingLevel;
+    agent.streamFn = createOpenRouterWrapper(agent.streamFn, openRouterThinkingLevel);
     agent.streamFn = createOpenRouterSystemCacheWrapper(agent.streamFn);
   }
 
