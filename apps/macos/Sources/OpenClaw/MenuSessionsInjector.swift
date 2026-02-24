@@ -493,7 +493,6 @@ extension MenuSessionsInjector {
         guard !summary.daily.isEmpty else { return nil }
 
         let menu = NSMenu()
-        menu.delegate = self
 
         let chartView = CostUsageHistoryMenuView(summary: summary, width: width)
         let hosting = NSHostingView(rootView: AnyView(chartView))
