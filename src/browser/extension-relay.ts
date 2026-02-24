@@ -4,6 +4,7 @@ import type { AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import WebSocket, { WebSocketServer } from "ws";
 import { isLoopbackAddress, isLoopbackHost } from "../gateway/net.js";
+import { registerUnhandledRejectionHandler } from "../infra/unhandled-rejections.js";
 import { rawDataToString } from "../infra/ws.js";
 import {
   probeAuthenticatedOpenClawRelay,
@@ -205,6 +206,28 @@ export function getChromeExtensionRelayAuthHeaders(url: string): Record<string, 
   }
   return { [RELAY_AUTH_HEADER]: token };
 }
+
+// Playwright can throw unhandled assertion errors when CDP frame events from the
+// Chrome extension relay reach its FrameManager (e.g. frameAttached with
+// unexpected state).  These are non-fatal — the relay and headless browser can
+// coexist; the assertion just means Playwright saw a frame it didn't expect.
+// Without this handler the default unhandledRejection handler calls
+// process.exit(1), crashing the entire gateway.
+// See: https://github.com/openclaw/openclaw/issues/24292
+registerUnhandledRejectionHandler((reason) => {
+  if (
+    reason instanceof Error &&
+    reason.message === "Assertion error" &&
+    reason.stack?.includes("playwright")
+  ) {
+    console.warn(
+      "[openclaw] Suppressed Playwright assertion error (extension relay / headless coexistence):",
+      reason.stack,
+    );
+    return true;
+  }
+  return false;
+});
 
 export async function ensureChromeExtensionRelayServer(opts: {
   cdpUrl: string;
