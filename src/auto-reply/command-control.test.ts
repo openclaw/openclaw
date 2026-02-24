@@ -138,6 +138,27 @@ describe("resolveCommandAuthorization", () => {
     expect(otherAuth.isAuthorizedSender).toBe(false);
   });
 
+  it("treats all senders as owner when ownerAllowFrom is wildcard", () => {
+    const cfg = {
+      commands: { ownerAllowFrom: ["*"] },
+      channels: { slack: {} },
+    } as OpenClawConfig;
+
+    const ctx = {
+      Provider: "slack",
+      Surface: "slack",
+      From: "slack:U0XXXXXXXXX",
+      SenderId: "U0XXXXXXXXX",
+    } as MsgContext;
+    const auth = resolveCommandAuthorization({
+      ctx,
+      cfg,
+      commandAuthorized: true,
+    });
+    expect(auth.senderIsOwner).toBe(true);
+    expect(auth.isAuthorizedSender).toBe(true);
+  });
+
   it("uses owner allowlist override from context when configured", () => {
     setActivePluginRegistry(
       createTestRegistry([
