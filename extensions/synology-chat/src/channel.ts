@@ -246,14 +246,22 @@ export function createSynologyChatPlugin() {
             // Build MsgContext (same format as LINE/Signal/etc.)
             const msgCtx = {
               Body: msg.body,
-              From: msg.from,
-              To: account.botName,
+              RawBody: msg.body,
+              CommandBody: msg.body,
+              From: `synology-chat:${msg.from}`,
+              To: `synology-chat:${msg.from}`,
               SessionKey: msg.sessionKey,
               AccountId: account.accountId,
               OriginatingChannel: CHANNEL_ID as any,
               OriginatingTo: msg.from,
               ChatType: msg.chatType,
               SenderName: msg.senderName,
+              SenderId: msg.from,
+              Provider: CHANNEL_ID,
+              Surface: CHANNEL_ID,
+              ConversationLabel: msg.senderName || msg.from,
+              Timestamp: Date.now(),
+              CommandAuthorized: true,
             };
 
             // Dispatch via the SDK's buffered block dispatcher
