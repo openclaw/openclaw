@@ -85,7 +85,17 @@ describe("browser state option collisions", () => {
   it("resolves --url via parent when addGatewayClientOptions captures it", async () => {
     const program = createBrowserProgram({ withGatewayUrl: true });
     await program.parseAsync(
-      ["browser", "--url", "ws://gw", "cookies", "set", "session", "abc", "--url", "https://example.com"],
+      [
+        "browser",
+        "--url",
+        "ws://gw",
+        "cookies",
+        "set",
+        "session",
+        "abc",
+        "--url",
+        "https://example.com",
+      ],
       { from: "user" },
     );
     const call = mocks.callBrowserRequest.mock.calls.at(-1);
