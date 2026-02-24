@@ -11,6 +11,7 @@ import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/c
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createIMessageTestPlugin } from "../../test-utils/imessage-test-plugin.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
+import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 
 const mocks = vi.hoisted(() => ({
   appendAssistantMessageToSessionTranscript: vi.fn(async () => ({ ok: true, sessionFile: "x" })),
@@ -198,6 +199,86 @@ describe("deliverOutboundPayloads", () => {
       expect.objectContaining({
         mediaUrl: "file:///tmp/f.png",
         mediaLocalRoots: expect.arrayContaining([path.join(STATE_DIR, "workspace-work")]),
+      }),
+    );
+  });
+
+  it("includes OpenClaw tmp root in telegram mediaLocalRoots", async () => {
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "c1" });
+
+    await deliverOutboundPayloads({
+      cfg: telegramChunkConfig,
+      channel: "telegram",
+      to: "123",
+      payloads: [{ text: "hi", mediaUrl: "https://example.com/x.png" }],
+      deps: { sendTelegram },
+    });
+
+    expect(sendTelegram).toHaveBeenCalledWith(
+      "123",
+      "hi",
+      expect.objectContaining({
+        mediaLocalRoots: expect.arrayContaining([resolvePreferredOpenClawTmpDir()]),
+      }),
+    );
+  });
+
+  it("includes OpenClaw tmp root in signal mediaLocalRoots", async () => {
+    const sendSignal = vi.fn().mockResolvedValue({ messageId: "s1", timestamp: 123 });
+
+    await deliverOutboundPayloads({
+      cfg: { channels: { signal: {} } },
+      channel: "signal",
+      to: "+1555",
+      payloads: [{ text: "hi", mediaUrl: "https://example.com/x.png" }],
+      deps: { sendSignal },
+    });
+
+    expect(sendSignal).toHaveBeenCalledWith(
+      "+1555",
+      "hi",
+      expect.objectContaining({
+        mediaLocalRoots: expect.arrayContaining([resolvePreferredOpenClawTmpDir()]),
+      }),
+    );
+  });
+
+  it("includes OpenClaw tmp root in whatsapp mediaLocalRoots", async () => {
+    const sendWhatsApp = vi.fn().mockResolvedValue({ messageId: "w1", toJid: "jid" });
+
+    await deliverOutboundPayloads({
+      cfg: whatsappChunkConfig,
+      channel: "whatsapp",
+      to: "+1555",
+      payloads: [{ text: "hi", mediaUrl: "https://example.com/x.png" }],
+      deps: { sendWhatsApp },
+    });
+
+    expect(sendWhatsApp).toHaveBeenCalledWith(
+      "+1555",
+      "hi",
+      expect.objectContaining({
+        mediaLocalRoots: expect.arrayContaining([resolvePreferredOpenClawTmpDir()]),
+      }),
+    );
+  });
+
+  it("includes OpenClaw tmp root in imessage mediaLocalRoots", async () => {
+    const sendIMessage = vi.fn().mockResolvedValue({ messageId: "i1", chatId: "chat-1" });
+
+    await deliverOutboundPayloads({
+      cfg: {},
+      channel: "imessage",
+      to: "imessage:+15551234567",
+      payloads: [{ text: "hi", mediaUrl: "https://example.com/x.png" }],
+      deps: { sendIMessage },
+    });
+
+    expect(sendIMessage).toHaveBeenCalledWith(
+      "imessage:+15551234567",
+      "hi",
+      expect.objectContaining({
+        mediaLocalRoots: expect.arrayContaining([resolvePreferredOpenClawTmpDir()]),
       }),
     );
   });
