@@ -11,6 +11,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Sessions/Tool-result guard: avoid generating synthetic `toolResult` entries for assistant turns that ended with `stopReason: "aborted"` or `"error"`, preventing orphaned tool-use IDs from triggering downstream API validation errors. (#25429) Thanks @mikaeldiakhate-cell.
 - Usage accounting: parse Moonshot/Kimi `cached_tokens` fields (including `prompt_tokens_details.cached_tokens`) into normalized cache-read usage metrics. (#25436) Thanks @Elarwei001.
 - Doctor/Sandbox: when sandbox mode is enabled but Docker is unavailable, surface a clear actionable warning (including failure impact and remediation) instead of a mild “skip checks” note. (#25438) Thanks @mcaxtr.
 - Config/Meta: accept numeric `meta.lastTouchedAt` timestamps and coerce them to ISO strings, preserving compatibility with agent edits that write `Date.now()` values. (#25491) Thanks @mcaxtr.
