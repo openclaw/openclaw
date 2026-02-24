@@ -9,11 +9,13 @@ import {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "../config/runtime-group-policy.js";
 import type { SignalReactionNotificationMode } from "../config/types.js";
+import { logVerbose } from "../globals.js";
 import type { BackoffPolicy } from "../infra/backoff.js";
 import { waitForTransportReady } from "../infra/transport-ready.js";
 import { saveMediaBuffer } from "../media/store.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../runtime.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
+import { isReasoningOnlyMessage } from "../shared/text/reasoning-tags.js";
 import { normalizeE164 } from "../utils.js";
 import { resolveSignalAccount } from "./accounts.js";
 import { signalCheck, signalRpcRequest } from "./client.js";
@@ -295,6 +297,10 @@ async function deliverReplies(params: {
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const text = payload.text ?? "";
     if (!text && mediaList.length === 0) {
+      continue;
+    }
+    if (text && isReasoningOnlyMessage(text)) {
+      logVerbose("signal reply is reasoning-only; skipping");
       continue;
     }
     if (mediaList.length === 0) {

@@ -4,7 +4,9 @@ import { createReplyReferencePlanner } from "../../auto-reply/reply/reply-refere
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { MarkdownTableMode } from "../../config/types.base.js";
+import { logVerbose } from "../../globals.js";
 import type { RuntimeEnv } from "../../runtime.js";
+import { isReasoningOnlyMessage } from "../../shared/text/reasoning-tags.js";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
 import { sendMessageSlack, type SlackSendIdentity } from "../send.js";
 
@@ -27,6 +29,10 @@ export async function deliverReplies(params: {
     const mediaList = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
     const text = payload.text ?? "";
     if (!text && mediaList.length === 0) {
+      continue;
+    }
+    if (text && isReasoningOnlyMessage(text)) {
+      logVerbose("slack reply is reasoning-only; skipping");
       continue;
     }
 

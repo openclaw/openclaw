@@ -6,6 +6,21 @@ const QUICK_TAG_RE = /<\s*\/?\s*(?:think(?:ing)?|thought|antthinking|final)\b/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\b[^<>]*>/gi;
 const THINKING_TAG_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\b[^<>]*>/gi;
 
+const REASONING_PREFIX = "Reasoning:\n";
+const REASONING_ONLY_TAG_RE = /^\s*<\s*(?:think(?:ing)?|thought|antthinking)\b/i;
+
+/**
+ * Detect messages that contain only reasoning/thinking content and no user-facing answer.
+ * Channels without a dedicated reasoning lane should filter these out.
+ */
+export function isReasoningOnlyMessage(text: string): boolean {
+  const trimmed = text.trim();
+  if (trimmed.startsWith(REASONING_PREFIX)) {
+    return true;
+  }
+  return REASONING_ONLY_TAG_RE.test(trimmed);
+}
+
 function applyTrim(value: string, mode: ReasoningTagTrim): string {
   if (mode === "none") {
     return value;
