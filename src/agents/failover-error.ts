@@ -175,6 +175,13 @@ export function resolveFailoverReasonFromError(err: unknown): FailoverReason | n
     return "rate_limit";
   }
   if (status === 400) {
+    // Before defaulting to "format", check whether the error message indicates
+    // a billing/rate-limit issue (e.g. Anthropic "insufficient_quota" arrives
+    // as HTTP 400). Let the message-based classifier take precedence.
+    const messageReason = classifyFailoverReason(getErrorMessage(err));
+    if (messageReason) {
+      return messageReason;
+    }
     return "format";
   }
 

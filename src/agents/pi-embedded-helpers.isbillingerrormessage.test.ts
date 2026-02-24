@@ -79,6 +79,9 @@ describe("isBillingErrorMessage", () => {
       "Payment Required",
       "HTTP 402 Payment Required",
       "plans & billing",
+      "insufficient_quota",
+      "insufficient quota",
+      "insufficient_quota: Your account has insufficient quota to process this request.",
     ];
     for (const sample of samples) {
       expect(isBillingErrorMessage(sample)).toBe(true);
@@ -539,6 +542,15 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("Your api key has been revoked")).toBe("auth_permanent");
     expect(classifyFailoverReason("key has been disabled")).toBe("auth_permanent");
     expect(classifyFailoverReason("account has been deactivated")).toBe("auth_permanent");
+  });
+  it("classifies Anthropic insufficient_quota errors as billing", () => {
+    expect(classifyFailoverReason("insufficient_quota")).toBe("billing");
+    expect(classifyFailoverReason("insufficient quota")).toBe("billing");
+    expect(
+      classifyFailoverReason(
+        "insufficient_quota: Your account has insufficient quota to process this request.",
+      ),
+    ).toBe("billing");
   });
   it("classifies JSON api_error internal server failures as timeout", () => {
     expect(
