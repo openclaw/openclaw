@@ -1017,7 +1017,9 @@ Optional **Docker sandboxing** for the embedded agent. See [Sandboxing](/gateway
 
 **`setupCommand`** runs once after container creation (via `sh -lc`). Needs network egress, writable root, root user.
 
-**Containers default to `network: "none"`** — set to `"bridge"` if the agent needs outbound access.
+**Containers default to `network: "none"`** — set to `"bridge"` (or a custom bridge network) if the agent needs outbound access.
+`"host"` is blocked. `"container:<id>"` is blocked by default unless you explicitly set
+`sandbox.docker.dangerouslyAllowContainerNamespaceJoin: true` (break-glass).
 
 **Inbound attachments** are staged into `media/inbound/*` in the active workspace.
 

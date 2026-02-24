@@ -52,6 +52,11 @@ export type SandboxDockerSettings = {
    * (workspace + agent workspace roots).
    */
   dangerouslyAllowExternalBindSources?: boolean;
+  /**
+   * Dangerous override: allow Docker `network: "container:<id>"` namespace joins.
+   * Default behavior blocks container namespace joins to preserve sandbox isolation.
+   */
+  dangerouslyAllowContainerNamespaceJoin?: boolean;
 };
 
 export type SandboxBrowserSettings = {
