@@ -830,13 +830,21 @@ export function collectSandboxDangerousConfigFindings(cfg: OpenClawConfig): Secu
     }
 
     const network = typeof docker.network === "string" ? docker.network : undefined;
-    if (network && network.trim().toLowerCase() === "host") {
+    const normalizedNetwork = network?.trim().toLowerCase();
+    if (normalizedNetwork === "host" || normalizedNetwork?.startsWith("container:")) {
+      const modeLabel = normalizedNetwork === "host" ? '"host"' : `"${network}"`;
+      const detail =
+        normalizedNetwork === "host"
+          ? `${source}.network is "host" which bypasses container network isolation entirely.`
+          : `${source}.network is ${modeLabel} which joins another container namespace and can bypass sandbox network isolation.`;
       findings.push({
         checkId: "sandbox.dangerous_network_mode",
         severity: "critical",
-        title: "Network host mode in sandbox config",
-        detail: `${source}.network is "host" which bypasses container network isolation entirely.`,
-        remediation: `Set ${source}.network to "bridge" or "none".`,
+        title: "Dangerous network mode in sandbox config",
+        detail,
+        remediation:
+          `Set ${source}.network to "bridge", "none", or a custom bridge network name.` +
+          ` Use ${source}.dangerouslyAllowContainerNamespaceJoin=true only as a break-glass override when you fully trust this runtime.`,
       });
     }
 
