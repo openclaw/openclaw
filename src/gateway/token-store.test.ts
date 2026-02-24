@@ -120,6 +120,9 @@ describe("token-store", () => {
   });
 
   it("store file has restricted permissions (0o600)", () => {
+    if (process.platform === "win32") {
+      return;
+    }
     const store = loadTokenStore(tmpDir);
     saveTokenStore(store, tmpDir);
     const storePath = path.join(tmpDir, "identity", "token-store.json");
