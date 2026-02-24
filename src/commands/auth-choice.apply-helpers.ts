@@ -3,6 +3,7 @@ import type { WizardPrompter } from "../wizard/prompts.js";
 import { formatApiKeyPreview } from "./auth-choice.api-key.js";
 import type { ApplyAuthChoiceParams } from "./auth-choice.apply.js";
 import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
+import type { SecretInputMode } from "./onboard-types.js";
 
 export function createAuthChoiceAgentModelNoter(
   params: ApplyAuthChoiceParams,
@@ -78,12 +79,55 @@ export function normalizeTokenProviderInput(
   return normalized || undefined;
 }
 
+export function normalizeSecretInputModeInput(
+  secretInputMode: string | null | undefined,
+): SecretInputMode | undefined {
+  const normalized = String(secretInputMode ?? "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "plaintext" || normalized === "ref") {
+    return normalized;
+  }
+  return undefined;
+}
+
+export async function resolveSecretInputModeForEnvSelection(params: {
+  prompter: WizardPrompter;
+  explicitMode?: SecretInputMode;
+}): Promise<SecretInputMode> {
+  if (params.explicitMode) {
+    return params.explicitMode;
+  }
+  // Some tests pass partial prompt harnesses without a select implementation.
+  // Preserve backward-compatible behavior by defaulting to plaintext in that case.
+  if (typeof params.prompter.select !== "function") {
+    return "plaintext";
+  }
+  return await params.prompter.select<SecretInputMode>({
+    message: "How should OpenClaw store this API key?",
+    initialValue: "plaintext",
+    options: [
+      {
+        value: "plaintext",
+        label: "Plaintext on disk",
+        hint: "Default and fully backward-compatible",
+      },
+      {
+        value: "ref",
+        label: "Env secret reference",
+        hint: "Stores env ref only (no plaintext key in auth-profiles)",
+      },
+    ],
+  });
+}
+
 export async function maybeApplyApiKeyFromOption(params: {
   token: string | undefined;
   tokenProvider: string | undefined;
+  secretInputMode?: SecretInputMode;
   expectedProviders: string[];
   normalize: (value: string) => string;
-  setCredential: (apiKey: string) => Promise<void>;
+  setCredential: (apiKey: string, mode?: SecretInputMode) => Promise<void>;
 }): Promise<string | undefined> {
   const tokenProvider = normalizeTokenProviderInput(params.tokenProvider);
   const expectedProviders = params.expectedProviders
@@ -93,13 +137,14 @@ export async function maybeApplyApiKeyFromOption(params: {
     return undefined;
   }
   const apiKey = params.normalize(params.token);
-  await params.setCredential(apiKey);
+  await params.setCredential(apiKey, params.secretInputMode);
   return apiKey;
 }
 
 export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
   token: string | undefined;
   tokenProvider: string | undefined;
+  secretInputMode?: SecretInputMode;
   expectedProviders: string[];
   provider: string;
   envLabel: string;
@@ -107,13 +152,14 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
   normalize: (value: string) => string;
   validate: (value: string) => string | undefined;
   prompter: WizardPrompter;
-  setCredential: (apiKey: string) => Promise<void>;
+  setCredential: (apiKey: string, mode?: SecretInputMode) => Promise<void>;
   noteMessage?: string;
   noteTitle?: string;
 }): Promise<string> {
   const optionApiKey = await maybeApplyApiKeyFromOption({
     token: params.token,
     tokenProvider: params.tokenProvider,
+    secretInputMode: params.secretInputMode,
     expectedProviders: params.expectedProviders,
     normalize: params.normalize,
     setCredential: params.setCredential,
@@ -133,6 +179,7 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
     normalize: params.normalize,
     validate: params.validate,
     prompter: params.prompter,
+    secretInputMode: params.secretInputMode,
     setCredential: params.setCredential,
   });
 }
@@ -144,7 +191,8 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
   normalize: (value: string) => string;
   validate: (value: string) => string | undefined;
   prompter: WizardPrompter;
-  setCredential: (apiKey: string) => Promise<void>;
+  secretInputMode?: SecretInputMode;
+  setCredential: (apiKey: string, mode?: SecretInputMode) => Promise<void>;
 }): Promise<string> {
   const envKey = resolveEnvApiKey(params.provider);
   if (envKey) {
@@ -153,7 +201,11 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
       initialValue: true,
     });
     if (useExisting) {
-      await params.setCredential(envKey.apiKey);
+      const mode = await resolveSecretInputModeForEnvSelection({
+        prompter: params.prompter,
+        explicitMode: params.secretInputMode,
+      });
+      await params.setCredential(envKey.apiKey, mode);
       return envKey.apiKey;
     }
   }
@@ -163,6 +215,6 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
     validate: params.validate,
   });
   const apiKey = params.normalize(String(key ?? ""));
-  await params.setCredential(apiKey);
+  await params.setCredential(apiKey, params.secretInputMode);
   return apiKey;
 }
