@@ -192,6 +192,7 @@ export function createExecTool(
   }
   const notifyOnExit = defaults?.notifyOnExit !== false;
   const notifyOnExitEmptySuccess = defaults?.notifyOnExitEmptySuccess === true;
+  const backgroundMode = defaults?.backgroundMode ?? "poll";
   const notifySessionKey = defaults?.sessionKey?.trim() || undefined;
   const approvalRunningNoticeMs = resolveApprovalRunningNoticeMs(defaults?.approvalRunningNoticeMs);
   // Derive agentId only when sessionKey is an agent session key.
@@ -505,14 +506,21 @@ export function createExecTool(
       }
 
       return new Promise<AgentToolResult<ExecToolDetails>>((resolve, reject) => {
-        const resolveRunning = () =>
+        const resolveRunning = () => {
+          const useNotifyMode = backgroundMode === "notify" && notifyOnExit;
+          const followUpText = useNotifyMode
+            ? `Command started in background (session ${run.session.id}, pid ${
+                run.session.pid ?? "n/a"
+              }). You will be automatically notified when it completes via system event. ` +
+              `Do not poll or check status — inform the user that the task is running and you will report back with results when done.`
+            : `Command still running (session ${run.session.id}, pid ${
+                run.session.pid ?? "n/a"
+              }). Use process (list/poll/log/write/kill/clear/remove) for follow-up.`;
           resolve({
             content: [
               {
                 type: "text",
-                text: `${getWarningText()}Command still running (session ${run.session.id}, pid ${
-                  run.session.pid ?? "n/a"
-                }). Use process (list/poll/log/write/kill/clear/remove) for follow-up.`,
+                text: `${getWarningText()}${followUpText}`,
               },
             ],
             details: {
@@ -524,6 +532,7 @@ export function createExecTool(
               tail: run.session.tail,
             },
           });
+        };
 
         const onYieldNow = () => {
           if (yieldTimer) {
