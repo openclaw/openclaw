@@ -68,7 +68,7 @@ Docs: https://docs.openclaw.ai
 - Infra/Windows TOCTOU: handle Windows `dev=0` edge cases in same-file identity checks. (#24939)
 - Exec/Bash tools: clamp poll sleep duration to non-negative values in process polling loops. (#24889)
 
-## 2026.2.23 (Unreleased)
+## 2026.2.23
 
 ### Changes
 
