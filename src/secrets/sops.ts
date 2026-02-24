@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { runExec } from "../process/exec.js";
-import { normalizePositiveInt } from "./shared.js";
+import { ensureDirForFile, normalizePositiveInt } from "./shared.js";
 
 export const DEFAULT_SOPS_TIMEOUT_MS = 5_000;
 const MAX_SOPS_OUTPUT_BYTES = 10 * 1024 * 1024;
@@ -28,10 +28,6 @@ function toSopsError(err: unknown, params: SopsErrorContext): Error {
   return new Error(`${params.operationLabel}: ${String(error.message ?? err)}`, {
     cause: err,
   });
-}
-
-function ensureDirForFile(filePath: string): void {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
 }
 
 export async function decryptSopsJsonFile(params: {
