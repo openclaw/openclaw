@@ -222,6 +222,30 @@ describe("validateNetworkMode", () => {
       expect(() => validateNetworkMode(testCase.mode), testCase.mode).toThrow(testCase.expected);
     }
   });
+
+  it("blocks container namespace joins by default", () => {
+    const cases = [
+      {
+        mode: "container:abc123",
+        expected: /network mode "container:abc123" is blocked by default/,
+      },
+      {
+        mode: "CONTAINER:ABC123",
+        expected: /network mode "CONTAINER:ABC123" is blocked by default/,
+      },
+    ] as const;
+    for (const testCase of cases) {
+      expect(() => validateNetworkMode(testCase.mode), testCase.mode).toThrow(testCase.expected);
+    }
+  });
+
+  it("allows container namespace joins with explicit dangerous override", () => {
+    expect(() =>
+      validateNetworkMode("container:abc123", {
+        allowContainerNamespaceJoin: true,
+      }),
+    ).not.toThrow();
+  });
 });
 
 describe("validateSeccompProfile", () => {

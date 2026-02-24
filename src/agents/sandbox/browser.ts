@@ -36,6 +36,7 @@ import { readBrowserRegistry, updateBrowserRegistry } from "./registry.js";
 import { resolveSandboxAgentId, slugifySessionKey } from "./shared.js";
 import { isToolAllowed } from "./tool-policy.js";
 import type { SandboxBrowserContext, SandboxConfig } from "./types.js";
+import { validateNetworkMode } from "./validate-sandbox-security.js";
 
 const HOT_BROWSER_WINDOW_MS = 5 * 60 * 1000;
 const CDP_SOURCE_RANGE_ENV_KEY = "OPENCLAW_BROWSER_CDP_SOURCE_RANGE";
@@ -107,14 +108,15 @@ async function ensureSandboxBrowserImage(image: string) {
   );
 }
 
-async function ensureDockerNetwork(network: string) {
+async function ensureDockerNetwork(
+  network: string,
+  opts?: { allowContainerNamespaceJoin?: boolean },
+) {
+  validateNetworkMode(network, {
+    allowContainerNamespaceJoin: opts?.allowContainerNamespaceJoin === true,
+  });
   const normalized = network.trim().toLowerCase();
-  if (
-    !normalized ||
-    normalized === "bridge" ||
-    normalized === "none" ||
-    normalized.startsWith("container:")
-  ) {
+  if (!normalized || normalized === "bridge" || normalized === "none") {
     return;
   }
   const inspect = await execDocker(["network", "inspect", network], { allowFailure: true });
@@ -216,7 +218,9 @@ export async function ensureSandboxBrowser(params: {
     if (noVncEnabled) {
       noVncPassword = generateNoVncPassword();
     }
-    await ensureDockerNetwork(browserDockerCfg.network);
+    await ensureDockerNetwork(browserDockerCfg.network, {
+      allowContainerNamespaceJoin: browserDockerCfg.dangerouslyAllowContainerNamespaceJoin === true,
+    });
     await ensureSandboxBrowserImage(browserImage);
     const args = buildSandboxCreateArgs({
       name: containerName,
