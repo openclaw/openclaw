@@ -140,6 +140,7 @@ function parseValidateConfigFromRawOrRespond(
   }
   const validated = validateConfigObjectWithPlugins(restored.result);
   if (!validated.ok) {
+    console.log("[config] Validation issues:", JSON.stringify(validated.issues, null, 2));
     respond(
       false,
       undefined,

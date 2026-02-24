@@ -701,6 +701,15 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     registryCache.set(cacheKey, registry);
   }
   setActivePluginRegistry(registry, cacheKey);
+
+  // Extract allowedAgents from plugin config for hook filtering
+  const allowedAgents: Record<string, string[]> = {};
+  for (const [pluginId, entry] of Object.entries(normalized.entries)) {
+    if (entry.allowedAgents && entry.allowedAgents.length > 0) {
+      allowedAgents[pluginId] = entry.allowedAgents;
+    }
+  }
   initializeGlobalHookRunner(registry, normalized);
+
   return registry;
 }
