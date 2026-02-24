@@ -178,6 +178,13 @@ function evaluateSegments(
   return { satisfied, matches, segmentSatisfiedBy };
 }
 
+function resolveAnalysisSegmentGroups(analysis: ExecCommandAnalysis): ExecCommandSegment[][] {
+  if (analysis.chains) {
+    return analysis.chains;
+  }
+  return [analysis.segments];
+}
+
 export function evaluateExecAllowlist(params: {
   analysis: ExecCommandAnalysis;
   allowlist: ExecAllowlistEntry[];
@@ -195,44 +202,32 @@ export function evaluateExecAllowlist(params: {
     return { allowlistSatisfied: false, allowlistMatches, segmentSatisfiedBy };
   }
 
-  // If the analysis contains chains, evaluate each chain part separately
-  if (params.analysis.chains) {
-    for (const chainSegments of params.analysis.chains) {
-      const result = evaluateSegments(chainSegments, {
-        allowlist: params.allowlist,
-        safeBins: params.safeBins,
-        safeBinProfiles: params.safeBinProfiles,
-        cwd: params.cwd,
-        platform: params.platform,
-        trustedSafeBinDirs: params.trustedSafeBinDirs,
-        skillBins: params.skillBins,
-        autoAllowSkills: params.autoAllowSkills,
-      });
-      if (!result.satisfied) {
-        return { allowlistSatisfied: false, allowlistMatches: [], segmentSatisfiedBy: [] };
+  const hasChains = Boolean(params.analysis.chains);
+  for (const group of resolveAnalysisSegmentGroups(params.analysis)) {
+    const result = evaluateSegments(group, {
+      allowlist: params.allowlist,
+      safeBins: params.safeBins,
+      safeBinProfiles: params.safeBinProfiles,
+      cwd: params.cwd,
+      platform: params.platform,
+      trustedSafeBinDirs: params.trustedSafeBinDirs,
+      skillBins: params.skillBins,
+      autoAllowSkills: params.autoAllowSkills,
+    });
+    if (!result.satisfied) {
+      if (!hasChains) {
+        return {
+          allowlistSatisfied: false,
+          allowlistMatches: result.matches,
+          segmentSatisfiedBy: result.segmentSatisfiedBy,
+        };
       }
-      allowlistMatches.push(...result.matches);
-      segmentSatisfiedBy.push(...result.segmentSatisfiedBy);
+      return { allowlistSatisfied: false, allowlistMatches: [], segmentSatisfiedBy: [] };
     }
-    return { allowlistSatisfied: true, allowlistMatches, segmentSatisfiedBy };
+    allowlistMatches.push(...result.matches);
+    segmentSatisfiedBy.push(...result.segmentSatisfiedBy);
   }
-
-  // No chains, evaluate all segments together
-  const result = evaluateSegments(params.analysis.segments, {
-    allowlist: params.allowlist,
-    safeBins: params.safeBins,
-    safeBinProfiles: params.safeBinProfiles,
-    cwd: params.cwd,
-    platform: params.platform,
-    trustedSafeBinDirs: params.trustedSafeBinDirs,
-    skillBins: params.skillBins,
-    autoAllowSkills: params.autoAllowSkills,
-  });
-  return {
-    allowlistSatisfied: result.satisfied,
-    allowlistMatches: result.matches,
-    segmentSatisfiedBy: result.segmentSatisfiedBy,
-  };
+  return { allowlistSatisfied: true, allowlistMatches, segmentSatisfiedBy };
 }
 
 export type ExecAllowlistAnalysis = {
