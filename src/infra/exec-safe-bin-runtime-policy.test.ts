@@ -89,4 +89,18 @@ describe("exec safe-bin runtime policy", () => {
     expect(policy.trustedSafeBinDirs.has(path.resolve(customDir))).toBe(true);
     expect(policy.trustedSafeBinDirs.has(path.resolve(agentDir))).toBe(true);
   });
+
+  it("does not trust package-manager bin dirs unless explicitly configured", () => {
+    const defaultPolicy = resolveExecSafeBinRuntimePolicy({});
+    expect(defaultPolicy.trustedSafeBinDirs.has(path.resolve("/opt/homebrew/bin"))).toBe(false);
+    expect(defaultPolicy.trustedSafeBinDirs.has(path.resolve("/usr/local/bin"))).toBe(false);
+
+    const optedIn = resolveExecSafeBinRuntimePolicy({
+      global: {
+        safeBinTrustedDirs: ["/opt/homebrew/bin", "/usr/local/bin"],
+      },
+    });
+    expect(optedIn.trustedSafeBinDirs.has(path.resolve("/opt/homebrew/bin"))).toBe(true);
+    expect(optedIn.trustedSafeBinDirs.has(path.resolve("/usr/local/bin"))).toBe(true);
+  });
 });
