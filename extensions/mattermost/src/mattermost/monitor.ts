@@ -39,6 +39,7 @@ import {
   fetchMattermostUser,
   fetchMattermostUserTeams,
   normalizeMattermostBaseUrl,
+  patchMattermostPost,
   sendMattermostTyping,
   updateMattermostPost,
   type MattermostChannel,
@@ -1630,14 +1631,99 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         });
       },
     });
+    // Block streaming state: track the message id for edit-in-place
+    let blockStreamMessageId: string | null = null;
+    let blockStreamAccumulatedText = "";
+
+    const resolvedBaseUrl = normalizeMattermostBaseUrl(account.baseUrl);
+    const resolvedBotToken = account.botToken?.trim();
+    const blockStreamingClient =
+      resolvedBaseUrl && resolvedBotToken
+        ? createMattermostClient({ baseUrl: resolvedBaseUrl, botToken: resolvedBotToken })
+        : null;
+
     const { dispatcher, replyOptions, markDispatchIdle } =
       core.channel.reply.createReplyDispatcherWithTyping({
         ...prefixOptions,
         humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, route.agentId),
         typingCallbacks,
-        deliver: async (payload: ReplyPayload) => {
+        deliver: async (payload: ReplyPayload, info: { kind: "tool" | "block" | "final" }) => {
           const mediaUrls = payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []);
           const text = core.channel.text.convertMarkdownTables(payload.text ?? "", tableMode);
+          const isBlock = info.kind === "block";
+          const isFinal = info.kind === "final";
+
+          // Block streaming: edit-in-place for progressive text rendering
+          if ((isBlock || isFinal) && blockStreamingClient && mediaUrls.length === 0 && text) {
+            if (isBlock && blockStreamMessageId) {
+              // Subsequent block: accumulate and edit the existing message
+              blockStreamAccumulatedText += (blockStreamAccumulatedText ? "\n" : "") + text;
+              try {
+                await patchMattermostPost(blockStreamingClient, {
+                  postId: blockStreamMessageId,
+                  message: blockStreamAccumulatedText,
+                });
+              } catch (err) {
+                logVerboseMessage(
+                  `mattermost block-stream edit failed: ${String(err)}, falling back to new message`,
+                );
+                blockStreamMessageId = null;
+                blockStreamAccumulatedText = "";
+                // Fall through to send as new message
+                const result = await sendMessageMattermost(to, text, {
+                  accountId: account.accountId,
+                  replyToId: threadRootId,
+                });
+                blockStreamMessageId = result.messageId;
+                blockStreamAccumulatedText = text;
+              }
+              runtime.log?.(`block-stream edited ${blockStreamMessageId}`);
+              return;
+            }
+
+            if (isFinal && blockStreamMessageId) {
+              // Final reply: edit the existing streamed message with the complete text
+              const finalText = text;
+              try {
+                await patchMattermostPost(blockStreamingClient, {
+                  postId: blockStreamMessageId,
+                  message: finalText,
+                });
+                runtime.log?.(`block-stream final edit ${blockStreamMessageId}`);
+              } catch (err) {
+                logVerboseMessage(
+                  `mattermost block-stream final edit failed: ${String(err)}, sending new message`,
+                );
+                await sendMessageMattermost(to, finalText, {
+                  accountId: account.accountId,
+                  replyToId: threadRootId,
+                });
+              }
+              // Reset block streaming state
+              blockStreamMessageId = null;
+              blockStreamAccumulatedText = "";
+              return;
+            }
+
+            if (isBlock && !blockStreamMessageId) {
+              // First block: send a new message and track its id
+              const result = await sendMessageMattermost(to, text, {
+                accountId: account.accountId,
+                replyToId: threadRootId,
+              });
+              blockStreamMessageId = result.messageId;
+              blockStreamAccumulatedText = text;
+              runtime.log?.(`block-stream started ${blockStreamMessageId}`);
+              return;
+            }
+          }
+
+          // Reset block streaming state for non-block payloads
+          if (isFinal) {
+            blockStreamMessageId = null;
+            blockStreamAccumulatedText = "";
+          }
+
           if (mediaUrls.length === 0) {
             const chunkMode = core.channel.text.resolveChunkMode(
               cfg,

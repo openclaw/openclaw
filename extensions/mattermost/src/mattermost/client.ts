@@ -175,6 +175,28 @@ export async function createMattermostDirectChannel(
   });
 }
 
+export type MattermostAttachmentAction = {
+  id?: string;
+  name: string;
+  type?: "button" | "select";
+  style?: "default" | "primary" | "success" | "danger";
+  integration?: {
+    url: string;
+    context?: Record<string, unknown>;
+  };
+  options?: Array<{ text: string; value: string }>;
+};
+
+export type MattermostAttachment = {
+  fallback?: string;
+  color?: string;
+  pretext?: string;
+  text?: string;
+  title?: string;
+  actions?: MattermostAttachmentAction[];
+  fields?: Array<{ short?: boolean; title: string; value: string }>;
+};
+
 export async function createMattermostPost(
   client: MattermostClient,
   params: {
