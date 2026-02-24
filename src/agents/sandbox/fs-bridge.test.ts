@@ -77,8 +77,20 @@ describe("sandbox fs bridge shell compatibility", () => {
     const executables = mockedExecDockerRaw.mock.calls.map(([args]) => args[3] ?? "");
 
     expect(executables.every((shell) => shell === "sh")).toBe(true);
-    expect(scripts.every((script) => script.includes("set -eu;"))).toBe(true);
+    expect(scripts.every((script) => /set -eu[;\n]/.test(script))).toBe(true);
     expect(scripts.some((script) => script.includes("pipefail"))).toBe(false);
+  });
+
+  it("resolveCanonicalContainerPath script is valid POSIX sh (no do; token)", async () => {
+    const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
+
+    await bridge.readFile({ filePath: "a.txt" });
+
+    const scripts = mockedExecDockerRaw.mock.calls.map(([args]) => args[5] ?? "");
+    const canonicalScript = scripts.find((script) => script.includes("allow_final"));
+    expect(canonicalScript).toBeDefined();
+    // "; " joining can create "do; cmd", which is invalid in POSIX sh.
+    expect(canonicalScript).not.toMatch(/\bdo;/);
   });
 
   it("resolves bind-mounted absolute container paths for reads", async () => {

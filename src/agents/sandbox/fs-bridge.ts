@@ -305,7 +305,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       "done",
       'canonical=$(readlink -f -- "$cursor")',
       'printf "%s%s\\n" "$canonical" "$suffix"',
-    ].join("; ");
+    ].join("\n");
     const result = await this.runCommand(script, {
       args: [params.containerPath, params.allowFinalSymlink ? "1" : "0"],
     });
