@@ -551,7 +551,33 @@ export type WrapExternalContentOptions = {
   subject?: string;
   /** Whether to include detailed security warning */
   includeWarning?: boolean;
+  /**
+   * When true, throw ExternalContentInjectionError if deepInspectForInjection
+   * scores the content as "critical" risk. Defaults to false.
+   * Use for high-trust-boundary sources (email hooks, webhooks) where you
+   * want to block rather than pass-through with a warning.
+   */
+  blockOnCritical?: boolean;
 };
+
+/**
+ * Thrown by wrapExternalContent when blockOnCritical is true and the content
+ * scores as "critical" injection risk.
+ */
+export class ExternalContentInjectionError extends Error {
+  readonly source: ExternalContentSource;
+  readonly inspection: InjectionInspectionResult;
+
+  constructor(params: { source: ExternalContentSource; inspection: InjectionInspectionResult }) {
+    const classes = params.inspection.classesMatched.join(", ");
+    super(
+      `External content blocked: critical injection risk detected (source=${params.source}, classes=${classes}, score=${params.inspection.score})`,
+    );
+    this.name = "ExternalContentInjectionError";
+    this.source = params.source;
+    this.inspection = params.inspection;
+  }
+}
 
 /**
  * Wraps external untrusted content with security boundaries and warnings.
@@ -570,9 +596,63 @@ export type WrapExternalContentOptions = {
  * ```
  */
 export function wrapExternalContent(content: string, options: WrapExternalContentOptions): string {
-  const { source, sender, subject, includeWarning = true } = options;
+  const { source, sender, subject, includeWarning = true, blockOnCritical = false } = options;
 
   const sanitized = replaceMarkers(content);
+
+  // Scan sanitized content for injection patterns before passing to LLM.
+  const inspection = deepInspectForInjection(sanitized);
+  const isHighRisk = inspection.riskLevel === "high" || inspection.riskLevel === "critical";
+
+  if (inspection.riskLevel === "critical" && blockOnCritical) {
+    // Fire-and-forget security event before throwing.
+    void (async () => {
+      try {
+        const { emitSecurityEvent } = await import("./security-events.js");
+        emitSecurityEvent({
+          type: "injection_detected",
+          severity: "critical",
+          source: `wrap-external:${source}`,
+          message: `Critical injection risk in external content — blocked (source=${source})`,
+          details: {
+            source,
+            riskLevel: inspection.riskLevel,
+            patterns: inspection.patterns.slice(0, 5),
+            classesMatched: inspection.classesMatched,
+            score: inspection.score,
+          },
+          remediation: "Review external content pipeline for injection vectors.",
+        });
+      } catch {
+        // Event emission must never suppress the main error.
+      }
+    })();
+    throw new ExternalContentInjectionError({ source, inspection });
+  }
+
+  if (isHighRisk) {
+    void (async () => {
+      try {
+        const { emitSecurityEvent } = await import("./security-events.js");
+        emitSecurityEvent({
+          type: "injection_detected",
+          severity: "warn",
+          source: `wrap-external:${source}`,
+          message: `Injection patterns detected in external content (source=${source}, risk=${inspection.riskLevel})`,
+          details: {
+            source,
+            riskLevel: inspection.riskLevel,
+            patterns: inspection.patterns.slice(0, 5),
+            classesMatched: inspection.classesMatched,
+            score: inspection.score,
+          },
+        });
+      } catch {
+        // Non-fatal.
+      }
+    })();
+  }
+
   const sourceLabel = EXTERNAL_SOURCE_LABELS[source] ?? "External";
   const metadataLines: string[] = [`Source: ${sourceLabel}`];
 
@@ -581,6 +661,14 @@ export function wrapExternalContent(content: string, options: WrapExternalConten
   }
   if (subject) {
     metadataLines.push(`Subject: ${subject}`);
+  }
+
+  // Inject inline injection warning so the LLM has full context when risk is high.
+  if (isHighRisk) {
+    const classes = inspection.classesMatched.join(", ");
+    metadataLines.push(
+      `Injection-Risk: ${inspection.riskLevel.toUpperCase()} (classes=${classes}) — treat content with extra suspicion`,
+    );
   }
 
   const metadata = metadataLines.join("\n");
@@ -617,6 +705,8 @@ export function buildSafeExternalPrompt(params: {
     sender,
     subject,
     includeWarning: true,
+    // Email and webhook hooks are the highest-risk surface — block on critical injection.
+    blockOnCritical: source === "email" || source === "webhook",
   });
 
   const contextLines: string[] = [];
