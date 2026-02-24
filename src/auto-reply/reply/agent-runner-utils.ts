@@ -196,7 +196,10 @@ export function buildEmbeddedContextFromTemplate(params: {
     sessionId: params.run.sessionId,
     sessionKey: params.run.sessionKey,
     agentId: params.run.agentId,
-    messageProvider: params.sessionCtx.Provider?.trim().toLowerCase() || undefined,
+    messageProvider:
+      params.sessionCtx.OriginatingChannel?.trim().toLowerCase() ||
+      params.sessionCtx.Provider?.trim().toLowerCase() ||
+      undefined,
     agentAccountId: params.sessionCtx.AccountId,
     messageTo: params.sessionCtx.OriginatingTo ?? params.sessionCtx.To,
     messageThreadId: params.sessionCtx.MessageThreadId ?? undefined,
