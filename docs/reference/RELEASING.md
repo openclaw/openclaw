@@ -38,6 +38,7 @@ When the operator says “release”, immediately do this preflight (no extra qu
 3. **Changelog & docs**
 
 - [ ] Update `CHANGELOG.md` with user-facing highlights (create the file if missing); keep entries strictly descending by version.
+  - Tip: use `pnpm changelog:add -- --section fixes --entry "Your entry. (#12345) Thanks @contrib."` (or `--section changes`) to append deterministically under the current Unreleased block.
 - [ ] Ensure README examples/flags match current CLI behavior (notably new commands or options).
 
 4. **Validation**

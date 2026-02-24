@@ -49,7 +49,7 @@ function recordHasKeys(value: unknown): boolean {
   return isRecord(value) && Object.keys(value).length > 0;
 }
 
-function accountsHaveKeys(value: unknown, keys: string[]): boolean {
+function accountsHaveKeys(value: unknown, keys: readonly string[]): boolean {
   if (!isRecord(value)) {
     return false;
   }
@@ -75,108 +75,95 @@ function resolveChannelConfig(
   return isRecord(entry) ? entry : null;
 }
 
-function isTelegramConfigured(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  if (hasNonEmptyString(env.TELEGRAM_BOT_TOKEN)) {
-    return true;
+type StructuredChannelConfigSpec = {
+  envAny?: readonly string[];
+  envAll?: readonly string[];
+  stringKeys?: readonly string[];
+  numberKeys?: readonly string[];
+  accountStringKeys?: readonly string[];
+};
+
+const STRUCTURED_CHANNEL_CONFIG_SPECS: Record<string, StructuredChannelConfigSpec> = {
+  telegram: {
+    envAny: ["TELEGRAM_BOT_TOKEN"],
+    stringKeys: ["botToken", "tokenFile"],
+    accountStringKeys: ["botToken", "tokenFile"],
+  },
+  discord: {
+    envAny: ["DISCORD_BOT_TOKEN"],
+    stringKeys: ["token"],
+    accountStringKeys: ["token"],
+  },
+  irc: {
+    envAll: ["IRC_HOST", "IRC_NICK"],
+    stringKeys: ["host", "nick"],
+    accountStringKeys: ["host", "nick"],
+  },
+  slack: {
+    envAny: ["SLACK_BOT_TOKEN", "SLACK_APP_TOKEN", "SLACK_USER_TOKEN"],
+    stringKeys: ["botToken", "appToken", "userToken"],
+    accountStringKeys: ["botToken", "appToken", "userToken"],
+  },
+  signal: {
+    stringKeys: ["account", "httpUrl", "httpHost", "cliPath"],
+    numberKeys: ["httpPort"],
+    accountStringKeys: ["account", "httpUrl", "httpHost", "cliPath"],
+  },
+  imessage: {
+    stringKeys: ["cliPath"],
+  },
+};
+
+function envHasAnyKeys(env: NodeJS.ProcessEnv, keys: readonly string[]): boolean {
+  for (const key of keys) {
+    if (hasNonEmptyString(env[key])) {
+      return true;
+    }
   }
-  const entry = resolveChannelConfig(cfg, "telegram");
-  if (!entry) {
-    return false;
-  }
-  if (hasNonEmptyString(entry.botToken) || hasNonEmptyString(entry.tokenFile)) {
-    return true;
-  }
-  if (accountsHaveKeys(entry.accounts, ["botToken", "tokenFile"])) {
-    return true;
-  }
-  return recordHasKeys(entry);
+  return false;
 }
 
-function isDiscordConfigured(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  if (hasNonEmptyString(env.DISCORD_BOT_TOKEN)) {
-    return true;
+function envHasAllKeys(env: NodeJS.ProcessEnv, keys: readonly string[]): boolean {
+  for (const key of keys) {
+    if (!hasNonEmptyString(env[key])) {
+      return false;
+    }
   }
-  const entry = resolveChannelConfig(cfg, "discord");
-  if (!entry) {
-    return false;
-  }
-  if (hasNonEmptyString(entry.token)) {
-    return true;
-  }
-  if (accountsHaveKeys(entry.accounts, ["token"])) {
-    return true;
-  }
-  return recordHasKeys(entry);
+  return keys.length > 0;
 }
 
-function isIrcConfigured(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  if (hasNonEmptyString(env.IRC_HOST) && hasNonEmptyString(env.IRC_NICK)) {
-    return true;
+function hasAnyNumberKeys(entry: Record<string, unknown>, keys: readonly string[]): boolean {
+  for (const key of keys) {
+    if (typeof entry[key] === "number") {
+      return true;
+    }
   }
-  const entry = resolveChannelConfig(cfg, "irc");
-  if (!entry) {
-    return false;
-  }
-  if (hasNonEmptyString(entry.host) || hasNonEmptyString(entry.nick)) {
-    return true;
-  }
-  if (accountsHaveKeys(entry.accounts, ["host", "nick"])) {
-    return true;
-  }
-  return recordHasKeys(entry);
+  return false;
 }
 
-function isSlackConfigured(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
-  if (
-    hasNonEmptyString(env.SLACK_BOT_TOKEN) ||
-    hasNonEmptyString(env.SLACK_APP_TOKEN) ||
-    hasNonEmptyString(env.SLACK_USER_TOKEN)
-  ) {
+function isStructuredChannelConfigured(
+  cfg: OpenClawConfig,
+  channelId: string,
+  env: NodeJS.ProcessEnv,
+  spec: StructuredChannelConfigSpec,
+): boolean {
+  if (spec.envAny && envHasAnyKeys(env, spec.envAny)) {
     return true;
   }
-  const entry = resolveChannelConfig(cfg, "slack");
+  if (spec.envAll && envHasAllKeys(env, spec.envAll)) {
+    return true;
+  }
+  const entry = resolveChannelConfig(cfg, channelId);
   if (!entry) {
     return false;
   }
-  if (
-    hasNonEmptyString(entry.botToken) ||
-    hasNonEmptyString(entry.appToken) ||
-    hasNonEmptyString(entry.userToken)
-  ) {
+  if (spec.stringKeys && spec.stringKeys.some((key) => hasNonEmptyString(entry[key]))) {
     return true;
   }
-  if (accountsHaveKeys(entry.accounts, ["botToken", "appToken", "userToken"])) {
+  if (spec.numberKeys && hasAnyNumberKeys(entry, spec.numberKeys)) {
     return true;
   }
-  return recordHasKeys(entry);
-}
-
-function isSignalConfigured(cfg: OpenClawConfig): boolean {
-  const entry = resolveChannelConfig(cfg, "signal");
-  if (!entry) {
-    return false;
-  }
-  if (
-    hasNonEmptyString(entry.account) ||
-    hasNonEmptyString(entry.httpUrl) ||
-    hasNonEmptyString(entry.httpHost) ||
-    typeof entry.httpPort === "number" ||
-    hasNonEmptyString(entry.cliPath)
-  ) {
-    return true;
-  }
-  if (accountsHaveKeys(entry.accounts, ["account", "httpUrl", "httpHost", "cliPath"])) {
-    return true;
-  }
-  return recordHasKeys(entry);
-}
-
-function isIMessageConfigured(cfg: OpenClawConfig): boolean {
-  const entry = resolveChannelConfig(cfg, "imessage");
-  if (!entry) {
-    return false;
-  }
-  if (hasNonEmptyString(entry.cliPath)) {
+  if (spec.accountStringKeys && accountsHaveKeys(entry.accounts, spec.accountStringKeys)) {
     return true;
   }
   return recordHasKeys(entry);
@@ -203,24 +190,14 @@ export function isChannelConfigured(
   channelId: string,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  switch (channelId) {
-    case "whatsapp":
-      return isWhatsAppConfigured(cfg);
-    case "telegram":
-      return isTelegramConfigured(cfg, env);
-    case "discord":
-      return isDiscordConfigured(cfg, env);
-    case "irc":
-      return isIrcConfigured(cfg, env);
-    case "slack":
-      return isSlackConfigured(cfg, env);
-    case "signal":
-      return isSignalConfigured(cfg);
-    case "imessage":
-      return isIMessageConfigured(cfg);
-    default:
-      return isGenericChannelConfigured(cfg, channelId);
+  if (channelId === "whatsapp") {
+    return isWhatsAppConfigured(cfg);
   }
+  const spec = STRUCTURED_CHANNEL_CONFIG_SPECS[channelId];
+  if (spec) {
+    return isStructuredChannelConfigured(cfg, channelId, env, spec);
+  }
+  return isGenericChannelConfigured(cfg, channelId);
 }
 
 function collectModelRefs(cfg: OpenClawConfig): string[] {
@@ -325,10 +302,34 @@ function buildChannelToPluginIdMap(registry: PluginManifestRegistry): Map<string
   return map;
 }
 
-type ChannelPluginPair = {
-  channelId: string;
-  pluginId: string;
-};
+function resolvePluginIdForChannel(
+  channelId: string,
+  channelToPluginId: ReadonlyMap<string, string>,
+): string {
+  // Third-party plugins can expose a channel id that differs from their
+  // manifest id; plugins.entries must always be keyed by manifest id.
+  const builtInId = normalizeChatChannelId(channelId);
+  if (builtInId) {
+    return builtInId;
+  }
+  return channelToPluginId.get(channelId) ?? channelId;
+}
+
+function collectCandidateChannelIds(cfg: OpenClawConfig): string[] {
+  const channelIds = new Set<string>(CHANNEL_PLUGIN_IDS);
+  const configuredChannels = cfg.channels as Record<string, unknown> | undefined;
+  if (!configuredChannels || typeof configuredChannels !== "object") {
+    return Array.from(channelIds);
+  }
+  for (const key of Object.keys(configuredChannels)) {
+    if (key === "defaults" || key === "modelByChannel") {
+      continue;
+    }
+    const normalizedBuiltIn = normalizeChatChannelId(key);
+    channelIds.add(normalizedBuiltIn ?? key);
+  }
+  return Array.from(channelIds);
+}
 
 function resolveConfiguredPlugins(
   cfg: OpenClawConfig,
@@ -337,45 +338,9 @@ function resolveConfiguredPlugins(
 ): PluginEnableChange[] {
   const changes: PluginEnableChange[] = [];
   // Build reverse map: channel ID → plugin ID from installed plugin manifests.
-  // This is needed when a third-party plugin declares a channel ID that differs
-  // from the plugin's own ID (e.g. plugin id="apn-channel", channels=["apn"]).
   const channelToPluginId = buildChannelToPluginIdMap(registry);
-
-  // For built-in and catalog entries: channelId === pluginId (they are the same).
-  const pairs: ChannelPluginPair[] = CHANNEL_PLUGIN_IDS.map((id) => ({
-    channelId: id,
-    pluginId: id,
-  }));
-
-  const configuredChannels = cfg.channels as Record<string, unknown> | undefined;
-  if (configuredChannels && typeof configuredChannels === "object") {
-    for (const key of Object.keys(configuredChannels)) {
-      if (key === "defaults" || key === "modelByChannel") {
-        continue;
-      }
-      const builtInId = normalizeChatChannelId(key);
-      if (builtInId) {
-        // Built-in channel: channelId and pluginId are the same.
-        pairs.push({ channelId: builtInId, pluginId: builtInId });
-      } else {
-        // Third-party channel plugin: look up the actual plugin ID from the
-        // manifest registry. If the plugin declares channels=["apn"] but its
-        // id is "apn-channel", we must use "apn-channel" as the pluginId so
-        // that plugins.entries is keyed correctly. Fall back to the channel key
-        // when no installed manifest declares this channel.
-        const pluginId = channelToPluginId.get(key) ?? key;
-        pairs.push({ channelId: key, pluginId });
-      }
-    }
-  }
-
-  // Deduplicate by channelId, preserving first occurrence.
-  const seenChannelIds = new Set<string>();
-  for (const { channelId, pluginId } of pairs) {
-    if (!channelId || !pluginId || seenChannelIds.has(channelId)) {
-      continue;
-    }
-    seenChannelIds.add(channelId);
+  for (const channelId of collectCandidateChannelIds(cfg)) {
+    const pluginId = resolvePluginIdForChannel(channelId, channelToPluginId);
     if (isChannelConfigured(cfg, channelId, env)) {
       changes.push({ pluginId, reason: `${channelId} configured` });
     }
