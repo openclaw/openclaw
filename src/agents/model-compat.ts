@@ -4,6 +4,14 @@ function isOpenAiCompletionsModel(model: Model<Api>): model is Model<"openai-com
   return model.api === "openai-completions";
 }
 
+function isDashScopeCompatibleEndpoint(baseUrl: string): boolean {
+  return (
+    baseUrl.includes("dashscope.aliyuncs.com") ||
+    baseUrl.includes("dashscope-intl.aliyuncs.com") ||
+    baseUrl.includes("dashscope-us.aliyuncs.com")
+  );
+}
+
 export function normalizeModelCompat(model: Model<Api>): Model<Api> {
   const baseUrl = model.baseUrl ?? "";
   const isZai = model.provider === "zai" || baseUrl.includes("api.z.ai");
@@ -11,7 +19,8 @@ export function normalizeModelCompat(model: Model<Api>): Model<Api> {
     model.provider === "moonshot" ||
     baseUrl.includes("moonshot.ai") ||
     baseUrl.includes("moonshot.cn");
-  if ((!isZai && !isMoonshot) || !isOpenAiCompletionsModel(model)) {
+  const isDashScope = model.provider === "dashscope" || isDashScopeCompatibleEndpoint(baseUrl);
+  if ((!isZai && !isMoonshot && !isDashScope) || !isOpenAiCompletionsModel(model)) {
     return model;
   }
 
