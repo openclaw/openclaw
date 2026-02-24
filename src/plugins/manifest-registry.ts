@@ -315,14 +315,17 @@ export function loadPluginManifestRegistry(
   for (const candidate of candidates) {
     const rejectHardlinks = candidate.origin !== "bundled";
     const isBundleRecord = (candidate.format ?? "openclaw") === "bundle";
+    // Reuse the manifest loaded during discovery when available;
+    // fall back to reading from disk for candidates without a cached result.
     const manifestRes =
-      isBundleRecord && candidate.bundleFormat
+      candidate.pluginManifestResult ??
+      (isBundleRecord && candidate.bundleFormat
         ? loadBundleManifest({
             rootDir: candidate.rootDir,
             bundleFormat: candidate.bundleFormat,
             rejectHardlinks,
           })
-        : loadPluginManifest(candidate.rootDir, rejectHardlinks);
+        : loadPluginManifest(candidate.rootDir, rejectHardlinks));
     if (!manifestRes.ok) {
       diagnostics.push({
         level: "error",

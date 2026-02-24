@@ -276,6 +276,61 @@ describe("discoverOpenClawPlugins", () => {
     const ids = candidates.map((c) => c.idHint);
     expect(ids).toContain("demo-plugin-dir");
   });
+  it("prefers openclaw.plugin.json id over npm package name for idHint", async () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions", "openclaw-groupme");
+    mkdirSafe(path.join(globalExt, "src"));
+
+    fs.writeFileSync(
+      path.join(globalExt, "package.json"),
+      JSON.stringify({
+        name: "openclaw-groupme",
+        openclaw: { extensions: ["./src/index.ts"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(globalExt, "openclaw.plugin.json"),
+      JSON.stringify({ id: "groupme", configSchema: { type: "object" } }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(globalExt, "src", "index.ts"),
+      "export default function () {}",
+      "utf-8",
+    );
+
+    const { candidates } = await discoverWithStateDir(stateDir, {});
+
+    const ids = candidates.map((c) => c.idHint);
+    expect(ids).toContain("groupme");
+    expect(ids).not.toContain("openclaw-groupme");
+  });
+
+  it("falls back to deriveIdHint when openclaw.plugin.json does not exist", async () => {
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions", "openclaw-groupme");
+    mkdirSafe(path.join(globalExt, "src"));
+
+    fs.writeFileSync(
+      path.join(globalExt, "package.json"),
+      JSON.stringify({
+        name: "openclaw-groupme",
+        openclaw: { extensions: ["./src/index.ts"] },
+      }),
+      "utf-8",
+    );
+    fs.writeFileSync(
+      path.join(globalExt, "src", "index.ts"),
+      "export default function () {}",
+      "utf-8",
+    );
+
+    const { candidates } = await discoverWithStateDir(stateDir, {});
+
+    const ids = candidates.map((c) => c.idHint);
+    expect(ids).toContain("openclaw-groupme");
+  });
 
   it("auto-detects Codex bundles as bundle candidates", async () => {
     const stateDir = makeTempDir();
