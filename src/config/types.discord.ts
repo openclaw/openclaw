@@ -185,6 +185,11 @@ export type DiscordAccountConfig = {
   /** Allow bot-authored messages to trigger replies (default: false). */
   allowBots?: boolean;
   /**
+   * Break-glass override: allow mutable identity matching (names/tags/slugs) in allowlists.
+   * Default behavior is ID-only matching.
+   */
+  dangerouslyAllowNameMatching?: boolean;
+  /**
    * Controls how guild channel messages are handled:
    * - "open": guild channels bypass allowlists; mention-gating applies
    * - "disabled": block all guild channel messages

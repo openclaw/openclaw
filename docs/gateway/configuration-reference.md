@@ -212,7 +212,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
       },
       replyToMode: "off", // off | first | all
       dmPolicy: "pairing",
-      allowFrom: ["1234567890", "steipete"],
+      allowFrom: ["1234567890", "123456789012345678"],
       dm: { enabled: true, groupEnabled: false, groupChannels: ["openclaw-dm"] },
       guilds: {
         "123456789012345678": {
@@ -283,6 +283,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 - `channels.discord.ui.components.accentColor` sets the accent color for Discord components v2 containers.
 - `channels.discord.voice` enables Discord voice channel conversations and optional auto-join + TTS overrides.
 - `channels.discord.streaming` is the canonical stream mode key. Legacy `streamMode` and boolean `streaming` values are auto-migrated.
+- `channels.discord.dangerouslyAllowNameMatching` re-enables mutable name/tag matching (break-glass compatibility mode).
 
 **Reaction notification modes:** `off` (none), `own` (bot's messages, default), `all` (all messages), `allowlist` (from `guilds.<id>.users` on all messages).
 
@@ -317,7 +318,8 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
 
 - Service account JSON: inline (`serviceAccount`) or file-based (`serviceAccountFile`).
 - Env fallbacks: `GOOGLE_CHAT_SERVICE_ACCOUNT` or `GOOGLE_CHAT_SERVICE_ACCOUNT_FILE`.
-- Use `spaces/<spaceId>` or `users/<userId|email>` for delivery targets.
+- Use `spaces/<spaceId>` or `users/<userId>` for delivery targets.
+- `channels.googlechat.dangerouslyAllowNameMatching` re-enables mutable email principal matching (break-glass compatibility mode).
 
 ### Slack
 
@@ -1490,7 +1492,7 @@ Controls elevated (host) exec access:
       enabled: true,
       allowFrom: {
         whatsapp: ["+15555550123"],
-        discord: ["steipete", "1234567890123"],
+        discord: ["1234567890123", "987654321098765432"],
       },
     },
   },
