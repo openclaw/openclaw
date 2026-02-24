@@ -4,6 +4,10 @@
 
 import * as crypto from "node:crypto";
 
+export type DmAuthorizationResult =
+  | { allowed: true }
+  | { allowed: false; reason: "disabled" | "allowlist-empty" | "not-allowlisted" };
+
 /**
  * Validate webhook token using constant-time comparison.
  * Prevents timing attacks that could leak token bytes.
@@ -26,6 +30,30 @@ export function validateToken(received: string, expected: string): boolean {
  */
 export function checkUserAllowed(userId: string, allowedUserIds: string[]): boolean {
   return allowedUserIds.includes(userId);
+}
+
+/**
+ * Resolve DM authorization for a sender across all DM policy modes.
+ * Keeps policy semantics in one place so webhook/startup behavior stays consistent.
+ */
+export function authorizeUserForDm(
+  userId: string,
+  dmPolicy: "open" | "allowlist" | "disabled",
+  allowedUserIds: string[],
+): DmAuthorizationResult {
+  if (dmPolicy === "disabled") {
+    return { allowed: false, reason: "disabled" };
+  }
+  if (dmPolicy === "open") {
+    return { allowed: true };
+  }
+  if (allowedUserIds.length === 0) {
+    return { allowed: false, reason: "allowlist-empty" };
+  }
+  if (!checkUserAllowed(userId, allowedUserIds)) {
+    return { allowed: false, reason: "not-allowlisted" };
+  }
+  return { allowed: true };
 }
 
 /**
