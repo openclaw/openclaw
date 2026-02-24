@@ -1,5 +1,61 @@
 import { normalizeE164 } from "../utils.js";
 
+/**
+ * DDDs (area codes) that keep the 9th digit in WhatsApp format.
+ * These are São Paulo (11-19), Rio de Janeiro (21, 22, 24), and Espírito Santo (27, 28).
+ * For all other DDDs, the 9th digit must be removed.
+ *
+ * @see https://support.gupshup.io/hc/en-us/articles/4407840924953
+ */
+const BRAZIL_DDD_WITH_NINTH_DIGIT = new Set([
+  11,
+  12,
+  13,
+  14,
+  15,
+  16,
+  17,
+  18,
+  19, // São Paulo
+  21,
+  22,
+  24, // Rio de Janeiro
+  27,
+  28, // Espírito Santo
+]);
+
+/**
+ * Normalize Brazilian phone numbers for WhatsApp.
+ * Brazilian mobile numbers have two formats:
+ * - Carrier format (14 digits): +55 DD 9XXXX XXXX
+ * - WhatsApp internal format (13 digits): +55 DD XXXX XXXX
+ *
+ * WhatsApp internally registers numbers without the 9th digit for most area codes.
+ * Only DDDs 11-19 (SP), 21-22, 24 (RJ), and 27-28 (ES) keep the 9th digit.
+ *
+ * @param phone - Phone number (should already have + prefix)
+ * @returns Normalized phone number for WhatsApp
+ */
+export function normalizeBrazilPhone(phone: string): string {
+  // Brazilian format: +55 (2 digits DDD) + 9 (optional) + 8 digits
+  // Carrier format: +55DD9XXXXXXXX (14 digits total including +)
+  // WhatsApp format: +55DDXXXXXXXX (13 digits total including +)
+  if (!phone.startsWith("+55") || phone.length !== 14 || phone[5] !== "9") {
+    return phone;
+  }
+
+  // Extract DDD (area code) - digits at positions 3 and 4 after +55
+  const ddd = parseInt(phone.slice(3, 5), 10);
+
+  // For DDDs that keep the 9th digit, return as-is
+  if (BRAZIL_DDD_WITH_NINTH_DIGIT.has(ddd)) {
+    return phone;
+  }
+
+  // For other DDDs, remove the 9th digit
+  return phone.slice(0, 5) + phone.slice(6);
+}
+
 const WHATSAPP_USER_JID_RE = /^(\d+)(?::\d+)?@s\.whatsapp\.net$/i;
 const WHATSAPP_LID_RE = /^(\d+)@lid$/i;
 
@@ -75,6 +131,8 @@ export function normalizeWhatsAppTarget(value: string): string | null {
   if (candidate.includes("@")) {
     return null;
   }
-  const normalized = normalizeE164(candidate);
+  // Apply Brazilian phone normalization before E.164
+  const brazilNormalized = normalizeBrazilPhone(candidate);
+  const normalized = normalizeE164(brazilNormalized);
   return normalized.length > 1 ? normalized : null;
 }
