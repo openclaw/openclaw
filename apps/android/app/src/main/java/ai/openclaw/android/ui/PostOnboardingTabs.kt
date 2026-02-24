@@ -9,12 +9,15 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.isImeVisible
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
@@ -70,8 +73,10 @@ private enum class StatusVisual {
 }
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 fun PostOnboardingTabs(viewModel: MainViewModel, modifier: Modifier = Modifier) {
   var activeTab by rememberSaveable { mutableStateOf(HomeTab.Connect) }
+  val imeVisible = WindowInsets.isImeVisible
 
   val statusText by viewModel.statusText.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
@@ -99,10 +104,12 @@ fun PostOnboardingTabs(viewModel: MainViewModel, modifier: Modifier = Modifier) 
       )
     },
     bottomBar = {
-      BottomTabBar(
-        activeTab = activeTab,
-        onSelect = { activeTab = it },
-      )
+      if (!imeVisible) {
+        BottomTabBar(
+          activeTab = activeTab,
+          onSelect = { activeTab = it },
+        )
+      }
     },
   ) { innerPadding ->
     Box(
@@ -218,7 +225,7 @@ private fun BottomTabBar(
   activeTab: HomeTab,
   onSelect: (HomeTab) -> Unit,
 ) {
-  val safeInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal)
+  val safeInsets = WindowInsets.navigationBars.only(WindowInsetsSides.Bottom + WindowInsetsSides.Horizontal)
 
   Box(
     modifier =
