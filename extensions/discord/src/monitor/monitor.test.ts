@@ -554,7 +554,9 @@ describe("discord component interactions", () => {
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
-    expect(lastDispatchCtx?.BodyForAgent).toBe('Clicked "Approve".');
+    // BodyForAgent gets a timestamp prefix (see #25334).
+    expect(lastDispatchCtx?.BodyForAgent).toContain('Clicked "Approve".');
+    expect(lastDispatchCtx?.BodyForAgent).toMatch(/^\[.*\d{4}-\d{2}-\d{2} \d{2}:\d{2}.*\]/);
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
     expect(resolveDiscordComponentEntry({ id: "btn_1" })).toBeNull();
   });
@@ -571,7 +573,9 @@ describe("discord component interactions", () => {
     await button.run(interaction, { cid: "btn_1" } as ComponentData);
 
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
-    expect(lastDispatchCtx?.BodyForAgent).toBe("/codex_resume --browse-projects");
+    // BodyForAgent gets a timestamp prefix (see #25334).
+    expect(lastDispatchCtx?.BodyForAgent).toContain("/codex_resume --browse-projects");
+    expect(lastDispatchCtx?.BodyForAgent).toMatch(/^\[.*\d{4}-\d{2}-\d{2} \d{2}:\d{2}.*\]/);
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
   });
 
@@ -600,7 +604,9 @@ describe("discord component interactions", () => {
     await select.run(interaction, { cid: "sel_1" } as ComponentData);
 
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
-    expect(lastDispatchCtx?.BodyForAgent).toBe('Selected Alpha from "Pick".');
+    // BodyForAgent gets a timestamp prefix (see #25334).
+    expect(lastDispatchCtx?.BodyForAgent).toContain('Selected Alpha from "Pick".');
+    expect(lastDispatchCtx?.BodyForAgent).toMatch(/^\[.*\d{4}-\d{2}-\d{2} \d{2}:\d{2}.*\]/);
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
   });
 

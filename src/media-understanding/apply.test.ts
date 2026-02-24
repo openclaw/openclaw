@@ -328,7 +328,11 @@ describe("applyMediaUnderstanding", () => {
       body: "[Audio]\nTranscript:\ntranscribed text",
       commandBody: "transcribed text",
     });
-    expect((ctx as unknown as { BodyForAgent?: string }).BodyForAgent).toBe(ctx.Body);
+    // BodyForAgent gets a timestamp prefix (see #25334).
+    expect((ctx as unknown as { BodyForAgent?: string }).BodyForAgent).toContain(ctx.Body);
+    expect((ctx as unknown as { BodyForAgent?: string }).BodyForAgent).toMatch(
+      /^\[.*\d{4}-\d{2}-\d{2} \d{2}:\d{2}.*\]/,
+    );
   });
 
   it("skips file blocks for text-like audio when transcription succeeds", async () => {
@@ -766,7 +770,9 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toBe("[Image]\nUser text:\nshow Dom\nDescription:\nimage description");
     expect(ctx.CommandBody).toBe("show Dom");
     expect(ctx.RawBody).toBe("show Dom");
-    expect(ctx.BodyForAgent).toBe(ctx.Body);
+    // BodyForAgent gets a timestamp prefix (see #25334).
+    expect(ctx.BodyForAgent).toContain(ctx.Body);
+    expect(ctx.BodyForAgent).toMatch(/^\[.*\d{4}-\d{2}-\d{2} \d{2}:\d{2}.*\]/);
     expect(ctx.BodyForCommands).toBe("show Dom");
   });
 
