@@ -44,7 +44,7 @@ describe("onboard auth credentials secret refs", () => {
     expect(parsed.profiles?.["moonshot:default"]?.keyRef).toBeUndefined();
   });
 
-  it("stores env-backed moonshot key as keyRef in ref mode", async () => {
+  it("stores env-backed moonshot key as keyRef when secret-input-mode=ref", async () => {
     const env = await setupAuthTestEnv("openclaw-onboard-auth-credentials-ref-");
     lifecycle.setStateDir(env.stateDir);
     process.env.MOONSHOT_API_KEY = "sk-moonshot-env";
@@ -142,14 +142,14 @@ describe("onboard auth credentials secret refs", () => {
     expect(parsed.profiles?.["openai:default"]?.key).toBeUndefined();
   });
 
-  it("stores env-backed volcengine and byteplus keys as keyRef", async () => {
+  it("stores env-backed volcengine and byteplus keys as keyRef in ref mode", async () => {
     const env = await setupAuthTestEnv("openclaw-onboard-auth-credentials-volc-byte-");
     lifecycle.setStateDir(env.stateDir);
     process.env.VOLCANO_ENGINE_API_KEY = "volcengine-secret";
     process.env.BYTEPLUS_API_KEY = "byteplus-secret";
 
-    await setVolcengineApiKey("volcengine-secret");
-    await setByteplusApiKey("byteplus-secret");
+    await setVolcengineApiKey("volcengine-secret", env.agentDir, { secretInputMode: "ref" });
+    await setByteplusApiKey("byteplus-secret", env.agentDir, { secretInputMode: "ref" });
 
     const parsed = await readAuthProfilesForAgent<{
       profiles?: Record<string, { key?: string; keyRef?: unknown }>;
