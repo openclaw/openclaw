@@ -665,6 +665,15 @@
     return div.innerHTML;
   }
 
+  // Validate image MIME type to prevent attribute injection in data-URL src.
+  const SAFE_IMAGE_MIME_RE = /^image\/(png|jpeg|gif|webp|svg\+xml|bmp|tiff|avif)$/i;
+  function sanitizeImageMimeType(mimeType) {
+    if (typeof mimeType === "string" && SAFE_IMAGE_MIME_RE.test(mimeType)) {
+      return mimeType;
+    }
+    return "application/octet-stream";
+  }
+
   /**
    * Truncate string to maxLen chars, append "..." if truncated.
    */
@@ -722,13 +731,13 @@
               `<span class="tree-role-tool">${escapeHtml(formatToolCall(toolCall.name, toolCall.arguments))}</span>`
             );
           }
-          return labelHtml + `<span class="tree-role-tool">[${msg.toolName || "tool"}]</span>`;
+          return labelHtml + `<span class="tree-role-tool">[${escapeHtml(msg.toolName || "tool")}]</span>`;
         }
         if (msg.role === "bashExecution") {
           const cmd = truncate(normalize(msg.command || ""));
           return labelHtml + `<span class="tree-role-tool">[bash]:</span> ${escapeHtml(cmd)}`;
         }
-        return labelHtml + `<span class="tree-muted">[${msg.role}]</span>`;
+        return labelHtml + `<span class="tree-muted">[${escapeHtml(msg.role)}]</span>`;
       }
       case "compaction":
         return (
@@ -751,11 +760,11 @@
         );
       }
       case "model_change":
-        return labelHtml + `<span class="tree-muted">[model: ${entry.modelId}]</span>`;
+        return labelHtml + `<span class="tree-muted">[model: ${escapeHtml(entry.modelId)}]</span>`;
       case "thinking_level_change":
-        return labelHtml + `<span class="tree-muted">[thinking: ${entry.thinkingLevel}]</span>`;
+        return labelHtml + `<span class="tree-muted">[thinking: ${escapeHtml(entry.thinkingLevel)}]</span>`;
       default:
-        return labelHtml + `<span class="tree-muted">[${entry.type}]</span>`;
+        return labelHtml + `<span class="tree-muted">[${escapeHtml(entry.type)}]</span>`;
     }
   }
 
@@ -1029,7 +1038,10 @@
       return (
         '<div class="tool-images">' +
         images
-          .map((img) => `<img src="data:${img.mimeType};base64,${img.data}" class="tool-image" />`)
+          .map(
+            (img) =>
+              `<img src="data:${sanitizeImageMimeType(img.mimeType)};base64,${img.data}" class="tool-image" />`,
+          )
           .join("") +
         "</div>"
       );
@@ -1303,7 +1315,7 @@
           if (images.length > 0) {
             html += '<div class="message-images">';
             for (const img of images) {
-              html += `<img src="data:${img.mimeType};base64,${img.data}" class="message-image" />`;
+              html += `<img src="data:${sanitizeImageMimeType(img.mimeType)};base64,${img.data}" class="message-image" />`;
             }
             html += "</div>";
           }
@@ -1522,7 +1534,7 @@
             </div>
             <div class="header-info">
               <div class="info-item"><span class="info-label">Date:</span><span class="info-value">${header?.timestamp ? new Date(header.timestamp).toLocaleString() : "unknown"}</span></div>
-              <div class="info-item"><span class="info-label">Models:</span><span class="info-value">${globalStats.models.join(", ") || "unknown"}</span></div>
+              <div class="info-item"><span class="info-label">Models:</span><span class="info-value">${escapeHtml(globalStats.models.join(", ") || "unknown")}</span></div>
               <div class="info-item"><span class="info-label">Messages:</span><span class="info-value">${msgParts.join(", ") || "0"}</span></div>
               <div class="info-item"><span class="info-label">Tool Calls:</span><span class="info-value">${globalStats.toolCalls}</span></div>
               <div class="info-item"><span class="info-label">Tokens:</span><span class="info-value">${tokenParts.join(" ") || "0"}</span></div>
@@ -1717,6 +1729,10 @@
       // Inline code: escape HTML
       codespan(token) {
         return `<code>${escapeHtml(token.text)}</code>`;
+      },
+      // Raw HTML blocks/inline HTML: escape to prevent script execution.
+      html(token) {
+        return escapeHtml(token.text);
       },
     },
   });
