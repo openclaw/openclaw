@@ -47,6 +47,11 @@ export type MSTeamsConfig = {
   enabled?: boolean;
   /** Optional provider capability tags used for agent/runtime guidance. */
   capabilities?: string[];
+  /**
+   * Break-glass override: allow mutable identity matching (display names/UPNs) in allowlists.
+   * Default behavior is ID-only matching.
+   */
+  dangerouslyAllowNameMatching?: boolean;
   /** Markdown formatting overrides (tables). */
   markdown?: MarkdownConfig;
   /** Allow channel-initiated config writes (default: true). */
