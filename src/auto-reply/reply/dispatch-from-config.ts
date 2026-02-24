@@ -363,6 +363,12 @@ export async function dispatchReplyFromConfig(params: {
         },
         onBlockReply: (payload: ReplyPayload, context) => {
           const run = async () => {
+            // Suppress reasoning payloads — channels using this generic dispatch
+            // path (WhatsApp, web, etc.) do not have a dedicated reasoning lane.
+            // Telegram has its own dispatch path that handles reasoning splitting.
+            if (payload.isReasoning) {
+              return;
+            }
             // Accumulate block text for TTS generation after streaming
             if (payload.text) {
               if (accumulatedBlockText.length > 0) {
@@ -396,6 +402,11 @@ export async function dispatchReplyFromConfig(params: {
     let queuedFinal = false;
     let routedFinalCount = 0;
     for (const reply of replies) {
+      // Suppress reasoning payloads from channel delivery — channels using this
+      // generic dispatch path do not have a dedicated reasoning lane.
+      if (reply.isReasoning) {
+        continue;
+      }
       const ttsReply = await maybeApplyTtsToPayload({
         payload: reply,
         cfg,
