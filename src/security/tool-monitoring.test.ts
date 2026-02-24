@@ -250,4 +250,80 @@ describe("ToolMonitor", () => {
       expect(monitor.isEnabled()).toBe(false);
     });
   });
+
+  describe("shouldThrottle", () => {
+    it("returns throttled=false when no critical pattern has been seen for the agent", () => {
+      expect(monitor.shouldThrottle("agent-new")).toEqual({ throttled: false });
+    });
+
+    it("returns throttled=true after a critical pattern match for the agent", () => {
+      const agentId = "agent-credential-thief";
+      const now = Date.now();
+
+      // Trigger the credential_harvesting critical pattern (3+ unique credential files)
+      monitor.record({ tool: "read", timestamp: now, agentId, args: { path: "/home/user/.env" } });
+      monitor.record({
+        tool: "read",
+        timestamp: now + 100,
+        agentId,
+        args: { path: "/home/user/.npmrc" },
+      });
+      monitor.record({
+        tool: "read",
+        timestamp: now + 200,
+        agentId,
+        args: { path: "/home/user/.aws/credentials" },
+      });
+
+      const result = monitor.shouldThrottle(agentId);
+      expect(result.throttled).toBe(true);
+      expect(result.reason).toContain("critical");
+    });
+
+    it("does not throttle a different agentId even after a critical match", () => {
+      const agentId = "agent-bad";
+      const other = "agent-good";
+      const now = Date.now();
+
+      monitor.record({ tool: "read", timestamp: now, agentId, args: { path: "/home/user/.env" } });
+      monitor.record({
+        tool: "read",
+        timestamp: now + 100,
+        agentId,
+        args: { path: "/home/user/.npmrc" },
+      });
+      monitor.record({
+        tool: "read",
+        timestamp: now + 200,
+        agentId,
+        args: { path: "/home/user/.aws/credentials" },
+      });
+
+      expect(monitor.shouldThrottle(agentId).throttled).toBe(true);
+      expect(monitor.shouldThrottle(other).throttled).toBe(false);
+    });
+
+    it("clearHistory resets the throttle state", () => {
+      const agentId = "agent-cleared";
+      const now = Date.now();
+
+      monitor.record({ tool: "read", timestamp: now, agentId, args: { path: "/home/user/.env" } });
+      monitor.record({
+        tool: "read",
+        timestamp: now + 100,
+        agentId,
+        args: { path: "/home/user/.npmrc" },
+      });
+      monitor.record({
+        tool: "read",
+        timestamp: now + 200,
+        agentId,
+        args: { path: "/home/user/.aws/credentials" },
+      });
+      expect(monitor.shouldThrottle(agentId).throttled).toBe(true);
+
+      monitor.clearHistory();
+      expect(monitor.shouldThrottle(agentId).throttled).toBe(false);
+    });
+  });
 });

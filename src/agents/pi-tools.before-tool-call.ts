@@ -132,6 +132,37 @@ export async function runBeforeToolCallHook(args: {
     recordToolCall(sessionState, toolName, params, args.toolCallId, args.ctx.loopDetection);
   }
 
+  // Security tool abuse gate: check for throttle + record call in the security monitor.
+  if (args.ctx?.agentId) {
+    const { recordToolCall: recordSecurityToolCall, shouldThrottle } =
+      await import("../security/tool-monitoring.js");
+
+    const throttle = shouldThrottle(args.ctx.agentId);
+    if (throttle.throttled) {
+      log.error(
+        `blocking tool=${toolName} agentId=${args.ctx.agentId}: security monitor throttle — ${throttle.reason}`,
+      );
+      return {
+        blocked: true,
+        reason: throttle.reason ?? "Tool execution throttled by security monitor",
+      };
+    }
+
+    const matches = recordSecurityToolCall({
+      tool: toolName,
+      timestamp: Date.now(),
+      agentId: args.ctx.agentId,
+      sessionKey: args.ctx.sessionKey,
+    });
+    const criticalMatch = matches.find((m) => m.severity === "critical");
+    if (criticalMatch) {
+      log.error(
+        `blocking tool=${toolName} agentId=${args.ctx.agentId}: critical abuse pattern "${criticalMatch.pattern}"`,
+      );
+      return { blocked: true, reason: criticalMatch.description };
+    }
+  }
+
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("before_tool_call")) {
     return { blocked: false, params: args.params };

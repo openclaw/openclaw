@@ -334,11 +334,18 @@ const BUILTIN_PATTERNS: AbusePattern[] = [
 // Tool Monitor
 // -----------------------------------------------------------------------------
 
+export interface ThrottleResult {
+  throttled: boolean;
+  reason?: string;
+}
+
 export class ToolMonitor {
   private config: Required<ToolMonitoringConfig>;
   private callHistory: ToolCall[] = [];
   private patterns: AbusePattern[] = [];
   private matchCache = new Map<string, number>(); // pattern -> last match timestamp
+  /** agentId → timestamp of last critical pattern match (used by shouldThrottle) */
+  private criticalAgentThrottles = new Map<string, number>();
 
   constructor(config?: ToolMonitoringConfig) {
     this.config = {
@@ -409,11 +416,40 @@ export class ToolMonitor {
           matches.push(match);
           this.matchCache.set(pattern.name, now);
           this.emitPatternAlert(match);
+          // Record critical matches per agent for shouldThrottle gate
+          if (match.severity === "critical" && callWithTimestamp.agentId) {
+            this.criticalAgentThrottles.set(callWithTimestamp.agentId, now);
+          }
         }
       }
     }
 
     return matches;
+  }
+
+  /**
+   * Check whether the given agent should be throttled due to a recent critical
+   * abuse pattern match. Returns `{ throttled: true }` if a critical pattern
+   * fired within the current monitoring window for this agentId.
+   *
+   * Expired entries are pruned on access so the map doesn't grow unbounded.
+   */
+  shouldThrottle(agentId: string): ThrottleResult {
+    const lastCritical = this.criticalAgentThrottles.get(agentId);
+    if (lastCritical === undefined) {
+      return { throttled: false };
+    }
+    const now = Date.now();
+    const elapsed = now - lastCritical;
+    if (elapsed < this.config.windowMs) {
+      return {
+        throttled: true,
+        reason: `critical tool abuse pattern detected ${Math.round(elapsed / 1000)}s ago`,
+      };
+    }
+    // Window expired — prune
+    this.criticalAgentThrottles.delete(agentId);
+    return { throttled: false };
   }
 
   /**
@@ -456,6 +492,7 @@ export class ToolMonitor {
   clearHistory(): void {
     this.callHistory = [];
     this.matchCache.clear();
+    this.criticalAgentThrottles.clear();
   }
 
   /**
@@ -541,4 +578,12 @@ export function resetToolMonitor(): void {
  */
 export function recordToolCall(call: ToolCall): PatternMatch[] {
   return getToolMonitor().record(call);
+}
+
+/**
+ * Check whether the given agent is currently throttled due to a critical
+ * abuse pattern match using the default monitor.
+ */
+export function shouldThrottle(agentId: string): ThrottleResult {
+  return getToolMonitor().shouldThrottle(agentId);
 }
