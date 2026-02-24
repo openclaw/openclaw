@@ -17,6 +17,7 @@ Docs: https://docs.openclaw.ai
 - Discord/Threading: recover missing thread parent IDs by refetching thread metadata before resolving parent channel context. (#24897) Thanks @z-x-yang.
 - Web UI/i18n: load and hydrate saved locale translations during startup so non-English sessions apply immediately without manual toggling. (#24795) Thanks @chilu18.
 - Plugins/Config schema: support legacy plugin schemas without `toJSONSchema()` by falling back to permissive object schema generation. (#24933) Thanks @pandego.
+- Auto-reply/Abort shortcuts: expand standalone stop phrases (`stop openclaw`, `stop action`, `stop run`, `stop agent`, `please stop`, and related variants) and accept trailing punctuation (for example `STOP OPENCLAW!!!`) so emergency stop messages are caught more reliably.
 - Cron/Isolated sessions: use full prompt mode for isolated cron runs so skills/extensions are available during cron execution. (#24944)
 - Discord/Reasoning: suppress reasoning/thinking-only payload blocks from Discord delivery output. (#24969)
 - Sessions/Reasoning: persist `reasoningLevel: "off"` explicitly instead of deleting it so session overrides survive patch/update flows. (#24406, #24559)
