@@ -293,18 +293,6 @@ export const FIELD_HELP: Record<string, string> = {
   "canvasHost.liveReload":
     "Enables automatic live-reload behavior for canvas assets during development workflows. Keep disabled in production-like environments where deterministic output is preferred.",
   talk: "Talk-mode voice synthesis settings for voice identity, model selection, output format, and interruption behavior. Use this section to tune human-facing voice UX while controlling latency and cost.",
-  "talk.voiceId":
-    "Primary voice identifier used by talk mode when synthesizing spoken responses. Use a stable voice for consistent persona and switch only when experience goals change.",
-  "talk.voiceAliases":
-    "Alias map for human-friendly voice shortcuts to concrete voice IDs in talk workflows. Use aliases to simplify operator switching without exposing long provider-native IDs.",
-  "talk.modelId":
-    "Model override used for talk pipeline generation when voice workflows require different model behavior. Use this when speech output needs a specialized low-latency or style-tuned model.",
-  "talk.outputFormat":
-    "Audio output format for synthesized talk responses, depending on provider support and client playback expectations. Use formats compatible with your playback channel to avoid decode failures.",
-  "talk.interruptOnSpeech":
-    "When true, interrupts current speech playback on new speech/input events for more conversational turn-taking. Keep enabled for interactive voice UX and disable for uninterrupted long-form playback.",
-  "talk.apiKey":
-    "Optional talk-provider API key override used specifically for speech synthesis requests. Use env-backed secrets and set this only when talk traffic must use separate credentials.",
   "gateway.auth.token":
     "Required by default for gateway access (unless using Tailscale Serve identity); required for non-loopback binds.",
   "gateway.auth.password": "Required for Tailscale funnel.",
