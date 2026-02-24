@@ -245,7 +245,7 @@ describe("deliverReplies", () => {
   });
 
   it("falls back to plain text when markdown renders to empty HTML in threaded mode", async () => {
-    const runtime = { error: vi.fn(), log: vi.fn() };
+    const runtime = createRuntime();
     const sendMessage = vi.fn(async (_chatId: string, text: string) => {
       if (text === "") {
         throw new Error("400: Bad Request: message text is empty");
@@ -279,7 +279,7 @@ describe("deliverReplies", () => {
   });
 
   it("throws when formatted and plain fallback text are both empty", async () => {
-    const runtime = { error: vi.fn(), log: vi.fn() };
+    const runtime = createRuntime();
     const sendMessage = vi.fn();
     const bot = { api: { sendMessage } } as unknown as Bot;
 
