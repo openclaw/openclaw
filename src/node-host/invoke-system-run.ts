@@ -55,6 +55,16 @@ type SystemRunAllowlistAnalysis = {
   segments: ExecCommandSegment[];
 };
 
+const safeBinTrustedDirWarningCache = new Set<string>();
+
+function warnWritableTrustedDirOnce(message: string): void {
+  if (safeBinTrustedDirWarningCache.has(message)) {
+    return;
+  }
+  safeBinTrustedDirWarningCache.add(message);
+  console.warn(message);
+}
+
 function normalizeDeniedReason(reason: string | null | undefined): SystemRunDeniedReason {
   switch (reason) {
     case "security=deny":
@@ -310,6 +320,7 @@ export async function handleSystemRunInvoke(opts: HandleSystemRunInvokeOptions):
   const { safeBins, safeBinProfiles, trustedSafeBinDirs } = resolveExecSafeBinRuntimePolicy({
     global: cfg.tools?.exec,
     local: agentExec,
+    onWarning: warnWritableTrustedDirOnce,
   });
   const bins = autoAllowSkills ? await opts.skillBins.current() : [];
   let { analysisOk, allowlistMatches, allowlistSatisfied, segments } = evaluateSystemRunAllowlist({

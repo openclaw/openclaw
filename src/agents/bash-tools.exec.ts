@@ -175,6 +175,9 @@ export function createExecTool(
       safeBinTrustedDirs: defaults?.safeBinTrustedDirs,
       safeBinProfiles: defaults?.safeBinProfiles,
     },
+    onWarning: (message) => {
+      logInfo(message);
+    },
   });
   if (unprofiledSafeBins.length > 0) {
     logInfo(
