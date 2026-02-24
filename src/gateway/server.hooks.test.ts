@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
+import { loadConfig } from "../config/config.js";
+import { resolveAgentMainSessionKey, resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { drainSystemEvents, peekSystemEvents } from "../infra/system-events.js";
 import {
   cronIsolatedRun,
@@ -13,6 +14,8 @@ installGatewayTestHooks({ scope: "suite" });
 
 const resolveMainKey = () => resolveMainSessionKeyFromConfig();
 const HOOK_TOKEN = "hook-secret";
+const resolveAgentMainKey = (agentId: string) =>
+  resolveAgentMainSessionKey({ cfg: loadConfig(), agentId });
 
 function buildHookJsonHeaders(options?: {
   token?: string | null;
@@ -40,6 +43,18 @@ async function postHook(
     headers: buildHookJsonHeaders(options),
     body: typeof body === "string" ? body : JSON.stringify(body),
   });
+}
+
+async function waitForSessionSystemEvent(sessionKey: string, timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const events = peekSystemEvents(sessionKey);
+    if (events.length > 0) {
+      return events;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`timeout waiting for system event for ${sessionKey}`);
 }
 
 function setMainAndHooksAgents(): void {
@@ -98,12 +113,15 @@ describe("gateway server hooks", () => {
         agentId: "hooks",
       });
       expect(resAgentWithId.status).toBe(200);
-      await waitForSystemEvent();
+      const hooksMainKey = resolveAgentMainKey("hooks");
+      const hooksEvents = await waitForSessionSystemEvent(hooksMainKey);
+      expect(hooksEvents.some((e) => e.includes("Hook Email: done"))).toBe(true);
       const routedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         job?: { agentId?: string };
       };
       expect(routedCall?.job?.agentId).toBe("hooks");
-      drainSystemEvents(resolveMainKey());
+      expect(peekSystemEvents(resolveMainKey()).length).toBe(0);
+      drainSystemEvents(hooksMainKey);
 
       mockIsolatedRunOkOnce();
       const resAgentUnknown = await postHook(port, "/hooks/agent", {
@@ -307,12 +325,15 @@ describe("gateway server hooks", () => {
         agentId: "hooks",
       });
       expect(resAllowed.status).toBe(200);
-      await waitForSystemEvent();
+      const hooksMainKey = resolveAgentMainKey("hooks");
+      const hooksEvents = await waitForSessionSystemEvent(hooksMainKey);
+      expect(hooksEvents.some((event) => event.includes("done"))).toBe(true);
       const allowedCall = (cronIsolatedRun.mock.calls[0] as unknown[] | undefined)?.[0] as {
         job?: { agentId?: string };
       };
       expect(allowedCall?.job?.agentId).toBe("hooks");
-      drainSystemEvents(resolveMainKey());
+      expect(peekSystemEvents(resolveMainKey()).length).toBe(0);
+      drainSystemEvents(hooksMainKey);
 
       const resDenied = await postHook(port, "/hooks/agent", {
         message: "Denied",
