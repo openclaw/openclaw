@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 
 - Subagents/Sessions: add `agents.defaults.subagents.runTimeoutSeconds` so `sessions_spawn` can inherit a configurable default timeout when the tool call omits `runTimeoutSeconds` (unset remains `0`, meaning no timeout). (#24594) Thanks @mitchmcalister.
 - Config/Kilo Gateway: Kilo provider flow now surfaces an updated list of models. (#24921) thanks @gumadeiras.
+- Auto-reply/Abort shortcuts: expand standalone stop phrases (`stop openclaw`, `stop action`, `stop run`, `stop agent`, `please stop`, and related variants) and accept trailing punctuation (for example `STOP OPENCLAW!!!`) so emergency stop messages are caught more reliably.
 
 ### Fixes
 
@@ -36,7 +37,6 @@ Docs: https://docs.openclaw.ai
 - WhatsApp/Auto-reply: send only final payloads to WhatsApp, suppress tool/block payload leakage (reasoning/thinking), and force block streaming off for WhatsApp dispatch so final-only delivery cannot cause silent turns. (#24962) Thanks @SidQin-cyber.
 - Channels/Reasoning: suppress reasoning/thinking payload segments in the shared channel dispatch path so non-Telegram channels (including WhatsApp and Web) no longer emit internal reasoning blocks as user-visible replies. (#24991) Thanks @stakeswky.
 - Discord/Reasoning: suppress reasoning/thinking-only payload blocks from Discord delivery output. (#24969)
-- Auto-reply/Abort shortcuts: expand standalone stop phrases (`stop openclaw`, `stop action`, `stop run`, `stop agent`, `please stop`, and related variants) and accept trailing punctuation (for example `STOP OPENCLAW!!!`) so emergency stop messages are caught more reliably.
 - WhatsApp/DM routing: only update main-session last-route state when DM traffic is bound to the main session, preserving isolated `dmScope` routing. (#24949) Thanks @kevinWangSheng.
 - WhatsApp/Access control: honor `selfChatMode` in inbound access-control checks. (#24738)
 - WhatsApp/Logging: redact outbound recipient identifiers in WhatsApp outbound + heartbeat logs and remove message/poll preview text from those log lines. (#24980) Thanks @coygeek.
