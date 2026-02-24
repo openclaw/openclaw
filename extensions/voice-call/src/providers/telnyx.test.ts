@@ -103,4 +103,37 @@ describe("TelnyxProvider.verifyWebhook", () => {
     const spkiDerBase64 = spkiDer.toString("base64");
     expectWebhookVerificationSucceeds({ publicKey: spkiDerBase64, privateKey });
   });
+
+  it("returns replay status when the same signed request is seen twice", () => {
+    const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
+    const spkiDer = publicKey.export({ format: "der", type: "spki" }) as Buffer;
+    const provider = new TelnyxProvider(
+      { apiKey: "KEY123", connectionId: "CONN456", publicKey: spkiDer.toString("base64") },
+      { skipVerification: false },
+    );
+
+    const rawBody = JSON.stringify({
+      event_type: "call.initiated",
+      payload: { call_control_id: "call-replay-test" },
+      nonce: crypto.randomUUID(),
+    });
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const signedPayload = `${timestamp}|${rawBody}`;
+    const signature = crypto.sign(null, Buffer.from(signedPayload), privateKey).toString("base64");
+    const ctx = createCtx({
+      rawBody,
+      headers: {
+        "telnyx-signature-ed25519": signature,
+        "telnyx-timestamp": timestamp,
+      },
+    });
+
+    const first = provider.verifyWebhook(ctx);
+    const second = provider.verifyWebhook(ctx);
+
+    expect(first.ok).toBe(true);
+    expect(first.isReplay).toBeFalsy();
+    expect(second.ok).toBe(true);
+    expect(second.isReplay).toBe(true);
+  });
 });
