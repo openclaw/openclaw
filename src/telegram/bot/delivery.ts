@@ -147,9 +147,8 @@ export async function deliverReplies(params: {
       const fileName = media.fileName ?? (isGif ? "animation.gif" : "file");
       const file = new InputFile(media.buffer, fileName);
       // Caption only on first item; if text exceeds limit, defer to follow-up message.
-      const { caption, followUpText } = splitTelegramCaption(
-        isFirstMedia ? (reply.text ?? undefined) : undefined,
-      );
+      const rawText = isFirstMedia ? (reply.text ?? undefined) : undefined;
+      const { caption, followUpText } = splitTelegramCaption(rawText);
       const htmlCaption = caption
         ? renderTelegramHtmlText(caption, { tableMode: params.tableMode })
         : undefined;
