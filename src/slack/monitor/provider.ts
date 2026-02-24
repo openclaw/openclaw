@@ -10,6 +10,7 @@ import {
   summarizeMapping,
 } from "../../channels/allowlists/resolve-utils.js";
 import { loadConfig } from "../../config/config.js";
+import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
 import {
   resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
@@ -210,7 +211,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     dmEnabled,
     dmPolicy,
     allowFrom,
-    allowNameMatching: slackCfg.dangerouslyAllowNameMatching === true,
+    allowNameMatching: isDangerousNameMatchingEnabled(slackCfg),
     groupDmEnabled,
     groupDmChannels,
     defaultRequireMention: slackCfg.requireMention,

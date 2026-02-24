@@ -21,6 +21,7 @@ import {
   type StatusReactionAdapter,
 } from "../../channels/status-reactions.js";
 import { createTypingCallbacks } from "../../channels/typing.js";
+import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
 import { resolveDiscordPreviewStreamMode } from "../../config/discord-preview-streaming.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
@@ -199,7 +200,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     channelConfig,
     guildInfo,
     sender: { id: sender.id, name: sender.name, tag: sender.tag },
-    allowNameMatching: discordConfig?.dangerouslyAllowNameMatching === true,
+    allowNameMatching: isDangerousNameMatchingEnabled(discordConfig),
   });
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId: route.agentId,

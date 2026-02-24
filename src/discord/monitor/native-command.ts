@@ -39,6 +39,7 @@ import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import type { OpenClawConfig, loadConfig } from "../../config/config.js";
+import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
 import { resolveOpenProviderRuntimeGroupPolicy } from "../../config/runtime-group-policy.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
@@ -1283,7 +1284,7 @@ async function dispatchDiscordCommandInteraction(params: {
             name: sender.name,
             tag: sender.tag,
           },
-          { allowNameMatching: discordConfig?.dangerouslyAllowNameMatching === true },
+          { allowNameMatching: isDangerousNameMatchingEnabled(discordConfig) },
         )
       : false;
   const guildInfo = resolveDiscordGuildEntry({
@@ -1374,7 +1375,7 @@ async function dispatchDiscordCommandInteraction(params: {
               name: sender.name,
               tag: sender.tag,
             },
-            { allowNameMatching: discordConfig?.dangerouslyAllowNameMatching === true },
+            { allowNameMatching: isDangerousNameMatchingEnabled(discordConfig) },
           )
         : false;
       if (!permitted) {
@@ -1412,7 +1413,7 @@ async function dispatchDiscordCommandInteraction(params: {
       guildInfo,
       memberRoleIds,
       sender,
-      allowNameMatching: discordConfig?.dangerouslyAllowNameMatching === true,
+      allowNameMatching: isDangerousNameMatchingEnabled(discordConfig),
     });
     const authorizers = useAccessGroups
       ? [
@@ -1518,7 +1519,7 @@ async function dispatchDiscordCommandInteraction(params: {
     channelConfig,
     guildInfo,
     sender: { id: sender.id, name: sender.name, tag: sender.tag },
-    allowNameMatching: discordConfig?.dangerouslyAllowNameMatching === true,
+    allowNameMatching: isDangerousNameMatchingEnabled(discordConfig),
   });
   const ctxPayload = finalizeInboundContext({
     Body: prompt,

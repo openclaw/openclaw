@@ -6,6 +6,7 @@ import {
   recordPendingHistoryEntryIfEnabled,
   resolveControlCommandGate,
   resolveDefaultGroupPolicy,
+  isDangerousNameMatchingEnabled,
   resolveMentionGating,
   formatAllowlistMatchMeta,
   type HistoryEntry,
@@ -145,7 +146,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
       if (dmPolicy !== "open") {
         const effectiveAllowFrom = [...allowFrom.map((v) => String(v)), ...storedAllowFrom];
-        const allowNameMatching = msteamsCfg.dangerouslyAllowNameMatching === true;
+        const allowNameMatching = isDangerousNameMatchingEnabled(msteamsCfg);
         const allowMatch = resolveMSTeamsAllowlistMatch({
           allowFrom: effectiveAllowFrom,
           senderId,
@@ -228,7 +229,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           return;
         }
         if (effectiveGroupAllowFrom.length > 0) {
-          const allowNameMatching = msteamsCfg.dangerouslyAllowNameMatching === true;
+          const allowNameMatching = isDangerousNameMatchingEnabled(msteamsCfg);
           const allowMatch = resolveMSTeamsAllowlistMatch({
             allowFrom: effectiveGroupAllowFrom,
             senderId,
@@ -252,14 +253,14 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       allowFrom: effectiveDmAllowFrom,
       senderId,
       senderName,
-      allowNameMatching: msteamsCfg?.dangerouslyAllowNameMatching === true,
+      allowNameMatching: isDangerousNameMatchingEnabled(msteamsCfg),
     });
     const groupAllowedForCommands = isMSTeamsGroupAllowed({
       groupPolicy: "allowlist",
       allowFrom: effectiveGroupAllowFrom,
       senderId,
       senderName,
-      allowNameMatching: msteamsCfg?.dangerouslyAllowNameMatching === true,
+      allowNameMatching: isDangerousNameMatchingEnabled(msteamsCfg),
     });
     const hasControlCommandInMessage = core.channel.text.hasControlCommand(text, cfg);
     const commandGate = resolveControlCommandGate({
