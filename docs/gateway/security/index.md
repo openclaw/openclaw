@@ -852,6 +852,30 @@ access those accounts and data. Treat browser profiles as **sensitive state**:
 - Disable browser proxy routing when you don’t need it (`gateway.nodes.browser.mode="off"`).
 - Chrome extension relay mode is **not** “safer”; it can take over your existing Chrome tabs. Assume it can act as you in whatever that tab/profile can reach.
 
+### Browser SSRF policy (trusted-network default)
+
+OpenClaw’s browser network policy defaults to the trusted-operator model: private/internal destinations are allowed unless you explicitly disable them.
+
+- Default: `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork: true` (implicit when unset).
+- Legacy alias: `browser.ssrfPolicy.allowPrivateNetwork` is still accepted for compatibility.
+- Strict mode: set `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork: false` to block private/internal/special-use destinations by default.
+- In strict mode, use `hostnameAllowlist` (patterns like `*.example.com`) and `allowedHostnames` (exact host exceptions, including blocked names like `localhost`) for explicit exceptions.
+- Navigation is checked before request and best-effort re-checked on the final `http(s)` URL after navigation to reduce redirect-based pivots.
+
+Example strict policy:
+
+```json5
+{
+  browser: {
+    ssrfPolicy: {
+      dangerouslyAllowPrivateNetwork: false,
+      hostnameAllowlist: ["*.example.com", "example.com"],
+      allowedHostnames: ["localhost"],
+    },
+  },
+}
+```
+
 ## Per-agent access profiles (multi-agent)
 
 With multi-agent routing, each agent can have its own sandbox + tool policy:

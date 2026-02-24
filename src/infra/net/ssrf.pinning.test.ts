@@ -154,4 +154,19 @@ describe("ssrf pinning", () => {
     });
     expect(lookup).toHaveBeenCalledTimes(1);
   });
+
+  it("accepts dangerouslyAllowPrivateNetwork as an allowPrivateNetwork alias", async () => {
+    const lookup = vi.fn(async () => [{ address: "127.0.0.1", family: 4 }]) as unknown as LookupFn;
+
+    await expect(
+      resolvePinnedHostnameWithPolicy("localhost", {
+        lookupFn: lookup,
+        policy: { dangerouslyAllowPrivateNetwork: true },
+      }),
+    ).resolves.toMatchObject({
+      hostname: "localhost",
+      addresses: ["127.0.0.1"],
+    });
+    expect(lookup).toHaveBeenCalledTimes(1);
+  });
 });

@@ -30,6 +30,7 @@ export type LookupFn = typeof dnsLookup;
 
 export type SsrFPolicy = {
   allowPrivateNetwork?: boolean;
+  dangerouslyAllowPrivateNetwork?: boolean;
   allowedHostnames?: string[];
   hostnameAllowlist?: string[];
 };
@@ -58,6 +59,10 @@ function normalizeHostnameAllowlist(values?: string[]): string[] {
         .filter((value) => value !== "*" && value !== "*." && value.length > 0),
     ),
   );
+}
+
+function resolveAllowPrivateNetwork(policy?: SsrFPolicy): boolean {
+  return policy?.dangerouslyAllowPrivateNetwork === true || policy?.allowPrivateNetwork === true;
 }
 
 function isHostnameAllowedByPattern(hostname: string, pattern: string): boolean {
@@ -247,7 +252,7 @@ export async function resolvePinnedHostnameWithPolicy(
     throw new Error("Invalid hostname");
   }
 
-  const allowPrivateNetwork = Boolean(params.policy?.allowPrivateNetwork);
+  const allowPrivateNetwork = resolveAllowPrivateNetwork(params.policy);
   const allowedHostnames = normalizeHostnameSet(params.policy?.allowedHostnames);
   const hostnameAllowlist = normalizeHostnameAllowlist(params.policy?.hostnameAllowlist);
   const isExplicitAllowed = allowedHostnames.has(normalized);
