@@ -17,7 +17,10 @@ import { detectCommandObfuscation } from "../infra/exec-obfuscation-detect.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
 import { logInfo } from "../logger.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
-import { requestExecApprovalDecisionForHost } from "./bash-tools.exec-approval-request.js";
+import {
+  registerExecApprovalRequestForHost,
+  waitForExecApprovalDecision,
+} from "./bash-tools.exec-approval-request.js";
 import {
   DEFAULT_APPROVAL_TIMEOUT_MS,
   DEFAULT_NOTIFY_TAIL_CHARS,
@@ -135,28 +138,42 @@ export async function processGatewayAllowlist(
   if (requiresAsk) {
     const approvalId = crypto.randomUUID();
     const approvalSlug = createApprovalSlug(approvalId);
-    const expiresAtMs = Date.now() + DEFAULT_APPROVAL_TIMEOUT_MS;
     const contextKey = `exec:${approvalId}`;
     const resolvedPath = allowlistEval.segments[0]?.resolution?.resolvedPath;
     const noticeSeconds = Math.max(1, Math.round(params.approvalRunningNoticeMs / 1000));
     const effectiveTimeout =
       typeof params.timeoutSec === "number" ? params.timeoutSec : params.defaultTimeoutSec;
     const warningText = params.warnings.length ? `${params.warnings.join("\n")}\n\n` : "";
+    let expiresAtMs = Date.now() + DEFAULT_APPROVAL_TIMEOUT_MS;
+    let preResolvedDecision: string | null | undefined;
+
+    try {
+      // Register first so the returned approval ID is actionable immediately.
+      const registration = await registerExecApprovalRequestForHost({
+        approvalId,
+        command: params.command,
+        workdir: params.workdir,
+        host: "gateway",
+        security: hostSecurity,
+        ask: hostAsk,
+        agentId: params.agentId,
+        resolvedPath,
+        sessionKey: params.sessionKey,
+      });
+      expiresAtMs = registration.expiresAtMs;
+      preResolvedDecision = registration.finalDecision;
+    } catch (err) {
+      throw new Error(`Exec approval registration failed: ${String(err)}`, { cause: err });
+    }
 
     void (async () => {
-      let decision: string | null = null;
+      let decision: string | null = preResolvedDecision ?? null;
       try {
-        decision = await requestExecApprovalDecisionForHost({
-          approvalId,
-          command: params.command,
-          workdir: params.workdir,
-          host: "gateway",
-          security: hostSecurity,
-          ask: hostAsk,
-          agentId: params.agentId,
-          resolvedPath,
-          sessionKey: params.sessionKey,
-        });
+        // Some gateways may return a final decision inline during registration.
+        // Only call waitDecision when registration did not already carry one.
+        if (preResolvedDecision === undefined) {
+          decision = await waitForExecApprovalDecision(approvalId);
+        }
       } catch {
         emitExecSystemEvent(
           `Exec denied (gateway id=${approvalId}, approval-request-failed): ${params.command}`,
