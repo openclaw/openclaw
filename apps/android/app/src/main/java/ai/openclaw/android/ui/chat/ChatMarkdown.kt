@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -28,13 +27,19 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import ai.openclaw.android.ui.mobileCallout
+import ai.openclaw.android.ui.mobileCaption1
+import ai.openclaw.android.ui.mobileCodeBg
+import ai.openclaw.android.ui.mobileCodeText
+import ai.openclaw.android.ui.mobileTextSecondary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 @Composable
 fun ChatMarkdown(text: String, textColor: Color) {
   val blocks = remember(text) { splitMarkdown(text) }
-  val inlineCodeBg = MaterialTheme.colorScheme.surfaceContainerLow
+  val inlineCodeBg = mobileCodeBg
+  val inlineCodeColor = mobileCodeText
 
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
     for (b in blocks) {
@@ -43,8 +48,8 @@ fun ChatMarkdown(text: String, textColor: Color) {
           val trimmed = b.text.trimEnd()
           if (trimmed.isEmpty()) continue
           Text(
-            text = parseInlineMarkdown(trimmed, inlineCodeBg = inlineCodeBg),
-            style = MaterialTheme.typography.bodyMedium,
+            text = parseInlineMarkdown(trimmed, inlineCodeBg = inlineCodeBg, inlineCodeColor = inlineCodeColor),
+            style = mobileCallout,
             color = textColor,
           )
         }
@@ -126,7 +131,11 @@ private fun splitInlineImages(text: String): List<ChatMarkdownBlock> {
   return out
 }
 
-private fun parseInlineMarkdown(text: String, inlineCodeBg: androidx.compose.ui.graphics.Color): AnnotatedString {
+private fun parseInlineMarkdown(
+  text: String,
+  inlineCodeBg: androidx.compose.ui.graphics.Color,
+  inlineCodeColor: androidx.compose.ui.graphics.Color,
+): AnnotatedString {
   if (text.isEmpty()) return AnnotatedString("")
 
   val out = buildAnnotatedString {
@@ -150,6 +159,7 @@ private fun parseInlineMarkdown(text: String, inlineCodeBg: androidx.compose.ui.
             SpanStyle(
               fontFamily = FontFamily.Monospace,
               background = inlineCodeBg,
+              color = inlineCodeColor,
             ),
           ) {
             append(text.substring(i + 1, end))
@@ -208,8 +218,8 @@ private fun InlineBase64Image(base64: String, mimeType: String?) {
     Text(
       text = "Image unavailable",
       modifier = Modifier.padding(vertical = 2.dp),
-      style = MaterialTheme.typography.bodySmall,
-      color = MaterialTheme.colorScheme.onSurfaceVariant,
+      style = mobileCaption1,
+      color = mobileTextSecondary,
     )
   }
 }
