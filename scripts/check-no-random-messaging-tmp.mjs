@@ -47,7 +47,8 @@ async function collectTypeScriptFiles(dir) {
   return out;
 }
 
-function collectNodeOsImports(sourceFile) {
+function collectOsTmpdirImports(sourceFile) {
+  const osModuleSpecifiers = new Set(["node:os", "os"]);
   const osNamespaceOrDefault = new Set();
   const namedTmpdir = new Set();
   for (const statement of sourceFile.statements) {
@@ -57,7 +58,7 @@ function collectNodeOsImports(sourceFile) {
     if (!statement.importClause || !ts.isStringLiteral(statement.moduleSpecifier)) {
       continue;
     }
-    if (statement.moduleSpecifier.text !== "node:os") {
+    if (!osModuleSpecifiers.has(statement.moduleSpecifier.text)) {
       continue;
     }
     const clause = statement.importClause;
@@ -101,7 +102,7 @@ function unwrapExpression(expression) {
 
 export function findMessagingTmpdirCallLines(content, fileName = "source.ts") {
   const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
-  const { osNamespaceOrDefault, namedTmpdir } = collectNodeOsImports(sourceFile);
+  const { osNamespaceOrDefault, namedTmpdir } = collectOsTmpdirImports(sourceFile);
   const lines = [];
 
   const visit = (node) => {
