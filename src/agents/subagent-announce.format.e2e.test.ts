@@ -572,6 +572,43 @@ describe("subagent announce formatting", () => {
     expect(sendSpy).not.toHaveBeenCalled();
   });
 
+  it("truncates completion message when findings exceed channel limit", async () => {
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-trunc",
+        inputTokens: 1,
+        outputTokens: 1,
+        totalTokens: 2,
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-trunc",
+      },
+    };
+    const longText = "A".repeat(5000);
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [{ role: "assistant", content: [{ type: "text", text: longText }] }],
+    });
+    readLatestAssistantReplyMock.mockResolvedValue("");
+
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-trunc",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "telegram", to: "chat:999", accountId: "acct-1" },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+    });
+
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    const call = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    const msg = typeof call?.params?.message === "string" ? call.params.message : "";
+    expect(msg).toContain("✅ Subagent main finished");
+    expect(msg).toContain("… (truncated)");
+    // Telegram limit is 4096; our truncation keeps findings ≤ 3500 plus header
+    expect(msg.length).toBeLessThan(4096);
+  });
+
   it("keeps completion-mode delivery coordinated when sibling runs are still active", async () => {
     sessionStore = {
       "agent:main:subagent:test": {
