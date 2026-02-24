@@ -227,7 +227,13 @@ function isPathInsidePosix(root: string, target: string): boolean {
 
 function isPathInsideHost(root: string, target: string): boolean {
   const canonicalRoot = resolveSandboxHostPathViaExistingAncestor(path.resolve(root));
-  const canonicalTarget = resolveSandboxHostPathViaExistingAncestor(path.resolve(target));
+  const resolvedTarget = path.resolve(target);
+  // Preserve the final path segment so pre-existing symlink leaves are validated
+  // by the dedicated symlink guard later in the bridge flow.
+  const canonicalTargetParent = resolveSandboxHostPathViaExistingAncestor(
+    path.dirname(resolvedTarget),
+  );
+  const canonicalTarget = path.resolve(canonicalTargetParent, path.basename(resolvedTarget));
   const rel = path.relative(canonicalRoot, canonicalTarget);
   if (!rel) {
     return true;
