@@ -1,7 +1,7 @@
 use anyhow::{bail, Result};
 use serde::Deserialize;
 
-use super::client::SynoClient;
+use super::client::{SynoClient, format_syno_error};
 
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
@@ -57,7 +57,7 @@ pub async fn logout(client: &SynoClient, sid: &str) -> Result<()> {
 
     let success = val["success"].as_bool().unwrap_or(false);
     if !success {
-        bail!("Logout failed: {val}");
+        bail!("{}", format_syno_error("Auth.logout", &val));
     }
     Ok(())
 }

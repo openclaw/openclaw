@@ -3,7 +3,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::path::Path;
 
-use super::client::SynoClient;
+use super::client::{SynoClient, format_syno_error};
 
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
@@ -162,7 +162,7 @@ pub async fn create_folder(
         .await?;
     let success = val["success"].as_bool().unwrap_or(false);
     if !success {
-        anyhow::bail!("FileStation.CreateFolder failed: {val}");
+        anyhow::bail!("{}", format_syno_error("FileStation.CreateFolder", &val));
     }
     Ok(val["data"].clone())
 }
@@ -193,7 +193,7 @@ pub async fn rename(
         .await?;
     let success = val["success"].as_bool().unwrap_or(false);
     if !success {
-        anyhow::bail!("FileStation.Rename failed: {val}");
+        anyhow::bail!("{}", format_syno_error("FileStation.Rename", &val));
     }
     Ok(val["data"].clone())
 }
@@ -221,7 +221,7 @@ pub async fn delete(
         .await?;
     let success = val["success"].as_bool().unwrap_or(false);
     if !success {
-        anyhow::bail!("FileStation.Delete failed: {val}");
+        anyhow::bail!("{}", format_syno_error("FileStation.Delete", &val));
     }
     Ok(())
 }
@@ -254,7 +254,7 @@ pub async fn upload(
         .await?;
     let success = val["success"].as_bool().unwrap_or(false);
     if !success {
-        anyhow::bail!("FileStation.Upload failed: {val}");
+        anyhow::bail!("{}", format_syno_error("FileStation.Upload", &val));
     }
     Ok(val["data"].clone())
 }

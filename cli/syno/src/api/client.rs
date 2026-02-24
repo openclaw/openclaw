@@ -19,6 +19,62 @@ pub struct SynoError {
     pub code: i32,
 }
 
+impl SynoError {
+    /// Human-readable description for common Synology DSM API error codes.
+    /// These are split into common codes (100-199) and Auth-specific codes (400+).
+    pub fn description(&self) -> &'static str {
+        match self.code {
+            // ── Common error codes (all APIs) ──
+            100 => "unknown error",
+            101 => "missing api/method/version parameter",
+            102 => "requested API does not exist",
+            103 => "requested method does not exist",
+            104 => "requested version does not support this method",
+            105 => "insufficient user privilege",
+            106 => "connection time out",
+            107 => "multiple login detected",
+            108..=114 => "file operation error",
+            115 => "not allowed to upload file",
+            116 => "not allowed to download file",
+            117 => "not allowed to overwrite file",
+            119 => "SID not found — session invalid or expired, need to re-login (call syno_login)",
+            120 => "insufficient application privilege",
+            // ── Auth API error codes (SYNO.API.Auth) ──
+            400 => "no such account or incorrect password",
+            401 => "account disabled",
+            402 => "permission denied — account has no API access",
+            403 => "2-step verification code required (OTP)",
+            404 => "failed to authenticate 2-step verification code",
+            406 => "enforce to authenticate with 2-step verification code (OTP enforced)",
+            407 => "blocked IP or gateway — too many failed login attempts, IP has been auto-blocked by DSM",
+            408 => "expired password, cannot change inside DSM",
+            409 => "expired password, need to change inside DSM",
+            410 => "password must be changed",
+            411 => "account locked out (too many failed attempts)",
+            // ── NoteStation error codes ──
+            800 => "NoteStation: note locked or encrypted",
+            // ── FileStation error codes ──
+            900 => "FileStation: failed to create a folder — already exists or permission denied",
+            // fallback
+            _ => "unknown Synology API error",
+        }
+    }
+}
+
+impl std::fmt::Display for SynoError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Synology API error code={}: {}", self.code, self.description())
+    }
+}
+
+/// Format a Synology API error from a raw JSON response value.
+/// Extracts `error.code` and appends the human-readable description.
+pub fn format_syno_error(api_label: &str, val: &Value) -> String {
+    let code = val["error"]["code"].as_i64().unwrap_or(-1) as i32;
+    let err = SynoError { code };
+    format!("{api_label} failed (code={code}): {}", err.description())
+}
+
 /// A thin HTTP client wrapper for Synology Web API.
 #[derive(Clone)]
 pub struct SynoClient {
@@ -76,8 +132,8 @@ impl SynoClient {
         let resp: SynoResponse<T> = serde_json::from_value(val.clone())
             .map_err(|e| anyhow::anyhow!("Failed to parse response: {e}\nBody: {val}"))?;
         if !resp.success {
-            let code = resp.error.map(|e| e.code).unwrap_or(-1);
-            bail!("Synology API error, code={code}");
+            let err = resp.error.unwrap_or(SynoError { code: -1 });
+            bail!("{err}");
         }
         resp.data
             .ok_or_else(|| anyhow::anyhow!("API returned success but no data"))
@@ -183,8 +239,8 @@ impl SynoClient {
         let resp: SynoResponse<T> = serde_json::from_value(val.clone())
             .map_err(|e| anyhow::anyhow!("Failed to parse response: {e}\nBody: {val}"))?;
         if !resp.success {
-            let code = resp.error.map(|e| e.code).unwrap_or(-1);
-            bail!("Synology API error, code={code}");
+            let err = resp.error.unwrap_or(SynoError { code: -1 });
+            bail!("{err}");
         }
         resp.data
             .ok_or_else(|| anyhow::anyhow!("API returned success but no data"))

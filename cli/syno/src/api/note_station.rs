@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::client::SynoClient;
+use super::client::{SynoClient, format_syno_error};
 
 // ── Notebook ──
 
@@ -119,7 +119,7 @@ pub async fn get_info(
         .await?;
     let success = val["success"].as_bool().unwrap_or(false);
     if !success {
-        anyhow::bail!("NoteStation.Info failed: {val}");
+        anyhow::bail!("{}", format_syno_error("NoteStation.Info", &val));
     }
     Ok(val["data"].clone())
 }
@@ -144,7 +144,7 @@ pub async fn list_notebook(
         .await?;
     let success = val["success"].as_bool().unwrap_or(false);
     if !success {
-        anyhow::bail!("NoteStation.Notebook.list failed: {val}");
+        anyhow::bail!("{}", format_syno_error("NoteStation.Notebook.list", &val));
     }
     Ok(val["data"].clone())
 }
@@ -186,7 +186,7 @@ pub async fn list_note(
         .await?;
     let success = val["success"].as_bool().unwrap_or(false);
     if !success {
-        anyhow::bail!("NoteStation.Note.list failed: {val}");
+        anyhow::bail!("{}", format_syno_error("NoteStation.Note.list", &val));
     }
     Ok(val["data"].clone())
 }
@@ -218,7 +218,7 @@ pub async fn get_note(
         .await?;
     let success = val["success"].as_bool().unwrap_or(false);
     if !success {
-        anyhow::bail!("NoteStation.Note.get failed: {val}");
+        anyhow::bail!("{}", format_syno_error("NoteStation.Note.get", &val));
     }
     Ok(val["data"].clone())
 }
@@ -251,7 +251,7 @@ pub async fn decrypt_note(
         .await?;
     let success = val["success"].as_bool().unwrap_or(false);
     if !success {
-        anyhow::bail!("NoteStation.Note.Encrypt failed: {val}");
+        anyhow::bail!("{}", format_syno_error("NoteStation.Note.Encrypt", &val));
     }
     let token = val["data"]["token"]
         .as_str()
@@ -290,7 +290,7 @@ pub async fn create_note(
         .await?;
     let success = val["success"].as_bool().unwrap_or(false);
     if !success {
-        anyhow::bail!("NoteStation.Note.create failed: {val}");
+        anyhow::bail!("{}", format_syno_error("NoteStation.Note.create", &val));
     }
     Ok(val["data"].clone())
 }
@@ -319,7 +319,7 @@ pub async fn delete_note(
         .await?;
     let success = val["success"].as_bool().unwrap_or(false);
     if !success {
-        anyhow::bail!("NoteStation.Note.delete failed: {val}");
+        anyhow::bail!("{}", format_syno_error("NoteStation.Note.delete", &val));
     }
     Ok(())
 }
@@ -344,7 +344,7 @@ pub async fn list_tag(
         .await?;
     let success = val["success"].as_bool().unwrap_or(false);
     if !success {
-        anyhow::bail!("NoteStation.Tag.list failed: {val}");
+        anyhow::bail!("{}", format_syno_error("NoteStation.Tag.list", &val));
     }
     Ok(val["data"].clone())
 }
@@ -385,7 +385,7 @@ pub async fn list_todo(
         .await?;
     let success = val["success"].as_bool().unwrap_or(false);
     if !success {
-        anyhow::bail!("NoteStation.Todo.list failed: {val}");
+        anyhow::bail!("{}", format_syno_error("NoteStation.Todo.list", &val));
     }
     Ok(val["data"].clone())
 }
@@ -413,7 +413,7 @@ pub async fn create_todo(
         .await?;
     let success = val["success"].as_bool().unwrap_or(false);
     if !success {
-        anyhow::bail!("NoteStation.Todo.create failed: {val}");
+        anyhow::bail!("{}", format_syno_error("NoteStation.Todo.create", &val));
     }
     Ok(val["data"].clone())
 }
@@ -468,7 +468,7 @@ pub async fn update_todo(
         .await?;
     let success = val["success"].as_bool().unwrap_or(false);
     if !success {
-        anyhow::bail!("NoteStation.Todo.set failed: {val}");
+        anyhow::bail!("{}", format_syno_error("NoteStation.Todo.set", &val));
     }
     Ok(val["data"].clone())
 }
@@ -496,7 +496,7 @@ pub async fn delete_todo(
         .await?;
     let success = val["success"].as_bool().unwrap_or(false);
     if !success {
-        anyhow::bail!("NoteStation.Todo.delete failed: {val}");
+        anyhow::bail!("{}", format_syno_error("NoteStation.Todo.delete", &val));
     }
     Ok(())
 }
@@ -531,7 +531,7 @@ pub async fn update_note(
         .await?;
     let success = val["success"].as_bool().unwrap_or(false);
     if !success {
-        anyhow::bail!("NoteStation.Note.set failed: {val}");
+        anyhow::bail!("{}", format_syno_error("NoteStation.Note.set", &val));
     }
     Ok(val["data"].clone())
 }
@@ -564,7 +564,7 @@ pub async fn move_note(
         .await?;
     let success = val["success"].as_bool().unwrap_or(false);
     if !success {
-        anyhow::bail!("NoteStation.Note.move failed: {val}");
+        anyhow::bail!("{}", format_syno_error("NoteStation.Note.move", &val));
     }
     Ok(())
 }
@@ -592,7 +592,7 @@ pub async fn create_notebook(
         .await?;
     let success = val["success"].as_bool().unwrap_or(false);
     if !success {
-        anyhow::bail!("NoteStation.Notebook.create failed: {val}");
+        anyhow::bail!("{}", format_syno_error("NoteStation.Notebook.create", &val));
     }
     Ok(val["data"].clone())
 }
@@ -623,7 +623,7 @@ pub async fn rename_notebook(
         .await?;
     let success = val["success"].as_bool().unwrap_or(false);
     if !success {
-        anyhow::bail!("NoteStation.Notebook.set failed: {val}");
+        anyhow::bail!("{}", format_syno_error("NoteStation.Notebook.set", &val));
     }
     Ok(())
 }
@@ -651,7 +651,7 @@ pub async fn delete_notebook(
         .await?;
     let success = val["success"].as_bool().unwrap_or(false);
     if !success {
-        anyhow::bail!("NoteStation.Notebook.delete failed: {val}");
+        anyhow::bail!("{}", format_syno_error("NoteStation.Notebook.delete", &val));
     }
     Ok(())
 }
@@ -689,7 +689,7 @@ pub async fn set_note_tags(
         .await?;
     let success = val["success"].as_bool().unwrap_or(false);
     if !success {
-        anyhow::bail!("NoteStation.Note.set (tag) failed: {val}");
+        anyhow::bail!("{}", format_syno_error("NoteStation.Note.set (tag)", &val));
     }
     Ok(val["data"].clone())
 }
@@ -732,7 +732,7 @@ pub async fn search(
         .await?;
     let success = val["success"].as_bool().unwrap_or(false);
     if !success {
-        anyhow::bail!("NoteStation.FTS.search failed: {val}");
+        anyhow::bail!("{}", format_syno_error("NoteStation.FTS.search", &val));
     }
     Ok(val["data"].clone())
 }

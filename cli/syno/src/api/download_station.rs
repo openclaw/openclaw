@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::client::SynoClient;
+use super::client::{SynoClient, format_syno_error};
 
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
@@ -64,7 +64,7 @@ pub async fn create(
     let val = client.post_with_sid("entry.cgi", sid, synotoken, &params).await?;
     let success = val["success"].as_bool().unwrap_or(false);
     if !success {
-        anyhow::bail!("Failed to create download task: {val}");
+        anyhow::bail!("{}", format_syno_error("DownloadStation.create_download_task", &val));
     }
     Ok(())
 }
@@ -91,7 +91,7 @@ pub async fn delete(
         .await?;
     let success = val["success"].as_bool().unwrap_or(false);
     if !success {
-        anyhow::bail!("Failed to delete task(s): {val}");
+        anyhow::bail!("{}", format_syno_error("DownloadStation.delete_task(s)", &val));
     }
     Ok(())
 }
@@ -118,7 +118,7 @@ pub async fn pause(
         .await?;
     let success = val["success"].as_bool().unwrap_or(false);
     if !success {
-        anyhow::bail!("Failed to pause task(s): {val}");
+        anyhow::bail!("{}", format_syno_error("DownloadStation.pause_task(s)", &val));
     }
     Ok(())
 }
@@ -145,7 +145,7 @@ pub async fn resume(
         .await?;
     let success = val["success"].as_bool().unwrap_or(false);
     if !success {
-        anyhow::bail!("Failed to resume task(s): {val}");
+        anyhow::bail!("{}", format_syno_error("DownloadStation.resume_task(s)", &val));
     }
     Ok(())
 }
