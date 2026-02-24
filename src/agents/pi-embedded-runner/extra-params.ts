@@ -435,24 +435,31 @@ function createOpenRouterWrapper(
           // only the nested one is sent.
           delete payloadObj.reasoning_effort;
 
-          const existingReasoning = payloadObj.reasoning;
+          // When thinking is "off", do not inject reasoning at all.
+          // Some models (e.g. deepseek/deepseek-r1) require reasoning and reject
+          // { effort: "none" } with "Reasoning is mandatory for this endpoint and
+          // cannot be disabled." Omitting the field lets each model use its own
+          // default reasoning behavior.
+          if (thinkingLevel !== "off") {
+            const existingReasoning = payloadObj.reasoning;
 
-          // OpenRouter treats reasoning.effort and reasoning.max_tokens as
-          // alternative controls. If max_tokens is already present, do not
-          // inject effort and do not overwrite caller-supplied reasoning.
-          if (
-            existingReasoning &&
-            typeof existingReasoning === "object" &&
-            !Array.isArray(existingReasoning)
-          ) {
-            const reasoningObj = existingReasoning as Record<string, unknown>;
-            if (!("max_tokens" in reasoningObj) && !("effort" in reasoningObj)) {
-              reasoningObj.effort = mapThinkingLevelToOpenRouterReasoningEffort(thinkingLevel);
+            // OpenRouter treats reasoning.effort and reasoning.max_tokens as
+            // alternative controls. If max_tokens is already present, do not
+            // inject effort and do not overwrite caller-supplied reasoning.
+            if (
+              existingReasoning &&
+              typeof existingReasoning === "object" &&
+              !Array.isArray(existingReasoning)
+            ) {
+              const reasoningObj = existingReasoning as Record<string, unknown>;
+              if (!("max_tokens" in reasoningObj) && !("effort" in reasoningObj)) {
+                reasoningObj.effort = mapThinkingLevelToOpenRouterReasoningEffort(thinkingLevel);
+              }
+            } else if (!existingReasoning) {
+              payloadObj.reasoning = {
+                effort: mapThinkingLevelToOpenRouterReasoningEffort(thinkingLevel),
+              };
             }
-          } else if (!existingReasoning) {
-            payloadObj.reasoning = {
-              effort: mapThinkingLevelToOpenRouterReasoningEffort(thinkingLevel),
-            };
           }
         }
         onPayload?.(payload);
@@ -539,7 +546,14 @@ export function applyExtraParamsToAgent(
 
   if (provider === "openrouter") {
     log.debug(`applying OpenRouter app attribution headers for ${provider}/${modelId}`);
-    agent.streamFn = createOpenRouterWrapper(agent.streamFn, thinkingLevel);
+    // "auto" is a dynamic routing model — we don't know which underlying model
+    // OpenRouter will select, and it may be a reasoning-required endpoint.
+    // Omit the thinkingLevel so we never inject `reasoning.effort: "none"`,
+    // which would cause a 400 on models where reasoning is mandatory.
+    // Users who need reasoning control should target a specific model ID.
+    // See: openclaw/openclaw#24851
+    const openRouterThinkingLevel = modelId === "auto" ? undefined : thinkingLevel;
+    agent.streamFn = createOpenRouterWrapper(agent.streamFn, openRouterThinkingLevel);
     agent.streamFn = createOpenRouterSystemCacheWrapper(agent.streamFn);
   }
 

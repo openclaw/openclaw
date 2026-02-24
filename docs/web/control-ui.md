@@ -99,7 +99,7 @@ Cron jobs panel notes:
 - `chat.inject` appends an assistant note to the session transcript and broadcasts a `chat` event for UI-only updates (no agent run, no channel delivery).
 - Stop:
   - Click **Stop** (calls `chat.abort`)
-  - Type `/stop` (or `stop|esc|abort|wait|exit|interrupt`) to abort out-of-band
+  - Type `/stop` (or standalone abort phrases like `stop`, `stop action`, `stop run`, `stop openclaw`, `please stop`) to abort out-of-band
   - `chat.abort` supports `{ sessionKey }` (no `runId`) to abort all active runs for that session
 - Abort partial retention:
   - When a run is aborted, partial assistant text can still be shown in the UI
@@ -233,8 +233,10 @@ Notes:
   Provide `token` (or `password`) explicitly. Missing explicit credentials is an error.
 - Use `wss://` when the Gateway is behind TLS (Tailscale Serve, HTTPS proxy, etc.).
 - `gatewayUrl` is only accepted in a top-level window (not embedded) to prevent clickjacking.
-- For cross-origin dev setups (e.g. `pnpm ui:dev` to a remote Gateway), add the UI
-  origin to `gateway.controlUi.allowedOrigins`.
+- Non-loopback Control UI deployments must set `gateway.controlUi.allowedOrigins`
+  explicitly (full origins). This includes remote dev setups.
+- `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true` enables
+  Host-header origin fallback mode, but it is a dangerous security mode.
 
 Example:
 

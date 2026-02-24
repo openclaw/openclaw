@@ -234,4 +234,49 @@ describe("processEvent (functional)", () => {
     expect(() => processEvent(ctx, event)).not.toThrow();
     expect(ctx.activeCalls.size).toBe(0);
   });
+
+  it("deduplicates by dedupeKey even when event IDs differ", () => {
+    const now = Date.now();
+    const ctx = createContext();
+    ctx.activeCalls.set("call-dedupe", {
+      callId: "call-dedupe",
+      providerCallId: "provider-dedupe",
+      provider: "plivo",
+      direction: "outbound",
+      state: "answered",
+      from: "+15550000000",
+      to: "+15550000001",
+      startedAt: now,
+      transcript: [],
+      processedEventIds: [],
+      metadata: {},
+    });
+    ctx.providerCallIdMap.set("provider-dedupe", "call-dedupe");
+
+    processEvent(ctx, {
+      id: "evt-1",
+      dedupeKey: "stable-key-1",
+      type: "call.speech",
+      callId: "call-dedupe",
+      providerCallId: "provider-dedupe",
+      timestamp: now + 1,
+      transcript: "hello",
+      isFinal: true,
+    });
+
+    processEvent(ctx, {
+      id: "evt-2",
+      dedupeKey: "stable-key-1",
+      type: "call.speech",
+      callId: "call-dedupe",
+      providerCallId: "provider-dedupe",
+      timestamp: now + 2,
+      transcript: "hello",
+      isFinal: true,
+    });
+
+    const call = ctx.activeCalls.get("call-dedupe");
+    expect(call?.transcript).toHaveLength(1);
+    expect(Array.from(ctx.processedEventIds)).toEqual(["stable-key-1"]);
+  });
 });

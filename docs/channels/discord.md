@@ -397,7 +397,8 @@ Example:
     `allowlist` behavior:
 
     - guild must match `channels.discord.guilds` (`id` preferred, slug accepted)
-    - optional sender allowlists: `users` (IDs or names) and `roles` (role IDs only); if either is configured, senders are allowed when they match `users` OR `roles`
+    - optional sender allowlists: `users` (stable IDs recommended) and `roles` (role IDs only); if either is configured, senders are allowed when they match `users` OR `roles`
+    - direct name/tag matching is disabled by default; enable `channels.discord.dangerouslyAllowNameMatching: true` only as break-glass compatibility mode
     - names/tags are supported for `users`, but IDs are safer; `openclaw security audit` warns when name/tag entries are used
     - if a guild has `channels` configured, non-listed channels are denied
     - if a guild has no `channels` block, all channels in that allowlisted guild are allowed
@@ -768,7 +769,7 @@ Default slash command settings:
     Notes:
 
     - allowlists can use `pk:<memberId>`
-    - member display names are matched by name/slug
+    - member display names are matched by name/slug only when `channels.discord.dangerouslyAllowNameMatching: true`
     - lookups use original message ID and are time-window constrained
     - if lookup fails, proxied messages are treated as bot messages and dropped unless `allowBots=true`
 

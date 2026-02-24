@@ -645,6 +645,22 @@ describe("handleCommands /allowlist", () => {
     expect(result.reply?.text).toContain("DM allowlist added");
   });
 
+  it("rejects blocked account ids and keeps Object.prototype clean", async () => {
+    delete (Object.prototype as Record<string, unknown>).allowFrom;
+
+    const cfg = {
+      commands: { text: true, config: true },
+      channels: { telegram: { allowFrom: ["123"] } },
+    } as OpenClawConfig;
+    const params = buildPolicyParams("/allowlist add dm --account __proto__ 789", cfg);
+    const result = await handleCommands(params);
+
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Invalid account id");
+    expect((Object.prototype as Record<string, unknown>).allowFrom).toBeUndefined();
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+  });
+
   it("removes DM allowlist entries from canonical allowFrom and deletes legacy dm.allowFrom", async () => {
     const cases = [
       {

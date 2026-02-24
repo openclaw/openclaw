@@ -5,6 +5,18 @@ import { describe, expect, it } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
 import { buildKilocodeProvider, resolveImplicitProviders } from "./models-config.providers.js";
 
+const KILOCODE_MODEL_IDS = [
+  "anthropic/claude-opus-4.6",
+  "z-ai/glm-5:free",
+  "minimax/minimax-m2.5:free",
+  "anthropic/claude-sonnet-4.5",
+  "openai/gpt-5.2",
+  "google/gemini-3-pro-preview",
+  "google/gemini-3-flash-preview",
+  "x-ai/grok-code-fast-1",
+  "moonshotai/kimi-k2.5",
+];
+
 describe("Kilo Gateway implicit provider", () => {
   it("should include kilocode when KILOCODE_API_KEY is configured", async () => {
     const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
@@ -45,5 +57,13 @@ describe("Kilo Gateway implicit provider", () => {
     const provider = buildKilocodeProvider();
     const modelIds = provider.models.map((m) => m.id);
     expect(modelIds).toContain("anthropic/claude-opus-4.6");
+  });
+
+  it("should include the full surfaced model catalog", () => {
+    const provider = buildKilocodeProvider();
+    const modelIds = provider.models.map((m) => m.id);
+    for (const modelId of KILOCODE_MODEL_IDS) {
+      expect(modelIds).toContain(modelId);
+    }
   });
 });

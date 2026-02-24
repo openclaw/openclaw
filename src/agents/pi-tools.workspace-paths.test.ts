@@ -60,6 +60,31 @@ describe("workspace path resolution", () => {
     });
   });
 
+  it("allows deletion edits with empty newText", async () => {
+    await withTempDir("openclaw-ws-", async (workspaceDir) => {
+      await withTempDir("openclaw-cwd-", async (otherDir) => {
+        const testFile = "delete.txt";
+        await fs.writeFile(path.join(workspaceDir, testFile), "hello world", "utf8");
+
+        const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(otherDir);
+        try {
+          const tools = createOpenClawCodingTools({ workspaceDir });
+          const { editTool } = expectReadWriteEditTools(tools);
+
+          await editTool.execute("ws-edit-delete", {
+            path: testFile,
+            oldText: " world",
+            newText: "",
+          });
+
+          expect(await fs.readFile(path.join(workspaceDir, testFile), "utf8")).toBe("hello");
+        } finally {
+          cwdSpy.mockRestore();
+        }
+      });
+    });
+  });
+
   it("defaults exec cwd to workspaceDir when workdir is omitted", async () => {
     await withTempDir("openclaw-ws-", async (workspaceDir) => {
       const tools = createOpenClawCodingTools({

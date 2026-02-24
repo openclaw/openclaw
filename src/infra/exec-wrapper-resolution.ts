@@ -7,6 +7,7 @@ const WINDOWS_EXE_SUFFIX = ".exe";
 const POSIX_SHELL_WRAPPER_NAMES = ["ash", "bash", "dash", "fish", "ksh", "sh", "zsh"] as const;
 const WINDOWS_CMD_WRAPPER_NAMES = ["cmd"] as const;
 const POWERSHELL_WRAPPER_NAMES = ["powershell", "pwsh"] as const;
+const SHELL_MULTIPLEXER_WRAPPER_NAMES = ["busybox", "toybox"] as const;
 const DISPATCH_WRAPPER_NAMES = [
   "chrt",
   "doas",
@@ -42,6 +43,7 @@ export const DISPATCH_WRAPPER_EXECUTABLES = new Set(withWindowsExeAliases(DISPAT
 const POSIX_SHELL_WRAPPER_CANONICAL = new Set<string>(POSIX_SHELL_WRAPPER_NAMES);
 const WINDOWS_CMD_WRAPPER_CANONICAL = new Set<string>(WINDOWS_CMD_WRAPPER_NAMES);
 const POWERSHELL_WRAPPER_CANONICAL = new Set<string>(POWERSHELL_WRAPPER_NAMES);
+const SHELL_MULTIPLEXER_WRAPPER_CANONICAL = new Set<string>(SHELL_MULTIPLEXER_WRAPPER_NAMES);
 const DISPATCH_WRAPPER_CANONICAL = new Set<string>(DISPATCH_WRAPPER_NAMES);
 const SHELL_WRAPPER_CANONICAL = new Set<string>([
   ...POSIX_SHELL_WRAPPER_NAMES,
@@ -79,6 +81,7 @@ const NICE_OPTIONS_WITH_VALUE = new Set(["-n", "--adjustment", "--priority"]);
 const STDBUF_OPTIONS_WITH_VALUE = new Set(["-i", "--input", "-o", "--output", "-e", "--error"]);
 const TIMEOUT_FLAG_OPTIONS = new Set(["--foreground", "--preserve-status", "-v", "--verbose"]);
 const TIMEOUT_OPTIONS_WITH_VALUE = new Set(["-k", "--kill-after", "-s", "--signal"]);
+const TRANSPARENT_DISPATCH_WRAPPERS = new Set(["nice", "nohup", "stdbuf", "timeout"]);
 
 type ShellWrapperKind = "posix" | "cmd" | "powershell";
 
@@ -130,6 +133,39 @@ function findShellWrapperSpec(baseExecutable: string): ShellWrapperSpec | null {
     }
   }
   return null;
+}
+
+export type ShellMultiplexerUnwrapResult =
+  | { kind: "not-wrapper" }
+  | { kind: "blocked"; wrapper: string }
+  | { kind: "unwrapped"; wrapper: string; argv: string[] };
+
+export function unwrapKnownShellMultiplexerInvocation(
+  argv: string[],
+): ShellMultiplexerUnwrapResult {
+  const token0 = argv[0]?.trim();
+  if (!token0) {
+    return { kind: "not-wrapper" };
+  }
+  const wrapper = normalizeExecutableToken(token0);
+  if (!SHELL_MULTIPLEXER_WRAPPER_CANONICAL.has(wrapper)) {
+    return { kind: "not-wrapper" };
+  }
+
+  let appletIndex = 1;
+  if (argv[appletIndex]?.trim() === "--") {
+    appletIndex += 1;
+  }
+  const applet = argv[appletIndex]?.trim();
+  if (!applet || !isShellWrapperExecutable(applet)) {
+    return { kind: "blocked", wrapper };
+  }
+
+  const unwrapped = argv.slice(appletIndex);
+  if (unwrapped.length === 0) {
+    return { kind: "blocked", wrapper };
+  }
+  return { kind: "unwrapped", wrapper, argv: unwrapped };
 }
 
 export function isEnvAssignment(token: string): boolean {
@@ -348,6 +384,13 @@ export type DispatchWrapperUnwrapResult =
   | { kind: "blocked"; wrapper: string }
   | { kind: "unwrapped"; wrapper: string; argv: string[] };
 
+export type DispatchWrapperExecutionPlan = {
+  argv: string[];
+  wrappers: string[];
+  policyBlocked: boolean;
+  blockedWrapper?: string;
+};
+
 function blockDispatchWrapper(wrapper: string): DispatchWrapperUnwrapResult {
   return { kind: "blocked", wrapper };
 }
@@ -394,15 +437,48 @@ export function unwrapDispatchWrappersForResolution(
   argv: string[],
   maxDepth = MAX_DISPATCH_WRAPPER_DEPTH,
 ): string[] {
+  const plan = resolveDispatchWrapperExecutionPlan(argv, maxDepth);
+  return plan.argv;
+}
+
+function isSemanticDispatchWrapperUsage(wrapper: string, argv: string[]): boolean {
+  if (wrapper === "env") {
+    return envInvocationUsesModifiers(argv);
+  }
+  return !TRANSPARENT_DISPATCH_WRAPPERS.has(wrapper);
+}
+
+export function resolveDispatchWrapperExecutionPlan(
+  argv: string[],
+  maxDepth = MAX_DISPATCH_WRAPPER_DEPTH,
+): DispatchWrapperExecutionPlan {
   let current = argv;
+  const wrappers: string[] = [];
   for (let depth = 0; depth < maxDepth; depth += 1) {
     const unwrap = unwrapKnownDispatchWrapperInvocation(current);
+    if (unwrap.kind === "blocked") {
+      return {
+        argv: current,
+        wrappers,
+        policyBlocked: true,
+        blockedWrapper: unwrap.wrapper,
+      };
+    }
     if (unwrap.kind !== "unwrapped" || unwrap.argv.length === 0) {
       break;
     }
+    wrappers.push(unwrap.wrapper);
+    if (isSemanticDispatchWrapperUsage(unwrap.wrapper, current)) {
+      return {
+        argv: current,
+        wrappers,
+        policyBlocked: true,
+        blockedWrapper: unwrap.wrapper,
+      };
+    }
     current = unwrap.argv;
   }
-  return current;
+  return { argv: current, wrappers, policyBlocked: false };
 }
 
 function hasEnvManipulationBeforeShellWrapperInternal(
@@ -430,6 +506,18 @@ function hasEnvManipulationBeforeShellWrapperInternal(
       dispatchUnwrap.argv,
       depth + 1,
       nextEnvManipulationSeen,
+    );
+  }
+
+  const shellMultiplexerUnwrap = unwrapKnownShellMultiplexerInvocation(argv);
+  if (shellMultiplexerUnwrap.kind === "blocked") {
+    return false;
+  }
+  if (shellMultiplexerUnwrap.kind === "unwrapped") {
+    return hasEnvManipulationBeforeShellWrapperInternal(
+      shellMultiplexerUnwrap.argv,
+      depth + 1,
+      envManipulationSeen,
     );
   }
 
@@ -534,6 +622,14 @@ function extractShellWrapperCommandInternal(
   }
   if (dispatchUnwrap.kind === "unwrapped") {
     return extractShellWrapperCommandInternal(dispatchUnwrap.argv, rawCommand, depth + 1);
+  }
+
+  const shellMultiplexerUnwrap = unwrapKnownShellMultiplexerInvocation(argv);
+  if (shellMultiplexerUnwrap.kind === "blocked") {
+    return { isWrapper: false, command: null };
+  }
+  if (shellMultiplexerUnwrap.kind === "unwrapped") {
+    return extractShellWrapperCommandInternal(shellMultiplexerUnwrap.argv, rawCommand, depth + 1);
   }
 
   const base0 = normalizeExecutableToken(token0);

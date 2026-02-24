@@ -133,6 +133,7 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Example model: `kilocode/anthropic/claude-opus-4.6`
 - CLI: `openclaw onboard --kilocode-api-key <key>`
 - Base URL: `https://api.kilo.ai/api/gateway/`
+- Expanded built-in catalog includes GLM-5 Free, MiniMax M2.5 Free, GPT-5.2, Gemini 3 Pro Preview, Gemini 3 Flash Preview, Grok Code Fast 1, and Kimi K2.5.
 
 See [/providers/kilocode](/providers/kilocode) for setup details.
 

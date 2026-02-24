@@ -993,6 +993,77 @@ describe("subagent announce formatting", () => {
     });
   });
 
+  it("falls back to internal requester-session injection when completion route is missing", async () => {
+    embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
+    embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "requester-session-no-route",
+      },
+    };
+    agentSpy.mockImplementationOnce(async (req: AgentCallRequest) => {
+      const deliver = req.params?.deliver;
+      const channel = req.params?.channel;
+      if (deliver === true && typeof channel !== "string") {
+        throw new Error("Channel is required when deliver=true");
+      }
+      return { runId: "run-main", status: "ok" };
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:worker",
+      childRunId: "run-completion-missing-route",
+      requesterSessionKey: "main",
+      requesterDisplayKey: "main",
+      expectsCompletionMessage: true,
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).toHaveBeenCalledTimes(0);
+    expect(agentSpy).toHaveBeenCalledTimes(1);
+    expect(agentSpy.mock.calls[0]?.[0]).toMatchObject({
+      method: "agent",
+      params: {
+        sessionKey: "agent:main:main",
+        deliver: false,
+      },
+    });
+  });
+
+  it("uses direct completion delivery when explicit channel+to route is available", async () => {
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "requester-session-direct-route",
+      },
+    };
+    agentSpy.mockImplementationOnce(async () => {
+      throw new Error("agent fallback should not run when direct route exists");
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:worker",
+      childRunId: "run-completion-explicit-route",
+      requesterSessionKey: "main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
+      expectsCompletionMessage: true,
+      ...defaultOutcomeAnnounce,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(agentSpy).toHaveBeenCalledTimes(0);
+    expect(sendSpy.mock.calls[0]?.[0]).toMatchObject({
+      method: "send",
+      params: {
+        sessionKey: "agent:main:main",
+        channel: "discord",
+        to: "channel:12345",
+      },
+    });
+  });
+
   it("returns failure for completion-mode when direct delivery fails and queue fallback is unavailable", async () => {
     embeddedRunMock.isEmbeddedPiRunActive.mockReturnValue(false);
     embeddedRunMock.isEmbeddedPiRunStreaming.mockReturnValue(false);

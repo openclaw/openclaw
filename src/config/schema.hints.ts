@@ -209,6 +209,11 @@ export function mapSensitivePaths(
       const nextPath = path ? `${path}.${key}` : key;
       next = mapSensitivePaths(shape[key], nextPath, next);
     }
+    const catchallSchema = currentSchema._def.catchall as z.ZodType | undefined;
+    if (catchallSchema && !(catchallSchema instanceof z.ZodNever)) {
+      const nextPath = path ? `${path}.*` : "*";
+      next = mapSensitivePaths(catchallSchema, nextPath, next);
+    }
   } else if (currentSchema instanceof z.ZodArray) {
     const nextPath = path ? `${path}[]` : "[]";
     next = mapSensitivePaths(currentSchema.element as z.ZodType, nextPath, next);

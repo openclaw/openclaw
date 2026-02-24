@@ -15,6 +15,7 @@ import {
   clearHistoryEntriesIfEnabled,
   DEFAULT_GROUP_HISTORY_LIMIT,
   recordPendingHistoryEntryIfEnabled,
+  isDangerousNameMatchingEnabled,
   resolveControlCommandGate,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
@@ -152,6 +153,7 @@ function isSenderAllowed(params: {
   senderId: string;
   senderName?: string;
   allowFrom: string[];
+  allowNameMatching?: boolean;
 }): boolean {
   const allowFrom = params.allowFrom;
   if (allowFrom.length === 0) {
@@ -162,10 +164,15 @@ function isSenderAllowed(params: {
   }
   const normalizedSenderId = normalizeAllowEntry(params.senderId);
   const normalizedSenderName = params.senderName ? normalizeAllowEntry(params.senderName) : "";
-  return allowFrom.some(
-    (entry) =>
-      entry === normalizedSenderId || (normalizedSenderName && entry === normalizedSenderName),
-  );
+  return allowFrom.some((entry) => {
+    if (entry === normalizedSenderId) {
+      return true;
+    }
+    if (params.allowNameMatching !== true) {
+      return false;
+    }
+    return normalizedSenderName ? entry === normalizedSenderName : false;
+  });
 }
 
 type MattermostMediaInfo = {
@@ -206,6 +213,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     cfg,
     accountId: opts.accountId,
   });
+  const allowNameMatching = isDangerousNameMatchingEnabled(account.config);
   const botToken = opts.botToken?.trim() || account.botToken?.trim();
   if (!botToken) {
     throw new Error(
@@ -416,11 +424,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       senderId,
       senderName,
       allowFrom: effectiveAllowFrom,
+      allowNameMatching,
     });
     const groupAllowedForCommands = isSenderAllowed({
       senderId,
       senderName,
       allowFrom: effectiveGroupAllowFrom,
+      allowNameMatching,
     });
     const commandGate = resolveControlCommandGate({
       useAccessGroups,
@@ -892,6 +902,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           senderId: userId,
           senderName,
           allowFrom: effectiveAllowFrom,
+          allowNameMatching,
         });
         if (!allowed) {
           logVerboseMessage(
@@ -927,6 +938,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             senderId: userId,
             senderName,
             allowFrom: effectiveGroupAllowFrom,
+            allowNameMatching,
           });
         if (!allowed) {
           logVerboseMessage(`mattermost: drop reaction (groupPolicy=allowlist sender=${userId})`);

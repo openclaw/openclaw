@@ -29,8 +29,35 @@ private func withUserDefaults<T>(_ updates: [String: Any?], _ body: () throws ->
     return try body()
 }
 
+private func makeAgentDeepLinkURL(
+    message: String,
+    deliver: Bool = false,
+    to: String? = nil,
+    channel: String? = nil,
+    key: String? = nil) -> URL
+{
+    var components = URLComponents()
+    components.scheme = "openclaw"
+    components.host = "agent"
+    var queryItems: [URLQueryItem] = [URLQueryItem(name: "message", value: message)]
+    if deliver {
+        queryItems.append(URLQueryItem(name: "deliver", value: "1"))
+    }
+    if let to {
+        queryItems.append(URLQueryItem(name: "to", value: to))
+    }
+    if let channel {
+        queryItems.append(URLQueryItem(name: "channel", value: channel))
+    }
+    if let key {
+        queryItems.append(URLQueryItem(name: "key", value: key))
+    }
+    components.queryItems = queryItems
+    return components.url!
+}
+
 @MainActor
-private final class MockWatchMessagingService: WatchMessagingServicing, @unchecked Sendable {
+private final class MockWatchMessagingService: @preconcurrency WatchMessagingServicing, @unchecked Sendable {
     var currentStatus = WatchMessagingStatus(
         supported: true,
         paired: true,
@@ -325,6 +352,58 @@ private final class MockWatchMessagingService: WatchMessagingServicing, @uncheck
         let url = URL(string: "openclaw://agent?message=\(msg)")!
         await appModel.handleDeepLink(url: url)
         #expect(appModel.screen.errorText?.contains("Deep link too large") == true)
+    }
+
+    @Test @MainActor func handleDeepLinkRequiresConfirmationWhenConnectedAndUnkeyed() async {
+        let appModel = NodeAppModel()
+        appModel._test_setGatewayConnected(true)
+        let url = makeAgentDeepLinkURL(message: "hello from deep link")
+
+        await appModel.handleDeepLink(url: url)
+        #expect(appModel.pendingAgentDeepLinkPrompt != nil)
+        #expect(appModel.openChatRequestID == 0)
+
+        await appModel.approvePendingAgentDeepLinkPrompt()
+        #expect(appModel.pendingAgentDeepLinkPrompt == nil)
+        #expect(appModel.openChatRequestID == 1)
+    }
+
+    @Test @MainActor func handleDeepLinkStripsDeliveryFieldsWhenUnkeyed() async throws {
+        let appModel = NodeAppModel()
+        appModel._test_setGatewayConnected(true)
+        let url = makeAgentDeepLinkURL(
+            message: "route this",
+            deliver: true,
+            to: "123456",
+            channel: "telegram")
+
+        await appModel.handleDeepLink(url: url)
+        let prompt = try #require(appModel.pendingAgentDeepLinkPrompt)
+        #expect(prompt.request.deliver == false)
+        #expect(prompt.request.to == nil)
+        #expect(prompt.request.channel == nil)
+    }
+
+    @Test @MainActor func handleDeepLinkRejectsLongUnkeyedMessageWhenConnected() async {
+        let appModel = NodeAppModel()
+        appModel._test_setGatewayConnected(true)
+        let message = String(repeating: "x", count: 241)
+        let url = makeAgentDeepLinkURL(message: message)
+
+        await appModel.handleDeepLink(url: url)
+        #expect(appModel.pendingAgentDeepLinkPrompt == nil)
+        #expect(appModel.screen.errorText?.contains("blocked") == true)
+    }
+
+    @Test @MainActor func handleDeepLinkBypassesPromptWithValidKey() async {
+        let appModel = NodeAppModel()
+        appModel._test_setGatewayConnected(true)
+        let key = NodeAppModel._test_currentDeepLinkKey()
+        let url = makeAgentDeepLinkURL(message: "trusted request", key: key)
+
+        await appModel.handleDeepLink(url: url)
+        #expect(appModel.pendingAgentDeepLinkPrompt == nil)
+        #expect(appModel.openChatRequestID == 1)
     }
 
     @Test @MainActor func sendVoiceTranscriptThrowsWhenGatewayOffline() async {

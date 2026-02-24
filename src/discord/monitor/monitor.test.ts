@@ -170,6 +170,7 @@ describe("agent components", () => {
     const select = createAgentSelectMenu({
       cfg: createCfg(),
       accountId: "default",
+      discordConfig: { dangerouslyAllowNameMatching: true } as DiscordAccountConfig,
       dmPolicy: "allowlist",
       allowFrom: ["Alice#1234"],
     });
@@ -426,13 +427,20 @@ describe("resolveDiscordOwnerAllowFrom", () => {
     expect(result).toEqual(["123"]);
   });
 
-  it("returns the normalized name slug for name matches", () => {
-    const result = resolveDiscordOwnerAllowFrom({
+  it("returns the normalized name slug for name matches only when enabled", () => {
+    const defaultResult = resolveDiscordOwnerAllowFrom({
       channelConfig: { allowed: true, users: ["Some User"] } as DiscordChannelConfigResolved,
       sender: { id: "999", name: "Some User" },
     });
+    expect(defaultResult).toBeUndefined();
 
-    expect(result).toEqual(["some-user"]);
+    const enabledResult = resolveDiscordOwnerAllowFrom({
+      channelConfig: { allowed: true, users: ["Some User"] } as DiscordChannelConfigResolved,
+      sender: { id: "999", name: "Some User" },
+      allowNameMatching: true,
+    });
+
+    expect(enabledResult).toEqual(["some-user"]);
   });
 });
 

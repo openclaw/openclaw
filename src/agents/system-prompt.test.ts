@@ -108,7 +108,8 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).not.toContain("## Authorized Senders");
-    expect(prompt).not.toContain("## Skills");
+    // Skills are included even in minimal mode when skillsPrompt is provided (cron sessions need them)
+    expect(prompt).toContain("## Skills");
     expect(prompt).not.toContain("## Memory Recall");
     expect(prompt).not.toContain("## Documentation");
     expect(prompt).not.toContain("## Reply Tags");
@@ -129,6 +130,29 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("## Subagent Context");
     expect(prompt).not.toContain("## Group Chat Context");
     expect(prompt).toContain("Subagent details");
+  });
+
+  it("includes skills in minimal prompt mode when skillsPrompt is provided (cron regression)", () => {
+    // Isolated cron sessions use promptMode="minimal" but must still receive skills.
+    const skillsPrompt =
+      "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>";
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "minimal",
+      skillsPrompt,
+    });
+
+    expect(prompt).toContain("## Skills (mandatory)");
+    expect(prompt).toContain("<available_skills>");
+  });
+
+  it("omits skills in minimal prompt mode when skillsPrompt is absent", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      promptMode: "minimal",
+    });
+
+    expect(prompt).not.toContain("## Skills");
   });
 
   it("includes safety guardrails in full prompts", () => {

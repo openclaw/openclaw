@@ -37,6 +37,59 @@ OpenClaw assumes the host and config boundary are trusted:
 - If someone can modify Gateway host state/config (`~/.openclaw`, including `openclaw.json`), treat them as a trusted operator.
 - Running one Gateway for multiple mutually untrusted/adversarial operators is **not a recommended setup**.
 - For mixed-trust teams, split trust boundaries with separate gateways (or at minimum separate OS users/hosts).
+- OpenClaw can run multiple gateway instances on one machine, but recommended operations favor clean trust-boundary separation.
+- Recommended default: one user per machine/host (or VPS), one gateway for that user, and one or more agents in that gateway.
+- If multiple users want OpenClaw, use one VPS/host per user.
+
+### Practical consequence (operator trust boundary)
+
+Inside one Gateway instance, authenticated operator access is a trusted control-plane role, not a per-user tenant role.
+
+- Operators with read/control-plane access can inspect gateway session metadata/history by design.
+- Session identifiers (`sessionKey`, session IDs, labels) are routing selectors, not authorization tokens.
+- Example: expecting per-operator isolation for methods like `sessions.list`, `sessions.preview`, or `chat.history` is outside this model.
+- If you need adversarial-user isolation, run separate gateways per trust boundary.
+- Multiple gateways on one machine are technically possible, but not the recommended baseline for multi-user isolation.
+
+## Personal assistant model (not a multi-tenant bus)
+
+OpenClaw is designed as a personal assistant security model: one trusted operator boundary, potentially many agents.
+
+- If several people can message one tool-enabled agent, each of them can steer that same permission set.
+- Per-user session/memory isolation helps privacy, but does not convert a shared agent into per-user host authorization.
+- If users may be adversarial to each other, run separate gateways (or separate OS users/hosts) per trust boundary.
+
+### Shared Slack workspace: real risk
+
+If "everyone in Slack can message the bot," the core risk is delegated tool authority:
+
+- any allowed sender can induce tool calls (`exec`, browser, network/file tools) within the agent's policy;
+- prompt/content injection from one sender can cause actions that affect shared state, devices, or outputs;
+- if one shared agent has sensitive credentials/files, any allowed sender can potentially drive exfiltration via tool usage.
+
+Use separate agents/gateways with minimal tools for team workflows; keep personal-data agents private.
+
+### Company-shared agent: acceptable pattern
+
+This is acceptable when everyone using that agent is in the same trust boundary (for example one company team) and the agent is strictly business-scoped.
+
+- run it on a dedicated machine/VM/container;
+- use a dedicated OS user + dedicated browser/profile/accounts for that runtime;
+- do not sign that runtime into personal Apple/Google accounts or personal password-manager/browser profiles.
+
+If you mix personal and company identities on the same runtime, you collapse the separation and increase personal-data exposure risk.
+
+## Gateway and node trust concept
+
+Treat Gateway and node as one operator trust domain, with different roles:
+
+- **Gateway** is the control plane and policy surface (`gateway.auth`, tool policy, routing).
+- **Node** is remote execution surface paired to that Gateway (commands, device actions, host-local capabilities).
+- A caller authenticated to the Gateway is trusted at Gateway scope. After pairing, node actions are trusted operator actions on that node.
+- `sessionKey` is routing/context selection, not per-user auth.
+- Exec approvals (allowlist + ask) are guardrails for operator intent, not hostile multi-tenant isolation.
+
+If you need hostile-user isolation, split trust boundaries by OS user/host and run separate gateways.
 
 ## Trust boundary matrix
 
@@ -57,6 +110,7 @@ These patterns are commonly reported and are usually closed as no-action unless 
 
 - Prompt-injection-only chains without a policy/auth/sandbox bypass.
 - Claims that assume hostile multi-tenant operation on one shared host/config.
+- Claims that classify normal operator read-path access (for example `sessions.list`/`sessions.preview`/`chat.history`) as IDOR in a shared-gateway setup.
 - Localhost-only deployment findings (for example HSTS on loopback-only gateway).
 - Discord inbound webhook signature findings for inbound paths that do not exist in this repo.
 - "Missing per-user authorization" findings that treat `sessionKey` as an auth token.
@@ -162,6 +216,8 @@ High-signal `checkId` values you will most likely see in real deployments (not e
 | `gateway.tools_invoke_http.dangerous_allow`        | warn/critical | Re-enables dangerous tools over HTTP API                                           | `gateway.tools.allow`                                                                             | no       |
 | `gateway.nodes.allow_commands_dangerous`           | warn/critical | Enables high-impact node commands (camera/screen/contacts/calendar/SMS)            | `gateway.nodes.allowCommands`                                                                     | no       |
 | `gateway.tailscale_funnel`                         | critical      | Public internet exposure                                                           | `gateway.tailscale.mode`                                                                          | no       |
+| `gateway.control_ui.allowed_origins_required`      | critical      | Non-loopback Control UI without explicit browser-origin allowlist                  | `gateway.controlUi.allowedOrigins`                                                                | no       |
+| `gateway.control_ui.host_header_origin_fallback`   | warn/critical | Enables Host-header origin fallback (DNS rebinding hardening downgrade)            | `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback`                                      | no       |
 | `gateway.control_ui.insecure_auth`                 | warn          | Insecure-auth compatibility toggle enabled                                         | `gateway.controlUi.allowInsecureAuth`                                                             | no       |
 | `gateway.control_ui.device_auth_disabled`          | critical      | Disables device identity check                                                     | `gateway.controlUi.dangerouslyDisableDeviceAuth`                                                  | no       |
 | `gateway.real_ip_fallback_enabled`                 | warn/critical | Trusting `X-Real-IP` fallback can enable source-IP spoofing via proxy misconfig    | `gateway.allowRealIpFallback`, `gateway.trustedProxies`                                           | no       |
@@ -198,6 +254,7 @@ keep it off unless you are actively debugging and can revert quickly.
 `openclaw security audit` includes `config.insecure_or_dangerous_flags` when any
 insecure/dangerous debug switches are enabled. This warning aggregates the exact
 keys so you can review them in one place (for example
+`gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true`,
 `gateway.controlUi.allowInsecureAuth=true`,
 `gateway.controlUi.dangerouslyDisableDeviceAuth=true`,
 `hooks.gmail.allowUnsafeExternalContent=true`, or
@@ -241,7 +298,8 @@ proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 - OpenClaw gateway is local/loopback first. If you terminate TLS at a reverse proxy, set HSTS on the proxy-facing HTTPS domain there.
 - If the gateway itself terminates HTTPS, you can set `gateway.http.securityHeaders.strictTransportSecurity` to emit the HSTS header from OpenClaw responses.
 - Detailed deployment guidance is in [Trusted Proxy Auth](/gateway/trusted-proxy-auth#tls-termination-and-hsts).
-- For non-loopback Control UI deployments, explicitly configure `gateway.controlUi.allowedOrigins` instead of relying on permissive defaults.
+- For non-loopback Control UI deployments, `gateway.controlUi.allowedOrigins` is required by default.
+- `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true` enables Host-header origin fallback mode; treat it as a dangerous operator-selected policy.
 - Treat DNS rebinding and proxy-host header behavior as deployment hardening concerns; keep `trustedProxies` tight and avoid exposing the gateway directly to the public internet.
 
 ## Local session logs live on disk
@@ -797,6 +855,30 @@ access those accounts and data. Treat browser profiles as **sensitive state**:
 - The Chrome extension relay’s CDP endpoint is auth-gated; only OpenClaw clients can connect.
 - Disable browser proxy routing when you don’t need it (`gateway.nodes.browser.mode="off"`).
 - Chrome extension relay mode is **not** “safer”; it can take over your existing Chrome tabs. Assume it can act as you in whatever that tab/profile can reach.
+
+### Browser SSRF policy (trusted-network default)
+
+OpenClaw’s browser network policy defaults to the trusted-operator model: private/internal destinations are allowed unless you explicitly disable them.
+
+- Default: `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork: true` (implicit when unset).
+- Legacy alias: `browser.ssrfPolicy.allowPrivateNetwork` is still accepted for compatibility.
+- Strict mode: set `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork: false` to block private/internal/special-use destinations by default.
+- In strict mode, use `hostnameAllowlist` (patterns like `*.example.com`) and `allowedHostnames` (exact host exceptions, including blocked names like `localhost`) for explicit exceptions.
+- Navigation is checked before request and best-effort re-checked on the final `http(s)` URL after navigation to reduce redirect-based pivots.
+
+Example strict policy:
+
+```json5
+{
+  browser: {
+    ssrfPolicy: {
+      dangerouslyAllowPrivateNetwork: false,
+      hostnameAllowlist: ["*.example.com", "example.com"],
+      allowedHostnames: ["localhost"],
+    },
+  },
+}
+```
 
 ## Per-agent access profiles (multi-agent)
 

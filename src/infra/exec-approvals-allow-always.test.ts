@@ -153,6 +153,60 @@ describe("resolveAllowAlwaysPatterns", () => {
     expect(patterns).not.toContain("/usr/bin/nice");
   });
 
+  it("unwraps busybox/toybox shell applets and persists inner executables", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const busybox = makeExecutable(dir, "busybox");
+    makeExecutable(dir, "toybox");
+    const whoami = makeExecutable(dir, "whoami");
+    const env = { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` };
+    const patterns = resolveAllowAlwaysPatterns({
+      segments: [
+        {
+          raw: `${busybox} sh -lc whoami`,
+          argv: [busybox, "sh", "-lc", "whoami"],
+          resolution: {
+            rawExecutable: busybox,
+            resolvedPath: busybox,
+            executableName: "busybox",
+          },
+        },
+      ],
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(patterns).toEqual([whoami]);
+    expect(patterns).not.toContain(busybox);
+  });
+
+  it("fails closed for unsupported busybox/toybox applets", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const busybox = makeExecutable(dir, "busybox");
+    const patterns = resolveAllowAlwaysPatterns({
+      segments: [
+        {
+          raw: `${busybox} sed -n 1p`,
+          argv: [busybox, "sed", "-n", "1p"],
+          resolution: {
+            rawExecutable: busybox,
+            resolvedPath: busybox,
+            executableName: "busybox",
+          },
+        },
+      ],
+      cwd: dir,
+      env: makePathEnv(dir),
+      platform: process.platform,
+    });
+    expect(patterns).toEqual([]);
+  });
+
   it("fails closed for unresolved dispatch wrappers", () => {
     const patterns = resolveAllowAlwaysPatterns({
       segments: [
@@ -169,6 +223,52 @@ describe("resolveAllowAlwaysPatterns", () => {
       platform: process.platform,
     });
     expect(patterns).toEqual([]);
+  });
+
+  it("prevents allow-always bypass for busybox shell applets", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const busybox = makeExecutable(dir, "busybox");
+    const echo = makeExecutable(dir, "echo");
+    makeExecutable(dir, "id");
+    const safeBins = resolveSafeBins(undefined);
+    const env = { PATH: `${dir}${path.delimiter}${process.env.PATH ?? ""}` };
+
+    const first = evaluateShellAllowlist({
+      command: `${busybox} sh -c 'echo warmup-ok'`,
+      allowlist: [],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    const persisted = resolveAllowAlwaysPatterns({
+      segments: first.segments,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(persisted).toEqual([echo]);
+
+    const second = evaluateShellAllowlist({
+      command: `${busybox} sh -c 'id > marker'`,
+      allowlist: [{ pattern: echo }],
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(false);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: second.analysisOk,
+        allowlistSatisfied: second.allowlistSatisfied,
+      }),
+    ).toBe(true);
   });
 
   it("prevents allow-always bypass for dispatch-wrapper + shell-wrapper chains", () => {

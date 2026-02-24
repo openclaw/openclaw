@@ -15,6 +15,8 @@ describe("exec safe-bin runtime policy", () => {
     { bin: "node20", expected: true },
     { bin: "ruby3.2", expected: true },
     { bin: "bash", expected: true },
+    { bin: "busybox", expected: true },
+    { bin: "toybox", expected: true },
     { bin: "myfilter", expected: false },
     { bin: "jq", expected: false },
   ];
