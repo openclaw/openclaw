@@ -505,12 +505,9 @@ describe("SendMessage Tool", () => {
         content: "Test message",
       });
 
-      expect(result.content).toEqual([
-        {
-          type: "text",
-          text: "Error: recipient is required for message type",
-        },
-      ]);
+      expect((result.details as { error: string }).error).toBe(
+        "recipient is required for message type",
+      );
       expect(writeInboxMessage).not.toHaveBeenCalled();
     });
 

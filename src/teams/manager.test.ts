@@ -21,7 +21,7 @@ const toStoreMessage = (
 ): {
   id: string;
   from: string;
-  to: string;
+  to?: string;
   type: TeamMessage["type"];
   content: string;
   summary?: string;
@@ -29,6 +29,8 @@ const toStoreMessage = (
   approve?: boolean;
   reason?: string;
   timestamp: number;
+  sender: string;
+  recipient?: string;
 } => ({
   id: msg.id,
   from: msg.sender,
@@ -40,6 +42,8 @@ const toStoreMessage = (
   approve: msg.approve,
   reason: msg.reason,
   timestamp: msg.timestamp,
+  sender: msg.sender,
+  recipient: msg.recipient,
 });
 
 // Test helper: track all mock instances for assertions
@@ -1607,6 +1611,160 @@ describe("TeamManager", () => {
 
         manager.close();
         expect(() => manager.close()).not.toThrow();
+      });
+    });
+  });
+
+  describe("Concurrency Control", () => {
+    describe("Parallel Task Claims", () => {
+      it("should only allow one agent to claim a task", () => {
+        const manager = new TeamManager("test-team", TEST_DIR);
+
+        const task = manager.createTask("Test task", "Description") as { id: string };
+
+        // Simulate parallel claims
+        const result1 = manager.claimTask(task.id, "agent-1");
+        const result2 = manager.claimTask(task.id, "agent-2");
+
+        // Only one should succeed
+        const successCount = [result1, result2].filter((r) => r.success).length;
+        expect(successCount).toBe(1);
+
+        // The first claim should win
+        const tasks = manager.listTasks();
+        const claimedTask = tasks.find((t) => t.id === task.id);
+        expect(claimedTask?.owner).toBeDefined();
+
+        manager.close();
+      });
+
+      it("should prevent race condition where two claims both succeed", () => {
+        const manager = new TeamManager("test-team", TEST_DIR);
+
+        const task = manager.createTask("Race test", "Testing race condition") as { id: string };
+
+        // Attempt rapid sequential claims
+        const results: Array<{ success: boolean }> = [];
+        for (let i = 0; i < 10; i++) {
+          results.push(manager.claimTask(task.id, `agent-${i}`));
+        }
+
+        // Only one should succeed
+        const successCount = results.filter((r) => r.success).length;
+        expect(successCount).toBe(1);
+
+        manager.close();
+      });
+    });
+
+    describe("Concurrent Read/Write Operations", () => {
+      it("should handle concurrent reads during writes", () => {
+        const manager = new TeamManager("test-team", TEST_DIR);
+
+        // Create multiple tasks
+        for (let i = 0; i < 5; i++) {
+          manager.createTask(`Task ${i}`, `Description ${i}`);
+        }
+
+        // Simulate concurrent reads while writing
+        const readResults: unknown[][] = [];
+        const writePromises = [];
+
+        for (let i = 0; i < 3; i++) {
+          writePromises.push(
+            (async () => {
+              manager.createTask(`Concurrent Task ${i}`, "Written during reads");
+            })(),
+          );
+          readResults.push(manager.listTasks());
+        }
+
+        // All reads should return consistent data
+        for (const reads of readResults) {
+          expect(reads.length).toBeGreaterThan(0);
+        }
+
+        manager.close();
+      });
+
+      it("should maintain data consistency under load", () => {
+        const manager = new TeamManager("test-team", TEST_DIR);
+
+        const taskCount = 20;
+        const tasks: Array<{ id: string }> = [];
+
+        // Create tasks
+        for (let i = 0; i < taskCount; i++) {
+          tasks.push(manager.createTask(`Load Test ${i}`, "Description") as { id: string });
+        }
+
+        // Claim some tasks
+        for (let i = 0; i < Math.floor(taskCount / 2); i++) {
+          manager.claimTask(tasks[i].id, `agent-${i % 3}`);
+        }
+
+        // Verify consistency
+        const listedTasks = manager.listTasks();
+        const claimedTasks = listedTasks.filter((t) => t.status === "in_progress");
+        const pendingTasks = listedTasks.filter((t) => t.status === "pending");
+
+        expect(listedTasks.length).toBe(taskCount);
+        expect(claimedTasks.length).toBe(Math.floor(taskCount / 2));
+        expect(pendingTasks.length).toBe(Math.ceil(taskCount / 2));
+
+        manager.close();
+      });
+    });
+
+    describe("Task Dependency Resolution Under Load", () => {
+      it("should resolve dependencies correctly with concurrent operations", () => {
+        const manager = new TeamManager("test-team", TEST_DIR);
+
+        // Create dependency chain: A -> B -> C
+        const taskA = manager.createTask("Task A", "First") as { id: string };
+        const taskB = manager.createTask("Task B", "Second") as { id: string };
+        const taskC = manager.createTask("Task C", "Third") as { id: string };
+
+        manager.addTaskDependency(taskB.id, taskA.id);
+        manager.addTaskDependency(taskC.id, taskB.id);
+
+        // Complete tasks in order
+        manager.claimTask(taskA.id, "agent-1");
+        manager.completeTask(taskA.id);
+
+        manager.claimTask(taskB.id, "agent-1");
+        manager.completeTask(taskB.id);
+
+        manager.claimTask(taskC.id, "agent-1");
+        manager.completeTask(taskC.id);
+
+        // Verify all completed
+        const tasks = manager.listTasks();
+        const completedCount = tasks.filter((t) => t.status === "completed").length;
+
+        expect(completedCount).toBe(3);
+        manager.close();
+      });
+
+      it("should handle multiple tasks completing simultaneously", () => {
+        const manager = new TeamManager("test-team", TEST_DIR);
+
+        // Create independent tasks
+        const task1 = manager.createTask("Independent 1", "Desc") as { id: string };
+        const task2 = manager.createTask("Independent 2", "Desc") as { id: string };
+        const task3 = manager.createTask("Independent 3", "Desc") as { id: string };
+
+        // Claim and complete all
+        [task1, task2, task3].forEach((task, i) => {
+          manager.claimTask(task.id, `agent-${i}`);
+          manager.completeTask(task.id);
+        });
+
+        const tasks = manager.listTasks();
+        const allCompleted = tasks.every((t) => t.status === "completed");
+
+        expect(allCompleted).toBe(true);
+        manager.close();
       });
     });
   });

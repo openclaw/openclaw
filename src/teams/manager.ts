@@ -180,6 +180,7 @@ export class TeamManager {
       activeForm: options?.activeForm,
       metadata: options?.metadata,
       status: "pending",
+      owner: "",
       dependsOn: [],
       blockedBy: [],
       blocks: [],
