@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { validateToken, checkUserAllowed, sanitizeInput, RateLimiter } from "./security.js";
+import {
+  validateToken,
+  checkUserAllowed,
+  authorizeUserForDm,
+  sanitizeInput,
+  RateLimiter,
+} from "./security.js";
 
 describe("validateToken", () => {
   it("returns true for matching tokens", () => {
@@ -34,6 +40,39 @@ describe("checkUserAllowed", () => {
 
   it("rejects user not in the allowlist", () => {
     expect(checkUserAllowed("user3", ["user1", "user2"])).toBe(false);
+  });
+});
+
+describe("authorizeUserForDm", () => {
+  it("allows any user when dmPolicy is open", () => {
+    expect(authorizeUserForDm("user1", "open", [])).toEqual({ allowed: true });
+  });
+
+  it("rejects all users when dmPolicy is disabled", () => {
+    expect(authorizeUserForDm("user1", "disabled", ["user1"])).toEqual({
+      allowed: false,
+      reason: "disabled",
+    });
+  });
+
+  it("rejects when dmPolicy is allowlist and list is empty", () => {
+    expect(authorizeUserForDm("user1", "allowlist", [])).toEqual({
+      allowed: false,
+      reason: "allowlist-empty",
+    });
+  });
+
+  it("rejects users not in allowlist", () => {
+    expect(authorizeUserForDm("user9", "allowlist", ["user1"])).toEqual({
+      allowed: false,
+      reason: "not-allowlisted",
+    });
+  });
+
+  it("allows users in allowlist", () => {
+    expect(authorizeUserForDm("user1", "allowlist", ["user1", "user2"])).toEqual({
+      allowed: true,
+    });
   });
 });
 
