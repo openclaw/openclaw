@@ -12,13 +12,13 @@ export const DISCORD_RETRY_DEFAULTS = {
 };
 
 export const TELEGRAM_RETRY_DEFAULTS = {
-  attempts: 3,
+  attempts: 6,
   minDelayMs: 400,
   maxDelayMs: 30_000,
   jitter: 0.1,
 };
 
-const TELEGRAM_RETRY_RE = /429|timeout|connect|reset|closed|unavailable|temporarily/i;
+const TELEGRAM_RETRY_RE = /429|timeout|connect|reset|closed|unavailable|temporarily|network/i;
 
 function getTelegramRetryAfterMs(err: unknown): number | undefined {
   if (!err || typeof err !== "object") {

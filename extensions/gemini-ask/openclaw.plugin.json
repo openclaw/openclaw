@@ -1,0 +1,24 @@
+{
+  "id": "gemini-ask",
+  "name": "Gemini Ask",
+  "description": "Ask Gemini AI a question via browser automation. Replaces manual browser snapshot/click/type steps with a single tool call.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "profile": {
+        "type": "string",
+        "description": "Browser profile to use (default: openclaw)"
+      },
+      "defaultModel": {
+        "type": "string",
+        "enum": ["flash", "pro", "thinking"],
+        "description": "Default Gemini model variant (default: flash)"
+      },
+      "timeoutMs": {
+        "type": "number",
+        "description": "Max wait time for Gemini response in ms (default: 60000)"
+      }
+    }
+  }
+}

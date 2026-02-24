@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/gemini-ask",
+  "version": "2026.2.20",
+  "private": true,
+  "description": "OpenClaw plugin: ask Gemini a question via browser automation",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
