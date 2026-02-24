@@ -137,7 +137,7 @@ async function resolveConfigSecretRefs(params: {
       if (!isSecretRef(entry.apiKey)) {
         continue;
       }
-      const resolvedValue = await resolveSecretRefValue(entry.apiKey, params.context);
+      const resolvedValue = await resolveSecretRefValueFromContext(entry.apiKey, params.context);
       if (!isNonEmptyString(resolvedValue)) {
         throw new Error(
           `skills.entries.${skillKey}.apiKey resolved to a non-string or empty value.`,
