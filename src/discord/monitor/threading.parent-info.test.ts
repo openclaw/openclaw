@@ -1,8 +1,13 @@
 import { ChannelType } from "@buape/carbon";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { __resetDiscordChannelInfoCacheForTest } from "./message-utils.js";
 import { resolveDiscordThreadParentInfo } from "./threading.js";
 
 describe("resolveDiscordThreadParentInfo", () => {
+  beforeEach(() => {
+    __resetDiscordChannelInfoCacheForTest();
+  });
+
   it("falls back to fetched thread parentId when parentId is missing in payload", async () => {
     const fetchChannel = vi.fn(async (channelId: string) => {
       if (channelId === "thread-1") {
