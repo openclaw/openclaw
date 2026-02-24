@@ -164,7 +164,9 @@ const IMAGE_ATTACHMENT = { contentType: CONTENT_TYPE_IMAGE_PNG, contentUrl: TEST
 const PNG_BUFFER = Buffer.from("png");
 const PNG_BASE64 = PNG_BUFFER.toString("base64");
 const PDF_BUFFER = Buffer.from("pdf");
-const createTokenProvider = () => ({ getAccessToken: vi.fn(async () => "token") });
+const createTokenProvider = (token = "token") => ({
+  getAccessToken: vi.fn(async () => token),
+});
 const asSingleItemArray = <T>(value: T) => [value];
 const withLabel = <T extends object>(label: string, fields: T): T & LabeledCase => ({
   label,
