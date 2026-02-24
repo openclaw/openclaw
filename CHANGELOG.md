@@ -8,6 +8,10 @@ Docs: https://docs.openclaw.ai
 
 - **BREAKING:** non-loopback Control UI now requires explicit `gateway.controlUi.allowedOrigins` (full origins). Startup fails closed when missing unless `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true` is set to use Host-header origin fallback mode.
 
+### Changes
+
+- Subagents/Sessions: add `agents.defaults.subagents.runTimeoutSeconds` so `sessions_spawn` can inherit a configurable default timeout when the tool call omits `runTimeoutSeconds` (unset remains `0`, meaning no timeout). (#24594) Thanks @mitchmcalister.
+
 ### Fixes
 
 - Gateway/Browser control: load `src/browser/server.js` during browser-control startup so the control listener starts reliably when browser control is enabled. (#23974) Thanks @ieaves.
