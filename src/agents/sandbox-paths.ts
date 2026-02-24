@@ -13,8 +13,12 @@ function normalizeUnicodeSpaces(str: string): string {
   return str.replace(UNICODE_SPACES, " ");
 }
 
+function normalizeAtPrefix(filePath: string): string {
+  return filePath.startsWith("@") ? filePath.slice(1) : filePath;
+}
+
 function expandPath(filePath: string): string {
-  const normalized = normalizeUnicodeSpaces(filePath);
+  const normalized = normalizeUnicodeSpaces(normalizeAtPrefix(filePath));
   if (normalized === "~") {
     return os.homedir();
   }
