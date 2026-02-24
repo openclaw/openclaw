@@ -41,6 +41,7 @@ export function createOpenClawTools(options?: {
   agentDir?: string;
   sandboxRoot?: string;
   sandboxFsBridge?: SandboxFsBridge;
+  workspaceOnly?: boolean;
   workspaceDir?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
@@ -78,6 +79,7 @@ export function createOpenClawTools(options?: {
           options?.sandboxRoot && options?.sandboxFsBridge
             ? { root: options.sandboxRoot, bridge: options.sandboxFsBridge }
             : undefined,
+        workspaceOnly: options?.workspaceOnly,
         modelHasVision: options?.modelHasVision,
       })
     : null;
