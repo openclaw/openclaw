@@ -890,6 +890,37 @@ describe("handleCommands hooks", () => {
     expect(spy).toHaveBeenCalledWith(expect.objectContaining({ type: "command", action: "new" }));
     spy.mockRestore();
   });
+
+  it("triggers hooks for native /new routed to target sessions", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { telegram: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/new", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      CommandSource: "native",
+      CommandTargetSessionKey: "agent:main:telegram:direct:123",
+      SessionKey: "telegram:slash:123",
+      SenderId: "123",
+      From: "telegram:123",
+      To: "slash:123",
+      CommandAuthorized: true,
+    });
+    params.sessionKey = "agent:main:telegram:direct:123";
+    const spy = vi.spyOn(internalHooks, "triggerInternalHook").mockResolvedValue();
+
+    await handleCommands(params);
+
+    expect(spy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "command",
+        action: "new",
+        sessionKey: "agent:main:telegram:direct:123",
+      }),
+    );
+    spy.mockRestore();
+  });
 });
 
 describe("handleCommands context", () => {
