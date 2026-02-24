@@ -28,6 +28,7 @@ describe("shell env fallback", () => {
   }
 
   function runShellEnvFallbackForShell(shell: string) {
+    resetShellPathCacheForTests();
     const env: NodeJS.ProcessEnv = { SHELL: shell };
     const exec = vi.fn(() => Buffer.from("OPENAI_API_KEY=from-shell\0"));
     const res = loadShellEnvFallback({
@@ -170,18 +171,44 @@ describe("shell env fallback", () => {
     expect(exec).toHaveBeenCalledWith("/bin/sh", ["-l", "-c", "env -0"], expect.any(Object));
   });
 
-  it("uses trusted absolute SHELL path when executable on posix-style paths", () => {
-    const accessSyncSpy = vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+  it("falls back to /bin/sh when SHELL is absolute but not registered in /etc/shells", () => {
+    const readFileSyncSpy = vi
+      .spyOn(fs, "readFileSync")
+      .mockImplementation((filePath, encoding) => {
+        if (filePath === "/etc/shells" && encoding === "utf8") {
+          return "/bin/sh\n/bin/bash\n/bin/zsh\n";
+        }
+        throw new Error(`Unexpected readFileSync(${String(filePath)}) in test`);
+      });
     try {
-      const trustedShell = "/usr/bin/zsh-trusted";
-      const { res, exec } = runShellEnvFallbackForShell(trustedShell);
-      const expectedShell = process.platform === "win32" ? "/bin/sh" : trustedShell;
+      const { res, exec } = runShellEnvFallbackForShell("/opt/homebrew/bin/evil-shell");
 
       expect(res.ok).toBe(true);
       expect(exec).toHaveBeenCalledTimes(1);
-      expect(exec).toHaveBeenCalledWith(expectedShell, ["-l", "-c", "env -0"], expect.any(Object));
+      expect(exec).toHaveBeenCalledWith("/bin/sh", ["-l", "-c", "env -0"], expect.any(Object));
     } finally {
-      accessSyncSpy.mockRestore();
+      readFileSyncSpy.mockRestore();
+    }
+  });
+
+  it("uses SHELL when it is explicitly registered in /etc/shells", () => {
+    const readFileSyncSpy = vi
+      .spyOn(fs, "readFileSync")
+      .mockImplementation((filePath, encoding) => {
+        if (filePath === "/etc/shells" && encoding === "utf8") {
+          return "/bin/sh\n/usr/bin/zsh-trusted\n";
+        }
+        throw new Error(`Unexpected readFileSync(${String(filePath)}) in test`);
+      });
+    try {
+      const trustedShell = "/usr/bin/zsh-trusted";
+      const { res, exec } = runShellEnvFallbackForShell(trustedShell);
+
+      expect(res.ok).toBe(true);
+      expect(exec).toHaveBeenCalledTimes(1);
+      expect(exec).toHaveBeenCalledWith(trustedShell, ["-l", "-c", "env -0"], expect.any(Object));
+    } finally {
+      readFileSyncSpy.mockRestore();
     }
   });
 
