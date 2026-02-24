@@ -301,16 +301,31 @@ class GatewaySession(
       val storedToken = deviceAuthStore.loadToken(identity.deviceId, options.role)
       val trimmedToken = token?.trim().orEmpty()
       val authToken = if (storedToken.isNullOrBlank()) trimmedToken else storedToken
-      val canFallbackToShared = !storedToken.isNullOrBlank() && trimmedToken.isNotBlank()
       val payload = buildConnectParams(identity, connectNonce, authToken, password?.trim())
-      val res = request("connect", payload, timeoutMs = 8_000)
+      var res = request("connect", payload, timeoutMs = 8_000)
       if (!res.ok) {
         val msg = res.error?.message ?: "connect failed"
-        if (canFallbackToShared) {
+        val hasStoredToken = !storedToken.isNullOrBlank()
+        val canRetryWithShared = hasStoredToken && trimmedToken.isNotBlank()
+        if (canRetryWithShared) {
+          val sharedPayload = buildConnectParams(identity, connectNonce, trimmedToken, password?.trim())
+          val sharedRes = request("connect", sharedPayload, timeoutMs = 8_000)
+          if (!sharedRes.ok) {
+            val retryMsg = sharedRes.error?.message ?: msg
+            throw IllegalStateException(retryMsg)
+          }
+          // Stored device token was bypassed successfully; clear stale token for future connects.
           deviceAuthStore.clearToken(identity.deviceId, options.role)
+          res = sharedRes
+        } else {
+          throw IllegalStateException(msg)
         }
-        throw IllegalStateException(msg)
       }
+      handleConnectSuccess(res, identity.deviceId)
+      connectDeferred.complete(Unit)
+    }
+
+    private fun handleConnectSuccess(res: RpcResponse, deviceId: String) {
       val payloadJson = res.payloadJson ?: throw IllegalStateException("connect failed: missing payload")
       val obj = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: throw IllegalStateException("connect failed")
       val serverName = obj["server"].asObjectOrNull()?.get("host").asStringOrNull()
@@ -318,7 +333,7 @@ class GatewaySession(
       val deviceToken = authObj?.get("deviceToken").asStringOrNull()
       val authRole = authObj?.get("role").asStringOrNull() ?: options.role
       if (!deviceToken.isNullOrBlank()) {
-        deviceAuthStore.saveToken(identity.deviceId, authRole, deviceToken)
+        deviceAuthStore.saveToken(deviceId, authRole, deviceToken)
       }
       val rawCanvas = obj["canvasHostUrl"].asStringOrNull()
       canvasHostUrl = normalizeCanvasHostUrl(rawCanvas, endpoint)
@@ -327,7 +342,6 @@ class GatewaySession(
           ?.get("sessionDefaults").asObjectOrNull()
       mainSessionKey = sessionDefaults?.get("mainSessionKey").asStringOrNull()
       onConnected(serverName, remoteAddress, mainSessionKey)
-      connectDeferred.complete(Unit)
     }
 
     private fun buildConnectParams(
