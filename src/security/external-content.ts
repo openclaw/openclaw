@@ -150,6 +150,29 @@ type EncodedPayload = {
   kind: "base64" | "url" | "hex";
 };
 
+/**
+ * Normalize text for injection detection.
+ *
+ * Applies NFKD (compatibility decomposition) then strips Unicode combining
+ * marks (category M). This folds compatibility equivalents — fullwidth Latin
+ * letters, math bold/italic/script variants, circled characters, etc. — back
+ * to their ASCII base forms, defeating homoglyph substitution attacks that
+ * try to write "ignore" or "system" with visually identical but distinct code
+ * points to bypass keyword pattern regexes.
+ *
+ * What NFKD covers (examples):
+ *   ｉｇｎｏｒｅ (fullwidth)  → ignore
+ *   𝒊𝒈𝒏𝒐𝒓𝒆 (math bold italic) → ignore
+ *   ⓘⓖⓝⓞⓡⓔ (circled)       → ignore  (after strip)
+ *   d̤e̤l̤e̤t̤e̤ (combining below)  → delete
+ *
+ * Limitation: pure script-level confusables (Cyrillic а vs Latin a) are NOT
+ * covered — that requires a full Unicode confusable-mapping table.
+ */
+function normalizeForDetection(text: string): string {
+  return text.normalize("NFKD").replace(/\p{M}/gu, "");
+}
+
 function safeTest(pattern: RegExp, text: string): boolean {
   if (pattern.global || pattern.sticky) {
     pattern.lastIndex = 0;
@@ -342,8 +365,9 @@ function tryDecodePayloads(content: string): EncodedPayload[] {
  * Deep inspection for prompt injection patterns, including encoded payloads.
  */
 export function deepInspectForInjection(content: string): InjectionInspectionResult {
-  const directMatches = findMatches(content, INJECTION_PATTERN_DEFS);
-  const decodedPayloads = tryDecodePayloads(content);
+  const normalized = normalizeForDetection(content);
+  const directMatches = findMatches(normalized, INJECTION_PATTERN_DEFS);
+  const decodedPayloads = tryDecodePayloads(normalized);
   const encodedMatches = decodedPayloads.flatMap((payload) =>
     findMatches(payload.text, INJECTION_PATTERN_DEFS, "encoded:"),
   );
@@ -392,7 +416,7 @@ export function deepInspectForInjection(content: string): InjectionInspectionRes
  * Check if content contains suspicious patterns that may indicate injection.
  */
 export function detectSuspiciousPatterns(content: string): string[] {
-  return dedupeMatches(findMatches(content, INJECTION_PATTERN_DEFS));
+  return dedupeMatches(findMatches(normalizeForDetection(content), INJECTION_PATTERN_DEFS));
 }
 
 /**
