@@ -13,7 +13,7 @@ Docs: https://docs.openclaw.ai
 
 - Subagents/Sessions: add `agents.defaults.subagents.runTimeoutSeconds` so `sessions_spawn` can inherit a configurable default timeout when the tool call omits `runTimeoutSeconds` (unset remains `0`, meaning no timeout). (#24594) Thanks @mitchmcalister.
 - Config/Kilo Gateway: Kilo provider flow now surfaces an updated list of models. (#24921) thanks @gumadeiras.
-- Auto-reply/Abort shortcuts: expand standalone stop phrases (`stop openclaw`, `stop action`, `stop run`, `stop agent`, `please stop`, and related variants) and accept trailing punctuation (for example `STOP OPENCLAW!!!`) so emergency stop messages are caught more reliably.
+- Auto-reply/Abort shortcuts: expand standalone stop phrases (`stop openclaw`, `stop action`, `stop run`, `stop agent`, `please stop`, and related variants), accept trailing punctuation (for example `STOP OPENCLAW!!!`), and add multilingual stop keywords (including ES/FR/ZH/HI/AR/JP/DE/PT/RU forms) so emergency stop messages are caught more reliably. Thanks @steipete and @vincentkoc.
 
 ### Fixes
 
