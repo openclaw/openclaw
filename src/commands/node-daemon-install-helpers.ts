@@ -1,4 +1,5 @@
 import { formatNodeServiceDescription } from "../daemon/constants.js";
+import { resolveGatewayStateDir } from "../daemon/paths.js";
 import { resolveNodeProgramArguments } from "../daemon/program-args.js";
 import { resolvePreferredNodePath } from "../daemon/runtime-paths.js";
 import { buildNodeServiceEnvironment } from "../daemon/service-env.js";
@@ -61,5 +62,9 @@ export async function buildNodeInstallPlan(params: {
     version: environment.OPENCLAW_SERVICE_VERSION,
   });
 
-  return { programArguments, workingDirectory, environment, description };
+  // Default working directory to the OpenClaw state dir (e.g. ~/.openclaw) so the
+  // daemon does not run with `/` as cwd when launched by launchd/systemd.
+  const resolvedWorkingDirectory = workingDirectory || resolveGatewayStateDir(params.env);
+
+  return { programArguments, workingDirectory: resolvedWorkingDirectory, environment, description };
 }

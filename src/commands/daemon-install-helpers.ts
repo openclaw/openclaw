@@ -2,6 +2,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { collectConfigServiceEnvVars } from "../config/env-vars.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
+import { resolveGatewayStateDir } from "../daemon/paths.js";
 import { resolveGatewayProgramArguments } from "../daemon/program-args.js";
 import { resolvePreferredNodePath } from "../daemon/runtime-paths.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
@@ -71,7 +72,11 @@ export async function buildGatewayInstallPlan(params: {
   };
   Object.assign(environment, serviceEnvironment);
 
-  return { programArguments, workingDirectory, environment };
+  // Default working directory to the OpenClaw state dir (e.g. ~/.openclaw) so the
+  // daemon does not run with `/` as cwd when launched by launchd/systemd.
+  const resolvedWorkingDirectory = workingDirectory || resolveGatewayStateDir(params.env);
+
+  return { programArguments, workingDirectory: resolvedWorkingDirectory, environment };
 }
 
 export function gatewayInstallErrorHint(platform = process.platform): string {
