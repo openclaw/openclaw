@@ -192,6 +192,390 @@ function createChannelOutboundContextBase(
 
 const isAbortError = (err: unknown): boolean => err instanceof Error && err.name === "AbortError";
 
+const GEC_VERSION = "1.0.0";
+const GEC_LEGAL_END_STATES = ["CLOSURE PACKET", "BLOCKED PACKET", "CHECKPOINT PLAN"];
+const GEC_HEDGING_RE = /\b(if you want|would you like me to|i can|let me know if)\b/i;
+const GEC_PROMISE_RE =
+  /\b(i['’]ll\s+do|i\s+will\s+do|i['’]m\s+executing\s+now|i\s+am\s+executing\s+now|running\s+end-to-end)\b/i;
+const GEC_DECISION_RE =
+  /\b(should i|do you want|would you like|which option|choose one|pick one|confirm)\b|\?/i;
+
+export type GecEnforcementResult = {
+  blocked: boolean;
+  rewrittenText: string;
+  reason: "forbidden_future_tense_execution_promise" | "forbidden_hedging_without_decision" | null;
+};
+
+export type ExecutionWatchdogState = {
+  active: boolean;
+  startedAtMs: number;
+  lastProofAtMs: number;
+};
+
+export type ExecutionWatchdogResult = {
+  state: ExecutionWatchdogState;
+  timedOut: boolean;
+  rewrittenText: string;
+  reason: "execution_window_exceeded" | null;
+};
+
+type MissionControlClient = {
+  createTask: (params: {
+    title: string;
+    type: "STORY" | "CHORE";
+    ownerAgent: string;
+    nextAction: string;
+    status: "backlog";
+  }) => Promise<{ taskId: string; link: string }>;
+  ensureLeaseActive: (params: { taskId: string; agentId: string }) => Promise<{ active: boolean }>;
+};
+
+type MissionControlBindingResult = {
+  proceed: boolean;
+  text: string;
+  taskId?: string;
+  taskLink?: string;
+  createdTask?: boolean;
+  blockedReason?: string;
+};
+
+const hasGecLegalEndState = (text: string): boolean => {
+  const upper = text.toUpperCase();
+  return GEC_LEGAL_END_STATES.some((token) => upper.includes(token));
+};
+
+const isDecisionRequestText = (text: string): boolean => GEC_DECISION_RE.test(text);
+const GEC_EXECUTION_INTENT_RE =
+  /\b(i['’]m\s+executing|i\s+am\s+executing|running\s+end-to-end|working\s+on\s+it|executing\s+now|starting\s+execution)\b/i;
+const GEC_EXECUTION_WINDOW_DEFAULT_MINS = 10;
+const MC_TASK_RE = /\btask(?:[_ -]?id)?\s*[:=]\s*([A-Za-z0-9_-]+)/i;
+const MC_TASK_LINK_RE = /https?:\/\/\S+\/tasks\/([A-Za-z0-9_-]+)/i;
+const NON_TRIVIAL_RE =
+  /\b(code changes?|file writes?|deploy(?:ment)?|multi-step|checkpoint plan|closure packet|blocked packet|running tests?|\bbuild\b|executing now|i['’]ll do this now|implement|patch|commit|pr\b)\b/i;
+
+const resolveExecutionWindowMs = (): number => {
+  const raw = process.env.GEC_EXECUTION_WINDOW_MINS;
+  const parsed = raw ? Number(raw) : GEC_EXECUTION_WINDOW_DEFAULT_MINS;
+  const mins = Number.isFinite(parsed) && parsed > 0 ? parsed : GEC_EXECUTION_WINDOW_DEFAULT_MINS;
+  return mins * 60 * 1000;
+};
+
+const hasProofSignal = (text: string): boolean => hasGecLegalEndState(text);
+
+const hasExecutionIntent = (text: string): boolean => GEC_EXECUTION_INTENT_RE.test(text);
+const isNonTrivialExecution = (text: string): boolean => NON_TRIVIAL_RE.test(text);
+
+const extractTaskIdFromText = (text: string): string | undefined => {
+  const direct = MC_TASK_RE.exec(text)?.[1];
+  if (direct) {
+    return direct;
+  }
+  return MC_TASK_LINK_RE.exec(text)?.[1];
+};
+
+const chooseDefaultOwnerAgent = (text: string): string =>
+  /\b(product|spec|priorit|roadmap|acceptance criteria)\b/i.test(text)
+    ? "ava-product-manager"
+    : "cb-router";
+
+let mcBindingLogEmitted = false;
+const outboundDedupeState = new Map<string, number>();
+
+export function shouldEmitDedup(key: string, windowMs: number, nowMs = Date.now()): boolean {
+  const last = outboundDedupeState.get(key) ?? 0;
+  if (nowMs - last < windowMs) {
+    return false;
+  }
+  outboundDedupeState.set(key, nowMs);
+  return true;
+}
+
+const resolveMcTimeoutMs = (): number => {
+  const parsed = Number(process.env.MC_TIMEOUT_MS ?? "7000");
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 7000;
+  }
+  return Math.floor(parsed);
+};
+
+const deriveAppBaseFromApiUrl = (apiUrl: string): string => {
+  const trimmed = apiUrl.replace(/\/$/, "");
+  return trimmed.replace(/\/api$/i, "");
+};
+
+const resolveMcBaseUrl = (): string | null => {
+  const explicit = process.env.MC_APP_BASE_URL?.trim();
+  if (explicit) {
+    return explicit.replace(/\/$/, "");
+  }
+  const api = process.env.MC_API_URL?.trim();
+  if (!api) {
+    return null;
+  }
+  return deriveAppBaseFromApiUrl(api);
+};
+
+const missingMcVars = (): string[] => {
+  const missing: string[] = [];
+  if (!process.env.MC_API_URL?.trim()) {
+    missing.push("MC_API_URL");
+  }
+  if (!process.env.MC_API_TOKEN?.trim()) {
+    missing.push("MC_API_TOKEN");
+  }
+  return missing;
+};
+
+const buildBlockedPacket = (reason: string): string =>
+  `BLOCKED PACKET\nMissing requirement: ${reason}\nRequired next step: set required Mission Control env vars and retry.`;
+
+const ensureMcLinkOnPacket = (text: string, taskLink?: string): string => {
+  if (!taskLink) {
+    return text;
+  }
+  if (!hasGecLegalEndState(text)) {
+    return text;
+  }
+  if (text.startsWith("MC Task:")) {
+    return text;
+  }
+  return `MC Task: ${taskLink}\n${text}`;
+};
+
+const createMissionControlClient = (): MissionControlClient => {
+  const apiBase = process.env.MC_API_URL?.trim().replace(/\/$/, "");
+  const token = process.env.MC_API_TOKEN?.trim();
+  const appBase = resolveMcBaseUrl();
+  const timeoutMs = resolveMcTimeoutMs();
+  const missing = missingMcVars();
+
+  if (missing.length === 0 && !mcBindingLogEmitted && apiBase && token) {
+    console.log(`[MC_BINDING] enabled url=${apiBase} token=present timeout_ms=${timeoutMs}`);
+    mcBindingLogEmitted = true;
+  }
+
+  return {
+    createTask: async ({ title, type, ownerAgent, nextAction, status }) => {
+      if (!apiBase || !token) {
+        throw new Error(`Missing required vars: ${missingMcVars().join(", ")}`);
+      }
+      const res = await fetch(`${apiBase}/tasks`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          ...(process.env.MC_TENANT?.trim()
+            ? {
+                "X-MC-Tenant": process.env.MC_TENANT.trim(),
+              }
+            : {}),
+        },
+        body: JSON.stringify({ title, type, ownerAgent, nextAction, status }),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!res.ok) {
+        throw new Error(`MC task create failed: HTTP ${res.status}`);
+      }
+      const json = (await res.json()) as { taskId?: string; id?: string; link?: string };
+      const taskId = json.taskId ?? json.id;
+      if (!taskId) {
+        throw new Error("MC task create failed: missing taskId in response");
+      }
+      const resolvedAppBase = appBase ?? deriveAppBaseFromApiUrl(apiBase);
+      return {
+        taskId,
+        link: json.link ?? `${resolvedAppBase}/tasks/${taskId}`,
+      };
+    },
+    ensureLeaseActive: async ({ taskId, agentId }) => {
+      if (!apiBase || !token) {
+        throw new Error(`Missing required vars: ${missingMcVars().join(", ")}`);
+      }
+      const res = await fetch(`${apiBase}/tasks/${taskId}/lease`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          ...(process.env.MC_TENANT?.trim()
+            ? {
+                "X-MC-Tenant": process.env.MC_TENANT.trim(),
+              }
+            : {}),
+        },
+        body: JSON.stringify({ agentId, state: "ACTIVE" }),
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!res.ok) {
+        throw new Error(`MC lease activation failed: HTTP ${res.status}`);
+      }
+      return { active: true };
+    },
+  };
+};
+
+export async function ensureMissionControlBinding(params: {
+  text: string;
+  taskId?: string;
+  taskLink?: string;
+  agentId: string;
+  client?: MissionControlClient;
+}): Promise<MissionControlBindingResult> {
+  const raw = (params.text ?? "").trim();
+  if (!raw || !isNonTrivialExecution(raw)) {
+    return { proceed: true, text: raw, taskId: params.taskId, taskLink: params.taskLink };
+  }
+  const client = params.client ?? createMissionControlClient();
+  let taskId = params.taskId ?? extractTaskIdFromText(raw);
+  let taskLink = params.taskLink;
+
+  if (!taskId) {
+    try {
+      const created = await client.createTask({
+        title: raw.slice(0, 120),
+        type: /\bdeploy|infra|ops\b/i.test(raw) ? "CHORE" : "STORY",
+        ownerAgent: chooseDefaultOwnerAgent(raw),
+        nextAction: "Execute one bounded checkpoint and report proof.",
+        status: "backlog",
+      });
+      taskId = created.taskId;
+      taskLink = created.link;
+      const checkpoint = `CHECKPOINT PLAN\n1) Task created: ${taskLink}\n2) Acquire ACTIVE lease for executor agent. Proof: lease ACTIVE for ${params.agentId}.\n3) Execute exactly one bounded step and report evidence linked to task ${taskId}.`;
+      return {
+        proceed: false,
+        createdTask: true,
+        text: ensureMcLinkOnPacket(checkpoint, taskLink),
+        taskId,
+        taskLink,
+      };
+    } catch (err) {
+      return {
+        proceed: false,
+        text: buildBlockedPacket(String(err)),
+        blockedReason: String(err),
+      };
+    }
+  }
+
+  if (!taskLink) {
+    const appBase = resolveMcBaseUrl();
+    if (!appBase) {
+      return {
+        proceed: false,
+        text: buildBlockedPacket(
+          "Missing required vars: MC_API_URL (or MC_APP_BASE_URL for link formatting)",
+        ),
+        taskId,
+        blockedReason: "Missing required vars: MC_API_URL (or MC_APP_BASE_URL for link formatting)",
+      };
+    }
+    taskLink = `${appBase}/tasks/${taskId}`;
+  }
+
+  try {
+    const lease = await client.ensureLeaseActive({ taskId, agentId: params.agentId });
+    if (!lease.active) {
+      return {
+        proceed: false,
+        text: buildBlockedPacket("MC lease is not ACTIVE"),
+        taskId,
+        taskLink,
+        blockedReason: "MC lease is not ACTIVE",
+      };
+    }
+  } catch (err) {
+    return {
+      proceed: false,
+      text: buildBlockedPacket(String(err)),
+      taskId,
+      taskLink,
+      blockedReason: String(err),
+    };
+  }
+
+  return {
+    proceed: true,
+    text: ensureMcLinkOnPacket(raw, taskLink),
+    taskId,
+    taskLink,
+  };
+}
+
+export function buildGecCheckpointPlan(originalText: string): string {
+  const objective = (originalText || "Execution update").replace(/\s+/g, " ").trim().slice(0, 220);
+  return `CHECKPOINT PLAN\n1) Capture objective + scope from request. Proof: objective statement logged.\n2) Execute exactly one bounded step toward objective. Proof: artifact path/command output.\n3) Return with one legal end state (Closure Packet / Blocked Packet / Checkpoint Plan) and evidence. Proof: end-state packet posted.\n\nObjective: ${objective}`;
+}
+
+export function enforceGlobalExecutionConstitution(text: string): GecEnforcementResult {
+  const raw = (text ?? "").trim();
+  if (!raw) {
+    return { blocked: false, rewrittenText: raw, reason: null };
+  }
+  const hasLegalState = hasGecLegalEndState(raw);
+  const promiseViolation = GEC_PROMISE_RE.test(raw);
+  const hedgingViolation = GEC_HEDGING_RE.test(raw) && !isDecisionRequestText(raw);
+  if (!hasLegalState && (promiseViolation || hedgingViolation)) {
+    return {
+      blocked: true,
+      rewrittenText: buildGecCheckpointPlan(raw),
+      reason: promiseViolation
+        ? "forbidden_future_tense_execution_promise"
+        : "forbidden_hedging_without_decision",
+    };
+  }
+  return { blocked: false, rewrittenText: raw, reason: null };
+}
+
+export function evaluateExecutionWatchdog(params: {
+  text: string;
+  state: ExecutionWatchdogState;
+  nowMs?: number;
+  windowMs?: number;
+}): ExecutionWatchdogResult {
+  const nowMs = params.nowMs ?? Date.now();
+  const windowMs = params.windowMs ?? resolveExecutionWindowMs();
+  const raw = (params.text ?? "").trim();
+  let state = params.state;
+
+  if (!raw) {
+    return { state, timedOut: false, rewrittenText: raw, reason: null };
+  }
+  if (hasProofSignal(raw)) {
+    return {
+      state: {
+        active: false,
+        startedAtMs: state.startedAtMs,
+        lastProofAtMs: nowMs,
+      },
+      timedOut: false,
+      rewrittenText: raw,
+      reason: null,
+    };
+  }
+
+  if (!state.active && hasExecutionIntent(raw)) {
+    state = {
+      active: true,
+      startedAtMs: nowMs,
+      lastProofAtMs: nowMs,
+    };
+    return { state, timedOut: false, rewrittenText: raw, reason: null };
+  }
+
+  if (state.active && nowMs - state.lastProofAtMs > windowMs) {
+    return {
+      state: {
+        ...state,
+        active: false,
+      },
+      timedOut: true,
+      rewrittenText: buildGecCheckpointPlan(raw),
+      reason: "execution_window_exceeded",
+    };
+  }
+
+  return { state, timedOut: false, rewrittenText: raw, reason: null };
+}
+
 type DeliverOutboundPayloadsCoreParams = {
   cfg: OpenClawConfig;
   channel: Exclude<OutboundChannel, "none">;
@@ -447,12 +831,73 @@ async function deliverOutboundPayloadsCore(
   });
   const hookRunner = getGlobalHookRunner();
   const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.sessionKey;
+  let watchdogState: ExecutionWatchdogState = {
+    active: false,
+    startedAtMs: Date.now(),
+    lastProofAtMs: Date.now(),
+  };
+  let boundTaskId: string | undefined;
+  let boundTaskLink: string | undefined;
   for (const payload of normalizedPayloads) {
     const payloadSummary: NormalizedOutboundPayload = {
       text: payload.text ?? "",
       mediaUrls: payload.mediaUrls ?? (payload.mediaUrl ? [payload.mediaUrl] : []),
       channelData: payload.channelData,
     };
+    const mcBinding = await ensureMissionControlBinding({
+      text: payloadSummary.text,
+      taskId: boundTaskId,
+      taskLink: boundTaskLink,
+      agentId: params.agentId ?? "cb-router",
+    });
+    if (mcBinding.taskId) {
+      boundTaskId = mcBinding.taskId;
+    }
+    if (mcBinding.taskLink) {
+      boundTaskLink = mcBinding.taskLink;
+    }
+    payloadSummary.text = mcBinding.text;
+
+    if (mcBinding.blockedReason) {
+      if (sessionKeyForInternalHooks) {
+        void triggerInternalHook(
+          createInternalHookEvent("message", "policy_violation", sessionKeyForInternalHooks, {
+            policy: "global_execution_constitution",
+            gecVersion: GEC_VERSION,
+            reason: "MISSION_CONTROL_BINDING_FAILED",
+            channelId: channel,
+            accountId: accountId ?? undefined,
+            conversationId: to,
+            originalContent: payload.text ?? "",
+            rewrittenContent: mcBinding.text,
+          }),
+        ).catch(() => {});
+      }
+    }
+
+    const gec = enforceGlobalExecutionConstitution(payloadSummary.text);
+    if (gec.blocked) {
+      payloadSummary.text = ensureMcLinkOnPacket(gec.rewrittenText, boundTaskLink);
+      if (sessionKeyForInternalHooks) {
+        void triggerInternalHook(
+          createInternalHookEvent("message", "policy_violation", sessionKeyForInternalHooks, {
+            policy: "global_execution_constitution",
+            gecVersion: GEC_VERSION,
+            reason: gec.reason,
+            channelId: channel,
+            accountId: accountId ?? undefined,
+            conversationId: to,
+            originalContent: payload.text ?? "",
+            rewrittenContent: gec.rewrittenText,
+          }),
+        ).catch(() => {});
+      } else if (shouldEmitDedup(`policy_violation:${channel}:${gec.reason}`, 5 * 60_000)) {
+        console.warn(
+          `[POLICY_VIOLATION] global_execution_constitution gec_version=${GEC_VERSION} channel=${channel} reason=${gec.reason}`,
+        );
+      }
+    }
+    let abortAfterThisPayload = !mcBinding.proceed;
     const emitMessageSent = (params: {
       success: boolean;
       content: string;
@@ -496,7 +941,12 @@ async function deliverOutboundPayloadsCore(
       throwIfAborted(abortSignal);
 
       // Run message_sending plugin hook (may modify content or cancel)
-      let effectivePayload = payload;
+      let effectivePayload: ReplyPayload = gec.blocked
+        ? {
+            ...payload,
+            text: payloadSummary.text,
+          }
+        : payload;
       if (hookRunner?.hasHooks("message_sending")) {
         try {
           const sendingResult = await hookRunner.runMessageSending(
@@ -522,6 +972,38 @@ async function deliverOutboundPayloadsCore(
         }
       }
 
+      const watchdog = evaluateExecutionWatchdog({
+        text: payloadSummary.text,
+        state: watchdogState,
+      });
+      watchdogState = watchdog.state;
+      if (watchdog.timedOut) {
+        abortAfterThisPayload = true;
+        payloadSummary.text = ensureMcLinkOnPacket(watchdog.rewrittenText, boundTaskLink);
+        effectivePayload = {
+          ...effectivePayload,
+          text: payloadSummary.text,
+        };
+        if (sessionKeyForInternalHooks) {
+          void triggerInternalHook(
+            createInternalHookEvent("message", "policy_violation", sessionKeyForInternalHooks, {
+              policy: "global_execution_constitution",
+              gecVersion: GEC_VERSION,
+              reason: "EXECUTION_WINDOW_EXCEEDED",
+              channelId: channel,
+              accountId: accountId ?? undefined,
+              conversationId: to,
+              originalContent: payload.text ?? "",
+              rewrittenContent: watchdog.rewrittenText,
+            }),
+          ).catch(() => {});
+        } else if (shouldEmitDedup(`execution_window_exceeded:${channel}`, 5 * 60_000)) {
+          console.warn(
+            `[POLICY_VIOLATION] EXECUTION_WINDOW_EXCEEDED gec_version=${GEC_VERSION} channel=${channel}`,
+          );
+        }
+      }
+
       params.onPayload?.(payloadSummary);
       const sendOverrides = {
         replyToId: effectivePayload.replyToId ?? params.replyToId ?? undefined,
@@ -535,6 +1017,9 @@ async function deliverOutboundPayloadsCore(
           content: payloadSummary.text,
           messageId: delivery.messageId,
         });
+        if (abortAfterThisPayload) {
+          return results;
+        }
         continue;
       }
       if (payloadSummary.mediaUrls.length === 0) {
@@ -550,6 +1035,9 @@ async function deliverOutboundPayloadsCore(
           content: payloadSummary.text,
           messageId,
         });
+        if (abortAfterThisPayload) {
+          return results;
+        }
         continue;
       }
 
@@ -574,6 +1062,9 @@ async function deliverOutboundPayloadsCore(
         content: payloadSummary.text,
         messageId: lastMessageId,
       });
+      if (abortAfterThisPayload) {
+        return results;
+      }
     } catch (err) {
       emitMessageSent({
         success: false,
