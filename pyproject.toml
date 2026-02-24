@@ -1,8 +1,6 @@
 [project]
 requires-python = ">=3.10"
-dependencies = [
-  "pyyaml",
-]
+dependencies = ["pyyaml"]
 
 [tool.ruff]
 target-version = "py310"
