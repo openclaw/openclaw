@@ -345,7 +345,10 @@ class NodeRuntime(context: Context) {
   val manualPort: StateFlow<Int> = prefs.manualPort
   val manualTls: StateFlow<Boolean> = prefs.manualTls
   val gatewayToken: StateFlow<String> = prefs.gatewayToken
+  val onboardingCompleted: StateFlow<Boolean> = prefs.onboardingCompleted
   fun setGatewayToken(value: String) = prefs.setGatewayToken(value)
+  fun setGatewayPassword(value: String) = prefs.setGatewayPassword(value)
+  fun setOnboardingCompleted(value: Boolean) = prefs.setOnboardingCompleted(value)
   val lastDiscoveredStableId: StateFlow<String> = prefs.lastDiscoveredStableId
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
 
