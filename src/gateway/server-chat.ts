@@ -291,7 +291,13 @@ export function createAgentEventHandler({
     // sees the complete output for watchdog sign-off detection.
     // Suppression of silent replies happens at the final emission layer.
     chatRunState.buffers.set(clientRunId, text);
-    if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
+    // Suppress full and partial silent tokens (e.g. "NO" before "_REPLY" arrives)
+    if (
+      isSilentReplyText(text, SILENT_REPLY_TOKEN) ||
+      (text.trim().length >= 2 &&
+        SILENT_REPLY_TOKEN.startsWith(text.trim().toUpperCase()) &&
+        /^[A-Z_]+$/i.test(text.trim()))
+    ) {
       return;
     }
     if (shouldHideHeartbeatChatOutput(clientRunId, sourceRunId)) {
@@ -335,7 +341,13 @@ export function createAgentEventHandler({
     });
     const text = normalizedHeartbeatText.text.trim();
     const shouldSuppressSilent =
-      normalizedHeartbeatText.suppress || isSilentReplyText(text, SILENT_REPLY_TOKEN);
+      normalizedHeartbeatText.suppress ||
+      isSilentReplyText(text, SILENT_REPLY_TOKEN) ||
+      // Suppress partial silent tokens: if text is a prefix of NO_REPLY and has no spaces/punctuation,
+      // it's almost certainly a mid-stream truncation, not a real message.
+      (text.length >= 2 &&
+        SILENT_REPLY_TOKEN.startsWith(text.toUpperCase()) &&
+        /^[A-Z_]+$/i.test(text));
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
     if (jobState === "done") {
