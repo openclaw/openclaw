@@ -74,8 +74,8 @@ describe("chunkDiscordText", () => {
   });
 
   it("converts reasoning italics to blockquotes across chunks", () => {
-    const body = Array.from({ length: 25 }, (_, i) => `${i + 1}. line`).join("\n");
-    const text = `Reasoning:\n_${body}_`;
+    const body = Array.from({ length: 25 }, (_, i) => `_${i + 1}. line_`).join("\n");
+    const text = `Reasoning:\n${body}`;
 
     const chunks = chunkDiscordText(text, { maxLines: 10, maxChars: 2000 });
     expect(chunks.length).toBeGreaterThan(1);
@@ -97,8 +97,8 @@ describe("chunkDiscordText", () => {
 
   it("converts reasoning italics to blockquotes when chunks split by char limit", () => {
     const longLine = "This is a very long reasoning line that forces char splits.";
-    const body = Array.from({ length: 5 }, () => longLine).join("\n");
-    const text = `Reasoning:\n_${body}_`;
+    const body = Array.from({ length: 5 }, () => `_${longLine}_`).join("\n");
+    const text = `Reasoning:\n${body}`;
 
     const chunks = chunkDiscordText(text, { maxChars: 80, maxLines: 50 });
     expect(chunks.length).toBeGreaterThan(1);
@@ -111,20 +111,20 @@ describe("chunkDiscordText", () => {
 
   it("preserves indentation in blockquoted reasoning", () => {
     const body = [
-      "1. line",
-      "2. line",
-      "3. line",
-      "4. line",
-      "5. line",
-      "6. line",
-      "7. line",
-      "8. line",
-      "9. line",
-      "10. line",
-      "  11. indented line",
-      "12. line",
+      "_1. line_",
+      "_2. line_",
+      "_3. line_",
+      "_4. line_",
+      "_5. line_",
+      "_6. line_",
+      "_7. line_",
+      "_8. line_",
+      "_9. line_",
+      "_10. line_",
+      "_  11. indented line_",
+      "_12. line_",
     ].join("\n");
-    const text = `Reasoning:\n_${body}_`;
+    const text = `Reasoning:\n${body}`;
 
     const chunks = chunkDiscordText(text, { maxLines: 10, maxChars: 2000 });
     expect(chunks.length).toBeGreaterThan(1);
