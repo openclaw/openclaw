@@ -1136,6 +1136,38 @@ describe("security audit", () => {
     expect(finding?.detail).toContain("tools.exec.applyPatch.workspaceOnly=false");
   });
 
+  it("flags non-loopback Control UI without allowed origins", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        auth: { mode: "token", token: "very-long-browser-token-0123456789" },
+      },
+    };
+
+    const res = await audit(cfg);
+    expectFinding(res, "gateway.control_ui.allowed_origins_required", "critical");
+  });
+
+  it("flags dangerous host-header origin fallback and suppresses missing allowed-origins finding", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        auth: { mode: "token", token: "very-long-browser-token-0123456789" },
+        controlUi: {
+          dangerouslyAllowHostHeaderOriginFallback: true,
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    expectFinding(res, "gateway.control_ui.host_header_origin_fallback", "critical");
+    expectNoFinding(res, "gateway.control_ui.allowed_origins_required");
+    const flags = res.findings.find((f) => f.checkId === "config.insecure_or_dangerous_flags");
+    expect(flags?.detail ?? "").toContain(
+      "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true",
+    );
+  });
+
   it("scores X-Real-IP fallback risk by gateway exposure", async () => {
     const trustedProxyCfg = (trustedProxies: string[]): OpenClawConfig => ({
       gateway: {

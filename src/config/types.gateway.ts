@@ -71,6 +71,11 @@ export type GatewayControlUiConfig = {
   /** Allowed browser origins for Control UI/WebChat websocket connections. */
   allowedOrigins?: string[];
   /**
+   * DANGEROUS: Keep Host-header origin fallback behavior.
+   * Supported long-term for deployments that intentionally rely on this policy.
+   */
+  dangerouslyAllowHostHeaderOriginFallback?: boolean;
+  /**
    * Insecure-auth toggle.
    * Control UI still requires secure context + device identity unless
    * dangerouslyDisableDeviceAuth is enabled.
