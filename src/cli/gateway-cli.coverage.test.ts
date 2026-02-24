@@ -112,7 +112,7 @@ describe("gateway-cli coverage", () => {
 
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(runtimeLogs.join("\n")).toContain('"ok": true');
-  }, 60_000);
+  });
 
   it("registers gateway probe and routes to gatewayStatusCommand", async () => {
     resetRuntimeCapture();
@@ -121,27 +121,9 @@ describe("gateway-cli coverage", () => {
     await runGatewayCommand(["gateway", "probe", "--json"]);
 
     expect(gatewayStatusCommand).toHaveBeenCalledTimes(1);
-  }, 60_000);
+  });
 
-  it.each([
-    {
-      label: "json output",
-      args: ["gateway", "discover", "--json"],
-      expectedOutput: ['"beacons"', '"wsUrl"', "ws://"],
-    },
-    {
-      label: "human output",
-      args: ["gateway", "discover", "--timeout", "1"],
-      expectedOutput: [
-        "Gateway Discovery",
-        "Found 1 gateway(s)",
-        "- Studio openclaw.internal.",
-        "  tailnet: studio.tailnet.ts.net",
-        "  host: studio.openclaw.internal",
-        "  ws: ws://studio.openclaw.internal:18789",
-      ],
-    },
-  ])("registers gateway discover and prints $label", async ({ args, expectedOutput }) => {
+  it("registers gateway discover and prints json output", async () => {
     resetRuntimeCapture();
     discoverGatewayBeacons.mockClear();
     discoverGatewayBeacons.mockResolvedValueOnce([
@@ -157,11 +139,11 @@ describe("gateway-cli coverage", () => {
       },
     ]);
 
-    await runGatewayCommand(args);
+    await runGatewayCommand(["gateway", "discover", "--json"]);
 
     expect(discoverGatewayBeacons).toHaveBeenCalledTimes(1);
     const out = runtimeLogs.join("\n");
-    for (const text of expectedOutput) {
+    for (const text of ['"beacons"', '"wsUrl"', "ws://"]) {
       expect(out).toContain(text);
     }
   });

@@ -9,6 +9,8 @@ export {
   applyCloudflareAiGatewayProviderConfig,
   applyHuggingfaceConfig,
   applyHuggingfaceProviderConfig,
+  applyKilocodeConfig,
+  applyKilocodeProviderConfig,
   applyQianfanConfig,
   applyQianfanProviderConfig,
   applyKimiCodeConfig,
@@ -37,6 +39,7 @@ export {
   applyXiaomiProviderConfig,
   applyZaiConfig,
   applyZaiProviderConfig,
+  KILOCODE_BASE_URL,
 } from "./onboard-auth.config-core.js";
 export {
   applyMinimaxApiConfig,
@@ -55,12 +58,14 @@ export {
 } from "./onboard-auth.config-opencode.js";
 export {
   CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF,
+  KILOCODE_DEFAULT_MODEL_REF,
   LITELLM_DEFAULT_MODEL_REF,
   OPENROUTER_DEFAULT_MODEL_REF,
   setAnthropicApiKey,
   setCloudflareAiGatewayConfig,
   setQianfanApiKey,
   setGeminiApiKey,
+  setKilocodeApiKey,
   setLitellmApiKey,
   setKimiCodingApiKey,
   setMinimaxApiKey,
@@ -86,12 +91,14 @@ export {
   XAI_DEFAULT_MODEL_REF,
 } from "./onboard-auth.credentials.js";
 export {
+  buildKilocodeModelDefinition,
   buildMinimaxApiModelDefinition,
   buildMinimaxModelDefinition,
   buildMistralModelDefinition,
   buildMoonshotModelDefinition,
   buildZaiModelDefinition,
   DEFAULT_MINIMAX_BASE_URL,
+  KILOCODE_DEFAULT_MODEL_ID,
   MOONSHOT_CN_BASE_URL,
   QIANFAN_BASE_URL,
   QIANFAN_DEFAULT_MODEL_ID,

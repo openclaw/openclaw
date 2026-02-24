@@ -250,25 +250,28 @@ describe("Agent-specific sandbox config", () => {
     expect(context?.enabled).toBe(true);
   });
 
-  it("should allow agent-specific docker setupCommand overrides", async () => {
-    const cfg = createWorkSetupCommandConfig("agent");
+  it("should resolve setupCommand overrides based on sandbox scope", async () => {
+    for (const scenario of [
+      {
+        scope: "agent" as const,
+        expectedSetup: "echo work",
+        expectedContainerFragment: "agent-work",
+      },
+      {
+        scope: "shared" as const,
+        expectedSetup: "echo global",
+        expectedContainerFragment: "shared",
+      },
+    ]) {
+      const cfg = createWorkSetupCommandConfig(scenario.scope);
+      const context = await resolveContext(cfg, "agent:work:main", "/tmp/test-work");
 
-    const context = await resolveContext(cfg, "agent:work:main", "/tmp/test-work");
-
-    expect(context).toBeDefined();
-    expect(context?.docker.setupCommand).toBe("echo work");
-    expectDockerSetupCommand("echo work");
-  });
-
-  it("should ignore agent-specific docker overrides when scope is shared", async () => {
-    const cfg = createWorkSetupCommandConfig("shared");
-
-    const context = await resolveContext(cfg, "agent:work:main", "/tmp/test-work");
-
-    expect(context).toBeDefined();
-    expect(context?.docker.setupCommand).toBe("echo global");
-    expect(context?.containerName).toContain("shared");
-    expectDockerSetupCommand("echo global");
+      expect(context).toBeDefined();
+      expect(context?.docker.setupCommand).toBe(scenario.expectedSetup);
+      expect(context?.containerName).toContain(scenario.expectedContainerFragment);
+      expectDockerSetupCommand(scenario.expectedSetup);
+      spawnCalls.length = 0;
+    }
   });
 
   it("should allow agent-specific docker settings beyond setupCommand", async () => {
@@ -308,61 +311,69 @@ describe("Agent-specific sandbox config", () => {
     expect(context?.docker.network).toBe("bridge");
   });
 
-  it("should override with agent-specific sandbox mode 'off'", async () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-            scope: "agent",
-          },
-        },
-        list: [
-          {
-            id: "main",
-            workspace: "~/openclaw",
-            sandbox: {
-              mode: "off",
+  it("should honor agent-specific sandbox mode overrides", async () => {
+    for (const scenario of [
+      {
+        cfg: {
+          agents: {
+            defaults: {
+              sandbox: {
+                mode: "all",
+                scope: "agent",
+              },
             },
+            list: [
+              {
+                id: "main",
+                workspace: "~/openclaw",
+                sandbox: {
+                  mode: "off",
+                },
+              },
+            ],
           },
-        ],
-      },
-    };
-
-    const context = await resolveContext(cfg, "agent:main:main", "/tmp/test");
-
-    expect(context).toBeNull();
-  });
-
-  it("should use agent-specific sandbox mode 'all'", async () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "off",
-          },
+        } satisfies OpenClawConfig,
+        sessionKey: "agent:main:main",
+        workspaceDir: "/tmp/test",
+        assert: (context: Awaited<ReturnType<typeof resolveContext>>) => {
+          expect(context).toBeNull();
         },
-        list: [
-          {
-            id: "family",
-            workspace: "~/openclaw-family",
-            sandbox: {
-              mode: "all",
-              scope: "agent",
-            },
-          },
-        ],
       },
-    };
-
-    const context = await resolveContext(
-      cfg,
-      "agent:family:whatsapp:group:123",
-      "/tmp/test-family",
-    );
-
-    expect(context).toBeDefined();
-    expect(context?.enabled).toBe(true);
+      {
+        cfg: {
+          agents: {
+            defaults: {
+              sandbox: {
+                mode: "off",
+              },
+            },
+            list: [
+              {
+                id: "family",
+                workspace: "~/openclaw-family",
+                sandbox: {
+                  mode: "all",
+                  scope: "agent",
+                },
+              },
+            ],
+          },
+        } satisfies OpenClawConfig,
+        sessionKey: "agent:family:whatsapp:group:123",
+        workspaceDir: "/tmp/test-family",
+        assert: (context: Awaited<ReturnType<typeof resolveContext>>) => {
+          expect(context).toBeDefined();
+          expect(context?.enabled).toBe(true);
+        },
+      },
+    ]) {
+      const context = await resolveContext(
+        scenario.cfg,
+        scenario.sessionKey,
+        scenario.workspaceDir,
+      );
+      scenario.assert(context);
+    }
   });
 
   it("should use agent-specific scope", async () => {
@@ -393,41 +404,38 @@ describe("Agent-specific sandbox config", () => {
     expect(context?.containerName).toContain("agent-work");
   });
 
-  it("includes session_status in default sandbox allowlist", async () => {
-    const cfg = createDefaultsSandboxConfig();
-
-    const sandbox = resolveSandboxConfigForAgent(cfg, "main");
-    expect(sandbox.tools.allow).toContain("session_status");
-  });
-
-  it("includes image in default sandbox allowlist", async () => {
-    const cfg = createDefaultsSandboxConfig();
-
-    const sandbox = resolveSandboxConfigForAgent(cfg, "main");
-    expect(sandbox.tools.allow).toContain("image");
-  });
-
-  it("injects image into explicit sandbox allowlists", async () => {
-    const cfg: OpenClawConfig = {
-      tools: {
-        sandbox: {
+  it("enforces required allowlist tools in default and explicit sandbox configs", async () => {
+    for (const scenario of [
+      {
+        cfg: createDefaultsSandboxConfig(),
+        expected: ["session_status", "image"],
+      },
+      {
+        cfg: {
           tools: {
-            allow: ["bash", "read"],
-            deny: [],
+            sandbox: {
+              tools: {
+                allow: ["bash", "read"],
+                deny: [],
+              },
+            },
           },
-        },
-      },
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-            scope: "agent",
+          agents: {
+            defaults: {
+              sandbox: {
+                mode: "all",
+                scope: "agent",
+              },
+            },
           },
-        },
+        } satisfies OpenClawConfig,
+        expected: ["image"],
       },
-    };
-
-    const sandbox = resolveSandboxConfigForAgent(cfg, "main");
-    expect(sandbox.tools.allow).toContain("image");
+    ]) {
+      const sandbox = resolveSandboxConfigForAgent(scenario.cfg, "main");
+      for (const tool of scenario.expected) {
+        expect(sandbox.tools.allow).toContain(tool);
+      }
+    }
   });
 });

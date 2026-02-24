@@ -71,6 +71,109 @@ All session state is **owned by the gateway** (the “master” OpenClaw). UI cl
 - Session entries include `origin` metadata (label + routing hints) so UIs can explain where a session came from.
 - OpenClaw does **not** read legacy Pi/Tau session folders.
 
+## Maintenance
+
+OpenClaw applies session-store maintenance to keep `sessions.json` and transcript artifacts bounded over time.
+
+### Defaults
+
+- `session.maintenance.mode`: `warn`
+- `session.maintenance.pruneAfter`: `30d`
+- `session.maintenance.maxEntries`: `500`
+- `session.maintenance.rotateBytes`: `10mb`
+- `session.maintenance.resetArchiveRetention`: defaults to `pruneAfter` (`30d`)
+- `session.maintenance.maxDiskBytes`: unset (disabled)
+- `session.maintenance.highWaterBytes`: defaults to `80%` of `maxDiskBytes` when budgeting is enabled
+
+### How it works
+
+Maintenance runs during session-store writes, and you can trigger it on demand with `openclaw sessions cleanup`.
+
+- `mode: "warn"`: reports what would be evicted but does not mutate entries/transcripts.
+- `mode: "enforce"`: applies cleanup in this order:
+  1. prune stale entries older than `pruneAfter`
+  2. cap entry count to `maxEntries` (oldest first)
+  3. archive transcript files for removed entries that are no longer referenced
+  4. purge old `*.deleted.<timestamp>` and `*.reset.<timestamp>` archives by retention policy
+  5. rotate `sessions.json` when it exceeds `rotateBytes`
+  6. if `maxDiskBytes` is set, enforce disk budget toward `highWaterBytes` (oldest artifacts first, then oldest sessions)
+
+### Performance caveat for large stores
+
+Large session stores are common in high-volume setups. Maintenance work is write-path work, so very large stores can increase write latency.
+
+What increases cost most:
+
+- very high `session.maintenance.maxEntries` values
+- long `pruneAfter` windows that keep stale entries around
+- many transcript/archive artifacts in `~/.openclaw/agents/<agentId>/sessions/`
+- enabling disk budgets (`maxDiskBytes`) without reasonable pruning/cap limits
+
+What to do:
+
+- use `mode: "enforce"` in production so growth is bounded automatically
+- set both time and count limits (`pruneAfter` + `maxEntries`), not just one
+- set `maxDiskBytes` + `highWaterBytes` for hard upper bounds in large deployments
+- keep `highWaterBytes` meaningfully below `maxDiskBytes` (default is 80%)
+- run `openclaw sessions cleanup --dry-run --json` after config changes to verify projected impact before enforcing
+- for frequent active sessions, pass `--active-key` when running manual cleanup
+
+### Customize examples
+
+Use a conservative enforce policy:
+
+```json5
+{
+  session: {
+    maintenance: {
+      mode: "enforce",
+      pruneAfter: "45d",
+      maxEntries: 800,
+      rotateBytes: "20mb",
+      resetArchiveRetention: "14d",
+    },
+  },
+}
+```
+
+Enable a hard disk budget for the sessions directory:
+
+```json5
+{
+  session: {
+    maintenance: {
+      mode: "enforce",
+      maxDiskBytes: "1gb",
+      highWaterBytes: "800mb",
+    },
+  },
+}
+```
+
+Tune for larger installs (example):
+
+```json5
+{
+  session: {
+    maintenance: {
+      mode: "enforce",
+      pruneAfter: "14d",
+      maxEntries: 2000,
+      rotateBytes: "25mb",
+      maxDiskBytes: "2gb",
+      highWaterBytes: "1.6gb",
+    },
+  },
+}
+```
+
+Preview or force maintenance from CLI:
+
+```bash
+openclaw sessions cleanup --dry-run
+openclaw sessions cleanup --enforce
+```
+
 ## Session pruning
 
 OpenClaw trims **old tool results** from the in-memory context right before LLM calls by default.

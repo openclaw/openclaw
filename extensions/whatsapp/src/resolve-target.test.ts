@@ -71,8 +71,10 @@ vi.mock("openclaw/plugin-sdk", () => ({
   readStringParam: vi.fn(),
   resolveDefaultWhatsAppAccountId: vi.fn(),
   resolveWhatsAppAccount: vi.fn(),
+  resolveWhatsAppGroupIntroHint: vi.fn(),
   resolveWhatsAppGroupRequireMention: vi.fn(),
   resolveWhatsAppGroupToolPolicy: vi.fn(),
+  resolveWhatsAppMentionStripPatterns: vi.fn(() => []),
   applyAccountNameToChannelSection: vi.fn(),
 }));
 
