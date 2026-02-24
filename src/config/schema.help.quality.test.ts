@@ -101,6 +101,7 @@ const TARGET_KEYS = [
   "models.providers.*.auth",
   "models.providers.*.authHeader",
   "gateway.reload.mode",
+  "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback",
   "gateway.controlUi.allowInsecureAuth",
   "gateway.controlUi.dangerouslyDisableDeviceAuth",
   "cron",
