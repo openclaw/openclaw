@@ -1068,6 +1068,7 @@ describe("followup queue collect routing", () => {
         prompt: "first",
         originatingChannel: "discord",
         originatingTo: "channel:C1",
+        originatingAccountId: "work",
         originatingThreadId: "1739142736.000100",
       }),
       settings,
@@ -1078,6 +1079,7 @@ describe("followup queue collect routing", () => {
         prompt: "second",
         originatingChannel: "discord",
         originatingTo: "channel:C1",
+        originatingAccountId: "work",
         originatingThreadId: "1739142736.000100",
       }),
       settings,
@@ -1088,6 +1090,7 @@ describe("followup queue collect routing", () => {
 
     expect(calls[0]?.originatingChannel).toBe("discord");
     expect(calls[0]?.originatingTo).toBe("channel:C1");
+    expect(calls[0]?.originatingAccountId).toBe("work");
     expect(calls[0]?.originatingThreadId).toBe("1739142736.000100");
     expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 1 message due to cap.");
   });

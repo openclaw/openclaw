@@ -238,6 +238,36 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
+  it("does not suppress replies for same target when account differs", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      messagingToolSentTexts: ["different message"],
+      messagingToolSentTargets: [
+        { tool: "telegram", provider: "telegram", to: "268300329", accountId: "work" },
+      ],
+      meta: {},
+    });
+
+    const runner = createMessagingDedupeRunner(onBlockReply);
+
+    await runner({
+      ...baseQueuedRun("heartbeat"),
+      originatingChannel: "telegram",
+      originatingTo: "268300329",
+      originatingAccountId: "personal",
+    } as FollowupRun);
+
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "268300329",
+        accountId: "personal",
+      }),
+    );
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
   it("drops media URL from payload when messaging tool already sent it", async () => {
     const onBlockReply = vi.fn(async () => {});
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
@@ -333,6 +363,34 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     } as FollowupRun);
 
     expect(routeReplyMock).toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("routes followups with originating account/thread metadata", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      meta: {},
+    });
+
+    const runner = createMessagingDedupeRunner(onBlockReply);
+
+    await runner({
+      ...baseQueuedRun("webchat"),
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      originatingAccountId: "work",
+      originatingThreadId: "1739142736.000100",
+    } as FollowupRun);
+
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to: "channel:C1",
+        accountId: "work",
+        threadId: "1739142736.000100",
+      }),
+    );
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 });
