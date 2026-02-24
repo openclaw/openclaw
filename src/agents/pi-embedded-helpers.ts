@@ -46,8 +46,10 @@ export {
 export { isGoogleModelApi, sanitizeGoogleTurnOrdering } from "./pi-embedded-helpers/google.js";
 
 export {
+  addEmptyThinkingToToolCallMessages,
   downgradeOpenAIFunctionCallReasoningPairs,
   downgradeOpenAIReasoningBlocks,
+  hasHistoryToolCallWithoutThinking,
 } from "./pi-embedded-helpers/openai.js";
 export {
   isEmptyAssistantMessageContent,
