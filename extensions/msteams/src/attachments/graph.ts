@@ -313,6 +313,35 @@ export async function downloadMSTeamsGraphMedia(params: {
           } catch {
             // Ignore SharePoint download failures.
           }
+          const encodedUrl = Buffer.from(shareUrl).toString("base64url");
+          const sharesUrl = `${GRAPH_ROOT}/shares/u!${encodedUrl}/driveItem/content`;
+
+          const media = await downloadAndStoreMSTeamsRemoteMedia({
+            url: sharesUrl,
+            filePathHint: name,
+            maxBytes: params.maxBytes,
+            contentTypeHint: "application/octet-stream",
+            preserveFilenames: params.preserveFilenames,
+            fetchImpl: async (input, init) => {
+              const requestUrl = resolveRequestUrl(input);
+              const headers = new Headers(init?.headers);
+              headers.set("Authorization", `Bearer ${accessToken}`);
+              return await safeFetch({
+                url: requestUrl,
+                allowHosts,
+                authorizationAllowHosts: params.authAllowHosts,
+                fetchFn,
+                requestInit: {
+                  ...init,
+                  headers,
+                },
+              });
+            },
+          });
+          sharePointMedia.push(media);
+          downloadedReferenceUrls.add(shareUrl);
+        } catch {
+          // Ignore SharePoint download failures.
         }
       }
     } finally {
