@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import type { ScopedTokenConfig } from "../config/types.gateway.js";
 
 export type ExplicitGatewayAuth = {
   token?: string;
@@ -159,4 +160,14 @@ export function resolveGatewayCredentialsFromConfig(params: {
         : firstDefined([remotePassword, envPassword, localPassword]);
 
   return { token, password };
+}
+
+/**
+ * Resolve scoped token configuration from the gateway auth config.
+ * Returns the scoped token config block if present, or undefined.
+ */
+export function resolveGatewayCredentialsFromScopedToken(params: {
+  cfg: OpenClawConfig;
+}): ScopedTokenConfig | undefined {
+  return params.cfg.gateway?.auth?.scopedTokens;
 }

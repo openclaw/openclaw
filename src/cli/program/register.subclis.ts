@@ -270,6 +270,15 @@ const entries: SubCliEntry[] = [
     },
   },
   {
+    name: "token",
+    description: "Create, manage, and inspect scoped gateway tokens",
+    hasSubcommands: true,
+    register: async (program) => {
+      const mod = await import("../token-cli.js");
+      mod.registerTokenCli(program);
+    },
+  },
+  {
     name: "update",
     description: "Update OpenClaw and inspect update channel status",
     hasSubcommands: true,
