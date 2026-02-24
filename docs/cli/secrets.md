@@ -82,8 +82,10 @@ openclaw secrets migrate --json | jq '{mode, changed, counters, changedFiles}'
 openclaw secrets migrate --write --json > /tmp/openclaw-secrets-migrate.json
 ```
 
-### Force a reload after updating env vars
+### Force a reload after updating gateway env visibility
 
 ```bash
-OPENAI_API_KEY="..." openclaw secrets reload
+# Ensure OPENAI_API_KEY is visible to the running gateway process first,
+# then re-resolve refs:
+openclaw secrets reload
 ```
