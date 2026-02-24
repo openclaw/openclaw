@@ -28,7 +28,7 @@ export type RestartSentinelStats = {
 };
 
 export type RestartSentinelPayload = {
-  kind: "config-apply" | "config-patch" | "update" | "restart";
+  kind: "config-apply" | "config-patch" | "update" | "restart" | "skills-install" | "skills-change";
   status: "ok" | "error" | "skipped";
   ts: number;
   sessionKey?: string;

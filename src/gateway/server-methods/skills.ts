@@ -9,7 +9,13 @@ import { loadWorkspaceSkillEntries, type SkillEntry } from "../../agents/skills.
 import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
+import {
+  formatDoctorNonInteractiveHint,
+  writeRestartSentinel,
+} from "../../infra/restart-sentinel.js";
+import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import {
@@ -22,6 +28,8 @@ import {
   validateSkillsUpdateParams,
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
+
+const log = createSubsystemLogger("gateway/skills");
 
 function collectSkillBins(entries: SkillEntry[]): string[] {
   const bins = new Set<string>();
@@ -137,6 +145,22 @@ export const skillsHandlers: GatewayRequestHandlers = {
       timeoutMs: p.timeoutMs,
       config: cfg,
     });
+    if (result.ok) {
+      // Write restart sentinel so the user gets notified after restart.
+      try {
+        await writeRestartSentinel({
+          kind: "skills-install",
+          status: "ok",
+          ts: Date.now(),
+          message: `Skill "${p.name}" installed`,
+          doctorHint: formatDoctorNonInteractiveHint(),
+          stats: { mode: "skills.install", reason: `installed skill ${p.name}` },
+        });
+      } catch {
+        log.warn(`failed to write restart sentinel for skills.install`);
+      }
+      scheduleGatewaySigusr1Restart({ reason: "skills.install" });
+    }
     respond(
       result.ok,
       result,

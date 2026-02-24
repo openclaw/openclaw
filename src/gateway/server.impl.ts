@@ -34,7 +34,12 @@ import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
-import { setGatewaySigusr1RestartPolicy, setPreRestartDeferralCheck } from "../infra/restart.js";
+import { formatDoctorNonInteractiveHint, writeRestartSentinel } from "../infra/restart-sentinel.js";
+import {
+  scheduleGatewaySigusr1Restart,
+  setGatewaySigusr1RestartPolicy,
+  setPreRestartDeferralCheck,
+} from "../infra/restart.js";
 import {
   primeRemoteSkillsCache,
   refreshRemoteBinsForConnectedNodes,
@@ -637,6 +642,16 @@ export async function startGatewayServer(
           const latest = loadConfig();
           void refreshRemoteBinsForConnectedNodes(latest);
         }, skillsRefreshDelayMs);
+        // Trigger gateway restart so new/changed skills take effect immediately.
+        void writeRestartSentinel({
+          kind: "skills-change",
+          status: "ok",
+          ts: Date.now(),
+          message: event.changedPath ? `Skill changed: ${event.changedPath}` : "Skills changed",
+          doctorHint: formatDoctorNonInteractiveHint(),
+          stats: { mode: "skills.change", reason: event.reason },
+        }).catch(() => {});
+        scheduleGatewaySigusr1Restart({ reason: "skills.change" });
       });
 
   const noopInterval = () => setInterval(() => {}, 1 << 30);
