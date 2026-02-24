@@ -1,4 +1,5 @@
 import type { ChannelId } from "../channels/plugins/types.js";
+import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import type { OpenClawConfig } from "./config.js";
 import {
@@ -293,13 +294,7 @@ function resolveChannelGroups(
   if (!channelConfig) {
     return undefined;
   }
-  const accountGroups =
-    channelConfig.accounts?.[normalizedAccountId]?.groups ??
-    channelConfig.accounts?.[
-      Object.keys(channelConfig.accounts ?? {}).find(
-        (key) => key.toLowerCase() === normalizedAccountId.toLowerCase(),
-      ) ?? ""
-    ]?.groups;
+  const accountGroups = resolveAccountEntry(channelConfig.accounts, normalizedAccountId)?.groups;
   return accountGroups ?? channelConfig.groups;
 }
 
@@ -320,13 +315,10 @@ function resolveChannelGroupPolicyMode(
   if (!channelConfig) {
     return undefined;
   }
-  const accountPolicy =
-    channelConfig.accounts?.[normalizedAccountId]?.groupPolicy ??
-    channelConfig.accounts?.[
-      Object.keys(channelConfig.accounts ?? {}).find(
-        (key) => key.toLowerCase() === normalizedAccountId.toLowerCase(),
-      ) ?? ""
-    ]?.groupPolicy;
+  const accountPolicy = resolveAccountEntry(
+    channelConfig.accounts,
+    normalizedAccountId,
+  )?.groupPolicy;
   return accountPolicy ?? channelConfig.groupPolicy;
 }
 
