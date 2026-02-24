@@ -8,7 +8,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -19,8 +23,15 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import ai.openclaw.android.MainViewModel
 import ai.openclaw.android.chat.OutgoingAttachment
+import ai.openclaw.android.ui.mobileAccent
+import ai.openclaw.android.ui.mobileBorder
+import ai.openclaw.android.ui.mobileCallout
+import ai.openclaw.android.ui.mobileCaption2
+import ai.openclaw.android.ui.mobileDanger
+import ai.openclaw.android.ui.mobileText
 import java.io.ByteArrayOutputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -72,14 +83,19 @@ fun ChatSheetContent(viewModel: MainViewModel) {
     modifier =
       Modifier
         .fillMaxSize()
-        .padding(horizontal = 12.dp, vertical = 12.dp),
-    verticalArrangement = Arrangement.spacedBy(10.dp),
+        .padding(horizontal = 20.dp, vertical = 12.dp),
+    verticalArrangement = Arrangement.spacedBy(8.dp),
   ) {
+    if (!errorText.isNullOrBlank()) {
+      ChatErrorRail(errorText = errorText!!)
+    }
+
     ChatMessageListCard(
       messages = messages,
       pendingRunCount = pendingRunCount,
       pendingToolCalls = pendingToolCalls,
       streamingAssistantText = streamingAssistantText,
+      healthOk = healthOk,
       modifier = Modifier.weight(1f, fill = true),
     )
 
@@ -90,7 +106,6 @@ fun ChatSheetContent(viewModel: MainViewModel) {
       healthOk = healthOk,
       thinkingLevel = thinkingLevel,
       pendingRunCount = pendingRunCount,
-      errorText = errorText,
       attachments = attachments,
       onPickImages = { pickImages.launch("image/*") },
       onRemoveAttachment = { id -> attachments.removeAll { it.id == id } },
@@ -115,6 +130,25 @@ fun ChatSheetContent(viewModel: MainViewModel) {
         attachments.clear()
       },
     )
+  }
+}
+
+@Composable
+private fun ChatErrorRail(errorText: String) {
+  Surface(
+    modifier = Modifier.fillMaxWidth(),
+    color = androidx.compose.ui.graphics.Color.White,
+    shape = RoundedCornerShape(12.dp),
+    border = androidx.compose.foundation.BorderStroke(1.dp, mobileDanger),
+  ) {
+    Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+      Text(
+        text = "CHAT ERROR",
+        style = mobileCaption2.copy(letterSpacing = 0.6.sp),
+        color = mobileDanger,
+      )
+      Text(text = errorText, style = mobileCallout, color = mobileText)
+    }
   }
 }
 
