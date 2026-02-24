@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { resolveSandboxedMediaSource } from "./sandbox-paths.js";
 
 async function withSandboxRoot<T>(run: (sandboxDir: string) => Promise<T>) {
@@ -24,22 +25,24 @@ function isPathInside(root: string, target: string): boolean {
 }
 
 describe("resolveSandboxedMediaSource", () => {
+  const openClawTmpDir = resolvePreferredOpenClawTmpDir();
+
   // Group 1: /tmp paths (the bug fix)
   it.each([
     {
-      name: "absolute paths under os.tmpdir()",
-      media: path.join(os.tmpdir(), "image.png"),
-      expected: path.join(os.tmpdir(), "image.png"),
+      name: "absolute paths under preferred OpenClaw tmp root",
+      media: path.join(openClawTmpDir, "image.png"),
+      expected: path.join(openClawTmpDir, "image.png"),
     },
     {
-      name: "file:// URLs pointing to os.tmpdir()",
-      media: pathToFileURL(path.join(os.tmpdir(), "photo.png")).href,
-      expected: path.join(os.tmpdir(), "photo.png"),
+      name: "file:// URLs pointing to preferred OpenClaw tmp root",
+      media: pathToFileURL(path.join(openClawTmpDir, "photo.png")).href,
+      expected: path.join(openClawTmpDir, "photo.png"),
     },
     {
-      name: "nested paths under os.tmpdir()",
-      media: path.join(os.tmpdir(), "subdir", "deep", "file.png"),
-      expected: path.join(os.tmpdir(), "subdir", "deep", "file.png"),
+      name: "nested paths under preferred OpenClaw tmp root",
+      media: path.join(openClawTmpDir, "subdir", "deep", "file.png"),
+      expected: path.join(openClawTmpDir, "subdir", "deep", "file.png"),
     },
   ])("allows $name", async ({ media, expected }) => {
     await withSandboxRoot(async (sandboxDir) => {
@@ -96,7 +99,12 @@ describe("resolveSandboxedMediaSource", () => {
     },
     {
       name: "path traversal through tmpdir",
-      media: path.join(os.tmpdir(), "..", "etc", "passwd"),
+      media: path.join(openClawTmpDir, "..", "etc", "passwd"),
+      expected: /sandbox/i,
+    },
+    {
+      name: "absolute paths under host tmp outside openclaw tmp root",
+      media: path.join(os.tmpdir(), "outside-openclaw", "passwd"),
       expected: /sandbox/i,
     },
     {
@@ -120,20 +128,25 @@ describe("resolveSandboxedMediaSource", () => {
     });
   });
 
-  it("rejects symlinked tmpdir paths escaping tmpdir", async () => {
+  it("rejects symlinked OpenClaw tmp paths escaping tmp root", async () => {
     if (process.platform === "win32") {
       return;
     }
     const outsideTmpTarget = path.resolve(process.cwd(), "package.json");
-    if (isPathInside(os.tmpdir(), outsideTmpTarget)) {
+    if (isPathInside(openClawTmpDir, outsideTmpTarget)) {
       return;
     }
 
     await withSandboxRoot(async (sandboxDir) => {
       await fs.access(outsideTmpTarget);
-      const symlinkPath = path.join(sandboxDir, "tmp-link-escape");
+      await fs.mkdir(openClawTmpDir, { recursive: true });
+      const symlinkPath = path.join(openClawTmpDir, `tmp-link-escape-${process.pid}`);
       await fs.symlink(outsideTmpTarget, symlinkPath);
-      await expectSandboxRejection(symlinkPath, sandboxDir, /symlink|sandbox/i);
+      try {
+        await expectSandboxRejection(symlinkPath, sandboxDir, /symlink|sandbox/i);
+      } finally {
+        await fs.unlink(symlinkPath).catch(() => {});
+      }
     });
   });
 
