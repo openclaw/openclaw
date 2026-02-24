@@ -95,7 +95,10 @@ async function expectTransientGetFileRetrySuccess() {
   expect(fetchRemoteMedia).toHaveBeenCalledWith(
     expect.objectContaining({
       url: `https://api.telegram.org/file/bot${BOT_TOKEN}/voice/file_0.oga`,
-      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+      ssrfPolicy: {
+        allowRfc2544BenchmarkRange: true,
+        allowedHostnames: ["api.telegram.org"],
+      },
     }),
   );
   return result;
