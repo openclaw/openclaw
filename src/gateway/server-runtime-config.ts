@@ -121,6 +121,32 @@ export async function resolveGatewayRuntimeConfig(params: {
   const dangerouslyAllowHostHeaderOriginFallback =
     params.cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
 
+  // When the Control UI is requested on a non-loopback interface but no origin
+  // policy is configured, the old behaviour was to throw and abort startup.
+  // This caused Docker / 1-click deployments to fail out-of-the-box because
+  // the docker-setup.sh script does not pre-configure allowedOrigins.
+  // Instead we now gracefully disable the Control UI, log a clear warning,
+  // and let the gateway start so the rest of the stack (Telegram, Discord, etc.)
+  // remains operational. See: openclaw/openclaw#25009
+  const controlUiMissingOriginPolicy =
+    controlUiEnabled &&
+    !isLoopbackHost(bindHost) &&
+    controlUiAllowedOrigins.length === 0 &&
+    !dangerouslyAllowHostHeaderOriginFallback;
+  const resolvedControlUiEnabled = controlUiEnabled && !controlUiMissingOriginPolicy;
+  if (controlUiMissingOriginPolicy) {
+    console.warn(
+      [
+        `[gateway] Control UI disabled: non-loopback deployments require an origin policy.`,
+        `  To enable the Control UI, choose one of:`,
+        `  1. Set gateway.controlUi.allowedOrigins to your deployment's origin (e.g. https://yourhost.example.com)`,
+        `  2. Set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true to derive the allowed origin`,
+        `     from the HTTP Host header (suitable for trusted reverse-proxy setups).`,
+        `  Gateway is still operational; only the Control UI WebSocket endpoint is unavailable.`,
+      ].join("\n"),
+    );
+  }
+
   assertGatewayAuthConfigured(resolvedAuth);
   if (tailscaleMode === "funnel" && authMode !== "password") {
     throw new Error(
@@ -133,16 +159,6 @@ export async function resolveGatewayRuntimeConfig(params: {
   if (!isLoopbackHost(bindHost) && !hasSharedSecret && authMode !== "trusted-proxy") {
     throw new Error(
       `refusing to bind gateway to ${bindHost}:${params.port} without auth (set gateway.auth.token/password, or set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD)`,
-    );
-  }
-  if (
-    controlUiEnabled &&
-    !isLoopbackHost(bindHost) &&
-    controlUiAllowedOrigins.length === 0 &&
-    !dangerouslyAllowHostHeaderOriginFallback
-  ) {
-    throw new Error(
-      "non-loopback Control UI requires gateway.controlUi.allowedOrigins (set explicit origins), or set gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true to use Host-header origin fallback mode",
     );
   }
 
@@ -166,7 +182,7 @@ export async function resolveGatewayRuntimeConfig(params: {
 
   return {
     bindHost,
-    controlUiEnabled,
+    controlUiEnabled: resolvedControlUiEnabled,
     openAiChatCompletionsEnabled,
     openResponsesEnabled,
     openResponsesConfig: openResponsesConfig

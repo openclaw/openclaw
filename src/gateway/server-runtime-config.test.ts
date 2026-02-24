@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 
 const TRUSTED_PROXY_AUTH = {
@@ -201,9 +201,14 @@ describe("resolveGatewayRuntimeConfig", () => {
       );
     });
 
-    it("rejects non-loopback control UI when allowed origins are missing", async () => {
-      await expect(
-        resolveGatewayRuntimeConfig({
+    it("disables Control UI (with a warning) when non-loopback and allowed origins are missing", async () => {
+      // Previously this would throw and abort gateway startup — which broke Docker
+      // and 1-click deployments that do not pre-configure allowedOrigins.
+      // Now the gateway starts successfully but disables the Control UI and logs
+      // a warning. See: openclaw/openclaw#25009
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const result = await resolveGatewayRuntimeConfig({
           cfg: {
             gateway: {
               bind: "lan",
@@ -211,8 +216,14 @@ describe("resolveGatewayRuntimeConfig", () => {
             },
           },
           port: 18789,
-        }),
-      ).rejects.toThrow("non-loopback Control UI requires gateway.controlUi.allowedOrigins");
+        });
+        expect(result.controlUiEnabled).toBe(false);
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining("Control UI disabled: non-loopback"),
+        );
+      } finally {
+        warnSpy.mockRestore();
+      }
     });
 
     it("allows non-loopback control UI without allowed origins when dangerous fallback is enabled", async () => {
