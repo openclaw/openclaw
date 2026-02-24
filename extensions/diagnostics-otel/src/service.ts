@@ -1,8 +1,8 @@
 import { metrics, trace, SpanStatusCode } from "@opentelemetry/api";
 import type { SeverityNumber } from "@opentelemetry/api-logs";
-import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-http";
-import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-http";
-import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
+import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-proto";
+import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-proto";
+import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-proto";
 import { resourceFromAttributes } from "@opentelemetry/resources";
 import { BatchLogRecordProcessor, LoggerProvider } from "@opentelemetry/sdk-logs";
 import { PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
@@ -657,7 +657,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       });
 
       if (logsEnabled) {
-        ctx.logger.info("diagnostics-otel: logs exporter enabled (OTLP/HTTP)");
+        ctx.logger.info("diagnostics-otel: logs exporter enabled (OTLP/Protobuf)");
       }
     },
     async stop() {
