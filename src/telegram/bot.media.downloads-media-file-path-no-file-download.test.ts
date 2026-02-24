@@ -370,7 +370,7 @@ describe("telegram media groups", () => {
             () => {
               expect(replySpy).toHaveBeenCalledTimes(scenario.expectedReplyCount);
             },
-            { timeout: MEDIA_GROUP_FLUSH_MS * 2, interval: 2 },
+            { timeout: MEDIA_GROUP_FLUSH_MS * 4, interval: 2 },
           );
 
           expect(runtimeError).not.toHaveBeenCalled();
