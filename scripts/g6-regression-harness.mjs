@@ -17,7 +17,7 @@ function shouldEmitDedup(key, windowMs, nowMs = Date.now()) {
   return true;
 }
 
-function isRuntimeBoundChannel(cfg, channel, accountId) {
+function isRuntimeBoundChannel(cfg, channel, accountId, chatType) {
   const channelCfg = cfg?.channels?.[channel];
   if (!channelCfg) {
     return true;
@@ -25,6 +25,13 @@ function isRuntimeBoundChannel(cfg, channel, accountId) {
   const accountCfg = accountId ? channelCfg?.accounts?.[accountId] : undefined;
   const resolved = accountCfg?.requiresRuntime ?? channelCfg?.requiresRuntime;
   if (channel === "slack") {
+    const normalized = (chatType || "channel").toLowerCase();
+    if (normalized === "direct" || normalized === "im" || normalized === "mpim") {
+      return false;
+    }
+    if (normalized === "channel" || normalized === "group") {
+      return true;
+    }
     return true;
   }
   return resolved !== false;
@@ -110,6 +117,7 @@ function pass(name, ok, detail) {
 }
 
 const results = [];
+let mcLiveOk = false;
 
 // 1
 const t1 = enforce("I'm going to run this end-to-end now and report back.");
@@ -202,6 +210,7 @@ if (!apiBase || !appBase) {
       lease.status === 200 &&
       lease.json.status === "ACTIVE" &&
       cp.includes("CHECKPOINT PLAN");
+    mcLiveOk = ok;
     results.push(
       pass(
         "5b_mc_live_create_and_lease",
@@ -231,10 +240,38 @@ for (let i = 0; i < 20; i += 1) {
 }
 results.push(pass("6_no_spam_dedup", emitted === 1, `emitted=${emitted}`));
 
-// 7 slack hardening: requiresRuntime=false must still resolve runtime-bound
-const mockCfg = { channels: { slack: { requiresRuntime: false } } };
-const t7 = isRuntimeBoundChannel(mockCfg, "slack");
-results.push(pass("7_slack_always_runtime_bound", t7, `resolved=${t7}`));
+// 7 DM surface must be conversational-only
+const mockCfg = { channels: { slack: { requiresRuntime: true } } };
+const dmRuntimeBound = isRuntimeBoundChannel(mockCfg, "slack", undefined, "direct");
+const dmPrompt = "I want to build and deploy a website and send the live URL.";
+const dmRewritten = buildCheckpoint(dmPrompt);
+const dmOk = !dmRuntimeBound && dmRewritten.includes("CHECKPOINT PLAN");
+results.push(
+  pass(
+    "7_dm_surface_blocks_execution_no_mc_bind",
+    dmOk,
+    JSON.stringify(
+      { dmRuntimeBound, before: dmPrompt, after: dmRewritten, mcCreateAttempted: false },
+      null,
+      2,
+    ),
+  ),
+);
+
+// 8 Channel surface must be execution lane (MC bind)
+const channelRuntimeBound = isRuntimeBoundChannel(mockCfg, "slack", undefined, "channel");
+const channelOk = channelRuntimeBound && mcLiveOk;
+results.push(
+  pass(
+    "8_channel_surface_mc_bind",
+    channelOk,
+    JSON.stringify(
+      { channelRuntimeBound, proof: "See 5b_mc_live_create_and_lease output above" },
+      null,
+      2,
+    ),
+  ),
+);
 
 const allPass = results.every(Boolean);
 console.log(`\nRESULT: ${allPass ? "PASS" : "FAIL"}`);

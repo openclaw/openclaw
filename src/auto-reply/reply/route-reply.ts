@@ -31,6 +31,8 @@ export type RouteReplyParams = {
   threadId?: string | number;
   /** Config for provider-specific settings. */
   cfg: OpenClawConfig;
+  /** Optional normalized chat type from inbound context (direct/group/channel/mpim). */
+  chatType?: string;
   /** Optional abort signal for cooperative cancellation. */
   abortSignal?: AbortSignal;
   /** Mirror reply into session transcript (default: true when sessionKey is set). */
@@ -137,6 +139,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
               mediaUrls,
             }
           : undefined,
+      chatType: params.chatType,
     });
 
     const last = results.at(-1);

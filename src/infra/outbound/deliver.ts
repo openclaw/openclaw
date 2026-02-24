@@ -277,6 +277,7 @@ const isRuntimeBoundChannel = (
   cfg: OpenClawConfig,
   channel: string,
   accountId?: string,
+  chatType?: string | null,
 ): boolean => {
   const channels = (cfg as OpenClawConfig & { channels?: Record<string, unknown> }).channels;
   const channelCfg = channels?.[channel] as
@@ -294,13 +295,12 @@ const isRuntimeBoundChannel = (
   const resolved = accountFlag ?? channelFlag;
 
   if (channel === "slack") {
-    if (
-      resolved === false &&
-      shouldEmitDedup("policy_violation_config:slack_requiresRuntime_false", 5 * 60_000)
-    ) {
-      console.warn(
-        `[POLICY_VIOLATION_CONFIG] slack requiresRuntime=false is forbidden; forcing runtime-bound behavior`,
-      );
+    const normalized = (chatType ?? "channel").toLowerCase();
+    if (normalized === "direct" || normalized === "im" || normalized === "mpim") {
+      return false;
+    }
+    if (normalized === "channel" || normalized === "group") {
+      return true;
     }
     return true;
   }
@@ -636,6 +636,8 @@ type DeliverOutboundPayloadsCoreParams = {
   cfg: OpenClawConfig;
   channel: Exclude<OutboundChannel, "none">;
   to: string;
+  /** Normalized chat surface from inbound context (direct/mpim/channel/group). */
+  chatType?: string | null;
   accountId?: string;
   payloads: ReplyPayload[];
   replyToId?: string | null;
@@ -901,12 +903,15 @@ async function deliverOutboundPayloadsCore(
       channelData: payload.channelData,
     };
 
-    if (
-      !isRuntimeBoundChannel(cfg, channel, accountId) &&
-      isNonTrivialExecution(payloadSummary.text)
-    ) {
-      const rewritten = buildGecCheckpointPlan(payloadSummary.text);
+    const runtimeBound = isRuntimeBoundChannel(cfg, channel, accountId, params.chatType);
+    let mcBinding: MissionControlBindingResult;
+    if (!runtimeBound && isNonTrivialExecution(payloadSummary.text)) {
+      const rewritten = `CHECKPOINT PLAN\n1) Post this request in a Slack execution lane (# channel) to run through runtime + Mission Control. Proof: execution-lane message link.\n2) If you want this in DM, request task creation only; no execution will run from DM. Proof: MC task link returned.`;
       payloadSummary.text = rewritten;
+      mcBinding = {
+        proceed: false,
+        text: rewritten,
+      };
       if (sessionKeyForInternalHooks) {
         void triggerInternalHook(
           createInternalHookEvent("message", "policy_violation", sessionKeyForInternalHooks, {
@@ -925,14 +930,14 @@ async function deliverOutboundPayloadsCore(
           `[POLICY_VIOLATION_CHANNEL] global_execution_constitution gec_version=${GEC_VERSION} channel=${channel}`,
         );
       }
+    } else {
+      mcBinding = await ensureMissionControlBinding({
+        text: payloadSummary.text,
+        taskId: boundTaskId,
+        taskLink: boundTaskLink,
+        agentId: params.agentId ?? "cb-router",
+      });
     }
-
-    const mcBinding = await ensureMissionControlBinding({
-      text: payloadSummary.text,
-      taskId: boundTaskId,
-      taskLink: boundTaskLink,
-      agentId: params.agentId ?? "cb-router",
-    });
     if (mcBinding.taskId) {
       boundTaskId = mcBinding.taskId;
     }

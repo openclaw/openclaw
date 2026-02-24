@@ -267,6 +267,7 @@ export async function dispatchReplyFromConfig(params: {
       accountId: ctx.AccountId,
       threadId: ctx.MessageThreadId,
       cfg,
+      chatType: ctx.ChatType,
       abortSignal,
       mirror,
     });
@@ -294,6 +295,7 @@ export async function dispatchReplyFromConfig(params: {
           accountId: ctx.AccountId,
           threadId: ctx.MessageThreadId,
           cfg,
+          chatType: ctx.ChatType,
         });
         queuedFinal = result.ok;
         if (result.ok) {
@@ -425,6 +427,7 @@ export async function dispatchReplyFromConfig(params: {
           accountId: ctx.AccountId,
           threadId: ctx.MessageThreadId,
           cfg,
+          chatType: ctx.ChatType,
         });
         if (!result.ok) {
           logVerbose(
@@ -475,6 +478,7 @@ export async function dispatchReplyFromConfig(params: {
               accountId: ctx.AccountId,
               threadId: ctx.MessageThreadId,
               cfg,
+              chatType: ctx.ChatType,
             });
             queuedFinal = result.ok || queuedFinal;
             if (result.ok) {
