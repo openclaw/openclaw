@@ -427,6 +427,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "browser.snapshotDefaults.mode": "Browser Snapshot Mode",
   "browser.ssrfPolicy": "Browser SSRF Policy",
   "browser.ssrfPolicy.allowPrivateNetwork": "Browser Allow Private Network",
+  "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork": "Browser Dangerously Allow Private Network",
   "browser.ssrfPolicy.allowedHostnames": "Browser Allowed Hostnames",
   "browser.ssrfPolicy.hostnameAllowlist": "Browser Hostname Allowlist",
   "browser.remoteCdpTimeoutMs": "Remote CDP Timeout (ms)",
