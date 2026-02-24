@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import {
   applyModelAllowlist,
   applyModelFallbacksFromSelection,
+  pruneKilocodeProviderModelsToAllowlist,
   promptDefaultModel,
   promptModelAllowlist,
 } from "./model-picker.js";
@@ -58,6 +59,18 @@ function expectRouterModelFiltering(options: Array<{ value: string }>) {
 
 function createSelectAllMultiselect() {
   return vi.fn(async (params) => params.options.map((option: { value: string }) => option.value));
+}
+
+function makeProviderModel(id: string, name: string) {
+  return {
+    id,
+    name,
+    reasoning: false,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 200000,
+    maxTokens: 8192,
+  };
 }
 
 describe("promptDefaultModel", () => {
@@ -247,5 +260,62 @@ describe("applyModelFallbacksFromSelection", () => {
       primary: "anthropic/claude-opus-4-5",
       fallbacks: ["openai/gpt-5.2"],
     });
+  });
+});
+
+describe("pruneKilocodeProviderModelsToAllowlist", () => {
+  it("keeps only selected model definitions in provider configs", () => {
+    const config = {
+      models: {
+        providers: {
+          kilocode: {
+            baseUrl: "https://api.kilo.ai/api/gateway/",
+            api: "openai-completions",
+            models: [
+              makeProviderModel("anthropic/claude-opus-4.6", "Claude Opus 4.6"),
+              makeProviderModel("minimax/minimax-m2.5:free", "MiniMax M2.5 (Free)"),
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const next = pruneKilocodeProviderModelsToAllowlist(config, [
+      "kilocode/anthropic/claude-opus-4.6",
+    ]);
+
+    expect(next.models?.providers?.kilocode?.models?.map((model) => model.id)).toEqual([
+      "anthropic/claude-opus-4.6",
+    ]);
+  });
+
+  it("does not modify non-kilo provider model catalogs", () => {
+    const config = {
+      models: {
+        providers: {
+          kilocode: {
+            baseUrl: "https://api.kilo.ai/api/gateway/",
+            api: "openai-completions",
+            models: [makeProviderModel("anthropic/claude-opus-4.6", "Claude Opus 4.6")],
+          },
+          minimax: {
+            baseUrl: "https://api.minimax.io/anthropic",
+            api: "anthropic-messages",
+            models: [makeProviderModel("MiniMax-M2.5", "MiniMax M2.5")],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const next = pruneKilocodeProviderModelsToAllowlist(config, [
+      "kilocode/anthropic/claude-opus-4.6",
+    ]);
+
+    expect(next.models?.providers?.kilocode?.models?.map((model) => model.id)).toEqual([
+      "anthropic/claude-opus-4.6",
+    ]);
+    expect(next.models?.providers?.minimax?.models?.map((model) => model.id)).toEqual([
+      "MiniMax-M2.5",
+    ]);
   });
 });
