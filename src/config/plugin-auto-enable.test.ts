@@ -4,9 +4,7 @@ import { validateConfigObject } from "./config.js";
 import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
 
 /** Helper to build a minimal PluginManifestRegistry for testing. */
-function makeRegistry(
-  plugins: Array<{ id: string; channels: string[] }>,
-): PluginManifestRegistry {
+function makeRegistry(plugins: Array<{ id: string; channels: string[] }>): PluginManifestRegistry {
   return {
     plugins: plugins.map((p) => ({
       id: p.id,
