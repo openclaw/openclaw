@@ -1,4 +1,4 @@
-import { buildRelayWsUrl, deriveRelayToken, isRetryableReconnectError, reconnectDelayMs } from './background-utils.js'
+import { buildRelayWsUrl, isRetryableReconnectError, reconnectDelayMs } from './background-utils.js'
 
 const DEFAULT_PORT = 18792
 
