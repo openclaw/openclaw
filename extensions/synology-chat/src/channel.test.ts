@@ -183,6 +183,25 @@ describe("createSynologyChatPlugin", () => {
       expect(warnings.some((w: string) => w.includes("open"))).toBe(true);
     });
 
+    it("warns when dmPolicy is allowlist and allowedUserIds is empty", () => {
+      const plugin = createSynologyChatPlugin();
+      const account = {
+        accountId: "default",
+        enabled: true,
+        token: "t",
+        incomingUrl: "https://nas/incoming",
+        nasHost: "h",
+        webhookPath: "/w",
+        dmPolicy: "allowlist" as const,
+        allowedUserIds: [],
+        rateLimitPerMinute: 30,
+        botName: "Bot",
+        allowInsecureSsl: false,
+      };
+      const warnings = plugin.security.collectWarnings({ account });
+      expect(warnings.some((w: string) => w.includes("empty allowedUserIds"))).toBe(true);
+    });
+
     it("returns no warnings for fully configured account", () => {
       const plugin = createSynologyChatPlugin();
       const account = {
