@@ -324,7 +324,10 @@ export async function processMessage(params: {
     OriginatingTo: params.msg.from,
   });
 
-  if (dmRouteTarget) {
+  // Only update main session's lastRoute when DM actually IS the main session.
+  // When dmScope="per-channel-peer", the DM uses an isolated sessionKey,
+  // and updating mainSessionKey would corrupt routing for the session owner.
+  if (dmRouteTarget && params.route.sessionKey === params.route.mainSessionKey) {
     updateLastRouteInBackground({
       cfg: params.cfg,
       backgroundTasks: params.backgroundTasks,
