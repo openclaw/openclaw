@@ -11,6 +11,10 @@ import type { AuthProfileCredential, AuthProfileStore, ProfileUsageStats } from 
 type LegacyAuthStore = Record<string, AuthProfileCredential>;
 type CredentialRejectReason = "non_object" | "invalid_type" | "missing_provider";
 type RejectedCredentialEntry = { key: string; reason: CredentialRejectReason };
+type LoadAuthProfileStoreOptions = {
+  allowKeychainPrompt?: boolean;
+  readOnly?: boolean;
+};
 
 const AUTH_PROFILE_TYPES = new Set<AuthProfileCredential["type"]>(["api_key", "oauth", "token"]);
 
@@ -373,16 +377,25 @@ export function loadAuthProfileStore(): AuthProfileStore {
 
 function loadAuthProfileStoreForAgent(
   agentDir?: string,
-  _options?: { allowKeychainPrompt?: boolean },
+  options?: LoadAuthProfileStoreOptions,
 ): AuthProfileStore {
+  const readOnly = options?.readOnly === true;
   const authPath = resolveAuthStorePath(agentDir);
   const asStore = loadCoercedStoreWithExternalSync(authPath);
   if (asStore) {
+    // Runtime secret activation must remain read-only.
+    if (!readOnly) {
+      // Sync from external CLI tools on every load
+      const synced = syncExternalCliCredentials(asStore);
+      if (synced) {
+        saveJsonFile(authPath, asStore);
+      }
+    }
     return asStore;
   }
 
   // Fallback: inherit auth-profiles from main agent if subagent has none
-  if (agentDir) {
+  if (agentDir && !readOnly) {
     const mainAuthPath = resolveAuthStorePath(); // without agentDir = main
     const mainRaw = loadJsonFile(mainAuthPath);
     const mainStore = coerceAuthStore(mainRaw);
@@ -405,8 +418,8 @@ function loadAuthProfileStoreForAgent(
   }
 
   const mergedOAuth = mergeOAuthFileIntoStore(store);
-  const syncedCli = syncExternalCliCredentials(store);
-  const shouldWrite = legacy !== null || mergedOAuth || syncedCli;
+  const syncedCli = readOnly ? false : syncExternalCliCredentials(store);
+  const shouldWrite = !readOnly && (legacy !== null || mergedOAuth || syncedCli);
   if (shouldWrite) {
     saveJsonFile(authPath, store);
   }
@@ -433,7 +446,7 @@ function loadAuthProfileStoreForAgent(
 
 export function loadAuthProfileStoreForRuntime(
   agentDir?: string,
-  options?: { allowKeychainPrompt?: boolean },
+  options?: LoadAuthProfileStoreOptions,
 ): AuthProfileStore {
   const store = loadAuthProfileStoreForAgent(agentDir, options);
   const authPath = resolveAuthStorePath(agentDir);
@@ -444,6 +457,10 @@ export function loadAuthProfileStoreForRuntime(
 
   const mainStore = loadAuthProfileStoreForAgent(undefined, options);
   return mergeAuthProfileStores(mainStore, store);
+}
+
+export function loadAuthProfileStoreForSecretsRuntime(agentDir?: string): AuthProfileStore {
+  return loadAuthProfileStoreForRuntime(agentDir, { readOnly: true, allowKeychainPrompt: false });
 }
 
 export function ensureAuthProfileStore(
