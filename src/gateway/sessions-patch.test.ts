@@ -179,6 +179,38 @@ describe("gateway sessions patch", () => {
     expect(res.entry.authProfileOverrideCompactionCount).toBeUndefined();
   });
 
+  test("accepts explicit allowlisted provider/model refs from sessions.patch", async () => {
+    const store: Record<string, SessionEntry> = {};
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.2" },
+          models: {
+            "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const res = await applySessionsPatchToStore({
+      cfg,
+      store,
+      storeKey: "agent:main:main",
+      patch: { key: "agent:main:main", model: "anthropic/claude-sonnet-4-6" },
+      loadGatewayModelCatalog: async () => [
+        { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+        { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
+      ],
+    });
+
+    expect(res.ok).toBe(true);
+    if (!res.ok) {
+      return;
+    }
+    expect(res.entry.providerOverride).toBe("anthropic");
+    expect(res.entry.modelOverride).toBe("claude-sonnet-4-6");
+  });
+
   test("sets spawnDepth for subagent sessions", async () => {
     const store: Record<string, SessionEntry> = {};
     const res = await applySessionsPatchToStore({
