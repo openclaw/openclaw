@@ -41,6 +41,17 @@ function resolvePairingRecoveryContext(params: {
   error?: string | null;
   closeReason?: string | null;
 }): { requestId: string | null } | null {
+  const sanitizeRequestId = (value: string): string | null => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    // Keep CLI guidance injection-safe: allow only compact id characters.
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(trimmed)) {
+      return null;
+    }
+    return trimmed;
+  };
   const source = [params.error, params.closeReason]
     .filter((part) => typeof part === "string" && part.trim().length > 0)
     .join(" ");
@@ -48,7 +59,8 @@ function resolvePairingRecoveryContext(params: {
     return null;
   }
   const requestIdMatch = source.match(/requestId:\s*([^\s)]+)/i);
-  const requestId = requestIdMatch && requestIdMatch[1] ? requestIdMatch[1].trim() : "";
+  const requestId =
+    requestIdMatch && requestIdMatch[1] ? sanitizeRequestId(requestIdMatch[1]) : null;
   return { requestId: requestId || null };
 }
 
