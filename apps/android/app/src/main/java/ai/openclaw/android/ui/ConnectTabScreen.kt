@@ -1,6 +1,5 @@
 package ai.openclaw.android.ui
 
-import android.util.Base64
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -47,36 +46,12 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
-import androidx.core.net.toUri
 import ai.openclaw.android.MainViewModel
-import java.util.Locale
-import org.json.JSONObject
 
 private enum class ConnectInputMode {
   SetupCode,
   Manual,
 }
-
-private data class ParsedConnectGateway(
-  val host: String,
-  val port: Int,
-  val tls: Boolean,
-  val displayUrl: String,
-)
-
-private data class ConnectSetupCodePayload(
-  val url: String,
-  val token: String?,
-  val password: String?,
-)
-
-private data class ConnectConfig(
-  val host: String,
-  val port: Int,
-  val tls: Boolean,
-  val token: String,
-  val password: String,
-)
 
 @Composable
 fun ConnectTabScreen(viewModel: MainViewModel) {
@@ -132,9 +107,9 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
     )
   }
 
-  val setupResolvedEndpoint = remember(setupCode) { decodeConnectSetupCode(setupCode)?.url?.let { parseConnectGateway(it)?.displayUrl } }
+  val setupResolvedEndpoint = remember(setupCode) { decodeGatewaySetupCode(setupCode)?.url?.let { parseGatewayEndpoint(it)?.displayUrl } }
   val manualResolvedEndpoint = remember(manualHostInput, manualPortInput, manualTlsInput) {
-    composeConnectManualGatewayUrl(manualHostInput, manualPortInput, manualTlsInput)?.let { parseConnectGateway(it)?.displayUrl }
+    composeGatewayManualUrl(manualHostInput, manualPortInput, manualTlsInput)?.let { parseGatewayEndpoint(it)?.displayUrl }
   }
 
   val activeEndpoint =
@@ -195,14 +170,14 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
         }
 
         val config =
-          resolveConnectConfig(
-            mode = inputMode,
+          resolveGatewayConnectConfig(
+            useSetupCode = inputMode == ConnectInputMode.SetupCode,
             setupCode = setupCode,
             manualHost = manualHostInput,
             manualPort = manualPortInput,
             manualTls = manualTlsInput,
-            token = gatewayToken,
-            password = passwordInput,
+            fallbackToken = gatewayToken,
+            fallbackPassword = passwordInput,
           )
 
         if (config == null) {
@@ -520,91 +495,3 @@ private fun outlinedColors() =
     unfocusedTextColor = mobileText,
     cursorColor = mobileAccent,
   )
-
-private fun resolveConnectConfig(
-  mode: ConnectInputMode,
-  setupCode: String,
-  manualHost: String,
-  manualPort: String,
-  manualTls: Boolean,
-  token: String,
-  password: String,
-): ConnectConfig? {
-  return if (mode == ConnectInputMode.SetupCode) {
-    val setup = decodeConnectSetupCode(setupCode) ?: return null
-    val parsed = parseConnectGateway(setup.url) ?: return null
-    ConnectConfig(
-      host = parsed.host,
-      port = parsed.port,
-      tls = parsed.tls,
-      token = setup.token ?: token.trim(),
-      password = setup.password ?: password.trim(),
-    )
-  } else {
-    val manualUrl = composeConnectManualGatewayUrl(manualHost, manualPort, manualTls) ?: return null
-    val parsed = parseConnectGateway(manualUrl) ?: return null
-    ConnectConfig(
-      host = parsed.host,
-      port = parsed.port,
-      tls = parsed.tls,
-      token = token.trim(),
-      password = password.trim(),
-    )
-  }
-}
-
-private fun parseConnectGateway(rawInput: String): ParsedConnectGateway? {
-  val raw = rawInput.trim()
-  if (raw.isEmpty()) return null
-
-  val normalized = if (raw.contains("://")) raw else "https://$raw"
-  val uri = normalized.toUri()
-  val host = uri.host?.trim().orEmpty()
-  if (host.isEmpty()) return null
-
-  val scheme = uri.scheme?.trim()?.lowercase(Locale.US).orEmpty()
-  val tls =
-    when (scheme) {
-      "ws", "http" -> false
-      "wss", "https" -> true
-      else -> true
-    }
-  val port = uri.port.takeIf { it in 1..65535 } ?: 18789
-  val displayUrl = "${if (tls) "https" else "http"}://$host:$port"
-
-  return ParsedConnectGateway(host = host, port = port, tls = tls, displayUrl = displayUrl)
-}
-
-private fun decodeConnectSetupCode(rawInput: String): ConnectSetupCodePayload? {
-  val trimmed = rawInput.trim()
-  if (trimmed.isEmpty()) return null
-
-  val padded =
-    trimmed
-      .replace('-', '+')
-      .replace('_', '/')
-      .let { normalized ->
-        val remainder = normalized.length % 4
-        if (remainder == 0) normalized else normalized + "=".repeat(4 - remainder)
-      }
-
-  return try {
-    val decoded = String(Base64.decode(padded, Base64.DEFAULT), Charsets.UTF_8)
-    val obj = JSONObject(decoded)
-    val url = obj.optString("url").trim()
-    if (url.isEmpty()) return null
-    val token = obj.optString("token").trim().ifEmpty { null }
-    val password = obj.optString("password").trim().ifEmpty { null }
-    ConnectSetupCodePayload(url = url, token = token, password = password)
-  } catch (_: Throwable) {
-    null
-  }
-}
-
-private fun composeConnectManualGatewayUrl(hostInput: String, portInput: String, tls: Boolean): String? {
-  val host = hostInput.trim()
-  val port = portInput.trim().toIntOrNull() ?: return null
-  if (host.isEmpty() || port !in 1..65535) return null
-  val scheme = if (tls) "https" else "http"
-  return "$scheme://$host:$port"
-}
