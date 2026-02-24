@@ -35,6 +35,15 @@ export async function onboardCommand(opts: OnboardOptions, runtime: RuntimeEnv =
     normalizedAuthChoice === opts.authChoice && flow === opts.flow
       ? opts
       : { ...opts, authChoice: normalizedAuthChoice, flow };
+  if (
+    normalizedOpts.secretInputMode &&
+    normalizedOpts.secretInputMode !== "plaintext" &&
+    normalizedOpts.secretInputMode !== "ref"
+  ) {
+    runtime.error('Invalid --secret-input-mode. Use "plaintext" or "ref".');
+    runtime.exit(1);
+    return;
+  }
 
   if (normalizedOpts.nonInteractive && normalizedOpts.acceptRisk !== true) {
     runtime.error(
