@@ -20,6 +20,33 @@ import type { VoiceCallProvider } from "./base.js";
 import { twilioApiRequest } from "./twilio/api.js";
 import { verifyTwilioProviderWebhook } from "./twilio/webhook.js";
 
+function getHeader(
+  headers: Record<string, string | string[] | undefined>,
+  name: string,
+): string | undefined {
+  const value = headers[name.toLowerCase()];
+  if (Array.isArray(value)) {
+    return value[0];
+  }
+  return value;
+}
+
+function createTwilioRequestDedupeKey(ctx: WebhookContext): string {
+  const idempotencyToken = getHeader(ctx.headers, "i-twilio-idempotency-token");
+  if (idempotencyToken) {
+    return `twilio:idempotency:${idempotencyToken}`;
+  }
+
+  const signature = getHeader(ctx.headers, "x-twilio-signature") ?? "";
+  const callId = typeof ctx.query?.callId === "string" ? ctx.query.callId.trim() : "";
+  const flow = typeof ctx.query?.flow === "string" ? ctx.query.flow.trim() : "";
+  const turnToken = typeof ctx.query?.turnToken === "string" ? ctx.query.turnToken.trim() : "";
+  return `twilio:fallback:${crypto
+    .createHash("sha256")
+    .update(`${signature}\n${callId}\n${flow}\n${turnToken}\n${ctx.rawBody}`)
+    .digest("hex")}`;
+}
+
 /**
  * Twilio Voice API provider implementation.
  *
@@ -212,7 +239,16 @@ export class TwilioProvider implements VoiceCallProvider {
         typeof ctx.query?.callId === "string" && ctx.query.callId.trim()
           ? ctx.query.callId.trim()
           : undefined;
-      const event = this.normalizeEvent(params, callIdFromQuery);
+      const turnTokenFromQuery =
+        typeof ctx.query?.turnToken === "string" && ctx.query.turnToken.trim()
+          ? ctx.query.turnToken.trim()
+          : undefined;
+      const dedupeKey = createTwilioRequestDedupeKey(ctx);
+      const event = this.normalizeEvent(params, {
+        callIdOverride: callIdFromQuery,
+        dedupeKey,
+        turnToken: turnTokenFromQuery,
+      });
 
       // For Twilio, we must return TwiML. Most actions are driven by Calls API updates,
       // so the webhook response is typically a pause to keep the call alive.
@@ -245,14 +281,24 @@ export class TwilioProvider implements VoiceCallProvider {
   /**
    * Convert Twilio webhook params to normalized event format.
    */
-  private normalizeEvent(params: URLSearchParams, callIdOverride?: string): NormalizedEvent | null {
+  private normalizeEvent(
+    params: URLSearchParams,
+    options?: {
+      callIdOverride?: string;
+      dedupeKey?: string;
+      turnToken?: string;
+    },
+  ): NormalizedEvent | null {
     const callSid = params.get("CallSid") || "";
+    const callIdOverride = options?.callIdOverride;
 
     const baseEvent = {
       id: crypto.randomUUID(),
+      dedupeKey: options?.dedupeKey,
       callId: callIdOverride || callSid,
       providerCallId: callSid,
       timestamp: Date.now(),
+      turnToken: options?.turnToken,
       direction: TwilioProvider.parseDirection(params.get("Direction")),
       from: params.get("From") || undefined,
       to: params.get("To") || undefined,
@@ -603,9 +649,14 @@ export class TwilioProvider implements VoiceCallProvider {
       throw new Error("Missing webhook URL for this call (provider state not initialized)");
     }
 
+    const actionUrl = new URL(webhookUrl);
+    if (input.turnToken) {
+      actionUrl.searchParams.set("turnToken", input.turnToken);
+    }
+
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
-  <Gather input="speech" speechTimeout="auto" language="${input.language || "en-US"}" action="${escapeXml(webhookUrl)}" method="POST">
+  <Gather input="speech" speechTimeout="auto" language="${input.language || "en-US"}" action="${escapeXml(actionUrl.toString())}" method="POST">
   </Gather>
 </Response>`;
 

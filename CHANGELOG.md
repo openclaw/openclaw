@@ -10,6 +10,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Security/Voice Call: harden Twilio webhook replay handling by preserving provider event IDs through normalization, adding bounded replay dedupe, and enforcing per-call turn-token matching for call-state transitions. This ships in the next npm release. Thanks @jiseoung for reporting.
 - Security/Commands: enforce sender-only matching for `commands.allowFrom` by blocking conversation-shaped `From` identities (`channel:`, `group:`, `thread:`, `@g.us`) while preserving direct-message fallback when sender fields are missing. Ships in the next npm release. Thanks @jiseoung.
 - Config/Kilo Gateway: Kilo provider flow now surfaces an updated list of models. (#24921) thanks @gumadeiras.
 - Security/Sandbox: enforce `tools.exec.applyPatch.workspaceOnly` and `tools.fs.workspaceOnly` for `apply_patch` in sandbox-mounted paths so writes/deletes cannot escape the workspace boundary via mounts like `/agent` unless explicitly opted out (`tools.exec.applyPatch.workspaceOnly=false`). This ships in the next npm release. Thanks @tdjackey for reporting.
