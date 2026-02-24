@@ -150,6 +150,82 @@ describe("resolveSandboxedMediaSource", () => {
     });
   });
 
+  it("rejects hardlinked OpenClaw tmp paths to outside files", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const outsideDir = await fs.mkdtemp(
+      path.join(process.cwd(), "sandbox-media-hardlink-outside-"),
+    );
+    const outsideFile = path.join(outsideDir, "outside-secret.txt");
+    const hardlinkPath = path.join(
+      openClawTmpDir,
+      `sandbox-media-hardlink-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`,
+    );
+    try {
+      if (isPathInside(openClawTmpDir, outsideFile)) {
+        return;
+      }
+      await fs.writeFile(outsideFile, "secret", "utf8");
+      await fs.mkdir(openClawTmpDir, { recursive: true });
+      try {
+        await fs.link(outsideFile, hardlinkPath);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+          return;
+        }
+        throw err;
+      }
+      await withSandboxRoot(async (sandboxDir) => {
+        await expectSandboxRejection(hardlinkPath, sandboxDir, /hard.?link|sandbox/i);
+      });
+    } finally {
+      await fs.rm(hardlinkPath, { force: true });
+      await fs.rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects symlinked OpenClaw tmp paths to hardlinked outside files", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const outsideDir = await fs.mkdtemp(
+      path.join(process.cwd(), "sandbox-media-hardlink-outside-"),
+    );
+    const outsideFile = path.join(outsideDir, "outside-secret.txt");
+    const hardlinkPath = path.join(
+      openClawTmpDir,
+      `sandbox-media-hardlink-target-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`,
+    );
+    const symlinkPath = path.join(
+      openClawTmpDir,
+      `sandbox-media-hardlink-symlink-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`,
+    );
+    try {
+      if (isPathInside(openClawTmpDir, outsideFile)) {
+        return;
+      }
+      await fs.writeFile(outsideFile, "secret", "utf8");
+      await fs.mkdir(openClawTmpDir, { recursive: true });
+      try {
+        await fs.link(outsideFile, hardlinkPath);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+          return;
+        }
+        throw err;
+      }
+      await fs.symlink(hardlinkPath, symlinkPath);
+      await withSandboxRoot(async (sandboxDir) => {
+        await expectSandboxRejection(symlinkPath, sandboxDir, /hard.?link|sandbox/i);
+      });
+    } finally {
+      await fs.rm(symlinkPath, { force: true });
+      await fs.rm(hardlinkPath, { force: true });
+      await fs.rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+
   // Group 4: Passthrough
   it("passes HTTP URLs through unchanged", async () => {
     const result = await resolveSandboxedMediaSource({
