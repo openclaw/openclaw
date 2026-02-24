@@ -10,6 +10,8 @@ preferred_team="${IOS_PREFERRED_TEAM_ID:-${OPENCLAW_IOS_DEFAULT_TEAM_ID:-Y5PE65H
 preferred_team_name="${IOS_PREFERRED_TEAM_NAME:-}"
 allow_keychain_fallback="${IOS_ALLOW_KEYCHAIN_TEAM_FALLBACK:-0}"
 prefer_non_free_team="${IOS_PREFER_NON_FREE_TEAM:-1}"
+preferred_team="${preferred_team//$'\r'/}"
+preferred_team_name="${preferred_team_name//$'\r'/}"
 
 declare -a team_ids=()
 declare -a team_is_free=()
@@ -34,6 +36,9 @@ append_team() {
   local candidate_id="$1"
   local candidate_is_free="$2"
   local candidate_name="$3"
+  candidate_id="${candidate_id//$'\r'/}"
+  candidate_is_free="${candidate_is_free//$'\r'/}"
+  candidate_name="${candidate_name//$'\r'/}"
   [[ -z "$candidate_id" ]] && return
 
   local i

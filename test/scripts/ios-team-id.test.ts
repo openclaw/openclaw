@@ -192,4 +192,40 @@ exit 0`,
     expect(result.ok).toBe(true);
     expect(result.stdout).toBe("BBBBB22222");
   });
+
+  it("matches preferred team IDs even when parser output uses CRLF line endings", async () => {
+    const homeDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-ios-team-id-"));
+    const binDir = path.join(homeDir, "bin");
+    await mkdir(binDir, { recursive: true });
+    await mkdir(path.join(homeDir, "Library", "Preferences"), { recursive: true });
+    await writeFile(path.join(homeDir, "Library", "Preferences", "com.apple.dt.Xcode.plist"), "");
+
+    await writeExecutable(
+      path.join(binDir, "plutil"),
+      `#!/usr/bin/env bash
+echo '{}'`,
+    );
+    await writeExecutable(
+      path.join(binDir, "defaults"),
+      `#!/usr/bin/env bash
+if [[ "$3" == "DVTDeveloperAccountManagerAppleIDLists" ]]; then
+  echo '(identifier = "dev@example.com";)'
+  exit 0
+fi
+exit 0`,
+    );
+    await writeExecutable(
+      path.join(binDir, "fake-python"),
+      `#!/usr/bin/env bash
+printf 'AAAAA11111\\t0\\tAlpha Team\\r\\n'
+printf 'BBBBB22222\\t0\\tBeta Team\\r\\n'`,
+    );
+
+    const result = runScript(homeDir, {
+      IOS_PYTHON_BIN: path.join(binDir, "fake-python"),
+      IOS_PREFERRED_TEAM_ID: "BBBBB22222",
+    });
+    expect(result.ok).toBe(true);
+    expect(result.stdout).toBe("BBBBB22222");
+  });
 });
