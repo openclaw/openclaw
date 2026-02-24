@@ -168,6 +168,9 @@ function buildRequestMessage(request: ExecApprovalRequest, nowMs: number) {
   if (request.request.cwd) {
     lines.push(`CWD: ${request.request.cwd}`);
   }
+  if (request.request.nodeId) {
+    lines.push(`Node: ${request.request.nodeId}`);
+  }
   if (request.request.host) {
     lines.push(`Host: ${request.request.host}`);
   }

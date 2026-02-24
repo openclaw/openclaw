@@ -63,6 +63,7 @@ vi.mock("../../auto-reply/dispatch.js", () => ({
 }));
 
 const { chatHandlers } = await import("./chat.js");
+const FAST_WAIT_OPTS = { timeout: 250, interval: 2 } as const;
 
 function createTranscriptFixture(prefix: string) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -162,14 +163,16 @@ async function runNonStreamingChatSend(params: {
   if (!shouldExpectBroadcast) {
     await vi.waitFor(() => {
       expect(params.context.dedupe.has(`chat:${params.idempotencyKey}`)).toBe(true);
-    });
+    }, FAST_WAIT_OPTS);
     return undefined;
   }
 
-  await vi.waitFor(() =>
-    expect(
-      (params.context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.length,
-    ).toBe(1),
+  await vi.waitFor(
+    () =>
+      expect(
+        (params.context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls.length,
+      ).toBe(1),
+    FAST_WAIT_OPTS,
   );
 
   const chatCall = (params.context.broadcast as unknown as ReturnType<typeof vi.fn>).mock.calls[0];

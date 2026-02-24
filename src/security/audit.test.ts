@@ -15,7 +15,8 @@ const isWindows = process.platform === "win32";
 function stubChannelPlugin(params: {
   id: "discord" | "slack" | "telegram";
   label: string;
-  resolveAccount: (cfg: OpenClawConfig) => unknown;
+  resolveAccount: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
+  listAccountIds?: (cfg: OpenClawConfig) => string[];
 }): ChannelPlugin {
   return {
     id: params.id,
@@ -31,11 +32,15 @@ function stubChannelPlugin(params: {
     },
     security: {},
     config: {
-      listAccountIds: (cfg) => {
-        const enabled = Boolean((cfg.channels as Record<string, unknown> | undefined)?.[params.id]);
-        return enabled ? ["default"] : [];
-      },
-      resolveAccount: (cfg) => params.resolveAccount(cfg),
+      listAccountIds:
+        params.listAccountIds ??
+        ((cfg) => {
+          const enabled = Boolean(
+            (cfg.channels as Record<string, unknown> | undefined)?.[params.id],
+          );
+          return enabled ? ["default"] : [];
+        }),
+      resolveAccount: (cfg, accountId) => params.resolveAccount(cfg, accountId),
       isEnabled: () => true,
       isConfigured: () => true,
     },
@@ -45,19 +50,46 @@ function stubChannelPlugin(params: {
 const discordPlugin = stubChannelPlugin({
   id: "discord",
   label: "Discord",
-  resolveAccount: (cfg) => ({ config: cfg.channels?.discord ?? {} }),
+  listAccountIds: (cfg) => {
+    const ids = Object.keys(cfg.channels?.discord?.accounts ?? {});
+    return ids.length > 0 ? ids : ["default"];
+  },
+  resolveAccount: (cfg, accountId) => {
+    const resolvedAccountId = typeof accountId === "string" && accountId ? accountId : "default";
+    const base = cfg.channels?.discord ?? {};
+    const account = cfg.channels?.discord?.accounts?.[resolvedAccountId] ?? {};
+    return { config: { ...base, ...account } };
+  },
 });
 
 const slackPlugin = stubChannelPlugin({
   id: "slack",
   label: "Slack",
-  resolveAccount: (cfg) => ({ config: cfg.channels?.slack ?? {} }),
+  listAccountIds: (cfg) => {
+    const ids = Object.keys(cfg.channels?.slack?.accounts ?? {});
+    return ids.length > 0 ? ids : ["default"];
+  },
+  resolveAccount: (cfg, accountId) => {
+    const resolvedAccountId = typeof accountId === "string" && accountId ? accountId : "default";
+    const base = cfg.channels?.slack ?? {};
+    const account = cfg.channels?.slack?.accounts?.[resolvedAccountId] ?? {};
+    return { config: { ...base, ...account } };
+  },
 });
 
 const telegramPlugin = stubChannelPlugin({
   id: "telegram",
   label: "Telegram",
-  resolveAccount: (cfg) => ({ config: cfg.channels?.telegram ?? {} }),
+  listAccountIds: (cfg) => {
+    const ids = Object.keys(cfg.channels?.telegram?.accounts ?? {});
+    return ids.length > 0 ? ids : ["default"];
+  },
+  resolveAccount: (cfg, accountId) => {
+    const resolvedAccountId = typeof accountId === "string" && accountId ? accountId : "default";
+    const base = cfg.channels?.telegram ?? {};
+    const account = cfg.channels?.telegram?.accounts?.[resolvedAccountId] ?? {};
+    return { config: { ...base, ...account } };
+  },
 });
 
 function successfulProbeResult(url: string) {
@@ -103,6 +135,7 @@ function expectNoFinding(res: SecurityAuditReport, checkId: string): void {
 describe("security audit", () => {
   let fixtureRoot = "";
   let caseId = 0;
+  let channelSecurityStateDir = "";
 
   const makeTmpDir = async (label: string) => {
     const dir = path.join(fixtureRoot, `case-${caseId++}-${label}`);
@@ -110,14 +143,23 @@ describe("security audit", () => {
     return dir;
   };
 
-  const withStateDir = async (label: string, fn: (tmp: string) => Promise<void>) => {
-    const tmp = await makeTmpDir(label);
-    await fs.mkdir(path.join(tmp, "credentials"), { recursive: true, mode: 0o700 });
-    await withEnvAsync({ OPENCLAW_STATE_DIR: tmp }, async () => await fn(tmp));
+  const withChannelSecurityStateDir = async (fn: (tmp: string) => Promise<void>) => {
+    const credentialsDir = path.join(channelSecurityStateDir, "credentials");
+    await fs.rm(credentialsDir, { recursive: true, force: true });
+    await fs.mkdir(credentialsDir, { recursive: true, mode: 0o700 });
+    await withEnvAsync(
+      { OPENCLAW_STATE_DIR: channelSecurityStateDir },
+      async () => await fn(channelSecurityStateDir),
+    );
   };
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-security-audit-"));
+    channelSecurityStateDir = path.join(fixtureRoot, "channel-security");
+    await fs.mkdir(path.join(channelSecurityStateDir, "credentials"), {
+      recursive: true,
+      mode: 0o700,
+    });
   });
 
   afterAll(async () => {
@@ -1094,6 +1136,38 @@ describe("security audit", () => {
     expect(finding?.detail).toContain("tools.exec.applyPatch.workspaceOnly=false");
   });
 
+  it("flags non-loopback Control UI without allowed origins", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        auth: { mode: "token", token: "very-long-browser-token-0123456789" },
+      },
+    };
+
+    const res = await audit(cfg);
+    expectFinding(res, "gateway.control_ui.allowed_origins_required", "critical");
+  });
+
+  it("flags dangerous host-header origin fallback and suppresses missing allowed-origins finding", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        auth: { mode: "token", token: "very-long-browser-token-0123456789" },
+        controlUi: {
+          dangerouslyAllowHostHeaderOriginFallback: true,
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    expectFinding(res, "gateway.control_ui.host_header_origin_fallback", "critical");
+    expectNoFinding(res, "gateway.control_ui.allowed_origins_required");
+    const flags = res.findings.find((f) => f.checkId === "config.insecure_or_dangerous_flags");
+    expect(flags?.detail ?? "").toContain(
+      "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true",
+    );
+  });
+
   it("scores X-Real-IP fallback risk by gateway exposure", async () => {
     const trustedProxyCfg = (trustedProxies: string[]): OpenClawConfig => ({
       gateway: {
@@ -1367,7 +1441,7 @@ describe("security audit", () => {
   });
 
   it("flags Discord native commands without a guild user allowlist", async () => {
-    await withStateDir("discord", async () => {
+    await withChannelSecurityStateDir(async () => {
       const cfg: OpenClawConfig = {
         channels: {
           discord: {
@@ -1404,7 +1478,7 @@ describe("security audit", () => {
   });
 
   it("does not flag Discord slash commands when dm.allowFrom includes a Discord snowflake id", async () => {
-    await withStateDir("discord-allowfrom-snowflake", async () => {
+    await withChannelSecurityStateDir(async () => {
       const cfg: OpenClawConfig = {
         channels: {
           discord: {
@@ -1441,7 +1515,7 @@ describe("security audit", () => {
   });
 
   it("warns when Discord allowlists contain name-based entries", async () => {
-    await withStateDir("discord-name-based-allowlist", async (tmp) => {
+    await withChannelSecurityStateDir(async (tmp) => {
       await fs.writeFile(
         path.join(tmp, "credentials", "discord-allowFrom.json"),
         JSON.stringify({ version: 1, allowFrom: ["team.owner"] }),
@@ -1490,8 +1564,118 @@ describe("security audit", () => {
     });
   });
 
+  it("marks Discord name-based allowlists as break-glass when dangerous matching is enabled", async () => {
+    await withChannelSecurityStateDir(async () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          discord: {
+            enabled: true,
+            token: "t",
+            dangerouslyAllowNameMatching: true,
+            allowFrom: ["Alice#1234"],
+          },
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [discordPlugin],
+      });
+
+      const finding = res.findings.find(
+        (entry) => entry.checkId === "channels.discord.allowFrom.name_based_entries",
+      );
+      expect(finding).toBeDefined();
+      expect(finding?.severity).toBe("info");
+      expect(finding?.detail).toContain("out-of-scope");
+      expect(res.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "channels.discord.allowFrom.dangerous_name_matching_enabled",
+            severity: "info",
+          }),
+        ]),
+      );
+    });
+  });
+
+  it("audits non-default Discord accounts for dangerous name matching", async () => {
+    await withChannelSecurityStateDir(async () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          discord: {
+            enabled: true,
+            token: "t",
+            accounts: {
+              alpha: { token: "a" },
+              beta: {
+                token: "b",
+                dangerouslyAllowNameMatching: true,
+              },
+            },
+          },
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [discordPlugin],
+      });
+
+      expect(res.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "channels.discord.allowFrom.dangerous_name_matching_enabled",
+            title: expect.stringContaining("(account: beta)"),
+            severity: "info",
+          }),
+        ]),
+      );
+    });
+  });
+
+  it("audits name-based allowlists on non-default Discord accounts", async () => {
+    await withChannelSecurityStateDir(async () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          discord: {
+            enabled: true,
+            token: "t",
+            accounts: {
+              alpha: {
+                token: "a",
+                allowFrom: ["123456789012345678"],
+              },
+              beta: {
+                token: "b",
+                allowFrom: ["Alice#1234"],
+              },
+            },
+          },
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [discordPlugin],
+      });
+
+      const finding = res.findings.find(
+        (entry) => entry.checkId === "channels.discord.allowFrom.name_based_entries",
+      );
+      expect(finding).toBeDefined();
+      expect(finding?.detail).toContain("channels.discord.accounts.beta.allowFrom:Alice#1234");
+    });
+  });
+
   it("does not warn when Discord allowlists use ID-style entries only", async () => {
-    await withStateDir("discord-id-only-allowlist", async () => {
+    await withChannelSecurityStateDir(async () => {
       const cfg: OpenClawConfig = {
         channels: {
           discord: {
@@ -1534,7 +1718,7 @@ describe("security audit", () => {
   });
 
   it("flags Discord slash commands when access-group enforcement is disabled and no users allowlist exists", async () => {
-    await withStateDir("discord-open", async () => {
+    await withChannelSecurityStateDir(async () => {
       const cfg: OpenClawConfig = {
         commands: { useAccessGroups: false },
         channels: {
@@ -1572,7 +1756,7 @@ describe("security audit", () => {
   });
 
   it("flags Slack slash commands without a channel users allowlist", async () => {
-    await withStateDir("slack", async () => {
+    await withChannelSecurityStateDir(async () => {
       const cfg: OpenClawConfig = {
         channels: {
           slack: {
@@ -1604,7 +1788,7 @@ describe("security audit", () => {
   });
 
   it("flags Slack slash commands when access-group enforcement is disabled", async () => {
-    await withStateDir("slack-open", async () => {
+    await withChannelSecurityStateDir(async () => {
       const cfg: OpenClawConfig = {
         commands: { useAccessGroups: false },
         channels: {
@@ -1637,7 +1821,7 @@ describe("security audit", () => {
   });
 
   it("flags Telegram group commands without a sender allowlist", async () => {
-    await withStateDir("telegram", async () => {
+    await withChannelSecurityStateDir(async () => {
       const cfg: OpenClawConfig = {
         channels: {
           telegram: {
@@ -1668,7 +1852,7 @@ describe("security audit", () => {
   });
 
   it("warns when Telegram allowFrom entries are non-numeric (legacy @username configs)", async () => {
-    await withStateDir("telegram-invalid-allowfrom", async () => {
+    await withChannelSecurityStateDir(async () => {
       const cfg: OpenClawConfig = {
         channels: {
           telegram: {

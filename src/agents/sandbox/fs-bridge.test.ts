@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("./docker.js", () => ({
@@ -29,6 +32,13 @@ describe("sandbox fs bridge shell compatibility", () => {
     mockedExecDockerRaw.mockClear();
     mockedExecDockerRaw.mockImplementation(async (args) => {
       const script = args[5] ?? "";
+      if (script.includes('readlink -f -- "$cursor"')) {
+        return {
+          stdout: Buffer.from(`${String(args.at(-2) ?? "")}\n`),
+          stderr: Buffer.alloc(0),
+          code: 0,
+        };
+      }
       if (script.includes('stat -c "%F|%s|%Y"')) {
         return {
           stdout: Buffer.from("regular file|1|2"),
@@ -102,5 +112,57 @@ describe("sandbox fs bridge shell compatibility", () => {
       bridge.writeFile({ filePath: "/workspace-two/new.txt", data: "hello" }),
     ).rejects.toThrow(/read-only/);
     expect(mockedExecDockerRaw).not.toHaveBeenCalled();
+  });
+
+  it("rejects pre-existing host symlink escapes before docker exec", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fs-bridge-"));
+    const workspaceDir = path.join(stateDir, "workspace");
+    const outsideDir = path.join(stateDir, "outside");
+    const outsideFile = path.join(outsideDir, "secret.txt");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(outsideDir, { recursive: true });
+    await fs.writeFile(outsideFile, "classified");
+    await fs.symlink(outsideFile, path.join(workspaceDir, "link.txt"));
+
+    const bridge = createSandboxFsBridge({
+      sandbox: createSandbox({
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+      }),
+    });
+
+    await expect(bridge.readFile({ filePath: "link.txt" })).rejects.toThrow(/Symlink escapes/);
+    expect(mockedExecDockerRaw).not.toHaveBeenCalled();
+    await fs.rm(stateDir, { recursive: true, force: true });
+  });
+
+  it("rejects container-canonicalized paths outside allowed mounts", async () => {
+    mockedExecDockerRaw.mockImplementation(async (args) => {
+      const script = args[5] ?? "";
+      if (script.includes('readlink -f -- "$cursor"')) {
+        return {
+          stdout: Buffer.from("/etc/passwd\n"),
+          stderr: Buffer.alloc(0),
+          code: 0,
+        };
+      }
+      if (script.includes('cat -- "$1"')) {
+        return {
+          stdout: Buffer.from("content"),
+          stderr: Buffer.alloc(0),
+          code: 0,
+        };
+      }
+      return {
+        stdout: Buffer.alloc(0),
+        stderr: Buffer.alloc(0),
+        code: 0,
+      };
+    });
+
+    const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
+    await expect(bridge.readFile({ filePath: "a.txt" })).rejects.toThrow(/escapes allowed mounts/i);
+    const scripts = mockedExecDockerRaw.mock.calls.map(([args]) => args[5] ?? "");
+    expect(scripts.some((script) => script.includes('cat -- "$1"'))).toBe(false);
   });
 });

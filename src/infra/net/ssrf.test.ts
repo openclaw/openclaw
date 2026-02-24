@@ -124,6 +124,14 @@ describe("isBlockedHostnameOrIp", () => {
     expect(isBlockedHostnameOrIp("198.20.0.1")).toBe(false);
   });
 
+  it("supports opt-in policy to allow RFC2544 benchmark range", () => {
+    const policy = { allowRfc2544BenchmarkRange: true };
+    expect(isBlockedHostnameOrIp("198.18.0.1")).toBe(true);
+    expect(isBlockedHostnameOrIp("198.18.0.1", policy)).toBe(false);
+    expect(isBlockedHostnameOrIp("::ffff:198.18.0.1", policy)).toBe(false);
+    expect(isBlockedHostnameOrIp("198.51.100.1", policy)).toBe(true);
+  });
+
   it("blocks legacy IPv4 literal representations", () => {
     expect(isBlockedHostnameOrIp("0177.0.0.1")).toBe(true);
     expect(isBlockedHostnameOrIp("8.8.2056")).toBe(true);

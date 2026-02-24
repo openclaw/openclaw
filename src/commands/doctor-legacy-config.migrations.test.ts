@@ -222,4 +222,39 @@ describe("normalizeLegacyConfigValues", () => {
       "Moved channels.slack.streaming (boolean) → channels.slack.nativeStreaming (false).",
     ]);
   });
+
+  it("migrates browser ssrfPolicy allowPrivateNetwork to dangerouslyAllowPrivateNetwork", () => {
+    const res = normalizeLegacyConfigValues({
+      browser: {
+        ssrfPolicy: {
+          allowPrivateNetwork: true,
+          allowedHostnames: ["localhost"],
+        },
+      },
+    });
+
+    expect(res.config.browser?.ssrfPolicy?.allowPrivateNetwork).toBeUndefined();
+    expect(res.config.browser?.ssrfPolicy?.dangerouslyAllowPrivateNetwork).toBe(true);
+    expect(res.config.browser?.ssrfPolicy?.allowedHostnames).toEqual(["localhost"]);
+    expect(res.changes).toContain(
+      "Moved browser.ssrfPolicy.allowPrivateNetwork → browser.ssrfPolicy.dangerouslyAllowPrivateNetwork (true).",
+    );
+  });
+
+  it("normalizes conflicting browser SSRF alias keys without changing effective behavior", () => {
+    const res = normalizeLegacyConfigValues({
+      browser: {
+        ssrfPolicy: {
+          allowPrivateNetwork: true,
+          dangerouslyAllowPrivateNetwork: false,
+        },
+      },
+    });
+
+    expect(res.config.browser?.ssrfPolicy?.allowPrivateNetwork).toBeUndefined();
+    expect(res.config.browser?.ssrfPolicy?.dangerouslyAllowPrivateNetwork).toBe(true);
+    expect(res.changes).toContain(
+      "Moved browser.ssrfPolicy.allowPrivateNetwork → browser.ssrfPolicy.dangerouslyAllowPrivateNetwork (true).",
+    );
+  });
 });

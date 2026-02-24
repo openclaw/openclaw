@@ -57,6 +57,11 @@ describe("system run command helpers", () => {
     expect(extractShellCommandFromArgv(["pwsh", "-Command", "Get-Date"])).toBe("Get-Date");
   });
 
+  test("extractShellCommandFromArgv unwraps busybox/toybox shell applets", () => {
+    expect(extractShellCommandFromArgv(["busybox", "sh", "-c", "echo hi"])).toBe("echo hi");
+    expect(extractShellCommandFromArgv(["toybox", "ash", "-lc", "echo hi"])).toBe("echo hi");
+  });
+
   test("extractShellCommandFromArgv ignores env wrappers when no shell wrapper follows", () => {
     expect(extractShellCommandFromArgv(["/usr/bin/env", "FOO=bar", "/usr/bin/printf", "ok"])).toBe(
       null,

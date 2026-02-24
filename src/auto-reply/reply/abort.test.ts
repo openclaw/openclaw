@@ -122,25 +122,77 @@ describe("abort detection", () => {
     expect(result.triggerBodyNormalized).toBe("/stop");
   });
 
-  it("isAbortTrigger matches bare word triggers (without slash)", () => {
-    expect(isAbortTrigger("stop")).toBe(true);
-    expect(isAbortTrigger("esc")).toBe(true);
-    expect(isAbortTrigger("abort")).toBe(true);
-    expect(isAbortTrigger("wait")).toBe(true);
-    expect(isAbortTrigger("exit")).toBe(true);
-    expect(isAbortTrigger("interrupt")).toBe(true);
+  it("isAbortTrigger matches standalone abort trigger phrases", () => {
+    const positives = [
+      "stop",
+      "esc",
+      "abort",
+      "wait",
+      "exit",
+      "interrupt",
+      "stop openclaw",
+      "openclaw stop",
+      "stop action",
+      "stop current action",
+      "stop run",
+      "stop current run",
+      "stop agent",
+      "stop the agent",
+      "stop don't do anything",
+      "stop dont do anything",
+      "stop do not do anything",
+      "stop doing anything",
+      "please stop",
+      "stop please",
+      "STOP OPENCLAW",
+      "stop openclaw!!!",
+      "stop don’t do anything",
+      "detente",
+      "detén",
+      "arrête",
+      "停止",
+      "やめて",
+      "止めて",
+      "रुको",
+      "توقف",
+      "стоп",
+      "остановись",
+      "останови",
+      "остановить",
+      "прекрати",
+      "halt",
+      "anhalten",
+      "aufhören",
+      "hoer auf",
+      "stopp",
+      "pare",
+    ];
+    for (const candidate of positives) {
+      expect(isAbortTrigger(candidate)).toBe(true);
+    }
+
     expect(isAbortTrigger("hello")).toBe(false);
-    // /stop is NOT matched by isAbortTrigger - it's handled separately
+    expect(isAbortTrigger("do not do that")).toBe(false);
+    // /stop is NOT matched by isAbortTrigger - it's handled separately.
     expect(isAbortTrigger("/stop")).toBe(false);
   });
 
   it("isAbortRequestText aligns abort command semantics", () => {
     expect(isAbortRequestText("/stop")).toBe(true);
+    expect(isAbortRequestText("/stop!!!")).toBe(true);
     expect(isAbortRequestText("stop")).toBe(true);
+    expect(isAbortRequestText("stop action")).toBe(true);
+    expect(isAbortRequestText("stop openclaw!!!")).toBe(true);
+    expect(isAbortRequestText("やめて")).toBe(true);
+    expect(isAbortRequestText("остановись")).toBe(true);
+    expect(isAbortRequestText("halt")).toBe(true);
+    expect(isAbortRequestText("stopp")).toBe(true);
+    expect(isAbortRequestText("pare")).toBe(true);
+    expect(isAbortRequestText(" توقف ")).toBe(true);
     expect(isAbortRequestText("/stop@openclaw_bot", { botUsername: "openclaw_bot" })).toBe(true);
 
     expect(isAbortRequestText("/status")).toBe(false);
-    expect(isAbortRequestText("stop please")).toBe(false);
+    expect(isAbortRequestText("do not do that")).toBe(false);
     expect(isAbortRequestText("/abort")).toBe(false);
   });
 

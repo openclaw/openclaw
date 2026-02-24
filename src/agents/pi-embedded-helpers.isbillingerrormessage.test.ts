@@ -393,6 +393,10 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("invalid api key")).toBe("auth");
     expect(classifyFailoverReason("no credentials found")).toBe("auth");
     expect(classifyFailoverReason("no api key found")).toBe("auth");
+    expect(classifyFailoverReason("You have insufficient permissions for this operation.")).toBe(
+      "auth",
+    );
+    expect(classifyFailoverReason("Missing scopes: model.request")).toBe("auth");
     expect(classifyFailoverReason("429 too many requests")).toBe("rate_limit");
     expect(classifyFailoverReason("resource has been exhausted")).toBe("rate_limit");
     expect(

@@ -14,7 +14,7 @@ async function waitForPersistedSecret(configPath: string, expectedSecret: string
     if (parsed.commands?.ownerDisplaySecret === expectedSecret) {
       return;
     }
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await new Promise((resolve) => setTimeout(resolve, 5));
   }
   throw new Error("timed out waiting for ownerDisplaySecret persistence");
 }

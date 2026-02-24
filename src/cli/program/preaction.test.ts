@@ -80,6 +80,8 @@ describe("registerPreActionHooks", () => {
     program.command("update").action(async () => {});
     program.command("channels").action(async () => {});
     program.command("directory").action(async () => {});
+    program.command("configure").action(async () => {});
+    program.command("onboard").action(async () => {});
     program
       .command("message")
       .command("send")
@@ -122,6 +124,24 @@ describe("registerPreActionHooks", () => {
       runtime: runtimeMock,
       commandPath: ["message", "send"],
     });
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads plugin registry for configure command", async () => {
+    await runCommand({
+      parseArgv: ["configure"],
+      processArgv: ["node", "openclaw", "configure"],
+    });
+
+    expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("loads plugin registry for onboard command", async () => {
+    await runCommand({
+      parseArgv: ["onboard"],
+      processArgv: ["node", "openclaw", "onboard"],
+    });
+
     expect(ensurePluginRegistryLoadedMock).toHaveBeenCalledTimes(1);
   });
 
