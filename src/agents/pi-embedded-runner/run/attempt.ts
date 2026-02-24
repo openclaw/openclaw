@@ -19,7 +19,7 @@ import type {
   PluginHookBeforeAgentStartResult,
   PluginHookBeforePromptBuildResult,
 } from "../../../plugins/types.js";
-import { isCronSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
+import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { resolveSignalReactionLevel } from "../../../signal/reaction-level.js";
 import { resolveTelegramInlineButtonsScope } from "../../../telegram/inline-buttons.js";
 import { resolveTelegramReactionLevel } from "../../../telegram/reaction-level.js";
@@ -494,10 +494,7 @@ export async function runEmbeddedAttempt(
       },
     });
     const isDefaultAgent = sessionAgentId === defaultAgentId;
-    const promptMode =
-      isSubagentSessionKey(params.sessionKey) || isCronSessionKey(params.sessionKey)
-        ? "minimal"
-        : "full";
+    const promptMode = isSubagentSessionKey(params.sessionKey) ? "minimal" : "full";
     const docsPath = await resolveOpenClawDocsPath({
       workspaceDir: effectiveWorkspace,
       argv1: process.argv[1],
