@@ -591,6 +591,8 @@ describe("runHeartbeatOnce", () => {
           SessionKey: sessionKey,
           From: "+1555",
           To: "+1555",
+          OriginatingChannel: "whatsapp",
+          OriginatingTo: "+1555",
           Provider: "heartbeat",
         }),
         expect.objectContaining({ isHeartbeat: true, suppressToolErrorWarnings: false }),

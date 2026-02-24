@@ -32,6 +32,7 @@ export function buildReplyPayloads(params: {
   messagingToolSentTargets?: Parameters<
     typeof shouldSuppressMessagingToolReplies
   >[0]["messagingToolSentTargets"];
+  originatingChannel?: OriginatingChannelType;
   originatingTo?: string;
   accountId?: string;
 }): { replyPayloads: ReplyPayload[]; didLogHeartbeatStrip: boolean } {
@@ -86,7 +87,7 @@ export function buildReplyPayloads(params: {
   const messagingToolSentTexts = params.messagingToolSentTexts ?? [];
   const messagingToolSentTargets = params.messagingToolSentTargets ?? [];
   const suppressMessagingToolReplies = shouldSuppressMessagingToolReplies({
-    messageProvider: params.messageProvider,
+    messageProvider: params.originatingChannel ?? params.messageProvider,
     messagingToolSentTargets,
     originatingTo: params.originatingTo,
     accountId: params.accountId,
