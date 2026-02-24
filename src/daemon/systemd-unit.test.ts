@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildSystemdUnit } from "./systemd-unit.js";
+import { buildSystemdUnit, parseSystemdEnvAssignment } from "./systemd-unit.js";
 
 describe("buildSystemdUnit", () => {
   it("quotes arguments with whitespace", () => {
@@ -22,5 +22,19 @@ describe("buildSystemdUnit", () => {
         },
       }),
     ).toThrow(/CR or LF/);
+  });
+});
+
+describe("parseSystemdEnvAssignment", () => {
+  it("unquotes simple assignment", () => {
+    expect(parseSystemdEnvAssignment('"FOO=bar"')).toEqual({ key: "FOO", value: "bar" });
+  });
+
+  it("handles backslash-escaped quotes in values", () => {
+    expect(parseSystemdEnvAssignment('"FOO=bar\\"baz"')).toEqual({ key: "FOO", value: 'bar"baz' });
+  });
+
+  it("returns null for empty input", () => {
+    expect(parseSystemdEnvAssignment("")).toBeNull();
   });
 });
