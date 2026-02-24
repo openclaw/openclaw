@@ -11,6 +11,26 @@ type TelegramDmAccessLogger = {
   info: (obj: Record<string, unknown>, msg: string) => void;
 };
 
+type TelegramSenderIdentity = {
+  username: string;
+  userId: string | null;
+  candidateId: string;
+  firstName?: string;
+  lastName?: string;
+};
+
+function resolveTelegramSenderIdentity(msg: Message, chatId: number): TelegramSenderIdentity {
+  const from = msg.from;
+  const userId = from?.id != null ? String(from.id) : null;
+  return {
+    username: from?.username ?? "",
+    userId,
+    candidateId: userId ?? String(chatId),
+    firstName: from?.first_name,
+    lastName: from?.last_name,
+  };
+}
+
 export async function enforceTelegramDmAccess(params: {
   isGroup: boolean;
   dmPolicy: DmPolicy;
@@ -32,13 +52,11 @@ export async function enforceTelegramDmAccess(params: {
     return true;
   }
 
-  const senderUsername = msg.from?.username ?? "";
-  const senderUserId = msg.from?.id != null ? String(msg.from.id) : null;
-  const candidate = senderUserId ?? String(chatId);
+  const sender = resolveTelegramSenderIdentity(msg, chatId);
   const allowMatch = resolveSenderAllowMatch({
     allow: effectiveDmAllow,
-    senderId: candidate,
-    senderUsername,
+    senderId: sender.candidateId,
+    senderUsername: sender.username,
   });
   const allowMatchMeta = `matchKey=${allowMatch.matchKey ?? "none"} matchSource=${
     allowMatch.matchSource ?? "none"
@@ -51,33 +69,25 @@ export async function enforceTelegramDmAccess(params: {
 
   if (dmPolicy === "pairing") {
     try {
-      const from = msg.from as
-        | {
-            first_name?: string;
-            last_name?: string;
-            username?: string;
-            id?: number;
-          }
-        | undefined;
-      const telegramUserId = from?.id ? String(from.id) : candidate;
+      const telegramUserId = sender.userId ?? sender.candidateId;
       const { code, created } = await upsertChannelPairingRequest({
         channel: "telegram",
         id: telegramUserId,
         accountId,
         meta: {
-          username: from?.username,
-          firstName: from?.first_name,
-          lastName: from?.last_name,
+          username: sender.username || undefined,
+          firstName: sender.firstName,
+          lastName: sender.lastName,
         },
       });
       if (created) {
         logger.info(
           {
             chatId: String(chatId),
-            senderUserId: senderUserId ?? undefined,
-            username: from?.username,
-            firstName: from?.first_name,
-            lastName: from?.last_name,
+            senderUserId: sender.userId ?? undefined,
+            username: sender.username || undefined,
+            firstName: sender.firstName,
+            lastName: sender.lastName,
             matchKey: allowMatch.matchKey ?? "none",
             matchSource: allowMatch.matchSource ?? "none",
           },
@@ -103,7 +113,7 @@ export async function enforceTelegramDmAccess(params: {
   }
 
   logVerbose(
-    `Blocked unauthorized telegram sender ${candidate} (dmPolicy=${dmPolicy}, ${allowMatchMeta})`,
+    `Blocked unauthorized telegram sender ${sender.candidateId} (dmPolicy=${dmPolicy}, ${allowMatchMeta})`,
   );
   return false;
 }

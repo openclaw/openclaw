@@ -72,6 +72,14 @@ function isRecoverableMediaGroupError(err: unknown): boolean {
   return err instanceof MediaFetchError || isMediaSizeLimitError(err);
 }
 
+function hasInboundMedia(msg: Message): boolean {
+  return (
+    Boolean(msg.media_group_id) ||
+    (Array.isArray(msg.photo) && msg.photo.length > 0) ||
+    Boolean(msg.video ?? msg.video_note ?? msg.document ?? msg.audio ?? msg.voice ?? msg.sticker)
+  );
+}
+
 export const registerTelegramHandlers = ({
   cfg,
   accountId,
@@ -1143,11 +1151,12 @@ export const registerTelegramHandlers = ({
       if (shouldSkipUpdate(event.ctxForDedupe)) {
         return;
       }
+      const dmPolicy = telegramCfg.dmPolicy ?? "pairing";
 
       const groupAllowContext = await resolveTelegramGroupAllowFromContext({
         chatId: event.chatId,
         accountId,
-        dmPolicy: telegramCfg.dmPolicy ?? "pairing",
+        dmPolicy,
         isForum: event.isForum,
         messageThreadId: event.messageThreadId,
         groupAllowFrom,
@@ -1161,6 +1170,11 @@ export const registerTelegramHandlers = ({
         effectiveGroupAllow,
         hasGroupAllowOverride,
       } = groupAllowContext;
+      const effectiveDmAllow = normalizeAllowFromWithStore({
+        allowFrom,
+        storeAllowFrom,
+        dmPolicy,
+      });
 
       if (event.requireConfiguredGroup && (!groupConfig || groupConfig.enabled === false)) {
         logVerbose(`Blocked telegram channel ${event.chatId} (channel disabled)`);
@@ -1184,26 +1198,10 @@ export const registerTelegramHandlers = ({
         return;
       }
 
-      const hasInboundMedia =
-        Boolean(event.msg.media_group_id) ||
-        (Array.isArray(event.msg.photo) && event.msg.photo.length > 0) ||
-        Boolean(
-          event.msg.video ??
-          event.msg.video_note ??
-          event.msg.document ??
-          event.msg.audio ??
-          event.msg.voice ??
-          event.msg.sticker,
-        );
-      if (!event.isGroup && hasInboundMedia) {
-        const effectiveDmAllow = normalizeAllowFromWithStore({
-          allowFrom,
-          storeAllowFrom,
-          dmPolicy: telegramCfg.dmPolicy ?? "pairing",
-        });
+      if (!event.isGroup && hasInboundMedia(event.msg)) {
         const dmAuthorized = await enforceTelegramDmAccess({
           isGroup: event.isGroup,
-          dmPolicy: telegramCfg.dmPolicy ?? "pairing",
+          dmPolicy,
           msg: event.msg,
           chatId: event.chatId,
           effectiveDmAllow,
