@@ -1338,19 +1338,22 @@ export async function runEmbeddedPiAgent(
             didSendViaMessagingTool: attempt.didSendViaMessagingTool,
           });
 
-          // Timeout aborts can leave the run without any assistant payloads.
-          // Emit an explicit timeout error instead of silently completing, so
-          // callers do not lose the turn as an orphaned user message.
-          if (timedOut && !timedOutDuringCompaction && payloads.length === 0) {
+          // Timeout aborts can leave the run without any assistant payloads,
+          // or with only reasoning/thinking blocks but no actual reply text.
+          // Emit an explicit timeout error so the user is not left staring at
+          // a "thinking" indicator that will never resolve.
+          const hasNonReasoningPayload = payloads.some(
+            (p) => !p.isReasoning && (p.text || p.mediaUrl || (p.mediaUrls && p.mediaUrls.length)),
+          );
+          if (timedOut && !timedOutDuringCompaction && !hasNonReasoningPayload) {
+            const timeoutPayload = {
+              text:
+                "Request timed out before a response was generated. " +
+                "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
+              isError: true,
+            };
             return {
-              payloads: [
-                {
-                  text:
-                    "Request timed out before a response was generated. " +
-                    "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.",
-                  isError: true,
-                },
-              ],
+              payloads: [...payloads, timeoutPayload],
               meta: {
                 durationMs: Date.now() - started,
                 agentMeta,
