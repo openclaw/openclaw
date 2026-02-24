@@ -164,7 +164,10 @@ function redactObjectWithLookup(
           break;
         }
       }
-      if (!matched && isExtensionPath(path)) {
+      if (!matched) {
+        // Fall back to pattern-based guessing for paths not covered by schema
+        // hints. This catches dynamic keys inside catchall objects (for example
+        // env.GROQ_API_KEY) and extension/plugin config alike.
         const markedNonSensitive = isExplicitlyNonSensitivePath(hints, [path, wildcardPath]);
         if (
           typeof value === "string" &&
@@ -542,7 +545,7 @@ function restoreRedactedValuesWithLookup(
         break;
       }
     }
-    if (!matched && isExtensionPath(path)) {
+    if (!matched) {
       const markedNonSensitive = isExplicitlyNonSensitivePath(hints, [path, wildcardPath]);
       if (!markedNonSensitive && isSensitivePath(path) && value === REDACTED_SENTINEL) {
         result[key] = restoreOriginalValueOrThrow({ key, path, original: orig });
