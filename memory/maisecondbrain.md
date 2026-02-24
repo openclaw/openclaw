@@ -27,7 +27,8 @@ related:
 
 - **데이터 레이크 + 지식그래프**: Obsidian (Markdown + YAML + `[[위키링크]]`) — 볼트 자체가 source of truth
 - **그래프 엔진**: NetworkX (Python 인메모리) — 볼트에서 동적 빌드
-- **GraphRAG**: 벡터 임베딩 + 그래프 관계 탐색 하이브리드
+- **임베딩 모델**: qwen3-embedding:0.6b (1024d, MTEB 다국어 1위) — nomic-embed-text(768d)에서 전환 (2026-02-24)
+- **GraphRAG**: 벡터 임베딩 + 그래프 관계 탐색 하이브리드 + Cross-Encoder Reranker
 - **AI 에이전트**: OpenClaw (MAIBOT) — 크론, 수집, 분석, 복습
 - **언어**: Python (그래프/RAG) + TypeScript (Obsidian 플러그인)
 
@@ -108,6 +109,8 @@ Mnemo
 - 2026-02-24: **온톨로지 v2** — 엔티티 분류 보강(tool 618개, concept 163개, decision 3개 새로 분류) + 의미적 관계 자동 추출(uses 1,144 / derived_from 807 / alternatives 278 / supports 249 / contradicts 3 = 총 2,481 엣지) + 가비지 노드 745개 정리(3,511→2,893) + 밀도 0.0029→0.0038(+30%)
 - 2026-02-24: **Phase 3.5 person 추출** — extract_persons.py(llama3.1:8b) 생성, 12 person stubs (Sam Altman, Jensen Huang, 김철수, 이진희 등), cleanup_person_stubs.py로 오탐(Morgan Stanley, Temasek 등) 제거
 - 2026-02-24: **Phase 4 검색 고도화** — Reranker A/B 테스트(8쿼리×4구성): Reranker +8% 관련도(0.521→0.562), 동적 가중치 단독 효과 미미(-8%). query_classifier.py(factual/relational/exploratory) + GraphRAG 프롬프트 쿼리타입별 분기 + search_ab_test.py 벤치마크 스크립트
+- 2026-02-24: **임베딩 모델 전환** — nomic-embed-text(768d, hit 6%) → qwen3-embedding:0.6b(1024d, hit 33%, 5.5배 개선). 전체 3,462 벡터 재빌드. MNEMO_EMBED_MODEL 환경변수 오버라이드 지원. 전환 후 baseline 0.583(+12%), reranker 0.604
+- 2026-02-24: **A002 온톨로지 개선 계획 전체 완료** — Phase 1(엔티티 분류) + Phase 2(가비지 정리) + Phase 3(의미적 관계) + Phase 3.5(person LLM 추출) + Phase 4(검색 고도화) 모두 ✅
 
 ## 결정사항
 
@@ -117,6 +120,10 @@ Mnemo
 - 첫 적용 대상: MAIBOT (3,037 파일 볼트 + memory 23개)
 - BOT Suite #7 (BOTMEMO)로 편입 — MAICON(BOTCON) 패턴 동일
 - Mnemo = BOT Suite의 "뇌" — 다른 봇의 활동 데이터를 지식으로 연결·축적·추론
+- Reranker ON 기본 추천: `MNEMO_USE_RERANKER=true` (cross-encoder +8% 관련도)
+- 동적 가중치: opt-in only (`--dynamic-weights` 플래그)
+- LLM 추출 기본: llama3.1:8b (qwen3:8b thinking mode empty response 이슈)
+- 임베딩 모델 환경변수: `MNEMO_EMBED_MODEL` (기본값: qwen3-embedding:0.6b)
 
 ## 다음 액션
 

@@ -28,6 +28,17 @@
   3. 진행 상황 Discord DM 보고
 - **완료 조건:** PR 머지됨
 
+#### MAIBOTALKS App Store 심사 추적
+
+- **URL:** https://appstoreconnect.apple.com/apps/6759508239/appstore/ios/version/inflight
+- **상태:** 심사 대기 중 (2026-02-22 제출, 메타데이터 2026-02-24 수정 완료)
+- **체크:** `curl -s "https://botalks.app/" -o /dev/null -w "%{http_code}"` (사이트 정상 여부)
+- **할 일:**
+  1. 심사 결과 나오면 → Discord DM 즉시 보고
+  2. 승인 시 → 출시 준비 (ASC 인앱 구독 상품 생성 필요)
+  3. 거부 시 → 사유 분석 → 수정 계획 수립 → Discord DM 보고
+- **완료 조건:** App Store 출시 완료 또는 거부 대응 완료
+
 #### MAISECONDBRAIN (Mnemo) — 이슈 자동 대응
 
 - **Repo:** https://github.com/jini92/MAISECONDBRAIN
@@ -166,4 +177,4 @@
 
 ---
 
-_Last reviewed: 2026-02-20_
+_Last reviewed: 2026-02-24_

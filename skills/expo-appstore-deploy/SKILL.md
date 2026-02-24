@@ -250,3 +250,38 @@ npx eas-cli metadata:push  # ASC에 업로드
 ```
 
 이 방식이 브라우저 자동화보다 안정적 (다음 제출부터 권장)
+
+## 이메일 포워딩 (ImprovMX 무료 권장)
+
+App Store 심사 시 `support@yourdomain.com` 같은 이메일이 필요할 수 있음.
+**ImprovMX** (무료 티어: 25 emails/day)가 간편:
+
+```bash
+# 1. ImprovMX 가입 (improvmx.com) + 도메인 추가
+# 2. DNS MX 레코드 2개:
+#    mx1.improvmx.com (우선순위 10)
+#    mx2.improvmx.com (우선순위 20)
+# 3. SPF(TXT) 레코드:
+#    v=spf1 include:spf.improvmx.com ~all
+# 4. Alias 설정: support@ → 실제 Gmail
+```
+
+검증: ImprovMX Dashboard 또는 API `/v3/domains/<domain>/check`
+
+## ASC contenteditable 필드 수정 (JS)
+
+ASC의 프로모션 텍스트/앱 설명은 `[contenteditable=true]` div, Review Notes는 `textarea#notes`:
+
+```javascript
+// Promotional Text / Description (contenteditable div)
+const el = document.querySelector("[contenteditable=true]");
+el.innerText = "New text";
+el.dispatchEvent(new Event("input", { bubbles: true }));
+
+// Review Notes (textarea)
+const ta = document.querySelector("textarea#notes");
+ta.value = "New notes";
+ta.dispatchEvent(new Event("input", { bubbles: true }));
+
+// 반드시 Save 버튼 클릭 — 페이지 이동 시 변경사항 소실됨!
+```

@@ -22,64 +22,82 @@ related:
 
 ## 주요 마일스톤
 
-| 날짜       | 내용                                                  | 상태         |
-| ---------- | ----------------------------------------------------- | ------------ |
-| 2026-02-15 | 프로젝트 초기화                                       | ✅ 완료      |
-| 2026-02-15 | PRD v2.0 완료 (모바일앱+수익화)                       | ✅ 완료      |
-| 2026-02-15 | Sprint 1 — Core Foundation 완료                       | ✅ 완료      |
-| 2026-02-15 | Sprint 2 — UI/Middleware/Config 완료                  | ✅ 완료      |
-| 2026-02-15 | 문서화 & 아키텍처 개요 작성                           | ✅ 완료      |
-| 2026-02-15 | 실기기 테스트 가이드 작성                             | ✅ 완료      |
-| 2026-02-15 | CHANGELOG 작성                                        | ✅ 완료      |
-| 2026-02-15 | Expo Go 실기기 테스트 (iOS) — 풀 플로우 성공          | ✅ 완료      |
-| 2026-02-15 | 버그 7개 수정 (녹음/STT/TTS/스트리밍)                 | ✅ 완료      |
-| 2026-02-15 | 앱 아이콘 + 스플래시 + EAS Build 설정                 | ✅ 완료      |
-| 2026-02-17 | 아키텍처 리팩토링 — 미들웨어 제거, Gateway 직접 연결  | ✅ 완료      |
-| 2026-02-17 | 수익 모델 확정 → ₩9,900 일회성 + 7일 트라이얼         | ✅ 완료      |
-| 2026-02-17 | QR 코드 스캔 + 딥링크 자동 연결                       | ✅ 완료      |
-| 2026-02-17 | 온보딩 5스텝 + 구매 게이트 + 사용자 가이드            | ✅ 완료      |
-| 2026-02-17 | clawhub botalks 스킬 패키지 생성                      | ✅ 완료      |
-| 2026-02-17 | OpenClaw 앱 팩토리 사업계획서 (A002)                  | ✅ 완료      |
-| 2026-02-17 | 실기기 테스트 가이드 (T003)                           | ✅ 완료      |
-| 2026-02-22 | EAS Build + App Store Connect 제출                    | ✅ 완료      |
-| 2026-02-22 | TestFlight 외부 베타 통과                             | ✅ 완료      |
-| 2026-02-22 | **App Store 심사 제출** (v1.0.0)                      | 🟡 심사 대기 |
-| 2026-02-24 | botalks-web GitHub Pages 배포 (privacy/terms/support) | ✅ 완료      |
-| 2026-02-24 | 심사 긴급 수정 가이드 (I007) 작성                     | ✅ 완료      |
-| 2026-02-24 | ASC Support URL + Marketing URL 변경                  | ✅ 완료      |
-| 2026-02-24 | ASC Privacy Policy URL + Review Notes + Description   | 🔴 미완료    |
+| 날짜       | 내용                                                    | 상태         |
+| ---------- | ------------------------------------------------------- | ------------ |
+| 2026-02-15 | 프로젝트 초기화                                         | ✅ 완료      |
+| 2026-02-15 | PRD v2.0 완료 (모바일앱+수익화)                         | ✅ 완료      |
+| 2026-02-15 | Sprint 1 — Core Foundation 완료                         | ✅ 완료      |
+| 2026-02-15 | Sprint 2 — UI/Middleware/Config 완료                    | ✅ 완료      |
+| 2026-02-15 | 문서화 & 아키텍처 개요 작성                             | ✅ 완료      |
+| 2026-02-15 | 실기기 테스트 가이드 작성                               | ✅ 완료      |
+| 2026-02-15 | CHANGELOG 작성                                          | ✅ 완료      |
+| 2026-02-15 | Expo Go 실기기 테스트 (iOS) — 풀 플로우 성공            | ✅ 완료      |
+| 2026-02-15 | 버그 7개 수정 (녹음/STT/TTS/스트리밍)                   | ✅ 완료      |
+| 2026-02-15 | 앱 아이콘 + 스플래시 + EAS Build 설정                   | ✅ 완료      |
+| 2026-02-17 | 아키텍처 리팩토링 — 미들웨어 제거, Gateway 직접 연결    | ✅ 완료      |
+| 2026-02-17 | 수익 모델 초안 → ₩9,900 일회성 + 7일 트라이얼           | ✅ 완료      |
+| 2026-02-17 | QR 코드 스캔 + 딥링크 자동 연결                         | ✅ 완료      |
+| 2026-02-17 | 온보딩 5스텝 + 구매 게이트 + 사용자 가이드              | ✅ 완료      |
+| 2026-02-17 | clawhub botalks 스킬 패키지 생성                        | ✅ 완료      |
+| 2026-02-17 | OpenClaw 앱 팩토리 사업계획서 (A002)                    | ✅ 완료      |
+| 2026-02-17 | 실기기 테스트 가이드 (T003)                             | ✅ 완료      |
+| 2026-02-22 | EAS Build + App Store Connect 제출                      | ✅ 완료      |
+| 2026-02-22 | TestFlight 외부 베타 통과                               | ✅ 완료      |
+| 2026-02-22 | **App Store 심사 제출** (v1.0.0)                        | 🟡 심사 대기 |
+| 2026-02-24 | botalks-web GitHub Pages 배포 (privacy/terms/support)   | ✅ 완료      |
+| 2026-02-24 | 심사 긴급 수정 가이드 (I007) 작성                       | ✅ 완료      |
+| 2026-02-24 | ASC Support URL + Marketing URL 변경                    | ✅ 완료      |
+| 2026-02-24 | ASC Privacy Policy URL + Review Notes + Description     | ✅ 완료      |
+| 2026-02-24 | ASC 프로모션 텍스트 + Description 구독 모델 반영        | ✅ 완료      |
+| 2026-02-24 | ASC 전체 메타데이터 저장 완료                           | ✅ 완료      |
+| 2026-02-24 | botalks.app DNS A 레코드 + HTTPS 활성화                 | ✅ 완료      |
+| 2026-02-24 | botalks-web 전면 리디자인 (glassmorphism + i18n)        | ✅ 완료      |
+| 2026-02-24 | 수익화 모델 변경: 일회성 → 구독 (₩3,900/월, ₩29,900/년) | ✅ 완료      |
+| 2026-02-24 | ImprovMX 이메일 포워딩 (support@botalks.app)            | ✅ 완료      |
+| 2026-02-24 | DNS MX + SPF 레코드 추가                                | ✅ 완료      |
 
-## ⚠️ App Store 심사 — URL 수정 진행 중
+## ✅ App Store 심사 — 인프라 완료 (2026-02-24)
 
-**상태:** 심사 대기 중 (2026-02-22 제출) → 도메인 등록 + URL 수정 진행 중 (2026-02-24)
-**문제:** 제출 시 `botalks.app` 도메인 미존재 → 리젝 위험
-**해결:** ✅ `botalks.app` 도메인 등록 (whois.co.kr) + GitHub Pages 연결
+**상태:** 심사 대기 중 (2026-02-22 제출) → 모든 인프라 + ASC 메타데이터 수정 완료 (2026-02-24)
 
 ### botalks-web 정적 사이트
 
-- **로컬:** `C:\TEST\botalks-web\` (순수 HTML/CSS)
+- **로컬:** `C:\TEST\botalks-web\` (순수 HTML/CSS, shared.css)
 - **GitHub:** `jini92/botalks-web`
-- **URL:** `https://botalks.app/` (커스텀 도메인)
+- **URL:** `https://botalks.app/` (HTTPS ✅, Let's Encrypt)
 - **페이지:** 메인(`/`), privacy(`/privacy/`, `/privacy/ko/`), terms(`/terms/`), support(`/support/`)
+- **디자인:** glassmorphism nav, gradient hero, feature cards, pricing cards, Inter font
+- **i18n:** 🇰🇷 한국어 / 🇺🇸 English (CSS data-lang toggle + localStorage, 기본=한국어)
 
 ### botalks.app 도메인 설정
 
-- **등록:** whois.co.kr (2026-02-24)
-- **DNS:** A 레코드 4개 필요 → `185.199.108.153` / `109` / `110` / `111`
-- **GitHub Pages CNAME:** 설정 완료 (CNAME 파일 + `gh api` 설정)
-- **HTTPS:** DNS 전파 후 GitHub가 Let's Encrypt 자동 발급
+- **등록:** whois.co.kr (2026-02-24, ₩33,000/1년)
+- **DNS A 레코드:** `185.199.108-111.153` (4개 완료)
+- **DNS MX 레코드:** `mx1.improvmx.com` (10), `mx2.improvmx.com` (20) ✅
+- **DNS SPF(TXT):** `v=spf1 include:spf.improvmx.com ~all` ✅
+- **GitHub Pages CNAME:** 설정 완료
+- **HTTPS:** Let's Encrypt 발급 + `https_enforced: true` ✅
 
-### App Store Connect URL — 최종 정리
+### 이메일 포워딩 (ImprovMX)
 
-| 항목               | 최종 URL                       | ASC 수정 |
+- **서비스:** ImprovMX (무료 티어, 25 emails/day)
+- `support@botalks.app` → `jini92.lee@gmail.com` ✅
+- `*@botalks.app` (catch-all) → `jini92.lee@gmail.com` ✅
+- ImprovMX API key: `sk_82446d1c08854b18995651764bc8b70d`
+- 이메일 수신 테스트 완료 ✅
+
+### App Store Connect 메타데이터 — 전체 완료 ✅
+
+| 항목               | 최종 URL/내용                  | ASC 수정 |
 | ------------------ | ------------------------------ | -------- |
-| Privacy Policy URL | `https://botalks.app/privacy/` | ❌ 필요  |
+| Privacy Policy URL | `https://botalks.app/privacy/` | ✅ 완료  |
 | Support URL        | `https://botalks.app/support/` | ✅ 완료  |
 | Marketing URL      | `https://botalks.app/`         | ✅ 완료  |
-| Review Notes       | I007 가이드 참고               | ❌ 필요  |
-| Description 내 URL | privacy/, terms/ 수정          | ❌ 필요  |
+| 프로모션 텍스트    | 구독 모델 반영 (₩3,900/월)     | ✅ 완료  |
+| Description        | 구독 모델로 수정               | ✅ 완료  |
+| Review Notes       | 구독 모델 반영 (no free trial) | ✅ 완료  |
+| 저장               | ✓ 저장 완료 확인               | ✅ 완료  |
 
-**잔여 작업:** DNS 전파 확인 → ASC에서 Support/Marketing URL도 `botalks.app`으로 재변경 → Privacy + Review Notes + Description 수정 → 저장 → 재제출
 **상세 가이드:** `docs/I007-appstore-review-fix.md`
 
 ## Tech Intelligence 인사이트 (2026-02-24)
@@ -123,7 +141,7 @@ related:
 - **TTS:** Gateway `/v1/audio/speech` + expo-speech 폴백
 - **백엔드:** 없음 (사용자 OpenClaw Gateway 직접 연결)
 - **연결:** QR 코드 스캔 / 딥링크 (`botalks://connect`) / 수동 입력
-- **결제:** 앱 유료 ₩9,900 (일회성, 7일 트라이얼)
+- **결제:** 구독 — 월간 ₩3,900 ($2.99) / 연간 ₩29,900 ($19.99), 무료 체험 없음
 - **스킬:** clawhub `botalks` 스킬 (QR 페어링 + 딥링크)
 
 ## App Store 배포 (2026-02-22)
@@ -151,10 +169,11 @@ related:
 
 - **구독 모델** (D005-monetization-model.md)
 - 월간: ₩3,900/월 (글로벌 $2.99/월)
-- 연간: ₩29,900/년 (글로벌 $19.99/년) — 37% 할인
+- 연간: ₩29,900/년 (글로벌 $19.99/년) — 36% 할인
 - 무료 버전 없음, 무료 체험 없음
 - 사용자가 자기 OpenClaw Gateway 인프라 비용 부담
 - BEP: 월간 구독자 약 6명
+- **ASC 인앱 구독 상품 미생성** — App Store Connect에서 월간/연간 구독 상품 + StoreKit 연동 필요 (다음 작업)
 
 ## 사업 모델: OpenClaw 앱 팩토리 (A002)
 
@@ -186,6 +205,10 @@ related:
 - [x] **ASC 프로모션 텍스트** → 구독 모델로 수정 ✅ (2026-02-24)
 - [x] **ASC 저장 완료** ✅ (2026-02-24)
 - [x] `botalks.app` 커스텀 도메인 등록 → GitHub Pages CNAME + HTTPS ✅ (2026-02-24)
+- [x] botalks-web 전면 리디자인 (glassmorphism + i18n) ✅ (2026-02-24)
+- [x] ImprovMX 이메일 포워딩 (`support@botalks.app`) ✅ (2026-02-24)
+- [x] DNS MX + SPF 레코드 추가 + 이메일 수신 테스트 ✅ (2026-02-24)
+- [ ] **ASC 인앱 구독 상품 생성** — 월간 ₩3,900 / 연간 ₩29,900 (StoreKit 연동 필요)
 - [ ] EAS Build (Android) + Google Play 제출
 - [ ] Tailscale funnel/VPS 데모 Gateway (다음 버전 심사용)
 
