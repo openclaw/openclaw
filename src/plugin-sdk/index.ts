@@ -181,7 +181,16 @@ export {
   normalizeAccountId,
   resolveThreadSessionKeys,
 } from "../routing/session-key.js";
-export { formatAllowFromLowercase, isAllowedParsedChatSender } from "./allow-from.js";
+export {
+  formatAllowFromLowercase,
+  isAllowedParsedChatSender,
+  isNormalizedSenderAllowed,
+} from "./allow-from.js";
+export {
+  evaluateSenderGroupAccess,
+  type SenderGroupAccessDecision,
+  type SenderGroupAccessReason,
+} from "./group-access.js";
 export { resolveSenderCommandAuthorization } from "./command-auth.js";
 export { handleSlackMessageAction } from "./slack-message-actions.js";
 export { extractToolSend } from "./tool-send.js";
