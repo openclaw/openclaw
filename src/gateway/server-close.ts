@@ -8,6 +8,7 @@ import type { PluginServicesHandle } from "../plugins/services.js";
 
 export function createGatewayCloseHandler(params: {
   bonjourStop: (() => Promise<void>) | null;
+  meshManager?: { stop: () => void } | null;
   tailscaleCleanup: (() => Promise<void>) | null;
   canvasHost: CanvasHostHandler | null;
   canvasHostServer: CanvasHostServer | null;
@@ -38,6 +39,13 @@ export function createGatewayCloseHandler(params: {
       typeof opts?.restartExpectedMs === "number" && Number.isFinite(opts.restartExpectedMs)
         ? Math.max(0, Math.floor(opts.restartExpectedMs))
         : null;
+    if (params.meshManager) {
+      try {
+        params.meshManager.stop();
+      } catch {
+        /* ignore */
+      }
+    }
     if (params.bonjourStop) {
       try {
         await params.bonjourStop();

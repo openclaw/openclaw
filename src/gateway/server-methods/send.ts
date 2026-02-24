@@ -170,6 +170,52 @@ export const sendHandlers: GatewayRequestHandlers = {
     const outboundChannel = channel;
     const plugin = resolveOutboundChannelPlugin({ channel, cfg });
     if (!plugin) {
+      // Mesh routing fallback: if the channel is unavailable locally, check if a
+      // mesh peer can deliver the message.
+      try {
+        const { resolveMeshRoute } = await import("../../mesh/routing.js");
+        const { forwardMessageToPeer } = await import("../../mesh/forwarding.js");
+        const meshContext = context as unknown as {
+          meshPeerRegistry?: import("../../mesh/peer-registry.js").PeerRegistry;
+          meshCapabilityRegistry?: import("../../mesh/capabilities.js").MeshCapabilityRegistry;
+          meshLocalDeviceId?: string;
+        };
+        if (meshContext.meshPeerRegistry && meshContext.meshCapabilityRegistry) {
+          const route = resolveMeshRoute({
+            channel,
+            capabilityRegistry: meshContext.meshCapabilityRegistry,
+          });
+          if (route.kind === "mesh") {
+            const fwdResult = await forwardMessageToPeer({
+              peerRegistry: meshContext.meshPeerRegistry,
+              peerDeviceId: route.peerDeviceId,
+              channel,
+              to,
+              message,
+              mediaUrl,
+              mediaUrls,
+              accountId,
+              originGatewayId: meshContext.meshLocalDeviceId ?? "",
+              idempotencyKey: idem,
+            });
+            if (fwdResult.ok) {
+              const payload: Record<string, unknown> = {
+                runId: idem,
+                messageId: fwdResult.messageId,
+                channel,
+                meshForwarded: true,
+                meshPeer: route.peerDeviceId,
+              };
+              context.dedupe.set(dedupeKey, { ts: Date.now(), ok: true, payload });
+              respond(true, payload, undefined, { channel, meshForwarded: true });
+              return;
+            }
+          }
+        }
+      } catch {
+        // Mesh module not available or routing failed — fall through to the error below.
+      }
+
       respond(
         false,
         undefined,

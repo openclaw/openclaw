@@ -17,6 +17,8 @@ export type GatewayBonjourBeacon = {
   cliPath?: string;
   role?: string;
   transport?: string;
+  /** Device identity ID (SHA256 of Ed25519 public key) for mesh peer discovery. */
+  deviceId?: string;
   txt?: Record<string, string>;
 };
 
@@ -254,6 +256,9 @@ function parseDnsSdResolve(stdout: string, instanceName: string): GatewayBonjour
   if (txt.transport) {
     beacon.transport = txt.transport;
   }
+  if (txt.deviceId) {
+    beacon.deviceId = txt.deviceId;
+  }
 
   if (!beacon.displayName) {
     beacon.displayName = decodedInstanceName;
@@ -432,6 +437,9 @@ async function discoverWideAreaViaTailnetDns(
     if (txtMap.transport) {
       beacon.transport = txtMap.transport;
     }
+    if (txtMap.deviceId) {
+      beacon.deviceId = txtMap.deviceId;
+    }
 
     results.push(beacon);
   }
@@ -515,6 +523,9 @@ function parseAvahiBrowse(stdout: string): GatewayBonjourBeacon[] {
       }
       if (txt.transport) {
         current.transport = txt.transport;
+      }
+      if (txt.deviceId) {
+        current.deviceId = txt.deviceId;
       }
     }
   }

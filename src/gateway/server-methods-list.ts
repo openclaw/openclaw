@@ -97,6 +97,14 @@ const BASE_METHODS = [
   "chat.history",
   "chat.abort",
   "chat.send",
+  // Mesh peer-to-peer methods
+  "mesh.connect",
+  "mesh.peers",
+  "mesh.status",
+  "mesh.trust.list",
+  "mesh.trust.add",
+  "mesh.trust.remove",
+  "mesh.message.forward",
 ];
 
 export function listGatewayMethods(): string[] {
@@ -124,4 +132,6 @@ export const GATEWAY_EVENTS = [
   "exec.approval.requested",
   "exec.approval.resolved",
   GATEWAY_EVENT_UPDATE_AVAILABLE,
+  "mesh.peer.connected",
+  "mesh.peer.disconnected",
 ];

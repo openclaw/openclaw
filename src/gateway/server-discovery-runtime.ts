@@ -17,6 +17,8 @@ export async function startGatewayDiscovery(params: {
   tailscaleMode: "off" | "serve" | "funnel";
   /** mDNS/Bonjour discovery mode (default: minimal). */
   mdnsMode?: "off" | "minimal" | "full";
+  /** Device identity ID for mesh peer discovery. */
+  deviceId?: string;
   logDiscovery: { info: (msg: string) => void; warn: (msg: string) => void };
 }) {
   let bonjourStop: (() => Promise<void>) | null = null;
@@ -50,6 +52,7 @@ export async function startGatewayDiscovery(params: {
         tailnetDns,
         cliPath,
         minimal: mdnsMinimal,
+        deviceId: params.deviceId,
       });
       bonjourStop = bonjour.stop;
     } catch (err) {
