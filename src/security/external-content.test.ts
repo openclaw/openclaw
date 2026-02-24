@@ -246,6 +246,12 @@ describe("external-content security", () => {
       expect(isExternalHookSession("hook:custom:456")).toBe(true);
     });
 
+    it("identifies mixed-case hook prefixes", () => {
+      expect(isExternalHookSession("HOOK:gmail:msg-123")).toBe(true);
+      expect(isExternalHookSession("Hook:custom:456")).toBe(true);
+      expect(isExternalHookSession("  HOOK:webhook:123  ")).toBe(true);
+    });
+
     it("rejects non-hook sessions", () => {
       expect(isExternalHookSession("cron:daily-task")).toBe(false);
       expect(isExternalHookSession("agent:main")).toBe(false);
@@ -264,6 +270,12 @@ describe("external-content security", () => {
 
     it("returns webhook for generic hooks", () => {
       expect(getHookType("hook:custom:456")).toBe("webhook");
+    });
+
+    it("returns hook type for mixed-case hook prefixes", () => {
+      expect(getHookType("HOOK:gmail:msg-123")).toBe("email");
+      expect(getHookType("  HOOK:webhook:123  ")).toBe("webhook");
+      expect(getHookType("Hook:custom:456")).toBe("webhook");
     });
 
     it("returns unknown for non-hook sessions", () => {
