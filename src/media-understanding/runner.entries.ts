@@ -55,11 +55,18 @@ const LEGACY_PLACEHOLDER_MAP: Record<string, string> = {
 /**
  * Normalize legacy single-brace placeholders to standard double-brace format.
  * Supports case-insensitive matching for convenience.
+ * Uses negative lookbehind/lookahead to avoid corrupting already-correct double-braced placeholders.
  */
 export function normalizePlaceholders(value: string): string {
   let result = value;
   for (const [legacy, standard] of Object.entries(LEGACY_PLACEHOLDER_MAP)) {
-    const pattern = new RegExp(legacy.replace(/[{}]/g, "\\$&"), "gi");
+    // Extract the placeholder name (without braces) for the regex
+    const placeholderName = legacy.slice(1, -1);
+    // Use negative lookbehind/lookahead to avoid matching inside {{Placeholder}}
+    // (?<!\{) = not preceded by {
+    // \{...\} = match the literal placeholder with single braces
+    // (?!\}) = not followed by }
+    const pattern = new RegExp(`(?<!\\{)\\{${placeholderName}\\}(?!\\})`, "gi");
     result = result.replace(pattern, standard);
   }
   return result;

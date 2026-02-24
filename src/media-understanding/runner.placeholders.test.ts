@@ -34,6 +34,10 @@ describe("normalizePlaceholders", () => {
     expect(normalizePlaceholders("{{MediaPath}}")).toBe("{{MediaPath}}");
   });
 
+  it("should preserve already-correct {{Prompt}} format (critical regression test)", () => {
+    expect(normalizePlaceholders("{{Prompt}}")).toBe("{{Prompt}}");
+  });
+
   it("should work with mixed content", () => {
     const input = "--input {file} --output {output}";
     const expected = "--input {{MediaPath}} --output {{OutputDir}}";
