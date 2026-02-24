@@ -64,7 +64,7 @@ const baseQueuedRun = (messageProvider = "whatsapp"): FollowupRun =>
   }) as FollowupRun;
 
 function createQueuedRun(
-  overrides: Partial<FollowupRun> & { run?: Partial<FollowupRun["run"]> } = {},
+  overrides: Partial<Omit<FollowupRun, "run">> & { run?: Partial<FollowupRun["run"]> } = {},
 ): FollowupRun {
   const base = baseQueuedRun();
   return {
