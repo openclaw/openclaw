@@ -45,6 +45,7 @@ import {
   resolveTelegramGroupAllowFromContext,
 } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
+import { enforceTelegramDmAccess } from "./dm-access.js";
 import {
   evaluateTelegramGroupBaseAccess,
   evaluateTelegramGroupPolicyAccess,
@@ -79,6 +80,7 @@ export const registerTelegramHandlers = ({
   runtime,
   mediaMaxBytes,
   telegramCfg,
+  allowFrom,
   groupAllowFrom,
   resolveGroupPolicy,
   resolveTelegramGroupConfig,
@@ -1180,6 +1182,38 @@ export const registerTelegramHandlers = ({
         })
       ) {
         return;
+      }
+
+      const hasInboundMedia =
+        Boolean(event.msg.media_group_id) ||
+        (Array.isArray(event.msg.photo) && event.msg.photo.length > 0) ||
+        Boolean(
+          event.msg.video ??
+          event.msg.video_note ??
+          event.msg.document ??
+          event.msg.audio ??
+          event.msg.voice ??
+          event.msg.sticker,
+        );
+      if (!event.isGroup && hasInboundMedia) {
+        const effectiveDmAllow = normalizeAllowFromWithStore({
+          allowFrom,
+          storeAllowFrom,
+          dmPolicy: telegramCfg.dmPolicy ?? "pairing",
+        });
+        const dmAuthorized = await enforceTelegramDmAccess({
+          isGroup: event.isGroup,
+          dmPolicy: telegramCfg.dmPolicy ?? "pairing",
+          msg: event.msg,
+          chatId: event.chatId,
+          effectiveDmAllow,
+          accountId,
+          bot,
+          logger,
+        });
+        if (!dmAuthorized) {
+          return;
+        }
       }
 
       await processInboundMessage({
