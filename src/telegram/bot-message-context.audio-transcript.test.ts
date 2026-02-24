@@ -63,7 +63,9 @@ function expectTranscriptRendered(
   transcript: string,
 ) {
   expect(ctx).not.toBeNull();
-  expect(ctx?.ctxPayload?.BodyForAgent).toBe(transcript);
+  // BodyForAgent gets a timestamp prefix (see #25334).
+  expect(ctx?.ctxPayload?.BodyForAgent).toContain(transcript);
+  expect(ctx?.ctxPayload?.BodyForAgent).toMatch(/^\[.*\d{4}-\d{2}-\d{2} \d{2}:\d{2}.*\]/);
   expect(ctx?.ctxPayload?.Body).toContain(transcript);
   expect(ctx?.ctxPayload?.Body).not.toContain("<media:audio>");
 }
