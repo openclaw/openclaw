@@ -25,6 +25,12 @@ Exec approvals are enforced locally on the execution host:
 - **gateway host** → `openclaw` process on the gateway machine
 - **node host** → node runner (macOS companion app or headless node host)
 
+Trust model note:
+
+- Gateway-authenticated callers are trusted operators for that Gateway.
+- Paired nodes extend that trusted operator capability onto the node host.
+- Exec approvals reduce accidental execution risk, but are not a per-user auth boundary.
+
 macOS split:
 
 - **node host service** forwards `system.run` to the **macOS app** over local IPC.
@@ -118,6 +124,12 @@ Each allowlist entry tracks:
 When **Auto-allow skill CLIs** is enabled, executables referenced by known skills
 are treated as allowlisted on nodes (macOS node or headless node host). This uses
 `skills.bins` over the Gateway RPC to fetch the skill bin list. Disable this if you want strict manual allowlists.
+
+Important trust notes:
+
+- This is an **implicit convenience allowlist**, separate from manual path allowlist entries.
+- It is intended for trusted operator environments where Gateway and node are in the same trust boundary.
+- If you require strict explicit trust, keep `autoAllowSkills: false` and use manual path allowlist entries only.
 
 ## Safe bins (stdin-only)
 
