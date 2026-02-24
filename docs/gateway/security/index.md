@@ -51,6 +51,34 @@ Inside one Gateway instance, authenticated operator access is a trusted control-
 - If you need adversarial-user isolation, run separate gateways per trust boundary.
 - Multiple gateways on one machine are technically possible, but not the recommended baseline for multi-user isolation.
 
+## Personal assistant model (not a multi-tenant bus)
+
+OpenClaw is designed as a personal assistant security model: one trusted operator boundary, potentially many agents.
+
+- If several people can message one tool-enabled agent, each of them can steer that same permission set.
+- Per-user session/memory isolation helps privacy, but does not convert a shared agent into per-user host authorization.
+- If users may be adversarial to each other, run separate gateways (or separate OS users/hosts) per trust boundary.
+
+### Shared Slack workspace: real risk
+
+If "everyone in Slack can message the bot," the core risk is delegated tool authority:
+
+- any allowed sender can induce tool calls (`exec`, browser, network/file tools) within the agent's policy;
+- prompt/content injection from one sender can cause actions that affect shared state, devices, or outputs;
+- if one shared agent has sensitive credentials/files, any allowed sender can potentially drive exfiltration via tool usage.
+
+Use separate agents/gateways with minimal tools for team workflows; keep personal-data agents private.
+
+### Company-shared agent: acceptable pattern
+
+This is acceptable when everyone using that agent is in the same trust boundary (for example one company team) and the agent is strictly business-scoped.
+
+- run it on a dedicated machine/VM/container;
+- use a dedicated OS user + dedicated browser/profile/accounts for that runtime;
+- do not sign that runtime into personal Apple/Google accounts or personal password-manager/browser profiles.
+
+If you mix personal and company identities on the same runtime, you collapse the separation and increase personal-data exposure risk.
+
 ## Trust boundary matrix
 
 Use this as the quick model when triaging risk:
