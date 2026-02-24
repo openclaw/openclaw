@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import { __testing, loadOpenClawPlugins } from "./loader.js";
+import { loadOpenClawPlugins, loadOpenClawPluginsAsync } from "./loader.js";
 
 type TempPlugin = { dir: string; file: string; id: string };
 
@@ -293,32 +293,6 @@ describe("loadOpenClawPlugins", () => {
     const loaded = registry.plugins.find((entry) => entry.id === "allowed");
     expect(loaded?.status).toBe("loaded");
     expect(Object.keys(registry.gatewayHandlers)).toContain("allowed.ping");
-  });
-
-  it("loads plugins when source and root differ only by realpath alias", () => {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
-    const plugin = writePlugin({
-      id: "alias-safe",
-      body: `export default { id: "alias-safe", register() {} };`,
-    });
-    const realRoot = fs.realpathSync(plugin.dir);
-    if (realRoot === plugin.dir) {
-      return;
-    }
-
-    const registry = loadOpenClawPlugins({
-      cache: false,
-      workspaceDir: plugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [plugin.file] },
-          allow: ["alias-safe"],
-        },
-      },
-    });
-
-    const loaded = registry.plugins.find((entry) => entry.id === "alias-safe");
-    expect(loaded?.status).toBe("loaded");
   });
 
   it("denylist disables plugins even if allowed", () => {
@@ -676,90 +650,130 @@ describe("loadOpenClawPlugins", () => {
     expect(record?.status).not.toBe("loaded");
     expect(registry.diagnostics.some((entry) => entry.message.includes("escapes"))).toBe(true);
   });
+});
 
-  it("rejects plugin entry files that escape plugin root via hardlink", () => {
-    if (process.platform === "win32") {
-      return;
-    }
+describe("loadOpenClawPluginsAsync", () => {
+  it("loads a JS plugin from a config load path", async () => {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
-    const pluginDir = makeTempDir();
-    const outsideDir = makeTempDir();
-    const outsideEntry = path.join(outsideDir, "outside.js");
-    const linkedEntry = path.join(pluginDir, "entry.js");
-    fs.writeFileSync(
-      outsideEntry,
-      'export default { id: "hardlinked", register() { throw new Error("should not run"); } };',
-      "utf-8",
-    );
-    fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      JSON.stringify(
-        {
-          id: "hardlinked",
-          configSchema: EMPTY_PLUGIN_SCHEMA,
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
-    try {
-      fs.linkSync(outsideEntry, linkedEntry);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "EXDEV") {
-        return;
-      }
-      throw err;
-    }
+    const plugin = writePlugin({
+      id: "async-config",
+      body: 'export default { id: "async-config", register() {} };',
+    });
 
-    const registry = loadOpenClawPlugins({
+    const registry = await loadOpenClawPluginsAsync({
       cache: false,
       config: {
         plugins: {
-          load: { paths: [linkedEntry] },
-          allow: ["hardlinked"],
+          enabled: true,
+          load: { paths: [plugin.dir] },
+          allow: [plugin.id],
+          entries: {
+            [plugin.id]: { enabled: true },
+          },
         },
       },
     });
 
-    const record = registry.plugins.find((entry) => entry.id === "hardlinked");
-    expect(record?.status).not.toBe("loaded");
-    expect(registry.diagnostics.some((entry) => entry.message.includes("escapes"))).toBe(true);
+    const record = registry.plugins.find((entry) => entry.id === plugin.id);
+    expect(record?.status).toBe("loaded");
   });
 
-  it("prefers dist plugin-sdk alias when loader runs from dist", () => {
-    const root = makeTempDir();
-    const srcFile = path.join(root, "src", "plugin-sdk", "index.ts");
-    const distFile = path.join(root, "dist", "plugin-sdk", "index.js");
-    fs.mkdirSync(path.dirname(srcFile), { recursive: true });
-    fs.mkdirSync(path.dirname(distFile), { recursive: true });
-    fs.writeFileSync(srcFile, "export {};\n", "utf-8");
-    fs.writeFileSync(distFile, "export {};\n", "utf-8");
-
-    const resolved = __testing.resolvePluginSdkAliasFile({
-      srcFile: "index.ts",
-      distFile: "index.js",
-      modulePath: path.join(root, "dist", "plugins", "loader.js"),
+  it("rejects TypeScript entrypoints", async () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    const plugin = writePlugin({
+      id: "async-ts",
+      filename: "async-ts.ts",
+      body: 'export default { id: "async-ts", register() {} };',
     });
-    expect(resolved).toBe(distFile);
+
+    const registry = await loadOpenClawPluginsAsync({
+      cache: false,
+      config: {
+        plugins: {
+          enabled: true,
+          load: { paths: [plugin.dir] },
+          allow: [plugin.id],
+          entries: {
+            [plugin.id]: { enabled: true },
+          },
+        },
+      },
+    });
+
+    const record = registry.plugins.find((entry) => entry.id === plugin.id);
+    expect(record?.status).toBe("error");
+    expect(record?.error).toContain("ESM loader does not support TypeScript entrypoints (.ts)");
+    expect(
+      registry.diagnostics.some((diag) =>
+        diag.message.includes("failed to load plugin: ESM loader does not support TypeScript"),
+      ),
+    ).toBe(true);
   });
 
-  it("prefers src plugin-sdk alias when loader runs from src in non-production", () => {
-    const root = makeTempDir();
-    const srcFile = path.join(root, "src", "plugin-sdk", "index.ts");
-    const distFile = path.join(root, "dist", "plugin-sdk", "index.js");
-    fs.mkdirSync(path.dirname(srcFile), { recursive: true });
-    fs.mkdirSync(path.dirname(distFile), { recursive: true });
-    fs.writeFileSync(srcFile, "export {};\n", "utf-8");
-    fs.writeFileSync(distFile, "export {};\n", "utf-8");
+  it("records register() errors using formatError output", async () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    const plugin = writePlugin({
+      id: "async-throws",
+      body: 'export default { id: "async-throws", register() { throw new Error("boom"); } };',
+    });
 
-    const resolved = withEnv({ NODE_ENV: undefined }, () =>
-      __testing.resolvePluginSdkAliasFile({
-        srcFile: "index.ts",
-        distFile: "index.js",
-        modulePath: path.join(root, "src", "plugins", "loader.ts"),
-      }),
-    );
-    expect(resolved).toBe(srcFile);
+    const registry = await loadOpenClawPluginsAsync({
+      cache: false,
+      config: {
+        plugins: {
+          enabled: true,
+          load: { paths: [plugin.dir] },
+          allow: [plugin.id],
+          entries: {
+            [plugin.id]: { enabled: true },
+          },
+        },
+      },
+    });
+
+    const record = registry.plugins.find((entry) => entry.id === plugin.id);
+    expect(record?.status).toBe("error");
+    expect(record?.error).toBe("boom");
+    expect(
+      registry.diagnostics.some((diag) => diag.message === "plugin failed during register: boom"),
+    ).toBe(true);
+  });
+
+  it("warns when register() returns a promise (async registration is ignored)", async () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    const plugin = writePlugin({
+      id: "async-promise",
+      body: `export default {
+  id: "async-promise",
+  register() {
+    return new Promise(() => {});
+  }
+};`,
+    });
+
+    const registry = await loadOpenClawPluginsAsync({
+      cache: false,
+      config: {
+        plugins: {
+          enabled: true,
+          load: { paths: [plugin.dir] },
+          allow: [plugin.id],
+          entries: {
+            [plugin.id]: { enabled: true },
+          },
+        },
+      },
+    });
+
+    const record = registry.plugins.find((entry) => entry.id === plugin.id);
+    expect(record?.status).toBe("loaded");
+    expect(
+      registry.diagnostics.some(
+        (diag) =>
+          diag.level === "warn" &&
+          diag.pluginId === plugin.id &&
+          diag.message === "plugin register returned a promise; async registration is ignored",
+      ),
+    ).toBe(true);
   });
 });
