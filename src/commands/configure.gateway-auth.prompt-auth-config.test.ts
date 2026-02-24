@@ -52,7 +52,7 @@ function makeRuntime(): RuntimeEnv {
 const noopPrompter = {} as WizardPrompter;
 
 describe("promptAuthConfig", () => {
-  it("prunes Kilo provider models to selected allowlist entries", async () => {
+  it("keeps Kilo provider models while applying allowlist defaults", async () => {
     mocks.promptAuthChoiceGrouped.mockResolvedValue("kilocode-api-key");
     mocks.applyAuthChoice.mockResolvedValue({
       config: {
@@ -82,13 +82,14 @@ describe("promptAuthConfig", () => {
     const result = await promptAuthConfig({}, makeRuntime(), noopPrompter);
     expect(result.models?.providers?.kilocode?.models?.map((model) => model.id)).toEqual([
       "anthropic/claude-opus-4.6",
+      "minimax/minimax-m2.5:free",
     ]);
     expect(Object.keys(result.agents?.defaults?.models ?? {})).toEqual([
       "kilocode/anthropic/claude-opus-4.6",
     ]);
   });
 
-  it("does not mutate non-Kilo provider models when allowlist contains Kilo entries", async () => {
+  it("does not mutate provider model catalogs when allowlist is set", async () => {
     mocks.promptAuthChoiceGrouped.mockResolvedValue("kilocode-api-key");
     mocks.applyAuthChoice.mockResolvedValue({
       config: {
@@ -123,6 +124,7 @@ describe("promptAuthConfig", () => {
     const result = await promptAuthConfig({}, makeRuntime(), noopPrompter);
     expect(result.models?.providers?.kilocode?.models?.map((model) => model.id)).toEqual([
       "anthropic/claude-opus-4.6",
+      "minimax/minimax-m2.5:free",
     ]);
     expect(result.models?.providers?.minimax?.models?.map((model) => model.id)).toEqual([
       "MiniMax-M2.1",
