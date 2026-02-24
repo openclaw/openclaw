@@ -564,9 +564,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     humanDelay: resolveHumanDelayConfig(cfg, route.agentId),
     deliver: async (payload: ReplyPayload, info) => {
       const isFinal = info.kind === "final";
-      if (info.kind === "block") {
-        // Block payloads carry reasoning/thinking content that should not be
-        // delivered to external channels. Skip them regardless of streamMode.
+      if (payload.isReasoning) {
+        // Reasoning/thinking payloads should not be delivered to Discord.
         return;
       }
       if (draftStream && isFinal) {
