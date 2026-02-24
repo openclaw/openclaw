@@ -5,6 +5,11 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as querystring from "node:querystring";
+import {
+  isRequestBodyLimitError,
+  readRequestBodyWithLimit,
+  requestBodyErrorToText,
+} from "openclaw/plugin-sdk";
 import { sendMessage } from "./client.js";
 import { validateToken, authorizeUserForDm, sanitizeInput, RateLimiter } from "./security.js";
 import type { SynologyWebhookPayload, ResolvedSynologyChatAccount } from "./types.js";
@@ -34,24 +39,34 @@ export function getSynologyWebhookRateLimiterCountForTest(): number {
 }
 
 /** Read the full request body as a string. */
-function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    let size = 0;
-    const maxSize = 1_048_576; // 1MB
-
-    req.on("data", (chunk: Buffer) => {
-      size += chunk.length;
-      if (size > maxSize) {
-        req.destroy();
-        reject(new Error("Request body too large"));
-        return;
-      }
-      chunks.push(chunk);
+async function readBody(req: IncomingMessage): Promise<
+  | { ok: true; body: string }
+  | {
+      ok: false;
+      statusCode: number;
+      error: string;
+    }
+> {
+  try {
+    const body = await readRequestBodyWithLimit(req, {
+      maxBytes: 1_048_576,
+      timeoutMs: 30_000,
     });
-    req.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
-    req.on("error", reject);
-  });
+    return { ok: true, body };
+  } catch (err) {
+    if (isRequestBodyLimitError(err)) {
+      return {
+        ok: false,
+        statusCode: err.statusCode,
+        error: requestBodyErrorToText(err.code),
+      };
+    }
+    return {
+      ok: false,
+      statusCode: 400,
+      error: "Invalid request body",
+    };
+  }
 }
 
 /** Parse form-urlencoded body into SynologyWebhookPayload. */
@@ -126,17 +141,15 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
     }
 
     // Parse body
-    let body: string;
-    try {
-      body = await readBody(req);
-    } catch (err) {
-      log?.error("Failed to read request body", err);
-      respond(res, 400, { error: "Invalid request body" });
+    const body = await readBody(req);
+    if (!body.ok) {
+      log?.error("Failed to read request body", body.error);
+      respond(res, body.statusCode, { error: body.error });
       return;
     }
 
     // Parse payload
-    const payload = parsePayload(body);
+    const payload = parsePayload(body.body);
     if (!payload) {
       respond(res, 400, { error: "Missing required fields (token, user_id, text)" });
       return;
