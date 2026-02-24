@@ -30,6 +30,7 @@ vi.mock("./doctor-sandbox.js", () => ({
 
 vi.mock("./doctor-security.js", () => ({
   noteSecurityWarnings: vi.fn().mockResolvedValue(undefined),
+  noteSecurityPosture: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("./doctor-session-locks.js", () => ({
