@@ -14,32 +14,11 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Merge latest stable release from upstream
+      - name: Merge upstream main
         run: |
-          git config user.email "ci@openclaw-jj-fork.ai"
-          git config user.name "CI"
           git remote add upstream https://github.com/openclaw/openclaw.git
-          git fetch upstream --tags
-
-          # Find latest stable tag (vYYYY.M.D, no prerelease suffix)
-          LATEST_TAG=$(git tag -l 'v*' --sort=-v:refname | grep -E '^v[0-9]{4}\.[0-9]+\.[0-9]+$' | head -n 1)
-
-          if [ -z "$LATEST_TAG" ]; then
-            echo "No stable release tag found. Skipping."
-            exit 0
-          fi
-
-          echo "Latest stable tag: $LATEST_TAG"
-
-          # Skip if already up to date
-          if git merge-base --is-ancestor "$LATEST_TAG" HEAD; then
-            echo "Already up to date with $LATEST_TAG. Skipping."
-            echo "SKIP_PUSH=true" >> "$GITHUB_ENV"
-            exit 0
-          fi
-
-          git merge "$LATEST_TAG" --no-edit
+          git fetch upstream main
+          git merge upstream/main --no-edit
 
       - name: Push to fork
-        if: env.SKIP_PUSH != 'true'
         run: git push origin main
