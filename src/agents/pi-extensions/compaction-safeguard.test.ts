@@ -6,6 +6,8 @@ import type { Api, Model } from "@mariozechner/pi-ai";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import * as compactionModule from "../compaction.js";
+import type { OpenClawConfig } from "../../config/config.js";
+import { buildEmbeddedExtensionFactories } from "../pi-embedded-runner/extensions.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import {
   getCompactionSafeguardRuntime,
@@ -402,6 +404,39 @@ describe("compaction-safeguard runtime registry", () => {
       contextWindowTokens: 200000,
       model,
     });
+  });
+
+  it("wires quality guard retries from config and clamps safeguard runtime usage", () => {
+    const sessionManager = {} as unknown as Parameters<
+      typeof buildEmbeddedExtensionFactories
+    >[0]["sessionManager"];
+    const cfg = {
+      agents: {
+        defaults: {
+          compaction: {
+            mode: "safeguard",
+            recentTurnsPreserve: 99,
+            qualityGuard: { maxRetries: 99 },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    buildEmbeddedExtensionFactories({
+      cfg,
+      sessionManager,
+      provider: "anthropic",
+      modelId: "claude-3-opus",
+      model: {
+        contextWindow: 200_000,
+      } as Parameters<typeof buildEmbeddedExtensionFactories>[0]["model"],
+    });
+
+    const runtime = getCompactionSafeguardRuntime(sessionManager);
+    expect(runtime?.qualityGuardMaxRetries).toBe(99);
+    expect(runtime?.recentTurnsPreserve).toBe(99);
+    expect(resolveQualityGuardMaxRetries(runtime?.qualityGuardMaxRetries)).toBe(3);
+    expect(resolveRecentTurnsPreserve(runtime?.recentTurnsPreserve)).toBe(12);
   });
 });
 

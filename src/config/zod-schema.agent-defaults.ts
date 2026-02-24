@@ -95,10 +95,14 @@ export const AgentDefaultsSchema = z
           .union([z.literal("strict"), z.literal("off"), z.literal("custom")])
           .optional(),
         identifierInstructions: z.string().optional(),
+        recentTurnsPreserve: z.number().int().min(0).max(12).optional(),
+        postIndexSync: z
+          .union([z.literal("off"), z.literal("async"), z.literal("await")])
+          .optional(),
         qualityGuard: z
           .object({
             enabled: z.boolean().optional(),
-            maxRetries: z.number().int().nonnegative().optional(),
+            maxRetries: z.number().int().min(0).max(3).optional(),
           })
           .strict()
           .optional(),
