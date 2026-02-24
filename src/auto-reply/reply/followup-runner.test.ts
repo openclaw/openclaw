@@ -63,6 +63,20 @@ const baseQueuedRun = (messageProvider = "whatsapp"): FollowupRun =>
     },
   }) as FollowupRun;
 
+function createQueuedRun(
+  overrides: Partial<FollowupRun> & { run?: Partial<FollowupRun["run"]> } = {},
+): FollowupRun {
+  const base = baseQueuedRun();
+  return {
+    ...base,
+    ...overrides,
+    run: {
+      ...base.run,
+      ...overrides.run,
+    },
+  };
+}
+
 function mockCompactionRun(params: {
   willRetry: boolean;
   result: {
@@ -114,32 +128,11 @@ describe("createFollowupRunner compaction", () => {
       defaultModel: "anthropic/claude-opus-4-5",
     });
 
-    const queued = {
-      prompt: "hello",
-      summaryLine: "hello",
-      enqueuedAt: Date.now(),
+    const queued = createQueuedRun({
       run: {
-        sessionId: "session",
-        sessionKey: "main",
-        messageProvider: "whatsapp",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/tmp",
-        config: {},
-        skillsSnapshot: {},
-        provider: "anthropic",
-        model: "claude",
-        thinkLevel: "low",
         verboseLevel: "on",
-        elevatedLevel: "off",
-        bashElevated: {
-          enabled: false,
-          allowed: false,
-          defaultLevel: "off",
-        },
-        timeoutMs: 1_000,
-        blockReplyBreak: "message_end",
       },
-    } as FollowupRun;
+    });
 
     await runner(queued);
 
@@ -411,7 +404,7 @@ describe("createFollowupRunner agentDir forwarding", () => {
       defaultModel: "anthropic/claude-opus-4-5",
     });
     const agentDir = path.join("/tmp", "agent-dir");
-    const queued = baseQueuedRun();
+    const queued = createQueuedRun();
     await runner({
       ...queued,
       run: {
