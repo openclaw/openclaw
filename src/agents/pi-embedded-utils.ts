@@ -190,6 +190,42 @@ export function stripDowngradedToolCallText(text: string): string {
 }
 
 /**
+ * Strip generic tool call XML blocks that leak into text content.
+ * Some models (e.g. Kimi K2.5, generic OpenRouter providers) emit tool calls
+ * as raw XML text blocks instead of structured tool calls. This removes:
+ * - <antml_function_calls>...</antml_function_calls>
+ * - <function_calls>...</function_calls>
+ * - <tool_use>...</tool_use> / <tool_call>...</tool_call>
+ *
+ * Note: <invoke> blocks are intentionally excluded here — they are handled
+ * separately by stripMinimaxToolCallXml only when Minimax markers are present,
+ * because plain <invoke> can appear as legitimate doc/code content.
+ */
+export function stripToolCallXml(text: string): string {
+  if (!text) {
+    return text;
+  }
+  if (!/<antml_function_calls|<function_calls|<tool_use\b|<tool_call\b/i.test(text)) {
+    return text;
+  }
+  let cleaned = text;
+  // <antml_function_calls>...</antml_function_calls>
+  cleaned = cleaned.replace(/<antml_function_calls>[\s\S]*?<\/antml_function_calls>/gi, "");
+  // <function_calls>...</function_calls>
+  cleaned = cleaned.replace(/<function_calls>[\s\S]*?<\/function_calls>/gi, "");
+  // <tool_use ...>...</tool_use>
+  cleaned = cleaned.replace(/<tool_use\b[^>]*>[\s\S]*?<\/tool_use>/gi, "");
+  // <tool_call ...>...</tool_call>
+  cleaned = cleaned.replace(/<tool_call\b[^>]*>[\s\S]*?<\/tool_call>/gi, "");
+  // Stray opening/closing tags left behind
+  cleaned = cleaned.replace(
+    /<\/?(antml_function_calls|function_calls|tool_use|tool_call)\b[^>]*>/gi,
+    "",
+  );
+  return cleaned;
+}
+
+/**
  * Strip thinking tags and their content from text.
  * This is a safety net for cases where the model outputs <think> tags
  * that slip through other filtering mechanisms.
@@ -212,7 +248,7 @@ export function extractAssistantText(msg: AssistantMessage): string {
         .filter(isTextBlock)
         .map((c) =>
           stripThinkingTagsFromText(
-            stripDowngradedToolCallText(stripMinimaxToolCallXml(c.text)),
+            stripDowngradedToolCallText(stripMinimaxToolCallXml(stripToolCallXml(c.text))),
           ).trim(),
         )
         .filter(Boolean)
