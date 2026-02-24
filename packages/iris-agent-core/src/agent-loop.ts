@@ -316,8 +316,12 @@ async function executeToolCallsParallel(
     });
   }
 
+  // Per-tool durations for observability (sequential-equivalent estimate).
+  const toolDurations: number[] = Array.from({ length: toolCalls.length }, () => 0);
+
   // Launch every tool concurrently.
-  const executions = toolCalls.map(async (toolCall) => {
+  const batchStart = Date.now();
+  const executions = toolCalls.map(async (toolCall, i) => {
     const tool = tools?.find((t) => t.name === toolCall.name);
     if (!tool) {
       throw new Error(`Tool ${toolCall.name} not found`);
@@ -327,25 +331,44 @@ async function executeToolCallsParallel(
       tool as Parameters<typeof validateToolArguments>[0],
       toolCall,
     );
-    return tool.execute(
-      toolCall.id,
-      validatedArgs,
-      signal,
-      (partialResult: AgentToolResult<unknown>) => {
-        // Partial updates stream in naturally — interleaved across tools is fine.
-        stream.push({
-          type: "tool_execution_update",
-          toolCallId: toolCall.id,
-          toolName: toolCall.name,
-          args: toolCall.arguments,
-          partialResult,
-        });
-      },
-    );
+    const toolStart = Date.now();
+    try {
+      return await tool.execute(
+        toolCall.id,
+        validatedArgs,
+        signal,
+        (partialResult: AgentToolResult<unknown>) => {
+          // Partial updates stream in naturally — interleaved across tools is fine.
+          stream.push({
+            type: "tool_execution_update",
+            toolCallId: toolCall.id,
+            toolName: toolCall.name,
+            args: toolCall.arguments,
+            partialResult,
+          });
+        },
+      );
+    } finally {
+      toolDurations[i] = Date.now() - toolStart;
+    }
   });
 
   // Wait for every tool (allSettled never throws).
   const settled = await Promise.allSettled(executions);
+  const wall = Date.now() - batchStart;
+
+  // Log parallel execution stats to stderr.
+  // Always emitted when N > 1 (the interesting case); set IRIS_PARALLEL_STATS=always to
+  // include single-tool calls too (useful for baselining).
+  const logSingle = process.env["IRIS_PARALLEL_STATS"] === "always";
+  if (toolCalls.length > 1 || logSingle) {
+    const seqEstimate = toolDurations.reduce((a, b) => a + b, 0);
+    const saved = seqEstimate - wall;
+    const names = toolCalls.map((tc) => tc.name).join(",");
+    process.stderr.write(
+      `[iris-parallel] n=${toolCalls.length} wall=${wall}ms seq_est=${seqEstimate}ms saved=${saved}ms tools=[${names}]\n`,
+    );
+  }
 
   // Emit execution_end events and collect toolResult messages in original order.
   const results: AgentMessage[] = [];

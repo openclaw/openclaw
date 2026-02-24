@@ -443,6 +443,7 @@ export function buildAgentSystemPrompt(params: {
     "Narrate only when it helps: multi-step work, complex/challenging problems, sensitive actions (e.g., deletions), or when the user explicitly asks.",
     "Keep narration brief and value-dense; avoid repeating obvious steps.",
     "Use plain human language for narration unless in a technical context.",
+    "**Parallel tools**: when multiple independent tools are needed, call them all in the same response rather than one at a time. The runtime executes them concurrently — batching independent requests cuts latency from N×T to max(T). For example, if you need to read three files, call read three times in one response, not across three turns.",
     "",
     ...safetySection,
     "## OpenClaw CLI Quick Reference",
