@@ -10,36 +10,389 @@ import { randomBytes } from "node:crypto";
  * system prompts or treated as trusted instructions.
  */
 
-/**
- * Patterns that may indicate prompt injection attempts.
- * These are logged for monitoring but content is still processed (wrapped safely).
- */
-const SUSPICIOUS_PATTERNS = [
-  /ignore\s+(all\s+)?(previous|prior|above)\s+(instructions?|prompts?)/i,
-  /disregard\s+(all\s+)?(previous|prior|above)/i,
-  /forget\s+(everything|all|your)\s+(instructions?|rules?|guidelines?)/i,
-  /you\s+are\s+now\s+(a|an)\s+/i,
-  /new\s+instructions?:/i,
-  /system\s*:?\s*(prompt|override|command)/i,
-  /\bexec\b.*command\s*=/i,
-  /elevated\s*=\s*true/i,
-  /rm\s+-rf/i,
-  /delete\s+all\s+(emails?|files?|data)/i,
-  /<\/?system>/i,
-  /\]\s*\n\s*\[?(system|assistant|user)\]?:/i,
+export type InjectionPatternClass =
+  | "role_confusion"
+  | "instruction_override"
+  | "tool_invocation"
+  | "exfiltration"
+  | "privilege_escalation"
+  | "encoding";
+
+type PatternDef = {
+  id: string;
+  re: RegExp;
+  cls: InjectionPatternClass;
+  weight: number;
+  description?: string;
+};
+
+const INJECTION_PATTERN_DEFS: PatternDef[] = [
+  {
+    id: "ignore-previous-instructions",
+    re: /(?:ignore|disregard|forget|override)\s+(?:all\s+)?(?:previous|prior|above|system)\s+(?:instructions?|rules?|guidelines?|prompts?)/gi,
+    cls: "instruction_override",
+    weight: 4,
+  },
+  {
+    id: "new-system-instructions",
+    re: /(?:new|updated|revised)\s+(?:system\s+)?(?:instructions?|rules?|guidelines?)\s*:/i,
+    cls: "instruction_override",
+    weight: 3,
+  },
+  {
+    id: "role-reassignment",
+    re: /you\s+(?:are|will\s+be)\s+now\s+(?:an?\s+|the\s+|a\s+different\s+)?(?:system|assistant|admin|developer|root)\b/i,
+    cls: "role_confusion",
+    weight: 2,
+  },
+  {
+    id: "system-tag",
+    re: /<\/?(?:system|assistant|user|developer)>/i,
+    cls: "role_confusion",
+    weight: 2,
+  },
+  {
+    id: "system-role-prefix",
+    re: /(?:^|\n|\r|\s|\[)(?:system|assistant|user|developer)\s*:/i,
+    cls: "role_confusion",
+    weight: 2,
+  },
+  {
+    id: "tool-call-directive",
+    re: /(?:call|invoke|execute|run)\s+(?:the\s+)?(?:tool|function|command)\b/i,
+    cls: "tool_invocation",
+    weight: 3,
+  },
+  {
+    id: "tool-call-tag",
+    re: /<(?:tool_call|function_call|command)>/i,
+    cls: "tool_invocation",
+    weight: 3,
+  },
+  {
+    id: "shell-fence",
+    re: /```(?:bash|shell|cmd|powershell|zsh)\b/i,
+    cls: "tool_invocation",
+    weight: 2,
+  },
+  {
+    id: "exec-command-assignment",
+    re: /\bexec\b[^\n]{0,120}\bcommand\s*=/i,
+    cls: "tool_invocation",
+    weight: 3,
+  },
+  {
+    id: "elevated-flag",
+    re: /\belevated\s*=\s*true\b/i,
+    cls: "privilege_escalation",
+    weight: 3,
+  },
+  {
+    id: "privileged-cli-flag",
+    re: /--(?:elevated|privileged|sudo|root)\b/i,
+    cls: "privilege_escalation",
+    weight: 3,
+  },
+  {
+    id: "admin-root-escalation",
+    re: /\b(?:admin|root|sudo)\b[^\n]{0,64}\b(?:access|mode|privileges?|rights?)\b/i,
+    cls: "privilege_escalation",
+    weight: 2,
+  },
+  {
+    id: "exfiltration-endpoint",
+    re: /(?:send|post|upload|exfiltrate)\s+(?:data|content|contacts?|secrets?|tokens?)?[^\n]{0,80}\b(?:to|via)\s+(?:https?:\/\/\S+|webhook|endpoint|server|url)\b/i,
+    cls: "exfiltration",
+    weight: 4,
+  },
+  {
+    id: "curl-post-body",
+    re: /\bcurl\b[^\n]{0,200}\s-d\b/i,
+    cls: "exfiltration",
+    weight: 4,
+  },
+  {
+    id: "destructive-delete-all",
+    re: /\bdelete\s+all\s+(?:emails?|files?|data)\b/i,
+    cls: "tool_invocation",
+    weight: 2,
+  },
 ];
+
+const PATTERN_BY_ID = new Map(INJECTION_PATTERN_DEFS.map((pattern) => [pattern.id, pattern]));
+
+const MAX_DECODE_SCAN_CHARS = 200_000;
+const MAX_BASE64_CANDIDATES = 40;
+const MAX_BASE64_CANDIDATE_CHARS = 4096;
+const MAX_DECODED_PAYLOAD_CHARS = 4096;
+const MAX_DECODED_PAYLOADS = 40;
+const MAX_URL_DECODE_INPUT_CHARS = 8192;
+const MIN_URL_ESCAPE_COUNT = 8;
+const MAX_HEX_CANDIDATES = 32;
+const MAX_HEX_CANDIDATE_CHARS = 4096;
+const MIN_PRINTABLE_RATIO = 0.7;
+const ENCODED_TRIGGER_TOKEN_RE =
+  /\b(ignore|override|system|assistant|developer|prompt|tool|function|command|exec|curl|webhook|elevated|sudo|admin|root|exfiltrat)\b/i;
+
+export type InjectionRiskLevel = "low" | "medium" | "high" | "critical";
+
+export type InjectionInspectionResult = {
+  suspicious: boolean;
+  patterns: string[];
+  riskLevel: InjectionRiskLevel;
+  classesMatched: InjectionPatternClass[];
+  score: number;
+  encodedMatches: number;
+};
+
+type EncodedPayload = {
+  text: string;
+  kind: "base64" | "url" | "hex";
+};
+
+function safeTest(pattern: RegExp, text: string): boolean {
+  if (pattern.global || pattern.sticky) {
+    pattern.lastIndex = 0;
+  }
+  return pattern.test(text);
+}
+
+function findMatches(content: string, patterns: PatternDef[], prefix = ""): string[] {
+  const matches: string[] = [];
+  for (const pattern of patterns) {
+    if (safeTest(pattern.re, content)) {
+      matches.push(`${prefix}${pattern.id}`);
+    }
+  }
+  return matches;
+}
+
+function dedupeMatches(values: string[]): string[] {
+  return Array.from(new Set(values));
+}
+
+function parsePatternId(match: string): string {
+  return match.startsWith("encoded:") ? match.slice("encoded:".length) : match;
+}
+
+function resolveRiskLevel(params: {
+  score: number;
+  classes: Set<InjectionPatternClass>;
+  encodedMatches: number;
+}): InjectionRiskLevel {
+  const has = (cls: InjectionPatternClass) => params.classes.has(cls);
+  const meaningfulClasses = Array.from(params.classes).filter((cls) => cls !== "encoding").length;
+  if (meaningfulClasses === 0) {
+    return "low";
+  }
+  const highWeightClasses = new Set<InjectionPatternClass>();
+  for (const pattern of PATTERN_BY_ID.values()) {
+    if (pattern.weight >= 3 && params.classes.has(pattern.cls)) {
+      highWeightClasses.add(pattern.cls);
+    }
+  }
+
+  if (
+    (has("instruction_override") &&
+      (has("tool_invocation") || has("exfiltration") || has("privilege_escalation"))) ||
+    (has("exfiltration") && has("tool_invocation")) ||
+    (params.encodedMatches > 0 && highWeightClasses.size >= 2)
+  ) {
+    return "critical";
+  }
+  if (
+    (has("instruction_override") && meaningfulClasses >= 2) ||
+    (meaningfulClasses >= 2 && params.score >= 6)
+  ) {
+    return "high";
+  }
+  return "medium";
+}
+
+function isPlausibleBase64(value: string): boolean {
+  if (value.length < 24 || value.length > MAX_BASE64_CANDIDATE_CHARS || value.length % 4 !== 0) {
+    return false;
+  }
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value)) {
+    return false;
+  }
+  const paddingIndex = value.indexOf("=");
+  if (paddingIndex === -1) {
+    return true;
+  }
+  return /^={1,2}$/.test(value.slice(paddingIndex));
+}
+
+function getPrintableRatio(value: string): number {
+  if (!value) {
+    return 0;
+  }
+  let printable = 0;
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if ((code >= 0x20 && code <= 0x7e) || code === 0x09 || code === 0x0a || code === 0x0d) {
+      printable += 1;
+    }
+  }
+  return printable / value.length;
+}
+
+function shouldInspectDecodedPayload(value: string): boolean {
+  if (!value || value.length < 12) {
+    return false;
+  }
+  if (getPrintableRatio(value) < MIN_PRINTABLE_RATIO) {
+    return false;
+  }
+  return ENCODED_TRIGGER_TOKEN_RE.test(value);
+}
+
+function trimDecodedPayload(value: string): string {
+  return value.slice(0, MAX_DECODED_PAYLOAD_CHARS);
+}
+
+function tryDecodePayloads(content: string): EncodedPayload[] {
+  const payloads: EncodedPayload[] = [];
+  const scanned = content.slice(0, MAX_DECODE_SCAN_CHARS);
+
+  const base64CandidateRe = /(?:^|[^A-Za-z0-9+/])([A-Za-z0-9+/]{24,}={0,2})(?=$|[^A-Za-z0-9+/])/g;
+  let base64Match: RegExpExecArray | null;
+  let processedBase64 = 0;
+  while ((base64Match = base64CandidateRe.exec(scanned)) !== null) {
+    const match = base64Match[1];
+    if (!match) {
+      continue;
+    }
+    processedBase64 += 1;
+    if (processedBase64 > MAX_BASE64_CANDIDATES) {
+      break;
+    }
+    if (!isPlausibleBase64(match)) {
+      continue;
+    }
+    try {
+      const decodedBytes = Buffer.from(match, "base64");
+      if (decodedBytes.length === 0) {
+        continue;
+      }
+      const canonical = decodedBytes.toString("base64").replace(/=+$/, "");
+      if (canonical !== match.replace(/=+$/, "")) {
+        continue;
+      }
+      const decoded = trimDecodedPayload(decodedBytes.toString("utf-8"));
+      if (shouldInspectDecodedPayload(decoded)) {
+        payloads.push({ text: decoded, kind: "base64" });
+      }
+    } catch {
+      // Ignore decode failures.
+    }
+    if (payloads.length >= MAX_DECODED_PAYLOADS) {
+      return payloads;
+    }
+  }
+
+  const urlScan = scanned.slice(0, MAX_URL_DECODE_INPUT_CHARS);
+  const urlMatches = urlScan.match(/%[0-9A-Fa-f]{2}/g);
+  if (
+    urlMatches &&
+    urlMatches.length >= MIN_URL_ESCAPE_COUNT &&
+    urlMatches.length * 3 >= Math.max(1, Math.floor(urlScan.length * 0.02))
+  ) {
+    try {
+      const decoded = trimDecodedPayload(decodeURIComponent(urlScan));
+      if (shouldInspectDecodedPayload(decoded)) {
+        payloads.push({ text: decoded, kind: "url" });
+      }
+    } catch {
+      // Ignore decode failures.
+    }
+    if (payloads.length >= MAX_DECODED_PAYLOADS) {
+      return payloads;
+    }
+  }
+
+  const hexMatches = scanned.match(/(?:\\x[0-9a-fA-F]{2}){8,}/g) ?? [];
+  for (const match of hexMatches.slice(0, MAX_HEX_CANDIDATES)) {
+    if (match.length > MAX_HEX_CANDIDATE_CHARS) {
+      continue;
+    }
+    try {
+      const bytes = match.replace(/\\x/g, "").match(/.{2}/g) ?? [];
+      if (bytes.length === 0) {
+        continue;
+      }
+      const decoded = trimDecodedPayload(
+        bytes.map((byte) => String.fromCharCode(Number.parseInt(byte, 16))).join(""),
+      );
+      if (shouldInspectDecodedPayload(decoded)) {
+        payloads.push({ text: decoded, kind: "hex" });
+      }
+    } catch {
+      // Ignore decode failures.
+    }
+    if (payloads.length >= MAX_DECODED_PAYLOADS) {
+      return payloads;
+    }
+  }
+
+  return payloads;
+}
+
+/**
+ * Deep inspection for prompt injection patterns, including encoded payloads.
+ */
+export function deepInspectForInjection(content: string): InjectionInspectionResult {
+  const directMatches = findMatches(content, INJECTION_PATTERN_DEFS);
+  const decodedPayloads = tryDecodePayloads(content);
+  const encodedMatches = decodedPayloads.flatMap((payload) =>
+    findMatches(payload.text, INJECTION_PATTERN_DEFS, "encoded:"),
+  );
+  const patterns = dedupeMatches([...directMatches, ...encodedMatches]);
+  const classes = new Set<InjectionPatternClass>();
+  const ids = new Set<string>();
+  for (const pattern of patterns) {
+    const id = parsePatternId(pattern);
+    ids.add(id);
+    const entry = PATTERN_BY_ID.get(id);
+    if (entry) {
+      classes.add(entry.cls);
+    }
+  }
+  if (encodedMatches.length > 0) {
+    classes.add("encoding");
+  }
+  let score = 0;
+  for (const id of ids) {
+    const entry = PATTERN_BY_ID.get(id);
+    if (entry) {
+      score += entry.weight;
+    }
+  }
+  if (encodedMatches.length > 0) {
+    score += 2;
+  }
+  const classesMatched = Array.from(classes).toSorted();
+  const riskLevel = resolveRiskLevel({
+    score,
+    classes,
+    encodedMatches: encodedMatches.length,
+  });
+
+  return {
+    suspicious: patterns.length > 0,
+    patterns,
+    riskLevel,
+    classesMatched,
+    score,
+    encodedMatches: encodedMatches.length,
+  };
+}
 
 /**
  * Check if content contains suspicious patterns that may indicate injection.
  */
 export function detectSuspiciousPatterns(content: string): string[] {
-  const matches: string[] = [];
-  for (const pattern of SUSPICIOUS_PATTERNS) {
-    if (pattern.test(content)) {
-      matches.push(pattern.source);
-    }
-  }
-  return matches;
+  return dedupeMatches(findMatches(content, INJECTION_PATTERN_DEFS));
 }
 
 /**

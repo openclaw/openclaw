@@ -1,5 +1,23 @@
 export type MemorySource = "memory" | "sessions";
 
+export type MemoryRiskLevel = "low" | "medium" | "high" | "critical";
+
+export type MemoryRiskClass =
+  | "role_confusion"
+  | "instruction_override"
+  | "tool_invocation"
+  | "exfiltration"
+  | "privilege_escalation"
+  | "encoding";
+
+export type MemoryRiskMetadata = {
+  riskLevel: MemoryRiskLevel;
+  score: number;
+  classesMatched: MemoryRiskClass[];
+  patternsTop: string[];
+  encodedMatches: number;
+};
+
 export type MemorySearchResult = {
   path: string;
   startLine: number;
@@ -8,6 +26,9 @@ export type MemorySearchResult = {
   snippet: string;
   source: MemorySource;
   citation?: string;
+  warnings?: string[];
+  riskLevel?: MemoryRiskLevel;
+  riskClasses?: MemoryRiskClass[];
 };
 
 export type MemoryEmbeddingProbeResult = {
