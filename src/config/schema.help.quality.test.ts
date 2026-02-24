@@ -519,6 +519,7 @@ const FINAL_BACKLOG_TARGET_KEYS = [
   "browser.snapshotDefaults.mode",
   "browser.ssrfPolicy",
   "browser.ssrfPolicy.allowPrivateNetwork",
+  "browser.ssrfPolicy.dangerouslyAllowPrivateNetwork",
   "browser.ssrfPolicy.allowedHostnames",
   "browser.ssrfPolicy.hostnameAllowlist",
   "diagnostics.enabled",
