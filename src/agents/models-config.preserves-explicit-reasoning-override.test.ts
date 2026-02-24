@@ -92,8 +92,8 @@ describe("models-config: explicit reasoning override", () => {
               minimax: {
                 baseUrl: "https://api.minimax.io/anthropic",
                 api: "anthropic-messages",
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                models: [modelWithoutReasoning as any],
+                // @ts-expect-error Intentional: emulate user config omitting reasoning.
+                models: [modelWithoutReasoning],
               },
             },
           },
