@@ -18,6 +18,14 @@ describe("check-no-random-messaging-tmp", () => {
     expect(findMessagingTmpdirCallLines(source)).toEqual([3]);
   });
 
+  it("finds tmpdir calls imported from os", () => {
+    const source = `
+      import os from "os";
+      const dir = os.tmpdir();
+    `;
+    expect(findMessagingTmpdirCallLines(source)).toEqual([3]);
+  });
+
   it("ignores mentions in comments and strings", () => {
     const source = `
       // os.tmpdir()

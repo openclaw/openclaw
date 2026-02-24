@@ -171,6 +171,10 @@ Security boundary notes:
 - Sandbox media validation allows absolute temp paths only under the OpenClaw-managed temp root.
 - Arbitrary host tmp paths are not treated as trusted media roots.
 - Plugin/extension code should use OpenClaw temp helpers (`resolvePreferredOpenClawTmpDir`, `buildRandomTempFilePath`, `withTempDownloadPath`) rather than raw `os.tmpdir()` defaults when handling media files.
+- Enforcement reference points:
+  - temp root resolver: `src/infra/tmp-openclaw-dir.ts`
+  - SDK temp helpers: `src/plugin-sdk/temp-path.ts`
+  - messaging/channel tmp guardrail: `scripts/check-no-random-messaging-tmp.mjs`
 
 ## Operational Guidance
 

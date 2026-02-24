@@ -31,6 +31,15 @@ function resolveTempRoot(tmpDir?: string): string {
   return tmpDir ?? resolvePreferredOpenClawTmpDir();
 }
 
+function isNodeErrorWithCode(err: unknown, code: string): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "code" in err &&
+    (err as { code?: string }).code === code
+  );
+}
+
 export function buildRandomTempFilePath(params: {
   prefix: string;
   extension?: string;
@@ -64,6 +73,12 @@ export async function withTempDownloadPath<T>(
   try {
     return await fn(tmpPath);
   } finally {
-    await rm(dir, { recursive: true, force: true }).catch(() => {});
+    try {
+      await rm(dir, { recursive: true, force: true });
+    } catch (err) {
+      if (!isNodeErrorWithCode(err, "ENOENT")) {
+        console.warn(`temp-path cleanup failed for ${dir}: ${String(err)}`);
+      }
+    }
   }
 }
