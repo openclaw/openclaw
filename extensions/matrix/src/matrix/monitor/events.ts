@@ -27,19 +27,34 @@ export function registerMatrixMonitorEvents(params: {
   } = params;
 
   let selfUserId: string | undefined;
+  let selfUserIdLookup: Promise<string | undefined> | undefined;
+  const resolveSelfUserId = async (): Promise<string | undefined> => {
+    if (selfUserId) {
+      return selfUserId;
+    }
+    if (!selfUserIdLookup) {
+      selfUserIdLookup = client
+        .getUserId()
+        .then((userId) => {
+          selfUserId = userId;
+          return userId;
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          if (!selfUserId) {
+            selfUserIdLookup = undefined;
+          }
+        });
+    }
+    return await selfUserIdLookup;
+  };
   client.on("room.message", (roomId: string, event: MatrixRawEvent) => {
     const eventId = event?.event_id;
     const senderId = event?.sender;
     if (eventId && senderId) {
       void (async () => {
-        if (!selfUserId) {
-          try {
-            selfUserId = await client.getUserId();
-          } catch {
-            return;
-          }
-        }
-        if (senderId === selfUserId) {
+        const currentSelfUserId = await resolveSelfUserId();
+        if (!currentSelfUserId || senderId === currentSelfUserId) {
           return;
         }
         await sendReadReceiptMatrix(roomId, eventId, client).catch((err) => {
