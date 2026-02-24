@@ -717,6 +717,47 @@ describe("redactConfigSnapshot", () => {
     expect(restored.skills.entries.web_search.env.BRAVE_REGION).toBe("us");
   });
 
+  it("contract-covers dynamic catchall/record paths for redact+restore", () => {
+    const hints = mapSensitivePaths(OpenClawSchema, "", {});
+    const snapshot = makeSnapshot({
+      env: {
+        GROQ_API_KEY: "gsk-contract-123",
+        NODE_ENV: "production",
+      },
+      skills: {
+        entries: {
+          web_search: {
+            env: {
+              GEMINI_API_KEY: "gemini-contract-456",
+              BRAVE_REGION: "us",
+            },
+          },
+        },
+      },
+      broadcast: {
+        apiToken: ["broadcast-secret-1", "broadcast-secret-2"],
+        channels: ["ops", "eng"],
+      },
+    });
+
+    const redacted = redactConfigSnapshot(snapshot, hints);
+    const config = redacted.config as {
+      env: Record<string, string>;
+      skills: { entries: Record<string, { env: Record<string, string> }> };
+      broadcast: Record<string, string[]>;
+    };
+
+    expect(config.env.GROQ_API_KEY).toBe(REDACTED_SENTINEL);
+    expect(config.env.NODE_ENV).toBe("production");
+    expect(config.skills.entries.web_search.env.GEMINI_API_KEY).toBe(REDACTED_SENTINEL);
+    expect(config.skills.entries.web_search.env.BRAVE_REGION).toBe("us");
+    expect(config.broadcast.apiToken).toEqual([REDACTED_SENTINEL, REDACTED_SENTINEL]);
+    expect(config.broadcast.channels).toEqual(["ops", "eng"]);
+
+    const restored = restoreRedactedValues(redacted.config, snapshot.config, hints);
+    expect(restored).toEqual(snapshot.config);
+  });
+
   it("uses wildcard hints for array items", () => {
     const hints: ConfigUiHints = {
       "channels.slack.accounts[].botToken": { sensitive: true },
