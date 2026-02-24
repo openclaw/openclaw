@@ -9,9 +9,15 @@ private struct KeychainEntry: Hashable {
 
 private let gatewayService = "ai.openclaw.gateway"
 private let nodeService = "ai.openclaw.node"
+private let talkService = "ai.openclaw.talk"
 private let instanceIdEntry = KeychainEntry(service: nodeService, account: "instanceId")
 private let preferredGatewayEntry = KeychainEntry(service: gatewayService, account: "preferredStableID")
 private let lastGatewayEntry = KeychainEntry(service: gatewayService, account: "lastDiscoveredStableID")
+private let talkElevenLabsLegacyEntry = KeychainEntry(service: talkService, account: "elevenlabs.apiKey")
+private let talkElevenLabsProviderEntry = KeychainEntry(
+    service: talkService,
+    account: "provider.apiKey.elevenlabs")
+private let talkAcmeProviderEntry = KeychainEntry(service: talkService, account: "provider.apiKey.acme")
 
 private func snapshotDefaults(_ keys: [String]) -> [String: Any?] {
     let defaults = UserDefaults.standard
@@ -195,5 +201,35 @@ private func restoreKeychain(_ snapshot: [KeychainEntry: String?]) {
 
         let loaded = GatewaySettingsStore.loadLastGatewayConnection()
         #expect(loaded == .manual(host: "example.org", port: 18789, useTLS: false, stableID: "manual|example.org|18789"))
+    }
+
+    @Test func talkProviderApiKey_genericRoundTrip() {
+        let keychainSnapshot = snapshotKeychain([talkAcmeProviderEntry])
+        defer { restoreKeychain(keychainSnapshot) }
+
+        _ = KeychainStore.delete(service: talkService, account: talkAcmeProviderEntry.account)
+
+        GatewaySettingsStore.saveTalkProviderApiKey("acme-key", provider: "acme")
+        #expect(GatewaySettingsStore.loadTalkProviderApiKey(provider: "acme") == "acme-key")
+
+        GatewaySettingsStore.saveTalkProviderApiKey(nil, provider: "acme")
+        #expect(GatewaySettingsStore.loadTalkProviderApiKey(provider: "acme") == nil)
+    }
+
+    @Test func talkProviderApiKey_elevenlabsLegacyFallbackMigratesToProviderKey() {
+        let keychainSnapshot = snapshotKeychain([talkElevenLabsLegacyEntry, talkElevenLabsProviderEntry])
+        defer { restoreKeychain(keychainSnapshot) }
+
+        _ = KeychainStore.delete(service: talkService, account: talkElevenLabsProviderEntry.account)
+        _ = KeychainStore.saveString(
+            "legacy-eleven-key",
+            service: talkService,
+            account: talkElevenLabsLegacyEntry.account)
+
+        let loaded = GatewaySettingsStore.loadTalkProviderApiKey(provider: "elevenlabs")
+        #expect(loaded == "legacy-eleven-key")
+        #expect(
+            KeychainStore.loadString(service: talkService, account: talkElevenLabsProviderEntry.account)
+                == "legacy-eleven-key")
     }
 }

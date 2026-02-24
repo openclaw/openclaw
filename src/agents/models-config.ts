@@ -47,10 +47,14 @@ function mergeProviderModels(implicit: ProviderConfig, explicit: ProviderConfig)
 
     // Refresh capability metadata from the implicit catalog while preserving
     // user-specific fields (cost, headers, compat, etc.) on explicit entries.
+    // reasoning is treated as user-overridable: if the user has explicitly set
+    // it in their config (key present), honour that value; otherwise fall back
+    // to the built-in catalog default so new reasoning models work out of the
+    // box without requiring every user to configure it.
     return {
       ...explicitModel,
       input: implicitModel.input,
-      reasoning: implicitModel.reasoning,
+      reasoning: "reasoning" in explicitModel ? explicitModel.reasoning : implicitModel.reasoning,
       contextWindow: implicitModel.contextWindow,
       maxTokens: implicitModel.maxTokens,
     };

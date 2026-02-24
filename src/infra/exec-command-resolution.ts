@@ -223,7 +223,17 @@ export function matchAllowlist(
   entries: ExecAllowlistEntry[],
   resolution: CommandResolution | null,
 ): ExecAllowlistEntry | null {
-  if (!entries.length || !resolution?.resolvedPath) {
+  if (!entries.length) {
+    return null;
+  }
+  // A bare "*" wildcard allows any parsed executable command.
+  // Check it before the resolvedPath guard so unresolved PATH lookups still
+  // match (for example platform-specific executables without known extensions).
+  const bareWild = entries.find((e) => e.pattern?.trim() === "*");
+  if (bareWild && resolution) {
+    return bareWild;
+  }
+  if (!resolution?.resolvedPath) {
     return null;
   }
   const resolvedPath = resolution.resolvedPath;

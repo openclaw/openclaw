@@ -133,6 +133,26 @@ export const FIELD_HELP: Record<string, string> = {
   "gateway.remote.sshTarget":
     "Remote gateway over SSH (tunnels the gateway port to localhost). Format: user@host or user@host:port.",
   "gateway.remote.sshIdentity": "Optional SSH identity file path (passed to ssh -i).",
+  "talk.provider": 'Active Talk provider id (for example "elevenlabs").',
+  "talk.providers":
+    "Provider-specific Talk settings keyed by provider id. During migration, prefer this over legacy talk.* keys.",
+  "talk.providers.*.voiceId": "Provider default voice ID for Talk mode.",
+  "talk.providers.*.voiceAliases": "Optional provider voice alias map for Talk directives.",
+  "talk.providers.*.modelId": "Provider default model ID for Talk mode.",
+  "talk.providers.*.outputFormat": "Provider default output format for Talk mode.",
+  "talk.providers.*.apiKey": "Provider API key for Talk mode.",
+  "talk.voiceId":
+    "Legacy ElevenLabs default voice ID for Talk mode. Prefer talk.providers.elevenlabs.voiceId.",
+  "talk.voiceAliases":
+    'Use this legacy ElevenLabs voice alias map (for example {"Clawd":"EXAVITQu4vr4xnSDxMaL"}) only during migration. Prefer talk.providers.elevenlabs.voiceAliases.',
+  "talk.modelId":
+    "Legacy ElevenLabs model ID for Talk mode (default: eleven_v3). Prefer talk.providers.elevenlabs.modelId.",
+  "talk.outputFormat":
+    "Use this legacy ElevenLabs output format for Talk mode (for example pcm_44100 or mp3_44100_128) only during migration. Prefer talk.providers.elevenlabs.outputFormat.",
+  "talk.apiKey":
+    "Use this legacy ElevenLabs API key for Talk mode only during migration, and keep secrets in env-backed storage. Prefer talk.providers.elevenlabs.apiKey (fallback: ELEVENLABS_API_KEY).",
+  "talk.interruptOnSpeech":
+    "If true (default), stop assistant speech when the user starts speaking in Talk mode. Keep enabled for conversational turn-taking.",
   "agents.list.*.skills":
     "Optional allowlist of skills for this agent (omit = all skills; empty = no skills).",
   "agents.list[].skills":
@@ -273,18 +293,6 @@ export const FIELD_HELP: Record<string, string> = {
   "canvasHost.liveReload":
     "Enables automatic live-reload behavior for canvas assets during development workflows. Keep disabled in production-like environments where deterministic output is preferred.",
   talk: "Talk-mode voice synthesis settings for voice identity, model selection, output format, and interruption behavior. Use this section to tune human-facing voice UX while controlling latency and cost.",
-  "talk.voiceId":
-    "Primary voice identifier used by talk mode when synthesizing spoken responses. Use a stable voice for consistent persona and switch only when experience goals change.",
-  "talk.voiceAliases":
-    "Alias map for human-friendly voice shortcuts to concrete voice IDs in talk workflows. Use aliases to simplify operator switching without exposing long provider-native IDs.",
-  "talk.modelId":
-    "Model override used for talk pipeline generation when voice workflows require different model behavior. Use this when speech output needs a specialized low-latency or style-tuned model.",
-  "talk.outputFormat":
-    "Audio output format for synthesized talk responses, depending on provider support and client playback expectations. Use formats compatible with your playback channel to avoid decode failures.",
-  "talk.interruptOnSpeech":
-    "When true, interrupts current speech playback on new speech/input events for more conversational turn-taking. Keep enabled for interactive voice UX and disable for uninterrupted long-form playback.",
-  "talk.apiKey":
-    "Optional talk-provider API key override used specifically for speech synthesis requests. Use env-backed secrets and set this only when talk traffic must use separate credentials.",
   "gateway.auth.token":
     "Required by default for gateway access (unless using Tailscale Serve identity); required for non-loopback binds.",
   "gateway.auth.password": "Required for Tailscale funnel.",

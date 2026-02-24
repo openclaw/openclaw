@@ -7,6 +7,22 @@ title: "Security"
 
 # Security 🔒
 
+> [!WARNING]
+> **Personal assistant trust model:** this guidance assumes one trusted operator boundary per gateway (single-user/personal assistant model).
+> OpenClaw is **not** a hostile multi-tenant security boundary for multiple adversarial users sharing one agent/gateway.
+> If you need mixed-trust or adversarial-user operation, split trust boundaries (separate gateway + credentials, ideally separate OS users/hosts).
+
+## Scope first: personal assistant security model
+
+OpenClaw security guidance assumes a **personal assistant** deployment: one trusted operator boundary, potentially many agents.
+
+- Supported security posture: one user/trust boundary per gateway (prefer one OS user/host/VPS per boundary).
+- Not a supported security boundary: one shared gateway/agent used by mutually untrusted or adversarial users.
+- If adversarial-user isolation is required, split by trust boundary (separate gateway + credentials, and ideally separate OS users/hosts).
+- If multiple untrusted users can message one tool-enabled agent, treat them as sharing the same delegated tool authority for that agent.
+
+This page explains hardening **within that model**. It does not claim hostile multi-tenant isolation on one shared gateway.
+
 ## Quick check: `openclaw security audit`
 
 See also: [Formal Verification (Security Models)](/security/formal-verification/)
@@ -231,7 +247,9 @@ High-signal `checkId` values you will most likely see in real deployments (not e
 | `tools.exec.host_sandbox_no_sandbox_defaults`      | warn          | `exec host=sandbox` resolves to host exec when sandbox is off                      | `tools.exec.host`, `agents.defaults.sandbox.mode`                                                 | no       |
 | `tools.exec.host_sandbox_no_sandbox_agents`        | warn          | Per-agent `exec host=sandbox` resolves to host exec when sandbox is off            | `agents.list[].tools.exec.host`, `agents.list[].sandbox.mode`                                     | no       |
 | `tools.exec.safe_bins_interpreter_unprofiled`      | warn          | Interpreter/runtime bins in `safeBins` without explicit profiles broaden exec risk | `tools.exec.safeBins`, `tools.exec.safeBinProfiles`, `agents.list[].tools.exec.*`                 | no       |
+| `security.exposure.open_groups_with_elevated`      | critical      | Open groups + elevated tools create high-impact prompt-injection paths             | `channels.*.groupPolicy`, `tools.elevated.*`                                                      | no       |
 | `security.exposure.open_groups_with_runtime_or_fs` | critical/warn | Open groups can reach command/file tools without sandbox/workspace guards          | `channels.*.groupPolicy`, `tools.profile/deny`, `tools.fs.workspaceOnly`, `agents.*.sandbox.mode` | no       |
+| `security.trust_model.multi_user_heuristic`        | warn          | Config looks multi-user while gateway trust model is personal-assistant            | split trust boundaries, or shared-user hardening (`sandbox.mode`, tool deny/workspace scoping)    | no       |
 | `tools.profile_minimal_overridden`                 | warn          | Agent overrides bypass global minimal profile                                      | `agents.list[].tools.profile`                                                                     | no       |
 | `plugins.tools_reachable_permissive_policy`        | warn          | Extension tools reachable in permissive contexts                                   | `tools.profile` + tool allow/deny                                                                 | no       |
 | `models.small_params`                              | critical/info | Small models + unsafe tool surfaces raise injection risk                           | model choice + sandbox/tool policy                                                                | no       |
@@ -251,14 +269,38 @@ keep it off unless you are actively debugging and can revert quickly.
 
 ## Insecure or dangerous flags summary
 
-`openclaw security audit` includes `config.insecure_or_dangerous_flags` when any
-insecure/dangerous debug switches are enabled. This warning aggregates the exact
-keys so you can review them in one place (for example
-`gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true`,
-`gateway.controlUi.allowInsecureAuth=true`,
-`gateway.controlUi.dangerouslyDisableDeviceAuth=true`,
-`hooks.gmail.allowUnsafeExternalContent=true`, or
-`tools.exec.applyPatch.workspaceOnly=false`).
+`openclaw security audit` includes `config.insecure_or_dangerous_flags` when
+known insecure/dangerous debug switches are enabled. That check currently
+aggregates:
+
+- `gateway.controlUi.allowInsecureAuth=true`
+- `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true`
+- `gateway.controlUi.dangerouslyDisableDeviceAuth=true`
+- `hooks.gmail.allowUnsafeExternalContent=true`
+- `hooks.mappings[<index>].allowUnsafeExternalContent=true`
+- `tools.exec.applyPatch.workspaceOnly=false`
+
+Complete `dangerous*` / `dangerously*` config keys defined in OpenClaw config
+schema:
+
+- `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback`
+- `gateway.controlUi.dangerouslyDisableDeviceAuth`
+- `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork`
+- `channels.discord.dangerouslyAllowNameMatching`
+- `channels.discord.accounts.<accountId>.dangerouslyAllowNameMatching`
+- `channels.slack.dangerouslyAllowNameMatching`
+- `channels.slack.accounts.<accountId>.dangerouslyAllowNameMatching`
+- `channels.googlechat.dangerouslyAllowNameMatching`
+- `channels.googlechat.accounts.<accountId>.dangerouslyAllowNameMatching`
+- `channels.msteams.dangerouslyAllowNameMatching`
+- `channels.irc.dangerouslyAllowNameMatching` (extension channel)
+- `channels.irc.accounts.<accountId>.dangerouslyAllowNameMatching` (extension channel)
+- `channels.mattermost.dangerouslyAllowNameMatching` (extension channel)
+- `channels.mattermost.accounts.<accountId>.dangerouslyAllowNameMatching` (extension channel)
+- `agents.defaults.sandbox.docker.dangerouslyAllowReservedContainerTargets`
+- `agents.defaults.sandbox.docker.dangerouslyAllowExternalBindSources`
+- `agents.list[<index>].sandbox.docker.dangerouslyAllowReservedContainerTargets`
+- `agents.list[<index>].sandbox.docker.dangerouslyAllowExternalBindSources`
 
 ## Reverse Proxy Configuration
 
@@ -791,7 +833,7 @@ We may add a single `readOnlyMode` flag later to simplify this configuration.
 Additional hardening options:
 
 - `tools.exec.applyPatch.workspaceOnly: true` (default): ensures `apply_patch` cannot write/delete outside the workspace directory even when sandboxing is off. Set to `false` only if you intentionally want `apply_patch` to touch files outside the workspace.
-- `tools.fs.workspaceOnly: true` (optional): restricts `read`/`write`/`edit`/`apply_patch` paths to the workspace directory (useful if you allow absolute paths today and want a single guardrail).
+- `tools.fs.workspaceOnly: true` (optional): restricts `read`/`write`/`edit`/`apply_patch` paths and native prompt image auto-load paths to the workspace directory (useful if you allow absolute paths today and want a single guardrail).
 
 ### 5) Secure baseline (copy/paste)
 
