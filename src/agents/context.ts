@@ -201,7 +201,12 @@ function ensureConfigCache(): void {
     for (const provider of Object.values(providers)) {
       const models = Array.isArray(provider?.models) ? provider.models : [];
       for (const m of models) {
-        if (m?.id && typeof m.contextWindow === "number" && m.contextWindow > 0) {
+        if (
+          m?.id &&
+          typeof m.id === "string" &&
+          typeof m.contextWindow === "number" &&
+          m.contextWindow > 0
+        ) {
           CONFIG_CACHE.set(m.id, m.contextWindow);
         }
       }
