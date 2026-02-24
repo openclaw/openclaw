@@ -665,15 +665,36 @@
     return div.innerHTML;
   }
 
-  // Validate image MIME type to prevent attribute injection in data-URL src.
+  // Validate image fields before interpolating data URLs.
   const SAFE_IMAGE_MIME_RE = /^image\/(png|jpeg|gif|webp|svg\+xml|bmp|tiff|avif)$/i;
+  const SAFE_BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+
   function sanitizeImageMimeType(mimeType) {
     if (typeof mimeType === "string" && SAFE_IMAGE_MIME_RE.test(mimeType)) {
-      return mimeType;
+      return mimeType.toLowerCase();
     }
     return "application/octet-stream";
   }
 
+  function sanitizeImageBase64(data) {
+    if (typeof data !== "string") {
+      return "";
+    }
+    const cleaned = data.replace(/\s+/g, "");
+    if (!cleaned || cleaned.length % 4 !== 0 || !SAFE_BASE64_RE.test(cleaned)) {
+      return "";
+    }
+    return cleaned;
+  }
+
+  function renderDataUrlImage(img, className) {
+    const mimeType = sanitizeImageMimeType(img?.mimeType);
+    const base64 = sanitizeImageBase64(img?.data);
+    if (!base64) {
+      return "";
+    }
+    return `<img src="data:${mimeType};base64,${base64}" class="${className}" />`;
+  }
   /**
    * Truncate string to maxLen chars, append "..." if truncated.
    */
@@ -1037,12 +1058,7 @@
       }
       return (
         '<div class="tool-images">' +
-        images
-          .map(
-            (img) =>
-              `<img src="data:${sanitizeImageMimeType(img.mimeType)};base64,${img.data}" class="tool-image" />`,
-          )
-          .join("") +
+        images.map((img) => renderDataUrlImage(img, "tool-image")).join("") +
         "</div>"
       );
     };
@@ -1315,7 +1331,7 @@
           if (images.length > 0) {
             html += '<div class="message-images">';
             for (const img of images) {
-              html += `<img src="data:${sanitizeImageMimeType(img.mimeType)};base64,${img.data}" class="message-image" />`;
+              html += renderDataUrlImage(img, "message-image");
             }
             html += "</div>";
           }
