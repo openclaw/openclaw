@@ -92,6 +92,10 @@ export function isSafeBinUsage(params: {
   return validateSafeBinArgv(argv, profile);
 }
 
+function isPathScopedExecutableToken(token: string): boolean {
+  return token.includes("/") || token.includes("\\");
+}
+
 export type ExecAllowlistEvaluation = {
   allowlistSatisfied: boolean;
   allowlistMatches: ExecAllowlistEntry[];
@@ -147,10 +151,19 @@ function evaluateSegments(
       platform: params.platform,
       trustedSafeBinDirs: params.trustedSafeBinDirs,
     });
-    const skillAllow =
-      allowSkills && segment.resolution?.executableName
-        ? params.skillBins?.has(segment.resolution.executableName)
-        : false;
+    const rawExecutable = segment.resolution?.rawExecutable?.trim() ?? "";
+    const executableName = segment.resolution?.executableName;
+    const usesExplicitPath = isPathScopedExecutableToken(rawExecutable);
+    let skillAllow = false;
+    if (
+      allowSkills &&
+      segment.resolution?.resolvedPath &&
+      rawExecutable.length > 0 &&
+      !usesExplicitPath &&
+      executableName
+    ) {
+      skillAllow = Boolean(params.skillBins?.has(executableName));
+    }
     const by: ExecSegmentSatisfiedBy = match
       ? "allowlist"
       : safe
