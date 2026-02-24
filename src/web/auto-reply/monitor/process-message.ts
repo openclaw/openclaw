@@ -368,6 +368,12 @@ export async function processMessage(params: {
         }
       },
       deliver: async (payload: ReplyPayload, info) => {
+        if (info.kind !== "final") {
+          // Only deliver final replies to external messaging channels (WhatsApp).
+          // Block (reasoning/thinking) and tool updates are meant for the internal
+          // web UI only; sending them here leaks chain-of-thought to end users.
+          return;
+        }
         await deliverWebReply({
           replyResult: payload,
           msg: params.msg,
@@ -377,30 +383,23 @@ export async function processMessage(params: {
           chunkMode,
           replyLogger: params.replyLogger,
           connectionId: params.connectionId,
-          // Tool + block updates are noisy; skip their log lines.
-          skipLog: info.kind !== "final",
+          skipLog: false,
           tableMode,
         });
         didSendReply = true;
-        if (info.kind === "tool") {
-          params.rememberSentText(payload.text, {});
-          return;
-        }
-        const shouldLog = info.kind === "final" && payload.text ? true : undefined;
+        const shouldLog = payload.text ? true : undefined;
         params.rememberSentText(payload.text, {
           combinedBody,
           combinedBodySessionKey: params.route.sessionKey,
           logVerboseMessage: shouldLog,
         });
-        if (info.kind === "final") {
-          const fromDisplay =
-            params.msg.chatType === "group" ? conversationId : (params.msg.from ?? "unknown");
-          const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
-          whatsappOutboundLog.info(`Auto-replied to ${fromDisplay}${hasMedia ? " (media)" : ""}`);
-          if (shouldLogVerbose()) {
-            const preview = payload.text != null ? elide(payload.text, 400) : "<media>";
-            whatsappOutboundLog.debug(`Reply body: ${preview}${hasMedia ? " (media)" : ""}`);
-          }
+        const fromDisplay =
+          params.msg.chatType === "group" ? conversationId : (params.msg.from ?? "unknown");
+        const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
+        whatsappOutboundLog.info(`Auto-replied to ${fromDisplay}${hasMedia ? " (media)" : ""}`);
+        if (shouldLogVerbose()) {
+          const preview = payload.text != null ? elide(payload.text, 400) : "<media>";
+          whatsappOutboundLog.debug(`Reply body: ${preview}${hasMedia ? " (media)" : ""}`);
         }
       },
       onError: (err, info) => {
