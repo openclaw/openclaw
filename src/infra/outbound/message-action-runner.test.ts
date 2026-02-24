@@ -424,6 +424,15 @@ describe("runMessageAction context isolation", () => {
 });
 
 describe("runMessageAction sendAttachment hydration", () => {
+  const cfg = {
+    channels: {
+      bluebubbles: {
+        enabled: true,
+        serverUrl: "http://localhost:1234",
+        password: "test-password",
+      },
+    },
+  } as OpenClawConfig;
   const attachmentPlugin: ChannelPlugin = {
     id: "bluebubbles",
     meta: {
@@ -433,15 +442,15 @@ describe("runMessageAction sendAttachment hydration", () => {
       docsPath: "/channels/bluebubbles",
       blurb: "BlueBubbles test plugin.",
     },
-    capabilities: { chatTypes: ["direct"], media: true },
+    capabilities: { chatTypes: ["direct", "group"], media: true },
     config: {
       listAccountIds: () => ["default"],
       resolveAccount: () => ({ enabled: true }),
       isConfigured: () => true,
     },
     actions: {
-      listActions: () => ["sendAttachment"],
-      supportsAction: ({ action }) => action === "sendAttachment",
+      listActions: () => ["sendAttachment", "setGroupIcon"],
+      supportsAction: ({ action }) => action === "sendAttachment" || action === "setGroupIcon",
       handleAction: async ({ params }) =>
         jsonResult({
           ok: true,
@@ -476,17 +485,12 @@ describe("runMessageAction sendAttachment hydration", () => {
     vi.clearAllMocks();
   });
 
-  it("hydrates buffer and filename from media for sendAttachment", async () => {
-    const cfg = {
-      channels: {
-        bluebubbles: {
-          enabled: true,
-          serverUrl: "http://localhost:1234",
-          password: "test-password",
-        },
-      },
-    } as OpenClawConfig;
+  async function restoreRealMediaLoader() {
+    const actual = await vi.importActual<typeof import("../../web/media.js")>("../../web/media.js");
+    vi.mocked(loadWebMedia).mockImplementation(actual.loadWebMedia);
+  }
 
+  it("hydrates buffer and filename from media for sendAttachment", async () => {
     const result = await runMessageAction({
       cfg,
       action: "sendAttachment",
@@ -511,15 +515,6 @@ describe("runMessageAction sendAttachment hydration", () => {
   });
 
   it("rewrites sandboxed media paths for sendAttachment", async () => {
-    const cfg = {
-      channels: {
-        bluebubbles: {
-          enabled: true,
-          serverUrl: "http://localhost:1234",
-          password: "test-password",
-        },
-      },
-    } as OpenClawConfig;
     await withSandbox(async (sandboxDir) => {
       await runMessageAction({
         cfg,
@@ -536,6 +531,55 @@ describe("runMessageAction sendAttachment hydration", () => {
       const call = vi.mocked(loadWebMedia).mock.calls[0];
       expect(call?.[0]).toBe(path.join(sandboxDir, "data", "pic.png"));
     });
+  });
+
+  it("rejects local absolute path for sendAttachment when sandboxRoot is missing", async () => {
+    await restoreRealMediaLoader();
+
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-attachment-"));
+    try {
+      const outsidePath = path.join(tempDir, "secret.txt");
+      await fs.writeFile(outsidePath, "secret", "utf8");
+
+      await expect(
+        runMessageAction({
+          cfg,
+          action: "sendAttachment",
+          params: {
+            channel: "bluebubbles",
+            target: "+15551234567",
+            media: outsidePath,
+            message: "caption",
+          },
+        }),
+      ).rejects.toThrow(/allowed directory|path-not-allowed/i);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects local absolute path for setGroupIcon when sandboxRoot is missing", async () => {
+    await restoreRealMediaLoader();
+
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-group-icon-"));
+    try {
+      const outsidePath = path.join(tempDir, "secret.txt");
+      await fs.writeFile(outsidePath, "secret", "utf8");
+
+      await expect(
+        runMessageAction({
+          cfg,
+          action: "setGroupIcon",
+          params: {
+            channel: "bluebubbles",
+            target: "group:123",
+            media: outsidePath,
+          },
+        }),
+      ).rejects.toThrow(/allowed directory|path-not-allowed/i);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 });
 

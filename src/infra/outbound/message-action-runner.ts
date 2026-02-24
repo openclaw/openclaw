@@ -13,6 +13,7 @@ import type {
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -757,6 +758,7 @@ export async function runMessageAction(
     params.accountId = accountId;
   }
   const dryRun = Boolean(input.dryRun ?? readBooleanParam(params, "dryRun"));
+  const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, resolvedAgentId);
 
   await normalizeSandboxMediaParams({
     args: params,
@@ -770,6 +772,8 @@ export async function runMessageAction(
     args: params,
     action,
     dryRun,
+    sandboxRoot: input.sandboxRoot,
+    mediaLocalRoots,
   });
 
   await hydrateSetGroupIconParams({
@@ -779,6 +783,8 @@ export async function runMessageAction(
     args: params,
     action,
     dryRun,
+    sandboxRoot: input.sandboxRoot,
+    mediaLocalRoots,
   });
 
   const resolvedTarget = await resolveActionTarget({
