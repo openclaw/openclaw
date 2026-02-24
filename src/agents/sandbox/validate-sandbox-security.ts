@@ -119,18 +119,38 @@ export function getBlockedReasonForSourcePath(sourceNormalized: string): Blocked
   return null;
 }
 
-function tryRealpathAbsolute(path: string): string {
-  if (!path.startsWith("/")) {
-    return path;
+function resolvePathViaExistingAncestor(sourcePath: string): string {
+  if (!sourcePath.startsWith("/")) {
+    return sourcePath;
   }
-  if (!existsSync(path)) {
-    return path;
+
+  const normalized = normalizeHostPath(sourcePath);
+  let current = normalized;
+  const missingSegments: string[] = [];
+
+  // Resolve through the deepest existing ancestor so symlink parents are honored
+  // even when the final source leaf does not exist yet.
+  while (current !== "/" && !existsSync(current)) {
+    missingSegments.unshift(posix.basename(current));
+    const parent = posix.dirname(current);
+    if (parent === current) {
+      break;
+    }
+    current = parent;
   }
+
+  if (!existsSync(current)) {
+    return normalized;
+  }
+
   try {
-    // Use native when available (keeps platform semantics); normalize for prefix checks.
-    return normalizeHostPath(realpathSync.native(path));
+    const resolvedAncestor = normalizeHostPath(realpathSync.native(current));
+    if (missingSegments.length === 0) {
+      return resolvedAncestor;
+    }
+    return normalizeHostPath(posix.join(resolvedAncestor, ...missingSegments));
   } catch {
-    return path;
+    return normalized;
   }
 }
 
@@ -145,7 +165,7 @@ function normalizeAllowedRoots(roots: string[] | undefined): string[] {
   const expanded = new Set<string>();
   for (const root of normalized) {
     expanded.add(root);
-    const real = tryRealpathAbsolute(root);
+    const real = resolvePathViaExistingAncestor(root);
     if (real !== root) {
       expanded.add(real);
     }
@@ -227,7 +247,8 @@ function formatBindBlockedError(params: { bind: string; reason: BlockedBindReaso
 
 /**
  * Validate bind mounts — throws if any source path is dangerous.
- * Includes a symlink/realpath pass when the source path exists.
+ * Includes a symlink/realpath pass via existing ancestors so non-existent leaf
+ * paths cannot bypass source-root and blocked-path checks.
  */
 export function validateBindMounts(
   binds: string[] | undefined,
@@ -268,18 +289,16 @@ export function validateBindMounts(
       }
     }
 
-    // Symlink escape hardening: resolve existing absolute paths and re-check.
-    const sourceReal = tryRealpathAbsolute(sourceNormalized);
-    if (sourceReal !== sourceNormalized) {
-      const reason = getBlockedReasonForSourcePath(sourceReal);
-      if (reason) {
-        throw formatBindBlockedError({ bind, reason });
-      }
-      if (!options?.allowSourcesOutsideAllowedRoots) {
-        const allowedReason = getOutsideAllowedRootsReason(sourceReal, allowedRoots);
-        if (allowedReason) {
-          throw formatBindBlockedError({ bind, reason: allowedReason });
-        }
+    // Symlink escape hardening: resolve through existing ancestors and re-check.
+    const sourceCanonical = resolvePathViaExistingAncestor(sourceNormalized);
+    const reason = getBlockedReasonForSourcePath(sourceCanonical);
+    if (reason) {
+      throw formatBindBlockedError({ bind, reason });
+    }
+    if (!options?.allowSourcesOutsideAllowedRoots) {
+      const allowedReason = getOutsideAllowedRootsReason(sourceCanonical, allowedRoots);
+      if (allowedReason) {
+        throw formatBindBlockedError({ bind, reason: allowedReason });
       }
     }
   }
