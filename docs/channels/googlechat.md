@@ -166,6 +166,7 @@ Use these identifiers for delivery and allowlists:
     googlechat: {
       enabled: true,
       serviceAccountFile: "/path/to/service-account.json",
+      // or serviceAccountRef: { source: "file", id: "/channels/googlechat/serviceAccount" }
       audienceType: "app-url",
       audience: "https://gateway.example.com/googlechat",
       webhookPath: "/googlechat",
@@ -194,11 +195,14 @@ Use these identifiers for delivery and allowlists:
 Notes:
 
 - Service account credentials can also be passed inline with `serviceAccount` (JSON string).
+- `serviceAccountRef` is also supported (env/file SecretRef), including per-account refs under `channels.googlechat.accounts.<id>.serviceAccountRef`.
 - Default webhook path is `/googlechat` if `webhookPath` isn’t set.
 - `dangerouslyAllowNameMatching` re-enables mutable email principal matching for allowlists (break-glass compatibility mode).
 - Reactions are available via the `reactions` tool and `channels action` when `actions.reactions` is enabled.
 - `typingIndicator` supports `none`, `message` (default), and `reaction` (reaction requires user OAuth).
 - Attachments are downloaded through the Chat API and stored in the media pipeline (size capped by `mediaMaxMb`).
+
+Secrets reference details: [Secrets Management](/gateway/secrets).
 
 ## Troubleshooting
 

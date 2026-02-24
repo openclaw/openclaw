@@ -22,6 +22,7 @@ openclaw onboard --non-interactive \
   --mode local \
   --auth-choice apiKey \
   --anthropic-api-key "$ANTHROPIC_API_KEY" \
+  --secret-input-mode plaintext \
   --gateway-port 18789 \
   --gateway-bind loopback \
   --install-daemon \
@@ -30,6 +31,18 @@ openclaw onboard --non-interactive \
 ```
 
 Add `--json` for a machine-readable summary.
+
+Use `--secret-input-mode ref` to store env-backed refs in auth profiles instead of plaintext values.
+
+Example:
+
+```bash
+openclaw onboard --non-interactive \
+  --mode local \
+  --auth-choice openai-api-key \
+  --secret-input-mode ref \
+  --accept-risk
+```
 
 ## Provider-specific examples
 
