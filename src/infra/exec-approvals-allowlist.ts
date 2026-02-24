@@ -21,6 +21,7 @@ import {
   extractShellWrapperInlineCommand,
   isDispatchWrapperExecutable,
   isShellWrapperExecutable,
+  unwrapKnownShellMultiplexerInvocation,
   unwrapKnownDispatchWrapperInvocation,
 } from "./exec-wrapper-resolution.js";
 
@@ -289,6 +290,30 @@ function collectAllowAlwaysPatterns(params: {
         raw: dispatchUnwrap.argv.join(" "),
         argv: dispatchUnwrap.argv,
         resolution: resolveCommandResolutionFromArgv(dispatchUnwrap.argv, params.cwd, params.env),
+      },
+      cwd: params.cwd,
+      env: params.env,
+      platform: params.platform,
+      depth: params.depth + 1,
+      out: params.out,
+    });
+    return;
+  }
+
+  const shellMultiplexerUnwrap = unwrapKnownShellMultiplexerInvocation(params.segment.argv);
+  if (shellMultiplexerUnwrap.kind === "blocked") {
+    return;
+  }
+  if (shellMultiplexerUnwrap.kind === "unwrapped") {
+    collectAllowAlwaysPatterns({
+      segment: {
+        raw: shellMultiplexerUnwrap.argv.join(" "),
+        argv: shellMultiplexerUnwrap.argv,
+        resolution: resolveCommandResolutionFromArgv(
+          shellMultiplexerUnwrap.argv,
+          params.cwd,
+          params.env,
+        ),
       },
       cwd: params.cwd,
       env: params.env,
