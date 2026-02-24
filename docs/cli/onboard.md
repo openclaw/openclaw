@@ -34,10 +34,22 @@ openclaw onboard --non-interactive \
   --custom-base-url "https://llm.example.com/v1" \
   --custom-model-id "foo-large" \
   --custom-api-key "$CUSTOM_API_KEY" \
+  --secret-input-mode plaintext \
   --custom-compatibility openai
 ```
 
 `--custom-api-key` is optional in non-interactive mode. If omitted, onboarding checks `CUSTOM_API_KEY`.
+
+Store provider keys as refs instead of plaintext:
+
+```bash
+openclaw onboard --non-interactive \
+  --auth-choice openai-api-key \
+  --secret-input-mode ref \
+  --accept-risk
+```
+
+With `--secret-input-mode ref`, onboarding writes provider default env refs (for example `OPENAI_API_KEY`) into auth profiles instead of plaintext key values.
 
 Non-interactive Z.AI endpoint choices:
 
