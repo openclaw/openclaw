@@ -59,6 +59,23 @@ describe("shell env fallback", () => {
     expect(receivedEnv?.HOME).toBe(os.homedir());
   }
 
+  function withEtcShells(shells: string[], fn: () => void) {
+    const etcShellsContent = `${shells.join("\n")}\n`;
+    const readFileSyncSpy = vi
+      .spyOn(fs, "readFileSync")
+      .mockImplementation((filePath, encoding) => {
+        if (filePath === "/etc/shells" && encoding === "utf8") {
+          return etcShellsContent;
+        }
+        throw new Error(`Unexpected readFileSync(${String(filePath)}) in test`);
+      });
+    try {
+      fn();
+    } finally {
+      readFileSyncSpy.mockRestore();
+    }
+  }
+
   it("is disabled by default", () => {
     expect(shouldEnableShellEnvFallback({} as NodeJS.ProcessEnv)).toBe(false);
     expect(shouldEnableShellEnvFallback({ OPENCLAW_LOAD_SHELL_ENV: "0" })).toBe(false);
@@ -172,44 +189,24 @@ describe("shell env fallback", () => {
   });
 
   it("falls back to /bin/sh when SHELL is absolute but not registered in /etc/shells", () => {
-    const readFileSyncSpy = vi
-      .spyOn(fs, "readFileSync")
-      .mockImplementation((filePath, encoding) => {
-        if (filePath === "/etc/shells" && encoding === "utf8") {
-          return "/bin/sh\n/bin/bash\n/bin/zsh\n";
-        }
-        throw new Error(`Unexpected readFileSync(${String(filePath)}) in test`);
-      });
-    try {
+    withEtcShells(["/bin/sh", "/bin/bash", "/bin/zsh"], () => {
       const { res, exec } = runShellEnvFallbackForShell("/opt/homebrew/bin/evil-shell");
 
       expect(res.ok).toBe(true);
       expect(exec).toHaveBeenCalledTimes(1);
       expect(exec).toHaveBeenCalledWith("/bin/sh", ["-l", "-c", "env -0"], expect.any(Object));
-    } finally {
-      readFileSyncSpy.mockRestore();
-    }
+    });
   });
 
   it("uses SHELL when it is explicitly registered in /etc/shells", () => {
-    const readFileSyncSpy = vi
-      .spyOn(fs, "readFileSync")
-      .mockImplementation((filePath, encoding) => {
-        if (filePath === "/etc/shells" && encoding === "utf8") {
-          return "/bin/sh\n/usr/bin/zsh-trusted\n";
-        }
-        throw new Error(`Unexpected readFileSync(${String(filePath)}) in test`);
-      });
-    try {
+    withEtcShells(["/bin/sh", "/usr/bin/zsh-trusted"], () => {
       const trustedShell = "/usr/bin/zsh-trusted";
       const { res, exec } = runShellEnvFallbackForShell(trustedShell);
 
       expect(res.ok).toBe(true);
       expect(exec).toHaveBeenCalledTimes(1);
       expect(exec).toHaveBeenCalledWith(trustedShell, ["-l", "-c", "env -0"], expect.any(Object));
-    } finally {
-      readFileSyncSpy.mockRestore();
-    }
+    });
   });
 
   it("sanitizes startup-related env vars before shell fallback exec", () => {

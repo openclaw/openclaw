@@ -110,6 +110,28 @@ function parseShellEnv(stdout: Buffer): Map<string, string> {
   return shellEnv;
 }
 
+type LoginShellEnvProbeResult =
+  | { ok: true; shellEnv: Map<string, string> }
+  | { ok: false; error: string };
+
+function probeLoginShellEnv(params: {
+  env: NodeJS.ProcessEnv;
+  timeoutMs?: number;
+  exec?: typeof execFileSync;
+}): LoginShellEnvProbeResult {
+  const exec = params.exec ?? execFileSync;
+  const timeoutMs = resolveTimeoutMs(params.timeoutMs);
+  const shell = resolveShell(params.env);
+  const execEnv = resolveShellExecEnv(params.env);
+
+  try {
+    const stdout = execLoginShellEnvZero({ shell, env: execEnv, exec, timeoutMs });
+    return { ok: true, shellEnv: parseShellEnv(stdout) };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 export type ShellEnvFallbackResult =
   | { ok: true; applied: string[]; skippedReason?: never }
   | { ok: true; applied: []; skippedReason: "already-has-keys" | "disabled" }
@@ -126,7 +148,6 @@ export type ShellEnvFallbackOptions = {
 
 export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFallbackResult {
   const logger = opts.logger ?? console;
-  const exec = opts.exec ?? execFileSync;
 
   if (!opts.enabled) {
     lastAppliedKeys = [];
@@ -139,29 +160,23 @@ export function loadShellEnvFallback(opts: ShellEnvFallbackOptions): ShellEnvFal
     return { ok: true, applied: [], skippedReason: "already-has-keys" };
   }
 
-  const timeoutMs = resolveTimeoutMs(opts.timeoutMs);
-
-  const shell = resolveShell(opts.env);
-  const execEnv = resolveShellExecEnv(opts.env);
-
-  let stdout: Buffer;
-  try {
-    stdout = execLoginShellEnvZero({ shell, env: execEnv, exec, timeoutMs });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    logger.warn(`[openclaw] shell env fallback failed: ${msg}`);
+  const probe = probeLoginShellEnv({
+    env: opts.env,
+    timeoutMs: opts.timeoutMs,
+    exec: opts.exec,
+  });
+  if (!probe.ok) {
+    logger.warn(`[openclaw] shell env fallback failed: ${probe.error}`);
     lastAppliedKeys = [];
-    return { ok: false, error: msg, applied: [] };
+    return { ok: false, error: probe.error, applied: [] };
   }
-
-  const shellEnv = parseShellEnv(stdout);
 
   const applied: string[] = [];
   for (const key of opts.expectedKeys) {
     if (opts.env[key]?.trim()) {
       continue;
     }
-    const value = shellEnv.get(key);
+    const value = probe.shellEnv.get(key);
     if (!value?.trim()) {
       continue;
     }
@@ -208,21 +223,17 @@ export function getShellPathFromLoginShell(opts: {
     return cachedShellPath;
   }
 
-  const exec = opts.exec ?? execFileSync;
-  const timeoutMs = resolveTimeoutMs(opts.timeoutMs);
-  const shell = resolveShell(opts.env);
-  const execEnv = resolveShellExecEnv(opts.env);
-
-  let stdout: Buffer;
-  try {
-    stdout = execLoginShellEnvZero({ shell, env: execEnv, exec, timeoutMs });
-  } catch {
+  const probe = probeLoginShellEnv({
+    env: opts.env,
+    timeoutMs: opts.timeoutMs,
+    exec: opts.exec,
+  });
+  if (!probe.ok) {
     cachedShellPath = null;
     return cachedShellPath;
   }
 
-  const shellEnv = parseShellEnv(stdout);
-  const shellPath = shellEnv.get("PATH")?.trim();
+  const shellPath = probe.shellEnv.get("PATH")?.trim();
   cachedShellPath = shellPath && shellPath.length > 0 ? shellPath : null;
   return cachedShellPath;
 }
