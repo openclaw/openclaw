@@ -91,7 +91,7 @@ async function ensureResponseConsumed(res: Response) {
 }
 
 describe("OpenResponses HTTP API (e2e)", () => {
-  it("rejects when disabled (default + config)", { timeout: 30_000 }, async () => {
+  it("rejects when disabled (default + config)", { timeout: 15_000 }, async () => {
     const port = await getFreePort();
     const server = await startServer(port);
     try {

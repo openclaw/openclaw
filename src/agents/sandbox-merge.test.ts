@@ -15,14 +15,14 @@ describe("sandbox config merges", () => {
     } = await import("./sandbox.js"));
   });
 
-  it("resolves sandbox scope deterministically", { timeout: 60_000 }, async () => {
+  it("resolves sandbox scope deterministically", () => {
     expect(resolveSandboxScope({})).toBe("agent");
     expect(resolveSandboxScope({ perSession: true })).toBe("session");
     expect(resolveSandboxScope({ perSession: false })).toBe("shared");
     expect(resolveSandboxScope({ perSession: true, scope: "agent" })).toBe("agent");
   });
 
-  it("merges sandbox docker env and ulimits (agent wins)", async () => {
+  it("merges sandbox docker env and ulimits (agent wins)", () => {
     const resolved = resolveSandboxDockerConfig({
       scope: "agent",
       globalDocker: {
@@ -42,7 +42,7 @@ describe("sandbox config merges", () => {
     });
   });
 
-  it("resolves docker binds and shared-scope override behavior", async () => {
+  it("resolves docker binds and shared-scope override behavior", () => {
     for (const scenario of [
       {
         name: "merges sandbox docker binds (global + agent combined)",
@@ -105,7 +105,7 @@ describe("sandbox config merges", () => {
     }
   });
 
-  it("applies per-agent browser and prune overrides (ignored under shared scope)", async () => {
+  it("applies per-agent browser and prune overrides (ignored under shared scope)", () => {
     const browser = resolveSandboxBrowserConfig({
       scope: "agent",
       globalBrowser: { enabled: false, headless: false, enableNoVnc: true },

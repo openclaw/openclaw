@@ -69,6 +69,7 @@ async function expectChatCompletionsDisabled(
       messages: [{ role: "user", content: "hi" }],
     });
     expect(res.status).toBe(404);
+    await res.text();
   } finally {
     await server.close({ reason: "test done" });
   }
@@ -83,7 +84,7 @@ function parseSseDataLines(text: string): string[] {
 }
 
 describe("OpenAI-compatible HTTP API (e2e)", () => {
-  it("rejects when disabled (default + config)", { timeout: 120_000 }, async () => {
+  it("rejects when disabled (default + config)", { timeout: 15_000 }, async () => {
     await expectChatCompletionsDisabled(startServerWithDefaultConfig);
     await expectChatCompletionsDisabled((port) =>
       startServer(port, {
