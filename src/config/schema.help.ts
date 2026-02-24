@@ -563,6 +563,15 @@ export const FIELD_HELP: Record<string, string> = {
     "Allow stdin-only safe binaries to run without explicit allowlist entries.",
   "tools.exec.strictInlineEval":
     "Require explicit approval for interpreter inline-eval forms such as `python -c`, `node -e`, `ruby -e`, or `osascript -e`. Prevents silent allowlist reuse and downgrades allow-always to ask-each-time for those forms.",
+  "tools.exec.rubberband.enabled":
+    "Enable RubberBand static command pattern detection (default: true).",
+  "tools.exec.rubberband.mode": "RubberBand enforcement mode: block, alert, log, shadow, or off.",
+  "tools.exec.rubberband.thresholds.alert": "Score threshold to trigger an alert (default: 40).",
+  "tools.exec.rubberband.thresholds.block": "Score threshold to block execution (default: 60).",
+  "tools.exec.rubberband.allowedDestinations":
+    "Hostnames/IPs allowed for network commands (e.g. localhost, 127.0.0.1). Destinations not on this list raise the exfil score.",
+  "tools.exec.rubberband.notifyChannel":
+    "When true, RubberBand alerts/blocks are sent to the user's messaging channel.",
   "tools.exec.safeBinTrustedDirs":
     "Additional explicit directories trusted for safe-bin path checks (PATH entries are never auto-trusted).",
   "tools.exec.safeBinProfiles":

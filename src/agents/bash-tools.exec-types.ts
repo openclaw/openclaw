@@ -1,8 +1,20 @@
 import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
+import type { OpenClawConfig } from "../config/types.js";
 import type { ExecAsk, ExecHost, ExecSecurity, ExecTarget } from "../infra/exec-approvals.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import type { EmbeddedFullAccessBlockedReason } from "./pi-embedded-runner/types.js";
+
+export type RubberBandDefaults = {
+  enabled?: boolean;
+  mode?: "block" | "alert" | "log" | "off" | "shadow";
+  thresholds?: {
+    alert?: number;
+    block?: number;
+  };
+  allowedDestinations?: string[];
+  notifyChannel?: boolean;
+};
 
 export type ExecToolDefaults = {
   hasCronTool?: boolean;
@@ -32,6 +44,8 @@ export type ExecToolDefaults = {
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   cwd?: string;
+  rubberband?: RubberBandDefaults;
+  cfg?: OpenClawConfig;
 };
 
 export type ExecElevatedDefaults = {
