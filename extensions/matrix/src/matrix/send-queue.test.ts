@@ -86,4 +86,34 @@ describe("enqueueSend", () => {
     await vi.advanceTimersByTimeAsync(150);
     await expect(second).resolves.toBe("ok");
   });
+
+  it("continues queued work when the head task fails", async () => {
+    const gate = deferred<void>();
+    const events: string[] = [];
+
+    const first = enqueueSend("!room:example.org", async () => {
+      events.push("start1");
+      await gate.promise;
+      throw new Error("boom");
+    }).then(
+      () => ({ ok: true as const }),
+      (error) => ({ ok: false as const, error }),
+    );
+    const second = enqueueSend("!room:example.org", async () => {
+      events.push("start2");
+      return "two";
+    });
+
+    await vi.advanceTimersByTimeAsync(150);
+    expect(events).toEqual(["start1"]);
+
+    gate.resolve();
+    const firstResult = await first;
+    expect(firstResult.ok).toBe(false);
+    expect(firstResult.error).toBeInstanceOf(Error);
+
+    await vi.advanceTimersByTimeAsync(150);
+    await expect(second).resolves.toBe("two");
+    expect(events).toEqual(["start1", "start2"]);
+  });
 });

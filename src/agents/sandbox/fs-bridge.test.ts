@@ -91,6 +91,22 @@ describe("sandbox fs bridge shell compatibility", () => {
     expect(canonicalScript).toBeDefined();
     // "; " joining can create "do; cmd", which is invalid in POSIX sh.
     expect(canonicalScript).not.toMatch(/\bdo;/);
+    // Keep command on the next line after "do" for POSIX-sh safety.
+    expect(canonicalScript).toMatch(/\bdo\n\s*parent=/);
+  });
+
+  it("reads inbound media-style filenames with triple-dash ids", async () => {
+    const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
+    const inboundPath = "media/inbound/file_1095---f00a04a2-99a0-4d98-99b0-dfe61c5a4198.ogg";
+
+    await bridge.readFile({ filePath: inboundPath });
+
+    const readCall = mockedExecDockerRaw.mock.calls.find(([args]) =>
+      String(args[5] ?? "").includes('cat -- "$1"'),
+    );
+    expect(readCall).toBeDefined();
+    const readPath = String(readCall?.[0].at(-1) ?? "");
+    expect(readPath).toContain("file_1095---");
   });
 
   it("resolves bind-mounted absolute container paths for reads", async () => {
