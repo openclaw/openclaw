@@ -401,6 +401,102 @@ describe("subagent announce formatting", () => {
     expect(msg).not.toContain("Convert the result above into your normal assistant voice");
   });
 
+  it("suppresses completion delivery when subagent reply is ANNOUNCE_SKIP", async () => {
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-completion-skip",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "discord", to: "channel:12345", accountId: "acct-1" },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      roundOneReply: "ANNOUNCE_SKIP",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(agentSpy).not.toHaveBeenCalled();
+  });
+
+  it("suppresses announce flow for whitespace-padded ANNOUNCE_SKIP and still runs cleanup", async () => {
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-skip-whitespace",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+      cleanup: "delete",
+      roundOneReply: "  ANNOUNCE_SKIP  ",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).not.toHaveBeenCalled();
+    expect(agentSpy).not.toHaveBeenCalled();
+    expect(sessionsDeleteSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries completion direct send on transient channel-unavailable errors", async () => {
+    sendSpy
+      .mockRejectedValueOnce(new Error("Error: No active WhatsApp Web listener (account: default)"))
+      .mockRejectedValueOnce(new Error("UNAVAILABLE: listener reconnecting"))
+      .mockResolvedValueOnce({ runId: "send-main", status: "ok" });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-completion-retry",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "whatsapp", to: "+15550000000", accountId: "default" },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      roundOneReply: "final answer",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).toHaveBeenCalledTimes(3);
+    expect(agentSpy).not.toHaveBeenCalled();
+  });
+
+  it("does not retry completion direct send on permanent channel errors", async () => {
+    sendSpy.mockRejectedValueOnce(new Error("unsupported channel: telegram"));
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-completion-no-retry",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "telegram", to: "telegram:1234" },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      roundOneReply: "final answer",
+    });
+
+    expect(didAnnounce).toBe(false);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(agentSpy).not.toHaveBeenCalled();
+  });
+
+  it("retries direct agent announce on transient channel-unavailable errors", async () => {
+    agentSpy
+      .mockRejectedValueOnce(new Error("No active WhatsApp Web listener (account: default)"))
+      .mockRejectedValueOnce(new Error("UNAVAILABLE: delivery temporarily unavailable"))
+      .mockResolvedValueOnce({ runId: "run-main", status: "ok" });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-agent-retry",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: { channel: "whatsapp", to: "+15551112222", accountId: "default" },
+      ...defaultOutcomeAnnounce,
+      roundOneReply: "worker result",
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(agentSpy).toHaveBeenCalledTimes(3);
+    expect(sendSpy).not.toHaveBeenCalled();
+  });
+
   it("keeps completion-mode delivery coordinated when sibling runs are still active", async () => {
     sessionStore = {
       "agent:main:subagent:test": {
