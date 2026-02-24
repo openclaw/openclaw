@@ -126,7 +126,23 @@ tests/unit/ (test_indicators — 7 tests passing)
 - [x] 모델 자동 선정 로직 (환경 변수 기반)
 - commit `5fde156d`, pushed
 
-## 다음 액션 (Phase 9 이후)
+## Phase 9 완료 ✅ (2026-02-25)
+
+**Mnemo(MAISECONDBRAIN) 지식그래프 연동**
+
+- [x] `maiupbit/analysis/knowledge.py` — KnowledgeProvider 클래스
+  - Mnemo integrated_search.py subprocess 래퍼
+  - search(), search_for_coin(), search_market_context(), enrich_llm_context()
+  - 코인별 키워드 매핑 (BTC→비트코인, ETH→이더리움 등)
+  - Graceful degradation (Mnemo 없으면 빈 결과 → 기존 파이프라인 유지)
+- [x] LLMAnalyzer.analyze()에 knowledge_context 파라미터 추가
+- [x] CLI analyze에 Mnemo 컨텍스트 자동 탐색
+- [x] daily_report.py에 knowledge enrichment
+- [x] 28 tests (test_knowledge.py), knowledge.py 97% coverage
+- [x] 전체: 225 passed, 3 skipped, 83.26% coverage
+- commit `f517d662`, pushed
+
+## 다음 액션 (Phase 10 이후)
 
 - [ ] Transformer 모델 실제 학습 (BTC 90일 데이터)
 - [ ] HEARTBEAT에 주간 모델 재학습 크론 추가
