@@ -118,9 +118,11 @@ describe("sandbox fs bridge shell compatibility", () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fs-bridge-"));
     const workspaceDir = path.join(stateDir, "workspace");
     const outsideDir = path.join(stateDir, "outside");
+    const outsideFile = path.join(outsideDir, "secret.txt");
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.mkdir(outsideDir, { recursive: true });
-    await fs.symlink(path.join(outsideDir, "secret.txt"), path.join(workspaceDir, "link.txt"));
+    await fs.writeFile(outsideFile, "classified");
+    await fs.symlink(outsideFile, path.join(workspaceDir, "link.txt"));
 
     const bridge = createSandboxFsBridge({
       sandbox: createSandbox({
