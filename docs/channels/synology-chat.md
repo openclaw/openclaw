@@ -72,6 +72,7 @@ Config values override env vars.
 
 - `dmPolicy: "allowlist"` is the recommended default.
 - `allowedUserIds` accepts a list (or comma-separated string) of Synology user IDs.
+- In `allowlist` mode, an empty `allowedUserIds` list blocks all senders (use `dmPolicy: "open"` for allow-all).
 - `dmPolicy: "open"` allows any sender.
 - `dmPolicy: "disabled"` blocks DMs.
 - Pairing approvals work with:

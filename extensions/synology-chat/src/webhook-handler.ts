@@ -138,18 +138,24 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
     }
 
     // User allowlist check
-    if (
-      account.dmPolicy === "allowlist" &&
-      !checkUserAllowed(payload.user_id, account.allowedUserIds)
-    ) {
-      log?.warn(`Unauthorized user: ${payload.user_id}`);
-      respond(res, 403, { error: "User not authorized" });
-      return;
-    }
-
     if (account.dmPolicy === "disabled") {
       respond(res, 403, { error: "DMs are disabled" });
       return;
+    }
+
+    if (account.dmPolicy === "allowlist") {
+      if (account.allowedUserIds.length === 0) {
+        log?.warn("Synology Chat allowlist is empty while dmPolicy=allowlist; rejecting message");
+        respond(res, 403, {
+          error: "Allowlist is empty. Configure allowedUserIds or use dmPolicy=open.",
+        });
+        return;
+      }
+      if (!checkUserAllowed(payload.user_id, account.allowedUserIds)) {
+        log?.warn(`Unauthorized user: ${payload.user_id}`);
+        respond(res, 403, { error: "User not authorized" });
+        return;
+      }
     }
 
     // Rate limit

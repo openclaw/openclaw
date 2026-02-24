@@ -24,8 +24,8 @@ describe("validateToken", () => {
 });
 
 describe("checkUserAllowed", () => {
-  it("allows any user when allowlist is empty", () => {
-    expect(checkUserAllowed("user1", [])).toBe(true);
+  it("rejects user when allowlist is empty", () => {
+    expect(checkUserAllowed("user1", [])).toBe(false);
   });
 
   it("allows user in the allowlist", () => {
