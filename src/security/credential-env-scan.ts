@@ -251,7 +251,7 @@ const VALUE_VALIDATORS: Array<{ pattern: RegExp; riskMultiplier: number }> = [
   // Anthropic keys
   { pattern: /^sk-ant-(?:api|admin)\d+-[A-Za-z0-9_-]{20,}$/, riskMultiplier: 1.5 },
   // OpenAI keys
-  { pattern: /^sk-[A-Za-z0-9]{20,}$/, riskMultiplier: 1.5 },
+  { pattern: /^sk-[A-Za-z0-9_-]{20,}$/, riskMultiplier: 1.5 },
   // AWS keys
   { pattern: /^AKIA[A-Z0-9]{16}$/, riskMultiplier: 1.5 },
   // Slack tokens

@@ -54,6 +54,17 @@ describe("credential-vault", () => {
       }
     });
 
+    it("should store an OpenAI project key successfully", () => {
+      const result = storeCredential(
+        "openai-proj",
+        "sk-proj-1234567890-abcdefghijklmnopqrstuvwxyz",
+        "provider",
+        vaultOptions,
+      );
+
+      expect(result.ok).toBe(true);
+    });
+
     it("should reject empty name", () => {
       const result = storeCredential("", "secret-value", "provider", vaultOptions);
 
@@ -332,6 +343,14 @@ describe("credential-vault", () => {
 
     it("should validate OpenAI API keys", () => {
       const result = validateCredentialFormat("sk-abcdefghijklmnopqrstuvwxyz12345678", "openai");
+      expect(result.valid).toBe(true);
+    });
+
+    it("should validate OpenAI project keys", () => {
+      const result = validateCredentialFormat(
+        "sk-proj-1234567890-abcdefghijklmnopqrstuvwxyz",
+        "openai",
+      );
       expect(result.valid).toBe(true);
     });
 
