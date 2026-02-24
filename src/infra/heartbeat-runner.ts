@@ -663,6 +663,10 @@ export async function runHeartbeatOnce(opts: {
     Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
     From: sender,
     To: sender,
+    OriginatingChannel: delivery.channel !== "none" ? delivery.channel : undefined,
+    OriginatingTo: delivery.to,
+    AccountId: delivery.accountId,
+    MessageThreadId: delivery.threadId,
     Provider: hasExecCompletion ? "exec-event" : hasCronEvents ? "cron-event" : "heartbeat",
     SessionKey: sessionKey,
   };

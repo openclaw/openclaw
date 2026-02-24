@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { resolveOutboundTarget, resolveSessionDeliveryTarget } from "./targets.js";
+import {
+  resolveHeartbeatDeliveryTarget,
+  resolveOutboundTarget,
+  resolveSessionDeliveryTarget,
+} from "./targets.js";
 import {
   installResolveOutboundTargetPluginRegistryHooks,
   runResolveOutboundTargetCoreTests,
@@ -175,6 +179,22 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.threadId).toBe(999);
   });
 
+  it("does not inherit lastThreadId in heartbeat mode", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-heartbeat-thread",
+        updatedAt: 1,
+        lastChannel: "slack",
+        lastTo: "user:U123",
+        lastThreadId: "1739142736.000100",
+      },
+      requestedChannel: "last",
+      mode: "heartbeat",
+    });
+
+    expect(resolved.threadId).toBeUndefined();
+  });
+
   it("falls back to a provided channel when requested is unsupported", () => {
     const resolved = resolveSessionDeliveryTarget({
       entry: {
@@ -279,5 +299,26 @@ describe("resolveSessionDeliveryTarget", () => {
 
     expect(resolved.threadId).toBe(42);
     expect(resolved.to).toBe("63448508");
+  });
+
+  it("does not return inherited threadId from resolveHeartbeatDeliveryTarget", () => {
+    const cfg: OpenClawConfig = {};
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg,
+      entry: {
+        sessionId: "sess-heartbeat-outbound",
+        updatedAt: 1,
+        lastChannel: "slack",
+        lastTo: "user:U123",
+        lastThreadId: "1739142736.000100",
+      },
+      heartbeat: {
+        target: "last",
+      },
+    });
+
+    expect(resolved.channel).toBe("slack");
+    expect(resolved.to).toBe("user:U123");
+    expect(resolved.threadId).toBeUndefined();
   });
 });
