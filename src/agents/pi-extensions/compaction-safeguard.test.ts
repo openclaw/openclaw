@@ -32,6 +32,9 @@ const {
   buildStructuredFallbackSummary,
   appendSummarySection,
   resolveRecentTurnsPreserve,
+  resolveQualityGuardMaxRetries,
+  extractOpaqueIdentifiers,
+  auditSummaryQuality,
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
   readWorkspaceContextForSummary,
@@ -652,6 +655,77 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(resolveRecentTurnsPreserve(undefined)).toBe(3);
     expect(resolveRecentTurnsPreserve(-1)).toBe(0);
     expect(resolveRecentTurnsPreserve(99)).toBe(12);
+  });
+
+  it("extracts opaque identifiers and audits summary quality", () => {
+    const identifiers = extractOpaqueIdentifiers(
+      "Track id a1b2c3d4e5f6 plus A1B2C3D4E5F6 and URL https://example.com/a and /tmp/x.log plus port host.local:18789",
+    );
+    expect(identifiers.length).toBeGreaterThan(0);
+    expect(identifiers).toContain("A1B2C3D4E5F6");
+
+    const summary = [
+      "## Decisions",
+      "Keep current flow.",
+      "## Open TODOs",
+      "None.",
+      "## Constraints/Rules",
+      "Preserve identifiers.",
+      "## Pending user asks",
+      "Explain post-compaction behavior.",
+      "## Exact identifiers",
+      identifiers.join(", "),
+    ].join("\n");
+
+    const quality = auditSummaryQuality({
+      summary,
+      identifiers,
+      latestAsk: "Explain post-compaction behavior for memory indexing",
+    });
+    expect(quality.ok).toBe(true);
+  });
+
+  it("dedupes identifiers before applying the result cap", () => {
+    const noisyPrefix = Array.from({ length: 10 }, () => "a0b0c0d0").join(" ");
+    const uniqueTail = Array.from(
+      { length: 12 },
+      (_, idx) => `b${idx.toString(16).padStart(7, "0")}`,
+    );
+    const identifiers = extractOpaqueIdentifiers(`${noisyPrefix} ${uniqueTail.join(" ")}`);
+
+    expect(identifiers).toHaveLength(12);
+    expect(new Set(identifiers).size).toBe(12);
+    expect(identifiers).toContain("a0b0c0d0");
+    expect(identifiers).toContain(uniqueTail[10]);
+  });
+
+  it("filters ordinary short numbers and trims wrapped punctuation", () => {
+    const identifiers = extractOpaqueIdentifiers(
+      "Year 2026 count 42 port 18789 ticket 123456 URL https://example.com/a, path /tmp/x.log.",
+    );
+
+    expect(identifiers).not.toContain("2026");
+    expect(identifiers).not.toContain("42");
+    expect(identifiers).not.toContain("18789");
+    expect(identifiers).toContain("123456");
+    expect(identifiers).toContain("https://example.com/a");
+    expect(identifiers).toContain("/tmp/x.log");
+  });
+
+  it("fails quality audit when required sections are missing", () => {
+    const quality = auditSummaryQuality({
+      summary: "Short summary without structure",
+      identifiers: ["abc12345"],
+      latestAsk: "Need a status update",
+    });
+    expect(quality.ok).toBe(false);
+    expect(quality.reasons.length).toBeGreaterThan(0);
+  });
+
+  it("clamps quality-guard retries into a safe range", () => {
+    expect(resolveQualityGuardMaxRetries(undefined)).toBe(1);
+    expect(resolveQualityGuardMaxRetries(-1)).toBe(0);
+    expect(resolveQualityGuardMaxRetries(99)).toBe(3);
   });
 
   it("builds structured instructions with required sections", () => {
