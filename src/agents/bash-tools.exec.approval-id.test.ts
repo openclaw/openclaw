@@ -196,6 +196,68 @@ describe("exec approvals", () => {
     expect(calls).toContain("exec.approval.waitDecision");
   });
 
+  it("waits for approval registration before returning approval-pending", async () => {
+    const calls: string[] = [];
+    let resolveRegistration: ((value: unknown) => void) | undefined;
+    const registrationPromise = new Promise<unknown>((resolve) => {
+      resolveRegistration = resolve;
+    });
+
+    vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+      calls.push(method);
+      if (method === "exec.approval.request") {
+        return await registrationPromise;
+      }
+      if (method === "exec.approval.waitDecision") {
+        return { decision: "deny" };
+      }
+      return { ok: true, id: (params as { id?: string })?.id };
+    });
+
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "on-miss",
+      security: "allowlist",
+      approvalRunningNoticeMs: 0,
+    });
+
+    let settled = false;
+    const executePromise = tool.execute("call-registration-gate", { command: "echo register" });
+    void executePromise.finally(() => {
+      settled = true;
+    });
+
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    resolveRegistration?.({ status: "accepted", id: "approval-id" });
+    const result = await executePromise;
+    expect(result.details.status).toBe("approval-pending");
+    expect(calls[0]).toBe("exec.approval.request");
+    expect(calls).toContain("exec.approval.waitDecision");
+  });
+
+  it("fails fast when approval registration fails", async () => {
+    vi.mocked(callGatewayTool).mockImplementation(async (method) => {
+      if (method === "exec.approval.request") {
+        throw new Error("gateway offline");
+      }
+      return { ok: true };
+    });
+
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "on-miss",
+      security: "allowlist",
+      approvalRunningNoticeMs: 0,
+    });
+
+    await expect(tool.execute("call-registration-fail", { command: "echo fail" })).rejects.toThrow(
+      "Exec approval registration failed",
+    );
+  });
+
   it("denies node obfuscated command when approval request times out", async () => {
     vi.mocked(detectCommandObfuscation).mockReturnValue({
       detected: true,
