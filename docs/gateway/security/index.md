@@ -247,7 +247,9 @@ High-signal `checkId` values you will most likely see in real deployments (not e
 | `tools.exec.host_sandbox_no_sandbox_defaults`      | warn          | `exec host=sandbox` resolves to host exec when sandbox is off                      | `tools.exec.host`, `agents.defaults.sandbox.mode`                                                 | no       |
 | `tools.exec.host_sandbox_no_sandbox_agents`        | warn          | Per-agent `exec host=sandbox` resolves to host exec when sandbox is off            | `agents.list[].tools.exec.host`, `agents.list[].sandbox.mode`                                     | no       |
 | `tools.exec.safe_bins_interpreter_unprofiled`      | warn          | Interpreter/runtime bins in `safeBins` without explicit profiles broaden exec risk | `tools.exec.safeBins`, `tools.exec.safeBinProfiles`, `agents.list[].tools.exec.*`                 | no       |
+| `security.exposure.open_groups_with_elevated`      | critical      | Open groups + elevated tools create high-impact prompt-injection paths             | `channels.*.groupPolicy`, `tools.elevated.*`                                                      | no       |
 | `security.exposure.open_groups_with_runtime_or_fs` | critical/warn | Open groups can reach command/file tools without sandbox/workspace guards          | `channels.*.groupPolicy`, `tools.profile/deny`, `tools.fs.workspaceOnly`, `agents.*.sandbox.mode` | no       |
+| `security.trust_model.multi_user_heuristic`        | warn          | Config looks multi-user while gateway trust model is personal-assistant            | split trust boundaries, or shared-user hardening (`sandbox.mode`, tool deny/workspace scoping)    | no       |
 | `tools.profile_minimal_overridden`                 | warn          | Agent overrides bypass global minimal profile                                      | `agents.list[].tools.profile`                                                                     | no       |
 | `plugins.tools_reachable_permissive_policy`        | warn          | Extension tools reachable in permissive contexts                                   | `tools.profile` + tool allow/deny                                                                 | no       |
 | `models.small_params`                              | critical/info | Small models + unsafe tool surfaces raise injection risk                           | model choice + sandbox/tool policy                                                                | no       |
@@ -267,14 +269,38 @@ keep it off unless you are actively debugging and can revert quickly.
 
 ## Insecure or dangerous flags summary
 
-`openclaw security audit` includes `config.insecure_or_dangerous_flags` when any
-insecure/dangerous debug switches are enabled. This warning aggregates the exact
-keys so you can review them in one place (for example
-`gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true`,
-`gateway.controlUi.allowInsecureAuth=true`,
-`gateway.controlUi.dangerouslyDisableDeviceAuth=true`,
-`hooks.gmail.allowUnsafeExternalContent=true`, or
-`tools.exec.applyPatch.workspaceOnly=false`).
+`openclaw security audit` includes `config.insecure_or_dangerous_flags` when
+known insecure/dangerous debug switches are enabled. That check currently
+aggregates:
+
+- `gateway.controlUi.allowInsecureAuth=true`
+- `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true`
+- `gateway.controlUi.dangerouslyDisableDeviceAuth=true`
+- `hooks.gmail.allowUnsafeExternalContent=true`
+- `hooks.mappings[<index>].allowUnsafeExternalContent=true`
+- `tools.exec.applyPatch.workspaceOnly=false`
+
+Complete `dangerous*` / `dangerously*` config keys defined in OpenClaw config
+schema:
+
+- `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback`
+- `gateway.controlUi.dangerouslyDisableDeviceAuth`
+- `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork`
+- `channels.discord.dangerouslyAllowNameMatching`
+- `channels.discord.accounts.<accountId>.dangerouslyAllowNameMatching`
+- `channels.slack.dangerouslyAllowNameMatching`
+- `channels.slack.accounts.<accountId>.dangerouslyAllowNameMatching`
+- `channels.googlechat.dangerouslyAllowNameMatching`
+- `channels.googlechat.accounts.<accountId>.dangerouslyAllowNameMatching`
+- `channels.msteams.dangerouslyAllowNameMatching`
+- `channels.irc.dangerouslyAllowNameMatching` (extension channel)
+- `channels.irc.accounts.<accountId>.dangerouslyAllowNameMatching` (extension channel)
+- `channels.mattermost.dangerouslyAllowNameMatching` (extension channel)
+- `channels.mattermost.accounts.<accountId>.dangerouslyAllowNameMatching` (extension channel)
+- `agents.defaults.sandbox.docker.dangerouslyAllowReservedContainerTargets`
+- `agents.defaults.sandbox.docker.dangerouslyAllowExternalBindSources`
+- `agents.list[<index>].sandbox.docker.dangerouslyAllowReservedContainerTargets`
+- `agents.list[<index>].sandbox.docker.dangerouslyAllowExternalBindSources`
 
 ## Reverse Proxy Configuration
 
