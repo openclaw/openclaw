@@ -48,7 +48,9 @@ describe("applyAuthChoiceOpenAI", () => {
       provider: "openai",
       mode: "api_key",
     });
-    expect(result?.config.agents?.defaults?.model?.primary).toBe("openai/gpt-5.1-codex");
+    const defaultModel = result?.config.agents?.defaults?.model;
+    const primaryModel = typeof defaultModel === "string" ? defaultModel : defaultModel?.primary;
+    expect(primaryModel).toBe("openai/gpt-5.1-codex");
     expect(text).not.toHaveBeenCalled();
 
     const parsed = await readAuthProfilesForAgent<{
