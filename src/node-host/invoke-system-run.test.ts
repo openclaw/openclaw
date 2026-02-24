@@ -150,7 +150,6 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       }),
     );
   });
-
   it("denies ./sh wrapper spoof in allowlist on-miss mode before execution", async () => {
     const marker = path.join(os.tmpdir(), `openclaw-wrapper-spoof-${process.pid}-${Date.now()}`);
     const runCommand = vi.fn(async () => {
@@ -212,5 +211,22 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     } catch {
       // no-op
     }
+  });
+
+  it("denies env -S shell payloads in allowlist mode", async () => {
+    const { runCommand, sendInvokeResult } = await runSystemInvoke({
+      preferMacAppExecHost: false,
+      security: "allowlist",
+      command: ["env", "-S", 'sh -c "echo pwned"'],
+    });
+    expect(runCommand).not.toHaveBeenCalled();
+    expect(sendInvokeResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ok: false,
+        error: expect.objectContaining({
+          message: expect.stringContaining("allowlist miss"),
+        }),
+      }),
+    );
   });
 });
