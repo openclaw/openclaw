@@ -2814,6 +2814,19 @@ Send any of these **as a standalone message** (no slash):
 
 ```
 stop
+stop action
+stop current action
+stop run
+stop current run
+stop agent
+stop the agent
+stop openclaw
+openclaw stop
+stop don't do anything
+stop do not do anything
+stop doing anything
+please stop
+stop please
 abort
 esc
 wait
