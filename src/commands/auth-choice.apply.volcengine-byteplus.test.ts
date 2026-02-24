@@ -28,7 +28,7 @@ describe("volcengine/byteplus auth choice", () => {
     await lifecycle.cleanup();
   });
 
-  it("stores volcengine env key as keyRef and configures auth profile", async () => {
+  it("stores volcengine env key as plaintext by default", async () => {
     const agentDir = await setupTempState();
     process.env.VOLCANO_ENGINE_API_KEY = "volc-env-key";
 
@@ -37,7 +37,7 @@ describe("volcengine/byteplus auth choice", () => {
         confirm: vi.fn(async () => true),
         text: vi.fn(async () => "unused"),
       },
-      { defaultSelect: "" },
+      { defaultSelect: "plaintext" },
     );
     const runtime = createExitThrowingRuntime();
 
@@ -58,13 +58,42 @@ describe("volcengine/byteplus auth choice", () => {
     const parsed = await readAuthProfilesForAgent<{
       profiles?: Record<string, { key?: string; keyRef?: unknown }>;
     }>(agentDir);
+    expect(parsed.profiles?.["volcengine:default"]?.key).toBe("volc-env-key");
+    expect(parsed.profiles?.["volcengine:default"]?.keyRef).toBeUndefined();
+  });
+
+  it("stores volcengine env key as keyRef in ref mode", async () => {
+    const agentDir = await setupTempState();
+    process.env.VOLCANO_ENGINE_API_KEY = "volc-env-key";
+
+    const prompter = createWizardPrompter(
+      {
+        confirm: vi.fn(async () => true),
+        text: vi.fn(async () => "unused"),
+      },
+      { defaultSelect: "ref" },
+    );
+    const runtime = createExitThrowingRuntime();
+
+    const result = await applyAuthChoiceVolcengine({
+      authChoice: "volcengine-api-key",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+    });
+
+    expect(result).not.toBeNull();
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, { key?: string; keyRef?: unknown }>;
+    }>(agentDir);
     expect(parsed.profiles?.["volcengine:default"]).toMatchObject({
       keyRef: { source: "env", id: "VOLCANO_ENGINE_API_KEY" },
     });
     expect(parsed.profiles?.["volcengine:default"]?.key).toBeUndefined();
   });
 
-  it("stores byteplus env key as keyRef and configures auth profile", async () => {
+  it("stores byteplus env key as plaintext by default", async () => {
     const agentDir = await setupTempState();
     process.env.BYTEPLUS_API_KEY = "byte-env-key";
 
@@ -73,7 +102,7 @@ describe("volcengine/byteplus auth choice", () => {
         confirm: vi.fn(async () => true),
         text: vi.fn(async () => "unused"),
       },
-      { defaultSelect: "" },
+      { defaultSelect: "plaintext" },
     );
     const runtime = createExitThrowingRuntime();
 
@@ -91,6 +120,35 @@ describe("volcengine/byteplus auth choice", () => {
       mode: "api_key",
     });
 
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, { key?: string; keyRef?: unknown }>;
+    }>(agentDir);
+    expect(parsed.profiles?.["byteplus:default"]?.key).toBe("byte-env-key");
+    expect(parsed.profiles?.["byteplus:default"]?.keyRef).toBeUndefined();
+  });
+
+  it("stores byteplus env key as keyRef in ref mode", async () => {
+    const agentDir = await setupTempState();
+    process.env.BYTEPLUS_API_KEY = "byte-env-key";
+
+    const prompter = createWizardPrompter(
+      {
+        confirm: vi.fn(async () => true),
+        text: vi.fn(async () => "unused"),
+      },
+      { defaultSelect: "ref" },
+    );
+    const runtime = createExitThrowingRuntime();
+
+    const result = await applyAuthChoiceBytePlus({
+      authChoice: "byteplus-api-key",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: true,
+    });
+
+    expect(result).not.toBeNull();
     const parsed = await readAuthProfilesForAgent<{
       profiles?: Record<string, { key?: string; keyRef?: unknown }>;
     }>(agentDir);

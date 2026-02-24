@@ -4,6 +4,10 @@ import {
   normalizeApiKeyInput,
   validateApiKeyInput,
 } from "./auth-choice.api-key.js";
+import {
+  normalizeSecretInputModeInput,
+  resolveSecretInputModeForEnvSelection,
+} from "./auth-choice.apply-helpers.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { applyPrimaryModel } from "./model-picker.js";
 import { applyAuthProfileConfig, setVolcengineApiKey } from "./onboard-auth.js";
@@ -18,6 +22,7 @@ export async function applyAuthChoiceVolcengine(
     return null;
   }
 
+  const requestedSecretInputMode = normalizeSecretInputModeInput(params.opts?.secretInputMode);
   const envKey = resolveEnvApiKey("volcengine");
   if (envKey) {
     const useExisting = await params.prompter.confirm({
@@ -25,7 +30,11 @@ export async function applyAuthChoiceVolcengine(
       initialValue: true,
     });
     if (useExisting) {
-      await setVolcengineApiKey(envKey.apiKey, params.agentDir);
+      const mode = await resolveSecretInputModeForEnvSelection({
+        prompter: params.prompter,
+        explicitMode: requestedSecretInputMode,
+      });
+      await setVolcengineApiKey(envKey.apiKey, params.agentDir, { secretInputMode: mode });
       const configWithAuth = applyAuthProfileConfig(params.config, {
         profileId: "volcengine:default",
         provider: "volcengine",
@@ -50,7 +59,9 @@ export async function applyAuthChoiceVolcengine(
   }
 
   const trimmed = normalizeApiKeyInput(String(key));
-  await setVolcengineApiKey(trimmed, params.agentDir);
+  await setVolcengineApiKey(trimmed, params.agentDir, {
+    secretInputMode: requestedSecretInputMode,
+  });
   const configWithAuth = applyAuthProfileConfig(params.config, {
     profileId: "volcengine:default",
     provider: "volcengine",
