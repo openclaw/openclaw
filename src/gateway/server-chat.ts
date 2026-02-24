@@ -317,17 +317,25 @@ export function createAgentEventHandler({
     // started a fresh text block.  Finalize the previous block into the base.
     // Safety: the agent runner guarantees monotonic prefix growth within a block
     // (non-prefix updates are suppressed in pi-embedded-subscribe.handlers.messages.ts).
-    // Use cleaned text for consistency with broadcasts.
+    //
+    // IMPORTANT: Use raw `text` (not `cleaned`) for prefix checking and buffer storage.
+    // Rationale:
+    // 1. Prefix check must operate on the agent's actual emitted text
+    // 2. Buffer stores raw text for processing by normalizeHeartbeatChatFinalText,
+    //    which extracts remainder text from HEARTBEAT_OK markers
+    // 3. stripInlineDirectiveTagsForDisplay is called in emitChatFinal before
+    //    broadcasting, ensuring all final outputs are cleaned
+    // 4. Delta broadcasts use `cleaned` (line ~344), so users never see directive tags
     const lastBlock = chatRunState.lastBlockTexts.get(clientRunId);
-    if (lastBlock !== undefined && !cleaned.startsWith(lastBlock)) {
+    if (lastBlock !== undefined && !text.startsWith(lastBlock)) {
       const base = chatRunState.blockBases.get(clientRunId) ?? "";
       chatRunState.blockBases.set(clientRunId, base ? base + "\n\n" + lastBlock : lastBlock);
     }
-    chatRunState.lastBlockTexts.set(clientRunId, cleaned);
+    chatRunState.lastBlockTexts.set(clientRunId, text);
 
     // Full text = all previous blocks + current block
     const base = chatRunState.blockBases.get(clientRunId) ?? "";
-    const fullText = base ? base + "\n\n" + cleaned : cleaned;
+    const fullText = base ? base + "\n\n" + text : text;
     chatRunState.buffers.set(clientRunId, fullText);
     const now = Date.now();
     const last = chatRunState.deltaSentAt.get(clientRunId) ?? 0;
