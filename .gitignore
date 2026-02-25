@@ -152,3 +152,6 @@ dist/protocol.schema.json
 
 # Synthing
 **/.stfolder/
+src/agents/tools/web-search.ts
+.gitignore
+.gitignore

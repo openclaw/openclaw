@@ -334,14 +334,7 @@ function missingSearchKeyPayload(provider: (typeof SEARCH_PROVIDERS)[number]) {
       docs: "https://docs.openclaw.ai/tools/web",
     };
   }
-  if (provider === "kimi") {
-    return {
-      error: "missing_kimi_api_key",
-      message:
-        "web_search (kimi) needs a Moonshot API key. Set KIMI_API_KEY or MOONSHOT_API_KEY in the Gateway environment, or configure tools.web.search.kimi.apiKey.",
-      docs: "https://docs.openclaw.ai/tools/web",
-    };
-  }
+
   return {
     error: "missing_brave_api_key",
     message: `web_search needs a Brave Search API key. Run \`${formatCliCommand("openclaw configure --section web")}\` to store it, or set BRAVE_API_KEY in the Gateway environment.`,
