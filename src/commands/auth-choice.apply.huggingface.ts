@@ -34,6 +34,7 @@ export async function applyAuthChoiceHuggingface(
     token: params.opts?.token,
     tokenProvider: params.opts?.tokenProvider,
     secretInputMode: requestedSecretInputMode,
+    config: nextConfig,
     expectedProviders: ["huggingface"],
     provider: "huggingface",
     envLabel: "Hugging Face token",
