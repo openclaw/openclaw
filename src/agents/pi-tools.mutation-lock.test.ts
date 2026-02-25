@@ -18,6 +18,21 @@ function textResult(text: string): AgentToolResult<unknown> {
   };
 }
 
+async function waitUntil(assertFn: () => void, timeoutMs = 1000): Promise<void> {
+  const start = Date.now();
+  let lastError: unknown;
+  while (Date.now() - start < timeoutMs) {
+    try {
+      assertFn();
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("waitUntil assertion timed out");
+}
+
 describe("wrapToolMutationLock", () => {
   it("serializes same-path write calls", async () => {
     const firstGate = deferred();
@@ -40,14 +55,14 @@ describe("wrapToolMutationLock", () => {
       },
     };
 
-    const wrapped = wrapToolMutationLock(base, "/workspace");
+    const wrapped = wrapToolMutationLock(base, process.cwd());
 
     const p1 = wrapped.execute("call-1", { path: "same.txt", content: "one" });
     const p2 = wrapped.execute("call-2", { file_path: "same.txt", content: "two" });
 
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(events).toEqual(["start:one"]);
+    await waitUntil(() => {
+      expect(events).toEqual(["start:one"]);
+    });
 
     firstGate.resolve();
 
@@ -84,15 +99,15 @@ describe("wrapToolMutationLock", () => {
       },
     };
 
-    const wrapped = wrapToolMutationLock(base, "/workspace");
+    const wrapped = wrapToolMutationLock(base, process.cwd());
 
     const p1 = wrapped.execute("call-1", { path: "a.txt", oldText: "a", newText: "A" });
     await firstStarted.promise;
     const p2 = wrapped.execute("call-2", { path: "b.txt", old_string: "b", new_string: "B" });
 
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(events).toEqual(["start:a.txt", "start:b.txt"]);
+    await waitUntil(() => {
+      expect(events).toEqual(["start:a.txt", "start:b.txt"]);
+    });
 
     releaseBoth.resolve();
     await Promise.all([p1, p2]);
