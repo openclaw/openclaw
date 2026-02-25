@@ -20,7 +20,9 @@ export function createTypingCallbacks(params: {
   let closed = false;
 
   const fireStart = async () => {
-    if (closed) { return; }
+    if (closed) {
+      return;
+    }
     try {
       await params.start();
     } catch (err) {
