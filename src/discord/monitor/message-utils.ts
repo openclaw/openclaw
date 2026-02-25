@@ -403,7 +403,7 @@ function buildDiscordMediaPlaceholder(params: {
   return attachmentText || stickerText || "";
 }
 
-function resolveDiscordEmbedText(
+export function resolveDiscordEmbedText(
   embed?: { title?: string | null; description?: string | null } | null,
 ): string {
   const title = embed?.title?.trim() || "";
