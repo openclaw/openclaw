@@ -475,6 +475,21 @@ function collectGatewayConfigFindings(
     });
   }
 
+  const password =
+    typeof auth.password === "string" && auth.password.trim().length > 0
+      ? auth.password.trim()
+      : null;
+  if (auth.mode === "password" && password && password.length < 16) {
+    findings.push({
+      checkId: "gateway.password_too_short",
+      severity: "warn",
+      title: "Gateway password looks short",
+      detail: `gateway auth password is ${password.length} chars; prefer at least 16 characters or switch to token mode.`,
+      remediation:
+        "Use a longer password (16+ characters) or switch to gateway.auth.mode=token with a long random token.",
+    });
+  }
+
   if (auth.mode === "trusted-proxy") {
     const trustedProxies = cfg.gateway?.trustedProxies ?? [];
     const trustedProxyConfig = cfg.gateway?.auth?.trustedProxy;
@@ -544,6 +559,22 @@ function collectGatewayConfigFindings(
         "Without rate limiting, brute-force auth attacks are not mitigated.",
       remediation:
         "Set gateway.auth.rateLimit (e.g. { maxAttempts: 10, windowMs: 60000, lockoutMs: 300000 }).",
+    });
+  }
+
+  if (cfg.plugins?.enabled !== false) {
+    findings.push({
+      checkId: "plugin.http_routes_no_auth",
+      severity: "info",
+      title: "Plugin HTTP routes bypass gateway auth",
+      detail:
+        "Plugins can register HTTP routes and handlers via the plugin registry. " +
+        "These routes are served by the gateway HTTP server but do not pass through the gateway authentication middleware. " +
+        "A malicious or misconfigured plugin could expose unauthenticated endpoints.",
+      remediation:
+        "Review installed plugins and their registered HTTP routes. " +
+        "Consider adding an optional authentication middleware for plugin HTTP routes, " +
+        "or restrict plugin installation to trusted sources via plugins.allow.",
     });
   }
 
