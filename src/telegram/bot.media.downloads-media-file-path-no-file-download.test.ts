@@ -1,6 +1,6 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import * as ssrf from "../infra/net/ssrf.js";
-import { onSpy, sendChatActionSpy } from "./bot.media.e2e-harness.js";
+import { onSpy, saveMediaBufferSpy, sendChatActionSpy } from "./bot.media.e2e-harness.js";
 
 const cacheStickerSpy = vi.fn();
 const getCachedStickerSpy = vi.fn();
@@ -178,6 +178,47 @@ describe("telegram inbound media", () => {
         });
 
         scenario.assert({ fetchSpy, replySpy, runtimeError });
+        fetchSpy.mockRestore();
+      }
+    },
+    INBOUND_MEDIA_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "keeps Telegram inbound media paths with triple-dash ids",
+    async () => {
+      const runtimeError = vi.fn();
+      const { handler, replySpy } = await createBotHandlerWithOptions({ runtimeError });
+      const fetchSpy = mockTelegramFileDownload({
+        contentType: "image/jpeg",
+        bytes: new Uint8Array([0xff, 0xd8, 0xff, 0x00]),
+      });
+      const inboundPath = "/tmp/media/inbound/file_1095---f00a04a2-99a0-4d98-99b0-dfe61c5a4198.jpg";
+      saveMediaBufferSpy.mockResolvedValueOnce({
+        id: "media",
+        path: inboundPath,
+        size: 4,
+        contentType: "image/jpeg",
+      });
+
+      try {
+        await handler({
+          message: {
+            message_id: 1001,
+            chat: { id: 1234, type: "private" },
+            photo: [{ file_id: "fid" }],
+            date: 1736380800,
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({ file_path: "photos/1.jpg" }),
+        });
+
+        expect(runtimeError).not.toHaveBeenCalled();
+        expect(replySpy).toHaveBeenCalledTimes(1);
+        const payload = replySpy.mock.calls[0]?.[0] as { Body?: string; MediaPaths?: string[] };
+        expect(payload.Body).toContain("<media:image>");
+        expect(payload.MediaPaths).toContain(inboundPath);
+      } finally {
         fetchSpy.mockRestore();
       }
     },
