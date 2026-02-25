@@ -55,7 +55,7 @@ describe("onboard auth credentials secret refs", () => {
       profiles?: Record<string, { key?: string; keyRef?: unknown }>;
     }>(env.agentDir);
     expect(parsed.profiles?.["moonshot:default"]).toMatchObject({
-      keyRef: { source: "env", id: "MOONSHOT_API_KEY" },
+      keyRef: { source: "env", provider: "default", id: "MOONSHOT_API_KEY" },
     });
     expect(parsed.profiles?.["moonshot:default"]?.key).toBeUndefined();
   });
@@ -70,7 +70,7 @@ describe("onboard auth credentials secret refs", () => {
       profiles?: Record<string, { key?: string; keyRef?: unknown }>;
     }>(env.agentDir);
     expect(parsed.profiles?.["moonshot:default"]).toMatchObject({
-      keyRef: { source: "env", id: "MOONSHOT_API_KEY" },
+      keyRef: { source: "env", provider: "default", id: "MOONSHOT_API_KEY" },
     });
     expect(parsed.profiles?.["moonshot:default"]?.key).toBeUndefined();
   });
@@ -104,7 +104,7 @@ describe("onboard auth credentials secret refs", () => {
       profiles?: Record<string, { key?: string; keyRef?: unknown; metadata?: unknown }>;
     }>(env.agentDir);
     expect(parsed.profiles?.["cloudflare-ai-gateway:default"]).toMatchObject({
-      keyRef: { source: "env", id: "CLOUDFLARE_AI_GATEWAY_API_KEY" },
+      keyRef: { source: "env", provider: "default", id: "CLOUDFLARE_AI_GATEWAY_API_KEY" },
       metadata: { accountId: "account-1", gatewayId: "gateway-1" },
     });
     expect(parsed.profiles?.["cloudflare-ai-gateway:default"]?.key).toBeUndefined();
@@ -137,7 +137,7 @@ describe("onboard auth credentials secret refs", () => {
       profiles?: Record<string, { key?: string; keyRef?: unknown }>;
     }>(env.agentDir);
     expect(parsed.profiles?.["openai:default"]).toMatchObject({
-      keyRef: { source: "env", id: "OPENAI_API_KEY" },
+      keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
     });
     expect(parsed.profiles?.["openai:default"]?.key).toBeUndefined();
   });
@@ -156,12 +156,12 @@ describe("onboard auth credentials secret refs", () => {
     }>(env.agentDir);
 
     expect(parsed.profiles?.["volcengine:default"]).toMatchObject({
-      keyRef: { source: "env", id: "VOLCANO_ENGINE_API_KEY" },
+      keyRef: { source: "env", provider: "default", id: "VOLCANO_ENGINE_API_KEY" },
     });
     expect(parsed.profiles?.["volcengine:default"]?.key).toBeUndefined();
 
     expect(parsed.profiles?.["byteplus:default"]).toMatchObject({
-      keyRef: { source: "env", id: "BYTEPLUS_API_KEY" },
+      keyRef: { source: "env", provider: "default", id: "BYTEPLUS_API_KEY" },
     });
     expect(parsed.profiles?.["byteplus:default"]?.key).toBeUndefined();
   });
