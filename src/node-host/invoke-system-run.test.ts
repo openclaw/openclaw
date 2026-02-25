@@ -365,6 +365,31 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     );
   });
 
+  it("denies semicolon-chained shell payloads in allowlist mode without explicit approval", async () => {
+    const payloads = ["openclaw status; id", "openclaw status; cat /etc/passwd"];
+    for (const payload of payloads) {
+      const command =
+        process.platform === "win32"
+          ? ["cmd.exe", "/d", "/s", "/c", payload]
+          : ["/bin/sh", "-lc", payload];
+      const { runCommand, sendInvokeResult } = await runSystemInvoke({
+        preferMacAppExecHost: false,
+        security: "allowlist",
+        ask: "on-miss",
+        command,
+      });
+      expect(runCommand, payload).not.toHaveBeenCalled();
+      expect(sendInvokeResult, payload).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ok: false,
+          error: expect.objectContaining({
+            message: "SYSTEM_RUN_DENIED: approval required",
+          }),
+        }),
+      );
+    }
+  });
+
   it("denies nested env shell payloads when wrapper depth is exceeded", async () => {
     if (process.platform === "win32") {
       return;
