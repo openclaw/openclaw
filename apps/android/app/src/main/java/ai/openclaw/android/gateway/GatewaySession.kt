@@ -635,10 +635,11 @@ class GatewaySession(
     val host = parsed?.host?.trim().orEmpty()
     val port = parsed?.port ?: -1
     val scheme = parsed?.scheme?.trim().orEmpty().ifBlank { "http" }
+    val suffix = buildUrlSuffix(parsed)
 
     // If raw URL is a non-loopback address and this connection uses TLS,
     // normalize scheme/port to the endpoint we actually connected to.
-    if (trimmed.isNotBlank() && !isLoopbackHost(host)) {
+    if (trimmed.isNotBlank() && host.isNotBlank() && !isLoopbackHost(host)) {
       val needsTlsRewrite =
         isTlsConnection &&
           (
@@ -647,11 +648,7 @@ class GatewaySession(
               (port <= 0 && endpoint.port != 443)
             )
       if (needsTlsRewrite) {
-        val fixedScheme = "https"
-        val formattedHost = if (host.contains(":")) "[${host}]" else host
-        val fixedPort = endpoint.port
-        val portSuffix = if (fixedPort == 443) "" else ":$fixedPort"
-        return "$fixedScheme://$formattedHost$portSuffix"
+        return buildCanvasUrl(host = host, scheme = "https", port = endpoint.port, suffix = suffix)
       }
       return trimmed
     }
@@ -666,9 +663,22 @@ class GatewaySession(
     val fallbackScheme = if (isTlsConnection) "https" else scheme
     // For TLS, always use the connected endpoint port.
     val fallbackPort = if (isTlsConnection) endpoint.port else (endpoint.canvasPort ?: endpoint.port)
-    val formattedHost = if (fallbackHost.contains(":")) "[${fallbackHost}]" else fallbackHost
-    val portSuffix = if ((fallbackScheme == "https" && fallbackPort == 443) || (fallbackScheme == "http" && fallbackPort == 80)) "" else ":$fallbackPort"
-    return "$fallbackScheme://$formattedHost$portSuffix"
+    return buildCanvasUrl(host = fallbackHost, scheme = fallbackScheme, port = fallbackPort, suffix = suffix)
+  }
+
+  private fun buildCanvasUrl(host: String, scheme: String, port: Int, suffix: String): String {
+    val loweredScheme = scheme.lowercase()
+    val formattedHost = if (host.contains(":")) "[${host}]" else host
+    val portSuffix = if ((loweredScheme == "https" && port == 443) || (loweredScheme == "http" && port == 80)) "" else ":$port"
+    return "$loweredScheme://$formattedHost$portSuffix$suffix"
+  }
+
+  private fun buildUrlSuffix(uri: java.net.URI?): String {
+    if (uri == null) return ""
+    val path = uri.rawPath?.takeIf { it.isNotBlank() } ?: ""
+    val query = uri.rawQuery?.takeIf { it.isNotBlank() }?.let { "?$it" } ?: ""
+    val fragment = uri.rawFragment?.takeIf { it.isNotBlank() }?.let { "#$it" } ?: ""
+    return "$path$query$fragment"
   }
 
   private fun isLoopbackHost(raw: String?): Boolean {
