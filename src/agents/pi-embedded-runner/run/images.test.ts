@@ -254,12 +254,39 @@ describe("loadImageFromRef", () => {
 });
 
 describe("detectAndLoadPromptImages", () => {
-  it("returns no images for non-vision models even when existing images are provided", async () => {
+  it("passes through existing images for non-vision models (gateway multimodal input)", async () => {
+    const existing = [{ type: "image" as const, data: "abc", mimeType: "image/png" }];
     const result = await detectAndLoadPromptImages({
       prompt: "ignore",
       workspaceDir: "/tmp",
       model: { input: ["text"] },
-      existingImages: [{ type: "image", data: "abc", mimeType: "image/png" }],
+      existingImages: existing,
+    });
+
+    expect(result.images).toHaveLength(1);
+    expect(result.images[0]).toEqual(existing[0]);
+    expect(result.detectedRefs).toHaveLength(0);
+  });
+
+  it("skips file detection for non-vision models but keeps existing images", async () => {
+    const existing = [{ type: "image" as const, data: "abc", mimeType: "image/png" }];
+    const result = await detectAndLoadPromptImages({
+      prompt: "check /tmp/test.png",
+      workspaceDir: "/tmp",
+      model: { input: ["text"] },
+      existingImages: existing,
+    });
+
+    expect(result.images).toHaveLength(1);
+    expect(result.detectedRefs).toHaveLength(0);
+    expect(result.loadedCount).toBe(0);
+  });
+
+  it("returns empty images for non-vision models when no existing images are provided", async () => {
+    const result = await detectAndLoadPromptImages({
+      prompt: "ignore",
+      workspaceDir: "/tmp",
+      model: { input: ["text"] },
     });
 
     expect(result.images).toHaveLength(0);

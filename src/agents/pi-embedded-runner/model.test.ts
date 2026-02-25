@@ -324,4 +324,17 @@ describe("resolveModel", () => {
     expect(result.model).toBeUndefined();
     expect(result.error).toBe("Unknown model: google-antigravity/some-model");
   });
+
+  it("creates openrouter fallback with image input support for unknown model ids", () => {
+    const result = resolveModel("openrouter", "anthropic/claude-opus-4.6", "/tmp/agent");
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      id: "anthropic/claude-opus-4.6",
+      provider: "openrouter",
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+      input: expect.arrayContaining(["text", "image"]),
+    });
+  });
 });

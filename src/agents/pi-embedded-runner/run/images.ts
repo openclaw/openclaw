@@ -296,10 +296,13 @@ export async function detectAndLoadPromptImages(params: {
   loadedCount: number;
   skippedCount: number;
 }> {
-  // If model doesn't support images, return empty results
+  // When model doesn't advertise image input, skip file-path detection but
+  // still pass through explicitly provided images (e.g. base64 attachments
+  // from gateway clients). Silently dropping user-provided images is worse
+  // than letting the upstream API reject them with a clear error.
   if (!modelSupportsImages(params.model)) {
     return {
-      images: [],
+      images: params.existingImages ?? [],
       detectedRefs: [],
       loadedCount: 0,
       skippedCount: 0,
