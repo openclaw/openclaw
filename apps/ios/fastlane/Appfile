@@ -1,4 +1,4 @@
-app_identifier("bot.molt.ios")
+app_identifier("ai.openclaw.ios")
 
 # Auth is expected via App Store Connect API key.
 # Provide either:
