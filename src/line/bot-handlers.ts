@@ -65,6 +65,70 @@ export interface LineHandlerContext {
   processMessage: (ctx: LineInboundContext) => Promise<void>;
 }
 
+const LINE_WEBHOOK_REPLAY_WINDOW_MS = 10 * 60 * 1000;
+const LINE_WEBHOOK_REPLAY_MAX_ENTRIES = 4096;
+const seenLineWebhookEvents = new Map<string, number>();
+
+function pruneLineWebhookReplayCache(nowMs: number): void {
+  const minSeenAt = nowMs - LINE_WEBHOOK_REPLAY_WINDOW_MS;
+  for (const [key, seenAt] of seenLineWebhookEvents) {
+    if (seenAt < minSeenAt) {
+      seenLineWebhookEvents.delete(key);
+    }
+  }
+
+  if (seenLineWebhookEvents.size > LINE_WEBHOOK_REPLAY_MAX_ENTRIES) {
+    const deleteCount = seenLineWebhookEvents.size - LINE_WEBHOOK_REPLAY_MAX_ENTRIES;
+    let deleted = 0;
+    for (const key of seenLineWebhookEvents.keys()) {
+      if (deleted >= deleteCount) {
+        break;
+      }
+      seenLineWebhookEvents.delete(key);
+      deleted += 1;
+    }
+  }
+}
+
+function buildLineWebhookReplayKey(
+  event: WebhookEvent,
+  accountId: string,
+): { key: string; eventId: string } | null {
+  const eventId = (event as { webhookEventId?: string }).webhookEventId?.trim();
+  if (!eventId) {
+    return null;
+  }
+
+  const source = (
+    event as {
+      source?: { type?: string; userId?: string; groupId?: string; roomId?: string };
+    }
+  ).source;
+  const sourceId =
+    source?.type === "group"
+      ? `group:${source.groupId ?? ""}`
+      : source?.type === "room"
+        ? `room:${source.roomId ?? ""}`
+        : `user:${source?.userId ?? ""}`;
+  return { key: `${accountId}|${event.type}|${sourceId}|${eventId}`, eventId };
+}
+
+function shouldSkipLineReplayEvent(event: WebhookEvent, context: LineHandlerContext): boolean {
+  const replay = buildLineWebhookReplayKey(event, context.account.accountId);
+  if (!replay) {
+    return false;
+  }
+
+  const nowMs = Date.now();
+  pruneLineWebhookReplayCache(nowMs);
+  if (seenLineWebhookEvents.has(replay.key)) {
+    logVerbose(`line: skipped replayed webhook event ${replay.eventId}`);
+    return true;
+  }
+  seenLineWebhookEvents.set(replay.key, nowMs);
+  return false;
+}
+
 function resolveLineGroupConfig(params: {
   config: ResolvedLineAccount["config"];
   groupId?: string;
@@ -383,6 +447,9 @@ export async function handleLineWebhookEvents(
   context: LineHandlerContext,
 ): Promise<void> {
   for (const event of events) {
+    if (shouldSkipLineReplayEvent(event, context)) {
+      continue;
+    }
     try {
       switch (event.type) {
         case "message":

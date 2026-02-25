@@ -379,6 +379,41 @@ describe("handleLineWebhookEvents", () => {
     );
   });
 
+  it("deduplicates replayed webhook events by webhookEventId before processing", async () => {
+    const processMessage = vi.fn();
+    const event = {
+      type: "message",
+      message: { id: "m-replay", type: "text", text: "hello" },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "group", groupId: "group-replay", userId: "user-replay" },
+      mode: "active",
+      webhookEventId: "evt-replay-1",
+      deliveryContext: { isRedelivery: true },
+    } as MessageEvent;
+
+    const context = {
+      cfg: { channels: { line: { groupPolicy: "open" } } },
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+        config: { groupPolicy: "open" },
+      },
+      runtime: createRuntime(),
+      mediaMaxBytes: 1,
+      processMessage,
+    };
+
+    await handleLineWebhookEvents([event], context);
+    await handleLineWebhookEvents([event], context);
+
+    expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
+    expect(processMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("downloads file attachments and forwards media refs to message context", async () => {
     const processMessage = vi.fn();
     const event = {
