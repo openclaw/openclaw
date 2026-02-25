@@ -1,4 +1,4 @@
-import { resolveMatrixRoomId } from "../send.js";
+import { resolveMatrixRoomId } from "../send/targets.js";
 import { resolveActionClient } from "./client.js";
 import { fetchEventSummary, readPinnedEvents } from "./summary.js";
 import {

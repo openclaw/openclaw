@@ -135,6 +135,7 @@ export async function resolveMatrixAuth(params?: {
     let userId = resolved.userId;
     if (!userId) {
       // Fetch userId from access token via whoami
+      const { ensureMatrixSdkLoggingConfigured } = await import("./logging.js");
       ensureMatrixSdkLoggingConfigured();
       const { MatrixClient } = loadMatrixSdk();
       const tempClient = new MatrixClient(resolved.homeserver, resolved.accessToken);
