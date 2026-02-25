@@ -372,6 +372,102 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads[0]?.thinking).toBe("off");
   });
 
+  it("removes invalid negative Google thinkingBudget and maps Gemini 3.1 to thinkingLevel", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { text: "describe image" },
+              {
+                inlineData: {
+                  mimeType: "image/png",
+                  data: "ZmFrZQ==",
+                },
+              },
+            ],
+          },
+        ],
+        config: {
+          thinkingConfig: {
+            includeThoughts: true,
+            thinkingBudget: -1,
+          },
+        },
+      };
+      options?.onPayload?.(payload);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "atproxy", "gemini-3.1-pro-high", undefined, "high");
+
+    const model = {
+      api: "google-generative-ai",
+      provider: "atproxy",
+      id: "gemini-3.1-pro-high",
+    } as Model<"google-generative-ai">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    const thinkingConfig = (
+      payloads[0]?.config as { thinkingConfig?: Record<string, unknown> } | undefined
+    )?.thinkingConfig;
+    expect(thinkingConfig).toEqual({
+      includeThoughts: true,
+      thinkingLevel: "HIGH",
+    });
+    expect(
+      (
+        payloads[0]?.contents as
+          | Array<{ parts?: Array<{ inlineData?: { mimeType?: string; data?: string } }> }>
+          | undefined
+      )?.[0]?.parts?.[1]?.inlineData,
+    ).toEqual({
+      mimeType: "image/png",
+      data: "ZmFrZQ==",
+    });
+  });
+
+  it("keeps valid Google thinkingBudget unchanged", () => {
+    const payloads: Record<string, unknown>[] = [];
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        config: {
+          thinkingConfig: {
+            includeThoughts: true,
+            thinkingBudget: 2048,
+          },
+        },
+      };
+      options?.onPayload?.(payload);
+      payloads.push(payload);
+      return {} as ReturnType<StreamFn>;
+    };
+    const agent = { streamFn: baseStreamFn };
+
+    applyExtraParamsToAgent(agent, undefined, "atproxy", "gemini-3.1-pro-high", undefined, "high");
+
+    const model = {
+      api: "google-generative-ai",
+      provider: "atproxy",
+      id: "gemini-3.1-pro-high",
+    } as Model<"google-generative-ai">;
+    const context: Context = { messages: [] };
+    void agent.streamFn?.(model, context, {});
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.config).toEqual({
+      thinkingConfig: {
+        includeThoughts: true,
+        thinkingBudget: 2048,
+      },
+    });
+  });
   it("adds OpenRouter attribution headers to stream options", () => {
     const { calls, agent } = createOptionsCaptureAgent();
 
