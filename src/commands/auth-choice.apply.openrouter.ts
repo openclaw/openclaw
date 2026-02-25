@@ -1,14 +1,9 @@
 import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../agents/auth-profiles.js";
-import { resolveEnvApiKey } from "../agents/model-auth.js";
-import {
-  formatApiKeyPreview,
-  normalizeApiKeyInput,
-  validateApiKeyInput,
-} from "./auth-choice.api-key.js";
+import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
 import {
   createAuthChoiceAgentModelNoter,
+  ensureApiKeyFromOptionEnvOrPrompt,
   normalizeSecretInputModeInput,
-  resolveSecretInputModeForEnvSelection,
 } from "./auth-choice.apply-helpers.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
@@ -55,30 +50,20 @@ export async function applyAuthChoiceOpenRouter(
   }
 
   if (!hasCredential) {
-    const envKey = resolveEnvApiKey("openrouter");
-    if (envKey) {
-      const useExisting = await params.prompter.confirm({
-        message: `Use existing OPENROUTER_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
-        initialValue: true,
-      });
-      if (useExisting) {
-        const mode = await resolveSecretInputModeForEnvSelection({
-          prompter: params.prompter,
-          explicitMode: requestedSecretInputMode,
-        });
-        await setOpenrouterApiKey(envKey.apiKey, params.agentDir, { secretInputMode: mode });
-        hasCredential = true;
-      }
-    }
-  }
-
-  if (!hasCredential) {
-    const key = await params.prompter.text({
-      message: "Enter OpenRouter API key",
-      validate: validateApiKeyInput,
-    });
-    await setOpenrouterApiKey(normalizeApiKeyInput(String(key ?? "")), params.agentDir, {
+    await ensureApiKeyFromOptionEnvOrPrompt({
+      token: params.opts?.token,
+      tokenProvider: params.opts?.tokenProvider,
       secretInputMode: requestedSecretInputMode,
+      config: nextConfig,
+      expectedProviders: ["openrouter"],
+      provider: "openrouter",
+      envLabel: "OPENROUTER_API_KEY",
+      promptMessage: "Enter OpenRouter API key",
+      normalize: normalizeApiKeyInput,
+      validate: validateApiKeyInput,
+      prompter: params.prompter,
+      setCredential: async (apiKey, mode) =>
+        setOpenrouterApiKey(apiKey, params.agentDir, { secretInputMode: mode }),
     });
     hasCredential = true;
   }

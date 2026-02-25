@@ -41,6 +41,7 @@ export async function applyAuthChoiceMiniMax(
       token: params.opts?.token,
       tokenProvider: params.opts?.tokenProvider,
       secretInputMode: requestedSecretInputMode,
+      config: nextConfig,
       expectedProviders: ["minimax", "minimax-cn"],
       provider: "minimax",
       envLabel: "MINIMAX_API_KEY",

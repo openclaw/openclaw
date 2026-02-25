@@ -2,6 +2,7 @@ import { upsertAuthProfile } from "../../../agents/auth-profiles.js";
 import { normalizeProviderId } from "../../../agents/model-selection.js";
 import { parseDurationMs } from "../../../cli/parse-duration.js";
 import type { OpenClawConfig } from "../../../config/config.js";
+import type { SecretInput } from "../../../config/types.secrets.js";
 import type { RuntimeEnv } from "../../../runtime.js";
 import { normalizeSecretInput } from "../../../utils/normalize-secret-input.js";
 import { normalizeSecretInputModeInput } from "../../auth-choice.apply-helpers.js";
@@ -84,6 +85,13 @@ export async function applyNonInteractiveAuthChoice(params: {
   const apiKeyStorageOptions = requestedSecretInputMode
     ? { secretInputMode: requestedSecretInputMode }
     : undefined;
+  const resolveApiKey = (
+    input: Parameters<typeof resolveNonInteractiveApiKey>[0],
+  ): ReturnType<typeof resolveNonInteractiveApiKey> =>
+    resolveNonInteractiveApiKey({
+      ...input,
+      secretInputMode: requestedSecretInputMode,
+    });
 
   if (authChoice === "claude-cli" || authChoice === "codex-cli") {
     runtime.error(
@@ -119,7 +127,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   }
 
   if (authChoice === "apiKey") {
-    const resolved = await resolveNonInteractiveApiKey({
+    const resolved = await resolveApiKey({
       provider: "anthropic",
       cfg: baseConfig,
       flagValue: opts.anthropicApiKey,
@@ -196,7 +204,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   }
 
   if (authChoice === "gemini-api-key") {
-    const resolved = await resolveNonInteractiveApiKey({
+    const resolved = await resolveApiKey({
       provider: "google",
       cfg: baseConfig,
       flagValue: opts.geminiApiKey,
@@ -225,7 +233,7 @@ export async function applyNonInteractiveAuthChoice(params: {
     authChoice === "zai-global" ||
     authChoice === "zai-cn"
   ) {
-    const resolved = await resolveNonInteractiveApiKey({
+    const resolved = await resolveApiKey({
       provider: "zai",
       cfg: baseConfig,
       flagValue: opts.zaiApiKey,
@@ -274,7 +282,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   }
 
   if (authChoice === "xiaomi-api-key") {
-    const resolved = await resolveNonInteractiveApiKey({
+    const resolved = await resolveApiKey({
       provider: "xiaomi",
       cfg: baseConfig,
       flagValue: opts.xiaomiApiKey,
@@ -297,7 +305,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   }
 
   if (authChoice === "xai-api-key") {
-    const resolved = await resolveNonInteractiveApiKey({
+    const resolved = await resolveApiKey({
       provider: "xai",
       cfg: baseConfig,
       flagValue: opts.xaiApiKey,
@@ -320,7 +328,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   }
 
   if (authChoice === "mistral-api-key") {
-    const resolved = await resolveNonInteractiveApiKey({
+    const resolved = await resolveApiKey({
       provider: "mistral",
       cfg: baseConfig,
       flagValue: opts.mistralApiKey,
@@ -343,7 +351,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   }
 
   if (authChoice === "volcengine-api-key") {
-    const resolved = await resolveNonInteractiveApiKey({
+    const resolved = await resolveApiKey({
       provider: "volcengine",
       cfg: baseConfig,
       flagValue: opts.volcengineApiKey,
@@ -366,7 +374,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   }
 
   if (authChoice === "byteplus-api-key") {
-    const resolved = await resolveNonInteractiveApiKey({
+    const resolved = await resolveApiKey({
       provider: "byteplus",
       cfg: baseConfig,
       flagValue: opts.byteplusApiKey,
@@ -389,7 +397,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   }
 
   if (authChoice === "qianfan-api-key") {
-    const resolved = await resolveNonInteractiveApiKey({
+    const resolved = await resolveApiKey({
       provider: "qianfan",
       cfg: baseConfig,
       flagValue: opts.qianfanApiKey,
@@ -412,7 +420,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   }
 
   if (authChoice === "openai-api-key") {
-    const resolved = await resolveNonInteractiveApiKey({
+    const resolved = await resolveApiKey({
       provider: "openai",
       cfg: baseConfig,
       flagValue: opts.openaiApiKey,
@@ -435,7 +443,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   }
 
   if (authChoice === "openrouter-api-key") {
-    const resolved = await resolveNonInteractiveApiKey({
+    const resolved = await resolveApiKey({
       provider: "openrouter",
       cfg: baseConfig,
       flagValue: opts.openrouterApiKey,
@@ -458,7 +466,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   }
 
   if (authChoice === "kilocode-api-key") {
-    const resolved = await resolveNonInteractiveApiKey({
+    const resolved = await resolveApiKey({
       provider: "kilocode",
       cfg: baseConfig,
       flagValue: opts.kilocodeApiKey,
@@ -481,7 +489,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   }
 
   if (authChoice === "litellm-api-key") {
-    const resolved = await resolveNonInteractiveApiKey({
+    const resolved = await resolveApiKey({
       provider: "litellm",
       cfg: baseConfig,
       flagValue: opts.litellmApiKey,
@@ -504,7 +512,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   }
 
   if (authChoice === "ai-gateway-api-key") {
-    const resolved = await resolveNonInteractiveApiKey({
+    const resolved = await resolveApiKey({
       provider: "vercel-ai-gateway",
       cfg: baseConfig,
       flagValue: opts.aiGatewayApiKey,
@@ -539,7 +547,7 @@ export async function applyNonInteractiveAuthChoice(params: {
       runtime.exit(1);
       return null;
     }
-    const resolved = await resolveNonInteractiveApiKey({
+    const resolved = await resolveApiKey({
       provider: "cloudflare-ai-gateway",
       cfg: baseConfig,
       flagValue: opts.cloudflareAiGatewayApiKey,
@@ -573,7 +581,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   const applyMoonshotApiKeyChoice = async (
     applyConfig: (cfg: OpenClawConfig) => OpenClawConfig,
   ): Promise<OpenClawConfig | null> => {
-    const resolved = await resolveNonInteractiveApiKey({
+    const resolved = await resolveApiKey({
       provider: "moonshot",
       cfg: baseConfig,
       flagValue: opts.moonshotApiKey,
@@ -604,7 +612,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   }
 
   if (authChoice === "kimi-code-api-key") {
-    const resolved = await resolveNonInteractiveApiKey({
+    const resolved = await resolveApiKey({
       provider: "kimi-coding",
       cfg: baseConfig,
       flagValue: opts.kimiCodeApiKey,
@@ -627,7 +635,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   }
 
   if (authChoice === "synthetic-api-key") {
-    const resolved = await resolveNonInteractiveApiKey({
+    const resolved = await resolveApiKey({
       provider: "synthetic",
       cfg: baseConfig,
       flagValue: opts.syntheticApiKey,
@@ -650,7 +658,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   }
 
   if (authChoice === "venice-api-key") {
-    const resolved = await resolveNonInteractiveApiKey({
+    const resolved = await resolveApiKey({
       provider: "venice",
       cfg: baseConfig,
       flagValue: opts.veniceApiKey,
@@ -681,7 +689,7 @@ export async function applyNonInteractiveAuthChoice(params: {
     const isCn = authChoice === "minimax-api-key-cn";
     const providerId = isCn ? "minimax-cn" : "minimax";
     const profileId = `${providerId}:default`;
-    const resolved = await resolveNonInteractiveApiKey({
+    const resolved = await resolveApiKey({
       provider: providerId,
       cfg: baseConfig,
       flagValue: opts.minimaxApiKey,
@@ -712,7 +720,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   }
 
   if (authChoice === "opencode-zen") {
-    const resolved = await resolveNonInteractiveApiKey({
+    const resolved = await resolveApiKey({
       provider: "opencode",
       cfg: baseConfig,
       flagValue: opts.opencodeZenApiKey,
@@ -735,7 +743,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   }
 
   if (authChoice === "together-api-key") {
-    const resolved = await resolveNonInteractiveApiKey({
+    const resolved = await resolveApiKey({
       provider: "together",
       cfg: baseConfig,
       flagValue: opts.togetherApiKey,
@@ -758,7 +766,7 @@ export async function applyNonInteractiveAuthChoice(params: {
   }
 
   if (authChoice === "huggingface-api-key") {
-    const resolved = await resolveNonInteractiveApiKey({
+    const resolved = await resolveApiKey({
       provider: "huggingface",
       cfg: baseConfig,
       flagValue: opts.huggingfaceApiKey,
@@ -794,7 +802,7 @@ export async function applyNonInteractiveAuthChoice(params: {
         baseUrl: customAuth.baseUrl,
         providerId: customAuth.providerId,
       });
-      const resolvedCustomApiKey = await resolveNonInteractiveApiKey({
+      const resolvedCustomApiKey = await resolveApiKey({
         provider: resolvedProviderId.providerId,
         cfg: baseConfig,
         flagValue: customAuth.apiKey,
@@ -804,12 +812,16 @@ export async function applyNonInteractiveAuthChoice(params: {
         runtime,
         required: false,
       });
+      const customApiKeyInput: SecretInput | undefined =
+        requestedSecretInputMode === "ref" && resolvedCustomApiKey?.source === "env"
+          ? { source: "env", id: "CUSTOM_API_KEY" }
+          : resolvedCustomApiKey?.key;
       const result = applyCustomApiConfig({
         config: nextConfig,
         baseUrl: customAuth.baseUrl,
         modelId: customAuth.modelId,
         compatibility: customAuth.compatibility,
-        apiKey: resolvedCustomApiKey?.key,
+        apiKey: customApiKeyInput,
         providerId: customAuth.providerId,
       });
       if (result.providerIdRenamedFrom && result.providerId) {
