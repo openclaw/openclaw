@@ -6,6 +6,12 @@ export const middlewareUseSpy: Mock = vi.fn();
 export const onSpy: Mock = vi.fn();
 export const stopSpy: Mock = vi.fn();
 export const sendChatActionSpy: Mock = vi.fn();
+export const saveMediaBufferSpy: Mock = vi.fn(async (buffer: Buffer, contentType?: string) => ({
+  id: "media",
+  path: "/tmp/telegram-media",
+  size: buffer.byteLength,
+  contentType: contentType ?? "application/octet-stream",
+}));
 
 type ApiStub = {
   config: { use: (arg: unknown) => void };
@@ -52,12 +58,8 @@ vi.mock("../media/store.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media/store.js")>();
   return {
     ...actual,
-    saveMediaBuffer: vi.fn(async (buffer: Buffer, contentType?: string) => ({
-      id: "media",
-      path: "/tmp/telegram-media",
-      size: buffer.byteLength,
-      contentType: contentType ?? "application/octet-stream",
-    })),
+    saveMediaBuffer: (...args: Parameters<typeof saveMediaBufferSpy>) =>
+      saveMediaBufferSpy(...args),
   };
 });
 
