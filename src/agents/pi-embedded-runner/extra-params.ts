@@ -408,6 +408,42 @@ function mapThinkingLevelToOpenRouterReasoningEffort(
   return thinkingLevel;
 }
 
+function shouldApplySiliconFlowThinkingOffCompat(params: {
+  provider: string;
+  modelId: string;
+  thinkingLevel?: ThinkLevel;
+}): boolean {
+  return (
+    params.provider === "siliconflow" &&
+    params.thinkingLevel === "off" &&
+    params.modelId.startsWith("Pro/")
+  );
+}
+
+/**
+ * SiliconFlow's Pro/* models reject string thinking modes (including "off")
+ * with HTTP 400 invalid-parameter errors. Normalize to `thinking: null` to
+ * preserve "thinking disabled" intent without sending an invalid enum value.
+ */
+function createSiliconFlowThinkingWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          if (payloadObj.thinking === "off") {
+            payloadObj.thinking = null;
+          }
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
 /**
  * Create a streamFn wrapper that adds OpenRouter app attribution headers
  * and injects reasoning.effort based on the configured thinking level.
@@ -542,6 +578,13 @@ export function applyExtraParamsToAgent(
       `applying Anthropic beta header for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
     );
     agent.streamFn = createAnthropicBetaHeadersWrapper(agent.streamFn, anthropicBetas);
+  }
+
+  if (shouldApplySiliconFlowThinkingOffCompat({ provider, modelId, thinkingLevel })) {
+    log.debug(
+      `normalizing thinking=off to thinking=null for SiliconFlow compatibility (${provider}/${modelId})`,
+    );
+    agent.streamFn = createSiliconFlowThinkingWrapper(agent.streamFn);
   }
 
   if (provider === "openrouter") {
