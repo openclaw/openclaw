@@ -71,4 +71,33 @@ describe("resolveWhatsAppAuthDir", () => {
     expect(resolved.messagePrefix).toBe("[root]");
     expect(resolved.debounceMs).toBe(250);
   });
+
+  it("account groups override root groups (no deep merge)", () => {
+    // An account setting groups: {} or a subset must fully override root.groups
+    // so that routing/gating and prompt surfaces see a consistent picture.
+    const resolved = resolveWhatsAppAccount({
+      cfg: {
+        channels: {
+          whatsapp: {
+            groups: {
+              "*": { systemPrompt: "Root wildcard prompt" },
+              "120363406415684625@g.us": { requireMention: true },
+            },
+            accounts: {
+              work: {
+                groups: {
+                  "120363406415684625@g.us": { requireMention: false },
+                },
+              },
+            },
+          },
+        },
+      } as Parameters<typeof resolveWhatsAppAccount>[0]["cfg"],
+      accountId: "work",
+    });
+
+    // Account groups replace root groups entirely — root "*" must not bleed in.
+    expect(resolved.groups?.["*"]).toBeUndefined();
+    expect(resolved.groups?.["120363406415684625@g.us"]).toEqual({ requireMention: false });
+  });
 });

@@ -3,8 +3,10 @@ export type { DmPolicy, GroupPolicy, WhatsAppAccountConfig } from "../config/typ
 export {
   createWhatsAppOutboundBase,
   resolveWhatsAppGroupIntroHint,
+  resolveWhatsAppGroupSystemPrompt,
   resolveWhatsAppMentionStripRegexes,
 } from "../channels/plugins/whatsapp-shared.js";
+export type { WhatsAppGroupSystemPromptParams } from "../channels/plugins/whatsapp-shared.js";
 export {
   looksLikeWhatsAppTargetId,
   normalizeWhatsAppAllowFromEntries,

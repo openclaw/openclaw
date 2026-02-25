@@ -374,6 +374,45 @@ The agent system prompt includes a group intro on the first turn of a new group 
 - List chats: `imsg chats --limit 20`.
 - Group replies always go back to the same `chat_id`.
 
+## WhatsApp system prompts for groups
+
+WhatsApp supports per-account and per-group system prompts. For group messages, the final prompt delivered to the agent is the account prompt and group prompt joined with a blank line (either part is omitted if not set).
+
+Resolution hierarchy:
+
+1. **Account system prompt** (`channels.whatsapp.systemPrompt` or `accounts.<id>.systemPrompt`): the root value applies to all accounts; an account-level value overrides it for that account.
+2. **Group system prompt** (`groups["<groupId>"].systemPrompt` or `groups["*"].systemPrompt`): the specific group entry is used if it defines a `systemPrompt`; falls back to `groups["*"].systemPrompt` for groups with no specific entry. Account `groups` fully overrides root `groups` (same override semantics as Telegram). This means root `groups["*"]` applies automatically when an account defines no `groups` of its own, but is replaced entirely once an account defines any `groups` entry.
+
+Example:
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      systemPrompt: "Respond in English only.",
+      groups: {
+        // Applies to all accounts that do not define their own groups map.
+        "*": { systemPrompt: "Default prompt for all groups." },
+      },
+      accounts: {
+        work: {
+          systemPrompt: "You are a work assistant.",
+          groups: {
+            // This account defines its own groups, so root groups are fully
+            // replaced. To keep a wildcard, define "*" explicitly here too.
+            "120363406415684625@g.us": {
+              requireMention: false,
+              systemPrompt: "Focus on project management.",
+            },
+            "*": { systemPrompt: "Default prompt for work groups." },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
 ## WhatsApp specifics
 
 See [Group messages](/channels/group-messages) for WhatsApp-only behavior (history injection, mention handling details).
