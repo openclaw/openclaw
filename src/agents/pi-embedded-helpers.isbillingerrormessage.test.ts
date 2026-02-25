@@ -434,6 +434,12 @@ describe("classifyFailoverReason", () => {
     expect(classifyFailoverReason("429 too many requests")).toBe("rate_limit");
     expect(classifyFailoverReason("resource has been exhausted")).toBe("rate_limit");
     expect(
+      classifyFailoverReason("model_cooldown: All credentials for model gpt-5 are cooling down"),
+    ).toBe("rate_limit");
+    expect(classifyFailoverReason("all credentials for model x are cooling down")).toBe(
+      "rate_limit",
+    );
+    expect(
       classifyFailoverReason(
         '{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
       ),

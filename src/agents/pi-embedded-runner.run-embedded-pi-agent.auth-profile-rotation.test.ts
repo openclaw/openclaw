@@ -109,6 +109,45 @@ const makeConfig = (opts?: { fallbacks?: string[]; apiKey?: string }): OpenClawC
     },
   }) satisfies OpenClawConfig;
 
+const makeAgentOverrideOnlyFallbackConfig = (agentId: string): OpenClawConfig =>
+  ({
+    agents: {
+      defaults: {
+        model: {
+          fallbacks: [],
+        },
+      },
+      list: [
+        {
+          id: agentId,
+          model: {
+            fallbacks: ["openai/mock-2"],
+          },
+        },
+      ],
+    },
+    models: {
+      providers: {
+        openai: {
+          api: "openai-responses",
+          apiKey: "sk-test",
+          baseUrl: "https://example.com",
+          models: [
+            {
+              id: "mock-1",
+              name: "Mock 1",
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 16_000,
+              maxTokens: 2048,
+            },
+          ],
+        },
+      },
+    },
+  }) satisfies OpenClawConfig;
+
 const writeAuthStore = async (
   agentDir: string,
   opts?: {
@@ -504,6 +543,42 @@ describe("runEmbeddedPiAgent auth profile rotation", () => {
           authProfileIdSource: "auto",
           timeoutMs: 5_000,
           runId: "run:cooldown-failover",
+        }),
+      ).rejects.toMatchObject({
+        name: "FailoverError",
+        reason: "rate_limit",
+        provider: "openai",
+        model: "mock-1",
+      });
+
+      expect(runEmbeddedAttemptMock).not.toHaveBeenCalled();
+    });
+  });
+
+  it("treats agent-level fallbacks as configured when defaults have none", async () => {
+    await withTimedAgentWorkspace(async ({ agentDir, workspaceDir, now }) => {
+      await writeAuthStore(agentDir, {
+        usageStats: {
+          "openai:p1": { lastUsed: 1, cooldownUntil: now + 60 * 60 * 1000 },
+          "openai:p2": { lastUsed: 2, cooldownUntil: now + 60 * 60 * 1000 },
+        },
+      });
+
+      await expect(
+        runEmbeddedPiAgent({
+          sessionId: "session:test",
+          sessionKey: "agent:support:cooldown-failover",
+          sessionFile: path.join(workspaceDir, "session.jsonl"),
+          workspaceDir,
+          agentDir,
+          config: makeAgentOverrideOnlyFallbackConfig("support"),
+          prompt: "hello",
+          provider: "openai",
+          model: "mock-1",
+          authProfileIdSource: "auto",
+          timeoutMs: 5_000,
+          runId: "run:agent-override-fallback",
+          agentId: "support",
         }),
       ).rejects.toMatchObject({
         name: "FailoverError",
