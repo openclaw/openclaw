@@ -89,17 +89,13 @@ export function resolveSessionDeliveryTarget(params: {
   const sessionLastChannel =
     context?.channel && isDeliverableMessageChannel(context.channel) ? context.channel : undefined;
 
-  // When a turn-source channel is provided, use it instead of the session's
-  // mutable lastChannel.  This prevents a concurrent inbound from a different
-  // channel from hijacking the reply target (cross-channel privacy leak).
-  const lastChannel = params.turnSourceChannel ?? sessionLastChannel;
-  const lastTo = params.turnSourceChannel ? (params.turnSourceTo ?? context?.to) : context?.to;
-  const lastAccountId = params.turnSourceChannel
-    ? (params.turnSourceAccountId ?? context?.accountId)
-    : context?.accountId;
-  const lastThreadId = params.turnSourceChannel
-    ? (params.turnSourceThreadId ?? context?.threadId)
-    : context?.threadId;
+  // When a turn-source channel is provided, use only turn-scoped metadata.
+  // Falling back to mutable session fields would re-introduce routing races.
+  const hasTurnSourceChannel = params.turnSourceChannel != null;
+  const lastChannel = hasTurnSourceChannel ? params.turnSourceChannel : sessionLastChannel;
+  const lastTo = hasTurnSourceChannel ? params.turnSourceTo : context?.to;
+  const lastAccountId = hasTurnSourceChannel ? params.turnSourceAccountId : context?.accountId;
+  const lastThreadId = hasTurnSourceChannel ? params.turnSourceThreadId : context?.threadId;
 
   const rawRequested = params.requestedChannel ?? "last";
   const requested = rawRequested === "last" ? "last" : normalizeMessageChannel(rawRequested);
