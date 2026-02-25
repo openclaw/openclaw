@@ -12,6 +12,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Slack/Session threads: prevent oversized parent-session inheritance from silently bricking new thread sessions, surface embedded context-overflow empty-result failures to users, and add configurable `session.parentForkMaxTokens` (default `100000`, `0` disables). (#26912) Thanks @markshields-tl.
 - Security/Signal: enforce DM/group authorization before reaction-only notification enqueue so unauthorized senders can no longer inject Signal reaction system events under `dmPolicy`/`groupPolicy`; reaction notifications now require channel access checks first. This ships in the next npm release (`2026.2.25`). Thanks @tdjackey for reporting.
 - Security/macOS beta onboarding: remove Anthropic OAuth sign-in and the legacy `oauth.json` onboarding path that exposed the PKCE verifier via OAuth `state`; this impacted the macOS beta onboarding path only. Anthropic subscription auth is now setup-token-only and will ship in the next npm release (`2026.2.25`). Thanks @zdi-disclosures for reporting.
 - Security/Nextcloud Talk: drop replayed signed webhook events with persistent per-account replay dedupe across restarts, and reject unexpected webhook backend origins when account base URL is configured. Thanks @aristorechina for reporting.
