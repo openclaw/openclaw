@@ -378,6 +378,65 @@ describe("monitorSignalProvider tool results", () => {
     expect(events.some((text) => text.includes("Signal reaction added"))).toBe(true);
   });
 
+  it("blocks reaction notifications from unauthorized senders when dmPolicy is allowlist", async () => {
+    setReactionNotificationConfig("all", {
+      dmPolicy: "allowlist",
+      allowFrom: ["+15550007777"],
+    });
+    await receiveSingleEnvelope({
+      ...makeBaseEnvelope(),
+      reactionMessage: {
+        emoji: "✅",
+        targetAuthor: "+15550002222",
+        targetSentTimestamp: 2,
+      },
+    });
+
+    const events = getDirectSignalEventsFor("+15550001111");
+    expect(events.some((text) => text.includes("Signal reaction added"))).toBe(false);
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks reaction notifications from unauthorized senders when dmPolicy is pairing", async () => {
+    setReactionNotificationConfig("own", {
+      dmPolicy: "pairing",
+      allowFrom: [],
+      account: "+15550009999",
+    });
+    await receiveSingleEnvelope({
+      ...makeBaseEnvelope(),
+      reactionMessage: {
+        emoji: "✅",
+        targetAuthor: "+15550009999",
+        targetSentTimestamp: 2,
+      },
+    });
+
+    const events = getDirectSignalEventsFor("+15550001111");
+    expect(events.some((text) => text.includes("Signal reaction added"))).toBe(false);
+    expect(sendMock).not.toHaveBeenCalled();
+    expect(upsertPairingRequestMock).not.toHaveBeenCalled();
+  });
+
+  it("allows reaction notifications for allowlisted senders when dmPolicy is allowlist", async () => {
+    setReactionNotificationConfig("all", {
+      dmPolicy: "allowlist",
+      allowFrom: ["+15550001111"],
+    });
+    await receiveSingleEnvelope({
+      ...makeBaseEnvelope(),
+      reactionMessage: {
+        emoji: "✅",
+        targetAuthor: "+15550002222",
+        targetSentTimestamp: 2,
+      },
+    });
+
+    const events = getDirectSignalEventsFor("+15550001111");
+    expect(events.some((text) => text.includes("Signal reaction added"))).toBe(true);
+  });
+
   it("notifies on own reactions when target includes uuid + phone", async () => {
     setReactionNotificationConfig("own", { account: "+15550002222" });
     await receiveSingleEnvelope({

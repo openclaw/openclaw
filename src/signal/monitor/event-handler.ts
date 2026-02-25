@@ -36,6 +36,10 @@ import {
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
+import {
+  resolveDmGroupAccessDecision,
+  resolveEffectiveAllowFromLists,
+} from "../../security/dm-policy-shared.js";
 import { normalizeE164 } from "../../utils.js";
 import {
   formatSignalPairingIdLine,
@@ -366,15 +370,45 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const quoteText = dataMessage?.quote?.text?.trim() ?? "";
     const hasBodyContent =
       Boolean(messageText || quoteText) || Boolean(!reaction && dataMessage?.attachments?.length);
+    const senderDisplay = formatSignalSenderDisplay(sender);
+    const storeAllowFrom =
+      deps.dmPolicy === "allowlist"
+        ? []
+        : await readChannelAllowFromStore("signal").catch(() => []);
+    const { effectiveAllowFrom: effectiveDmAllow } = resolveEffectiveAllowFromLists({
+      allowFrom: deps.allowFrom,
+      groupAllowFrom: deps.groupAllowFrom,
+      storeAllowFrom,
+      dmPolicy: deps.dmPolicy,
+    });
+    const effectiveGroupAllow = [...deps.groupAllowFrom, ...storeAllowFrom];
+    const resolveAccessDecision = (isGroup: boolean) =>
+      resolveDmGroupAccessDecision({
+        isGroup,
+        dmPolicy: deps.dmPolicy,
+        groupPolicy: deps.groupPolicy,
+        effectiveAllowFrom: effectiveDmAllow,
+        effectiveGroupAllowFrom: effectiveGroupAllow,
+        isSenderAllowed: (allowFrom) => isSignalSenderAllowed(sender, allowFrom),
+      });
+    const dmAccess = resolveAccessDecision(false);
+    const dmAllowed = dmAccess.decision === "allow";
 
     if (reaction && !hasBodyContent) {
       if (reaction.isRemove) {
         return;
       } // Ignore reaction removals
       const emojiLabel = reaction.emoji?.trim() || "emoji";
-      const senderDisplay = formatSignalSenderDisplay(sender);
       const senderName = envelope.sourceName ?? senderDisplay;
       logVerbose(`signal reaction: ${emojiLabel} from ${senderName}`);
+      const groupId = reaction.groupInfo?.groupId ?? undefined;
+      const groupName = reaction.groupInfo?.groupName ?? undefined;
+      const isGroup = Boolean(groupId);
+      const reactionAccess = resolveAccessDecision(isGroup);
+      if (reactionAccess.decision !== "allow") {
+        logVerbose(`Blocked signal reaction sender ${senderDisplay} (${reactionAccess.reason})`);
+        return;
+      }
       const targets = deps.resolveSignalReactionTargets(reaction);
       const shouldNotify = deps.shouldEmitSignalReactionNotification({
         mode: deps.reactionMode,
@@ -387,9 +421,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         return;
       }
 
-      const groupId = reaction.groupInfo?.groupId ?? undefined;
-      const groupName = reaction.groupInfo?.groupName ?? undefined;
-      const isGroup = Boolean(groupId);
       const senderPeerId = resolveSignalPeerId(sender);
       const route = resolveAgentRoute({
         cfg: deps.cfg,
@@ -430,7 +461,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return;
     }
 
-    const senderDisplay = formatSignalSenderDisplay(sender);
     const senderRecipient = resolveSignalRecipient(sender);
     const senderPeerId = resolveSignalPeerId(sender);
     const senderAllowId = formatSignalSenderId(sender);
@@ -441,20 +471,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const groupId = dataMessage.groupInfo?.groupId ?? undefined;
     const groupName = dataMessage.groupInfo?.groupName ?? undefined;
     const isGroup = Boolean(groupId);
-    const storeAllowFrom =
-      deps.dmPolicy === "allowlist"
-        ? []
-        : await readChannelAllowFromStore("signal").catch(() => []);
-    const effectiveDmAllow = [...deps.allowFrom, ...storeAllowFrom];
-    const effectiveGroupAllow = [...deps.groupAllowFrom, ...storeAllowFrom];
-    const dmAllowed =
-      deps.dmPolicy === "open" ? true : isSignalSenderAllowed(sender, effectiveDmAllow);
 
     if (!isGroup) {
-      if (deps.dmPolicy === "disabled") {
+      if (dmAccess.decision === "block") {
+        if (deps.dmPolicy !== "disabled") {
+          logVerbose(`Blocked signal sender ${senderDisplay} (dmPolicy=${deps.dmPolicy})`);
+        }
         return;
       }
-      if (!dmAllowed) {
+      if (dmAccess.decision === "pairing") {
         if (deps.dmPolicy === "pairing") {
           const senderId = senderAllowId;
           const { code, created } = await upsertChannelPairingRequest({
@@ -483,23 +508,20 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
               logVerbose(`signal pairing reply failed for ${senderId}: ${String(err)}`);
             }
           }
-        } else {
-          logVerbose(`Blocked signal sender ${senderDisplay} (dmPolicy=${deps.dmPolicy})`);
         }
         return;
       }
     }
-    if (isGroup && deps.groupPolicy === "disabled") {
-      logVerbose("Blocked signal group message (groupPolicy: disabled)");
-      return;
-    }
-    if (isGroup && deps.groupPolicy === "allowlist") {
-      if (effectiveGroupAllow.length === 0) {
-        logVerbose("Blocked signal group message (groupPolicy: allowlist, no groupAllowFrom)");
-        return;
-      }
-      if (!isSignalSenderAllowed(sender, effectiveGroupAllow)) {
-        logVerbose(`Blocked signal group sender ${senderDisplay} (not in groupAllowFrom)`);
+    if (isGroup) {
+      const groupAccess = resolveAccessDecision(true);
+      if (groupAccess.decision !== "allow") {
+        if (groupAccess.reason === "groupPolicy=disabled") {
+          logVerbose("Blocked signal group message (groupPolicy: disabled)");
+        } else if (groupAccess.reason === "groupPolicy=allowlist (empty allowlist)") {
+          logVerbose("Blocked signal group message (groupPolicy: allowlist, no groupAllowFrom)");
+        } else {
+          logVerbose(`Blocked signal group sender ${senderDisplay} (not in groupAllowFrom)`);
+        }
         return;
       }
     }
