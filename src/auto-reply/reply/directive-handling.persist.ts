@@ -15,11 +15,11 @@ import { type SessionEntry, updateSessionStore } from "../../config/sessions.js"
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
-import { resolveContextTokens } from "./model-selection.js";
 import { resolveProfileOverride } from "./directive-handling.auth.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";
 import { enqueueModeSwitchEvents } from "./directive-handling.shared.js";
 import type { ElevatedLevel, ReasoningLevel } from "./directives.js";
+import { resolveContextTokens } from "./model-selection.js";
 
 export async function persistInlineDirectives(params: {
   directives: InlineDirectives;

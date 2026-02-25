@@ -621,9 +621,7 @@ export function resolveContextTokens(params: {
       if (!parsed) {
         continue;
       }
-      if (
-        modelKey(normalizeProviderId(parsed.ref.provider), parsed.ref.model) === modelKeyValue
-      ) {
+      if (modelKey(normalizeProviderId(parsed.ref.provider), parsed.ref.model) === modelKeyValue) {
         return entry;
       }
     }
