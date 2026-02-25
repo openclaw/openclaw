@@ -1065,7 +1065,7 @@ describe("gateway server auth/connect", () => {
     }
   });
 
-  test("skips pairing for operator scope upgrades when shared token auth is valid", async () => {
+  test("requires pairing for remote operator device identity with shared token auth", async () => {
     const { mkdtemp } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
@@ -1102,21 +1102,29 @@ describe("gateway server auth/connect", () => {
         nonce,
       };
     };
-    const initialNonce = await readConnectChallengeNonce(ws);
-    const initial = await connectReq(ws, {
+    ws.close();
+
+    const wsRemoteRead = await openWs(port, { host: "gateway.example" });
+    const initialNonce = await readConnectChallengeNonce(wsRemoteRead);
+    const initial = await connectReq(wsRemoteRead, {
       token: "secret",
       scopes: ["operator.read"],
       client,
       device: buildDevice(["operator.read"], initialNonce),
     });
-    expect(initial.ok).toBe(true);
+    expect(initial.ok).toBe(false);
+    expect(initial.error?.message ?? "").toContain("pairing required");
     let pairing = await listDevicePairing();
-    expect(pairing.pending.filter((entry) => entry.deviceId === identity.deviceId)).toEqual([]);
+    const pendingAfterRead = pairing.pending.filter(
+      (entry) => entry.deviceId === identity.deviceId,
+    );
+    expect(pendingAfterRead).toHaveLength(1);
+    expect(pendingAfterRead[0]?.role).toBe("operator");
+    expect(pendingAfterRead[0]?.scopes ?? []).toContain("operator.read");
     expect(await getPairedDevice(identity.deviceId)).toBeNull();
+    wsRemoteRead.close();
 
-    ws.close();
-
-    const ws2 = await openWs(port);
+    const ws2 = await openWs(port, { host: "gateway.example" });
     const nonce2 = await readConnectChallengeNonce(ws2);
     const res = await connectReq(ws2, {
       token: "secret",
@@ -1124,9 +1132,16 @@ describe("gateway server auth/connect", () => {
       client,
       device: buildDevice(["operator.admin"], nonce2),
     });
-    expect(res.ok).toBe(true);
+    expect(res.ok).toBe(false);
+    expect(res.error?.message ?? "").toContain("pairing required");
     pairing = await listDevicePairing();
-    expect(pairing.pending.filter((entry) => entry.deviceId === identity.deviceId)).toEqual([]);
+    const pendingAfterAdmin = pairing.pending.filter(
+      (entry) => entry.deviceId === identity.deviceId,
+    );
+    expect(pendingAfterAdmin).toHaveLength(1);
+    expect(pendingAfterAdmin[0]?.scopes ?? []).toEqual(
+      expect.arrayContaining(["operator.read", "operator.admin"]),
+    );
     expect(await getPairedDevice(identity.deviceId)).toBeNull();
     ws2.close();
     await server.close();
@@ -1199,7 +1214,7 @@ describe("gateway server auth/connect", () => {
     restoreGatewayToken(prevToken);
   });
 
-  test("still requires node pairing while operator shared auth succeeds for the same device", async () => {
+  test("merges remote node/operator pairing requests for the same unpaired device", async () => {
     const { mkdtemp } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
@@ -1266,23 +1281,25 @@ describe("gateway server auth/connect", () => {
     expect(nodeConnect.error?.message ?? "").toContain("pairing required");
 
     const operatorConnect = await connectWithNonce("operator", ["operator.read", "operator.write"]);
-    expect(operatorConnect.ok).toBe(true);
+    expect(operatorConnect.ok).toBe(false);
+    expect(operatorConnect.error?.message ?? "").toContain("pairing required");
 
     const pending = await listDevicePairing();
     const pendingForTestDevice = pending.pending.filter(
       (entry) => entry.deviceId === identity.deviceId,
     );
     expect(pendingForTestDevice).toHaveLength(1);
-    expect(pendingForTestDevice[0]?.roles).toEqual(expect.arrayContaining(["node"]));
-    expect(pendingForTestDevice[0]?.roles ?? []).not.toContain("operator");
+    expect(pendingForTestDevice[0]?.roles).toEqual(expect.arrayContaining(["node", "operator"]));
+    expect(pendingForTestDevice[0]?.scopes ?? []).toEqual(
+      expect.arrayContaining(["operator.read", "operator.write"]),
+    );
     if (!pendingForTestDevice[0]) {
       throw new Error("expected pending pairing request");
     }
     await approveDevicePairing(pendingForTestDevice[0].requestId);
 
     const paired = await getPairedDevice(identity.deviceId);
-    expect(paired?.roles).toEqual(expect.arrayContaining(["node"]));
-    expect(paired?.roles ?? []).not.toContain("operator");
+    expect(paired?.roles).toEqual(expect.arrayContaining(["node", "operator"]));
 
     const approvedOperatorConnect = await connectWithNonce("operator", ["operator.read"]);
     expect(approvedOperatorConnect.ok).toBe(true);
@@ -1438,8 +1455,8 @@ describe("gateway server auth/connect", () => {
       expect(reconnect.ok).toBe(true);
 
       const repaired = await getPairedDevice(deviceId);
-      expect(repaired?.roles).toBeUndefined();
-      expect(repaired?.scopes).toBeUndefined();
+      expect(repaired?.roles ?? []).toContain("operator");
+      expect(repaired?.scopes ?? []).toContain("operator.read");
       const list = await listDevicePairing();
       expect(list.pending.filter((entry) => entry.deviceId === deviceId)).toEqual([]);
     } finally {
@@ -1450,7 +1467,7 @@ describe("gateway server auth/connect", () => {
     }
   });
 
-  test("allows shared-auth scope escalation even when paired metadata is legacy-shaped", async () => {
+  test("auto-approves local scope upgrades even when paired metadata is legacy-shaped", async () => {
     const { mkdtemp } = await import("node:fs/promises");
     const { tmpdir } = await import("node:os");
     const { join } = await import("node:path");
@@ -1539,9 +1556,13 @@ describe("gateway server auth/connect", () => {
       expect(pendingUpgrade).toBeUndefined();
       const repaired = await getPairedDevice(identity.deviceId);
       expect(repaired?.role).toBe("operator");
-      expect(repaired?.roles).toBeUndefined();
-      expect(repaired?.scopes).toBeUndefined();
-      expect(repaired?.approvedScopes).not.toContain("operator.admin");
+      expect(repaired?.roles ?? []).toContain("operator");
+      expect(repaired?.scopes ?? []).toEqual(
+        expect.arrayContaining(["operator.read", "operator.admin"]),
+      );
+      expect(repaired?.approvedScopes ?? []).toEqual(
+        expect.arrayContaining(["operator.read", "operator.admin"]),
+      );
     } finally {
       ws.close();
       ws2?.close();
