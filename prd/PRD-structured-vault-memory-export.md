@@ -23,7 +23,7 @@ If the machine crashes and Magnus needs to be rebuilt from scratch, the vault ha
 
 ## Design Principles
 
-1. **Vault-primary** — agent memory lives in Obsidian, not `memory/*.md`. QMD indexes the vault (already working). The workspace `memory/` directory becomes a write-through cache, not the source of truth.
+1. **Vault-only** — agent memory lives in Obsidian, period. No workspace `memory/*.md` mirror. QMD indexes the vault directly (already working). Bootstrap injection reads from the vault.
 2. **Human-readable** — notes use proper frontmatter, tags, wiki-links. A human should be able to browse the vault and understand what the agent knows.
 3. **PARA-native** — notes land in the correct PARA location. Agent operational notes go to `2-Areas/Magnus/`. Project-specific memories go to `1-Projects/<project>/`.
 4. **Rehydration-ready** — a fresh agent install pointed at the same vault should be able to bootstrap from vault contents alone.
@@ -34,8 +34,7 @@ If the machine crashes and Magnus needs to be rebuilt from scratch, the vault ha
 
 ```
 Agent decides to store memory
-  → obsidian-scribe writes to vault (primary)
-  → optionally mirrors to workspace memory/*.md (cache for fast local access)
+  → obsidian-scribe writes to vault
   → QMD indexes vault on next sync cycle
 ```
 
@@ -43,8 +42,8 @@ Agent decides to store memory
 
 ```
 Agent calls memory_search
-  → QMD searches vault + workspace memory
-  → Returns results from both sources (deduplicated)
+  → QMD searches vault
+  → Returns results
 ```
 
 ### Memory Categories & Vault Locations
@@ -122,8 +121,8 @@ updated: 2026-02-25
 
 ### Phase 1: Write path (hook-based)
 - Modify `session-memory` hook (or replace with new hook) to write structured notes to vault via `obsidian-scribe`
-- Mirror to workspace `memory/*.md` for backward compatibility
-- QMD already indexes both locations
+- Disable workspace `memory/*.md` writes (vault is the only store)
+- QMD indexes vault directly
 
 ### Phase 2: Agent-driven memory curation
 - Agent writes to vault directly during conversations (decisions, facts, project notes)
@@ -149,7 +148,7 @@ updated: 2026-02-25
       "path": "/mnt/c/Users/Jherr/Documents/remote-personal",
       "agentFolder": "2-Areas/Magnus",
       "writeVia": "obsidian-scribe",
-      "mirrorToLocal": true,
+
       "bootstrap": "2-Areas/Magnus/Bootstrap.md"
     }
   }
@@ -171,8 +170,7 @@ updated: 2026-02-25
 
 ## Open Questions
 
-1. Should `MEMORY.md` and `memory/*.md` in the workspace be deprecated, or kept as a local cache?
-2. How to handle the transition — migrate existing workspace memory to vault?
+1. How to handle the transition — migrate existing workspace `memory/*.md` to vault, then remove?
 3. Should the bootstrap note be agent-maintained or user-maintained?
 4. Wiki-link extraction: keyword match against vault filenames? Or explicit agent instruction?
 5. Is this an OpenClaw core feature, a hook, or a ClawHub skill?
