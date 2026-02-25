@@ -231,6 +231,72 @@ describe("buildStatusMessage", () => {
     expect(normalizeTestText(text)).toContain("Model: openai/gpt-4.1-mini");
   });
 
+  it("shows runtime model when fallback differs from configured", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-5",
+        contextTokens: 32_000,
+      },
+      sessionEntry: {
+        sessionId: "rt-1",
+        updatedAt: 0,
+        modelProvider: "openrouter",
+        model: "gpt-5.2",
+        contextTokens: 32_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: anthropic/claude-opus-4-5");
+    expect(normalized).toContain("Runtime: openrouter/gpt-5.2");
+  });
+
+  it("omits runtime line when runtime model matches configured", () => {
+    const text = buildStatusMessage({
+      agent: {
+        model: "anthropic/claude-opus-4-5",
+        contextTokens: 32_000,
+      },
+      sessionEntry: {
+        sessionId: "rt-2",
+        updatedAt: 0,
+        modelProvider: "anthropic",
+        model: "claude-opus-4-5",
+        contextTokens: 32_000,
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+      modelAuth: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: anthropic/claude-opus-4-5");
+    expect(normalized).not.toContain("🔄 Runtime:");
+  });
+
+  it("shows runtime when default model falls back (no override)", () => {
+    const text = buildStatusMessage({
+      agent: {},
+      sessionEntry: {
+        sessionId: "rt-3",
+        updatedAt: 0,
+        modelProvider: "openai",
+        model: "gpt-4.1",
+      },
+      sessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      queue: { mode: "collect", depth: 0 },
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Runtime: openai/gpt-4.1");
+  });
+
   it("keeps provider prefix from configured model", () => {
     const text = buildStatusMessage({
       agent: {

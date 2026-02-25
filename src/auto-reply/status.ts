@@ -464,6 +464,19 @@ export function buildStatusMessage(args: StatusArgs): string {
   const modelLabel = model ? `${provider}/${model}` : "unknown";
   const authLabel = authLabelValue ? ` · 🔑 ${authLabelValue}` : "";
   const modelLine = `🧠 Model: ${modelLabel}${authLabel}`;
+
+  // Show runtime model when it differs from configured (e.g. after fallback)
+  const runtimeProvider = entry?.modelProvider;
+  const runtimeModel = entry?.model;
+  const runtimeModelLabel =
+    runtimeProvider && runtimeModel
+      ? `${runtimeProvider}/${runtimeModel}`
+      : runtimeProvider || runtimeModel || null;
+  const runtimeModelLine =
+    runtimeModelLabel && runtimeModelLabel !== modelLabel
+      ? `🔄 Runtime: ${runtimeModelLabel}`
+      : null;
+
   const commit = resolveCommitHash();
   const versionLine = `🦞 OpenClaw ${VERSION}${commit ? ` (${commit})` : ""}`;
   const usagePair = formatUsagePair(inputTokens, outputTokens);
@@ -477,6 +490,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     versionLine,
     args.timeLine,
     modelLine,
+    runtimeModelLine,
     usageCostLine,
     `📚 ${contextLine}`,
     mediaLine,
