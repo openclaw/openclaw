@@ -64,6 +64,16 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: 
  *        https://api.anthropic.com/v1/organization/usage
  */
 async function fetchAnthropicUsage(apiKey: string): Promise<ProviderUsageEntry> {
+  // Organization usage API requires an admin key (sk-ant-admin-...).
+  // Standard OAuth tokens (sk-ant-oat01-...) and regular API keys don't have
+  // access to this endpoint. Return a clear message rather than a 404/403.
+  if (!apiKey.startsWith("sk-ant-admin")) {
+    return {
+      provider: "anthropic",
+      displayName: "Anthropic",
+      error: "Admin key required for usage stats — generate one at console.anthropic.com",
+    };
+  }
   try {
     const res = await fetch("https://api.anthropic.com/v1/organization/usage", {
       headers: {
@@ -177,7 +187,7 @@ async function fetchOpenRouterUsage(apiKey: string): Promise<ProviderUsageEntry>
  */
 async function fetchMoonshotUsage(apiKey: string): Promise<ProviderUsageEntry> {
   try {
-    const res = await fetch("https://api.moonshot.cn/v1/users/me/balance", {
+    const res = await fetch("https://api.moonshot.ai/v1/users/me/balance", {
       headers: {
         Authorization: `Bearer ${apiKey}`,
         Accept: "application/json",
