@@ -288,7 +288,8 @@ export async function normalizeSandboxMediaParams(params: {
     // hydration tries to read files.
     if (/^(?:\/|\\|[A-Za-z]:[\\/])/.test(raw) || raw.startsWith("~")) {
       const expandedPath = raw.startsWith("~") ? resolveUserPath(raw) : raw;
-      const localRoots = params.mediaPolicy.mode === "host" ? params.mediaPolicy.localRoots : undefined;
+      const localRoots =
+        params.mediaPolicy.mode === "host" ? params.mediaPolicy.localRoots : undefined;
       await validateLocalMediaPathAllowed(expandedPath, localRoots);
     }
   }
