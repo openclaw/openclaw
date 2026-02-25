@@ -4,6 +4,11 @@ import type { TtsConfig } from "./types.tts.js";
 export type GroupChatConfig = {
   mentionPatterns?: string[];
   historyLimit?: number;
+  /**
+   * Optional global allowlist for agents that may respond in shared chats
+   * (group/channel). When set, routing is forced to one of these agents.
+   */
+  allowedAgentIds?: string[];
 };
 
 export type DmConfig = {

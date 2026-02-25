@@ -768,3 +768,49 @@ describe("role-based agent routing", () => {
     });
   });
 });
+
+describe("group chat allowedAgentIds hardening", () => {
+  test("forces group routes onto allowlisted agents", () => {
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "main" }, { id: "lite" }, { id: "power" }] },
+      messages: { groupChat: { allowedAgentIds: ["lite"] } },
+      bindings: [
+        {
+          agentId: "power",
+          match: { channel: "telegram", peer: { kind: "group", id: "g1" } },
+        },
+      ],
+    };
+
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      peer: { kind: "group", id: "g1" },
+    });
+
+    expect(route.agentId).toBe("lite");
+    expect(route.matchedBy).toBe("group.allowlist");
+  });
+
+  test("does not affect direct chat routing", () => {
+    const cfg: OpenClawConfig = {
+      agents: { list: [{ id: "main" }, { id: "lite" }, { id: "power" }] },
+      messages: { groupChat: { allowedAgentIds: ["lite"] } },
+      bindings: [
+        {
+          agentId: "power",
+          match: { channel: "telegram" },
+        },
+      ],
+    };
+
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "telegram",
+      peer: { kind: "direct", id: "u1" },
+    });
+
+    expect(route.agentId).toBe("power");
+    expect(route.matchedBy).toBe("binding.account");
+  });
+});

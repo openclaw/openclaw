@@ -53,6 +53,7 @@ export type ResolvedAgentRoute = {
     | "binding.team"
     | "binding.account"
     | "binding.channel"
+    | "group.allowlist"
     | "default";
 };
 
@@ -158,6 +159,23 @@ function pickFirstExistingAgentId(cfg: OpenClawConfig, agentId: string): string 
     return resolved;
   }
   return lookup.fallbackDefaultAgentId;
+}
+
+function resolveGroupAllowlistedAgentIds(cfg: OpenClawConfig): string[] {
+  const configured = cfg.messages?.groupChat?.allowedAgentIds;
+  if (!Array.isArray(configured) || configured.length === 0) {
+    return [];
+  }
+  const allowed = configured.map((id) => normalizeAgentId(String(id ?? "").trim())).filter(Boolean);
+  if (allowed.length === 0) {
+    return [];
+  }
+  const known = listAgents(cfg);
+  if (known.length === 0) {
+    return allowed;
+  }
+  const knownSet = new Set(known.map((a) => normalizeAgentId(a.id)));
+  return allowed.filter((id) => knownSet.has(id));
 }
 
 function matchesChannel(
@@ -574,8 +592,25 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
   const bindings = getEvaluatedBindingsForChannelAccount(input.cfg, channel, accountId);
   const bindingsIndex = getEvaluatedBindingIndexForChannelAccount(input.cfg, channel, accountId);
 
+  const groupAllowlistedAgents = resolveGroupAllowlistedAgentIds(input.cfg);
+
   const choose = (agentId: string, matchedBy: ResolvedAgentRoute["matchedBy"]) => {
-    const resolvedAgentId = pickFirstExistingAgentId(input.cfg, agentId);
+    let resolvedAgentId = pickFirstExistingAgentId(input.cfg, agentId);
+    let effectiveMatchedBy = matchedBy;
+
+    // Security hardening: shared chats can optionally restrict which agents may run.
+    const isSharedChat = peer?.kind === "group" || peer?.kind === "channel";
+    if (isSharedChat && groupAllowlistedAgents.length > 0) {
+      const resolvedNormalized = normalizeAgentId(resolvedAgentId);
+      if (!groupAllowlistedAgents.includes(resolvedNormalized)) {
+        const fallback = groupAllowlistedAgents[0];
+        if (fallback) {
+          resolvedAgentId = pickFirstExistingAgentId(input.cfg, fallback);
+          effectiveMatchedBy = "group.allowlist";
+        }
+      }
+    }
+
     const sessionKey = buildAgentSessionKey({
       agentId: resolvedAgentId,
       channel,
@@ -594,7 +629,7 @@ export function resolveAgentRoute(input: ResolveAgentRouteInput): ResolvedAgentR
       accountId,
       sessionKey,
       mainSessionKey,
-      matchedBy,
+      matchedBy: effectiveMatchedBy,
     };
     if (routeCache && routeCacheKey) {
       routeCache.set(routeCacheKey, route);
