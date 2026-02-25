@@ -160,7 +160,7 @@ spec:
                 user:
                   tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
               EOF
-              exec node dist/index.js gateway --bind lan --port 18789 --allow-unconfigured
+              exec openclaw gateway --bind lan --port 18789 --allow-unconfigured
           envFrom:
             - secretRef:
                 name: openclaw-sre-env

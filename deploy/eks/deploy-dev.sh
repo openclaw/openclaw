@@ -9,6 +9,7 @@ AWS_REGION="${AWS_REGION:-eu-west-3}"
 ECR_REPO="${ECR_REPO:-openclaw-sre}"
 IMAGE_TAG="${IMAGE_TAG:-$(date -u +%Y%m%d-%H%M%S)}"
 IMAGE_PLATFORM="${IMAGE_PLATFORM:-linux/amd64}"
+OPENCLAW_VERSION="${OPENCLAW_VERSION:-2026.2.24}"
 
 OPENCLAW_JSON="${OPENCLAW_JSON:-$HOME/.openclaw/openclaw.json}"
 SLACK_ENV_FILE="${SLACK_ENV_FILE:-$HOME/.openclaw/docker-sre/.env}"
@@ -119,9 +120,9 @@ if ! aws ecr describe-repositories --region "$AWS_REGION" --repository-names "$E
   aws ecr create-repository --region "$AWS_REGION" --repository-name "$ECR_REPO" >/dev/null
 fi
 
-echo "[3/8] Build and push $IMAGE_URI ($IMAGE_PLATFORM)"
+echo "[3/8] Build and push $IMAGE_URI ($IMAGE_PLATFORM, openclaw@$OPENCLAW_VERSION)"
 aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$REGISTRY" >/dev/null
-docker build --platform "$IMAGE_PLATFORM" -t "$IMAGE_URI" "$TMP_DIR"
+docker build --platform "$IMAGE_PLATFORM" --build-arg "OPENCLAW_VERSION=$OPENCLAW_VERSION" -t "$IMAGE_URI" "$TMP_DIR"
 docker push "$IMAGE_URI"
 
 echo "[4/8] Apply config and secrets in $NAMESPACE"
@@ -131,6 +132,8 @@ RUNTIME_CONFIG="$TMP_DIR/openclaw.runtime.json"
 jq '
   del(.commands.ownerDisplay)
   | del(.channels.slack.nativeStreaming)
+  | .channels.slack.mode = "socket"
+  | .gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback = true
   | if (.channels.slack.streaming | type) == "string"
     then .channels.slack.streaming = true
     else .
@@ -204,7 +207,7 @@ kubectl --context "$CONTEXT" -n "$NAMESPACE" exec "$POD_NAME" -- sh -lc \
 kubectl --context "$CONTEXT" -n "$NAMESPACE" exec "$POD_NAME" -- sh -lc \
   "curl --max-time 5 -sSI http://prometheus-stack-kube-prom-prometheus.monitoring.svc.cluster.local:9090/-/ready | sed -n '1p'"
 kubectl --context "$CONTEXT" -n "$NAMESPACE" exec "$POD_NAME" -- sh -lc \
-  "out=\$(node dist/index.js health 2>&1); rc=\$?; echo \"\$out\" | sed -n '1,80p'; exit \$rc"
+  "out=\$(openclaw health 2>&1); rc=\$?; echo \"\$out\" | sed -n '1,80p'; exit \$rc"
 
 echo "Deployed image: $IMAGE_URI"
 echo "Service URL (in-cluster): http://openclaw-sre.${NAMESPACE}.svc.cluster.local:18789"
