@@ -1,23 +1,43 @@
-import { html } from "lit";
+import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
+
+export type ScreenNode = {
+  nodeId: string;
+  displayName: string;
+};
 
 export type ScreenProps = {
   connected: boolean;
   gatewayUrl: string;
+  token: string;
+  nodes: ScreenNode[];
+  selectedNodeId: string | null;
+  onSelectNode: (nodeId: string | null) => void;
 };
 
 /**
  * Resolves the VNC viewer URL from the gateway WebSocket URL.
  * Converts ws:// → http:// or wss:// → https:// and appends /vnc-viewer.
+ * Adds token and optional nodeId query parameters.
  */
-function resolveVncViewerUrl(gatewayUrl: string): string {
+function resolveVncViewerUrl(gatewayUrl: string, token: string, nodeId: string | null): string {
   const trimmed = gatewayUrl.trim();
+  let base: string;
   if (!trimmed) {
-    return "/vnc-viewer";
+    base = "/vnc-viewer";
+  } else {
+    const httpUrl = trimmed.replace(/^wss:\/\//i, "https://").replace(/^ws:\/\//i, "http://");
+    base = httpUrl.replace(/\/+$/, "") + "/vnc-viewer";
   }
-  const httpUrl = trimmed.replace(/^wss:\/\//i, "https://").replace(/^ws:\/\//i, "http://");
-  const base = httpUrl.replace(/\/+$/, "");
-  return `${base}/vnc-viewer`;
+  const params = new URLSearchParams();
+  if (token) {
+    params.set("token", token);
+  }
+  if (nodeId) {
+    params.set("nodeId", nodeId);
+  }
+  const qs = params.toString();
+  return qs ? `${base}?${qs}` : base;
 }
 
 export function renderScreen(props: ScreenProps) {
@@ -29,11 +49,35 @@ export function renderScreen(props: ScreenProps) {
     `;
   }
 
-  const viewerUrl = resolveVncViewerUrl(props.gatewayUrl);
+  const viewerUrl = resolveVncViewerUrl(props.gatewayUrl, props.token, props.selectedNodeId);
+
+  const nodeSelector =
+    props.nodes.length > 0
+      ? html`
+          <select
+            class="select select--sm"
+            .value=${props.selectedNodeId ?? ""}
+            @change=${(e: Event) => {
+              const val = (e.target as HTMLSelectElement).value;
+              props.onSelectNode(val || null);
+            }}
+          >
+            <option value="">Gateway (local)</option>
+            ${props.nodes.map(
+              (n) => html`
+                <option value=${n.nodeId} ?selected=${n.nodeId === props.selectedNodeId}>
+                  ${n.displayName}
+                </option>
+              `,
+            )}
+          </select>
+        `
+      : nothing;
 
   return html`
     <section style="display: flex; flex-direction: column; height: calc(100vh - 120px); gap: 12px;">
       <div class="row" style="gap: 8px; align-items: center; flex-shrink: 0;">
+        ${nodeSelector}
         <a
           class="btn btn--outline"
           href=${viewerUrl}

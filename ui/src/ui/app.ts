@@ -174,6 +174,7 @@ export class BotApp extends LitElement {
   @state() execApprovalsSelectedAgent: string | null = null;
   @state() execApprovalsTarget: "gateway" | "node" = "gateway";
   @state() execApprovalsTargetNodeId: string | null = null;
+  @state() screenNodeId: string | null = null;
   @state() execApprovalQueue: ExecApprovalRequest[] = [];
   @state() execApprovalBusy = false;
   @state() execApprovalError: string | null = null;

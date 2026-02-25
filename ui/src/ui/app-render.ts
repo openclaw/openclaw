@@ -822,6 +822,21 @@ export function renderApp(state: AppViewState) {
             ? renderScreen({
                 connected: state.connected,
                 gatewayUrl: state.settings.gatewayUrl,
+                token: state.settings.token,
+                nodes: state.nodes
+                  .filter(
+                    (n): n is Record<string, unknown> & { nodeId: string } =>
+                      typeof n.nodeId === "string",
+                  )
+                  .map((n) => ({
+                    nodeId: n.nodeId,
+                    displayName:
+                      typeof n.hostname === "string" ? n.hostname : n.nodeId.substring(0, 12),
+                  })),
+                selectedNodeId: state.screenNodeId,
+                onSelectNode: (nodeId) => {
+                  state.screenNodeId = nodeId;
+                },
               })
             : nothing
         }
