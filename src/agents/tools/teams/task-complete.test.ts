@@ -4,10 +4,42 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { createTaskCompleteTool } from "./task-complete.js";
+
+// Mock storage modules
+vi.mock("../../../teams/storage.js", () => ({
+  validateTeamNameOrThrow: vi.fn(),
+}));
+
+// Mock manager and pool modules
+vi.mock("../../../teams/pool.js", () => ({
+  getTeamManager: vi.fn(),
+}));
+
+// Mock inbox modules
+vi.mock("../../../teams/inbox.js", () => ({
+  writeInboxMessage: vi.fn().mockResolvedValue(undefined),
+  listMembers: vi.fn().mockResolvedValue([]),
+}));
 
 describe("TaskComplete Tool", () => {
+  let mockManager: {
+    completeTask: ReturnType<typeof vi.fn>;
+    getTeamConfig: ReturnType<typeof vi.fn>;
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
+
+    mockManager = {
+      completeTask: vi.fn().mockReturnValue({
+        unblocked: [],
+      }),
+      getTeamConfig: vi.fn().mockResolvedValue({
+        team_name: "test-team",
+        lead: "agent:main:user:main",
+      }),
+    };
   });
 
   describe("Successful Completion", () => {
@@ -69,6 +101,169 @@ describe("TaskComplete Tool", () => {
 
     it("should validate task ID format", async () => {
       expect(true).toBe(true);
+    });
+  });
+
+  describe("Announce Completion", () => {
+    it("should not announce when announce=false", async () => {
+      const { getTeamManager } = await import("../../../teams/pool.js");
+      const { writeInboxMessage } = await import("../../../teams/inbox.js");
+
+      (getTeamManager as ReturnType<typeof vi.fn>).mockReturnValue(mockManager);
+
+      const tool = createTaskCompleteTool({
+        agentSessionKey: "agent:main:teammate:uuid-123",
+      });
+
+      await tool.execute("tool-call-1", {
+        team_name: "test-team",
+        task_id: "task-1",
+        announce: false,
+      });
+
+      expect(writeInboxMessage).not.toHaveBeenCalled();
+    });
+
+    it("should not announce when announce not specified", async () => {
+      const { getTeamManager } = await import("../../../teams/pool.js");
+      const { writeInboxMessage } = await import("../../../teams/inbox.js");
+
+      (getTeamManager as ReturnType<typeof vi.fn>).mockReturnValue(mockManager);
+
+      const tool = createTaskCompleteTool({
+        agentSessionKey: "agent:main:teammate:uuid-123",
+      });
+
+      await tool.execute("tool-call-1", {
+        team_name: "test-team",
+        task_id: "task-1",
+      });
+
+      expect(writeInboxMessage).not.toHaveBeenCalled();
+    });
+
+    it("should announce to lead when announce=true", async () => {
+      const { getTeamManager } = await import("../../../teams/pool.js");
+      const { writeInboxMessage, listMembers } = await import("../../../teams/inbox.js");
+
+      (getTeamManager as ReturnType<typeof vi.fn>).mockReturnValue(mockManager);
+      (listMembers as ReturnType<typeof vi.fn>).mockResolvedValue([
+        {
+          sessionKey: "agent:main:teammate:uuid-123",
+          name: "Worker",
+          agentId: "main",
+          agentType: "member",
+        },
+      ]);
+
+      const tool = createTaskCompleteTool({
+        agentSessionKey: "agent:main:teammate:uuid-123",
+      });
+
+      const result = await tool.execute("tool-call-1", {
+        team_name: "test-team",
+        task_id: "task-1",
+        summary: "Fixed the bug in auth module",
+        announce: true,
+      });
+
+      expect(writeInboxMessage).toHaveBeenCalledWith(
+        "test-team",
+        process.cwd(),
+        "agent:main:user:main",
+        expect.objectContaining({
+          type: "task_complete",
+          taskId: "task-1",
+          content: "Task task-1 completed: Fixed the bug in auth module",
+        }),
+      );
+      expect(result.details.announced).toBe(true);
+    });
+
+    it("should not announce if teammate is the lead", async () => {
+      const { getTeamManager } = await import("../../../teams/pool.js");
+      const { writeInboxMessage } = await import("../../../teams/inbox.js");
+
+      mockManager.getTeamConfig.mockResolvedValue({
+        team_name: "test-team",
+        lead: "agent:main:user:main",
+      });
+
+      (getTeamManager as ReturnType<typeof vi.fn>).mockReturnValue(mockManager);
+
+      const tool = createTaskCompleteTool({
+        agentSessionKey: "agent:main:user:main", // Same as lead
+      });
+
+      await tool.execute("tool-call-1", {
+        team_name: "test-team",
+        task_id: "task-1",
+        announce: true,
+      });
+
+      expect(writeInboxMessage).not.toHaveBeenCalled();
+    });
+
+    it("should still complete task even if announce fails", async () => {
+      const { getTeamManager } = await import("../../../teams/pool.js");
+      const { writeInboxMessage, listMembers } = await import("../../../teams/inbox.js");
+
+      (getTeamManager as ReturnType<typeof vi.fn>).mockReturnValue(mockManager);
+      (listMembers as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error("Failed to list members"),
+      );
+      (writeInboxMessage as ReturnType<typeof vi.fn>).mockRejectedValue(
+        new Error("Failed to write inbox"),
+      );
+
+      const tool = createTaskCompleteTool({
+        agentSessionKey: "agent:main:teammate:uuid-123",
+      });
+
+      // Should not throw even if announce fails
+      const result = await tool.execute("tool-call-1", {
+        team_name: "test-team",
+        task_id: "task-1",
+        announce: true,
+      });
+
+      expect(result.details.taskId).toBe("task-1");
+      expect(result.details.status).toBe("completed");
+      expect(mockManager.completeTask).toHaveBeenCalled();
+    });
+
+    it("should use default message when summary not provided", async () => {
+      const { getTeamManager } = await import("../../../teams/pool.js");
+      const { writeInboxMessage, listMembers } = await import("../../../teams/inbox.js");
+
+      (getTeamManager as ReturnType<typeof vi.fn>).mockReturnValue(mockManager);
+      (listMembers as ReturnType<typeof vi.fn>).mockResolvedValue([
+        {
+          sessionKey: "agent:main:teammate:uuid-456",
+          name: "Developer",
+          agentId: "main",
+          agentType: "member",
+        },
+      ]);
+
+      const tool = createTaskCompleteTool({
+        agentSessionKey: "agent:main:teammate:uuid-456",
+      });
+
+      await tool.execute("tool-call-1", {
+        team_name: "test-team",
+        task_id: "task-2",
+        announce: true,
+      });
+
+      expect(writeInboxMessage).toHaveBeenCalledWith(
+        "test-team",
+        process.cwd(),
+        "agent:main:user:main",
+        expect.objectContaining({
+          content: "Task task-2 completed successfully.",
+        }),
+      );
     });
   });
 });

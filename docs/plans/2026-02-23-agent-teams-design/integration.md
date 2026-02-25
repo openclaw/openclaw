@@ -396,23 +396,24 @@ Teammates can have their own sandbox and tool restrictions:
 
 ### Implementation Status
 
-The agentToAgent policy integration is now implemented:
+The agentToAgent policy integration and Gateway session spawning are now implemented:
 
 - **send_message.ts**: Checks agentToAgent policy before delivering messages
 - **team_create.ts**: Warns when agentToAgent is not enabled
-- **inbox.ts**: Stores messages for context injection (policy already checked)
+- **inbox.ts**: Stores messages for context injection (policy already checked), reads members from SQLite ledger
+- **teammate-spawn.ts**: Creates real Gateway sessions via `callGateway({method: "agent"})`, uses standard session key format `agent:{agentId}:teammate:{uuid}`
+- **task-complete.ts**: Supports optional `announce` parameter to notify team lead when tasks complete
 
 ### Remaining Integration (Optional Future Work)
 
-1. **teammate-spawn.ts**: Currently creates ledger entries; could spawn real Gateway sessions
-2. **sessions_send integration**: Messages use inbox files; could use sessions_send for delivery
+1. **sessions_send integration**: Messages use inbox files; could use sessions_send for delivery
 
 ### Migration Steps (For Full Gateway Integration)
 
-1. **Update teammate-spawn.ts**:
-   - Use `agent:{agentId}:teammate:{uuid}` format
-   - Call `callGateway({method: "agent"})`
-   - Pass team context in prompt
+1. ~~**Update teammate-spawn.ts**:~~ COMPLETED
+   - ~~Use `agent:{agentId}:teammate:{uuid}` format~~
+   - ~~Call `callGateway({method: "agent"})`~~
+   - ~~Pass team context in prompt~~
 
 2. **Update send-message.ts**:
    - Use `sessions_send` for actual delivery instead of inbox files

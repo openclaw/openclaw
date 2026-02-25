@@ -120,24 +120,25 @@ export async function clearProcessedMessages(
 
 /**
  * List members for broadcast messaging
- * This is a placeholder implementation that should be replaced with proper member listing
+ * Reads members from the team's SQLite ledger
  */
 export async function listMembers(
   teamName: string,
   teamsDir: string,
-): Promise<Array<{ name: string; agentId: string; agentType?: string }>> {
-  // This is a simple implementation for testing
-  // In production, this would read from team configuration
+): Promise<Array<{ name: string; agentId: string; agentType?: string; sessionKey?: string }>> {
+  // Import here to avoid circular dependency
+  const { getTeamManager } = await import("./pool.js");
   try {
-    const teamPath = join(teamsDir, "teams", teamName);
-    const configPath = join(teamPath, "config.json");
-    const content = await readFile(configPath, "utf-8");
-    const config = JSON.parse(content) as {
-      members?: Array<{ name: string; agentId: string; agentType?: string }>;
-    };
-    return config.members || [];
+    const manager = getTeamManager(teamName, teamsDir);
+    const members = manager.listMembers();
+    return members.map((m) => ({
+      name: m.name,
+      agentId: m.agentId,
+      agentType: m.agentType,
+      sessionKey: m.sessionKey,
+    }));
   } catch {
-    // Return empty array if config doesn't exist
+    // Return empty array if team doesn't exist
     return [];
   }
 }
