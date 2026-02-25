@@ -1,7 +1,5 @@
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
-import type { OpenClawConfig } from "../config/types.js";
-import { readGatewayTokenEnv } from "../gateway/credentials.js";
-import { resolveConfiguredSecretInputWithFallback } from "../gateway/resolve-configured-secret-input-string.js";
+import { resolveGatewayService } from "../daemon/service.js";
 import { copyToClipboard } from "../infra/clipboard.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -16,35 +14,27 @@ type DashboardOptions = {
   noOpen?: boolean;
 };
 
-async function resolveDashboardToken(
-  cfg: OpenClawConfig,
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<{
-  token?: string;
-  source?: "config" | "env" | "secretRef";
-  unresolvedRefReason?: string;
-  tokenSecretRefConfigured: boolean;
-}> {
-  const resolved = await resolveConfiguredSecretInputWithFallback({
-    config: cfg,
-    env,
-    value: cfg.gateway?.auth?.token,
-    path: "gateway.auth.token",
-    readFallback: () => readGatewayTokenEnv(env),
-  });
-  return {
-    token: resolved.value,
-    source:
-      resolved.source === "config"
-        ? "config"
-        : resolved.source === "secretRef"
-          ? "secretRef"
-          : resolved.source === "fallback"
-            ? "env"
-            : undefined,
-    unresolvedRefReason: resolved.unresolvedRefReason,
-    tokenSecretRefConfigured: resolved.secretRefConfigured,
-  };
+async function resolveDashboardToken(cfg: { gateway?: { auth?: { token?: string } } }): Promise<string> {
+  const configToken = cfg.gateway?.auth?.token?.trim();
+  if (configToken) {
+    return configToken;
+  }
+
+  const envToken =
+    process.env.OPENCLAW_GATEWAY_TOKEN?.trim() || process.env.CLAWDBOT_GATEWAY_TOKEN?.trim();
+  if (envToken) {
+    return envToken;
+  }
+
+  try {
+    const command = await resolveGatewayService().readCommand(process.env);
+    const serviceToken =
+      command?.environment?.OPENCLAW_GATEWAY_TOKEN?.trim() ||
+      command?.environment?.CLAWDBOT_GATEWAY_TOKEN?.trim();
+    return serviceToken || "";
+  } catch {
+    return "";
+  }
 }
 
 export async function dashboardCommand(
@@ -57,8 +47,7 @@ export async function dashboardCommand(
   const bind = cfg.gateway?.bind ?? "loopback";
   const basePath = cfg.gateway?.controlUi?.basePath;
   const customBindHost = cfg.gateway?.customBindHost;
-  const resolvedToken = await resolveDashboardToken(cfg, process.env);
-  const token = resolvedToken.token ?? "";
+  const token = await resolveDashboardToken(cfg);
 
   // LAN URLs fail secure-context checks in browsers.
   // Coerce only lan->loopback and preserve other bind modes.
