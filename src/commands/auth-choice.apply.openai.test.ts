@@ -82,7 +82,7 @@ describe("applyAuthChoiceOpenAI", () => {
       profiles?: Record<string, { key?: string; keyRef?: unknown }>;
     }>(agentDir);
     expect(parsed.profiles?.["openai:default"]).toMatchObject({
-      keyRef: { source: "env", id: "OPENAI_API_KEY" },
+      keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
     });
     expect(parsed.profiles?.["openai:default"]?.key).toBeUndefined();
   });

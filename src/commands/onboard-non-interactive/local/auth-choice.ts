@@ -814,7 +814,7 @@ export async function applyNonInteractiveAuthChoice(params: {
       });
       const customApiKeyInput: SecretInput | undefined =
         requestedSecretInputMode === "ref" && resolvedCustomApiKey?.source === "env"
-          ? { source: "env", id: "CUSTOM_API_KEY" }
+          ? { source: "env", provider: "default", id: "CUSTOM_API_KEY" }
           : resolvedCustomApiKey?.key;
       const result = applyCustomApiConfig({
         config: nextConfig,

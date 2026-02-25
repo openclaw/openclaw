@@ -611,6 +611,7 @@ describe("onboard (non-interactive): provider auth", () => {
         });
         expect(await readCustomLocalProviderApiKeyInput(configPath)).toEqual({
           source: "env",
+          provider: "default",
           id: "CUSTOM_API_KEY",
         });
       },

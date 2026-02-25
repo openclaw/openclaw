@@ -153,6 +153,12 @@ describe("buildGatewayReloadPlan", () => {
     expect(plan.noopPaths).toContain("gateway.remote.url");
   });
 
+  it("treats secrets config changes as no-op for gateway restart planning", () => {
+    const plan = buildGatewayReloadPlan(["secrets.providers.default.path"]);
+    expect(plan.restartGateway).toBe(false);
+    expect(plan.noopPaths).toContain("secrets.providers.default.path");
+  });
+
   it("defaults unknown paths to restart", () => {
     const plan = buildGatewayReloadPlan(["unknownField"]);
     expect(plan.restartGateway).toBe(true);

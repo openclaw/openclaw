@@ -20,7 +20,7 @@ describe("runtime config snapshot writes", () => {
           providers: {
             openai: {
               baseUrl: "https://api.openai.com/v1",
-              apiKey: { source: "env", id: "OPENAI_API_KEY" },
+              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
               models: [],
             },
           },
@@ -52,6 +52,7 @@ describe("runtime config snapshot writes", () => {
         };
         expect(persisted.models?.providers?.openai?.apiKey).toEqual({
           source: "env",
+          provider: "default",
           id: "OPENAI_API_KEY",
         });
       } finally {

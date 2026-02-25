@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { ensureAuthProfileStore } from "../agents/auth-profiles.js";
 import { loadConfig, type OpenClawConfig } from "../config/config.js";
 import {
@@ -10,15 +10,8 @@ import {
   prepareSecretsRuntimeSnapshot,
 } from "./runtime.js";
 
-const runExecMock = vi.hoisted(() => vi.fn());
-
-vi.mock("../process/exec.js", () => ({
-  runExec: runExecMock,
-}));
-
 describe("secrets runtime snapshot", () => {
   afterEach(() => {
-    runExecMock.mockReset();
     clearSecretsRuntimeSnapshot();
   });
 
@@ -28,7 +21,7 @@ describe("secrets runtime snapshot", () => {
         providers: {
           openai: {
             baseUrl: "https://api.openai.com/v1",
-            apiKey: { source: "env", id: "OPENAI_API_KEY" },
+            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
             models: [],
           },
         },
@@ -37,7 +30,7 @@ describe("secrets runtime snapshot", () => {
         entries: {
           "review-pr": {
             enabled: true,
-            apiKey: { source: "env", id: "REVIEW_SKILL_API_KEY" },
+            apiKey: { source: "env", provider: "default", id: "REVIEW_SKILL_API_KEY" },
           },
         },
       },
@@ -58,13 +51,18 @@ describe("secrets runtime snapshot", () => {
             type: "api_key",
             provider: "openai",
             key: "old-openai",
-            keyRef: { source: "env", id: "OPENAI_API_KEY" },
+            keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
           },
           "github-copilot:default": {
             type: "token",
             provider: "github-copilot",
             token: "old-gh",
-            tokenRef: { source: "env", id: "GITHUB_TOKEN" },
+            tokenRef: { source: "env", provider: "default", id: "GITHUB_TOKEN" },
+          },
+          "openai:inline": {
+            type: "api_key",
+            provider: "openai",
+            key: "${OPENAI_API_KEY}",
           },
         },
       }),
@@ -81,90 +79,105 @@ describe("secrets runtime snapshot", () => {
       type: "token",
       token: "ghp-env-token",
     });
+    expect(snapshot.authStores[0]?.store.profiles["openai:inline"]).toMatchObject({
+      type: "api_key",
+      key: "sk-env-openai",
+    });
   });
 
-  it("resolves file refs via sops json payload", async () => {
-    runExecMock.mockResolvedValueOnce({
-      stdout: JSON.stringify({
-        providers: {
-          openai: {
-            apiKey: "sk-from-sops",
-          },
-        },
-      }),
-      stderr: "",
-    });
-
-    const config: OpenClawConfig = {
-      secrets: {
-        sources: {
-          file: {
-            type: "sops",
-            path: "~/.openclaw/secrets.enc.json",
-            timeoutMs: 7000,
-          },
-        },
-      },
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            apiKey: { source: "file", id: "/providers/openai/apiKey" },
-            models: [],
-          },
-        },
-      },
-    };
-
-    const snapshot = await prepareSecretsRuntimeSnapshot({
-      config,
-      agentDirs: ["/tmp/openclaw-agent-main"],
-      loadAuthStore: () => ({ version: 1, profiles: {} }),
-    });
-
-    expect(snapshot.config.models?.providers?.openai?.apiKey).toBe("sk-from-sops");
-    expect(runExecMock).toHaveBeenCalledWith(
-      "sops",
-      ["--decrypt", "--output-type", "json", expect.stringContaining("secrets.enc.json")],
-      expect.objectContaining({
-        timeoutMs: 7000,
-        maxBuffer: 10 * 1024 * 1024,
-        cwd: expect.stringContaining(".openclaw"),
-      }),
-    );
-  });
-
-  it("fails when sops decrypt payload is not a JSON object", async () => {
-    runExecMock.mockResolvedValueOnce({
-      stdout: JSON.stringify(["not-an-object"]),
-      stderr: "",
-    });
-
-    await expect(
-      prepareSecretsRuntimeSnapshot({
-        config: {
-          secrets: {
-            sources: {
-              file: {
-                type: "sops",
-                path: "~/.openclaw/secrets.enc.json",
-              },
-            },
-          },
-          models: {
+  it("resolves file refs via configured file provider", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-file-provider-"));
+    const secretsPath = path.join(root, "secrets.json");
+    try {
+      await fs.writeFile(
+        secretsPath,
+        JSON.stringify(
+          {
             providers: {
               openai: {
-                baseUrl: "https://api.openai.com/v1",
-                apiKey: { source: "file", id: "/providers/openai/apiKey" },
-                models: [],
+                apiKey: "sk-from-file-provider",
               },
             },
           },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+      await fs.chmod(secretsPath, 0o600);
+
+      const config: OpenClawConfig = {
+        secrets: {
+          providers: {
+            default: {
+              source: "file",
+              path: secretsPath,
+              mode: "jsonPointer",
+            },
+          },
+          defaults: {
+            file: "default",
+          },
         },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: { source: "file", provider: "default", id: "/providers/openai/apiKey" },
+              models: [],
+            },
+          },
+        },
+      };
+
+      const snapshot = await prepareSecretsRuntimeSnapshot({
+        config,
         agentDirs: ["/tmp/openclaw-agent-main"],
         loadAuthStore: () => ({ version: 1, profiles: {} }),
-      }),
-    ).rejects.toThrow("sops decrypt failed: decrypted payload is not a JSON object");
+      });
+
+      expect(snapshot.config.models?.providers?.openai?.apiKey).toBe("sk-from-file-provider");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("fails when file provider payload is not a JSON object", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-file-provider-bad-"));
+    const secretsPath = path.join(root, "secrets.json");
+    try {
+      await fs.writeFile(secretsPath, JSON.stringify(["not-an-object"]), "utf8");
+      await fs.chmod(secretsPath, 0o600);
+
+      await expect(
+        prepareSecretsRuntimeSnapshot({
+          config: {
+            secrets: {
+              providers: {
+                default: {
+                  source: "file",
+                  path: secretsPath,
+                  mode: "jsonPointer",
+                },
+              },
+            },
+            models: {
+              providers: {
+                openai: {
+                  baseUrl: "https://api.openai.com/v1",
+                  apiKey: { source: "file", provider: "default", id: "/providers/openai/apiKey" },
+                  models: [],
+                },
+              },
+            },
+          },
+          agentDirs: ["/tmp/openclaw-agent-main"],
+          loadAuthStore: () => ({ version: 1, profiles: {} }),
+        }),
+      ).rejects.toThrow("payload is not a JSON object");
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("activates runtime snapshots for loadConfig and ensureAuthProfileStore", async () => {
@@ -174,7 +187,7 @@ describe("secrets runtime snapshot", () => {
           providers: {
             openai: {
               baseUrl: "https://api.openai.com/v1",
-              apiKey: { source: "env", id: "OPENAI_API_KEY" },
+              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
               models: [],
             },
           },
@@ -188,7 +201,7 @@ describe("secrets runtime snapshot", () => {
           "openai:default": {
             type: "api_key",
             provider: "openai",
-            keyRef: { source: "env", id: "OPENAI_API_KEY" },
+            keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
           },
         },
       }),
@@ -221,7 +234,7 @@ describe("secrets runtime snapshot", () => {
             "openai:default": {
               type: "api_key",
               provider: "openai",
-              keyRef: { source: "env", id: "OPENAI_API_KEY" },
+              keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
             },
           },
         }),

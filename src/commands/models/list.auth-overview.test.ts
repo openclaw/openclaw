@@ -12,7 +12,7 @@ describe("resolveProviderAuthOverview", () => {
           "github-copilot:default": {
             type: "token",
             provider: "github-copilot",
-            tokenRef: { source: "env", id: "GITHUB_TOKEN" },
+            tokenRef: { source: "env", provider: "default", id: "GITHUB_TOKEN" },
           },
         },
       } as never,

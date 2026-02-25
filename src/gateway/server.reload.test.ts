@@ -222,7 +222,7 @@ describe("gateway hot reload", () => {
             providers: {
               openai: {
                 baseUrl: "https://api.openai.com/v1",
-                apiKey: { source: "env", id: "OPENAI_API_KEY" },
+                apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
                 models: [],
               },
             },
@@ -251,7 +251,7 @@ describe("gateway hot reload", () => {
             missing: {
               type: "api_key",
               provider: "openai",
-              keyRef: { source: "env", id: "MISSING_OPENCLAW_AUTH_REF" },
+              keyRef: { source: "env", provider: "default", id: "MISSING_OPENCLAW_AUTH_REF" },
             },
           },
           selectedProfileId: "missing",
@@ -425,7 +425,7 @@ describe("gateway hot reload", () => {
           providers: {
             openai: {
               baseUrl: "https://api.openai.com/v1",
-              apiKey: { source: "env", id: "OPENAI_API_KEY" },
+              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
               models: [],
             },
           },

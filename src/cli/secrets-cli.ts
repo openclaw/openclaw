@@ -95,7 +95,7 @@ export function registerSecretsCli(program: Command) {
 
   secrets
     .command("migrate")
-    .description("Migrate plaintext secrets to file-backed SecretRefs (sops)")
+    .description("Migrate plaintext secrets to file-backed SecretRefs")
     .option("--write", "Apply migration changes (default is dry-run)", false)
     .option("--rollback <backup-id>", "Rollback a previous migration backup id")
     .option("--no-scrub-env", "Keep matching plaintext values in ~/.openclaw/.env")

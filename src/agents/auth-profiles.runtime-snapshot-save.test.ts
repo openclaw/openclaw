@@ -25,7 +25,7 @@ describe("auth profile runtime snapshot persistence", () => {
               "openai:default": {
                 type: "api_key",
                 provider: "openai",
-                keyRef: { source: "env", id: "OPENAI_API_KEY" },
+                keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
               },
             },
           },
@@ -46,7 +46,7 @@ describe("auth profile runtime snapshot persistence", () => {
       expect(runtimeStore.profiles["openai:default"]).toMatchObject({
         type: "api_key",
         key: "sk-runtime-openai",
-        keyRef: { source: "env", id: "OPENAI_API_KEY" },
+        keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
       });
 
       await markAuthProfileUsed({
@@ -61,6 +61,7 @@ describe("auth profile runtime snapshot persistence", () => {
       expect(persisted.profiles["openai:default"]?.key).toBeUndefined();
       expect(persisted.profiles["openai:default"]?.keyRef).toEqual({
         source: "env",
+        provider: "default",
         id: "OPENAI_API_KEY",
       });
     } finally {

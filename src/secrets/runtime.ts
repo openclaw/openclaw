@@ -11,9 +11,9 @@ import {
   setRuntimeConfigSnapshot,
   type OpenClawConfig,
 } from "../config/config.js";
-import { isSecretRef, type SecretRef } from "../config/types.secrets.js";
+import { coerceSecretRef, type SecretRef } from "../config/types.secrets.js";
 import { resolveUserPath } from "../utils.js";
-import { resolveSecretRefValue, type SecretRefResolveCache } from "./resolve.js";
+import { resolveSecretRefValues, type SecretRefResolveCache } from "./resolve.js";
 import { isNonEmptyString, isRecord } from "./shared.js";
 
 type SecretResolverWarningCode = "SECRETS_REF_OVERRIDES_PLAINTEXT";
@@ -29,11 +29,6 @@ export type PreparedSecretsRuntimeSnapshot = {
   config: OpenClawConfig;
   authStores: Array<{ agentDir: string; store: AuthProfileStore }>;
   warnings: SecretResolverWarning[];
-};
-
-type ResolverContext = SecretRefResolveCache & {
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
 };
 
 type ProviderLike = {
@@ -62,7 +57,26 @@ type TokenCredentialLike = AuthProfileCredential & {
   tokenRef?: unknown;
 };
 
+type SecretAssignment = {
+  ref: SecretRef;
+  path: string;
+  expected: "string" | "string-or-object";
+  apply: (value: unknown) => void;
+};
+
+type ResolverContext = {
+  sourceConfig: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  cache: SecretRefResolveCache;
+  warnings: SecretResolverWarning[];
+  assignments: SecretAssignment[];
+};
+
 let activeSnapshot: PreparedSecretsRuntimeSnapshot | null = null;
+
+function toRefKey(ref: SecretRef): string {
+  return `${ref.source}:${ref.provider}:${ref.id}`;
+}
 
 function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecretsRuntimeSnapshot {
   return {
@@ -76,151 +90,174 @@ function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecret
   };
 }
 
-async function resolveSecretRefValueFromContext(
-  ref: SecretRef,
-  context: ResolverContext,
-): Promise<unknown> {
-  return await resolveSecretRefValue(ref, {
-    config: context.config,
-    env: context.env,
-    cache: context,
-  });
-}
-
-async function resolveGoogleChatServiceAccount(
-  target: GoogleChatAccountLike,
-  path: string,
-  context: ResolverContext,
-  warnings: SecretResolverWarning[],
-): Promise<void> {
-  const explicitRef = isSecretRef(target.serviceAccountRef) ? target.serviceAccountRef : null;
-  const inlineRef = isSecretRef(target.serviceAccount) ? target.serviceAccount : null;
-  const ref = explicitRef ?? inlineRef;
-  if (!ref) {
-    return;
-  }
-  if (explicitRef && target.serviceAccount !== undefined && !isSecretRef(target.serviceAccount)) {
-    warnings.push({
-      code: "SECRETS_REF_OVERRIDES_PLAINTEXT",
-      path,
-      message: `${path}: serviceAccountRef is set; runtime will ignore plaintext serviceAccount.`,
-    });
-  }
-  target.serviceAccount = await resolveSecretRefValueFromContext(ref, context);
-}
-
-async function resolveConfigSecretRefs(params: {
+function collectConfigAssignments(params: {
   config: OpenClawConfig;
   context: ResolverContext;
-  warnings: SecretResolverWarning[];
-}): Promise<OpenClawConfig> {
-  const resolved = structuredClone(params.config);
-  const providers = resolved.models?.providers as Record<string, ProviderLike> | undefined;
+}): void {
+  const defaults = params.context.sourceConfig.secrets?.defaults;
+  const providers = params.config.models?.providers as Record<string, ProviderLike> | undefined;
   if (providers) {
     for (const [providerId, provider] of Object.entries(providers)) {
-      if (!isSecretRef(provider.apiKey)) {
+      const ref = coerceSecretRef(provider.apiKey, defaults);
+      if (!ref) {
         continue;
       }
-      const resolvedValue = await resolveSecretRefValueFromContext(provider.apiKey, params.context);
-      if (!isNonEmptyString(resolvedValue)) {
-        throw new Error(
-          `models.providers.${providerId}.apiKey resolved to a non-string or empty value.`,
-        );
-      }
-      provider.apiKey = resolvedValue;
+      params.context.assignments.push({
+        ref,
+        path: `models.providers.${providerId}.apiKey`,
+        expected: "string",
+        apply: (value) => {
+          provider.apiKey = value;
+        },
+      });
     }
   }
 
-  const skillEntries = resolved.skills?.entries as Record<string, SkillEntryLike> | undefined;
+  const skillEntries = params.config.skills?.entries as Record<string, SkillEntryLike> | undefined;
   if (skillEntries) {
     for (const [skillKey, entry] of Object.entries(skillEntries)) {
-      if (!isSecretRef(entry.apiKey)) {
+      const ref = coerceSecretRef(entry.apiKey, defaults);
+      if (!ref) {
         continue;
       }
-      const resolvedValue = await resolveSecretRefValueFromContext(entry.apiKey, params.context);
-      if (!isNonEmptyString(resolvedValue)) {
-        throw new Error(
-          `skills.entries.${skillKey}.apiKey resolved to a non-string or empty value.`,
-        );
-      }
-      entry.apiKey = resolvedValue;
+      params.context.assignments.push({
+        ref,
+        path: `skills.entries.${skillKey}.apiKey`,
+        expected: "string",
+        apply: (value) => {
+          entry.apiKey = value;
+        },
+      });
     }
   }
 
-  const googleChat = resolved.channels?.googlechat as GoogleChatAccountLike | undefined;
+  const collectGoogleChatAssignments = (target: GoogleChatAccountLike, path: string) => {
+    const explicitRef = coerceSecretRef(target.serviceAccountRef, defaults);
+    const inlineRef = coerceSecretRef(target.serviceAccount, defaults);
+    const ref = explicitRef ?? inlineRef;
+    if (!ref) {
+      return;
+    }
+    if (
+      explicitRef &&
+      target.serviceAccount !== undefined &&
+      !coerceSecretRef(target.serviceAccount, defaults)
+    ) {
+      params.context.warnings.push({
+        code: "SECRETS_REF_OVERRIDES_PLAINTEXT",
+        path,
+        message: `${path}: serviceAccountRef is set; runtime will ignore plaintext serviceAccount.`,
+      });
+    }
+    params.context.assignments.push({
+      ref,
+      path: `${path}.serviceAccount`,
+      expected: "string-or-object",
+      apply: (value) => {
+        target.serviceAccount = value;
+      },
+    });
+  };
+
+  const googleChat = params.config.channels?.googlechat as GoogleChatAccountLike | undefined;
   if (googleChat) {
-    await resolveGoogleChatServiceAccount(
-      googleChat,
-      "channels.googlechat",
-      params.context,
-      params.warnings,
-    );
+    collectGoogleChatAssignments(googleChat, "channels.googlechat");
     if (isRecord(googleChat.accounts)) {
       for (const [accountId, account] of Object.entries(googleChat.accounts)) {
         if (!isRecord(account)) {
           continue;
         }
-        await resolveGoogleChatServiceAccount(
+        collectGoogleChatAssignments(
           account as GoogleChatAccountLike,
           `channels.googlechat.accounts.${accountId}`,
-          params.context,
-          params.warnings,
         );
       }
     }
   }
-
-  return resolved;
 }
 
-async function resolveAuthStoreSecretRefs(params: {
+function collectAuthStoreAssignments(params: {
   store: AuthProfileStore;
   context: ResolverContext;
-  warnings: SecretResolverWarning[];
   agentDir: string;
-}): Promise<AuthProfileStore> {
-  const resolvedStore = structuredClone(params.store);
-  for (const [profileId, profile] of Object.entries(resolvedStore.profiles)) {
+}): void {
+  const defaults = params.context.sourceConfig.secrets?.defaults;
+  for (const [profileId, profile] of Object.entries(params.store.profiles)) {
     if (profile.type === "api_key") {
       const apiProfile = profile as ApiKeyCredentialLike;
-      const keyRef = isSecretRef(apiProfile.keyRef) ? apiProfile.keyRef : null;
+      const keyRef = coerceSecretRef(apiProfile.keyRef, defaults);
+      const inlineKeyRef = keyRef ? null : coerceSecretRef(apiProfile.key, defaults);
+      const resolvedKeyRef = keyRef ?? inlineKeyRef;
+      if (!resolvedKeyRef) {
+        continue;
+      }
       if (keyRef && isNonEmptyString(apiProfile.key)) {
-        params.warnings.push({
+        params.context.warnings.push({
           code: "SECRETS_REF_OVERRIDES_PLAINTEXT",
           path: `${params.agentDir}.auth-profiles.${profileId}.key`,
           message: `auth-profiles ${profileId}: keyRef is set; runtime will ignore plaintext key.`,
         });
       }
-      if (keyRef) {
-        const resolvedValue = await resolveSecretRefValueFromContext(keyRef, params.context);
-        if (!isNonEmptyString(resolvedValue)) {
-          throw new Error(`auth profile "${profileId}" keyRef resolved to an empty value.`);
-        }
-        apiProfile.key = resolvedValue;
-      }
+      params.context.assignments.push({
+        ref: resolvedKeyRef,
+        path: `${params.agentDir}.auth-profiles.${profileId}.key`,
+        expected: "string",
+        apply: (value) => {
+          apiProfile.key = String(value);
+        },
+      });
       continue;
     }
 
     if (profile.type === "token") {
       const tokenProfile = profile as TokenCredentialLike;
-      const tokenRef = isSecretRef(tokenProfile.tokenRef) ? tokenProfile.tokenRef : null;
+      const tokenRef = coerceSecretRef(tokenProfile.tokenRef, defaults);
+      const inlineTokenRef = tokenRef ? null : coerceSecretRef(tokenProfile.token, defaults);
+      const resolvedTokenRef = tokenRef ?? inlineTokenRef;
+      if (!resolvedTokenRef) {
+        continue;
+      }
       if (tokenRef && isNonEmptyString(tokenProfile.token)) {
-        params.warnings.push({
+        params.context.warnings.push({
           code: "SECRETS_REF_OVERRIDES_PLAINTEXT",
           path: `${params.agentDir}.auth-profiles.${profileId}.token`,
           message: `auth-profiles ${profileId}: tokenRef is set; runtime will ignore plaintext token.`,
         });
       }
-      if (tokenRef) {
-        const resolvedValue = await resolveSecretRefValueFromContext(tokenRef, params.context);
-        if (!isNonEmptyString(resolvedValue)) {
-          throw new Error(`auth profile "${profileId}" tokenRef resolved to an empty value.`);
-        }
-        tokenProfile.token = resolvedValue;
-      }
+      params.context.assignments.push({
+        ref: resolvedTokenRef,
+        path: `${params.agentDir}.auth-profiles.${profileId}.token`,
+        expected: "string",
+        apply: (value) => {
+          tokenProfile.token = String(value);
+        },
+      });
     }
   }
-  return resolvedStore;
+}
+
+function applyAssignments(params: {
+  assignments: SecretAssignment[];
+  resolved: Map<string, unknown>;
+}): void {
+  for (const assignment of params.assignments) {
+    const key = toRefKey(assignment.ref);
+    if (!params.resolved.has(key)) {
+      throw new Error(`Secret reference "${key}" resolved to no value.`);
+    }
+    const value = params.resolved.get(key);
+    if (assignment.expected === "string") {
+      if (!isNonEmptyString(value)) {
+        throw new Error(`${assignment.path} resolved to a non-string or empty value.`);
+      }
+      assignment.apply(value);
+      continue;
+    }
+    if (!(isNonEmptyString(value) || isRecord(value))) {
+      throw new Error(`${assignment.path} resolved to an unsupported value type.`);
+    }
+    assignment.apply(value);
+  }
 }
 
 function collectCandidateAgentDirs(config: OpenClawConfig): string[] {
@@ -238,39 +275,55 @@ export async function prepareSecretsRuntimeSnapshot(params: {
   agentDirs?: string[];
   loadAuthStore?: (agentDir?: string) => AuthProfileStore;
 }): Promise<PreparedSecretsRuntimeSnapshot> {
-  const warnings: SecretResolverWarning[] = [];
+  const sourceConfig = structuredClone(params.config);
+  const resolvedConfig = structuredClone(params.config);
   const context: ResolverContext = {
-    config: params.config,
+    sourceConfig,
     env: params.env ?? process.env,
-    fileSecretsPromise: null,
+    cache: {},
+    warnings: [],
+    assignments: [],
   };
-  const resolvedConfig = await resolveConfigSecretRefs({
-    config: params.config,
+
+  collectConfigAssignments({
+    config: resolvedConfig,
     context,
-    warnings,
   });
 
   const loadAuthStore = params.loadAuthStore ?? loadAuthProfileStoreForSecretsRuntime;
   const candidateDirs = params.agentDirs?.length
     ? [...new Set(params.agentDirs.map((entry) => resolveUserPath(entry)))]
     : collectCandidateAgentDirs(resolvedConfig);
+
   const authStores: Array<{ agentDir: string; store: AuthProfileStore }> = [];
   for (const agentDir of candidateDirs) {
-    const rawStore = loadAuthStore(agentDir);
-    const resolvedStore = await resolveAuthStoreSecretRefs({
-      store: rawStore,
+    const store = structuredClone(loadAuthStore(agentDir));
+    collectAuthStoreAssignments({
+      store,
       context,
-      warnings,
       agentDir,
     });
-    authStores.push({ agentDir, store: resolvedStore });
+    authStores.push({ agentDir, store });
+  }
+
+  if (context.assignments.length > 0) {
+    const refs = context.assignments.map((assignment) => assignment.ref);
+    const resolved = await resolveSecretRefValues(refs, {
+      config: sourceConfig,
+      env: context.env,
+      cache: context.cache,
+    });
+    applyAssignments({
+      assignments: context.assignments,
+      resolved,
+    });
   }
 
   return {
-    sourceConfig: structuredClone(params.config),
+    sourceConfig,
     config: resolvedConfig,
     authStores,
-    warnings,
+    warnings: context.warnings,
   };
 }
 
