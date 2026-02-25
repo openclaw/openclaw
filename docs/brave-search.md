@@ -36,6 +36,7 @@ OpenClaw uses Brave Search as the default provider for `web_search`.
 ## Notes
 
 - The Data for AI plan is **not** compatible with `web_search`.
-- Brave provides a free tier plus paid plans; check the Brave API portal for current limits.
+- Brave provides paid plans; check the Brave API portal for current limits.
+- Brave limits the use for AI, ruling out the "use the Search Results to create, evaluate, train, re-train, fine-tune, benchmark or otherwise improve artificial intelligence models or services offered by Customer or third parties". As long as you are not involved in AI model creation, don't use AI models that store usage data for improvement (e.g. many free OpenRouter models), or provide OpenClaw as a service for others, you _should_ be good. This is, however, not legal advice---Check the Terms of Service.
 
 See [Web tools](/tools/web) for the full web_search configuration.

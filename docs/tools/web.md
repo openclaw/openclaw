@@ -33,7 +33,7 @@ These are **not** browser automation. For JS-heavy sites or logins, use the
 
 | Provider            | Pros                                         | Cons                                     | API Key                                      |
 | ------------------- | -------------------------------------------- | ---------------------------------------- | -------------------------------------------- |
-| **Brave** (default) | Fast, structured results, free tier          | Traditional search results               | `BRAVE_API_KEY`                              |
+| **Brave** (default) | Fast, structured results, ltd. no AI clause  | Traditional search results               | `BRAVE_API_KEY`                              |
 | **Perplexity**      | AI-synthesized answers, citations, real-time | Requires Perplexity or OpenRouter access | `OPENROUTER_API_KEY` or `PERPLEXITY_API_KEY` |
 | **Gemini**          | Google Search grounding, AI-synthesized      | Requires Gemini API key                  | `GEMINI_API_KEY`                             |
 | **Grok**            | xAI web-grounded responses                   | Requires xAI API key                     | `XAI_API_KEY`                                |
@@ -94,8 +94,13 @@ Example: switch to Perplexity Sonar (direct API):
 2. In the dashboard, choose the **Data for Search** plan (not “Data for AI”) and generate an API key.
 3. Run `openclaw configure --section web` to store the key in config (recommended), or set `BRAVE_API_KEY` in your environment.
 
-Brave provides a free tier plus paid plans; check the Brave API portal for the
+Brave provides paid plans; check the Brave API portal for the
 current limits and pricing.
+
+Brave limits the use for AI, ruling out the "use the Search Results to create, evaluate, train, re-train, fine-tune, benchmark
+or otherwise improve artificial intelligence models or services offered by Customer or third parties". As long as you are not
+involved in AI model creation, don't use AI models that store usage data for improvement (e.g. many free OpenRouter models), or
+provide OpenClaw as a service for others, you _should_ be good. This is, however, not legal advice---Check the Terms of Service.
 
 ### Where to set the key (recommended)
 
