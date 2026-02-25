@@ -237,6 +237,44 @@ describe("runWithModelFallback", () => {
     ]);
   });
 
+  it("keeps configured fallback chain when current model is a configured fallback", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: ["anthropic/claude-haiku-3-5", "openrouter/deepseek-chat"],
+          },
+        },
+      },
+    });
+
+    const run = vi.fn().mockImplementation(async (provider: string, model: string) => {
+      if (provider === "anthropic" && model === "claude-haiku-3-5") {
+        throw Object.assign(new Error("rate-limited"), { status: 429 });
+      }
+      if (provider === "openrouter" && model === "openrouter/deepseek-chat") {
+        return "ok";
+      }
+      throw new Error(`unexpected fallback candidate: ${provider}/${model}`);
+    });
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "anthropic",
+      model: "claude-haiku-3-5",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(result.provider).toBe("openrouter");
+    expect(result.model).toBe("openrouter/deepseek-chat");
+    expect(run.mock.calls).toEqual([
+      ["anthropic", "claude-haiku-3-5"],
+      ["openrouter", "openrouter/deepseek-chat"],
+    ]);
+  });
+
   it("treats normalized default refs as primary and keeps configured fallback chain", async () => {
     const cfg = makeCfg({
       agents: {
