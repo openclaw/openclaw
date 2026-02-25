@@ -178,7 +178,6 @@ jobs:
     permissions:
       packages: write
       contents: read
-      id-token: write
     needs: [build-amd64, build-arm64]
     steps:
       - name: Checkout
