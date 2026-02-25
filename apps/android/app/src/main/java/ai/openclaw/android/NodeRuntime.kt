@@ -378,7 +378,7 @@ class NodeRuntime(context: Context) {
         "Restore canvas now for session=$sessionKey source=$source. " +
           "If existing A2UI state exists, replay it immediately. " +
           "If not, create and render a compact mobile-friendly dashboard in Canvas."
-      try {
+      val sent =
         nodeSession.sendNodeEvent(
           event = "agent.request",
           payloadJson =
@@ -389,15 +389,7 @@ class NodeRuntime(context: Context) {
               put("deliver", JsonPrimitive(false))
             }.toString(),
         )
-        scope.launch {
-          delay(20_000)
-          if (canvasRehydrateSeq.get() != requestId) return@launch
-          if (!_canvasRehydratePending.value) return@launch
-          if (_canvasA2uiHydrated.value) return@launch
-          _canvasRehydratePending.value = false
-          _canvasRehydrateErrorText.value = "No canvas update yet. Tap to retry."
-        }
-      } catch (err: Throwable) {
+      if (!sent) {
         if (!force) {
           didAutoRequestCanvasRehydrate = false
         }
@@ -405,7 +397,16 @@ class NodeRuntime(context: Context) {
           _canvasRehydratePending.value = false
           _canvasRehydrateErrorText.value = "Failed to request restore. Tap to retry."
         }
-        Log.w("OpenClawCanvas", "canvas rehydrate request failed (${source}): ${err.message}")
+        Log.w("OpenClawCanvas", "canvas rehydrate request failed ($source): transport unavailable")
+        return@launch
+      }
+      scope.launch {
+        delay(20_000)
+        if (canvasRehydrateSeq.get() != requestId) return@launch
+        if (!_canvasRehydratePending.value) return@launch
+        if (_canvasA2uiHydrated.value) return@launch
+        _canvasRehydratePending.value = false
+        _canvasRehydrateErrorText.value = "No canvas update yet. Tap to retry."
       }
     }
   }
@@ -733,7 +734,7 @@ class NodeRuntime(context: Context) {
       val connected = _nodeConnected.value
       var error: String? = null
       if (connected) {
-        try {
+        val sent =
           nodeSession.sendNodeEvent(
             event = "agent.request",
             payloadJson =
@@ -745,8 +746,8 @@ class NodeRuntime(context: Context) {
                 put("key", JsonPrimitive(actionId))
               }.toString(),
           )
-        } catch (e: Throwable) {
-          error = e.message ?: "send failed"
+        if (!sent) {
+          error = "send failed"
         }
       } else {
         error = "gateway not connected"

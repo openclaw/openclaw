@@ -261,11 +261,7 @@ class ChatController(
     val key = _sessionKey.value
     try {
       if (supportsChatSubscribe) {
-        try {
-          session.sendNodeEvent("chat.subscribe", """{"sessionKey":"$key"}""")
-        } catch (_: Throwable) {
-          // best-effort
-        }
+        session.sendNodeEvent("chat.subscribe", """{"sessionKey":"$key"}""")
       }
 
       val historyJson = session.request("chat.history", """{"sessionKey":"$key"}""")
