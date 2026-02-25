@@ -30,7 +30,7 @@ describe("validateToken", () => {
 });
 
 describe("checkUserAllowed", () => {
-  it("rejects user when allowlist is empty", () => {
+  it("rejects all users when allowlist is empty", () => {
     expect(checkUserAllowed("user1", [])).toBe(false);
   });
 
