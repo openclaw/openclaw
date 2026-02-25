@@ -9,6 +9,7 @@ import type { SessionsPatchResult } from "../gateway/protocol/index.js";
 import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { helpText, parseCommand } from "./commands.js";
+import { applyTheme, currentThemeName, getThemeNames, resetTerminalColors } from "./theme/theme.js";
 import type { ChatLog } from "./components/chat-log.js";
 import {
   createFilterableSelectList,
@@ -440,6 +441,20 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         break;
       case "abort":
         await abortActive();
+        break;
+      case "theme":
+        if (!args) {
+          chatLog.addSystem(
+            `usage: /theme <${getThemeNames().join(", ")}>  (current: ${currentThemeName})`,
+          );
+        } else if (applyTheme(args, tui)) {
+          chatLog.addSystem(`theme set to ${args}`);
+          await loadHistory();
+        } else {
+          chatLog.addSystem(
+            `unknown theme: ${args}. available: ${getThemeNames().join(", ")}`,
+          );
+        }
         break;
       case "settings":
         openSettings();
