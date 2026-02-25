@@ -814,6 +814,29 @@ describe("createTelegramBot", () => {
       expectedReplyCount: 1,
     },
     {
+      name: "blocks group messages when per-group allowFrom override is explicitly empty",
+      config: {
+        channels: {
+          telegram: {
+            groupPolicy: "open",
+            groups: {
+              "-100123456789": {
+                allowFrom: [],
+                requireMention: false,
+              },
+            },
+          },
+        },
+      },
+      message: {
+        chat: { id: -100123456789, type: "group", title: "Test Group" },
+        from: { id: 999999, username: "random" },
+        text: "hello",
+        date: 1736380800,
+      },
+      expectedReplyCount: 0,
+    },
+    {
       name: "allows all group messages when groupPolicy is 'open'",
       config: {
         channels: {
