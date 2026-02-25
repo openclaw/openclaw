@@ -78,6 +78,7 @@ Docs: https://docs.openclaw.ai
 - macOS/Menu bar: stop reusing the injector delegate for the "Usage cost (30 days)" submenu to prevent recursive submenu injection loops when opening cost history. (#25341) Thanks @yingchunbai.
 - Control UI/Chat images: route image-click opens through a shared safe-open helper (allowing only safe URL schemes) and open new tabs with opener isolation to block tabnabbing. (#18685, #25444, #25847) Thanks @Mariana-Codebase and @shakkernerd.
 - CLI/Doctor: correct stale recovery hints to use valid commands (`openclaw gateway status --deep` and `openclaw configure --section model`). (#24485) Thanks @chilu18.
+- CLI/Memory search: accept `--query <text>` for `openclaw memory search` (while keeping positional query support), and emit a clear error when neither form is provided. (#25904, #25857) Thanks @niceysam and @stakeswky.
 - Security/Sandbox: canonicalize bind-mount source paths via existing-ancestor realpath so symlink-parent + non-existent-leaf paths cannot bypass allowed-source-roots or blocked-path checks. Thanks @tdjackey.
 - Doctor/Plugins: auto-enable now resolves third-party channel plugins by manifest plugin id (not channel id), preventing invalid `plugins.entries.<channelId>` writes when ids differ. (#25275) Thanks @zerone0x.
 
