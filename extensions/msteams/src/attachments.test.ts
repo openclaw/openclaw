@@ -694,6 +694,54 @@ describe("msteams attachments", () => {
       runAttachmentAuthRetryCase,
     );
 
+    it("preserves auth fallback when dispatcher-mode fetch returns a redirect", async () => {
+      const redirectedUrl = createTestUrl("redirected.png");
+      const tokenProvider = createTokenProvider();
+      const fetchMock = vi.fn(async (url: string, opts?: RequestInit) => {
+        const hasAuth = Boolean(new Headers(opts?.headers).get("Authorization"));
+        if (url === TEST_URL_IMAGE) {
+          return hasAuth
+            ? createRedirectResponse(redirectedUrl)
+            : createTextResponse("unauthorized", 401);
+        }
+        if (url === redirectedUrl) {
+          return createBufferResponse(PNG_BUFFER, CONTENT_TYPE_IMAGE_PNG);
+        }
+        return createNotFoundResponse();
+      });
+
+      fetchRemoteMediaMock.mockImplementationOnce(async (params) => {
+        const fetchFn = params.fetchImpl ?? fetch;
+        let currentUrl = params.url;
+        for (let i = 0; i < MAX_REDIRECT_HOPS; i += 1) {
+          const res = await fetchFn(currentUrl, {
+            redirect: "manual",
+            dispatcher: {},
+          } as RequestInit);
+          if (REDIRECT_STATUS_CODES.includes(res.status)) {
+            const location = res.headers.get("location");
+            if (!location) {
+              throw new Error("redirect missing location");
+            }
+            currentUrl = new URL(location, currentUrl).toString();
+            continue;
+          }
+          return readRemoteMediaResponse(res, params);
+        }
+        throw new Error("too many redirects");
+      });
+
+      const media = await downloadAttachmentsWithFetch(
+        createImageAttachments(TEST_URL_IMAGE),
+        fetchMock,
+        { tokenProvider, authAllowHosts: [TEST_HOST] },
+      );
+
+      expectAttachmentMediaLength(media, 1);
+      expect(tokenProvider.getAccessToken).toHaveBeenCalledOnce();
+      expect(fetchMock.mock.calls.map(([calledUrl]) => String(calledUrl))).toContain(redirectedUrl);
+    });
+
     it("skips urls outside the allowlist", async () => {
       const fetchMock = vi.fn();
       const media = await downloadAttachmentsWithFetch(
