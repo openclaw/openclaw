@@ -241,6 +241,20 @@ function resolveAllowFromAccountId(accountId?: string): string {
   return normalizePairingAccountId(accountId) || DEFAULT_ACCOUNT_ID;
 }
 
+function requestShouldTrackFailedAttempt(
+  entry: PairingRequest,
+  normalizedAccountId: string,
+): boolean {
+  const entryAccountId = String(entry.meta?.accountId ?? "")
+    .trim()
+    .toLowerCase();
+  if (!normalizedAccountId) {
+    // Unscoped attempts should only affect unscoped requests.
+    return !entryAccountId;
+  }
+  return entryAccountId === normalizedAccountId;
+}
+
 function normalizeId(value: string | number): string {
   return String(value).trim();
 }
@@ -822,7 +836,7 @@ export async function approveChannelPairingCode(params: {
         let mutated = removed;
         const surviving: PairingRequest[] = [];
         for (const req of pruned) {
-          if (!requestMatchesAccountId(req, normalizedAccountId)) {
+          if (!requestShouldTrackFailedAttempt(req, normalizedAccountId)) {
             surviving.push(req);
             continue;
           }

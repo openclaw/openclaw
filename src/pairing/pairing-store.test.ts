@@ -504,6 +504,35 @@ describe("pairing store", () => {
     });
   });
 
+  it("does not increment account-scoped requests for unscoped wrong attempts", async () => {
+    await withTempStateDir(async () => {
+      await upsertChannelPairingRequest({
+        channel: "telegram",
+        id: "alice-1",
+        accountId: "alice",
+      });
+      await upsertChannelPairingRequest({
+        channel: "telegram",
+        id: "bob-1",
+        accountId: "bob",
+      });
+
+      // Wrong code with no accountId should NOT burn account-scoped requests.
+      for (let i = 0; i < 12; i++) {
+        await approveChannelPairingCode({
+          channel: "telegram",
+          code: "WRONGCODE",
+        });
+      }
+
+      const pending = await listChannelPairingRequests("telegram");
+      expect(pending).toHaveLength(2);
+      const byId = new Map(pending.map((p) => [p.id, p]));
+      expect(byId.get("alice-1")?.failedAttempts ?? 0).toBe(0);
+      expect(byId.get("bob-1")?.failedAttempts ?? 0).toBe(0);
+    });
+  });
+
   it("reads legacy channel-scoped allowFrom for default account", async () => {
     await withTempStateDir(async (stateDir) => {
       await seedTelegramAllowFromFixtures({
