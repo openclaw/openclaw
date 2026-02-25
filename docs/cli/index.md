@@ -388,6 +388,7 @@ Subcommands:
 - `config get <path>`: print a config value (dot/bracket path).
 - `config set <path> <value>`: set a value (JSON5 or raw string).
 - `config unset <path>`: remove a value.
+- `config path`: print the active config file path.
 
 ### `doctor`
 

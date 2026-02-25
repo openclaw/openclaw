@@ -324,6 +324,17 @@ export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv 
   }
 }
 
+export async function runConfigPath(opts: { runtime?: RuntimeEnv }) {
+  const runtime = opts.runtime ?? defaultRuntime;
+  try {
+    const snapshot = await readConfigFileSnapshot();
+    runtime.log(shortenHomePath(snapshot.path));
+  } catch (err) {
+    runtime.error(danger(String(err)));
+    runtime.exit(1);
+  }
+}
+
 export function registerConfigCli(program: Command) {
   const cmd = program
     .command("config")
@@ -389,5 +400,12 @@ export function registerConfigCli(program: Command) {
     .argument("<path>", "Config path (dot or bracket notation)")
     .action(async (path: string) => {
       await runConfigUnset({ path });
+    });
+
+  cmd
+    .command("path")
+    .description("Print the active config file path")
+    .action(async () => {
+      await runConfigPath({});
     });
 }
