@@ -1,5 +1,6 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
+import { shouldSuppressMessagingToolReplies } from "../auto-reply/reply/reply-payloads.js";
 import { createStreamingDirectiveAccumulator } from "../auto-reply/reply/streaming-directives.js";
 import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -219,6 +220,23 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   const MAX_MESSAGING_SENT_TEXTS = 200;
   const MAX_MESSAGING_SENT_TARGETS = 200;
   const MAX_MESSAGING_SENT_MEDIA_URLS = 200;
+  const shouldSuppressMessagingToolBlockReply = () => {
+    const hasRoutingScope =
+      typeof params.messageProvider === "string" &&
+      params.messageProvider.trim().length > 0 &&
+      typeof params.originatingTo === "string" &&
+      params.originatingTo.trim().length > 0;
+    if (!hasRoutingScope) {
+      // Backward-compatible fallback when upstream caller does not provide routing context.
+      return true;
+    }
+    return shouldSuppressMessagingToolReplies({
+      messageProvider: params.messageProvider,
+      messagingToolSentTargets,
+      originatingTo: params.originatingTo,
+      accountId: params.accountId,
+    });
+  };
   const trimMessagingToolSent = () => {
     if (messagingToolSentTexts.length > MAX_MESSAGING_SENT_TEXTS) {
       const overflow = messagingToolSentTexts.length - MAX_MESSAGING_SENT_TEXTS;
@@ -503,7 +521,10 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     // Only check committed (successful) messaging tool texts - checking pending texts
     // is risky because if the tool fails after suppression, the user gets no response
     const normalizedChunk = normalizeTextForComparison(chunk);
-    if (isMessagingToolDuplicateNormalized(normalizedChunk, messagingToolSentTextsNormalized)) {
+    if (
+      shouldSuppressMessagingToolBlockReply() &&
+      isMessagingToolDuplicateNormalized(normalizedChunk, messagingToolSentTextsNormalized)
+    ) {
       log.debug(`Skipping block reply - already sent via messaging tool: ${chunk.slice(0, 50)}...`);
       return;
     }
