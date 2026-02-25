@@ -31,7 +31,7 @@ vi.mock("./uuid.ts", () => ({
 }));
 
 import type { ChatHost } from "./app-chat.ts";
-import { handleAbortChat, isChatStopCommand } from "./app-chat.ts";
+import { handleAbortChat, handleSendChat, isChatStopCommand } from "./app-chat.ts";
 
 function createHost(overrides?: Partial<ChatHost>): ChatHost {
   return {
@@ -83,6 +83,34 @@ describe("handleAbortChat", () => {
     await handleAbortChat(host);
 
     expect(host.chatMessage).toBe("some text");
+  });
+});
+
+describe("handleSendChat stop-command path", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("clears the stop command from chatMessage when typed in the input", async () => {
+    const host = createHost({
+      chatMessage: "stop",
+      chatRunId: "run-1",
+    });
+
+    await handleSendChat(host);
+
+    expect(host.chatMessage).toBe("");
+  });
+
+  it("preserves chatMessage when stop command is sent via messageOverride", async () => {
+    const host = createHost({
+      chatMessage: "my draft",
+      chatRunId: "run-1",
+    });
+
+    await handleSendChat(host, "stop");
+
+    expect(host.chatMessage).toBe("my draft");
   });
 });
 

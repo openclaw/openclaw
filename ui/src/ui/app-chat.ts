@@ -175,6 +175,9 @@ export async function handleSendChat(
   }
 
   if (isChatStopCommand(message)) {
+    if (messageOverride == null) {
+      host.chatMessage = "";
+    }
     await handleAbortChat(host);
     return;
   }
