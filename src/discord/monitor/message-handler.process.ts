@@ -669,6 +669,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
       await typingCallbacks.onReplyStart();
       await statusReactions.setThinking();
     },
+    onIdle: typingCallbacks.onIdle,
+    onCleanup: typingCallbacks.onCleanup,
   });
 
   let dispatchResult: Awaited<ReturnType<typeof dispatchInboundMessage>> | null = null;
