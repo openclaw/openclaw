@@ -495,7 +495,7 @@ export class CredentialAccessDetector {
       type: "credential_access_spike",
       severity: result.zScore > 4 ? "critical" : "warn",
       source: "anomaly-detection",
-      message: `Unusual credential access rate for ${key}: ${count} accesses/minute`,
+      message: `Credential access spike: ${count} accesses/minute for ${key}`,
       details: {
         credential: key,
         accessCount: count,
