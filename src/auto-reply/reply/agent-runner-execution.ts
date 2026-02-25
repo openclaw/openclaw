@@ -204,7 +204,21 @@ export async function runAgentTurnWithFallback(params: {
             });
             const cliSessionId = getCliSessionId(params.getActiveSessionEntry(), provider);
             return (async () => {
-              let lifecycleTerminalEmitted = false;
+              // Emit periodic heartbeats during CLI execution so the parent's
+              // inactivity timer (waitForAgentJob) stays alive.  CLI backends
+              // produce no streaming output — without heartbeats, long runs
+              // (e.g. 100s+ with reasoning models) would silently timeout.
+              const CLI_HEARTBEAT_INTERVAL_MS = 30_000;
+              const heartbeatTimer = setInterval(() => {
+                emitAgentEvent({
+                  runId,
+                  stream: "lifecycle",
+                  data: {
+                    phase: "info",
+                    message: `CLI execution in progress (${provider}/${model})`,
+                  },
+                });
+              }, CLI_HEARTBEAT_INTERVAL_MS);
               try {
                 const result = await runCliAgent({
                   sessionId: params.followupRun.run.sessionId,
@@ -246,37 +260,14 @@ export async function runAgentTurnWithFallback(params: {
                     endedAt: Date.now(),
                   },
                 });
-                lifecycleTerminalEmitted = true;
 
                 return result;
-              } catch (err) {
-                emitAgentEvent({
-                  runId,
-                  stream: "lifecycle",
-                  data: {
-                    phase: "error",
-                    startedAt,
-                    endedAt: Date.now(),
-                    error: String(err),
-                  },
-                });
-                lifecycleTerminalEmitted = true;
-                throw err;
               } finally {
-                // Defensive backstop: never let a CLI run complete without a terminal
-                // lifecycle event, otherwise downstream consumers can hang.
-                if (!lifecycleTerminalEmitted) {
-                  emitAgentEvent({
-                    runId,
-                    stream: "lifecycle",
-                    data: {
-                      phase: "error",
-                      startedAt,
-                      endedAt: Date.now(),
-                      error: "CLI run completed without lifecycle terminal event",
-                    },
-                  });
-                }
+                // Don't emit lifecycle "error" for individual model failures —
+                // model fallback will try the next candidate; only the final
+                // outcome (success or all-models-exhausted) should be a terminal
+                // lifecycle event.  The outer fallback error handler covers that.
+                clearInterval(heartbeatTimer);
               }
             })();
           }
@@ -425,6 +416,21 @@ export async function runAgentTurnWithFallback(params: {
               : undefined,
           });
         },
+        onError: async ({ provider: errProvider, model: errModel, attempt, total }) => {
+          // Emit an "info" lifecycle event so downstream consumers can
+          // observe fallback transitions.  "info" is ignored by
+          // waitForAgentJob's terminal-phase logic (it only acts on
+          // start/end/error), but it IS used to reset the inactivity
+          // timer (see activity-aware timer in agent-job.ts).
+          emitAgentEvent({
+            runId,
+            stream: "lifecycle",
+            data: {
+              phase: "info",
+              message: `Model ${errProvider}/${errModel} failed (attempt ${attempt}/${total}), switching to next fallback`,
+            },
+          });
+        },
       });
       runResult = fallbackResult.result;
       fallbackProvider = fallbackResult.provider;
@@ -564,6 +570,22 @@ export async function runAgentTurnWithFallback(params: {
       }
 
       defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
+
+      // Emit terminal lifecycle error for the entire fallback chain.
+      // Individual model errors were intentionally suppressed in the CLI
+      // run callback (see above) so they don't trigger premature failure
+      // in waitForAgentJob.  This is the single authoritative "error"
+      // lifecycle event for this agent run.
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "error",
+          endedAt: Date.now(),
+          error: message,
+        },
+      });
+
       const safeMessage = isTransientHttp
         ? sanitizeUserFacingText(message, { errorContext: true })
         : message;
