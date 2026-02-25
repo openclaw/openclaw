@@ -168,6 +168,11 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
           validationText = null
           return@Button
         }
+        if (statusText.contains("operator offline", ignoreCase = true)) {
+          validationText = null
+          viewModel.refreshGatewayConnection()
+          return@Button
+        }
 
         val config =
           resolveGatewayConnectConfig(
@@ -396,15 +401,6 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
           }
 
           HorizontalDivider(color = mobileBorder)
-
-          Text(
-            "Debug snapshot: mode=${if (inputMode == ConnectInputMode.SetupCode) "setup" else "manual"}, manualEnabled=$manualEnabled, tokenLen=${gatewayToken.trim().length}",
-            style = mobileCaption1,
-            color = mobileTextSecondary,
-          )
-          TextButton(onClick = { viewModel.logGatewayDebugSnapshot(source = "connect_tab") }) {
-            Text("Log gateway debug snapshot", style = mobileCallout.copy(fontWeight = FontWeight.SemiBold), color = mobileAccent)
-          }
 
           TextButton(onClick = { viewModel.setOnboardingCompleted(false) }) {
             Text("Run onboarding again", style = mobileCallout.copy(fontWeight = FontWeight.SemiBold), color = mobileAccent)
