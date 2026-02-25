@@ -621,15 +621,13 @@ export function resolveContextTokens(params: {
       if (!parsed) {
         continue;
       }
-      if (
-        modelKey(normalizeProviderId(parsed.ref.provider), parsed.ref.model) === modelKeyValue
-      ) {
+      if (modelKey(normalizeProviderId(parsed.ref.provider), parsed.ref.model) === modelKeyValue) {
         return entry;
       }
     }
     return undefined;
   })();
-  const modelParams = modelEntry?.params as Record<string, unknown> | undefined;
+  const modelParams = modelEntry?.params;
   const contextTokensFromParams =
     typeof modelParams?.contextTokens === "number" &&
     Number.isFinite(modelParams.contextTokens) &&
