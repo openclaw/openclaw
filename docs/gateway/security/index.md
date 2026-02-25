@@ -188,7 +188,7 @@ If more than one person can DM your bot:
 - **Browser control exposure** (remote nodes, relay ports, remote CDP endpoints).
 - **Local disk hygiene** (permissions, symlinks, config includes, “synced folder” paths).
 - **Plugins** (extensions exist without an explicit allowlist).
-- **Policy drift/misconfig** (sandbox docker settings configured but sandbox mode off; ineffective `gateway.nodes.denyCommands` patterns; dangerous `gateway.nodes.allowCommands` entries; global `tools.profile="minimal"` overridden by per-agent profiles; extension plugin tools reachable under permissive tool policy).
+- **Policy drift/misconfig** (sandbox docker settings configured but sandbox mode off; ineffective `gateway.nodes.denyCommands` patterns because matching is exact command-name only (for example `system.run`) and does not inspect shell text; dangerous `gateway.nodes.allowCommands` entries; global `tools.profile="minimal"` overridden by per-agent profiles; extension plugin tools reachable under permissive tool policy).
 - **Runtime expectation drift** (for example `tools.exec.host="sandbox"` while sandbox mode is off, which runs directly on the gateway host).
 - **Model hygiene** (warn when configured models look legacy; not a hard block).
 
