@@ -181,6 +181,8 @@ class NodeRuntime(context: Context) {
 
   private val _isConnected = MutableStateFlow(false)
   val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
+  private val _nodeConnected = MutableStateFlow(false)
+  val nodeConnected: StateFlow<Boolean> = _nodeConnected.asStateFlow()
 
   private val _statusText = MutableStateFlow("Offline")
   val statusText: StateFlow<String> = _statusText.asStateFlow()
@@ -224,7 +226,6 @@ class NodeRuntime(context: Context) {
   private var didAutoRequestCanvasRehydrate = false
   private val canvasRehydrateSeq = AtomicLong(0)
   private var operatorConnected = false
-  private var nodeConnected = false
   private var operatorStatusText: String = "Offline"
   private var nodeStatusText: String = "Offline"
 
@@ -270,7 +271,7 @@ class NodeRuntime(context: Context) {
       identityStore = identityStore,
       deviceAuthStore = deviceAuthStore,
       onConnected = { _, _, _ ->
-        nodeConnected = true
+        _nodeConnected.value = true
         nodeStatusText = "Connected"
         didAutoRequestCanvasRehydrate = false
         _canvasA2uiHydrated.value = false
@@ -281,7 +282,7 @@ class NodeRuntime(context: Context) {
         requestCanvasRehydrate(source = "node_connect", force = false)
       },
       onDisconnected = { message ->
-        nodeConnected = false
+        _nodeConnected.value = false
         nodeStatusText = message
         didAutoRequestCanvasRehydrate = false
         _canvasA2uiHydrated.value = false
@@ -329,9 +330,9 @@ class NodeRuntime(context: Context) {
     _isConnected.value = operatorConnected
     _statusText.value =
       when {
-        operatorConnected && nodeConnected -> "Connected"
-        operatorConnected && !nodeConnected -> "Connected (node offline)"
-        !operatorConnected && nodeConnected -> "Connected (operator offline)"
+        operatorConnected && _nodeConnected.value -> "Connected"
+        operatorConnected && !_nodeConnected.value -> "Connected (node offline)"
+        !operatorConnected && _nodeConnected.value -> "Connected (operator offline)"
         operatorStatusText.isNotBlank() && operatorStatusText != "Offline" -> operatorStatusText
         else -> nodeStatusText
       }
@@ -361,7 +362,11 @@ class NodeRuntime(context: Context) {
 
   fun requestCanvasRehydrate(source: String = "manual", force: Boolean = true) {
     scope.launch {
-      if (!nodeConnected) return@launch
+      if (!_nodeConnected.value) {
+        _canvasRehydratePending.value = false
+        _canvasRehydrateErrorText.value = "Node offline. Reconnect and retry."
+        return@launch
+      }
       if (!force && didAutoRequestCanvasRehydrate) return@launch
       didAutoRequestCanvasRehydrate = true
       val requestId = canvasRehydrateSeq.incrementAndGet()
@@ -725,7 +730,7 @@ class NodeRuntime(context: Context) {
           contextJson = contextJson,
         )
 
-      val connected = nodeConnected
+      val connected = _nodeConnected.value
       var error: String? = null
       if (connected) {
         try {
