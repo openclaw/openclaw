@@ -2,7 +2,6 @@ import com.android.build.api.variant.impl.VariantOutputImpl
 
 plugins {
   id("com.android.application")
-  id("org.jetbrains.kotlin.android")
   id("org.jetbrains.kotlin.plugin.compose")
   id("org.jetbrains.kotlin.plugin.serialization")
 }
@@ -13,7 +12,7 @@ android {
 
   sourceSets {
     getByName("main") {
-      assets.srcDir(file("../../shared/OpenClawKit/Sources/OpenClawKit/Resources"))
+      assets.directories.add("../../shared/OpenClawKit/Sources/OpenClawKit/Resources")
     }
   }
 
