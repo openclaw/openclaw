@@ -93,7 +93,7 @@ Contract:
 
 - OpenClaw shells out to `sops` for decrypt/encrypt.
 - Minimum supported version: `sops >= 3.9.0`.
-- For migration, OpenClaw explicitly passes `--config <config-dir>/.sops.yaml` (or `.sops.yml`) when present, so behavior is not dependent on current working directory.
+- For migration, OpenClaw explicitly passes `--config <config-dir>/.sops.yaml` (or `.sops.yml`), runs `sops` with `cwd=<config-dir>`, and sets `--filename-override` to the absolute target secrets path (for example `/home/user/.openclaw/secrets.enc.json`) so strict `creation_rules` still match even though encryption uses a temp input file.
 - Decrypted payload must be a JSON object.
 - `id` is resolved as JSON pointer into decrypted payload.
 - Default timeout is `5000ms`.
