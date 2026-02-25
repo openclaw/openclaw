@@ -37,7 +37,9 @@ const PERPLEXITY_KEY_PREFIXES = ["pplx-"];
 const OPENROUTER_KEY_PREFIXES = ["sk-or-"];
 
 const XAI_API_ENDPOINT = "https://api.x.ai/v1/responses";
+const XAI_TOOL_TYPES = ["web_search", "x_search"] as const;
 const DEFAULT_GROK_MODEL = "grok-4-1-fast";
+const DEFAULT_X_SEARCH_MODEL = "grok-4-1-fast-non-reasoning";
 const DEFAULT_KIMI_BASE_URL = "https://api.moonshot.ai/v1";
 const DEFAULT_KIMI_MODEL = "moonshot-v1-128k";
 const KIMI_WEB_SEARCH_TOOL = {
@@ -339,6 +341,17 @@ type GrokConfig = {
   apiKey?: string;
   model?: string;
   inlineCitations?: boolean;
+  maxTurns?: number;
+};
+
+type XSearchConfig = {
+  enabled?: boolean;
+  apiKey?: string;
+  model?: string;
+  inlineCitations?: boolean;
+  maxTurns?: number;
+  timeoutSeconds?: number;
+  cacheTtlMinutes?: number;
 };
 
 type KimiConfig = {
@@ -871,6 +884,11 @@ function resolveGrokInlineCitations(grok?: GrokConfig): boolean {
   return grok?.inlineCitations === true;
 }
 
+function resolveGrokMaxTurns(grok?: GrokConfig): number | undefined {
+  const v = grok?.maxTurns;
+  return typeof v === "number" ? v : undefined;
+}
+
 function resolveKimiConfig(search?: WebSearchConfig): KimiConfig {
   if (!search || typeof search !== "object") {
     return {};
@@ -1326,6 +1344,11 @@ async function runGrokSearch(params: {
   model: string;
   timeoutSeconds: number;
   inlineCitations: boolean;
+  /** xAI tool type to use (defaults to "web_search"). */
+  xaiToolType?: (typeof XAI_TOOL_TYPES)[number];
+  /** Max tool-use turns Grok may take. Unset = let xAI decide. Higher = better accuracy/coverage;
+   *  lower = faster but shallower. Omitted when undefined or < 1. */
+  maxTurns?: number;
 }): Promise<{
   content: string;
   citations: string[];
@@ -1339,13 +1362,13 @@ async function runGrokSearch(params: {
         content: params.query,
       },
     ],
-    tools: [{ type: "web_search" }],
+    tools: [{ type: params.xaiToolType ?? "web_search" }],
+    // max_turns controls how many tool-use rounds Grok may take. Higher values
+    // improve accuracy and coverage (more searches); lower values reduce latency
+    // at the cost of shallower results. Omitted when unset, letting xAI decide.
+    ...(params.maxTurns !== undefined && params.maxTurns >= 1 ? { max_turns: params.maxTurns } : {}),
+    ...(!params.inlineCitations ? { include: ["no_inline_citations"] } : {}),
   };
-
-  // Note: xAI's /v1/responses endpoint does not support the `include`
-  // parameter (returns 400 "Argument not supported: include"). Inline
-  // citations are returned automatically when available — we just parse
-  // them from the response without requesting them explicitly (#12910).
 
   return withTrustedWebSearchEndpoint(
     {
@@ -1617,6 +1640,7 @@ async function runWebSearch(params: {
   perplexityTransport?: PerplexityTransport;
   grokModel?: string;
   grokInlineCitations?: boolean;
+  grokMaxTurns?: number;
   geminiModel?: string;
   kimiBaseUrl?: string;
   kimiModel?: string;
@@ -1627,7 +1651,7 @@ async function runWebSearch(params: {
     params.provider === "perplexity"
       ? `${params.perplexityTransport ?? "search_api"}:${params.perplexityBaseUrl ?? PERPLEXITY_DIRECT_BASE_URL}:${params.perplexityModel ?? DEFAULT_PERPLEXITY_MODEL}`
       : params.provider === "grok"
-        ? `${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}`
+        ? `${params.grokModel ?? DEFAULT_GROK_MODEL}:${String(params.grokInlineCitations ?? false)}:${String(params.grokMaxTurns ?? "unset")}`
         : params.provider === "gemini"
           ? (params.geminiModel ?? DEFAULT_GEMINI_MODEL)
           : params.provider === "kimi"
@@ -1713,6 +1737,7 @@ async function runWebSearch(params: {
       model: params.grokModel ?? DEFAULT_GROK_MODEL,
       timeoutSeconds: params.timeoutSeconds,
       inlineCitations: params.grokInlineCitations ?? false,
+      maxTurns: params.grokMaxTurns,
     });
 
     const payload = {
@@ -2202,12 +2227,142 @@ export function createWebSearchTool(options?: {
         perplexityTransport: perplexityRuntime?.transport,
         grokModel: resolveGrokModel(grokConfig),
         grokInlineCitations: resolveGrokInlineCitations(grokConfig),
+        grokMaxTurns: resolveGrokMaxTurns(grokConfig),
         geminiModel: resolveGeminiModel(geminiConfig),
         kimiBaseUrl: resolveKimiBaseUrl(kimiConfig),
         kimiModel: resolveKimiModel(kimiConfig),
         braveMode,
       });
       return jsonResult(result);
+    },
+  };
+}
+
+const XSearchSchema = Type.Object({
+  query: Type.String({ description: "Search query string." }),
+});
+
+function resolveXSearchConfig(cfg?: OpenClawConfig): XSearchConfig {
+  const raw = cfg?.tools?.web?.x_search;
+  if (!raw || typeof raw !== "object") {
+    return {};
+  }
+  return raw as XSearchConfig;
+}
+
+function resolveXSearchEnabled(xSearch?: XSearchConfig): boolean {
+  if (typeof xSearch?.enabled === "boolean") {
+    return xSearch.enabled;
+  }
+  return true;
+}
+
+function resolveXSearchApiKey(xSearch?: XSearchConfig): string | undefined {
+  const fromConfig = normalizeApiKey(xSearch?.apiKey);
+  if (fromConfig) {
+    return fromConfig;
+  }
+  const fromEnv = normalizeApiKey(process.env.XAI_API_KEY);
+  return fromEnv || undefined;
+}
+
+function resolveXSearchModel(xSearch?: XSearchConfig): string {
+  const fromConfig =
+    xSearch && "model" in xSearch && typeof xSearch.model === "string" ? xSearch.model.trim() : "";
+  return fromConfig || DEFAULT_X_SEARCH_MODEL;
+}
+
+function resolveXSearchInlineCitations(xSearch?: XSearchConfig): boolean {
+  return xSearch?.inlineCitations === true;
+}
+
+function resolveXSearchMaxTurns(xSearch?: XSearchConfig): number | undefined {
+  const v = xSearch?.maxTurns;
+  return typeof v === "number" ? v : undefined;
+}
+
+const X_SEARCH_CACHE_KEY = Symbol.for("openclaw.x-search.cache");
+
+function getSharedXSearchCache(): Map<string, CacheEntry<Record<string, unknown>>> {
+  const root = globalThis as Record<PropertyKey, unknown>;
+  const existing = root[X_SEARCH_CACHE_KEY];
+  if (existing instanceof Map) {
+    return existing as Map<string, CacheEntry<Record<string, unknown>>>;
+  }
+  const next = new Map<string, CacheEntry<Record<string, unknown>>>();
+  root[X_SEARCH_CACHE_KEY] = next;
+  return next;
+}
+
+export function createXSearchTool(options?: { config?: OpenClawConfig }): AnyAgentTool | null {
+  const xSearch = resolveXSearchConfig(options?.config);
+  if (!resolveXSearchEnabled(xSearch)) {
+    return null;
+  }
+
+  return {
+    label: "X Search",
+    name: "x_search",
+    description:
+      "Search X (formerly Twitter) using xAI Grok. Returns AI-synthesized answers with citations from real-time X post search.",
+    parameters: XSearchSchema,
+    execute: async (_toolCallId, args) => {
+      const apiKey = resolveXSearchApiKey(xSearch);
+      if (!apiKey) {
+        return jsonResult({
+          error: "missing_xai_api_key",
+          message:
+            "x_search needs an xAI API key. Set XAI_API_KEY in the Gateway environment, or configure tools.web.x_search.apiKey.",
+          docs: "https://docs.openclaw.ai/tools/web",
+        });
+      }
+
+      const params = args as Record<string, unknown>;
+      const query = readStringParam(params, "query", { required: true });
+      const model = resolveXSearchModel(xSearch);
+      const inlineCitations = resolveXSearchInlineCitations(xSearch);
+      const maxTurns = resolveXSearchMaxTurns(xSearch);
+      const timeoutSeconds = resolveTimeoutSeconds(xSearch?.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS);
+      const cacheTtlMs = resolveCacheTtlMs(xSearch?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES);
+
+      const X_SEARCH_CACHE = getSharedXSearchCache();
+      const cacheKey = normalizeCacheKey(
+        `x_search:${query}:${model}:${String(inlineCitations)}:${String(maxTurns ?? "unset")}`,
+      );
+      const cached = readCache(X_SEARCH_CACHE, cacheKey);
+      if (cached) {
+        return jsonResult({ ...cached.value, cached: true });
+      }
+
+      const start = Date.now();
+      const {
+        content,
+        citations,
+        inlineCitations: inlineCitationsData,
+      } = await runGrokSearch({
+        query,
+        apiKey,
+        model,
+        timeoutSeconds,
+        inlineCitations,
+        maxTurns,
+        xaiToolType: "x_search",
+      });
+
+      const payload = {
+        query,
+        tookMs: Date.now() - start,
+        externalContent: {
+          untrusted: true,
+          source: "x_search",
+          wrapped: true,
+        },
+        content: wrapWebContent(content),
+        citations,
+        inlineCitations: inlineCitationsData,
+      };
+      writeCache(X_SEARCH_CACHE, cacheKey, payload, cacheTtlMs);
+      return jsonResult(payload);
     },
   };
 }
@@ -2239,4 +2394,8 @@ export const __testing = {
   resolveRedirectUrl: resolveCitationRedirectUrl,
   resolveBraveMode,
   mapBraveLlmContextResults,
+  resolveXSearchApiKey,
+  resolveXSearchModel,
+  resolveXSearchInlineCitations,
+  resolveXSearchMaxTurns,
 } as const;

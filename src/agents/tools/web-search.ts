@@ -5,6 +5,7 @@ import type { AnyAgentTool } from "./common.js";
 import {
   __testing as coreTesting,
   createWebSearchTool as createWebSearchToolCore,
+  createXSearchTool as createXSearchToolCore,
 } from "./web-search-core.js";
 
 export function createWebSearchTool(options?: {
@@ -13,6 +14,10 @@ export function createWebSearchTool(options?: {
   runtimeWebSearch?: RuntimeWebSearchMetadata;
 }): AnyAgentTool | null {
   return createWebSearchToolCore(options);
+}
+
+export function createXSearchTool(options?: { config?: OpenClawConfig }): AnyAgentTool | null {
+  return createXSearchToolCore(options);
 }
 
 export const __testing = {

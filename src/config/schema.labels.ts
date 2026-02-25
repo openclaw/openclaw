@@ -227,6 +227,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.search.gemini.model": "Gemini Search Model",
   "tools.web.search.grok.apiKey": "Grok Search API Key", // pragma: allowlist secret
   "tools.web.search.grok.model": "Grok Search Model",
+  "tools.web.search.grok.maxTurns": "Grok Search Max Turns",
   "tools.web.search.kimi.apiKey": "Kimi Search API Key", // pragma: allowlist secret
   "tools.web.search.kimi.baseUrl": "Kimi Search Base URL",
   "tools.web.search.kimi.model": "Kimi Search Model",
@@ -247,6 +248,13 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.web.fetch.firecrawl.onlyMainContent": "Firecrawl Main Content Only",
   "tools.web.fetch.firecrawl.maxAgeMs": "Firecrawl Cache Max Age (ms)",
   "tools.web.fetch.firecrawl.timeoutSeconds": "Firecrawl Timeout (sec)",
+  "tools.web.x_search.enabled": "Enable X Search Tool",
+  "tools.web.x_search.apiKey": "xAI API Key",
+  "tools.web.x_search.model": "X Search Model",
+  "tools.web.x_search.inlineCitations": "X Search Inline Citations",
+  "tools.web.x_search.maxTurns": "X Search Max Turns",
+  "tools.web.x_search.timeoutSeconds": "X Search Timeout (sec)",
+  "tools.web.x_search.cacheTtlMinutes": "X Search Cache TTL (min)",
   "gateway.controlUi.basePath": "Control UI Base Path",
   "gateway.controlUi.root": "Control UI Assets Root",
   "gateway.controlUi.allowedOrigins": "Control UI Allowed Origins",

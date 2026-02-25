@@ -1175,7 +1175,9 @@ export function resolveToolVerbAndDetail(params: {
       ? "search"
       : params.toolKey === "web_fetch"
         ? "fetch"
-        : params.toolKey.replace(/_/g, " ").replace(/\./g, " ");
+        : params.toolKey === "x_search"
+          ? "search X"
+          : params.toolKey.replace(/_/g, " ").replace(/\./g, " ");
   const verb = normalizeVerb(actionSpec?.label ?? params.action ?? fallbackVerb);
 
   let detail: string | undefined;
@@ -1191,7 +1193,7 @@ export function resolveToolVerbAndDetail(params: {
   ) {
     detail = resolveWriteDetail(params.toolKey, params.args);
   }
-  if (!detail && params.toolKey === "web_search") {
+  if (!detail && (params.toolKey === "web_search" || params.toolKey === "x_search")) {
     detail = resolveWebSearchDetail(params.args);
   }
   if (!detail && params.toolKey === "web_fetch") {
