@@ -50,7 +50,7 @@ export type SpawnSubagentContext = {
 export const SUBAGENT_SPAWN_ACCEPTED_NOTE =
   "auto-announces on completion, do not poll/sleep. The response will be sent back as an user message.";
 export const SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE =
-  "thread-bound session stays active after this task; continue in-thread for follow-ups.";
+  "subagent session stays active after this task for follow-ups.";
 
 export type SpawnSubagentResult = {
   status: "accepted" | "forbidden" | "error";
@@ -84,8 +84,10 @@ function resolveSpawnMode(params: {
   if (params.requestedMode === "run" || params.requestedMode === "session") {
     return params.requestedMode;
   }
-  // Thread-bound spawns should default to persistent sessions.
-  return params.threadRequested ? "session" : "run";
+  // Default to one-shot runs unless session mode is explicitly requested.
+  // Persistent sessions can run without thread binding; thread=true only adds
+  // plugin-managed routing/binding where supported.
+  return "run";
 }
 
 function summarizeError(err: unknown): string {
@@ -173,12 +175,6 @@ export async function spawnSubagentDirect(
     requestedMode: params.mode,
     threadRequested: requestThreadBinding,
   });
-  if (spawnMode === "session" && !requestThreadBinding) {
-    return {
-      status: "error",
-      error: 'mode="session" requires thread=true so the subagent can stay bound to a thread.',
-    };
-  }
   const cleanup =
     spawnMode === "session"
       ? "keep"

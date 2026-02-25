@@ -119,7 +119,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
         childSessionKey: expect.stringMatching(/^agent:main:subagent:/),
         agentId: "main",
         label: "research",
-        mode: "session",
+        mode: "run",
         requester: {
           channel: "discord",
           accountId: "work",
@@ -143,7 +143,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       runId: "run-1",
       agentId: "main",
       label: "research",
-      mode: "session",
+      mode: "run",
       requester: {
         channel: "discord",
         accountId: "work",
@@ -275,7 +275,7 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
     });
   });
 
-  it("rejects mode=session when thread=true is not requested", async () => {
+  it("accepts mode=session when thread=true is not requested", async () => {
     const tool = await getSessionsSpawnTool({
       agentSessionKey: "main",
       agentChannel: "discord",
@@ -287,13 +287,9 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       mode: "session",
     });
 
-    expect(result.details).toMatchObject({ status: "error" });
-    const details = result.details as { error?: string };
-    expect(details.error).toMatch(/requires thread=true/i);
+    expect(result.details).toMatchObject({ status: "accepted", mode: "session", runId: "run-1" });
     expect(hookRunnerMocks.runSubagentSpawning).not.toHaveBeenCalled();
-    expect(hookRunnerMocks.runSubagentSpawned).not.toHaveBeenCalled();
-    const callGatewayMock = getCallGatewayMock();
-    expect(callGatewayMock).not.toHaveBeenCalled();
+    expect(hookRunnerMocks.runSubagentSpawned).toHaveBeenCalledTimes(1);
   });
 
   it("rejects thread=true on channels without thread support", async () => {
