@@ -55,7 +55,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
     const sessionKey = await seedMainSessionStore(params.storePath, cfg, {
       lastChannel: "telegram",
       lastProvider: "telegram",
-      lastTo: "155462274",
+      lastTo: "-100155462274",
     });
 
     return { cfg, sessionKey };
