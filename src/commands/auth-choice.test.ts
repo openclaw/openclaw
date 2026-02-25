@@ -630,6 +630,8 @@ describe("applyAuthChoice", () => {
       profileId: string;
       provider: string;
       opts?: { secretInputMode?: "ref" };
+      expectEnvPrompt: boolean;
+      expectedTextCalls: number;
       expectedKey?: string;
       expectedKeyRef?: { source: "env"; id: string };
       expectedModel?: string;
@@ -641,6 +643,8 @@ describe("applyAuthChoice", () => {
         envValue: "sk-synthetic-env",
         profileId: "synthetic:default",
         provider: "synthetic",
+        expectEnvPrompt: true,
+        expectedTextCalls: 0,
         expectedKey: "sk-synthetic-env",
         expectedModelPrefix: "synthetic/",
       },
@@ -650,6 +654,8 @@ describe("applyAuthChoice", () => {
         envValue: "sk-openrouter-test",
         profileId: "openrouter:default",
         provider: "openrouter",
+        expectEnvPrompt: true,
+        expectedTextCalls: 0,
         expectedKey: "sk-openrouter-test",
         expectedModel: "openrouter/auto",
       },
@@ -659,6 +665,8 @@ describe("applyAuthChoice", () => {
         envValue: "gateway-test-key",
         profileId: "vercel-ai-gateway:default",
         provider: "vercel-ai-gateway",
+        expectEnvPrompt: true,
+        expectedTextCalls: 0,
         expectedKey: "gateway-test-key",
         expectedModel: "vercel-ai-gateway/anthropic/claude-opus-4.6",
       },
@@ -669,6 +677,8 @@ describe("applyAuthChoice", () => {
         profileId: "vercel-ai-gateway:default",
         provider: "vercel-ai-gateway",
         opts: { secretInputMode: "ref" },
+        expectEnvPrompt: false,
+        expectedTextCalls: 1,
         expectedKeyRef: { source: "env", id: "AI_GATEWAY_API_KEY" },
         expectedModel: "vercel-ai-gateway/anthropic/claude-opus-4.6",
       },
@@ -693,12 +703,16 @@ describe("applyAuthChoice", () => {
         opts: scenario.opts,
       });
 
-      expect(confirm).toHaveBeenCalledWith(
-        expect.objectContaining({
-          message: expect.stringContaining(scenario.envKey),
-        }),
-      );
-      expect(text).not.toHaveBeenCalled();
+      if (scenario.expectEnvPrompt) {
+        expect(confirm).toHaveBeenCalledWith(
+          expect.objectContaining({
+            message: expect.stringContaining(scenario.envKey),
+          }),
+        );
+      } else {
+        expect(confirm).not.toHaveBeenCalled();
+      }
+      expect(text).toHaveBeenCalledTimes(scenario.expectedTextCalls);
       expect(result.config.auth?.profiles?.[scenario.profileId]).toMatchObject({
         provider: scenario.provider,
         mode: "api_key",
@@ -724,6 +738,57 @@ describe("applyAuthChoice", () => {
         expect(profile?.keyRef).toBeUndefined();
       }
     }
+  });
+
+  it("retries ref setup when sops preflight fails and can switch to env ref", async () => {
+    await setupTempState();
+    process.env.OPENAI_API_KEY = "sk-openai-env";
+
+    const selectValues: Array<"file" | "env"> = ["file", "env"];
+    const select = vi.fn(async (params: Parameters<WizardPrompter["select"]>[0]) => {
+      if (params.options.some((option) => option.value === "file")) {
+        return (selectValues.shift() ?? "env") as never;
+      }
+      return (params.options[0]?.value ?? "env") as never;
+    });
+    const text = vi
+      .fn<WizardPrompter["text"]>()
+      .mockResolvedValueOnce("/providers/openai/apiKey")
+      .mockResolvedValueOnce("OPENAI_API_KEY");
+    const note = vi.fn(async () => undefined);
+
+    const prompter = createPrompter({
+      select,
+      text,
+      note,
+      confirm: vi.fn(async () => true),
+    });
+    const runtime = createExitThrowingRuntime();
+
+    const result = await applyAuthChoice({
+      authChoice: "openai-api-key",
+      config: {},
+      prompter,
+      runtime,
+      setDefaultModel: false,
+      opts: { secretInputMode: "ref" },
+    });
+
+    expect(result.config.auth?.profiles?.["openai:default"]).toMatchObject({
+      provider: "openai",
+      mode: "api_key",
+    });
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Could not validate this encrypted file reference."),
+      "Reference check failed",
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Validated environment variable OPENAI_API_KEY."),
+      "Reference validated",
+    );
+    expect(await readAuthProfile("openai:default")).toMatchObject({
+      keyRef: { source: "env", id: "OPENAI_API_KEY" },
+    });
   });
 
   it("keeps existing default model for explicit provider keys when setDefaultModel=false", async () => {
@@ -947,6 +1012,7 @@ describe("applyAuthChoice", () => {
         cloudflareAiGatewayApiKey?: string;
       };
       expectEnvPrompt: boolean;
+      expectedTextCalls: number;
       expectedKey?: string;
       expectedKeyRef?: { source: string; id: string };
       expectedMetadata: { accountId: string; gatewayId: string };
@@ -956,6 +1022,7 @@ describe("applyAuthChoice", () => {
         textValues: ["cf-account-id", "cf-gateway-id"],
         confirmValue: true,
         expectEnvPrompt: true,
+        expectedTextCalls: 2,
         expectedKey: "cf-gateway-test-key",
         expectedMetadata: {
           accountId: "cf-account-id",
@@ -969,7 +1036,8 @@ describe("applyAuthChoice", () => {
         opts: {
           secretInputMode: "ref",
         },
-        expectEnvPrompt: true,
+        expectEnvPrompt: false,
+        expectedTextCalls: 3,
         expectedKeyRef: {
           source: "env",
           id: "CLOUDFLARE_AI_GATEWAY_API_KEY",
@@ -988,6 +1056,7 @@ describe("applyAuthChoice", () => {
           cloudflareAiGatewayApiKey: "cf-direct-key",
         },
         expectEnvPrompt: false,
+        expectedTextCalls: 0,
         expectedKey: "cf-direct-key",
         expectedMetadata: {
           accountId: "acc-direct",
@@ -1027,7 +1096,7 @@ describe("applyAuthChoice", () => {
       } else {
         expect(confirm).not.toHaveBeenCalled();
       }
-      expect(text).toHaveBeenCalledTimes(scenario.textValues.length);
+      expect(text).toHaveBeenCalledTimes(scenario.expectedTextCalls);
       expect(result.config.auth?.profiles?.["cloudflare-ai-gateway:default"]).toMatchObject({
         provider: "cloudflare-ai-gateway",
         mode: "api_key",
