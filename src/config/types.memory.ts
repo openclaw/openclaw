@@ -1,6 +1,6 @@
 import type { SessionSendPolicyConfig } from "./types.base.js";
 
-export type MemoryBackend = "builtin" | "qmd";
+export type MemoryBackend = "builtin" | "qmd" | "engram";
 export type MemoryCitationsMode = "auto" | "on" | "off";
 export type MemoryQmdSearchMode = "query" | "search" | "vsearch";
 
@@ -8,6 +8,18 @@ export type MemoryConfig = {
   backend?: MemoryBackend;
   citations?: MemoryCitationsMode;
   qmd?: MemoryQmdConfig;
+  engram?: MemoryEngramConfig;
+};
+
+export type MemoryEngramConfig = {
+  /** Base URL of the Engram HTTP server. Default: http://127.0.0.1:7437 */
+  url?: string;
+  /** Project name to scope queries. Defaults to the agent id. */
+  project?: string;
+  /** Maximum number of results per search query. Default: 6 */
+  maxResults?: number;
+  /** HTTP request timeout in milliseconds. Default: 4000 */
+  timeoutMs?: number;
 };
 
 export type MemoryQmdConfig = {

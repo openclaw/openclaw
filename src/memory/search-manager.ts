@@ -22,6 +22,18 @@ export async function getMemorySearchManager(params: {
   purpose?: "default" | "status";
 }): Promise<MemorySearchManagerResult> {
   const resolved = resolveMemoryBackendConfig(params);
+
+  if (resolved.backend === "engram" && resolved.engram) {
+    try {
+      const { EngramProvider } = await import("./engram-provider.js");
+      const manager = new EngramProvider(resolved.engram);
+      return { manager };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(`engram memory unavailable; falling back to builtin: ${message}`);
+    }
+  }
+
   if (resolved.backend === "qmd" && resolved.qmd) {
     const statusOnly = params.purpose === "status";
     const cacheKey = buildQmdCacheKey(params.agentId, resolved.qmd);

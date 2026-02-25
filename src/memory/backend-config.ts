@@ -6,6 +6,7 @@ import type { SessionSendPolicyConfig } from "../config/types.base.js";
 import type {
   MemoryBackend,
   MemoryCitationsMode,
+  MemoryEngramConfig,
   MemoryQmdConfig,
   MemoryQmdIndexPath,
   MemoryQmdMcporterConfig,
@@ -18,6 +19,14 @@ export type ResolvedMemoryBackendConfig = {
   backend: MemoryBackend;
   citations: MemoryCitationsMode;
   qmd?: ResolvedQmdConfig;
+  engram?: ResolvedEngramConfig;
+};
+
+export type ResolvedEngramConfig = {
+  url: string;
+  project: string;
+  maxResults: number;
+  timeoutMs: number;
 };
 
 export type ResolvedQmdCollection = {
@@ -294,12 +303,37 @@ function resolveDefaultCollections(
   }));
 }
 
+const DEFAULT_ENGRAM_URL = "http://127.0.0.1:7437";
+const DEFAULT_ENGRAM_MAX_RESULTS = 6;
+const DEFAULT_ENGRAM_TIMEOUT_MS = 4_000;
+
+function resolveEngramConfig(
+  raw: MemoryEngramConfig | undefined,
+  agentId: string,
+): ResolvedEngramConfig {
+  const url = raw?.url?.trim() || DEFAULT_ENGRAM_URL;
+  const project = raw?.project?.trim() || agentId;
+  const maxResults =
+    typeof raw?.maxResults === "number" && raw.maxResults > 0
+      ? Math.floor(raw.maxResults)
+      : DEFAULT_ENGRAM_MAX_RESULTS;
+  const timeoutMs =
+    typeof raw?.timeoutMs === "number" && raw.timeoutMs > 0
+      ? Math.floor(raw.timeoutMs)
+      : DEFAULT_ENGRAM_TIMEOUT_MS;
+  return { url, project, maxResults, timeoutMs };
+}
+
 export function resolveMemoryBackendConfig(params: {
   cfg: OpenClawConfig;
   agentId: string;
 }): ResolvedMemoryBackendConfig {
   const backend = params.cfg.memory?.backend ?? DEFAULT_BACKEND;
   const citations = params.cfg.memory?.citations ?? DEFAULT_CITATIONS;
+  if (backend === "engram") {
+    const engram = resolveEngramConfig(params.cfg.memory?.engram, params.agentId);
+    return { backend: "engram", citations, engram };
+  }
   if (backend !== "qmd") {
     return { backend: "builtin", citations };
   }
