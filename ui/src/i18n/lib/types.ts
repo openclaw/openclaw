@@ -1,6 +1,6 @@
 export type TranslationMap = { [key: string]: string | TranslationMap };
 
-export type Locale = "en" | "zh-CN" | "zh-TW" | "pt-BR" | "de";
+export type Locale = "en" | "zh-CN" | "zh-TW" | "pt-BR" | "it";
 
 export interface I18nConfig {
   locale: Locale;

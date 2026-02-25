@@ -53,4 +53,21 @@ describe("i18n", () => {
     expect(fresh.i18n.getLocale()).toBe("zh-CN");
     expect(fresh.t("common.health")).toBe("健康状况");
   });
+
+  it("loads Italian locale on startup when browser language is Italian", async () => {
+    const languageSpy = vi.spyOn(window.navigator, "language", "get").mockReturnValue("it-IT");
+    try {
+      vi.resetModules();
+      const fresh = await import("../lib/translate.ts");
+
+      for (let index = 0; index < 5 && fresh.i18n.getLocale() !== "it"; index += 1) {
+        await Promise.resolve();
+      }
+
+      expect(fresh.i18n.getLocale()).toBe("it");
+      expect(fresh.t("common.health")).toBe("Stato");
+    } finally {
+      languageSpy.mockRestore();
+    }
+  });
 });

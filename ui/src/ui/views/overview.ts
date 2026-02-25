@@ -259,10 +259,11 @@ export function renderOverview(props: OverviewProps) {
                 props.onSettingsChange({ ...props.settings, locale: v });
               }}
             >
-              ${SUPPORTED_LOCALES.map((loc) => {
-                const key = loc.replace(/-([a-zA-Z])/g, (_, c) => c.toUpperCase());
-                return html`<option value=${loc}>${t(`languages.${key}`)}</option>`;
-              })}
+              <option value="en">${t("languages.en")}</option>
+              <option value="zh-CN">${t("languages.zhCN")}</option>
+              <option value="zh-TW">${t("languages.zhTW")}</option>
+              <option value="pt-BR">${t("languages.ptBR")}</option>
+              <option value="it">${t("languages.it")}</option>
             </select>
           </label>
         </div>
