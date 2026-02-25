@@ -133,15 +133,48 @@ check_ci() {
     gh pr view "$pr" --json statusCheckRollup --jq '.statusCheckRollup[0].conclusion' 2>/dev/null || echo ""
 }
 
-# Send notification via MCP hook
+HOOK_BASE_URL="${HOOK_BASE_URL:-https://beelink2.tailcd0984.ts.net/hooks}"
+
+resolve_hook_token() {
+    if [[ -n "${CLAWD_TOKEN:-}" ]]; then
+        echo "$CLAWD_TOKEN"
+        return 0
+    fi
+
+    local cfg="$HOME/.openclaw/openclaw.json"
+    if [[ -f "$cfg" ]] && command -v jq >/dev/null 2>&1; then
+        jq -r '.hooks.token // empty' "$cfg" 2>/dev/null
+        return 0
+    fi
+
+    echo ""
+}
+
+# Send human notification via MCP hook + machine event via swarm-events hook
 notify() {
     local message="$1"
     local priority="${2:-normal}"
-    
-    curl -s -X POST https://beelink2.tailcd0984.ts.net/hooks/mcp \
-        -H "Authorization: Bearer ${CLAWD_TOKEN}" \
+    local task_id="${3:-}"
+    local agent="${4:-}"
+
+    local token
+    token="$(resolve_hook_token)"
+    if [[ -z "$token" ]]; then
+        log "  Warning: no hook token available; skipping notifications"
+        return 0
+    fi
+
+    # Human route
+    curl -s -X POST "$HOOK_BASE_URL/mcp" \
+        -H "Authorization: Bearer ${token}" \
         -H "Content-Type: application/json" \
         -d "{\"message\":\"$message\",\"priority\":\"$priority\"}" >/dev/null 2>&1 || true
+
+    # Agent/event route
+    curl -s -X POST "$HOOK_BASE_URL/swarm-events" \
+        -H "Authorization: Bearer ${token}" \
+        -H "Content-Type: application/json" \
+        -d "{\"taskId\":\"$task_id\",\"agent\":\"$agent\",\"message\":\"$message\",\"priority\":\"$priority\"}" >/dev/null 2>&1 || true
 }
 
 # Main monitoring loop
@@ -179,14 +212,14 @@ for task_id in $TASKS; do
             update_task_status "$task_id" "done" "$pr_number" "Session completed, PR created"
             
             if [[ "$NOTIFY" == "true" ]]; then
-                notify "✅ Agent task completed: $description\nPR #$pr_number ready for review" "normal"
+                notify "✅ Agent task completed: $description\nPR #$pr_number ready for review" "normal" "$task_id" "$agent"
             fi
         else
             log "  No PR found - marking as failed"
             update_task_status "$task_id" "failed" "" "Session died without creating PR"
             
             if [[ "$NOTIFY" == "true" ]]; then
-                notify "⚠️ Agent task failed: $description\nSession died without creating PR" "high"
+                notify "⚠️ Agent task failed: $description\nSession died without creating PR" "high" "$task_id" "$agent"
             fi
         fi
         continue
@@ -214,7 +247,7 @@ for task_id in $TASKS; do
                 update_task_status "$task_id" "done" "$pr_number" "CI passed, ready for review"
                 
                 if [[ "$NOTIFY" == "true" ]]; then
-                    notify "✅ Agent task ready: $description\nPR #$pr_number - CI passed" "normal"
+                    notify "✅ Agent task ready: $description\nPR #$pr_number - CI passed" "normal" "$task_id" "$agent"
                 fi
                 ;;
             "FAILURE")
@@ -232,7 +265,7 @@ for task_id in $TASKS; do
             update_task_status "$task_id" "done" "" "Agent finished in tmux; no PR detected yet"
 
             if [[ "$NOTIFY" == "true" ]]; then
-                notify "✅ Agent task finished: $description\nNo PR detected yet. Review worktree: $worktree" "normal"
+                notify "✅ Agent task finished: $description\nNo PR detected yet. Review worktree: $worktree" "normal" "$task_id" "$agent"
             fi
         else
             log "  No PR yet, agent still working..."
