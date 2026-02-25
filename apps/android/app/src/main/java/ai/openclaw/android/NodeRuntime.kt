@@ -164,6 +164,12 @@ class NodeRuntime(context: Context) {
     isForeground = { _isForeground.value },
     cameraEnabled = { cameraEnabled.value },
     locationEnabled = { locationMode.value != LocationMode.Off },
+    onCanvasA2uiPush = {
+      _canvasA2uiHydrated.value = true
+      _canvasRehydratePending.value = false
+      _canvasRehydrateErrorText.value = null
+    },
+    onCanvasA2uiReset = { _canvasA2uiHydrated.value = false },
   )
 
   private lateinit var gatewayEventHandler: GatewayEventHandler
@@ -195,6 +201,13 @@ class NodeRuntime(context: Context) {
   private val _screenRecordActive = MutableStateFlow(false)
   val screenRecordActive: StateFlow<Boolean> = _screenRecordActive.asStateFlow()
 
+  private val _canvasA2uiHydrated = MutableStateFlow(false)
+  val canvasA2uiHydrated: StateFlow<Boolean> = _canvasA2uiHydrated.asStateFlow()
+  private val _canvasRehydratePending = MutableStateFlow(false)
+  val canvasRehydratePending: StateFlow<Boolean> = _canvasRehydratePending.asStateFlow()
+  private val _canvasRehydrateErrorText = MutableStateFlow<String?>(null)
+  val canvasRehydrateErrorText: StateFlow<String?> = _canvasRehydrateErrorText.asStateFlow()
+
   private val _serverName = MutableStateFlow<String?>(null)
   val serverName: StateFlow<String?> = _serverName.asStateFlow()
 
@@ -208,6 +221,8 @@ class NodeRuntime(context: Context) {
   val isForeground: StateFlow<Boolean> = _isForeground.asStateFlow()
 
   private var lastAutoA2uiUrl: String? = null
+  private var didAutoRequestCanvasRehydrate = false
+  private val canvasRehydrateSeq = AtomicLong(0)
   private var operatorConnected = false
   private var nodeConnected = false
   private var operatorStatusText: String = "Offline"
@@ -257,12 +272,21 @@ class NodeRuntime(context: Context) {
       onConnected = { _, _, _ ->
         nodeConnected = true
         nodeStatusText = "Connected"
+        didAutoRequestCanvasRehydrate = false
+        _canvasA2uiHydrated.value = false
+        _canvasRehydratePending.value = false
+        _canvasRehydrateErrorText.value = null
         updateStatus()
         maybeNavigateToA2uiOnConnect()
+        requestCanvasRehydrate(source = "node_connect", force = false)
       },
       onDisconnected = { message ->
         nodeConnected = false
         nodeStatusText = message
+        didAutoRequestCanvasRehydrate = false
+        _canvasA2uiHydrated.value = false
+        _canvasRehydratePending.value = false
+        _canvasRehydrateErrorText.value = null
         updateStatus()
         showLocalCanvasOnDisconnect()
       },
@@ -329,7 +353,56 @@ class NodeRuntime(context: Context) {
 
   private fun showLocalCanvasOnDisconnect() {
     lastAutoA2uiUrl = null
+    _canvasA2uiHydrated.value = false
+    _canvasRehydratePending.value = false
+    _canvasRehydrateErrorText.value = null
     canvas.navigate("")
+  }
+
+  fun requestCanvasRehydrate(source: String = "manual", force: Boolean = true) {
+    scope.launch {
+      if (!nodeConnected) return@launch
+      if (!force && didAutoRequestCanvasRehydrate) return@launch
+      didAutoRequestCanvasRehydrate = true
+      val requestId = canvasRehydrateSeq.incrementAndGet()
+      _canvasRehydratePending.value = true
+      _canvasRehydrateErrorText.value = null
+
+      val sessionKey = resolveMainSessionKey()
+      val prompt =
+        "Restore canvas now for session=$sessionKey source=$source. " +
+          "If existing A2UI state exists, replay it immediately. " +
+          "If not, create and render a compact mobile-friendly dashboard in Canvas."
+      try {
+        nodeSession.sendNodeEvent(
+          event = "agent.request",
+          payloadJson =
+            buildJsonObject {
+              put("message", JsonPrimitive(prompt))
+              put("sessionKey", JsonPrimitive(sessionKey))
+              put("thinking", JsonPrimitive("low"))
+              put("deliver", JsonPrimitive(false))
+            }.toString(),
+        )
+        scope.launch {
+          delay(20_000)
+          if (canvasRehydrateSeq.get() != requestId) return@launch
+          if (!_canvasRehydratePending.value) return@launch
+          if (_canvasA2uiHydrated.value) return@launch
+          _canvasRehydratePending.value = false
+          _canvasRehydrateErrorText.value = "No canvas update yet. Tap to retry."
+        }
+      } catch (err: Throwable) {
+        if (!force) {
+          didAutoRequestCanvasRehydrate = false
+        }
+        if (canvasRehydrateSeq.get() == requestId) {
+          _canvasRehydratePending.value = false
+          _canvasRehydrateErrorText.value = "Failed to request restore. Tap to retry."
+        }
+        Log.w("OpenClawCanvas", "canvas rehydrate request failed (${source}): ${err.message}")
+      }
+    }
   }
 
   val instanceId: StateFlow<String> = prefs.instanceId
