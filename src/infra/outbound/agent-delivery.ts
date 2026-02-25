@@ -65,6 +65,15 @@ export function resolveAgentDeliveryPlan(params: {
     normalizedTurnSource && isDeliverableMessageChannel(normalizedTurnSource)
       ? normalizedTurnSource
       : undefined;
+  const turnSourceTo =
+    typeof params.turnSourceTo === "string" && params.turnSourceTo.trim()
+      ? params.turnSourceTo.trim()
+      : undefined;
+  const turnSourceAccountId = normalizeAccountId(params.turnSourceAccountId);
+  const turnSourceThreadId =
+    params.turnSourceThreadId != null && params.turnSourceThreadId !== ""
+      ? params.turnSourceThreadId
+      : undefined;
 
   const baseDelivery = resolveSessionDeliveryTarget({
     entry: params.sessionEntry,
@@ -72,9 +81,9 @@ export function resolveAgentDeliveryPlan(params: {
     explicitTo,
     explicitThreadId: params.explicitThreadId,
     turnSourceChannel,
-    turnSourceTo: params.turnSourceTo,
-    turnSourceAccountId: params.turnSourceAccountId,
-    turnSourceThreadId: params.turnSourceThreadId,
+    turnSourceTo,
+    turnSourceAccountId,
+    turnSourceThreadId,
   });
 
   const resolvedChannel = (() => {
