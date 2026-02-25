@@ -20,6 +20,7 @@ import {
   type EmbeddingProvider,
   type GeminiEmbeddingClient,
   type MistralEmbeddingClient,
+  type OllamaEmbeddingClient,
   type OpenAiEmbeddingClient,
   type VoyageEmbeddingClient,
 } from "./embeddings.js";
@@ -91,11 +92,12 @@ export abstract class MemoryManagerSyncOps {
   protected abstract readonly workspaceDir: string;
   protected abstract readonly settings: ResolvedMemorySearchConfig;
   protected provider: EmbeddingProvider | null = null;
-  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "mistral";
+  protected fallbackFrom?: "openai" | "local" | "gemini" | "voyage" | "mistral" | "ollama";
   protected openAi?: OpenAiEmbeddingClient;
   protected gemini?: GeminiEmbeddingClient;
   protected voyage?: VoyageEmbeddingClient;
   protected mistral?: MistralEmbeddingClient;
+  protected ollama?: OllamaEmbeddingClient;
   protected abstract batch: {
     enabled: boolean;
     wait: boolean;
@@ -350,7 +352,10 @@ export abstract class MemoryManagerSyncOps {
     this.fts.available = result.ftsAvailable;
     if (result.ftsError) {
       this.fts.loadError = result.ftsError;
-      log.warn(`fts unavailable: ${result.ftsError}`);
+      // Only warn when hybrid search is enabled; otherwise this is expected noise.
+      if (this.fts.enabled) {
+        log.warn(`fts unavailable: ${result.ftsError}`);
+      }
     }
   }
 
@@ -958,7 +963,13 @@ export abstract class MemoryManagerSyncOps {
     if (this.fallbackFrom) {
       return false;
     }
-    const fallbackFrom = this.provider.id as "openai" | "gemini" | "local" | "voyage" | "mistral";
+    const fallbackFrom = this.provider.id as
+      | "openai"
+      | "gemini"
+      | "local"
+      | "voyage"
+      | "mistral"
+      | "ollama";
 
     const fallbackModel =
       fallback === "gemini"
@@ -988,6 +999,7 @@ export abstract class MemoryManagerSyncOps {
     this.gemini = fallbackResult.gemini;
     this.voyage = fallbackResult.voyage;
     this.mistral = fallbackResult.mistral;
+    this.ollama = fallbackResult.ollama;
     this.providerKey = this.computeProviderKey();
     this.batch = this.resolveBatchConfig();
     log.warn(`memory embeddings: switched to fallback provider (${fallback})`, { reason });
