@@ -237,7 +237,7 @@ export function renderApp(state: AppViewState) {
             </div>
             <div class="brand-text">
               <div class="brand-title">IRIS</div>
-              <div class="brand-sub">by Araújo 🌈</div>
+              <div class="brand-sub">by QualiApps 🌈</div>
             </div>
           </div>
         </div>
