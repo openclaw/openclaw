@@ -11,7 +11,6 @@ describe("embeddings-ollama", () => {
           headers: { "content-type": "application/json" },
         }),
     );
-    // @ts-expect-error test override
     globalThis.fetch = fetchMock;
 
     const { provider } = await createOllamaEmbeddingProvider({
