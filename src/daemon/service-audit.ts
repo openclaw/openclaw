@@ -47,6 +47,24 @@ export const SERVICE_AUDIT_CODES = {
   systemdWantsNetworkOnline: "systemd-wants-network-online",
 } as const;
 
+function normalizeGatewayToken(value: string | undefined): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (
+    (trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'"))
+  ) {
+    const inner = trimmed.slice(1, -1).trim();
+    return inner || undefined;
+  }
+  return trimmed;
+}
+
 export function needsNodeRuntimeMigration(issues: ServiceConfigIssue[]): boolean {
   return issues.some(
     (issue) =>
@@ -360,7 +378,8 @@ export function checkTokenDrift(params: {
   serviceToken: string | undefined;
   configToken: string | undefined;
 }): ServiceConfigIssue | null {
-  const { serviceToken, configToken } = params;
+  const serviceToken = normalizeGatewayToken(params.serviceToken);
+  const configToken = normalizeGatewayToken(params.configToken);
 
   // No drift if both are undefined/empty
   if (!serviceToken && !configToken) {
