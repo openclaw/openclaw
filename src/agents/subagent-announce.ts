@@ -46,7 +46,7 @@ import { isAnnounceSkip } from "./tools/sessions-send-helpers.js";
 const FAST_TEST_MODE = process.env.OPENCLAW_TEST_FAST === "1";
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
 const FAST_TEST_REPLY_CHANGE_WAIT_MS = 20;
-const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 60_000;
+const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
 const MAX_TIMER_SAFE_TIMEOUT_MS = 2_147_000_000;
 const DIRECT_ANNOUNCE_TRANSIENT_RETRY_DELAYS_MS = FAST_TEST_MODE
   ? ([8, 16, 32] as const)
@@ -123,6 +123,10 @@ const TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /gateway closed \(1006/i,
   /gateway timeout/i,
   /\b(econnreset|econnrefused|etimedout|enotfound|ehostunreach|network error)\b/i,
+  /\bHTTP\s+5\d{2}\b/i,
+  /\b(rate[_ ]?limit|too many requests|429)\b/i,
+  /\boverloaded\b/i,
+  /\b(service|server)\s+unavailable\b/i,
 ];
 
 const PERMANENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
