@@ -47,7 +47,6 @@ extension OnboardingView {
     func updateMonitoring(for pageIndex: Int) {
         self.updatePermissionMonitoring(for: pageIndex)
         self.updateDiscoveryMonitoring(for: pageIndex)
-        self.updateAuthMonitoring(for: pageIndex)
         self.maybeKickoffOnboardingChat(for: pageIndex)
     }
 
@@ -61,33 +60,6 @@ extension OnboardingView {
         guard self.monitoringDiscovery else { return }
         self.monitoringDiscovery = false
         self.gatewayDiscovery.stop()
-    }
-
-    func updateAuthMonitoring(for pageIndex: Int) {
-        let shouldMonitor = pageIndex == self.anthropicAuthPageIndex && self.state.connectionMode == .local
-        if shouldMonitor, !self.monitoringAuth {
-            self.monitoringAuth = true
-            self.startAuthMonitoring()
-        } else if !shouldMonitor, self.monitoringAuth {
-            self.stopAuthMonitoring()
-        }
-    }
-
-    func startAuthMonitoring() {
-        self.refreshAnthropicOAuthStatus()
-        self.authMonitorTask?.cancel()
-        self.authMonitorTask = Task {
-            while !Task.isCancelled {
-                await MainActor.run { self.refreshAnthropicOAuthStatus() }
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-            }
-        }
-    }
-
-    func stopAuthMonitoring() {
-        self.monitoringAuth = false
-        self.authMonitorTask?.cancel()
-        self.authMonitorTask = nil
     }
 
     func installCLI() async {
@@ -123,56 +95,6 @@ extension OnboardingView {
                 pid: desc.pid,
                 command: command,
                 expected: expected)
-        }
-    }
-
-    func refreshAnthropicOAuthStatus() {
-        _ = OpenClawOAuthStore.importLegacyAnthropicOAuthIfNeeded()
-        let previous = self.anthropicAuthDetectedStatus
-        let status = OpenClawOAuthStore.anthropicOAuthStatus()
-        self.anthropicAuthDetectedStatus = status
-        self.anthropicAuthConnected = status.isConnected
-
-        if previous != status {
-            self.anthropicAuthVerified = false
-            self.anthropicAuthVerificationAttempted = false
-            self.anthropicAuthVerificationFailed = false
-            self.anthropicAuthVerifiedAt = nil
-        }
-    }
-
-    @MainActor
-    func verifyAnthropicOAuthIfNeeded(force: Bool = false) async {
-        guard self.state.connectionMode == .local else { return }
-        guard self.anthropicAuthDetectedStatus.isConnected else { return }
-        if self.anthropicAuthVerified, !force { return }
-        if self.anthropicAuthVerifying { return }
-        if self.anthropicAuthVerificationAttempted, !force { return }
-
-        self.anthropicAuthVerificationAttempted = true
-        self.anthropicAuthVerifying = true
-        self.anthropicAuthVerificationFailed = false
-        defer { self.anthropicAuthVerifying = false }
-
-        guard let refresh = OpenClawOAuthStore.loadAnthropicOAuthRefreshToken(), !refresh.isEmpty else {
-            self.anthropicAuthStatus = "OAuth verification failed: missing refresh token."
-            self.anthropicAuthVerificationFailed = true
-            return
-        }
-
-        do {
-            let updated = try await AnthropicOAuth.refresh(refreshToken: refresh)
-            try OpenClawOAuthStore.saveAnthropicOAuth(updated)
-            self.refreshAnthropicOAuthStatus()
-            self.anthropicAuthVerified = true
-            self.anthropicAuthVerifiedAt = Date()
-            self.anthropicAuthVerificationFailed = false
-            self.anthropicAuthStatus = "OAuth detected and verified."
-        } catch {
-            self.anthropicAuthVerified = false
-            self.anthropicAuthVerifiedAt = nil
-            self.anthropicAuthVerificationFailed = true
-            self.anthropicAuthStatus = "OAuth verification failed: \(error.localizedDescription)"
         }
     }
 }
