@@ -8,6 +8,7 @@ import { createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
 const routeReplyMock = vi.fn();
+const isRoutableChannelMock = vi.fn();
 
 vi.mock(
   "../../agents/model-fallback.js",
@@ -22,15 +23,30 @@ vi.mock("./route-reply.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./route-reply.js")>();
   return {
     ...actual,
+    isRoutableChannel: (...args: unknown[]) => isRoutableChannelMock(...args),
     routeReply: (...args: unknown[]) => routeReplyMock(...args),
   };
 });
 
 import { createFollowupRunner } from "./followup-runner.js";
 
+const ROUTABLE_TEST_CHANNELS = new Set([
+  "telegram",
+  "slack",
+  "discord",
+  "signal",
+  "imessage",
+  "whatsapp",
+  "feishu",
+]);
+
 beforeEach(() => {
   routeReplyMock.mockReset();
   routeReplyMock.mockResolvedValue({ ok: true });
+  isRoutableChannelMock.mockReset();
+  isRoutableChannelMock.mockImplementation((ch: string | undefined) =>
+    Boolean(ch?.trim() && ROUTABLE_TEST_CHANNELS.has(ch.trim().toLowerCase())),
+  );
 });
 
 const baseQueuedRun = (messageProvider = "whatsapp"): FollowupRun =>
@@ -336,7 +352,7 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     expect(store[sessionKey]?.outputTokens).toBe(50);
   });
 
-  it("does not fall back to dispatcher when explicit origin routing fails", async () => {
+  it("does not fall back to dispatcher when cross-channel origin routing fails", async () => {
     const onBlockReply = vi.fn(async () => {});
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "hello world!" }],
@@ -357,6 +373,30 @@ describe("createFollowupRunner messaging tool dedupe", () => {
 
     expect(routeReplyMock).toHaveBeenCalled();
     expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("falls back to dispatcher when same-channel origin routing fails", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      meta: {},
+    });
+    routeReplyMock.mockResolvedValueOnce({
+      ok: false,
+      error: "outbound adapter unavailable",
+    });
+
+    const runner = createMessagingDedupeRunner(onBlockReply);
+
+    await runner({
+      ...baseQueuedRun(" Feishu "),
+      originatingChannel: "FEISHU",
+      originatingTo: "ou_abc123",
+    } as FollowupRun);
+
+    expect(routeReplyMock).toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text: "hello world!" }));
   });
 
   it("routes followups with originating account/thread metadata", async () => {
