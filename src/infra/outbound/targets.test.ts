@@ -470,4 +470,62 @@ describe("resolveSessionDeliveryTarget — cross-channel reply guard (#24152)", 
     expect(resolved.accountId).toBe("bot-123");
     expect(resolved.threadId).toBe(42);
   });
+
+  it("does not fall back to session target metadata when turnSourceChannel is set", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-no-fallback",
+        updatedAt: 1,
+        lastChannel: "slack",
+        lastTo: "U_WRONG",
+        lastAccountId: "wrong-account",
+        lastThreadId: "1739142736.000100",
+      },
+      requestedChannel: "last",
+      turnSourceChannel: "whatsapp",
+    });
+
+    expect(resolved.channel).toBe("whatsapp");
+    expect(resolved.to).toBeUndefined();
+    expect(resolved.accountId).toBeUndefined();
+    expect(resolved.threadId).toBeUndefined();
+    expect(resolved.lastTo).toBeUndefined();
+    expect(resolved.lastAccountId).toBeUndefined();
+    expect(resolved.lastThreadId).toBeUndefined();
+  });
+
+  it("uses explicitTo even when turnSourceTo is omitted", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-explicit-to",
+        updatedAt: 1,
+        lastChannel: "slack",
+        lastTo: "U_WRONG",
+      },
+      requestedChannel: "last",
+      explicitTo: "+15551234567",
+      turnSourceChannel: "whatsapp",
+    });
+
+    expect(resolved.channel).toBe("whatsapp");
+    expect(resolved.to).toBe("+15551234567");
+  });
+
+  it("still allows mismatched lastTo only from turn-scoped metadata", () => {
+    const resolved = resolveSessionDeliveryTarget({
+      entry: {
+        sessionId: "sess-mismatch-turn",
+        updatedAt: 1,
+        lastChannel: "slack",
+        lastTo: "U_WRONG",
+      },
+      requestedChannel: "telegram",
+      allowMismatchedLastTo: true,
+      turnSourceChannel: "whatsapp",
+      turnSourceTo: "+15550000000",
+    });
+
+    expect(resolved.channel).toBe("telegram");
+    expect(resolved.to).toBe("+15550000000");
+  });
 });
