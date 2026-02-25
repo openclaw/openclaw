@@ -562,6 +562,8 @@ class NodeRuntime(context: Context) {
 
   fun setMicEnabled(value: Boolean) {
     prefs.setTalkEnabled(value)
+    micCapture.setMicEnabled(value)
+    externalAudioCaptureActive.value = value
   }
 
   fun refreshGatewayConnection() {
