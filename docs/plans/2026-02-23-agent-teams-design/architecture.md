@@ -8,7 +8,6 @@ graph TB
         UI[User Message]
         CLI[CLI openclaw agent]
         WEB[WebChat]
-        APP[macOS/iOS Apps]
     end
 
     subgraph Gateway Control Plane
@@ -21,10 +20,9 @@ graph TB
     end
 
     subgraph Team Layer
-        TL[Team Lead Session]
-        TM1[Teammate 1 Session]
-        TM2[Teammate 2 Session]
-        TM3[Teammate 3 Session]
+        TL[Team Lead Session<br/>agent:id:team:name]
+        TM1[Teammate 1 Session<br/>agent:id:teammate:uuid]
+        TM2[Teammate 2 Session<br/>agent:id:teammate:uuid]
     end
 
     subgraph Storage Layer
@@ -38,36 +36,33 @@ graph TB
     UI --> GW
     CLI --> GW
     WEB --> GW
-    APP --> GW
 
     GW <--> WS
     GW <--> PI
 
     PI --> TL
-    PI --> TM1
-    PI --> TM2
-    PI --> TM3
+
+    TL -->|TeammateSpawn| PI
+    PI -->|spawnSubagentDirect| TM1
+    PI -->|spawnSubagentDirect| TM2
 
     TL -->|TeamCreate| DIR
     TL -->|TaskCreate| DB
-    TL -->|TaskList| DB
 
     TM1 -->|TaskClaim| DB
     TM2 -->|TaskClaim| DB
-    TM3 -->|TaskClaim| DB
 
-    TM1 -->|TaskComplete| DB
-    TM2 -->|TaskComplete| DB
-    TM3 -->|TaskComplete| DB
-
-    TL -->|SendMessage| INBOX
     TM1 -->|SendMessage| INBOX
     TM2 -->|SendMessage| INBOX
+    TL -->|SendMessage| INBOX
 
     INBOX --> MSGS
-    MSGS --> TM1
-    MSGS --> TM2
-    MSGS --> TL
+    MSGS -->|inject context| TM1
+    MSGS -->|inject context| TM2
+    MSGS -->|inject context| TL
+
+    TM1 -->|runSubagentAnnounceFlow| TL
+    TM2 -->|runSubagentAnnounceFlow| TL
 ```
 
 ## Component Architecture
@@ -75,36 +70,53 @@ graph TB
 ### 1. Storage Layer
 
 #### Team Directory Structure
+
 ```
 ~/.openclaw/teams/
-├── teams.json                    # Team registry
+├── teams.json                    # Team registry (name → path mapping)
 ├── {team_name}/
 │   ├── config.json               # Team configuration
 │   ├── ledger.db                 # SQLite task ledger
 │   ├── ledger.db-shm             # WAL shared memory
 │   ├── ledger.db-wal             # WAL log
 │   └── inbox/
-│       ├── {teammate_session_key}/
-│       │   └── messages.jsonl    # Message queue (one line per message)
+│       ├── {session_key_1}/
+│       │   └── messages.jsonl    # Message queue
+│       ├── {session_key_2}/
+│       │   └── messages.jsonl
+│       └── {session_key_3}/
+│           └── messages.jsonl
 ```
 
 #### Team Config Schema
+
 ```typescript
 interface TeamConfig {
-  id: string;                    // UUID
-  name: string;                  // Path-safe team identifier
-  description?: string;          // Human-readable description
-  agentType?: string;            // Agent type for team lead
-  createdAt: number;             // Unix timestamp
-  updatedAt: number;             // Unix timestamp
-  status: 'active' | 'shutdown';
-  leadSessionKey: string;        // Session key of team lead
+  id: string; // UUID
+  name: string; // Path-safe team identifier
+  description?: string; // Human-readable description
+  agentType?: string; // Agent type for team lead
+  createdAt: number; // Unix timestamp
+  updatedAt: number; // Unix timestamp
+  status: "active" | "shutting_down" | "shutdown";
+  leadSessionKey: string; // Session key of team lead
+  members: TeamMemberInfo[]; // Registered teammates
+}
+
+interface TeamMemberInfo {
+  sessionKey: string; // teammate session key
+  agentId: string; // agent type ID
+  name: string; // display name
+  color?: string; // UI color (e.g., "#D94A4A")
+  joinedAt: number; // Unix timestamp
+  lastActiveAt?: number; // Unix timestamp
 }
 ```
 
 #### SQLite Schema
 
 **Tasks Table:**
+
 ```sql
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,           -- UUID
@@ -114,10 +126,10 @@ CREATE TABLE IF NOT EXISTS tasks (
   status TEXT NOT NULL CHECK(
     status IN ('pending', 'claimed', 'in_progress', 'completed', 'failed')
   ),
-  owner TEXT,                    -- Session key of claiming agent
+  owner TEXT,                    -- sessionKey of claiming agent
   dependsOn TEXT,                -- JSON array: ["task-id-1", "task-id-2"]
   blockedBy TEXT,                -- JSON array (computed): ["task-id-3"]
-  metadata TEXT,                 -- JSON object: {"priority": "high", "deadline": "2026-03-01"}
+  metadata TEXT,                 -- JSON object
   createdAt INTEGER NOT NULL,
   claimedAt INTEGER,
   completedAt INTEGER
@@ -128,7 +140,8 @@ CREATE INDEX IF NOT EXISTS idx_tasks_owner ON tasks(owner);
 CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(createdAt);
 ```
 
-**Members Table:**
+**Members Table (optional, for team state persistence):**
+
 ```sql
 CREATE TABLE IF NOT EXISTS members (
   sessionKey TEXT PRIMARY KEY,
@@ -140,48 +153,29 @@ CREATE TABLE IF NOT EXISTS members (
 );
 ```
 
-**Messages Table (optional persistence):**
-```sql
-CREATE TABLE IF NOT EXISTS messages (
-  id TEXT PRIMARY KEY,
-  fromSession TEXT NOT NULL,
-  toSession TEXT NOT NULL,
-  type TEXT NOT NULL CHECK(
-    type IN ('message', 'broadcast', 'shutdown_request', 'shutdown_response', 'idle')
-  ),
-  content TEXT NOT NULL,
-  summary TEXT,
-  requestId TEXT,
-  approve INTEGER,               -- 0/1 for shutdown_response
-  reason TEXT,
-  createdAt INTEGER NOT NULL,
-  delivered INTEGER DEFAULT 0
-);
-```
-
 ### 2. Tool Layer
 
 #### Tool Organization
+
 ```
-src/agents/tools/
-├── teams/
-│   ├── team-create.ts
-│   ├── team-create.test.ts
-│   ├── teammate-spawn.ts
-│   ├── teammate-spawn.test.ts
-│   ├── team-shutdown.ts
-│   ├── team-shutdown.test.ts
-│   ├── task-create.ts
-│   ├── task-create.test.ts
-│   ├── task-list.ts
-│   ├── task-list.test.ts
-│   ├── task-claim.ts
-│   ├── task-claim.test.ts
-│   ├── task-complete.ts
-│   ├── task-complete.test.ts
-│   ├── send-message.ts
-│   ├── send-message.test.ts
-│   └── common.ts                # Shared utilities
+src/agents/tools/teams/
+├── team-create.ts
+├── team-create.test.ts
+├── teammate-spawn.ts
+├── teammate-spawn.test.ts
+├── team-shutdown.ts
+├── team-shutdown.test.ts
+├── task-create.ts
+├── task-create.test.ts
+├── task-list.ts
+├── task-list.test.ts
+├── task-claim.ts
+├── task-claim.test.ts
+├── task-complete.ts
+├── task-complete.test.ts
+├── send-message.ts
+├── send-message.test.ts
+└── common.ts                    # Shared utilities
 ```
 
 #### Tool Registration
@@ -227,11 +221,11 @@ const tools: AnyAgentTool[] = [
 
 ```typescript
 // src/teams/manager.ts
-import { randomUUID } from 'node:crypto';
-import { requireNodeSqlite } from '../memory/sqlite.js';
-import type { DatabaseSync } from 'node:sqlite';
-import path from 'node:path';
-import fs from 'node:fs/promises';
+import { randomUUID } from "node:crypto";
+import { requireNodeSqlite } from "../memory/sqlite.js";
+import type { DatabaseSync } from "node:sqlite";
+import path from "node:path";
+import fs from "node:fs/promises";
 
 export class TeamManager {
   private readonly teamDir: string;
@@ -240,19 +234,19 @@ export class TeamManager {
 
   constructor(teamName: string, stateDir: string) {
     this.teamName = teamName;
-    this.teamDir = path.join(stateDir, 'teams', teamName);
+    this.teamDir = path.join(stateDir, "teams", teamName);
     this.db = this.openDatabase();
     this.ensureSchema();
   }
 
   private openDatabase(): DatabaseSync {
     const { DatabaseSync } = requireNodeSqlite();
-    const dbPath = path.join(this.teamDir, 'ledger.db');
-    return new DatabaseSync(dbPath, { mode: 'wal' });
+    const dbPath = path.join(this.teamDir, "ledger.db");
+    return new DatabaseSync(dbPath, { mode: "wal" });
   }
 
   private ensureSchema(): void {
-    // Create tables...
+    // Create tasks table and indexes
   }
 
   async createTask(params: {
@@ -267,7 +261,7 @@ export class TeamManager {
     return taskId;
   }
 
-  async claimTask(taskId: string, sessionKey: string): Promise<boolean> {
+  async claimTask(taskId: string, sessionKey: string): Promise<ClaimResult> {
     const stmt = this.db.prepare(`
       UPDATE tasks
       SET status = 'claimed',
@@ -277,51 +271,108 @@ export class TeamManager {
         AND status = 'pending'
         AND owner IS NULL
     `);
-    const result = stmt.exec(sessionKey, Date.now(), taskId);
-    return result.changes > 0;
+
+    let attempts = 0;
+    const maxAttempts = 5;
+    const baseDelay = 50; // ms
+
+    while (attempts < maxAttempts) {
+      try {
+        const result = stmt.exec(sessionKey, Date.now(), taskId);
+        if (result.changes > 0) {
+          return { success: true, taskId };
+        }
+        return { success: false, error: "Task already claimed" };
+      } catch (err) {
+        if (err.code === "SQLITE_BUSY") {
+          const delay = baseDelay * Math.pow(2, attempts);
+          await sleep(delay);
+          attempts++;
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    return { success: false, error: "Failed to claim task after retries" };
   }
 
-  async completeTask(taskId: string): Promise<void> {
+  async completeTask(taskId: string, sessionKey: string): Promise<void> {
     // Update task status
-    // Unblock dependent tasks
+    // Unblock dependent tasks (remove from blockedBy)
+    // Auto-unblock: set status='pending' when blockedBy is empty
+  }
+
+  close(): void {
+    this.db.close();
   }
 }
 ```
 
 ### 4. Gateway Integration
 
-#### Team Handlers
+#### Teammate Spawn Integration
+
+```typescript
+// src/agents/tools/teams/teammate-spawn.ts
+import { spawnSubagentDirect, SUBAGENT_SPAWN_ACCEPTED_NOTE } from "../subagent-spawn.js";
+import { AGENT_LANE_TEAMMATE } from "../../lanes.js";
+
+export function createTeammateSpawnTool(deps: ToolDeps) {
+  return async function teammateSpawn(params: TeammateSpawnParams): Promise<string> {
+    const result = await spawnSubagentDirect(
+      {
+        task: params.task || `Join team ${params.team_name} as ${params.name}`,
+        label: params.name,
+        agentId: params.agent_id,
+        model: params.model,
+        mode: "session", // Teammates are persistent
+        thread: true, // Thread-bound for follow-ups
+        cleanup: "keep", // Keep session for mailbox
+      },
+      {
+        agentSessionKey: deps.agentSessionKey,
+        agentChannel: deps.agentChannel,
+        agentAccountId: deps.agentAccountId,
+      },
+    );
+
+    if (result.status === "accepted") {
+      // Register teammate in team config
+      await registerTeammate(params.team_name, {
+        sessionKey: result.childSessionKey!,
+        name: params.name,
+        agentId: params.agent_id || "default",
+      });
+      return `Teammate "${params.name}" spawned successfully. ${SUBAGENT_SPAWN_ACCEPTED_NOTE}`;
+    }
+
+    throw new Error(result.error || "Failed to spawn teammate");
+  };
+}
+```
+
+#### Team Handlers (optional, for direct Gateway API)
 
 ```typescript
 // src/gateway/server-methods/teams.ts
 export const teamsHandlers: GatewayRequestHandlers = {
-  'teams.create': async (opts) => {
+  "teams.create": async (opts) => {
     const { team_name, description, agent_type } = opts.params;
-    const teamDir = path.join(resolveStateDir(), 'teams', team_name);
+    const teamDir = path.join(resolveStateDir(), "teams", team_name);
     // Create team config
     // Create SQLite ledger
     // Respond with team ID
   },
-  'teams.delete': async (opts) => {
+  "teams.delete": async (opts) => {
     // Remove team directory
   },
-  'teams.list': async (opts) => {
+  "teams.list": async (opts) => {
     // List all teams
   },
-  'teams.get': async (opts) => {
+  "teams.get": async (opts) => {
     // Get team details
   },
-};
-```
-
-Register in `src/gateway/server-methods.ts`:
-
-```typescript
-export const coreGatewayHandlers: GatewayRequestHandlers = {
-  ...connectHandlers,
-  ...teamsHandlers,  // Add team handlers
-  ...chatHandlers,
-  // ... other handlers
 };
 ```
 
@@ -335,34 +386,193 @@ export type SessionEntry = {
   sessionId: string;
   updatedAt: number;
   // ... existing fields ...
-  teamId?: string;              // ID of team session belongs to
-  teamRole?: 'lead' | 'member'; // Role in team
-  teamCapabilities?: string[];   // Assigned capabilities
+
+  // Team-related fields
+  teamId?: string; // ID of team session belongs to
+  teamRole?: "lead" | "member"; // Role in team
+  teamName?: string; // Human-readable team name
+  teammateColor?: string; // Display color for UI
 };
 ```
 
 #### Context Injection for Team State
 
 ```typescript
-// In system prompt construction (src/agents/system-prompt.ts or similar)
-function buildSystemPrompt(session: SessionEntry): string {
+// In system prompt construction (src/agents/system-prompt.ts)
+function buildSystemPrompt(session: SessionEntry, config: OpenClawConfig): string {
   let prompt = basePrompt;
 
-  if (session.teamId && session.teamRole === 'lead') {
-    const teamState = loadTeamState(session.teamId); // Load from file/DB
-    prompt += '\n\n=== TEAM STATE ===\n';
+  // Inject team state for team lead
+  if (session.teamId && session.teamRole === "lead") {
+    const teamState = loadTeamState(session.teamId);
+    prompt += "\n\n=== TEAM STATE (GROUND TRUTH) ===\n";
     prompt += `Team: ${teamState.name} (${session.teamId})\n`;
     prompt += `Role: Team Lead\n`;
     prompt += `Active Members (${teamState.members.length}):\n`;
     for (const member of teamState.members) {
-      prompt += `  - ${member.name} (${member.agentId})\n`;
+      prompt += `  - ${member.name} (${member.agentId})`;
+      if (member.color) prompt += ` [${member.color}]`;
+      prompt += "\n";
     }
     prompt += `Pending Tasks: ${teamState.pendingTaskCount}\n`;
     prompt += `In Progress Tasks: ${teamState.inProgressTaskCount}\n`;
-    prompt += '====================\n\n';
+    prompt += "=====================================\n\n";
+  }
+
+  // Inject mailbox messages for all team members
+  if (session.teamId) {
+    const mailboxContent = await injectPendingMessages(session);
+    if (mailboxContent.trim()) {
+      prompt += "\n\n=== TEAM MESSAGES ===\n";
+      prompt += mailboxContent;
+      prompt += "=======================\n\n";
+    }
   }
 
   return prompt;
+}
+```
+
+### 6. Mailbox System
+
+#### Message Format
+
+```typescript
+interface TeamMessage {
+  id: string; // UUID
+  from: string; // Session key
+  fromName: string; // Display name
+  to?: string; // Session key (optional for broadcast)
+  type: "message" | "broadcast" | "shutdown_request" | "shutdown_response" | "idle";
+  content: string; // Message content
+  summary?: string; // 5-10 word summary for UI
+  requestId?: string; // For shutdown protocol
+  approve?: boolean; // For shutdown_response
+  reason?: string; // For shutdown_response reject
+  timestamp: number; // Unix timestamp
+}
+```
+
+#### Message Write
+
+```typescript
+// src/agents/tools/teams/send-message.ts
+async function writeMessage(teamName: string, message: TeamMessage): Promise<void> {
+  const inboxDir = path.join(resolveStateDir(), "teams", teamName, "inbox");
+
+  if (message.type === "broadcast") {
+    // Write to all members' inboxes (except sender)
+    const members = await listTeamMembers(teamName);
+    for (const member of members) {
+      if (member.sessionKey !== message.from) {
+        await writeToMemberInbox(inboxDir, member.sessionKey, message);
+      }
+    }
+  } else if (message.to) {
+    await writeToMemberInbox(inboxDir, message.to, message);
+  }
+}
+
+async function writeToMemberInbox(
+  inboxDir: string,
+  sessionKey: string,
+  message: TeamMessage,
+): Promise<void> {
+  const memberInbox = path.join(inboxDir, sanitizeSessionKey(sessionKey));
+  await fs.mkdir(memberInbox, { recursive: true });
+
+  const messagesFile = path.join(memberInbox, "messages.jsonl");
+  const line = JSON.stringify(message) + "\n";
+  await fs.appendFile(messagesFile, line, { mode: 0o600 });
+}
+```
+
+#### Message Injection into Context
+
+```typescript
+async function injectPendingMessages(session: SessionEntry): Promise<string> {
+  if (!session.teamId) {
+    return "";
+  }
+
+  const inboxDir = path.join(
+    resolveStateDir(),
+    "teams",
+    session.teamId,
+    "inbox",
+    sanitizeSessionKey(session.sessionKey),
+  );
+
+  const messagesFile = path.join(inboxDir, "messages.jsonl");
+
+  try {
+    const content = await fs.readFile(messagesFile, "utf-8");
+    const lines = content.trim().split("\n").filter(Boolean);
+    const messages: TeamMessage[] = lines.map((line) => JSON.parse(line));
+
+    if (messages.length === 0) {
+      return "";
+    }
+
+    // Build context from messages
+    let context = "";
+    for (const msg of messages) {
+      const attrs = [`teammate_id="${msg.fromName}"`, `type="${msg.type}"`];
+      if (msg.summary) attrs.push(`summary="${msg.summary}"`);
+      if (msg.requestId) attrs.push(`request_id="${msg.requestId}"`);
+      if (msg.approve !== undefined) attrs.push(`approve="${msg.approve}"`);
+      if (msg.reason) attrs.push(`reason="${msg.reason}"`);
+
+      context += `<teammate-message ${attrs.join(" ")}>\n`;
+      context += `${msg.content}\n`;
+      context += `</teammate-message>\n`;
+    }
+
+    // Clear processed messages (atomic rename)
+    const processedFile = path.join(inboxDir, `messages.processed.${Date.now()}.jsonl`);
+    await fs.rename(messagesFile, processedFile);
+    // Schedule cleanup of processed files
+
+    return context;
+  } catch (err) {
+    if (err.code !== "ENOENT") {
+      logWarn(
+        { err: String(err), session: session.sessionKey },
+        "Failed to inject mailbox messages",
+      );
+    }
+    return "";
+  }
+}
+```
+
+### 7. Completion Announce Flow
+
+```typescript
+// src/agents/tools/teams/task-complete.ts
+import { runSubagentAnnounceFlow } from "../subagent-announce.js";
+
+async function completeTaskAndAnnounce(params: {
+  teamName: string;
+  taskId: string;
+  teammateSessionKey: string;
+  teamLeadSessionKey: string;
+  taskSubject: string;
+}): Promise<void> {
+  // Mark task as completed in SQLite
+  await teamManager.completeTask(params.taskId, params.teammateSessionKey);
+
+  // Announce completion to team lead
+  await runSubagentAnnounceFlow({
+    childSessionKey: params.teammateSessionKey,
+    childRunId: `${params.teamName}:${params.taskId}`,
+    requesterSessionKey: params.teamLeadSessionKey,
+    task: params.taskSubject,
+    timeoutMs: 30000,
+    cleanup: "keep", // Keep teammate session
+    roundOneReply: `Task "${params.taskSubject}" completed`,
+    announceType: "teammate",
+  });
 }
 ```
 
@@ -371,13 +581,16 @@ function buildSystemPrompt(session: SessionEntry): string {
 ### SQLite WAL Mode
 
 WAL (Write-Ahead Logging) mode enables:
+
 - Concurrent readers during writes
 - Better performance for read-heavy workloads
 - Checkpoint-based persistence
 
 Configuration:
+
 ```typescript
-const db = new DatabaseSync(dbPath, { mode: 'wal' });
+const db = new DatabaseSync(dbPath, { mode: "wal" });
+db.pragma("wal_autocheckpoint = 1000"); // Every 1000 pages
 ```
 
 ### Atomic Task Claiming
@@ -425,8 +638,10 @@ async claimTask(taskId: string, sessionKey: string): Promise<ClaimResult> {
 
 ```typescript
 async completeTask(taskId: string, sessionKey: string): Promise<void> {
+  const db = this.db;
+
   // Mark task as completed
-  const updateStmt = this.db.prepare(`
+  const updateStmt = db.prepare(`
     UPDATE tasks
     SET status = 'completed',
         completedAt = ?
@@ -435,7 +650,7 @@ async completeTask(taskId: string, sessionKey: string): Promise<void> {
   updateStmt.exec(Date.now(), taskId, sessionKey);
 
   // Find tasks blocked by this task
-  const findBlocked = this.db.prepare(`
+  const findBlocked = db.prepare(`
     SELECT id, blockedBy FROM tasks
     WHERE status IN ('pending', 'claimed')
       AND blockedBy LIKE ?
@@ -445,134 +660,27 @@ async completeTask(taskId: string, sessionKey: string): Promise<void> {
   const blocked = findBlocked.all(pattern);
 
   // Update each blocked task
-  const removeBlocked = this.db.prepare(`
+  const updateBlockedBy = db.prepare(`
     UPDATE tasks
-    SET blockedBy = (
-      SELECT json_remove(blockedBy, idx)
-      FROM (
-        SELECT blockedBy, json_each.key as idx
-        FROM tasks
-        WHERE id = ?
-      )
-      WHERE json_extract(blockedBy, '$[' || idx || ']') = ?
-    )
+    SET blockedBy = json_remove(blockedBy, ?)
     WHERE id = ?
   `);
 
-  const unblockIfEmpty = this.db.prepare(`
+  const unblockIfEmpty = db.prepare(`
     UPDATE tasks
     SET status = 'pending'
     WHERE id = ? AND json_array_length(blockedBy) = 0
   `);
 
   for (const task of blocked) {
-    // Remove from blockedBy
-    removeBlocked.exec(task.id, taskId, task.id);
-    // Unblock if no remaining dependencies
-    unblockIfEmpty.exec(task.id);
-  }
-}
-```
-
-## Mailbox Protocol
-
-### Message Format
-
-```typescript
-interface TeamMessage {
-  id: string;
-  from: string;              // Session key
-  to?: string;               // Session key (optional for broadcast)
-  type: 'message' | 'broadcast' | 'shutdown_request' | 'shutdown_response' | 'idle';
-  content: string;
-  summary?: string;          // 5-10 word summary for UI
-  requestId?: string;        // For shutdown protocol
-  approve?: boolean;         // For shutdown_response
-  reason?: string;           // For shutdown_response reject
-  timestamp: number;
-}
-```
-
-### Message Storage
-
-```typescript
-// Write to inbox
-async writeMessage(teamName: string, message: TeamMessage): Promise<void> {
-  const inboxDir = path.join(resolveStateDir(), 'teams', teamName, 'inbox');
-
-  if (message.type === 'broadcast') {
-    // Write to all members' inboxes
-    const members = await listTeamMembers(teamName);
-    for (const member of members) {
-      if (member.sessionKey !== message.from) {
-        await writeToMemberInbox(inboxDir, member.sessionKey, message);
-      }
+    // Find index of completed task in blockedBy array
+    const blockedByArr = JSON.parse(task.blockedBy || '[]');
+    const idx = blockedByArr.indexOf(taskId);
+    if (idx >= 0) {
+      updateBlockedBy.exec(`$[${idx}]`, task.id);
+      // Auto-unblock if no remaining dependencies
+      unblockIfEmpty.exec(task.id);
     }
-  } else {
-    await writeToMemberInbox(inboxDir, message.to!, message);
-  }
-}
-
-async function writeToMemberInbox(
-  inboxDir: string,
-  sessionKey: string,
-  message: TeamMessage
-): Promise<void> {
-  const memberInbox = path.join(inboxDir, sanitizeSessionKey(sessionKey));
-  await fs.mkdir(memberInbox, { recursive: true });
-
-  const messagesFile = path.join(memberInbox, 'messages.jsonl');
-  const line = JSON.stringify(message) + '\n';
-  await fs.appendFile(messagesFile, line, { mode: 0o600 });
-}
-```
-
-### Message Injection into Context
-
-```typescript
-async injectPendingMessages(session: SessionEntry): Promise<string> {
-  if (!session.teamId) {
-    return '';
-  }
-
-  const inboxDir = path.join(
-    resolveStateDir(),
-    'teams',
-    session.teamId,
-    'inbox',
-    sanitizeSessionKey(session.sessionKey)
-  );
-
-  const messagesFile = path.join(inboxDir, 'messages.jsonl');
-
-  try {
-    const content = await fs.readFile(messagesFile, 'utf-8');
-    const lines = content.trim().split('\n').filter(Boolean);
-    const messages: TeamMessage[] = lines.map(line => JSON.parse(line));
-
-    // Build context from messages
-    let context = '';
-    for (const msg of messages) {
-      const fromName = resolveAgentName(msg.from);
-      const attrs = [`teammate_id="${fromName}"`, `type="${msg.type}"`];
-      if (msg.summary) attrs.push(`summary="${msg.summary}"`);
-      if (msg.requestId) attrs.push(`request_id="${msg.requestId}"`);
-      if (msg.approve !== undefined) attrs.push(`approve="${msg.approve}"`);
-
-      context += `<teammate-message ${attrs.join(' ')}>\n`;
-      context += `${msg.content}\n`;
-      context += `</teammate-message>\n`;
-    }
-
-    // Clear processed messages
-    await fs.unlink(messagesFile).catch(() => {});
-
-    return context;
-  } catch (err) {
-    if (err.code !== 'ENOENT') {
-      // Log error but continue
-    }
-    return '';
   }
 }
 ```
@@ -584,9 +692,7 @@ async injectPendingMessages(session: SessionEntry): Promise<string> {
 ```typescript
 function sanitizeSessionKey(sessionKey: string): string {
   // Remove or replace dangerous characters
-  return sessionKey
-    .replace(/[.\/\\]/g, '_')
-    .substring(0, 100); // Limit length
+  return sessionKey.replace(/[.\/\\]/g, "_").substring(0, 100); // Limit length
 }
 
 function validateTeamName(name: string): boolean {
@@ -600,23 +706,26 @@ function validateTeamName(name: string): boolean {
 - Each team has its own directory
 - SQLite database is team-specific
 - Inboxes are per-session scoped
-- No cross-team message routing
+- No cross-team message routing through tools
 
 ### Sandbox Integration
 
-Teammate sessions should use Docker sandboxing:
+Teammate sessions should use Docker sandboxing when enabled:
 
 ```typescript
 // When spawning teammate
-await spawnSubagentDirect({
-  task: `Join team ${teamName} as ${name}`,
-  agentId: requestedAgentId,
-  // ...
-}, {
-  // Enforce sandbox for teammates
-  agentSessionKey: parentKey,
-  // ... other context
-});
+await spawnSubagentDirect(
+  {
+    task: `Join team ${teamName} as ${name}`,
+    agentId: requestedAgentId,
+    // ...
+  },
+  {
+    // Context ensures sandbox is inherited
+    agentSessionKey: parentKey,
+    // ...
+  },
+);
 ```
 
 ## Performance Considerations
@@ -624,8 +733,8 @@ await spawnSubagentDirect({
 ### Connection Pooling
 
 ```typescript
-// Shared connection manager
-const connectionCache = new Map<string, DatabaseSync>();
+// Shared connection manager per team
+const connectionCache = new Map<string, TeamManager>();
 
 function getTeamManager(teamName: string): TeamManager {
   if (!connectionCache.has(teamName)) {
@@ -633,21 +742,32 @@ function getTeamManager(teamName: string): TeamManager {
   }
   return connectionCache.get(teamName)!;
 }
+
+function closeTeamManager(teamName: string): void {
+  const manager = connectionCache.get(teamName);
+  if (manager) {
+    manager.close();
+    connectionCache.delete(teamName);
+  }
+}
 ```
 
-### Checkpoint Configuration
+### WAL Checkpoint Configuration
 
 ```typescript
 // Configure WAL checkpoint
-db.pragma('wal_autocheckpoint = 1000'); // Every 1000 pages
+db.pragma("wal_autocheckpoint = 1000"); // Every 1000 pages
+
+// Or manual checkpoint
+db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
 ```
 
 ### Message Cleanup
 
 ```typescript
 // Periodic cleanup of old messages
-async cleanupOldMessages(teamName: string, maxAge = 24 * 60 * 60 * 1000): Promise<void> {
-  const inboxDir = path.join(resolveStateDir(), 'teams', teamName, 'inbox');
+async function cleanupOldMessages(teamName: string, maxAge = 24 * 60 * 60 * 1000): Promise<void> {
+  const inboxDir = path.join(resolveStateDir(), "teams", teamName, "inbox");
   const now = Date.now();
 
   const entries = await fs.readdir(inboxDir, { withFileTypes: true });
@@ -655,17 +775,17 @@ async cleanupOldMessages(teamName: string, maxAge = 24 * 60 * 60 * 1000): Promis
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
 
-    const messagesFile = path.join(inboxDir, entry.name, 'messages.jsonl');
+    const messagesFile = path.join(inboxDir, entry.name, "messages.jsonl");
     try {
-      const content = await fs.readFile(messagesFile, 'utf-8');
-      const lines = content.trim().split('\n').filter(Boolean);
-      const messages: TeamMessage[] = lines.map(line => JSON.parse(line));
+      const content = await fs.readFile(messagesFile, "utf-8");
+      const lines = content.trim().split("\n").filter(Boolean);
+      const messages: TeamMessage[] = lines.map((line) => JSON.parse(line));
 
       // Filter out old messages
-      const recent = messages.filter(m => (now - m.timestamp) < maxAge);
+      const recent = messages.filter((m) => now - m.timestamp < maxAge);
 
       if (recent.length < messages.length) {
-        const newContent = recent.map(m => JSON.stringify(m)).join('\n') + '\n';
+        const newContent = recent.map((m) => JSON.stringify(m)).join("\n") + "\n";
         await fs.writeFile(messagesFile, newContent, { mode: 0o600 });
       }
     } catch (err) {
@@ -673,4 +793,17 @@ async cleanupOldMessages(teamName: string, maxAge = 24 * 60 * 60 * 1000): Promis
     }
   }
 }
+```
+
+### Index Strategy
+
+```sql
+-- Essential indexes for task queries
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_owner ON tasks(owner);
+CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(createdAt);
+CREATE INDEX IF NOT EXISTS idx_tasks_blocked_by ON tasks(blockedBy);
+
+-- For member queries (if using members table)
+CREATE INDEX IF NOT EXISTS idx_members_role ON members(role);
 ```

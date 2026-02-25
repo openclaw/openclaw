@@ -4,14 +4,25 @@
 
 This document describes the design for implementing Claude Code-style multi-agent team orchestration in OpenClaw. The design enables a Team Lead agent to coordinate multiple independent Teammate agents through a shared task ledger with SQLite-backed concurrency control and a mailbox protocol for peer-to-peer communication.
 
+**Key Design Decisions:**
+
+1. **Teammate as Subagent**: Teammates spawn via `spawnSubagentDirect()` using dedicated `teammate` lane
+2. **Hybrid Communication**: Mailbox for async peer-to-peer + Announce flow for completion reporting
+3. **Unified Storage**: Team data in `~/.openclaw/teams/`, simplifying Claude Code's dual `teams/` + `tasks/` structure
+
 ## Requirements
 
 ### Success Criteria for MVP
 
-- **Team Creation and Lifecycle**: Users can create teams via `TeamCreate` tool, team configuration persists in `~/.openclaw/teams/{team_name}/config.json`, teams can be gracefully shut down with member approval
-- **Teammate Spawning**: Team leads can spawn teammate agents via `TeammateSpawn` tool, teammate processes run as independent agent sessions
-- **Task Ledger Management**: Tasks can be added with full metadata via `TaskCreate` tool, task claiming is atomic, task dependencies (`dependsOn`/`blockedBy`) are fully resolved, auto-unblock occurs when blocking tasks complete
-- **Agent-to-Agent Communication**: Direct messaging via `SendMessage` tool, broadcasting to all teammates, shutdown request/response protocol
+| Feature                 | Description                                                                          |
+| ----------------------- | ------------------------------------------------------------------------------------ |
+| **Team Creation**       | `TeamCreate` tool creates team config at `~/.openclaw/teams/{team_name}/config.json` |
+| **Teammate Spawning**   | `TeammateSpawn` spawns via `spawnSubagentDirect()` with `lane: "teammate"`           |
+| **Task Ledger**         | SQLite at `~/.openclaw/teams/{team}/ledger.db` with atomic claiming                  |
+| **Task Dependencies**   | `dependsOn`/`blockedBy` resolution with auto-unblock on completion                   |
+| **Mailbox Protocol**    | File-based inbox for async peer-to-peer messaging                                    |
+| **Shutdown Protocol**   | Request/response pattern for graceful teammate termination                           |
+| **Completion Announce** | `runSubagentAnnounceFlow()` for teammate → team lead reporting                       |
 
 ### Technical Constraints
 
@@ -19,10 +30,23 @@ This document describes the design for implementing Claude Code-style multi-agen
 - **Database**: SQLite (node:sqlite) with WAL mode
 - **Implementation**: Native OpenClaw tools (not skills/extensions)
 - **Testing**: Vitest with BDD scenarios (84 total)
-
-See [AGENT_TEAMS_REQUIREMENTS.md](../../AGENT_TEAMS_REQUIREMENTS.md) for complete requirements.
+- **Integration**: Reuse `spawnSubagentDirect`, `runSubagentAnnounceFlow`, Gateway delivery
 
 ## Rationale
+
+### Why Hybrid Communication Model
+
+| Pattern              | Use Case                     | Implementation                    |
+| -------------------- | ---------------------------- | --------------------------------- |
+| **Mailbox (inbox/)** | Peer-to-peer async messaging | File-based, injected into context |
+| **Announce Flow**    | Task completion → team lead  | Reuse `runSubagentAnnounceFlow()` |
+| **Broadcast**        | Team-wide announcements      | Write to all member inboxes       |
+
+This hybrid approach:
+
+- Avoids reinventing delivery logic (reuse announce flow)
+- Enables true peer-to-peer async communication (mailbox)
+- Aligns with OpenClaw's existing subagent infrastructure
 
 ### Why SQLite for Task Ledger
 
@@ -42,12 +66,14 @@ OpenClaw follows a local-first, file-driven design. Storing team data in `~/.ope
 3. **Alignment**: Consistent with existing `~/.openclaw/agents/` patterns
 4. **Debuggability**: Direct file inspection for troubleshooting
 
-### Why Native Tools Instead of Extensions
+### Why Teammate as Subagent
 
-- Tighter integration with session state management
-- Direct access to Gateway internals for team coordination
-- Easier testing and maintenance
-- Consistent with OpenClaw tool patterns
+| Aspect        | Claude Code              | OpenClaw (Revised)             |
+| ------------- | ------------------------ | ------------------------------ |
+| Spawn backend | tmux, iTerm2, in-process | `spawnSubagentDirect()`        |
+| Session key   | Custom format            | `agent:${id}:teammate:${uuid}` |
+| Lane          | N/A                      | `AGENT_LANE_TEAMMATE`          |
+| Communication | Mailbox only             | Mailbox + Announce flow        |
 
 ## Detailed Design
 
@@ -72,19 +98,31 @@ graph TB
     end
 
     subgraph Teammates
-        TM1[Teammate 1 Session]
-        TM2[Teammate 2 Session]
+        TM1[Teammate 1 Session<br/>lane: teammate]
+        TM2[Teammate 2 Session<br/>lane: teammate]
     end
 
     U --> G
     G --> TL
+
     TL -->|TeamCreate| DIR
-    TL -->|TaskAdd| DB
+    TL -->|TeammateSpawn| G
+    G -->|spawnSubagentDirect| TM1
+    G -->|spawnSubagentDirect| TM2
+
     TM1 -->|TaskClaim| DB
     TM2 -->|TaskClaim| DB
+
+    TM1 -->|SendMessage| INBOX
+    TM2 -->|SendMessage| INBOX
     TL -->|SendMessage| INBOX
-    INBOX --> TM1
-    INBOX --> TM2
+
+    INBOX -->|inject context| TM1
+    INBOX -->|inject context| TM2
+    INBOX -->|inject context| TL
+
+    TM1 -->|AnnounceFlow| TL
+    TM2 -->|AnnounceFlow| TL
 ```
 
 ### Directory Structure
@@ -92,15 +130,23 @@ graph TB
 ```
 ~/.openclaw/
 ├── teams/
-│   ├── {team_name}/
-│   │   ├── config.json          # Team configuration
-│   │   ├── ledger.db            # SQLite task ledger
-│   │   ├── ledger.db-shm        # WAL shared memory
-│   │   ├── ledger.db-wal        # WAL log
-│   │   └── inbox/
-│   │       ├── {teammate_id}/   # Message queues
-│   │       │   └── messages.jsonl
+│   ├── teams.json                    # Team registry (name → path mapping)
+│   └── {team_name}/
+│       ├── config.json               # Team configuration
+│       ├── ledger.db                 # SQLite task ledger
+│       ├── ledger.db-shm             # WAL shared memory
+│       ├── ledger.db-wal             # WAL log
+│       └── inbox/
+│           ├── {session_key}/
+│           │   └── messages.jsonl    # Message queue (one line per message)
 ```
+
+### Session Key Patterns
+
+| Session Type | Format                              | Example                                                       |
+| ------------ | ----------------------------------- | ------------------------------------------------------------- |
+| Team Lead    | `agent:${agentId}:team:${teamName}` | `agent:default:team:my-project`                               |
+| Teammate     | `agent:${agentId}:teammate:${uuid}` | `agent:default:teammate:550e8400-e29b-41d4-a716-446655440000` |
 
 ### SQLite Schema
 
@@ -112,16 +158,16 @@ CREATE TABLE IF NOT EXISTS tasks (
   description TEXT NOT NULL,
   activeForm TEXT,
   status TEXT NOT NULL CHECK(status IN ('pending', 'claimed', 'in_progress', 'completed', 'failed')),
-  owner TEXT,
-  dependsOn TEXT,  -- JSON array of task IDs
-  blockedBy TEXT, -- JSON array of task IDs (computed)
-  metadata TEXT,  -- JSON object
+  owner TEXT,                    -- sessionKey of claiming agent
+  dependsOn TEXT,                -- JSON array of task IDs
+  blockedBy TEXT,                -- JSON array (computed)
+  metadata TEXT,                 -- JSON object
   createdAt INTEGER NOT NULL,
   claimedAt INTEGER,
   completedAt INTEGER
 );
 
--- Team members table
+-- Team members table (optional, for team state)
 CREATE TABLE IF NOT EXISTS members (
   sessionKey TEXT PRIMARY KEY,
   agentId TEXT NOT NULL,
@@ -130,16 +176,10 @@ CREATE TABLE IF NOT EXISTS members (
   joinedAt INTEGER NOT NULL
 );
 
--- Messages table (optional, for inbox persistence)
-CREATE TABLE IF NOT EXISTS messages (
-  id TEXT PRIMARY KEY,
-  from_session TEXT NOT NULL,
-  to_session TEXT NOT NULL,
-  type TEXT NOT NULL,
-  content TEXT NOT NULL,
-  createdAt INTEGER NOT NULL,
-  delivered INTEGER DEFAULT 0
-);
+-- Indexes
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status);
+CREATE INDEX IF NOT EXISTS idx_tasks_owner ON tasks(owner);
+CREATE INDEX IF NOT EXISTS idx_tasks_created ON tasks(createdAt);
 ```
 
 ### Tool API
@@ -147,35 +187,40 @@ CREATE TABLE IF NOT EXISTS messages (
 #### Team Management Tools
 
 **TeamCreate**: Creates a new team
+
 ```typescript
 {
   team_name: string;           // Required: Path-safe team identifier
-  description?: string;       // Optional: Team description
-  agent_type?: string;        // Optional: Agent type for team lead
+  description?: string;        // Optional: Team description
+  agent_type?: string;         // Optional: Agent type for team lead
 }
 ```
 
-**TeammateSpawn**: Creates a teammate session
+**TeammateSpawn**: Creates a teammate session via `spawnSubagentDirect`
+
 ```typescript
 {
   team_name: string;           // Required: Team to join
-  name: string;               // Required: Display name
-  agent_id?: string;          // Optional: Agent type ID
-  model?: string;             // Optional: Model override
+  name: string;                // Required: Display name
+  agent_id?: string;           // Optional: Agent type ID
+  model?: string;              // Optional: Model override
+  task?: string;               // Optional: Initial task prompt
 }
 ```
 
 **TeamShutdown**: Gracefully shuts down a team
+
 ```typescript
 {
   team_name: string;           // Required: Team to shutdown
-  reason?: string;            // Optional: Shutdown reason
+  reason?: string;             // Optional: Shutdown reason
 }
 ```
 
 #### Task Management Tools
 
 **TaskCreate**: Adds a task to the ledger
+
 ```typescript
 {
   team_name: string;           // Required: Team to add task to
@@ -188,6 +233,7 @@ CREATE TABLE IF NOT EXISTS messages (
 ```
 
 **TaskList**: Queries available tasks
+
 ```typescript
 {
   team_name: string;           // Required: Team to query
@@ -198,34 +244,37 @@ CREATE TABLE IF NOT EXISTS messages (
 ```
 
 **TaskClaim**: Atomically claims a task
+
 ```typescript
 {
-  team_name: string;           // Required: Team containing task
-  task_id: string;             // Required: Task ID to claim
+  team_name: string; // Required: Team containing task
+  task_id: string; // Required: Task ID to claim
 }
 ```
 
 **TaskComplete**: Marks a task as completed
+
 ```typescript
 {
-  team_name: string;           // Required: Team containing task
-  task_id: string;             // Required: Task ID to complete
+  team_name: string; // Required: Team containing task
+  task_id: string; // Required: Task ID to complete
 }
 ```
 
 #### Communication Tools
 
 **SendMessage**: Sends a message to teammate(s)
+
 ```typescript
 {
   team_name: string;           // Required: Team context
-  type: "message" | "broadcast" | "shutdown_request";
-  recipient?: string;          // Required for message type
+  type: "message" | "broadcast" | "shutdown_request" | "shutdown_response";
+  recipient?: string;          // Required for message type (session key)
   content: string;             // Required: Message content
-  request_id?: string;         // Required for shutdown_request
+  summary?: string;            // Optional: 5-10 word summary for UI
+  request_id?: string;         // Required for shutdown_request/response
   approve?: boolean;           // Required for shutdown_response
-  reason?: string;             // Optional: Reject reason
-  summary?: string;            // Optional: 5-10 word summary
+  reason?: string;             // Optional: Reject reason for shutdown_response
 }
 ```
 
@@ -236,94 +285,177 @@ Add team-related fields to `SessionEntry` type in `src/config/sessions/types.ts`
 ```typescript
 export type SessionEntry = {
   // ... existing fields ...
-  teamId?: string;            // ID of team session belongs to
-  teamRole?: 'lead' | 'member'; // Role in team
-  teamCapabilities?: string[]; // Assigned capabilities
+  teamId?: string; // ID of team session belongs to
+  teamRole?: "lead" | "member"; // Role in team
+  teamName?: string; // Human-readable team name
+  teammateColor?: string; // Display color for UI (e.g., "#D94A4A")
 };
 ```
 
-### Concurrency Control
+### Communication Flows
 
-**Atomic Task Claiming** uses SQL UPDATE with WHERE:
+#### 1. Teammate Spawn Flow
 
-```sql
-UPDATE tasks
-SET status = 'claimed',
-    owner = ?,
-    claimedAt = ?
-WHERE id = ?
-  AND status = 'pending'
-  AND owner IS NULL
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant TL as Team Lead
+    participant G as Gateway
+    participant TM as Teammate
+
+    U->>TL: "Create a researcher teammate"
+    TL->>TL: Call TeammateSpawn tool
+    TL->>G: spawnSubagentDirect({<br/>  sessionKey: `agent:${id}:teammate:${uuid}`,<br/>  lane: "teammate",<br/>  spawnedBy: teamLeadKey<br/>})
+    G-->>TL: { status: "accepted", childSessionKey }
+    TL->>TL: Store teammate session in team config
+    Note over TM: Teammate starts with<br/>team state injected
 ```
 
-If no rows are affected, another agent claimed the task first - return a conflict error.
+#### 2. Task Claim Flow
 
-**Task Dependency Resolution** uses a post-completion trigger:
+```mermaid
+sequenceDiagram
+    participant TM1 as Teammate 1
+    participant TM2 as Teammate 2
+    participant DB as SQLite Ledger
 
-```sql
--- After marking task as completed:
-SELECT id FROM tasks WHERE blockedBy LIKE '%"completedTaskId"%';
-
--- Update each blocked task
-UPDATE tasks SET blockedBy = json_remove(blockedBy, '$[idx]') WHERE id = ?;
-UPDATE tasks SET status = 'pending' WHERE id = ? AND json_array_length(blockedBy) = 0;
+    TM1->>DB: TaskClaim(taskId)
+    TM2->>DB: TaskClaim(taskId)
+    Note over DB: Atomic UPDATE with WHERE:<br/>WHERE status='pending' AND owner IS NULL
+    DB-->>TM1: { success: true }
+    DB-->>TM2: { success: false, error: "already claimed" }
 ```
 
-### Mailbox Protocol
+#### 3. Peer-to-Peer Message Flow
 
-**Message Flow**:
+```mermaid
+sequenceDiagram
+    participant TM1 as Teammate 1
+    participant G as Gateway
+    participant INBOX as inbox/{session}/messages.jsonl
+    participant TM2 as Teammate 2
 
-1. Sender calls `SendMessage` tool
-2. Gateway writes message to `~/.openclaw/teams/{team}/inbox/{recipient}/messages.jsonl`
-3. On next inference, Gateway reads pending messages for the session
-4. Messages are injected into context with XML tags:
+    TM1->>G: SendMessage(tool call)
+    G->>INBOX: Append message line
+    Note over TM2: TM2 continues working
+    Note over TM2: Next inference cycle
+    TM2->>INBOX: Read pending messages
+    INBOX-->>TM2: Inject as XML context
+    Note over TM2: Messages visible in context
+```
+
+#### 4. Shutdown Protocol Flow
+
+```mermaid
+sequenceDiagram
+    participant TL as Team Lead
+    participant TM as Teammate
+    participant INBOX as inbox
+
+    TL->>INBOX: Write shutdown_request<br/>(request_id: "abc-123")
+    Note over TM: Next inference
+    TM->>INBOX: Read shutdown_request
+    TM->>TM: Decide to approve
+    TM->>INBOX: Write shutdown_response<br/>(approve: true, request_id: "abc-123")
+    TL->>INBOX: Read shutdown_response
+    TL->>TL: Confirm shutdown complete
+```
+
+#### 5. Task Completion Announce Flow
+
+```mermaid
+sequenceDiagram
+    participant TM as Teammate
+    participant G as Gateway
+    participant TL as Team Lead
+
+    TM->>TM: Complete task
+    TM->>G: runSubagentAnnounceFlow({<br/>  childSessionKey: teammateKey,<br/>  requesterSessionKey: teamLeadKey,<br/>  announceType: "teammate"<br/>})
+    G-->>TL: Inject system message:<br/>"Teammate X completed task Y"
+    Note over TL: TL sees completion,<br/>continues orchestration
+```
+
+### Context Injection
+
+#### Team State for Team Lead
+
+```typescript
+function injectTeamState(session: SessionEntry): string {
+  if (!session.teamId || session.teamRole !== "lead") {
+    return "";
+  }
+
+  const teamState = loadTeamState(session.teamId);
+  let state = "\n\n=== TEAM STATE ===\n";
+  state += `Team: ${teamState.name} (${session.teamId})\n`;
+  state += `Role: Team Lead\n`;
+  state += `Active Members (${teamState.members.length}):\n`;
+  for (const member of teamState.members) {
+    state += `  - ${member.name} (${member.agentId})\n`;
+  }
+  state += `Pending Tasks: ${teamState.pendingTaskCount}\n`;
+  state += "====================\n\n";
+
+  return state;
+}
+```
+
+#### Mailbox Messages for All Members
 
 ```xml
-<teammate-message teammate_id="researcher-1" type="message" summary="Found critical bug in auth module">
+<teammate-message teammate_id="researcher" type="message" summary="Found critical bug in auth">
 Found a critical security vulnerability in the auth module at src/auth/jwt.ts:42.
 The token expiration check is bypassed when using admin claims.
 
 I recommend we prioritize fixing this before deploying to production.
 </teammate-message>
-```
 
-**Shutdown Protocol**:
-
-```xml
-<!-- Request -->
 <teammate-message teammate_id="team-lead" type="shutdown_request" request_id="abc-123">
 Task complete, wrapping up the session
 </teammate-message>
-
-<!-- Response -->
-<teammate-message teammate_id="researcher-1" type="shutdown_response" request_id="abc-123" approve="true">
-</teammate-message>
-
-<!-- Reject -->
-<teammate-message teammate_id="worker-1" type="shutdown_response" request_id="abc-123" approve="false" reason="Still working on task #3">
-</teammate-message>
 ```
-
-### Context Amnesia Prevention
-
-Team state is injected as "ground truth" before each Team Lead inference:
-
-```typescript
-// In system prompt construction
-if (session.teamId && session.teamRole === 'lead') {
-  const teamState = await loadTeamState(session.teamId);
-  systemPrompt += `\n\n=== TEAM STATE ===\n`;
-  systemPrompt += `Team: ${teamState.name}\n`;
-  systemPrompt += `Active Members: ${teamState.members.map(m => m.name).join(', ')}\n`;
-  systemPrompt += `Pending Tasks: ${teamState.pendingTaskCount}\n`;
-  systemPrompt += `====================\n`;
-}
-```
-
-This ensures Team Lead always knows about its team and members, regardless of context compression.
 
 ## Design Documents
 
 - [BDD Specifications](./bdd-specs.md) - Behavior scenarios and testing strategy
 - [Architecture](./architecture.md) - System architecture and component details
 - [Best Practices](./best-practices.md) - Security, performance, and code quality guidelines
+
+## Implementation Checklist
+
+### Phase 1: Core Infrastructure
+
+- [ ] Create `src/teams/manager.ts` for SQLite operations
+- [ ] Create `src/config/teams/store.ts` for team config persistence
+- [ ] Define TypeScript types for teams, tasks, members, messages
+- [ ] Implement WAL mode configuration
+- [ ] Add `AGENT_LANE_TEAMMATE` to `src/agents/lanes.ts`
+
+### Phase 2: Team Tools
+
+- [ ] Implement `TeamCreate` tool
+- [ ] Implement `TeammateSpawn` tool (wraps `spawnSubagentDirect`)
+- [ ] Implement `TeamShutdown` tool
+- [ ] Add team fields to SessionEntry type
+
+### Phase 3: Task Tools
+
+- [ ] Implement `TaskCreate` tool
+- [ ] Implement `TaskList` tool
+- [ ] Implement `TaskClaim` tool (atomic with retry)
+- [ ] Implement `TaskComplete` tool (with unblock logic)
+
+### Phase 4: Communication Tools
+
+- [ ] Implement `SendMessage` tool
+- [ ] Implement inbox directory structure
+- [ ] Implement message injection into context
+- [ ] Implement shutdown protocol
+- [ ] Integrate `runSubagentAnnounceFlow` for completion
+
+### Phase 5: Testing
+
+- [ ] Write unit tests for SQLite operations
+- [ ] Write integration tests for tool interactions
+- [ ] Write concurrency tests for race conditions
+- [ ] Implement BDD step definitions for all 84 scenarios
