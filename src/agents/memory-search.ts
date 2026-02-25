@@ -79,6 +79,7 @@ export type ResolvedMemorySearchConfig = {
       temporalDecay: {
         enabled: boolean;
         halfLifeDays: number;
+        importanceBoost?: Partial<import("../memory/temporal-decay.js").ImportanceBoostConfig>;
       };
     };
   };
@@ -362,6 +363,9 @@ function mergeConfig(
         temporalDecay: {
           enabled: Boolean(hybrid.temporalDecay.enabled),
           halfLifeDays: temporalDecayHalfLifeDays,
+          importanceBoost:
+            overrides?.query?.hybrid?.temporalDecay?.importanceBoost ??
+            defaults?.query?.hybrid?.temporalDecay?.importanceBoost,
         },
       },
     },
