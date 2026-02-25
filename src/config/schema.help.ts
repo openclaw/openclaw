@@ -1364,6 +1364,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Enable Discord voice channel conversations (default: true). Omit channels.discord.voice to keep voice support disabled for the account.",
   "channels.discord.voice.autoJoin":
     "Voice channels to auto-join on startup (list of guildId/channelId entries).",
+  "channels.discord.voice.daveEncryption":
+    "Toggle DAVE end-to-end encryption for Discord voice joins (default: true in @discordjs/voice; Discord may require this).",
+  "channels.discord.voice.decryptionFailureTolerance":
+    "Consecutive decrypt failures before DAVE attempts session recovery (passed to @discordjs/voice; default: 24).",
   "channels.discord.voice.tts":
     "Optional TTS overrides for Discord voice playback (merged with messages.tts).",
   "channels.discord.intents.presence":
