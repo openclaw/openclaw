@@ -1,83 +1,8 @@
 apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: openclaw-sre
-  namespace: morpho-dev
-  annotations:
-    eks.amazonaws.com/role-arn: arn:aws:iam::537124939463:role/openclaw-sre-dev-readonly
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: openclaw-sre-readonly
-rules:
-  - apiGroups: [""]
-    resources:
-      - configmaps
-      - endpoints
-      - events
-      - namespaces
-      - nodes
-      - persistentvolumeclaims
-      - pods
-      - pods/log
-      - secrets
-      - services
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["apps"]
-    resources:
-      - daemonsets
-      - deployments
-      - replicasets
-      - statefulsets
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["batch"]
-    resources:
-      - cronjobs
-      - jobs
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["autoscaling"]
-    resources:
-      - horizontalpodautoscalers
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["networking.k8s.io"]
-    resources:
-      - ingresses
-      - networkpolicies
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["metrics.k8s.io"]
-    resources:
-      - nodes
-      - pods
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["monitoring.coreos.com"]
-    resources:
-      - alertmanagers
-      - podmonitors
-      - prometheuses
-      - prometheusrules
-      - servicemonitors
-      - thanosrulers
-    verbs: ["get", "list", "watch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: openclaw-sre-readonly
-subjects:
-  - kind: ServiceAccount
-    name: openclaw-sre
-    namespace: morpho-dev
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: openclaw-sre-readonly
----
-apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: openclaw-sre-state
-  namespace: morpho-dev
+  namespace: monitoring
 spec:
   accessModes:
     - ReadWriteOnce
@@ -89,7 +14,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: openclaw-sre
-  namespace: morpho-dev
+  namespace: monitoring
   labels:
     app: openclaw-sre
 spec:
@@ -104,7 +29,7 @@ spec:
       labels:
         app: openclaw-sre
     spec:
-      serviceAccountName: openclaw-sre
+      serviceAccountName: incident-readonly-agent
       initContainers:
         - name: seed-openclaw-home
           image: busybox:1.36
@@ -151,15 +76,23 @@ spec:
               contexts:
               - context:
                   cluster: in-cluster
-                  namespace: morpho-dev
-                  user: openclaw-sre
+                  namespace: monitoring
+                  user: incident-readonly-agent
                 name: in-cluster
               current-context: in-cluster
               users:
-              - name: openclaw-sre
+              - name: incident-readonly-agent
                 user:
                   tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
               EOF
+              if [ -z "${VAULT_TOKEN:-}" ] && [ -n "${VAULT_ADDR:-}" ] && command -v curl >/dev/null 2>&1; then
+                ROLE="${VAULT_KUBERNETES_ROLE:-incident-readonly-agent}"
+                AUTH_PATH="${VAULT_KUBERNETES_AUTH_PATH:-kubernetes}"
+                JWT="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)"
+                LOGIN_BODY="$(printf '{"role":"%s","jwt":"%s"}' "$ROLE" "$JWT")"
+                VAULT_TOKEN="$(curl -sS -X POST "${VAULT_ADDR}/v1/auth/${AUTH_PATH}/login" -H "Content-Type: application/json" --data "$LOGIN_BODY" | jq -r '.auth.client_token // empty')"
+                export VAULT_TOKEN
+              fi
               exec openclaw gateway --bind lan --port 18789 --allow-unconfigured
           envFrom:
             - secretRef:
@@ -177,6 +110,46 @@ spec:
               value: eu-west-3
             - name: AWS_DEFAULT_REGION
               value: eu-west-3
+            - name: VAULT_KUBERNETES_AUTH_PATH
+              value: kubernetes
+            - name: VAULT_KUBERNETES_ROLE
+              value: incident-readonly-agent
+            - name: VAULT_ADDR
+              valueFrom:
+                secretKeyRef:
+                  name: carapulse-secrets
+                  key: vault-addr
+                  optional: true
+            - name: VAULT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: carapulse-secrets
+                  key: vault-token
+                  optional: true
+            - name: BOUNDARY_ADDR
+              valueFrom:
+                secretKeyRef:
+                  name: carapulse-secrets
+                  key: boundary-addr
+                  optional: true
+            - name: BOUNDARY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: carapulse-secrets
+                  key: boundary-token
+                  optional: true
+            - name: ARGOCD_BASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: carapulse-secrets
+                  key: argocd-base-url
+                  optional: true
+            - name: ARGOCD_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: carapulse-secrets
+                  key: argocd-token
+                  optional: true
           ports:
             - name: http
               containerPort: 18789
@@ -212,7 +185,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: openclaw-sre
-  namespace: morpho-dev
+  namespace: monitoring
   labels:
     app: openclaw-sre
 spec:

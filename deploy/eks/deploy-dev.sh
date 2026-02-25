@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 CONTEXT="${CONTEXT:-dev-morpho}"
-NAMESPACE="${NAMESPACE:-morpho-dev}"
+NAMESPACE="${NAMESPACE:-monitoring}"
 AWS_REGION="${AWS_REGION:-eu-west-3}"
 ECR_REPO="${ECR_REPO:-openclaw-sre}"
 IMAGE_TAG="${IMAGE_TAG:-$(date -u +%Y%m%d-%H%M%S)}"
@@ -13,6 +13,7 @@ OPENCLAW_VERSION="${OPENCLAW_VERSION:-2026.2.24}"
 
 OPENCLAW_JSON="${OPENCLAW_JSON:-$HOME/.openclaw/openclaw.json}"
 SLACK_ENV_FILE="${SLACK_ENV_FILE:-$HOME/.openclaw/docker-sre/.env}"
+SLACK_TXT_FILE="${SLACK_TXT_FILE:-$ROOT_DIR/slack.txt}"
 SKILL_DIR="${SKILL_DIR:-$HOME/.openclaw/skills/morpho-sre}"
 MORPHO_INFRA_DIR="${MORPHO_INFRA_DIR:-/Users/florian/morpho/morpho-infra}"
 MORPHO_INFRA_HELM_DIR="${MORPHO_INFRA_HELM_DIR:-/Users/florian/morpho/morpho-infra-helm}"
@@ -54,12 +55,27 @@ source "$SLACK_ENV_FILE"
 set +a
 
 if [[ -z "${SLACK_BOT_TOKEN:-}" ]]; then
-  echo "SLACK_BOT_TOKEN missing in $SLACK_ENV_FILE" >&2
+  if [[ -f "$SLACK_TXT_FILE" ]]; then
+    SLACK_BOT_TOKEN="$(grep -Eo 'xoxb-[A-Za-z0-9-]+' "$SLACK_TXT_FILE" | head -n1 || true)"
+  fi
+fi
+
+if [[ "${SLACK_APP_TOKEN:-}" == "http-mode-unused" ]]; then
+  SLACK_APP_TOKEN=""
+fi
+
+if [[ "${SLACK_APP_TOKEN:-}" != xapp-* && -f "$SLACK_TXT_FILE" ]]; then
+  SLACK_APP_TOKEN="$(grep -Eo 'xapp-[A-Za-z0-9-]+' "$SLACK_TXT_FILE" | head -n1 || true)"
+fi
+
+if [[ -z "${SLACK_BOT_TOKEN:-}" ]]; then
+  echo "SLACK_BOT_TOKEN missing in $SLACK_ENV_FILE (and no xoxb token found in $SLACK_TXT_FILE)" >&2
   exit 1
 fi
 
-if [[ -z "${SLACK_APP_TOKEN:-}" ]]; then
-  SLACK_APP_TOKEN="http-mode-unused"
+if [[ -z "${SLACK_APP_TOKEN:-}" || "${SLACK_APP_TOKEN:-}" != xapp-* ]]; then
+  echo "SLACK_APP_TOKEN missing in $SLACK_ENV_FILE (and no xapp token found in $SLACK_TXT_FILE)" >&2
+  exit 1
 fi
 
 GATEWAY_TOKEN="$(jq -r '.gateway.auth.token // empty' "$OPENCLAW_JSON")"
@@ -158,6 +174,11 @@ kubectl --context "$CONTEXT" -n "$NAMESPACE" create secret generic openclaw-sre-
   --from-literal=OPENCLAW_GATEWAY_TOKEN="$GATEWAY_TOKEN" \
   --dry-run=client \
   -o yaml | kubectl --context "$CONTEXT" apply -f -
+
+kubectl --context "$CONTEXT" -n "$NAMESPACE" get secret carapulse-secrets >/dev/null 2>&1 || {
+  echo "Missing required secret: $NAMESPACE/carapulse-secrets" >&2
+  exit 1
+}
 
 if [[ "$INJECT_AWS_CREDS" == "1" ]]; then
   AWS_EXPORT_FILE="$TMP_DIR/aws.env"
