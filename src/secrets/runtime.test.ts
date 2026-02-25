@@ -133,6 +133,39 @@ describe("secrets runtime snapshot", () => {
     );
   });
 
+  it("fails when sops decrypt payload is not a JSON object", async () => {
+    runExecMock.mockResolvedValueOnce({
+      stdout: JSON.stringify(["not-an-object"]),
+      stderr: "",
+    });
+
+    await expect(
+      prepareSecretsRuntimeSnapshot({
+        config: {
+          secrets: {
+            sources: {
+              file: {
+                type: "sops",
+                path: "~/.openclaw/secrets.enc.json",
+              },
+            },
+          },
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: { source: "file", id: "/providers/openai/apiKey" },
+                models: [],
+              },
+            },
+          },
+        },
+        agentDirs: ["/tmp/openclaw-agent-main"],
+        loadAuthStore: () => ({ version: 1, profiles: {} }),
+      }),
+    ).rejects.toThrow("sops decrypt failed: decrypted payload is not a JSON object");
+  });
+
   it("activates runtime snapshots for loadConfig and ensureAuthProfileStore", async () => {
     const prepared = await prepareSecretsRuntimeSnapshot({
       config: {

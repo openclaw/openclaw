@@ -291,7 +291,16 @@ export function startGatewayConfigReloader(opts: {
       return;
     }
     restartQueued = true;
-    void opts.onRestart(plan, nextConfig);
+    void (async () => {
+      try {
+        await opts.onRestart(plan, nextConfig);
+      } catch (err) {
+        // Restart checks can fail (for example unresolved SecretRefs). Keep the
+        // reloader alive and allow a future change to retry restart scheduling.
+        restartQueued = false;
+        opts.log.error(`config restart failed: ${String(err)}`);
+      }
+    })();
   };
 
   const handleMissingSnapshot = (snapshot: ConfigFileSnapshot): boolean => {

@@ -279,4 +279,54 @@ describe("startGatewayConfigReloader", () => {
 
     await reloader.stop();
   });
+
+  it("contains restart callback failures and retries on subsequent changes", async () => {
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          config: {
+            gateway: { reload: { debounceMs: 0 }, port: 18790 },
+          },
+          hash: "restart-1",
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeSnapshot({
+          config: {
+            gateway: { reload: { debounceMs: 0 }, port: 18791 },
+          },
+          hash: "restart-2",
+        }),
+      );
+    const { watcher, onHotReload, onRestart, log, reloader } = createReloaderHarness(readSnapshot);
+    onRestart.mockRejectedValueOnce(new Error("restart-check failed"));
+    onRestart.mockResolvedValueOnce(undefined);
+
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      watcher.emit("change");
+      await vi.runOnlyPendingTimersAsync();
+      await Promise.resolve();
+
+      expect(onHotReload).not.toHaveBeenCalled();
+      expect(onRestart).toHaveBeenCalledTimes(1);
+      expect(log.error).toHaveBeenCalledWith("config restart failed: Error: restart-check failed");
+      expect(unhandled).toEqual([]);
+
+      watcher.emit("change");
+      await vi.runOnlyPendingTimersAsync();
+      await Promise.resolve();
+
+      expect(onRestart).toHaveBeenCalledTimes(2);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+      await reloader.stop();
+    }
+  });
 });
