@@ -306,6 +306,7 @@ export type PluginHookName =
   | "before_compaction"
   | "after_compaction"
   | "before_reset"
+  | "message_observed"
   | "message_received"
   | "message_sending"
   | "message_sent"
@@ -441,16 +442,25 @@ export type PluginHookMessageContext = {
   conversationId?: string;
 };
 
+// message_observed hook (pre-access-control, blocking)
+export type PluginHookMessageObservedEvent = {
+  from: string;
+  content: string;
+  timestamp?: number;
+  fromMe: boolean;
+  metadata?: Record<string, unknown>;
+};
+
+export type PluginHookMessageObservedResult = {
+  handled?: boolean;
+};
+
 // message_received hook
 export type PluginHookMessageReceivedEvent = {
   from: string;
   content: string;
   timestamp?: number;
   metadata?: Record<string, unknown>;
-};
-
-export type PluginHookMessageReceivedResult = {
-  handled?: boolean;
 };
 
 // message_sending hook
@@ -693,10 +703,14 @@ export type PluginHookHandlerMap = {
     event: PluginHookBeforeResetEvent,
     ctx: PluginHookAgentContext,
   ) => Promise<void> | void;
+  message_observed: (
+    event: PluginHookMessageObservedEvent,
+    ctx: PluginHookMessageContext,
+  ) => Promise<PluginHookMessageObservedResult | void> | PluginHookMessageObservedResult | void;
   message_received: (
     event: PluginHookMessageReceivedEvent,
     ctx: PluginHookMessageContext,
-  ) => Promise<PluginHookMessageReceivedResult | void> | PluginHookMessageReceivedResult | void;
+  ) => Promise<void> | void;
   message_sending: (
     event: PluginHookMessageSendingEvent,
     ctx: PluginHookMessageContext,

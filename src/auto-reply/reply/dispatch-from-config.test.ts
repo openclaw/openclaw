@@ -549,47 +549,6 @@ describe("dispatchReplyFromConfig", () => {
     );
   });
 
-  it("skips agent dispatch when message_received hook returns { handled: true }", async () => {
-    setNoAbort();
-    hookMocks.runner.hasHooks.mockReturnValue(true);
-    hookMocks.runner.runMessageReceived.mockResolvedValue({ handled: true });
-    const cfg = emptyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "whatsapp",
-      Surface: "whatsapp",
-      Body: "hello",
-    });
-    const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
-
-    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
-
-    // Agent dispatch should have been skipped
-    expect(replyResolver).not.toHaveBeenCalled();
-    expect(result.queuedFinal).toBe(false);
-    expect(result.counts).toEqual({ tool: 0, block: 0, final: 0 });
-  });
-
-  it("proceeds with dispatch when message_received hook returns void", async () => {
-    setNoAbort();
-    hookMocks.runner.hasHooks.mockReturnValue(true);
-    hookMocks.runner.runMessageReceived.mockResolvedValue(undefined);
-    const cfg = emptyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "whatsapp",
-      Surface: "whatsapp",
-      Body: "hello",
-    });
-    const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
-
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
-
-    // Agent dispatch should proceed normally
-    expect(replyResolver).toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
-  });
-
   it("suppresses isReasoning payloads from final replies (WhatsApp channel)", async () => {
     setNoAbort();
     const dispatcher = createDispatcher();

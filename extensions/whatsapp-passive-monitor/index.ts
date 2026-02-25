@@ -29,41 +29,27 @@ export default function register(api: OpenClawPluginApi) {
 
   const debounce: DebounceManager = createDebounceManager(config.debounceMs, onDebouncefire);
 
-  // ---- message_received hook ----
-  // For WhatsApp: store in SQLite, reset debounce, return { handled: true }
-  // For non-WhatsApp: pass through (return void)
-  api.on("message_received", async (event, ctx) => {
+  // ---- message_observed hook ----
+  // Captures ALL WhatsApp messages (inbound + phone-typed outbound)
+  // before access control. Stores in SQLite, resets debounce,
+  // and returns { handled: true } to block agent dispatch.
+  api.on("message_observed", async (event, ctx) => {
     if (ctx.channelId !== "whatsapp") return;
 
     db.insertMessage({
       conversation_id: ctx.conversationId ?? event.from,
-      sender: event.from,
-      sender_name: (event.metadata?.senderName as string) ?? null,
+      sender: event.fromMe ? "me" : event.from,
+      sender_name: event.fromMe ? null : ((event.metadata?.pushName as string) ?? null),
       content: event.content,
       timestamp: event.timestamp ?? Date.now(),
-      direction: "inbound",
+      direction: event.fromMe ? "outbound" : "inbound",
       channel_id: "whatsapp",
     });
 
+    // Reset debounce on ALL messages — wait for full conversation to settle
     debounce.touch(ctx.conversationId ?? event.from);
 
-    // Cancel agent dispatch for WhatsApp messages
+    // Block ALL WhatsApp messages from reaching the main agent
     return { handled: true };
-  });
-
-  // ---- message_sent hook ----
-  // Capture outbound replies for full conversation context
-  api.on("message_sent", async (event, ctx) => {
-    if (ctx.channelId !== "whatsapp") return;
-
-    db.insertMessage({
-      conversation_id: ctx.conversationId ?? event.to,
-      sender: "me",
-      sender_name: null,
-      content: event.content,
-      timestamp: Date.now(),
-      direction: "outbound",
-      channel_id: "whatsapp",
-    });
   });
 }

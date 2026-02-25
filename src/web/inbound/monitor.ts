@@ -7,6 +7,7 @@ import { recordChannelActivity } from "../../infra/channel-activity.js";
 import { getChildLogger } from "../../logging/logger.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { saveMediaBuffer } from "../../media/store.js";
+import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { jidToE164, resolveJidToE164 } from "../../utils.js";
 import { createWaSocket, getStatusCode, waitForWaConnection } from "../session.js";
 import { checkInboundAccessControl } from "./access-control.js";
@@ -198,6 +199,44 @@ export async function monitorWebInbox(options: {
       const messageTimestampMs = msg.messageTimestamp
         ? Number(msg.messageTimestamp) * 1000
         : undefined;
+
+      // Fire message_observed for ALL messages (including fromMe)
+      // before access control. If a plugin returns { handled: true },
+      // skip the entire downstream pipeline for this message.
+      const hookRunner = getGlobalHookRunner();
+      if (hookRunner?.hasHooks("message_observed")) {
+        const observedBody = extractText(msg.message ?? undefined) ?? "";
+        try {
+          const observedResult = await hookRunner.runMessageObserved(
+            {
+              from,
+              content: observedBody,
+              timestamp: messageTimestampMs,
+              fromMe: Boolean(msg.key?.fromMe),
+              metadata: {
+                remoteJid,
+                pushName: msg.pushName ?? undefined,
+                senderE164: senderE164 ?? undefined,
+                group,
+                groupSubject: groupSubject ?? undefined,
+              },
+            },
+            {
+              channelId: "whatsapp",
+              accountId: options.accountId,
+              conversationId: from,
+            },
+          );
+          if (observedResult?.handled) {
+            logVerbose(
+              `monitor: message_observed hook handled message from ${from}, skipping pipeline`,
+            );
+            continue;
+          }
+        } catch (err) {
+          logVerbose(`monitor: message_observed hook failed: ${String(err)}`);
+        }
+      }
 
       const access = await checkInboundAccessControl({
         accountId: options.accountId,

@@ -7,31 +7,31 @@ import { describe, expect, it, vi } from "vitest";
 import { createHookRunner } from "./hooks.js";
 import { createMockPluginRegistry } from "./hooks.test-helpers.js";
 
-describe("message_received hook runner", () => {
-  it("runMessageReceived returns { handled: true } when a handler signals handled", async () => {
+describe("message_observed hook runner", () => {
+  it("returns { handled: true } when handler signals handled", async () => {
     const handler = vi.fn().mockReturnValue({ handled: true });
-    const registry = createMockPluginRegistry([{ hookName: "message_received", handler }]);
+    const registry = createMockPluginRegistry([{ hookName: "message_observed", handler }]);
     const runner = createHookRunner(registry);
 
-    const result = await runner.runMessageReceived(
-      { from: "user-1", content: "hello" },
+    const result = await runner.runMessageObserved(
+      { from: "user-1", content: "hello", fromMe: false },
       { channelId: "whatsapp" },
     );
 
     expect(handler).toHaveBeenCalledWith(
-      { from: "user-1", content: "hello" },
+      { from: "user-1", content: "hello", fromMe: false },
       { channelId: "whatsapp" },
     );
     expect(result?.handled).toBe(true);
   });
 
-  it("runMessageReceived returns undefined when handler returns void (backward compat)", async () => {
+  it("returns undefined for void-returning handlers", async () => {
     const handler = vi.fn(); // returns undefined
-    const registry = createMockPluginRegistry([{ hookName: "message_received", handler }]);
+    const registry = createMockPluginRegistry([{ hookName: "message_observed", handler }]);
     const runner = createHookRunner(registry);
 
-    const result = await runner.runMessageReceived(
-      { from: "user-1", content: "hello" },
+    const result = await runner.runMessageObserved(
+      { from: "user-1", content: "hello", fromMe: false },
       { channelId: "whatsapp" },
     );
 
@@ -39,21 +39,20 @@ describe("message_received hook runner", () => {
     expect(result).toBeUndefined();
   });
 
-  it("runMessageReceived merges multiple handlers — last handled wins", async () => {
-    const handler1 = vi.fn().mockReturnValue({ handled: false });
-    const handler2 = vi.fn().mockReturnValue({ handled: true });
-    const registry = createMockPluginRegistry([
-      { hookName: "message_received", handler: handler1 },
-      { hookName: "message_received", handler: handler2 },
-    ]);
+  it("handler receives fromMe field correctly", async () => {
+    const handler = vi.fn().mockReturnValue({ handled: true });
+    const registry = createMockPluginRegistry([{ hookName: "message_observed", handler }]);
     const runner = createHookRunner(registry);
 
-    const result = await runner.runMessageReceived(
-      { from: "user-1", content: "hello" },
+    await runner.runMessageObserved(
+      { from: "+15555550123", content: "outbound msg", fromMe: true },
       { channelId: "whatsapp" },
     );
 
-    expect(result?.handled).toBe(true);
+    expect(handler).toHaveBeenCalledWith(
+      expect.objectContaining({ fromMe: true }),
+      expect.anything(),
+    );
   });
 });
 

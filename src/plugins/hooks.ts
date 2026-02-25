@@ -27,8 +27,9 @@ import type {
   PluginHookGatewayStartEvent,
   PluginHookGatewayStopEvent,
   PluginHookMessageContext,
+  PluginHookMessageObservedEvent,
+  PluginHookMessageObservedResult,
   PluginHookMessageReceivedEvent,
-  PluginHookMessageReceivedResult,
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
@@ -68,8 +69,9 @@ export type {
   PluginHookBeforeResetEvent,
   PluginHookAfterCompactionEvent,
   PluginHookMessageContext,
+  PluginHookMessageObservedEvent,
+  PluginHookMessageObservedResult,
   PluginHookMessageReceivedEvent,
-  PluginHookMessageReceivedResult,
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
@@ -378,19 +380,30 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   // =========================================================================
 
   /**
-   * Run message_received hook.
-   * Runs sequentially so plugins can signal `{ handled: true }` to cancel dispatch.
+   * Run message_observed hook. Sequential so plugins can signal { handled: true }.
+   * Fires before access control in monitor.ts — captures ALL messages including fromMe.
    */
-  async function runMessageReceived(
-    event: PluginHookMessageReceivedEvent,
+  async function runMessageObserved(
+    event: PluginHookMessageObservedEvent,
     ctx: PluginHookMessageContext,
-  ): Promise<PluginHookMessageReceivedResult | undefined> {
-    return runModifyingHook<"message_received", PluginHookMessageReceivedResult>(
-      "message_received",
+  ): Promise<PluginHookMessageObservedResult | undefined> {
+    return runModifyingHook<"message_observed", PluginHookMessageObservedResult>(
+      "message_observed",
       event,
       ctx,
       (acc, next) => ({ handled: next.handled ?? acc?.handled }),
     );
+  }
+
+  /**
+   * Run message_received hook.
+   * Runs in parallel (fire-and-forget).
+   */
+  async function runMessageReceived(
+    event: PluginHookMessageReceivedEvent,
+    ctx: PluginHookMessageContext,
+  ): Promise<void> {
+    return runVoidHook("message_received", event, ctx);
   }
 
   /**
@@ -732,6 +745,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runAfterCompaction,
     runBeforeReset,
     // Message hooks
+    runMessageObserved,
     runMessageReceived,
     runMessageSending,
     runMessageSent,
