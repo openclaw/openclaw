@@ -566,17 +566,20 @@ export type PluginHookBeforeMessageWriteResult = {
 export type PluginHookSessionContext = {
   agentId?: string;
   sessionId: string;
+  sessionKey?: string;
 };
 
 // session_start hook
 export type PluginHookSessionStartEvent = {
   sessionId: string;
+  sessionKey?: string;
   resumedFrom?: string;
 };
 
 // session_end hook
 export type PluginHookSessionEndEvent = {
   sessionId: string;
+  sessionKey?: string;
   messageCount: number;
   durationMs?: number;
 };
