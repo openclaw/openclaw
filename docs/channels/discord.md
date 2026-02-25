@@ -919,6 +919,8 @@ Auto-join example:
             channelId: "234567890123456789",
           },
         ],
+        daveEncryption: true,
+        decryptionFailureTolerance: 24,
         tts: {
           provider: "openai",
           openai: { voice: "alloy" },
@@ -933,6 +935,8 @@ Notes:
 
 - `voice.tts` overrides `messages.tts` for voice playback only.
 - Voice is enabled by default; set `channels.discord.voice.enabled=false` to disable it.
+- `voice.daveEncryption` and `voice.decryptionFailureTolerance` pass through to `@discordjs/voice` join options.
+- If receive logs repeatedly show `DecryptionFailed(UnencryptedWhenPassthroughDisabled)`, this may be the upstream `@discordjs/voice` receive bug tracked in [discord.js #11419](https://github.com/discordjs/discord.js/issues/11419).
 
 ## Voice messages
 

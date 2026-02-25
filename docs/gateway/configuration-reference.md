@@ -255,6 +255,8 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
             channelId: "234567890123456789",
           },
         ],
+        daveEncryption: true,
+        decryptionFailureTolerance: 24,
         tts: {
           provider: "openai",
           openai: { voice: "alloy" },
@@ -282,6 +284,7 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
   - `spawnSubagentSessions`: opt-in switch for `sessions_spawn({ thread: true })` auto thread creation/binding
 - `channels.discord.ui.components.accentColor` sets the accent color for Discord components v2 containers.
 - `channels.discord.voice` enables Discord voice channel conversations and optional auto-join + TTS overrides.
+- `channels.discord.voice.daveEncryption` and `channels.discord.voice.decryptionFailureTolerance` pass through to `@discordjs/voice` DAVE options.
 - `channels.discord.streaming` is the canonical stream mode key. Legacy `streamMode` and boolean `streaming` values are auto-migrated.
 - `channels.discord.dangerouslyAllowNameMatching` re-enables mutable name/tag matching (break-glass compatibility mode).
 
