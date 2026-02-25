@@ -654,6 +654,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           },
           onReplyStart: typingCallbacks.onReplyStart,
           onIdle: typingCallbacks.onIdle,
+          onCleanup: typingCallbacks.onCleanup,
         });
 
       const { queuedFinal, counts } = await core.channel.reply.dispatchReplyFromConfig({
