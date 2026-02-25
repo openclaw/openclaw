@@ -17,6 +17,7 @@ import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
+import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
@@ -366,7 +367,7 @@ export async function dispatchReplyFromConfig(params: {
             // Suppress reasoning payloads — channels using this generic dispatch
             // path (WhatsApp, web, etc.) do not have a dedicated reasoning lane.
             // Telegram has its own dispatch path that handles reasoning splitting.
-            if (payload.isReasoning) {
+            if (shouldSuppressReasoningPayload(payload)) {
               return;
             }
             // Accumulate block text for TTS generation after streaming
@@ -404,7 +405,7 @@ export async function dispatchReplyFromConfig(params: {
     for (const reply of replies) {
       // Suppress reasoning payloads from channel delivery — channels using this
       // generic dispatch path do not have a dedicated reasoning lane.
-      if (reply.isReasoning) {
+      if (shouldSuppressReasoningPayload(reply)) {
         continue;
       }
       const ttsReply = await maybeApplyTtsToPayload({
