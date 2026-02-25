@@ -52,6 +52,23 @@ Skip `.env` scrubbing:
 openclaw secrets migrate --write --no-scrub-env
 ```
 
+`.env` scrub details (default behavior):
+
+- Scrub target is `<config-dir>/.env`.
+- Only known secret env keys are considered.
+- Entries are removed only when the value exactly matches a migrated plaintext secret.
+- If `<config-dir>/.sops.yaml` or `<config-dir>/.sops.yml` exists, migrate passes it explicitly to `sops` so command behavior is cwd-independent.
+
+Common migrate write failure:
+
+- `config file not found, or has no creation rules, and no keys provided through command line options`
+
+If you hit this:
+
+- Add or fix `<config-dir>/.sops.yaml` / `.sops.yml` with valid `creation_rules`.
+- Ensure key access is available in the command environment (for example `SOPS_AGE_KEY_FILE`).
+- Re-run `openclaw secrets migrate --write`.
+
 Rollback a previous migration:
 
 ```bash
