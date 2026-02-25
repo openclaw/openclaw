@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -16,7 +17,11 @@
             --text-dim: rgba(255, 255, 255, 0.6);
         }
 
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
 
         body {
             background: var(--bg);
@@ -95,9 +100,17 @@
         }
 
         @keyframes pulse {
-            0% { opacity: 1; }
-            50% { opacity: 0.3; }
-            100% { opacity: 1; }
+            0% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.3;
+            }
+
+            100% {
+                opacity: 1;
+            }
         }
 
         .chat-container {
@@ -153,7 +166,9 @@
             padding: 2px 5px;
         }
 
-        .accent-text { color: var(--accent); }
+        .accent-text {
+            color: var(--accent);
+        }
 
         .footer {
             height: 80px;
@@ -186,7 +201,9 @@
         }
 
         @keyframes blink {
-            50% { opacity: 0; }
+            50% {
+                opacity: 0;
+            }
         }
 
         .orb {
@@ -198,9 +215,9 @@
             background: radial-gradient(circle, rgba(234, 255, 0, 0.05) 0%, transparent 70%);
             z-index: -1;
         }
-
     </style>
 </head>
+
 <body>
     <div class="sidebar">
         <div class="icon">⚡</div>
@@ -217,21 +234,30 @@
         <div class="chat-container">
             <div class="message rykiri">
                 <h3>System Initialized</h3>
-                <p>Uzumaki Resilience engaged. All Solana skills are online. Protocol <span class="accent-text">INDUSTRIAL_FUTURISM</span> loaded.</p>
+                <p>Uzumaki Resilience engaged. All Solana skills are online. Protocol <span
+                        class="accent-text">INDUSTRIAL_FUTURISM</span> loaded.</p>
             </div>
             <div class="message rykiri">
                 <h3>Solana Simulate // Result</h3>
-                <p>I've dry-run your Anchor instruction. Simulation reveals a potential <span class="accent-text">Compute Unit</span> bottleneck in the re-allocation logic. Refactoring recommended.</p>
+                <p>I've dry-run your Anchor instruction. Simulation reveals a potential <span
+                        class="accent-text">Compute Unit</span> bottleneck in the re-allocation logic. Refactoring
+                    recommended.</p>
                 <div class="code-block">
-pub fn update_vault(ctx: Context<UpdateVault>, amount: u64) -> Result<()> {
-    let vault = &mut ctx.accounts.vault;
-    // Optimized math to minimize CU
-    vault.balance = vault.balance.checked_add(amount)
-        .ok_or(ErrorCode::Overflow)?;
-    Ok(())
-}
+                    pub fn update_vault(ctx: Context<UpdateVault>, amount: u64) -> Result<()> {
+                            let vault = &mut ctx.accounts.vault;
+                            // Optimized math to minimize CU
+                            vault.balance = vault.balance.checked_add(amount)
+                            .ok_or(ErrorCode::Overflow)?;
+                            Ok(())
+                            }
                 </div>
-                <p>I've also verified the PDA seeds. Every rule in <span class="accent-text">SOUL.md</span> is satisfied. Ready to deploy whenever you are, Partner.</p>
+                <p>I've also verified the PDA seeds. Every rule in <span class="accent-text">SOUL.md</span> is
+                    satisfied. Ready to deploy whenever you are, Partner.</p>
+            </div>
+            <div class="message rykiri" style="border-left-color: #FF3333;">
+                <h3 style="color: #FF3333;">Security Alert // Resolved</h3>
+                <p>Detected a potential reentrancy vector in the swap logic. <span class="accent-text">Shadow
+                        Clones</span> deployed to patch. Threat neutralized.</p>
             </div>
         </div>
         <footer class="footer">
@@ -241,5 +267,45 @@ pub fn update_vault(ctx: Context<UpdateVault>, amount: u64) -> Result<()> {
         </footer>
     </div>
     <div class="orb"></div>
+    <div class="scanline"></div>
+    <div class="noise"></div>
+    <style>
+        .scanline {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(to bottom, transparent 50%, rgba(0, 0, 0, 0.5) 50%);
+            background-size: 100% 4px;
+            pointer-events: none;
+            z-index: 1000;
+            opacity: 0.3;
+            animation: scan 10s linear infinite;
+        }
+
+        .noise {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image: url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyMDAiIGhlaWdodD0iMjAwIj48ZmlsdGVyIGlkPSJmIj48ZmVUdXJidWxlbmNlIHR5cGU9ImZyYWN0YWxOb2lzZSIgYmFzZUZyZXF1ZW5jeT0iMC42NSIgbnVtT2N0YXZlcz0iMyIgc3RpdGNoVGlsZXM9InN0aXRjaCIvPjwvZmlsdGVyPjxyZWN0IHdpZHRoPSIxMDAlIiBoZWlnaHQ9IjEwMCUiIGZpbHRlcj0idXJsKCNmKSIgb3BhY2l0eT0iMC4wNSIvPjwvc3ZnPg==');
+            pointer-events: none;
+            z-index: 999;
+            opacity: 0.1;
+        }
+
+        @keyframes scan {
+            0% {
+                transform: translateY(-100%);
+            }
+
+            100% {
+                transform: translateY(100%);
+            }
+        }
+    </style>
 </body>
+
 </html>

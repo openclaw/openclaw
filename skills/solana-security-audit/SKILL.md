@@ -41,6 +41,12 @@ Before any Solana program is considered "done," run through EVERY item:
 - [ ] Rent-exempt minimum enforced on all created accounts
 - [ ] Closing accounts properly handles remaining lamports
 
+### Deployment & Verification
+
+- [ ] Program is compiled deterministically using the `solana-verify-build` skill
+- [ ] On-chain executable is verified against the audited source code and has a valid Verification PDA
+- [ ] Unused dependencies and vulnerabilities were checked pre-build (`cargo machete`, `cargo audit`)
+
 ## GEMINI THINKING PROTOCOL
 >
 > [!IMPORTANT]

@@ -111,6 +111,7 @@ export function renderApp(state: AppViewState) {
     <div class="shell ${isChat ? "shell--chat" : ""} ${chatFocus ? "shell--chat-focus" : ""} ${state.settings.navCollapsed ? "shell--nav-collapsed" : ""} ${state.onboarding ? "shell--onboarding" : ""}">
       <header class="topbar">
         <div class="topbar-left">
+          <div class="ry-scanlines"></div>
           <button
             class="nav-collapse-toggle"
             @click=${() =>

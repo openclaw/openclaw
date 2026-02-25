@@ -22,6 +22,11 @@ Principles for writing maintainable, minimal, and elite Anchor code.
 > - Who signs the transaction?
 > - What happens if the input is `0` or `null`?
 
+## DEPLOYMENT & VERIFICATION
+
+- **Verifiable Builds**: You MUST use the `solana-verify-build` skill when compiling and deploying the program to ensure reproducibility.
+- **IDL Syncing**: Ensure the on-chain Interface Definition Language (IDL) is always synchronized with the verified build. Run `anchor idl init` or `anchor idl upgrade` *after* a successful verifiable deployment.
+
 ## ARCHITECTURE
 
 - **Instruction Handlers**: Extract logic into standalone handler functions.

@@ -15,6 +15,12 @@ Core guidance for high-performance Solana development using 2026 standards.
 - **Pinocchio**: Use for ultra-high-performance/low-CU requirements.
 - **Account Sizing**: NEVER use hardcoded constants. Use `dynamic space calculation` with 8-byte discriminator.
 
+## DEPLOYMENT ARCHITECTURE
+
+- **Mandatory Hygiene**: Prior to any build, run `cargo audit` to check for CVEs and `cargo machete` to prune unused dependencies.
+- **Verifiable Builds**: ALWAYS compile programs using deterministic Docker builds following the `solana-verify-build` skill protocols.
+- **Secure Deployment**: For production deployments (Mainnet), NEVER use a hot wallet. Deployments MUST be managed via Squads (Multisig) or a hardware wallet.
+
 ## GEMINI THINKING PROTOCOL
 >
 > [!IMPORTANT]

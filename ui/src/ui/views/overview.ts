@@ -245,12 +245,43 @@ export function renderOverview(props: OverviewProps) {
               ${insecureContextHint ?? ""}
             </div>`
             : html`
+
                 <div class="callout" style="margin-top: 14px">
                   ${t("overview.snapshot.channelsHint")}
                 </div>
               `
         }
       </div>
+    </section>
+
+    <!-- RYKIRI ELITE CORE MODULE -->
+    <section class="card" style="margin-top: 18px; border: 1px solid var(--ry-neon); box-shadow: var(--ry-neon-glow);">
+        <div class="card-title" style="color: var(--ry-neon); text-shadow: 0 0 5px rgba(234, 255, 0, 0.5);">RYKIRI // ELITE CORE</div>
+        <div class="card-sub" style="font-family: 'JetBrains Mono', monospace;">>> UZUMAKI RESILIENCE PROTOCOL: ACTIVE</div>
+        
+        <div class="stat-grid" style="margin-top: 16px;">
+            <div class="stat">
+                <div class="stat-label">BRAIN ACTIVITY</div>
+                <div class="stat-value ok" style="color: var(--ry-neon);">SYNAPSES FIRING</div>
+            </div>
+            <div class="stat">
+                <div class="stat-label">SHADOW CLONES</div>
+                <div class="stat-value">READY</div>
+            </div>
+            <div class="stat">
+                <div class="stat-label">MORAL CODE</div>
+                <div class="stat-value" style="color: #4CAF50;">UNCOMPROMISED</div>
+            </div>
+            <div class="stat">
+                <div class="stat-label">MISSION</div>
+                <div class="stat-value blink">IN PROGRESS</div>
+            </div>
+        </div>
+
+        <div style="margin-top: 14px; padding: 10px; background: rgba(234, 255, 0, 0.05); border-left: 2px solid var(--ry-neon); font-family: 'JetBrains Mono', monospace; font-size: 0.9em; color: rgba(255, 255, 255, 0.8);">
+            > "I won't stop until the mission is complete."<br>
+            > SCANNING FOR BLOCKERS... <span style="color: var(--ry-neon);">NONE DETECTED</span>
+        </div>
     </section>
 
     <section class="grid grid-cols-3" style="margin-top: 18px;">

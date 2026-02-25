@@ -1,0 +1,19 @@
+# Antigravity Environment Triggers (Aggressive)
+**/macos/**
+**/ios/**
+**/*macos*/**
+**/*ios*/**
+**/Package.swift
+**/*.xcodeproj
+**/*.xcworkspace
+**/*.swiftlint.yml
+**/*.swiftformat
+**/appcast.xml
+**/Swabble/**
+**/OpenClawKit/**
+**/MoltbotKit/**
+**/bin/clawdbot-mac
+**/bin/docs-list
+**/scripts/ios-*.sh
+**/docs/platforms/macos.md
+**/docs/platforms/ios.md
