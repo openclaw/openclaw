@@ -222,7 +222,7 @@ export async function applyTemporalDecayToHybridResults<
         importanceConfig.boostFactor > 1 &&
         isImportantChunk({
           filePath: entry.path,
-          snippet: (entry as { snippet?: string }).snippet,
+          snippet: entry.snippet,
           config: importanceConfig,
         })
       ) {
