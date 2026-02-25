@@ -33,6 +33,7 @@ export type ResolvedWhatsAppAccount = {
   blockStreaming?: boolean;
   ackReaction?: WhatsAppAccountConfig["ackReaction"];
   groups?: WhatsAppAccountConfig["groups"];
+  direct?: WhatsAppAccountConfig["direct"];
   debounceMs?: number;
 };
 
@@ -155,6 +156,7 @@ export function resolveWhatsAppAccount(params: {
     blockStreaming: merged.blockStreaming,
     ackReaction: merged.ackReaction,
     groups: merged.groups,
+    direct: merged.direct,
     debounceMs: merged.debounceMs,
   };
 }

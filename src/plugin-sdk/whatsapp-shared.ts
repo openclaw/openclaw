@@ -2,8 +2,14 @@ export type { ChannelMessageActionName } from "../channels/plugins/types.js";
 export type { DmPolicy, GroupPolicy, WhatsAppAccountConfig } from "../config/types.js";
 export {
   createWhatsAppOutboundBase,
+  resolveWhatsAppDirectSystemPrompt,
   resolveWhatsAppGroupIntroHint,
+  resolveWhatsAppGroupSystemPrompt,
   resolveWhatsAppMentionStripRegexes,
+} from "../channels/plugins/whatsapp-shared.js";
+export type {
+  WhatsAppDirectSystemPromptParams,
+  WhatsAppGroupSystemPromptParams,
 } from "../channels/plugins/whatsapp-shared.js";
 export {
   looksLikeWhatsAppTargetId,

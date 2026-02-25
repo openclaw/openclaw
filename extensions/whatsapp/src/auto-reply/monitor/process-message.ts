@@ -32,6 +32,10 @@ import {
   resolveDmGroupAccessWithCommandGate,
 } from "openclaw/plugin-sdk/security-runtime";
 import { jidToE164, normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
+import {
+  resolveWhatsAppDirectSystemPrompt,
+  resolveWhatsAppGroupSystemPrompt,
+} from "openclaw/plugin-sdk/whatsapp-shared";
 import { resolveWhatsAppAccount } from "../../accounts.js";
 import {
   getPrimaryIdentityId,
@@ -61,6 +65,7 @@ export type GroupHistoryEntry = {
 async function resolveWhatsAppCommandAuthorized(params: {
   cfg: ReturnType<typeof loadConfig>;
   msg: WebInboundMsg;
+  account: ReturnType<typeof resolveWhatsAppAccount>;
 }): Promise<boolean> {
   const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
   if (!useAccessGroups) {
@@ -77,7 +82,7 @@ async function resolveWhatsAppCommandAuthorized(params: {
     return false;
   }
 
-  const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.msg.accountId });
+  const account = params.account;
   const dmPolicy = account.dmPolicy ?? "pairing";
   const groupPolicy = account.groupPolicy ?? "allowlist";
   const configuredAllowFrom = account.allowFrom ?? [];
@@ -121,11 +126,11 @@ async function resolveWhatsAppCommandAuthorized(params: {
 function resolvePinnedMainDmRecipient(params: {
   cfg: ReturnType<typeof loadConfig>;
   msg: WebInboundMsg;
+  account: ReturnType<typeof resolveWhatsAppAccount>;
 }): string | null {
-  const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.msg.accountId });
   return resolvePinnedMainDmOwnerFromAllowlist({
     dmScope: params.cfg.session?.dmScope,
-    allowFrom: account.allowFrom,
+    allowFrom: params.account.allowFrom,
     normalizeEntry: (entry) => normalizeE164(entry),
   });
 }
@@ -275,8 +280,9 @@ export async function processMessage(params: {
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(params.cfg, params.route.agentId);
   let didLogHeartbeatStrip = false;
   let didSendReply = false;
+  const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.msg.accountId });
   const commandAuthorized = shouldComputeCommandAuthorized(params.msg.body, params.cfg)
-    ? await resolveWhatsAppCommandAuthorized({ cfg: params.cfg, msg: params.msg })
+    ? await resolveWhatsAppCommandAuthorized({ cfg: params.cfg, msg: params.msg, account })
     : undefined;
   const configuredResponsePrefix = params.cfg.messages?.responsePrefix;
   const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
@@ -305,6 +311,17 @@ export async function processMessage(params: {
           }),
         )
       : undefined;
+  // Resolve combined conversation system prompt using the group or direct surface.
+  const conversationSystemPrompt =
+    params.msg.chatType === "group"
+      ? resolveWhatsAppGroupSystemPrompt({
+          accountConfig: account,
+          groupId: conversationId,
+        })
+      : resolveWhatsAppDirectSystemPrompt({
+          accountConfig: account,
+          peerId: dmRouteTarget ?? params.msg.from,
+        });
 
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
@@ -336,6 +353,7 @@ export async function processMessage(params: {
     SenderE164: sender.e164 ?? undefined,
     CommandAuthorized: commandAuthorized,
     WasMentioned: params.msg.wasMentioned,
+    GroupSystemPrompt: conversationSystemPrompt,
     ...(params.msg.location ? toLocationContext(params.msg.location) : {}),
     Provider: "whatsapp",
     Surface: "whatsapp",
@@ -349,6 +367,7 @@ export async function processMessage(params: {
   const pinnedMainDmRecipient = resolvePinnedMainDmRecipient({
     cfg: params.cfg,
     msg: params.msg,
+    account,
   });
   const shouldUpdateMainLastRoute =
     !pinnedMainDmRecipient || pinnedMainDmRecipient === dmRouteTarget;

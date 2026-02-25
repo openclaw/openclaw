@@ -242,6 +242,72 @@ describe("web processMessage inbound context", () => {
     expect(getDispatcherResponsePrefix()).toBeUndefined();
   });
 
+  it("injects WhatsApp group prompts into GroupSystemPrompt for group chats", async () => {
+    await processMessage(
+      makeProcessMessageArgs({
+        routeSessionKey: "agent:main:whatsapp:group:123",
+        groupHistoryKey: "123@g.us",
+        cfg: {
+          channels: {
+            whatsapp: {
+              groups: {
+                "123@g.us": { systemPrompt: "Specific group prompt" },
+              },
+            },
+          },
+          messages: {},
+          session: { store: sessionStorePath },
+        } as unknown as ReturnType<typeof import("../../../../../src/config/config.js").loadConfig>,
+        msg: {
+          id: "msg-group-prompt-1",
+          from: "123@g.us",
+          to: "+15550001111",
+          chatType: "group",
+          body: "hi",
+          senderE164: "+15550002222",
+          groupSubject: "Test Group",
+          groupParticipants: [],
+        },
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    // oxlint-disable-next-line typescript/no-explicit-any
+    expect((capturedCtx as any).GroupSystemPrompt).toBe("Specific group prompt");
+  });
+
+  it("injects WhatsApp direct prompts into GroupSystemPrompt for direct chats", async () => {
+    await processMessage(
+      makeProcessMessageArgs({
+        routeSessionKey: "agent:main:whatsapp:direct:+1555",
+        groupHistoryKey: "+1555",
+        cfg: {
+          channels: {
+            whatsapp: {
+              direct: {
+                "+1555": { systemPrompt: "Specific direct prompt" },
+              },
+            },
+          },
+          messages: {},
+          session: { store: sessionStorePath },
+        } as unknown as ReturnType<typeof import("../../../../../src/config/config.js").loadConfig>,
+        msg: {
+          id: "msg-direct-prompt-1",
+          from: "+1555",
+          to: "+2000",
+          chatType: "direct",
+          body: "hi",
+          senderE164: "+1555",
+        },
+      }),
+    );
+
+    expect(capturedCtx).toBeTruthy();
+    // oxlint-disable-next-line typescript/no-explicit-any
+    expect((capturedCtx as any).GroupSystemPrompt).toBe("Specific direct prompt");
+  });
+
   it("clears pending group history when the dispatcher does not queue a final reply", async () => {
     capturedCtx = undefined;
     const groupHistories = new Map<string, Array<{ sender: string; body: string }>>([

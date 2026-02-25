@@ -438,6 +438,73 @@ Behavior notes:
   </Accordion>
 </AccordionGroup>
 
+## System prompts
+
+WhatsApp supports Telegram-style system prompts for groups and direct chats via the `groups` and `direct` maps.
+
+Resolution hierarchy for group messages:
+
+1. **Group-specific system prompt** (`channels.whatsapp.groups["<groupId>"].systemPrompt` or `channels.whatsapp.accounts.<id>.groups["<groupId>"].systemPrompt`): the specific group entry is used if it defines a `systemPrompt`.
+2. **Group wildcard system prompt** (`channels.whatsapp.groups["*"].systemPrompt` or `channels.whatsapp.accounts.<id>.groups["*"].systemPrompt`): used when the specific group entry does not define a `systemPrompt`.
+
+Resolution hierarchy for direct messages:
+
+1. **Direct-specific system prompt** (`channels.whatsapp.direct["<peerId>"].systemPrompt` or `channels.whatsapp.accounts.<id>.direct["<peerId>"].systemPrompt`): the specific direct-chat entry is used if it defines a `systemPrompt`.
+2. **Direct wildcard system prompt** (`channels.whatsapp.direct["*"].systemPrompt` or `channels.whatsapp.accounts.<id>.direct["*"].systemPrompt`): used when the specific direct-chat entry does not define a `systemPrompt`.
+
+Map override semantics:
+
+- Account `groups` fully override root `groups`; they do not merge.
+- Account `direct` fully override root `direct`; they do not merge.
+- Existing `dms` remains the lightweight per-DM history override bucket (`dms.<id>.historyLimit`); prompt overrides live under `direct`.
+
+Important behavior:
+
+- `channels.whatsapp.groups` is both a per-group config map and the chat-level group allowlist. At either the root or account scope, `groups["*"]` means "all groups are admitted" for that scope.
+- Only add a wildcard group `systemPrompt` when you already want that scope to admit all groups. If you still want only a fixed set of group IDs to be eligible, do not use `groups["*"]` for the prompt default. Instead, repeat the prompt on each explicitly allowlisted group entry.
+- Group admission and sender authorization are separate checks. `groups["*"]` widens the set of groups that can reach group handling, but it does not by itself authorize every sender in those groups. Sender access is still controlled separately by `channels.whatsapp.groupPolicy` and `channels.whatsapp.groupAllowFrom`.
+- `channels.whatsapp.direct` does not have the same side effect for DMs. `direct["*"]` only provides a default direct-chat config after a DM is already admitted by `dmPolicy` plus `allowFrom` or pairing-store rules.
+
+Example:
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      groups: {
+        // Use only if all groups should be admitted at the root scope.
+        // Applies to all accounts that do not define their own groups map.
+        "*": { systemPrompt: "Default prompt for all groups." },
+      },
+      direct: {
+        // Applies to all accounts that do not define their own direct map.
+        "*": { systemPrompt: "Default prompt for all direct chats." },
+      },
+      accounts: {
+        work: {
+          groups: {
+            // This account defines its own groups, so root groups are fully
+            // replaced. To keep a wildcard, define "*" explicitly here too.
+            "120363406415684625@g.us": {
+              requireMention: false,
+              systemPrompt: "Focus on project management.",
+            },
+            // Use only if all groups should be admitted in this account.
+            "*": { systemPrompt: "Default prompt for work groups." },
+          },
+          direct: {
+            // This account defines its own direct map, so root direct entries are
+            // fully replaced. To keep a wildcard, define "*" explicitly here too.
+            "+15551234567": { systemPrompt: "Prompt for a specific work direct chat." },
+            "*": { systemPrompt: "Default prompt for work direct chats." },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
 ## Configuration reference pointers
 
 Primary reference:
@@ -451,6 +518,7 @@ High-signal WhatsApp fields:
 - multi-account: `accounts.<id>.enabled`, `accounts.<id>.authDir`, account-level overrides
 - operations: `configWrites`, `debounceMs`, `web.enabled`, `web.heartbeatSeconds`, `web.reconnect.*`
 - session behavior: `session.dmScope`, `historyLimit`, `dmHistoryLimit`, `dms.<id>.historyLimit`
+- prompts: `groups.<id>.systemPrompt`, `groups["*"].systemPrompt`, `direct.<id>.systemPrompt`, `direct["*"].systemPrompt`
 
 ## Related
 
