@@ -122,7 +122,7 @@ export async function handleNextcloudTalkInbound(params: {
     configGroupAllowFrom.length > 0 ? configGroupAllowFrom : configAllowFrom;
 
   const effectiveAllowFrom = [...configAllowFrom, ...storeAllowList].filter(Boolean);
-  const effectiveGroupAllowFrom = [...baseGroupAllowFrom, ...storeAllowList].filter(Boolean);
+  const effectiveGroupAllowFrom = [...baseGroupAllowFrom].filter(Boolean);
 
   const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
     cfg: config as OpenClawConfig,
