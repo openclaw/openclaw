@@ -14,6 +14,7 @@ const PAIRING_CODE_LENGTH = 8;
 const PAIRING_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const PAIRING_PENDING_TTL_MS = 60 * 60 * 1000;
 const PAIRING_PENDING_MAX = 3;
+const PAIRING_MAX_FAILED_ATTEMPTS = 10;
 const PAIRING_STORE_LOCK_OPTIONS = {
   retries: {
     retries: 10,
@@ -42,6 +43,8 @@ export type PairingRequest = {
   createdAt: string;
   lastSeenAt: string;
   meta?: Record<string, string>;
+  /** Number of failed code validation attempts against this request. */
+  failedAttempts?: number;
 };
 
 type PairingStore = {
@@ -814,10 +817,28 @@ export async function approveChannelPairingCode(params: {
         return requestMatchesAccountId(r, normalizedAccountId);
       });
       if (idx < 0) {
-        if (removed) {
+        // Wrong code — increment failed attempts on all matching pending requests.
+        // If any request exceeds the threshold, expire it to prevent brute-force.
+        let mutated = removed;
+        const surviving: PairingRequest[] = [];
+        for (const req of pruned) {
+          if (!requestMatchesAccountId(req, normalizedAccountId)) {
+            surviving.push(req);
+            continue;
+          }
+          const attempts = (req.failedAttempts ?? 0) + 1;
+          if (attempts >= PAIRING_MAX_FAILED_ATTEMPTS) {
+            // Auto-expire: too many wrong guesses
+            mutated = true;
+            continue;
+          }
+          surviving.push({ ...req, failedAttempts: attempts });
+          mutated = true;
+        }
+        if (mutated) {
           await writeJsonFile(filePath, {
             version: 1,
-            requests: pruned,
+            requests: surviving,
           } satisfies PairingStore);
         }
         return null;
