@@ -46,7 +46,7 @@ DART_SUPPLEMENTARY_FILE = OUTPUT_DIR / "dart_supplementary.json"
 VALUATION_HISTORY_FILE = OUTPUT_DIR / "valuation_history.json"
 LONGTERM_FILE = OUTPUT_DIR / "longterm_proxies.json"
 SCORE_HISTORY_FILE = OUTPUT_DIR / "score_history.json"
-VAULT_REPORT_DIR = Path.home() / "knowledge" / "300 운영" / "340 리포트"
+from shared.vault_paths import REPORTS as VAULT_REPORT_DIR
 
 CHART_DIR = OUTPUT_DIR / "charts"
 
