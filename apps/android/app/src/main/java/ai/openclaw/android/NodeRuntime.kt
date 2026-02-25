@@ -243,7 +243,6 @@ class NodeRuntime(context: Context) {
         _canvasRehydrateErrorText.value = null
         updateStatus()
         maybeNavigateToA2uiOnConnect()
-        requestCanvasRehydrate(source = "node_connect", force = false)
       },
       onDisconnected = { message ->
         _nodeConnected.value = false
