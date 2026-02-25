@@ -9,6 +9,7 @@ import {
   ModelsConfigSchema,
   SecretInputSchema,
   SecretsConfigSchema,
+  TtsConfigSchema,
 } from "./zod-schema.core.js";
 import { HookMappingSchema, HooksGmailSchema, InternalHooksSchema } from "./zod-schema.hooks.js";
 import { InstallRecordShape } from "./zod-schema.installs.js";
@@ -587,6 +588,7 @@ export const OpenClawSchema = z
               .catchall(z.unknown()),
           )
           .optional(),
+        tts: TtsConfigSchema.optional(),
         voiceId: z.string().optional(),
         voiceAliases: z.record(z.string(), z.string()).optional(),
         modelId: z.string().optional(),
