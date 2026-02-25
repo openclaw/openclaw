@@ -11,12 +11,12 @@
 import type { AgentMessage } from "./types.js";
 
 export interface ToolResultCompressionOptions {
-  /** How many user-turns from the end to keep uncompressed. Default: 3 */
+  /** How many user-turns from the end to keep uncompressed. Default: 2 */
   ageTurns?: number;
-  /** Max characters per tool result before truncation. Default: 200 */
+  /** Max characters per tool result before truncation. Default: 100 */
   maxChars?: number;
   /**
-   * Max characters per assistant text block before truncation. Default: 500.
+   * Max characters per assistant text block before truncation. Default: 300.
    * Set to 0 to skip assistant message compression.
    */
   maxAssistantChars?: number;
@@ -104,9 +104,9 @@ export function compressAgedToolResults(
   messages: AgentMessage[],
   opts: ToolResultCompressionOptions = {},
 ): AgentMessage[] {
-  const ageTurns = opts.ageTurns ?? 3;
-  const maxChars = opts.maxChars ?? 200;
-  const maxAssistantChars = opts.maxAssistantChars ?? 500;
+  const ageTurns = opts.ageTurns ?? 2;
+  const maxChars = opts.maxChars ?? 100;
+  const maxAssistantChars = opts.maxAssistantChars ?? 300;
 
   // Locate user-message indices (each marks a turn boundary)
   const userIndices: number[] = [];
