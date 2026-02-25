@@ -44,5 +44,7 @@ jobs:
         with:
           install-bun: "false"
 
+      # Advisory-only: upstream deps may have unfixable advisories.
+      # Blocking on new vulnerable deps is handled by dependency-review on PRs.
       - name: Audit dependencies
         run: pnpm audit --audit-level=high || true
