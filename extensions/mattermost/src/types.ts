@@ -52,6 +52,8 @@ export type MattermostAccountConfig = {
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /** Allow media fetches from private network addresses (e.g., LAN IPs). Use only when Mattermost is self-hosted on internal networks. */
+  allowPrivateNetwork?: boolean;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
   /** Action toggles for this account. */
