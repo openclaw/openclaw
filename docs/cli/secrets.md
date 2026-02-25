@@ -57,7 +57,7 @@ openclaw secrets migrate --write --no-scrub-env
 - Scrub target is `<config-dir>/.env`.
 - Only known secret env keys are considered.
 - Entries are removed only when the value exactly matches a migrated plaintext secret.
-- If `<config-dir>/.sops.yaml` or `<config-dir>/.sops.yml` exists, migrate passes it explicitly to `sops` so command behavior is cwd-independent.
+- If `<config-dir>/.sops.yaml` or `<config-dir>/.sops.yml` exists, migrate passes it explicitly to `sops`, runs `sops` with `cwd=<config-dir>`, and sets `--filename-override` to the absolute target secrets path (for example `/home/user/.openclaw/secrets.enc.json`) so strict `creation_rules` continue to match when OpenClaw encrypts through a temp file.
 
 Common migrate write failure:
 
