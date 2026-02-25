@@ -392,6 +392,8 @@ export type MemorySearchConfig = {
       textWeight?: number;
       /** Multiplier for candidate pool size (default: 4). */
       candidateMultiplier?: number;
+      /** FTS query join mode: "and" requires all tokens, "or" matches any (default: "and"). */
+      ftsMode?: "and" | "or";
       /** Optional MMR re-ranking for result diversity. */
       mmr?: {
         /** Enable MMR re-ranking (default: false). */

@@ -62,6 +62,7 @@ export type ResolvedMemorySearchConfig = {
       vectorWeight: number;
       textWeight: number;
       candidateMultiplier: number;
+      ftsMode: "and" | "or";
       mmr: {
         enabled: boolean;
         lambda: number;
@@ -93,6 +94,7 @@ const DEFAULT_HYBRID_ENABLED = true;
 const DEFAULT_HYBRID_VECTOR_WEIGHT = 0.7;
 const DEFAULT_HYBRID_TEXT_WEIGHT = 0.3;
 const DEFAULT_HYBRID_CANDIDATE_MULTIPLIER = 4;
+const DEFAULT_FTS_MODE: "and" | "or" = "and";
 const DEFAULT_MMR_ENABLED = false;
 const DEFAULT_MMR_LAMBDA = 0.7;
 const DEFAULT_TEMPORAL_DECAY_ENABLED = false;
@@ -252,6 +254,8 @@ function mergeConfig(
       overrides?.query?.hybrid?.candidateMultiplier ??
       defaults?.query?.hybrid?.candidateMultiplier ??
       DEFAULT_HYBRID_CANDIDATE_MULTIPLIER,
+    ftsMode:
+      overrides?.query?.hybrid?.ftsMode ?? defaults?.query?.hybrid?.ftsMode ?? DEFAULT_FTS_MODE,
     mmr: {
       enabled:
         overrides?.query?.hybrid?.mmr?.enabled ??
@@ -325,6 +329,7 @@ function mergeConfig(
         vectorWeight: normalizedVectorWeight,
         textWeight: normalizedTextWeight,
         candidateMultiplier,
+        ftsMode: hybrid.ftsMode,
         mmr: {
           enabled: Boolean(hybrid.mmr.enabled),
           lambda: Number.isFinite(hybrid.mmr.lambda)

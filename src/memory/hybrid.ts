@@ -30,7 +30,7 @@ export type HybridKeywordResult = {
   textScore: number;
 };
 
-export function buildFtsQuery(raw: string): string | null {
+export function buildFtsQuery(raw: string, mode: "and" | "or" = "and"): string | null {
   const tokens =
     raw
       .match(/[\p{L}\p{N}_]+/gu)
@@ -40,7 +40,7 @@ export function buildFtsQuery(raw: string): string | null {
     return null;
   }
   const quoted = tokens.map((t) => `"${t.replaceAll('"', "")}"`);
-  return quoted.join(" AND ");
+  return quoted.join(mode === "or" ? " OR " : " AND ");
 }
 
 export function bm25RankToScore(rank: number): number {

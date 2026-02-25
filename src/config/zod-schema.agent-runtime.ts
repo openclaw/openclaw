@@ -639,6 +639,7 @@ export const MemorySearchSchema = z
             vectorWeight: z.number().min(0).max(1).optional(),
             textWeight: z.number().min(0).max(1).optional(),
             candidateMultiplier: z.number().int().positive().optional(),
+            ftsMode: z.enum(["and", "or"]).optional(),
             mmr: z
               .object({
                 enabled: z.boolean().optional(),

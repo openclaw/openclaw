@@ -10,6 +10,17 @@ describe("memory hybrid helpers", () => {
     expect(buildFtsQuery("   ")).toBeNull();
   });
 
+  it("buildFtsQuery joins with OR when mode is 'or'", () => {
+    expect(buildFtsQuery("hello world", "or")).toBe('"hello" OR "world"');
+    expect(buildFtsQuery("FOO_bar baz-1", "or")).toBe('"FOO_bar" OR "baz" OR "1"');
+    expect(buildFtsQuery("金银价格", "or")).toBe('"金银价格"');
+    expect(buildFtsQuery("   ", "or")).toBeNull();
+  });
+
+  it("buildFtsQuery defaults to AND when mode is omitted", () => {
+    expect(buildFtsQuery("hello world")).toBe('"hello" AND "world"');
+  });
+
   it("bm25RankToScore is monotonic and clamped", () => {
     expect(bm25RankToScore(0)).toBeCloseTo(1);
     expect(bm25RankToScore(1)).toBeCloseTo(0.5);

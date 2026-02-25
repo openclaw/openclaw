@@ -315,7 +315,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   private buildFtsQuery(raw: string): string | null {
-    return buildFtsQuery(raw);
+    return buildFtsQuery(raw, this.settings.query.hybrid.ftsMode);
   }
 
   private async searchKeyword(
