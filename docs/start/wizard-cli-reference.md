@@ -179,7 +179,7 @@ What you set:
 
     Interactive onboarding supports the same API key storage choices as other provider API key flows:
     - **Paste API key now** (plaintext)
-    - **Use secret reference** (env or encrypted `sops` file pointer, with preflight validation)
+    - **Use secret reference** (env ref or configured provider ref, with preflight validation)
 
     Non-interactive flags:
     - `--auth-choice custom-api-key`
@@ -210,16 +210,16 @@ API key storage mode:
 - Default onboarding behavior persists API keys as plaintext values in auth profiles.
 - `--secret-input-mode ref` enables reference mode instead of plaintext key storage.
   In interactive onboarding, you can choose either:
-  - environment variable ref (for example `keyRef: { source: "env", id: "OPENAI_API_KEY" }`)
-  - encrypted file ref via `sops` JSON pointer (for example `keyRef: { source: "file", id: "/providers/openai/apiKey" }`)
+  - environment variable ref (for example `keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" }`)
+  - configured provider ref (`file` or `exec`) with provider alias + id
 - Interactive reference mode runs a fast preflight validation before saving.
   - Env refs: validates variable name + non-empty value in the current onboarding environment.
-  - File refs: validates `secrets.sources.file` + `sops` decrypt + JSON pointer resolution.
+  - Provider refs: validates provider config and resolves the requested id.
   - If preflight fails, onboarding shows the error and lets you retry.
 - In non-interactive mode, `--secret-input-mode ref` is env-backed only.
   - Set the provider env var in the onboarding process environment.
   - Inline key flags (for example `--openai-api-key`) require that env var to be set; otherwise onboarding fails fast.
-  - For custom providers, non-interactive `ref` mode stores `models.providers.<id>.apiKey` as `{ source: "env", id: "CUSTOM_API_KEY" }`.
+  - For custom providers, non-interactive `ref` mode stores `models.providers.<id>.apiKey` as `{ source: "env", provider: "default", id: "CUSTOM_API_KEY" }`.
   - In that custom-provider case, `--custom-api-key` requires `CUSTOM_API_KEY` to be set; otherwise onboarding fails fast.
 - Existing plaintext setups continue to work unchanged.
 
