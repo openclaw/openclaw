@@ -52,6 +52,7 @@ const {
   resolveModelOverridePolicy,
   summarizeText,
   resolveOutputFormat,
+  resolveChannelId,
   resolveEdgeOutputFormat,
 } = _test;
 
@@ -200,6 +201,19 @@ describe("tts", () => {
         expect(output.extension, testCase.channel).toBe(testCase.expected.extension);
         expect(output.voiceCompatible, testCase.channel).toBe(testCase.expected.voiceCompatible);
       }
+    });
+  });
+
+  describe("resolveChannelId", () => {
+    it("resolves whatsapp and telegram directly, ignoring case and whitespace", () => {
+      expect(resolveChannelId("whatsapp")).toBe("whatsapp");
+      expect(resolveChannelId("  WhatsApp ")).toBe("whatsapp");
+      expect(resolveChannelId("telegram")).toBe("telegram");
+      expect(resolveChannelId("  TELEGRAM ")).toBe("telegram");
+    });
+
+    it("returns null when channel is missing", () => {
+      expect(resolveChannelId(undefined)).toBeNull();
     });
   });
 

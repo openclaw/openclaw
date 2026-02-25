@@ -491,7 +491,14 @@ function resolveOutputFormat(channelId?: string | null) {
 }
 
 function resolveChannelId(channel: string | undefined): ChannelId | null {
-  return channel ? normalizeChannelId(channel) : null;
+  if (!channel) {
+    return null;
+  }
+  const lower = String(channel).toLowerCase().trim();
+  if (lower === "whatsapp" || lower === "telegram") {
+    return lower as ChannelId;
+  }
+  return normalizeChannelId(channel);
 }
 
 function resolveEdgeOutputFormat(config: ResolvedTtsConfig): string {
@@ -947,5 +954,6 @@ export const _test = {
   resolveModelOverridePolicy,
   summarizeText,
   resolveOutputFormat,
+  resolveChannelId,
   resolveEdgeOutputFormat,
 };
