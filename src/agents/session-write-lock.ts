@@ -1,12 +1,14 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isPidAlive } from "../shared/pid-alive.js";
+import { getProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { resolveProcessScopedMap } from "../shared/process-scoped-map.js";
 
 type LockFilePayload = {
   pid?: number;
   createdAt?: string;
+  /** Process start time in clock ticks (from /proc/pid/stat field 22). */
+  starttime?: number;
 };
 
 type HeldLock = {
@@ -276,6 +278,9 @@ async function readLockPayload(lockPath: string): Promise<LockFilePayload | null
     if (typeof parsed.createdAt === "string") {
       payload.createdAt = parsed.createdAt;
     }
+    if (typeof parsed.starttime === "number") {
+      payload.starttime = parsed.starttime;
+    }
     return payload;
   } catch {
     return null;
@@ -293,11 +298,28 @@ function inspectLockPayload(
   const createdAtMs = createdAt ? Date.parse(createdAt) : Number.NaN;
   const ageMs = Number.isFinite(createdAtMs) ? Math.max(0, nowMs - createdAtMs) : null;
 
+  // Detect PID recycling: if the PID is alive but its start time differs from
+  // what was recorded in the lock file, the original process died and the OS
+  // reassigned the same PID to a different process.
+  const storedStarttime =
+    typeof payload?.starttime === "number" && Number.isFinite(payload.starttime)
+      ? payload.starttime
+      : null;
+  const pidRecycled =
+    pidAlive && pid !== null && storedStarttime !== null
+      ? (() => {
+          const currentStarttime = getProcessStartTime(pid);
+          return currentStarttime !== null && currentStarttime !== storedStarttime;
+        })()
+      : false;
+
   const staleReasons: string[] = [];
   if (pid === null) {
     staleReasons.push("missing-pid");
   } else if (!pidAlive) {
     staleReasons.push("dead-pid");
+  } else if (pidRecycled) {
+    staleReasons.push("recycled-pid");
   }
   if (ageMs === null) {
     staleReasons.push("invalid-createdAt");
@@ -447,7 +469,12 @@ export async function acquireSessionWriteLock(params: {
     try {
       handle = await fs.open(lockPath, "wx");
       const createdAt = new Date().toISOString();
-      await handle.writeFile(JSON.stringify({ pid: process.pid, createdAt }, null, 2), "utf8");
+      const starttime = getProcessStartTime(process.pid);
+      const lockPayload: Record<string, unknown> = { pid: process.pid, createdAt };
+      if (starttime !== null) {
+        lockPayload.starttime = starttime;
+      }
+      await handle.writeFile(JSON.stringify(lockPayload, null, 2), "utf8");
       const createdHeld: HeldLock = {
         count: 1,
         handle,
