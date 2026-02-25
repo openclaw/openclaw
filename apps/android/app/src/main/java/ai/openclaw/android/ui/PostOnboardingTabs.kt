@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ScreenShare
@@ -83,6 +84,10 @@ fun PostOnboardingTabs(viewModel: MainViewModel, modifier: Modifier = Modifier) 
       }
     }
 
+  val density = LocalDensity.current
+  val imeVisible = WindowInsets.ime.getBottom(density) > 0
+  val hideBottomTabBar = activeTab == HomeTab.Chat && imeVisible
+
   Scaffold(
     modifier = modifier,
     containerColor = Color.Transparent,
@@ -94,29 +99,20 @@ fun PostOnboardingTabs(viewModel: MainViewModel, modifier: Modifier = Modifier) 
       )
     },
     bottomBar = {
-      BottomTabBar(
-        activeTab = activeTab,
-        onSelect = { activeTab = it },
-      )
+      if (!hideBottomTabBar) {
+        BottomTabBar(
+          activeTab = activeTab,
+          onSelect = { activeTab = it },
+        )
+      }
     },
   ) { innerPadding ->
-    val density = LocalDensity.current
-    val imeVisible = WindowInsets.ime.getBottom(density) > 0
-    val contentBottomPadding =
-      if (activeTab == HomeTab.Chat && imeVisible) {
-        0.dp
-      } else {
-        innerPadding.calculateBottomPadding()
-      }
-
     Box(
       modifier =
         Modifier
           .fillMaxSize()
-          .padding(
-            top = innerPadding.calculateTopPadding(),
-            bottom = contentBottomPadding,
-          )
+          .padding(innerPadding)
+          .consumeWindowInsets(innerPadding)
           .background(mobileBackgroundGradient),
     ) {
       when (activeTab) {
