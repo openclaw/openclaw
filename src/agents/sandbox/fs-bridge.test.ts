@@ -13,13 +13,19 @@ import { createSandboxFsBridge } from "./fs-bridge.js";
 import { createSandboxTestContext } from "./test-fixtures.js";
 
 const mockedExecDockerRaw = vi.mocked(execDockerRaw);
+const DOCKER_SCRIPT_INDEX = 5;
+const DOCKER_FIRST_SCRIPT_ARG_INDEX = 7;
 
 function getDockerScript(args: string[]): string {
-  return String(args[5] ?? "");
+  return String(args[DOCKER_SCRIPT_INDEX] ?? "");
+}
+
+function getDockerArg(args: string[], position: number): string {
+  return String(args[DOCKER_FIRST_SCRIPT_ARG_INDEX + position - 1] ?? "");
 }
 
 function getDockerPathArg(args: string[]): string {
-  return String(args.at(-1) ?? "");
+  return getDockerArg(args, 1);
 }
 
 function getScriptsFromCalls(): string[] {
@@ -50,7 +56,7 @@ describe("sandbox fs bridge shell compatibility", () => {
       const script = getDockerScript(args);
       if (script.includes('readlink -f -- "$cursor"')) {
         return {
-          stdout: Buffer.from(`${String(args.at(-2) ?? "")}\n`),
+          stdout: Buffer.from(`${getDockerArg(args, 1)}\n`),
           stderr: Buffer.alloc(0),
           code: 0,
         };
@@ -121,6 +127,17 @@ describe("sandbox fs bridge shell compatibility", () => {
     expect(readCall).toBeDefined();
     const readPath = readCall ? getDockerPathArg(readCall[0]) : "";
     expect(readPath).toContain("file_1095---");
+  });
+
+  it("resolves dash-leading basenames into absolute container paths", async () => {
+    const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
+
+    await bridge.readFile({ filePath: "--leading.txt" });
+
+    const readCall = findCallByScriptFragment('cat -- "$1"');
+    expect(readCall).toBeDefined();
+    const readPath = readCall ? getDockerPathArg(readCall[0]) : "";
+    expect(readPath).toBe("/workspace/--leading.txt");
   });
 
   it("resolves bind-mounted absolute container paths for reads", async () => {

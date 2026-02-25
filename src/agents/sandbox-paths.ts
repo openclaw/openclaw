@@ -186,8 +186,36 @@ async function resolveAllowedTmpMediaPath(params: {
   if (!isPathInside(openClawTmpDir, resolved)) {
     return undefined;
   }
-  await assertNoSymlinkEscape(path.relative(openClawTmpDir, resolved), openClawTmpDir);
+  await assertNoTmpAliasEscape({ filePath: resolved, tmpRoot: openClawTmpDir });
   return resolved;
+}
+
+async function assertNoTmpAliasEscape(params: {
+  filePath: string;
+  tmpRoot: string;
+}): Promise<void> {
+  await assertNoSymlinkEscape(path.relative(params.tmpRoot, params.filePath), params.tmpRoot);
+  await assertNoHardlinkedFinalPath(params.filePath, params.tmpRoot);
+}
+
+async function assertNoHardlinkedFinalPath(filePath: string, tmpRoot: string): Promise<void> {
+  let stat: Awaited<ReturnType<typeof fs.stat>>;
+  try {
+    stat = await fs.stat(filePath);
+  } catch (err) {
+    if (isNotFoundPathError(err)) {
+      return;
+    }
+    throw err;
+  }
+  if (!stat.isFile()) {
+    return;
+  }
+  if (stat.nlink > 1) {
+    throw new Error(
+      `Hardlinked tmp media path is not allowed under tmp root (${shortPath(tmpRoot)}): ${shortPath(filePath)}`,
+    );
+  }
 }
 
 async function assertNoSymlinkEscape(

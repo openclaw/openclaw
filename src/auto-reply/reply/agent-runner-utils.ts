@@ -4,10 +4,9 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { TemplateContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import type { FollowupRun } from "./queue.js";
-import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
+import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { getChannelDock } from "../../channels/dock.js";
 import { normalizeAnyChannelId, normalizeChannelId } from "../../channels/registry.js";
-import { resolveAgentIdFromSessionKey } from "../../config/sessions.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { estimateUsageCost, formatTokenCount, formatUsd } from "../../utils/usage-format.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
@@ -152,10 +151,11 @@ export function resolveModelFallbackOptions(run: FollowupRun["run"]) {
     provider: run.provider,
     model: run.model,
     agentDir: run.agentDir,
-    fallbacksOverride: resolveAgentModelFallbacksOverride(
-      run.config,
-      resolveAgentIdFromSessionKey(run.sessionKey),
-    ),
+    fallbacksOverride: resolveRunModelFallbacksOverride({
+      cfg: run.config,
+      agentId: run.agentId,
+      sessionKey: run.sessionKey,
+    }),
   };
 }
 

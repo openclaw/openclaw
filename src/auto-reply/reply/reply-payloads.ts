@@ -1,10 +1,10 @@
-import { isMessagingToolDuplicate } from "../../agents/pi-embedded-helpers.js";
 import type { MessagingToolSend } from "../../agents/pi-embedded-runner.js";
 import type { ReplyToMode } from "../../config/types.js";
-import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
-import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
+import { isMessagingToolDuplicate } from "../../agents/pi-embedded-helpers.js";
+import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
+import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { extractReplyToTag } from "./reply-tags.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 
@@ -66,6 +66,10 @@ export function isRenderablePayload(payload: ReplyPayload): boolean {
     payload.audioAsVoice ||
     payload.channelData,
   );
+}
+
+export function shouldSuppressReasoningPayload(payload: ReplyPayload): boolean {
+  return payload.isReasoning === true;
 }
 
 export function applyReplyThreading(params: {

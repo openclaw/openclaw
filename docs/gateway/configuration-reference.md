@@ -255,6 +255,8 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
             channelId: "234567890123456789",
           },
         ],
+        daveEncryption: true,
+        decryptionFailureTolerance: 24,
         tts: {
           provider: "openai",
           openai: { voice: "alloy" },
@@ -282,6 +284,8 @@ WhatsApp runs through the gateway's web channel (Baileys Web). It starts automat
   - `spawnSubagentSessions`: opt-in switch for `sessions_spawn({ thread: true })` auto thread creation/binding
 - `channels.discord.ui.components.accentColor` sets the accent color for Discord components v2 containers.
 - `channels.discord.voice` enables Discord voice channel conversations and optional auto-join + TTS overrides.
+- `channels.discord.voice.daveEncryption` and `channels.discord.voice.decryptionFailureTolerance` pass through to `@discordjs/voice` DAVE options (`true` and `24` by default).
+- OpenClaw additionally attempts voice receive recovery by leaving/rejoining a voice session after repeated decrypt failures.
 - `channels.discord.streaming` is the canonical stream mode key. Legacy `streamMode` and boolean `streaming` values are auto-migrated.
 - `channels.discord.dangerouslyAllowNameMatching` re-enables mutable name/tag matching (break-glass compatibility mode).
 
@@ -796,7 +800,7 @@ Periodic heartbeat runs.
         includeReasoning: false,
         session: "main",
         to: "+15555550123",
-        target: "last", // last | whatsapp | telegram | discord | ... | none
+        target: "none", // default: none | options: last | whatsapp | telegram | discord | ...
         prompt: "Read HEARTBEAT.md if it exists...",
         ackMaxChars: 300,
         suppressToolErrorWarnings: false,
@@ -808,6 +812,7 @@ Periodic heartbeat runs.
 
 - `every`: duration string (ms/s/m/h). Default: `30m`.
 - `suppressToolErrorWarnings`: when true, suppresses tool error warning payloads during heartbeat runs.
+- Heartbeats never deliver to direct/DM chat targets when the destination can be classified as direct (for example `user:<id>`, Telegram user chat IDs, or WhatsApp direct numbers/JIDs); those runs still execute, but outbound delivery is skipped.
 - Per-agent: set `agents.list[].heartbeat`. When any agent defines `heartbeat`, **only those agents** run heartbeats.
 - Heartbeats run full agent turns — shorter intervals burn more tokens.
 

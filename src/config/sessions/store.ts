@@ -1,8 +1,9 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { acquireSessionWriteLock } from "../../agents/session-write-lock.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import type { SessionMaintenanceConfig, SessionMaintenanceMode } from "../types.base.js";
+import { acquireSessionWriteLock } from "../../agents/session-write-lock.js";
 import { parseByteSize } from "../../cli/parse-bytes.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import {
@@ -19,10 +20,13 @@ import {
 } from "../../utils/delivery-context.js";
 import { getFileMtimeMs, isCacheEnabled, resolveCacheTtlMs } from "../cache-utils.js";
 import { loadConfig } from "../config.js";
-import type { SessionMaintenanceConfig, SessionMaintenanceMode } from "../types.base.js";
 import { enforceSessionDiskBudget, type SessionDiskBudgetSweepResult } from "./disk-budget.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
-import { mergeSessionEntry, type SessionEntry } from "./types.js";
+import {
+  mergeSessionEntry,
+  normalizeSessionRuntimeModelFields,
+  type SessionEntry,
+} from "./types.js";
 
 const log = createSubsystemLogger("sessions/store");
 
@@ -157,7 +161,7 @@ function normalizeSessionStore(store: Record<string, SessionEntry>): void {
     if (!entry) {
       continue;
     }
-    const normalized = normalizeSessionEntryDelivery(entry);
+    const normalized = normalizeSessionEntryDelivery(normalizeSessionRuntimeModelFields(entry));
     if (normalized !== entry) {
       store[key] = normalized;
     }

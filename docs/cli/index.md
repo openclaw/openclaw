@@ -281,7 +281,7 @@ Vector search over `MEMORY.md` + `memory/*.md`:
 
 - `openclaw memory status` — show index stats.
 - `openclaw memory index` — reindex memory files.
-- `openclaw memory search "<query>"` — semantic search over memory.
+- `openclaw memory search "<query>"` (or `--query "<query>"`) — semantic search over memory.
 
 ## Chat slash commands
 
@@ -468,8 +468,23 @@ Approve DM pairing requests across channels.
 
 Subcommands:
 
-- `pairing list <channel> [--json]`
-- `pairing approve <channel> <code> [--notify]`
+- `pairing list [channel] [--channel <channel>] [--account <id>] [--json]`
+- `pairing approve <channel> <code> [--account <id>] [--notify]`
+- `pairing approve --channel <channel> [--account <id>] <code> [--notify]`
+
+### `devices`
+
+Manage gateway device pairing entries and per-role device tokens.
+
+Subcommands:
+
+- `devices list [--json]`
+- `devices approve [requestId] [--latest]`
+- `devices reject <requestId>`
+- `devices remove <deviceId>`
+- `devices clear --yes [--pending]`
+- `devices rotate --device <id> --role <role> [--scope <scope...>]`
+- `devices revoke --device <id> --role <role>`
 
 ### `webhooks gmail`
 

@@ -1,6 +1,9 @@
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
-import { isRenderablePayload } from "../../auto-reply/reply/reply-payloads.js";
+import {
+  isRenderablePayload,
+  shouldSuppressReasoningPayload,
+} from "../../auto-reply/reply/reply-payloads.js";
 
 export type NormalizedOutboundPayload = {
   text: string;
@@ -41,6 +44,9 @@ export function normalizeReplyPayloadsForDelivery(
   payloads: readonly ReplyPayload[],
 ): ReplyPayload[] {
   return payloads.flatMap((payload) => {
+    if (shouldSuppressReasoningPayload(payload)) {
+      return [];
+    }
     const parsed = parseReplyDirectives(payload.text ?? "");
     const explicitMediaUrls = payload.mediaUrls ?? parsed.mediaUrls;
     const explicitMediaUrl = payload.mediaUrl ?? parsed.mediaUrl;

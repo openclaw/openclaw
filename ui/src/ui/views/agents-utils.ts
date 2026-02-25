@@ -1,4 +1,5 @@
 import { html } from "lit";
+import type { AgentIdentityResult, AgentsFilesListResult, AgentsListResult } from "../types.ts";
 import {
   listCoreToolSections,
   PROFILE_OPTIONS as TOOL_PROFILE_OPTIONS,
@@ -8,7 +9,6 @@ import {
   normalizeToolName,
   resolveToolProfilePolicy,
 } from "../../../../src/agents/tool-policy-shared.js";
-import type { AgentIdentityResult, AgentsFilesListResult, AgentsListResult } from "../types.ts";
 
 export const TOOL_SECTIONS = listCoreToolSections();
 
@@ -242,6 +242,13 @@ export function resolveModelFallbacks(model?: unknown): string[] | null {
       : null;
   }
   return null;
+}
+
+export function resolveEffectiveModelFallbacks(
+  entryModel?: unknown,
+  defaultModel?: unknown,
+): string[] | null {
+  return resolveModelFallbacks(entryModel) ?? resolveModelFallbacks(defaultModel);
 }
 
 export function parseFallbackList(value: string): string[] {

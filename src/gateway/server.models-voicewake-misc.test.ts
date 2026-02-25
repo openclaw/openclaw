@@ -3,8 +3,8 @@ import { createServer } from "node:net";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
-import { getChannelPlugin } from "../channels/plugins/index.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.js";
+import { getChannelPlugin } from "../channels/plugins/index.js";
 import { clearConfigCache } from "../config/config.js";
 import { resolveCanvasHostUrl } from "../infra/canvas-host-url.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
@@ -328,7 +328,7 @@ describe("gateway server models + voicewake", () => {
     );
   });
 
-  test("models.list falls back to full catalog when allowlist has no catalog match", async () => {
+  test("models.list includes synthetic entries for allowlist models absent from catalog", async () => {
     await withModelsConfig(
       {
         agents: {
@@ -345,7 +345,13 @@ describe("gateway server models + voicewake", () => {
         const res = await listModels();
 
         expect(res.ok).toBe(true);
-        expect(res.payload?.models).toEqual(expectedSortedCatalog());
+        expect(res.payload?.models).toEqual([
+          {
+            id: "not-in-catalog",
+            name: "not-in-catalog",
+            provider: "openai",
+          },
+        ]);
       },
     );
   });
