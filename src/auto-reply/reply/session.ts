@@ -647,10 +647,12 @@ export async function initSessionState(params: {
           .runSessionEnd(
             {
               sessionId: previousSessionEntry.sessionId,
+              sessionKey,
               messageCount: 0,
             },
             {
               sessionId: previousSessionEntry.sessionId,
+              sessionKey,
               agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
             },
           )
@@ -664,10 +666,12 @@ export async function initSessionState(params: {
         .runSessionStart(
           {
             sessionId: effectiveSessionId,
+            sessionKey,
             resumedFrom: previousSessionEntry?.sessionId,
           },
           {
             sessionId: effectiveSessionId,
+            sessionKey,
             agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
           },
         )
