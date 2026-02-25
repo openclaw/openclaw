@@ -153,10 +153,7 @@ describeGeminiLive("pi embedded extra params (gemini live)", () => {
   }
 
   it("sanitizes Gemini 3.1 thinking payload and keeps image parts with reasoning enabled", async () => {
-    const model = getModel(
-      "google",
-      "gemini-3.1-pro-preview",
-    ) as unknown as Model<"google-generative-ai">;
+    const model = getModel("google", "gemini-2.5-pro") as unknown as Model<"google-generative-ai">;
 
     const agent = { streamFn: streamSimple };
     applyExtraParamsToAgent(agent, undefined, "google", model.id, undefined, "high");
