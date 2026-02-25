@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { withTempHome } from "../../../test/helpers/temp-home.js";
+import type { ErrorShape } from "../../gateway/protocol/index.js";
 import type {
   GatewayRequestHandlers,
   GatewayRequestHandlerOptions,
-  ErrorShape,
 } from "../../gateway/server-methods/types.js";
 import { listTrustedPeers } from "../peer-trust.js";
 import { createMeshTrustHandlers } from "./trust.js";

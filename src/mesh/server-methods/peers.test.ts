@@ -1,8 +1,8 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import type { ErrorShape } from "../../gateway/protocol/index.js";
 import type {
   GatewayRequestHandlers,
   GatewayRequestHandlerOptions,
-  ErrorShape,
 } from "../../gateway/server-methods/types.js";
 import { MeshCapabilityRegistry } from "../capabilities.js";
 import { PeerRegistry } from "../peer-registry.js";
