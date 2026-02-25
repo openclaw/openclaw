@@ -1510,7 +1510,9 @@ export async function runEmbeddedAttempt(
         });
         {
           if (hookResult?.prependContext) {
-            effectivePrompt = `${hookResult.prependContext}\n\n${params.prompt}`;
+            // Wrap in XML tags so (a) the model attributes it to the system, not the user,
+            // and (b) old injections can be identified and stripped from prior turns.
+            effectivePrompt = `<injected-context source="plugin">\n${hookResult.prependContext}\n</injected-context>\n\n${params.prompt}`;
             log.debug(
               `hooks: prepended context to prompt (${hookResult.prependContext.length} chars)`,
             );
