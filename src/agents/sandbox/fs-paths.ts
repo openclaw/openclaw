@@ -3,6 +3,7 @@ import { resolveSandboxInputPath, resolveSandboxPath } from "../sandbox-paths.js
 import { splitSandboxBindSpec } from "./bind-spec.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import { resolveSandboxHostPathViaExistingAncestor } from "./host-paths.js";
+import { isPathInsideContainerRoot, normalizeContainerPath } from "./path-utils.js";
 import type { SandboxContext } from "./types.js";
 
 export type SandboxFsMount = {
@@ -201,7 +202,7 @@ function dedupeMounts(mounts: SandboxFsMount[]): SandboxFsMount[] {
 
 function findMountByContainerPath(mounts: SandboxFsMount[], target: string): SandboxFsMount | null {
   for (const mount of mounts) {
-    if (isPathInsidePosix(mount.containerRoot, target)) {
+    if (isPathInsideContainerRoot(mount.containerRoot, target)) {
       return mount;
     }
   }
@@ -215,14 +216,6 @@ function findMountByHostPath(mounts: SandboxFsMount[], target: string): SandboxF
     }
   }
   return null;
-}
-
-function isPathInsidePosix(root: string, target: string): boolean {
-  const rel = path.posix.relative(root, target);
-  if (!rel) {
-    return true;
-  }
-  return !(rel.startsWith("..") || path.posix.isAbsolute(rel));
 }
 
 function isPathInsideHost(root: string, target: string): boolean {
@@ -257,11 +250,6 @@ function toDisplayRelative(params: {
     return rel;
   }
   return params.containerPath;
-}
-
-function normalizeContainerPath(value: string): string {
-  const normalized = path.posix.normalize(value);
-  return normalized === "." ? "/" : normalized;
 }
 
 function normalizePosixInput(value: string): string {
