@@ -366,9 +366,9 @@ private enum ExecHostExecutor {
             rawCommand: request.rawCommand)
         let displayCommand: String
         switch validatedCommand {
-        case .ok(let resolved):
+        case let .ok(resolved):
             displayCommand = resolved.displayCommand
-        case .invalid(let message):
+        case let .invalid(message):
             return self.errorResponse(
                 code: "INVALID_REQUEST",
                 message: message,
