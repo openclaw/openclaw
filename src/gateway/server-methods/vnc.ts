@@ -291,7 +291,7 @@ export function vncViewerHtml(gatewayOrigin: string, nodeId?: string, token?: st
   <div id="status">Connecting…</div>
   <div id="screen"></div>
   <script type="module">
-    import RFB from "https://cdn.jsdelivr.net/npm/@novnc/novnc@1.5.0/+esm";
+    import RFB from "https://esm.sh/@novnc/novnc@1.5.0/lib/rfb.js";
     const status = document.getElementById("status");
     const rfb = new RFB(document.getElementById("screen"), "${wsUrl}");
     rfb.scaleViewport = true;
