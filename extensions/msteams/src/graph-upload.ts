@@ -14,6 +14,9 @@ import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 const GRAPH_ROOT = "https://graph.microsoft.com/v1.0";
 const GRAPH_BETA = "https://graph.microsoft.com/beta";
 const GRAPH_SCOPE = "https://graph.microsoft.com";
+const SIMPLE_UPLOAD_LIMIT_BYTES = 4 * 1024 * 1024;
+const UPLOAD_SESSION_CHUNK_BYTES = 5 * 1024 * 1024;
+const UPLOAD_SESSION_MAX_STALLS = 5;
 
 export interface OneDriveUploadResult {
   id: string;
@@ -21,9 +24,170 @@ export interface OneDriveUploadResult {
   name: string;
 }
 
+type GraphDriveItem = {
+  id?: string;
+  webUrl?: string;
+  name?: string;
+};
+
+function toUploadResult(
+  target: "OneDrive" | "SharePoint",
+  data: GraphDriveItem,
+): OneDriveUploadResult {
+  if (!data.id || !data.webUrl || !data.name) {
+    throw new Error(`${target} upload response missing required fields`);
+  }
+
+  return {
+    id: data.id,
+    webUrl: data.webUrl,
+    name: data.name,
+  };
+}
+
+function parseNextChunkStart(nextExpectedRanges: string[] | undefined): number | undefined {
+  const nextExpected = nextExpectedRanges?.[0];
+  if (!nextExpected) {
+    return undefined;
+  }
+
+  const [start] = nextExpected.split("-", 1);
+  const parsedStart = Number.parseInt(start, 10);
+  if (!Number.isFinite(parsedStart)) {
+    return undefined;
+  }
+
+  return parsedStart;
+}
+
+async function uploadWithGraphSession(params: {
+  target: "OneDrive" | "SharePoint";
+  buffer: Buffer;
+  contentType?: string;
+  token: string;
+  uploadSessionUrl: string;
+  fetchFn: typeof fetch;
+}): Promise<OneDriveUploadResult> {
+  const createSessionRes = await params.fetchFn(params.uploadSessionUrl, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${params.token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({}),
+  });
+
+  if (!createSessionRes.ok) {
+    const body = await createSessionRes.text().catch(() => "");
+    throw new Error(
+      `${params.target} upload session creation failed: ${createSessionRes.status} ${createSessionRes.statusText} - ${body}`,
+    );
+  }
+
+  const uploadSession = (await createSessionRes.json().catch(() => ({}))) as {
+    uploadUrl?: string;
+  };
+
+  if (!uploadSession.uploadUrl) {
+    throw new Error(`${params.target} upload session response missing uploadUrl`);
+  }
+
+  const totalSize = params.buffer.length;
+  let chunkStart = 0;
+  let stalledResponses = 0;
+
+  while (chunkStart < totalSize) {
+    const chunkEnd = Math.min(chunkStart + UPLOAD_SESSION_CHUNK_BYTES, totalSize) - 1;
+    const chunk = params.buffer.subarray(chunkStart, chunkEnd + 1);
+    const chunkRes = await params.fetchFn(uploadSession.uploadUrl, {
+      method: "PUT",
+      headers: {
+        "Content-Length": String(chunk.length),
+        "Content-Range": `bytes ${chunkStart}-${chunkEnd}/${totalSize}`,
+        "Content-Type": params.contentType ?? "application/octet-stream",
+      },
+      body: new Uint8Array(chunk),
+    });
+
+    if (chunkRes.status === 202) {
+      const data = (await chunkRes.json().catch(() => ({}))) as {
+        nextExpectedRanges?: string[];
+      };
+      const nextChunkStart = parseNextChunkStart(data.nextExpectedRanges);
+      if (nextChunkStart === undefined) {
+        chunkStart = chunkEnd + 1;
+        stalledResponses = 0;
+        continue;
+      }
+
+      if (nextChunkStart === chunkStart) {
+        stalledResponses += 1;
+        if (stalledResponses > UPLOAD_SESSION_MAX_STALLS) {
+          throw new Error(`${params.target} upload session stalled at byte ${chunkStart}`);
+        }
+      } else {
+        stalledResponses = 0;
+      }
+
+      chunkStart = nextChunkStart;
+      continue;
+    }
+
+    if (!chunkRes.ok) {
+      const body = await chunkRes.text().catch(() => "");
+      throw new Error(
+        `${params.target} upload session chunk failed: ${chunkRes.status} ${chunkRes.statusText} - ${body}`,
+      );
+    }
+
+    const data = (await chunkRes.json().catch(() => ({}))) as GraphDriveItem;
+    return toUploadResult(params.target, data);
+  }
+
+  throw new Error(`${params.target} upload session completed without final driveItem response`);
+}
+
+async function uploadSimpleOrChunked(params: {
+  target: "OneDrive" | "SharePoint";
+  buffer: Buffer;
+  contentType?: string;
+  token: string;
+  simpleUploadUrl: string;
+  uploadSessionUrl: string;
+  fetchFn: typeof fetch;
+}): Promise<OneDriveUploadResult> {
+  if (params.buffer.length > SIMPLE_UPLOAD_LIMIT_BYTES) {
+    return uploadWithGraphSession({
+      target: params.target,
+      buffer: params.buffer,
+      contentType: params.contentType,
+      token: params.token,
+      uploadSessionUrl: params.uploadSessionUrl,
+      fetchFn: params.fetchFn,
+    });
+  }
+
+  const res = await params.fetchFn(params.simpleUploadUrl, {
+    method: "PUT",
+    headers: {
+      Authorization: `Bearer ${params.token}`,
+      "Content-Type": params.contentType ?? "application/octet-stream",
+    },
+    body: new Uint8Array(params.buffer),
+  });
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`${params.target} upload failed: ${res.status} ${res.statusText} - ${body}`);
+  }
+
+  const data = (await res.json()) as GraphDriveItem;
+  return toUploadResult(params.target, data);
+}
+
 /**
  * Upload a file to the user's OneDrive root folder.
- * For larger files, this uses the simple upload endpoint (up to 4MB).
+ * Files larger than 4MB are uploaded with a resumable Graph upload session.
  */
 export async function uploadToOneDrive(params: {
   buffer: Buffer;
@@ -37,36 +201,15 @@ export async function uploadToOneDrive(params: {
 
   // Use "OpenClawShared" folder to organize bot-uploaded files
   const uploadPath = `/OpenClawShared/${encodeURIComponent(params.filename)}`;
-
-  const res = await fetchFn(`${GRAPH_ROOT}/me/drive/root:${uploadPath}:/content`, {
-    method: "PUT",
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": params.contentType ?? "application/octet-stream",
-    },
-    body: new Uint8Array(params.buffer),
+  return uploadSimpleOrChunked({
+    target: "OneDrive",
+    buffer: params.buffer,
+    contentType: params.contentType,
+    token,
+    simpleUploadUrl: `${GRAPH_ROOT}/me/drive/root:${uploadPath}:/content`,
+    uploadSessionUrl: `${GRAPH_ROOT}/me/drive/root:${uploadPath}:/createUploadSession`,
+    fetchFn,
   });
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`OneDrive upload failed: ${res.status} ${res.statusText} - ${body}`);
-  }
-
-  const data = (await res.json()) as {
-    id?: string;
-    webUrl?: string;
-    name?: string;
-  };
-
-  if (!data.id || !data.webUrl || !data.name) {
-    throw new Error("OneDrive upload response missing required fields");
-  }
-
-  return {
-    id: data.id,
-    webUrl: data.webUrl,
-    name: data.name,
-  };
 }
 
 export interface OneDriveSharingLink {
@@ -180,39 +323,15 @@ export async function uploadToSharePoint(params: {
 
   // Use "OpenClawShared" folder to organize bot-uploaded files
   const uploadPath = `/OpenClawShared/${encodeURIComponent(params.filename)}`;
-
-  const res = await fetchFn(
-    `${GRAPH_ROOT}/sites/${params.siteId}/drive/root:${uploadPath}:/content`,
-    {
-      method: "PUT",
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": params.contentType ?? "application/octet-stream",
-      },
-      body: new Uint8Array(params.buffer),
-    },
-  );
-
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`SharePoint upload failed: ${res.status} ${res.statusText} - ${body}`);
-  }
-
-  const data = (await res.json()) as {
-    id?: string;
-    webUrl?: string;
-    name?: string;
-  };
-
-  if (!data.id || !data.webUrl || !data.name) {
-    throw new Error("SharePoint upload response missing required fields");
-  }
-
-  return {
-    id: data.id,
-    webUrl: data.webUrl,
-    name: data.name,
-  };
+  return uploadSimpleOrChunked({
+    target: "SharePoint",
+    buffer: params.buffer,
+    contentType: params.contentType,
+    token,
+    simpleUploadUrl: `${GRAPH_ROOT}/sites/${params.siteId}/drive/root:${uploadPath}:/content`,
+    uploadSessionUrl: `${GRAPH_ROOT}/sites/${params.siteId}/drive/root:${uploadPath}:/createUploadSession`,
+    fetchFn,
+  });
 }
 
 export interface ChatMember {
