@@ -63,6 +63,8 @@ pub(crate) struct AppState {
     pub nas_sessions: Mutex<HashMap<String, NasSession>>,
     /// MCP session_id → NAS config from headers (for auto re-login)
     pub session_configs: Mutex<HashMap<String, NasConfig>>,
+    /// Stdio mode connection config (for auto re-login)
+    pub stdio_config: Mutex<Option<NasConfig>>,
 }
 
 impl AppState {
@@ -71,6 +73,7 @@ impl AppState {
             sse_clients: Mutex::new(HashMap::new()),
             nas_sessions: Mutex::new(HashMap::new()),
             session_configs: Mutex::new(HashMap::new()),
+            stdio_config: Mutex::new(None),
         }
     }
 }
@@ -150,16 +153,30 @@ pub(crate) async fn get_nas_session(
     Ok((s.client.clone(), s.sid.clone(), s.synotoken.clone()))
 }
 
-/// Direct session lookup without header/MCP session resolution (for stdio mode).
+/// Direct session lookup for stdio mode. Auto re-login if session is missing or expired.
 pub(crate) async fn get_nas_session_direct(
     state: &AppState,
     nas_session_id: &str,
 ) -> Result<(SynoClient, String, Option<String>), String> {
-    let sessions = state.nas_sessions.lock().await;
-    let s = sessions
-        .get(nas_session_id)
-        .ok_or_else(|| "NAS session not available. Restart the MCP stdio server.".to_string())?;
-    Ok((s.client.clone(), s.sid.clone(), s.synotoken.clone()))
+    // Check if session exists and is still valid
+    {
+        let sessions = state.nas_sessions.lock().await;
+        if let Some(s) = sessions.get(nas_session_id) {
+            if s.created.elapsed() <= Duration::from_secs(25 * 60) {
+                return Ok((s.client.clone(), s.sid.clone(), s.synotoken.clone()));
+            }
+        }
+    }
+
+    // Session missing or expired — try auto re-login using stdio config
+    let cfg = state.stdio_config.lock().await.clone();
+    let cfg = cfg.ok_or_else(|| "NAS session not available. Restart the MCP stdio server.".to_string())?;
+
+    eprintln!("[stdio] Session expired or missing, re-logging in…");
+    let session = login_with_config(&cfg).await?;
+    let result = (session.client.clone(), session.sid.clone(), session.synotoken.clone());
+    state.nas_sessions.lock().await.insert(nas_session_id.to_string(), session);
+    Ok(result)
 }
 
 /// Resolve the session ID: use provided value, or fall back to header-based session.

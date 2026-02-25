@@ -187,16 +187,6 @@ pub(crate) async fn handle_jsonrpc_stdio(state: &AppState, req: JsonRpcRequest, 
             let tool_name = params["name"].as_str().unwrap_or("");
             let tool_args = params.get("arguments").cloned().unwrap_or(json!({}));
 
-            // Refresh session if near expiry
-            {
-                let mut sessions = state.nas_sessions.lock().await;
-                if let Some(s) = sessions.get(nas_session_id) {
-                    if s.created.elapsed() > std::time::Duration::from_secs(25 * 60) {
-                        sessions.remove(nas_session_id);
-                    }
-                }
-            }
-
             let result = match get_nas_session_direct(state, nas_session_id).await {
                 Ok((client, sid, token)) => {
                     dispatch_tool_call(state, tool_name, &tool_args, &client, &sid, token.as_deref()).await

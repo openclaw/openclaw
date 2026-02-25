@@ -21,6 +21,15 @@ pub async fn run_stdio(host: &str, port: u16, https: bool, username: &str, passw
 
     let state = Arc::new(AppState::new());
 
+    // Save connection config for auto re-login on session expiry
+    *state.stdio_config.lock().await = Some(NasConfig {
+        host: host.to_string(),
+        port,
+        https,
+        username: username.to_string(),
+        password: password.to_string(),
+    });
+
     let nas_session_id = "__stdio__".to_string();
     state.nas_sessions.lock().await.insert(
         nas_session_id.clone(),
