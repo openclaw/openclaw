@@ -188,22 +188,37 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         }
       }
 
-      const isDirectMessage = await directTracker.isDirectMessage({
+      let isDirectMessage = await directTracker.isDirectMessage({
         roomId,
         senderId,
         selfUserId,
       });
+
+      // Resolve room config early so explicitly configured rooms can override DM classification.
+      // This ensures rooms in the groups config are always treated as groups regardless of
+      // member count or protocol-level DM flags. Only explicit matches (not wildcards) trigger
+      // the override to avoid breaking DM routing when a wildcard entry exists. (See #9106)
+      const roomConfigInfo = resolveMatrixRoomConfig({
+        rooms: roomsConfig,
+        roomId,
+        aliases: roomAliases,
+        name: roomName,
+      });
+      if (isDirectMessage && roomConfigInfo?.config && roomConfigInfo.matchSource === "direct") {
+        logVerboseMessage(
+          `matrix: overriding DM to group for configured room=${roomId} (${roomConfigInfo.matchKey})`,
+        );
+        isDirectMessage = false;
+      }
+
       const isRoom = !isDirectMessage;
 
-      const roomConfigInfo = isRoom
-        ? resolveMatrixRoomConfig({
-            rooms: roomsConfig,
-            roomId,
-            aliases: roomAliases,
-            name: roomName,
-          })
-        : undefined;
-      const roomConfig = roomConfigInfo?.config;
+      if (isRoom && groupPolicy === "disabled") {
+        return;
+      }
+      // Only expose room config for confirmed group rooms. DMs should never inherit
+      // group settings (skills, systemPrompt, autoReply) even when a wildcard entry exists.
+      const roomConfig = isRoom ? roomConfigInfo?.config : undefined;
       const roomMatchMeta = roomConfigInfo
         ? `matchKey=${roomConfigInfo.matchKey ?? "none"} matchSource=${
             roomConfigInfo.matchSource ?? "none"
