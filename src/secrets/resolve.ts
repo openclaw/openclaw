@@ -2,7 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import { resolveUserPath } from "../utils.js";
 import { readJsonPointer } from "./json-pointer.js";
-import { isNonEmptyString, normalizePositiveInt } from "./shared.js";
+import { isNonEmptyString, isRecord, normalizePositiveInt } from "./shared.js";
 import { decryptSopsJsonFile, DEFAULT_SOPS_TIMEOUT_MS } from "./sops.js";
 
 export type SecretRefResolveCache = {
@@ -39,6 +39,11 @@ async function resolveFileSecretPayload(options: ResolveSecretRefOptions): Promi
     path: resolveUserPath(fileSource.path),
     timeoutMs: normalizePositiveInt(fileSource.timeoutMs, DEFAULT_SOPS_TIMEOUT_MS),
     missingBinaryMessage: options.missingBinaryMessage ?? DEFAULT_SOPS_MISSING_BINARY_MESSAGE,
+  }).then((payload) => {
+    if (!isRecord(payload)) {
+      throw new Error("sops decrypt failed: decrypted payload is not a JSON object");
+    }
+    return payload;
   });
   if (cache) {
     cache.fileSecretsPromise = promise;

@@ -47,4 +47,30 @@ describe("resolveModelAuthLabel", () => {
 
     expect(label).toContain("token ref(env:GITHUB_TOKEN)");
   });
+
+  it("masks short api-key profile values", () => {
+    const shortSecret = "abc123";
+    ensureAuthProfileStoreMock.mockReturnValue({
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          key: shortSecret,
+        },
+      },
+    } as never);
+    resolveAuthProfileOrderMock.mockReturnValue(["openai:default"]);
+    resolveAuthProfileDisplayLabelMock.mockReturnValue("openai:default");
+
+    const label = resolveModelAuthLabel({
+      provider: "openai",
+      cfg: {},
+      sessionEntry: { authProfileOverride: "openai:default" } as never,
+    });
+
+    expect(label).toContain("api-key");
+    expect(label).toContain("...");
+    expect(label).not.toContain(shortSecret);
+  });
 });
