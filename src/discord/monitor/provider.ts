@@ -550,6 +550,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       allowFrom,
       guildEntries,
       threadBindings,
+      discordRestFetch,
     });
 
     registerDiscordListener(client.listeners, new DiscordMessageListener(messageHandler, logger));
