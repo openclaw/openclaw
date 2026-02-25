@@ -1,0 +1,167 @@
+# MERGE-GUIDE.md — Guia de Merge Upstream para Iris 🌈
+
+> **Repo:** `iris-2.0` (branch `iris/production`)  
+> **Upstream:** `origin/main` (openclaw/openclaw.git)  
+> **Última atualização:** 25/02/2026
+
+---
+
+## 📐 Arquitetura de Customização
+
+A Iris roda em cima do OpenClaw upstream com duas camadas de customização:
+
+1. **Patches no código-fonte** (`src/`) — funcionalidades que o upstream não tem (ainda)
+2. **Branding** (`ui/`, `src/cli/`) — identidade visual Iris/QualiApps
+3. **Plugins** (`extensions/`) — plugins próprios (NÃO tocam no upstream)
+4. **Config** (`~/.openclaw/openclaw.json`) — configuração local (NÃO versionada aqui)
+
+### Filosofia
+> "Trocar os pneus, não o motor."  
+> Patches mínimos, isolados, com PRs upstream pra cada um.  
+> Quanto mais PRs aceitos, menos patches pra manter.
+
+---
+
+## 📁 Inventário de Arquivos Modificados
+
+### 🔧 Patches Funcionais (submeter como PRs upstream)
+
+| Arquivo | O que faz | PR Status |
+|---------|-----------|-----------|
+| `src/agents/pi-embedded-runner/run.ts` | Passa senderE164/senderName ao runEmbeddedAttempt | ⏳ Pendente |
+| `src/agents/pi-embedded-runner/run/attempt.ts` | Extrai senderMetadata do envelope e injeta no plugin context | ⏳ Pendente |
+| `src/auto-reply/reply/dispatch-from-config.ts` | Suporte a replyMode tool-only como default | ⏳ Pendente |
+| `src/auto-reply/reply/get-reply.ts` | Hook message_transcribed pra audio transcription | ⏳ Pendente |
+| `src/config/types.agent-defaults.ts` | Tipo replyMode no AgentDefaults | ⏳ Pendente |
+| `src/config/zod-schema.agent-defaults.ts` | Schema Zod pra replyMode default | ⏳ Pendente |
+| `src/infra/outbound/deliver.ts` | normalizeBrazilianMobile (+55 DDD9) nos destinatários | ⏳ Pendente |
+| `src/plugins/hooks.ts` | Hook message_transcribed registration | ⏳ Pendente |
+| `src/plugins/types.ts` | Tipos do hook message_transcribed + senderMetadata | ⏳ Pendente |
+| `src/utils.ts` | Função normalizeBrazilianMobile | ⏳ Pendente |
+| `src/utils.test.ts` | Testes do normalizeBrazilianMobile | ⏳ Pendente |
+| `src/web/auto-reply/monitor/process-message.ts` | Smart-router outbound + message_transcribed dispatch | ⏳ Pendente |
+
+**Quando o PR for aceito upstream:** remover o patch do branch, o `git pull` já traz.
+
+### 🎨 Branding (NUNCA vira PR — são customizações nossas)
+
+| Arquivo | O que faz |
+|---------|-----------|
+| `src/cli/banner.ts` | "🌈 Iris" no lugar de "🦞 OpenClaw", ASCII art IRIS |
+| `src/cli/tagline.ts` | Tagline default → "Parceira de pensamento, não de bajulação." |
+| `ui/index.html` | Title "Iris Control 🌈" |
+| `ui/src/styles/base.css` | Cor de acento roxo (#7C3AED) no lugar de vermelho (#ff5c5c) |
+| `ui/src/ui/app-render.ts` | Logo "IRIS by QualiApps 🌈" |
+| `ui/public/favicon.svg` | Favicon SVG com gradiente roxo + "I" |
+| `ui/public/favicon-32.png` | Favicon PNG do mascote Iris |
+| `ui/public/favicon.ico` | Favicon ICO do mascote Iris |
+| `ui/public/apple-touch-icon.png` | Apple touch icon do mascote Iris |
+
+### 🔌 Plugins (pasta separada, sem conflito)
+
+| Plugin | Pasta |
+|--------|-------|
+| handover | `extensions/handover/` |
+| message-logger | `extensions/message-logger/` |
+| pattern-detector | `extensions/pattern-detector/` |
+| smart-router-inbound | `extensions/smart-router-inbound/` |
+
+---
+
+## 🔄 Passo a Passo: Merge Upstream
+
+### 1. Buscar atualizações
+
+```bash
+cd C:\Users\lucas\iris-2.0
+git fetch origin main
+```
+
+### 2. Ver o que mudou no upstream
+
+```bash
+# Commits novos no upstream
+git log iris/production..origin/main --oneline
+
+# Verificar se algum arquivo nosso foi tocado
+git diff iris/production...origin/main --stat -- src/cli/banner.ts src/cli/tagline.ts src/agents/pi-embedded-runner/ src/auto-reply/reply/ src/config/types.agent-defaults.ts src/config/zod-schema.agent-defaults.ts src/infra/outbound/deliver.ts src/plugins/hooks.ts src/plugins/types.ts src/utils.ts src/web/auto-reply/monitor/process-message.ts ui/
+```
+
+### 3. Merge
+
+```bash
+git merge origin/main --no-edit
+```
+
+### 4. Resolver conflitos (se houver)
+
+**Regra de ouro:**
+- **Patches funcionais** → manter NOSSO código (é funcionalidade que o upstream não tem)
+- **Branding** → manter NOSSO código (sempre)
+- **Se o PR foi aceito upstream** → aceitar o DELES e remover nosso patch
+- **Qualquer outro arquivo** → aceitar o DELES
+
+### 5. Rebuild
+
+```bash
+pnpm build
+node scripts/ui.js build
+```
+
+### 6. Testar
+
+```bash
+pnpm test          # Testes unitários
+# Subir gateway e testar manualmente:
+# - WhatsApp conecta?
+# - Telegram conecta?
+# - Pattern Detector mostra senderName?
+# - Control UI com branding Iris?
+```
+
+### 7. Reiniciar gateway
+
+Via Task Scheduler: Stop + Start "OpenClaw Gateway"
+
+---
+
+## 🚨 Checklist Pré-Merge
+
+- [ ] Backup: `git stash` ou `git branch backup-YYYYMMDD` antes
+- [ ] Verificar se algum PR nosso foi aceito (pode remover patch)
+- [ ] Rodar `git diff --stat` pra ver se conflitos são gerenciáveis
+- [ ] Depois do merge: verificar que `pnpm build` passa
+- [ ] Depois do merge: verificar que `node scripts/ui.js build` passa
+- [ ] Testar gateway completo (WhatsApp + Telegram + UI)
+
+---
+
+## 📊 Status dos PRs Upstream
+
+> Atualizar conforme PRs forem submetidos/aceitos
+
+| # | Título | Status | Data |
+|---|--------|--------|------|
+| - | senderMetadata para plugins | ⏳ Não submetido | - |
+| - | replyMode tool-only default | ⏳ Não submetido | - |
+| - | normalizeBrazilianMobile | ⏳ Não submetido | - |
+| - | hook message_transcribed | ⏳ Não submetido | - |
+| - | smart-router outbound | ⏳ Não submetido | - |
+
+**Meta:** Zero patches funcionais. Tudo aceito upstream. Só branding fica.
+
+---
+
+## 💡 Dicas
+
+1. **Nunca commitar em `origin/main`** — sempre em `iris/production`
+2. **`origin` neste repo = openclaw/openclaw.git** (upstream direto)
+3. **Plugins em `extensions/` nunca conflitam** — pasta ignorada pelo upstream
+4. **Config em `~/.openclaw/openclaw.json` não está no repo** — sem risco
+5. **Se a UI upstream mudar muito** (ex: novo framework), pode precisar re-aplicar branding manual
+6. **O build da UI é separado:** `node scripts/ui.js build` (Vite, ~1s)
+7. **Chunk size warning na UI é normal** — não é erro
+
+---
+
+*Mantido por Iris 🌈 — Atualizar após cada merge ou PR aceito.*
