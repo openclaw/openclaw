@@ -206,13 +206,11 @@ export function createVncProxy(opts?: {
 
       // Derive the WebSocket URL for the node to connect back.
       const host = req.headers.host ?? "localhost";
-      const forwardedProto = req.headers["x-forwarded-proto"] as string | undefined;
-      // Default to wss for non-localhost hosts — the gateway is typically behind
-      // a TLS-terminating reverse proxy that may not forward X-Forwarded-Proto
-      // on WebSocket upgrade requests.
-      const isSecure =
-        forwardedProto === "https" ||
-        (!forwardedProto && host !== "localhost" && !host.startsWith("127."));
+      // Use wss for any public hostname. Behind a TLS-terminating reverse
+      // proxy the X-Forwarded-Proto header may read "http" (the internal
+      // leg), so we only fall back to ws for localhost/127.x development.
+      const isLocalDev = host === "localhost" || host.startsWith("127.");
+      const isSecure = !isLocalDev;
       const tunnelUrl = `${isSecure ? "wss" : "ws"}://${host}/vnc-tunnel?tunnelId=${tunnelId}`;
 
       // Invoke the node to open a VNC tunnel.
