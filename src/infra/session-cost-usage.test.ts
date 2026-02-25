@@ -231,6 +231,30 @@ describe("session cost usage", () => {
     });
   });
 
+  it("preserves raw filename stem as sessionId for all filename formats", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discover-uuid-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    // Pi-SDK timestamped format: "<fileTimestamp>_<UUID>.jsonl"
+    const uuid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+    const timestampedStem = `2024-01-15T10-30-45-123Z_${uuid}`;
+    await fs.writeFile(path.join(sessionsDir, `${timestampedStem}.jsonl`), "", "utf-8");
+
+    // Plain UUID filename
+    const plainUuid = "11112222-3333-4444-5555-666677778888";
+    await fs.writeFile(path.join(sessionsDir, `${plainUuid}.jsonl`), "", "utf-8");
+
+    await withStateDir(root, async () => {
+      const sessions = await discoverAllSessions({});
+      const byId = new Map(sessions.map((s) => [s.sessionId, s]));
+
+      // Both retain the raw filename stem so file resolution keeps working
+      expect(byId.has(timestampedStem)).toBe(true);
+      expect(byId.has(plainUuid)).toBe(true);
+    });
+  });
+
   it("resolves non-main absolute sessionFile using explicit agentId for cost summary", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-agent-"));
     const workerSessionsDir = path.join(root, "agents", "worker1", "sessions");

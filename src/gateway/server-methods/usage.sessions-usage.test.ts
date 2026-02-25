@@ -189,6 +189,89 @@ describe("sessions.usage", () => {
     }
   });
 
+  it("matches timestamped pi-SDK filenames to store entries by extracted UUID", async () => {
+    const uuid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890";
+    const timestampedId = `2024-01-15T10-30-45-123Z_${uuid}`;
+    const storeKey = "agent:main:whatsapp:dm:user1";
+
+    // discoverAllSessions returns the raw filename stem (timestamped)
+    vi.mocked(discoverAllSessions).mockImplementation(async (params) => {
+      if (params?.agentId === "main") {
+        return [
+          {
+            sessionId: timestampedId,
+            sessionFile: `/tmp/agents/main/sessions/${timestampedId}.jsonl`,
+            mtime: 300,
+            firstUserMessage: "test",
+          },
+        ];
+      }
+      return [];
+    });
+
+    // Store indexes by plain UUID
+    vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+      storePath: "(multiple)",
+      store: {
+        [storeKey]: {
+          sessionId: uuid,
+          sessionFile: `${timestampedId}.jsonl`,
+          label: "WhatsApp DM",
+          updatedAt: 300,
+          channel: "whatsapp",
+        },
+      },
+    });
+
+    const respond = await runSessionsUsage(BASE_USAGE_RANGE);
+    const sessions = expectSuccessfulSessionsUsage(respond);
+
+    // Should match the store entry via UUID extraction fallback and use store
+    // key since the entry has sessionFile
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]?.key).toBe(storeKey);
+  });
+
+  it("keeps discovered key for UUID fallback when store entry lacks sessionFile", async () => {
+    const uuid = "b2c3d4e5-f6a7-8901-bcde-f12345678901";
+    const timestampedId = `2024-06-20T08-15-30-456Z_${uuid}`;
+    const storeKey = "agent:main:telegram:dm:user2";
+
+    vi.mocked(discoverAllSessions).mockImplementation(async (params) => {
+      if (params?.agentId === "main") {
+        return [
+          {
+            sessionId: timestampedId,
+            sessionFile: `/tmp/agents/main/sessions/${timestampedId}.jsonl`,
+            mtime: 400,
+            firstUserMessage: "hello",
+          },
+        ];
+      }
+      return [];
+    });
+
+    // Store entry with matching UUID but NO sessionFile field
+    vi.mocked(loadCombinedSessionStoreForGateway).mockReturnValue({
+      storePath: "(multiple)",
+      store: {
+        [storeKey]: {
+          sessionId: uuid,
+          label: "Telegram DM",
+          updatedAt: 400,
+          channel: "telegram",
+        },
+      },
+    });
+
+    const respond = await runSessionsUsage(BASE_USAGE_RANGE);
+    const sessions = expectSuccessfulSessionsUsage(respond);
+
+    // Should fall back to discovered key so detail handlers can resolve the file
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]?.key).toBe(`agent:main:${timestampedId}`);
+  });
+
   it("rejects traversal-style keys in specific session usage lookups", async () => {
     const respond = await runSessionsUsage({
       ...BASE_USAGE_RANGE,

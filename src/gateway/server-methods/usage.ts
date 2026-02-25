@@ -248,6 +248,19 @@ const parseDateRange = (params: {
 
 type DiscoveredSessionWithAgent = DiscoveredSession & { agentId: string };
 
+/**
+ * Pi-SDK session transcript filenames use "<timestamp>_<UUID>.jsonl" where
+ * the timestamp is an ISO date with colons/dots replaced by dashes.
+ * This helper extracts the UUID when the filename matches that shape,
+ * returning `undefined` for all other formats.
+ */
+const PI_SDK_TS_RE =
+  /^\d{4}-\d{2}-\d{2}T[\d-]+Z?_([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;
+
+function extractUuidFromTimestampedId(sessionId: string): string | undefined {
+  return PI_SDK_TS_RE.exec(sessionId)?.[1];
+}
+
 function buildStoreBySessionId(
   store: Record<string, SessionEntry>,
 ): Map<string, { key: string; entry: SessionEntry }> {
@@ -468,11 +481,24 @@ export const usageHandlers: GatewayRequestHandlers = {
       const storeBySessionId = buildStoreBySessionId(store);
 
       for (const discovered of discoveredSessions) {
-        const storeMatch = storeBySessionId.get(discovered.sessionId);
+        // Pi-SDK timestamped files use "<timestamp>_<UUID>.jsonl" but the
+        // session store indexes by plain UUID — try both for matching.
+        const directMatch = storeBySessionId.get(discovered.sessionId);
+        const uuidFallback = !directMatch
+          ? extractUuidFromTimestampedId(discovered.sessionId)
+          : undefined;
+        const storeMatch =
+          directMatch ?? (uuidFallback ? storeBySessionId.get(uuidFallback) : undefined);
         if (storeMatch) {
-          // Named session from store
+          // Use the store key when the store entry has a sessionFile that
+          // detail handlers can resolve. For UUID-fallback matches where the
+          // entry might lack sessionFile, keep the discovered key so the
+          // raw filename stem is available for path resolution.
+          const useStoreKey = directMatch || storeMatch.entry.sessionFile?.trim();
           mergedEntries.push({
-            key: storeMatch.key,
+            key: useStoreKey
+              ? storeMatch.key
+              : `agent:${discovered.agentId}:${discovered.sessionId}`,
             sessionId: discovered.sessionId,
             sessionFile: discovered.sessionFile,
             label: storeMatch.entry.label,
