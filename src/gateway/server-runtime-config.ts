@@ -47,10 +47,13 @@ export async function resolveGatewayRuntimeConfig(params: {
   openResponsesEnabled?: boolean;
   auth?: GatewayAuthConfig;
   tailscale?: GatewayTailscaleConfig;
+  /** Optional logger for one-time warnings (e.g. bind auto-correction for Tailscale serve). */
+  log?: { warn: (message: string) => void };
 }): Promise<GatewayRuntimeConfig> {
   const bindMode = params.bind ?? params.cfg.gateway?.bind ?? "loopback";
   const customBindHost = params.cfg.gateway?.customBindHost;
   const bindHost = params.host ?? (await resolveGatewayBindHost(bindMode, customBindHost));
+  let effectiveBindHost = bindHost;
   if (bindMode === "loopback" && !isLoopbackHost(bindHost)) {
     throw new Error(
       `gateway bind=loopback resolved to non-loopback host ${bindHost}; refusing fallback to a network bind`,
@@ -127,17 +130,20 @@ export async function resolveGatewayRuntimeConfig(params: {
       "tailscale funnel requires gateway auth mode=password (set gateway.auth.password or OPENCLAW_GATEWAY_PASSWORD)",
     );
   }
-  if (tailscaleMode !== "off" && !isLoopbackHost(bindHost)) {
-    throw new Error("tailscale serve/funnel requires gateway bind=loopback (127.0.0.1)");
+  if (tailscaleMode !== "off" && !isLoopbackHost(effectiveBindHost)) {
+    effectiveBindHost = "127.0.0.1";
+    params.log?.warn(
+      `gateway.tailscale.mode="${tailscaleMode}" requires loopback; overriding gateway bind to 127.0.0.1 for this session (config unchanged).`,
+    );
   }
-  if (!isLoopbackHost(bindHost) && !hasSharedSecret && authMode !== "trusted-proxy") {
+  if (!isLoopbackHost(effectiveBindHost) && !hasSharedSecret && authMode !== "trusted-proxy") {
     throw new Error(
-      `refusing to bind gateway to ${bindHost}:${params.port} without auth (set gateway.auth.token/password, or set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD)`,
+      `refusing to bind gateway to ${effectiveBindHost}:${params.port} without auth (set gateway.auth.token/password, or set OPENCLAW_GATEWAY_TOKEN/OPENCLAW_GATEWAY_PASSWORD)`,
     );
   }
   if (
     controlUiEnabled &&
-    !isLoopbackHost(bindHost) &&
+    !isLoopbackHost(effectiveBindHost) &&
     controlUiAllowedOrigins.length === 0 &&
     !dangerouslyAllowHostHeaderOriginFallback
   ) {
@@ -152,7 +158,7 @@ export async function resolveGatewayRuntimeConfig(params: {
         "gateway auth mode=trusted-proxy requires gateway.trustedProxies to be configured with at least one proxy IP",
       );
     }
-    if (isLoopbackHost(bindHost)) {
+    if (isLoopbackHost(effectiveBindHost)) {
       const hasLoopbackTrustedProxy =
         isTrustedProxyAddress("127.0.0.1", trustedProxies) ||
         isTrustedProxyAddress("::1", trustedProxies);
@@ -165,7 +171,7 @@ export async function resolveGatewayRuntimeConfig(params: {
   }
 
   return {
-    bindHost,
+    bindHost: effectiveBindHost,
     controlUiEnabled,
     openAiChatCompletionsEnabled,
     openAiChatCompletionsConfig: openAiChatCompletionsConfig

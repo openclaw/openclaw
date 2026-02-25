@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
 
 const TRUSTED_PROXY_AUTH = {
@@ -229,6 +229,66 @@ describe("resolveGatewayRuntimeConfig", () => {
         port: 18789,
       });
       expect(result.bindHost).toBe("0.0.0.0");
+    });
+  });
+
+  describe("tailscale serve/funnel bind auto-correction", () => {
+    it("auto-corrects bind to loopback when tailscale.mode=serve and bind=lan", async () => {
+      const logWarn = vi.fn();
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: {
+          gateway: {
+            bind: "lan",
+            auth: TOKEN_AUTH,
+            tailscale: { mode: "serve" },
+            controlUi: { allowedOrigins: ["https://example.com"] },
+          },
+        },
+        port: 18789,
+        log: { warn: logWarn },
+      });
+      expect(result.bindHost).toBe("127.0.0.1");
+      expect(result.tailscaleMode).toBe("serve");
+      expect(logWarn).toHaveBeenCalledWith(
+        expect.stringContaining('gateway.tailscale.mode="serve" requires loopback'),
+      );
+    });
+
+    it("auto-corrects bind to loopback when tailscale.mode=funnel and bind=lan", async () => {
+      const logWarn = vi.fn();
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: {
+          gateway: {
+            bind: "lan",
+            auth: { mode: "password" as const, password: "secret" },
+            tailscale: { mode: "funnel" },
+            controlUi: { allowedOrigins: ["https://example.com"] },
+          },
+        },
+        port: 18789,
+        log: { warn: logWarn },
+      });
+      expect(result.bindHost).toBe("127.0.0.1");
+      expect(logWarn).toHaveBeenCalledWith(
+        expect.stringContaining('gateway.tailscale.mode="funnel" requires loopback'),
+      );
+    });
+
+    it("does not override when tailscale.mode=serve and bind=loopback", async () => {
+      const logWarn = vi.fn();
+      const result = await resolveGatewayRuntimeConfig({
+        cfg: {
+          gateway: {
+            bind: "loopback",
+            auth: { mode: "none" as const },
+            tailscale: { mode: "serve" },
+          },
+        },
+        port: 18789,
+        log: { warn: logWarn },
+      });
+      expect(result.bindHost).toBe("127.0.0.1");
+      expect(logWarn).not.toHaveBeenCalled();
     });
   });
 
