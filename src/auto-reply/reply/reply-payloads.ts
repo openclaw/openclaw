@@ -1,5 +1,6 @@
 import { isMessagingToolDuplicate } from "../../agents/pi-embedded-helpers.js";
 import type { MessagingToolSend } from "../../agents/pi-embedded-runner.js";
+import { normalizeChannelId } from "../../channels/plugins/index.js";
 import type { ReplyToMode } from "../../config/types.js";
 import { normalizeTargetForProvider } from "../../infra/outbound/target-normalization.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
@@ -140,13 +141,33 @@ export function filterMessagingToolMediaDuplicates(params: {
   });
 }
 
+function normalizeProviderForSuppression(provider?: string): string | undefined {
+  const raw = provider?.trim();
+  if (!raw) {
+    return undefined;
+  }
+  return normalizeChannelId(raw) ?? raw.toLowerCase();
+}
+
+function resolveTargetProviderForSuppression(params: {
+  currentProvider: string;
+  targetProvider?: string;
+}): string {
+  const targetProvider = normalizeProviderForSuppression(params.targetProvider);
+  // "message" is a placeholder for providerless sends; treat it as wildcard.
+  if (!targetProvider || targetProvider === "message") {
+    return params.currentProvider;
+  }
+  return targetProvider;
+}
+
 export function shouldSuppressMessagingToolReplies(params: {
   messageProvider?: string;
   messagingToolSentTargets?: MessagingToolSend[];
   originatingTo?: string;
   accountId?: string;
 }): boolean {
-  const provider = params.messageProvider?.trim().toLowerCase();
+  const provider = normalizeProviderForSuppression(params.messageProvider);
   if (!provider) {
     return false;
   }
@@ -160,10 +181,11 @@ export function shouldSuppressMessagingToolReplies(params: {
     return false;
   }
   return sentTargets.some((target) => {
-    if (!target?.provider) {
-      return false;
-    }
-    if (target.provider.trim().toLowerCase() !== provider) {
+    const targetProvider = resolveTargetProviderForSuppression({
+      currentProvider: provider,
+      targetProvider: target?.provider,
+    });
+    if (targetProvider !== provider) {
       return false;
     }
     const targetKey = normalizeTargetForProvider(provider, target.to);

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { filterMessagingToolMediaDuplicates } from "./reply-payloads.js";
+import {
+  filterMessagingToolMediaDuplicates,
+  shouldSuppressMessagingToolReplies,
+} from "./reply-payloads.js";
 
 describe("filterMessagingToolMediaDuplicates", () => {
   it("strips mediaUrl when it matches sentMediaUrls", () => {
@@ -73,5 +76,43 @@ describe("filterMessagingToolMediaDuplicates", () => {
       sentMediaUrls: ["file:///tmp/photo%20one.jpg"],
     });
     expect(result).toEqual([{ text: "hello", mediaUrl: undefined, mediaUrls: undefined }]);
+  });
+});
+
+describe("shouldSuppressMessagingToolReplies", () => {
+  it("suppresses when target provider is missing but target matches current provider route", () => {
+    const suppressed = shouldSuppressMessagingToolReplies({
+      messageProvider: "telegram",
+      originatingTo: "123",
+      messagingToolSentTargets: [{ tool: "message", to: "123" }],
+    });
+    expect(suppressed).toBe(true);
+  });
+
+  it('suppresses when target provider uses "message" placeholder and target matches', () => {
+    const suppressed = shouldSuppressMessagingToolReplies({
+      messageProvider: "telegram",
+      originatingTo: "123",
+      messagingToolSentTargets: [{ tool: "message", provider: "message", to: "123" }],
+    });
+    expect(suppressed).toBe(true);
+  });
+
+  it("does not suppress when providerless target does not match current route target", () => {
+    const suppressed = shouldSuppressMessagingToolReplies({
+      messageProvider: "telegram",
+      originatingTo: "123",
+      messagingToolSentTargets: [{ tool: "message", to: "999" }],
+    });
+    expect(suppressed).toBe(false);
+  });
+
+  it("does not suppress when explicit target provider is different", () => {
+    const suppressed = shouldSuppressMessagingToolReplies({
+      messageProvider: "telegram",
+      originatingTo: "123",
+      messagingToolSentTargets: [{ tool: "message", provider: "slack", to: "123" }],
+    });
+    expect(suppressed).toBe(false);
   });
 });

@@ -2,7 +2,7 @@ import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.
 
 export type MessagingToolSend = {
   tool: string;
-  provider: string;
+  provider?: string;
   accountId?: string;
   to?: string;
 };
