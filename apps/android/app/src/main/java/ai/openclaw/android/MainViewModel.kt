@@ -14,6 +14,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   private val runtime: NodeRuntime = (app as NodeApp).runtime
 
   val canvas: CanvasController = runtime.canvas
+  val canvasCurrentUrl: StateFlow<String?> = runtime.canvas.currentUrl
+  val canvasA2uiHydrated: StateFlow<Boolean> = runtime.canvasA2uiHydrated
+  val canvasRehydratePending: StateFlow<Boolean> = runtime.canvasRehydratePending
+  val canvasRehydrateErrorText: StateFlow<String?> = runtime.canvasRehydrateErrorText
   val camera: CameraCaptureManager = runtime.camera
   val screenRecorder: ScreenRecordManager = runtime.screenRecorder
   val sms: SmsManager = runtime.sms
@@ -169,6 +173,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun handleCanvasA2UIActionFromWebView(payloadJson: String) {
     runtime.handleCanvasA2UIActionFromWebView(payloadJson)
+  }
+
+  fun requestCanvasRehydrate(source: String = "screen_tab") {
+    runtime.requestCanvasRehydrate(source = source, force = true)
   }
 
   fun loadChat(sessionKey: String) {

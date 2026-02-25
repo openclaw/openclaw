@@ -115,8 +115,50 @@ fun PostOnboardingTabs(viewModel: MainViewModel, modifier: Modifier = Modifier) 
         HomeTab.Connect -> ConnectTabScreen(viewModel = viewModel)
         HomeTab.Chat -> ChatSheet(viewModel = viewModel)
         HomeTab.Voice -> ComingSoonTabScreen(label = "VOICE", title = "Coming soon", description = "Voice mode is coming soon.")
-        HomeTab.Screen -> ComingSoonTabScreen(label = "SCREEN", title = "Coming soon", description = "Screen mode is coming soon.")
+        HomeTab.Screen -> ScreenTabScreen(viewModel = viewModel)
         HomeTab.Settings -> SettingsSheet(viewModel = viewModel)
+      }
+    }
+  }
+}
+
+@Composable
+private fun ScreenTabScreen(viewModel: MainViewModel) {
+  val isConnected by viewModel.isConnected.collectAsState()
+  val canvasUrl by viewModel.canvasCurrentUrl.collectAsState()
+  val canvasA2uiHydrated by viewModel.canvasA2uiHydrated.collectAsState()
+  val canvasRehydratePending by viewModel.canvasRehydratePending.collectAsState()
+  val canvasRehydrateErrorText by viewModel.canvasRehydrateErrorText.collectAsState()
+  val isA2uiUrl = canvasUrl?.contains("/__openclaw__/a2ui/") == true
+  val showRestoreCta = isConnected && (canvasUrl.isNullOrBlank() || (isA2uiUrl && !canvasA2uiHydrated))
+  val restoreCtaText =
+    when {
+      canvasRehydratePending -> "Restore requested. Waiting for agent…"
+      !canvasRehydrateErrorText.isNullOrBlank() -> canvasRehydrateErrorText!!
+      else -> "Canvas reset. Tap to restore dashboard."
+    }
+
+  Box(modifier = Modifier.fillMaxSize()) {
+    CanvasScreen(viewModel = viewModel, modifier = Modifier.fillMaxSize())
+
+    if (showRestoreCta) {
+      Surface(
+        onClick = {
+          if (canvasRehydratePending) return@Surface
+          viewModel.requestCanvasRehydrate(source = "screen_tab_cta")
+        },
+        modifier = Modifier.align(Alignment.TopCenter).padding(horizontal = 16.dp, vertical = 16.dp),
+        shape = RoundedCornerShape(12.dp),
+        color = mobileSurface.copy(alpha = 0.9f),
+        border = BorderStroke(1.dp, mobileBorder),
+        shadowElevation = 4.dp,
+      ) {
+        Text(
+          text = restoreCtaText,
+          modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+          style = mobileCallout.copy(fontWeight = FontWeight.Medium),
+          color = mobileText,
+        )
       }
     }
   }
