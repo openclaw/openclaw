@@ -5,7 +5,7 @@ import {
   type OAuthProvider,
 } from "@mariozechner/pi-ai";
 import { loadConfig, type OpenClawConfig } from "../../config/config.js";
-import { isSecretRef } from "../../config/types.secrets.js";
+import { coerceSecretRef } from "../../config/types.secrets.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { refreshQwenPortalCredentials } from "../../providers/qwen-portal-oauth.js";
 import { resolveSecretRefString, type SecretRefResolveCache } from "../../secrets/resolve.js";
@@ -257,14 +257,34 @@ export async function resolveApiKeyForProfile(
     return null;
   }
 
-  const refResolveCache: SecretRefResolveCache = { fileSecretsPromise: null };
+  const refResolveCache: SecretRefResolveCache = {};
   const configForRefResolution = cfg ?? loadConfig();
+  const refDefaults = configForRefResolution.secrets?.defaults;
 
   if (cred.type === "api_key") {
     let key = cred.key?.trim();
-    if (!key && isSecretRef(cred.keyRef)) {
+    if (key) {
+      const inlineRef = coerceSecretRef(key, refDefaults);
+      if (inlineRef) {
+        try {
+          key = await resolveSecretRefString(inlineRef, {
+            config: configForRefResolution,
+            env: process.env,
+            cache: refResolveCache,
+          });
+        } catch (err) {
+          log.debug("failed to resolve inline auth profile api_key ref", {
+            profileId,
+            provider: cred.provider,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    }
+    const keyRef = coerceSecretRef(cred.keyRef, refDefaults);
+    if (!key && keyRef) {
       try {
-        key = await resolveSecretRefString(cred.keyRef, {
+        key = await resolveSecretRefString(keyRef, {
           config: configForRefResolution,
           env: process.env,
           cache: refResolveCache,
@@ -284,9 +304,28 @@ export async function resolveApiKeyForProfile(
   }
   if (cred.type === "token") {
     let token = cred.token?.trim();
-    if (!token && isSecretRef(cred.tokenRef)) {
+    if (token) {
+      const inlineRef = coerceSecretRef(token, refDefaults);
+      if (inlineRef) {
+        try {
+          token = await resolveSecretRefString(inlineRef, {
+            config: configForRefResolution,
+            env: process.env,
+            cache: refResolveCache,
+          });
+        } catch (err) {
+          log.debug("failed to resolve inline auth profile token ref", {
+            profileId,
+            provider: cred.provider,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    }
+    const tokenRef = coerceSecretRef(cred.tokenRef, refDefaults);
+    if (!token && tokenRef) {
       try {
-        token = await resolveSecretRefString(cred.tokenRef, {
+        token = await resolveSecretRefString(tokenRef, {
           config: configForRefResolution,
           env: process.env,
           cache: refResolveCache,

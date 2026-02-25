@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import { ensureDirForFile, writeJsonFileSecure } from "../shared.js";
-import { encryptSopsJsonFile } from "../sops.js";
 import {
   createBackupManifest,
   pruneOldBackups,
@@ -9,22 +8,6 @@ import {
 } from "./backup.js";
 import { createSecretsMigrationConfigIO } from "./config-io.js";
 import type { MigrationPlan, SecretsMigrationRunResult } from "./types.js";
-
-async function encryptSopsJson(params: {
-  pathname: string;
-  timeoutMs: number;
-  payload: Record<string, unknown>;
-  sopsConfigPath?: string;
-}): Promise<void> {
-  await encryptSopsJsonFile({
-    path: params.pathname,
-    payload: params.payload,
-    timeoutMs: params.timeoutMs,
-    configPath: params.sopsConfigPath,
-    missingBinaryMessage:
-      "sops binary not found in PATH. Install sops >= 3.9.0 to run secrets migrate.",
-  });
-}
 
 export async function applyMigrationPlan(params: {
   plan: MigrationPlan;
@@ -52,12 +35,7 @@ export async function applyMigrationPlan(params: {
 
   try {
     if (plan.payloadChanged) {
-      await encryptSopsJson({
-        pathname: plan.secretsFilePath,
-        timeoutMs: plan.secretsFileTimeoutMs,
-        payload: plan.nextPayload,
-        sopsConfigPath: plan.sopsConfigPath,
-      });
+      writeJsonFileSecure(plan.secretsFilePath, plan.nextPayload);
     }
 
     if (plan.configChanged) {
