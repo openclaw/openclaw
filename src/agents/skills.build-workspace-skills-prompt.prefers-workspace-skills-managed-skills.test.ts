@@ -91,9 +91,11 @@ describe("buildWorkspaceSkillsPrompt", () => {
     });
 
     const managedSkillsDir = path.join(workspaceDir, ".managed");
+    const bundledSkillsDir = path.join(workspaceDir, ".bundled");
     const defaultPrompt = withEnv({ HOME: workspaceDir, PATH: "" }, () =>
       buildWorkspaceSkillsPrompt(workspaceDir, {
         managedSkillsDir,
+        bundledSkillsDir,
         eligibility: {
           remote: {
             platforms: ["linux"],
@@ -113,6 +115,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
     const gatedPrompt = withEnv({ HOME: workspaceDir, PATH: "" }, () =>
       buildWorkspaceSkillsPrompt(workspaceDir, {
         managedSkillsDir,
+        bundledSkillsDir,
         config: {
           browser: { enabled: false },
           skills: { entries: { "env-skill": { apiKey: "ok" } } },
@@ -146,6 +149,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
     const prompt = withEnv({ HOME: workspaceDir, PATH: "" }, () =>
       buildWorkspaceSkillsPrompt(workspaceDir, {
         managedSkillsDir: path.join(workspaceDir, ".managed"),
+        bundledSkillsDir: path.join(workspaceDir, ".bundled"),
         config: { skills: { entries: { alias: { enabled: false } } } },
       }),
     );
