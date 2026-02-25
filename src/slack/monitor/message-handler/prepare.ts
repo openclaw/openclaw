@@ -371,7 +371,7 @@ export async function prepareSlackMessage(params: {
     !mediaPlaceholder && (message.files?.length ?? 0) > 0
       ? message
           .files!.slice(0, MAX_SLACK_MEDIA_FILES)
-          .map((f) => f.name ?? "file")
+          .map((f) => f.name?.trim() || "file")
           .join(", ")
       : undefined;
   const fileOnlyPlaceholder = fileOnlyFallback ? `[Slack file: ${fileOnlyFallback}]` : undefined;
