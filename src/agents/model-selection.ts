@@ -26,6 +26,9 @@ const ANTHROPIC_MODEL_ALIASES: Record<string, string> = {
   "opus-4.5": "claude-opus-4-5",
   "sonnet-4.6": "claude-sonnet-4-6",
   "sonnet-4.5": "claude-sonnet-4-5",
+  haiku: "claude-haiku-4-5",
+  "haiku-3.5": "claude-haiku-4-5",
+  "claude-haiku-3-5": "claude-haiku-4-5",
 };
 const OPENAI_CODEX_OAUTH_MODEL_PREFIXES = ["gpt-5.3-codex"] as const;
 
