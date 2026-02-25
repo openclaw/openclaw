@@ -20,6 +20,8 @@ class InvokeDispatcher(
   private val isForeground: () -> Boolean,
   private val cameraEnabled: () -> Boolean,
   private val locationEnabled: () -> Boolean,
+  private val onCanvasA2uiPush: () -> Unit,
+  private val onCanvasA2uiReset: () -> Unit,
 ) {
   suspend fun handleInvoke(command: String, paramsJson: String?): GatewaySession.InvokeResult {
     // Check foreground requirement for canvas/camera/screen commands
@@ -117,6 +119,7 @@ class InvokeDispatcher(
           )
         }
         val res = canvas.eval(A2UIHandler.a2uiResetJS)
+        onCanvasA2uiReset()
         GatewaySession.InvokeResult.ok(res)
       }
       OpenClawCanvasA2UICommand.Push.rawValue, OpenClawCanvasA2UICommand.PushJSONL.rawValue -> {
@@ -143,6 +146,7 @@ class InvokeDispatcher(
         }
         val js = A2UIHandler.a2uiApplyMessagesJS(messages)
         val res = canvas.eval(js)
+        onCanvasA2uiPush()
         GatewaySession.InvokeResult.ok(res)
       }
 
