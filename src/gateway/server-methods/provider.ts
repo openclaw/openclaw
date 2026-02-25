@@ -527,7 +527,8 @@ export const providerHandlers: GatewayRequestHandlers = {
 
     const tasks: Array<Promise<ProviderUsageEntry>> = [];
 
-    if (anthropicKey) {
+    // Only attempt Anthropic usage if we have an admin key — OAuth tokens return 404
+    if (anthropicKey && anthropicKey.startsWith("sk-ant-admin")) {
       tasks.push(
         withTimeout(fetchAnthropicUsage(anthropicKey), TIMEOUT_MS, {
           provider: "anthropic",
