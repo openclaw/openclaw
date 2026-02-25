@@ -1,9 +1,10 @@
-FROM ghcr.io/openclaw/openclaw:latest
+FROM node:22-bookworm-slim
 
 USER root
 
 ARG KUBECTL_VERSION=v1.33.5
 ARG HELM_VERSION=v3.17.1
+ARG OPENCLAW_VERSION=2026.2.24
 ARG TARGETARCH
 
 RUN apt-get update \
@@ -18,6 +19,8 @@ RUN apt-get update \
     tar \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+
+RUN npm install -g "openclaw@${OPENCLAW_VERSION}"
 
 RUN set -eux; \
   arch="${TARGETARCH:-$(dpkg --print-architecture)}"; \
