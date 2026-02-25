@@ -361,7 +361,24 @@ private enum ExecHostExecutor {
                 reason: "invalid")
         }
 
-        let context = await self.buildContext(request: request, command: command)
+        let validatedCommand = ExecSystemRunCommandValidator.resolve(
+            command: command,
+            rawCommand: request.rawCommand)
+        let displayCommand: String
+        switch validatedCommand {
+        case .ok(let resolved):
+            displayCommand = resolved.displayCommand
+        case .invalid(let message):
+            return self.errorResponse(
+                code: "INVALID_REQUEST",
+                message: message,
+                reason: "invalid")
+        }
+
+        let context = await self.buildContext(
+            request: request,
+            command: command,
+            rawCommand: displayCommand)
         if context.security == .deny {
             return self.errorResponse(
                 code: "UNAVAILABLE",
@@ -451,10 +468,14 @@ private enum ExecHostExecutor {
             timeoutMs: request.timeoutMs)
     }
 
-    private static func buildContext(request: ExecHostRequest, command: [String]) async -> ExecApprovalContext {
+    private static func buildContext(
+        request: ExecHostRequest,
+        command: [String],
+        rawCommand: String?) async -> ExecApprovalContext
+    {
         await ExecApprovalEvaluator.evaluate(
             command: command,
-            rawCommand: request.rawCommand,
+            rawCommand: rawCommand,
             cwd: request.cwd,
             envOverrides: request.env,
             agentId: request.agentId)
