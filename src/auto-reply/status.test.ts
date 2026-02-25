@@ -482,6 +482,8 @@ describe("buildStatusMessage", () => {
       cacheWrite: number;
       totalTokens: number;
     };
+    provider?: string;
+    model?: string;
   }) {
     const logPath = path.join(
       params.dir,
@@ -499,7 +501,8 @@ describe("buildStatusMessage", () => {
           type: "message",
           message: {
             role: "assistant",
-            model: "claude-opus-4-5",
+            provider: params.provider ?? "anthropic",
+            model: params.model ?? "claude-opus-4-5",
             usage: params.usage,
           },
         }),
@@ -584,6 +587,51 @@ describe("buildStatusMessage", () => {
         });
 
         expect(normalizeTestText(text)).toContain("Context: 1.0k/32k");
+      },
+      { prefix: "openclaw-status-" },
+    );
+  });
+
+  it("shows routed fallback model from transcript provider/model metadata", async () => {
+    await withTempHome(
+      async (dir) => {
+        const sessionId = "sess-fallback";
+        writeTranscriptUsageLog({
+          dir,
+          agentId: "main",
+          sessionId,
+          provider: "google-vertex",
+          model: "gemini-2.5-pro",
+          usage: baselineTranscriptUsage,
+        });
+
+        const text = buildStatusMessage({
+          agent: {
+            model: "google-antigravity/claude-opus-4-6-thinking",
+            contextTokens: 32_000,
+          },
+          sessionEntry: {
+            sessionId,
+            updatedAt: 0,
+            modelProvider: "google-antigravity",
+            model: "claude-opus-4-6-thinking",
+            totalTokens: 3,
+            contextTokens: 32_000,
+            fallbackNoticeSelectedModel: "google-antigravity/claude-opus-4-6-thinking",
+            fallbackNoticeActiveModel: "google-vertex/gemini-2.5-pro",
+            fallbackNoticeReason: "rate limit",
+          },
+          sessionKey: "agent:main:main",
+          sessionScope: "per-sender",
+          queue: { mode: "collect", depth: 0 },
+          includeTranscriptUsage: true,
+          modelAuth: "api-key",
+          activeModelAuth: "api-key",
+        });
+
+        const normalized = normalizeTestText(text);
+        expect(normalized).toContain("Model: google-antigravity/claude-opus-4-6-thinking");
+        expect(normalized).toContain("Fallback: google-vertex/gemini-2.5-pro (rate limit)");
       },
       { prefix: "openclaw-status-" },
     );

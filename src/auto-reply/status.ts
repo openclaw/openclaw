@@ -220,6 +220,7 @@ const readUsageFromSessionLog = (
       promptTokens: number;
       total: number;
       model?: string;
+      provider?: string;
     }
   | undefined => {
   // Transcripts are stored at the session file path (fallback: ~/.openclaw/sessions/<SessionId>.jsonl)
@@ -261,6 +262,7 @@ const readUsageFromSessionLog = (
     let output = 0;
     let promptTokens = 0;
     let model: string | undefined;
+    let provider: string | undefined;
     let lastUsage: ReturnType<typeof normalizeUsage> | undefined;
 
     for (const line of lines) {
@@ -272,15 +274,18 @@ const readUsageFromSessionLog = (
           message?: {
             usage?: UsageLike;
             model?: string;
+            provider?: string;
           };
           usage?: UsageLike;
           model?: string;
+          provider?: string;
         };
         const usageRaw = parsed.message?.usage ?? parsed.usage;
         const usage = normalizeUsage(usageRaw);
         if (usage) {
           lastUsage = usage;
         }
+        provider = parsed.message?.provider ?? parsed.provider ?? provider;
         model = parsed.message?.model ?? parsed.model ?? model;
       } catch {
         // ignore bad lines (including a truncated first tail line)
@@ -297,7 +302,15 @@ const readUsageFromSessionLog = (
     if (promptTokens === 0 && total === 0) {
       return undefined;
     }
-    return { input, output, promptTokens, total, model };
+    const providerModel = (() => {
+      const providerTrimmed = provider?.trim();
+      const modelTrimmed = model?.trim();
+      if (providerTrimmed && modelTrimmed) {
+        return formatProviderModelRef(providerTrimmed, modelTrimmed);
+      }
+      return modelTrimmed;
+    })();
+    return { input, output, promptTokens, total, model: providerModel };
   } catch {
     return undefined;
   }
@@ -476,7 +489,7 @@ export function buildStatusMessage(args: StatusArgs): string {
       if (!totalTokens || totalTokens === 0 || candidate > totalTokens) {
         totalTokens = candidate;
       }
-      if (!entry?.model && logUsage.model) {
+      if (logUsage.model) {
         const slashIndex = logUsage.model.indexOf("/");
         if (slashIndex > 0) {
           const provider = logUsage.model.slice(0, slashIndex).trim();
