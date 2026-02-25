@@ -1,0 +1,224 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: openclaw-sre
+  namespace: morpho-dev
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::537124939463:role/openclaw-sre-dev-readonly
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: openclaw-sre-readonly
+rules:
+  - apiGroups: [""]
+    resources:
+      - configmaps
+      - endpoints
+      - events
+      - namespaces
+      - nodes
+      - persistentvolumeclaims
+      - pods
+      - pods/log
+      - secrets
+      - services
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources:
+      - daemonsets
+      - deployments
+      - replicasets
+      - statefulsets
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources:
+      - cronjobs
+      - jobs
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["autoscaling"]
+    resources:
+      - horizontalpodautoscalers
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources:
+      - ingresses
+      - networkpolicies
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["metrics.k8s.io"]
+    resources:
+      - nodes
+      - pods
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["monitoring.coreos.com"]
+    resources:
+      - alertmanagers
+      - podmonitors
+      - prometheuses
+      - prometheusrules
+      - servicemonitors
+      - thanosrulers
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: openclaw-sre-readonly
+subjects:
+  - kind: ServiceAccount
+    name: openclaw-sre
+    namespace: morpho-dev
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: openclaw-sre-readonly
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: openclaw-sre-state
+  namespace: morpho-dev
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openclaw-sre
+  namespace: morpho-dev
+  labels:
+    app: openclaw-sre
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: openclaw-sre
+  template:
+    metadata:
+      labels:
+        app: openclaw-sre
+    spec:
+      serviceAccountName: openclaw-sre
+      initContainers:
+        - name: seed-openclaw-home
+          image: busybox:1.36
+          command:
+            - /bin/sh
+            - -c
+          args:
+            - |
+              set -eu
+              mkdir -p /state/skills/morpho-sre/references
+              cp /seed-config/openclaw.json /state/openclaw.json
+              cp /seed-skills/SKILL.md /state/skills/morpho-sre/SKILL.md
+              cp /seed-skills/repo-map.md /state/skills/morpho-sre/references/repo-map.md
+              cp /seed-skills/safety.md /state/skills/morpho-sre/references/safety.md
+              chown -R 1000:1000 /state
+          volumeMounts:
+            - name: state
+              mountPath: /state
+            - name: seed-config
+              mountPath: /seed-config
+              readOnly: true
+            - name: seed-skills
+              mountPath: /seed-skills
+              readOnly: true
+      containers:
+        - name: gateway
+          image: ${IMAGE_URI}
+          imagePullPolicy: Always
+          command:
+            - /bin/sh
+            - -lc
+          args:
+            - |
+              set -eu
+              mkdir -p /home/node/.kube
+              cat >/home/node/.kube/config <<EOF
+              apiVersion: v1
+              kind: Config
+              clusters:
+              - cluster:
+                  certificate-authority: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+                  server: https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT_HTTPS}
+                name: in-cluster
+              contexts:
+              - context:
+                  cluster: in-cluster
+                  namespace: morpho-dev
+                  user: openclaw-sre
+                name: in-cluster
+              current-context: in-cluster
+              users:
+              - name: openclaw-sre
+                user:
+                  tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+              EOF
+              exec node dist/index.js gateway --bind lan --port 18789 --allow-unconfigured
+          envFrom:
+            - secretRef:
+                name: openclaw-sre-env
+          env:
+            - name: HOME
+              value: /home/node
+            - name: TERM
+              value: xterm-256color
+            - name: OPENCLAW_CONFIG_PATH
+              value: /home/node/.openclaw/openclaw.json
+            - name: OPENCLAW_STATE_DIR
+              value: /home/node/.openclaw
+            - name: AWS_REGION
+              value: eu-west-3
+            - name: AWS_DEFAULT_REGION
+              value: eu-west-3
+          ports:
+            - name: http
+              containerPort: 18789
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 40
+            periodSeconds: 20
+            timeoutSeconds: 3
+          volumeMounts:
+            - name: state
+              mountPath: /home/node/.openclaw
+      volumes:
+        - name: state
+          persistentVolumeClaim:
+            claimName: openclaw-sre-state
+        - name: seed-config
+          secret:
+            secretName: openclaw-sre-config
+        - name: seed-skills
+          configMap:
+            name: openclaw-sre-skill
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openclaw-sre
+  namespace: morpho-dev
+  labels:
+    app: openclaw-sre
+spec:
+  selector:
+    app: openclaw-sre
+  ports:
+    - name: http
+      port: 18789
+      targetPort: http
