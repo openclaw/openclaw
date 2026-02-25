@@ -77,11 +77,10 @@ enum ExecSystemRunCommandValidator {
         let shellWrapperPositionalArgv = self.hasTrailingPositionalArgvAfterInlineCommand(command)
         let mustBindDisplayToFullArgv = envManipulationBeforeShellWrapper || shellWrapperPositionalArgv
 
-        let inferred: String
-        if let shellCommand, !mustBindDisplayToFullArgv {
-            inferred = shellCommand
+        let inferred: String = if let shellCommand, !mustBindDisplayToFullArgv {
+            shellCommand
         } else {
-            inferred = ExecCommandFormatter.displayString(for: command)
+            ExecCommandFormatter.displayString(for: command)
         }
 
         if let raw = normalizedRaw, raw != inferred {
@@ -189,7 +188,7 @@ enum ExecSystemRunCommandValidator {
         }
 
         var appletIndex = 1
-        if appletIndex < argv.count && argv[appletIndex].trimmingCharacters(in: .whitespacesAndNewlines) == "--" {
+        if appletIndex < argv.count, argv[appletIndex].trimmingCharacters(in: .whitespacesAndNewlines) == "--" {
             appletIndex += 1
         }
         guard appletIndex < argv.count else {
@@ -255,14 +254,13 @@ enum ExecSystemRunCommandValidator {
             return false
         }
 
-        let inlineCommandIndex: Int?
-        if wrapper == "powershell" || wrapper == "pwsh" {
-            inlineCommandIndex = self.resolveInlineCommandTokenIndex(
+        let inlineCommandIndex: Int? = if wrapper == "powershell" || wrapper == "pwsh" {
+            self.resolveInlineCommandTokenIndex(
                 wrapperArgv,
                 flags: self.powershellInlineCommandFlags,
                 allowCombinedC: false)
         } else {
-            inlineCommandIndex = self.resolveInlineCommandTokenIndex(
+            self.resolveInlineCommandTokenIndex(
                 wrapperArgv,
                 flags: self.posixInlineCommandFlags,
                 allowCombinedC: true)
