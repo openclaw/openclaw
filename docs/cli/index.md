@@ -472,6 +472,20 @@ Subcommands:
 - `pairing approve <channel> <code> [--account <id>] [--notify]`
 - `pairing approve --channel <channel> [--account <id>] <code> [--notify]`
 
+### `devices`
+
+Manage gateway device pairing entries and per-role device tokens.
+
+Subcommands:
+
+- `devices list [--json]`
+- `devices approve [requestId] [--latest]`
+- `devices reject <requestId>`
+- `devices remove <deviceId>`
+- `devices clear --yes [--pending]`
+- `devices rotate --device <id> --role <role> [--scope <scope...>]`
+- `devices revoke --device <id> --role <role>`
+
 ### `webhooks gmail`
 
 Gmail Pub/Sub hook setup + runner. See [/automation/gmail-pubsub](/automation/gmail-pubsub).
