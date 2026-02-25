@@ -206,11 +206,15 @@ async function isFfmpegAvailable(): Promise<boolean> {
     ffmpegAvailable = true;
   } catch {
     ffmpegAvailable = false;
-    const logger = getCore().logging.getChildLogger({ plugin: "matrix" });
-    logger.warn(
-      "ffmpeg not found — voice message waveform generation disabled. " +
-        "Install ffmpeg to enable waveform visualizations in Element clients.",
-    );
+    try {
+      const logger = getCore().logging.getChildLogger({ plugin: "matrix" });
+      logger.warn(
+        "ffmpeg not found — voice message waveform generation disabled. " +
+          "Install ffmpeg to enable waveform visualizations in Element clients.",
+      );
+    } catch {
+      // runtime not available (e.g. in tests) — silently skip the warning
+    }
   }
   return ffmpegAvailable;
 }
