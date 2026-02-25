@@ -21,6 +21,14 @@ vi.mock("../../extensions/voice-call/src/runtime.js", () => ({
   createVoiceCallRuntime: vi.fn(async () => runtimeStub),
 }));
 
+const { callGatewayMock } = vi.hoisted(() => ({
+  callGatewayMock: vi.fn(async () => ({ callId: "call-rpc", initiated: true })),
+}));
+vi.mock("../gateway/call.js", async (importOriginal) => {
+  const orig = await importOriginal<typeof import("../gateway/call.js")>();
+  return { ...orig, callGateway: callGatewayMock };
+});
+
 import plugin from "../../extensions/voice-call/index.js";
 
 const noopLogger = {
@@ -211,14 +219,18 @@ describe("voice-call plugin", () => {
     }
   });
 
-  it("CLI start prints JSON", async () => {
+  it("CLI start calls gateway RPC instead of creating local runtime", async () => {
     const program = new Command();
     const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    callGatewayMock.mockResolvedValueOnce({ callId: "call-rpc", initiated: true });
     await registerVoiceCallCli(program);
 
     await program.parseAsync(["voicecall", "start", "--to", "+1", "--message", "Hello"], {
       from: "user",
     });
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({ method: "voicecall.start" }),
+    );
     expect(logSpy).toHaveBeenCalled();
     logSpy.mockRestore();
   });
