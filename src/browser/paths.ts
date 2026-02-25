@@ -55,6 +55,29 @@ export async function resolveExistingPathsWithinRoot(params: {
   requestedPaths: string[];
   scopeLabel: string;
 }): Promise<{ ok: true; paths: string[] } | { ok: false; error: string }> {
+  return await resolveCheckedPathsWithinRoot({
+    ...params,
+    allowMissingFallback: true,
+  });
+}
+
+export async function resolveStrictExistingPathsWithinRoot(params: {
+  rootDir: string;
+  requestedPaths: string[];
+  scopeLabel: string;
+}): Promise<{ ok: true; paths: string[] } | { ok: false; error: string }> {
+  return await resolveCheckedPathsWithinRoot({
+    ...params,
+    allowMissingFallback: false,
+  });
+}
+
+async function resolveCheckedPathsWithinRoot(params: {
+  rootDir: string;
+  requestedPaths: string[];
+  scopeLabel: string;
+  allowMissingFallback: boolean;
+}): Promise<{ ok: true; paths: string[] } | { ok: false; error: string }> {
   const rootDir = path.resolve(params.rootDir);
   let rootRealPath: string | undefined;
   try {
@@ -119,7 +142,7 @@ export async function resolveExistingPathsWithinRoot(params: {
       });
       resolvedPaths.push(opened.realPath);
     } catch (err) {
-      if (err instanceof SafeOpenError && err.code === "not-found") {
+      if (params.allowMissingFallback && err instanceof SafeOpenError && err.code === "not-found") {
         // Preserve historical behavior for paths that do not exist yet.
         resolvedPaths.push(pathResult.fallbackPath);
         continue;
