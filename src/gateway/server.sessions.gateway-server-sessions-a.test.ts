@@ -1239,12 +1239,22 @@ describe("gateway server sessions", () => {
       scopes: ["operator.admin"],
     });
 
-    const patched = await rpcReq(ws, "sessions.patch", {
+    const patchedLabel = await rpcReq<{
+      ok: true;
+      entry: { label?: string };
+    }>(ws, "sessions.patch", {
       key: "agent:main:discord:group:dev",
-      label: "should-fail",
+      label: "should-pass",
     });
-    expect(patched.ok).toBe(false);
-    expect(patched.error?.message ?? "").toMatch(/webchat clients cannot patch sessions/i);
+    expect(patchedLabel.ok).toBe(true);
+    expect(patchedLabel.payload?.entry.label).toBe("should-pass");
+
+    const patchedThinking = await rpcReq(ws, "sessions.patch", {
+      key: "agent:main:discord:group:dev",
+      thinkingLevel: "high",
+    });
+    expect(patchedThinking.ok).toBe(false);
+    expect(patchedThinking.error?.message ?? "").toMatch(/webchat clients cannot patch sessions/i);
 
     const deleted = await rpcReq(ws, "sessions.delete", {
       key: "agent:main:discord:group:dev",

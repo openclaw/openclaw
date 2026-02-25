@@ -27,6 +27,7 @@ import { GATEWAY_CLIENT_IDS } from "../protocol/client-info.js";
 import {
   ErrorCodes,
   errorShape,
+  type SessionsPatchParams,
   validateSessionsCompactParams,
   validateSessionsDeleteParams,
   validateSessionsListParams,
@@ -99,6 +100,14 @@ function rejectWebchatSessionMutation(params: {
     ),
   );
   return true;
+}
+
+function isWebchatLabelOnlyPatch(patch: SessionsPatchParams): boolean {
+  const keys = Object.keys(patch).filter((key) => key !== "key");
+  if (keys.length !== 1 || keys[0] !== "label") {
+    return false;
+  }
+  return Object.hasOwn(patch, "label");
 }
 
 function migrateAndPruneSessionStoreKey(params: {
@@ -411,7 +420,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
-    if (rejectWebchatSessionMutation({ action: "patch", client, isWebchatConnect, respond })) {
+    const allowWebchatLabelPatch =
+      client?.connect && isWebchatConnect(client.connect) && isWebchatLabelOnlyPatch(p);
+    if (
+      !allowWebchatLabelPatch &&
+      rejectWebchatSessionMutation({ action: "patch", client, isWebchatConnect, respond })
+    ) {
       return;
     }
 
