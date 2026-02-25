@@ -294,6 +294,54 @@ describe("handleLineWebhookEvents", () => {
     );
   });
 
+  it("does not authorize DM senders from another account's pairing-store entries", async () => {
+    const processMessage = vi.fn();
+    readAllowFromStoreMock.mockImplementation(async (...args: unknown[]) => {
+      const accountId = args[2] as string | undefined;
+      if (accountId === "work") {
+        return [];
+      }
+      return ["cross-account-user"];
+    });
+    upsertPairingRequestMock.mockResolvedValue({ code: "CODE", created: false });
+
+    const event = {
+      type: "message",
+      message: { id: "m6", type: "text", text: "hi" },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "user", userId: "cross-account-user" },
+      mode: "active",
+      webhookEventId: "evt-6",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+
+    await handleLineWebhookEvents([event], {
+      cfg: { channels: { line: { dmPolicy: "pairing" } } },
+      account: {
+        accountId: "work",
+        enabled: true,
+        channelAccessToken: "token-work",
+        channelSecret: "secret-work",
+        tokenSource: "config",
+        config: { dmPolicy: "pairing" },
+      },
+      runtime: createRuntime(),
+      mediaMaxBytes: 1,
+      processMessage,
+    });
+
+    expect(readAllowFromStoreMock).toHaveBeenCalledWith("line", undefined, "work");
+    expect(processMessage).not.toHaveBeenCalled();
+    expect(upsertPairingRequestMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "line",
+        id: "cross-account-user",
+        accountId: "work",
+      }),
+    );
+  });
+
   it("downloads file attachments and forwards media refs to message context", async () => {
     const processMessage = vi.fn();
     const event = {
