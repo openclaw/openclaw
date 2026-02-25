@@ -14,6 +14,7 @@ REPO_PATH=""
 HOST="auto"
 TASK_DESC=""
 TASK_FILE=""
+TASK_B64=""
 BRANCH_PREFIX="agent-task"
 
 # Parse arguments
@@ -64,6 +65,9 @@ if [[ -z "$REPO_PATH" ]]; then
     echo "Error: --repo is required (guardrail: no implicit default repo)"
     exit 1
 fi
+
+# Encode task payload to avoid shell interpolation/injection during remote script transport
+TASK_B64="$(printf '%s' "$TASK_DESC" | base64 -w0 2>/dev/null || printf '%s' "$TASK_DESC" | base64 | tr -d '\n')"
 
 if [[ "$REPO_PATH" != /* ]]; then
     echo "Error: --repo must be an absolute path"
@@ -151,7 +155,8 @@ AGENT_MODEL="__AGENT_MODEL__"
 AGENT_FLAGS="__AGENT_FLAGS__"
 AGENT_MODEL_FLAGS="__AGENT_MODEL_FLAGS__"
 AGENT_INVOKE="__AGENT_INVOKE__"
-TASK_DESC="__TASK_DESC__"
+TASK_B64="__TASK_B64__"
+TASK_DESC="$(printf '%s' "$TASK_B64" | base64 -d 2>/dev/null || printf '%s' "$TASK_B64" | base64 --decode 2>/dev/null || true)"
 
 ORCH_INSTRUCTIONS="You are running inside an isolated git worktree created for this task. Do the requested work end-to-end.\n\nRequired completion protocol:\n1) Make the code/doc changes.\n2) Run relevant checks/tests for changed scope.\n3) Commit all changes with a clear commit message.\n4) If 'gh' is available and this repo has an origin remote, push branch and open a PR against main.\n5) Print a concise completion summary including files changed and PR URL/number if created.\n6) If PR creation is not possible, explicitly state why and leave committed changes on this branch.\n\nBe decisive and avoid asking for interactive approvals; prefer finishing the task in one pass."
 
@@ -202,7 +207,7 @@ SPAWN_SCRIPT="${SPAWN_SCRIPT//__AGENT_MODEL__/$AGENT_MODEL}"
 SPAWN_SCRIPT="${SPAWN_SCRIPT//__AGENT_FLAGS__/$AGENT_FLAGS}"
 SPAWN_SCRIPT="${SPAWN_SCRIPT//__AGENT_MODEL_FLAGS__/$AGENT_MODEL_FLAGS}"
 SPAWN_SCRIPT="${SPAWN_SCRIPT//__AGENT_INVOKE__/$AGENT_INVOKE}"
-SPAWN_SCRIPT="${SPAWN_SCRIPT//__TASK_DESC__/$TASK_DESC}"
+SPAWN_SCRIPT="${SPAWN_SCRIPT//__TASK_B64__/$TASK_B64}"
 
 # Execute spawn on target host
 execute_on_host "$SPAWN_SCRIPT"
