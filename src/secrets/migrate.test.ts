@@ -94,7 +94,7 @@ describe("secrets migrate", () => {
 
     runExecMock.mockReset();
     runExecMock.mockImplementation(async (_cmd: string, args: string[]) => {
-      if (args[0] === "--encrypt") {
+      if (args.includes("--encrypt")) {
         const outputPath = args[args.indexOf("--output") + 1];
         const inputPath = args.at(-1);
         if (!outputPath || !inputPath) {
@@ -103,7 +103,7 @@ describe("secrets migrate", () => {
         await fs.copyFile(inputPath, outputPath);
         return { stdout: "", stderr: "" };
       }
-      if (args[0] === "--decrypt") {
+      if (args.includes("--decrypt")) {
         const sourcePath = args.at(-1);
         if (!sourcePath) {
           throw new Error("missing sops decrypt source");
@@ -212,5 +212,21 @@ describe("secrets migrate", () => {
     expect(first.backupId).toBeTruthy();
     expect(second.backupId).toBeTruthy();
     expect(second.backupId).not.toBe(first.backupId);
+  });
+
+  it("passes --config for sops when .sops.yaml exists in config dir", async () => {
+    const sopsConfigPath = path.join(stateDir, ".sops.yaml");
+    await fs.writeFile(sopsConfigPath, "creation_rules:\n  - path_regex: .*\n", "utf8");
+
+    await runSecretsMigration({ env, write: true });
+
+    const encryptCall = runExecMock.mock.calls.find((call) =>
+      (call[1] as string[]).includes("--encrypt"),
+    );
+    expect(encryptCall).toBeTruthy();
+    const args = encryptCall?.[1] as string[];
+    const configIndex = args.indexOf("--config");
+    expect(configIndex).toBeGreaterThanOrEqual(0);
+    expect(args[configIndex + 1]).toBe(sopsConfigPath);
   });
 });

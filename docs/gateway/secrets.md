@@ -93,6 +93,7 @@ Contract:
 
 - OpenClaw shells out to `sops` for decrypt/encrypt.
 - Minimum supported version: `sops >= 3.9.0`.
+- For migration, OpenClaw explicitly passes `--config <config-dir>/.sops.yaml` (or `.sops.yml`) when present, so behavior is not dependent on current working directory.
 - Decrypted payload must be a JSON object.
 - `id` is resolved as JSON pointer into decrypted payload.
 - Default timeout is `5000ms`.
@@ -101,6 +102,13 @@ Common errors:
 
 - Missing binary: `sops binary not found in PATH. Install sops >= 3.9.0 or disable secrets.sources.file.`
 - Timeout: `sops decrypt timed out after <n>ms for <path>.`
+- Missing creation rules/key access (common during migrate write): `config file not found, or has no creation rules, and no keys provided through command line options`
+
+Fix for creation-rules/key-access errors:
+
+- Ensure `<config-dir>/.sops.yaml` or `<config-dir>/.sops.yml` contains a valid `creation_rules` entry for your secrets file.
+- Ensure the runtime environment for `openclaw secrets migrate --write` can access decryption/encryption keys (for example `SOPS_AGE_KEY_FILE` for age keys).
+- Re-run migration after confirming both config and key access.
 
 ## In-scope fields (v1)
 
@@ -158,6 +166,8 @@ Behavior:
 
 - Degraded: runtime keeps last-known-good snapshot.
 - Recovered: emitted once after successful activation.
+- Repeated failures while already degraded only log warnings (no repeated system events).
+- Startup fail-fast does not emit degraded events because no runtime snapshot is active yet.
 
 ## Migration command
 
@@ -185,7 +195,15 @@ What migration covers:
 
 - `openclaw.json` fields listed above
 - `auth-profiles.json` API key and token plaintext fields
-- optional scrub of matching secret values in `~/.openclaw/.env` (default on)
+- optional scrub of matching plaintext values from config-dir `.env` (default on)
+- if `<config-dir>/.sops.yaml` or `<config-dir>/.sops.yml` exists, migration uses it explicitly for sops decrypt/encrypt
+
+`.env` scrub semantics:
+
+- Scrub target path is `<config-dir>/.env` (`resolveConfigDir(...)`), not `OPENCLAW_HOME/.env`.
+- Only known secret env keys are eligible (for example `OPENAI_API_KEY`).
+- A line is removed only when its parsed value exactly matches a migrated plaintext value.
+- Non-secret keys, comments, and unmatched values are preserved.
 
 Backups:
 
