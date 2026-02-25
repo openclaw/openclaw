@@ -342,6 +342,96 @@ describe("gateway send mirroring", () => {
     );
   });
 
+  it("uses explicit agentId for delivery when sessionKey is not provided", async () => {
+    mockDeliverySuccess("m-agent");
+
+    await runSend({
+      to: "channel:C1",
+      message: "hello",
+      channel: "slack",
+      agentId: "work",
+      idempotencyKey: "idem-agent-explicit",
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "work",
+        mirror: expect.objectContaining({
+          sessionKey: "agent:work:slack:channel:resolved",
+          agentId: "work",
+        }),
+      }),
+    );
+  });
+
+  it("uses sessionKey agentId when explicit agentId is omitted", async () => {
+    mockDeliverySuccess("m-session-agent");
+
+    await runSend({
+      to: "channel:C1",
+      message: "hello",
+      channel: "slack",
+      sessionKey: "agent:work:slack:channel:c1",
+      idempotencyKey: "idem-session-agent",
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "work",
+        mirror: expect.objectContaining({
+          sessionKey: "agent:work:slack:channel:c1",
+          agentId: "work",
+        }),
+      }),
+    );
+  });
+
+  it("prefers explicit agentId over sessionKey agent for delivery and mirror", async () => {
+    mockDeliverySuccess("m-agent-precedence");
+
+    await runSend({
+      to: "channel:C1",
+      message: "hello",
+      channel: "slack",
+      agentId: "work",
+      sessionKey: "agent:main:slack:channel:c1",
+      idempotencyKey: "idem-agent-precedence",
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "work",
+        mirror: expect.objectContaining({
+          sessionKey: "agent:main:slack:channel:c1",
+          agentId: "work",
+        }),
+      }),
+    );
+  });
+
+  it("ignores blank explicit agentId and falls back to sessionKey agent", async () => {
+    mockDeliverySuccess("m-agent-blank");
+
+    await runSend({
+      to: "channel:C1",
+      message: "hello",
+      channel: "slack",
+      agentId: "   ",
+      sessionKey: "agent:work:slack:channel:c1",
+      idempotencyKey: "idem-agent-blank",
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "work",
+        mirror: expect.objectContaining({
+          sessionKey: "agent:work:slack:channel:c1",
+          agentId: "work",
+        }),
+      }),
+    );
+  });
+
   it("forwards threadId to outbound delivery when provided", async () => {
     mockDeliverySuccess("m-thread");
 
