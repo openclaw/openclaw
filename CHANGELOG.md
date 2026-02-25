@@ -13,11 +13,11 @@ Docs: https://docs.openclaw.ai
 ### Breaking
 
 - **BREAKING:** Security/Sandbox: block Docker `network: "container:<id>"` namespace-join mode by default for sandbox and sandbox-browser containers. To keep that behavior intentionally, set `agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin: true` (break-glass). Thanks @tdjackey for reporting.
-- **BREAKING:** Heartbeat delivery now blocks DM-style `user:<id>` targets. Heartbeat runs still execute, but direct-message delivery is skipped and only non-DM destinations (for example channel/group targets) can receive outbound heartbeat messages.
+- **BREAKING:** Heartbeat delivery now blocks direct/DM targets when destination parsing identifies a direct chat (for example `user:<id>`, Telegram user chat IDs, or WhatsApp direct numbers/JIDs). Heartbeat runs still execute, but direct-message delivery is skipped and only non-DM destinations (for example channel/group targets) can receive outbound heartbeat messages.
 
 ### Fixes
 
-- Heartbeat routing: prevent heartbeat leakage/spam into Discord DMs by blocking DM-style heartbeat delivery targets and keeping blocked-delivery cron/exec prompts internal-only. (#25871)
+- Heartbeat routing: prevent heartbeat leakage/spam into Discord and other direct-message destinations by blocking direct-chat heartbeat delivery targets and keeping blocked-delivery cron/exec prompts internal-only. (#25871)
 - iMessage/Reasoning safety: harden iMessage echo suppression with outbound `messageId` matching (plus scoped text fallback), and enforce reasoning-payload suppression on routed outbound delivery paths to prevent hidden thinking text from being sent as user-visible channel messages. (#25897, #1649, #25757) Thanks @rmarr and @Iranb.
 - Windows/Media safety checks: align async local-file identity validation with sync-safe-open behavior by treating win32 `dev=0` stats as unknown-device fallbacks (while keeping strict dev checks when both sides are non-zero), fixing false `Local media path is not safe to read` drops for local attachments/TTS/images. (#25708, #21989, #25699, #25878) Thanks @kevinWangSheng.
 - Windows/Exec shell selection: prefer PowerShell 7 (`pwsh`) discovery (Program Files, ProgramW6432, PATH) before falling back to Windows PowerShell 5.1, fixing `&&` command chaining failures on Windows hosts with PS7 installed. (#25684, #25638) Thanks @zerone0x.

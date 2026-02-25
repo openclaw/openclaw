@@ -341,6 +341,102 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.reason).toBe("dm-blocked");
   });
 
+  it("blocks heartbeat delivery to Telegram direct chats", () => {
+    const cfg: OpenClawConfig = {};
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg,
+      entry: {
+        sessionId: "sess-heartbeat-telegram-direct",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "5232990709",
+      },
+      heartbeat: {
+        target: "last",
+      },
+    });
+
+    expect(resolved.channel).toBe("none");
+    expect(resolved.reason).toBe("dm-blocked");
+  });
+
+  it("keeps heartbeat delivery to Telegram groups", () => {
+    const cfg: OpenClawConfig = {};
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg,
+      entry: {
+        sessionId: "sess-heartbeat-telegram-group",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "-1001234567890",
+      },
+      heartbeat: {
+        target: "last",
+      },
+    });
+
+    expect(resolved.channel).toBe("telegram");
+    expect(resolved.to).toBe("-1001234567890");
+  });
+
+  it("blocks heartbeat delivery to WhatsApp direct chats", () => {
+    const cfg: OpenClawConfig = {};
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg,
+      entry: {
+        sessionId: "sess-heartbeat-whatsapp-direct",
+        updatedAt: 1,
+        lastChannel: "whatsapp",
+        lastTo: "+15551234567",
+      },
+      heartbeat: {
+        target: "last",
+      },
+    });
+
+    expect(resolved.channel).toBe("none");
+    expect(resolved.reason).toBe("dm-blocked");
+  });
+
+  it("keeps heartbeat delivery to WhatsApp groups", () => {
+    const cfg: OpenClawConfig = {};
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg,
+      entry: {
+        sessionId: "sess-heartbeat-whatsapp-group",
+        updatedAt: 1,
+        lastChannel: "whatsapp",
+        lastTo: "120363140186826074@g.us",
+      },
+      heartbeat: {
+        target: "last",
+      },
+    });
+
+    expect(resolved.channel).toBe("whatsapp");
+    expect(resolved.to).toBe("120363140186826074@g.us");
+  });
+
+  it("uses session chatType hint when target parser cannot classify", () => {
+    const cfg: OpenClawConfig = {};
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg,
+      entry: {
+        sessionId: "sess-heartbeat-imessage-direct",
+        updatedAt: 1,
+        lastChannel: "imessage",
+        lastTo: "chat-guid-unknown-shape",
+        chatType: "direct",
+      },
+      heartbeat: {
+        target: "last",
+      },
+    });
+
+    expect(resolved.channel).toBe("none");
+    expect(resolved.reason).toBe("dm-blocked");
+  });
+
   it("keeps heartbeat delivery to Discord channels", () => {
     const cfg: OpenClawConfig = {};
     const resolved = resolveHeartbeatDeliveryTarget({
@@ -386,12 +482,12 @@ describe("resolveSessionDeliveryTarget", () => {
       cfg,
       heartbeat: {
         target: "telegram",
-        to: "63448508:topic:1008013",
+        to: "-10063448508:topic:1008013",
       },
     });
 
     expect(resolved.channel).toBe("telegram");
-    expect(resolved.to).toBe("63448508");
+    expect(resolved.to).toBe("-10063448508");
     expect(resolved.threadId).toBe(1008013);
   });
 });
