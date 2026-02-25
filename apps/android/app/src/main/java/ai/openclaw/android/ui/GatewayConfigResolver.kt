@@ -1,9 +1,13 @@
 package ai.openclaw.android.ui
 
-import android.util.Base64
 import androidx.core.net.toUri
+import java.util.Base64
 import java.util.Locale
-import org.json.JSONObject
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 internal data class GatewayEndpointConfig(
   val host: String,
@@ -25,6 +29,8 @@ internal data class GatewayConnectConfig(
   val token: String,
   val password: String,
 )
+
+private val gatewaySetupJson = Json { ignoreUnknownKeys = true }
 
 internal fun resolveGatewayConnectConfig(
   useSetupCode: Boolean,
@@ -94,14 +100,31 @@ internal fun decodeGatewaySetupCode(rawInput: String): GatewaySetupCode? {
       }
 
   return try {
-    val decoded = String(Base64.decode(padded, Base64.DEFAULT), Charsets.UTF_8)
-    val obj = JSONObject(decoded)
-    val url = obj.optString("url").trim()
+    val decoded = String(Base64.getDecoder().decode(padded), Charsets.UTF_8)
+    val obj = parseJsonObject(decoded) ?: return null
+    val url = jsonField(obj, "url").orEmpty()
     if (url.isEmpty()) return null
-    val token = obj.optString("token").trim().ifEmpty { null }
-    val password = obj.optString("password").trim().ifEmpty { null }
+    val token = jsonField(obj, "token")
+    val password = jsonField(obj, "password")
     GatewaySetupCode(url = url, token = token, password = password)
-  } catch (_: Throwable) {
+  } catch (_: IllegalArgumentException) {
+    null
+  }
+}
+
+internal fun resolveScannedSetupCode(rawInput: String): String? {
+  val trimmed = rawInput.trim()
+  if (trimmed.isEmpty()) return null
+
+  if (decodeGatewaySetupCode(trimmed) != null) {
+    return trimmed
+  }
+
+  val obj = parseJsonObject(trimmed) ?: return null
+  val setupCode = jsonField(obj, "setupCode") ?: return null
+  return if (decodeGatewaySetupCode(setupCode) != null) {
+    setupCode
+  } else {
     null
   }
 }
@@ -112,4 +135,13 @@ internal fun composeGatewayManualUrl(hostInput: String, portInput: String, tls: 
   if (host.isEmpty() || port !in 1..65535) return null
   val scheme = if (tls) "https" else "http"
   return "$scheme://$host:$port"
+}
+
+private fun parseJsonObject(input: String): JsonObject? {
+  return runCatching { gatewaySetupJson.parseToJsonElement(input).jsonObject }.getOrNull()
+}
+
+private fun jsonField(obj: JsonObject, key: String): String? {
+  val value = obj[key]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+  return value.ifEmpty { null }
 }
