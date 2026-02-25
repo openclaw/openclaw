@@ -1,0 +1,33 @@
+{
+  "name": "@openclaw/dchat",
+  "version": "2026.2.24",
+  "description": "OpenClaw D-Chat/nMobile channel plugin (NKN relay network)",
+  "type": "module",
+  "dependencies": {
+    "nkn-sdk": "^1.3.6",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "channel": {
+      "id": "dchat",
+      "label": "D-Chat / nMobile",
+      "selectionLabel": "D-Chat (plugin)",
+      "docsPath": "/channels/dchat",
+      "docsLabel": "dchat",
+      "blurb": "decentralized E2E encrypted messaging over the NKN relay network.",
+      "order": 80,
+      "quickstartAllowFrom": true
+    },
+    "install": {
+      "npmSpec": "@openclaw/dchat",
+      "localPath": "extensions/dchat",
+      "defaultChoice": "npm"
+    }
+  }
+}

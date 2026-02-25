@@ -1,0 +1,9 @@
+{
+  "id": "dchat",
+  "channels": ["dchat"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
