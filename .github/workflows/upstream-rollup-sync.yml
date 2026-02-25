@@ -1,0 +1,169 @@
+name: Upstream Rollup Sync
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_validation:
+        description: "Run build/tests before opening PR"
+        required: false
+        default: true
+        type: boolean
+      upstream_ref:
+        description: "Upstream ref to sync from"
+        required: false
+        default: "main"
+        type: string
+  schedule:
+    - cron: "17 6 * * *"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-upstream-rollup
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      UPSTREAM_REPO: openclaw/openclaw
+      BASE_BRANCH: main
+      ROLLUP_BRANCH: bugfixes/rollup
+      SYNC_BRANCH: sync/upstream-rollup
+      RUN_VALIDATION: ${{ github.event_name == 'schedule' || inputs.run_validation }}
+      UPSTREAM_REF: ${{ inputs.upstream_ref || 'main' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch origin + upstream refs
+        run: |
+          set -euo pipefail
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git" 2>/dev/null || true
+          git fetch --prune origin
+          git fetch --prune upstream
+          git fetch --prune origin "${ROLLUP_BRANCH}:${ROLLUP_BRANCH}"
+
+      - name: Build sync branch from upstream
+        run: |
+          set -euo pipefail
+          git switch --detach "upstream/${UPSTREAM_REF}"
+          git switch -C "${SYNC_BRANCH}"
+
+      - name: Replay rollup commits on top of upstream
+        id: replay
+        run: |
+          set -euo pipefail
+          applied=0
+          skipped=0
+
+          commits="$(git rev-list --reverse "upstream/${UPSTREAM_REF}..${ROLLUP_BRANCH}" || true)"
+          if [ -z "$commits" ]; then
+            echo "applied=0" >> "$GITHUB_OUTPUT"
+            echo "skipped=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          for commit in $commits; do
+            if git cherry-pick -x "$commit"; then
+              applied=$((applied + 1))
+              continue
+            fi
+
+            if git rev-parse -q --verify CHERRY_PICK_HEAD >/dev/null; then
+              if git diff --quiet && git diff --cached --quiet; then
+                git cherry-pick --skip
+                skipped=$((skipped + 1))
+                continue
+              fi
+              git cherry-pick --abort
+            fi
+
+            echo "Conflict while applying commit ${commit}" >&2
+            exit 1
+          done
+
+          echo "applied=${applied}" >> "$GITHUB_OUTPUT"
+          echo "skipped=${skipped}" >> "$GITHUB_OUTPUT"
+
+      - name: Count divergence from base
+        id: diverge
+        run: |
+          set -euo pipefail
+          ahead="$(git rev-list --count "origin/${BASE_BRANCH}..HEAD")"
+          echo "ahead=${ahead}" >> "$GITHUB_OUTPUT"
+          echo "Ahead commits: ${ahead}"
+
+      - name: Setup Node environment
+        if: env.RUN_VALIDATION == 'true' && steps.diverge.outputs.ahead != '0'
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Run validation suite
+        if: env.RUN_VALIDATION == 'true' && steps.diverge.outputs.ahead != '0'
+        run: |
+          set -euo pipefail
+          pnpm -s vitest run \
+            src/agents/pi-embedded-runner/runs.test.ts \
+            src/agents/pi-embedded-runner/run/compaction-timeout.test.ts \
+            src/process/command-queue.test.ts \
+            src/auto-reply/reply/queue-policy.test.ts \
+            src/auto-reply/reply/reply-flow.test.ts \
+            src/auto-reply/reply/commands.test.ts
+          pnpm -s build
+
+      - name: Push sync branch
+        if: steps.diverge.outputs.ahead != '0'
+        run: |
+          set -euo pipefail
+          git push origin "HEAD:${SYNC_BRANCH}" --force-with-lease
+
+      - name: Open or update sync PR
+        if: steps.diverge.outputs.ahead != '0'
+        run: |
+          set -euo pipefail
+          title="chore(sync): replay rollup fixes on upstream/${UPSTREAM_REF}"
+          body_file="$(mktemp)"
+          cat > "$body_file" <<EOF
+          Automated upstream sync with rollup replay.
+
+          - Upstream base: \`upstream/${UPSTREAM_REF}\`
+          - Rollup source: \`${ROLLUP_BRANCH}\`
+          - Applied commits: ${{ steps.replay.outputs.applied }}
+          - Skipped (already upstreamed): ${{ steps.replay.outputs.skipped }}
+          - Validation run: ${RUN_VALIDATION}
+
+          Please review conflict-sensitive areas before merge.
+          EOF
+
+          pr_number="$(gh pr list --base "${BASE_BRANCH}" --head "${SYNC_BRANCH}" --state open --json number --jq '.[0].number // empty')"
+          if [ -z "$pr_number" ]; then
+            gh pr create \
+              --base "${BASE_BRANCH}" \
+              --head "${SYNC_BRANCH}" \
+              --title "$title" \
+              --body-file "$body_file"
+          else
+            gh pr edit "$pr_number" --title "$title" --body-file "$body_file"
+          fi
+
+      - name: Close stale sync PR when no divergence
+        if: steps.diverge.outputs.ahead == '0'
+        run: |
+          set -euo pipefail
+          pr_number="$(gh pr list --base "${BASE_BRANCH}" --head "${SYNC_BRANCH}" --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$pr_number" ]; then
+            gh pr close "$pr_number" --comment "Closing: upstream sync produced no new divergence."
+          fi
