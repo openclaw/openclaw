@@ -800,7 +800,7 @@ Periodic heartbeat runs.
         includeReasoning: false,
         session: "main",
         to: "+15555550123",
-        target: "last", // last | whatsapp | telegram | discord | ... | none
+        target: "none", // default: none | options: last | whatsapp | telegram | discord | ...
         prompt: "Read HEARTBEAT.md if it exists...",
         ackMaxChars: 300,
         suppressToolErrorWarnings: false,

@@ -210,7 +210,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
   const { cfg, entry } = params;
   const heartbeat = params.heartbeat ?? cfg.agents?.defaults?.heartbeat;
   const rawTarget = heartbeat?.target;
-  let target: HeartbeatTarget = "last";
+  let target: HeartbeatTarget = "none";
   if (rawTarget === "none" || rawTarget === "last") {
     target = rawTarget;
   } else if (typeof rawTarget === "string") {
