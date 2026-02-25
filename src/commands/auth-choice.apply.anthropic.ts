@@ -1,12 +1,8 @@
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
-import {
-  formatApiKeyPreview,
-  normalizeApiKeyInput,
-  validateApiKeyInput,
-} from "./auth-choice.api-key.js";
+import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
 import {
   normalizeSecretInputModeInput,
-  resolveSecretInputModeForEnvSelection,
+  ensureApiKeyFromOptionEnvOrPrompt,
 } from "./auth-choice.apply-helpers.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { buildTokenProfileId, validateAnthropicSetupToken } from "./auth-token.js";
@@ -75,39 +71,21 @@ export async function applyAuthChoiceAnthropic(
     }
 
     let nextConfig = params.config;
-    let hasCredential = false;
-    const envKey = process.env.ANTHROPIC_API_KEY?.trim();
-
-    if (params.opts?.token) {
-      await setAnthropicApiKey(normalizeApiKeyInput(params.opts.token), params.agentDir, {
-        secretInputMode: requestedSecretInputMode,
-      });
-      hasCredential = true;
-    }
-
-    if (!hasCredential && envKey) {
-      const useExisting = await params.prompter.confirm({
-        message: `Use existing ANTHROPIC_API_KEY (env, ${formatApiKeyPreview(envKey)})?`,
-        initialValue: true,
-      });
-      if (useExisting) {
-        const mode = await resolveSecretInputModeForEnvSelection({
-          prompter: params.prompter,
-          explicitMode: requestedSecretInputMode,
-        });
-        await setAnthropicApiKey(envKey, params.agentDir, { secretInputMode: mode });
-        hasCredential = true;
-      }
-    }
-    if (!hasCredential) {
-      const key = await params.prompter.text({
-        message: "Enter Anthropic API key",
-        validate: validateApiKeyInput,
-      });
-      await setAnthropicApiKey(normalizeApiKeyInput(String(key ?? "")), params.agentDir, {
-        secretInputMode: requestedSecretInputMode,
-      });
-    }
+    await ensureApiKeyFromOptionEnvOrPrompt({
+      token: params.opts?.token,
+      tokenProvider: params.opts?.tokenProvider ?? "anthropic",
+      secretInputMode: requestedSecretInputMode,
+      config: nextConfig,
+      expectedProviders: ["anthropic"],
+      provider: "anthropic",
+      envLabel: "ANTHROPIC_API_KEY",
+      promptMessage: "Enter Anthropic API key",
+      normalize: normalizeApiKeyInput,
+      validate: validateApiKeyInput,
+      prompter: params.prompter,
+      setCredential: async (apiKey, mode) =>
+        setAnthropicApiKey(apiKey, params.agentDir, { secretInputMode: mode }),
+    });
     nextConfig = applyAuthProfileConfig(nextConfig, {
       profileId: "anthropic:default",
       provider: "anthropic",

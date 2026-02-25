@@ -1,12 +1,7 @@
-import { resolveEnvApiKey } from "../agents/model-auth.js";
+import { normalizeApiKeyInput, validateApiKeyInput } from "./auth-choice.api-key.js";
 import {
-  formatApiKeyPreview,
-  normalizeApiKeyInput,
-  validateApiKeyInput,
-} from "./auth-choice.api-key.js";
-import {
+  ensureApiKeyFromOptionEnvOrPrompt,
   normalizeSecretInputModeInput,
-  resolveSecretInputModeForEnvSelection,
 } from "./auth-choice.apply-helpers.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { applyPrimaryModel } from "./model-picker.js";
@@ -23,44 +18,20 @@ export async function applyAuthChoiceVolcengine(
   }
 
   const requestedSecretInputMode = normalizeSecretInputModeInput(params.opts?.secretInputMode);
-  const envKey = resolveEnvApiKey("volcengine");
-  if (envKey) {
-    const useExisting = await params.prompter.confirm({
-      message: `Use existing VOLCANO_ENGINE_API_KEY (${envKey.source}, ${formatApiKeyPreview(envKey.apiKey)})?`,
-      initialValue: true,
-    });
-    if (useExisting) {
-      const mode = await resolveSecretInputModeForEnvSelection({
-        prompter: params.prompter,
-        explicitMode: requestedSecretInputMode,
-      });
-      await setVolcengineApiKey(envKey.apiKey, params.agentDir, { secretInputMode: mode });
-      const configWithAuth = applyAuthProfileConfig(params.config, {
-        profileId: "volcengine:default",
-        provider: "volcengine",
-        mode: "api_key",
-      });
-      const configWithModel = applyPrimaryModel(configWithAuth, VOLCENGINE_DEFAULT_MODEL);
-      return {
-        config: configWithModel,
-        agentModelOverride: VOLCENGINE_DEFAULT_MODEL,
-      };
-    }
-  }
-
-  let key: string | undefined;
-  if (params.opts?.volcengineApiKey) {
-    key = params.opts.volcengineApiKey;
-  } else {
-    key = await params.prompter.text({
-      message: "Enter Volcano Engine API Key",
-      validate: validateApiKeyInput,
-    });
-  }
-
-  const trimmed = normalizeApiKeyInput(String(key));
-  await setVolcengineApiKey(trimmed, params.agentDir, {
+  await ensureApiKeyFromOptionEnvOrPrompt({
+    token: params.opts?.volcengineApiKey,
+    tokenProvider: "volcengine",
     secretInputMode: requestedSecretInputMode,
+    config: params.config,
+    expectedProviders: ["volcengine"],
+    provider: "volcengine",
+    envLabel: "VOLCANO_ENGINE_API_KEY",
+    promptMessage: "Enter Volcano Engine API key",
+    normalize: normalizeApiKeyInput,
+    validate: validateApiKeyInput,
+    prompter: params.prompter,
+    setCredential: async (apiKey, mode) =>
+      setVolcengineApiKey(apiKey, params.agentDir, { secretInputMode: mode }),
   });
   const configWithAuth = applyAuthProfileConfig(params.config, {
     profileId: "volcengine:default",
