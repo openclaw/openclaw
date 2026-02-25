@@ -46,6 +46,13 @@ class GatewayConfigResolverTest {
     assertNull(resolved)
   }
 
+  @Test
+  fun resolveScannedSetupCodeRejectsJsonWithNonStringSetupCode() {
+    val qrJson = """{"setupCode":{"nested":"value"}}"""
+    val resolved = resolveScannedSetupCode(qrJson)
+    assertNull(resolved)
+  }
+
   private fun encodeSetupCode(payloadJson: String): String {
     return Base64.getUrlEncoder().withoutPadding().encodeToString(payloadJson.toByteArray(Charsets.UTF_8))
   }
