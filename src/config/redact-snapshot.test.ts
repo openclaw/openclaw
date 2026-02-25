@@ -134,7 +134,7 @@ describe("redactConfigSnapshot", () => {
       models: {
         providers: {
           openai: {
-            apiKey: { source: "env", id: "OPENAI_API_KEY" },
+            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
             baseUrl: "https://api.openai.com",
           },
         },
@@ -145,6 +145,7 @@ describe("redactConfigSnapshot", () => {
     const models = result.config.models as Record<string, Record<string, Record<string, unknown>>>;
     expect(models.providers.openai.apiKey).toEqual({
       source: REDACTED_SENTINEL,
+      provider: REDACTED_SENTINEL,
       id: REDACTED_SENTINEL,
     });
     expect(models.providers.openai.baseUrl).toBe("https://api.openai.com");

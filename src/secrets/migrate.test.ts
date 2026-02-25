@@ -1,15 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-const runExecMock = vi.hoisted(() => vi.fn());
-
-vi.mock("../process/exec.js", () => ({
-  runExec: runExecMock,
-}));
-
-const { rollbackSecretsMigration, runSecretsMigration } = await import("./migrate.js");
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { rollbackSecretsMigration, runSecretsMigration } from "./migrate.js";
 
 describe("secrets migrate", () => {
   let baseDir = "";
@@ -91,28 +84,6 @@ describe("secrets migrate", () => {
       "OPENAI_API_KEY=sk-openai-plaintext\nSKILL_KEY=sk-skill-plaintext\nUNRELATED=value\n",
       "utf8",
     );
-
-    runExecMock.mockReset();
-    runExecMock.mockImplementation(async (_cmd: string, args: string[]) => {
-      if (args.includes("--encrypt")) {
-        const outputPath = args[args.indexOf("--output") + 1];
-        const inputPath = args.at(-1);
-        if (!outputPath || !inputPath) {
-          throw new Error("missing sops encrypt paths");
-        }
-        await fs.copyFile(inputPath, outputPath);
-        return { stdout: "", stderr: "" };
-      }
-      if (args.includes("--decrypt")) {
-        const sourcePath = args.at(-1);
-        if (!sourcePath) {
-          throw new Error("missing sops decrypt source");
-        }
-        const raw = await fs.readFile(sourcePath, "utf8");
-        return { stdout: raw, stderr: "" };
-      }
-      throw new Error(`unexpected sops invocation: ${args.join(" ")}`);
-    });
   });
 
   afterEach(async () => {
@@ -144,22 +115,25 @@ describe("secrets migrate", () => {
       models: { providers: { openai: { apiKey: unknown } } };
       skills: { entries: { "review-pr": { apiKey: unknown } } };
       channels: { googlechat: { serviceAccount?: unknown; serviceAccountRef?: unknown } };
-      secrets: { sources: { file: { type: string; path: string } } };
+      secrets: { providers: Record<string, { source: string; path: string }> };
     };
     expect(migratedConfig.models.providers.openai.apiKey).toEqual({
       source: "file",
+      provider: "default",
       id: "/providers/openai/apiKey",
     });
     expect(migratedConfig.skills.entries["review-pr"].apiKey).toEqual({
       source: "file",
+      provider: "default",
       id: "/skills/entries/review-pr/apiKey",
     });
     expect(migratedConfig.channels.googlechat.serviceAccount).toBeUndefined();
     expect(migratedConfig.channels.googlechat.serviceAccountRef).toEqual({
       source: "file",
+      provider: "default",
       id: "/channels/googlechat/serviceAccount",
     });
-    expect(migratedConfig.secrets.sources.file.type).toBe("sops");
+    expect(migratedConfig.secrets.providers.default.source).toBe("file");
 
     const migratedAuth = JSON.parse(await fs.readFile(authStorePath, "utf8")) as {
       profiles: { "openai:default": { key?: string; keyRef?: unknown } };
@@ -167,6 +141,7 @@ describe("secrets migrate", () => {
     expect(migratedAuth.profiles["openai:default"].key).toBeUndefined();
     expect(migratedAuth.profiles["openai:default"].keyRef).toEqual({
       source: "file",
+      provider: "default",
       id: "/auth-profiles/main/openai:default/key",
     });
 
@@ -175,7 +150,7 @@ describe("secrets migrate", () => {
     expect(migratedEnv).toContain("SKILL_KEY=sk-skill-plaintext");
     expect(migratedEnv).toContain("UNRELATED=value");
 
-    const secretsPath = path.join(stateDir, "secrets.enc.json");
+    const secretsPath = path.join(stateDir, "secrets.json");
     const secretsPayload = JSON.parse(await fs.readFile(secretsPath, "utf8")) as {
       providers: { openai: { apiKey: string } };
       skills: { entries: { "review-pr": { apiKey: string } } };
@@ -214,45 +189,53 @@ describe("secrets migrate", () => {
     expect(second.backupId).not.toBe(first.backupId);
   });
 
-  it("passes --config for sops when .sops.yaml exists in config dir", async () => {
-    const sopsConfigPath = path.join(stateDir, ".sops.yaml");
-    await fs.writeFile(sopsConfigPath, "creation_rules:\n  - path_regex: .*\n", "utf8");
+  it("reuses configured file provider aliases", async () => {
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          secrets: {
+            providers: {
+              teamfile: {
+                source: "file",
+                path: "~/.openclaw/team-secrets.json",
+                mode: "jsonPointer",
+              },
+            },
+            defaults: {
+              file: "teamfile",
+            },
+          },
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: "sk-openai-plaintext",
+                models: [{ id: "gpt-5", name: "gpt-5" }],
+              },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
 
     await runSecretsMigration({ env, write: true });
-
-    const encryptCall = runExecMock.mock.calls.find((call) =>
-      (call[1] as string[]).includes("--encrypt"),
-    );
-    expect(encryptCall).toBeTruthy();
-    const args = encryptCall?.[1] as string[];
-    const configIndex = args.indexOf("--config");
-    expect(configIndex).toBeGreaterThanOrEqual(0);
-    expect(args[configIndex + 1]).toBe(sopsConfigPath);
-    const filenameOverrideIndex = args.indexOf("--filename-override");
-    expect(filenameOverrideIndex).toBeGreaterThanOrEqual(0);
-    expect(args[filenameOverrideIndex + 1]).toBe(
-      path.join(stateDir, "secrets.enc.json").replaceAll(path.sep, "/"),
-    );
-    const options = encryptCall?.[2] as { cwd?: string } | undefined;
-    expect(options?.cwd).toBe(stateDir);
+    const migratedConfig = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+      models: { providers: { openai: { apiKey: unknown } } };
+    };
+    expect(migratedConfig.models.providers.openai.apiKey).toEqual({
+      source: "file",
+      provider: "teamfile",
+      id: "/providers/openai/apiKey",
+    });
   });
 
-  it("passes a stable filename override for sops when config file is absent", async () => {
-    await runSecretsMigration({ env, write: true });
-
-    const encryptCall = runExecMock.mock.calls.find((call) =>
-      (call[1] as string[]).includes("--encrypt"),
-    );
-    expect(encryptCall).toBeTruthy();
-    const args = encryptCall?.[1] as string[];
-    const configIndex = args.indexOf("--config");
-    expect(configIndex).toBe(-1);
-    const filenameOverrideIndex = args.indexOf("--filename-override");
-    expect(filenameOverrideIndex).toBeGreaterThanOrEqual(0);
-    expect(args[filenameOverrideIndex + 1]).toBe(
-      path.join(stateDir, "secrets.enc.json").replaceAll(path.sep, "/"),
-    );
-    const options = encryptCall?.[2] as { cwd?: string } | undefined;
-    expect(options?.cwd).toBe(stateDir);
+  it("keeps .env values when scrub-env is disabled", async () => {
+    await runSecretsMigration({ env, write: true, scrubEnv: false });
+    const migratedEnv = await fs.readFile(envPath, "utf8");
+    expect(migratedEnv).toContain("OPENAI_API_KEY=sk-openai-plaintext");
   });
 });
