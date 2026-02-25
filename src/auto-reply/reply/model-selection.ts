@@ -627,7 +627,7 @@ export function resolveContextTokens(params: {
     }
     return undefined;
   })();
-  const modelParams = modelEntry?.params as Record<string, unknown> | undefined;
+  const modelParams = modelEntry?.params;
   const contextTokensFromParams =
     typeof modelParams?.contextTokens === "number" &&
     Number.isFinite(modelParams.contextTokens) &&
