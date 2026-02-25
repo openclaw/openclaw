@@ -178,9 +178,50 @@ describe("runWithModelFallback", () => {
     expect(run).toHaveBeenCalledWith("openai-codex", "gpt-5.3-codex");
   });
 
-  it("does not fall back on non-auth errors", async () => {
+  it("falls back on unrecognized errors when candidates remain", async () => {
     const cfg = makeCfg();
     const run = vi.fn().mockRejectedValueOnce(new Error("bad request")).mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+    });
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(result.attempts).toHaveLength(1);
+    expect(result.attempts[0].error).toBe("bad request");
+    expect(result.attempts[0].reason).toBe("unknown");
+  });
+
+  it("passes original unknown errors to onError during fallback", async () => {
+    const cfg = makeCfg();
+    const unknownError = new Error("provider misbehaved");
+    const run = vi.fn().mockRejectedValueOnce(unknownError).mockResolvedValueOnce("ok");
+    const onError = vi.fn();
+
+    await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      run,
+      onError,
+    });
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError.mock.calls[0]?.[0]).toMatchObject({
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      attempt: 1,
+      total: 2,
+    });
+    expect(onError.mock.calls[0]?.[0]?.error).toBe(unknownError);
+  });
+
+  it("throws unrecognized error on last candidate", async () => {
+    const cfg = makeCfg();
+    const run = vi.fn().mockRejectedValueOnce(new Error("something weird"));
 
     await expect(
       runWithModelFallback({
@@ -188,8 +229,9 @@ describe("runWithModelFallback", () => {
         provider: "openai",
         model: "gpt-4.1-mini",
         run,
+        fallbacksOverride: [],
       }),
-    ).rejects.toThrow("bad request");
+    ).rejects.toThrow("something weird");
     expect(run).toHaveBeenCalledTimes(1);
   });
 

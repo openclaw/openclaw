@@ -402,24 +402,29 @@ export async function runWithModelFallback<T>(params: {
           provider: candidate.provider,
           model: candidate.model,
         }) ?? err;
-      if (!isFailoverError(normalized)) {
+
+      // Even unrecognized errors should not abort the fallback loop when
+      // there are remaining candidates.  Only abort/context-overflow errors
+      // (handled above) are truly non-retryable.
+      const isKnownFailover = isFailoverError(normalized);
+      if (!isKnownFailover && i === candidates.length - 1) {
         throw err;
       }
 
-      lastError = normalized;
+      lastError = isKnownFailover ? normalized : err;
       const described = describeFailoverError(normalized);
       attempts.push({
         provider: candidate.provider,
         model: candidate.model,
         error: described.message,
-        reason: described.reason,
+        reason: described.reason ?? "unknown",
         status: described.status,
         code: described.code,
       });
       await params.onError?.({
         provider: candidate.provider,
         model: candidate.model,
-        error: normalized,
+        error: isKnownFailover ? normalized : err,
         attempt: i + 1,
         total: candidates.length,
       });
