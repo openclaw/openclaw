@@ -56,6 +56,9 @@ export type RouteReplyResult = {
  */
 export async function routeReply(params: RouteReplyParams): Promise<RouteReplyResult> {
   const { payload, channel, to, accountId, threadId, cfg, abortSignal } = params;
+  if (payload.isReasoning) {
+    return { ok: true };
+  }
   const normalizedChannel = normalizeMessageChannel(channel);
   const resolvedAgentId = params.sessionKey
     ? resolveSessionAgentId({

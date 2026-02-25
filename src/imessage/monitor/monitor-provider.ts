@@ -83,43 +83,80 @@ async function detectRemoteHostFromCliPath(cliPath: string): Promise<string | un
 /**
  * Cache for recently sent messages, used for echo detection.
  * Keys are scoped by conversation (accountId:target) so the same text in different chats is not conflated.
- * Entries expire after 5 seconds; we do not forget on match so multiple echo deliveries are all filtered.
+ * Message IDs use a longer TTL than text fallback to improve resilience when inbound polling is delayed.
  */
-class SentMessageCache {
-  private cache = new Map<string, number>();
-  private readonly ttlMs = 5000; // 5 seconds
+const SENT_MESSAGE_TEXT_TTL_MS = 5000;
+const SENT_MESSAGE_ID_TTL_MS = 60_000;
 
-  remember(scope: string, text: string): void {
-    if (!text?.trim()) {
-      return;
+function normalizeEchoTextKey(text: string | undefined): string | null {
+  if (!text) {
+    return null;
+  }
+  const normalized = text.replace(/\r\n?/g, "\n").trim();
+  return normalized ? normalized : null;
+}
+
+function normalizeEchoMessageIdKey(messageId: string | undefined): string | null {
+  if (!messageId) {
+    return null;
+  }
+  const normalized = messageId.trim();
+  if (!normalized || normalized === "ok" || normalized === "unknown") {
+    return null;
+  }
+  return normalized;
+}
+
+type SentMessageLookup = {
+  text?: string;
+  messageId?: string;
+};
+
+class SentMessageCache {
+  private textCache = new Map<string, number>();
+  private messageIdCache = new Map<string, number>();
+
+  remember(scope: string, lookup: SentMessageLookup): void {
+    const textKey = normalizeEchoTextKey(lookup.text);
+    if (textKey) {
+      this.textCache.set(`${scope}:${textKey}`, Date.now());
     }
-    const key = `${scope}:${text.trim()}`;
-    this.cache.set(key, Date.now());
+    const messageIdKey = normalizeEchoMessageIdKey(lookup.messageId);
+    if (messageIdKey) {
+      this.messageIdCache.set(`${scope}:${messageIdKey}`, Date.now());
+    }
     this.cleanup();
   }
 
-  has(scope: string, text: string): boolean {
-    if (!text?.trim()) {
-      return false;
+  has(scope: string, lookup: SentMessageLookup): boolean {
+    this.cleanup();
+    const messageIdKey = normalizeEchoMessageIdKey(lookup.messageId);
+    if (messageIdKey) {
+      const idTimestamp = this.messageIdCache.get(`${scope}:${messageIdKey}`);
+      if (idTimestamp && Date.now() - idTimestamp <= SENT_MESSAGE_ID_TTL_MS) {
+        return true;
+      }
     }
-    const key = `${scope}:${text.trim()}`;
-    const timestamp = this.cache.get(key);
-    if (!timestamp) {
-      return false;
+    const textKey = normalizeEchoTextKey(lookup.text);
+    if (textKey) {
+      const textTimestamp = this.textCache.get(`${scope}:${textKey}`);
+      if (textTimestamp && Date.now() - textTimestamp <= SENT_MESSAGE_TEXT_TTL_MS) {
+        return true;
+      }
     }
-    const age = Date.now() - timestamp;
-    if (age > this.ttlMs) {
-      this.cache.delete(key);
-      return false;
-    }
-    return true;
+    return false;
   }
 
   private cleanup(): void {
     const now = Date.now();
-    for (const [text, timestamp] of this.cache.entries()) {
-      if (now - timestamp > this.ttlMs) {
-        this.cache.delete(text);
+    for (const [key, timestamp] of this.textCache.entries()) {
+      if (now - timestamp > SENT_MESSAGE_TEXT_TTL_MS) {
+        this.textCache.delete(key);
+      }
+    }
+    for (const [key, timestamp] of this.messageIdCache.entries()) {
+      if (now - timestamp > SENT_MESSAGE_ID_TTL_MS) {
+        this.messageIdCache.delete(key);
       }
     }
   }
@@ -527,4 +564,5 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
 export const __testing = {
   resolveIMessageRuntimeGroupPolicy: resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
+  createSentMessageCache: () => new SentMessageCache(),
 };
