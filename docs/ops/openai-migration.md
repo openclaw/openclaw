@@ -8,7 +8,7 @@ Migrated Jubal from OpenRouter (per-API-call billing) to OpenAI Codex (ChatGPT P
 
 | Before | After |
 |---|---|
-| Primary: `openrouter/anthropic/claude-sonnet-4-5` | Primary: `openai-codex/gpt-5.2-codex` |
+| Primary: `openrouter/anthropic/claude-sonnet-4-5` | Primary: `openai-codex/gpt-5.3-codex` |
 | Fallback: `openrouter/anthropic/claude-opus-4-6` | Fallback: `openrouter/anthropic/claude-opus-4-6` (unchanged) |
 | Billing: per API call via OpenRouter | Billing: ChatGPT Pro subscription ($200/mo flat) |
 
@@ -34,7 +34,7 @@ Migrated Jubal from OpenRouter (per-API-call billing) to OpenAI Codex (ChatGPT P
 
 5. **Headless VPS detected automatically** — the onboard wizard detected the remote/VPS environment and showed a URL + paste-back flow instead of trying to open a browser. No SSH tunnel was actually needed for the auth step.
 
-6. **`gpt-5.3-codex` doesn't exist** in clawdbot v2026.1.24-3 — the docs reference it but the model registry doesn't have it. `gpt-5.2-codex` is the correct model.
+6. **`gpt-5.3-codex` doesn't exist in clawdbot v2026.1.24-3** — the legacy `clawdbot` npm package doesn't have it. Fixed by upgrading to `openclaw` v2026.2.23 (`sudo npm i -g openclaw@latest`), which includes gpt-5.3-codex in the model registry.
 
 7. **Onboard wizard tried to install Homebrew** — happens when you say "yes" to configuring skills. Not needed for the auth migration. Ctrl+C out of the wizard after OAuth completes.
 
@@ -42,7 +42,7 @@ Migrated Jubal from OpenRouter (per-API-call billing) to OpenAI Codex (ChatGPT P
 
 ```bash
 # 1. SSH in (tunnel for OAuth callback — may not be needed but doesn't hurt)
-ssh -i ~/Documents/JubalH.pem -L 1455:127.0.0.1:1455 ubuntu@100.52.191.223
+ssh -i ~/Documents/JubalH.pem -L 1455:127.0.0.1:1455 ubuntu@34.194.157.97
 
 # 2. Stop gateway
 systemctl --user stop clawdbot-gateway
@@ -74,7 +74,7 @@ journalctl --user -u clawdbot-gateway --since '30 sec ago' --no-pager
 The OAuth token expires ~10 days after auth and should auto-refresh. If it stops working:
 
 ```bash
-ssh -i ~/Documents/JubalH.pem -L 1455:127.0.0.1:1455 ubuntu@100.52.191.223
+ssh -i ~/Documents/JubalH.pem -L 1455:127.0.0.1:1455 ubuntu@34.194.157.97
 systemctl --user stop clawdbot-gateway
 clawdbot onboard --auth-choice openai-codex
 # Quick start → Use existing values → complete OAuth → Ctrl+C after auth
@@ -82,12 +82,33 @@ clawdbot models list   # verify auth shows "yes"
 systemctl --user start clawdbot-gateway
 ```
 
+## Upgrade to gpt-5.3-codex (2026-02-25)
+
+The legacy `clawdbot` npm package (v2026.1.24-3) didn't have gpt-5.3-codex in its model registry. The fix was upgrading to the renamed `openclaw` package:
+
+```bash
+# Add swap first (t3.small OOMs without it)
+sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
+
+# Install new package (openclaw, not clawdbot)
+sudo npm i -g openclaw@latest
+
+# Update systemd service to use new binary
+# Change ExecStart from .../clawdbot/dist/entry.js to .../openclaw/dist/entry.js
+# Then: systemctl --user daemon-reload
+
+# Set model and verify
+openclaw models set openai-codex/gpt-5.3-codex
+openclaw models list   # should show configured, Auth yes, no "missing"
+systemctl --user restart clawdbot-gateway
+```
+
 ## Rollback to OpenRouter
 
 If OpenAI Codex breaks and you need to go back:
 
 ```bash
-clawdbot models set openrouter/anthropic/claude-sonnet-4-5
+openclaw models set openrouter/anthropic/claude-sonnet-4-5
 systemctl --user restart clawdbot-gateway
 journalctl --user -u clawdbot-gateway --since '1 min ago' --no-pager | grep -i error
 ```

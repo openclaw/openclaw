@@ -44,7 +44,7 @@ journalctl --user -u clawdbot-gateway -f      # follow logs
 journalctl --user -u clawdbot-gateway --since '10 min ago' --no-pager  # recent logs
 ```
 
-## Current Model Config (as of 2026-02-24)
+## Current Model Config (as of 2026-02-25)
 - **Primary:** `openai-codex/gpt-5.3-codex` (ChatGPT Pro subscription, flat monthly fee)
 - **Fallback:** `openrouter/anthropic/claude-opus-4-6` (per-API-call, expensive — emergency fallback only)
 - **Heartbeat:** every 30m on Codex
@@ -55,7 +55,8 @@ journalctl --user -u clawdbot-gateway --since '10 min ago' --no-pager  # recent 
 
 ## Auth Details
 - **OpenAI Codex:** OAuth token in `auth-profiles.json` (profile: `openai-codex:default`). Token auto-refreshes but expires ~10 days after auth. If Jubal goes down unexpectedly, re-run the auth flow (see openai-migration.md).
-- **OpenRouter:** rotated 2026-02-24 (key stored in `auth-profiles.json` and `clawdbot.json` on server)
+- **OpenRouter:** rotated 2026-02-24 (key stored in `auth-profiles.json` and `openclaw.json` on server)
+- **OpenAI API key:** for embeddings/memory-lancedb plugin. Set as `OPENAI_API_KEY` env var in systemd service + `.bashrc`
 - **Telegram bot token:** `8364471517:AAHokt2Dh7Ot90YvWebTdwV856RnmrnboWs`
 - **Gateway auth token:** `f22fe8c926fd49d6c4825c756df6d419a12250dc9c97eaef882493eab1ccc438`
 
@@ -135,7 +136,7 @@ GOG_KEYRING_PASSWORD=jubal gog auth add jubal@marketingresultslab.com --remote -
 2. ~~Allocate Elastic IP~~ (DONE 2026-02-24 — 34.194.157.97)
 3. ~~Set up SSM Session Manager~~ (DONE 2026-02-24 — IAM role `JubalSSMRole` attached, connect via EC2 → Connect → Session Manager)
 4. ~~Install AWS CLI~~ (DONE 2026-02-24)
-5. **Enable memory-lancedb plugin** - needs `@lancedb/lancedb` npm module and embedding config
+5. ~~Enable memory-lancedb plugin~~ (DONE 2026-02-25 — enabled with OpenAI embeddings, needs API credits on platform.openai.com)
 
 ## Known Issues / Lessons Learned
 - See `/home/ubuntu/clawd/incident-log.md` on the instance for full incident history

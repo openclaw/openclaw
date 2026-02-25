@@ -112,21 +112,49 @@ The allowlist (`agents.defaults.models`) says "this model is allowed." The provi
 
 ---
 
+## Incident 6: npm install OOM crashed the instance
+
+**Date:** 2026-02-24
+**Error:** Instance became unresponsive, SSH timed out
+**Impact:** Had to stop/start instance from AWS Console.
+
+**What happened:**
+Running `sudo npm i -g clawdbot@latest` on the t3.small (2 GiB RAM) exhausted memory. The npm install process consumed all RAM, killed SSH, and made the instance unreachable.
+
+**Root cause:**
+No swap file on a 2 GiB instance. Large npm installs need more memory than available.
+
+**Fix:**
+Added a 2GB swap file before retrying:
+```bash
+sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
+echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+```
+
+**Lesson:**
+- Always verify swap exists (`swapon --show`) before running large npm installs on t3.small.
+- The swap file is now persistent across reboots via `/etc/fstab`.
+
+---
+
 ## Pre-flight checklist for config changes
 
 Before restarting after ANY config change:
 
 1. **Verify model names are exact** - no typos, correct version numbers
-2. **Run `clawdbot models list`** - every model should show `configured` (not `missing`)
+2. **Run `openclaw models list`** - every model should show `configured` (not `missing`)
 3. **Check `Auth` column** - should be `yes` for all providers you're using
-4. **Check `auth.json` exists** - `ls ~/.clawdbot/agents/main/agent/auth.json`
+4. **Check `auth.json` exists** - `ls ~/.openclaw/agents/main/agent/auth.json`
 5. **Only then restart** - `systemctl --user restart clawdbot-gateway`
 6. **After restart, check logs** - `journalctl --user -u clawdbot-gateway --since '1 min ago' --no-pager | grep -i error`
 
-## Current working config (2026-02-19)
+## Current working config (2026-02-25)
 
-- **Primary model:** `openrouter/anthropic/claude-sonnet-4-5`
+- **Software:** OpenClaw v2026.2.23 (package: `openclaw`, NOT `clawdbot`)
+- **Primary model:** `openai-codex/gpt-5.3-codex` (ChatGPT Pro subscription via OAuth)
 - **Fallback:** `openrouter/anthropic/claude-opus-4-6`
-- **Heartbeat:** every 6h on Gemini Flash
+- **Subagents:** 4 concurrent on `openai-codex/gpt-5.2-codex`
+- **Heartbeat:** every 30m on Codex
 - **Cron:** morning check-in only (8 AM MT)
-- **Provider:** OpenRouter (baseUrl: `https://openrouter.ai/api/v1`, api: `openai-completions`)
+- **Plugins:** memory-lancedb (semantic memory via OpenAI embeddings)
+- **Google Suite:** gogcli for Drive, Gmail, Calendar (jubal@marketingresultslab.com)
