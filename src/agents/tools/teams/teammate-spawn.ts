@@ -100,16 +100,6 @@ export function createTeammateSpawnTool(opts?: {
 
       // Create Gateway session for the teammate
       try {
-        // Set up session with spawn metadata
-        await callGateway({
-          method: "sessions.patch",
-          params: {
-            key: sessionKey,
-            spawnDepth: 1, // Teammates are at depth 1 (spawned by lead)
-          },
-          timeoutMs: 10_000,
-        });
-
         // Set model if provided
         const modelParam = readStringParam(params, "model");
         if (modelParam) {

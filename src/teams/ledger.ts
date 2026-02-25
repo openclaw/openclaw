@@ -16,8 +16,8 @@ export class TeamLedger {
   private readonly dbPath: string;
 
   constructor(teamName: string, stateDir: string) {
-    this.dbPath = join(stateDir, "teams", teamName, "ledger.db");
-    const dbDir = join(stateDir, "teams", teamName);
+    this.dbPath = join(stateDir, teamName, "ledger.db");
+    const dbDir = join(stateDir, teamName);
     mkdirSync(dbDir, { recursive: true });
   }
 

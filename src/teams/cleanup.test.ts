@@ -184,14 +184,7 @@ describe("cleanupOldMessages", () => {
   describe("Given a team with old messages", () => {
     it("When cleaning up messages older than maxAge Then it should delete them", async () => {
       const now = Date.now();
-      const oldMessagesPath = path.join(
-        stateDir,
-        "teams",
-        teamName,
-        "inbox",
-        "agent-1",
-        "messages.jsonl",
-      );
+      const oldMessagesPath = path.join(stateDir, teamName, "inbox", "agent-1", "messages.jsonl");
 
       vi.mocked(fs.readdir).mockResolvedValue([
         { name: "agent-1", isDirectory: () => true },

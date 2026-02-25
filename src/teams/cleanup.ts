@@ -19,7 +19,7 @@ export async function cleanupOldMessages(
   maxAge: number = 24 * 60 * 60 * 1000,
   stateDir: string = process.cwd(),
 ): Promise<number> {
-  const inboxDir = join(stateDir, "teams", teamName, "inbox");
+  const inboxDir = join(stateDir, teamName, "inbox");
   const now = Date.now();
   let deletedCount = 0;
 
@@ -106,7 +106,7 @@ export async function cleanupInactiveTeams(
   maxAge: number = 7 * 24 * 60 * 60 * 1000,
   deleteThreshold: boolean = false,
 ): Promise<string[]> {
-  const teamsDir = join(stateDir, "teams");
+  const teamsDir = stateDir;
   const now = Date.now();
   const inactiveTeams: string[] = [];
 
@@ -196,7 +196,7 @@ export async function getTeamStats(
 
   // Count messages in inbox directories
   let messageCount = 0;
-  const inboxDir = join(stateDir, "teams", teamName, "inbox");
+  const inboxDir = join(stateDir, teamName, "inbox");
 
   try {
     const sessions = await readdir(inboxDir, { withFileTypes: true });
@@ -222,7 +222,7 @@ export async function getTeamStats(
 
   // Get database size
   let dbSize = 0;
-  const dbPath = join(stateDir, "teams", teamName, "ledger.db");
+  const dbPath = join(stateDir, teamName, "ledger.db");
 
   try {
     const dbStats = await stat(dbPath);

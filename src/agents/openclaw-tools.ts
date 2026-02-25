@@ -19,6 +19,7 @@ import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 import { createSessionsSpawnTool } from "./tools/sessions-spawn-tool.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
+import { createInboxTool } from "./tools/teams/inbox.js";
 import { createSendMessageTool } from "./tools/teams/send-message.js";
 import { createTaskAutoClaimTool } from "./tools/teams/task-auto-claim.js";
 import { createTaskClaimTool } from "./tools/teams/task-claim.js";
@@ -210,6 +211,9 @@ export function createOpenClawTools(options?: {
       agentSessionKey: options?.agentSessionKey,
     }),
     createTaskCompleteTool({
+      agentSessionKey: options?.agentSessionKey,
+    }),
+    createInboxTool({
       agentSessionKey: options?.agentSessionKey,
     }),
     createSendMessageTool({

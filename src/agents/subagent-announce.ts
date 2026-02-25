@@ -577,6 +577,11 @@ async function sendAnnounce(item: AnnounceQueueItem) {
   const origin = item.origin;
   const threadId =
     origin?.threadId != null && origin.threadId !== "" ? String(origin.threadId) : undefined;
+  // Only request delivery if we have a deliverable channel.
+  // Without a deliverable channel, deliver=true would fail with
+  // "Channel is required" when no channels are configured.
+  const hasDeliverableChannel =
+    typeof origin?.channel === "string" && isDeliverableMessageChannel(origin.channel);
   // Share one announce identity across direct and queued delivery paths so
   // gateway dedupe suppresses true retries without collapsing distinct events.
   const idempotencyKey = buildAnnounceIdempotencyKey(
@@ -595,7 +600,7 @@ async function sendAnnounce(item: AnnounceQueueItem) {
       accountId: requesterIsSubagent ? undefined : origin?.accountId,
       to: requesterIsSubagent ? undefined : origin?.to,
       threadId: requesterIsSubagent ? undefined : threadId,
-      deliver: !requesterIsSubagent,
+      deliver: !requesterIsSubagent && hasDeliverableChannel,
       idempotencyKey,
     },
     timeoutMs: announceTimeoutMs,

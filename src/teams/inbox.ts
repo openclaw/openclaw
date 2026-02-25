@@ -22,7 +22,7 @@ export function sanitizeSessionKey(sessionKey: string): string {
  */
 function getInboxPath(teamName: string, teamsDir: string, sessionKey: string): string {
   const safeSessionKey = sanitizeSessionKey(sessionKey);
-  return join(teamsDir, "teams", teamName, "inbox", safeSessionKey);
+  return join(teamsDir, teamName, "inbox", safeSessionKey);
 }
 
 /**

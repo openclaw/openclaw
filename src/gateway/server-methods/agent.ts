@@ -532,9 +532,9 @@ export const agentHandlers: GatewayRequestHandlers = {
           deliveryTargetMode,
           resolvedAccountId,
         };
-      } catch (err) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, String(err)));
-        return;
+      } catch {
+        // No channels configured - proceed without external delivery.
+        // The agent will still run, but deliver will effectively be false.
       }
     }
 

@@ -387,7 +387,7 @@ describe("SQLite Ledger Initialization", () => {
       ledger.openDatabase();
 
       const instance = getLatestMockInstance();
-      expect(instance.path).toBe(join(TEST_DIR, "teams", teamName, "ledger.db"));
+      expect(instance.path).toBe(join(TEST_DIR, teamName, "ledger.db"));
 
       ledger.close();
     });

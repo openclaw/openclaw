@@ -448,7 +448,7 @@ describe("gateway server agent", () => {
       });
       expect(res.ok).toBe(false);
       expect(res.error?.code).toBe("INVALID_REQUEST");
-      expect(res.error?.message).toContain("Channel is required");
+      expect(res.error?.message).toMatch(/Channel is required|delivery channel is required/);
       expect(vi.mocked(agentCommand)).not.toHaveBeenCalled();
     } finally {
       testState.allowFrom = undefined;

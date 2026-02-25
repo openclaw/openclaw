@@ -76,7 +76,7 @@ describe("Inbox Directory Creation", () => {
 
       await ensureInboxDirectory("my-team", "/teams", "session-key-123");
 
-      expect(fs.mkdir).toHaveBeenCalledWith("/teams/teams/my-team/inbox/session-key-123", {
+      expect(fs.mkdir).toHaveBeenCalledWith("/teams/my-team/inbox/session-key-123", {
         recursive: true,
       });
     });
@@ -86,7 +86,7 @@ describe("Inbox Directory Creation", () => {
 
       const result = await ensureInboxDirectory("my-team", "/teams", "session-key-123");
 
-      expect(result).toBe("/teams/teams/my-team/inbox/session-key-123");
+      expect(result).toBe("/teams/my-team/inbox/session-key-123");
     });
   });
 
@@ -96,7 +96,7 @@ describe("Inbox Directory Creation", () => {
 
       await ensureInboxDirectory("my-team", "/teams", "session/.:key");
 
-      expect(fs.mkdir).toHaveBeenCalledWith("/teams/teams/my-team/inbox/session___key", {
+      expect(fs.mkdir).toHaveBeenCalledWith("/teams/my-team/inbox/session___key", {
         recursive: true,
       });
     });
@@ -124,7 +124,7 @@ describe("Write Inbox Message", () => {
 
       await writeInboxMessage("my-team", "/teams", "recipient-session", message);
 
-      expect(fs.mkdir).toHaveBeenCalledWith("/teams/teams/my-team/inbox/recipient-session", {
+      expect(fs.mkdir).toHaveBeenCalledWith("/teams/my-team/inbox/recipient-session", {
         recursive: true,
       });
     });
@@ -136,7 +136,7 @@ describe("Write Inbox Message", () => {
       await writeInboxMessage("my-team", "/teams", "recipient-session", message);
 
       expect(fs.appendFile).toHaveBeenCalledWith(
-        "/teams/teams/my-team/inbox/recipient-session/messages.jsonl",
+        "/teams/my-team/inbox/recipient-session/messages.jsonl",
         JSON.stringify(message) + "\n",
         { mode: 0o600 },
       );
@@ -204,7 +204,7 @@ describe("Read Inbox Messages", () => {
       await readInboxMessages("my-team", "/teams", "session-key");
 
       expect(fs.readFile).toHaveBeenCalledWith(
-        "/teams/teams/my-team/inbox/session-key/messages.jsonl",
+        "/teams/my-team/inbox/session-key/messages.jsonl",
         "utf-8",
       );
     });
@@ -266,9 +266,7 @@ describe("Clear Inbox Messages", () => {
 
       await clearInboxMessages("my-team", "/teams", "session-key");
 
-      expect(fs.unlink).toHaveBeenCalledWith(
-        "/teams/teams/my-team/inbox/session-key/messages.jsonl",
-      );
+      expect(fs.unlink).toHaveBeenCalledWith("/teams/my-team/inbox/session-key/messages.jsonl");
     });
   });
 
@@ -344,7 +342,7 @@ describe("End-to-End Inbox Operations", () => {
         clearInboxMessages("my-team", "/teams", "recipient-session"),
       ).resolves.not.toThrow();
       expect(fs.unlink).toHaveBeenCalledWith(
-        "/teams/teams/my-team/inbox/recipient-session/messages.jsonl",
+        "/teams/my-team/inbox/recipient-session/messages.jsonl",
       );
     });
   });
