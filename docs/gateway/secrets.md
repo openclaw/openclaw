@@ -9,7 +9,7 @@ title: "Secrets Management"
 
 # Secrets management
 
-OpenClaw supports additive secret references so credentials do not need to be stored in plaintext config files.
+OpenClaw supports additive secret references so credentials do not need to be stored as plaintext in config files.
 
 Plaintext still works. Secret refs are optional.
 
@@ -17,107 +17,137 @@ Plaintext still works. Secret refs are optional.
 
 Secrets are resolved into an in-memory runtime snapshot.
 
-- Resolution is eager during activation (not lazy on request paths).
-- Startup fails fast if any required ref cannot be resolved.
+- Resolution is eager during activation, not lazy on request paths.
+- Startup fails fast if any referenced credential cannot be resolved.
 - Reload uses atomic swap: full success or keep last-known-good.
-- Runtime requests use the active in-memory snapshot.
+- Runtime requests read from the active in-memory snapshot.
 
-This keeps external secret source outages off the hot request path.
+This keeps secret-provider outages off the hot request path.
 
 ## Onboarding reference preflight
 
 When onboarding runs in interactive mode and you choose secret reference storage, OpenClaw performs a fast preflight check before saving:
 
 - Env refs: validates env var name and confirms a non-empty value is visible during onboarding.
-- File refs (`sops`): validates `secrets.sources.file`, decrypts, and resolves the JSON pointer.
+- Provider refs (`file` or `exec`): validates the selected provider, resolves the provided `id`, and checks value type.
 
-If validation fails, onboarding shows the error and lets you retry with a different ref/source.
+If validation fails, onboarding shows the error and lets you retry.
 
 ## SecretRef contract
 
 Use one object shape everywhere:
 
 ```json5
-{ source: "env" | "file", id: "..." }
+{ source: "env" | "file" | "exec", provider: "default", id: "..." }
 ```
 
 ### `source: "env"`
 
 ```json5
-{ source: "env", id: "OPENAI_API_KEY" }
+{ source: "env", provider: "default", id: "OPENAI_API_KEY" }
 ```
 
 Validation:
 
+- `provider` must match `^[a-z][a-z0-9_-]{0,63}$`
 - `id` must match `^[A-Z][A-Z0-9_]{0,127}$`
-- Example error: `Env secret reference id must match /^[A-Z][A-Z0-9_]{0,127}$/ (example: "OPENAI_API_KEY").`
 
 ### `source: "file"`
 
 ```json5
-{ source: "file", id: "/providers/openai/apiKey" }
+{ source: "file", provider: "filemain", id: "/providers/openai/apiKey" }
 ```
 
 Validation:
 
+- `provider` must match `^[a-z][a-z0-9_-]{0,63}$`
 - `id` must be an absolute JSON pointer (`/...`)
-- Use RFC6901 token escaping in segments: `~` => `~0`, `/` => `~1`
-- Example error: `File secret reference id must be an absolute JSON pointer (example: "/providers/openai/apiKey").`
+- RFC6901 escaping in segments: `~` => `~0`, `/` => `~1`
 
-## v1 secret sources
-
-### Environment source
-
-No extra config required for resolution.
-
-Optional explicit config:
+### `source: "exec"`
 
 ```json5
-{
-  secrets: {
-    sources: {
-      env: { type: "env" },
-    },
-  },
-}
+{ source: "exec", provider: "vault", id: "providers/openai/apiKey" }
 ```
 
-### Encrypted file source (`sops`)
+Validation:
+
+- `provider` must match `^[a-z][a-z0-9_-]{0,63}$`
+- `id` must match `^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$`
+
+## Provider config
+
+Define providers under `secrets.providers`:
 
 ```json5
 {
   secrets: {
-    sources: {
-      file: {
-        type: "sops",
-        path: "~/.openclaw/secrets.enc.json",
-        timeoutMs: 5000,
+    providers: {
+      default: { source: "env" },
+      filemain: {
+        source: "file",
+        path: "~/.openclaw/secrets.json",
+        mode: "jsonPointer", // or "raw"
+      },
+      vault: {
+        source: "exec",
+        command: "/usr/local/bin/openclaw-vault-resolver",
+        args: ["--profile", "prod"],
+        passEnv: ["PATH", "VAULT_ADDR"],
+        jsonOnly: true,
       },
     },
+    defaults: {
+      env: "default",
+      file: "filemain",
+      exec: "vault",
+    },
+    resolution: {
+      maxProviderConcurrency: 4,
+      maxRefsPerProvider: 512,
+      maxBatchBytes: 262144,
+    },
   },
 }
 ```
 
-Contract:
+### Env provider
 
-- OpenClaw shells out to `sops` for decrypt/encrypt.
-- Minimum supported version: `sops >= 3.9.0`.
-- For migration, OpenClaw explicitly passes `--config <config-dir>/.sops.yaml` (or `.sops.yml`), runs `sops` with `cwd=<config-dir>`, and sets `--filename-override` to the absolute target secrets path (for example `/home/user/.openclaw/secrets.enc.json`) so strict `creation_rules` still match even though encryption uses a temp input file.
-- Decrypted payload must be a JSON object.
-- `id` is resolved as JSON pointer into decrypted payload.
-- Default timeout is `5000ms`.
+- Optional allowlist via `allowlist`.
+- Missing/empty env values fail resolution.
 
-Common errors:
+### File provider
 
-- Missing binary: `sops binary not found in PATH. Install sops >= 3.9.0 or disable secrets.sources.file.`
-- Timeout: `sops decrypt timed out after <n>ms for <path>.`
-- Missing creation rules/key access (common during migrate write): `config file not found, or has no creation rules, and no keys provided through command line options`
+- Reads local file from `path`.
+- `mode: "jsonPointer"` expects JSON object payload and resolves `id` as pointer.
+- `mode: "raw"` expects ref id `"value"` and returns file contents.
+- Path must pass ownership/permission checks.
 
-Fix for creation-rules/key-access errors:
+### Exec provider
 
-- Ensure `<config-dir>/.sops.yaml` or `<config-dir>/.sops.yml` contains a valid `creation_rules` entry for your secrets file.
-- Ensure the runtime environment for `openclaw secrets migrate --write` can access decryption/encryption keys (for example `SOPS_AGE_KEY_FILE` for age keys).
-- Re-run migration after confirming both config and key access.
+- Runs configured absolute binary path, no shell.
+- Supports timeout, no-output timeout, output byte limits, env allowlist, and trusted dirs.
+- Request payload (stdin):
+
+```json
+{ "protocolVersion": 1, "provider": "vault", "ids": ["providers/openai/apiKey"] }
+```
+
+- Response payload (stdout):
+
+```json
+{ "protocolVersion": 1, "values": { "providers/openai/apiKey": "sk-..." } }
+```
+
+Optional per-id errors:
+
+```json
+{
+  "protocolVersion": 1,
+  "values": {},
+  "errors": { "providers/openai/apiKey": { "message": "not found" } }
+}
+```
 
 ## In-scope fields (v1)
 
@@ -135,15 +165,15 @@ Fix for creation-rules/key-access errors:
 - `profiles.<profileId>.keyRef` for `type: "api_key"`
 - `profiles.<profileId>.tokenRef` for `type: "token"`
 
-OAuth credential storage changes are out of scope for this sprint.
+OAuth credential storage changes are out of scope.
 
-## Required vs optional behavior
+## Required behavior and precedence
 
-- Optional field with no ref: ignored.
-- Field with a ref: required at activation time.
-- If both plaintext and ref exist, ref wins at runtime and plaintext is ignored.
+- Field without ref: unchanged.
+- Field with ref: required at activation time.
+- If plaintext and ref both exist, ref wins at runtime and plaintext is ignored.
 
-Warning code used for that override:
+Warning code:
 
 - `SECRETS_REF_OVERRIDES_PLAINTEXT`
 
@@ -151,16 +181,16 @@ Warning code used for that override:
 
 Secret activation is attempted on:
 
-- Startup (preflight + final activation)
+- Startup (preflight plus final activation)
 - Config reload hot-apply path
 - Config reload restart-check path
 - Manual reload via `secrets.reload`
 
 Activation contract:
 
-- If activation succeeds, snapshot swaps atomically.
-- If activation fails on startup, gateway startup fails.
-- If activation fails during runtime reload, active snapshot remains last-known-good.
+- Success swaps the snapshot atomically.
+- Startup failure aborts gateway startup.
+- Runtime reload failure keeps last-known-good snapshot.
 
 ## Degraded and recovered operator signals
 
@@ -174,21 +204,21 @@ One-shot system event and log codes:
 Behavior:
 
 - Degraded: runtime keeps last-known-good snapshot.
-- Recovered: emitted once after successful activation.
-- Repeated failures while already degraded only log warnings (no repeated system events).
-- Startup fail-fast does not emit degraded events because no runtime snapshot is active yet.
+- Recovered: emitted once after a successful activation.
+- Repeated failures while already degraded log warnings but do not spam events.
+- Startup fail-fast does not emit degraded events because no runtime snapshot exists yet.
 
 ## Migration command
 
 Use `openclaw secrets migrate` to move plaintext static secrets into file-backed refs.
 
-Default is dry-run:
+Dry-run (default):
 
 ```bash
 openclaw secrets migrate
 ```
 
-Apply changes:
+Apply:
 
 ```bash
 openclaw secrets migrate --write
@@ -203,22 +233,26 @@ openclaw secrets migrate --rollback 20260224T193000Z
 What migration covers:
 
 - `openclaw.json` fields listed above
-- `auth-profiles.json` API key and token plaintext fields
-- optional scrub of matching plaintext values from config-dir `.env` (default on)
-- if `<config-dir>/.sops.yaml` or `<config-dir>/.sops.yml` exists, migration uses it explicitly for sops decrypt/encrypt
+- `auth-profiles.json` plaintext API key/token fields
+- optional scrub of matching plaintext values from `<config-dir>/.env` (default on)
+
+Migration writes secrets to:
+
+- configured default `file` provider path when present
+- otherwise `<state-dir>/secrets.json`
 
 `.env` scrub semantics:
 
-- Scrub target path is `<config-dir>/.env` (`resolveConfigDir(...)`), not `OPENCLAW_HOME/.env`.
-- Only known secret env keys are eligible (for example `OPENAI_API_KEY`).
-- A line is removed only when its parsed value exactly matches a migrated plaintext value.
-- Non-secret keys, comments, and unmatched values are preserved.
+- target path is `<config-dir>/.env`
+- only known secret env keys are eligible
+- a line is removed only when value exactly matches a migrated plaintext value
+- comments/non-secret keys/unmatched values are preserved
 
 Backups:
 
-- Path: `~/.openclaw/backups/secrets-migrate/<backupId>/`
-- Manifest: `manifest.json`
-- Retention: 20 backups
+- path: `~/.openclaw/backups/secrets-migrate/<backupId>/`
+- manifest: `manifest.json`
+- retention: 20 backups
 
 ## `auth.json` compatibility notes
 

@@ -50,7 +50,7 @@ openclaw onboard --non-interactive \
 ```
 
 With `--secret-input-mode ref`, onboarding writes env-backed refs instead of plaintext key values.
-For auth-profile backed providers this writes `keyRef` entries; for custom providers this writes `models.providers.<id>.apiKey` as an env ref (for example `{ source: "env", id: "CUSTOM_API_KEY" }`).
+For auth-profile backed providers this writes `keyRef` entries; for custom providers this writes `models.providers.<id>.apiKey` as an env ref (for example `{ source: "env", provider: "default", id: "CUSTOM_API_KEY" }`).
 
 Non-interactive `ref` mode contract:
 
@@ -63,7 +63,7 @@ Interactive onboarding behavior with reference mode:
 - Choose **Use secret reference** when prompted.
 - Then choose either:
   - Environment variable
-  - Encrypted `sops` file (JSON pointer)
+  - Configured secret provider (`file` or `exec`)
 - Onboarding performs a fast preflight validation before saving the ref.
   - If validation fails, onboarding shows the error and lets you retry.
 

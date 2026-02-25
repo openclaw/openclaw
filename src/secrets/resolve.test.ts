@@ -108,6 +108,147 @@ describe("secret ref resolver", () => {
     expect(value).toBe("value:openai/api-key");
   });
 
+  it("supports non-JSON single-value exec output when jsonOnly is false", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-exec-plain-"));
+    cleanupRoots.push(root);
+    const scriptPath = path.join(root, "resolver-plain.mjs");
+    await writeSecureFile(
+      scriptPath,
+      ["#!/usr/bin/env node", "process.stdout.write('plain-secret');"].join("\n"),
+      0o700,
+    );
+
+    const value = await resolveSecretRefString(
+      { source: "exec", provider: "execmain", id: "openai/api-key" },
+      {
+        config: {
+          secrets: {
+            providers: {
+              execmain: {
+                source: "exec",
+                command: scriptPath,
+                passEnv: ["PATH"],
+                jsonOnly: false,
+              },
+            },
+          },
+        },
+      },
+    );
+    expect(value).toBe("plain-secret");
+  });
+
+  it("rejects exec refs when protocolVersion is not 1", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-secrets-resolve-exec-protocol-"),
+    );
+    cleanupRoots.push(root);
+    const scriptPath = path.join(root, "resolver-protocol.mjs");
+    await writeSecureFile(
+      scriptPath,
+      [
+        "#!/usr/bin/env node",
+        "process.stdout.write(JSON.stringify({ protocolVersion: 2, values: { 'openai/api-key': 'x' } }));",
+      ].join("\n"),
+      0o700,
+    );
+
+    await expect(
+      resolveSecretRefString(
+        { source: "exec", provider: "execmain", id: "openai/api-key" },
+        {
+          config: {
+            secrets: {
+              providers: {
+                execmain: {
+                  source: "exec",
+                  command: scriptPath,
+                  passEnv: ["PATH"],
+                },
+              },
+            },
+          },
+        },
+      ),
+    ).rejects.toThrow("protocolVersion must be 1");
+  });
+
+  it("rejects exec refs when response omits requested id", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-exec-id-"));
+    cleanupRoots.push(root);
+    const scriptPath = path.join(root, "resolver-missing-id.mjs");
+    await writeSecureFile(
+      scriptPath,
+      [
+        "#!/usr/bin/env node",
+        "process.stdout.write(JSON.stringify({ protocolVersion: 1, values: {} }));",
+      ].join("\n"),
+      0o700,
+    );
+
+    await expect(
+      resolveSecretRefString(
+        { source: "exec", provider: "execmain", id: "openai/api-key" },
+        {
+          config: {
+            secrets: {
+              providers: {
+                execmain: {
+                  source: "exec",
+                  command: scriptPath,
+                  passEnv: ["PATH"],
+                },
+              },
+            },
+          },
+        },
+      ),
+    ).rejects.toThrow('response missing id "openai/api-key"');
+  });
+
+  it("rejects exec refs with invalid JSON when jsonOnly is true", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-exec-json-"));
+    cleanupRoots.push(root);
+    const scriptPath = path.join(root, "resolver-invalid-json.mjs");
+    await writeSecureFile(
+      scriptPath,
+      ["#!/usr/bin/env node", "process.stdout.write('not-json');"].join("\n"),
+      0o700,
+    );
+
+    await expect(
+      resolveSecretRefString(
+        { source: "exec", provider: "execmain", id: "openai/api-key" },
+        {
+          config: {
+            secrets: {
+              providers: {
+                execmain: {
+                  source: "exec",
+                  command: scriptPath,
+                  passEnv: ["PATH"],
+                  jsonOnly: true,
+                },
+              },
+            },
+          },
+        },
+      ),
+    ).rejects.toThrow("returned invalid JSON");
+  });
+
   it("supports file raw mode with id=value", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-raw-"));
     cleanupRoots.push(root);

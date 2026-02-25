@@ -1987,7 +1987,7 @@ See [Local Models](/gateway/local-models). TL;DR: run MiniMax M2.1 via LM Studio
     },
     entries: {
       "nano-banana-pro": {
-        apiKey: { source: "env", id: "GEMINI_API_KEY" }, // or plaintext string
+        apiKey: { source: "env", provider: "default", id: "GEMINI_API_KEY" }, // or plaintext string
         env: { GEMINI_API_KEY: "GEMINI_KEY_HERE" },
       },
       peekaboo: { enabled: true },
@@ -2394,13 +2394,15 @@ Secret refs are additive: plaintext values still work.
 Use one object shape:
 
 ```json5
-{ source: "env" | "file", id: "..." }
+{ source: "env" | "file" | "exec", provider: "default", id: "..." }
 ```
 
 Validation:
 
+- `provider` pattern: `^[a-z][a-z0-9_-]{0,63}$`
 - `source: "env"` id pattern: `^[A-Z][A-Z0-9_]{0,127}$`
 - `source: "file"` id: absolute JSON pointer (for example `"/providers/openai/apiKey"`)
+- `source: "exec"` id pattern: `^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$`
 
 ### Supported fields in config
 
@@ -2411,18 +2413,29 @@ Validation:
 - `channels.googlechat.accounts.<accountId>.serviceAccount`
 - `channels.googlechat.accounts.<accountId>.serviceAccountRef`
 
-### Secret sources config
+### Secret providers config
 
 ```json5
 {
   secrets: {
-    sources: {
-      env: { type: "env" }, // optional
-      file: {
-        type: "sops",
-        path: "~/.openclaw/secrets.enc.json",
+    providers: {
+      default: { source: "env" }, // optional explicit env provider
+      filemain: {
+        source: "file",
+        path: "~/.openclaw/secrets.json",
+        mode: "jsonPointer",
         timeoutMs: 5000,
       },
+      vault: {
+        source: "exec",
+        command: "/usr/local/bin/openclaw-vault-resolver",
+        passEnv: ["PATH", "VAULT_ADDR"],
+      },
+    },
+    defaults: {
+      env: "default",
+      file: "filemain",
+      exec: "vault",
     },
   },
 }
@@ -2430,9 +2443,9 @@ Validation:
 
 Notes:
 
-- `file` source requires `sops` in `PATH` (`sops >= 3.9.0`).
-- `timeoutMs` defaults to `5000`.
-- File payload must decrypt to a JSON object; `id` is resolved via JSON pointer.
+- `file` provider supports `mode: "jsonPointer"` and `mode: "raw"` (`id` must be `"value"` in raw mode).
+- `exec` provider requires an absolute `command` path and uses protocol payloads on stdin/stdout.
+- Secret refs are resolved at activation time into an in-memory snapshot, then request paths read the snapshot only.
 
 ---
 
