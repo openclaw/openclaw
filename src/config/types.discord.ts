@@ -62,6 +62,8 @@ export type DiscordGuildEntry = {
   reactionNotifications?: DiscordReactionNotificationMode;
   /** Member join notification mode (off|on). Requires intents.guildMembers=true. Default: off. */
   memberJoinNotifications?: DiscordMemberJoinNotificationMode;
+  /** Discord channel ID to post welcome messages to when a member joins. Falls back to guild systemChannelId. */
+  memberJoinChannel?: string;
   /** Optional allowlist for guild senders (ids or names). */
   users?: string[];
   /** Optional allowlist for guild senders by role ID. */
