@@ -185,7 +185,9 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     const result = await context.cron.remove(jobId);
-    context.logGateway.info("cron: job removed", { jobId });
+    if (result.removed) {
+      context.logGateway.info("cron: job removed", { jobId });
+    }
     respond(true, result, undefined);
   },
   "cron.run": async ({ params, respond, context }) => {
