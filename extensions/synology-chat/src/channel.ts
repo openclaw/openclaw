@@ -178,8 +178,8 @@ export function createSynologyChatPlugin() {
       deliveryMode: "gateway" as const,
       textChunkLimit: 2000,
 
-      sendText: async ({ to, text, accountId, account: ctxAccount }: any) => {
-        const account: ResolvedSynologyChatAccount = ctxAccount ?? resolveAccount({}, accountId);
+      sendText: async ({ to, text, accountId, cfg }: any) => {
+        const account: ResolvedSynologyChatAccount = resolveAccount(cfg ?? {}, accountId);
 
         if (!account.incomingUrl) {
           throw new Error("Synology Chat incoming URL not configured");
@@ -192,8 +192,8 @@ export function createSynologyChatPlugin() {
         return { channel: CHANNEL_ID, messageId: `sc-${Date.now()}`, chatId: to };
       },
 
-      sendMedia: async ({ to, mediaUrl, accountId, account: ctxAccount }: any) => {
-        const account: ResolvedSynologyChatAccount = ctxAccount ?? resolveAccount({}, accountId);
+      sendMedia: async ({ to, mediaUrl, accountId, cfg }: any) => {
+        const account: ResolvedSynologyChatAccount = resolveAccount(cfg ?? {}, accountId);
 
         if (!account.incomingUrl) {
           throw new Error("Synology Chat incoming URL not configured");

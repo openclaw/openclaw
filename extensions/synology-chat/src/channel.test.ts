@@ -268,18 +268,10 @@ describe("createSynologyChatPlugin", () => {
       const plugin = createSynologyChatPlugin();
       await expect(
         plugin.outbound.sendText({
-          account: {
-            accountId: "default",
-            enabled: true,
-            token: "t",
-            incomingUrl: "",
-            nasHost: "h",
-            webhookPath: "/w",
-            dmPolicy: "open",
-            allowedUserIds: [],
-            rateLimitPerMinute: 30,
-            botName: "Bot",
-            allowInsecureSsl: true,
+          cfg: {
+            channels: {
+              "synology-chat": { enabled: true, token: "t", incomingUrl: "" },
+            },
           },
           text: "hello",
           to: "user1",
@@ -290,18 +282,15 @@ describe("createSynologyChatPlugin", () => {
     it("sendText returns OutboundDeliveryResult on success", async () => {
       const plugin = createSynologyChatPlugin();
       const result = await plugin.outbound.sendText({
-        account: {
-          accountId: "default",
-          enabled: true,
-          token: "t",
-          incomingUrl: "https://nas/incoming",
-          nasHost: "h",
-          webhookPath: "/w",
-          dmPolicy: "open",
-          allowedUserIds: [],
-          rateLimitPerMinute: 30,
-          botName: "Bot",
-          allowInsecureSsl: true,
+        cfg: {
+          channels: {
+            "synology-chat": {
+              enabled: true,
+              token: "t",
+              incomingUrl: "https://nas/incoming",
+              allowInsecureSsl: true,
+            },
+          },
         },
         text: "hello",
         to: "user1",
@@ -315,18 +304,10 @@ describe("createSynologyChatPlugin", () => {
       const plugin = createSynologyChatPlugin();
       await expect(
         plugin.outbound.sendMedia({
-          account: {
-            accountId: "default",
-            enabled: true,
-            token: "t",
-            incomingUrl: "",
-            nasHost: "h",
-            webhookPath: "/w",
-            dmPolicy: "open",
-            allowedUserIds: [],
-            rateLimitPerMinute: 30,
-            botName: "Bot",
-            allowInsecureSsl: true,
+          cfg: {
+            channels: {
+              "synology-chat": { enabled: true, token: "t", incomingUrl: "" },
+            },
           },
           mediaUrl: "https://example.com/img.png",
           to: "user1",
