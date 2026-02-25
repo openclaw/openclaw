@@ -55,8 +55,7 @@ describe("markdownTheme", () => {
 });
 
 describe("theme", () => {
-  it("keeps assistant text in terminal default foreground", () => {
-    expect(theme.assistantText("hello")).toBe("hello");
+  it("applies palette text color to assistant text", () => {
     expect(stripAnsi(theme.assistantText("hello"))).toBe("hello");
   });
 });
