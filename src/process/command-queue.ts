@@ -30,6 +30,7 @@ let gatewayDraining = false;
 // Default lane ("main") preserves the existing behavior. Additional lanes allow
 // low-risk parallelism (e.g. cron jobs) without interleaving stdin / logs for
 // the main auto-reply workflow.
+const LANE_TASK_TIMEOUT_MS = 10 * 60_000;
 
 type QueueEntry = {
   task: () => Promise<unknown>;
@@ -108,10 +109,39 @@ function drainLane(lane: string) {
         const taskId = nextTaskId++;
         const taskGeneration = state.generation;
         state.activeTaskIds.add(taskId);
+        let timeoutId: NodeJS.Timeout | undefined;
+        let completed = false;
+        const clearTaskTimeout = () => {
+          if (!timeoutId) {
+            return;
+          }
+          clearTimeout(timeoutId);
+          timeoutId = undefined;
+        };
+        timeoutId = setTimeout(() => {
+          if (completed) {
+            return;
+          }
+          completed = true;
+          clearTaskTimeout();
+          const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
+          diag.error(
+            `lane task timeout: lane=${lane} maxDurationMs=${LANE_TASK_TIMEOUT_MS} - forcefully releasing lane slot`,
+          );
+          if (completedCurrentGeneration) {
+            pump();
+          }
+          entry.reject(new Error(`Lane task timed out after ${LANE_TASK_TIMEOUT_MS}ms`));
+        }, LANE_TASK_TIMEOUT_MS);
         void (async () => {
           const startTime = Date.now();
           try {
             const result = await entry.task();
+            if (completed) {
+              return;
+            }
+            completed = true;
+            clearTaskTimeout();
             const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
             if (completedCurrentGeneration) {
               diag.debug(
@@ -121,6 +151,11 @@ function drainLane(lane: string) {
             }
             entry.resolve(result);
           } catch (err) {
+            if (completed) {
+              return;
+            }
+            completed = true;
+            clearTaskTimeout();
             const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
             const isProbeLane = lane.startsWith("auth-probe:") || lane.startsWith("session:probe-");
             if (!isProbeLane) {

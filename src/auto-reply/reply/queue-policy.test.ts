@@ -6,6 +6,7 @@ describe("resolveActiveRunQueueAction", () => {
     expect(
       resolveActiveRunQueueAction({
         isActive: false,
+        hasQueuedFollowups: false,
         isHeartbeat: false,
         shouldFollowup: true,
         queueMode: "collect",
@@ -17,6 +18,7 @@ describe("resolveActiveRunQueueAction", () => {
     expect(
       resolveActiveRunQueueAction({
         isActive: true,
+        hasQueuedFollowups: false,
         isHeartbeat: true,
         shouldFollowup: true,
         queueMode: "collect",
@@ -28,6 +30,7 @@ describe("resolveActiveRunQueueAction", () => {
     expect(
       resolveActiveRunQueueAction({
         isActive: true,
+        hasQueuedFollowups: false,
         isHeartbeat: false,
         shouldFollowup: true,
         queueMode: "collect",
@@ -39,9 +42,22 @@ describe("resolveActiveRunQueueAction", () => {
     expect(
       resolveActiveRunQueueAction({
         isActive: true,
+        hasQueuedFollowups: false,
         isHeartbeat: false,
         shouldFollowup: false,
         queueMode: "steer",
+      }),
+    ).toBe("enqueue-followup");
+  });
+
+  it("enqueues followups when queue is already busy even if run is not active", () => {
+    expect(
+      resolveActiveRunQueueAction({
+        isActive: false,
+        hasQueuedFollowups: true,
+        isHeartbeat: false,
+        shouldFollowup: true,
+        queueMode: "collect",
       }),
     ).toBe("enqueue-followup");
   });

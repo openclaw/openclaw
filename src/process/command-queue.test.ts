@@ -94,6 +94,36 @@ describe("command queue", () => {
     expect(getQueueSize()).toBe(0);
   });
 
+  it("times out a hung lane task and continues draining queued tasks", async () => {
+    vi.useFakeTimers();
+    try {
+      const lane = `timeout-test-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      const first = enqueueCommandInLane(lane, () => new Promise<never>(() => {}));
+      const firstOutcome = first.then(
+        () => ({ ok: true as const }),
+        (error) => ({ ok: false as const, error }),
+      );
+      let secondRan = false;
+      const second = enqueueCommandInLane(lane, async () => {
+        secondRan = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(10 * 60_000 + 1);
+
+      const firstResult = await firstOutcome;
+      expect(firstResult.ok).toBe(false);
+      if (firstResult.ok) {
+        throw new Error("expected first lane task to time out");
+      }
+      expect(firstResult.error).toBeInstanceOf(Error);
+      expect(String(firstResult.error)).toContain("Lane task timed out");
+      await second;
+      expect(secondRan).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("logs enqueue depth after push", async () => {
     const task = enqueueCommand(async () => {});
 
