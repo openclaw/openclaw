@@ -126,6 +126,11 @@ dependencies {
   implementation("androidx.exifinterface:exifinterface:1.4.2")
   implementation("com.squareup.okhttp3:okhttp:5.3.2")
   implementation("org.bouncycastle:bcprov-jdk18on:1.83")
+  implementation("org.commonmark:commonmark:0.27.1")
+  implementation("org.commonmark:commonmark-ext-autolink:0.27.1")
+  implementation("org.commonmark:commonmark-ext-gfm-strikethrough:0.27.1")
+  implementation("org.commonmark:commonmark-ext-gfm-tables:0.27.1")
+  implementation("org.commonmark:commonmark-ext-task-list-items:0.27.1")
 
   // CameraX (for node.invoke camera.* parity)
   implementation("androidx.camera:camera-core:1.5.2")
