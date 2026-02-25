@@ -44,6 +44,7 @@ import { probeIMessage } from "../probe.js";
 import { sendMessageIMessage } from "../send.js";
 import { attachIMessageMonitorAbortHandler } from "./abort-handler.js";
 import { deliverReplies } from "./deliver.js";
+import { createSentMessageCache } from "./echo-cache.js";
 import {
   buildIMessageInboundContext,
   resolveIMessageInboundDecision,
@@ -80,88 +81,6 @@ async function detectRemoteHostFromCliPath(cliPath: string): Promise<string | un
   }
 }
 
-/**
- * Cache for recently sent messages, used for echo detection.
- * Keys are scoped by conversation (accountId:target) so the same text in different chats is not conflated.
- * Message IDs use a longer TTL than text fallback to improve resilience when inbound polling is delayed.
- */
-const SENT_MESSAGE_TEXT_TTL_MS = 5000;
-const SENT_MESSAGE_ID_TTL_MS = 60_000;
-
-function normalizeEchoTextKey(text: string | undefined): string | null {
-  if (!text) {
-    return null;
-  }
-  const normalized = text.replace(/\r\n?/g, "\n").trim();
-  return normalized ? normalized : null;
-}
-
-function normalizeEchoMessageIdKey(messageId: string | undefined): string | null {
-  if (!messageId) {
-    return null;
-  }
-  const normalized = messageId.trim();
-  if (!normalized || normalized === "ok" || normalized === "unknown") {
-    return null;
-  }
-  return normalized;
-}
-
-type SentMessageLookup = {
-  text?: string;
-  messageId?: string;
-};
-
-class SentMessageCache {
-  private textCache = new Map<string, number>();
-  private messageIdCache = new Map<string, number>();
-
-  remember(scope: string, lookup: SentMessageLookup): void {
-    const textKey = normalizeEchoTextKey(lookup.text);
-    if (textKey) {
-      this.textCache.set(`${scope}:${textKey}`, Date.now());
-    }
-    const messageIdKey = normalizeEchoMessageIdKey(lookup.messageId);
-    if (messageIdKey) {
-      this.messageIdCache.set(`${scope}:${messageIdKey}`, Date.now());
-    }
-    this.cleanup();
-  }
-
-  has(scope: string, lookup: SentMessageLookup): boolean {
-    this.cleanup();
-    const messageIdKey = normalizeEchoMessageIdKey(lookup.messageId);
-    if (messageIdKey) {
-      const idTimestamp = this.messageIdCache.get(`${scope}:${messageIdKey}`);
-      if (idTimestamp && Date.now() - idTimestamp <= SENT_MESSAGE_ID_TTL_MS) {
-        return true;
-      }
-    }
-    const textKey = normalizeEchoTextKey(lookup.text);
-    if (textKey) {
-      const textTimestamp = this.textCache.get(`${scope}:${textKey}`);
-      if (textTimestamp && Date.now() - textTimestamp <= SENT_MESSAGE_TEXT_TTL_MS) {
-        return true;
-      }
-    }
-    return false;
-  }
-
-  private cleanup(): void {
-    const now = Date.now();
-    for (const [key, timestamp] of this.textCache.entries()) {
-      if (now - timestamp > SENT_MESSAGE_TEXT_TTL_MS) {
-        this.textCache.delete(key);
-      }
-    }
-    for (const [key, timestamp] of this.messageIdCache.entries()) {
-      if (now - timestamp > SENT_MESSAGE_ID_TTL_MS) {
-        this.messageIdCache.delete(key);
-      }
-    }
-  }
-}
-
 export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): Promise<void> {
   const runtime = resolveRuntime(opts);
   const cfg = opts.config ?? loadConfig();
@@ -177,7 +96,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       DEFAULT_GROUP_HISTORY_LIMIT,
   );
   const groupHistories = new Map<string, HistoryEntry[]>();
-  const sentMessageCache = new SentMessageCache();
+  const sentMessageCache = createSentMessageCache();
   const textLimit = resolveTextChunkLimit(cfg, "imessage", accountInfo.accountId);
   const allowFrom = normalizeAllowList(opts.allowFrom ?? imessageCfg.allowFrom);
   const groupAllowFrom = normalizeAllowList(
@@ -564,5 +483,4 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
 export const __testing = {
   resolveIMessageRuntimeGroupPolicy: resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
-  createSentMessageCache: () => new SentMessageCache(),
 };

@@ -7,10 +7,7 @@ import { runOutboundMessageHook } from "../../plugins/outbound-hook.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { createIMessageRpcClient } from "../client.js";
 import { sendMessageIMessage } from "../send.js";
-
-type SentMessageCache = {
-  remember: (scope: string, lookup: { text?: string; messageId?: string }) => void;
-};
+import type { SentMessageCache } from "./echo-cache.js";
 
 export async function deliverReplies(params: {
   replies: ReplyPayload[];
@@ -20,7 +17,7 @@ export async function deliverReplies(params: {
   runtime: RuntimeEnv;
   maxBytes: number;
   textLimit: number;
-  sentMessageCache?: SentMessageCache;
+  sentMessageCache?: Pick<SentMessageCache, "remember">;
 }) {
   const { replies, target, client, runtime, maxBytes, textLimit, accountId, sentMessageCache } =
     params;
