@@ -166,4 +166,23 @@ describe("printCronList", () => {
     printCronList([job], runtime);
     expect(logs.some((line) => line.includes("(exact)"))).toBe(true);
   });
+
+  it("shows Model column with payload.model and dash for missing agentId", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const job = createBaseJob({
+      id: "model-job",
+      name: "With Model",
+      agentId: undefined,
+      payload: { kind: "agentTurn", message: "hi", model: "sonnet" },
+    });
+
+    printCronList([job], runtime);
+    // Header should contain "Model" and "Agent ID"
+    expect(logs[0]).toContain("Model");
+    expect(logs[0]).toContain("Agent ID");
+    // Job row should show the model and "-" for missing agentId
+    const row = logs[1];
+    expect(row).toContain("sonnet");
+    expect(row).not.toContain("default");
+  });
 });
