@@ -5,7 +5,7 @@ import { toToolDefinitions } from "./pi-tool-definition-adapter.js";
 
 const hookMocks = vi.hoisted(() => ({
   runner: {
-    hasHooks: vi.fn((_: string) => true),
+    hasHooks: vi.fn((_: string) => false),
     runAfterToolCall: vi.fn(async () => {}),
   },
   isToolWrappedWithBeforeToolCallHook: vi.fn(() => false),
@@ -39,9 +39,23 @@ function createReadTool() {
 type ToolExecute = ReturnType<typeof toToolDefinitions>[number]["execute"];
 const extensionContext = {} as Parameters<ToolExecute>[4];
 
+function enableAfterToolCallHook() {
+  hookMocks.runner.hasHooks.mockReturnValue(true);
+}
+
+async function executeReadTool(callId: string) {
+  const defs = toToolDefinitions([createReadTool()]);
+  const def = defs[0];
+  if (!def) {
+    throw new Error("missing tool definition");
+  }
+  return def.execute(callId, { path: "/tmp/file" }, undefined, undefined, extensionContext);
+}
+
 describe("pi tool definition adapter after_tool_call", () => {
   beforeEach(() => {
     hookMocks.runner.hasHooks.mockClear();
+    hookMocks.runner.hasHooks.mockReturnValue(false);
     hookMocks.runner.runAfterToolCall.mockClear();
     hookMocks.runner.runAfterToolCall.mockResolvedValue(undefined);
     hookMocks.isToolWrappedWithBeforeToolCallHook.mockClear();
@@ -55,21 +69,25 @@ describe("pi tool definition adapter after_tool_call", () => {
     }));
   });
 
-  // Regression guard: after_tool_call is handled exclusively by
-  // handleToolExecutionEnd in the subscription handler to prevent
-  // duplicate invocations in embedded runs.
-  it("does not fire after_tool_call from the adapter (handled by subscription handler)", async () => {
-    const defs = toToolDefinitions([createReadTool()]);
-    const def = defs[0];
-    if (!def) {
-      throw new Error("missing tool definition");
-    }
-    await def.execute("call-ok", { path: "/tmp/file" }, undefined, undefined, extensionContext);
+  it("does not fire after_tool_call when no hooks registered", async () => {
+    hookMocks.runner.hasHooks.mockReturnValue(false);
+    const result = await executeReadTool("call-no-hooks");
 
     expect(hookMocks.runner.runAfterToolCall).not.toHaveBeenCalled();
+    expect(result.details).toMatchObject({ ok: true });
   });
 
-  it("does not fire after_tool_call from the adapter on error", async () => {
+  it("fires after_tool_call from the adapter on success when hooks registered", async () => {
+    enableAfterToolCallHook();
+    hookMocks.runner.runAfterToolCall.mockResolvedValue(undefined);
+    const result = await executeReadTool("call-ok");
+
+    expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
+    expect(result.details).toMatchObject({ ok: true });
+  });
+
+  it("fires after_tool_call from the adapter on error when hooks registered", async () => {
+    enableAfterToolCallHook();
     const tool = {
       name: "bash",
       label: "Bash",
@@ -87,26 +105,7 @@ describe("pi tool definition adapter after_tool_call", () => {
     }
     await def.execute("call-err", { cmd: "ls" }, undefined, undefined, extensionContext);
 
-    expect(hookMocks.runner.runAfterToolCall).not.toHaveBeenCalled();
-  });
-
-  it("does not consume adjusted params in adapter for wrapped tools", async () => {
-    hookMocks.isToolWrappedWithBeforeToolCallHook.mockReturnValue(true);
-    const defs = toToolDefinitions([createReadTool()]);
-    const def = defs[0];
-    if (!def) {
-      throw new Error("missing tool definition");
-    }
-    await def.execute(
-      "call-wrapped",
-      { path: "/tmp/file" },
-      undefined,
-      undefined,
-      extensionContext,
-    );
-
-    expect(hookMocks.runBeforeToolCallHook).not.toHaveBeenCalled();
-    expect(hookMocks.consumeAdjustedParamsForToolCall).not.toHaveBeenCalled();
+    expect(hookMocks.runner.runAfterToolCall).toHaveBeenCalledTimes(1);
   });
 
   it("returns modified result when after_tool_call hook provides one (success path)", async () => {
@@ -160,5 +159,26 @@ describe("pi tool definition adapter after_tool_call", () => {
     const result = await executeReadTool("call-no-modify");
 
     expect(result.details).toMatchObject({ ok: true });
+  });
+
+  it("consumes adjusted params for wrapped tools to pass to after_tool_call hook", async () => {
+    hookMocks.isToolWrappedWithBeforeToolCallHook.mockReturnValue(true);
+    const defs = toToolDefinitions([createReadTool()]);
+    const def = defs[0];
+    if (!def) {
+      throw new Error("missing tool definition");
+    }
+    await def.execute(
+      "call-wrapped",
+      { path: "/tmp/file" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    // before_tool_call is skipped for wrapped tools (handled by subscription handler)
+    expect(hookMocks.runBeforeToolCallHook).not.toHaveBeenCalled();
+    // but adjusted params are consumed for the after_tool_call hook event
+    expect(hookMocks.consumeAdjustedParamsForToolCall).toHaveBeenCalledWith("call-wrapped");
   });
 });
