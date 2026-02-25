@@ -1,0 +1,43 @@
+FROM ghcr.io/openclaw/openclaw:latest
+
+USER root
+
+ARG KUBECTL_VERSION=v1.33.5
+ARG HELM_VERSION=v3.17.1
+ARG TARGETARCH
+
+RUN apt-get update \
+  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    awscli \
+    bash \
+    ca-certificates \
+    curl \
+    git \
+    gzip \
+    jq \
+    tar \
+  && apt-get clean \
+  && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+
+RUN set -eux; \
+  arch="${TARGETARCH:-$(dpkg --print-architecture)}"; \
+  case "$arch" in \
+    amd64) kube_arch="amd64"; helm_arch="amd64" ;; \
+    arm64) kube_arch="arm64"; helm_arch="arm64" ;; \
+    *) echo "Unsupported arch: $arch" >&2; exit 1 ;; \
+  esac; \
+  curl -fsSL -o /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${kube_arch}/kubectl"; \
+  chmod +x /usr/local/bin/kubectl; \
+  curl -fsSL -o /tmp/helm.tar.gz "https://get.helm.sh/helm-${HELM_VERSION}-linux-${helm_arch}.tar.gz"; \
+  tar -C /tmp -xzf /tmp/helm.tar.gz; \
+  mv "/tmp/linux-${helm_arch}/helm" /usr/local/bin/helm; \
+  chmod +x /usr/local/bin/helm; \
+  rm -rf /tmp/helm.tar.gz "/tmp/linux-${helm_arch}"
+
+RUN mkdir -p /Users/florian/morpho \
+  && chown -R node:node /Users/florian
+
+COPY --chown=node:node morpho-infra /Users/florian/morpho/morpho-infra
+COPY --chown=node:node morpho-infra-helm /Users/florian/morpho/morpho-infra-helm
+
+USER node
