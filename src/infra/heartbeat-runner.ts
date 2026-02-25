@@ -553,6 +553,40 @@ async function resolveHeartbeatPreflight(params: {
   return basePreflight;
 }
 
+type HeartbeatPromptResolution = {
+  prompt: string;
+  hasExecCompletion: boolean;
+  hasCronEvents: boolean;
+};
+
+function resolveHeartbeatRunPrompt(params: {
+  cfg: OpenClawConfig;
+  heartbeat?: HeartbeatConfig;
+  preflight: HeartbeatPreflight;
+  canRelayToUser: boolean;
+}): HeartbeatPromptResolution {
+  const pendingEventEntries = params.preflight.pendingEventEntries;
+  const pendingEvents = params.preflight.shouldInspectPendingEvents
+    ? pendingEventEntries.map((event) => event.text)
+    : [];
+  const cronEvents = pendingEventEntries
+    .filter(
+      (event) =>
+        (params.preflight.isCronEventReason || event.contextKey?.startsWith("cron:")) &&
+        isCronSystemEvent(event.text),
+    )
+    .map((event) => event.text);
+  const hasExecCompletion = pendingEvents.some(isExecCompletionEvent);
+  const hasCronEvents = cronEvents.length > 0;
+  const prompt = hasExecCompletion
+    ? buildExecEventPrompt({ deliverToUser: params.canRelayToUser })
+    : hasCronEvents
+      ? buildCronEventPrompt(cronEvents, { deliverToUser: params.canRelayToUser })
+      : resolveHeartbeatPrompt(params.cfg, params.heartbeat);
+
+  return { prompt, hasExecCompletion, hasCronEvents };
+}
+
 export async function runHeartbeatOnce(opts: {
   cfg?: OpenClawConfig;
   agentId?: string;
@@ -601,7 +635,6 @@ export async function runHeartbeatOnce(opts: {
     return { status: "skipped", reason: preflight.skipReason };
   }
   const { entry, sessionKey, storePath } = preflight.session;
-  const { isCronEventReason, pendingEventEntries } = preflight;
   const previousUpdatedAt = entry?.updatedAt;
   const delivery = resolveHeartbeatDeliveryTarget({ cfg, entry, heartbeat });
   const heartbeatAccountId = heartbeat?.accountId?.trim();
@@ -631,30 +664,15 @@ export async function runHeartbeatOnce(opts: {
     accountId: delivery.accountId,
   }).responsePrefix;
 
-  // Check if this is an exec event or cron event with pending system events.
-  // If so, use a specialized prompt that instructs the model to relay the result
-  // instead of the standard heartbeat prompt with "reply HEARTBEAT_OK".
-  const shouldInspectPendingEvents = preflight.shouldInspectPendingEvents;
-  const pendingEvents = shouldInspectPendingEvents
-    ? pendingEventEntries.map((event) => event.text)
-    : [];
-  const cronEvents = pendingEventEntries
-    .filter(
-      (event) =>
-        (isCronEventReason || event.contextKey?.startsWith("cron:")) &&
-        isCronSystemEvent(event.text),
-    )
-    .map((event) => event.text);
-  const hasExecCompletion = pendingEvents.some(isExecCompletionEvent);
-  const hasCronEvents = cronEvents.length > 0;
   const canRelayToUser = Boolean(
     delivery.channel !== "none" && delivery.to && visibility.showAlerts,
   );
-  const prompt = hasExecCompletion
-    ? buildExecEventPrompt({ deliverToUser: canRelayToUser })
-    : hasCronEvents
-      ? buildCronEventPrompt(cronEvents, { deliverToUser: canRelayToUser })
-      : resolveHeartbeatPrompt(cfg, heartbeat);
+  const { prompt, hasExecCompletion, hasCronEvents } = resolveHeartbeatRunPrompt({
+    cfg,
+    heartbeat,
+    preflight,
+    canRelayToUser,
+  });
   const ctx = {
     Body: appendCronStyleCurrentTimeLine(prompt, cfg, startedAt),
     From: sender,
