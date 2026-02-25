@@ -1,0 +1,26 @@
+{
+  "codex": {
+    "command": "codex",
+    "model": "gpt-5.3-codex",
+    "flags": ["--dangerously-bypass-approvals-and-sandbox"],
+    "modelFlags": ["-c", "model_reasoning_effort=high"],
+    "preferredHost": "local",
+    "description": "Backend logic, complex bugs, multi-file refactors"
+  },
+  "claude": {
+    "command": "claude",
+    "model": "claude-opus-4.5",
+    "flags": ["--dangerously-skip-permissions"],
+    "modelFlags": [],
+    "preferredHost": "local",
+    "description": "Frontend work, git operations, faster iteration"
+  },
+  "gemini": {
+    "command": "gemini",
+    "model": "gemini-3-pro-preview",
+    "flags": [],
+    "modelFlags": [],
+    "preferredHost": "any",
+    "description": "UI design specs, generates HTML/CSS for implementation"
+  }
+}
