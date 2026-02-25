@@ -235,6 +235,11 @@ export async function runReplyAgent(params: {
     }
   }
 
+  if (isHeartbeat && isActive) {
+    typing.cleanup();
+    return undefined;
+  }
+
   if (isActive && (shouldFollowup || resolvedQueue.mode === "steer")) {
     enqueueFollowupRun(queueKey, followupRun, resolvedQueue);
     await touchActiveSessionEntry();
