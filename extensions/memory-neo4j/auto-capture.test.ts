@@ -396,6 +396,8 @@ describe("runAutoCapture", () => {
       embeddings,
       enabledConfig,
       mockLogger,
+      undefined, // workspaceDir
+      true, // captureAssistant — enable for this test
     );
 
     // Should call embedBatch once with both texts

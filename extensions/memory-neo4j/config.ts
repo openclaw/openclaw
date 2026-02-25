@@ -31,6 +31,7 @@ export type MemoryNeo4jConfig = {
     baseUrl: string;
   };
   autoCapture: boolean;
+  autoCaptureAssistant: boolean;
   autoCaptureSkipPattern?: RegExp;
   autoRecall: boolean;
   autoRecallMinScore: number;
@@ -253,6 +254,7 @@ export const memoryNeo4jConfigSchema = {
         "embedding",
         "neo4j",
         "autoCapture",
+        "autoCaptureAssistant",
         "autoCaptureSkipPattern",
         "autoRecall",
         "autoRecallMinScore",
@@ -418,6 +420,7 @@ export const memoryNeo4jConfigSchema = {
       },
       extraction,
       autoCapture: cfg.autoCapture !== false,
+      autoCaptureAssistant: cfg.autoCaptureAssistant === true, // off by default
       autoCaptureSkipPattern:
         typeof cfg.autoCaptureSkipPattern === "string" && cfg.autoCaptureSkipPattern
           ? new RegExp(cfg.autoCaptureSkipPattern)

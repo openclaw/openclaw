@@ -217,7 +217,9 @@ export function registerCli(api: OpenClawPluginApi, deps: CliDeps): void {
             console.log(
               `Extraction:     ${extractionConfig.enabled ? extractionConfig.model : "disabled"}`,
             );
-            console.log(`Auto-capture:   ${cfg.autoCapture ? "enabled" : "disabled"}`);
+            console.log(
+              `Auto-capture:   ${cfg.autoCapture ? "enabled" : "disabled"} (assistant: ${cfg.autoCaptureAssistant ? "enabled" : "disabled"})`,
+            );
             console.log(`Auto-recall:    ${cfg.autoRecall ? "enabled" : "disabled"}`);
             console.log(`Core memory:    ${cfg.coreMemory.enabled ? "enabled" : "disabled"}`);
 

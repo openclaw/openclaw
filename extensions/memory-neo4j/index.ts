@@ -777,6 +777,7 @@ const memoryNeo4jPlugin = {
           extractionConfig,
           api.logger,
           ctx.workspaceDir, // Layer 3: pass workspace dir for task auto-tagging
+          cfg.autoCaptureAssistant,
         );
       });
     }
@@ -954,6 +955,7 @@ async function runAutoCapture(
   extractionConfig: import("./config.js").ExtractionConfig,
   logger: Logger,
   workspaceDir?: string, // Layer 3: workspace dir for task auto-tagging
+  captureAssistant: boolean = false,
 ): Promise<void> {
   try {
     const t0 = performance.now();
@@ -964,8 +966,8 @@ async function runAutoCapture(
     const userMessages = extractUserMessages(messages);
     const retained = userMessages.filter((text) => passesAttentionGate(text));
 
-    // Process assistant messages
-    const assistantMessages = extractAssistantMessages(messages);
+    // Process assistant messages (only when explicitly enabled)
+    const assistantMessages = captureAssistant ? extractAssistantMessages(messages) : [];
     const retainedAssistant = assistantMessages.filter((text) =>
       passesAssistantAttentionGate(text),
     );
