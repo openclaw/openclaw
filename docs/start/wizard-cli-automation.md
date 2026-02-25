@@ -33,7 +33,7 @@ openclaw onboard --non-interactive \
 Add `--json` for a machine-readable summary.
 
 Use `--secret-input-mode ref` to store env-backed refs in auth profiles instead of plaintext values.
-Interactive selection between env refs and encrypted file refs (`sops`) is available in the onboarding wizard flow.
+Interactive selection between env refs and configured provider refs (`file` or `exec`) is available in the onboarding wizard flow.
 
 In non-interactive `ref` mode, provider env vars must be set in the process environment.
 Passing inline key flags without the matching env var now fails fast.
@@ -165,7 +165,7 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
 
-    In this mode, onboarding stores `apiKey` as `{ source: "env", id: "CUSTOM_API_KEY" }`.
+    In this mode, onboarding stores `apiKey` as `{ source: "env", provider: "default", id: "CUSTOM_API_KEY" }`.
 
   </Accordion>
 </AccordionGroup>

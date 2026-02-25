@@ -492,32 +492,40 @@ Rules:
 
 </Accordion>
 
-<Accordion title="Secret refs (env and encrypted file)">
+<Accordion title="Secret refs (env, file, exec)">
   For fields that support SecretRef objects, you can use:
 
 ```json5
 {
   models: {
     providers: {
-      openai: { apiKey: { source: "env", id: "OPENAI_API_KEY" } },
+      openai: { apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" } },
     },
   },
   skills: {
     entries: {
       "nano-banana-pro": {
-        apiKey: { source: "file", id: "/skills/entries/nano-banana-pro/apiKey" },
+        apiKey: {
+          source: "file",
+          provider: "filemain",
+          id: "/skills/entries/nano-banana-pro/apiKey",
+        },
       },
     },
   },
   channels: {
     googlechat: {
-      serviceAccountRef: { source: "file", id: "/channels/googlechat/serviceAccount" },
+      serviceAccountRef: {
+        source: "exec",
+        provider: "vault",
+        id: "channels/googlechat/serviceAccount",
+      },
     },
   },
 }
 ```
 
-SecretRef details (including `secrets.sources.file` for `sops`) are in [Secrets Management](/gateway/secrets).
+SecretRef details (including `secrets.providers` for `env`/`file`/`exec`) are in [Secrets Management](/gateway/secrets).
 </Accordion>
 
 See [Environment](/help/environment) for full precedence and sources.

@@ -67,7 +67,7 @@ The wizard starts with **QuickStart** (defaults) vs **Advanced** (full control).
    (OpenAI-compatible, Anthropic-compatible, or Unknown auto-detect). Pick a default model.
    For non-interactive runs, `--secret-input-mode ref` stores env-backed refs in auth profiles instead of plaintext API key values.
    In non-interactive `ref` mode, the provider env var must be set; passing inline key flags without that env var fails fast.
-   In interactive runs, choosing secret reference mode lets you point at either an environment variable or an encrypted `sops` file pointer, with a fast preflight validation before saving.
+   In interactive runs, choosing secret reference mode lets you point at either an environment variable or a configured provider ref (`file` or `exec`), with a fast preflight validation before saving.
 2. **Workspace** — Location for agent files (default `~/.openclaw/workspace`). Seeds bootstrap files.
 3. **Gateway** — Port, bind address, auth mode, Tailscale exposure.
 4. **Channels** — WhatsApp, Telegram, Discord, Google Chat, Mattermost, Signal, BlueBubbles, or iMessage.
