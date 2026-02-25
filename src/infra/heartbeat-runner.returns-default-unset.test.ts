@@ -239,12 +239,12 @@ describe("resolveHeartbeatDeliveryTarget", () => {
         },
       },
       {
-        name: "use last route by default",
+        name: "target defaults to none when unset",
         cfg: {},
         entry: { ...baseEntry, lastChannel: "whatsapp", lastTo: "+1555" },
         expected: {
-          channel: "whatsapp",
-          to: "+1555",
+          channel: "none",
+          reason: "target-none",
           accountId: undefined,
           lastChannel: "whatsapp",
           lastAccountId: undefined,
@@ -271,7 +271,7 @@ describe("resolveHeartbeatDeliveryTarget", () => {
         entry: { ...baseEntry, lastChannel: "webchat", lastTo: "web" },
         expected: {
           channel: "none",
-          reason: "no-target",
+          reason: "target-none",
           accountId: undefined,
           lastChannel: undefined,
           lastAccountId: undefined,
@@ -294,7 +294,10 @@ describe("resolveHeartbeatDeliveryTarget", () => {
       },
       {
         name: "normalize prefixed whatsapp group targets",
-        cfg: { channels: { whatsapp: { allowFrom: ["+1555"] } } },
+        cfg: {
+          agents: { defaults: { heartbeat: { target: "last" } } },
+          channels: { whatsapp: { allowFrom: ["+1555"] } },
+        },
         entry: {
           ...baseEntry,
           lastChannel: "whatsapp",
@@ -927,7 +930,7 @@ describe("runHeartbeatOnce", () => {
     try {
       const cfg: OpenClawConfig = {
         agents: {
-          defaults: { workspace: tmpDir, heartbeat: { every: "5m" } },
+          defaults: { workspace: tmpDir, heartbeat: { every: "5m", target: "whatsapp" } },
           list: [{ id: "work", default: true }],
         },
         channels: { whatsapp: { allowFrom: ["*"] } },
@@ -1146,6 +1149,112 @@ describe("runHeartbeatOnce", () => {
       } finally {
         replySpy.mockRestore();
       }
+    }
+  });
+
+  it("uses an internal-only cron prompt when heartbeat delivery target is none", async () => {
+    const tmpDir = await createCaseDir("hb-cron-target-none");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: { every: "5m", target: "none" },
+        },
+      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "sid",
+          updatedAt: Date.now(),
+          lastChannel: "whatsapp",
+          lastTo: "+1555",
+        },
+      }),
+    );
+    enqueueSystemEvent("Cron: rotate logs", {
+      sessionKey,
+      contextKey: "cron:rotate-logs",
+    });
+
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    replySpy.mockResolvedValue({ text: "Handled internally" });
+    const sendWhatsApp = vi
+      .fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>()
+      .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+    try {
+      const res = await runHeartbeatOnce({
+        cfg,
+        reason: "interval",
+        deps: createHeartbeatDeps(sendWhatsApp),
+      });
+      expect(res.status).toBe("ran");
+      expect(sendWhatsApp).toHaveBeenCalledTimes(0);
+      const calledCtx = replySpy.mock.calls[0]?.[0] as { Provider?: string; Body?: string };
+      expect(calledCtx.Provider).toBe("cron-event");
+      expect(calledCtx.Body).toContain("Handle this reminder internally");
+      expect(calledCtx.Body).not.toContain("Please relay this reminder to the user");
+    } finally {
+      replySpy.mockRestore();
+    }
+  });
+
+  it("uses an internal-only exec prompt when heartbeat delivery target is none", async () => {
+    const tmpDir = await createCaseDir("hb-exec-target-none");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: tmpDir,
+          heartbeat: { every: "5m", target: "none" },
+        },
+      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: storePath },
+    };
+    const sessionKey = resolveMainSessionKey(cfg);
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [sessionKey]: {
+          sessionId: "sid",
+          updatedAt: Date.now(),
+          lastChannel: "whatsapp",
+          lastTo: "+1555",
+        },
+      }),
+    );
+    enqueueSystemEvent("exec finished: backup completed", {
+      sessionKey,
+      contextKey: "exec:backup",
+    });
+
+    const replySpy = vi.spyOn(replyModule, "getReplyFromConfig");
+    replySpy.mockResolvedValue({ text: "Handled internally" });
+    const sendWhatsApp = vi
+      .fn<NonNullable<HeartbeatDeps["sendWhatsApp"]>>()
+      .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+    try {
+      const res = await runHeartbeatOnce({
+        cfg,
+        reason: "exec-event",
+        deps: createHeartbeatDeps(sendWhatsApp),
+      });
+      expect(res.status).toBe("ran");
+      expect(sendWhatsApp).toHaveBeenCalledTimes(0);
+      const calledCtx = replySpy.mock.calls[0]?.[0] as { Provider?: string; Body?: string };
+      expect(calledCtx.Provider).toBe("exec-event");
+      expect(calledCtx.Body).toContain("Handle the result internally");
+      expect(calledCtx.Body).not.toContain("Please relay the command output to the user");
+    } finally {
+      replySpy.mockRestore();
     }
   });
 });
