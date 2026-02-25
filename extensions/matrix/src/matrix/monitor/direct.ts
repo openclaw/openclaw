@@ -119,6 +119,16 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
       // where m.direct pointed to the wrong room and is_direct was never set on the invite.
       // Unlike the removed heuristic, this requires two signals (member count + no name)
       // to avoid false positives on named 2-person group rooms.
+      //
+      // Performance: member count is cached (resolveMemberCount). The room name state
+      // check is not cached but only runs for the subset of 2-member rooms that reach
+      // this fallback path (no m.direct, no is_direct). In typical deployments this is
+      // a small minority of rooms.
+      //
+      // Note: there is a narrow race where a room name is being set concurrently with
+      // this check. The consequence is a one-time misclassification that self-corrects
+      // on the next message (once the state event is synced). This is acceptable given
+      // the alternative of an additional API call on every message.
       const memberCount = await resolveMemberCount(roomId);
       if (memberCount === 2) {
         try {
@@ -128,6 +138,9 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
             return true;
           }
         } catch (err: unknown) {
+          // Missing state events (M_NOT_FOUND) are expected for unnamed rooms and
+          // strongly indicate a DM. Any other error (network, auth) is ambiguous,
+          // so we fall through to classify as group rather than guess.
           if (isMatrixNotFoundError(err)) {
             log(`matrix: dm detected via fallback (2 members, no room name) room=${roomId}`);
             return true;
