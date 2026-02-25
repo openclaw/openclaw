@@ -24,6 +24,14 @@ import {
   type ExecAllowlistEntry,
 } from "./exec-approvals.js";
 
+function buildNestedEnvShellCommand(params: {
+  envExecutable: string;
+  depth: number;
+  payload: string;
+}): string[] {
+  return [...Array(params.depth).fill(params.envExecutable), "/bin/sh", "-c", params.payload];
+}
+
 describe("exec approvals allowlist matching", () => {
   const baseResolution = {
     rawExecutable: "rg",
@@ -311,7 +319,11 @@ describe("exec approvals command resolution", () => {
     fs.chmodSync(envPath, 0o755);
 
     const analysis = analyzeArgvCommand({
-      argv: [envPath, envPath, envPath, envPath, envPath, "/bin/sh", "-c", "echo pwned"],
+      argv: buildNestedEnvShellCommand({
+        envExecutable: envPath,
+        depth: 5,
+        payload: "echo pwned",
+      }),
       cwd: dir,
       env: makePathEnv(binDir),
     });
