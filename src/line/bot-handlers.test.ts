@@ -190,16 +190,15 @@ describe("handleLineWebhookEvents", () => {
 
   it("blocks group sender not in groupAllowFrom even when sender is paired in DM store", async () => {
     readAllowFromStoreMock.mockResolvedValueOnce(["user-store"]);
-
     const processMessage = vi.fn();
     const event = {
       type: "message",
-      message: { id: "m3b", type: "text", text: "hi" },
+      message: { id: "m5", type: "text", text: "hi" },
       replyToken: "reply-token",
       timestamp: Date.now(),
       source: { type: "group", groupId: "group-1", userId: "user-store" },
       mode: "active",
-      webhookEventId: "evt-3b",
+      webhookEventId: "evt-5",
       deliveryContext: { isRedelivery: false },
     } as MessageEvent;
 
@@ -214,6 +213,44 @@ describe("handleLineWebhookEvents", () => {
         channelSecret: "secret",
         tokenSource: "config",
         config: { groupPolicy: "allowlist", groupAllowFrom: ["user-group"] },
+      },
+      runtime: createRuntime(),
+      mediaMaxBytes: 1,
+      processMessage,
+    });
+
+    expect(processMessage).not.toHaveBeenCalled();
+    expect(buildLineMessageContextMock).not.toHaveBeenCalled();
+  });
+
+  it("does not authorize group messages from DM pairing-store entries when group allowlist is empty", async () => {
+    readAllowFromStoreMock.mockResolvedValueOnce(["user-5"]);
+    const processMessage = vi.fn();
+    const event = {
+      type: "message",
+      message: { id: "m5b", type: "text", text: "hi" },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "group", groupId: "group-1", userId: "user-5" },
+      mode: "active",
+      webhookEventId: "evt-5b",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+
+    await handleLineWebhookEvents([event], {
+      cfg: { channels: { line: { groupPolicy: "allowlist" } } },
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+        config: {
+          dmPolicy: "pairing",
+          allowFrom: [],
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
+        },
       },
       runtime: createRuntime(),
       mediaMaxBytes: 1,
