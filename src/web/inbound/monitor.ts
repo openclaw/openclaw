@@ -40,7 +40,14 @@ export async function monitorWebInbox(options: {
   const sock = await createWaSocket(false, options.verbose, {
     authDir: options.authDir,
   });
-  await waitForWaConnection(sock);
+  try {
+    await waitForWaConnection(sock);
+  } catch (err) {
+    try {
+      sock.ws?.close();
+    } catch {}
+    throw err;
+  }
   const connectedAtMs = Date.now();
 
   let onCloseResolve: ((reason: WebListenerCloseReason) => void) | null = null;
