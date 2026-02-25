@@ -100,11 +100,16 @@ echo "Cleanup complete"
 EOFSCRIPT
 )
 
-# Replace placeholders
-CLEANUP_SCRIPT="${CLEANUP_SCRIPT//__TMUX_SESSION__/$tmux_session}"
-CLEANUP_SCRIPT="${CLEANUP_SCRIPT//__WORKTREE__/$worktree}"
-CLEANUP_SCRIPT="${CLEANUP_SCRIPT//__REPO__/$repo}"
-CLEANUP_SCRIPT="${CLEANUP_SCRIPT//__BRANCH__/$branch}"
+# Replace placeholders (properly escaped for shell injection protection)
+tmux_session_escaped=$(printf %q "$tmux_session")
+worktree_escaped=$(printf %q "$worktree")
+repo_escaped=$(printf %q "$repo")
+branch_escaped=$(printf %q "$branch")
+
+CLEANUP_SCRIPT="${CLEANUP_SCRIPT//__TMUX_SESSION__/$tmux_session_escaped}"
+CLEANUP_SCRIPT="${CLEANUP_SCRIPT//__WORKTREE__/$worktree_escaped}"
+CLEANUP_SCRIPT="${CLEANUP_SCRIPT//__REPO__/$repo_escaped}"
+CLEANUP_SCRIPT="${CLEANUP_SCRIPT//__BRANCH__/$branch_escaped}"
 
 # Execute cleanup
 cleanup_on_host "$CLEANUP_SCRIPT"
