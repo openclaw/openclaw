@@ -103,6 +103,47 @@ describe("sandbox docker config", () => {
     expect(overridden.dangerouslyAllowContainerNamespaceJoin).toBe(false);
   });
 
+  it("uses agent override precedence for bind-mount dangerous overrides", () => {
+    const inherited = resolveSandboxDockerConfig({
+      scope: "agent",
+      globalDocker: {
+        dangerouslyAllowReservedContainerTargets: true,
+        dangerouslyAllowExternalBindSources: true,
+      },
+      agentDocker: {},
+    });
+    expect(inherited.dangerouslyAllowReservedContainerTargets).toBe(true);
+    expect(inherited.dangerouslyAllowExternalBindSources).toBe(true);
+
+    const overridden = resolveSandboxDockerConfig({
+      scope: "agent",
+      globalDocker: {
+        dangerouslyAllowReservedContainerTargets: true,
+        dangerouslyAllowExternalBindSources: true,
+      },
+      agentDocker: {
+        dangerouslyAllowReservedContainerTargets: false,
+        dangerouslyAllowExternalBindSources: false,
+      },
+    });
+    expect(overridden.dangerouslyAllowReservedContainerTargets).toBe(false);
+    expect(overridden.dangerouslyAllowExternalBindSources).toBe(false);
+
+    const sharedScope = resolveSandboxDockerConfig({
+      scope: "shared",
+      globalDocker: {
+        dangerouslyAllowReservedContainerTargets: true,
+        dangerouslyAllowExternalBindSources: true,
+      },
+      agentDocker: {
+        dangerouslyAllowReservedContainerTargets: false,
+        dangerouslyAllowExternalBindSources: false,
+      },
+    });
+    expect(sharedScope.dangerouslyAllowReservedContainerTargets).toBe(true);
+    expect(sharedScope.dangerouslyAllowExternalBindSources).toBe(true);
+  });
+
   it("rejects seccomp unconfined via Zod schema validation", () => {
     const res = validateConfigObject({
       agents: {
