@@ -27,6 +27,8 @@ describe("createPinnedDispatcher", () => {
     expect(agentCtor).toHaveBeenCalledWith({
       connect: {
         lookup,
+        autoSelectFamily: true,
+        autoSelectFamilyAttemptTimeout: 2500,
       },
     });
     const firstCallArg = agentCtor.mock.calls[0]?.[0] as
