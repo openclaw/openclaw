@@ -61,10 +61,10 @@ describe("agent-runner-utils", () => {
 
     const resolved = resolveModelFallbackOptions(run);
 
-    expect(hoisted.resolveAgentIdFromSessionKeyMock).toHaveBeenCalledWith(run.sessionKey);
+    expect(hoisted.resolveAgentIdFromSessionKeyMock).not.toHaveBeenCalled();
     expect(hoisted.resolveAgentModelFallbacksOverrideMock).toHaveBeenCalledWith(
       run.config,
-      "agent-id",
+      run.agentId,
     );
     expect(resolved).toEqual({
       cfg: run.config,
@@ -73,6 +73,21 @@ describe("agent-runner-utils", () => {
       agentDir: run.agentDir,
       fallbacksOverride: ["fallback-model"],
     });
+  });
+
+  it("falls back to sessionKey agent id when run.agentId is missing", () => {
+    hoisted.resolveAgentIdFromSessionKeyMock.mockReturnValue("agent-from-session-key");
+    hoisted.resolveAgentModelFallbacksOverrideMock.mockReturnValue(["fallback-model"]);
+    const run = makeRun({ agentId: undefined });
+
+    const resolved = resolveModelFallbackOptions(run);
+
+    expect(hoisted.resolveAgentIdFromSessionKeyMock).toHaveBeenCalledWith(run.sessionKey);
+    expect(hoisted.resolveAgentModelFallbacksOverrideMock).toHaveBeenCalledWith(
+      run.config,
+      "agent-from-session-key",
+    );
+    expect(resolved.fallbacksOverride).toEqual(["fallback-model"]);
   });
 
   it("builds embedded run base params with auth profile and run metadata", () => {

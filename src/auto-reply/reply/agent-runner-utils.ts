@@ -147,15 +147,13 @@ export const resolveEnforceFinalTag = (run: FollowupRun["run"], provider: string
   Boolean(run.enforceFinalTag || isReasoningTagProvider(provider));
 
 export function resolveModelFallbackOptions(run: FollowupRun["run"]) {
+  const fallbackAgentId = run.agentId ?? resolveAgentIdFromSessionKey(run.sessionKey);
   return {
     cfg: run.config,
     provider: run.provider,
     model: run.model,
     agentDir: run.agentDir,
-    fallbacksOverride: resolveAgentModelFallbacksOverride(
-      run.config,
-      resolveAgentIdFromSessionKey(run.sessionKey),
-    ),
+    fallbacksOverride: resolveAgentModelFallbacksOverride(run.config, fallbackAgentId),
   };
 }
 
