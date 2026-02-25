@@ -180,6 +180,7 @@ jobs:
           kms_url = os.environ['KMS_URL']
           kms_cid = os.environ['KMS_CLIENT_ID']
           kms_csec = os.environ['KMS_CLIENT_SECRET']
+          T = httpx.Timeout(30.0, connect=10.0)
 
           PAAS_URL = 'https://platform.hanzo.ai/api/v1'
           ORG = '698cda6739f65183b3009313'
@@ -190,7 +191,7 @@ jobs:
           # 1. Authenticate with KMS
           r = httpx.post(f'{kms_url}/api/v1/auth/universal-auth/login', json={
               'clientId': kms_cid, 'clientSecret': kms_csec,
-          })
+          }, timeout=T)
           if r.status_code != 200:
               print(f'KMS auth failed ({r.status_code}): {r.text}', file=sys.stderr)
               r.raise_for_status()
@@ -204,7 +205,7 @@ jobs:
               'secretPath': '/',
               'include_imports': 'true',
               'expandSecretReferences': 'true',
-          }, headers={'Authorization': f'Bearer {kms_token}'})
+          }, headers={'Authorization': f'Bearer {kms_token}'}, timeout=T)
           if r.status_code != 200:
               print(f'KMS secrets fetch failed ({r.status_code}): {r.text}', file=sys.stderr)
               r.raise_for_status()
@@ -227,7 +228,7 @@ jobs:
               'username': secrets['CI__DEPLOY_USER'],
               'password': secrets['CI__DEPLOY_PASSWORD'],
               'scope': 'openid profile email',
-          })
+          }, timeout=T)
           if r.status_code != 200:
               print(f'IAM auth failed ({r.status_code}): {r.text}', file=sys.stderr)
               r.raise_for_status()
@@ -237,7 +238,7 @@ jobs:
           # 4. Exchange IAM token for PaaS session
           r = httpx.post(f'{PAAS_URL}/auth/login', json={
               'provider': 'hanzo', 'accessToken': iam_token,
-          })
+          }, timeout=T)
           if r.status_code != 200:
               print(f'PaaS login failed ({r.status_code}): {r.text}', file=sys.stderr)
               r.raise_for_status()
@@ -246,7 +247,7 @@ jobs:
 
           # 5. Find container and redeploy
           base = f'{PAAS_URL}/org/{ORG}/project/{PROJECT}/env/{ENV}/container'
-          r = httpx.get(base, headers={'Authorization': at})
+          r = httpx.get(base, headers={'Authorization': at}, timeout=T)
           r.raise_for_status()
           match = [c for c in r.json() if c.get('iid') == CONTAINER or c.get('name') == CONTAINER]
           if not match:
@@ -254,7 +255,7 @@ jobs:
           cid = str(match[0]['_id'])
           print(f'Found container: {CONTAINER} ({cid})')
 
-          config = httpx.get(f'{base}/{cid}', headers={'Authorization': at}).json()
-          httpx.put(f'{base}/{cid}', json=config, headers={'Authorization': at}).raise_for_status()
+          config = httpx.get(f'{base}/{cid}', headers={'Authorization': at}, timeout=T).json()
+          httpx.put(f'{base}/{cid}', json=config, headers={'Authorization': at}, timeout=T).raise_for_status()
           print(f'Redeployment triggered for {CONTAINER}')
           "
