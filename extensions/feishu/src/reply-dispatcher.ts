@@ -2,7 +2,9 @@ import {
   createReplyPrefixContext,
   createTypingCallbacks,
   logTypingFailure,
+  resolveAgentIdentity,
   type ClawdbotConfig,
+  type IdentityConfig,
   type ReplyPayload,
   type RuntimeEnv,
 } from "openclaw/plugin-sdk";
@@ -12,7 +14,7 @@ import { sendMediaFeishu } from "./media.js";
 import type { MentionTarget } from "./mention.js";
 import { buildMentionedCardContent } from "./mention.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { sendMarkdownCardFeishu, sendMessageFeishu } from "./send.js";
+import { sendMessageFeishu, sendStructuredCardFeishu, type CardHeaderConfig } from "./send.js";
 import { FeishuStreamingSession } from "./streaming-card.js";
 import { resolveReceiveIdType } from "./targets.js";
 import { addTypingIndicator, removeTypingIndicator, type TypingIndicatorState } from "./typing.js";
@@ -25,6 +27,36 @@ function shouldUseCard(text: string): boolean {
 /** Format thinking/reasoning content for display in streaming card */
 function formatThinkingContent(text: string): string {
   return `💭 **Thinking...**\n\n${text}`;
+}
+
+/** Build a card header from agent identity config. */
+function resolveCardHeader(
+  agentId: string,
+  identity: IdentityConfig | undefined,
+): CardHeaderConfig {
+  const name = identity?.name?.trim() || agentId;
+  const emoji = identity?.emoji?.trim();
+  return {
+    title: emoji ? `${emoji} ${name}` : name,
+    template: identity?.theme ?? "blue",
+  };
+}
+
+/** Build a card note footer from agent identity and model context. */
+function resolveCardNote(
+  agentId: string,
+  identity: IdentityConfig | undefined,
+  prefixCtx: { model?: string; provider?: string },
+): string {
+  const name = identity?.name?.trim() || agentId;
+  const parts: string[] = [`Agent: ${name}`];
+  if (prefixCtx.model) {
+    parts.push(`Model: ${prefixCtx.model}`);
+  }
+  if (prefixCtx.provider) {
+    parts.push(`Provider: ${prefixCtx.provider}`);
+  }
+  return parts.join(" | ");
 }
 
 export type CreateFeishuReplyDispatcherParams = {
@@ -57,6 +89,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
   const account = resolveFeishuAccount({ cfg, accountId });
   const prefixContext = createReplyPrefixContext({ cfg, agentId });
+  const identity = resolveAgentIdentity(cfg, agentId);
 
   let typingState: TypingIndicatorState | null = null;
   const typingCallbacks = createTypingCallbacks({
@@ -131,10 +164,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         params.runtime.log?.(`feishu[${account.accountId}] ${message}`),
       );
       try {
+        const cardHeader = resolveCardHeader(agentId, identity);
+        const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
         await streaming.start(chatId, resolveReceiveIdType(chatId), {
           replyToMessageId,
           replyInThread,
           rootId,
+          header: cardHeader,
+          note: cardNote,
         });
       } catch (error) {
         params.runtime.error?.(`feishu: streaming start failed: ${String(error)}`);
@@ -153,7 +190,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       if (mentionTargets?.length) {
         text = buildMentionedCardContent(mentionTargets, text);
       }
-      await streaming.close(text);
+      const finalNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
+      await streaming.close(text, { note: finalNote });
     }
     streaming = null;
     streamingStartPromise = null;
@@ -220,12 +258,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
 
           let first = true;
           if (useCard) {
+            const cardHeader = resolveCardHeader(agentId, identity);
+            const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
             for (const chunk of core.channel.text.chunkTextWithMode(
               text,
               textChunkLimit,
               chunkMode,
             )) {
-              await sendMarkdownCardFeishu({
+              await sendStructuredCardFeishu({
                 cfg,
                 to: chatId,
                 text: chunk,
@@ -233,6 +273,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 replyInThread,
                 mentions: first ? mentionTargets : undefined,
                 accountId,
+                header: cardHeader,
+                note: cardNote,
               });
               first = false;
             }

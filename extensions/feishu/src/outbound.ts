@@ -1,9 +1,10 @@
 import fs from "fs";
 import path from "path";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk";
+import { resolveFeishuAccount } from "./accounts.js";
 import { sendMediaFeishu } from "./media.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { sendMessageFeishu } from "./send.js";
+import { sendMessageFeishu, sendStructuredCardFeishu } from "./send.js";
 
 function normalizePossibleLocalImagePath(text: string | undefined): string | null {
   const raw = text?.trim();
@@ -43,7 +44,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
   chunker: (text, limit) => getFeishuRuntime().channel.text.chunkMarkdownText(text, limit),
   chunkerMode: "markdown",
   textChunkLimit: 4000,
-  sendText: async ({ cfg, to, text, accountId }) => {
+  sendText: async ({ cfg, to, text, accountId, identity }) => {
     // Scheme A compatibility shim:
     // when upstream accidentally returns a local image path as plain text,
     // auto-upload and send as Feishu image message instead of leaking path text.
@@ -63,6 +64,27 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       }
     }
 
+    const account = resolveFeishuAccount({ cfg, accountId: accountId ?? undefined });
+    const renderMode = account.config?.renderMode ?? "auto";
+    const useCard = renderMode === "card" || (renderMode === "auto" && /```[\s\S]*?```/.test(text));
+    if (useCard) {
+      const header = identity
+        ? {
+            title: identity.emoji
+              ? `${identity.emoji} ${identity.name ?? ""}`.trim()
+              : (identity.name ?? ""),
+            template: "blue" as const,
+          }
+        : undefined;
+      const result = await sendStructuredCardFeishu({
+        cfg,
+        to,
+        text,
+        accountId: accountId ?? undefined,
+        header: header?.title ? header : undefined,
+      });
+      return { channel: "feishu", ...result };
+    }
     const result = await sendMessageFeishu({ cfg, to, text, accountId: accountId ?? undefined });
     return { channel: "feishu", ...result };
   },
