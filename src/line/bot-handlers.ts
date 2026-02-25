@@ -67,7 +67,9 @@ export interface LineHandlerContext {
 
 const LINE_WEBHOOK_REPLAY_WINDOW_MS = 10 * 60 * 1000;
 const LINE_WEBHOOK_REPLAY_MAX_ENTRIES = 4096;
+const LINE_WEBHOOK_REPLAY_PRUNE_INTERVAL_MS = 1000;
 const seenLineWebhookEvents = new Map<string, number>();
+let lastLineWebhookReplayPruneAtMs = 0;
 
 function pruneLineWebhookReplayCache(nowMs: number): void {
   const minSeenAt = nowMs - LINE_WEBHOOK_REPLAY_WINDOW_MS;
@@ -120,7 +122,13 @@ function shouldSkipLineReplayEvent(event: WebhookEvent, context: LineHandlerCont
   }
 
   const nowMs = Date.now();
-  pruneLineWebhookReplayCache(nowMs);
+  if (
+    nowMs - lastLineWebhookReplayPruneAtMs >= LINE_WEBHOOK_REPLAY_PRUNE_INTERVAL_MS ||
+    seenLineWebhookEvents.size >= LINE_WEBHOOK_REPLAY_MAX_ENTRIES
+  ) {
+    pruneLineWebhookReplayCache(nowMs);
+    lastLineWebhookReplayPruneAtMs = nowMs;
+  }
   if (seenLineWebhookEvents.has(replay.key)) {
     logVerbose(`line: skipped replayed webhook event ${replay.eventId}`);
     return true;
