@@ -733,5 +733,6 @@ export async function preflightDiscordMessage(
     canDetectMention,
     historyEntry,
     threadBindings: params.threadBindings,
+    discordRestFetch: params.discordRestFetch,
   };
 }

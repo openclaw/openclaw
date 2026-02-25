@@ -101,10 +101,15 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     threadBindings,
     route,
     commandAuthorized,
+    discordRestFetch,
   } = ctx;
 
-  const mediaList = await resolveMediaList(message, mediaMaxBytes);
-  const forwardedMediaList = await resolveForwardedMediaList(message, mediaMaxBytes);
+  const mediaList = await resolveMediaList(message, mediaMaxBytes, discordRestFetch);
+  const forwardedMediaList = await resolveForwardedMediaList(
+    message,
+    mediaMaxBytes,
+    discordRestFetch,
+  );
   mediaList.push(...forwardedMediaList);
   const text = messageText;
   if (!text) {
@@ -147,6 +152,8 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     enabled: statusReactionsEnabled,
     adapter: discordAdapter,
     initialEmoji: ackReaction,
+    emojis: cfg.messages?.statusReactions?.emojis,
+    timing: cfg.messages?.statusReactions?.timing,
     onError: (err) => {
       logAckFailure({
         log: logVerbose,
