@@ -47,18 +47,49 @@ function registerTarget(params: {
   path: string;
   secret?: string;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
+  account?: ResolvedZaloAccount;
+  config?: OpenClawConfig;
+  core?: PluginRuntime;
 }): () => void {
   return registerZaloWebhookTarget({
     token: "tok",
-    account: DEFAULT_ACCOUNT,
-    config: {} as OpenClawConfig,
+    account: params.account ?? DEFAULT_ACCOUNT,
+    config: params.config ?? ({} as OpenClawConfig),
     runtime: {},
-    core: {} as PluginRuntime,
+    core: params.core ?? ({} as PluginRuntime),
     secret: params.secret ?? "secret",
     path: params.path,
     mediaMaxMb: 5,
     statusSink: params.statusSink,
   });
+}
+
+function createPairingAuthCore(params?: { storeAllowFrom?: string[]; pairingCreated?: boolean }): {
+  core: PluginRuntime;
+  readAllowFromStore: ReturnType<typeof vi.fn>;
+  upsertPairingRequest: ReturnType<typeof vi.fn>;
+} {
+  const readAllowFromStore = vi.fn().mockResolvedValue(params?.storeAllowFrom ?? []);
+  const upsertPairingRequest = vi
+    .fn()
+    .mockResolvedValue({ code: "PAIRCODE", created: params?.pairingCreated ?? false });
+  const core = {
+    logging: {
+      shouldLogVerbose: () => false,
+    },
+    channel: {
+      pairing: {
+        readAllowFromStore,
+        upsertPairingRequest,
+        buildPairingReply: vi.fn(() => "Pairing code: PAIRCODE"),
+      },
+      commands: {
+        shouldComputeCommandAuthorized: vi.fn(() => false),
+        resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
+      },
+    },
+  } as unknown as PluginRuntime;
+  return { core, readAllowFromStore, upsertPairingRequest };
 }
 
 describe("handleZaloWebhookRequest", () => {
@@ -206,7 +237,6 @@ describe("handleZaloWebhookRequest", () => {
       unregister();
     }
   });
-
   it("does not grow status counters when query strings churn on unauthorized requests", async () => {
     const unregister = registerTarget({ path: "/hook-query-status" });
 
@@ -258,5 +288,61 @@ describe("handleZaloWebhookRequest", () => {
     } finally {
       unregister();
     }
+  });
+
+  it("scopes DM pairing store reads and writes to accountId", async () => {
+    const { core, readAllowFromStore, upsertPairingRequest } = createPairingAuthCore({
+      pairingCreated: false,
+    });
+    const account: ResolvedZaloAccount = {
+      ...DEFAULT_ACCOUNT,
+      accountId: "work",
+      config: {
+        dmPolicy: "pairing",
+        allowFrom: [],
+      },
+    };
+    const unregister = registerTarget({
+      path: "/hook-account-scope",
+      account,
+      core,
+    });
+
+    const payload = {
+      event_name: "message.text.received",
+      message: {
+        from: { id: "123", name: "Attacker" },
+        chat: { id: "dm-work", chat_type: "PRIVATE" },
+        message_id: "msg-work-1",
+        date: Math.floor(Date.now() / 1000),
+        text: "hello",
+      },
+    };
+
+    try {
+      await withServer(webhookRequestHandler, async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/hook-account-scope`, {
+          method: "POST",
+          headers: {
+            "x-bot-api-secret-token": "secret",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+
+        expect(response.status).toBe(200);
+      });
+    } finally {
+      unregister();
+    }
+
+    expect(readAllowFromStore).toHaveBeenCalledWith("zalo", undefined, "work");
+    expect(upsertPairingRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "zalo",
+        id: "123",
+        accountId: "work",
+      }),
+    );
   });
 });
