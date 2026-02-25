@@ -38,7 +38,7 @@ import type { SpawnSubagentMode } from "./subagent-spawn.js";
 import { readLatestAssistantReply } from "./tools/agent-step.js";
 import { sanitizeTextContent, extractAssistantText } from "./tools/sessions-helpers.js";
 
-const FAST_TEST_MODE = process.env.OPENCLAW_TEST_FAST === "1";
+const FAST_TEST_MODE = process.env.ACTIVI_TEST_FAST === "1";
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
 const FAST_TEST_REPLY_CHANGE_WAIT_MS = 20;
 

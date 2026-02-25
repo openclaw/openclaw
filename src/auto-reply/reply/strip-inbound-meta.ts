@@ -1,5 +1,5 @@
 /**
- * Strips OpenClaw-injected inbound metadata blocks from a user-role message
+ * Strips Activi-injected inbound metadata blocks from a user-role message
  * text before it is displayed in any UI surface (TUI, webchat, macOS app).
  *
  * Background: `buildInboundUserContextPrefix` in `inbound-meta.ts` prepends
@@ -82,7 +82,7 @@ export function stripInboundMetadata(text: string): string {
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
-    // Channel untrusted context is appended by OpenClaw as a terminal metadata suffix.
+    // Channel untrusted context is appended by Activi as a terminal metadata suffix.
     // When this structured header appears, drop it and everything that follows.
     if (!inMetaBlock && shouldStripTrailingUntrustedContext(lines, i)) {
       break;

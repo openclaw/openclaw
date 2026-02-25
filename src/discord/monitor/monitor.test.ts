@@ -7,7 +7,7 @@ import type {
 import type { Client } from "@buape/carbon";
 import type { GatewayPresenceUpdate } from "discord-api-types/v10";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 import type { DiscordAccountConfig } from "../../config/types.discord.js";
 import { buildAgentSessionKey } from "../../routing/resolve-route.js";
 import {
@@ -89,7 +89,7 @@ vi.mock("../../config/sessions.js", async (importOriginal) => {
 });
 
 describe("agent components", () => {
-  const createCfg = (): OpenClawConfig => ({}) as OpenClawConfig;
+  const createCfg = (): ActiviConfig => ({}) as ActiviConfig;
 
   const createDmButtonInteraction = (overrides: Partial<ButtonInteraction> = {}) => {
     const reply = vi.fn().mockResolvedValue(undefined);
@@ -175,14 +175,14 @@ describe("agent components", () => {
 });
 
 describe("discord component interactions", () => {
-  const createCfg = (): OpenClawConfig =>
+  const createCfg = (): ActiviConfig =>
     ({
       channels: {
         discord: {
           replyToMode: "first",
         },
       },
-    }) as OpenClawConfig;
+    }) as ActiviConfig;
 
   const createDiscordConfig = (overrides?: Partial<DiscordAccountConfig>): DiscordAccountConfig =>
     ({
@@ -292,7 +292,7 @@ describe("discord component interactions", () => {
     deliverDiscordReplyMock.mockClear();
     recordInboundSessionMock.mockClear().mockResolvedValue(undefined);
     readSessionUpdatedAtMock.mockClear().mockReturnValue(undefined);
-    resolveStorePathMock.mockClear().mockReturnValue("/tmp/openclaw-sessions-test.json");
+    resolveStorePathMock.mockClear().mockReturnValue("/tmp/activi-sessions-test.json");
   });
 
   it("routes button clicks with reply references", async () => {
@@ -619,14 +619,14 @@ describe("resolveDiscordPresenceUpdate", () => {
     const presence = resolveDiscordPresenceUpdate({
       activity: "Live",
       activityType: 1,
-      activityUrl: "https://twitch.tv/openclaw",
+      activityUrl: "https://twitch.tv/activi",
     });
     expect(presence).not.toBeNull();
     expect(presence?.activities).toHaveLength(1);
     expect(presence?.activities[0]).toMatchObject({
       type: 1,
       name: "Live",
-      url: "https://twitch.tv/openclaw",
+      url: "https://twitch.tv/activi",
     });
   });
 });

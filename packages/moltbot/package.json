@@ -1,7 +1,7 @@
 {
   "name": "moltbot",
   "version": "2026.2.12",
-  "description": "Compatibility shim that forwards to openclaw",
+  "description": "Compatibility shim that forwards to activi",
   "bin": {
     "moltbot": "./bin/moltbot.js"
   },
@@ -11,6 +11,6 @@
     "./cli-entry": "./bin/moltbot.js"
   },
   "dependencies": {
-    "openclaw": "workspace:*"
+    "activi": "workspace:*"
   }
 }

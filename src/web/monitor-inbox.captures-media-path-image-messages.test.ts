@@ -96,7 +96,7 @@ describe("web monitor inbox", () => {
   });
 
   it("logs inbound bodies to file", async () => {
-    const logPath = path.join(os.tmpdir(), `openclaw-log-test-${crypto.randomUUID()}.log`);
+    const logPath = path.join(os.tmpdir(), `activi-log-test-${crypto.randomUUID()}.log`);
     setLoggerOverride({ level: "trace", file: logPath });
 
     const onMessage = vi.fn();

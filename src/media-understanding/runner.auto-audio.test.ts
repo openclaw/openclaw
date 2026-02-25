@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { buildProviderRegistry, runCapability } from "./runner.js";
 import { withAudioFixture } from "./runner.test-utils.js";
 
@@ -15,7 +15,7 @@ function createOpenAiAudioProvider(
   });
 }
 
-function createOpenAiAudioCfg(extra?: Partial<OpenClawConfig>): OpenClawConfig {
+function createOpenAiAudioCfg(extra?: Partial<ActiviConfig>): ActiviConfig {
   return {
     models: {
       providers: {
@@ -26,12 +26,12 @@ function createOpenAiAudioCfg(extra?: Partial<OpenClawConfig>): OpenClawConfig {
       },
     },
     ...extra,
-  } as unknown as OpenClawConfig;
+  } as unknown as ActiviConfig;
 }
 
 describe("runCapability auto audio entries", () => {
   it("uses provider keys to auto-enable audio transcription", async () => {
-    await withAudioFixture("openclaw-auto-audio", async ({ ctx, media, cache }) => {
+    await withAudioFixture("activi-auto-audio", async ({ ctx, media, cache }) => {
       let seenModel: string | undefined;
       const providerRegistry = createOpenAiAudioProvider(async (req) => {
         seenModel = req.model;
@@ -54,7 +54,7 @@ describe("runCapability auto audio entries", () => {
   });
 
   it("skips auto audio when disabled", async () => {
-    await withAudioFixture("openclaw-auto-audio", async ({ ctx, media, cache }) => {
+    await withAudioFixture("activi-auto-audio", async ({ ctx, media, cache }) => {
       const providerRegistry = createOpenAiAudioProvider(async () => ({
         text: "ok",
         model: "whisper-1",
@@ -83,7 +83,7 @@ describe("runCapability auto audio entries", () => {
   });
 
   it("prefers explicitly configured audio model entries", async () => {
-    await withAudioFixture("openclaw-auto-audio", async ({ ctx, media, cache }) => {
+    await withAudioFixture("activi-auto-audio", async ({ ctx, media, cache }) => {
       let seenModel: string | undefined;
       const providerRegistry = createOpenAiAudioProvider(async (req) => {
         seenModel = req.model;

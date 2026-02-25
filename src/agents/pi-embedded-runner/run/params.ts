@@ -1,7 +1,7 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import type { AgentStreamParams } from "../../../commands/agent/types.js";
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { ActiviConfig } from "../../../config/config.js";
 import type { enqueueCommand } from "../../../process/command-queue.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.js";
@@ -59,7 +59,7 @@ export type RunEmbeddedPiAgentParams = {
   sessionFile: string;
   workspaceDir: string;
   agentDir?: string;
-  config?: OpenClawConfig;
+  config?: ActiviConfig;
   skillsSnapshot?: SkillSnapshot;
   prompt: string;
   images?: ImageContent[];

@@ -1,12 +1,12 @@
 {
-  "name": "@openclaw/discord",
+  "name": "@activi/discord",
   "version": "2026.2.22",
-  "description": "OpenClaw Discord channel plugin",
+  "description": "Activi Discord channel plugin",
   "type": "module",
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "activi": "workspace:*"
   },
-  "openclaw": {
+  "activi": {
     "extensions": [
       "./index.ts"
     ]

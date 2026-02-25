@@ -154,7 +154,7 @@ function resolvePathWithinSessionsDir(
       }
       // The path structurally matches .../agents/<agentId>/sessions/...
       // Accept it even if the root directory differs from the current env
-      // (e.g., OPENCLAW_STATE_DIR changed between session creation and resolution).
+      // (e.g., ACTIVI_STATE_DIR changed between session creation and resolution).
       // The structural pattern provides sufficient containment guarantees.
       return path.resolve(trimmed);
     }

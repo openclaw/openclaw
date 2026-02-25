@@ -1,8 +1,8 @@
-# OpenClaw iOS (Super Alpha)
+# Activi iOS (Super Alpha)
 
 NO TEST FLIGHT AVAILABLE AT THIS POINT
 
-This iPhone app is super-alpha and internal-use only. It connects to an OpenClaw Gateway as a `role: node`.
+This iPhone app is super-alpha and internal-use only. It connects to an Activi Gateway as a `role: node`.
 
 ## Distribution Status
 
@@ -32,11 +32,11 @@ pnpm install
 ./scripts/ios-configure-signing.sh
 cd apps/ios
 xcodegen generate
-open OpenClaw.xcodeproj
+open Activi.xcodeproj
 ```
 
 3. In Xcode:
-   - Scheme: `OpenClaw`
+   - Scheme: `Activi`
    - Destination: connected iPhone (recommended for real behavior)
    - Build configuration: `Debug`
    - Run (`Product` -> `Run`)
@@ -53,7 +53,7 @@ pnpm ios:open
 ## APNs Expectations For Local/Manual Builds
 
 - The app calls `registerForRemoteNotifications()` at launch.
-- `apps/ios/Sources/OpenClaw.entitlements` sets `aps-environment` to `development`.
+- `apps/ios/Sources/Activi.entitlements` sets `aps-environment` to `development`.
 - APNs token registration to gateway happens only after gateway connection (`push.apns.register`).
 - Your selected team/profile must support Push Notifications for the app bundle ID you are signing.
 - If push capability or provisioning is wrong, APNs registration fails at runtime (check Xcode logs for `APNs registration failed`).
@@ -133,7 +133,7 @@ Automatic wake/reconnect hardening:
 5. If network path is unclear:
    - switch to manual host/port + TLS in Gateway Advanced settings
 6. In Xcode console, filter for subsystem/category signals:
-   - `ai.openclaw.ios`
+   - `ai.activi.ios`
    - `GatewayDiag`
    - `APNs registration failed`
 7. Validate background expectations:

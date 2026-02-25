@@ -1,4 +1,4 @@
-# MiniMax OAuth (OpenClaw plugin)
+# MiniMax OAuth (Activi plugin)
 
 OAuth provider plugin for **MiniMax** (OAuth).
 
@@ -7,19 +7,19 @@ OAuth provider plugin for **MiniMax** (OAuth).
 Bundled plugins are disabled by default. Enable this one:
 
 ```bash
-openclaw plugins enable minimax-portal-auth
+activi plugins enable minimax-portal-auth
 ```
 
 Restart the Gateway after enabling.
 
 ```bash
-openclaw gateway restart
+activi gateway restart
 ```
 
 ## Authenticate
 
 ```bash
-openclaw models auth login --provider minimax-portal --set-default
+activi models auth login --provider minimax-portal --set-default
 ```
 
 You will be prompted to select an endpoint:

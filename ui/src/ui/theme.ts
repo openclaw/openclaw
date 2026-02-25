@@ -1,4 +1,4 @@
-export type ThemeMode = "dark" | "light" | "openknot" | "fieldmanual" | "clawdash";
+export type ThemeMode = "dark" | "light" | "openknot" | "fieldmanual" | "activiash";
 export type ResolvedTheme = ThemeMode;
 
 export const VALID_THEMES = new Set<ThemeMode>([
@@ -6,7 +6,7 @@ export const VALID_THEMES = new Set<ThemeMode>([
   "light",
   "openknot",
   "fieldmanual",
-  "clawdash",
+  "activiash",
 ]);
 
 const LEGACY_MAP: Record<string, ThemeMode> = {

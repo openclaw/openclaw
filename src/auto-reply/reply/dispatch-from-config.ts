@@ -1,5 +1,5 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
@@ -56,7 +56,7 @@ const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
 
 const resolveSessionTtsAuto = (
   ctx: FinalizedMsgContext,
-  cfg: OpenClawConfig,
+  cfg: ActiviConfig,
 ): string | undefined => {
   const targetSessionKey =
     ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey?.trim() : undefined;
@@ -82,7 +82,7 @@ export type DispatchFromConfigResult = {
 
 export async function dispatchReplyFromConfig(params: {
   ctx: FinalizedMsgContext;
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   dispatcher: ReplyDispatcher;
   replyOptions?: Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
   replyResolver?: typeof getReplyFromConfig;

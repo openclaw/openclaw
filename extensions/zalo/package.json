@@ -1,15 +1,15 @@
 {
-  "name": "@openclaw/zalo",
+  "name": "@activi/zalo",
   "version": "2026.2.22",
-  "description": "OpenClaw Zalo channel plugin",
+  "description": "Activi Zalo channel plugin",
   "type": "module",
   "dependencies": {
     "undici": "7.22.0"
   },
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "activi": "workspace:*"
   },
-  "openclaw": {
+  "activi": {
     "extensions": [
       "./index.ts"
     ],
@@ -27,7 +27,7 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@openclaw/zalo",
+      "npmSpec": "@activi/zalo",
       "localPath": "extensions/zalo",
       "defaultChoice": "npm"
     }

@@ -4,7 +4,7 @@ import {
   resolveSandboxToolPolicyForAgent,
 } from "../agents/sandbox.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
   loadSessionStore,
@@ -30,10 +30,10 @@ type SandboxExplainOptions = {
   json: boolean;
 };
 
-const SANDBOX_DOCS_URL = "https://docs.openclaw.ai/sandbox";
+const SANDBOX_DOCS_URL = "https://docs.activi.ai/sandbox";
 
 function normalizeExplainSessionKey(params: {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   agentId: string;
   session?: string;
 }): string {
@@ -57,7 +57,7 @@ function normalizeExplainSessionKey(params: {
 }
 
 function inferProviderFromSessionKey(params: {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   sessionKey: string;
 }): string | undefined {
   const parsed = parseAgentSessionKey(params.sessionKey);
@@ -87,7 +87,7 @@ function inferProviderFromSessionKey(params: {
 }
 
 function resolveActiveChannel(params: {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   agentId: string;
   sessionKey: string;
 }): string | undefined {
@@ -331,7 +331,7 @@ export async function sandboxExplainCommand(
     lines.push(`  - ${key}`);
   }
   lines.push("");
-  lines.push(`${key("Docs:")} ${formatDocsLink("/sandbox", "docs.openclaw.ai/sandbox")}`);
+  lines.push(`${key("Docs:")} ${formatDocsLink("/sandbox", "docs.activi.ai/sandbox")}`);
 
   runtime.log(`${lines.join("\n")}\n`);
 }

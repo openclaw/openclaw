@@ -3,7 +3,7 @@ import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
 } from "../../agents/subagent-registry.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 
 const hoisted = vi.hoisted(() => {
   const callGatewayMock = vi.fn();
@@ -116,7 +116,7 @@ function createFakeThreadBindingManager(initialBindings: FakeBinding[] = []) {
 
 const baseCfg = {
   session: { mainKey: "main", scope: "per-sender" },
-} satisfies OpenClawConfig;
+} satisfies ActiviConfig;
 
 function createDiscordCommandParams(commandBody: string) {
   const params = buildCommandTestParams(commandBody, baseCfg, {

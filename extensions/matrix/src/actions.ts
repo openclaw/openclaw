@@ -6,7 +6,7 @@ import {
   type ChannelMessageActionContext,
   type ChannelMessageActionName,
   type ChannelToolSend,
-} from "openclaw/plugin-sdk";
+} from "activi/plugin-sdk";
 import { resolveMatrixAccount } from "./matrix/accounts.js";
 import { handleMatrixAction } from "./tool-actions.js";
 import type { CoreConfig } from "./types.js";

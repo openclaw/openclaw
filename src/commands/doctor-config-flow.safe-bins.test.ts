@@ -18,10 +18,10 @@ async function runDoctorConfigWithInput(params: {
   repair?: boolean;
 }) {
   return withTempHome(async (home) => {
-    const configDir = path.join(home, ".openclaw");
+    const configDir = path.join(home, ".activi");
     await fs.mkdir(configDir, { recursive: true });
     await fs.writeFile(
-      path.join(configDir, "openclaw.json"),
+      path.join(configDir, "activi.json"),
       JSON.stringify(params.config, null, 2),
       "utf-8",
     );
@@ -101,7 +101,7 @@ describe("doctor config flow safe bins", () => {
       "Doctor warnings",
     );
     expect(noteSpy).toHaveBeenCalledWith(
-      expect.stringContaining("openclaw doctor --fix"),
+      expect.stringContaining("activi doctor --fix"),
       "Doctor warnings",
     );
   });

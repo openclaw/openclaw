@@ -4,7 +4,7 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "@mariozechner/pi-coding-agent";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 import {
   DEFAULT_RESET_TRIGGERS,
   deriveSessionMetaPatch,
@@ -102,7 +102,7 @@ function forkSessionFromParent(params: {
 
 export async function initSessionState(params: {
   ctx: MsgContext;
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   commandAuthorized: boolean;
 }): Promise<SessionInitResult> {
   const { ctx, cfg, commandAuthorized } = params;

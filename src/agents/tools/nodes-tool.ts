@@ -17,7 +17,7 @@ import {
   writeScreenRecordToFile,
 } from "../../cli/nodes-screen.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 import { imageMimeFromFormat } from "../../media/mime.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { resolveImageSanitizationLimits } from "../image-sanitization.js";
@@ -109,7 +109,7 @@ const NodesToolSchema = Type.Object({
 
 export function createNodesTool(options?: {
   agentSessionKey?: string;
-  config?: OpenClawConfig;
+  config?: ActiviConfig;
 }): AnyAgentTool {
   const sessionKey = options?.agentSessionKey?.trim() || undefined;
   const agentId = resolveSessionAgentId({

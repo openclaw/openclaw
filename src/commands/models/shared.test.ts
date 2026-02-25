@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 
 const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
@@ -20,7 +20,7 @@ describe("models/shared", () => {
   });
 
   it("returns config when snapshot is valid", async () => {
-    const cfg = { providers: {} } as unknown as OpenClawConfig;
+    const cfg = { providers: {} } as unknown as ActiviConfig;
     mocks.readConfigFileSnapshot.mockResolvedValue({
       valid: true,
       config: cfg,
@@ -32,17 +32,17 @@ describe("models/shared", () => {
   it("throws formatted issues when snapshot is invalid", async () => {
     mocks.readConfigFileSnapshot.mockResolvedValue({
       valid: false,
-      path: "/tmp/openclaw.json",
+      path: "/tmp/activi.json",
       issues: [{ path: "providers.openai.apiKey", message: "Required" }],
     });
 
     await expect(loadValidConfigOrThrow()).rejects.toThrowError(
-      "Invalid config at /tmp/openclaw.json\n- providers.openai.apiKey: Required",
+      "Invalid config at /tmp/activi.json\n- providers.openai.apiKey: Required",
     );
   });
 
   it("updateConfig writes mutated config", async () => {
-    const cfg = { update: { channel: "stable" } } as unknown as OpenClawConfig;
+    const cfg = { update: { channel: "stable" } } as unknown as ActiviConfig;
     mocks.readConfigFileSnapshot.mockResolvedValue({
       valid: true,
       config: cfg,

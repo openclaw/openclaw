@@ -1,6 +1,6 @@
 # Bundled Hooks
 
-This directory contains hooks that ship with OpenClaw. These hooks are automatically discovered and can be enabled/disabled via CLI or configuration.
+This directory contains hooks that ship with Activi. These hooks are automatically discovered and can be enabled/disabled via CLI or configuration.
 
 ## Available Hooks
 
@@ -10,12 +10,12 @@ Automatically saves session context to memory when you issue `/new` or `/reset`.
 
 **Events**: `command:new`, `command:reset`
 **What it does**: Creates a dated memory file with LLM-generated slug based on conversation content.
-**Output**: `<workspace>/memory/YYYY-MM-DD-slug.md` (defaults to `~/.openclaw/workspace`)
+**Output**: `<workspace>/memory/YYYY-MM-DD-slug.md` (defaults to `~/.activi/workspace`)
 
 **Enable**:
 
 ```bash
-openclaw hooks enable session-memory
+activi hooks enable session-memory
 ```
 
 ### 📎 bootstrap-extra-files
@@ -29,7 +29,7 @@ Injects extra bootstrap files (for example monorepo `AGENTS.md`/`TOOLS.md`) duri
 **Enable**:
 
 ```bash
-openclaw hooks enable bootstrap-extra-files
+activi hooks enable bootstrap-extra-files
 ```
 
 ### 📝 command-logger
@@ -38,12 +38,12 @@ Logs all command events to a centralized audit file.
 
 **Events**: `command` (all commands)
 **What it does**: Appends JSONL entries to command log file.
-**Output**: `~/.openclaw/logs/commands.log`
+**Output**: `~/.activi/logs/commands.log`
 
 **Enable**:
 
 ```bash
-openclaw hooks enable command-logger
+activi hooks enable command-logger
 ```
 
 ### 🚀 boot-md
@@ -57,7 +57,7 @@ Runs `BOOT.md` whenever the gateway starts (after channels start).
 **Enable**:
 
 ```bash
-openclaw hooks enable boot-md
+activi hooks enable boot-md
 ```
 
 ## Hook Structure
@@ -81,9 +81,9 @@ session-memory/
 ---
 name: my-hook
 description: "Short description"
-homepage: https://docs.openclaw.ai/automation/hooks#my-hook
+homepage: https://docs.activi.ai/automation/hooks#my-hook
 metadata:
-  { "openclaw": { "emoji": "🔗", "events": ["command:new"], "requires": { "bins": ["node"] } } }
+  { "activi": { "emoji": "🔗", "events": ["command:new"], "requires": { "bins": ["node"] } } }
 ---
 # Hook Title
 
@@ -107,7 +107,7 @@ Documentation goes here...
 To create your own hooks, place them in:
 
 - **Workspace hooks**: `<workspace>/hooks/` (highest precedence)
-- **Managed hooks**: `~/.openclaw/hooks/` (shared across workspaces)
+- **Managed hooks**: `~/.activi/hooks/` (shared across workspaces)
 
 Custom hooks follow the same structure as bundled hooks.
 
@@ -116,31 +116,31 @@ Custom hooks follow the same structure as bundled hooks.
 List all hooks:
 
 ```bash
-openclaw hooks list
+activi hooks list
 ```
 
 Show hook details:
 
 ```bash
-openclaw hooks info session-memory
+activi hooks info session-memory
 ```
 
 Check hook status:
 
 ```bash
-openclaw hooks check
+activi hooks check
 ```
 
 Enable/disable:
 
 ```bash
-openclaw hooks enable session-memory
-openclaw hooks disable command-logger
+activi hooks enable session-memory
+activi hooks disable command-logger
 ```
 
 ## Configuration
 
-Hooks can be configured in `~/.openclaw/openclaw.json`:
+Hooks can be configured in `~/.activi/activi.json`:
 
 ```json
 {
@@ -213,11 +213,11 @@ export default myHandler;
 Test your hooks by:
 
 1. Place hook in workspace hooks directory
-2. Restart gateway: `pkill -9 -f 'openclaw.*gateway' && pnpm openclaw gateway`
-3. Enable the hook: `openclaw hooks enable my-hook`
+2. Restart gateway: `pkill -9 -f 'activi.*gateway' && pnpm activi gateway`
+3. Enable the hook: `activi hooks enable my-hook`
 4. Trigger the event (e.g., send `/new` command)
 5. Check gateway logs for hook execution
 
 ## Documentation
 
-Full documentation: https://docs.openclaw.ai/automation/hooks
+Full documentation: https://docs.activi.ai/automation/hooks

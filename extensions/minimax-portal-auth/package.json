@@ -1,13 +1,13 @@
 {
-  "name": "@openclaw/minimax-portal-auth",
+  "name": "@activi/minimax-portal-auth",
   "version": "2026.2.22",
   "private": true,
-  "description": "OpenClaw MiniMax Portal OAuth provider plugin",
+  "description": "Activi MiniMax Portal OAuth provider plugin",
   "type": "module",
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "activi": "workspace:*"
   },
-  "openclaw": {
+  "activi": {
     "extensions": [
       "./index.ts"
     ]

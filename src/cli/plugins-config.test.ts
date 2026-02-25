@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { setPluginEnabledInConfig } from "./plugins-config.js";
 
 describe("setPluginEnabledInConfig", () => {
@@ -10,7 +10,7 @@ describe("setPluginEnabledInConfig", () => {
           alpha: { enabled: false, custom: "x" },
         },
       },
-    } as OpenClawConfig;
+    } as ActiviConfig;
 
     const next = setPluginEnabledInConfig(config, "alpha", true);
 
@@ -21,7 +21,7 @@ describe("setPluginEnabledInConfig", () => {
   });
 
   it("creates a plugin entry when it does not exist", () => {
-    const config = {} as OpenClawConfig;
+    const config = {} as ActiviConfig;
 
     const next = setPluginEnabledInConfig(config, "beta", false);
 

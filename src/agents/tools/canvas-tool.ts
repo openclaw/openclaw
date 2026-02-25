@@ -4,7 +4,7 @@ import path from "node:path";
 import { Type } from "@sinclair/typebox";
 import { writeBase64ToFile } from "../../cli/nodes-camera.js";
 import { canvasSnapshotTempPath, parseCanvasSnapshotPayload } from "../../cli/nodes-canvas.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { isInboundPathAllowed } from "../../media/inbound-path-policy.js";
 import { getDefaultMediaLocalRoots } from "../../media/local-roots.js";
@@ -77,7 +77,7 @@ const CanvasToolSchema = Type.Object({
   jsonlPath: Type.Optional(Type.String()),
 });
 
-export function createCanvasTool(options?: { config?: OpenClawConfig }): AnyAgentTool {
+export function createCanvasTool(options?: { config?: ActiviConfig }): AnyAgentTool {
   const imageSanitization = resolveImageSanitizationLimits(options?.config);
   return {
     label: "Canvas",

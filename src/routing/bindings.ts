@@ -1,6 +1,6 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { normalizeChatChannelId } from "../channels/registry.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import type { AgentBinding } from "../config/types.agents.js";
 import { normalizeAccountId, normalizeAgentId } from "./session-key.js";
 
@@ -13,7 +13,7 @@ function normalizeBindingChannelId(raw?: string | null): string | null {
   return fallback || null;
 }
 
-export function listBindings(cfg: OpenClawConfig): AgentBinding[] {
+export function listBindings(cfg: ActiviConfig): AgentBinding[] {
   return Array.isArray(cfg.bindings) ? cfg.bindings : [];
 }
 
@@ -44,7 +44,7 @@ function resolveNormalizedBindingMatch(binding: AgentBinding): {
   };
 }
 
-export function listBoundAccountIds(cfg: OpenClawConfig, channelId: string): string[] {
+export function listBoundAccountIds(cfg: ActiviConfig, channelId: string): string[] {
   const normalizedChannel = normalizeBindingChannelId(channelId);
   if (!normalizedChannel) {
     return [];
@@ -61,7 +61,7 @@ export function listBoundAccountIds(cfg: OpenClawConfig, channelId: string): str
 }
 
 export function resolveDefaultAgentBoundAccountId(
-  cfg: OpenClawConfig,
+  cfg: ActiviConfig,
   channelId: string,
 ): string | null {
   const normalizedChannel = normalizeBindingChannelId(channelId);
@@ -83,7 +83,7 @@ export function resolveDefaultAgentBoundAccountId(
   return null;
 }
 
-export function buildChannelAccountBindings(cfg: OpenClawConfig) {
+export function buildChannelAccountBindings(cfg: ActiviConfig) {
   const map = new Map<string, Map<string, string[]>>();
   for (const binding of listBindings(cfg)) {
     const resolved = resolveNormalizedBindingMatch(binding);

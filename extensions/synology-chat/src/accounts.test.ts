@@ -11,7 +11,7 @@ beforeEach(() => {
   delete process.env.SYNOLOGY_NAS_HOST;
   delete process.env.SYNOLOGY_ALLOWED_USER_IDS;
   delete process.env.SYNOLOGY_RATE_LIMIT;
-  delete process.env.OPENCLAW_BOT_NAME;
+  delete process.env.ACTIVI_BOT_NAME;
 });
 
 describe("listAccountIds", () => {
@@ -68,14 +68,14 @@ describe("resolveAccount", () => {
     expect(account.webhookPath).toBe("/webhook/synology");
     expect(account.dmPolicy).toBe("allowlist");
     expect(account.rateLimitPerMinute).toBe(30);
-    expect(account.botName).toBe("OpenClaw");
+    expect(account.botName).toBe("Activi");
   });
 
   it("uses env var fallbacks", () => {
     process.env.SYNOLOGY_CHAT_TOKEN = "env-tok";
     process.env.SYNOLOGY_CHAT_INCOMING_URL = "https://nas/incoming";
     process.env.SYNOLOGY_NAS_HOST = "192.0.2.1";
-    process.env.OPENCLAW_BOT_NAME = "TestBot";
+    process.env.ACTIVI_BOT_NAME = "TestBot";
 
     const cfg = { channels: { "synology-chat": {} } };
     const account = resolveAccount(cfg);

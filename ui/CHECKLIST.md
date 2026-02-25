@@ -22,7 +22,7 @@ Open the dashboard at `http://localhost:<port>` (or the gateway's configured UI 
   - [ ] Light
   - [ ] OpenKnot (Aurora)
   - [ ] Field Manual
-  - [ ] OpenClaw (Chrome)
+  - [ ] Activi (Chrome)
 - [ ] Glass components (cards, panels, inputs) render correctly per theme
 - [ ] Theme persists across page reload
 

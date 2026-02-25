@@ -1,7 +1,7 @@
 import { isPlainObject } from "../utils.js";
 import { parseConfigPath, setConfigValueAtPath, unsetConfigValueAtPath } from "./config-paths.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
-import type { OpenClawConfig } from "./types.js";
+import type { ActiviConfig } from "./types.js";
 
 type OverrideTree = Record<string, unknown>;
 
@@ -83,9 +83,9 @@ export function unsetConfigOverride(pathRaw: string): {
   return { ok: true, removed };
 }
 
-export function applyConfigOverrides(cfg: OpenClawConfig): OpenClawConfig {
+export function applyConfigOverrides(cfg: ActiviConfig): ActiviConfig {
   if (!overrides || Object.keys(overrides).length === 0) {
     return cfg;
   }
-  return mergeOverrides(cfg, overrides) as OpenClawConfig;
+  return mergeOverrides(cfg, overrides) as ActiviConfig;
 }

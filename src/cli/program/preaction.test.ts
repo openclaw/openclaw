@@ -25,7 +25,7 @@ vi.mock("../banner.js", () => ({
 }));
 
 vi.mock("../cli-name.js", () => ({
-  resolveCliName: () => "openclaw",
+  resolveCliName: () => "activi",
 }));
 
 vi.mock("./config-guard.js", () => ({
@@ -51,9 +51,9 @@ beforeEach(() => {
   originalProcessArgv = [...process.argv];
   originalProcessTitle = process.title;
   originalNodeNoWarnings = process.env.NODE_NO_WARNINGS;
-  originalHideBanner = process.env.OPENCLAW_HIDE_BANNER;
+  originalHideBanner = process.env.ACTIVI_HIDE_BANNER;
   delete process.env.NODE_NO_WARNINGS;
-  delete process.env.OPENCLAW_HIDE_BANNER;
+  delete process.env.ACTIVI_HIDE_BANNER;
 });
 
 afterEach(() => {
@@ -65,15 +65,15 @@ afterEach(() => {
     process.env.NODE_NO_WARNINGS = originalNodeNoWarnings;
   }
   if (originalHideBanner === undefined) {
-    delete process.env.OPENCLAW_HIDE_BANNER;
+    delete process.env.ACTIVI_HIDE_BANNER;
   } else {
-    process.env.OPENCLAW_HIDE_BANNER = originalHideBanner;
+    process.env.ACTIVI_HIDE_BANNER = originalHideBanner;
   }
 });
 
 describe("registerPreActionHooks", () => {
   function buildProgram() {
-    const program = new Command().name("openclaw");
+    const program = new Command().name("activi");
     program.command("status").action(async () => {});
     program.command("doctor").action(async () => {});
     program.command("completion").action(async () => {});
@@ -97,7 +97,7 @@ describe("registerPreActionHooks", () => {
   it("emits banner, resolves config, and enables verbose from --debug", async () => {
     await runCommand({
       parseArgv: ["status"],
-      processArgv: ["node", "openclaw", "status", "--debug"],
+      processArgv: ["node", "activi", "status", "--debug"],
     });
 
     expect(emitCliBannerMock).toHaveBeenCalledWith("9.9.9-test");
@@ -107,13 +107,13 @@ describe("registerPreActionHooks", () => {
       commandPath: ["status"],
     });
     expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
-    expect(process.title).toBe("openclaw-status");
+    expect(process.title).toBe("activi-status");
   });
 
   it("loads plugin registry for plugin-required commands", async () => {
     await runCommand({
       parseArgv: ["message", "send"],
-      processArgv: ["node", "openclaw", "message", "send"],
+      processArgv: ["node", "activi", "message", "send"],
     });
 
     expect(setVerboseMock).toHaveBeenCalledWith(false);
@@ -128,11 +128,11 @@ describe("registerPreActionHooks", () => {
   it("skips config guard for doctor and completion commands", async () => {
     await runCommand({
       parseArgv: ["doctor"],
-      processArgv: ["node", "openclaw", "doctor"],
+      processArgv: ["node", "activi", "doctor"],
     });
     await runCommand({
       parseArgv: ["completion"],
-      processArgv: ["node", "openclaw", "completion"],
+      processArgv: ["node", "activi", "completion"],
     });
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
@@ -141,7 +141,7 @@ describe("registerPreActionHooks", () => {
   it("skips preaction work when argv indicates help/version", async () => {
     await runCommand({
       parseArgv: ["status"],
-      processArgv: ["node", "openclaw", "--version"],
+      processArgv: ["node", "activi", "--version"],
     });
 
     expect(emitCliBannerMock).not.toHaveBeenCalled();
@@ -149,11 +149,11 @@ describe("registerPreActionHooks", () => {
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
   });
 
-  it("hides banner when OPENCLAW_HIDE_BANNER is truthy", async () => {
-    process.env.OPENCLAW_HIDE_BANNER = "1";
+  it("hides banner when ACTIVI_HIDE_BANNER is truthy", async () => {
+    process.env.ACTIVI_HIDE_BANNER = "1";
     await runCommand({
       parseArgv: ["status"],
-      processArgv: ["node", "openclaw", "status"],
+      processArgv: ["node", "activi", "status"],
     });
 
     expect(emitCliBannerMock).not.toHaveBeenCalled();

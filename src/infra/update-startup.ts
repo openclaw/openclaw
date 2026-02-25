@@ -4,7 +4,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { loadConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { VERSION } from "../version.js";
-import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
+import { resolveActiviPackageRoot } from "./activi-root.js";
 import { normalizeUpdateChannel, DEFAULT_PACKAGE_CHANNEL } from "./update-channels.js";
 import { compareSemverStrings, resolveNpmChannelTag, checkUpdateStatus } from "./update-check.js";
 
@@ -134,7 +134,7 @@ export async function runGatewayUpdateCheck(params: {
     }
   }
 
-  const root = await resolveOpenClawPackageRoot({
+  const root = await resolveActiviPackageRoot({
     moduleUrl: import.meta.url,
     argv1: process.argv[1],
     cwd: process.cwd(),
@@ -187,7 +187,7 @@ export async function runGatewayUpdateCheck(params: {
       state.lastNotifiedVersion !== resolved.version || state.lastNotifiedTag !== tag;
     if (shouldNotify) {
       params.log.info(
-        `update available (${tag}): v${resolved.version} (current v${VERSION}). Run: ${formatCliCommand("openclaw update")}`,
+        `update available (${tag}): v${resolved.version} (current v${VERSION}). Run: ${formatCliCommand("activi update")}`,
       );
       nextState.lastNotifiedVersion = resolved.version;
       nextState.lastNotifiedTag = tag;

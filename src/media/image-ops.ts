@@ -25,8 +25,8 @@ function isBun(): boolean {
 
 function prefersSips(): boolean {
   return (
-    process.env.OPENCLAW_IMAGE_BACKEND === "sips" ||
-    (process.env.OPENCLAW_IMAGE_BACKEND !== "sharp" && isBun() && process.platform === "darwin")
+    process.env.ACTIVI_IMAGE_BACKEND === "sips" ||
+    (process.env.ACTIVI_IMAGE_BACKEND !== "sharp" && isBun() && process.platform === "darwin")
   );
 }
 
@@ -134,7 +134,7 @@ function readJpegExifOrientation(buffer: Buffer): number | null {
 }
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-img-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "activi-img-"));
   try {
     return await fn(dir);
   } finally {

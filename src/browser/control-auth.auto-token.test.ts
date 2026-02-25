@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 
 const mocks = vi.hoisted(() => ({
-  loadConfig: vi.fn<() => OpenClawConfig>(),
-  writeConfigFile: vi.fn(async (_cfg: OpenClawConfig) => {}),
+  loadConfig: vi.fn<() => ActiviConfig>(),
+  writeConfigFile: vi.fn(async (_cfg: ActiviConfig) => {}),
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -19,7 +19,7 @@ import { ensureBrowserControlAuth } from "./control-auth.js";
 
 describe("ensureBrowserControlAuth", () => {
   const expectExplicitModeSkipsAutoAuth = async (mode: "password" | "none") => {
-    const cfg: OpenClawConfig = {
+    const cfg: ActiviConfig = {
       gateway: {
         auth: { mode },
       },
@@ -53,7 +53,7 @@ describe("ensureBrowserControlAuth", () => {
   });
 
   it("returns existing auth and skips writes", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: ActiviConfig = {
       gateway: {
         auth: {
           token: "already-set",
@@ -69,7 +69,7 @@ describe("ensureBrowserControlAuth", () => {
   });
 
   it("auto-generates and persists a token when auth is missing", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: ActiviConfig = {
       browser: {
         enabled: true,
       },
@@ -85,7 +85,7 @@ describe("ensureBrowserControlAuth", () => {
   });
 
   it("skips auto-generation in test env", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: ActiviConfig = {
       browser: {
         enabled: true,
       },
@@ -110,7 +110,7 @@ describe("ensureBrowserControlAuth", () => {
   });
 
   it("reuses auth from latest config snapshot", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: ActiviConfig = {
       browser: {
         enabled: true,
       },

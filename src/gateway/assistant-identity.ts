@@ -1,7 +1,7 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveAgentIdentity } from "../agents/identity.js";
 import { loadAgentIdentity } from "../commands/agents.config.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import {
   isAvatarHttpUrl,
@@ -92,7 +92,7 @@ function normalizeEmojiValue(value: string | undefined): string | undefined {
 }
 
 export function resolveAssistantIdentity(params: {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   agentId?: string | null;
   workspaceDir?: string | null;
 }): AssistantIdentity {

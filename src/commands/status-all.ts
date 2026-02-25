@@ -11,7 +11,7 @@ import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { resolveGatewayProbeAuth } from "../gateway/probe-auth.js";
 import { probeGateway } from "../gateway/probe.js";
 import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
-import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
+import { resolveActiviPackageRoot } from "../infra/activi-root.js";
 import { resolveOsSummary } from "../infra/os-summary.js";
 import { inspectPortUsage } from "../infra/ports.js";
 import { readRestartSentinel } from "../infra/restart-sentinel.js";
@@ -79,7 +79,7 @@ export async function statusAllCommand(
     progress.tick();
 
     progress.setLabel("Checking for updates…");
-    const root = await resolveOpenClawPackageRoot({
+    const root = await resolveActiviPackageRoot({
       moduleUrl: import.meta.url,
       argv1: process.argv[1],
       cwd: process.cwd(),
@@ -285,7 +285,7 @@ export async function statusAllCommand(
         Item: "Gateway",
         Value: `${gatewayMode}${remoteUrlMissing ? " (remote.url missing)" : ""} · ${gatewayTarget} (${connection.urlSource}) · ${gatewayStatus}${gatewayAuth}`,
       },
-      { Item: "Security", Value: `Run: ${formatCliCommand("openclaw security audit --deep")}` },
+      { Item: "Security", Value: `Run: ${formatCliCommand("activi security audit --deep")}` },
       gatewaySelfLine
         ? { Item: "Gateway self", Value: gatewaySelfLine }
         : { Item: "Gateway self", Value: "unknown" },

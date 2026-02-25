@@ -1,7 +1,7 @@
 import type { Model } from "@mariozechner/pi-ai";
 import { getModel, streamSimple } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { applyExtraParamsToAgent } from "./pi-embedded-runner.js";
 
@@ -14,7 +14,7 @@ describeLive("pi embedded extra params (live)", () => {
   it("applies config maxTokens to openai streamFn", async () => {
     const model = getModel("openai", "gpt-5.2") as unknown as Model<"openai-completions">;
 
-    const cfg: OpenClawConfig = {
+    const cfg: ActiviConfig = {
       agents: {
         defaults: {
           models: {

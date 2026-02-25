@@ -1,5 +1,5 @@
 import { normalizeProviderId } from "../agents/model-selection.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "../plugins/types.js";
 
 export function resolveProviderMatch(
@@ -58,7 +58,7 @@ export function mergeConfigPatch<T>(base: T, patch: unknown): T {
   return next as T;
 }
 
-export function applyDefaultModel(cfg: OpenClawConfig, model: string): OpenClawConfig {
+export function applyDefaultModel(cfg: ActiviConfig, model: string): ActiviConfig {
   const models = { ...cfg.agents?.defaults?.models };
   models[model] = models[model] ?? {};
 

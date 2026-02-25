@@ -4,7 +4,7 @@ import {
   type OAuthCredentials,
   type OAuthProvider,
 } from "@mariozechner/pi-ai";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { refreshQwenPortalCredentials } from "../../providers/qwen-portal-oauth.js";
 import { refreshChutesTokens } from "../chutes-oauth.js";
@@ -38,7 +38,7 @@ const isCompatibleModeType = (mode: string | undefined, type: string | undefined
 };
 
 function isProfileConfigCompatible(params: {
-  cfg?: OpenClawConfig;
+  cfg?: ActiviConfig;
   profileId: string;
   provider: string;
   mode: "api_key" | "token" | "oauth";
@@ -91,7 +91,7 @@ function isExpiredCredential(expires: number | undefined): boolean {
 }
 
 type ResolveApiKeyForProfileParams = {
-  cfg?: OpenClawConfig;
+  cfg?: ActiviConfig;
   store: AuthProfileStore;
   profileId: string;
   agentDir?: string;

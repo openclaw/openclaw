@@ -6,7 +6,7 @@ if [[ -n "${IOS_DEVELOPMENT_TEAM:-}" ]]; then
   exit 0
 fi
 
-preferred_team="${IOS_PREFERRED_TEAM_ID:-${OPENCLAW_IOS_DEFAULT_TEAM_ID:-Y5PE65HELJ}}"
+preferred_team="${IOS_PREFERRED_TEAM_ID:-${ACTIVI_IOS_DEFAULT_TEAM_ID:-Y5PE65HELJ}}"
 preferred_team_name="${IOS_PREFERRED_TEAM_NAME:-}"
 allow_keychain_fallback="${IOS_ALLOW_KEYCHAIN_TEAM_FALLBACK:-0}"
 prefer_non_free_team="${IOS_PREFER_NON_FREE_TEAM:-1}"

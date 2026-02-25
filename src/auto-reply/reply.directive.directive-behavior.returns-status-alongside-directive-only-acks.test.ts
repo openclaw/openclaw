@@ -1,7 +1,7 @@
 import "./reply.directive.directive-behavior.e2e-mocks.js";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { loadSessionStore } from "../config/sessions.js";
 import {
   assertElevatedOffStatusReply,
@@ -24,12 +24,12 @@ describe("directive behavior", () => {
       agents: {
         defaults: {
           model: "anthropic/claude-opus-4-5",
-          workspace: path.join(home, "openclaw"),
+          workspace: path.join(home, "activi"),
         },
       },
       channels: { whatsapp: { allowFrom: ["*"] } },
       session: { store: storePath },
-    } as unknown as OpenClawConfig;
+    } as unknown as ActiviConfig;
   }
 
   async function runQueueDirective(params: { home: string; storePath: string; body: string }) {
@@ -58,7 +58,7 @@ describe("directive behavior", () => {
           agents: {
             defaults: {
               model: { primary: "anthropic/claude-opus-4-5" },
-              workspace: path.join(home, "openclaw"),
+              workspace: path.join(home, "activi"),
             },
           },
           tools: {
@@ -93,7 +93,7 @@ describe("directive behavior", () => {
           CommandAuthorized: true,
         },
         {},
-        makeRestrictedElevatedDisabledConfig(home) as unknown as OpenClawConfig,
+        makeRestrictedElevatedDisabledConfig(home) as unknown as ActiviConfig,
       );
 
       const text = extractReplyText(res);

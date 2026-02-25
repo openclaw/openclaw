@@ -38,7 +38,7 @@ import { dispatchReplyWithDispatcher } from "../../auto-reply/reply/provider-dis
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
-import type { OpenClawConfig, loadConfig } from "../../config/config.js";
+import type { ActiviConfig, loadConfig } from "../../config/config.js";
 import { resolveOpenProviderRuntimeGroupPolicy } from "../../config/runtime-group-policy.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
@@ -86,7 +86,7 @@ import { resolveDiscordSenderIdentity } from "./sender-identity.js";
 import type { ThreadBindingManager } from "./thread-bindings.js";
 import { resolveDiscordThreadParentInfo } from "./threading.js";
 
-type DiscordConfig = NonNullable<OpenClawConfig["channels"]>["discord"];
+type DiscordConfig = NonNullable<ActiviConfig["channels"]>["discord"];
 const log = createSubsystemLogger("discord/native-command");
 
 function buildDiscordCommandOptions(params: {

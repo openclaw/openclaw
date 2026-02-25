@@ -6,9 +6,9 @@ import {
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
-  type OpenClawConfig,
+  type ActiviConfig,
   type RuntimeEnv,
-} from "openclaw/plugin-sdk";
+} from "activi/plugin-sdk";
 import type { ResolvedIrcAccount } from "./accounts.js";
 import { normalizeIrcAllowlist, resolveIrcAllowlistMatch } from "./normalize.js";
 import {
@@ -133,7 +133,7 @@ export async function handleIrcInbound(params: {
   const effectiveGroupAllowFrom = [...configGroupAllowFrom, ...storeAllowList].filter(Boolean);
 
   const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
-    cfg: config as OpenClawConfig,
+    cfg: config as ActiviConfig,
     surface: CHANNEL_ID,
   });
   const useAccessGroups = config.commands?.useAccessGroups !== false;
@@ -141,7 +141,7 @@ export async function handleIrcInbound(params: {
     allowFrom: message.isGroup ? effectiveGroupAllowFrom : effectiveAllowFrom,
     message,
   }).allowed;
-  const hasControlCommand = core.channel.text.hasControlCommand(rawBody, config as OpenClawConfig);
+  const hasControlCommand = core.channel.text.hasControlCommand(rawBody, config as ActiviConfig);
   const commandGate = resolveControlCommandGate({
     useAccessGroups,
     authorizers: [
@@ -218,7 +218,7 @@ export async function handleIrcInbound(params: {
     return;
   }
 
-  const mentionRegexes = core.channel.mentions.buildMentionRegexes(config as OpenClawConfig);
+  const mentionRegexes = core.channel.mentions.buildMentionRegexes(config as ActiviConfig);
   const mentionNick = connectedNick?.trim() || account.nick;
   const explicitMentionRegex = mentionNick
     ? new RegExp(`\\b${escapeIrcRegexLiteral(mentionNick)}\\b[:,]?`, "i")
@@ -249,7 +249,7 @@ export async function handleIrcInbound(params: {
 
   const peerId = message.isGroup ? message.target : message.senderNick;
   const route = core.channel.routing.resolveAgentRoute({
-    cfg: config as OpenClawConfig,
+    cfg: config as ActiviConfig,
     channel: CHANNEL_ID,
     accountId: account.accountId,
     peer: {
@@ -262,7 +262,7 @@ export async function handleIrcInbound(params: {
   const storePath = core.channel.session.resolveStorePath(config.session?.store, {
     agentId: route.agentId,
   });
-  const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(config as OpenClawConfig);
+  const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(config as ActiviConfig);
   const previousTimestamp = core.channel.session.readSessionUpdatedAt({
     storePath,
     sessionKey: route.sessionKey,
@@ -312,7 +312,7 @@ export async function handleIrcInbound(params: {
   });
 
   const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
-    cfg: config as OpenClawConfig,
+    cfg: config as ActiviConfig,
     agentId: route.agentId,
     channel: CHANNEL_ID,
     accountId: account.accountId,
@@ -320,7 +320,7 @@ export async function handleIrcInbound(params: {
 
   await core.channel.reply.dispatchReplyWithBufferedBlockDispatcher({
     ctx: ctxPayload,
-    cfg: config as OpenClawConfig,
+    cfg: config as ActiviConfig,
     dispatcherOptions: {
       ...prefixOptions,
       deliver: async (payload) => {

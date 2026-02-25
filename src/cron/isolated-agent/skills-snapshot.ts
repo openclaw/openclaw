@@ -2,12 +2,12 @@ import { resolveAgentSkillsFilter } from "../../agents/agent-scope.js";
 import { buildWorkspaceSkillSnapshot, type SkillSnapshot } from "../../agents/skills.js";
 import { matchesSkillFilter } from "../../agents/skills/filter.js";
 import { getSkillsSnapshotVersion } from "../../agents/skills/refresh.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 
 export function resolveCronSkillsSnapshot(params: {
   workspaceDir: string;
-  config: OpenClawConfig;
+  config: ActiviConfig;
   agentId: string;
   existingSnapshot?: SkillSnapshot;
   isFastTestEnv: boolean;

@@ -2,7 +2,7 @@ import { completeSimple, type AssistantMessage } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { resolveModel } from "../agents/pi-embedded-runner/model.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { withEnv } from "../test-utils/env.js";
 import * as tts from "./tts.js";
 
@@ -186,7 +186,7 @@ describe("tts", () => {
   });
 
   describe("resolveEdgeOutputFormat", () => {
-    const baseCfg: OpenClawConfig = {
+    const baseCfg: ActiviConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
       messages: { tts: {} },
     };
@@ -207,7 +207,7 @@ describe("tts", () => {
                 edge: { outputFormat: "audio-24khz-96kbitrate-mono-mp3" },
               },
             },
-          } as OpenClawConfig,
+          } as ActiviConfig,
           expected: "audio-24khz-96kbitrate-mono-mp3",
         },
       ] as const;
@@ -262,7 +262,7 @@ describe("tts", () => {
   });
 
   describe("summarizeText", () => {
-    const baseCfg: OpenClawConfig = {
+    const baseCfg: ActiviConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
       messages: { tts: {} },
     };
@@ -307,7 +307,7 @@ describe("tts", () => {
     });
 
     it("uses summaryModel override when configured", async () => {
-      const cfg: OpenClawConfig = {
+      const cfg: ActiviConfig = {
         agents: { defaults: { model: { primary: "anthropic/claude-opus-4-5" } } },
         messages: { tts: { summaryModel: "openai/gpt-4.1-mini" } },
       };
@@ -373,7 +373,7 @@ describe("tts", () => {
   });
 
   describe("getTtsProvider", () => {
-    const baseCfg: OpenClawConfig = {
+    const baseCfg: ActiviConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
       messages: { tts: {} },
     };
@@ -420,7 +420,7 @@ describe("tts", () => {
   });
 
   describe("maybeApplyTtsToPayload", () => {
-    const baseCfg: OpenClawConfig = {
+    const baseCfg: ActiviConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
       messages: {
         tts: {
@@ -434,8 +434,8 @@ describe("tts", () => {
     const withMockedAutoTtsFetch = async (
       run: (fetchMock: ReturnType<typeof vi.fn>) => Promise<void>,
     ) => {
-      const prevPrefs = process.env.OPENCLAW_TTS_PREFS;
-      process.env.OPENCLAW_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
+      const prevPrefs = process.env.ACTIVI_TTS_PREFS;
+      process.env.ACTIVI_TTS_PREFS = `/tmp/tts-test-${Date.now()}.json`;
       const originalFetch = globalThis.fetch;
       const fetchMock = vi.fn(async () => ({
         ok: true,
@@ -446,11 +446,11 @@ describe("tts", () => {
         await run(fetchMock);
       } finally {
         globalThis.fetch = originalFetch;
-        process.env.OPENCLAW_TTS_PREFS = prevPrefs;
+        process.env.ACTIVI_TTS_PREFS = prevPrefs;
       }
     };
 
-    const taggedCfg: OpenClawConfig = {
+    const taggedCfg: ActiviConfig = {
       ...baseCfg,
       messages: {
         ...baseCfg.messages!,

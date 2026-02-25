@@ -11,7 +11,7 @@ x-i18n:
 
 # 创建自定义 Skills 🛠
 
-OpenClaw 被设计为易于扩展。"Skills"是为你的助手添加新功能的主要方式。
+Activi 被设计为易于扩展。"Skills"是为你的助手添加新功能的主要方式。
 
 ## 什么是 Skill？
 
@@ -21,10 +21,10 @@ Skill 是一个包含 `SKILL.md` 文件（为 LLM 提供指令和工具定义）
 
 ### 1. 创建目录
 
-Skills 位于你的工作区中，通常是 `~/.openclaw/workspace/skills/`。为你的 Skill 创建一个新文件夹：
+Skills 位于你的工作区中，通常是 `~/.activi/workspace/skills/`。为你的 Skill 创建一个新文件夹：
 
 ```bash
-mkdir -p ~/.openclaw/workspace/skills/hello-world
+mkdir -p ~/.activi/workspace/skills/hello-world
 ```
 
 ### 2. 定义 `SKILL.md`
@@ -46,16 +46,16 @@ When the user asks for a greeting, use the `echo` tool to say "Hello from your c
 
 你可以在 frontmatter 中定义自定义工具，或指示智能体使用现有的系统工具（如 `bash` 或 `browser`）。
 
-### 4. 刷新 OpenClaw
+### 4. 刷新 Activi
 
-让你的智能体"刷新 skills"或重启 Gateway 网关。OpenClaw 将发现新目录并索引 `SKILL.md`。
+让你的智能体"刷新 skills"或重启 Gateway 网关。Activi 将发现新目录并索引 `SKILL.md`。
 
 ## 最佳实践
 
 - **简洁明了**：指示模型*做什么*，而不是如何成为一个 AI。
 - **安全第一**：如果你的 Skill 使用 `bash`，确保提示词不允许来自不受信任用户输入的任意命令注入。
-- **本地测试**：使用 `openclaw agent --message "use my new skill"` 进行测试。
+- **本地测试**：使用 `activi agent --message "use my new skill"` 进行测试。
 
 ## 共享 Skills
 
-你也可以在 [ClawHub](https://clawhub.com) 上浏览和贡献 Skills。
+你也可以在 [ActiviHub](https://activihub.com) 上浏览和贡献 Skills。

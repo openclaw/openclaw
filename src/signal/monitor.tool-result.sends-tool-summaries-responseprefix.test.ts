@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { normalizeE164 } from "../utils.js";
@@ -46,7 +46,7 @@ function setSignalAutoStartConfig(overrides: Record<string, unknown> = {}) {
 }
 
 function createSignalConfig(overrides: Record<string, unknown> = {}): Record<string, unknown> {
-  const base = config as OpenClawConfig;
+  const base = config as ActiviConfig;
   const channels = (base.channels ?? {}) as Record<string, unknown>;
   const signal = (channels.signal ?? {}) as Record<string, unknown>;
   return {
@@ -104,7 +104,7 @@ async function receiveSignalPayloads(params: {
 
 function getDirectSignalEventsFor(sender: string) {
   const route = resolveAgentRoute({
-    cfg: config as OpenClawConfig,
+    cfg: config as ActiviConfig,
     channel: "signal",
     accountId: "default",
     peer: { kind: "direct", id: normalizeE164(sender) },

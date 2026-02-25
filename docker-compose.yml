@@ -1,19 +1,19 @@
 services:
-  openclaw-gateway:
-    image: ${OPENCLAW_IMAGE:-openclaw:local}
+  activi-gateway:
+    image: ${ACTIVI_IMAGE:-activi:local}
     environment:
       HOME: /home/node
       TERM: xterm-256color
-      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      ACTIVI_GATEWAY_TOKEN: ${ACTIVI_GATEWAY_TOKEN}
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
     volumes:
-      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
-      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      - ${ACTIVI_CONFIG_DIR}:/home/node/.activi
+      - ${ACTIVI_WORKSPACE_DIR}:/home/node/.activi/workspace
     ports:
-      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
-      - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
+      - "${ACTIVI_GATEWAY_PORT:-18789}:18789"
+      - "${ACTIVI_BRIDGE_PORT:-18790}:18790"
     init: true
     restart: unless-stopped
     command:
@@ -22,24 +22,24 @@ services:
         "dist/index.js",
         "gateway",
         "--bind",
-        "${OPENCLAW_GATEWAY_BIND:-lan}",
+        "${ACTIVI_GATEWAY_BIND:-lan}",
         "--port",
         "18789",
       ]
 
-  openclaw-cli:
-    image: ${OPENCLAW_IMAGE:-openclaw:local}
+  activi-cli:
+    image: ${ACTIVI_IMAGE:-activi:local}
     environment:
       HOME: /home/node
       TERM: xterm-256color
-      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      ACTIVI_GATEWAY_TOKEN: ${ACTIVI_GATEWAY_TOKEN}
       BROWSER: echo
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
     volumes:
-      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
-      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
+      - ${ACTIVI_CONFIG_DIR}:/home/node/.activi
+      - ${ACTIVI_WORKSPACE_DIR}:/home/node/.activi/workspace
     stdin_open: true
     tty: true
     init: true

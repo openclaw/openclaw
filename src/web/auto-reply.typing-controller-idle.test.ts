@@ -1,6 +1,6 @@
 import "./test-helpers.js";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { monitorWebChannel } from "./auto-reply.js";
 import {
   createMockWebListener,
@@ -36,7 +36,7 @@ describe("typing controller idle", () => {
       return { text: "final reply" };
     });
 
-    const mockConfig: OpenClawConfig = {
+    const mockConfig: ActiviConfig = {
       channels: { whatsapp: { allowFrom: ["*"] } },
     };
 

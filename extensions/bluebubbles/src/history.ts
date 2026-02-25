@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { ActiviConfig } from "activi/plugin-sdk";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
 import { blueBubblesFetchWithTimeout, buildBlueBubblesApiUrl } from "./types.js";
 
@@ -37,7 +37,7 @@ export type BlueBubblesChatOpts = {
   password?: string;
   accountId?: string;
   timeoutMs?: number;
-  cfg?: OpenClawConfig;
+  cfg?: ActiviConfig;
 };
 
 function resolveAccount(params: BlueBubblesChatOpts) {

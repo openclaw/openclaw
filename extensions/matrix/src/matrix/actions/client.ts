@@ -1,4 +1,4 @@
-import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { normalizeAccountId } from "activi/plugin-sdk/account-id";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { CoreConfig } from "../../types.js";
 import { getActiveMatrixClient } from "../active-client.js";
@@ -25,7 +25,7 @@ export async function resolveActionClient(
   if (active) {
     return { client: active, stopOnDone: false };
   }
-  const shouldShareClient = Boolean(process.env.OPENCLAW_GATEWAY_PORT);
+  const shouldShareClient = Boolean(process.env.ACTIVI_GATEWAY_PORT);
   if (shouldShareClient) {
     const client = await resolveSharedMatrixClient({
       cfg: getMatrixRuntime().config.loadConfig() as CoreConfig,

@@ -6,7 +6,7 @@ import { buildWorkspaceSkillsPrompt } from "./skills.js";
 import { writeSkill } from "./skills.test-helpers.js";
 
 async function withTempWorkspace(run: (workspaceDir: string) => Promise<void>) {
-  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-"));
+  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "activi.compact-"));
   try {
     await run(workspaceDir);
   } finally {

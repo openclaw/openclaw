@@ -20,7 +20,7 @@ describe("resolveWindowsLobsterSpawn", () => {
   const originalPathExtAlt = process.env.Pathext;
 
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lobster-win-spawn-"));
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "activi-lobster-win-spawn-"));
     setProcessPlatform("win32");
   });
 

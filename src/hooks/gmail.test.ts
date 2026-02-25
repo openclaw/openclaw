@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type OpenClawConfig, DEFAULT_GATEWAY_PORT } from "../config/config.js";
+import { type ActiviConfig, DEFAULT_GATEWAY_PORT } from "../config/config.js";
 import {
   buildDefaultHookUrl,
   buildTopicPath,
@@ -11,23 +11,23 @@ const baseConfig = {
   hooks: {
     token: "hook-token",
     gmail: {
-      account: "openclaw@gmail.com",
+      account: "activi@gmail.com",
       topic: "projects/demo/topics/gog-gmail-watch",
       pushToken: "push-token",
     },
   },
-} satisfies OpenClawConfig;
+} satisfies ActiviConfig;
 
 describe("gmail hook config", () => {
   function resolveWithGmailOverrides(
-    overrides: Partial<NonNullable<OpenClawConfig["hooks"]>["gmail"]>,
+    overrides: Partial<NonNullable<ActiviConfig["hooks"]>["gmail"]>,
   ) {
     return resolveGmailHookRuntimeConfig(
       {
         hooks: {
           token: "hook-token",
           gmail: {
-            account: "openclaw@gmail.com",
+            account: "activi@gmail.com",
             topic: "projects/demo/topics/gog-gmail-watch",
             pushToken: "push-token",
             ...overrides,
@@ -71,7 +71,7 @@ describe("gmail hook config", () => {
     const result = resolveGmailHookRuntimeConfig(baseConfig, {});
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.value.account).toBe("openclaw@gmail.com");
+      expect(result.value.account).toBe("activi@gmail.com");
       expect(result.value.label).toBe("INBOX");
       expect(result.value.includeBody).toBe(true);
       expect(result.value.serve.port).toBe(8788);
@@ -84,7 +84,7 @@ describe("gmail hook config", () => {
       {
         hooks: {
           gmail: {
-            account: "openclaw@gmail.com",
+            account: "activi@gmail.com",
             topic: "projects/demo/topics/gog-gmail-watch",
             pushToken: "push-token",
           },

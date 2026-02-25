@@ -16,7 +16,7 @@ describe("scripts/ui windows spawn behavior", () => {
 
   it("allows safe forwarded args when shell mode is required on Windows", () => {
     expect(() =>
-      assertSafeWindowsShellArgs(["run", "build", "--filter", "@openclaw/ui"], "win32"),
+      assertSafeWindowsShellArgs(["run", "build", "--filter", "@activi/ui"], "win32"),
     ).not.toThrow();
   });
 

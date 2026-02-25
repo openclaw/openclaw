@@ -27,7 +27,7 @@ type ThreadBindingsGlobalState = {
 
 // Plugin hooks can load this module via Jiti while core imports it via ESM.
 // Store mutable state on globalThis so both loader paths share one registry.
-const THREAD_BINDINGS_STATE_KEY = "__openclawDiscordThreadBindingsState";
+const THREAD_BINDINGS_STATE_KEY = "__activiDiscordThreadBindingsState";
 
 function createThreadBindingsGlobalState(): ThreadBindingsGlobalState {
   return {

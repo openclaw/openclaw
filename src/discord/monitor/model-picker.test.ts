@@ -3,7 +3,7 @@ import { ComponentType } from "discord-api-types/v10";
 import { describe, expect, it, vi } from "vitest";
 import type { ModelsProviderData } from "../../auto-reply/reply/commands-models.js";
 import * as modelsCommandModule from "../../auto-reply/reply/commands-models.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 import {
   DISCORD_CUSTOM_ID_MAX_CHARS,
   DISCORD_MODEL_PICKER_MODEL_PAGE_SIZE,
@@ -62,7 +62,7 @@ describe("loadDiscordModelPickerData", () => {
       .spyOn(modelsCommandModule, "buildModelsProviderData")
       .mockResolvedValue(expected);
 
-    const result = await loadDiscordModelPickerData({} as OpenClawConfig);
+    const result = await loadDiscordModelPickerData({} as ActiviConfig);
 
     expect(spy).toHaveBeenCalledTimes(1);
     expect(result).toBe(expected);

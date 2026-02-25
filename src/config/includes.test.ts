@@ -12,17 +12,17 @@ import {
 
 const ROOT_DIR = path.parse(process.cwd()).root;
 const CONFIG_DIR = path.join(ROOT_DIR, "config");
-const ETC_OPENCLAW_DIR = path.join(ROOT_DIR, "etc", "openclaw");
+const ETC_ACTIVI_DIR = path.join(ROOT_DIR, "etc", "activi");
 const SHARED_DIR = path.join(ROOT_DIR, "shared");
 
-const DEFAULT_BASE_PATH = path.join(CONFIG_DIR, "openclaw.json");
+const DEFAULT_BASE_PATH = path.join(CONFIG_DIR, "activi.json");
 
 function configPath(...parts: string[]) {
   return path.join(CONFIG_DIR, ...parts);
 }
 
-function etcOpenClawPath(...parts: string[]) {
-  return path.join(ETC_OPENCLAW_DIR, ...parts);
+function etcActiviPath(...parts: string[]) {
+  return path.join(ETC_ACTIVI_DIR, ...parts);
 }
 
 function sharedPath(...parts: string[]) {
@@ -88,7 +88,7 @@ describe("resolveConfigIncludes", () => {
   });
 
   it("rejects absolute path outside config directory (CWE-22)", () => {
-    const absolute = etcOpenClawPath("agents.json");
+    const absolute = etcActiviPath("agents.json");
     const files = { [absolute]: { list: [{ id: "main" }] } };
     const obj = { agents: { $include: absolute } };
     expectResolveIncludeError(() => resolve(obj, files), /escapes config directory/);
@@ -293,7 +293,7 @@ describe("resolveConfigIncludes", () => {
     const files = { [sharedPath("common.json")]: { shared: true } };
     const obj = { $include: "../../shared/common.json" };
     expectResolveIncludeError(
-      () => resolve(obj, files, configPath("sub", "openclaw.json")),
+      () => resolve(obj, files, configPath("sub", "activi.json")),
       /escapes config directory/,
     );
   });
@@ -586,7 +586,7 @@ describe("security: path traversal protection (CWE-22)", () => {
     });
 
     it("allows include files when the config root path is a symlink", async () => {
-      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-includes-symlink-"));
+      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "activi-includes-symlink-"));
       try {
         const realRoot = path.join(tempRoot, "real");
         const linkRoot = path.join(tempRoot, "link");
@@ -600,7 +600,7 @@ describe("security: path traversal protection (CWE-22)", () => {
 
         const result = resolveConfigIncludes(
           { $include: "./includes/extra.json5" },
-          path.join(linkRoot, "openclaw.json"),
+          path.join(linkRoot, "activi.json"),
         );
         expect(result).toEqual({ logging: { redactSensitive: "tools" } });
       } finally {

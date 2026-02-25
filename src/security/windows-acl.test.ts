@@ -106,10 +106,10 @@ Successfully processed 1 files`;
 
     it("skips localized (non-English) status lines that have no parenthesised token", () => {
       const output =
-        "C:\\Users\\karte\\.openclaw NT AUTHORITY\\\u0421\u0418\u0421\u0422\u0415\u041c\u0410:(OI)(CI)(F)\n" +
+        "C:\\Users\\karte\\.activi NT AUTHORITY\\\u0421\u0418\u0421\u0422\u0415\u041c\u0410:(OI)(CI)(F)\n" +
         "\u0423\u0441\u043f\u0435\u0448\u043d\u043e \u043e\u0431\u0440\u0430\u0431\u043e\u0442\u0430\u043d\u043e 1 \u0444\u0430\u0439\u043b\u043e\u0432; " +
         "\u043d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043e\u0431\u0440\u0430\u0431\u043e\u0442\u0430\u0442\u044c 0 \u0444\u0430\u0439\u043b\u043e\u0432";
-      const entries = parseIcaclsOutput(output, "C:\\Users\\karte\\.openclaw");
+      const entries = parseIcaclsOutput(output, "C:\\Users\\karte\\.activi");
       expect(entries).toHaveLength(1);
       expect(entries[0].principal).toBe("NT AUTHORITY\\\u0421\u0418\u0421\u0422\u0415\u041c\u0410");
     });

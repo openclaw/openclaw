@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { withEnv } from "../test-utils/env.js";
 import { listTelegramAccountIds, resolveTelegramAccount } from "./accounts.js";
 
@@ -24,7 +24,7 @@ describe("resolveTelegramAccount", () => {
 
   it("falls back to the first configured account when accountId is omitted", () => {
     withEnv({ TELEGRAM_BOT_TOKEN: "" }, () => {
-      const cfg: OpenClawConfig = {
+      const cfg: ActiviConfig = {
         channels: {
           telegram: { accounts: { work: { botToken: "tok-work" } } },
         },
@@ -39,7 +39,7 @@ describe("resolveTelegramAccount", () => {
 
   it("uses TELEGRAM_BOT_TOKEN when default account config is missing", () => {
     withEnv({ TELEGRAM_BOT_TOKEN: "tok-env" }, () => {
-      const cfg: OpenClawConfig = {
+      const cfg: ActiviConfig = {
         channels: {
           telegram: { accounts: { work: { botToken: "tok-work" } } },
         },
@@ -54,7 +54,7 @@ describe("resolveTelegramAccount", () => {
 
   it("prefers default config token over TELEGRAM_BOT_TOKEN", () => {
     withEnv({ TELEGRAM_BOT_TOKEN: "tok-env" }, () => {
-      const cfg: OpenClawConfig = {
+      const cfg: ActiviConfig = {
         channels: {
           telegram: { botToken: "tok-config" },
         },
@@ -69,7 +69,7 @@ describe("resolveTelegramAccount", () => {
 
   it("does not fall back when accountId is explicitly provided", () => {
     withEnv({ TELEGRAM_BOT_TOKEN: "" }, () => {
-      const cfg: OpenClawConfig = {
+      const cfg: ActiviConfig = {
         channels: {
           telegram: { accounts: { work: { botToken: "tok-work" } } },
         },
@@ -83,8 +83,8 @@ describe("resolveTelegramAccount", () => {
   });
 
   it("formats debug logs with inspect-style output when debug env is enabled", () => {
-    withEnv({ TELEGRAM_BOT_TOKEN: "", OPENCLAW_DEBUG_TELEGRAM_ACCOUNTS: "1" }, () => {
-      const cfg: OpenClawConfig = {
+    withEnv({ TELEGRAM_BOT_TOKEN: "", ACTIVI_DEBUG_TELEGRAM_ACCOUNTS: "1" }, () => {
+      const cfg: ActiviConfig = {
         channels: {
           telegram: { accounts: { work: { botToken: "tok-work" } } },
         },

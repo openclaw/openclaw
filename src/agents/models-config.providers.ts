@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -45,7 +45,7 @@ import {
 } from "./together-models.js";
 import { discoverVeniceModels, VENICE_BASE_URL } from "./venice-models.js";
 
-type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
+type ModelsConfig = NonNullable<ActiviConfig["models"]>;
 export type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
 
 const MINIMAX_PORTAL_BASE_URL = "https://api.minimax.io/anthropic";
@@ -959,15 +959,15 @@ export async function resolveImplicitCopilotProvider(params: {
 
   // pi-coding-agent's ModelRegistry marks a model "available" only if its
   // `AuthStorage` has auth configured for that provider (via auth.json/env/etc).
-  // Our Copilot auth lives in OpenClaw's auth-profiles store instead, so we also
+  // Our Copilot auth lives in Activi's auth-profiles store instead, so we also
   // write a runtime-only auth.json entry for pi-coding-agent to pick up.
   //
-  // This is safe because it's (1) within OpenClaw's agent dir, (2) contains the
+  // This is safe because it's (1) within Activi's agent dir, (2) contains the
   // GitHub token (not the exchanged Copilot token), and (3) matches existing
   // patterns for OAuth-like providers in pi-coding-agent.
   // Note: we deliberately do not write pi-coding-agent's `auth.json` here.
-  // OpenClaw uses its own auth store and exchanges tokens at runtime.
-  // `models list` uses OpenClaw's auth heuristics for availability.
+  // Activi uses its own auth store and exchanges tokens at runtime.
+  // `models list` uses Activi's auth heuristics for availability.
 
   // We intentionally do NOT define custom models for Copilot in models.json.
   // pi-coding-agent treats providers with models as replacements requiring apiKey.
@@ -980,7 +980,7 @@ export async function resolveImplicitCopilotProvider(params: {
 
 export async function resolveImplicitBedrockProvider(params: {
   agentDir: string;
-  config?: OpenClawConfig;
+  config?: ActiviConfig;
   env?: NodeJS.ProcessEnv;
 }): Promise<ProviderConfig | null> {
   const env = params.env ?? process.env;

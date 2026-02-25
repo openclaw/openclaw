@@ -2,15 +2,15 @@ import { parseFrontmatterBlock } from "../markdown/frontmatter.js";
 import {
   getFrontmatterString,
   normalizeStringList,
-  parseOpenClawManifestInstallBase,
+  parseActiviManifestInstallBase,
   parseFrontmatterBool,
-  resolveOpenClawManifestBlock,
-  resolveOpenClawManifestInstall,
-  resolveOpenClawManifestOs,
-  resolveOpenClawManifestRequires,
+  resolveActiviManifestBlock,
+  resolveActiviManifestInstall,
+  resolveActiviManifestOs,
+  resolveActiviManifestRequires,
 } from "../shared/frontmatter.js";
 import type {
-  OpenClawHookMetadata,
+  ActiviHookMetadata,
   HookEntry,
   HookInstallSpec,
   HookInvocationPolicy,
@@ -22,7 +22,7 @@ export function parseFrontmatter(content: string): ParsedHookFrontmatter {
 }
 
 function parseInstallSpec(input: unknown): HookInstallSpec | undefined {
-  const parsed = parseOpenClawManifestInstallBase(input, ["bundled", "npm", "git"]);
+  const parsed = parseActiviManifestInstallBase(input, ["bundled", "npm", "git"]);
   if (!parsed) {
     return undefined;
   }
@@ -50,16 +50,16 @@ function parseInstallSpec(input: unknown): HookInstallSpec | undefined {
   return spec;
 }
 
-export function resolveOpenClawMetadata(
+export function resolveActiviMetadata(
   frontmatter: ParsedHookFrontmatter,
-): OpenClawHookMetadata | undefined {
-  const metadataObj = resolveOpenClawManifestBlock({ frontmatter });
+): ActiviHookMetadata | undefined {
+  const metadataObj = resolveActiviManifestBlock({ frontmatter });
   if (!metadataObj) {
     return undefined;
   }
-  const requires = resolveOpenClawManifestRequires(metadataObj);
-  const install = resolveOpenClawManifestInstall(metadataObj, parseInstallSpec);
-  const osRaw = resolveOpenClawManifestOs(metadataObj);
+  const requires = resolveActiviManifestRequires(metadataObj);
+  const install = resolveActiviManifestInstall(metadataObj, parseInstallSpec);
+  const osRaw = resolveActiviManifestOs(metadataObj);
   const eventsRaw = normalizeStringList(metadataObj.events);
   return {
     always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,

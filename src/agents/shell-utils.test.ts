@@ -11,7 +11,7 @@ function createTempCommandDir(
   tempDirs: string[],
   files: Array<{ name: string; executable?: boolean }>,
 ): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-"));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "activi-shell-"));
   tempDirs.push(dir);
   for (const file of files) {
     const filePath = path.join(dir, file.name);
@@ -107,7 +107,7 @@ describe("resolveShellFromPath", () => {
   });
 
   it("returns undefined when command does not exist", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shell-empty-"));
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "activi-shell-empty-"));
     tempDirs.push(dir);
     process.env.PATH = dir;
     expect(resolveShellFromPath("bash")).toBeUndefined();

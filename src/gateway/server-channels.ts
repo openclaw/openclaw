@@ -1,7 +1,7 @@
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { type ChannelId, getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { type BackoffPolicy, computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resetDirectoryCache } from "../infra/outbound/target-resolver.js";
@@ -56,7 +56,7 @@ function cloneDefaultRuntime(channelId: ChannelId, accountId: string): ChannelAc
 }
 
 type ChannelManagerOptions = {
-  loadConfig: () => OpenClawConfig;
+  loadConfig: () => ActiviConfig;
   channelLogs: Record<ChannelId, SubsystemLogger>;
   channelRuntimeEnvs: Record<ChannelId, RuntimeEnv>;
 };

@@ -5,7 +5,7 @@ import { resolveBrowserConfig, resolveProfile } from "../browser/config.js";
 import { resolveBrowserControlAuth } from "../browser/control-auth.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { buildGatewayConnectionDetails } from "../gateway/call.js";
@@ -80,7 +80,7 @@ export type SecurityAuditReport = {
 };
 
 export type SecurityAuditOptions = {
-  config: OpenClawConfig;
+  config: ActiviConfig;
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   deep?: boolean;
@@ -153,7 +153,7 @@ async function collectFilesystemFindings(params: {
         checkId: "fs.state_dir.perms_world_writable",
         severity: "critical",
         title: "State dir is world-writable",
-        detail: `${formatPermissionDetail(params.stateDir, stateDirPerms)}; other users can write into your OpenClaw state.`,
+        detail: `${formatPermissionDetail(params.stateDir, stateDirPerms)}; other users can write into your Activi state.`,
         remediation: formatPermissionRemediation({
           targetPath: params.stateDir,
           perms: stateDirPerms,
@@ -167,7 +167,7 @@ async function collectFilesystemFindings(params: {
         checkId: "fs.state_dir.perms_group_writable",
         severity: "warn",
         title: "State dir is group-writable",
-        detail: `${formatPermissionDetail(params.stateDir, stateDirPerms)}; group users can write into your OpenClaw state.`,
+        detail: `${formatPermissionDetail(params.stateDir, stateDirPerms)}; group users can write into your Activi state.`,
         remediation: formatPermissionRemediation({
           targetPath: params.stateDir,
           perms: stateDirPerms,
@@ -257,7 +257,7 @@ async function collectFilesystemFindings(params: {
 }
 
 function collectGatewayConfigFindings(
-  cfg: OpenClawConfig,
+  cfg: ActiviConfig,
   env: NodeJS.ProcessEnv,
 ): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
@@ -541,7 +541,7 @@ function isStrictLoopbackTrustedProxyEntry(entry: string): boolean {
 }
 
 function collectBrowserControlFindings(
-  cfg: OpenClawConfig,
+  cfg: ActiviConfig,
   env: NodeJS.ProcessEnv,
 ): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
@@ -555,7 +555,7 @@ function collectBrowserControlFindings(
       severity: "warn",
       title: "Browser control config looks invalid",
       detail: String(err),
-      remediation: `Fix browser.cdpUrl in ${resolveConfigPath()} and re-run "${formatCliCommand("openclaw security audit --deep")}".`,
+      remediation: `Fix browser.cdpUrl in ${resolveConfigPath()} and re-run "${formatCliCommand("activi security audit --deep")}".`,
     });
     return findings;
   }
@@ -603,7 +603,7 @@ function collectBrowserControlFindings(
   return findings;
 }
 
-function collectLoggingFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+function collectLoggingFindings(cfg: ActiviConfig): SecurityAuditFinding[] {
   const redact = cfg.logging?.redactSensitive;
   if (redact !== "off") {
     return [];
@@ -619,7 +619,7 @@ function collectLoggingFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   ];
 }
 
-function collectElevatedFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+function collectElevatedFindings(cfg: ActiviConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const enabled = cfg.tools?.elevated?.enabled;
   const allowFrom = cfg.tools?.elevated?.allowFrom ?? {};
@@ -654,7 +654,7 @@ function collectElevatedFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   return findings;
 }
 
-function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
+function collectExecRuntimeFindings(cfg: ActiviConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const globalExecHost = cfg.tools?.exec?.host;
   const defaultSandboxMode = resolveSandboxConfigForAgent(cfg).mode;
@@ -762,7 +762,7 @@ function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFinding[]
 }
 
 async function maybeProbeGateway(params: {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   timeoutMs: number;
   probe: typeof probeGateway;
 }): Promise<SecurityAuditReport["deep"]> {
@@ -885,7 +885,7 @@ export async function runSecurityAudit(opts: SecurityAuditOptions): Promise<Secu
       severity: "warn",
       title: "Gateway probe failed (deep)",
       detail: deep.gateway.error ?? "gateway unreachable",
-      remediation: `Run "${formatCliCommand("openclaw status --all")}" to debug connectivity/auth, then re-run "${formatCliCommand("openclaw security audit --deep")}".`,
+      remediation: `Run "${formatCliCommand("activi status --all")}" to debug connectivity/auth, then re-run "${formatCliCommand("activi security audit --deep")}".`,
     });
   }
 

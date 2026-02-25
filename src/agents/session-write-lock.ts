@@ -31,9 +31,9 @@ export type SessionLockInspection = {
 
 const CLEANUP_SIGNALS = ["SIGINT", "SIGTERM", "SIGQUIT", "SIGABRT"] as const;
 type CleanupSignal = (typeof CLEANUP_SIGNALS)[number];
-const CLEANUP_STATE_KEY = Symbol.for("openclaw.sessionWriteLockCleanupState");
-const HELD_LOCKS_KEY = Symbol.for("openclaw.sessionWriteLockHeldLocks");
-const WATCHDOG_STATE_KEY = Symbol.for("openclaw.sessionWriteLockWatchdogState");
+const CLEANUP_STATE_KEY = Symbol.for("activi.sessionWriteLockCleanupState");
+const HELD_LOCKS_KEY = Symbol.for("activi.sessionWriteLockHeldLocks");
+const WATCHDOG_STATE_KEY = Symbol.for("activi.sessionWriteLockWatchdogState");
 
 const DEFAULT_STALE_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_HOLD_MS = 5 * 60 * 1000;

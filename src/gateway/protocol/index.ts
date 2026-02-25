@@ -38,6 +38,18 @@ import {
   AgentsFilesSetResultSchema,
   type AgentsListParams,
   AgentsListParamsSchema,
+  type BuilderSetApiKeyParams,
+  BuilderSetApiKeyParamsSchema,
+  type BuilderSetApiKeyResult,
+  BuilderSetApiKeyResultSchema,
+  type BuilderCreateAgentParams,
+  BuilderCreateAgentParamsSchema,
+  type BuilderCreateAgentResult,
+  BuilderCreateAgentResultSchema,
+  type BuilderDeployAgentParams,
+  BuilderDeployAgentParamsSchema,
+  type BuilderDeployAgentResult,
+  BuilderDeployAgentResultSchema,
   type AgentsListResult,
   AgentsListResultSchema,
   type AgentWaitParams,
@@ -248,6 +260,15 @@ export const validateAgentWaitParams = ajv.compile<AgentWaitParams>(AgentWaitPar
 export const validateWakeParams = ajv.compile<WakeParams>(WakeParamsSchema);
 export const validateAgentsListParams = ajv.compile<AgentsListParams>(AgentsListParamsSchema);
 export const validateAgentsCreateParams = ajv.compile<AgentsCreateParams>(AgentsCreateParamsSchema);
+export const validateBuilderSetApiKeyParams = ajv.compile<BuilderSetApiKeyParams>(
+  BuilderSetApiKeyParamsSchema,
+);
+export const validateBuilderCreateAgentParams = ajv.compile<BuilderCreateAgentParams>(
+  BuilderCreateAgentParamsSchema,
+);
+export const validateBuilderDeployAgentParams = ajv.compile<BuilderDeployAgentParams>(
+  BuilderDeployAgentParamsSchema,
+);
 export const validateAgentsUpdateParams = ajv.compile<AgentsUpdateParams>(AgentsUpdateParamsSchema);
 export const validateAgentsDeleteParams = ajv.compile<AgentsDeleteParams>(AgentsDeleteParamsSchema);
 export const validateAgentsFilesListParams = ajv.compile<AgentsFilesListParams>(

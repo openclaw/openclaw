@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { Type } from "@sinclair/typebox";
-import type { OpenClawPluginApi } from "../../../src/plugins/types.js";
+import type { ActiviPluginApi } from "../../../src/plugins/types.js";
 import { resolveWindowsLobsterSpawn } from "./windows-spawn.js";
 
 type LobsterEnvelope =
@@ -207,7 +207,7 @@ function buildLobsterArgv(action: string, params: Record<string, unknown>): stri
   throw new Error(`Unknown action: ${action}`);
 }
 
-export function createLobsterTool(api: OpenClawPluginApi) {
+export function createLobsterTool(api: ActiviPluginApi) {
   return {
     name: "lobster",
     label: "Lobster Workflow",

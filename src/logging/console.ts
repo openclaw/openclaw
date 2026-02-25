@@ -1,5 +1,5 @@
 import util from "node:util";
-import type { OpenClawConfig } from "../config/types.js";
+import type { ActiviConfig } from "../config/types.js";
 import { isVerbose } from "../globals.js";
 import { stripAnsi } from "../terminal/ansi.js";
 import { readLoggingConfig } from "./config.js";
@@ -18,12 +18,12 @@ type ConsoleSettings = {
 export type ConsoleLoggerSettings = ConsoleSettings;
 
 const requireConfig = resolveNodeRequireFromMeta(import.meta.url);
-type ConsoleConfigLoader = () => OpenClawConfig["logging"] | undefined;
+type ConsoleConfigLoader = () => ActiviConfig["logging"] | undefined;
 const loadConfigFallbackDefault: ConsoleConfigLoader = () => {
   try {
     const loaded = requireConfig?.("../config/config.js") as
       | {
-          loadConfig?: () => OpenClawConfig;
+          loadConfig?: () => ActiviConfig;
         }
       | undefined;
     return loaded?.loadConfig?.().logging;
@@ -41,7 +41,7 @@ function normalizeConsoleLevel(level?: string): LogLevel {
   if (isVerbose()) {
     return "debug";
   }
-  if (!level && process.env.VITEST === "true" && process.env.OPENCLAW_TEST_CONSOLE !== "1") {
+  if (!level && process.env.VITEST === "true" && process.env.ACTIVI_TEST_CONSOLE !== "1") {
     return "silent";
   }
   return normalizeLogLevel(level, "info");
@@ -58,7 +58,7 @@ function normalizeConsoleStyle(style?: string): ConsoleStyle {
 }
 
 function resolveConsoleSettings(): ConsoleSettings {
-  let cfg: OpenClawConfig["logging"] | undefined =
+  let cfg: ActiviConfig["logging"] | undefined =
     (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
   if (!cfg) {
     if (loggingState.resolvingConsoleSettings) {

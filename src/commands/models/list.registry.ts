@@ -1,5 +1,5 @@
 import type { Api, Model } from "@mariozechner/pi-ai";
-import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
+import { resolveActiviAgentDir } from "../../agents/agent-paths.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
 import { listProfilesForProvider } from "../../agents/auth-profiles.js";
 import {
@@ -11,11 +11,11 @@ import {
   ANTIGRAVITY_OPUS_46_FORWARD_COMPAT_CANDIDATES,
   resolveForwardCompatModel,
 } from "../../agents/model-forward-compat.js";
-import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
+import { ensureActiviModelsJson } from "../../agents/models-config.js";
 import { ensurePiAuthJsonFromAuthProfiles } from "../../agents/pi-auth-json.js";
 import type { ModelRegistry } from "../../agents/pi-model-discovery.js";
 import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 import {
   formatErrorWithStack,
   MODEL_AVAILABILITY_UNAVAILABLE_CODE,
@@ -26,7 +26,7 @@ import { isLocalBaseUrl, modelKey } from "./shared.js";
 
 const hasAuthForProvider = (
   provider: string,
-  cfg?: OpenClawConfig,
+  cfg?: ActiviConfig,
   authStore?: AuthProfileStore,
 ) => {
   if (!cfg || !authStore) {
@@ -99,9 +99,9 @@ function loadAvailableModels(registry: ModelRegistry): Model<Api>[] {
   }
 }
 
-export async function loadModelRegistry(cfg: OpenClawConfig) {
-  await ensureOpenClawModelsJson(cfg);
-  const agentDir = resolveOpenClawAgentDir();
+export async function loadModelRegistry(cfg: ActiviConfig) {
+  await ensureActiviModelsJson(cfg);
+  const agentDir = resolveActiviAgentDir();
   await ensurePiAuthJsonFromAuthProfiles(agentDir);
   const authStorage = discoverAuthStorage(agentDir);
   const registry = discoverModels(authStorage, agentDir);
@@ -186,7 +186,7 @@ export function toModelRow(params: {
   tags: string[];
   aliases?: string[];
   availableKeys?: Set<string>;
-  cfg?: OpenClawConfig;
+  cfg?: ActiviConfig;
   authStore?: AuthProfileStore;
 }): ModelRow {
   const { model, key, tags, aliases = [], availableKeys, cfg, authStore } = params;

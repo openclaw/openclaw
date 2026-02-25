@@ -32,7 +32,7 @@ describe("buildInboundMetaSystemPrompt", () => {
     } as TemplateContext);
 
     const payload = parseInboundMetaPayload(prompt);
-    expect(payload["schema"]).toBe("openclaw.inbound_meta.v1");
+    expect(payload["schema"]).toBe("activi.inbound_meta.v1");
     expect(payload["chat_id"]).toBe("telegram:5494292670");
     expect(payload["channel"]).toBe("telegram");
   });
@@ -77,7 +77,7 @@ describe("buildInboundUserContextPrefix", () => {
   it("omits conversation label block for direct chats", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "direct",
-      ConversationLabel: "openclaw-tui",
+      ConversationLabel: "activi-tui",
     } as TemplateContext);
 
     expect(text).toBe("");

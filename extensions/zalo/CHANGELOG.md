@@ -4,7 +4,7 @@
 
 ### Changes
 
-- Version alignment with core OpenClaw release numbers.
+- Version alignment with core Activi release numbers.
 
 ## 0.1.0
 

@@ -11,7 +11,7 @@ import {
   resolveEnvApiKey,
 } from "../../agents/model-auth.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../../agents/model-selection.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 import { shortenHomePath } from "../../utils.js";
 import { maskApiKey } from "../../utils/mask-api-key.js";
 
@@ -19,7 +19,7 @@ export type ModelAuthDetailMode = "compact" | "verbose";
 
 export const resolveAuthLabel = async (
   provider: string,
-  cfg: OpenClawConfig,
+  cfg: ActiviConfig,
   modelsPath: string,
   agentDir?: string,
   mode: ModelAuthDetailMode = "compact",
@@ -188,7 +188,7 @@ export const formatAuthLabel = (auth: { label: string; source: string }) => {
 export const resolveProfileOverride = (params: {
   rawProfile?: string;
   provider: string;
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   agentDir?: string;
 }): { profileId?: string; error?: string } => {
   const raw = params.rawProfile?.trim();

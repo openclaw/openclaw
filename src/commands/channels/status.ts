@@ -3,7 +3,7 @@ import { buildChannelAccountSnapshot } from "../../channels/plugins/status.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { withProgress } from "../../cli/progress.js";
-import { type OpenClawConfig, readConfigFileSnapshot } from "../../config/config.js";
+import { type ActiviConfig, readConfigFileSnapshot } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
 import { collectChannelStatusIssues } from "../../infra/channels-status-issues.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
@@ -175,7 +175,7 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
         `- ${issue.channel} ${issue.accountId}: ${issue.message}${issue.fix ? ` (${issue.fix})` : ""}`,
       );
     }
-    lines.push(`- Run: ${formatCliCommand("openclaw doctor")}`);
+    lines.push(`- Run: ${formatCliCommand("activi doctor")}`);
     lines.push("");
   }
   lines.push(
@@ -185,7 +185,7 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
 }
 
 async function formatConfigChannelsStatusLines(
-  cfg: OpenClawConfig,
+  cfg: ActiviConfig,
   meta: { path?: string; mode?: "local" | "remote" },
 ): Promise<string[]> {
   const lines: string[] = [];

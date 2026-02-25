@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveAgentWorkspaceDir } from "../../../agents/agent-scope.js";
 import type { CliDeps } from "../../../cli/deps.js";
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { ActiviConfig } from "../../../config/config.js";
 
 const runBootOnce = vi.fn();
 
@@ -36,7 +36,7 @@ describe("boot-md startup hook integration", () => {
           { id: "ops", workspace: "/ws/ops" },
         ],
       },
-    } as OpenClawConfig;
+    } as ActiviConfig;
     const deps = {} as CliDeps;
     runBootOnce.mockResolvedValue({ status: "ran" });
 

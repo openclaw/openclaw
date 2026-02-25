@@ -17,7 +17,7 @@ describe("buildAgentSystemPrompt", () => {
       {
         name: "plain owner numbers",
         params: {
-          workspaceDir: "/tmp/openclaw",
+          workspaceDir: "/tmp/activi",
           ownerNumbers: ["+123", " +456 ", ""],
         },
         expectAuthorizedSection: true,
@@ -29,7 +29,7 @@ describe("buildAgentSystemPrompt", () => {
       {
         name: "hashed owner numbers",
         params: {
-          workspaceDir: "/tmp/openclaw",
+          workspaceDir: "/tmp/activi",
           ownerNumbers: ["+123", "+456", ""],
           ownerDisplay: "hash",
         },
@@ -41,7 +41,7 @@ describe("buildAgentSystemPrompt", () => {
       {
         name: "missing owners",
         params: {
-          workspaceDir: "/tmp/openclaw",
+          workspaceDir: "/tmp/activi",
         },
         expectAuthorizedSection: false,
         contains: [],
@@ -70,14 +70,14 @@ describe("buildAgentSystemPrompt", () => {
 
   it("uses a stable, keyed HMAC when ownerDisplaySecret is provided", () => {
     const secretA = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
+      workspaceDir: "/tmp/activi",
       ownerNumbers: ["+123"],
       ownerDisplay: "hash",
       ownerDisplaySecret: "secret-key-A",
     });
 
     const secretB = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
+      workspaceDir: "/tmp/activi",
       ownerNumbers: ["+123"],
       ownerDisplay: "hash",
       ownerDisplaySecret: "secret-key-B",
@@ -95,14 +95,14 @@ describe("buildAgentSystemPrompt", () => {
 
   it("omits extended sections in minimal prompt mode", () => {
     const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
+      workspaceDir: "/tmp/activi",
       promptMode: "minimal",
       ownerNumbers: ["+123"],
       skillsPrompt:
         "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
       heartbeatPrompt: "ping",
       toolNames: ["message", "memory_search"],
-      docsPath: "/tmp/openclaw/docs",
+      docsPath: "/tmp/activi/docs",
       extraSystemPrompt: "Subagent details",
       ttsHint: "Voice (TTS) is enabled.",
     });
@@ -133,7 +133,7 @@ describe("buildAgentSystemPrompt", () => {
 
   it("includes safety guardrails in full prompts", () => {
     const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
+      workspaceDir: "/tmp/activi",
     });
 
     expect(prompt).toContain("## Safety");
@@ -147,7 +147,7 @@ describe("buildAgentSystemPrompt", () => {
 
   it("includes voice hint when provided", () => {
     const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
+      workspaceDir: "/tmp/activi",
       ttsHint: "Voice (TTS) is enabled.",
     });
 
@@ -157,7 +157,7 @@ describe("buildAgentSystemPrompt", () => {
 
   it("adds reasoning tag hint when enabled", () => {
     const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
+      workspaceDir: "/tmp/activi",
       reasoningTagHint: true,
     });
 
@@ -168,17 +168,17 @@ describe("buildAgentSystemPrompt", () => {
 
   it("includes a CLI quick reference section", () => {
     const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
+      workspaceDir: "/tmp/activi",
     });
 
-    expect(prompt).toContain("## OpenClaw CLI Quick Reference");
-    expect(prompt).toContain("openclaw gateway restart");
+    expect(prompt).toContain("## Activi CLI Quick Reference");
+    expect(prompt).toContain("activi gateway restart");
     expect(prompt).toContain("Do not invent commands");
   });
 
   it("marks system message blocks as internal and not user-visible", () => {
     const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
+      workspaceDir: "/tmp/activi",
     });
 
     expect(prompt).toContain("`[System Message] ...` blocks are internal context");
@@ -189,7 +189,7 @@ describe("buildAgentSystemPrompt", () => {
 
   it("guides subagent workflows to avoid polling loops", () => {
     const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
+      workspaceDir: "/tmp/activi",
     });
 
     expect(prompt).toContain(
@@ -201,7 +201,7 @@ describe("buildAgentSystemPrompt", () => {
 
   it("lists available tools when provided", () => {
     const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
+      workspaceDir: "/tmp/activi",
       toolNames: ["exec", "sessions_list", "sessions_history", "sessions_send"],
     });
 
@@ -213,11 +213,11 @@ describe("buildAgentSystemPrompt", () => {
 
   it("preserves tool casing in the prompt", () => {
     const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
+      workspaceDir: "/tmp/activi",
       toolNames: ["Read", "Exec", "process"],
       skillsPrompt:
         "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
-      docsPath: "/tmp/openclaw/docs",
+      docsPath: "/tmp/activi/docs",
     });
 
     expect(prompt).toContain("- Read: Read file contents");
@@ -225,28 +225,28 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "- If exactly one skill clearly applies: read its SKILL.md at <location> with `Read`, then follow it.",
     );
-    expect(prompt).toContain("OpenClaw docs: /tmp/openclaw/docs");
+    expect(prompt).toContain("Activi docs: /tmp/activi/docs");
     expect(prompt).toContain(
-      "For OpenClaw behavior, commands, config, or architecture: consult local docs first.",
+      "For Activi behavior, commands, config, or architecture: consult local docs first.",
     );
   });
 
   it("includes docs guidance when docsPath is provided", () => {
     const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      docsPath: "/tmp/openclaw/docs",
+      workspaceDir: "/tmp/activi",
+      docsPath: "/tmp/activi/docs",
     });
 
     expect(prompt).toContain("## Documentation");
-    expect(prompt).toContain("OpenClaw docs: /tmp/openclaw/docs");
+    expect(prompt).toContain("Activi docs: /tmp/activi/docs");
     expect(prompt).toContain(
-      "For OpenClaw behavior, commands, config, or architecture: consult local docs first.",
+      "For Activi behavior, commands, config, or architecture: consult local docs first.",
     );
   });
 
   it("includes workspace notes when provided", () => {
     const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
+      workspaceDir: "/tmp/activi",
       workspaceNotes: ["Reminder: commit your changes in this workspace after edits."],
     });
 
@@ -258,7 +258,7 @@ describe("buildAgentSystemPrompt", () => {
       {
         name: "12-hour",
         params: {
-          workspaceDir: "/tmp/openclaw",
+          workspaceDir: "/tmp/activi",
           userTimezone: "America/Chicago",
           userTime: "Monday, January 5th, 2026 — 3:26 PM",
           userTimeFormat: "12" as const,
@@ -267,7 +267,7 @@ describe("buildAgentSystemPrompt", () => {
       {
         name: "24-hour",
         params: {
-          workspaceDir: "/tmp/openclaw",
+          workspaceDir: "/tmp/activi",
           userTimezone: "America/Chicago",
           userTime: "Monday, January 5th, 2026 — 15:26",
           userTimeFormat: "24" as const,
@@ -276,7 +276,7 @@ describe("buildAgentSystemPrompt", () => {
       {
         name: "timezone-only",
         params: {
-          workspaceDir: "/tmp/openclaw",
+          workspaceDir: "/tmp/activi",
           userTimezone: "America/Chicago",
           userTimeFormat: "24" as const,
         },
@@ -292,7 +292,7 @@ describe("buildAgentSystemPrompt", () => {
 
   it("hints to use session_status for current date/time", () => {
     const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/clawd",
+      workspaceDir: "/tmp/activi",
       userTimezone: "America/Chicago",
     });
 
@@ -308,7 +308,7 @@ describe("buildAgentSystemPrompt", () => {
   //          https://github.com/moltbot/moltbot/issues/3658
   it("does NOT include a date or time in the system prompt (cache stability)", () => {
     const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/clawd",
+      workspaceDir: "/tmp/activi",
       userTimezone: "America/Chicago",
       userTime: "Monday, January 5th, 2026 — 3:26 PM",
       userTimeFormat: "12",
@@ -327,7 +327,7 @@ describe("buildAgentSystemPrompt", () => {
 
   it("includes model alias guidance when aliases are provided", () => {
     const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
+      workspaceDir: "/tmp/activi",
       modelAliasLines: [
         "- Opus: anthropic/claude-opus-4-5",
         "- Sonnet: anthropic/claude-sonnet-4-5",
@@ -341,18 +341,18 @@ describe("buildAgentSystemPrompt", () => {
 
   it("adds ClaudeBot self-update guidance when gateway tool is available", () => {
     const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
+      workspaceDir: "/tmp/activi",
       toolNames: ["gateway", "exec"],
     });
 
-    expect(prompt).toContain("## OpenClaw Self-Update");
+    expect(prompt).toContain("## Activi Self-Update");
     expect(prompt).toContain("config.apply");
     expect(prompt).toContain("update.run");
   });
 
   it("includes skills guidance when skills prompt is present", () => {
     const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
+      workspaceDir: "/tmp/activi",
       skillsPrompt:
         "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
     });
@@ -365,7 +365,7 @@ describe("buildAgentSystemPrompt", () => {
 
   it("appends available skills when provided", () => {
     const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
+      workspaceDir: "/tmp/activi",
       skillsPrompt:
         "<available_skills>\n  <skill>\n    <name>demo</name>\n  </skill>\n</available_skills>",
     });
@@ -376,7 +376,7 @@ describe("buildAgentSystemPrompt", () => {
 
   it("omits skills section when no skills prompt is provided", () => {
     const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
+      workspaceDir: "/tmp/activi",
     });
 
     expect(prompt).not.toContain("## Skills");
@@ -385,7 +385,7 @@ describe("buildAgentSystemPrompt", () => {
 
   it("renders project context files when provided", () => {
     const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
+      workspaceDir: "/tmp/activi",
       contextFiles: [
         { path: "AGENTS.md", content: "Alpha" },
         { path: "IDENTITY.md", content: "Bravo" },
@@ -401,7 +401,7 @@ describe("buildAgentSystemPrompt", () => {
 
   it("ignores context files with missing or blank paths", () => {
     const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
+      workspaceDir: "/tmp/activi",
       contextFiles: [
         { path: undefined as unknown as string, content: "Missing path" },
         { path: "   ", content: "Blank path" },
@@ -418,7 +418,7 @@ describe("buildAgentSystemPrompt", () => {
 
   it("adds SOUL guidance when a soul file is present", () => {
     const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
+      workspaceDir: "/tmp/activi",
       contextFiles: [
         { path: "./SOUL.md", content: "Persona" },
         { path: "dir\\SOUL.md", content: "Persona Windows" },
@@ -432,7 +432,7 @@ describe("buildAgentSystemPrompt", () => {
 
   it("summarizes the message tool when available", () => {
     const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
+      workspaceDir: "/tmp/activi",
       toolNames: ["message"],
     });
 
@@ -443,7 +443,7 @@ describe("buildAgentSystemPrompt", () => {
 
   it("includes inline button style guidance when runtime supports inline buttons", () => {
     const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
+      workspaceDir: "/tmp/activi",
       toolNames: ["message"],
       runtimeInfo: {
         channel: "telegram",
@@ -457,7 +457,7 @@ describe("buildAgentSystemPrompt", () => {
 
   it("includes runtime provider capabilities when present", () => {
     const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
+      workspaceDir: "/tmp/activi",
       runtimeInfo: {
         channel: "telegram",
         capabilities: ["inlineButtons"],
@@ -470,7 +470,7 @@ describe("buildAgentSystemPrompt", () => {
 
   it("includes agent id in runtime when provided", () => {
     const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
+      workspaceDir: "/tmp/activi",
       runtimeInfo: {
         agentId: "work",
         host: "host",
@@ -486,7 +486,7 @@ describe("buildAgentSystemPrompt", () => {
 
   it("includes reasoning visibility hint", () => {
     const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
+      workspaceDir: "/tmp/activi",
       reasoningLevel: "off",
     });
 
@@ -526,7 +526,7 @@ describe("buildAgentSystemPrompt", () => {
 
   it("describes sandboxed runtime and elevated when allowed", () => {
     const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
+      workspaceDir: "/tmp/activi",
       sandboxInfo: {
         enabled: true,
         workspaceDir: "/tmp/sandbox",
@@ -539,7 +539,7 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("Your working directory is: /workspace");
     expect(prompt).toContain(
-      "For read/write/edit/apply_patch, file paths resolve against host workspace: /tmp/openclaw. For bash/exec commands, use sandbox container paths under /workspace (or relative paths from that workdir), not host paths.",
+      "For read/write/edit/apply_patch, file paths resolve against host workspace: /tmp/activi. For bash/exec commands, use sandbox container paths under /workspace (or relative paths from that workdir), not host paths.",
     );
     expect(prompt).toContain("Sandbox container workdir: /workspace");
     expect(prompt).toContain(
@@ -553,7 +553,7 @@ describe("buildAgentSystemPrompt", () => {
 
   it("includes reaction guidance when provided", () => {
     const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
+      workspaceDir: "/tmp/activi",
       reactionGuidance: {
         level: "minimal",
         channel: "Telegram",

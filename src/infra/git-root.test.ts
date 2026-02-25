@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { findGitRoot, resolveGitHeadPath } from "./git-root.js";
 
 async function makeTempDir(label: string): Promise<string> {
-  return fs.mkdtemp(path.join(os.tmpdir(), `openclaw-${label}-`));
+  return fs.mkdtemp(path.join(os.tmpdir(), `activi-${label}-`));
 }
 
 describe("git-root", () => {

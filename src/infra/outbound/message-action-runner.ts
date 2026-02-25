@@ -12,7 +12,7 @@ import type {
   ChannelMessageActionName,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -89,7 +89,7 @@ function resolveAndApplyOutboundThreadId(
 }
 
 export type RunMessageActionParams = {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   action: ChannelMessageActionName;
   params: Record<string, unknown>;
   defaultAccountId?: string;
@@ -183,7 +183,7 @@ function applyCrossContextMessageDecoration({
 }
 
 async function maybeApplyCrossContextMarker(params: {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   channel: ChannelId;
   action: ChannelMessageActionName;
   target: string;
@@ -214,7 +214,7 @@ async function maybeApplyCrossContextMarker(params: {
   });
 }
 
-async function resolveChannel(cfg: OpenClawConfig, params: Record<string, unknown>) {
+async function resolveChannel(cfg: ActiviConfig, params: Record<string, unknown>) {
   const channelHint = readStringParam(params, "channel");
   const selection = await resolveMessageChannelSelection({
     cfg,
@@ -224,7 +224,7 @@ async function resolveChannel(cfg: OpenClawConfig, params: Record<string, unknow
 }
 
 async function resolveActionTarget(params: {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   channel: ChannelId;
   action: ChannelMessageActionName;
   args: Record<string, unknown>;
@@ -269,7 +269,7 @@ async function resolveActionTarget(params: {
 }
 
 type ResolvedActionContext = {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   params: Record<string, unknown>;
   channel: ChannelId;
   accountId?: string | null;

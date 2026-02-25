@@ -4,12 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
-import { discoverOpenClawPlugins } from "./discovery.js";
+import { discoverActiviPlugins } from "./discovery.js";
 
 const tempDirs: string[] = [];
 
 function makeTempDir() {
-  const dir = path.join(os.tmpdir(), `openclaw-plugins-${randomUUID()}`);
+  const dir = path.join(os.tmpdir(), `activi-plugins-${randomUUID()}`);
   fs.mkdirSync(dir, { recursive: true });
   tempDirs.push(dir);
   return dir;
@@ -18,9 +18,8 @@ function makeTempDir() {
 async function withStateDir<T>(stateDir: string, fn: () => Promise<T>) {
   return await withEnvAsync(
     {
-      OPENCLAW_STATE_DIR: stateDir,
-      CLAWDBOT_STATE_DIR: undefined,
-      OPENCLAW_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
+      ACTIVI_STATE_DIR: stateDir,
+      ACTIVI_BUNDLED_PLUGINS_DIR: "/nonexistent/bundled/plugins",
     },
     fn,
   );
@@ -36,7 +35,7 @@ afterEach(() => {
   }
 });
 
-describe("discoverOpenClawPlugins", () => {
+describe("discoverActiviPlugins", () => {
   it("discovers global and workspace extensions", async () => {
     const stateDir = makeTempDir();
     const workspaceDir = path.join(stateDir, "workspace");
@@ -45,12 +44,12 @@ describe("discoverOpenClawPlugins", () => {
     fs.mkdirSync(globalExt, { recursive: true });
     fs.writeFileSync(path.join(globalExt, "alpha.ts"), "export default function () {}", "utf-8");
 
-    const workspaceExt = path.join(workspaceDir, ".openclaw", "extensions");
+    const workspaceExt = path.join(workspaceDir, ".activi", "extensions");
     fs.mkdirSync(workspaceExt, { recursive: true });
     fs.writeFileSync(path.join(workspaceExt, "beta.ts"), "export default function () {}", "utf-8");
 
     const { candidates } = await withStateDir(stateDir, async () => {
-      return discoverOpenClawPlugins({ workspaceDir });
+      return discoverActiviPlugins({ workspaceDir });
     });
 
     const ids = candidates.map((c) => c.idHint);
@@ -67,7 +66,7 @@ describe("discoverOpenClawPlugins", () => {
       path.join(globalExt, "package.json"),
       JSON.stringify({
         name: "pack",
-        openclaw: { extensions: ["./src/one.ts", "./src/two.ts"] },
+        activi: { extensions: ["./src/one.ts", "./src/two.ts"] },
       }),
       "utf-8",
     );
@@ -83,7 +82,7 @@ describe("discoverOpenClawPlugins", () => {
     );
 
     const { candidates } = await withStateDir(stateDir, async () => {
-      return discoverOpenClawPlugins({});
+      return discoverActiviPlugins({});
     });
 
     const ids = candidates.map((c) => c.idHint);
@@ -99,8 +98,8 @@ describe("discoverOpenClawPlugins", () => {
     fs.writeFileSync(
       path.join(globalExt, "package.json"),
       JSON.stringify({
-        name: "@openclaw/voice-call",
-        openclaw: { extensions: ["./src/index.ts"] },
+        name: "@activi/voice-call",
+        activi: { extensions: ["./src/index.ts"] },
       }),
       "utf-8",
     );
@@ -111,7 +110,7 @@ describe("discoverOpenClawPlugins", () => {
     );
 
     const { candidates } = await withStateDir(stateDir, async () => {
-      return discoverOpenClawPlugins({});
+      return discoverActiviPlugins({});
     });
 
     const ids = candidates.map((c) => c.idHint);
@@ -126,15 +125,15 @@ describe("discoverOpenClawPlugins", () => {
     fs.writeFileSync(
       path.join(packDir, "package.json"),
       JSON.stringify({
-        name: "@openclaw/demo-plugin-dir",
-        openclaw: { extensions: ["./index.js"] },
+        name: "@activi/demo-plugin-dir",
+        activi: { extensions: ["./index.js"] },
       }),
       "utf-8",
     );
     fs.writeFileSync(path.join(packDir, "index.js"), "module.exports = {}", "utf-8");
 
     const { candidates } = await withStateDir(stateDir, async () => {
-      return discoverOpenClawPlugins({ extraPaths: [packDir] });
+      return discoverActiviPlugins({ extraPaths: [packDir] });
     });
 
     const ids = candidates.map((c) => c.idHint);
@@ -149,15 +148,15 @@ describe("discoverOpenClawPlugins", () => {
     fs.writeFileSync(
       path.join(globalExt, "package.json"),
       JSON.stringify({
-        name: "@openclaw/escape-pack",
-        openclaw: { extensions: ["../../outside.js"] },
+        name: "@activi/escape-pack",
+        activi: { extensions: ["../../outside.js"] },
       }),
       "utf-8",
     );
     fs.writeFileSync(outside, "export default function () {}", "utf-8");
 
     const result = await withStateDir(stateDir, async () => {
-      return discoverOpenClawPlugins({});
+      return discoverActiviPlugins({});
     });
 
     expect(result.candidates).toHaveLength(0);
@@ -183,14 +182,14 @@ describe("discoverOpenClawPlugins", () => {
     fs.writeFileSync(
       path.join(globalExt, "package.json"),
       JSON.stringify({
-        name: "@openclaw/pack",
-        openclaw: { extensions: ["./linked/escape.ts"] },
+        name: "@activi/pack",
+        activi: { extensions: ["./linked/escape.ts"] },
       }),
       "utf-8",
     );
 
     const { candidates, diagnostics } = await withStateDir(stateDir, async () => {
-      return discoverOpenClawPlugins({});
+      return discoverActiviPlugins({});
     });
 
     expect(candidates.some((candidate) => candidate.idHint === "pack")).toBe(false);
@@ -208,7 +207,7 @@ describe("discoverOpenClawPlugins", () => {
     fs.chmodSync(pluginPath, 0o777);
 
     const result = await withStateDir(stateDir, async () => {
-      return discoverOpenClawPlugins({});
+      return discoverActiviPlugins({});
     });
 
     expect(result.candidates).toHaveLength(0);
@@ -231,7 +230,7 @@ describe("discoverOpenClawPlugins", () => {
 
       const actualUid = (process as NodeJS.Process & { getuid: () => number }).getuid();
       const result = await withStateDir(stateDir, async () => {
-        return discoverOpenClawPlugins({ ownershipUid: actualUid + 1 });
+        return discoverActiviPlugins({ ownershipUid: actualUid + 1 });
       });
       expect(result.candidates).toHaveLength(0);
       expect(result.diagnostics.some((diag) => diag.message.includes("suspicious ownership"))).toBe(

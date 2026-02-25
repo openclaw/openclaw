@@ -8,10 +8,10 @@ type MockRegistryToolEntry = {
   factory: (ctx: unknown) => unknown;
 };
 
-const loadOpenClawPluginsMock = vi.fn();
+const loadActiviPluginsMock = vi.fn();
 
 vi.mock("./loader.js", () => ({
-  loadOpenClawPlugins: (params: unknown) => loadOpenClawPluginsMock(params),
+  loadActiviPlugins: (params: unknown) => loadActiviPluginsMock(params),
 }));
 
 function makeTool(name: string) {
@@ -48,13 +48,13 @@ function setRegistry(entries: MockRegistryToolEntry[]) {
       message: string;
     }>,
   };
-  loadOpenClawPluginsMock.mockReturnValue(registry);
+  loadActiviPluginsMock.mockReturnValue(registry);
   return registry;
 }
 
 describe("resolvePluginTools optional tools", () => {
   beforeEach(() => {
-    loadOpenClawPluginsMock.mockClear();
+    loadActiviPluginsMock.mockClear();
   });
 
   it("skips optional tools without explicit allowlist", () => {

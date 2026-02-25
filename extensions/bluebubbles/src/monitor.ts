@@ -1,6 +1,6 @@
 import { timingSafeEqual } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { ActiviConfig } from "activi/plugin-sdk";
 import {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
@@ -9,7 +9,7 @@ import {
   requestBodyErrorToText,
   resolveSingleWebhookTarget,
   resolveWebhookTargets,
-} from "openclaw/plugin-sdk";
+} from "activi/plugin-sdk";
 import {
   normalizeWebhookMessage,
   normalizeWebhookReaction,
@@ -127,7 +127,7 @@ type BlueBubblesDebouncer = {
 const targetDebouncers = new Map<WebhookTarget, BlueBubblesDebouncer>();
 
 function resolveBlueBubblesDebounceMs(
-  config: OpenClawConfig,
+  config: ActiviConfig,
   core: BlueBubblesCoreRuntime,
 ): number {
   const inbound = config.messages?.inbound;

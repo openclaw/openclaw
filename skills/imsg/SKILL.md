@@ -4,7 +4,7 @@ description: iMessage/SMS CLI for listing chats, history, and sending messages v
 homepage: https://imsg.to
 metadata:
   {
-    "openclaw":
+    "activi":
       {
         "emoji": "📨",
         "os": ["darwin"],
@@ -47,7 +47,7 @@ Use `imsg` to read and send iMessage/SMS via macOS Messages.app.
 - Slack messages → use `slack` skill
 - Group chat management (adding/removing members) → not supported
 - Bulk/mass messaging → always confirm with user first
-- Replying in current conversation → just reply normally (Clawdbot routes automatically)
+- Replying in current conversation → just reply normally (Activi routes automatically)
 
 ## Requirements
 

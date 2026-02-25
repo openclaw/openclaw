@@ -35,8 +35,8 @@ export async function uploadToOneDrive(params: {
   const fetchFn = params.fetchFn ?? fetch;
   const token = await params.tokenProvider.getAccessToken(GRAPH_SCOPE);
 
-  // Use "OpenClawShared" folder to organize bot-uploaded files
-  const uploadPath = `/OpenClawShared/${encodeURIComponent(params.filename)}`;
+  // Use "ActiviShared" folder to organize bot-uploaded files
+  const uploadPath = `/ActiviShared/${encodeURIComponent(params.filename)}`;
 
   const res = await fetchFn(`${GRAPH_ROOT}/me/drive/root:${uploadPath}:/content`, {
     method: "PUT",
@@ -178,8 +178,8 @@ export async function uploadToSharePoint(params: {
   const fetchFn = params.fetchFn ?? fetch;
   const token = await params.tokenProvider.getAccessToken(GRAPH_SCOPE);
 
-  // Use "OpenClawShared" folder to organize bot-uploaded files
-  const uploadPath = `/OpenClawShared/${encodeURIComponent(params.filename)}`;
+  // Use "ActiviShared" folder to organize bot-uploaded files
+  const uploadPath = `/ActiviShared/${encodeURIComponent(params.filename)}`;
 
   const res = await fetchFn(
     `${GRAPH_ROOT}/sites/${params.siteId}/drive/root:${uploadPath}:/content`,

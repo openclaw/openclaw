@@ -1,12 +1,12 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import type { DmScope } from "../config/types.base.js";
 
 export const ONBOARDING_DEFAULT_DM_SCOPE: DmScope = "per-channel-peer";
 
 export function applyOnboardingLocalWorkspaceConfig(
-  baseConfig: OpenClawConfig,
+  baseConfig: ActiviConfig,
   workspaceDir: string,
-): OpenClawConfig {
+): ActiviConfig {
   return {
     ...baseConfig,
     agents: {

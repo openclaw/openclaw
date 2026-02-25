@@ -5,7 +5,7 @@ import { useFastShortTimeouts } from "../../test/helpers/fast-short-timeouts.js"
 import { installEmbeddingManagerFixture } from "./embedding-manager.test-harness.js";
 
 const fx = installEmbeddingManagerFixture({
-  fixturePrefix: "openclaw-mem-",
+  fixturePrefix: "activi-mem-",
   largeTokens: 1250,
   smallTokens: 200,
   createCfg: ({ workspaceDir, indexPath, tokens }) => ({

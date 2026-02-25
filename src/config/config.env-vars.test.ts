@@ -5,26 +5,26 @@ import { loadDotEnv } from "../infra/dotenv.js";
 import { resolveConfigEnvVars } from "./env-substitution.js";
 import { applyConfigEnvVars, collectConfigRuntimeEnvVars } from "./env-vars.js";
 import { withEnvOverride, withTempHome } from "./test-helpers.js";
-import type { OpenClawConfig } from "./types.js";
+import type { ActiviConfig } from "./types.js";
 
 describe("config env vars", () => {
   it("applies env vars from env block when missing", async () => {
     await withEnvOverride({ OPENROUTER_API_KEY: undefined }, async () => {
-      applyConfigEnvVars({ env: { vars: { OPENROUTER_API_KEY: "config-key" } } } as OpenClawConfig);
+      applyConfigEnvVars({ env: { vars: { OPENROUTER_API_KEY: "config-key" } } } as ActiviConfig);
       expect(process.env.OPENROUTER_API_KEY).toBe("config-key");
     });
   });
 
   it("does not override existing env vars", async () => {
     await withEnvOverride({ OPENROUTER_API_KEY: "existing-key" }, async () => {
-      applyConfigEnvVars({ env: { vars: { OPENROUTER_API_KEY: "config-key" } } } as OpenClawConfig);
+      applyConfigEnvVars({ env: { vars: { OPENROUTER_API_KEY: "config-key" } } } as ActiviConfig);
       expect(process.env.OPENROUTER_API_KEY).toBe("existing-key");
     });
   });
 
   it("applies env vars from env.vars when missing", async () => {
     await withEnvOverride({ GROQ_API_KEY: undefined }, async () => {
-      applyConfigEnvVars({ env: { vars: { GROQ_API_KEY: "gsk-config" } } } as OpenClawConfig);
+      applyConfigEnvVars({ env: { vars: { GROQ_API_KEY: "gsk-config" } } } as ActiviConfig);
       expect(process.env.GROQ_API_KEY).toBe("gsk-config");
     });
   });
@@ -50,14 +50,14 @@ describe("config env vars", () => {
             },
           },
         };
-        const entries = collectConfigRuntimeEnvVars(config as OpenClawConfig);
+        const entries = collectConfigRuntimeEnvVars(config as ActiviConfig);
         expect(entries.BASH_ENV).toBeUndefined();
         expect(entries.SHELL).toBeUndefined();
         expect(entries.HOME).toBeUndefined();
         expect(entries.ZDOTDIR).toBeUndefined();
         expect(entries.OPENROUTER_API_KEY).toBe("config-key");
 
-        applyConfigEnvVars(config as OpenClawConfig);
+        applyConfigEnvVars(config as ActiviConfig);
         expect(process.env.BASH_ENV).toBeUndefined();
         expect(process.env.SHELL).toBeUndefined();
         expect(process.env.HOME).toBeUndefined();
@@ -78,24 +78,24 @@ describe("config env vars", () => {
           "NOT-PORTABLE": "bad",
         },
       };
-      const entries = collectConfigRuntimeEnvVars(config as OpenClawConfig);
+      const entries = collectConfigRuntimeEnvVars(config as ActiviConfig);
       expect(entries.OPENROUTER_API_KEY).toBe("config-key");
       expect(entries[" BAD KEY"]).toBeUndefined();
       expect(entries["NOT-PORTABLE"]).toBeUndefined();
     });
   });
 
-  it("loads ${VAR} substitutions from ~/.openclaw/.env on repeated runtime loads", async () => {
+  it("loads ${VAR} substitutions from ~/.activi/.env on repeated runtime loads", async () => {
     await withTempHome(async (_home) => {
       await withEnvOverride({ BRAVE_API_KEY: undefined }, async () => {
-        const stateDir = process.env.OPENCLAW_STATE_DIR?.trim();
+        const stateDir = process.env.ACTIVI_STATE_DIR?.trim();
         if (!stateDir) {
-          throw new Error("Expected OPENCLAW_STATE_DIR to be set by withTempHome");
+          throw new Error("Expected ACTIVI_STATE_DIR to be set by withTempHome");
         }
         await fs.mkdir(stateDir, { recursive: true });
         await fs.writeFile(path.join(stateDir, ".env"), "BRAVE_API_KEY=from-dotenv\n", "utf-8");
 
-        const config: OpenClawConfig = {
+        const config: ActiviConfig = {
           tools: {
             web: {
               search: {
@@ -106,12 +106,12 @@ describe("config env vars", () => {
         };
 
         loadDotEnv({ quiet: true });
-        const first = resolveConfigEnvVars(config, process.env) as OpenClawConfig;
+        const first = resolveConfigEnvVars(config, process.env) as ActiviConfig;
         expect(first.tools?.web?.search?.apiKey).toBe("from-dotenv");
 
         delete process.env.BRAVE_API_KEY;
         loadDotEnv({ quiet: true });
-        const second = resolveConfigEnvVars(config, process.env) as OpenClawConfig;
+        const second = resolveConfigEnvVars(config, process.env) as ActiviConfig;
         expect(second.tools?.web?.search?.apiKey).toBe("from-dotenv");
       });
     });

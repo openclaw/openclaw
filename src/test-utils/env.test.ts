@@ -11,8 +11,8 @@ function restoreEnvKey(key: string, previous: string | undefined): void {
 
 describe("env test utils", () => {
   it("captureEnv restores mutated keys", () => {
-    const keyA = "OPENCLAW_ENV_TEST_A";
-    const keyB = "OPENCLAW_ENV_TEST_B";
+    const keyA = "ACTIVI_ENV_TEST_A";
+    const keyB = "ACTIVI_ENV_TEST_B";
     const snapshot = captureEnv([keyA, keyB]);
     const prevA = process.env[keyA];
     const prevB = process.env[keyB];
@@ -26,7 +26,7 @@ describe("env test utils", () => {
   });
 
   it("captureFullEnv restores added keys and baseline values", () => {
-    const key = "OPENCLAW_ENV_TEST_ADDED";
+    const key = "ACTIVI_ENV_TEST_ADDED";
     const prevHome = process.env.HOME;
     const snapshot = captureFullEnv();
     process.env[key] = "1";
@@ -39,7 +39,7 @@ describe("env test utils", () => {
   });
 
   it("withEnv applies values only inside callback", () => {
-    const key = "OPENCLAW_ENV_TEST_SYNC";
+    const key = "ACTIVI_ENV_TEST_SYNC";
     const prev = process.env[key];
 
     const seen = withEnv({ [key]: "inside" }, () => process.env[key]);
@@ -49,7 +49,7 @@ describe("env test utils", () => {
   });
 
   it("withEnv restores values when callback throws", () => {
-    const key = "OPENCLAW_ENV_TEST_SYNC_THROW";
+    const key = "ACTIVI_ENV_TEST_SYNC_THROW";
     const prev = process.env[key];
 
     expect(() =>
@@ -63,7 +63,7 @@ describe("env test utils", () => {
   });
 
   it("withEnv can delete a key only inside callback", () => {
-    const key = "OPENCLAW_ENV_TEST_SYNC_DELETE";
+    const key = "ACTIVI_ENV_TEST_SYNC_DELETE";
     const prev = process.env[key];
     process.env[key] = "outer";
 
@@ -75,7 +75,7 @@ describe("env test utils", () => {
   });
 
   it("withEnvAsync restores values when callback throws", async () => {
-    const key = "OPENCLAW_ENV_TEST_ASYNC";
+    const key = "ACTIVI_ENV_TEST_ASYNC";
     const prev = process.env[key];
 
     await expect(
@@ -89,7 +89,7 @@ describe("env test utils", () => {
   });
 
   it("withEnvAsync applies values only inside async callback", async () => {
-    const key = "OPENCLAW_ENV_TEST_ASYNC_OK";
+    const key = "ACTIVI_ENV_TEST_ASYNC_OK";
     const prev = process.env[key];
 
     const seen = await withEnvAsync({ [key]: "inside" }, async () => process.env[key]);
@@ -99,7 +99,7 @@ describe("env test utils", () => {
   });
 
   it("withEnvAsync can delete a key only inside callback", async () => {
-    const key = "OPENCLAW_ENV_TEST_ASYNC_DELETE";
+    const key = "ACTIVI_ENV_TEST_ASYNC_DELETE";
     const prev = process.env[key];
     process.env[key] = "outer";
 

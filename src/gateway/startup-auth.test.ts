@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 
 const mocks = vi.hoisted(() => ({
-  writeConfigFile: vi.fn(async (_cfg: OpenClawConfig) => {}),
+  writeConfigFile: vi.fn(async (_cfg: ActiviConfig) => {}),
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => {
@@ -19,7 +19,7 @@ import {
 } from "./startup-auth.js";
 
 describe("ensureGatewayStartupAuth", () => {
-  async function expectEphemeralGeneratedTokenWhenOverridden(cfg: OpenClawConfig) {
+  async function expectEphemeralGeneratedTokenWhenOverridden(cfg: ActiviConfig) {
     const result = await ensureGatewayStartupAuth({
       cfg,
       env: {} as NodeJS.ProcessEnv,
@@ -39,7 +39,7 @@ describe("ensureGatewayStartupAuth", () => {
     mocks.writeConfigFile.mockClear();
   });
 
-  async function expectNoTokenGeneration(cfg: OpenClawConfig, mode: string) {
+  async function expectNoTokenGeneration(cfg: ActiviConfig, mode: string) {
     const result = await ensureGatewayStartupAuth({
       cfg,
       env: {} as NodeJS.ProcessEnv,
@@ -70,7 +70,7 @@ describe("ensureGatewayStartupAuth", () => {
   });
 
   it("does not generate when token already exists", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: ActiviConfig = {
       gateway: {
         auth: {
           mode: "token",
@@ -132,7 +132,7 @@ describe("ensureGatewayStartupAuth", () => {
   });
 
   it("treats undefined token override as no override", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: ActiviConfig = {
       gateway: {
         auth: {
           mode: "token",
@@ -194,7 +194,7 @@ describe("ensureGatewayStartupAuth", () => {
           },
         },
         env: {
-          OPENCLAW_GATEWAY_TOKEN: "shared-gateway-token-1234567890",
+          ACTIVI_GATEWAY_TOKEN: "shared-gateway-token-1234567890",
         } as NodeJS.ProcessEnv,
       }),
     ).rejects.toThrow(/hooks\.token must not match gateway auth token/i);

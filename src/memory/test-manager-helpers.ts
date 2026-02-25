@@ -1,8 +1,8 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 
 export async function getRequiredMemoryIndexManager(params: {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   agentId?: string;
 }): Promise<MemoryIndexManager> {
   const result = await getMemorySearchManager({

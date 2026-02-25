@@ -1,4 +1,4 @@
-import type { OpenClawConfig, HookConfig } from "../config/config.js";
+import type { ActiviConfig, HookConfig } from "../config/config.js";
 import {
   evaluateRuntimeRequires,
   hasBinary,
@@ -17,12 +17,12 @@ const DEFAULT_CONFIG_VALUES: Record<string, boolean> = {
 
 export { hasBinary, resolveConfigPath, resolveRuntimePlatform };
 
-export function isConfigPathTruthy(config: OpenClawConfig | undefined, pathStr: string): boolean {
+export function isConfigPathTruthy(config: ActiviConfig | undefined, pathStr: string): boolean {
   return isConfigPathTruthyWithDefaults(config, pathStr, DEFAULT_CONFIG_VALUES);
 }
 
 export function resolveHookConfig(
-  config: OpenClawConfig | undefined,
+  config: ActiviConfig | undefined,
   hookKey: string,
 ): HookConfig | undefined {
   const hooks = config?.hooks?.internal?.entries;
@@ -38,13 +38,13 @@ export function resolveHookConfig(
 
 export function shouldIncludeHook(params: {
   entry: HookEntry;
-  config?: OpenClawConfig;
+  config?: ActiviConfig;
   eligibility?: HookEligibilityContext;
 }): boolean {
   const { entry, config, eligibility } = params;
   const hookKey = resolveHookKey(entry.hook.name, entry);
   const hookConfig = resolveHookConfig(config, hookKey);
-  const pluginManaged = entry.hook.source === "openclaw-plugin";
+  const pluginManaged = entry.hook.source === "activi-plugin";
   const osList = entry.metadata?.os ?? [];
   const remotePlatforms = eligibility?.remote?.platforms ?? [];
 

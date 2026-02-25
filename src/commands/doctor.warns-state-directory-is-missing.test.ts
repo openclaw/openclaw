@@ -17,9 +17,9 @@ describe("doctor command", () => {
   it("warns when the state directory is missing", async () => {
     mockDoctorConfigSnapshot();
 
-    const missingDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-missing-state-"));
+    const missingDir = fs.mkdtempSync(path.join(os.tmpdir(), "activi-missing-state-"));
     fs.rmSync(missingDir, { recursive: true, force: true });
-    process.env.OPENCLAW_STATE_DIR = missingDir;
+    process.env.ACTIVI_STATE_DIR = missingDir;
     note.mockClear();
 
     await doctorCommand(createDoctorRuntime(), {
@@ -58,15 +58,15 @@ describe("doctor command", () => {
     expect(warned).toBe(true);
   });
 
-  it("skips gateway auth warning when OPENCLAW_GATEWAY_TOKEN is set", async () => {
+  it("skips gateway auth warning when ACTIVI_GATEWAY_TOKEN is set", async () => {
     mockDoctorConfigSnapshot({
       config: {
         gateway: { mode: "local" },
       },
     });
 
-    const prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token-1234567890";
+    const prevToken = process.env.ACTIVI_GATEWAY_TOKEN;
+    process.env.ACTIVI_GATEWAY_TOKEN = "env-token-1234567890";
     note.mockClear();
 
     try {
@@ -76,9 +76,9 @@ describe("doctor command", () => {
       });
     } finally {
       if (prevToken === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+        delete process.env.ACTIVI_GATEWAY_TOKEN;
       } else {
-        process.env.OPENCLAW_GATEWAY_TOKEN = prevToken;
+        process.env.ACTIVI_GATEWAY_TOKEN = prevToken;
       }
     }
 

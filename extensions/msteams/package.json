@@ -1,16 +1,16 @@
 {
-  "name": "@openclaw/msteams",
+  "name": "@activi/msteams",
   "version": "2026.2.22",
-  "description": "OpenClaw Microsoft Teams channel plugin",
+  "description": "Activi Microsoft Teams channel plugin",
   "type": "module",
   "dependencies": {
     "@microsoft/agents-hosting": "^1.3.1",
     "express": "^5.2.1"
   },
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "activi": "workspace:*"
   },
-  "openclaw": {
+  "activi": {
     "extensions": [
       "./index.ts"
     ],
@@ -27,7 +27,7 @@
       "order": 60
     },
     "install": {
-      "npmSpec": "@openclaw/msteams",
+      "npmSpec": "@activi/msteams",
       "localPath": "extensions/msteams",
       "defaultChoice": "npm"
     }

@@ -146,19 +146,19 @@ describe("subagent announce formatting", () => {
 
   beforeAll(async () => {
     ({ runSubagentAnnounceFlow } = await import("./subagent-announce.js"));
-    previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
+    previousFastTestEnv = process.env.ACTIVI_TEST_FAST;
   });
 
   afterAll(() => {
     if (previousFastTestEnv === undefined) {
-      delete process.env.OPENCLAW_TEST_FAST;
+      delete process.env.ACTIVI_TEST_FAST;
       return;
     }
-    process.env.OPENCLAW_TEST_FAST = previousFastTestEnv;
+    process.env.ACTIVI_TEST_FAST = previousFastTestEnv;
   });
 
   beforeEach(() => {
-    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.stubEnv("ACTIVI_TEST_FAST", "1");
     agentSpy
       .mockClear()
       .mockImplementation(async (_req: AgentCallRequest) => ({ runId: "run-main", status: "ok" }));

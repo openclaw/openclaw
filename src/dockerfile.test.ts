@@ -10,7 +10,7 @@ describe("Dockerfile", () => {
   it("installs optional browser dependencies after pnpm install", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
     const installIndex = dockerfile.indexOf("RUN pnpm install --frozen-lockfile");
-    const browserArgIndex = dockerfile.indexOf("ARG OPENCLAW_INSTALL_BROWSER");
+    const browserArgIndex = dockerfile.indexOf("ARG ACTIVI_INSTALL_BROWSER");
 
     expect(installIndex).toBeGreaterThan(-1);
     expect(browserArgIndex).toBeGreaterThan(-1);

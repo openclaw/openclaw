@@ -943,6 +943,13 @@
   margin-bottom: 8px;
 }
 
+.chat-attachment-video-preview {
+  max-width: 120px;
+  max-height: 80px;
+  border-radius: 4px;
+  object-fit: cover;
+}
+
 .chat-attachment-thumb {
   position: relative;
   width: 60px;
@@ -952,7 +959,8 @@
   border: 1px solid var(--border);
 }
 
-.chat-attachment-thumb img {
+.chat-attachment-thumb img,
+.chat-attachment-thumb video {
   width: 100%;
   height: 100%;
   object-fit: cover;

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { createTempHomeHarness, makeReplyConfig } from "./reply.test-harness.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
@@ -40,7 +40,7 @@ vi.mock("../web/session.js", () => webMocks);
 import { getReplyFromConfig } from "./reply.js";
 
 const { withTempHome } = createTempHomeHarness({
-  prefix: "openclaw-typing-",
+  prefix: "activi-typing-",
   beforeEachCase: () => runEmbeddedPiAgentMock.mockClear(),
 });
 
@@ -60,14 +60,14 @@ describe("getReplyFromConfig typing (heartbeat)", () => {
       await getReplyFromConfig(
         { Body: "hi", From: "+1000", To: "+2000", Provider: "whatsapp" },
         { onReplyStart, isHeartbeat },
-        makeReplyConfig(home) as unknown as OpenClawConfig,
+        makeReplyConfig(home) as unknown as ActiviConfig,
       );
     });
     return onReplyStart;
   }
 
   beforeEach(() => {
-    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.stubEnv("ACTIVI_TEST_FAST", "1");
   });
 
   it("starts typing for normal runs", async () => {

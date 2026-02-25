@@ -3,7 +3,7 @@ import type {
   ChannelResolveKind,
   ChannelResolveResult,
   RuntimeEnv,
-} from "openclaw/plugin-sdk";
+} from "activi/plugin-sdk";
 import { listMatrixDirectoryGroupsLive, listMatrixDirectoryPeersLive } from "./directory-live.js";
 
 function findExactDirectoryMatches(

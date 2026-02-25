@@ -1,9 +1,9 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { ensureModelAllowlistEntry } from "./model-allowlist.js";
 
 export const OPENAI_DEFAULT_MODEL = "openai/gpt-5.1-codex";
 
-export function applyOpenAIProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+export function applyOpenAIProviderConfig(cfg: ActiviConfig): ActiviConfig {
   const next = ensureModelAllowlistEntry({
     cfg,
     modelRef: OPENAI_DEFAULT_MODEL,
@@ -26,7 +26,7 @@ export function applyOpenAIProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
-export function applyOpenAIConfig(cfg: OpenClawConfig): OpenClawConfig {
+export function applyOpenAIConfig(cfg: ActiviConfig): ActiviConfig {
   const next = applyOpenAIProviderConfig(cfg);
   return {
     ...next,

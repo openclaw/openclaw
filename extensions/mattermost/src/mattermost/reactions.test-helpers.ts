@@ -1,7 +1,7 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { ActiviConfig } from "activi/plugin-sdk";
 import { expect, vi } from "vitest";
 
-export function createMattermostTestConfig(): OpenClawConfig {
+export function createMattermostTestConfig(): ActiviConfig {
   return {
     channels: {
       mattermost: {

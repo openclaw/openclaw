@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { resolveStorePath, resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
 import { note } from "../terminal/note.js";
 import { noteStateIntegrity } from "./doctor-state-integrity.js";
@@ -13,17 +13,17 @@ vi.mock("../terminal/note.js", () => ({
 
 type EnvSnapshot = {
   HOME?: string;
-  OPENCLAW_HOME?: string;
-  OPENCLAW_STATE_DIR?: string;
-  OPENCLAW_OAUTH_DIR?: string;
+  ACTIVI_HOME?: string;
+  ACTIVI_STATE_DIR?: string;
+  ACTIVI_OAUTH_DIR?: string;
 };
 
 function captureEnv(): EnvSnapshot {
   return {
     HOME: process.env.HOME,
-    OPENCLAW_HOME: process.env.OPENCLAW_HOME,
-    OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
-    OPENCLAW_OAUTH_DIR: process.env.OPENCLAW_OAUTH_DIR,
+    ACTIVI_HOME: process.env.ACTIVI_HOME,
+    ACTIVI_STATE_DIR: process.env.ACTIVI_STATE_DIR,
+    ACTIVI_OAUTH_DIR: process.env.ACTIVI_OAUTH_DIR,
   };
 }
 
@@ -38,7 +38,7 @@ function restoreEnv(snapshot: EnvSnapshot) {
   }
 }
 
-function setupSessionState(cfg: OpenClawConfig, env: NodeJS.ProcessEnv, homeDir: string) {
+function setupSessionState(cfg: ActiviConfig, env: NodeJS.ProcessEnv, homeDir: string) {
   const agentId = "main";
   const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId, env, () => homeDir);
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
@@ -58,7 +58,7 @@ const OAUTH_PROMPT_MATCHER = expect.objectContaining({
   message: expect.stringContaining("Create OAuth dir at"),
 });
 
-async function runStateIntegrity(cfg: OpenClawConfig) {
+async function runStateIntegrity(cfg: ActiviConfig) {
   setupSessionState(cfg, process.env, process.env.HOME ?? "");
   const confirmSkipInNonInteractive = vi.fn(async () => false);
   await noteStateIntegrity(cfg, { confirmSkipInNonInteractive });
@@ -71,12 +71,12 @@ describe("doctor state integrity oauth dir checks", () => {
 
   beforeEach(() => {
     envSnapshot = captureEnv();
-    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-state-integrity-"));
+    tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "activi-doctor-state-integrity-"));
     process.env.HOME = tempHome;
-    process.env.OPENCLAW_HOME = tempHome;
-    process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openclaw");
-    delete process.env.OPENCLAW_OAUTH_DIR;
-    fs.mkdirSync(process.env.OPENCLAW_STATE_DIR, { recursive: true, mode: 0o700 });
+    process.env.ACTIVI_HOME = tempHome;
+    process.env.ACTIVI_STATE_DIR = path.join(tempHome, ".activi");
+    delete process.env.ACTIVI_OAUTH_DIR;
+    fs.mkdirSync(process.env.ACTIVI_STATE_DIR, { recursive: true, mode: 0o700 });
     vi.mocked(note).mockClear();
   });
 
@@ -86,7 +86,7 @@ describe("doctor state integrity oauth dir checks", () => {
   });
 
   it("does not prompt for oauth dir when no whatsapp/pairing config is active", async () => {
-    const cfg: OpenClawConfig = {};
+    const cfg: ActiviConfig = {};
     const confirmSkipInNonInteractive = await runStateIntegrity(cfg);
     expect(confirmSkipInNonInteractive).not.toHaveBeenCalledWith(OAUTH_PROMPT_MATCHER);
     const text = stateIntegrityText();
@@ -95,7 +95,7 @@ describe("doctor state integrity oauth dir checks", () => {
   });
 
   it("prompts for oauth dir when whatsapp is configured", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: ActiviConfig = {
       channels: {
         whatsapp: {},
       },
@@ -106,7 +106,7 @@ describe("doctor state integrity oauth dir checks", () => {
   });
 
   it("prompts for oauth dir when a channel dmPolicy is pairing", async () => {
-    const cfg: OpenClawConfig = {
+    const cfg: ActiviConfig = {
       channels: {
         telegram: {
           dmPolicy: "pairing",
@@ -117,9 +117,9 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(confirmSkipInNonInteractive).toHaveBeenCalledWith(OAUTH_PROMPT_MATCHER);
   });
 
-  it("prompts for oauth dir when OPENCLAW_OAUTH_DIR is explicitly configured", async () => {
-    process.env.OPENCLAW_OAUTH_DIR = path.join(tempHome, ".oauth");
-    const cfg: OpenClawConfig = {};
+  it("prompts for oauth dir when ACTIVI_OAUTH_DIR is explicitly configured", async () => {
+    process.env.ACTIVI_OAUTH_DIR = path.join(tempHome, ".oauth");
+    const cfg: ActiviConfig = {};
     const confirmSkipInNonInteractive = await runStateIntegrity(cfg);
     expect(confirmSkipInNonInteractive).toHaveBeenCalledWith(OAUTH_PROMPT_MATCHER);
     expect(stateIntegrityText()).toContain("CRITICAL: OAuth dir missing");

@@ -50,7 +50,7 @@ let storeSeq = 0;
 
 function createTestStorePath(): string {
   storeSeq += 1;
-  return path.join(os.tmpdir(), `openclaw-voice-call-test-${Date.now()}-${storeSeq}`);
+  return path.join(os.tmpdir(), `activi-voice-call-test-${Date.now()}-${storeSeq}`);
 }
 
 function createManagerHarness(

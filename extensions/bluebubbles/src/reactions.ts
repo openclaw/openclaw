@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { ActiviConfig } from "activi/plugin-sdk";
 import { resolveBlueBubblesServerAccount } from "./account-resolve.js";
 import { getCachedBlueBubblesPrivateApiStatus } from "./probe.js";
 import { blueBubblesFetchWithTimeout, buildBlueBubblesApiUrl } from "./types.js";
@@ -8,7 +8,7 @@ export type BlueBubblesReactionOpts = {
   password?: string;
   accountId?: string;
   timeoutMs?: number;
-  cfg?: OpenClawConfig;
+  cfg?: ActiviConfig;
 };
 
 const REACTION_TYPES = new Set(["love", "like", "dislike", "laugh", "emphasize", "question"]);

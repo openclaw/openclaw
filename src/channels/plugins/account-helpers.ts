@@ -1,8 +1,8 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 
 export function createAccountListHelpers(channelKey: string) {
-  function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
+  function listConfiguredAccountIds(cfg: ActiviConfig): string[] {
     const channel = cfg.channels?.[channelKey];
     const accounts = (channel as Record<string, unknown> | undefined)?.accounts;
     if (!accounts || typeof accounts !== "object") {
@@ -11,7 +11,7 @@ export function createAccountListHelpers(channelKey: string) {
     return Object.keys(accounts as Record<string, unknown>).filter(Boolean);
   }
 
-  function listAccountIds(cfg: OpenClawConfig): string[] {
+  function listAccountIds(cfg: ActiviConfig): string[] {
     const ids = listConfiguredAccountIds(cfg);
     if (ids.length === 0) {
       return [DEFAULT_ACCOUNT_ID];
@@ -19,7 +19,7 @@ export function createAccountListHelpers(channelKey: string) {
     return ids.toSorted((a, b) => a.localeCompare(b));
   }
 
-  function resolveDefaultAccountId(cfg: OpenClawConfig): string {
+  function resolveDefaultAccountId(cfg: ActiviConfig): string {
     const ids = listAccountIds(cfg);
     if (ids.includes(DEFAULT_ACCOUNT_ID)) {
       return DEFAULT_ACCOUNT_ID;

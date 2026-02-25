@@ -17,16 +17,16 @@ describe("browser config", () => {
     expect(profile?.cdpPort).toBe(18792);
     expect(profile?.cdpUrl).toBe("http://127.0.0.1:18792");
 
-    const openclaw = resolveProfile(resolved, "openclaw");
-    expect(openclaw?.driver).toBe("openclaw");
-    expect(openclaw?.cdpPort).toBe(18800);
-    expect(openclaw?.cdpUrl).toBe("http://127.0.0.1:18800");
+    const activi = resolveProfile(resolved, "activi");
+    expect(activi?.driver).toBe("activi");
+    expect(activi?.cdpPort).toBe(18800);
+    expect(activi?.cdpUrl).toBe("http://127.0.0.1:18800");
     expect(resolved.remoteCdpTimeoutMs).toBe(1500);
     expect(resolved.remoteCdpHandshakeTimeoutMs).toBe(3000);
   });
 
-  it("derives default ports from OPENCLAW_GATEWAY_PORT when unset", () => {
-    withEnv({ OPENCLAW_GATEWAY_PORT: "19001" }, () => {
+  it("derives default ports from ACTIVI_GATEWAY_PORT when unset", () => {
+    withEnv({ ACTIVI_GATEWAY_PORT: "19001" }, () => {
       const resolved = resolveBrowserConfig(undefined);
       expect(resolved.controlPort).toBe(19003);
       const chrome = resolveProfile(resolved, "chrome");
@@ -34,14 +34,14 @@ describe("browser config", () => {
       expect(chrome?.cdpPort).toBe(19004);
       expect(chrome?.cdpUrl).toBe("http://127.0.0.1:19004");
 
-      const openclaw = resolveProfile(resolved, "openclaw");
-      expect(openclaw?.cdpPort).toBe(19012);
-      expect(openclaw?.cdpUrl).toBe("http://127.0.0.1:19012");
+      const activi = resolveProfile(resolved, "activi");
+      expect(activi?.cdpPort).toBe(19012);
+      expect(activi?.cdpUrl).toBe("http://127.0.0.1:19012");
     });
   });
 
   it("derives default ports from gateway.port when env is unset", () => {
-    withEnv({ OPENCLAW_GATEWAY_PORT: undefined }, () => {
+    withEnv({ ACTIVI_GATEWAY_PORT: undefined }, () => {
       const resolved = resolveBrowserConfig(undefined, { gateway: { port: 19011 } });
       expect(resolved.controlPort).toBe(19013);
       const chrome = resolveProfile(resolved, "chrome");
@@ -49,9 +49,9 @@ describe("browser config", () => {
       expect(chrome?.cdpPort).toBe(19014);
       expect(chrome?.cdpUrl).toBe("http://127.0.0.1:19014");
 
-      const openclaw = resolveProfile(resolved, "openclaw");
-      expect(openclaw?.cdpPort).toBe(19022);
-      expect(openclaw?.cdpUrl).toBe("http://127.0.0.1:19022");
+      const activi = resolveProfile(resolved, "activi");
+      expect(activi?.cdpPort).toBe(19022);
+      expect(activi?.cdpUrl).toBe("http://127.0.0.1:19022");
     });
   });
 
@@ -82,7 +82,7 @@ describe("browser config", () => {
     const resolved = resolveBrowserConfig({
       cdpUrl: "http://example.com:9222",
     });
-    const profile = resolveProfile(resolved, "openclaw");
+    const profile = resolveProfile(resolved, "activi");
     expect(profile?.cdpIsLoopback).toBe(false);
   });
 
@@ -90,7 +90,7 @@ describe("browser config", () => {
     const resolved = resolveBrowserConfig({
       cdpUrl: "http://example.com:9222",
     });
-    const profile = resolveProfile(resolved, "openclaw");
+    const profile = resolveProfile(resolved, "activi");
     expect(profile?.cdpPort).toBe(9222);
     expect(profile?.cdpUrl).toBe("http://example.com:9222");
     expect(profile?.cdpIsLoopback).toBe(false);
@@ -128,11 +128,11 @@ describe("browser config", () => {
   it("does not add the built-in chrome extension profile if the derived relay port is already used", () => {
     const resolved = resolveBrowserConfig({
       profiles: {
-        openclaw: { cdpPort: 18792, color: "#FF4500" },
+        activi: { cdpPort: 18792, color: "#FF4500" },
       },
     });
     expect(resolveProfile(resolved, "chrome")).toBe(null);
-    expect(resolved.defaultProfile).toBe("openclaw");
+    expect(resolved.defaultProfile).toBe("activi");
   });
 
   it("defaults extraArgs to empty array when not provided", () => {

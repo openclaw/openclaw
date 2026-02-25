@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 
-export const CANVAS_CAPABILITY_PATH_PREFIX = "/__openclaw__/cap";
+export const CANVAS_CAPABILITY_PATH_PREFIX = "/__activi__/cap";
 export const CANVAS_CAPABILITY_QUERY_PARAM = "oc_cap";
 export const CANVAS_CAPABILITY_TTL_MS = 10 * 60_000;
 

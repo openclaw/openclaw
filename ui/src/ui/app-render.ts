@@ -27,6 +27,7 @@ import {
   updateConfigFormValue,
   removeConfigFormValue,
 } from "./controllers/config.ts";
+import "./views/onboarding-wizard.ts";
 import {
   loadCronRuns,
   toggleCronJob,
@@ -79,6 +80,8 @@ import { renderNodes } from "./views/nodes.ts";
 import { renderOverview } from "./views/overview.ts";
 import { renderSessions } from "./views/sessions.ts";
 import { renderSkills } from "./views/skills.ts";
+import { renderSidebarAgents } from "./views/sidebar-agents.ts";
+import { renderBroadcast, type BroadcastResult } from "./views/broadcast.ts";
 
 const AVATAR_DATA_RE = /^data:/i;
 const AVATAR_HTTP_RE = /^https?:\/\//i;
@@ -136,6 +139,46 @@ export function renderApp(state: AppViewState) {
     `;
   }
 
+  // Render onboarding wizard if active
+  if (state.onboarding && (state as any).wizardState?.currentStep) {
+    const wizardState = (state as any).wizardState;
+    const wizardController = (state as any).wizardController;
+    return html`
+      <onboarding-wizard
+        .props=${{
+          step: wizardState.currentStep,
+          stepIndex: wizardState.stepIndex,
+          totalSteps: wizardState.totalSteps,
+          loading: wizardState.loading,
+          error: wizardState.error,
+          gateway: state.client,
+          onNext: async (answer: unknown) => {
+            if (wizardController) {
+              await wizardController.next(answer);
+              (state as any).wizardState = wizardController.getState();
+              (state as any).requestUpdate?.();
+            }
+          },
+          onBack: async () => {
+            if (wizardController) {
+              await wizardController.back();
+              (state as any).wizardState = wizardController.getState();
+              (state as any).requestUpdate?.();
+            }
+          },
+          onCancel: async () => {
+            if (wizardController) {
+              await wizardController.cancel();
+              (state as any).wizardState = wizardController.getState();
+            }
+            state.onboarding = false;
+            (state as any).requestUpdate?.();
+          },
+        }}
+      ></onboarding-wizard>
+    `;
+  }
+
   const presenceCount = state.presenceEntries.length;
   const sessionsCount = state.sessionsResult?.count ?? null;
   const cronNext = state.cronStatus?.nextWakeAtMs ?? null;
@@ -177,7 +220,7 @@ export function renderApp(state: AppViewState) {
       },
     })}
     <div
-      class="shell ${isChat ? "shell--chat" : ""} ${chatFocus ? "shell--chat-focus" : ""} ${state.settings.navCollapsed ? "shell--nav-collapsed" : ""} ${state.onboarding ? "shell--onboarding" : ""}"
+      class="shell ${isChat ? "shell--chat" : ""} ${chatFocus ? "shell--chat-focus" : ""} ${state.settings.navCollapsed ? "shell--nav-collapsed" : ""} ${state.onboarding ? "shell--onboarding" : ""} ${(state as any).rightPanelOpen ? "" : "shell--panel-collapsed"}"
       style="--shell-nav-width: ${state.settings.navWidth}px"
     >
       <header class="topbar">
@@ -210,8 +253,8 @@ export function renderApp(state: AppViewState) {
             ? nothing
             : html`
           <div class="sidebar-brand">
-            <img class="sidebar-brand__logo" src="${basePath ? `${basePath}/favicon.svg` : "/favicon.svg"}" alt="OpenClaw" />
-            <span class="sidebar-brand__title">OpenClaw</span>
+            <img class="sidebar-brand__logo" src="${basePath ? `${basePath}/favicon.svg` : "/favicon.svg"}" alt="Activi" />
+            <span class="sidebar-brand__title">Activi</span>
           </div>
         `
         }
@@ -267,11 +310,22 @@ export function renderApp(state: AppViewState) {
           })}
         </nav>
 
+        ${renderSidebarAgents({
+          agentsList: state.agentsList,
+          selectedAgentId: state.agentsSelectedId ?? state.agentsList?.defaultId ?? null,
+          collapsed: state.settings.navCollapsed,
+          onSelectAgent: (agentId: string) => {
+            state.agentsSelectedId = agentId;
+            state.setTab("agents" as import("./navigation.ts").Tab);
+            (state as any).requestUpdate?.();
+          },
+        })}
+
         <div class="sidebar-footer">
           <div class="sidebar-footer__docs-block">
             <a
               class="nav-item nav-item--external"
-              href="https://docs.openclaw.ai"
+              href="https://docs.activi.ai"
               target="_blank"
               rel="noreferrer"
               title="${t("common.docs")} (opens in new tab)"
@@ -396,7 +450,7 @@ export function renderApp(state: AppViewState) {
                 onToggleStreamMode: () => {
                   state.streamMode = !state.streamMode;
                   try {
-                    localStorage.setItem("openclaw:stream-mode", String(state.streamMode));
+                    localStorage.setItem("activi:stream-mode", String(state.streamMode));
                   } catch {
                     /* */
                   }
@@ -405,6 +459,82 @@ export function renderApp(state: AppViewState) {
             : nothing
         }
 
+        ${
+          state.tab === "broadcast"
+            ? renderBroadcast({
+                agentsList: state.agentsList,
+                loading: (state as any).broadcastLoading ?? false,
+                error: (state as any).broadcastError ?? null,
+                message: (state as any).broadcastMessage ?? "",
+                selectedAgentIds: (state as any).broadcastSelectedAgentIds ?? new Set(),
+                selectedTeam: (state as any).broadcastSelectedTeam ?? null,
+                results: (state as any).broadcastResults ?? [],
+                onMessageChange: (message: string) => {
+                  (state as any).broadcastMessage = message;
+                  (state as any).requestUpdate?.();
+                },
+                onAgentToggle: (agentId: string) => {
+                  const selected = (state as any).broadcastSelectedAgentIds ?? new Set<string>();
+                  if (selected.has(agentId)) {
+                    selected.delete(agentId);
+                  } else {
+                    selected.add(agentId);
+                  }
+                  (state as any).broadcastSelectedAgentIds = selected;
+                  (state as any).requestUpdate?.();
+                },
+                onTeamSelect: (team: string | null) => {
+                  (state as any).broadcastSelectedTeam = team;
+                  (state as any).requestUpdate?.();
+                },
+                onSelectAll: () => {
+                  const agents = state.agentsList?.agents ?? [];
+                  const selectedTeam = (state as any).broadcastSelectedTeam;
+                  const filtered = selectedTeam
+                    ? agents.filter((a) => {
+                        const teamName = a.id.includes("-") ? a.id.split("-")[0] : "default";
+                        return teamName === selectedTeam;
+                      })
+                    : agents;
+                  (state as any).broadcastSelectedAgentIds = new Set(filtered.map((a) => a.id));
+                  (state as any).requestUpdate?.();
+                },
+                onDeselectAll: () => {
+                  (state as any).broadcastSelectedAgentIds = new Set();
+                  (state as any).requestUpdate?.();
+                },
+                onSend: async () => {
+                  const selectedIds = Array.from((state as any).broadcastSelectedAgentIds ?? []) as string[];
+                  const message = (state as any).broadcastMessage ?? "";
+                  if (selectedIds.length === 0 || !message.trim()) {
+                    return;
+                  }
+                  (state as any).broadcastLoading = true;
+                  (state as any).broadcastError = null;
+                  (state as any).broadcastResults = [];
+                  (state as any).requestUpdate?.();
+                  
+                  // TODO: Implement actual broadcast via Gateway API
+                  // For now, simulate results
+                  const results: BroadcastResult[] = selectedIds.map((agentId) => {
+                    const agent = state.agentsList?.agents.find((a) => a.id === agentId);
+                    return {
+                      agentId,
+                      agentName: agent?.name || agentId,
+                      ok: Math.random() > 0.2, // 80% success rate for demo
+                      error: Math.random() > 0.8 ? "Timeout" : undefined,
+                      duration: Math.floor(Math.random() * 500 + 100),
+                      timestamp: Date.now(),
+                    };
+                  });
+                  
+                  (state as any).broadcastResults = results;
+                  (state as any).broadcastLoading = false;
+                  (state as any).requestUpdate?.();
+                },
+              })
+            : nothing
+        }
         ${
           state.tab === "channels"
             ? renderChannels({
@@ -1208,6 +1338,42 @@ export function renderApp(state: AppViewState) {
             : nothing
         }
       </main>
+      ${
+        (state as any).rightPanelOpen
+          ? html`
+              <aside class="right-panel" style="position: relative">
+                <div
+                  class="right-panel-resizer"
+                  role="separator"
+                  aria-orientation="vertical"
+                  aria-label="Resize panel"
+                  title="Resize panel"
+                  @mousedown=${(ev: MouseEvent) => {
+                    // TODO: Implement panel resizing
+                    ev.preventDefault();
+                  }}
+                ></div>
+                <div class="right-panel__header">
+                  <span class="right-panel__title">${(state as any).rightPanelTitle || "Details"}</span>
+                  <button
+                    class="right-panel__close-btn"
+                    @click=${() => {
+                      (state as any).rightPanelOpen = false;
+                      (state as any).requestUpdate?.();
+                    }}
+                    aria-label="Close panel"
+                    title="Close panel"
+                  >
+                    ${icons.x}
+                  </button>
+                </div>
+                <div class="right-panel__content">
+                  ${(state as any).rightPanelContent || html`<p style="color: var(--muted); font-size: 13px;">Keine Details verfügbar</p>`}
+                </div>
+              </aside>
+            `
+          : nothing
+      }
       ${renderExecApprovalPrompt(state)}
       ${renderGatewayUrlConfirmation(state)}
       ${nothing}

@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { resolveUserPath } from "../utils.js";
-import { discoverOpenClawPlugins } from "./discovery.js";
+import { discoverActiviPlugins } from "./discovery.js";
 import { installPluginFromNpmSpec, resolvePluginInstallDir } from "./install.js";
 import { recordPluginInstall } from "./installs.js";
 import { loadPluginManifest } from "./manifest.js";
@@ -24,7 +24,7 @@ export type PluginUpdateOutcome = {
 };
 
 export type PluginUpdateSummary = {
-  config: OpenClawConfig;
+  config: ActiviConfig;
   changed: boolean;
   outcomes: PluginUpdateOutcome[];
 };
@@ -47,7 +47,7 @@ export type PluginChannelSyncSummary = {
 };
 
 export type PluginChannelSyncResult = {
-  config: OpenClawConfig;
+  config: ActiviConfig;
   changed: boolean;
   summary: PluginChannelSyncSummary;
 };
@@ -81,7 +81,7 @@ async function readInstalledPackageVersion(dir: string): Promise<string | undefi
 function resolveBundledPluginSources(params: {
   workspaceDir?: string;
 }): Map<string, BundledPluginSource> {
-  const discovery = discoverOpenClawPlugins({ workspaceDir: params.workspaceDir });
+  const discovery = discoverActiviPlugins({ workspaceDir: params.workspaceDir });
   const bundled = new Map<string, BundledPluginSource>();
 
   for (const candidate of discovery.candidates) {
@@ -184,7 +184,7 @@ function createPluginUpdateIntegrityDriftHandler(params: {
 }
 
 export async function updateNpmInstalledPlugins(params: {
-  config: OpenClawConfig;
+  config: ActiviConfig;
   logger?: PluginUpdateLogger;
   pluginIds?: string[];
   skipIds?: Set<string>;
@@ -378,7 +378,7 @@ export async function updateNpmInstalledPlugins(params: {
 }
 
 export async function syncPluginsForUpdateChannel(params: {
-  config: OpenClawConfig;
+  config: ActiviConfig;
   channel: UpdateChannel;
   workspaceDir?: string;
   logger?: PluginUpdateLogger;

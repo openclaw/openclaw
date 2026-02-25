@@ -1,12 +1,12 @@
 {
-  "name": "@openclaw/nextcloud-talk",
+  "name": "@activi/nextcloud-talk",
   "version": "2026.2.22",
-  "description": "OpenClaw Nextcloud Talk channel plugin",
+  "description": "Activi Nextcloud Talk channel plugin",
   "type": "module",
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "activi": "workspace:*"
   },
-  "openclaw": {
+  "activi": {
     "extensions": [
       "./index.ts"
     ],
@@ -25,7 +25,7 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@openclaw/nextcloud-talk",
+      "npmSpec": "@activi/nextcloud-talk",
       "localPath": "extensions/nextcloud-talk",
       "defaultChoice": "npm"
     }

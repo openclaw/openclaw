@@ -3,13 +3,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { saveAuthProfileStore } from "./auth-profiles.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import { runWithModelFallback } from "./model-fallback.js";
 
-function makeCfg(overrides: Partial<OpenClawConfig> = {}): OpenClawConfig {
+function makeCfg(overrides: Partial<ActiviConfig> = {}): ActiviConfig {
   return {
     agents: {
       defaults: {
@@ -20,10 +20,10 @@ function makeCfg(overrides: Partial<OpenClawConfig> = {}): OpenClawConfig {
       },
     },
     ...overrides,
-  } as OpenClawConfig;
+  } as ActiviConfig;
 }
 
-function makeFallbacksOnlyCfg(): OpenClawConfig {
+function makeFallbacksOnlyCfg(): ActiviConfig {
   return {
     agents: {
       defaults: {
@@ -32,10 +32,10 @@ function makeFallbacksOnlyCfg(): OpenClawConfig {
         },
       },
     },
-  } as OpenClawConfig;
+  } as ActiviConfig;
 }
 
-function makeProviderFallbackCfg(provider: string): OpenClawConfig {
+function makeProviderFallbackCfg(provider: string): ActiviConfig {
   return makeCfg({
     agents: {
       defaults: {
@@ -52,7 +52,7 @@ async function withTempAuthStore<T>(
   store: AuthProfileStore,
   run: (tempDir: string) => Promise<T>,
 ): Promise<T> {
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "activi-auth-"));
   saveAuthProfileStore(store, tempDir);
   try {
     return await run(tempDir);
@@ -62,7 +62,7 @@ async function withTempAuthStore<T>(
 }
 
 async function runWithStoredAuth(params: {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   store: AuthProfileStore;
   provider: string;
   run: (provider: string, model: string) => Promise<string>;

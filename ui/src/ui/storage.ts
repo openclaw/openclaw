@@ -1,4 +1,4 @@
-const KEY = "openclaw.control.settings.v1";
+const KEY = "activi.control.settings.v1";
 
 import { isSupportedLocale } from "../i18n/index.ts";
 import { VALID_THEMES, type ThemeMode } from "./theme.ts";

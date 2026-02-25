@@ -4,7 +4,7 @@ import {
   isEmbeddedPiRunActive,
   waitForEmbeddedPiRunEnd,
 } from "../../agents/pi-embedded.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 import {
   resolveFreshSessionTotalTokens,
   resolveSessionFilePath,
@@ -20,7 +20,7 @@ import { incrementCompactionCount } from "./session-updates.js";
 function extractCompactInstructions(params: {
   rawBody?: string;
   ctx: import("../templating.js").MsgContext;
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   agentId?: string;
   isGroup: boolean;
 }): string | undefined {

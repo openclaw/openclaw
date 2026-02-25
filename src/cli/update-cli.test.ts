@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
+import type { ActiviConfig, ConfigFileSnapshot } from "../config/types.activi.js";
 import type { UpdateRunResult } from "../infra/update-runner.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
@@ -34,8 +34,8 @@ vi.mock("../infra/update-runner.js", () => ({
   runGatewayUpdate: vi.fn(),
 }));
 
-vi.mock("../infra/openclaw-root.js", () => ({
-  resolveOpenClawPackageRoot: vi.fn(),
+vi.mock("../infra/activi-root.js", () => ({
+  resolveActiviPackageRoot: vi.fn(),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -121,7 +121,7 @@ vi.mock("../runtime.js", () => ({
 }));
 
 const { runGatewayUpdate } = await import("../infra/update-runner.js");
-const { resolveOpenClawPackageRoot } = await import("../infra/openclaw-root.js");
+const { resolveActiviPackageRoot } = await import("../infra/activi-root.js");
 const { readConfigFileSnapshot, writeConfigFile } = await import("../config/config.js");
 const { checkUpdateStatus, fetchNpmTagVersion, resolveNpmChannelTag } =
   await import("../infra/update-check.js");
@@ -133,7 +133,7 @@ const { updateCommand, registerUpdateCli, updateStatusCommand, updateWizardComma
   await import("./update-cli.js");
 
 describe("update-cli", () => {
-  const fixtureRoot = "/tmp/openclaw-update-tests";
+  const fixtureRoot = "/tmp/activi-update-tests";
   let fixtureCount = 0;
 
   const createCaseDir = (prefix: string) => {
@@ -142,9 +142,9 @@ describe("update-cli", () => {
     return dir;
   };
 
-  const baseConfig = {} as OpenClawConfig;
+  const baseConfig = {} as ActiviConfig;
   const baseSnapshot: ConfigFileSnapshot = {
-    path: "/tmp/openclaw-config.json",
+    path: "/tmp/activi-config.json",
     exists: true,
     raw: "{}",
     parsed: {},
@@ -171,7 +171,7 @@ describe("update-cli", () => {
   };
 
   const mockPackageInstallStatus = (root: string) => {
-    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
+    vi.mocked(resolveActiviPackageRoot).mockResolvedValue(root);
     vi.mocked(checkUpdateStatus).mockResolvedValue({
       root,
       installKind: "package",
@@ -221,7 +221,7 @@ describe("update-cli", () => {
   };
 
   const setupNonInteractiveDowngrade = async () => {
-    const tempDir = createCaseDir("openclaw-update");
+    const tempDir = createCaseDir("activi-update");
     setTty(false);
     readPackageVersion.mockResolvedValue("2.0.0");
 
@@ -246,7 +246,7 @@ describe("update-cli", () => {
     confirm.mockClear();
     select.mockClear();
     vi.mocked(runGatewayUpdate).mockClear();
-    vi.mocked(resolveOpenClawPackageRoot).mockClear();
+    vi.mocked(resolveActiviPackageRoot).mockClear();
     vi.mocked(readConfigFileSnapshot).mockClear();
     vi.mocked(writeConfigFile).mockClear();
     vi.mocked(checkUpdateStatus).mockClear();
@@ -269,7 +269,7 @@ describe("update-cli", () => {
     inspectPortUsage.mockClear();
     classifyPortListener.mockClear();
     formatPortDiagnostics.mockClear();
-    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(process.cwd());
+    vi.mocked(resolveActiviPackageRoot).mockResolvedValue(process.cwd());
     vi.mocked(readConfigFileSnapshot).mockResolvedValue(baseSnapshot);
     vi.mocked(fetchNpmTagVersion).mockResolvedValue({
       tag: "latest",
@@ -312,7 +312,7 @@ describe("update-cli", () => {
       killed: false,
       termination: "exit",
     });
-    readPackageName.mockResolvedValue("openclaw");
+    readPackageName.mockResolvedValue("activi");
     readPackageVersion.mockResolvedValue("1.0.0");
     resolveGlobalManager.mockResolvedValue("npm");
     serviceLoaded.mockResolvedValue(false);
@@ -321,12 +321,12 @@ describe("update-cli", () => {
       pid: 4242,
       state: "running",
     });
-    prepareRestartScript.mockResolvedValue("/tmp/openclaw-restart-test.sh");
+    prepareRestartScript.mockResolvedValue("/tmp/activi-restart-test.sh");
     runRestartScript.mockResolvedValue(undefined);
     inspectPortUsage.mockResolvedValue({
       port: 18789,
       status: "busy",
-      listeners: [{ pid: 4242, command: "openclaw-gateway" }],
+      listeners: [{ pid: 4242, command: "activi-gateway" }],
       hints: [],
     });
     classifyPortListener.mockReturnValue("gateway");
@@ -378,7 +378,7 @@ describe("update-cli", () => {
     await updateStatusCommand({ json: false });
 
     const logs = vi.mocked(defaultRuntime.log).mock.calls.map((call) => call[0]);
-    expect(logs.join("\n")).toContain("OpenClaw update status");
+    expect(logs.join("\n")).toContain("Activi update status");
   });
 
   it("updateStatusCommand emits JSON", async () => {
@@ -404,7 +404,7 @@ describe("update-cli", () => {
       mode: "npm" as const,
       options: { yes: true },
       prepare: async () => {
-        const tempDir = createCaseDir("openclaw-update");
+        const tempDir = createCaseDir("activi-update");
         mockPackageInstallStatus(tempDir);
       },
       expectedChannel: "stable" as const,
@@ -417,7 +417,7 @@ describe("update-cli", () => {
       prepare: async () => {
         vi.mocked(readConfigFileSnapshot).mockResolvedValue({
           ...baseSnapshot,
-          config: { update: { channel: "beta" } } as OpenClawConfig,
+          config: { update: { channel: "beta" } } as ActiviConfig,
         });
       },
       expectedChannel: "beta" as const,
@@ -436,12 +436,12 @@ describe("update-cli", () => {
   });
 
   it("falls back to latest when beta tag is older than release", async () => {
-    const tempDir = createCaseDir("openclaw-update");
+    const tempDir = createCaseDir("activi-update");
 
     mockPackageInstallStatus(tempDir);
     vi.mocked(readConfigFileSnapshot).mockResolvedValue({
       ...baseSnapshot,
-      config: { update: { channel: "beta" } } as OpenClawConfig,
+      config: { update: { channel: "beta" } } as ActiviConfig,
     });
     vi.mocked(resolveNpmChannelTag).mockResolvedValue({
       tag: "latest",
@@ -460,9 +460,9 @@ describe("update-cli", () => {
   });
 
   it("honors --tag override", async () => {
-    const tempDir = createCaseDir("openclaw-update");
+    const tempDir = createCaseDir("activi-update");
 
-    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(tempDir);
+    vi.mocked(resolveActiviPackageRoot).mockResolvedValue(tempDir);
     vi.mocked(runGatewayUpdate).mockResolvedValue(
       makeOkUpdateResult({
         mode: "npm",
@@ -542,7 +542,7 @@ describe("update-cli", () => {
   });
 
   it("updateCommand refreshes service env from updated install root when available", async () => {
-    const root = createCaseDir("openclaw-updated-root");
+    const root = createCaseDir("activi-updated-root");
     await fs.mkdir(path.join(root, "dist"), { recursive: true });
     await fs.writeFile(path.join(root, "dist", "entry.js"), "console.log('ok');\n", "utf8");
 
@@ -593,7 +593,7 @@ describe("update-cli", () => {
   it("updateCommand continues after doctor sub-step and clears update flag", async () => {
     const randomSpy = vi.spyOn(Math, "random").mockReturnValue(0);
     try {
-      await withEnvAsync({ OPENCLAW_UPDATE_IN_PROGRESS: undefined }, async () => {
+      await withEnvAsync({ ACTIVI_UPDATE_IN_PROGRESS: undefined }, async () => {
         vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
         vi.mocked(runDaemonRestart).mockResolvedValue(true);
         vi.mocked(doctorCommand).mockResolvedValue(undefined);
@@ -605,7 +605,7 @@ describe("update-cli", () => {
           defaultRuntime,
           expect.objectContaining({ nonInteractive: true }),
         );
-        expect(process.env.OPENCLAW_UPDATE_IN_PROGRESS).toBeUndefined();
+        expect(process.env.ACTIVI_UPDATE_IN_PROGRESS).toBeUndefined();
 
         const logLines = vi.mocked(defaultRuntime.log).mock.calls.map((call) => String(call[0]));
         expect(
@@ -718,8 +718,8 @@ describe("update-cli", () => {
   });
 
   it("updateWizardCommand offers dev checkout and forwards selections", async () => {
-    const tempDir = createCaseDir("openclaw-update-wizard");
-    await withEnvAsync({ OPENCLAW_GIT_DIR: tempDir }, async () => {
+    const tempDir = createCaseDir("activi-update-wizard");
+    await withEnvAsync({ ACTIVI_GIT_DIR: tempDir }, async () => {
       setTty(true);
 
       vi.mocked(checkUpdateStatus).mockResolvedValue({

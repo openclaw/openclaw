@@ -4,9 +4,9 @@ import type {
   ChannelDock,
   ChannelGroupContext,
   ChannelPlugin,
-  OpenClawConfig,
+  ActiviConfig,
   GroupToolPolicyConfig,
-} from "openclaw/plugin-sdk";
+} from "activi/plugin-sdk";
 import {
   applyAccountNameToChannelSection,
   buildChannelConfigSchema,
@@ -19,7 +19,7 @@ import {
   normalizeAccountId,
   resolveChannelAccountConfigBasePath,
   setAccountEnabledInConfigSection,
-} from "openclaw/plugin-sdk";
+} from "activi/plugin-sdk";
 import {
   listZalouserAccountIds,
   resolveDefaultZalouserAccountId,
@@ -253,7 +253,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
               enabled: true,
             },
           },
-        } as OpenClawConfig;
+        } as ActiviConfig;
       }
       return {
         ...next,
@@ -271,7 +271,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
             },
           },
         },
-      } as OpenClawConfig;
+      } as ActiviConfig;
     },
   },
   messaging: {
@@ -501,7 +501,7 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount> = {
       const ok = await checkZcaInstalled();
       if (!ok) {
         throw new Error(
-          "Missing dependency: `zca` not found in PATH. See docs.openclaw.ai/channels/zalouser",
+          "Missing dependency: `zca` not found in PATH. See docs.activi.ai/channels/zalouser",
         );
       }
       runtime.log(

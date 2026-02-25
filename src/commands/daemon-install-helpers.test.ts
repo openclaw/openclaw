@@ -34,11 +34,11 @@ afterEach(() => {
 
 describe("resolveGatewayDevMode", () => {
   it("detects dev mode for src ts entrypoints", () => {
-    expect(resolveGatewayDevMode(["node", "/Users/me/openclaw/src/cli/index.ts"])).toBe(true);
-    expect(resolveGatewayDevMode(["node", "C:\\Users\\me\\openclaw\\src\\cli\\index.ts"])).toBe(
+    expect(resolveGatewayDevMode(["node", "/Users/me/activi/src/cli/index.ts"])).toBe(true);
+    expect(resolveGatewayDevMode(["node", "C:\\Users\\me\\activi\\src\\cli\\index.ts"])).toBe(
       true,
     );
-    expect(resolveGatewayDevMode(["node", "/Users/me/openclaw/dist/cli/index.js"])).toBe(false);
+    expect(resolveGatewayDevMode(["node", "/Users/me/activi/dist/cli/index.js"])).toBe(false);
   });
 });
 
@@ -56,7 +56,7 @@ function mockNodeGatewayPlanFixture(
     version = "22.0.0",
     supported = true,
     warning,
-    serviceEnvironment = { OPENCLAW_PORT: "3000" },
+    serviceEnvironment = { ACTIVI_PORT: "3000" },
   } = params;
   mocks.resolvePreferredNodePath.mockResolvedValue("/opt/node");
   mocks.resolveGatewayProgramArguments.mockResolvedValue({
@@ -85,7 +85,7 @@ describe("buildGatewayInstallPlan", () => {
 
     expect(plan.programArguments).toEqual(["node", "gateway"]);
     expect(plan.workingDirectory).toBe("/Users/me");
-    expect(plan.environment).toEqual({ OPENCLAW_PORT: "3000" });
+    expect(plan.environment).toEqual({ ACTIVI_PORT: "3000" });
     expect(mocks.resolvePreferredNodePath).not.toHaveBeenCalled();
   });
 
@@ -113,7 +113,7 @@ describe("buildGatewayInstallPlan", () => {
   it("merges config env vars into the environment", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
-        OPENCLAW_PORT: "3000",
+        ACTIVI_PORT: "3000",
         HOME: "/Users/me",
       },
     });
@@ -136,14 +136,14 @@ describe("buildGatewayInstallPlan", () => {
     expect(plan.environment.GOOGLE_API_KEY).toBe("test-key");
     expect(plan.environment.CUSTOM_VAR).toBe("custom-value");
     // Service environment vars should take precedence
-    expect(plan.environment.OPENCLAW_PORT).toBe("3000");
+    expect(plan.environment.ACTIVI_PORT).toBe("3000");
     expect(plan.environment.HOME).toBe("/Users/me");
   });
 
   it("drops dangerous config env vars before service merge", async () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
-        OPENCLAW_PORT: "3000",
+        ACTIVI_PORT: "3000",
       },
     });
 
@@ -211,7 +211,7 @@ describe("buildGatewayInstallPlan", () => {
     mockNodeGatewayPlanFixture({
       serviceEnvironment: {
         HOME: "/Users/service",
-        OPENCLAW_PORT: "3000",
+        ACTIVI_PORT: "3000",
       },
     });
 
@@ -223,14 +223,14 @@ describe("buildGatewayInstallPlan", () => {
         env: {
           HOME: "/Users/config",
           vars: {
-            OPENCLAW_PORT: "9999",
+            ACTIVI_PORT: "9999",
           },
         },
       },
     });
 
     expect(plan.environment.HOME).toBe("/Users/service");
-    expect(plan.environment.OPENCLAW_PORT).toBe("3000");
+    expect(plan.environment.ACTIVI_PORT).toBe("3000");
   });
 });
 
@@ -238,7 +238,7 @@ describe("gatewayInstallErrorHint", () => {
   it("returns platform-specific hints", () => {
     expect(gatewayInstallErrorHint("win32")).toContain("Run as administrator");
     expect(gatewayInstallErrorHint("linux")).toMatch(
-      /(?:openclaw|openclaw)( --profile isolated)? gateway install/,
+      /(?:activi|activi)( --profile isolated)? gateway install/,
     );
   });
 });

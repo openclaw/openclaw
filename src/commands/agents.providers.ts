@@ -5,7 +5,7 @@ import {
   normalizeChannelId,
 } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import type { AgentBinding } from "../config/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
@@ -43,7 +43,7 @@ function formatProviderState(entry: ProviderAccountStatus): string {
 }
 
 export async function buildProviderStatusIndex(
-  cfg: OpenClawConfig,
+  cfg: ActiviConfig,
 ): Promise<Map<string, ProviderAccountStatus>> {
   const map = new Map<string, ProviderAccountStatus>();
 
@@ -91,7 +91,7 @@ export async function buildProviderStatusIndex(
   return map;
 }
 
-function resolveDefaultAccountId(cfg: OpenClawConfig, provider: ChannelId): string {
+function resolveDefaultAccountId(cfg: ActiviConfig, provider: ChannelId): string {
   const plugin = getChannelPlugin(provider);
   if (!plugin) {
     return DEFAULT_ACCOUNT_ID;
@@ -99,7 +99,7 @@ function resolveDefaultAccountId(cfg: OpenClawConfig, provider: ChannelId): stri
   return resolveChannelDefaultAccountId({ plugin, cfg });
 }
 
-function shouldShowProviderEntry(entry: ProviderAccountStatus, cfg: OpenClawConfig): boolean {
+function shouldShowProviderEntry(entry: ProviderAccountStatus, cfg: ActiviConfig): boolean {
   const plugin = getChannelPlugin(entry.provider);
   if (!plugin) {
     return Boolean(entry.configured);
@@ -120,7 +120,7 @@ function formatProviderEntry(entry: ProviderAccountStatus): string {
   return `${label}: ${formatProviderState(entry)}`;
 }
 
-export function summarizeBindings(cfg: OpenClawConfig, bindings: AgentBinding[]): string[] {
+export function summarizeBindings(cfg: ActiviConfig, bindings: AgentBinding[]): string[] {
   if (bindings.length === 0) {
     return [];
   }
@@ -145,7 +145,7 @@ export function summarizeBindings(cfg: OpenClawConfig, bindings: AgentBinding[])
 
 export function listProvidersForAgent(params: {
   summaryIsDefault: boolean;
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   bindings: AgentBinding[];
   providerStatus: Map<string, ProviderAccountStatus>;
 }): string[] {

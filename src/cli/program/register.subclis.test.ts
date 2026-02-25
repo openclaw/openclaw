@@ -39,7 +39,7 @@ describe("registerSubCliCommands", () => {
 
   beforeEach(() => {
     process.env = { ...originalEnv };
-    delete process.env.OPENCLAW_DISABLE_LAZY_SUBCOMMANDS;
+    delete process.env.ACTIVI_DISABLE_LAZY_SUBCOMMANDS;
     registerAcpCli.mockClear();
     acpAction.mockClear();
     registerNodesCli.mockClear();
@@ -52,7 +52,7 @@ describe("registerSubCliCommands", () => {
   });
 
   it("registers only the primary placeholder and dispatches", async () => {
-    const program = createRegisteredProgram(["node", "openclaw", "acp"]);
+    const program = createRegisteredProgram(["node", "activi", "acp"]);
 
     expect(program.commands.map((cmd) => cmd.name())).toEqual(["acp"]);
 
@@ -63,7 +63,7 @@ describe("registerSubCliCommands", () => {
   });
 
   it("registers placeholders for all subcommands when no primary", () => {
-    const program = createRegisteredProgram(["node", "openclaw"]);
+    const program = createRegisteredProgram(["node", "activi"]);
 
     const names = program.commands.map((cmd) => cmd.name());
     expect(names).toContain("acp");
@@ -73,7 +73,7 @@ describe("registerSubCliCommands", () => {
   });
 
   it("re-parses argv for lazy subcommands", async () => {
-    const program = createRegisteredProgram(["node", "openclaw", "nodes", "list"], "openclaw");
+    const program = createRegisteredProgram(["node", "activi", "nodes", "list"], "activi");
 
     expect(program.commands.map((cmd) => cmd.name())).toEqual(["nodes"]);
 
@@ -84,14 +84,14 @@ describe("registerSubCliCommands", () => {
   });
 
   it("replaces placeholder when registering a subcommand by name", async () => {
-    const program = createRegisteredProgram(["node", "openclaw", "acp", "--help"], "openclaw");
+    const program = createRegisteredProgram(["node", "activi", "acp", "--help"], "activi");
 
     await registerSubCliByName(program, "acp");
 
     const names = program.commands.map((cmd) => cmd.name());
     expect(names.filter((name) => name === "acp")).toHaveLength(1);
 
-    await program.parseAsync(["node", "openclaw", "acp"], { from: "user" });
+    await program.parseAsync(["node", "activi", "acp"], { from: "user" });
     expect(registerAcpCli).toHaveBeenCalledTimes(1);
     expect(acpAction).toHaveBeenCalledTimes(1);
   });

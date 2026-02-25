@@ -1,16 +1,16 @@
 {
-  "name": "@openclaw/memory-core",
+  "name": "@activi/memory-core",
   "version": "2026.2.22",
   "private": true,
-  "description": "OpenClaw core memory search plugin",
+  "description": "Activi core memory search plugin",
   "type": "module",
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "activi": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.1.26"
+    "activi": ">=2026.1.26"
   },
-  "openclaw": {
+  "activi": {
     "extensions": [
       "./index.ts"
     ]

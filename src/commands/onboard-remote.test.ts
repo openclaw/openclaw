@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import type { GatewayBonjourBeacon } from "../infra/bonjour-discovery.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { createWizardPrompter } from "./test-wizard-helpers.js";
@@ -70,7 +70,7 @@ describe("promptRemoteGatewayConfig", () => {
       return "";
     }) as WizardPrompter["text"];
 
-    const cfg = {} as OpenClawConfig;
+    const cfg = {} as ActiviConfig;
     const prompter = createPrompter({
       confirm: vi.fn(async () => true),
       select,
@@ -106,7 +106,7 @@ describe("promptRemoteGatewayConfig", () => {
       return (params.options[0]?.value ?? "") as never;
     });
 
-    const cfg = {} as OpenClawConfig;
+    const cfg = {} as ActiviConfig;
     const prompter = createPrompter({
       confirm: vi.fn(async () => false),
       select,

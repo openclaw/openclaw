@@ -126,7 +126,7 @@ describe("telegram inbound media", () => {
           photo: [{ file_id: "fid" }],
           date: 1736380800, // 2025-01-09T00:00:00Z
         },
-        me: { username: "openclaw_bot" },
+        me: { username: "activi_bot" },
         getFile: async () => ({ file_path: "photos/1.jpg" }),
       });
 
@@ -170,7 +170,7 @@ describe("telegram inbound media", () => {
         chat: { id: 1234, type: "private" },
         photo: [{ file_id: "fid" }],
       },
-      me: { username: "openclaw_bot" },
+      me: { username: "activi_bot" },
       getFile: async () => ({ file_path: "photos/2.jpg" }),
     });
 
@@ -198,7 +198,7 @@ describe("telegram inbound media", () => {
         chat: { id: 1234, type: "private" },
         photo: [{ file_id: "fid" }],
       },
-      me: { username: "openclaw_bot" },
+      me: { username: "activi_bot" },
       getFile: async () => ({}),
     });
 
@@ -237,7 +237,7 @@ describe("telegram media groups", () => {
           media_group_id: "album123",
           photo: [{ file_id: "photo1" }],
         },
-        me: { username: "openclaw_bot" },
+        me: { username: "activi_bot" },
         getFile: async () => ({ file_path: "photos/photo1.jpg" }),
       });
 
@@ -249,7 +249,7 @@ describe("telegram media groups", () => {
           media_group_id: "album123",
           photo: [{ file_id: "photo2" }],
         },
-        me: { username: "openclaw_bot" },
+        me: { username: "activi_bot" },
         getFile: async () => ({ file_path: "photos/photo2.jpg" }),
       });
 
@@ -289,7 +289,7 @@ describe("telegram media groups", () => {
           media_group_id: "albumA",
           photo: [{ file_id: "photoA1" }],
         },
-        me: { username: "openclaw_bot" },
+        me: { username: "activi_bot" },
         getFile: async () => ({ file_path: "photos/photoA1.jpg" }),
       });
 
@@ -302,7 +302,7 @@ describe("telegram media groups", () => {
           media_group_id: "albumB",
           photo: [{ file_id: "photoB1" }],
         },
-        me: { username: "openclaw_bot" },
+        me: { username: "activi_bot" },
         getFile: async () => ({ file_path: "photos/photoB1.jpg" }),
       });
 
@@ -360,7 +360,7 @@ describe("telegram stickers", () => {
           },
           date: 1736380800,
         },
-        me: { username: "openclaw_bot" },
+        me: { username: "activi_bot" },
         getFile: async () => ({ file_path: "stickers/sticker.webp" }),
       });
 
@@ -420,7 +420,7 @@ describe("telegram stickers", () => {
           },
           date: 1736380800,
         },
-        me: { username: "openclaw_bot" },
+        me: { username: "activi_bot" },
         getFile: async () => ({ file_path: "stickers/sticker.webp" }),
       });
 
@@ -464,7 +464,7 @@ describe("telegram stickers", () => {
           },
           date: 1736380800,
         },
-        me: { username: "openclaw_bot" },
+        me: { username: "activi_bot" },
         getFile: async () => ({ file_path: "stickers/animated.tgs" }),
       });
 
@@ -502,7 +502,7 @@ describe("telegram stickers", () => {
           },
           date: 1736380800,
         },
-        me: { username: "openclaw_bot" },
+        me: { username: "activi_bot" },
         getFile: async () => ({ file_path: "stickers/video.webm" }),
       });
 
@@ -547,7 +547,7 @@ describe("telegram text fragments", () => {
           date: 1736380800,
           text: part1,
         },
-        me: { username: "openclaw_bot" },
+        me: { username: "activi_bot" },
         getFile: async () => ({}),
       });
 
@@ -558,7 +558,7 @@ describe("telegram text fragments", () => {
           date: 1736380801,
           text: part2,
         },
-        me: { username: "openclaw_bot" },
+        me: { username: "activi_bot" },
         getFile: async () => ({}),
       });
 

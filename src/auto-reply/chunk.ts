@@ -3,7 +3,7 @@
 // the chunk so messages are only split when they truly exceed the limit.
 
 import type { ChannelId } from "../channels/plugins/types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { findFenceSpanAt, isSafeFenceBreak, parseFenceSpans } from "../markdown/fences.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { chunkTextByBreakResolver } from "../shared/text-chunking.js";
@@ -55,7 +55,7 @@ function resolveChunkLimitForProvider(
 }
 
 export function resolveTextChunkLimit(
-  cfg: OpenClawConfig | undefined,
+  cfg: ActiviConfig | undefined,
   provider?: TextChunkProvider,
   accountId?: string | null,
   opts?: { fallbackLimit?: number },
@@ -105,7 +105,7 @@ function resolveChunkModeForProvider(
 }
 
 export function resolveChunkMode(
-  cfg: OpenClawConfig | undefined,
+  cfg: ActiviConfig | undefined,
   provider?: TextChunkProvider,
   accountId?: string | null,
 ): ChunkMode {

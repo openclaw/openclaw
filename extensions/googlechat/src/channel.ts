@@ -18,9 +18,9 @@ import {
   type ChannelMessageActionAdapter,
   type ChannelPlugin,
   type ChannelStatusIssue,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk";
-import { GoogleChatConfigSchema } from "openclaw/plugin-sdk";
+  type ActiviConfig,
+} from "activi/plugin-sdk";
+import { GoogleChatConfigSchema } from "activi/plugin-sdk";
 import {
   listGoogleChatAccountIds,
   resolveDefaultGoogleChatAccountId,
@@ -356,7 +356,7 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
               ...configPatch,
             },
           },
-        } as OpenClawConfig;
+        } as ActiviConfig;
       }
       return {
         ...next,
@@ -375,7 +375,7 @@ export const googlechatPlugin: ChannelPlugin<ResolvedGoogleChatAccount> = {
             },
           },
         },
-      } as OpenClawConfig;
+      } as ActiviConfig;
     },
   },
   outbound: {

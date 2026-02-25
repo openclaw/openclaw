@@ -132,8 +132,8 @@ describe("chrome extension relay server", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN"]);
-    process.env.OPENCLAW_GATEWAY_TOKEN = TEST_GATEWAY_TOKEN;
+    envSnapshot = captureEnv(["ACTIVI_GATEWAY_TOKEN"]);
+    process.env.ACTIVI_GATEWAY_TOKEN = TEST_GATEWAY_TOKEN;
   });
 
   afterEach(async () => {
@@ -180,8 +180,8 @@ describe("chrome extension relay server", () => {
     await ensureChromeExtensionRelayServer({ cdpUrl });
 
     const headers = getChromeExtensionRelayAuthHeaders(cdpUrl);
-    expect(Object.keys(headers)).toContain("x-openclaw-relay-token");
-    expect(headers["x-openclaw-relay-token"]).not.toBe(TEST_GATEWAY_TOKEN);
+    expect(Object.keys(headers)).toContain("x-activi-relay-token");
+    expect(headers["x-activi-relay-token"]).not.toBe(TEST_GATEWAY_TOKEN);
   });
 
   it("rejects CDP access without relay auth token", async () => {
@@ -212,7 +212,7 @@ describe("chrome extension relay server", () => {
     cdpUrl = `http://127.0.0.1:${port}`;
     await ensureChromeExtensionRelayServer({ cdpUrl });
 
-    const token = relayAuthHeaders(`ws://127.0.0.1:${port}/extension`)["x-openclaw-relay-token"];
+    const token = relayAuthHeaders(`ws://127.0.0.1:${port}/extension`)["x-activi-relay-token"];
     expect(token).toBeTruthy();
     const ext = new WebSocket(
       `ws://127.0.0.1:${port}/extension?token=${encodeURIComponent(String(token))}`,
@@ -421,7 +421,7 @@ describe("chrome extension relay server", () => {
     let probeToken: string | undefined;
     const fakeRelay = createServer((req, res) => {
       if (req.url?.startsWith("/json/version")) {
-        const header = req.headers["x-openclaw-relay-token"];
+        const header = req.headers["x-activi-relay-token"];
         probeToken = Array.isArray(header) ? header[0] : header;
         if (!probeToken) {
           res.writeHead(401);
@@ -429,7 +429,7 @@ describe("chrome extension relay server", () => {
           return;
         }
         res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ Browser: "OpenClaw/extension-relay" }));
+        res.end(JSON.stringify({ Browser: "Activi/extension-relay" }));
         return;
       }
       if (req.url?.startsWith("/extension/status")) {
@@ -460,7 +460,7 @@ describe("chrome extension relay server", () => {
     }
   });
 
-  it("does not swallow EADDRINUSE when occupied port is not an openclaw relay", async () => {
+  it("does not swallow EADDRINUSE when occupied port is not an activi relay", async () => {
     const port = await getFreePort();
     const blocker = createServer((_, res) => {
       res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });

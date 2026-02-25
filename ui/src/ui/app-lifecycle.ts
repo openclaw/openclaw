@@ -59,7 +59,10 @@ export function handleConnected(host: LifecycleHost) {
     (host as unknown as { cmdKHandler: (e: KeyboardEvent) => void }).cmdKHandler,
   );
   connectGateway(host as unknown as Parameters<typeof connectGateway>[0]);
-  startNodesPolling(host as unknown as Parameters<typeof startNodesPolling>[0]);
+  // Performance: Only start nodes polling if on nodes tab
+  if (host.tab === "nodes") {
+    startNodesPolling(host as unknown as Parameters<typeof startNodesPolling>[0]);
+  }
   if (host.tab === "logs") {
     startLogsPolling(host as unknown as Parameters<typeof startLogsPolling>[0]);
   }

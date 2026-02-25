@@ -1,10 +1,10 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 
 export function setPluginEnabledInConfig(
-  config: OpenClawConfig,
+  config: ActiviConfig,
   pluginId: string,
   enabled: boolean,
-): OpenClawConfig {
+): ActiviConfig {
   return {
     ...config,
     plugins: {

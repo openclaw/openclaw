@@ -33,7 +33,7 @@ function applyTelegramNetworkWorkarounds(network?: TelegramNetworkConfig): void 
 
   // Apply DNS result order workaround for IPv4/IPv6 issues.
   // Some APIs (including Telegram) may fail with IPv6 on certain networks.
-  // See: https://github.com/openclaw/openclaw/issues/5311
+  // See: https://github.com/activi/activi/issues/5311
   const dnsDecision = resolveTelegramDnsResultOrderDecision({ network });
   if (dnsDecision.value !== null && dnsDecision.value !== appliedDnsResultOrder) {
     if (typeof dns.setDefaultResultOrder === "function") {

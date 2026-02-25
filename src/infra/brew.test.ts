@@ -6,7 +6,7 @@ import { resolveBrewExecutable, resolveBrewPathDirs } from "./brew.js";
 
 describe("brew helpers", () => {
   async function withBrewRoot(run: (tmp: string) => Promise<void>) {
-    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-brew-"));
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "activi-brew-"));
     try {
       await run(tmp);
     } finally {

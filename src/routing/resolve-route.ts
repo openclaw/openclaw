@@ -1,7 +1,7 @@
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { normalizeChatType } from "../channels/chat-type.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { shouldLogVerbose } from "../globals.js";
 import { logDebug } from "../logger.js";
 import { listBindings } from "./bindings.js";
@@ -24,7 +24,7 @@ export type RoutePeer = {
 };
 
 export type ResolveAgentRouteInput = {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   channel: string;
   accountId?: string | null;
   peer?: RoutePeer | null;
@@ -106,12 +106,12 @@ export function buildAgentSessionKey(params: {
   });
 }
 
-function listAgents(cfg: OpenClawConfig) {
+function listAgents(cfg: ActiviConfig) {
   const agents = cfg.agents?.list;
   return Array.isArray(agents) ? agents : [];
 }
 
-function pickFirstExistingAgentId(cfg: OpenClawConfig, agentId: string): string {
+function pickFirstExistingAgentId(cfg: ActiviConfig, agentId: string): string {
   const trimmed = (agentId ?? "").trim();
   if (!trimmed) {
     return sanitizeAgentId(resolveDefaultAgentId(cfg));
@@ -165,15 +165,15 @@ type BindingScope = {
 };
 
 type EvaluatedBindingsCache = {
-  bindingsRef: OpenClawConfig["bindings"];
+  bindingsRef: ActiviConfig["bindings"];
   byChannelAccount: Map<string, EvaluatedBinding[]>;
 };
 
-const evaluatedBindingsCacheByCfg = new WeakMap<OpenClawConfig, EvaluatedBindingsCache>();
+const evaluatedBindingsCacheByCfg = new WeakMap<ActiviConfig, EvaluatedBindingsCache>();
 const MAX_EVALUATED_BINDINGS_CACHE_KEYS = 2000;
 
 function getEvaluatedBindingsForChannelAccount(
-  cfg: OpenClawConfig,
+  cfg: ActiviConfig,
   channel: string,
   accountId: string,
 ): EvaluatedBinding[] {

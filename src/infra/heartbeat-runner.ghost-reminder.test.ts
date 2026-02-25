@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import { setTelegramRuntime } from "../../extensions/telegram/src/runtime.js";
 import * as replyModule from "../auto-reply/reply.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -42,8 +42,8 @@ describe("Ghost reminder bug (issue #13317)", () => {
   const createConfig = async (params: {
     tmpDir: string;
     storePath: string;
-  }): Promise<{ cfg: OpenClawConfig; sessionKey: string }> => {
-    const cfg: OpenClawConfig = {
+  }): Promise<{ cfg: ActiviConfig; sessionKey: string }> => {
+    const cfg: ActiviConfig = {
       agents: {
         defaults: {
           workspace: params.tmpDir,
@@ -135,13 +135,13 @@ describe("Ghost reminder bug (issue #13317)", () => {
         expect(calledCtx?.Body).not.toContain("relay this reminder");
         expect(sendTelegram).toHaveBeenCalled();
       },
-      { prefix: "openclaw-ghost-" },
+      { prefix: "activi-ghost-" },
     );
   });
 
   it("uses CRON_EVENT_PROMPT when an actionable cron event exists", async () => {
     const { result, sendTelegram, calledCtx } = await runCronReminderCase(
-      "openclaw-cron-",
+      "activi-cron-",
       (sessionKey) => {
         enqueueSystemEvent("Reminder: Check Base Scout results", { sessionKey });
       },
@@ -153,7 +153,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
 
   it("uses CRON_EVENT_PROMPT when cron events are mixed with heartbeat noise", async () => {
     const { result, sendTelegram, calledCtx } = await runCronReminderCase(
-      "openclaw-cron-mixed-",
+      "activi-cron-mixed-",
       (sessionKey) => {
         enqueueSystemEvent("HEARTBEAT_OK", { sessionKey });
         enqueueSystemEvent("Reminder: Check Base Scout results", { sessionKey });
@@ -192,7 +192,7 @@ describe("Ghost reminder bug (issue #13317)", () => {
         expect(calledCtx?.Body).not.toContain("Read HEARTBEAT.md");
         expect(sendTelegram).toHaveBeenCalled();
       },
-      { prefix: "openclaw-cron-interval-" },
+      { prefix: "activi-cron-interval-" },
     );
   });
 });

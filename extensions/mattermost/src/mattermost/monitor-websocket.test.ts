@@ -1,4 +1,4 @@
-import type { RuntimeEnv } from "openclaw/plugin-sdk";
+import type { RuntimeEnv } from "activi/plugin-sdk";
 import { describe, expect, it, vi } from "vitest";
 import {
   createMattermostConnectOnce,

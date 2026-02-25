@@ -1,5 +1,5 @@
 /**
- * OpenClaw Memory (LanceDB) Plugin
+ * Activi Memory (LanceDB) Plugin
  *
  * Long-term memory with vector search for AI conversations.
  * Uses LanceDB for storage and OpenAI for embeddings.
@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import type * as LanceDB from "@lancedb/lancedb";
 import { Type } from "@sinclair/typebox";
 import OpenAI from "openai";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { ActiviPluginApi } from "activi/plugin-sdk";
 import {
   DEFAULT_CAPTURE_MAX_CHARS,
   MEMORY_CATEGORIES,
@@ -290,7 +290,7 @@ const memoryPlugin = {
   kind: "memory" as const,
   configSchema: memoryConfigSchema,
 
-  register(api: OpenClawPluginApi) {
+  register(api: ActiviPluginApi) {
     const cfg = memoryConfigSchema.parse(api.pluginConfig);
     const resolvedDbPath = api.resolvePath(cfg.dbPath!);
     const vectorDim = vectorDimsForModel(cfg.embedding.model ?? "text-embedding-3-small");

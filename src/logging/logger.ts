@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Logger as TsLogger } from "tslog";
-import type { OpenClawConfig } from "../config/types.js";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import type { ActiviConfig } from "../config/types.js";
+import { resolvePreferredActiviTmpDir } from "../infra/tmp-activi-dir.js";
 import { readLoggingConfig } from "./config.js";
 import type { ConsoleStyle } from "./console.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
@@ -10,10 +10,10 @@ import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
 import { resolveNodeRequireFromMeta } from "./node-require.js";
 import { loggingState } from "./state.js";
 
-export const DEFAULT_LOG_DIR = resolvePreferredOpenClawTmpDir();
-export const DEFAULT_LOG_FILE = path.join(DEFAULT_LOG_DIR, "openclaw.log"); // legacy single-file path
+export const DEFAULT_LOG_DIR = resolvePreferredActiviTmpDir();
+export const DEFAULT_LOG_FILE = path.join(DEFAULT_LOG_DIR, "activi.log"); // legacy single-file path
 
-const LOG_PREFIX = "openclaw";
+const LOG_PREFIX = "activi";
 const LOG_SUFFIX = ".log";
 const MAX_LOG_AGE_MS = 24 * 60 * 60 * 1000; // 24h
 
@@ -52,13 +52,13 @@ function attachExternalTransport(logger: TsLogger<LogObj>, transport: LogTranspo
 }
 
 function resolveSettings(): ResolvedSettings {
-  let cfg: OpenClawConfig["logging"] | undefined =
+  let cfg: ActiviConfig["logging"] | undefined =
     (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
   if (!cfg) {
     try {
       const loaded = requireConfig?.("../config/config.js") as
         | {
-            loadConfig?: () => OpenClawConfig;
+            loadConfig?: () => ActiviConfig;
           }
         | undefined;
       cfg = loaded?.loadConfig?.().logging;
@@ -67,7 +67,7 @@ function resolveSettings(): ResolvedSettings {
     }
   }
   const defaultLevel =
-    process.env.VITEST === "true" && process.env.OPENCLAW_TEST_FILE_LOG !== "1" ? "silent" : "info";
+    process.env.VITEST === "true" && process.env.ACTIVI_TEST_FILE_LOG !== "1" ? "silent" : "info";
   const fromConfig = normalizeLogLevel(cfg?.level, defaultLevel);
   const envLevel = resolveEnvLogLevelOverride();
   const level = envLevel ?? fromConfig;
@@ -100,7 +100,7 @@ function buildLogger(settings: ResolvedSettings): TsLogger<LogObj> {
     pruneOldRollingLogs(path.dirname(settings.file));
   }
   const logger = new TsLogger<LogObj>({
-    name: "openclaw",
+    name: "activi",
     minLevel: levelToMinLevel(settings.level),
     type: "hidden", // no ansi formatting
   });

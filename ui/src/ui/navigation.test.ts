@@ -82,7 +82,7 @@ describe("subtitleForTab", () => {
 
   it("returns descriptive subtitles", () => {
     expect(subtitleForTab("chat")).toContain("chat session");
-    expect(subtitleForTab("config")).toContain("openclaw.json");
+    expect(subtitleForTab("config")).toContain("activi.json");
   });
 });
 
@@ -93,7 +93,7 @@ describe("normalizeBasePath", () => {
       { input: "ui", expected: "/ui" },
       { input: "/ui/", expected: "/ui" },
       { input: "/", expected: "" },
-      { input: "/apps/openclaw", expected: "/apps/openclaw" },
+      { input: "/apps/activi", expected: "/apps/activi" },
     ] as const;
     for (const testCase of cases) {
       expect(normalizeBasePath(testCase.input), testCase.input).toBe(testCase.expected);
@@ -121,7 +121,7 @@ describe("pathForTab", () => {
       { tab: "chat", base: undefined, expected: "/chat" },
       { tab: "overview", base: undefined, expected: "/overview" },
       { tab: "chat", base: "/ui", expected: "/ui/chat" },
-      { tab: "sessions", base: "/apps/openclaw", expected: "/apps/openclaw/sessions" },
+      { tab: "sessions", base: "/apps/activi", expected: "/apps/activi/sessions" },
     ] as const;
     for (const testCase of cases) {
       expect(
@@ -140,7 +140,7 @@ describe("tabFromPath", () => {
       { path: "/sessions", base: undefined, expected: "sessions" },
       { path: "/", base: undefined, expected: "chat" },
       { path: "/ui/chat", base: "/ui", expected: "chat" },
-      { path: "/apps/openclaw/sessions", base: "/apps/openclaw", expected: "sessions" },
+      { path: "/apps/activi/sessions", base: "/apps/activi", expected: "sessions" },
       { path: "/unknown", base: undefined, expected: null },
       { path: "/CHAT", base: undefined, expected: "chat" },
       { path: "/Overview", base: undefined, expected: "overview" },
@@ -161,7 +161,7 @@ describe("inferBasePathFromPathname", () => {
       { path: "/chat", expected: "" },
       { path: "/overview", expected: "" },
       { path: "/ui/chat", expected: "/ui" },
-      { path: "/apps/openclaw/sessions", expected: "/apps/openclaw" },
+      { path: "/apps/activi/sessions", expected: "/apps/activi" },
       { path: "/index.html", expected: "" },
       { path: "/ui/index.html", expected: "/ui" },
     ] as const;

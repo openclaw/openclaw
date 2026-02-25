@@ -250,7 +250,7 @@ function createArgMenusHarness() {
     channelsConfig: undefined,
     slashCommand: {
       enabled: true,
-      name: "openclaw",
+      name: "activi",
       ephemeral: true,
       sessionPrefix: "slack:slash",
     },
@@ -381,8 +381,8 @@ describe("Slack native command argument menus", () => {
     reportExternalHandler = requireHandler(harness.commands, "/reportexternal", "/reportexternal");
     reportLongHandler = requireHandler(harness.commands, "/reportlong", "/reportlong");
     unsafeConfirmHandler = requireHandler(harness.commands, "/unsafeconfirm", "/unsafeconfirm");
-    argMenuHandler = requireHandler(harness.actions, "openclaw_cmdarg", "arg-menu action");
-    argMenuOptionsHandler = requireHandler(harness.options, "openclaw_cmdarg", "arg-menu options");
+    argMenuHandler = requireHandler(harness.actions, "activi_cmdarg", "arg-menu action");
+    argMenuOptionsHandler = requireHandler(harness.options, "activi_cmdarg", "arg-menu options");
   });
 
   beforeEach(() => {
@@ -393,8 +393,8 @@ describe("Slack native command argument menus", () => {
     const testHarness = createArgMenusHarness();
     await registerCommands(testHarness.ctx, testHarness.account);
     expect(testHarness.commands.size).toBeGreaterThan(0);
-    expect(testHarness.actions.has("openclaw_cmdarg")).toBe(true);
-    expect(testHarness.options.has("openclaw_cmdarg")).toBe(true);
+    expect(testHarness.actions.has("activi_cmdarg")).toBe(true);
+    expect(testHarness.options.has("activi_cmdarg")).toBe(true);
     expect(testHarness.optionsReceiverContexts[0]).toBe(testHarness.app);
   });
 
@@ -411,7 +411,7 @@ describe("Slack native command argument menus", () => {
     const actions = expectArgMenuLayout(respond);
     const element = actions?.elements?.[0];
     expect(element?.type).toBe("static_select");
-    expect(element?.action_id).toBe("openclaw_cmdarg");
+    expect(element?.action_id).toBe("activi_cmdarg");
     expect(element?.confirm).toBeTruthy();
   });
 
@@ -434,7 +434,7 @@ describe("Slack native command argument menus", () => {
     const actions = findFirstActionsBlock(payload);
     const element = actions?.elements?.[0];
     expect(element?.type).toBe("overflow");
-    expect(element?.action_id).toBe("openclaw_cmdarg");
+    expect(element?.action_id).toBe("activi_cmdarg");
     expect(element?.confirm).toBeTruthy();
   });
 
@@ -503,10 +503,10 @@ describe("Slack native command argument menus", () => {
     const actions = findFirstActionsBlock(payload);
     const element = actions?.elements?.[0];
     expect(element?.type).toBe("external_select");
-    expect(element?.action_id).toBe("openclaw_cmdarg");
+    expect(element?.action_id).toBe("activi_cmdarg");
     const blockId = payload.blocks?.find((block) => block.type === "actions")?.block_id;
-    expect(blockId).toContain("openclaw_cmdarg_ext:");
-    const token = (blockId ?? "").slice("openclaw_cmdarg_ext:".length);
+    expect(blockId).toContain("activi_cmdarg_ext:");
+    const token = (blockId ?? "").slice("activi_cmdarg_ext:".length);
     expect(token).toMatch(/^[A-Za-z0-9_-]{24}$/);
   });
 
@@ -517,7 +517,7 @@ describe("Slack native command argument menus", () => {
       blocks?: Array<{ type: string; block_id?: string }>;
     };
     const blockId = payload.blocks?.find((block) => block.type === "actions")?.block_id;
-    expect(blockId).toContain("openclaw_cmdarg_ext:");
+    expect(blockId).toContain("activi_cmdarg_ext:");
 
     const ackOptions = vi.fn().mockResolvedValue(undefined);
     await argMenuOptionsHandler({
@@ -544,7 +544,7 @@ describe("Slack native command argument menus", () => {
       blocks?: Array<{ type: string; block_id?: string }>;
     };
     const blockId = payload.blocks?.find((block) => block.type === "actions")?.block_id;
-    expect(blockId).toContain("openclaw_cmdarg_ext:");
+    expect(blockId).toContain("activi_cmdarg_ext:");
 
     const ackOptions = vi.fn().mockResolvedValue(undefined);
     await argMenuOptionsHandler({
@@ -645,7 +645,7 @@ function createPolicyHarness(overrides?: {
     channelsConfig: overrides?.channelsConfig,
     slashCommand: {
       enabled: true,
-      name: "openclaw",
+      name: "activi",
       ephemeral: true,
       sessionPrefix: "slack:slash",
     },

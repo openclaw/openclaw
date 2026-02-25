@@ -4,7 +4,7 @@ import {
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
   requestBodyErrorToText,
-} from "openclaw/plugin-sdk";
+} from "activi/plugin-sdk";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
 import { handleNextcloudTalkInbound } from "./inbound.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";

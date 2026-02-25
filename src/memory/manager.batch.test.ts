@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useFastShortTimeouts } from "../../test/helpers/fast-short-timeouts.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 import { createOpenAIEmbeddingProviderMock } from "./test-embeddings-mock.js";
 import "./test-runtime-mocks.js";
@@ -97,7 +97,7 @@ describe("memory indexing with OpenAI batches", () => {
     return { fetchMock, state };
   }
 
-  function createBatchCfg(): OpenClawConfig {
+  function createBatchCfg(): ActiviConfig {
     return {
       agents: {
         defaults: {
@@ -113,11 +113,11 @@ describe("memory indexing with OpenAI batches", () => {
         },
         list: [{ id: "main", default: true }],
       },
-    } as OpenClawConfig;
+    } as ActiviConfig;
   }
 
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mem-batch-"));
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "activi-mem-batch-"));
     workspaceDir = path.join(fixtureRoot, "workspace");
     memoryDir = path.join(workspaceDir, "memory");
     indexPath = path.join(fixtureRoot, "index.sqlite");

@@ -9,7 +9,7 @@ import {
   setAccountEnabledInConfigSection,
   deleteAccountFromConfigSection,
   type ChannelPlugin,
-} from "openclaw/plugin-sdk";
+} from "activi/plugin-sdk";
 import {
   listIrcAccountIds,
   resolveDefaultIrcAccountId,

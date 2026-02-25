@@ -1,5 +1,5 @@
 import type { ChannelId } from "../../channels/plugins/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 import {
   loadSessionStore,
   resolveAgentMainSessionKey,
@@ -18,7 +18,7 @@ import { resolveWhatsAppAccount } from "../../web/accounts.js";
 import { normalizeWhatsAppTarget } from "../../whatsapp/normalize.js";
 
 export async function resolveDeliveryTarget(
-  cfg: OpenClawConfig,
+  cfg: ActiviConfig,
   agentId: string,
   jobPayload: {
     channel?: "last" | ChannelId;

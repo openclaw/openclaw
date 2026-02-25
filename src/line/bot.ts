@@ -1,6 +1,6 @@
 import type { WebhookRequestBody } from "@line/bot-sdk";
 import type { Request, Response, NextFunction } from "express";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { logVerbose } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -15,7 +15,7 @@ export interface LineBotOptions {
   channelSecret: string;
   accountId?: string;
   runtime?: RuntimeEnv;
-  config?: OpenClawConfig;
+  config?: ActiviConfig;
   mediaMaxMb?: number;
   onMessage?: (ctx: LineInboundContext) => Promise<void>;
 }

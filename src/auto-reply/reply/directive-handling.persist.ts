@@ -12,7 +12,7 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyVerboseOverride } from "../../sessions/level-overrides.js";
@@ -25,7 +25,7 @@ import type { ElevatedLevel, ReasoningLevel } from "./directives.js";
 export async function persistInlineDirectives(params: {
   directives: InlineDirectives;
   effectiveModelDirective?: string;
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   agentDir?: string;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -41,7 +41,7 @@ export async function persistInlineDirectives(params: {
   model: string;
   initialModelLabel: string;
   formatModelSwitchEvent: (label: string, alias?: string) => string;
-  agentCfg: NonNullable<OpenClawConfig["agents"]>["defaults"] | undefined;
+  agentCfg: NonNullable<ActiviConfig["agents"]>["defaults"] | undefined;
 }): Promise<{ provider: string; model: string; contextTokens: number }> {
   const {
     directives,
@@ -216,7 +216,7 @@ export async function persistInlineDirectives(params: {
   };
 }
 
-export function resolveDefaultModel(params: { cfg: OpenClawConfig; agentId?: string }): {
+export function resolveDefaultModel(params: { cfg: ActiviConfig; agentId?: string }): {
   defaultProvider: string;
   defaultModel: string;
   aliasIndex: ModelAliasIndex;

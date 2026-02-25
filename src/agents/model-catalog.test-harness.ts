@@ -4,11 +4,11 @@ import { __setModelCatalogImportForTest, resetModelCatalogCacheForTest } from ".
 export type PiSdkModule = typeof import("./pi-model-discovery.js");
 
 vi.mock("./models-config.js", () => ({
-  ensureOpenClawModelsJson: vi.fn().mockResolvedValue({ agentDir: "/tmp", wrote: false }),
+  ensureActiviModelsJson: vi.fn().mockResolvedValue({ agentDir: "/tmp", wrote: false }),
 }));
 
 vi.mock("./agent-paths.js", () => ({
-  resolveOpenClawAgentDir: () => "/tmp/openclaw",
+  resolveActiviAgentDir: () => "/tmp/activi",
 }));
 
 export function installModelCatalogTestHooks() {

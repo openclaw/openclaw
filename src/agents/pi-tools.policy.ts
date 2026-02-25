@@ -1,6 +1,6 @@
 import { getChannelDock } from "../channels/dock.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
 import { resolveThreadParentSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
@@ -82,7 +82,7 @@ function resolveSubagentDenyList(depth: number, maxSpawnDepth: number): string[]
   return [...SUBAGENT_TOOL_DENY_ALWAYS];
 }
 
-export function resolveSubagentToolPolicy(cfg?: OpenClawConfig, depth?: number): SandboxToolPolicy {
+export function resolveSubagentToolPolicy(cfg?: ActiviConfig, depth?: number): SandboxToolPolicy {
   const configured = cfg?.tools?.subagents?.tools;
   const maxSpawnDepth =
     cfg?.agents?.defaults?.subagents?.maxSpawnDepth ?? DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH;
@@ -196,7 +196,7 @@ function resolveProviderToolPolicy(params: {
 }
 
 export function resolveEffectiveToolPolicy(params: {
-  config?: OpenClawConfig;
+  config?: ActiviConfig;
   sessionKey?: string;
   modelProvider?: string;
   modelId?: string;
@@ -241,7 +241,7 @@ export function resolveEffectiveToolPolicy(params: {
 }
 
 export function resolveGroupToolPolicy(params: {
-  config?: OpenClawConfig;
+  config?: ActiviConfig;
   sessionKey?: string;
   spawnedBy?: string | null;
   messageProvider?: string;

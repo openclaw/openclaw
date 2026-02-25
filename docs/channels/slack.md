@@ -34,7 +34,7 @@ Status: production-ready for DMs + channels via Slack app integrations. Default 
         - install app and copy **Bot Token** (`xoxb-...`)
       </Step>
 
-      <Step title="Configure OpenClaw">
+      <Step title="Configure Activi">
 
 ```json5
 {
@@ -74,7 +74,7 @@ SLACK_BOT_TOKEN=xoxb-...
       <Step title="Start gateway">
 
 ```bash
-openclaw gateway
+activi gateway
 ```
 
       </Step>
@@ -92,7 +92,7 @@ openclaw gateway
 
       </Step>
 
-      <Step title="Configure OpenClaw HTTP mode">
+      <Step title="Configure Activi HTTP mode">
 
 ```json5
 {
@@ -152,7 +152,7 @@ For actions/directory reads, user token can be preferred when configured. For wr
     - `dm.groupEnabled` (group DMs default false)
     - `dm.groupChannels` (optional MPIM allowlist)
 
-    Pairing in DMs uses `openclaw pairing approve slack <code>`.
+    Pairing in DMs uses `activi pairing approve slack <code>`.
 
   </Tab>
 
@@ -211,7 +211,7 @@ For actions/directory reads, user token can be preferred when configured. For wr
 Default slash command settings:
 
 - `enabled: false`
-- `name: "openclaw"`
+- `name: "activi"`
 - `sessionPrefix: "slack:slash"`
 - `ephemeral: true`
 
@@ -299,7 +299,7 @@ Available action groups in current Slack tooling:
 
 ## Ack reactions
 
-`ackReaction` sends an acknowledgement emoji while OpenClaw is processing an inbound message.
+`ackReaction` sends an acknowledgement emoji while Activi is processing an inbound message.
 
 Resolution order:
 
@@ -321,12 +321,12 @@ Notes:
 ```json
 {
   "display_information": {
-    "name": "OpenClaw",
-    "description": "Slack connector for OpenClaw"
+    "name": "Activi",
+    "description": "Slack connector for Activi"
   },
   "features": {
     "bot_user": {
-      "display_name": "OpenClaw",
+      "display_name": "Activi",
       "always_online": false
     },
     "app_home": {
@@ -335,8 +335,8 @@ Notes:
     },
     "slash_commands": [
       {
-        "command": "/openclaw",
-        "description": "Send a message to OpenClaw",
+        "command": "/activi",
+        "description": "Send a message to Activi",
         "should_escape": false
       }
     ]
@@ -416,9 +416,9 @@ Notes:
     Useful commands:
 
 ```bash
-openclaw channels status --probe
-openclaw logs --follow
-openclaw doctor
+activi channels status --probe
+activi logs --follow
+activi doctor
 ```
 
   </Accordion>
@@ -431,7 +431,7 @@ openclaw doctor
     - pairing approvals / allowlist entries
 
 ```bash
-openclaw pairing list slack
+activi pairing list slack
 ```
 
   </Accordion>
@@ -463,7 +463,7 @@ openclaw pairing list slack
 
 ## Text streaming
 
-OpenClaw supports Slack native text streaming via the Agents and AI Apps API.
+Activi supports Slack native text streaming via the Agents and AI Apps API.
 
 `channels.slack.streaming` controls live preview behavior:
 
@@ -500,7 +500,7 @@ Legacy keys:
 - Later text chunks append to the same stream (`chat.appendStream`).
 - End of reply finalizes stream (`chat.stopStream`).
 - Media and non-text payloads fall back to normal delivery.
-- If streaming fails mid-reply, OpenClaw falls back to normal delivery for remaining payloads.
+- If streaming fails mid-reply, Activi falls back to normal delivery for remaining payloads.
 
 ## Configuration reference pointers
 

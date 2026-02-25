@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
@@ -14,7 +14,7 @@ const log = createSubsystemLogger("agent-scope");
 
 export { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 
-type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
+type AgentEntry = NonNullable<NonNullable<ActiviConfig["agents"]>["list"]>[number];
 
 type ResolvedAgentConfig = {
   name?: string;
@@ -34,7 +34,7 @@ type ResolvedAgentConfig = {
 
 let defaultAgentWarned = false;
 
-export function listAgentEntries(cfg: OpenClawConfig): AgentEntry[] {
+export function listAgentEntries(cfg: ActiviConfig): AgentEntry[] {
   const list = cfg.agents?.list;
   if (!Array.isArray(list)) {
     return [];
@@ -42,7 +42,7 @@ export function listAgentEntries(cfg: OpenClawConfig): AgentEntry[] {
   return list.filter((entry): entry is AgentEntry => Boolean(entry && typeof entry === "object"));
 }
 
-export function listAgentIds(cfg: OpenClawConfig): string[] {
+export function listAgentIds(cfg: ActiviConfig): string[] {
   const agents = listAgentEntries(cfg);
   if (agents.length === 0) {
     return [DEFAULT_AGENT_ID];
@@ -60,7 +60,7 @@ export function listAgentIds(cfg: OpenClawConfig): string[] {
   return ids.length > 0 ? ids : [DEFAULT_AGENT_ID];
 }
 
-export function resolveDefaultAgentId(cfg: OpenClawConfig): string {
+export function resolveDefaultAgentId(cfg: ActiviConfig): string {
   const agents = listAgentEntries(cfg);
   if (agents.length === 0) {
     return DEFAULT_AGENT_ID;
@@ -74,7 +74,7 @@ export function resolveDefaultAgentId(cfg: OpenClawConfig): string {
   return normalizeAgentId(chosen || DEFAULT_AGENT_ID);
 }
 
-export function resolveSessionAgentIds(params: { sessionKey?: string; config?: OpenClawConfig }): {
+export function resolveSessionAgentIds(params: { sessionKey?: string; config?: ActiviConfig }): {
   defaultAgentId: string;
   sessionAgentId: string;
 } {
@@ -88,18 +88,18 @@ export function resolveSessionAgentIds(params: { sessionKey?: string; config?: O
 
 export function resolveSessionAgentId(params: {
   sessionKey?: string;
-  config?: OpenClawConfig;
+  config?: ActiviConfig;
 }): string {
   return resolveSessionAgentIds(params).sessionAgentId;
 }
 
-function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEntry | undefined {
+function resolveAgentEntry(cfg: ActiviConfig, agentId: string): AgentEntry | undefined {
   const id = normalizeAgentId(agentId);
   return listAgentEntries(cfg).find((entry) => normalizeAgentId(entry.id) === id);
 }
 
 export function resolveAgentConfig(
-  cfg: OpenClawConfig,
+  cfg: ActiviConfig,
   agentId: string,
 ): ResolvedAgentConfig | undefined {
   const id = normalizeAgentId(agentId);
@@ -128,13 +128,13 @@ export function resolveAgentConfig(
 }
 
 export function resolveAgentSkillsFilter(
-  cfg: OpenClawConfig,
+  cfg: ActiviConfig,
   agentId: string,
 ): string[] | undefined {
   return normalizeSkillFilter(resolveAgentConfig(cfg, agentId)?.skills);
 }
 
-export function resolveAgentModelPrimary(cfg: OpenClawConfig, agentId: string): string | undefined {
+export function resolveAgentModelPrimary(cfg: ActiviConfig, agentId: string): string | undefined {
   const raw = resolveAgentConfig(cfg, agentId)?.model;
   if (!raw) {
     return undefined;
@@ -147,7 +147,7 @@ export function resolveAgentModelPrimary(cfg: OpenClawConfig, agentId: string): 
 }
 
 export function resolveAgentModelFallbacksOverride(
-  cfg: OpenClawConfig,
+  cfg: ActiviConfig,
   agentId: string,
 ): string[] | undefined {
   const raw = resolveAgentConfig(cfg, agentId)?.model;
@@ -162,7 +162,7 @@ export function resolveAgentModelFallbacksOverride(
 }
 
 export function resolveEffectiveModelFallbacks(params: {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   agentId: string;
   hasSessionModelOverride: boolean;
 }): string[] | undefined {
@@ -177,7 +177,7 @@ export function resolveEffectiveModelFallbacks(params: {
   return agentFallbacksOverride ?? defaultFallbacks;
 }
 
-export function resolveAgentWorkspaceDir(cfg: OpenClawConfig, agentId: string) {
+export function resolveAgentWorkspaceDir(cfg: ActiviConfig, agentId: string) {
   const id = normalizeAgentId(agentId);
   const configured = resolveAgentConfig(cfg, id)?.workspace?.trim();
   if (configured) {
@@ -195,7 +195,7 @@ export function resolveAgentWorkspaceDir(cfg: OpenClawConfig, agentId: string) {
   return path.join(stateDir, `workspace-${id}`);
 }
 
-export function resolveAgentDir(cfg: OpenClawConfig, agentId: string) {
+export function resolveAgentDir(cfg: ActiviConfig, agentId: string) {
   const id = normalizeAgentId(agentId);
   const configured = resolveAgentConfig(cfg, id)?.agentDir?.trim();
   if (configured) {

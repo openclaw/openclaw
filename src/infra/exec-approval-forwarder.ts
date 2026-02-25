@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import type {
@@ -35,11 +35,11 @@ export type ExecApprovalForwarder = {
 };
 
 export type ExecApprovalForwarderDeps = {
-  getConfig?: () => OpenClawConfig;
+  getConfig?: () => ActiviConfig;
   deliver?: typeof deliverOutboundPayloads;
   nowMs?: () => number;
   resolveSessionTarget?: (params: {
-    cfg: OpenClawConfig;
+    cfg: ActiviConfig;
     request: ExecApprovalRequest;
   }) => ExecApprovalForwardTarget | null;
 };
@@ -167,7 +167,7 @@ function buildExpiredMessage(request: ExecApprovalRequest) {
 }
 
 function defaultResolveSessionTarget(params: {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   request: ExecApprovalRequest;
 }): ExecApprovalForwardTarget | null {
   const sessionKey = params.request.request.sessionKey?.trim();
@@ -198,7 +198,7 @@ function defaultResolveSessionTarget(params: {
 }
 
 async function deliverToTargets(params: {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   targets: ForwardTarget[];
   text: string;
   deliver: typeof deliverOutboundPayloads;

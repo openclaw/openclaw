@@ -35,11 +35,11 @@ export function registerSecurityCli(program: Command) {
       "after",
       () =>
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
-          ["openclaw security audit", "Run a local security audit."],
-          ["openclaw security audit --deep", "Include best-effort live Gateway probe checks."],
-          ["openclaw security audit --fix", "Apply safe remediations and file-permission fixes."],
-          ["openclaw security audit --json", "Output machine-readable JSON."],
-        ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/security", "docs.openclaw.ai/cli/security")}\n`,
+          ["activi security audit", "Run a local security audit."],
+          ["activi security audit --deep", "Include best-effort live Gateway probe checks."],
+          ["activi security audit --fix", "Apply safe remediations and file-permission fixes."],
+          ["activi security audit --json", "Output machine-readable JSON."],
+        ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/security", "docs.activi.ai/cli/security")}\n`,
     );
 
   security
@@ -71,12 +71,12 @@ export function registerSecurityCli(program: Command) {
       const muted = (text: string) => (rich ? theme.muted(text) : text);
 
       const lines: string[] = [];
-      lines.push(heading("OpenClaw security audit"));
+      lines.push(heading("Activi security audit"));
       lines.push(muted(`Summary: ${formatSummary(report.summary)}`));
-      lines.push(muted(`Run deeper: ${formatCliCommand("openclaw security audit --deep")}`));
+      lines.push(muted(`Run deeper: ${formatCliCommand("activi security audit --deep")}`));
 
       if (opts.fix) {
-        lines.push(muted(`Fix: ${formatCliCommand("openclaw security audit --fix")}`));
+        lines.push(muted(`Fix: ${formatCliCommand("activi security audit --fix")}`));
         if (!fixResult) {
           lines.push(muted("Fixes: failed to apply (unexpected error)"));
         } else if (

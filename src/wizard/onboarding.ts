@@ -5,7 +5,7 @@ import type {
   OnboardOptions,
   ResetScope,
 } from "../commands/onboard-types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import {
   DEFAULT_GATEWAY_PORT,
   readConfigFileSnapshot,
@@ -28,32 +28,32 @@ async function requireRiskAcknowledgement(params: {
 
   await params.prompter.note(
     [
-      "Security warning — please read.",
+      "Sicherheitshinweis — bitte lesen.",
       "",
-      "OpenClaw is a hobby project and still in beta. Expect sharp edges.",
-      "This bot can read files and run actions if tools are enabled.",
-      "A bad prompt can trick it into doing unsafe things.",
+      "Activi ist ein Hobby-Projekt und noch in der Beta. Erwarte raue Kanten.",
+      "Dieser Bot kann Dateien lesen und Aktionen ausführen, wenn Tools aktiviert sind.",
+      "Ein schlechter Prompt kann ihn dazu bringen, unsichere Dinge zu tun.",
       "",
-      "If you’re not comfortable with basic security and access control, don’t run OpenClaw.",
-      "Ask someone experienced to help before enabling tools or exposing it to the internet.",
+      "If you’re not comfortable with basic security and access control, don’t run Activi.",
+      "Frage jemanden mit Erfahrung um Hilfe, bevor du Tools aktivierst oder es dem Internet aussetzt.",
       "",
-      "Recommended baseline:",
-      "- Pairing/allowlists + mention gating.",
-      "- Sandbox + least-privilege tools.",
+      "Empfohlene Basis-Konfiguration:",
+      "- Pairing/Allowlists + Mention-Gating.",
+      "- Sandbox + Tools mit minimalen Berechtigungen.",
       "- Keep secrets out of the agent’s reachable filesystem.",
-      "- Use the strongest available model for any bot with tools or untrusted inboxes.",
+      "- Verwende das stärkste verfügbare Modell für jeden Bot mit Tools oder nicht vertrauenswürdigen Posteingängen.",
       "",
-      "Run regularly:",
-      "openclaw security audit --deep",
-      "openclaw security audit --fix",
+      "Regelmäßig ausführen:",
+      "activi security audit --deep",
+      "activi security audit --fix",
       "",
-      "Must read: https://docs.openclaw.ai/gateway/security",
+      "Muss gelesen werden: https://docs.activi.ai/gateway/security",
     ].join("\n"),
-    "Security",
+    "Sicherheit",
   );
 
   const ok = await params.prompter.confirm({
-    message: "I understand this is powerful and inherently risky. Continue?",
+    message: "Ich verstehe, dass dies mächtig und inhärent riskant ist. Fortfahren?",
     initialValue: false,
   });
   if (!ok) {
@@ -68,11 +68,11 @@ export async function runOnboardingWizard(
 ) {
   const onboardHelpers = await import("../commands/onboard-helpers.js");
   onboardHelpers.printWizardHeader(runtime);
-  await prompter.intro("OpenClaw onboarding");
+  await prompter.intro("Activi onboarding");
   await requireRiskAcknowledgement({ opts, prompter });
 
   const snapshot = await readConfigFileSnapshot();
-  let baseConfig: OpenClawConfig = snapshot.valid ? snapshot.config : {};
+  let baseConfig: ActiviConfig = snapshot.valid ? snapshot.config : {};
 
   if (snapshot.exists && !snapshot.valid) {
     await prompter.note(onboardHelpers.summarizeExistingConfig(baseConfig), "Invalid config");
@@ -81,19 +81,19 @@ export async function runOnboardingWizard(
         [
           ...snapshot.issues.map((iss) => `- ${iss.path}: ${iss.message}`),
           "",
-          "Docs: https://docs.openclaw.ai/gateway/configuration",
+          "Docs: https://docs.activi.ai/gateway/configuration",
         ].join("\n"),
         "Config issues",
       );
     }
     await prompter.outro(
-      `Config invalid. Run \`${formatCliCommand("openclaw doctor")}\` to repair it, then re-run onboarding.`,
+      `Config invalid. Run \`${formatCliCommand("activi doctor")}\` to repair it, then re-run onboarding.`,
     );
     runtime.exit(1);
     return;
   }
 
-  const quickstartHint = `Configure details later via ${formatCliCommand("openclaw configure")}.`;
+  const quickstartHint = `Configure details later via ${formatCliCommand("activi configure")}.`;
   const manualHint = "Configure port, network, Tailscale, and auth options.";
   const explicitFlowRaw = opts.flow?.trim();
   const normalizedExplicitFlow = explicitFlowRaw === "manual" ? "advanced" : explicitFlowRaw;
@@ -274,8 +274,8 @@ export async function runOnboardingWizard(
   const localUrl = `ws://127.0.0.1:${localPort}`;
   const localProbe = await onboardHelpers.probeGatewayReachable({
     url: localUrl,
-    token: baseConfig.gateway?.auth?.token ?? process.env.OPENCLAW_GATEWAY_TOKEN,
-    password: baseConfig.gateway?.auth?.password ?? process.env.OPENCLAW_GATEWAY_PASSWORD,
+    token: baseConfig.gateway?.auth?.token ?? process.env.ACTIVI_GATEWAY_TOKEN,
+    password: baseConfig.gateway?.auth?.password ?? process.env.ACTIVI_GATEWAY_PASSWORD,
   });
   const remoteUrl = baseConfig.gateway?.remote?.url?.trim() ?? "";
   const remoteProbe = remoteUrl
@@ -334,7 +334,7 @@ export async function runOnboardingWizard(
   const workspaceDir = resolveUserPath(workspaceInput.trim() || onboardHelpers.DEFAULT_WORKSPACE);
 
   const { applyOnboardingLocalWorkspaceConfig } = await import("../commands/onboard-config.js");
-  let nextConfig: OpenClawConfig = applyOnboardingLocalWorkspaceConfig(baseConfig, workspaceDir);
+  let nextConfig: ActiviConfig = applyOnboardingLocalWorkspaceConfig(baseConfig, workspaceDir);
 
   const { ensureAuthProfileStore } = await import("../agents/auth-profiles.js");
   const { promptAuthChoiceGrouped } = await import("../commands/auth-choice-prompt.js");

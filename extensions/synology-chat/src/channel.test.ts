@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 // Mock external dependencies
-vi.mock("openclaw/plugin-sdk", () => ({
+vi.mock("activi/plugin-sdk", () => ({
   DEFAULT_ACCOUNT_ID: "default",
   setAccountEnabledInConfigSection: vi.fn((_opts: any) => ({})),
   registerPluginHttpRoute: vi.fn(() => vi.fn()),

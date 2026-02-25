@@ -23,13 +23,13 @@ Status: ready for DMs and guild channels via the official Discord gateway.
 
 ## Quick setup
 
-You will need to create a new application with a bot, add the bot to your server, and pair it to OpenClaw. We recommend adding your bot to your own private server. If you don't have one yet, [create one first](https://support.discord.com/hc/en-us/articles/204849977-How-do-I-create-a-server) (choose **Create My Own > For me and my friends**).
+You will need to create a new application with a bot, add the bot to your server, and pair it to Activi. We recommend adding your bot to your own private server. If you don't have one yet, [create one first](https://support.discord.com/hc/en-us/articles/204849977-How-do-I-create-a-server) (choose **Create My Own > For me and my friends**).
 
 <Steps>
   <Step title="Create a Discord application and bot">
-    Go to the [Discord Developer Portal](https://discord.com/developers/applications) and click **New Application**. Name it something like "OpenClaw".
+    Go to the [Discord Developer Portal](https://discord.com/developers/applications) and click **New Application**. Name it something like "Activi".
 
-    Click **Bot** on the sidebar. Set the **Username** to whatever you call your OpenClaw agent.
+    Click **Bot** on the sidebar. Set the **Username** to whatever you call your Activi agent.
 
   </Step>
 
@@ -81,35 +81,35 @@ You will need to create a new application with a bot, add the bot to your server
     2. Right-click your **server icon** in the sidebar → **Copy Server ID**
     3. Right-click your **own avatar** → **Copy User ID**
 
-    Save your **Server ID** and **User ID** alongside your Bot Token — you'll send all three to OpenClaw in the next step.
+    Save your **Server ID** and **User ID** alongside your Bot Token — you'll send all three to Activi in the next step.
 
   </Step>
 
   <Step title="Allow DMs from server members">
     For pairing to work, Discord needs to allow your bot to DM you. Right-click your **server icon** → **Privacy Settings** → toggle on **Direct Messages**.
 
-    This lets server members (including bots) send you DMs. Keep this enabled if you want to use Discord DMs with OpenClaw. If you only plan to use guild channels, you can disable DMs after pairing.
+    This lets server members (including bots) send you DMs. Keep this enabled if you want to use Discord DMs with Activi. If you only plan to use guild channels, you can disable DMs after pairing.
 
   </Step>
 
   <Step title="Step 0: Set your bot token securely (do not send it in chat)">
-    Your Discord bot token is a secret (like a password). Set it on the machine running OpenClaw before messaging your agent.
+    Your Discord bot token is a secret (like a password). Set it on the machine running Activi before messaging your agent.
 
 ```bash
-openclaw config set channels.discord.token '"YOUR_BOT_TOKEN"' --json
-openclaw config set channels.discord.enabled true --json
-openclaw gateway
+activi config set channels.discord.token '"YOUR_BOT_TOKEN"' --json
+activi config set channels.discord.enabled true --json
+activi gateway
 ```
 
-    If OpenClaw is already running as a background service, use `openclaw gateway restart` instead.
+    If Activi is already running as a background service, use `activi gateway restart` instead.
 
   </Step>
 
-  <Step title="Configure OpenClaw and pair">
+  <Step title="Configure Activi and pair">
 
     <Tabs>
       <Tab title="Ask your agent">
-        Chat with your OpenClaw agent on any existing channel (e.g. Telegram) and tell it. If Discord is your first channel, use the CLI / config tab instead.
+        Chat with your Activi agent on any existing channel (e.g. Telegram) and tell it. If Discord is your first channel, use the CLI / config tab instead.
 
         > "I already set my Discord bot token in config. Please finish Discord setup with User ID `<user_id>` and Server ID `<server_id>`."
       </Tab>
@@ -150,8 +150,8 @@ DISCORD_BOT_TOKEN=...
       <Tab title="CLI">
 
 ```bash
-openclaw pairing list discord
-openclaw pairing approve discord <CODE>
+activi pairing list discord
+activi pairing approve discord <CODE>
 ```
 
       </Tab>
@@ -260,22 +260,22 @@ Now create some channels on your Discord server and start chatting. Your agent c
 
 ## Forum channels
 
-Discord forum and media channels only accept thread posts. OpenClaw supports two ways to create them:
+Discord forum and media channels only accept thread posts. Activi supports two ways to create them:
 
 - Send a message to the forum parent (`channel:<forumId>`) to auto-create a thread. The thread title uses the first non-empty line of your message.
-- Use `openclaw message thread create` to create a thread directly. Do not pass `--message-id` for forum channels.
+- Use `activi message thread create` to create a thread directly. Do not pass `--message-id` for forum channels.
 
 Example: send to forum parent to create a thread
 
 ```bash
-openclaw message send --channel discord --target channel:<forumId> \
+activi message send --channel discord --target channel:<forumId> \
   --message "Topic title\nBody of the post"
 ```
 
 Example: create a forum thread explicitly
 
 ```bash
-openclaw message thread create --channel discord --target channel:<forumId> \
+activi message thread create --channel discord --target channel:<forumId> \
   --thread-name "Topic title" --message "Body of the post"
 ```
 
@@ -283,7 +283,7 @@ Forum parents do not accept Discord components. If you need components, send to 
 
 ## Interactive components
 
-OpenClaw supports Discord components v2 containers for agent messages. Use the message tool with a `components` payload. Interaction results are routed back to the agent as normal inbound messages and follow the existing Discord `replyToMode` settings.
+Activi supports Discord components v2 containers for agent messages. Use the message tool with a `components` payload. Interaction results are routed back to the agent as normal inbound messages and follow the existing Discord `replyToMode` settings.
 
 Supported blocks:
 
@@ -307,7 +307,7 @@ Modal forms:
 
 - Add `components.modal` with up to 5 fields
 - Field types: `text`, `checkbox`, `radio`, `select`, `role-select`, `user-select`
-- OpenClaw adds a trigger button automatically
+- Activi adds a trigger button automatically
 
 Example:
 
@@ -398,7 +398,7 @@ Example:
 
     - guild must match `channels.discord.guilds` (`id` preferred, slug accepted)
     - optional sender allowlists: `users` (IDs or names) and `roles` (role IDs only); if either is configured, senders are allowed when they match `users` OR `roles`
-    - names/tags are supported for `users`, but IDs are safer; `openclaw security audit` warns when name/tag entries are used
+    - names/tags are supported for `users`, but IDs are safer; `activi security audit` warns when name/tag entries are used
     - if a guild has `channels` configured, non-listed channels are denied
     - if a guild has no `channels` block, all channels in that allowlisted guild are allowed
 
@@ -520,7 +520,7 @@ Use `bindings[].match.roles` to route Discord guild members to different agents 
     - channel ID
     - user ID
 
-    Prefer numeric IDs in OpenClaw config for reliable audits and probes.
+    Prefer numeric IDs in Activi config for reliable audits and probes.
 
   </Accordion>
 </AccordionGroup>
@@ -531,7 +531,7 @@ Use `bindings[].match.roles` to route Discord guild members to different agents 
 - Per-channel override: `channels.discord.commands.native`.
 - `commands.native=false` explicitly clears previously registered Discord native commands.
 - Native command auth uses the same Discord allowlists/policies as normal message handling.
-- Commands may still be visible in Discord UI for users who are not authorized; execution still enforces OpenClaw auth and returns "not authorized".
+- Commands may still be visible in Discord UI for users who are not authorized; execution still enforces Activi auth and returns "not authorized".
 
 See [Slash commands](/tools/slash-commands) for command catalog and behavior.
 
@@ -561,7 +561,7 @@ Default slash command settings:
   </Accordion>
 
   <Accordion title="Live stream preview">
-    OpenClaw can stream draft replies by sending a temporary message and editing it as text arrives.
+    Activi can stream draft replies by sending a temporary message and editing it as text arrives.
 
     - `channels.discord.streaming` controls preview streaming (`off` | `partial` | `block` | `progress`, default: `off`).
     - `progress` is accepted for cross-channel consistency and maps to `partial` on Discord.
@@ -601,7 +601,7 @@ Default slash command settings:
     Preview streaming is text-only; media replies fall back to normal delivery.
 
     Note: preview streaming is separate from block streaming. When block streaming is explicitly
-    enabled for Discord, OpenClaw skips the preview stream to avoid double streaming.
+    enabled for Discord, Activi skips the preview stream to avoid double streaming.
 
   </Accordion>
 
@@ -683,7 +683,7 @@ Default slash command settings:
   </Accordion>
 
   <Accordion title="Ack reactions">
-    `ackReaction` sends an acknowledgement emoji while OpenClaw is processing an inbound message.
+    `ackReaction` sends an acknowledgement emoji while Activi is processing an inbound message.
 
     Resolution order:
 
@@ -810,7 +810,7 @@ Default slash command settings:
     discord: {
       activity: "Live coding",
       activityType: 1,
-      activityUrl: "https://twitch.tv/openclaw",
+      activityUrl: "https://twitch.tv/activi",
     },
   },
 }
@@ -837,7 +837,7 @@ Default slash command settings:
     - `channels.discord.execApprovals.target` (`dm` | `channel` | `both`, default: `dm`)
     - `agentFilter`, `sessionFilter`, `cleanupAfterResolve`
 
-    When `target` is `channel` or `both`, the approval prompt is visible in the channel. Only configured approvers can use the buttons; other users receive an ephemeral denial. Approval prompts include the command text, so only enable channel delivery in trusted channels. If the channel ID cannot be derived from the session key, OpenClaw falls back to DM delivery.
+    When `target` is `channel` or `both`, the approval prompt is visible in the channel. Only configured approvers can use the buttons; other users receive an ephemeral denial. Approval prompts include the command text, so only enable channel delivery in trusted channels. If the channel ID cannot be derived from the session key, Activi falls back to DM delivery.
 
     If approvals fail with unknown approval IDs, verify approver list and feature enablement.
 
@@ -870,7 +870,7 @@ Default gate behavior:
 
 ## Components v2 UI
 
-OpenClaw uses Discord components v2 for exec approvals and cross-context markers. Discord message actions can also accept `components` for custom UI (advanced; requires Carbon component instances), while legacy `embeds` remain available but are not recommended.
+Activi uses Discord components v2 for exec approvals and cross-context markers. Discord message actions can also accept `components` for custom UI (advanced; requires Carbon component instances), while legacy `embeds` remain available but are not recommended.
 
 - `channels.discord.ui.components.accentColor` sets the accent color used by Discord component containers (hex).
 - Set per account with `channels.discord.accounts.<id>.ui.components.accentColor`.
@@ -894,7 +894,7 @@ Example:
 
 ## Voice channels
 
-OpenClaw can join Discord voice channels for realtime, continuous conversations. This is separate from voice message attachments.
+Activi can join Discord voice channels for realtime, continuous conversations. This is separate from voice message attachments.
 
 Requirements:
 
@@ -935,13 +935,13 @@ Notes:
 
 ## Voice messages
 
-Discord voice messages show a waveform preview and require OGG/Opus audio plus metadata. OpenClaw generates the waveform automatically, but it needs `ffmpeg` and `ffprobe` available on the gateway host to inspect and convert audio files.
+Discord voice messages show a waveform preview and require OGG/Opus audio plus metadata. Activi generates the waveform automatically, but it needs `ffmpeg` and `ffprobe` available on the gateway host to inspect and convert audio files.
 
 Requirements and constraints:
 
 - Provide a **local file path** (URLs are rejected).
 - Omit text content (Discord does not allow text + voice message in the same payload).
-- Any audio format is accepted; OpenClaw converts to OGG/Opus when needed.
+- Any audio format is accepted; Activi converts to OGG/Opus when needed.
 
 Example:
 
@@ -970,9 +970,9 @@ message(action="send", channel="discord", target="channel:123", path="/path/to/a
     Useful checks:
 
 ```bash
-openclaw doctor
-openclaw channels status --probe
-openclaw logs --follow
+activi doctor
+activi channels status --probe
+activi logs --follow
 ```
 
   </Accordion>
@@ -1033,7 +1033,7 @@ High-signal Discord fields:
 
 - Treat bot tokens as secrets (`DISCORD_BOT_TOKEN` preferred in supervised environments).
 - Grant least-privilege Discord permissions.
-- If command deploy/state is stale, restart gateway and re-check with `openclaw channels status --probe`.
+- If command deploy/state is stale, restart gateway and re-check with `activi channels status --probe`.
 
 ## Related
 

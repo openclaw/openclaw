@@ -49,7 +49,7 @@ async function setTestSessionStore(params: {
   entries: Record<string, Record<string, unknown>>;
   agentId?: string;
 }) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "activi-gw-"));
   testState.sessionStorePath = path.join(dir, "sessions.json");
   await writeSessionStore({
     entries: params.entries,
@@ -221,7 +221,7 @@ describe("gateway server agent", () => {
 
   test("agent preserves spawnDepth on subagent sessions", async () => {
     setRegistry(defaultRegistry);
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "activi-gw-"));
     const storePath = path.join(dir, "sessions.json");
     testState.sessionStorePath = storePath;
     await writeSessionStore({

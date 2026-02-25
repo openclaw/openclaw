@@ -10,21 +10,21 @@ describe("resolveTailnetDnsHint", () => {
   const prevTailnetDns = { value: undefined as string | undefined };
 
   beforeEach(() => {
-    prevTailnetDns.value = process.env.OPENCLAW_TAILNET_DNS;
-    delete process.env.OPENCLAW_TAILNET_DNS;
+    prevTailnetDns.value = process.env.ACTIVI_TAILNET_DNS;
+    delete process.env.ACTIVI_TAILNET_DNS;
     getTailnetHostname.mockClear();
   });
 
   afterEach(() => {
     if (prevTailnetDns.value === undefined) {
-      delete process.env.OPENCLAW_TAILNET_DNS;
+      delete process.env.ACTIVI_TAILNET_DNS;
     } else {
-      process.env.OPENCLAW_TAILNET_DNS = prevTailnetDns.value;
+      process.env.ACTIVI_TAILNET_DNS = prevTailnetDns.value;
     }
   });
 
   test("returns env hint when disabled", async () => {
-    process.env.OPENCLAW_TAILNET_DNS = "studio.tailnet.ts.net.";
+    process.env.ACTIVI_TAILNET_DNS = "studio.tailnet.ts.net.";
     const value = await resolveTailnetDnsHint({ enabled: false });
     expect(value).toBe("studio.tailnet.ts.net");
     expect(getTailnetHostname).not.toHaveBeenCalled();

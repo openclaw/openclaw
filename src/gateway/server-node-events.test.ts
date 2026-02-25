@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import type { loadSessionEntry as loadSessionEntryType } from "./session-utils.js";
 
 const buildSessionLookup = (
@@ -11,7 +11,7 @@ const buildSessionLookup = (
     updatedAt?: number;
   } = {},
 ): ReturnType<typeof loadSessionEntryType> => ({
-  cfg: { session: { mainKey: "agent:main:main" } } as OpenClawConfig,
+  cfg: { session: { mainKey: "agent:main:main" } } as ActiviConfig,
   storePath: "/tmp/sessions.json",
   store: {} as ReturnType<typeof loadSessionEntryType>["store"],
   entry: {
@@ -35,7 +35,7 @@ vi.mock("../commands/agent.js", () => ({
 }));
 vi.mock("../config/config.js", () => ({
   loadConfig: vi.fn(() => ({ session: { mainKey: "agent:main:main" } })),
-  STATE_DIR: "/tmp/openclaw-state",
+  STATE_DIR: "/tmp/activi-state",
 }));
 vi.mock("../config/sessions.js", () => ({
   updateSessionStore: vi.fn(),

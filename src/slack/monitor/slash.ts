@@ -33,7 +33,7 @@ import { resolveSlackRoomContextHints } from "./room-context.js";
 
 type SlackBlock = { type: string; [key: string]: unknown };
 
-const SLACK_COMMAND_ARG_ACTION_ID = "openclaw_cmdarg";
+const SLACK_COMMAND_ARG_ACTION_ID = "activi_cmdarg";
 const SLACK_COMMAND_ARG_VALUE_PREFIX = "cmdarg";
 const SLACK_COMMAND_ARG_BUTTON_ROW_SIZE = 5;
 const SLACK_COMMAND_ARG_OVERFLOW_MIN = 3;

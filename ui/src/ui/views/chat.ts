@@ -280,7 +280,7 @@ function handleDrop(e: DragEvent, props: ChatProps) {
   const additions: ChatAttachment[] = [];
   let pending = 0;
   for (const file of files) {
-    if (!file.type.startsWith("image/")) {
+    if (!file.type.startsWith("image/") && !file.type.startsWith("video/")) {
       continue;
     }
     pending++;
@@ -310,7 +310,10 @@ function renderAttachmentPreview(props: ChatProps): TemplateResult | typeof noth
       ${attachments.map(
         (att) => html`
           <div class="chat-attachment-thumb">
-            <img src=${att.dataUrl} alt="Attachment preview" />
+            ${att.mimeType.startsWith("video/")
+              ? html`<video src=${att.dataUrl} muted playsinline class="chat-attachment-video-preview"></video>`
+              : html`<img src=${att.dataUrl} alt="Attachment preview" />`
+            }
             <button
               class="chat-attachment-remove"
               type="button"
@@ -393,7 +396,7 @@ function renderWelcomeState(props: ChatProps): TemplateResult {
       ${
         avatar
           ? html`<img src=${avatar} alt=${name} style="width:56px; height:56px; border-radius:50%; object-fit:cover;" />`
-          : html`<div class="agent-chat__avatar agent-chat__avatar--logo"><img src=${logoUrl} alt="OpenClaw" /></div>`
+          : html`<div class="agent-chat__avatar agent-chat__avatar--logo"><img src=${logoUrl} alt="Activi" /></div>`
       }
       <h2>${name}</h2>
       <div class="agent-chat__badges">
@@ -848,7 +851,7 @@ export function renderChat(props: ChatProps) {
 
         <input
           type="file"
-          accept="image/*,.pdf,.txt,.md,.json,.csv"
+          accept="image/*,video/*,.pdf,.txt,.md,.json,.csv"
           multiple
           class="agent-chat__file-input"
           @change=${(e: Event) => handleFileSelect(e, props)}
@@ -983,7 +986,7 @@ function buildChatItems(props: ChatProps): Array<ChatItem | MessageGroup> {
     const msg = history[i];
     const normalized = normalizeMessage(msg);
     const raw = msg as Record<string, unknown>;
-    const marker = raw.__openclaw as Record<string, unknown> | undefined;
+    const marker = raw.__activi as Record<string, unknown> | undefined;
     if (marker && marker.kind === "compaction") {
       items.push({
         kind: "divider",

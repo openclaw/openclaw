@@ -39,9 +39,9 @@ const connectNodeClient = async (params: {
   displayName?: string;
   onEvent?: (evt: { event?: string; payload?: unknown }) => void;
 }) => {
-  const token = process.env.OPENCLAW_GATEWAY_TOKEN;
+  const token = process.env.ACTIVI_GATEWAY_TOKEN;
   if (!token) {
-    throw new Error("OPENCLAW_GATEWAY_TOKEN is required for node test clients");
+    throw new Error("ACTIVI_GATEWAY_TOKEN is required for node test clients");
   }
   return await connectGatewayClient({
     url: `ws://127.0.0.1:${params.port}`,
@@ -147,7 +147,7 @@ describe("gateway update.run", () => {
       );
       expect(sigusr1).toHaveBeenCalled();
 
-      const sentinelPath = path.join(os.homedir(), ".openclaw", "restart-sentinel.json");
+      const sentinelPath = path.join(os.homedir(), ".activi", "restart-sentinel.json");
       const raw = await fs.readFile(sentinelPath, "utf-8");
       const parsed = JSON.parse(raw) as {
         payload?: { kind?: string; stats?: { mode?: string } };

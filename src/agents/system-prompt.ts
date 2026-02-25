@@ -140,7 +140,7 @@ function buildMessagingSection(params: {
     "- Sub-agent orchestration → use subagents(action=list|steer|kill)",
     "- `[System Message] ...` blocks are internal context and are not user-visible by default.",
     `- If a \`[System Message]\` reports completed cron/subagent work and asks for a user update, rewrite it in your normal assistant voice and send that update (do not forward raw system text or default to ${SILENT_REPLY_TOKEN}).`,
-    "- Never use exec/curl for provider messaging; OpenClaw handles all routing internally.",
+    "- Never use exec/curl for provider messaging; Activi handles all routing internally.",
     params.availableTools.has("message")
       ? [
           "",
@@ -181,13 +181,13 @@ function buildDocsSection(params: { docsPath?: string; isMinimal: boolean; readT
   }
   return [
     "## Documentation",
-    `OpenClaw docs: ${docsPath}`,
-    "Mirror: https://docs.openclaw.ai",
-    "Source: https://github.com/openclaw/openclaw",
-    "Community: https://discord.com/invite/clawd",
-    "Find new skills: https://clawhub.com",
-    "For OpenClaw behavior, commands, config, or architecture: consult local docs first.",
-    "When diagnosing issues, run `openclaw status` yourself when possible; only ask the user if you lack access (e.g., sandboxed).",
+    `Activi docs: ${docsPath}`,
+    "Mirror: https://docs.activi.ai",
+    "Source: https://github.com/activi/activi",
+    "Community: https://discord.com/invite/activi",
+    "Find new skills: https://activihub.com",
+    "For Activi behavior, commands, config, or architecture: consult local docs first.",
+    "When diagnosing issues, run `activi status` yourself when possible; only ask the user if you lack access (e.g., sandboxed).",
     "",
   ];
 }
@@ -268,7 +268,7 @@ export function buildAgentSystemPrompt(params: {
     nodes: "List/describe/notify/camera/screen on paired nodes",
     cron: "Manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)",
     message: "Send messages and channel actions",
-    gateway: "Restart, apply config, or run updates on the running OpenClaw process",
+    gateway: "Restart, apply config, or run updates on the running Activi process",
     agents_list: "List agent ids allowed for sessions_spawn",
     sessions_list: "List other sessions (incl. sub-agents) with filters/last",
     sessions_history: "Fetch history for another session/sub-agent",
@@ -278,6 +278,7 @@ export function buildAgentSystemPrompt(params: {
     session_status:
       "Show a /status-equivalent status card (usage + time + Reasoning/Verbose/Elevated); use for model-use questions (📊 session_status); optional per-session model override",
     image: "Analyze an image with the configured image model",
+    skills_manage: "Manage skills dynamically: install, uninstall, enable, disable, and list available skills. Use when you need a skill that isn't available or want to remove unused skills",
   };
 
   const toolOrder = [
@@ -305,6 +306,7 @@ export function buildAgentSystemPrompt(params: {
     "subagents",
     "session_status",
     "image",
+    "skills_manage",
   ];
 
   const rawToolNames = (params.toolNames ?? []).map((tool) => tool.trim());
@@ -424,11 +426,11 @@ export function buildAgentSystemPrompt(params: {
 
   // For "none" mode, return just the basic identity line
   if (promptMode === "none") {
-    return "You are a personal assistant running inside OpenClaw.";
+    return "You are a personal assistant running inside Activi.";
   }
 
   const lines = [
-    "You are a personal assistant running inside OpenClaw.",
+    "You are a personal assistant running inside Activi.",
     "",
     "## Tooling",
     "Tool availability (filtered by policy):",
@@ -443,7 +445,7 @@ export function buildAgentSystemPrompt(params: {
           "- apply_patch: apply multi-file patches",
           `- ${execToolName}: run shell commands (supports background via yieldMs/background)`,
           `- ${processToolName}: manage background exec sessions`,
-          "- browser: control OpenClaw's dedicated browser",
+          "- browser: control Activi's dedicated browser",
           "- canvas: present/eval/snapshot the Canvas",
           "- nodes: list/describe/notify/camera/screen on paired nodes",
           "- cron: manage cron jobs and wake events (use for reminders; when scheduling a reminder, write the systemEvent text as something that will read like a reminder when it fires, and mention that it is a reminder depending on the time gap between setting and firing; include recent context in reminder text if appropriate)",
@@ -465,25 +467,25 @@ export function buildAgentSystemPrompt(params: {
     "Use plain human language for narration unless in a technical context.",
     "",
     ...safetySection,
-    "## OpenClaw CLI Quick Reference",
-    "OpenClaw is controlled via subcommands. Do not invent commands.",
+    "## Activi CLI Quick Reference",
+    "Activi is controlled via subcommands. Do not invent commands.",
     "To manage the Gateway daemon service (start/stop/restart):",
-    "- openclaw gateway status",
-    "- openclaw gateway start",
-    "- openclaw gateway stop",
-    "- openclaw gateway restart",
-    "If unsure, ask the user to run `openclaw help` (or `openclaw gateway --help`) and paste the output.",
+    "- activi gateway status",
+    "- activi gateway start",
+    "- activi gateway stop",
+    "- activi gateway restart",
+    "If unsure, ask the user to run `activi help` (or `activi gateway --help`) and paste the output.",
     "",
     ...skillsSection,
     ...memorySection,
     // Skip self-update for subagent/none modes
-    hasGateway && !isMinimal ? "## OpenClaw Self-Update" : "",
+    hasGateway && !isMinimal ? "## Activi Self-Update" : "",
     hasGateway && !isMinimal
       ? [
           "Get Updates (self-update) is ONLY allowed when the user explicitly asks for it.",
           "Do not run config.apply or update.run unless the user explicitly requests an update or config change; if it's not explicit, ask first.",
           "Actions: config.get, config.schema, config.apply (validate + write full config, then restart), update.run (update deps or git, then restart).",
-          "After restart, OpenClaw pings the last active session automatically.",
+          "After restart, Activi pings the last active session automatically.",
         ].join("\n")
       : "",
     hasGateway && !isMinimal ? "" : "",
@@ -558,7 +560,7 @@ export function buildAgentSystemPrompt(params: {
       userTimezone,
     }),
     "## Workspace Files (injected)",
-    "These user-editable files are loaded by OpenClaw and included below in Project Context.",
+    "These user-editable files are loaded by Activi and included below in Project Context.",
     "",
     ...buildReplyTagsSection(isMinimal),
     ...buildMessagingSection({
@@ -652,7 +654,7 @@ export function buildAgentSystemPrompt(params: {
       heartbeatPromptLine,
       "If you receive a heartbeat poll (a user message matching the heartbeat prompt above), and there is nothing that needs attention, reply exactly:",
       "HEARTBEAT_OK",
-      'OpenClaw treats a leading/trailing "HEARTBEAT_OK" as a heartbeat ack (and may discard it).',
+      'Activi treats a leading/trailing "HEARTBEAT_OK" as a heartbeat ack (and may discard it).',
       'If something needs attention, do NOT include "HEARTBEAT_OK"; reply with the alert text instead.',
       "",
     );

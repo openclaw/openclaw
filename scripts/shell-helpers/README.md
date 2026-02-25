@@ -1,8 +1,8 @@
 # ClawDock <!-- omit in toc -->
 
-Stop typing `docker-compose` commands. Just type `clawdock-start`.
+Stop typing `docker-compose` commands. Just type `activiock-start`.
 
-Inspired by Simon Willison's [Running OpenClaw in Docker](https://til.simonwillison.net/llms/openclaw-docker).
+Inspired by Simon Willison's [Running Activi in Docker](https://til.simonwillison.net/llms/activi-docker).
 
 - [Quickstart](#quickstart)
 - [Available Commands](#available-commands)
@@ -25,49 +25,49 @@ Inspired by Simon Willison's [Running OpenClaw in Docker](https://til.simonwilli
 **Install:**
 
 ```bash
-mkdir -p ~/.clawdock && curl -sL https://raw.githubusercontent.com/openclaw/openclaw/main/scripts/shell-helpers/clawdock-helpers.sh -o ~/.clawdock/clawdock-helpers.sh
+mkdir -p ~/.activiock && curl -sL https://raw.githubusercontent.com/activi/activi/main/scripts/shell-helpers/activiock-helpers.sh -o ~/.activiock/activiock-helpers.sh
 ```
 
 ```bash
-echo 'source ~/.clawdock/clawdock-helpers.sh' >> ~/.zshrc && source ~/.zshrc
+echo 'source ~/.activiock/activiock-helpers.sh' >> ~/.zshrc && source ~/.zshrc
 ```
 
 **See what you get:**
 
 ```bash
-clawdock-help
+activiock-help
 ```
 
-On first command, ClawDock auto-detects your OpenClaw directory:
+On first command, ClawDock auto-detects your Activi directory:
 
-- Checks common paths (`~/openclaw`, `~/workspace/openclaw`, etc.)
+- Checks common paths (`~/activi`, `~/workspace/activi`, etc.)
 - If found, asks you to confirm
-- Saves to `~/.clawdock/config`
+- Saves to `~/.activiock/config`
 
 **First time setup:**
 
 ```bash
-clawdock-start
+activiock-start
 ```
 
 ```bash
-clawdock-fix-token
+activiock-fix-token
 ```
 
 ```bash
-clawdock-dashboard
+activiock-dashboard
 ```
 
 If you see "pairing required":
 
 ```bash
-clawdock-devices
+activiock-devices
 ```
 
 And approve the request for the specific device:
 
 ```bash
-clawdock-approve <request-id>
+activiock-approve <request-id>
 ```
 
 ## Available Commands
@@ -76,51 +76,51 @@ clawdock-approve <request-id>
 
 | Command            | Description                     |
 | ------------------ | ------------------------------- |
-| `clawdock-start`   | Start the gateway               |
-| `clawdock-stop`    | Stop the gateway                |
-| `clawdock-restart` | Restart the gateway             |
-| `clawdock-status`  | Check container status          |
-| `clawdock-logs`    | View live logs (follows output) |
+| `activiock-start`   | Start the gateway               |
+| `activiock-stop`    | Stop the gateway                |
+| `activiock-restart` | Restart the gateway             |
+| `activiock-status`  | Check container status          |
+| `activiock-logs`    | View live logs (follows output) |
 
 ### Container Access
 
 | Command                   | Description                                    |
 | ------------------------- | ---------------------------------------------- |
-| `clawdock-shell`          | Interactive shell inside the gateway container |
-| `clawdock-cli <command>`  | Run OpenClaw CLI commands                      |
-| `clawdock-exec <command>` | Execute arbitrary commands in the container    |
+| `activiock-shell`          | Interactive shell inside the gateway container |
+| `activiock-cli <command>`  | Run Activi CLI commands                      |
+| `activiock-exec <command>` | Execute arbitrary commands in the container    |
 
 ### Web UI & Devices
 
 | Command                 | Description                                |
 | ----------------------- | ------------------------------------------ |
-| `clawdock-dashboard`    | Open web UI in browser with authentication |
-| `clawdock-devices`      | List device pairing requests               |
-| `clawdock-approve <id>` | Approve a device pairing request           |
+| `activiock-dashboard`    | Open web UI in browser with authentication |
+| `activiock-devices`      | List device pairing requests               |
+| `activiock-approve <id>` | Approve a device pairing request           |
 
 ### Setup & Configuration
 
 | Command              | Description                                       |
 | -------------------- | ------------------------------------------------- |
-| `clawdock-fix-token` | Configure gateway authentication token (run once) |
+| `activiock-fix-token` | Configure gateway authentication token (run once) |
 
 ### Maintenance
 
 | Command            | Description                                      |
 | ------------------ | ------------------------------------------------ |
-| `clawdock-rebuild` | Rebuild the Docker image                         |
-| `clawdock-clean`   | Remove all containers and volumes (destructive!) |
+| `activiock-rebuild` | Rebuild the Docker image                         |
+| `activiock-clean`   | Remove all containers and volumes (destructive!) |
 
 ### Utilities
 
 | Command              | Description                               |
 | -------------------- | ----------------------------------------- |
-| `clawdock-health`    | Run gateway health check                  |
-| `clawdock-token`     | Display the gateway authentication token  |
-| `clawdock-cd`        | Jump to the OpenClaw project directory    |
-| `clawdock-config`    | Open the OpenClaw config directory        |
-| `clawdock-workspace` | Open the workspace directory              |
-| `clawdock-help`      | Show all available commands with examples |
+| `activiock-health`    | Run gateway health check                  |
+| `activiock-token`     | Display the gateway authentication token  |
+| `activiock-cd`        | Jump to the Activi project directory    |
+| `activiock-config`    | Open the Activi config directory        |
+| `activiock-workspace` | Open the workspace directory              |
+| `activiock-help`      | Show all available commands with examples |
 
 ## Common Workflows
 
@@ -129,19 +129,19 @@ clawdock-approve <request-id>
 **Restart the gateway:**
 
 ```bash
-clawdock-restart
+activiock-restart
 ```
 
 **Check container status:**
 
 ```bash
-clawdock-status
+activiock-status
 ```
 
 **View live logs:**
 
 ```bash
-clawdock-logs
+activiock-logs
 ```
 
 ### Set Up WhatsApp Bot
@@ -149,13 +149,13 @@ clawdock-logs
 **Shell into the container:**
 
 ```bash
-clawdock-shell
+activiock-shell
 ```
 
 **Inside the container, login to WhatsApp:**
 
 ```bash
-openclaw channels login --channel whatsapp --verbose
+activi channels login --channel whatsapp --verbose
 ```
 
 Scan the QR code with WhatsApp on your phone.
@@ -163,7 +163,7 @@ Scan the QR code with WhatsApp on your phone.
 **Verify connection:**
 
 ```bash
-openclaw status
+activi status
 ```
 
 ### Troubleshooting Device Pairing
@@ -171,13 +171,13 @@ openclaw status
 **Check for pending pairing requests:**
 
 ```bash
-clawdock-devices
+activiock-devices
 ```
 
 **Copy the Request ID from the "Pending" table, then approve:**
 
 ```bash
-clawdock-approve <request-id>
+activiock-approve <request-id>
 ```
 
 Then refresh your browser.
@@ -187,13 +187,13 @@ Then refresh your browser.
 If you see "gateway token mismatch" errors:
 
 ```bash
-clawdock-fix-token
+activiock-fix-token
 ```
 
 This will:
 
 1. Read the token from your `.env` file
-2. Configure it in the OpenClaw config
+2. Configure it in the Activi config
 3. Restart the gateway
 4. Verify the configuration
 
@@ -209,18 +209,18 @@ docker ps
 
 - Docker and Docker Compose installed
 - Bash or Zsh shell
-- OpenClaw project (from `docker-setup.sh`)
+- Activi project (from `docker-setup.sh`)
 
 ## Development
 
 **Test with fresh config (mimics first-time install):**
 
 ```bash
-unset CLAWDOCK_DIR && rm -f ~/.clawdock/config && source scripts/shell-helpers/clawdock-helpers.sh
+unset CLAWDOCK_DIR && rm -f ~/.activiock/config && source scripts/shell-helpers/activiock-helpers.sh
 ```
 
 Then run any command to trigger auto-detect:
 
 ```bash
-clawdock-start
+activiock-start
 ```

@@ -7,7 +7,7 @@ import { createNoopThreadBindingManager } from "./thread-bindings.js";
 export async function createBaseDiscordMessageContext(
   overrides: Record<string, unknown> = {},
 ): Promise<DiscordMessagePreflightContext> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discord-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "activi-discord-"));
   const storePath = path.join(dir, "sessions.json");
   return {
     cfg: { messages: { ackReaction: "👀" }, session: { store: storePath } },

@@ -22,7 +22,7 @@ resolved by the **ask fallback** (default: deny).
 
 Exec approvals are enforced locally on the execution host:
 
-- **gateway host** → `openclaw` process on the gateway machine
+- **gateway host** → `activi` process on the gateway machine
 - **node host** → node runner (macOS companion app or headless node host)
 
 macOS split:
@@ -34,7 +34,7 @@ macOS split:
 
 Approvals live in a local JSON file on the execution host:
 
-`~/.openclaw/exec-approvals.json`
+`~/.activi/exec-approvals.json`
 
 Example schema:
 
@@ -42,7 +42,7 @@ Example schema:
 {
   "version": 1,
   "socket": {
-    "path": "~/.openclaw/exec-approvals.sock",
+    "path": "~/.activi/exec-approvals.sock",
     "token": "base64url-token"
   },
   "defaults": {
@@ -183,9 +183,9 @@ Configuration location:
 
 - `safeBins` comes from config (`tools.exec.safeBins` or per-agent `agents.list[].tools.exec.safeBins`).
 - `safeBinProfiles` comes from config (`tools.exec.safeBinProfiles` or per-agent `agents.list[].tools.exec.safeBinProfiles`). Per-agent profile keys override global keys.
-- allowlist entries live in host-local `~/.openclaw/exec-approvals.json` under `agents.<id>.allowlist` (or via Control UI / `openclaw approvals allowlist ...`).
-- `openclaw security audit` warns with `tools.exec.safe_bins_interpreter_unprofiled` when interpreter/runtime bins appear in `safeBins` without explicit profiles.
-- `openclaw doctor --fix` can scaffold missing custom `safeBinProfiles.<bin>` entries as `{}` (review and tighten afterward). Interpreter/runtime bins are not auto-scaffolded.
+- allowlist entries live in host-local `~/.activi/exec-approvals.json` under `agents.<id>.allowlist` (or via Control UI / `activi approvals allowlist ...`).
+- `activi security audit` warns with `tools.exec.safe_bins_interpreter_unprofiled` when interpreter/runtime bins appear in `safeBins` without explicit profiles.
+- `activi doctor --fix` can scaffold missing custom `safeBinProfiles.<bin>` entries as `{}` (review and tighten afterward). Interpreter/runtime bins are not auto-scaffolded.
 
 Custom profile example:
 
@@ -217,9 +217,9 @@ per pattern so you can keep the list tidy.
 The target selector chooses **Gateway** (local approvals) or a **Node**. Nodes
 must advertise `system.execApprovals.get/set` (macOS app or headless node host).
 If a node does not advertise exec approvals yet, edit its local
-`~/.openclaw/exec-approvals.json` directly.
+`~/.activi/exec-approvals.json` directly.
 
-CLI: `openclaw approvals` supports gateway or node editing (see [Approvals CLI](/cli/approvals)).
+CLI: `activi approvals` supports gateway or node editing (see [Approvals CLI](/cli/approvals)).
 
 ## Approval flow
 

@@ -36,6 +36,21 @@
 }
 
 .login-gate__logo {
+  width: 64px;
+  height: 64px;
+  object-fit: contain;
+  margin-bottom: 1rem;
+  filter: brightness(1);
+  transition: filter 0.2s ease;
+}
+
+@media (prefers-color-scheme: dark) {
+  .login-gate__logo {
+    filter: brightness(1.15);
+  }
+}
+
+.login-gate__logo {
   width: 48px;
   height: 48px;
   margin-bottom: 12px;

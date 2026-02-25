@@ -9,7 +9,7 @@ import {
   resolveMentionGating,
   formatAllowlistMatchMeta,
   type HistoryEntry,
-} from "openclaw/plugin-sdk";
+} from "activi/plugin-sdk";
 import {
   buildMSTeamsAttachmentPlaceholder,
   buildMSTeamsMediaPayload,

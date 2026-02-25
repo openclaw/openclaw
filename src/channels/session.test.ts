@@ -26,7 +26,7 @@ describe("recordInboundSession", () => {
     const { recordInboundSession } = await import("./session.js");
 
     await recordInboundSession({
-      storePath: "/tmp/openclaw-session-store.json",
+      storePath: "/tmp/activi-session-store.json",
       sessionKey: "agent:main:telegram:1234:thread:42",
       ctx,
       updateLastRoute: {
@@ -53,7 +53,7 @@ describe("recordInboundSession", () => {
     const { recordInboundSession } = await import("./session.js");
 
     await recordInboundSession({
-      storePath: "/tmp/openclaw-session-store.json",
+      storePath: "/tmp/activi-session-store.json",
       sessionKey: "agent:main:telegram:1234:thread:42",
       ctx,
       updateLastRoute: {

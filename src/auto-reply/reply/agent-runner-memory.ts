@@ -3,7 +3,7 @@ import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStoreEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
@@ -25,7 +25,7 @@ import type { FollowupRun } from "./queue.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
 export async function runMemoryFlushIfNeeded(params: {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   followupRun: FollowupRun;
   sessionCtx: TemplateContext;
   opts?: GetReplyOptions;

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import {
@@ -20,7 +20,7 @@ export type ChannelModelOverride = {
 type ChannelModelByChannelConfig = Record<string, Record<string, string>>;
 
 type ChannelModelOverrideParams = {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   channel?: string | null;
   groupId?: string | null;
   groupChannel?: string | null;

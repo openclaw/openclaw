@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
 import { createCacheTrace } from "./cache-trace.js";
 
 describe("createCacheTrace", () => {
   it("returns null when diagnostics cache tracing is disabled", () => {
     const trace = createCacheTrace({
-      cfg: {} as OpenClawConfig,
+      cfg: {} as ActiviConfig,
       env: {},
     });
 
@@ -20,7 +20,7 @@ describe("createCacheTrace", () => {
         diagnostics: {
           cacheTrace: {
             enabled: true,
-            filePath: "~/.openclaw/logs/cache-trace.jsonl",
+            filePath: "~/.activi/logs/cache-trace.jsonl",
           },
         },
       },
@@ -32,7 +32,7 @@ describe("createCacheTrace", () => {
     });
 
     expect(trace).not.toBeNull();
-    expect(trace?.filePath).toBe(resolveUserPath("~/.openclaw/logs/cache-trace.jsonl"));
+    expect(trace?.filePath).toBe(resolveUserPath("~/.activi/logs/cache-trace.jsonl"));
 
     trace?.recordStage("session:loaded", {
       messages: [],
@@ -79,7 +79,7 @@ describe("createCacheTrace", () => {
         },
       },
       env: {
-        OPENCLAW_CACHE_TRACE: "0",
+        ACTIVI_CACHE_TRACE: "0",
       },
       writer: {
         filePath: "memory",

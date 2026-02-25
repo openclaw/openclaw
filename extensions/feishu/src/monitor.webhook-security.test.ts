@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import type { ClawdbotConfig } from "openclaw/plugin-sdk";
+import type { ActiviConfig } from "activi/plugin-sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
@@ -56,7 +56,7 @@ function buildConfig(params: {
   path: string;
   port: number;
   verificationToken?: string;
-}): ClawdbotConfig {
+}): ActiviConfig {
   return {
     channels: {
       feishu: {
@@ -75,7 +75,7 @@ function buildConfig(params: {
         },
       },
     },
-  } as ClawdbotConfig;
+  } as ActiviConfig;
 }
 
 async function withRunningWebhookMonitor(

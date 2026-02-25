@@ -8,7 +8,7 @@ import {
 import { requireApiKey, resolveApiKeyForProvider } from "../agents/model-auth.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import type {
   MediaUnderstandingConfig,
   MediaUnderstandingModelConfig,
@@ -278,7 +278,7 @@ export function buildModelDecision(params: {
 function resolveEntryRunOptions(params: {
   capability: MediaUnderstandingCapability;
   entry: MediaUnderstandingModelConfig;
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   config?: MediaUnderstandingConfig;
 }): { maxBytes: number; maxChars?: number; timeoutMs: number; prompt: string } {
   const { capability, entry, cfg } = params;
@@ -300,7 +300,7 @@ function resolveEntryRunOptions(params: {
 
 async function resolveProviderExecutionAuth(params: {
   providerId: string;
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   entry: MediaUnderstandingModelConfig;
   agentDir?: string;
 }) {
@@ -342,7 +342,7 @@ export function formatDecisionSummary(decision: MediaUnderstandingDecision): str
 export async function runProviderEntry(params: {
   capability: MediaUnderstandingCapability;
   entry: MediaUnderstandingModelConfig;
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   ctx: MsgContext;
   attachmentIndex: number;
   cache: MediaAttachmentCache;
@@ -525,7 +525,7 @@ export async function runProviderEntry(params: {
 export async function runCliEntry(params: {
   capability: MediaUnderstandingCapability;
   entry: MediaUnderstandingModelConfig;
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   ctx: MsgContext;
   attachmentIndex: number;
   cache: MediaAttachmentCache;
@@ -548,7 +548,7 @@ export async function runCliEntry(params: {
     maxBytes,
     timeoutMs,
   });
-  const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-media-cli-"));
+  const outputDir = await fs.mkdtemp(path.join(os.tmpdir(), "activi-media-cli-"));
   const mediaPath = pathResult.path;
   const outputBase = path.join(outputDir, path.parse(mediaPath).name);
 

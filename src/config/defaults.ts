@@ -2,7 +2,7 @@ import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import { normalizeProviderId, parseModelRef } from "../agents/model-selection.js";
 import { DEFAULT_AGENT_MAX_CONCURRENT, DEFAULT_SUBAGENT_MAX_CONCURRENT } from "./agent-limits.js";
 import { resolveTalkApiKey } from "./talk.js";
-import type { OpenClawConfig } from "./types.js";
+import type { ActiviConfig } from "./types.js";
 import type { ModelDefinitionConfig } from "./types.models.js";
 
 type WarnState = { warned: boolean };
@@ -63,7 +63,7 @@ function resolveModelCost(
   };
 }
 
-function resolveAnthropicDefaultAuthMode(cfg: OpenClawConfig): AnthropicAuthDefaultsMode | null {
+function resolveAnthropicDefaultAuthMode(cfg: ActiviConfig): AnthropicAuthDefaultsMode | null {
   const profiles = cfg.auth?.profiles ?? {};
   const anthropicProfiles = Object.entries(profiles).filter(
     ([, profile]) => profile?.provider === "anthropic",
@@ -120,7 +120,7 @@ export type SessionDefaultsOptions = {
   warnState?: WarnState;
 };
 
-export function applyMessageDefaults(cfg: OpenClawConfig): OpenClawConfig {
+export function applyMessageDefaults(cfg: ActiviConfig): ActiviConfig {
   const messages = cfg.messages;
   const hasAckScope = messages?.ackReactionScope !== undefined;
   if (hasAckScope) {
@@ -136,9 +136,9 @@ export function applyMessageDefaults(cfg: OpenClawConfig): OpenClawConfig {
 }
 
 export function applySessionDefaults(
-  cfg: OpenClawConfig,
+  cfg: ActiviConfig,
   options: SessionDefaultsOptions = {},
-): OpenClawConfig {
+): ActiviConfig {
   const session = cfg.session;
   if (!session || session.mainKey === undefined) {
     return cfg;
@@ -148,7 +148,7 @@ export function applySessionDefaults(
   const warn = options.warn ?? console.warn;
   const warnState = options.warnState ?? defaultWarnState;
 
-  const next: OpenClawConfig = {
+  const next: ActiviConfig = {
     ...cfg,
     session: { ...session, mainKey: "main" },
   };
@@ -161,7 +161,7 @@ export function applySessionDefaults(
   return next;
 }
 
-export function applyTalkApiKey(config: OpenClawConfig): OpenClawConfig {
+export function applyTalkApiKey(config: ActiviConfig): ActiviConfig {
   const resolved = resolveTalkApiKey();
   if (!resolved) {
     return config;
@@ -179,7 +179,7 @@ export function applyTalkApiKey(config: OpenClawConfig): OpenClawConfig {
   };
 }
 
-export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
+export function applyModelDefaults(cfg: ActiviConfig): ActiviConfig {
   let mutated = false;
   let nextCfg = cfg;
 
@@ -315,7 +315,7 @@ export function applyModelDefaults(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
-export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
+export function applyAgentDefaults(cfg: ActiviConfig): ActiviConfig {
   const agents = cfg.agents;
   const defaults = agents?.defaults;
   const hasMax =
@@ -356,7 +356,7 @@ export function applyAgentDefaults(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
-export function applyLoggingDefaults(cfg: OpenClawConfig): OpenClawConfig {
+export function applyLoggingDefaults(cfg: ActiviConfig): ActiviConfig {
   const logging = cfg.logging;
   if (!logging) {
     return cfg;
@@ -373,7 +373,7 @@ export function applyLoggingDefaults(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
-export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig {
+export function applyContextPruningDefaults(cfg: ActiviConfig): ActiviConfig {
   const defaults = cfg.agents?.defaults;
   if (!defaults) {
     return cfg;
@@ -464,7 +464,7 @@ export function applyContextPruningDefaults(cfg: OpenClawConfig): OpenClawConfig
   };
 }
 
-export function applyCompactionDefaults(cfg: OpenClawConfig): OpenClawConfig {
+export function applyCompactionDefaults(cfg: ActiviConfig): ActiviConfig {
   const defaults = cfg.agents?.defaults;
   if (!defaults) {
     return cfg;

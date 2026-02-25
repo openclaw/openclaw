@@ -4,7 +4,7 @@ import {
   getCallGatewayMock,
   getSessionsSpawnTool,
   setSessionsSpawnConfigOverride,
-} from "./openclaw-tools.subagents.sessions-spawn.test-harness.js";
+} from "./activi-tools.subagents.sessions-spawn.test-harness.js";
 import {
   listSubagentRunsForRequester,
   resetSubagentRegistryForTests,

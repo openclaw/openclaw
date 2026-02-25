@@ -30,7 +30,7 @@ type UsageDateInterpretationParams = {
   utcOffset?: string;
 };
 
-const LEGACY_USAGE_DATE_PARAMS_STORAGE_KEY = "openclaw.control.usage.date-params.v1";
+const LEGACY_USAGE_DATE_PARAMS_STORAGE_KEY = "activi.control.usage.date-params.v1";
 const LEGACY_USAGE_DATE_PARAMS_DEFAULT_GATEWAY_KEY = "__default__";
 const LEGACY_USAGE_DATE_PARAMS_MODE_RE = /unexpected property ['"]mode['"]/i;
 const LEGACY_USAGE_DATE_PARAMS_OFFSET_RE = /unexpected property ['"]utcoffset['"]/i;

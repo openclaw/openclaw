@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { ActiviConfig } from "activi/plugin-sdk";
 import { describe, expect, it } from "vitest";
 import { twitchPlugin } from "./plugin.js";
 
@@ -27,7 +27,7 @@ describe("twitchPlugin.status.buildAccountSnapshot", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as ActiviConfig;
 
     const snapshot = await twitchPlugin.status?.buildAccountSnapshot?.({
       account: secondary,

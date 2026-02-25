@@ -20,10 +20,16 @@ type ImageBlock = {
   alt?: string;
 };
 
-function extractImages(message: unknown): ImageBlock[] {
+type MediaBlock = {
+  url: string;
+  alt?: string;
+  type: "image" | "video";
+};
+
+function extractMedia(message: unknown): MediaBlock[] {
   const m = message as Record<string, unknown>;
   const content = m.content;
-  const images: ImageBlock[] = [];
+  const media: MediaBlock[] = [];
 
   if (Array.isArray(content)) {
     for (const block of content) {
@@ -40,21 +46,37 @@ function extractImages(message: unknown): ImageBlock[] {
           const mediaType = (source.media_type as string) || "image/png";
           // If data is already a data URL, use it directly
           const url = data.startsWith("data:") ? data : `data:${mediaType};base64,${data}`;
-          images.push({ url });
+          media.push({ url, type: "image" });
         } else if (typeof b.url === "string") {
-          images.push({ url: b.url });
+          media.push({ url: b.url, type: "image" });
+        }
+      } else if (b.type === "video") {
+        const source = b.source as Record<string, unknown> | undefined;
+        if (source?.type === "base64" && typeof source.data === "string") {
+          const data = source.data;
+          const mediaType = (source.media_type as string) || "video/mp4";
+          const url = data.startsWith("data:") ? data : `data:${mediaType};base64,${data}`;
+          media.push({ url, type: "video" });
+        } else if (typeof b.url === "string") {
+          media.push({ url: b.url, type: "video" });
         }
       } else if (b.type === "image_url") {
         // OpenAI format
         const imageUrl = b.image_url as Record<string, unknown> | undefined;
         if (typeof imageUrl?.url === "string") {
-          images.push({ url: imageUrl.url });
+          media.push({ url: imageUrl.url, type: "image" });
         }
       }
     }
   }
 
-  return images;
+  return media;
+}
+
+function extractImages(message: unknown): ImageBlock[] {
+  return extractMedia(message)
+    .filter((m) => m.type === "image")
+    .map((m) => ({ url: m.url, alt: m.alt }));
 }
 
 export function renderReadingIndicatorGroup(assistant?: AssistantIdentity, basePath?: string) {
@@ -206,7 +228,7 @@ function renderAvatar(
         alt="${assistantName}"
       />`;
     }
-    /* Use OpenClaw logo instead of emoji (e.g. ✨) for assistant avatar */
+    /* Use Activi logo instead of emoji (e.g. ✨) for assistant avatar */
     const logoUrl = basePath ? agentLogoUrl(basePath) : "";
     if (logoUrl) {
       return html`<img
@@ -237,25 +259,41 @@ function isAvatarUrl(value: string): boolean {
   );
 }
 
-function renderMessageImages(images: ImageBlock[]) {
-  if (images.length === 0) {
+function renderMessageMedia(media: MediaBlock[]) {
+  if (media.length === 0) {
     return nothing;
   }
 
   return html`
-    <div class="chat-message-images">
-      ${images.map(
-        (img) => html`
-          <img
-            src=${img.url}
-            alt=${img.alt ?? "Attached image"}
-            class="chat-message-image"
-            @click=${() => window.open(img.url, "_blank")}
-          />
-        `,
+    <div class="chat-message-media">
+      ${media.map(
+        (item) => item.type === "video"
+          ? html`
+              <video
+                src=${item.url}
+                controls
+                class="chat-message-video"
+                @click=${(e: Event) => {
+                  e.stopPropagation();
+                }}
+              ></video>
+            `
+          : html`
+              <img
+                src=${item.url}
+                alt=${item.alt ?? "Attached image"}
+                class="chat-message-image"
+                @click=${() => window.open(item.url, "_blank")}
+              />
+            `
       )}
     </div>
   `;
+}
+
+function renderMessageImages(images: ImageBlock[]) {
+  const media = images.map((img) => ({ url: img.url, alt: img.alt, type: "image" as const }));
+  return renderMessageMedia(media);
 }
 
 /** Render tool cards inside a collapsed `<details>` element. */
@@ -334,6 +372,8 @@ function renderGroupedMessage(
 
   const toolCards = extractToolCards(message);
   const hasToolCards = toolCards.length > 0;
+  const media = extractMedia(message);
+  const hasMedia = media.length > 0;
   const images = extractImages(message);
   const hasImages = images.length > 0;
 
@@ -361,14 +401,14 @@ function renderGroupedMessage(
     return renderCollapsedToolCards(toolCards, onOpenSidebar);
   }
 
-  if (!markdown && !hasToolCards && !hasImages) {
+  if (!markdown && !hasToolCards && !hasMedia) {
     return nothing;
   }
 
   return html`
     <div class="${bubbleClasses}">
       ${canCopyMarkdown ? renderCopyAsMarkdownButton(markdown!) : nothing}
-      ${renderMessageImages(images)}
+      ${renderMessageMedia(media)}
       ${
         reasoningMarkdown
           ? html`<div class="chat-thinking">${unsafeHTML(

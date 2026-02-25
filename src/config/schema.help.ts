@@ -1,7 +1,7 @@
 import { IRC_FIELD_HELP } from "./schema.irc.js";
 
 export const FIELD_HELP: Record<string, string> = {
-  "meta.lastTouchedVersion": "Auto-set when OpenClaw writes the config.",
+  "meta.lastTouchedVersion": "Auto-set when Activi writes the config.",
   "meta.lastTouchedAt": "ISO timestamp of the last config write (auto-set).",
   "update.channel": 'Update channel for git + npm installs ("stable", "beta", or "dev").',
   "update.checkOnStart": "Check for npm updates when the gateway starts (default: true).",
@@ -27,14 +27,14 @@ export const FIELD_HELP: Record<string, string> = {
     "Required by default for gateway access (unless using Tailscale Serve identity); required for non-loopback binds.",
   "gateway.auth.password": "Required for Tailscale funnel.",
   "agents.defaults.sandbox.browser.network":
-    "Docker network for sandbox browser containers (default: openclaw-sandbox-browser). Avoid bridge if you need stricter isolation.",
+    "Docker network for sandbox browser containers (default: activi-sandbox-browser). Avoid bridge if you need stricter isolation.",
   "agents.list[].sandbox.browser.network": "Per-agent override for sandbox browser Docker network.",
   "agents.defaults.sandbox.browser.cdpSourceRange":
     "Optional CIDR allowlist for container-edge CDP ingress (for example 172.21.0.1/32).",
   "agents.list[].sandbox.browser.cdpSourceRange":
     "Per-agent override for CDP source CIDR allowlist.",
   "gateway.controlUi.basePath":
-    "Optional URL prefix where the Control UI is served (e.g. /openclaw).",
+    "Optional URL prefix where the Control UI is served (e.g. /activi).",
   "gateway.controlUi.root":
     "Optional filesystem root for Control UI assets (defaults to dist/control-ui).",
   "gateway.controlUi.allowedOrigins":
@@ -51,7 +51,7 @@ export const FIELD_HELP: Record<string, string> = {
     'Node browser routing ("auto" = pick single connected browser node, "manual" = require node param, "off" = disable).',
   "gateway.nodes.browser.node": "Pin browser routing to a specific node id or name (optional).",
   "gateway.nodes.allowCommands":
-    "Extra node.invoke commands to allow beyond the gateway defaults (array of command strings). Enabling dangerous commands here is a security-sensitive override and is flagged by `openclaw security audit`.",
+    "Extra node.invoke commands to allow beyond the gateway defaults (array of command strings). Enabling dangerous commands here is a security-sensitive override and is flagged by `activi security audit`.",
   "gateway.nodes.denyCommands":
     "Commands to block even if present in node claims or default allowlist.",
   "nodeHost.browserProxy.enabled": "Expose the local browser control server via node proxy.",
@@ -62,7 +62,7 @@ export const FIELD_HELP: Record<string, string> = {
   "diagnostics.cacheTrace.enabled":
     "Log cache trace snapshots for embedded agent runs (default: false).",
   "diagnostics.cacheTrace.filePath":
-    "JSONL output path for cache trace logs (default: $OPENCLAW_STATE_DIR/logs/cache-trace.jsonl).",
+    "JSONL output path for cache trace logs (default: $ACTIVI_STATE_DIR/logs/cache-trace.jsonl).",
   "diagnostics.cacheTrace.includeMessages":
     "Include full message payloads in trace output (default: true).",
   "diagnostics.cacheTrace.includePrompt": "Include prompt text in trace output (default: true).",
@@ -211,7 +211,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.fallback":
     'Fallback provider when embeddings fail ("openai", "gemini", "local", or "none").',
   "agents.defaults.memorySearch.store.path":
-    "SQLite index path (default: ~/.openclaw/memory/{agentId}.sqlite).",
+    "SQLite index path (default: ~/.activi/memory/{agentId}.sqlite).",
   "agents.defaults.memorySearch.store.vector.enabled":
     "Enable sqlite-vec extension for vector search (default: true).",
   "agents.defaults.memorySearch.store.vector.extensionPath":
@@ -235,7 +235,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.cache.enabled":
     "Cache chunk embeddings in SQLite to speed up reindexing and frequent updates (default: true).",
   memory: "Memory backend configuration (global).",
-  "memory.backend": 'Memory backend ("builtin" for OpenClaw embeddings, "qmd" for QMD sidecar).',
+  "memory.backend": 'Memory backend ("builtin" for Activi embeddings, "qmd" for QMD sidecar).',
   "memory.citations": 'Default citation behavior ("auto", "on", or "off").',
   "memory.qmd.command": "Path to the qmd binary (default: resolves from PATH).",
   "memory.qmd.mcporter":
@@ -298,12 +298,12 @@ export const FIELD_HELP: Record<string, string> = {
   "plugins.entries.*.enabled": "Overrides plugin enable/disable for this entry (restart required).",
   "plugins.entries.*.config": "Plugin-defined config payload (schema is provided by the plugin).",
   "plugins.installs":
-    "CLI-managed install metadata (used by `openclaw plugins update` to locate install sources).",
+    "CLI-managed install metadata (used by `activi plugins update` to locate install sources).",
   "plugins.installs.*.source": 'Install source ("npm", "archive", or "path").',
   "plugins.installs.*.spec": "Original npm spec used for install (if source is npm).",
   "plugins.installs.*.sourcePath": "Original archive/path used for install (if any).",
   "plugins.installs.*.installPath":
-    "Resolved install directory (usually ~/.openclaw/extensions/<id>).",
+    "Resolved install directory (usually ~/.activi/extensions/<id>).",
   "plugins.installs.*.version": "Version recorded at install time (if available).",
   "plugins.installs.*.resolvedName": "Resolved npm package name from the fetched artifact.",
   "plugins.installs.*.resolvedVersion":

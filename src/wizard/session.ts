@@ -9,7 +9,27 @@ export type WizardStepOption = {
 
 export type WizardStep = {
   id: string;
-  type: "note" | "select" | "text" | "confirm" | "multiselect" | "progress" | "action";
+  type:
+    | "note"
+    | "select"
+    | "text"
+    | "confirm"
+    | "multiselect"
+    | "progress"
+    | "action"
+    | "welcome"
+    | "api-key"
+    | "workspace-path"
+    | "gateway-config"
+    | "channel-cards"
+    | "agent-mode-select"
+    | "agent-single-form"
+    | "agent-team-count"
+    | "agent-swarm-config"
+    | "agent-grid"
+    | "agent-config-advanced"
+    | "skills-config"
+    | "summary";
   title?: string;
   message?: string;
   options?: WizardStepOption[];
@@ -17,6 +37,16 @@ export type WizardStep = {
   placeholder?: string;
   sensitive?: boolean;
   executor?: "gateway" | "client";
+  icon?: string;
+  logo?: string;
+  validation?: {
+    pattern?: string;
+    min?: number;
+    max?: number;
+    required?: boolean;
+  };
+  items?: Array<{ id: string; label: string; icon?: string }>;
+  summary?: Array<{ label: string; value: string }>;
 };
 
 export type WizardSessionStatus = "running" | "done" | "cancelled" | "error";

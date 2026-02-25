@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { resolveControlUiRootSync } from "../infra/control-ui-assets.js";
 import { isWithinDir } from "../infra/path-safety.js";
 import { DEFAULT_ASSISTANT_IDENTITY, resolveAssistantIdentity } from "./assistant-identity.js";
@@ -21,7 +21,7 @@ const ROOT_PREFIX = "/";
 
 export type ControlUiRequestOptions = {
   basePath?: string;
-  config?: OpenClawConfig;
+  config?: ActiviConfig;
   agentId?: string;
   root?: ControlUiRootState;
 };

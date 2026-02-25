@@ -15,7 +15,7 @@ import {
 const tempDirs: string[] = [];
 
 const makeWorkspace = async () => {
-  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
+  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "activi-"));
   tempDirs.push(workspaceDir);
   return workspaceDir;
 };
@@ -233,7 +233,7 @@ describe("applySkillEnvOverrides", () => {
       dir: skillDir,
       name: "env-skill",
       description: "Needs env",
-      metadata: '{"openclaw":{"requires":{"env":["ENV_KEY"]},"primaryEnv":"ENV_KEY"}}',
+      metadata: '{"activi":{"requires":{"env":["ENV_KEY"]},"primaryEnv":"ENV_KEY"}}',
     });
 
     const entries = loadWorkspaceSkillEntries(workspaceDir, {
@@ -262,7 +262,7 @@ describe("applySkillEnvOverrides", () => {
       dir: skillDir,
       name: "env-skill",
       description: "Needs env",
-      metadata: '{"openclaw":{"requires":{"env":["ENV_KEY"]},"primaryEnv":"ENV_KEY"}}',
+      metadata: '{"activi":{"requires":{"env":["ENV_KEY"]},"primaryEnv":"ENV_KEY"}}',
     });
 
     const snapshot = buildWorkspaceSkillSnapshot(workspaceDir, {
@@ -293,7 +293,7 @@ describe("applySkillEnvOverrides", () => {
       name: "unsafe-env-skill",
       description: "Needs env",
       metadata:
-        '{"openclaw":{"requires":{"env":["OPENAI_API_KEY","NODE_OPTIONS"]},"primaryEnv":"OPENAI_API_KEY"}}',
+        '{"activi":{"requires":{"env":["OPENAI_API_KEY","NODE_OPTIONS"]},"primaryEnv":"OPENAI_API_KEY"}}',
     });
 
     const entries = loadWorkspaceSkillEntries(workspaceDir, {
@@ -335,7 +335,7 @@ describe("applySkillEnvOverrides", () => {
       dir: skillDir,
       name: "dangerous-env-skill",
       description: "Needs env",
-      metadata: '{"openclaw":{"requires":{"env":["BASH_ENV","SHELL"]}}}',
+      metadata: '{"activi":{"requires":{"env":["BASH_ENV","SHELL"]}}}',
     });
 
     const entries = loadWorkspaceSkillEntries(workspaceDir, {
@@ -377,7 +377,7 @@ describe("applySkillEnvOverrides", () => {
       dir: skillDir,
       name: "snapshot-env-skill",
       description: "Needs env",
-      metadata: '{"openclaw":{"requires":{"env":["OPENAI_API_KEY"]}}}',
+      metadata: '{"activi":{"requires":{"env":["OPENAI_API_KEY"]}}}',
     });
 
     const config = {

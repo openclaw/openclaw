@@ -36,7 +36,7 @@ describe("ensureExtensionRelayForProfiles", () => {
       if (name === "chrome") {
         return { driver: "extension", cdpUrl: "http://127.0.0.1:18888" };
       }
-      return { driver: "openclaw", cdpUrl: "http://127.0.0.1:18889" };
+      return { driver: "activi", cdpUrl: "http://127.0.0.1:18889" };
     });
     ensureChromeExtensionRelayServerMock.mockResolvedValue(undefined);
 
@@ -44,7 +44,7 @@ describe("ensureExtensionRelayForProfiles", () => {
       resolved: {
         profiles: {
           chrome: {},
-          openclaw: {},
+          activi: {},
         },
       } as never,
       onWarn: vi.fn(),
@@ -79,9 +79,9 @@ describe("stopKnownBrowserProfiles", () => {
   });
 
   it("stops all known profiles and ignores per-profile failures", async () => {
-    listKnownProfileNamesMock.mockReturnValue(["openclaw", "chrome"]);
+    listKnownProfileNamesMock.mockReturnValue(["activi", "chrome"]);
     const stopMap: Record<string, ReturnType<typeof vi.fn>> = {
-      openclaw: vi.fn(async () => {}),
+      activi: vi.fn(async () => {}),
       chrome: vi.fn(async () => {
         throw new Error("profile stop failed");
       }),
@@ -99,7 +99,7 @@ describe("stopKnownBrowserProfiles", () => {
       onWarn,
     });
 
-    expect(stopMap.openclaw).toHaveBeenCalledTimes(1);
+    expect(stopMap.activi).toHaveBeenCalledTimes(1);
     expect(stopMap.chrome).toHaveBeenCalledTimes(1);
     expect(onWarn).not.toHaveBeenCalled();
   });
@@ -118,6 +118,6 @@ describe("stopKnownBrowserProfiles", () => {
       onWarn,
     });
 
-    expect(onWarn).toHaveBeenCalledWith("openclaw browser stop failed: Error: oops");
+    expect(onWarn).toHaveBeenCalledWith("activi browser stop failed: Error: oops");
   });
 });

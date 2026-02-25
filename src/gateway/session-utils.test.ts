@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, test } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
   capArrayByJsonBytes,
@@ -63,7 +63,7 @@ describe("gateway session utils", () => {
     const cfg = {
       session: { mainKey: "work" },
       agents: { list: [{ id: "ops", default: true }] },
-    } as OpenClawConfig;
+    } as ActiviConfig;
     expect(resolveSessionStoreKey({ cfg, sessionKey: "main" })).toBe("agent:ops:work");
     expect(resolveSessionStoreKey({ cfg, sessionKey: "work" })).toBe("agent:ops:work");
     expect(resolveSessionStoreKey({ cfg, sessionKey: "agent:ops:main" })).toBe("agent:ops:work");
@@ -76,7 +76,7 @@ describe("gateway session utils", () => {
     const cfg = {
       session: { mainKey: "main" },
       agents: { list: [{ id: "ops", default: true }] },
-    } as OpenClawConfig;
+    } as ActiviConfig;
     expect(resolveSessionStoreKey({ cfg, sessionKey: "discord:group:123" })).toBe(
       "agent:ops:discord:group:123",
     );
@@ -89,7 +89,7 @@ describe("gateway session utils", () => {
     const cfg = {
       session: { mainKey: "main" },
       agents: { list: [{ id: "ops" }, { id: "review" }] },
-    } as OpenClawConfig;
+    } as ActiviConfig;
     expect(resolveSessionStoreKey({ cfg, sessionKey: "main" })).toBe("agent:ops:main");
     expect(resolveSessionStoreKey({ cfg, sessionKey: "discord:group:123" })).toBe(
       "agent:ops:discord:group:123",
@@ -99,7 +99,7 @@ describe("gateway session utils", () => {
   test("resolveSessionStoreKey falls back to main when agents.list is missing", () => {
     const cfg = {
       session: { mainKey: "work" },
-    } as OpenClawConfig;
+    } as ActiviConfig;
     expect(resolveSessionStoreKey({ cfg, sessionKey: "main" })).toBe("agent:main:work");
     expect(resolveSessionStoreKey({ cfg, sessionKey: "thread-1" })).toBe("agent:main:thread-1");
   });
@@ -108,7 +108,7 @@ describe("gateway session utils", () => {
     const cfg = {
       session: { mainKey: "main" },
       agents: { list: [{ id: "ops", default: true }] },
-    } as OpenClawConfig;
+    } as ActiviConfig;
     // Bare keys with different casing must resolve to the same canonical key
     expect(resolveSessionStoreKey({ cfg, sessionKey: "CoP" })).toBe(
       resolveSessionStoreKey({ cfg, sessionKey: "cop" }),
@@ -125,7 +125,7 @@ describe("gateway session utils", () => {
     const cfg = {
       session: { scope: "global", mainKey: "work" },
       agents: { list: [{ id: "ops", default: true }] },
-    } as OpenClawConfig;
+    } as ActiviConfig;
     expect(resolveSessionStoreKey({ cfg, sessionKey: "main" })).toBe("global");
     const target = resolveGatewaySessionStoreTarget({ cfg, key: "main" });
     expect(target.canonicalKey).toBe("global");
@@ -135,14 +135,14 @@ describe("gateway session utils", () => {
   test("resolveGatewaySessionStoreTarget uses canonical key for main alias", () => {
     const storeTemplate = path.join(
       os.tmpdir(),
-      "openclaw-session-utils",
+      "activi-session-utils",
       "{agentId}",
       "sessions.json",
     );
     const cfg = {
       session: { mainKey: "main", store: storeTemplate },
       agents: { list: [{ id: "ops", default: true }] },
-    } as OpenClawConfig;
+    } as ActiviConfig;
     const target = resolveGatewaySessionStoreTarget({ cfg, key: "main" });
     expect(target.canonicalKey).toBe("agent:ops:main");
     expect(target.storeKeys).toEqual(expect.arrayContaining(["agent:ops:main", "main"]));
@@ -161,7 +161,7 @@ describe("gateway session utils", () => {
     const cfg = {
       session: { mainKey: "main", store: storePath },
       agents: { list: [{ id: "ops", default: true }] },
-    } as OpenClawConfig;
+    } as ActiviConfig;
     // Client passes the lowercased canonical key (as returned by sessions.list)
     const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:ops:mysession" });
     expect(target.canonicalKey).toBe("agent:ops:mysession");
@@ -190,7 +190,7 @@ describe("gateway session utils", () => {
     const cfg = {
       session: { mainKey: "main", store: storePath },
       agents: { list: [{ id: "ops", default: true }] },
-    } as OpenClawConfig;
+    } as ActiviConfig;
     const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:ops:mysession" });
     // storeKeys must include BOTH variants so delete/reset/patch can clean up all duplicates
     expect(target.storeKeys).toEqual(
@@ -210,7 +210,7 @@ describe("gateway session utils", () => {
     const cfg = {
       session: { mainKey: "work", store: storePath },
       agents: { list: [{ id: "ops", default: true }] },
-    } as OpenClawConfig;
+    } as ActiviConfig;
     const target = resolveGatewaySessionStoreTarget({ cfg, key: "agent:ops:main" });
     expect(target.canonicalKey).toBe("agent:ops:work");
     // storeKeys must include the legacy mixed-case alias key
@@ -248,7 +248,7 @@ describe("gateway session utils", () => {
       agents: {
         list: [{ id: "main", default: true, workspace, identity: { avatar: "avatar-link.png" } }],
       },
-    } as OpenClawConfig;
+    } as ActiviConfig;
 
     const result = listAgentsForGateway(cfg);
     expect(result.agents[0]?.identity?.avatarUrl).toBeUndefined();
@@ -270,7 +270,7 @@ describe("gateway session utils", () => {
       agents: {
         list: [{ id: "main", default: true, workspace, identity: { avatar: "avatar-link.png" } }],
       },
-    } as OpenClawConfig;
+    } as ActiviConfig;
 
     const result = listAgentsForGateway(cfg);
     expect(result.agents[0]?.identity?.avatarUrl).toBe(
@@ -287,7 +287,7 @@ describe("resolveSessionModelRef", () => {
           model: { primary: "anthropic/claude-opus-4-6" },
         },
       },
-    } as OpenClawConfig;
+    } as ActiviConfig;
 
     const resolved = resolveSessionModelRef(cfg, {
       sessionId: "s1",
@@ -308,7 +308,7 @@ describe("resolveSessionModelRef", () => {
           model: { primary: "anthropic/claude-opus-4-6" },
         },
       },
-    } as OpenClawConfig;
+    } as ActiviConfig;
 
     const resolved = resolveSessionModelRef(cfg, {
       sessionId: "s2",
@@ -419,7 +419,7 @@ describe("listSessionsFromStore search", () => {
   const baseCfg = {
     session: { mainKey: "main" },
     agents: { list: [{ id: "main", default: true }] },
-  } as OpenClawConfig;
+  } as ActiviConfig;
 
   const makeStore = (): Record<string, SessionEntry> => ({
     "agent:main:work-project": {

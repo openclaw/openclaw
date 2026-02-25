@@ -1,12 +1,12 @@
 ---
-summary: "CLI reference for `openclaw security` (audit and fix common security footguns)"
+summary: "CLI reference for `activi security` (audit and fix common security footguns)"
 read_when:
   - You want to run a quick security audit on config/state
   - You want to apply safe “fix” suggestions (chmod, tighten defaults)
 title: "security"
 ---
 
-# `openclaw security`
+# `activi security`
 
 Security tools (audit + optional fixes).
 
@@ -17,10 +17,10 @@ Related:
 ## Audit
 
 ```bash
-openclaw security audit
-openclaw security audit --deep
-openclaw security audit --fix
-openclaw security audit --json
+activi security audit
+activi security audit --deep
+activi security audit --fix
+activi security audit --json
 ```
 
 The audit warns when multiple DM senders share the main session and recommends **secure DM mode**: `session.dmScope="per-channel-peer"` (or `per-account-channel-peer` for multi-account channels) for shared inboxes.
@@ -30,7 +30,7 @@ For webhook ingress, it warns when `hooks.defaultSessionKey` is unset, when requ
 It also warns when sandbox Docker settings are configured while sandbox mode is off, when `gateway.nodes.denyCommands` uses ineffective pattern-like/unknown entries, when `gateway.nodes.allowCommands` explicitly enables dangerous node commands, when global `tools.profile="minimal"` is overridden by agent tool profiles, when open groups expose runtime/filesystem tools without sandbox/workspace guards, and when installed extension plugin tools may be reachable under permissive tool policy.
 It also flags `gateway.allowRealIpFallback=true` (header-spoofing risk if proxies are misconfigured) and `discovery.mdns.mode="full"` (metadata leakage via mDNS TXT records).
 It also warns when sandbox browser uses Docker `bridge` network without `sandbox.browser.cdpSourceRange`.
-It also warns when existing sandbox browser Docker containers have missing/stale hash labels (for example pre-migration containers missing `openclaw.browserConfigEpoch`) and recommends `openclaw sandbox recreate --browser --all`.
+It also warns when existing sandbox browser Docker containers have missing/stale hash labels (for example pre-migration containers missing `activi.browserConfigEpoch`) and recommends `activi sandbox recreate --browser --all`.
 It also warns when npm-based plugin/hook install records are unpinned, missing integrity metadata, or drift from currently installed package versions.
 It warns when Discord allowlists (`channels.discord.allowFrom`, `channels.discord.guilds.*.users`, pairing store) use name or tag entries instead of stable IDs.
 It warns when `gateway.auth.mode="none"` leaves Gateway HTTP APIs reachable without a shared secret (`/tools/invoke` plus any enabled `/v1/*` endpoint).
@@ -40,14 +40,14 @@ It warns when `gateway.auth.mode="none"` leaves Gateway HTTP APIs reachable with
 Use `--json` for CI/policy checks:
 
 ```bash
-openclaw security audit --json | jq '.summary'
-openclaw security audit --deep --json | jq '.findings[] | select(.severity=="critical") | .checkId'
+activi security audit --json | jq '.summary'
+activi security audit --deep --json | jq '.findings[] | select(.severity=="critical") | .checkId'
 ```
 
 If `--fix` and `--json` are combined, output includes both fix actions and final report:
 
 ```bash
-openclaw security audit --fix --json | jq '{fix: .fix.ok, summary: .report.summary}'
+activi security audit --fix --json | jq '{fix: .fix.ok, summary: .report.summary}'
 ```
 
 ## What `--fix` changes

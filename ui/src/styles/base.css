@@ -270,9 +270,9 @@
   --radius-full: 0px;
 }
 
-/* ─── Theme: clawdash — Chrome Metallic ─── */
+/* ─── Theme: activiash — Chrome Metallic ─── */
 
-:root[data-theme="clawdash"] {
+:root[data-theme="activiash"] {
   color-scheme: dark;
 
   --vscode-bg: #050507;
@@ -337,7 +337,7 @@
 :root[data-theme="light"],
 :root[data-theme="openknot"],
 :root[data-theme="fieldmanual"],
-:root[data-theme="clawdash"] {
+:root[data-theme="activiash"] {
   /* Core surfaces */
   --bg: var(--vscode-bg);
   --bg-accent: var(--vscode-sidebar);
@@ -564,7 +564,7 @@ html.theme-transition::view-transition-new(theme) {
   }
 }
 
-openclaw-app {
+activi-app {
   display: block;
   position: relative;
   z-index: 1;
@@ -738,20 +738,20 @@ select {
   display: none;
 }
 
-/* ─── clawdash — Chrome Metallic Overrides ─── */
+/* ─── activiash — Chrome Metallic Overrides ─── */
 
-:root[data-theme="clawdash"] body {
+:root[data-theme="activiash"] body {
   background:
     radial-gradient(ellipse 80% 50% at 40% -10%, rgba(192, 200, 212, 0.06) 0%, transparent 60%),
     radial-gradient(ellipse 60% 40% at 70% 30%, rgba(202, 58, 41, 0.04) 0%, transparent 50%),
     var(--bg);
 }
 
-:root[data-theme="clawdash"] body::after {
+:root[data-theme="activiash"] body::after {
   display: none;
 }
 
-:root[data-theme="clawdash"] .nav-item--active {
+:root[data-theme="activiash"] .nav-item--active {
   border-image: linear-gradient(to bottom, var(--kn-silver-bright), var(--kn-claw)) 1;
   border-image-slice: 1;
 }

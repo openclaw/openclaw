@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 
 export const ANTHROPIC_STORE: AuthProfileStore = {
@@ -17,7 +17,7 @@ export const ANTHROPIC_STORE: AuthProfileStore = {
   },
 };
 
-export const ANTHROPIC_CFG: OpenClawConfig = {
+export const ANTHROPIC_CFG: ActiviConfig = {
   auth: {
     profiles: {
       "anthropic:default": { provider: "anthropic", mode: "api_key" },

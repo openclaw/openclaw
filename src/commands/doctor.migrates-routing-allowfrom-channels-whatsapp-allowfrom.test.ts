@@ -6,7 +6,7 @@ import {
   mockDoctorConfigSnapshot,
   note,
   readConfigFileSnapshot,
-  resolveOpenClawPackageRoot,
+  resolveActiviPackageRoot,
   runCommandWithTimeout,
   runGatewayUpdate,
   serviceInstall,
@@ -71,7 +71,7 @@ describe("doctor command", () => {
       findLegacyGatewayServices.mockResolvedValueOnce([
         {
           platform: "darwin",
-          label: "com.steipete.openclaw.gateway",
+          label: "com.steipete.activi.gateway",
           detail: "loaded",
         },
       ]);
@@ -87,10 +87,10 @@ describe("doctor command", () => {
   );
 
   it("offers to update first for git checkouts", async () => {
-    delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+    delete process.env.ACTIVI_UPDATE_IN_PROGRESS;
 
-    const root = "/tmp/openclaw";
-    resolveOpenClawPackageRoot.mockResolvedValueOnce(root);
+    const root = "/tmp/activi";
+    resolveActiviPackageRoot.mockResolvedValueOnce(root);
     runCommandWithTimeout.mockResolvedValueOnce({
       stdout: `${root}\n`,
       stderr: "",

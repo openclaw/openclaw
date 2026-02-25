@@ -25,7 +25,7 @@ describe("resolvePythonExecutablePath", () => {
   itUnix(
     "resolves a working python path and caches the result",
     async () => {
-      const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-python-"));
+      const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "activi-python-"));
       try {
         const realPython = path.join(tmp, "python-real");
         await fs.writeFile(realPython, "#!/bin/sh\nexit 0\n", "utf-8");

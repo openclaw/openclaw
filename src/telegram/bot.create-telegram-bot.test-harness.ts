@@ -2,14 +2,14 @@ import { beforeEach, vi } from "vitest";
 import { resetInboundDedupe } from "../auto-reply/reply/inbound-dedupe.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../auto-reply/types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 
 type AnyMock = MockFn<(...args: unknown[]) => unknown>;
 type AnyAsyncMock = MockFn<(...args: unknown[]) => Promise<unknown>>;
 
 const { sessionStorePath } = vi.hoisted(() => ({
-  sessionStorePath: `/tmp/openclaw-telegram-${Math.random().toString(16).slice(2)}.json`,
+  sessionStorePath: `/tmp/activi-telegram-${Math.random().toString(16).slice(2)}.json`,
 }));
 
 const { loadWebMedia } = vi.hoisted((): { loadWebMedia: AnyMock } => ({
@@ -114,7 +114,7 @@ export const editMessageTextSpy: AnyAsyncMock = vi.fn(async () => ({ message_id:
 export const setMessageReactionSpy: AnyAsyncMock = vi.fn(async () => undefined);
 export const setMyCommandsSpy: AnyAsyncMock = vi.fn(async () => undefined);
 export const getMeSpy: AnyAsyncMock = vi.fn(async () => ({
-  username: "openclaw_bot",
+  username: "activi_bot",
   has_topics_enabled: true,
 }));
 export const sendMessageSpy: AnyAsyncMock = vi.fn(async () => ({ message_id: 77 }));
@@ -186,7 +186,7 @@ export const replySpy: MockFn<
   (
     ctx: MsgContext,
     opts?: GetReplyOptions,
-    configOverride?: OpenClawConfig,
+    configOverride?: ActiviConfig,
   ) => Promise<ReplyPayload | ReplyPayload[] | undefined>
 > = vi.fn(async (_ctx, opts) => {
   await opts?.onReplyStart?.();
@@ -230,7 +230,7 @@ export function makeTelegramMessageCtx(params: {
         ? {}
         : { message_thread_id: params.messageThreadId }),
     },
-    me: { username: "openclaw_bot" },
+    me: { username: "activi_bot" },
     getFile: async () => ({ download: async () => new Uint8Array() }),
   };
 }
@@ -301,7 +301,7 @@ beforeEach(() => {
   setMyCommandsSpy.mockResolvedValue(undefined);
   getMeSpy.mockReset();
   getMeSpy.mockResolvedValue({
-    username: "openclaw_bot",
+    username: "activi_bot",
     has_topics_enabled: true,
   });
   editMessageTextSpy.mockReset();

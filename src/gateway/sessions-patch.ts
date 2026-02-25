@@ -16,7 +16,7 @@ import {
   normalizeUsageDisplay,
   supportsXHighThinking,
 } from "../auto-reply/thinking.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import {
   isSubagentSessionKey,
@@ -63,7 +63,7 @@ function normalizeExecAsk(raw: string): "off" | "on-miss" | "always" | undefined
 }
 
 export async function applySessionsPatchToStore(params: {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   store: Record<string, SessionEntry>;
   storeKey: string;
   patch: SessionsPatchParams;

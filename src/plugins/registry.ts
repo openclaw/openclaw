@@ -13,17 +13,17 @@ import { registerPluginCommand } from "./commands.js";
 import { normalizePluginHttpPath } from "./http-path.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type {
-  OpenClawPluginApi,
-  OpenClawPluginChannelRegistration,
-  OpenClawPluginCliRegistrar,
-  OpenClawPluginCommandDefinition,
-  OpenClawPluginHttpHandler,
-  OpenClawPluginHttpRouteHandler,
-  OpenClawPluginHookOptions,
+  ActiviPluginApi,
+  ActiviPluginChannelRegistration,
+  ActiviPluginCliRegistrar,
+  ActiviPluginCommandDefinition,
+  ActiviPluginHttpHandler,
+  ActiviPluginHttpRouteHandler,
+  ActiviPluginHookOptions,
   ProviderPlugin,
-  OpenClawPluginService,
-  OpenClawPluginToolContext,
-  OpenClawPluginToolFactory,
+  ActiviPluginService,
+  ActiviPluginToolContext,
+  ActiviPluginToolFactory,
   PluginConfigUiHint,
   PluginDiagnostic,
   PluginLogger,
@@ -36,7 +36,7 @@ import type {
 
 export type PluginToolRegistration = {
   pluginId: string;
-  factory: OpenClawPluginToolFactory;
+  factory: ActiviPluginToolFactory;
   names: string[];
   optional: boolean;
   source: string;
@@ -44,21 +44,21 @@ export type PluginToolRegistration = {
 
 export type PluginCliRegistration = {
   pluginId: string;
-  register: OpenClawPluginCliRegistrar;
+  register: ActiviPluginCliRegistrar;
   commands: string[];
   source: string;
 };
 
 export type PluginHttpRegistration = {
   pluginId: string;
-  handler: OpenClawPluginHttpHandler;
+  handler: ActiviPluginHttpHandler;
   source: string;
 };
 
 export type PluginHttpRouteRegistration = {
   pluginId?: string;
   path: string;
-  handler: OpenClawPluginHttpRouteHandler;
+  handler: ActiviPluginHttpRouteHandler;
   source?: string;
 };
 
@@ -84,13 +84,13 @@ export type PluginHookRegistration = {
 
 export type PluginServiceRegistration = {
   pluginId: string;
-  service: OpenClawPluginService;
+  service: ActiviPluginService;
   source: string;
 };
 
 export type PluginCommandRegistration = {
   pluginId: string;
-  command: OpenClawPluginCommandDefinition;
+  command: ActiviPluginCommandDefinition;
   source: string;
 };
 
@@ -171,13 +171,13 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
 
   const registerTool = (
     record: PluginRecord,
-    tool: AnyAgentTool | OpenClawPluginToolFactory,
+    tool: AnyAgentTool | ActiviPluginToolFactory,
     opts?: { name?: string; names?: string[]; optional?: boolean },
   ) => {
     const names = opts?.names ?? (opts?.name ? [opts.name] : []);
     const optional = opts?.optional === true;
-    const factory: OpenClawPluginToolFactory =
-      typeof tool === "function" ? tool : (_ctx: OpenClawPluginToolContext) => tool;
+    const factory: ActiviPluginToolFactory =
+      typeof tool === "function" ? tool : (_ctx: ActiviPluginToolContext) => tool;
 
     if (typeof tool !== "function") {
       names.push(tool.name);
@@ -200,8 +200,8 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record: PluginRecord,
     events: string | string[],
     handler: Parameters<typeof registerInternalHook>[1],
-    opts: OpenClawPluginHookOptions | undefined,
-    config: OpenClawPluginApi["config"],
+    opts: ActiviPluginHookOptions | undefined,
+    config: ActiviPluginApi["config"],
   ) => {
     const eventList = Array.isArray(events) ? events : [events];
     const normalizedEvents = eventList.map((event) => event.trim()).filter(Boolean);
@@ -225,7 +225,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
             ...entry.hook,
             name,
             description,
-            source: "openclaw-plugin",
+            source: "activi-plugin",
             pluginId: record.id,
           },
           metadata: {
@@ -237,7 +237,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
           hook: {
             name,
             description,
-            source: "openclaw-plugin",
+            source: "activi-plugin",
             pluginId: record.id,
             filePath: record.source,
             baseDir: path.dirname(record.source),
@@ -288,7 +288,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record.gatewayMethods.push(trimmed);
   };
 
-  const registerHttpHandler = (record: PluginRecord, handler: OpenClawPluginHttpHandler) => {
+  const registerHttpHandler = (record: PluginRecord, handler: ActiviPluginHttpHandler) => {
     record.httpHandlers += 1;
     registry.httpHandlers.push({
       pluginId: record.id,
@@ -299,7 +299,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
 
   const registerHttpRoute = (
     record: PluginRecord,
-    params: { path: string; handler: OpenClawPluginHttpRouteHandler },
+    params: { path: string; handler: ActiviPluginHttpRouteHandler },
   ) => {
     const normalizedPath = normalizePluginHttpPath(params.path);
     if (!normalizedPath) {
@@ -331,11 +331,11 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
 
   const registerChannel = (
     record: PluginRecord,
-    registration: OpenClawPluginChannelRegistration | ChannelPlugin,
+    registration: ActiviPluginChannelRegistration | ChannelPlugin,
   ) => {
     const normalized =
-      typeof (registration as OpenClawPluginChannelRegistration).plugin === "object"
-        ? (registration as OpenClawPluginChannelRegistration)
+      typeof (registration as ActiviPluginChannelRegistration).plugin === "object"
+        ? (registration as ActiviPluginChannelRegistration)
         : { plugin: registration as ChannelPlugin };
     const plugin = normalized.plugin;
     const id = typeof plugin?.id === "string" ? plugin.id.trim() : String(plugin?.id ?? "").trim();
@@ -388,7 +388,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
 
   const registerCli = (
     record: PluginRecord,
-    registrar: OpenClawPluginCliRegistrar,
+    registrar: ActiviPluginCliRegistrar,
     opts?: { commands?: string[] },
   ) => {
     const commands = (opts?.commands ?? []).map((cmd) => cmd.trim()).filter(Boolean);
@@ -401,7 +401,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
-  const registerService = (record: PluginRecord, service: OpenClawPluginService) => {
+  const registerService = (record: PluginRecord, service: ActiviPluginService) => {
     const id = service.id.trim();
     if (!id) {
       return;
@@ -414,7 +414,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
   };
 
-  const registerCommand = (record: PluginRecord, command: OpenClawPluginCommandDefinition) => {
+  const registerCommand = (record: PluginRecord, command: ActiviPluginCommandDefinition) => {
     const name = command.name.trim();
     if (!name) {
       pushDiagnostic({
@@ -472,10 +472,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
   const createApi = (
     record: PluginRecord,
     params: {
-      config: OpenClawPluginApi["config"];
+      config: ActiviPluginApi["config"];
       pluginConfig?: Record<string, unknown>;
     },
-  ): OpenClawPluginApi => {
+  ): ActiviPluginApi => {
     return {
       id: record.id,
       name: record.name,

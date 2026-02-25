@@ -81,6 +81,13 @@ export const icons = {
       <path d="M15 12h-5" />
     </svg>
   `,
+  megaphone: html`
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <path d="M3 11l15-5v12l-15-5z" />
+      <path d="M6 12v4" />
+      <path d="M15 7v10" />
+    </svg>
+  `,
   folder: html`
     <svg viewBox="0 0 24 24">
       <path

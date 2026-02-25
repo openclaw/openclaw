@@ -9,7 +9,7 @@ import {
 } from "./paths.js";
 
 async function createFixtureRoot(): Promise<{ baseDir: string; uploadsDir: string }> {
-  const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-browser-paths-"));
+  const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "activi-browser-paths-"));
   const uploadsDir = path.join(baseDir, "uploads");
   await fs.mkdir(uploadsDir, { recursive: true });
   return { baseDir, uploadsDir };

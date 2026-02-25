@@ -4,7 +4,7 @@ import path from "node:path";
 import type { App } from "@slack/bolt";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { expectInboundContextContract } from "../../../../test/helpers/inbound-contract.js";
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { ActiviConfig } from "../../../config/config.js";
 import { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../../../routing/session-key.js";
 import type { RuntimeEnv } from "../../../runtime.js";
@@ -28,7 +28,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
   }
 
   beforeAll(() => {
-    fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-slack-thread-"));
+    fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), "activi-slack-thread-"));
   });
 
   afterAll(() => {
@@ -39,7 +39,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
   });
 
   function createInboundSlackCtx(params: {
-    cfg: OpenClawConfig;
+    cfg: ActiviConfig;
     appClient?: App["client"];
     defaultRequireMention?: boolean;
     replyToMode?: "off" | "all";
@@ -73,7 +73,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       threadInheritParent: false,
       slashCommand: {
         enabled: false,
-        name: "openclaw",
+        name: "activi",
         sessionPrefix: "slack:slash",
         ephemeral: true,
       },
@@ -88,7 +88,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     const slackCtx = createInboundSlackCtx({
       cfg: {
         channels: { slack: { enabled: true } },
-      } as OpenClawConfig,
+      } as ActiviConfig,
     });
     // oxlint-disable-next-line typescript/no-explicit-any
     slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
@@ -146,7 +146,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
   }
 
-  function createThreadSlackCtx(params: { cfg: OpenClawConfig; replies: unknown }) {
+  function createThreadSlackCtx(params: { cfg: ActiviConfig; replies: unknown }) {
     return createInboundSlackCtx({
       cfg: params.cfg,
       appClient: { conversations: { replies: params.replies } } as App["client"],
@@ -229,7 +229,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
             enabled: true,
           },
         },
-      } as OpenClawConfig,
+      } as ActiviConfig,
       defaultRequireMention: false,
       channelsConfig: {
         C123: { systemPrompt: "Config prompt" },
@@ -267,7 +267,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     const slackCtx = createInboundSlackCtx({
       cfg: {
         channels: { slack: { enabled: true, replyToMode: "all" } },
-      } as OpenClawConfig,
+      } as ActiviConfig,
       replyToMode: "all",
     });
     // oxlint-disable-next-line typescript/no-explicit-any
@@ -303,7 +303,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
       cfg: {
         session: { store: storePath },
         channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
-      } as OpenClawConfig,
+      } as ActiviConfig,
       replies,
     });
     slackCtx.resolveUserName = async (id: string) => ({
@@ -329,7 +329,7 @@ describe("slack prepareSlackMessage inbound contract", () => {
     const cfg = {
       session: { store: storePath },
       channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
-    } as OpenClawConfig;
+    } as ActiviConfig;
     const route = resolveAgentRoute({
       cfg,
       channel: "slack",
@@ -416,7 +416,7 @@ describe("prepareSlackMessage sender prefix", () => {
   }): SlackMonitorContext {
     return {
       cfg: {
-        agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
+        agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/activi" } },
         channels: { slack: params.channels },
       },
       accountId: "default",
@@ -485,7 +485,7 @@ describe("prepareSlackMessage sender prefix", () => {
   it("prefixes channel bodies with sender label", async () => {
     const ctx = createSenderPrefixCtx({
       channels: {},
-      slashCommand: { command: "/openclaw", enabled: true },
+      slashCommand: { command: "/activi", enabled: true },
     });
 
     const result = await prepareSenderPrefixMessage(ctx, "<@BOT> hello", "1700000000.0001");
@@ -502,7 +502,7 @@ describe("prepareSlackMessage sender prefix", () => {
       useAccessGroups: true,
       slashCommand: {
         enabled: false,
-        name: "openclaw",
+        name: "activi",
         sessionPrefix: "slack:slash",
         ephemeral: true,
       },

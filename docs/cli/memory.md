@@ -1,12 +1,12 @@
 ---
-summary: "CLI reference for `openclaw memory` (status/index/search)"
+summary: "CLI reference for `activi memory` (status/index/search)"
 read_when:
   - You want to index or search semantic memory
   - You’re debugging memory availability or indexing
 title: "memory"
 ---
 
-# `openclaw memory`
+# `activi memory`
 
 Manage semantic memory indexing and search.
 Provided by the active memory plugin (default: `memory-core`; set `plugins.slots.memory = "none"` to disable).
@@ -19,15 +19,15 @@ Related:
 ## Examples
 
 ```bash
-openclaw memory status
-openclaw memory status --deep
-openclaw memory status --deep --index
-openclaw memory status --deep --index --verbose
-openclaw memory index
-openclaw memory index --verbose
-openclaw memory search "release checklist"
-openclaw memory status --agent main
-openclaw memory index --agent main --verbose
+activi memory status
+activi memory status --deep
+activi memory status --deep --index
+activi memory status --deep --index --verbose
+activi memory index
+activi memory index --verbose
+activi memory search "release checklist"
+activi memory status --agent main
+activi memory index --agent main --verbose
 ```
 
 ## Options

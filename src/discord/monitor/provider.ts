@@ -19,7 +19,7 @@ import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "../../config/commands.js";
-import type { OpenClawConfig, ReplyToMode } from "../../config/config.js";
+import type { ActiviConfig, ReplyToMode } from "../../config/config.js";
 import { loadConfig } from "../../config/config.js";
 import {
   GROUP_POLICY_BLOCKED_LABEL,
@@ -74,7 +74,7 @@ import { createNoopThreadBindingManager, createThreadBindingManager } from "./th
 export type MonitorDiscordOpts = {
   token?: string;
   accountId?: string;
-  config?: OpenClawConfig;
+  config?: ActiviConfig;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   mediaMaxMb?: number;

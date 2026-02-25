@@ -1,12 +1,12 @@
 {
-  "name": "@openclaw/mattermost",
+  "name": "@activi/mattermost",
   "version": "2026.2.22",
-  "description": "OpenClaw Mattermost channel plugin",
+  "description": "Activi Mattermost channel plugin",
   "type": "module",
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "activi": "workspace:*"
   },
-  "openclaw": {
+  "activi": {
     "extensions": [
       "./index.ts"
     ],
@@ -20,7 +20,7 @@
       "order": 65
     },
     "install": {
-      "npmSpec": "@openclaw/mattermost",
+      "npmSpec": "@activi/mattermost",
       "localPath": "extensions/mattermost",
       "defaultChoice": "npm"
     }

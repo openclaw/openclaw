@@ -3,6 +3,7 @@ import { LitElement } from "lit";
 import { state } from "lit/decorators.js";
 import { customElement } from "lit/decorators.js";
 import { icons } from "../icons.ts";
+import { renderSkillsConfig } from "./onboarding-wizard-skills.ts";
 import "../../styles/onboarding-wizard.css";
 
 export type WizardStep = {
@@ -16,7 +17,10 @@ export type WizardStep = {
     | "agent-mode-select"
     | "agent-single-form"
     | "agent-team-count"
+    | "agent-swarm-config"
     | "agent-grid"
+    | "agent-config-advanced"
+    | "skills-config"
     | "summary";
   title?: string;
   message?: string;
@@ -42,6 +46,7 @@ export type OnboardingWizardProps = {
   totalSteps: number;
   loading: boolean;
   error: string | null;
+  gateway?: any; // GatewayBrowserClient
   onNext: (answer: unknown) => void;
   onBack: () => void;
   onCancel: () => void;
@@ -52,6 +57,11 @@ export class OnboardingWizard extends LitElement {
   @state() private currentAnswer: unknown = null;
   @state() private validationError: string | null = null;
   @state() private showApiKey = false;
+  @state() private apiKeyValidating = false;
+  @state() private apiKeyValid: boolean | null = null;
+  private apiKeyValidationTimer: number | null = null;
+  @state() private availableSkills: Array<{ name: string; description?: string }> = [];
+  @state() private skillsLoading = false;
 
   render() {
     const props = this.props;
@@ -121,7 +131,7 @@ export class OnboardingWizard extends LitElement {
     `;
   }
 
-  private renderStep(step: WizardStep): TemplateResult {
+  private renderStep(step: WizardStep): TemplateResult | Promise<TemplateResult> {
     switch (step.type) {
       case "welcome":
         return this.renderWelcome(step);
@@ -139,8 +149,12 @@ export class OnboardingWizard extends LitElement {
         return this.renderAgentSingleForm(step);
       case "agent-team-count":
         return this.renderAgentTeamCount(step);
+      case "agent-swarm-config":
+        return this.renderAgentSwarmConfig(step);
       case "agent-grid":
         return this.renderAgentGrid(step);
+      case "skills-config":
+        return this.renderSkillsConfig(step);
       case "summary":
         return this.renderSummary(step);
       default:
@@ -155,7 +169,9 @@ export class OnboardingWizard extends LitElement {
       <div class="onboarding-wizard__step onboarding-wizard__step--welcome">
         ${
           step.logo
-            ? html`<img src="${step.logo}" alt="Activi Logo" class="onboarding-wizard__logo" />`
+            ? step.logo.endsWith(".mp4")
+              ? html`<video src="${step.logo}" autoplay loop muted playsinline class="onboarding-wizard__logo onboarding-wizard__logo--video" />`
+              : html`<img src="${step.logo}" alt="Activi Logo" class="onboarding-wizard__logo" />`
             : html`
                 <div class="onboarding-wizard__logo-placeholder">A</div>
               `
@@ -204,8 +220,34 @@ export class OnboardingWizard extends LitElement {
               .value=${apiKey}
               @input=${(e: Event) => {
                 const target = e.target as HTMLInputElement;
-                this.currentAnswer = { ...(this.currentAnswer as object), apiKey: target.value };
+                const newApiKey = target.value;
+                this.currentAnswer = { ...(this.currentAnswer as object), apiKey: newApiKey };
+                
+                // Debounce API key validation (500ms)
+                if (this.apiKeyValidationTimer !== null) {
+                  clearTimeout(this.apiKeyValidationTimer);
+                }
+                
+                // Reset validation state
+                this.apiKeyValid = null;
+                this.apiKeyValidating = false;
+                
+                // Basic format validation immediately
                 this.validateStep(step);
+                
+                // Debounced validation for longer keys
+                if (newApiKey.length >= 10) {
+                  this.apiKeyValidating = true;
+                  this.apiKeyValidationTimer = window.setTimeout(async () => {
+                    // Format validation (basic check)
+                    const isValidFormat = /^sk-[a-zA-Z0-9_-]+$/.test(newApiKey) || 
+                                         /^sk-ant-[a-zA-Z0-9_-]+$/.test(newApiKey);
+                    this.apiKeyValid = isValidFormat;
+                    this.apiKeyValidating = false;
+                    this.requestUpdate();
+                  }, 500);
+                }
+                
                 this.requestUpdate();
               }}
             />
@@ -225,7 +267,15 @@ export class OnboardingWizard extends LitElement {
                 : nothing
             }
           </div>
-          <p class="onboarding-wizard__hint">Dein Key bleibt lokal, wird nie übertragen</p>
+          ${
+            this.apiKeyValidating
+              ? html`<p class="onboarding-wizard__hint onboarding-wizard__hint--validating">Prüfe API-Key...</p>`
+              : this.apiKeyValid === true
+                ? html`<p class="onboarding-wizard__hint onboarding-wizard__hint--valid">✓ Gültiges Format</p>`
+                : this.apiKeyValid === false && apiKey.length >= 10
+                  ? html`<p class="onboarding-wizard__hint onboarding-wizard__hint--invalid">⚠ Ungültiges Format</p>`
+                  : html`<p class="onboarding-wizard__hint">Dein Key bleibt lokal, wird nie übertragen</p>`
+          }
         </div>
       </div>
     `;
@@ -517,6 +567,96 @@ export class OnboardingWizard extends LitElement {
     `;
   }
 
+  private renderAgentSwarmConfig(step: WizardStep): TemplateResult {
+    const swarmConfig = (this.currentAnswer as {
+      count?: number;
+      strategy?: "parallel" | "sequential";
+    }) || { count: 10, strategy: "parallel" };
+    const count = String(swarmConfig.count || 10);
+    const strategy = swarmConfig.strategy || "parallel";
+
+    return html`
+      <div class="onboarding-wizard__step">
+        <h2 class="onboarding-wizard__step-title">${step.title || "Schwarm-Modus"}</h2>
+        <p class="onboarding-wizard__step-message">
+          ${step.message || "Konfiguriere deinen Agenten-Schwarm"}
+        </p>
+
+        <div class="onboarding-wizard__info-box">
+          <strong>Schwarm-Modus</strong>
+          <p>
+            Viele Agents arbeiten zusammen an Aufgaben. Sie können parallel oder sequentiell arbeiten.
+            Ideal für komplexe Aufgaben, die aufgeteilt werden können.
+          </p>
+        </div>
+
+        <div class="onboarding-wizard__form-group">
+          <label class="onboarding-wizard__label">Anzahl Agents</label>
+          <input
+            type="number"
+            class="onboarding-wizard__input"
+            placeholder="10"
+            .value=${count}
+            min="5"
+            max="100"
+            @input=${(e: Event) => {
+              const target = e.target as HTMLInputElement;
+              this.currentAnswer = {
+                ...swarmConfig,
+                count: parseInt(target.value, 10) || 10,
+              };
+              this.validateStep(step);
+              this.requestUpdate();
+            }}
+          />
+          <p class="onboarding-wizard__hint">Zwischen 5 und 100 Agents (empfohlen: 10-20)</p>
+        </div>
+
+        <div class="onboarding-wizard__form-group">
+          <label class="onboarding-wizard__label">Koordinations-Strategie</label>
+          <div class="onboarding-wizard__radio-group">
+            <label
+              class="onboarding-wizard__radio-label ${strategy === "parallel" ? "onboarding-wizard__radio-label--selected" : ""}"
+            >
+              <input
+                type="radio"
+                name="swarm-strategy"
+                value="parallel"
+                .checked=${strategy === "parallel"}
+                @change=${() => {
+                  this.currentAnswer = { ...swarmConfig, strategy: "parallel" };
+                  this.requestUpdate();
+                }}
+              />
+              <div class="onboarding-wizard__radio-content">
+                <strong>Parallel</strong>
+                <span class="onboarding-wizard__radio-hint">Alle Agents arbeiten gleichzeitig (schneller)</span>
+              </div>
+            </label>
+            <label
+              class="onboarding-wizard__radio-label ${strategy === "sequential" ? "onboarding-wizard__radio-label--selected" : ""}"
+            >
+              <input
+                type="radio"
+                name="swarm-strategy"
+                value="sequential"
+                .checked=${strategy === "sequential"}
+                @change=${() => {
+                  this.currentAnswer = { ...swarmConfig, strategy: "sequential" };
+                  this.requestUpdate();
+                }}
+              />
+              <div class="onboarding-wizard__radio-content">
+                <strong>Sequentiell</strong>
+                <span class="onboarding-wizard__radio-hint">Agents arbeiten nacheinander (kosteneffizienter)</span>
+              </div>
+            </label>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   private renderAgentGrid(step: WizardStep): TemplateResult {
     return html`
       <div class="onboarding-wizard__step">
@@ -535,6 +675,147 @@ export class OnboardingWizard extends LitElement {
         </div>
       </div>
     `;
+  }
+
+  private renderAgentConfigAdvanced(step: WizardStep): TemplateResult {
+    const config = (this.currentAnswer as {
+      rules?: string;
+      commands?: string;
+      systemPrompt?: string;
+    }) || {};
+
+    return html`
+      <div class="onboarding-wizard__step">
+        <h2 class="onboarding-wizard__step-title">${step.title || "Agent-Konfiguration"}</h2>
+        <p class="onboarding-wizard__step-message">
+          ${step.message || "Konfiguriere Rules, Commands und System-Prompt für deine Agents (optional)"}
+        </p>
+
+        <div class="onboarding-wizard__info-box">
+          <strong>Hinweis</strong>
+          <p>
+            Diese Konfiguration wird auf <strong>alle erstellten Agents</strong> angewendet. Du kannst sie später
+            individuell anpassen.
+          </p>
+        </div>
+
+        <div class="onboarding-wizard__form-group">
+          <label class="onboarding-wizard__label">
+            Rules (AGENTS.md)
+            <span class="onboarding-wizard__hint">Verhaltensregeln und Richtlinien für Agents</span>
+          </label>
+          <textarea
+            class="onboarding-wizard__textarea"
+            placeholder="Beispiel:&#10;- Sei immer höflich und professionell&#10;- Verwende keine persönlichen Daten ohne Erlaubnis&#10;- Dokumentiere alle wichtigen Entscheidungen"
+            rows="6"
+            .value=${config.rules || ""}
+            @input=${(e: Event) => {
+              const target = e.target as HTMLTextAreaElement;
+              this.currentAnswer = { ...config, rules: target.value };
+              this.requestUpdate();
+            }}
+          ></textarea>
+        </div>
+
+        <div class="onboarding-wizard__form-group">
+          <label class="onboarding-wizard__label">
+            Commands (TOOLS.md)
+            <span class="onboarding-wizard__hint">Verfügbare Befehle und Tools für Agents</span>
+          </label>
+          <textarea
+            class="onboarding-wizard__textarea"
+            placeholder="Beispiel:&#10;/search - Suche im Internet&#10;/code - Analysiere Code&#10;/write - Schreibe Dateien"
+            rows="6"
+            .value=${config.commands || ""}
+            @input=${(e: Event) => {
+              const target = e.target as HTMLTextAreaElement;
+              this.currentAnswer = { ...config, commands: target.value };
+              this.requestUpdate();
+            }}
+          ></textarea>
+        </div>
+
+        <div class="onboarding-wizard__form-group">
+          <label class="onboarding-wizard__label">
+            System-Prompt (SOUL.md)
+            <span class="onboarding-wizard__hint">Grundlegende Persönlichkeit und Verhalten des Agents</span>
+          </label>
+          <textarea
+            class="onboarding-wizard__textarea"
+            placeholder="Beispiel:&#10;Du bist ein hilfreicher AI-Assistent.&#10;Dein Ziel ist es, dem Nutzer bei seinen Aufgaben zu helfen.&#10;Sei präzise, aber freundlich."
+            rows="6"
+            .value=${config.systemPrompt || ""}
+            @input=${(e: Event) => {
+              const target = e.target as HTMLTextAreaElement;
+              this.currentAnswer = { ...config, systemPrompt: target.value };
+              this.requestUpdate();
+            }}
+          ></textarea>
+        </div>
+
+        <p class="onboarding-wizard__hint">
+          <strong>Tipp:</strong> Diese Felder sind optional. Du kannst sie leer lassen und später konfigurieren.
+        </p>
+      </div>
+    `;
+  }
+
+  private renderSkillsConfig(step: WizardStep): TemplateResult {
+    // Load skills on first render
+    if (this.availableSkills.length === 0 && !this.skillsLoading) {
+      void this.loadAvailableSkills();
+    }
+
+    const skillsAnswer = (this.currentAnswer as {
+      mode?: "allowlist" | "blocklist" | "all";
+      allowlist?: string[];
+      blocklist?: string[];
+    }) || { mode: "all" };
+
+    return renderSkillsConfig(
+      step,
+      this.availableSkills,
+      skillsAnswer,
+      (mode) => {
+        this.currentAnswer = { ...skillsAnswer, mode };
+        this.requestUpdate();
+      },
+      (skillName, list) => {
+        const current = skillsAnswer[list] || [];
+        const updated = current.includes(skillName)
+          ? current.filter((s) => s !== skillName)
+          : [...current, skillName];
+        this.currentAnswer = { ...skillsAnswer, [list]: updated };
+        this.requestUpdate();
+      },
+    );
+  }
+
+  private async loadAvailableSkills(): Promise<void> {
+    this.skillsLoading = true;
+    this.requestUpdate();
+    try {
+      const props = this.props;
+      const gateway = (props as any)?.gateway;
+      if (gateway) {
+        const result = await gateway.request("skills.status", {});
+        if (result?.skills) {
+          this.availableSkills = result.skills.map((s: any) => ({
+            name: s.name || s.skillKey,
+            description: s.description,
+          }));
+        }
+      } else {
+        // Fallback: empty list if no gateway available
+        this.availableSkills = [];
+      }
+    } catch (err) {
+      console.error("Failed to load skills:", err);
+      this.availableSkills = [];
+    } finally {
+      this.skillsLoading = false;
+      this.requestUpdate();
+    }
   }
 
   private renderSummary(step: WizardStep): TemplateResult {

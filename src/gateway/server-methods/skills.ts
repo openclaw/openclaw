@@ -7,7 +7,7 @@ import { installSkill } from "../../agents/skills-install.js";
 import { buildWorkspaceSkillStatus } from "../../agents/skills-status.js";
 import { loadWorkspaceSkillEntries, type SkillEntry } from "../../agents/skills.js";
 import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
@@ -194,11 +194,47 @@ export const skillsHandlers: GatewayRequestHandlers = {
     }
     entries[p.skillKey] = current;
     skills.entries = entries;
-    const nextConfig: OpenClawConfig = {
+    const nextConfig: ActiviConfig = {
       ...cfg,
       skills,
     };
     await writeConfigFile(nextConfig);
     respond(true, { ok: true, skillKey: p.skillKey, config: current }, undefined);
+  },
+  "skills.uninstall": async ({ params, respond }) => {
+    if (!params || typeof params !== "object" || !("skillKey" in params) || typeof params.skillKey !== "string") {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid skills.uninstall params: skillKey required"),
+      );
+      return;
+    }
+    const p = params as {
+      skillKey: string;
+    };
+    const cfg = loadConfig();
+    const skills = cfg.skills ? { ...cfg.skills } : {};
+    const entries = skills.entries ? { ...skills.entries } : {};
+    
+    if (entries[p.skillKey]) {
+      entries[p.skillKey] = {
+        ...entries[p.skillKey],
+        enabled: false,
+      };
+      skills.entries = entries;
+      const nextConfig: ActiviConfig = {
+        ...cfg,
+        skills,
+      };
+      await writeConfigFile(nextConfig);
+      respond(true, { ok: true, skillKey: p.skillKey, message: "Skill disabled" }, undefined);
+    } else {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `Skill not found: ${p.skillKey}`),
+      );
+    }
   },
 };

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { ActiviConfig } from "activi/plugin-sdk";
 import {
   createReplyPrefixOptions,
   evictOldHistoryKeys,
@@ -12,7 +12,7 @@ import {
   resolveControlCommandGate,
   stripMarkdown,
   type HistoryEntry,
-} from "openclaw/plugin-sdk";
+} from "activi/plugin-sdk";
 import { downloadBlueBubblesAttachment } from "./attachments.js";
 import { markBlueBubblesChatRead, sendBlueBubblesTyping } from "./chat.js";
 import { fetchBlueBubblesHistory } from "./history.js";
@@ -217,7 +217,7 @@ function logGroupAllowlistHint(params: {
 }
 
 function resolveBlueBubblesAckReaction(params: {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   agentId: string;
   core: BlueBubblesCoreRuntime;
   runtime: BlueBubblesRuntimeEnv;

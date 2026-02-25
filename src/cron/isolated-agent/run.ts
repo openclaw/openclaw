@@ -34,7 +34,7 @@ import {
 } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 import {
   resolveAgentMainSessionKey,
   resolveSessionTranscriptPath,
@@ -102,7 +102,7 @@ function resolveCronDeliveryBestEffort(job: CronJob): boolean {
 }
 
 async function resolveCronAnnounceSessionKey(params: {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   agentId: string;
   fallbackSessionKey: string;
   delivery: {
@@ -143,14 +143,14 @@ export type RunCronAgentTurnResult = {
    * channel (via outbound payloads, the subagent announce flow, or a matching
    * messaging-tool send). Callers should skip posting a summary to the main
    * session to avoid duplicate
-   * messages.  See: https://github.com/openclaw/openclaw/issues/15692
+   * messages.  See: https://github.com/activi/activi/issues/15692
    */
   delivered?: boolean;
 } & CronRunOutcome &
   CronRunTelemetry;
 
 export async function runCronIsolatedAgentTurn(params: {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   deps: CliDeps;
   job: CronJob;
   message: string;
@@ -159,7 +159,7 @@ export async function runCronIsolatedAgentTurn(params: {
   agentId?: string;
   lane?: string;
 }): Promise<RunCronAgentTurnResult> {
-  const isFastTestEnv = process.env.OPENCLAW_TEST_FAST === "1";
+  const isFastTestEnv = process.env.ACTIVI_TEST_FAST === "1";
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
   const requestedAgentId =
     typeof params.agentId === "string" && params.agentId.trim()
@@ -174,7 +174,7 @@ export async function runCronIsolatedAgentTurn(params: {
   const { model: overrideModel, ...agentOverrideRest } = agentConfigOverride ?? {};
   // Use the requested agentId even when there is no explicit agent config entry.
   // This ensures auth-profiles, workspace, and agentDir all resolve to the
-  // correct per-agent paths (e.g. ~/.openclaw/agents/<agentId>/agent/).
+  // correct per-agent paths (e.g. ~/.activi/agents/<agentId>/agent/).
   const agentId = normalizedRequested ?? defaultAgentId;
   const agentCfg: AgentDefaultsConfig = Object.assign(
     {},
@@ -190,7 +190,7 @@ export async function runCronIsolatedAgentTurn(params: {
   } else if (overrideModel) {
     agentCfg.model = { ...existingModel, ...overrideModel };
   }
-  const cfgWithAgentDefaults: OpenClawConfig = {
+  const cfgWithAgentDefaults: ActiviConfig = {
     ...params.cfg,
     agents: Object.assign({}, params.cfg.agents, { defaults: agentCfg }),
   };

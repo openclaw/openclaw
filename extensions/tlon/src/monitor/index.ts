@@ -1,6 +1,6 @@
 import { format } from "node:util";
-import type { RuntimeEnv, ReplyPayload, OpenClawConfig } from "openclaw/plugin-sdk";
-import { createReplyPrefixOptions } from "openclaw/plugin-sdk";
+import type { RuntimeEnv, ReplyPayload, ActiviConfig } from "activi/plugin-sdk";
+import { createReplyPrefixOptions } from "activi/plugin-sdk";
 import { getTlonRuntime } from "../runtime.js";
 import { normalizeShip, parseChannelNest } from "../targets.js";
 import { resolveTlonAccount } from "../types.js";
@@ -64,7 +64,7 @@ type UrbitUpdate = {
 };
 
 function resolveChannelAuthorization(
-  cfg: OpenClawConfig,
+  cfg: ActiviConfig,
   channelNest: string,
 ): { mode: "restricted" | "open"; allowedShips: string[] } {
   const tlonConfig = cfg.channels?.tlon as

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { getMemorySearchManager, type MemoryIndexManager } from "./index.js";
 
 const { watchMock } = vi.hoisted(() => ({
@@ -52,7 +52,7 @@ describe("memory watcher config", () => {
   });
 
   it("watches markdown globs and ignores dependency directories", async () => {
-    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-memory-watch-"));
+    workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "activi-memory-watch-"));
     extraDir = path.join(workspaceDir, "extra");
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
     await fs.mkdir(extraDir, { recursive: true });
@@ -73,7 +73,7 @@ describe("memory watcher config", () => {
         },
         list: [{ id: "main", default: true }],
       },
-    } as OpenClawConfig;
+    } as ActiviConfig;
 
     const result = await getMemorySearchManager({ cfg, agentId: "main" });
     expect(result.manager).not.toBeNull();

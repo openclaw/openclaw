@@ -1,5 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 import { getChannelPlugin, listChannelPlugins } from "./index.js";
 import type { ChannelMessageActionContext, ChannelMessageActionName } from "./types.js";
 
@@ -16,7 +16,7 @@ function requiresTrustedRequesterSender(ctx: ChannelMessageActionContext): boole
   return Boolean(actions?.has(ctx.action) && ctx.toolContext);
 }
 
-export function listChannelMessageActions(cfg: OpenClawConfig): ChannelMessageActionName[] {
+export function listChannelMessageActions(cfg: ActiviConfig): ChannelMessageActionName[] {
   const actions = new Set<ChannelMessageActionName>(["send", "broadcast"]);
   for (const plugin of listChannelPlugins()) {
     const list = plugin.actions?.listActions?.({ cfg });
@@ -30,12 +30,12 @@ export function listChannelMessageActions(cfg: OpenClawConfig): ChannelMessageAc
   return Array.from(actions);
 }
 
-export function supportsChannelMessageButtons(cfg: OpenClawConfig): boolean {
+export function supportsChannelMessageButtons(cfg: ActiviConfig): boolean {
   return supportsMessageFeature(cfg, (actions) => actions?.supportsButtons?.({ cfg }) === true);
 }
 
 export function supportsChannelMessageButtonsForChannel(params: {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   channel?: string;
 }): boolean {
   return supportsMessageFeatureForChannel(
@@ -44,12 +44,12 @@ export function supportsChannelMessageButtonsForChannel(params: {
   );
 }
 
-export function supportsChannelMessageCards(cfg: OpenClawConfig): boolean {
+export function supportsChannelMessageCards(cfg: ActiviConfig): boolean {
   return supportsMessageFeature(cfg, (actions) => actions?.supportsCards?.({ cfg }) === true);
 }
 
 export function supportsChannelMessageCardsForChannel(params: {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   channel?: string;
 }): boolean {
   return supportsMessageFeatureForChannel(
@@ -59,7 +59,7 @@ export function supportsChannelMessageCardsForChannel(params: {
 }
 
 function supportsMessageFeature(
-  cfg: OpenClawConfig,
+  cfg: ActiviConfig,
   check: (actions: ChannelActions) => boolean,
 ): boolean {
   for (const plugin of listChannelPlugins()) {
@@ -72,7 +72,7 @@ function supportsMessageFeature(
 
 function supportsMessageFeatureForChannel(
   params: {
-    cfg: OpenClawConfig;
+    cfg: ActiviConfig;
     channel?: string;
   },
   check: (actions: ChannelActions) => boolean,

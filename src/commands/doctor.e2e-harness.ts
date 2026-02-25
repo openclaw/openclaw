@@ -41,7 +41,7 @@ function createCommandWithTimeoutResult() {
 
 function createLegacyConfigSnapshot() {
   return {
-    path: "/tmp/openclaw.json",
+    path: "/tmp/activi.json",
     exists: false,
     raw: null,
     parsed: {},
@@ -57,7 +57,7 @@ export const confirm = vi.fn().mockResolvedValue(true) as unknown as MockFn;
 export const select = vi.fn().mockResolvedValue("node") as unknown as MockFn;
 export const note = vi.fn() as unknown as MockFn;
 export const writeConfigFile = vi.fn().mockResolvedValue(undefined) as unknown as MockFn;
-export const resolveOpenClawPackageRoot = vi.fn().mockResolvedValue(null) as unknown as MockFn;
+export const resolveActiviPackageRoot = vi.fn().mockResolvedValue(null) as unknown as MockFn;
 export const runGatewayUpdate = vi
   .fn()
   .mockResolvedValue(createGatewayUpdateResult()) as unknown as MockFn;
@@ -157,7 +157,7 @@ export const runLegacyStateMigrations = vi.fn().mockResolvedValue({
 }) as unknown as MockFn;
 
 const DEFAULT_CONFIG_SNAPSHOT = {
-  path: "/tmp/openclaw.json",
+  path: "/tmp/activi.json",
   exists: true,
   raw: "{}",
   parsed: {},
@@ -180,14 +180,14 @@ vi.mock("../agents/skills-status.js", () => ({
 }));
 
 vi.mock("../plugins/loader.js", () => ({
-  loadOpenClawPlugins: () => ({ plugins: [], diagnostics: [] }),
+  loadActiviPlugins: () => ({ plugins: [], diagnostics: [] }),
 }));
 
 vi.mock("../config/config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../config/config.js")>();
   return {
     ...actual,
-    CONFIG_PATH: "/tmp/openclaw.json",
+    CONFIG_PATH: "/tmp/activi.json",
     createConfigIO,
     readConfigFileSnapshot,
     writeConfigFile,
@@ -222,8 +222,8 @@ vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout,
 }));
 
-vi.mock("../infra/openclaw-root.js", () => ({
-  resolveOpenClawPackageRoot,
+vi.mock("../infra/activi-root.js", () => ({
+  resolveActiviPackageRoot,
 }));
 
 vi.mock("../infra/update-runner.js", () => ({
@@ -367,7 +367,7 @@ beforeEach(() => {
 
   readConfigFileSnapshot.mockReset();
   writeConfigFile.mockReset().mockResolvedValue(undefined);
-  resolveOpenClawPackageRoot.mockReset().mockResolvedValue(null);
+  resolveActiviPackageRoot.mockReset().mockResolvedValue(null);
   runGatewayUpdate.mockReset().mockResolvedValue(createGatewayUpdateResult());
   legacyReadConfigFileSnapshot.mockReset().mockResolvedValue(createLegacyConfigSnapshot());
   createConfigIO.mockReset().mockImplementation(() => ({
@@ -396,11 +396,11 @@ beforeEach(() => {
 
   originalIsTTY = process.stdin.isTTY;
   setStdinTty(true);
-  originalStateDir = process.env.OPENCLAW_STATE_DIR;
-  originalUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-  process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
-  tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-state-"));
-  process.env.OPENCLAW_STATE_DIR = tempStateDir;
+  originalStateDir = process.env.ACTIVI_STATE_DIR;
+  originalUpdateInProgress = process.env.ACTIVI_UPDATE_IN_PROGRESS;
+  process.env.ACTIVI_UPDATE_IN_PROGRESS = "1";
+  tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "activi-doctor-state-"));
+  process.env.ACTIVI_STATE_DIR = tempStateDir;
   fs.mkdirSync(path.join(tempStateDir, "agents", "main", "sessions"), {
     recursive: true,
   });
@@ -410,14 +410,14 @@ beforeEach(() => {
 afterEach(() => {
   setStdinTty(originalIsTTY);
   if (originalStateDir === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
+    delete process.env.ACTIVI_STATE_DIR;
   } else {
-    process.env.OPENCLAW_STATE_DIR = originalStateDir;
+    process.env.ACTIVI_STATE_DIR = originalStateDir;
   }
   if (originalUpdateInProgress === undefined) {
-    delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+    delete process.env.ACTIVI_UPDATE_IN_PROGRESS;
   } else {
-    process.env.OPENCLAW_UPDATE_IN_PROGRESS = originalUpdateInProgress;
+    process.env.ACTIVI_UPDATE_IN_PROGRESS = originalUpdateInProgress;
   }
   if (tempStateDir) {
     fs.rmSync(tempStateDir, { recursive: true, force: true });

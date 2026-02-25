@@ -80,13 +80,13 @@ export function renderOverview(props: OverviewProps) {
         <div class="muted" style="margin-top: 8px">
           ${t("overview.auth.required")}
           <div style="margin-top: 6px">
-            <span class="mono">openclaw dashboard --no-open</span> → tokenized URL<br />
-            <span class="mono">openclaw doctor --generate-gateway-token</span> → set token
+            <span class="mono">activi dashboard --no-open</span> → tokenized URL<br />
+            <span class="mono">activi doctor --generate-gateway-token</span> → set token
           </div>
           <div style="margin-top: 6px">
             <a
               class="session-link"
-              href="https://docs.openclaw.ai/web/dashboard"
+              href="https://docs.activi.ai/web/dashboard"
               target="_blank"
               rel="noreferrer"
               title="Control UI auth docs (opens in new tab)"
@@ -98,11 +98,11 @@ export function renderOverview(props: OverviewProps) {
     }
     return html`
       <div class="muted" style="margin-top: 8px">
-        ${t("overview.auth.failed", { command: "openclaw dashboard --no-open" })}
+        ${t("overview.auth.failed", { command: "activi dashboard --no-open" })}
         <div style="margin-top: 6px">
           <a
             class="session-link"
-            href="https://docs.openclaw.ai/web/dashboard"
+            href="https://docs.activi.ai/web/dashboard"
             target="_blank"
             rel="noreferrer"
             title="Control UI auth docs (opens in new tab)"
@@ -134,7 +134,7 @@ export function renderOverview(props: OverviewProps) {
         <div style="margin-top: 6px">
           <a
             class="session-link"
-            href="https://docs.openclaw.ai/gateway/tailscale"
+            href="https://docs.activi.ai/gateway/tailscale"
             target="_blank"
             rel="noreferrer"
             title="Tailscale Serve docs (opens in new tab)"
@@ -143,7 +143,7 @@ export function renderOverview(props: OverviewProps) {
           <span class="muted"> · </span>
           <a
             class="session-link"
-            href="https://docs.openclaw.ai/web/control-ui#insecure-http"
+            href="https://docs.activi.ai/web/control-ui#insecure-http"
             target="_blank"
             rel="noreferrer"
             title="Insecure HTTP docs (opens in new tab)"
@@ -187,7 +187,7 @@ export function renderOverview(props: OverviewProps) {
                       const v = (e.target as HTMLInputElement).value;
                       props.onSettingsChange({ ...props.settings, token: v });
                     }}
-                    placeholder="OPENCLAW_GATEWAY_TOKEN"
+                    placeholder="ACTIVI_GATEWAY_TOKEN"
                   />
                 </label>
                 <label class="field">
@@ -225,6 +225,8 @@ export function renderOverview(props: OverviewProps) {
               }}
             >
               <option value="en">${t("languages.en")}</option>
+              <option value="de">${t("languages.de")}</option>
+              <option value="bs">${t("languages.bs")}</option>
               <option value="zh-CN">${t("languages.zhCN")}</option>
               <option value="zh-TW">${t("languages.zhTW")}</option>
               <option value="pt-BR">${t("languages.ptBR")}</option>
@@ -245,21 +247,21 @@ export function renderOverview(props: OverviewProps) {
                   <div style="font-weight: 600; font-size: 13px; margin-bottom: 10px;">${t("overview.connection.title")}</div>
                   <ol class="muted" style="margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.8;">
                     <li>${t("overview.connection.step1")}
-                      <div class="mono" style="font-size: 12px; margin: 4px 0 6px;">openclaw gateway run</div>
+                      <div class="mono" style="font-size: 12px; margin: 4px 0 6px;">activi gateway run</div>
                     </li>
                     <li>${t("overview.connection.step2")}
-                      <div class="mono" style="font-size: 12px; margin: 4px 0 6px;">openclaw dashboard --no-open</div>
+                      <div class="mono" style="font-size: 12px; margin: 4px 0 6px;">activi dashboard --no-open</div>
                     </li>
                     <li>${t("overview.connection.step3")}</li>
                     <li>${t("overview.connection.step4")}
-                      <div class="mono" style="font-size: 12px; margin: 4px 0 6px;">openclaw doctor --generate-gateway-token</div>
+                      <div class="mono" style="font-size: 12px; margin: 4px 0 6px;">activi doctor --generate-gateway-token</div>
                     </li>
                   </ol>
                   <div class="muted" style="font-size: 12px; margin-top: 10px;">
                     ${t("overview.connection.docsHint")}
                     <a
                       class="session-link"
-                      href="https://docs.openclaw.ai/web/dashboard"
+                      href="https://docs.activi.ai/web/dashboard"
                       target="_blank"
                       rel="noreferrer"
                     >${t("overview.connection.docsLink")}</a>

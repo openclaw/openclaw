@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { isDiagnosticFlagEnabled, resolveDiagnosticFlags } from "./diagnostic-flags.js";
 import { isMainModule } from "./is-main.js";
 import { buildNodeShellCommand } from "./node-shell.js";
@@ -10,9 +10,9 @@ describe("infra parsing", () => {
     it("merges config + env flags", () => {
       const cfg = {
         diagnostics: { flags: ["telegram.http", "cache.*"] },
-      } as OpenClawConfig;
+      } as ActiviConfig;
       const env = {
-        OPENCLAW_DIAGNOSTICS: "foo,bar",
+        ACTIVI_DIAGNOSTICS: "foo,bar",
       } as NodeJS.ProcessEnv;
 
       const flags = resolveDiagnosticFlags(cfg, env);
@@ -23,12 +23,12 @@ describe("infra parsing", () => {
     });
 
     it("treats env true as wildcard", () => {
-      const env = { OPENCLAW_DIAGNOSTICS: "1" } as NodeJS.ProcessEnv;
+      const env = { ACTIVI_DIAGNOSTICS: "1" } as NodeJS.ProcessEnv;
       expect(isDiagnosticFlagEnabled("anything.here", undefined, env)).toBe(true);
     });
 
     it("treats env false as disabled", () => {
-      const env = { OPENCLAW_DIAGNOSTICS: "0" } as NodeJS.ProcessEnv;
+      const env = { ACTIVI_DIAGNOSTICS: "0" } as NodeJS.ProcessEnv;
       expect(isDiagnosticFlagEnabled("telegram.http", undefined, env)).toBe(false);
     });
   });
@@ -56,14 +56,14 @@ describe("infra parsing", () => {
       ).toBe(true);
     });
 
-    it("returns true for dist/entry.js when launched via openclaw.mjs wrapper", () => {
+    it("returns true for dist/entry.js when launched via activi.mjs wrapper", () => {
       expect(
         isMainModule({
           currentFile: "/repo/dist/entry.js",
-          argv: ["node", "/repo/openclaw.mjs"],
+          argv: ["node", "/repo/activi.mjs"],
           cwd: "/repo",
           env: {},
-          wrapperEntryPairs: [{ wrapperBasename: "openclaw.mjs", entryBasename: "entry.js" }],
+          wrapperEntryPairs: [{ wrapperBasename: "activi.mjs", entryBasename: "entry.js" }],
         }),
       ).toBe(true);
     });
@@ -72,7 +72,7 @@ describe("infra parsing", () => {
       expect(
         isMainModule({
           currentFile: "/repo/dist/entry.js",
-          argv: ["node", "/repo/openclaw.mjs"],
+          argv: ["node", "/repo/activi.mjs"],
           cwd: "/repo",
           env: {},
         }),
@@ -83,10 +83,10 @@ describe("infra parsing", () => {
       expect(
         isMainModule({
           currentFile: "/repo/dist/index.js",
-          argv: ["node", "/repo/openclaw.mjs"],
+          argv: ["node", "/repo/activi.mjs"],
           cwd: "/repo",
           env: {},
-          wrapperEntryPairs: [{ wrapperBasename: "openclaw.mjs", entryBasename: "entry.js" }],
+          wrapperEntryPairs: [{ wrapperBasename: "activi.mjs", entryBasename: "entry.js" }],
         }),
       ).toBe(false);
     });
@@ -94,7 +94,7 @@ describe("infra parsing", () => {
     it("returns false when running under PM2 but this module is imported", () => {
       expect(
         isMainModule({
-          currentFile: "/repo/node_modules/openclaw/dist/index.js",
+          currentFile: "/repo/node_modules/activi/dist/index.js",
           argv: ["node", "/repo/app.js"],
           cwd: "/repo",
           env: { pm_exec_path: "/repo/app.js", pm_id: "0" },

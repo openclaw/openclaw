@@ -25,7 +25,7 @@ describe("gateway startup log", () => {
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining("gateway.controlUi.dangerouslyDisableDeviceAuth=true"),
     );
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("openclaw security audit"));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("activi security audit"));
   });
 
   it("does not warn when dangerous config flags are disabled", () => {

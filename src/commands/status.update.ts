@@ -1,5 +1,5 @@
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
+import { resolveActiviPackageRoot } from "../infra/activi-root.js";
 import {
   checkUpdateStatus,
   compareSemverStrings,
@@ -12,7 +12,7 @@ export async function getUpdateCheckResult(params: {
   fetchGit: boolean;
   includeRegistry: boolean;
 }): Promise<UpdateCheckResult> {
-  const root = await resolveOpenClawPackageRoot({
+  const root = await resolveActiviPackageRoot({
     moduleUrl: import.meta.url,
     argv1: process.argv[1],
     cwd: process.cwd(),
@@ -66,7 +66,7 @@ export function formatUpdateAvailableHint(update: UpdateCheckResult): string | n
     details.push(`npm ${availability.latestVersion}`);
   }
   const suffix = details.length > 0 ? ` (${details.join(" · ")})` : "";
-  return `Update available${suffix}. Run: ${formatCliCommand("openclaw update")}`;
+  return `Update available${suffix}. Run: ${formatCliCommand("activi update")}`;
 }
 
 export function formatUpdateOneLiner(update: UpdateCheckResult): string {

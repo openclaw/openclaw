@@ -1,6 +1,6 @@
 import "./reply.directive.directive-behavior.e2e-mocks.js";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { loadSessionStore } from "../config/sessions.js";
 import {
   AUTHORIZED_WHATSAPP_COMMAND,
@@ -66,7 +66,7 @@ describe("directive behavior", () => {
           CommandAuthorized: true,
         },
         {},
-        makeRestrictedElevatedDisabledConfig(home) as unknown as OpenClawConfig,
+        makeRestrictedElevatedDisabledConfig(home) as unknown as ActiviConfig,
       );
 
       const text = replyText(res);

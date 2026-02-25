@@ -11,7 +11,7 @@ import {
   type APIApplicationCommandChannelOption,
 } from "discord-api-types/v10";
 import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 import type { DiscordAccountConfig } from "../../config/types.js";
 import {
   allowListMatches,
@@ -33,7 +33,7 @@ const VOICE_CHANNEL_TYPES: NonNullable<APIApplicationCommandChannelOption["chann
 ];
 
 type VoiceCommandContext = {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   discordConfig: DiscordAccountConfig;
   accountId: string;
   groupPolicy: "open" | "disabled" | "allowlist";

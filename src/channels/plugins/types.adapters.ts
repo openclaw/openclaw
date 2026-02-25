@@ -1,5 +1,5 @@
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 import type { GroupToolPolicyConfig } from "../../config/types.tools.js";
 import type { OutboundDeliveryResult, OutboundSendDeps } from "../../infra/outbound/deliver.js";
 import type { OutboundIdentity } from "../../infra/outbound/identity.js";
@@ -21,50 +21,50 @@ import type {
 } from "./types.core.js";
 
 export type ChannelSetupAdapter = {
-  resolveAccountId?: (params: { cfg: OpenClawConfig; accountId?: string }) => string;
+  resolveAccountId?: (params: { cfg: ActiviConfig; accountId?: string }) => string;
   applyAccountName?: (params: {
-    cfg: OpenClawConfig;
+    cfg: ActiviConfig;
     accountId: string;
     name?: string;
-  }) => OpenClawConfig;
+  }) => ActiviConfig;
   applyAccountConfig: (params: {
-    cfg: OpenClawConfig;
+    cfg: ActiviConfig;
     accountId: string;
     input: ChannelSetupInput;
-  }) => OpenClawConfig;
+  }) => ActiviConfig;
   validateInput?: (params: {
-    cfg: OpenClawConfig;
+    cfg: ActiviConfig;
     accountId: string;
     input: ChannelSetupInput;
   }) => string | null;
 };
 
 export type ChannelConfigAdapter<ResolvedAccount> = {
-  listAccountIds: (cfg: OpenClawConfig) => string[];
-  resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) => ResolvedAccount;
-  defaultAccountId?: (cfg: OpenClawConfig) => string;
+  listAccountIds: (cfg: ActiviConfig) => string[];
+  resolveAccount: (cfg: ActiviConfig, accountId?: string | null) => ResolvedAccount;
+  defaultAccountId?: (cfg: ActiviConfig) => string;
   setAccountEnabled?: (params: {
-    cfg: OpenClawConfig;
+    cfg: ActiviConfig;
     accountId: string;
     enabled: boolean;
-  }) => OpenClawConfig;
-  deleteAccount?: (params: { cfg: OpenClawConfig; accountId: string }) => OpenClawConfig;
-  isEnabled?: (account: ResolvedAccount, cfg: OpenClawConfig) => boolean;
-  disabledReason?: (account: ResolvedAccount, cfg: OpenClawConfig) => string;
-  isConfigured?: (account: ResolvedAccount, cfg: OpenClawConfig) => boolean | Promise<boolean>;
-  unconfiguredReason?: (account: ResolvedAccount, cfg: OpenClawConfig) => string;
-  describeAccount?: (account: ResolvedAccount, cfg: OpenClawConfig) => ChannelAccountSnapshot;
+  }) => ActiviConfig;
+  deleteAccount?: (params: { cfg: ActiviConfig; accountId: string }) => ActiviConfig;
+  isEnabled?: (account: ResolvedAccount, cfg: ActiviConfig) => boolean;
+  disabledReason?: (account: ResolvedAccount, cfg: ActiviConfig) => string;
+  isConfigured?: (account: ResolvedAccount, cfg: ActiviConfig) => boolean | Promise<boolean>;
+  unconfiguredReason?: (account: ResolvedAccount, cfg: ActiviConfig) => string;
+  describeAccount?: (account: ResolvedAccount, cfg: ActiviConfig) => ChannelAccountSnapshot;
   resolveAllowFrom?: (params: {
-    cfg: OpenClawConfig;
+    cfg: ActiviConfig;
     accountId?: string | null;
   }) => Array<string | number> | undefined;
   formatAllowFrom?: (params: {
-    cfg: OpenClawConfig;
+    cfg: ActiviConfig;
     accountId?: string | null;
     allowFrom: Array<string | number>;
   }) => string[];
   resolveDefaultTo?: (params: {
-    cfg: OpenClawConfig;
+    cfg: ActiviConfig;
     accountId?: string | null;
   }) => string | undefined;
 };
@@ -76,7 +76,7 @@ export type ChannelGroupAdapter = {
 };
 
 export type ChannelOutboundContext = {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   to: string;
   text: string;
   mediaUrl?: string;
@@ -101,7 +101,7 @@ export type ChannelOutboundAdapter = {
   textChunkLimit?: number;
   pollMaxOptions?: number;
   resolveTarget?: (params: {
-    cfg?: OpenClawConfig;
+    cfg?: ActiviConfig;
     to?: string;
     allowFrom?: string[];
     accountId?: string | null;
@@ -117,37 +117,37 @@ export type ChannelStatusAdapter<ResolvedAccount, Probe = unknown, Audit = unkno
   defaultRuntime?: ChannelAccountSnapshot;
   buildChannelSummary?: (params: {
     account: ResolvedAccount;
-    cfg: OpenClawConfig;
+    cfg: ActiviConfig;
     defaultAccountId: string;
     snapshot: ChannelAccountSnapshot;
   }) => Record<string, unknown> | Promise<Record<string, unknown>>;
   probeAccount?: (params: {
     account: ResolvedAccount;
     timeoutMs: number;
-    cfg: OpenClawConfig;
+    cfg: ActiviConfig;
   }) => Promise<Probe>;
   auditAccount?: (params: {
     account: ResolvedAccount;
     timeoutMs: number;
-    cfg: OpenClawConfig;
+    cfg: ActiviConfig;
     probe?: Probe;
   }) => Promise<Audit>;
   buildAccountSnapshot?: (params: {
     account: ResolvedAccount;
-    cfg: OpenClawConfig;
+    cfg: ActiviConfig;
     runtime?: ChannelAccountSnapshot;
     probe?: Probe;
     audit?: Audit;
   }) => ChannelAccountSnapshot | Promise<ChannelAccountSnapshot>;
   logSelfId?: (params: {
     account: ResolvedAccount;
-    cfg: OpenClawConfig;
+    cfg: ActiviConfig;
     runtime: RuntimeEnv;
     includeChannelPrefix?: boolean;
   }) => void;
   resolveAccountState?: (params: {
     account: ResolvedAccount;
-    cfg: OpenClawConfig;
+    cfg: ActiviConfig;
     configured: boolean;
     enabled: boolean;
   }) => ChannelAccountState;
@@ -155,7 +155,7 @@ export type ChannelStatusAdapter<ResolvedAccount, Probe = unknown, Audit = unkno
 };
 
 export type ChannelGatewayContext<ResolvedAccount = unknown> = {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   accountId: string;
   account: ResolvedAccount;
   runtime: RuntimeEnv;
@@ -182,7 +182,7 @@ export type ChannelLoginWithQrWaitResult = {
 };
 
 export type ChannelLogoutContext<ResolvedAccount = unknown> = {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   accountId: string;
   account: ResolvedAccount;
   runtime: RuntimeEnv;
@@ -193,7 +193,7 @@ export type ChannelPairingAdapter = {
   idLabel: string;
   normalizeAllowEntry?: (entry: string) => string;
   notifyApproval?: (params: {
-    cfg: OpenClawConfig;
+    cfg: ActiviConfig;
     id: string;
     runtime?: RuntimeEnv;
   }) => Promise<void>;
@@ -217,7 +217,7 @@ export type ChannelGatewayAdapter<ResolvedAccount = unknown> = {
 
 export type ChannelAuthAdapter = {
   login?: (params: {
-    cfg: OpenClawConfig;
+    cfg: ActiviConfig;
     accountId?: string | null;
     runtime: RuntimeEnv;
     verbose?: boolean;
@@ -227,24 +227,24 @@ export type ChannelAuthAdapter = {
 
 export type ChannelHeartbeatAdapter = {
   checkReady?: (params: {
-    cfg: OpenClawConfig;
+    cfg: ActiviConfig;
     accountId?: string | null;
     deps?: ChannelHeartbeatDeps;
   }) => Promise<{ ok: boolean; reason: string }>;
-  resolveRecipients?: (params: { cfg: OpenClawConfig; opts?: { to?: string; all?: boolean } }) => {
+  resolveRecipients?: (params: { cfg: ActiviConfig; opts?: { to?: string; all?: boolean } }) => {
     recipients: string[];
     source: string;
   };
 };
 
 type ChannelDirectorySelfParams = {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   accountId?: string | null;
   runtime: RuntimeEnv;
 };
 
 type ChannelDirectoryListParams = {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   accountId?: string | null;
   query?: string | null;
   limit?: number | null;
@@ -252,7 +252,7 @@ type ChannelDirectoryListParams = {
 };
 
 type ChannelDirectoryListGroupMembersParams = {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   accountId?: string | null;
   groupId: string;
   limit?: number | null;
@@ -282,7 +282,7 @@ export type ChannelResolveResult = {
 
 export type ChannelResolverAdapter = {
   resolveTargets: (params: {
-    cfg: OpenClawConfig;
+    cfg: ActiviConfig;
     accountId?: string | null;
     inputs: string[];
     kind: ChannelResolveKind;
@@ -292,7 +292,7 @@ export type ChannelResolverAdapter = {
 
 export type ChannelElevatedAdapter = {
   allowFromFallback?: (params: {
-    cfg: OpenClawConfig;
+    cfg: ActiviConfig;
     accountId?: string | null;
   }) => Array<string | number> | undefined;
 };

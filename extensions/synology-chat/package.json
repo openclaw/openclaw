@@ -1,13 +1,13 @@
 {
-  "name": "@openclaw/synology-chat",
+  "name": "@activi/synology-chat",
   "version": "2026.2.22",
   "private": true,
-  "description": "Synology Chat channel plugin for OpenClaw",
+  "description": "Synology Chat channel plugin for Activi",
   "type": "module",
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "activi": "workspace:*"
   },
-  "openclaw": {
+  "activi": {
     "extensions": [
       "./index.ts"
     ],
@@ -17,11 +17,11 @@
       "selectionLabel": "Synology Chat (Webhook)",
       "docsPath": "/channels/synology-chat",
       "docsLabel": "synology-chat",
-      "blurb": "Connect your Synology NAS Chat to OpenClaw with full agent capabilities.",
+      "blurb": "Connect your Synology NAS Chat to Activi with full agent capabilities.",
       "order": 90
     },
     "install": {
-      "npmSpec": "@openclaw/synology-chat",
+      "npmSpec": "@activi/synology-chat",
       "localPath": "extensions/synology-chat",
       "defaultChoice": "npm"
     }

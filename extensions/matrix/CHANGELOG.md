@@ -4,7 +4,7 @@
 
 ### Changes
 
-- Version alignment with core OpenClaw release numbers.
+- Version alignment with core Activi release numbers.
 
 ## 2026.1.14
 

@@ -11,7 +11,7 @@ import {
   setLastActiveSessionKey,
 } from "./app-settings.ts";
 import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream.ts";
-import type { OpenClawApp } from "./app.ts";
+import type { ActiviApp } from "./app.ts";
 import { loadAgents } from "./controllers/agents.ts";
 import { loadAssistantIdentity } from "./controllers/assistant-identity.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
@@ -29,6 +29,21 @@ import { loadNodes } from "./controllers/nodes.ts";
 import { loadSessions } from "./controllers/sessions.ts";
 import type { GatewayEventFrame, GatewayHelloOk } from "./gateway.ts";
 import { GatewayBrowserClient } from "./gateway.ts";
+
+async function initOnboardingWizard(host: ActiviApp & { client: GatewayBrowserClient | null; onboarding: boolean; requestUpdate?: () => void }) {
+  if (!host.client || !host.onboarding) {
+    return;
+  }
+  const { OnboardingWizardController } = await import("./controllers/onboarding-wizard.ts");
+  const controller = new OnboardingWizardController(host.client);
+  (host as any).wizardController = controller;
+  (host as any).wizardState = controller.getState();
+  await controller.start();
+  (host as any).wizardState = controller.getState();
+  if (host.requestUpdate) {
+    host.requestUpdate();
+  }
+}
 import type { Tab } from "./navigation.ts";
 import type { UiSettings } from "./storage.ts";
 import type {
@@ -142,7 +157,7 @@ export function connectGateway(host: GatewayHost) {
     url: host.settings.gatewayUrl,
     token: host.settings.token.trim() ? host.settings.token : undefined,
     password: host.password.trim() ? host.password : undefined,
-    clientName: "openclaw-control-ui",
+    clientName: "activi-control-ui",
     mode: "webchat",
     onHello: (hello) => {
       if (host.client !== client) {
@@ -158,12 +173,16 @@ export function connectGateway(host: GatewayHost) {
       (host as unknown as { chatStream: string | null }).chatStream = null;
       (host as unknown as { chatStreamStartedAt: number | null }).chatStreamStartedAt = null;
       resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
-      void loadAssistantIdentity(host as unknown as OpenClawApp);
-      void loadAgents(host as unknown as OpenClawApp);
-      void loadHealthState(host as unknown as OpenClawApp);
-      void loadNodes(host as unknown as OpenClawApp, { quiet: true });
-      void loadDevices(host as unknown as OpenClawApp, { quiet: true });
+      void loadAssistantIdentity(host as unknown as ActiviApp);
+      void loadAgents(host as unknown as ActiviApp);
+      void loadHealthState(host as unknown as ActiviApp);
+      void loadNodes(host as unknown as ActiviApp, { quiet: true });
+      void loadDevices(host as unknown as ActiviApp, { quiet: true });
       void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
+      // Initialize wizard if onboarding mode is active
+      if ((host as unknown as { onboarding: boolean }).onboarding) {
+        void initOnboardingWizard(host as unknown as ActiviApp);
+      }
     },
     onClose: ({ code, reason }) => {
       if (host.client !== client) {
@@ -229,7 +248,7 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
         payload.sessionKey,
       );
     }
-    const state = handleChatEvent(host as unknown as OpenClawApp, payload);
+    const state = handleChatEvent(host as unknown as ActiviApp, payload);
     if (state === "final" || state === "error" || state === "aborted") {
       resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
       void flushChatQueueForEvent(host as unknown as Parameters<typeof flushChatQueueForEvent>[0]);
@@ -237,14 +256,14 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
       if (runId && host.refreshSessionsAfterChat.has(runId)) {
         host.refreshSessionsAfterChat.delete(runId);
         if (state === "final") {
-          void loadSessions(host as unknown as OpenClawApp, {
+          void loadSessions(host as unknown as ActiviApp, {
             activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
           });
         }
       }
     }
     if (state === "final") {
-      void loadChatHistory(host as unknown as OpenClawApp);
+      void loadChatHistory(host as unknown as ActiviApp);
     }
     return;
   }
@@ -264,7 +283,7 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   }
 
   if (evt.event === "device.pair.requested" || evt.event === "device.pair.resolved") {
-    void loadDevices(host as unknown as OpenClawApp, { quiet: true });
+    void loadDevices(host as unknown as ActiviApp, { quiet: true });
   }
 
   if (evt.event === "exec.approval.requested") {

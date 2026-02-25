@@ -13,8 +13,8 @@ export function renderLoginGate(state: AppViewState) {
       <div class="login-gate__theme">${renderThemeToggle(state)}</div>
       <div class="login-gate__card">
         <div class="login-gate__header">
-          <img class="login-gate__logo" src=${faviconSrc} alt="OpenClaw" />
-          <div class="login-gate__title">OpenClaw</div>
+          <img class="login-gate__logo" src=${faviconSrc} alt="Activi" />
+          <div class="login-gate__title">Activi</div>
           <div class="login-gate__sub">${t("login.subtitle")}</div>
         </div>
         <div class="login-gate__form">
@@ -64,17 +64,17 @@ export function renderLoginGate(state: AppViewState) {
           <div style="font-weight: 600; font-size: 12px; margin-bottom: 8px;">${t("overview.connection.title")}</div>
           <ol class="muted" style="margin: 0; padding-left: 16px; font-size: 12px; line-height: 1.7;">
             <li>${t("overview.connection.step1")}
-              <div class="mono" style="font-size: 11px; margin: 2px 0 4px;">openclaw gateway run</div>
+              <div class="mono" style="font-size: 11px; margin: 2px 0 4px;">activi gateway run</div>
             </li>
             <li>${t("overview.connection.step2")}
-              <div class="mono" style="font-size: 11px; margin: 2px 0 4px;">openclaw dashboard --no-open</div>
+              <div class="mono" style="font-size: 11px; margin: 2px 0 4px;">activi dashboard --no-open</div>
             </li>
             <li>${t("overview.connection.step3")}</li>
           </ol>
           <div class="muted" style="font-size: 11px; margin-top: 8px;">
             <a
               class="session-link"
-              href="https://docs.openclaw.ai/web/dashboard"
+              href="https://docs.activi.ai/web/dashboard"
               target="_blank"
               rel="noreferrer"
             >${t("overview.connection.docsLink")}</a>

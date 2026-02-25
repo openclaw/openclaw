@@ -1,5 +1,5 @@
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 import { createTelegramActionGate } from "../../telegram/accounts.js";
 import type { TelegramButtonStyle, TelegramInlineButtons } from "../../telegram/button-types.js";
 import {
@@ -84,7 +84,7 @@ export function readTelegramButtons(
 
 export async function handleTelegramAction(
   params: Record<string, unknown>,
-  cfg: OpenClawConfig,
+  cfg: ActiviConfig,
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
   const accountId = readStringParam(params, "accountId");

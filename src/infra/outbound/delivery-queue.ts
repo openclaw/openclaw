@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { generateSecureUuid } from "../secure-random.js";
 import type { OutboundChannel } from "./targets.js";
@@ -195,7 +195,7 @@ export function computeBackoffMs(retryCount: number): number {
 
 export type DeliverFn = (
   params: {
-    cfg: OpenClawConfig;
+    cfg: ActiviConfig;
   } & QueuedDeliveryParams & {
       skipQueue?: boolean;
     },
@@ -214,7 +214,7 @@ export interface RecoveryLogger {
 export async function recoverPendingDeliveries(opts: {
   deliver: DeliverFn;
   log: RecoveryLogger;
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   stateDir?: string;
   /** Override for testing — resolves instead of using real setTimeout. */
   delay?: (ms: number) => Promise<void>;

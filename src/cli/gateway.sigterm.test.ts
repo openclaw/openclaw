@@ -78,22 +78,22 @@ describe("gateway SIGTERM", () => {
   });
 
   it("exits 0 on SIGTERM", { timeout: 180_000 }, async () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-test-"));
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "activi-gateway-test-"));
     const out: string[] = [];
     const err: string[] = [];
 
     const nodeBin = process.execPath;
     const env = {
       ...process.env,
-      OPENCLAW_NO_RESPAWN: "1",
-      OPENCLAW_STATE_DIR: stateDir,
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
+      ACTIVI_NO_RESPAWN: "1",
+      ACTIVI_STATE_DIR: stateDir,
+      ACTIVI_SKIP_CHANNELS: "1",
+      ACTIVI_SKIP_GMAIL_WATCHER: "1",
+      ACTIVI_SKIP_CRON: "1",
+      ACTIVI_SKIP_BROWSER_CONTROL_SERVER: "1",
+      ACTIVI_SKIP_CANVAS_HOST: "1",
     };
-    const bootstrapPath = path.join(stateDir, "openclaw-entry-bootstrap.cjs");
+    const bootstrapPath = path.join(stateDir, "activi-entry-bootstrap.cjs");
     const runLoopPath = path.resolve("src/cli/gateway-cli/run-loop.ts");
     const runtimePath = path.resolve("src/runtime.ts");
     const jitiPath = require.resolve("jiti");

@@ -1,6 +1,6 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isSensitiveConfigPath, type ConfigUiHints } from "./schema.hints.js";
-import type { ConfigFileSnapshot } from "./types.openclaw.js";
+import type { ConfigFileSnapshot } from "./types.activi.js";
 
 const log = createSubsystemLogger("config/redaction");
 const ENV_VAR_PLACEHOLDER_PATTERN = /^\$\{[^}]*\}$/;
@@ -39,7 +39,7 @@ function isExplicitlyNonSensitivePath(hints: ConfigUiHints | undefined, paths: s
  * sentinel and restore the original value from the on-disk config, so a
  * round-trip through the Web UI does not corrupt credentials.
  */
-export const REDACTED_SENTINEL = "__OPENCLAW_REDACTED__";
+export const REDACTED_SENTINEL = "__ACTIVI_REDACTED__";
 
 // ConfigUiHints' keys look like this:
 // - path.subpath.key (nested objects)

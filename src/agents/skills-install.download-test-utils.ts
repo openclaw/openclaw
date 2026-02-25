@@ -5,15 +5,15 @@ import { captureEnv } from "../test-utils/env.js";
 
 export function setTempStateDir(workspaceDir: string): string {
   const stateDir = path.join(workspaceDir, "state");
-  process.env.OPENCLAW_STATE_DIR = stateDir;
+  process.env.ACTIVI_STATE_DIR = stateDir;
   return stateDir;
 }
 
 export async function withTempWorkspace(
   run: (params: { workspaceDir: string; stateDir: string }) => Promise<void>,
 ) {
-  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skills-install-"));
+  const envSnapshot = captureEnv(["ACTIVI_STATE_DIR"]);
+  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "activi-skills-install-"));
   try {
     const stateDir = setTempStateDir(workspaceDir);
     await run({ workspaceDir, stateDir });
@@ -35,7 +35,7 @@ export async function writeDownloadSkill(params: {
   const skillDir = path.join(params.workspaceDir, "skills", params.name);
   await fs.mkdir(skillDir, { recursive: true });
   const meta = {
-    openclaw: {
+    activi: {
       install: [
         {
           id: params.installId,

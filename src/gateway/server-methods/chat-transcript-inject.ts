@@ -49,12 +49,12 @@ export function appendInjectedAssistantMessageToTranscript(params: {
     usage,
     // Make these explicit so downstream tooling never treats this as model output.
     api: "openai-responses",
-    provider: "openclaw",
+    provider: "activi",
     model: "gateway-injected",
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
     ...(params.abortMeta
       ? {
-          openclawAbort: {
+          activiAbort: {
             aborted: true,
             origin: params.abortMeta.origin,
             runId: params.abortMeta.runId,

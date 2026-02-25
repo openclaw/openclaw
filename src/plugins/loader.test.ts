@@ -4,13 +4,13 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import { loadOpenClawPlugins } from "./loader.js";
+import { loadActiviPlugins } from "./loader.js";
 
 type TempPlugin = { dir: string; file: string; id: string };
 
-const fixtureRoot = path.join(os.tmpdir(), `openclaw-plugin-${randomUUID()}`);
+const fixtureRoot = path.join(os.tmpdir(), `activi-plugin-${randomUUID()}`);
 let tempDirIndex = 0;
-const prevBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+const prevBundledDir = process.env.ACTIVI_BUNDLED_PLUGINS_DIR;
 const EMPTY_PLUGIN_SCHEMA = { type: "object", additionalProperties: false, properties: {} };
 
 function makeTempDir() {
@@ -30,7 +30,7 @@ function writePlugin(params: {
   const file = path.join(dir, filename);
   fs.writeFileSync(file, params.body, "utf-8");
   fs.writeFileSync(
-    path.join(dir, "openclaw.plugin.json"),
+    path.join(dir, "activi.plugin.json"),
     JSON.stringify(
       {
         id: params.id,
@@ -64,7 +64,7 @@ function loadBundledMemoryPluginRegistry(options?: {
           name: options.packageMeta.name,
           version: options.packageMeta.version,
           description: options.packageMeta.description,
-          openclaw: { extensions: ["./index.js"] },
+          activi: { extensions: ["./index.js"] },
         },
         null,
         2,
@@ -80,9 +80,9 @@ function loadBundledMemoryPluginRegistry(options?: {
     dir: pluginDir,
     filename: pluginFilename,
   });
-  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+  process.env.ACTIVI_BUNDLED_PLUGINS_DIR = bundledDir;
 
-  return loadOpenClawPlugins({
+  return loadActiviPlugins({
     cache: false,
     config: {
       plugins: {
@@ -96,9 +96,9 @@ function loadBundledMemoryPluginRegistry(options?: {
 
 afterEach(() => {
   if (prevBundledDir === undefined) {
-    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
+    delete process.env.ACTIVI_BUNDLED_PLUGINS_DIR;
   } else {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = prevBundledDir;
+    process.env.ACTIVI_BUNDLED_PLUGINS_DIR = prevBundledDir;
   }
 });
 
@@ -110,7 +110,7 @@ afterAll(() => {
   }
 });
 
-describe("loadOpenClawPlugins", () => {
+describe("loadActiviPlugins", () => {
   it("disables bundled plugins by default", () => {
     const bundledDir = makeTempDir();
     writePlugin({
@@ -119,9 +119,9 @@ describe("loadOpenClawPlugins", () => {
       dir: bundledDir,
       filename: "bundled.js",
     });
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    process.env.ACTIVI_BUNDLED_PLUGINS_DIR = bundledDir;
 
-    const registry = loadOpenClawPlugins({
+    const registry = loadActiviPlugins({
       cache: false,
       config: {
         plugins: {
@@ -133,7 +133,7 @@ describe("loadOpenClawPlugins", () => {
     const bundled = registry.plugins.find((entry) => entry.id === "bundled");
     expect(bundled?.status).toBe("disabled");
 
-    const enabledRegistry = loadOpenClawPlugins({
+    const enabledRegistry = loadActiviPlugins({
       cache: false,
       config: {
         plugins: {
@@ -176,9 +176,9 @@ describe("loadOpenClawPlugins", () => {
       dir: bundledDir,
       filename: "telegram.js",
     });
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    process.env.ACTIVI_BUNDLED_PLUGINS_DIR = bundledDir;
 
-    const registry = loadOpenClawPlugins({
+    const registry = loadActiviPlugins({
       cache: false,
       config: {
         plugins: {
@@ -205,7 +205,7 @@ describe("loadOpenClawPlugins", () => {
   it("preserves package.json metadata for bundled memory plugins", () => {
     const registry = loadBundledMemoryPluginRegistry({
       packageMeta: {
-        name: "@openclaw/memory-core",
+        name: "@activi/memory-core",
         version: "1.2.3",
         description: "Memory plugin package",
       },
@@ -220,13 +220,13 @@ describe("loadOpenClawPlugins", () => {
     expect(memory?.version).toBe("1.2.3");
   });
   it("loads plugins from config paths", () => {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    process.env.ACTIVI_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const plugin = writePlugin({
       id: "allowed",
       body: `export default { id: "allowed", register(api) { api.registerGatewayMethod("allowed.ping", ({ respond }) => respond(true, { ok: true })); } };`,
     });
 
-    const registry = loadOpenClawPlugins({
+    const registry = loadActiviPlugins({
       cache: false,
       workspaceDir: plugin.dir,
       config: {
@@ -243,13 +243,13 @@ describe("loadOpenClawPlugins", () => {
   });
 
   it("denylist disables plugins even if allowed", () => {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    process.env.ACTIVI_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const plugin = writePlugin({
       id: "blocked",
       body: `export default { id: "blocked", register() {} };`,
     });
 
-    const registry = loadOpenClawPlugins({
+    const registry = loadActiviPlugins({
       cache: false,
       workspaceDir: plugin.dir,
       config: {
@@ -266,13 +266,13 @@ describe("loadOpenClawPlugins", () => {
   });
 
   it("fails fast on invalid plugin config", () => {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    process.env.ACTIVI_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const plugin = writePlugin({
       id: "configurable",
       body: `export default { id: "configurable", register() {} };`,
     });
 
-    const registry = loadOpenClawPlugins({
+    const registry = loadActiviPlugins({
       cache: false,
       workspaceDir: plugin.dir,
       config: {
@@ -293,7 +293,7 @@ describe("loadOpenClawPlugins", () => {
   });
 
   it("registers channel plugins", () => {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    process.env.ACTIVI_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const plugin = writePlugin({
       id: "channel-demo",
       body: `export default { id: "channel-demo", register(api) {
@@ -318,7 +318,7 @@ describe("loadOpenClawPlugins", () => {
 } };`,
     });
 
-    const registry = loadOpenClawPlugins({
+    const registry = loadActiviPlugins({
       cache: false,
       workspaceDir: plugin.dir,
       config: {
@@ -334,7 +334,7 @@ describe("loadOpenClawPlugins", () => {
   });
 
   it("registers http handlers", () => {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    process.env.ACTIVI_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const plugin = writePlugin({
       id: "http-demo",
       body: `export default { id: "http-demo", register(api) {
@@ -342,7 +342,7 @@ describe("loadOpenClawPlugins", () => {
 } };`,
     });
 
-    const registry = loadOpenClawPlugins({
+    const registry = loadActiviPlugins({
       cache: false,
       workspaceDir: plugin.dir,
       config: {
@@ -360,7 +360,7 @@ describe("loadOpenClawPlugins", () => {
   });
 
   it("registers http routes", () => {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    process.env.ACTIVI_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const plugin = writePlugin({
       id: "http-route-demo",
       body: `export default { id: "http-route-demo", register(api) {
@@ -368,7 +368,7 @@ describe("loadOpenClawPlugins", () => {
 } };`,
     });
 
-    const registry = loadOpenClawPlugins({
+    const registry = loadActiviPlugins({
       cache: false,
       workspaceDir: plugin.dir,
       config: {
@@ -387,13 +387,13 @@ describe("loadOpenClawPlugins", () => {
   });
 
   it("respects explicit disable in config", () => {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    process.env.ACTIVI_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const plugin = writePlugin({
       id: "config-disable",
       body: `export default { id: "config-disable", register() {} };`,
     });
 
-    const registry = loadOpenClawPlugins({
+    const registry = loadActiviPlugins({
       cache: false,
       config: {
         plugins: {
@@ -410,7 +410,7 @@ describe("loadOpenClawPlugins", () => {
   });
 
   it("enforces memory slot selection", () => {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    process.env.ACTIVI_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const memoryA = writePlugin({
       id: "memory-a",
       body: `export default { id: "memory-a", kind: "memory", register() {} };`,
@@ -420,7 +420,7 @@ describe("loadOpenClawPlugins", () => {
       body: `export default { id: "memory-b", kind: "memory", register() {} };`,
     });
 
-    const registry = loadOpenClawPlugins({
+    const registry = loadActiviPlugins({
       cache: false,
       config: {
         plugins: {
@@ -437,13 +437,13 @@ describe("loadOpenClawPlugins", () => {
   });
 
   it("disables memory plugins when slot is none", () => {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    process.env.ACTIVI_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const memory = writePlugin({
       id: "memory-off",
       body: `export default { id: "memory-off", kind: "memory", register() {} };`,
     });
 
-    const registry = loadOpenClawPlugins({
+    const registry = loadActiviPlugins({
       cache: false,
       config: {
         plugins: {
@@ -465,14 +465,14 @@ describe("loadOpenClawPlugins", () => {
       dir: bundledDir,
       filename: "shadow.js",
     });
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    process.env.ACTIVI_BUNDLED_PLUGINS_DIR = bundledDir;
 
     const override = writePlugin({
       id: "shadow",
       body: `export default { id: "shadow", register() {} };`,
     });
 
-    const registry = loadOpenClawPlugins({
+    const registry = loadActiviPlugins({
       cache: false,
       config: {
         plugins: {
@@ -491,13 +491,13 @@ describe("loadOpenClawPlugins", () => {
     expect(overridden?.origin).toBe("bundled");
   });
   it("warns when plugins.allow is empty and non-bundled plugins are discoverable", () => {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    process.env.ACTIVI_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const plugin = writePlugin({
       id: "warn-open-allow",
       body: `export default { id: "warn-open-allow", register() {} };`,
     });
     const warnings: string[] = [];
-    loadOpenClawPlugins({
+    loadActiviPlugins({
       cache: false,
       logger: {
         info: () => {},
@@ -516,9 +516,9 @@ describe("loadOpenClawPlugins", () => {
   });
 
   it("warns when loaded non-bundled plugin has no install/load-path provenance", () => {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    process.env.ACTIVI_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const stateDir = makeTempDir();
-    withEnv({ OPENCLAW_STATE_DIR: stateDir, CLAWDBOT_STATE_DIR: undefined }, () => {
+    withEnv({ ACTIVI_STATE_DIR: stateDir }, () => {
       const globalDir = path.join(stateDir, "extensions", "rogue");
       fs.mkdirSync(globalDir, { recursive: true });
       writePlugin({
@@ -529,7 +529,7 @@ describe("loadOpenClawPlugins", () => {
       });
 
       const warnings: string[] = [];
-      const registry = loadOpenClawPlugins({
+      const registry = loadActiviPlugins({
         cache: false,
         logger: {
           info: () => {},
@@ -555,7 +555,7 @@ describe("loadOpenClawPlugins", () => {
   });
 
   it("rejects plugin entry files that escape plugin root via symlink", () => {
-    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    process.env.ACTIVI_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const pluginDir = makeTempDir();
     const outsideDir = makeTempDir();
     const outsideEntry = path.join(outsideDir, "outside.js");
@@ -566,7 +566,7 @@ describe("loadOpenClawPlugins", () => {
       "utf-8",
     );
     fs.writeFileSync(
-      path.join(pluginDir, "openclaw.plugin.json"),
+      path.join(pluginDir, "activi.plugin.json"),
       JSON.stringify(
         {
           id: "symlinked",
@@ -583,7 +583,7 @@ describe("loadOpenClawPlugins", () => {
       return;
     }
 
-    const registry = loadOpenClawPlugins({
+    const registry = loadActiviPlugins({
       cache: false,
       config: {
         plugins: {

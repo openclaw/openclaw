@@ -5,7 +5,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type { PluginHookBeforeAgentStartResult } from "../../plugins/types.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
-import { resolveOpenClawAgentDir } from "../agent-paths.js";
+import { resolveActiviAgentDir } from "../agent-paths.js";
 import {
   isProfileInCooldown,
   markAuthProfileFailure,
@@ -27,7 +27,7 @@ import {
   type ResolvedProviderAuth,
 } from "../model-auth.js";
 import { normalizeProviderId } from "../model-selection.js";
-import { ensureOpenClawModelsJson } from "../models-config.js";
+import { ensureActiviModelsJson } from "../models-config.js";
 import {
   formatBillingErrorMessage,
   classifyFailoverReason,
@@ -161,7 +161,7 @@ const toNormalizedUsage = (usage: UsageAccumulator) => {
   // The accumulated cacheRead/cacheWrite inflate context size because each tool-call
   // round-trip reports cacheRead ≈ current_context_size, and summing N calls gives
   // N × context_size which gets clamped to contextWindow (e.g. 200k).
-  // See: https://github.com/openclaw/openclaw/issues/13698
+  // See: https://github.com/activi/activi/issues/13698
   //
   // We use lastInput/lastCacheRead/lastCacheWrite (from the most recent API call) for
   // cache-related fields, but keep accumulated output (total generated text this turn).
@@ -227,10 +227,10 @@ export async function runEmbeddedPiAgent(
 
       let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
       let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
-      const agentDir = params.agentDir ?? resolveOpenClawAgentDir();
+      const agentDir = params.agentDir ?? resolveActiviAgentDir();
       const fallbackConfigured =
         (params.config?.agents?.defaults?.model?.fallbacks?.length ?? 0) > 0;
-      await ensureOpenClawModelsJson(params.config, agentDir);
+      await ensureActiviModelsJson(params.config, agentDir);
 
       // Run before_model_resolve hooks early so plugins can override the
       // provider/model before resolveModel().
@@ -500,11 +500,11 @@ export async function runEmbeddedPiAgent(
       let lastRunPromptUsage: ReturnType<typeof normalizeUsage> | undefined;
       let autoCompactionCount = 0;
       let runLoopIterations = 0;
-      const maybeMarkAuthProfileFailure = async (params: {
+      const maybeMarkAuthProfileFailure = async (failureParams: {
         profileId?: string;
         reason?: Parameters<typeof markAuthProfileFailure>[0]["reason"] | null;
       }) => {
-        const { profileId, reason } = params;
+        const { profileId, reason } = failureParams;
         if (!profileId || !reason || reason === "timeout") {
           return;
         }
@@ -513,7 +513,7 @@ export async function runEmbeddedPiAgent(
           profileId,
           reason,
           cfg: params.config,
-          agentDir: params.agentDir,
+          agentDir,
         });
       };
       try {

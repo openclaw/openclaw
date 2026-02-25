@@ -1,15 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { validateConfigObject } from "../config/validation.js";
-import { resolveOpenClawAgentDir } from "./agent-paths.js";
+import { resolveActiviAgentDir } from "./agent-paths.js";
 import {
   CUSTOM_PROXY_MODELS_CONFIG,
   installModelsConfigTestHooks,
   withModelsTempHome as withTempHome,
 } from "./models-config.e2e-harness.js";
-import { ensureOpenClawModelsJson } from "./models-config.js";
+import { ensureActiviModelsJson } from "./models-config.js";
 
 installModelsConfigTestHooks();
 
@@ -32,9 +32,9 @@ describe("models-config", () => {
         throw new Error("expected config to validate");
       }
 
-      await ensureOpenClawModelsJson(validated.config);
+      await ensureActiviModelsJson(validated.config);
 
-      const modelPath = path.join(resolveOpenClawAgentDir(), "models.json");
+      const modelPath = path.join(resolveActiviAgentDir(), "models.json");
       const raw = await fs.readFile(modelPath, "utf8");
       const parsed = JSON.parse(raw) as {
         providers: Record<string, { api?: string; models?: Array<{ id: string; api?: string }> }>;
@@ -50,7 +50,7 @@ describe("models-config", () => {
       const prevKey = process.env.MINIMAX_API_KEY;
       process.env.MINIMAX_API_KEY = "sk-minimax-test";
       try {
-        const cfg: OpenClawConfig = {
+        const cfg: ActiviConfig = {
           models: {
             providers: {
               minimax: {
@@ -72,9 +72,9 @@ describe("models-config", () => {
           },
         };
 
-        await ensureOpenClawModelsJson(cfg);
+        await ensureActiviModelsJson(cfg);
 
-        const modelPath = path.join(resolveOpenClawAgentDir(), "models.json");
+        const modelPath = path.join(resolveActiviAgentDir(), "models.json");
         const raw = await fs.readFile(modelPath, "utf8");
         const parsed = JSON.parse(raw) as {
           providers: Record<string, { apiKey?: string; models?: Array<{ id: string }> }>;
@@ -93,7 +93,7 @@ describe("models-config", () => {
   });
   it("merges providers by default", async () => {
     await withTempHome(async () => {
-      const agentDir = resolveOpenClawAgentDir();
+      const agentDir = resolveActiviAgentDir();
       await fs.mkdir(agentDir, { recursive: true });
       await fs.writeFile(
         path.join(agentDir, "models.json"),
@@ -125,7 +125,7 @@ describe("models-config", () => {
         "utf8",
       );
 
-      await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
+      await ensureActiviModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
 
       const raw = await fs.readFile(path.join(agentDir, "models.json"), "utf8");
       const parsed = JSON.parse(raw) as {

@@ -40,12 +40,12 @@ import { applyMergePatch } from "./merge-patch.js";
 import { normalizeConfigPaths } from "./normalize-paths.js";
 import { resolveConfigPath, resolveDefaultConfigCandidates, resolveStateDir } from "./paths.js";
 import { applyConfigOverrides } from "./runtime-overrides.js";
-import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
+import type { ActiviConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
 } from "./validation.js";
-import { compareOpenClawVersions } from "./version.js";
+import { compareActiviVersions } from "./version.js";
 
 // Re-export for backwards compatibility
 export { CircularIncludeError, ConfigIncludeError } from "./includes.js";
@@ -66,8 +66,8 @@ const SHELL_ENV_EXPECTED_KEYS = [
   "DISCORD_BOT_TOKEN",
   "SLACK_BOT_TOKEN",
   "SLACK_APP_TOKEN",
-  "OPENCLAW_GATEWAY_TOKEN",
-  "OPENCLAW_GATEWAY_PASSWORD",
+  "ACTIVI_GATEWAY_TOKEN",
+  "ACTIVI_GATEWAY_PASSWORD",
 ];
 
 const CONFIG_AUDIT_LOG_FILENAME = "config-audit.jsonl";
@@ -231,11 +231,11 @@ export function resolveConfigSnapshotHash(snapshot: {
   return hashConfigRaw(snapshot.raw);
 }
 
-function coerceConfig(value: unknown): OpenClawConfig {
+function coerceConfig(value: unknown): ActiviConfig {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return {};
   }
-  return value as OpenClawConfig;
+  return value as ActiviConfig;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -500,7 +500,7 @@ function warnOnConfigMiskeys(raw: unknown, logger: Pick<typeof console, "warn">)
   }
 }
 
-function stampConfigVersion(cfg: OpenClawConfig): OpenClawConfig {
+function stampConfigVersion(cfg: ActiviConfig): ActiviConfig {
   const now = new Date().toISOString();
   return {
     ...cfg,
@@ -512,18 +512,18 @@ function stampConfigVersion(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
-function warnIfConfigFromFuture(cfg: OpenClawConfig, logger: Pick<typeof console, "warn">): void {
+function warnIfConfigFromFuture(cfg: ActiviConfig, logger: Pick<typeof console, "warn">): void {
   const touched = cfg.meta?.lastTouchedVersion;
   if (!touched) {
     return;
   }
-  const cmp = compareOpenClawVersions(VERSION, touched);
+  const cmp = compareActiviVersions(VERSION, touched);
   if (cmp === null) {
     return;
   }
   if (cmp < 0) {
     logger.warn(
-      `Config was last written by a newer OpenClaw (${touched}); current version is ${VERSION}.`,
+      `Config was last written by a newer Activi (${touched}); current version is ${VERSION}.`,
     );
   }
 }
@@ -556,7 +556,7 @@ function maybeLoadDotEnvForConfig(env: NodeJS.ProcessEnv): void {
   loadDotEnv({ quiet: true });
 }
 
-function normalizeExecSafeBinProfilesInConfig(cfg: OpenClawConfig): void {
+function normalizeExecSafeBinProfilesInConfig(cfg: ActiviConfig): void {
   const normalizeExec = (exec: unknown) => {
     if (!exec || typeof exec !== "object" || Array.isArray(exec)) {
       return;
@@ -616,7 +616,7 @@ function resolveConfigForRead(
 ): ConfigReadResolution {
   // Apply config.env to process.env BEFORE substitution so ${VAR} can reference config-defined vars.
   if (resolvedIncludes && typeof resolvedIncludes === "object" && "env" in resolvedIncludes) {
-    applyConfigEnvVars(resolvedIncludes as OpenClawConfig, env);
+    applyConfigEnvVars(resolvedIncludes as ActiviConfig, env);
   }
 
   return {
@@ -640,7 +640,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
   const configPath =
     candidatePaths.find((candidate) => deps.fs.existsSync(candidate)) ?? requestedConfigPath;
 
-  function loadConfig(): OpenClawConfig {
+  function loadConfig(): ActiviConfig {
     try {
       maybeLoadDotEnvForConfig(deps.env);
       if (!deps.fs.existsSync(configPath)) {
@@ -665,7 +665,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       if (typeof resolvedConfig !== "object" || resolvedConfig === null) {
         return {};
       }
-      const preValidationDuplicates = findDuplicateAgentDirs(resolvedConfig as OpenClawConfig, {
+      const preValidationDuplicates = findDuplicateAgentDirs(resolvedConfig as ActiviConfig, {
         env: deps.env,
         homedir: deps.homedir,
       });
@@ -967,7 +967,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     };
   }
 
-  async function writeConfigFile(cfg: OpenClawConfig, options: ConfigWriteOptions = {}) {
+  async function writeConfigFile(cfg: ActiviConfig, options: ConfigWriteOptions = {}) {
     clearConfigCache();
     let persistCandidate: unknown = cfg;
     const { snapshot } = await readConfigFileSnapshotInternal();
@@ -1029,7 +1029,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
             cfgToWrite,
             parsedRes.parsed,
             envForRestore,
-          ) as OpenClawConfig;
+          ) as ActiviConfig;
         }
       }
     } catch {
@@ -1040,7 +1040,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
     await deps.fs.promises.mkdir(dir, { recursive: true, mode: 0o700 });
     const outputConfig =
       envRefMap && changedPaths
-        ? (restoreEnvRefsFromMap(cfgToWrite, "", envRefMap, changedPaths) as OpenClawConfig)
+        ? (restoreEnvRefsFromMap(cfgToWrite, "", envRefMap, changedPaths) as ActiviConfig)
         : cfgToWrite;
     if (options.unsetPaths?.length) {
       for (const unsetPath of options.unsetPaths) {
@@ -1077,7 +1077,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         return;
       }
       const isVitest = deps.env.VITEST === "true";
-      const shouldLogInVitest = deps.env.OPENCLAW_TEST_CONFIG_OVERWRITE_LOG === "1";
+      const shouldLogInVitest = deps.env.ACTIVI_TEST_CONFIG_OVERWRITE_LOG === "1";
       if (isVitest && !shouldLogInVitest) {
         return;
       }
@@ -1093,7 +1093,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
       // Tests often write minimal configs (missing meta, etc); keep output quiet unless requested.
       const isVitest = deps.env.VITEST === "true";
-      const shouldLogInVitest = deps.env.OPENCLAW_TEST_CONFIG_WRITE_ANOMALY_LOG === "1";
+      const shouldLogInVitest = deps.env.ACTIVI_TEST_CONFIG_WRITE_ANOMALY_LOG === "1";
       if (isVitest && !shouldLogInVitest) {
         return;
       }
@@ -1109,16 +1109,16 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       cwd: process.cwd(),
       argv: process.argv.slice(0, 8),
       execArgv: process.execArgv.slice(0, 8),
-      watchMode: deps.env.OPENCLAW_WATCH_MODE === "1",
+      watchMode: deps.env.ACTIVI_WATCH_MODE === "1",
       watchSession:
-        typeof deps.env.OPENCLAW_WATCH_SESSION === "string" &&
-        deps.env.OPENCLAW_WATCH_SESSION.trim().length > 0
-          ? deps.env.OPENCLAW_WATCH_SESSION.trim()
+        typeof deps.env.ACTIVI_WATCH_SESSION === "string" &&
+        deps.env.ACTIVI_WATCH_SESSION.trim().length > 0
+          ? deps.env.ACTIVI_WATCH_SESSION.trim()
           : null,
       watchCommand:
-        typeof deps.env.OPENCLAW_WATCH_COMMAND === "string" &&
-        deps.env.OPENCLAW_WATCH_COMMAND.trim().length > 0
-          ? deps.env.OPENCLAW_WATCH_COMMAND.trim()
+        typeof deps.env.ACTIVI_WATCH_COMMAND === "string" &&
+        deps.env.ACTIVI_WATCH_COMMAND.trim().length > 0
+          ? deps.env.ACTIVI_WATCH_COMMAND.trim()
           : null,
       existsBefore: snapshot.exists,
       previousHash: previousHash ?? null,
@@ -1211,7 +1211,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
 }
 
 // NOTE: These wrappers intentionally do *not* cache the resolved config path at
-// module scope. `OPENCLAW_CONFIG_PATH` (and friends) are expected to work even
+// module scope. `ACTIVI_CONFIG_PATH` (and friends) are expected to work even
 // when set after the module has been imported (tests, one-off scripts, etc.).
 const DEFAULT_CONFIG_CACHE_MS = 200;
 const AUTO_OWNER_DISPLAY_SECRET_BY_PATH = new Map<string, string>();
@@ -1220,11 +1220,11 @@ const AUTO_OWNER_DISPLAY_SECRET_PERSIST_WARNED = new Set<string>();
 let configCache: {
   configPath: string;
   expiresAt: number;
-  config: OpenClawConfig;
+  config: ActiviConfig;
 } | null = null;
 
 function resolveConfigCacheMs(env: NodeJS.ProcessEnv): number {
-  const raw = env.OPENCLAW_CONFIG_CACHE_MS?.trim();
+  const raw = env.ACTIVI_CONFIG_CACHE_MS?.trim();
   if (raw === "" || raw === "0") {
     return 0;
   }
@@ -1239,7 +1239,7 @@ function resolveConfigCacheMs(env: NodeJS.ProcessEnv): number {
 }
 
 function shouldUseConfigCache(env: NodeJS.ProcessEnv): boolean {
-  if (env.OPENCLAW_DISABLE_CONFIG_CACHE?.trim()) {
+  if (env.ACTIVI_DISABLE_CONFIG_CACHE?.trim()) {
     return false;
   }
   return resolveConfigCacheMs(env) > 0;
@@ -1249,7 +1249,7 @@ export function clearConfigCache(): void {
   configCache = null;
 }
 
-export function loadConfig(): OpenClawConfig {
+export function loadConfig(): ActiviConfig {
   const io = createConfigIO();
   const configPath = io.configPath;
   const now = Date.now();
@@ -1282,7 +1282,7 @@ export async function readConfigFileSnapshotForWrite(): Promise<ReadConfigFileSn
 }
 
 export async function writeConfigFile(
-  cfg: OpenClawConfig,
+  cfg: ActiviConfig,
   options: ConfigWriteOptions = {},
 ): Promise<void> {
   const io = createConfigIO();

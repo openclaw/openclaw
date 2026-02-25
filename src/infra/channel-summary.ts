@@ -4,7 +4,7 @@ import {
 } from "../channels/account-summary.js";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelAccountSnapshot, ChannelPlugin } from "../channels/plugins/types.js";
-import { type OpenClawConfig, loadConfig } from "../config/config.js";
+import { type ActiviConfig, loadConfig } from "../config/config.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { theme } from "../terminal/theme.js";
 import { formatTimeAgo } from "./format-time/format-relative.ts";
@@ -41,7 +41,7 @@ const accountLine = (label: string, details: string[]) =>
 const resolveAccountEnabled = (
   plugin: ChannelPlugin,
   account: unknown,
-  cfg: OpenClawConfig,
+  cfg: ActiviConfig,
 ): boolean => {
   if (plugin.config.isEnabled) {
     return plugin.config.isEnabled(account, cfg);
@@ -56,7 +56,7 @@ const resolveAccountEnabled = (
 const resolveAccountConfigured = async (
   plugin: ChannelPlugin,
   account: unknown,
-  cfg: OpenClawConfig,
+  cfg: ActiviConfig,
 ): Promise<boolean> => {
   if (plugin.config.isConfigured) {
     return await plugin.config.isConfigured(account, cfg);
@@ -67,7 +67,7 @@ const resolveAccountConfigured = async (
 const buildAccountDetails = (params: {
   entry: ChannelAccountEntry;
   plugin: ChannelPlugin;
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   includeAllowFrom: boolean;
 }): string[] => {
   const details: string[] = [];
@@ -115,7 +115,7 @@ const buildAccountDetails = (params: {
 };
 
 export async function buildChannelSummary(
-  cfg?: OpenClawConfig,
+  cfg?: ActiviConfig,
   options?: ChannelSummaryOptions,
 ): Promise<string[]> {
   const effective = cfg ?? loadConfig();

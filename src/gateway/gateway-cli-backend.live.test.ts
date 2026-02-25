@@ -13,10 +13,10 @@ import { renderCatNoncePngBase64 } from "./live-image-probe.js";
 import { startGatewayServer } from "./server.js";
 import { extractPayloadText } from "./test-helpers.agent-results.js";
 
-const LIVE = isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST);
-const CLI_LIVE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND);
-const CLI_IMAGE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_IMAGE_PROBE);
-const CLI_RESUME = isTruthyEnvValue(process.env.OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE);
+const LIVE = isTruthyEnvValue(process.env.LIVE) || isTruthyEnvValue(process.env.ACTIVI_LIVE_TEST);
+const CLI_LIVE = isTruthyEnvValue(process.env.ACTIVI_LIVE_CLI_BACKEND);
+const CLI_IMAGE = isTruthyEnvValue(process.env.ACTIVI_LIVE_CLI_BACKEND_IMAGE_PROBE);
+const CLI_RESUME = isTruthyEnvValue(process.env.ACTIVI_LIVE_CLI_BACKEND_RESUME_PROBE);
 const describeLive = LIVE && CLI_LIVE ? describe : describe.skip;
 
 const DEFAULT_MODEL = "claude-cli/claude-sonnet-4-6";
@@ -98,7 +98,7 @@ function parseImageMode(raw?: string): "list" | "repeat" | undefined {
   if (trimmed === "list" || trimmed === "repeat") {
     return trimmed;
   }
-  throw new Error("OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE must be 'list' or 'repeat'.");
+  throw new Error("ACTIVI_LIVE_CLI_BACKEND_IMAGE_MODE must be 'list' or 'repeat'.");
 }
 
 function withMcpConfigOverrides(args: string[], mcpConfigPath: string): string[] {
@@ -154,31 +154,31 @@ async function connectClient(params: { url: string; token: string }) {
 describeLive("gateway live (cli backend)", () => {
   it("runs the agent pipeline against the local CLI backend", async () => {
     const previous = {
-      configPath: process.env.OPENCLAW_CONFIG_PATH,
-      token: process.env.OPENCLAW_GATEWAY_TOKEN,
-      skipChannels: process.env.OPENCLAW_SKIP_CHANNELS,
-      skipGmail: process.env.OPENCLAW_SKIP_GMAIL_WATCHER,
-      skipCron: process.env.OPENCLAW_SKIP_CRON,
-      skipCanvas: process.env.OPENCLAW_SKIP_CANVAS_HOST,
+      configPath: process.env.ACTIVI_CONFIG_PATH,
+      token: process.env.ACTIVI_GATEWAY_TOKEN,
+      skipChannels: process.env.ACTIVI_SKIP_CHANNELS,
+      skipGmail: process.env.ACTIVI_SKIP_GMAIL_WATCHER,
+      skipCron: process.env.ACTIVI_SKIP_CRON,
+      skipCanvas: process.env.ACTIVI_SKIP_CANVAS_HOST,
       anthropicApiKey: process.env.ANTHROPIC_API_KEY,
       anthropicApiKeyOld: process.env.ANTHROPIC_API_KEY_OLD,
     };
 
-    process.env.OPENCLAW_SKIP_CHANNELS = "1";
-    process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
-    process.env.OPENCLAW_SKIP_CRON = "1";
-    process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
+    process.env.ACTIVI_SKIP_CHANNELS = "1";
+    process.env.ACTIVI_SKIP_GMAIL_WATCHER = "1";
+    process.env.ACTIVI_SKIP_CRON = "1";
+    process.env.ACTIVI_SKIP_CANVAS_HOST = "1";
     delete process.env.ANTHROPIC_API_KEY;
     delete process.env.ANTHROPIC_API_KEY_OLD;
 
     const token = `test-${randomUUID()}`;
-    process.env.OPENCLAW_GATEWAY_TOKEN = token;
+    process.env.ACTIVI_GATEWAY_TOKEN = token;
 
-    const rawModel = process.env.OPENCLAW_LIVE_CLI_BACKEND_MODEL ?? DEFAULT_MODEL;
+    const rawModel = process.env.ACTIVI_LIVE_CLI_BACKEND_MODEL ?? DEFAULT_MODEL;
     const parsed = parseModelRef(rawModel, "claude-cli");
     if (!parsed) {
       throw new Error(
-        `OPENCLAW_LIVE_CLI_BACKEND_MODEL must resolve to a CLI backend model. Got: ${rawModel}`,
+        `ACTIVI_LIVE_CLI_BACKEND_MODEL must resolve to a CLI backend model. Got: ${rawModel}`,
       );
     }
     const providerId = parsed.provider;
@@ -191,36 +191,36 @@ describeLive("gateway live (cli backend)", () => {
           ? { command: "codex", args: DEFAULT_CODEX_ARGS }
           : null;
 
-    const cliCommand = process.env.OPENCLAW_LIVE_CLI_BACKEND_COMMAND ?? providerDefaults?.command;
+    const cliCommand = process.env.ACTIVI_LIVE_CLI_BACKEND_COMMAND ?? providerDefaults?.command;
     if (!cliCommand) {
       throw new Error(
-        `OPENCLAW_LIVE_CLI_BACKEND_COMMAND is required for provider "${providerId}".`,
+        `ACTIVI_LIVE_CLI_BACKEND_COMMAND is required for provider "${providerId}".`,
       );
     }
     const baseCliArgs =
       parseJsonStringArray(
-        "OPENCLAW_LIVE_CLI_BACKEND_ARGS",
-        process.env.OPENCLAW_LIVE_CLI_BACKEND_ARGS,
+        "ACTIVI_LIVE_CLI_BACKEND_ARGS",
+        process.env.ACTIVI_LIVE_CLI_BACKEND_ARGS,
       ) ?? providerDefaults?.args;
     if (!baseCliArgs || baseCliArgs.length === 0) {
-      throw new Error(`OPENCLAW_LIVE_CLI_BACKEND_ARGS is required for provider "${providerId}".`);
+      throw new Error(`ACTIVI_LIVE_CLI_BACKEND_ARGS is required for provider "${providerId}".`);
     }
     const cliClearEnv =
       parseJsonStringArray(
-        "OPENCLAW_LIVE_CLI_BACKEND_CLEAR_ENV",
-        process.env.OPENCLAW_LIVE_CLI_BACKEND_CLEAR_ENV,
+        "ACTIVI_LIVE_CLI_BACKEND_CLEAR_ENV",
+        process.env.ACTIVI_LIVE_CLI_BACKEND_CLEAR_ENV,
       ) ?? (providerId === "claude-cli" ? DEFAULT_CLEAR_ENV : []);
-    const cliImageArg = process.env.OPENCLAW_LIVE_CLI_BACKEND_IMAGE_ARG?.trim() || undefined;
-    const cliImageMode = parseImageMode(process.env.OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE);
+    const cliImageArg = process.env.ACTIVI_LIVE_CLI_BACKEND_IMAGE_ARG?.trim() || undefined;
+    const cliImageMode = parseImageMode(process.env.ACTIVI_LIVE_CLI_BACKEND_IMAGE_MODE);
 
     if (cliImageMode && !cliImageArg) {
       throw new Error(
-        "OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE requires OPENCLAW_LIVE_CLI_BACKEND_IMAGE_ARG.",
+        "ACTIVI_LIVE_CLI_BACKEND_IMAGE_MODE requires ACTIVI_LIVE_CLI_BACKEND_IMAGE_ARG.",
       );
     }
 
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-cli-"));
-    const disableMcpConfig = process.env.OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG !== "0";
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "activi-live-cli-"));
+    const disableMcpConfig = process.env.ACTIVI_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG !== "0";
     let cliArgs = baseCliArgs;
     if (providerId === "claude-cli" && disableMcpConfig) {
       const mcpConfigPath = path.join(tempDir, "claude-mcp.json");
@@ -254,9 +254,9 @@ describeLive("gateway live (cli backend)", () => {
         },
       },
     };
-    const tempConfigPath = path.join(tempDir, "openclaw.json");
+    const tempConfigPath = path.join(tempDir, "activi.json");
     await fs.writeFile(tempConfigPath, `${JSON.stringify(nextCfg, null, 2)}\n`);
-    process.env.OPENCLAW_CONFIG_PATH = tempConfigPath;
+    process.env.ACTIVI_CONFIG_PATH = tempConfigPath;
 
     const port = await getFreeGatewayPort();
     const server = await startGatewayServer(port, {
@@ -375,34 +375,34 @@ describeLive("gateway live (cli backend)", () => {
       await server.close();
       await fs.rm(tempDir, { recursive: true, force: true });
       if (previous.configPath === undefined) {
-        delete process.env.OPENCLAW_CONFIG_PATH;
+        delete process.env.ACTIVI_CONFIG_PATH;
       } else {
-        process.env.OPENCLAW_CONFIG_PATH = previous.configPath;
+        process.env.ACTIVI_CONFIG_PATH = previous.configPath;
       }
       if (previous.token === undefined) {
-        delete process.env.OPENCLAW_GATEWAY_TOKEN;
+        delete process.env.ACTIVI_GATEWAY_TOKEN;
       } else {
-        process.env.OPENCLAW_GATEWAY_TOKEN = previous.token;
+        process.env.ACTIVI_GATEWAY_TOKEN = previous.token;
       }
       if (previous.skipChannels === undefined) {
-        delete process.env.OPENCLAW_SKIP_CHANNELS;
+        delete process.env.ACTIVI_SKIP_CHANNELS;
       } else {
-        process.env.OPENCLAW_SKIP_CHANNELS = previous.skipChannels;
+        process.env.ACTIVI_SKIP_CHANNELS = previous.skipChannels;
       }
       if (previous.skipGmail === undefined) {
-        delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
+        delete process.env.ACTIVI_SKIP_GMAIL_WATCHER;
       } else {
-        process.env.OPENCLAW_SKIP_GMAIL_WATCHER = previous.skipGmail;
+        process.env.ACTIVI_SKIP_GMAIL_WATCHER = previous.skipGmail;
       }
       if (previous.skipCron === undefined) {
-        delete process.env.OPENCLAW_SKIP_CRON;
+        delete process.env.ACTIVI_SKIP_CRON;
       } else {
-        process.env.OPENCLAW_SKIP_CRON = previous.skipCron;
+        process.env.ACTIVI_SKIP_CRON = previous.skipCron;
       }
       if (previous.skipCanvas === undefined) {
-        delete process.env.OPENCLAW_SKIP_CANVAS_HOST;
+        delete process.env.ACTIVI_SKIP_CANVAS_HOST;
       } else {
-        process.env.OPENCLAW_SKIP_CANVAS_HOST = previous.skipCanvas;
+        process.env.ACTIVI_SKIP_CANVAS_HOST = previous.skipCanvas;
       }
       if (previous.anthropicApiKey === undefined) {
         delete process.env.ANTHROPIC_API_KEY;

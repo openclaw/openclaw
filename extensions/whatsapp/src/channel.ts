@@ -30,7 +30,7 @@ import {
   type ChannelMessageActionName,
   type ChannelPlugin,
   type ResolvedWhatsAppAccount,
-} from "openclaw/plugin-sdk";
+} from "activi/plugin-sdk";
 import { getWhatsAppRuntime } from "./runtime.js";
 
 const meta = getChatChannelMeta("whatsapp");

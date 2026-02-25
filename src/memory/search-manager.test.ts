@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 
 const mockPrimary = {
   search: vi.fn(async () => []),
@@ -76,7 +76,7 @@ const createQmdManagerMock = vi.mocked(QmdMemoryManager.create);
 type SearchManagerResult = Awaited<ReturnType<typeof getMemorySearchManager>>;
 type SearchManager = NonNullable<SearchManagerResult["manager"]>;
 
-function createQmdCfg(agentId: string): OpenClawConfig {
+function createQmdCfg(agentId: string): ActiviConfig {
   return {
     memory: { backend: "qmd", qmd: {} },
     agents: { list: [{ id: agentId, default: true, workspace: "/tmp/workspace" }] },

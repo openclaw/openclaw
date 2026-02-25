@@ -8,7 +8,7 @@
     },
     {
       "id": "chained-commands",
-      "command": "ls && rm -rf /tmp/openclaw-allowlist",
+      "command": "ls && rm -rf /tmp/activi-allowlist",
       "ok": true,
       "executables": ["ls", "rm"]
     },

@@ -50,19 +50,19 @@ describe("session path safety", () => {
   });
 
   it("resolves transcript path inside an explicit sessions dir", () => {
-    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
+    const sessionsDir = "/tmp/activi/agents/main/sessions";
     const resolved = resolveSessionTranscriptPathInDir("sess-1", sessionsDir, "topic/a+b");
 
     expect(resolved).toBe(path.resolve(sessionsDir, "sess-1-topic-topic%2Fa%2Bb.jsonl"));
   });
 
   it("rejects absolute sessionFile paths outside known agent sessions dirs", () => {
-    const sessionsDir = "/tmp/openclaw/agents/main/sessions";
+    const sessionsDir = "/tmp/activi/agents/main/sessions";
 
     expect(() =>
       resolveSessionFilePath(
         "sess-1",
-        { sessionFile: "/tmp/openclaw/agents/work/not-sessions/abc-123.jsonl" },
+        { sessionFile: "/tmp/activi/agents/work/not-sessions/abc-123.jsonl" },
         { sessionsDir },
       ),
     ).toThrow(/within sessions directory/);
@@ -107,7 +107,7 @@ describe("session store lock (Promise chain mutex)", () => {
   }
 
   beforeAll(async () => {
-    lockFixtureRoot = await fsPromises.mkdtemp(path.join(os.tmpdir(), "openclaw-lock-test-"));
+    lockFixtureRoot = await fsPromises.mkdtemp(path.join(os.tmpdir(), "activi-lock-test-"));
   });
 
   afterAll(async () => {

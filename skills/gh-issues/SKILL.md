@@ -3,14 +3,14 @@ name: gh-issues
 description: "Fetch GitHub issues, spawn sub-agents to implement fixes and open PRs, then monitor and address PR review comments. Usage: /gh-issues [owner/repo] [--label bug] [--limit 5] [--milestone v1.0] [--assignee @me] [--fork user/repo] [--watch] [--interval 5] [--reviews-only] [--cron] [--dry-run] [--model glm-5] [--notify-channel -1002381931352]"
 user-invocable: true
 metadata:
-  { "openclaw": { "requires": { "bins": ["curl", "git", "gh"] }, "primaryEnv": "GH_TOKEN" } }
+  { "activi": { "requires": { "bins": ["curl", "git", "gh"] }, "primaryEnv": "GH_TOKEN" } }
 ---
 
 # gh-issues — Auto-fix GitHub Issues with Parallel Sub-agents
 
 You are an orchestrator. Follow these 6 phases exactly. Do not skip phases.
 
-IMPORTANT — No `gh` CLI dependency. This skill uses curl + the GitHub REST API exclusively. The GH_TOKEN env var is already injected by OpenClaw. Pass it as a Bearer token in all API calls:
+IMPORTANT — No `gh` CLI dependency. This skill uses curl + the GitHub REST API exclusively. The GH_TOKEN env var is already injected by Activi. Pass it as a Bearer token in all API calls:
 
 ```
 curl -s -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" ...
@@ -79,13 +79,13 @@ echo $GH_TOKEN
 If empty, read from config:
 
 ```
-cat ~/.openclaw/openclaw.json | jq -r '.skills.entries["gh-issues"].apiKey // empty'
+cat ~/.activi/activi.json | jq -r '.skills.entries["gh-issues"].apiKey // empty'
 ```
 
-If still empty, check `/data/.clawdbot/openclaw.json`:
+If still empty, check `/data/.activi/activi.json`:
 
 ```
-cat /data/.clawdbot/openclaw.json | jq -r '.skills.entries["gh-issues"].apiKey // empty'
+cat /data/.activi/activi.json | jq -r '.skills.entries["gh-issues"].apiKey // empty'
 ```
 
 Export as GH_TOKEN for subsequent commands:
@@ -114,7 +114,7 @@ If in watch mode: Also filter out any issue numbers already in the PROCESSED_ISS
 Error handling:
 
 - If curl returns an HTTP 401 or 403 → stop and tell the user:
-  > "GitHub authentication failed. Please check your apiKey in the OpenClaw dashboard or in ~/.openclaw/openclaw.json under skills.entries.gh-issues."
+  > "GitHub authentication failed. Please check your apiKey in the Activi dashboard or in ~/.activi/activi.json under skills.entries.gh-issues."
 - If the response is an empty array (after filtering) → report "No issues found matching filters" and stop (or loop back if in watch mode).
 - If curl fails or returns any other error → report the error verbatim and stop.
 
@@ -212,7 +212,7 @@ Run these checks sequentially via exec:
 
    If HTTP status is not 200, stop with:
 
-   > "GitHub authentication failed. Please check your apiKey in the OpenClaw dashboard or in ~/.openclaw/openclaw.json under skills.entries.gh-issues."
+   > "GitHub authentication failed. Please check your apiKey in the Activi dashboard or in ~/.activi/activi.json under skills.entries.gh-issues."
 
 5. **Check for existing PRs:**
    For each confirmed issue number N, run:
@@ -252,9 +252,9 @@ Run these checks sequentially via exec:
    Read the claims file (create empty `{}` if missing):
 
    ```
-   CLAIMS_FILE="/data/.clawdbot/gh-issues-claims.json"
+   CLAIMS_FILE="/data/.activi/gh-issues-claims.json"
    if [ ! -f "$CLAIMS_FILE" ]; then
-     mkdir -p /data/.clawdbot
+     mkdir -p /data/.activi
      echo '{}' > "$CLAIMS_FILE"
    fi
    ```
@@ -287,8 +287,8 @@ Run these checks sequentially via exec:
 - **Sequential cursor tracking:** Use a cursor file to track which issue to process next:
 
   ```
-  CURSOR_FILE="/data/.clawdbot/gh-issues-cursor-{SOURCE_REPO_SLUG}.json"
-  # SOURCE_REPO_SLUG = owner-repo with slashes replaced by hyphens (e.g., openclaw-openclaw)
+  CURSOR_FILE="/data/.activi/gh-issues-cursor-{SOURCE_REPO_SLUG}.json"
+  # SOURCE_REPO_SLUG = owner-repo with slashes replaced by hyphens (e.g., activi-activi)
   ```
 
   Read the cursor file (create if missing):
@@ -346,7 +346,7 @@ You are a focused code-fix agent. Your task is to fix a single GitHub issue and 
 IMPORTANT: Do NOT use the gh CLI — it is not installed. Use curl with the GitHub REST API for all GitHub operations.
 
 First, ensure GH_TOKEN is set. Check: `echo $GH_TOKEN`. If empty, read from config:
-GH_TOKEN=$(cat ~/.openclaw/openclaw.json 2>/dev/null | jq -r '.skills.entries["gh-issues"].apiKey // empty') || GH_TOKEN=$(cat /data/.clawdbot/openclaw.json 2>/dev/null | jq -r '.skills.entries["gh-issues"].apiKey // empty')
+GH_TOKEN=$(cat ~/.activi/activi.json 2>/dev/null | jq -r '.skills.entries["gh-issues"].apiKey // empty') || GH_TOKEN=$(cat /data/.activi/activi.json 2>/dev/null | jq -r '.skills.entries["gh-issues"].apiKey // empty')
 
 Use the token in all GitHub API calls:
 curl -s -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" ...
@@ -375,13 +375,13 @@ Follow these steps in order. If any step fails, report the failure and stop.
 0. SETUP — Ensure GH_TOKEN is available:
 ```
 
-export GH_TOKEN=$(node -e "const fs=require('fs'); const c=JSON.parse(fs.readFileSync('/data/.clawdbot/openclaw.json','utf8')); console.log(c.skills?.entries?.['gh-issues']?.apiKey || '')")
+export GH_TOKEN=$(node -e "const fs=require('fs'); const c=JSON.parse(fs.readFileSync('/data/.activi/activi.json','utf8')); console.log(c.skills?.entries?.['gh-issues']?.apiKey || '')")
 
 ```
 If that fails, also try:
 ```
 
-export GH_TOKEN=$(cat ~/.openclaw/openclaw.json 2>/dev/null | node -e "const fs=require('fs');const d=JSON.parse(fs.readFileSync(0,'utf8'));console.log(d.skills?.entries?.['gh-issues']?.apiKey||'')")
+export GH_TOKEN=$(cat ~/.activi/activi.json 2>/dev/null | node -e "const fs=require('fs');const d=JSON.parse(fs.readFileSync(0,'utf8'));console.log(d.skills?.entries?.['gh-issues']?.apiKey||'')")
 
 ```
 Verify: echo "Token: ${GH_TOKEN:0:10}..."
@@ -714,7 +714,7 @@ You are a PR review handler agent. Your task is to address review comments on a 
 IMPORTANT: Do NOT use the gh CLI — it is not installed. Use curl with the GitHub REST API for all GitHub operations.
 
 First, ensure GH_TOKEN is set. Check: echo $GH_TOKEN. If empty, read from config:
-GH_TOKEN=$(cat ~/.openclaw/openclaw.json 2>/dev/null | jq -r '.skills.entries["gh-issues"].apiKey // empty') || GH_TOKEN=$(cat /data/.clawdbot/openclaw.json 2>/dev/null | jq -r '.skills.entries["gh-issues"].apiKey // empty')
+GH_TOKEN=$(cat ~/.activi/activi.json 2>/dev/null | jq -r '.skills.entries["gh-issues"].apiKey // empty') || GH_TOKEN=$(cat /data/.activi/activi.json 2>/dev/null | jq -r '.skills.entries["gh-issues"].apiKey // empty')
 
 <config>
 Repository: {SOURCE_REPO}
@@ -745,7 +745,7 @@ Follow these steps in order:
 0. SETUP — Ensure GH_TOKEN is available:
 ```
 
-export GH_TOKEN=$(node -e "const fs=require('fs'); const c=JSON.parse(fs.readFileSync('/data/.clawdbot/openclaw.json','utf8')); console.log(c.skills?.entries?.['gh-issues']?.apiKey || '')")
+export GH_TOKEN=$(node -e "const fs=require('fs'); const c=JSON.parse(fs.readFileSync('/data/.activi/activi.json','utf8')); console.log(c.skills?.entries?.['gh-issues']?.apiKey || '')")
 
 ```
 Verify: echo "Token: ${GH_TOKEN:0:10}..."

@@ -57,7 +57,7 @@ describe("exec safe bin trust", () => {
   });
 
   it("uses startup PATH snapshot when pathEnv is omitted", () => {
-    const injected = `/tmp/openclaw-path-injected-${Date.now()}`;
+    const injected = `/tmp/activi-path-injected-${Date.now()}`;
     const initial = getTrustedSafeBinDirs({ refresh: true });
 
     withEnv({ PATH: `${injected}${path.delimiter}${process.env.PATH ?? ""}` }, () => {

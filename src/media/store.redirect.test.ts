@@ -7,7 +7,7 @@ import { createPinnedLookup } from "../infra/net/ssrf.js";
 import { captureEnv } from "../test-utils/env.js";
 import { saveMediaSource, setMediaStoreNetworkDepsForTest } from "./store.js";
 
-const HOME = path.join(os.tmpdir(), "openclaw-home-redirect");
+const HOME = path.join(os.tmpdir(), "activi-home-redirect");
 const mockRequest = vi.fn();
 
 function createMockHttpExchange() {
@@ -32,9 +32,9 @@ describe("media store redirects", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeAll(async () => {
-    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
+    envSnapshot = captureEnv(["ACTIVI_STATE_DIR"]);
     await fs.rm(HOME, { recursive: true, force: true });
-    process.env.OPENCLAW_STATE_DIR = HOME;
+    process.env.ACTIVI_STATE_DIR = HOME;
   });
 
   beforeEach(() => {

@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import {
   applyAuthProfileConfig,
   applyLitellmProviderConfig,
@@ -43,7 +43,7 @@ function createLegacyProviderConfig(params: {
   modelName?: string;
   baseUrl?: string;
   apiKey?: string;
-}): OpenClawConfig {
+}): ActiviConfig {
   return {
     models: {
       providers: {
@@ -65,7 +65,7 @@ function createLegacyProviderConfig(params: {
         },
       },
     },
-  } as OpenClawConfig;
+  } as ActiviConfig;
 }
 
 const EXPECTED_FALLBACKS = ["anthropic/claude-opus-4-5"] as const;
@@ -106,10 +106,10 @@ function expectAliasPreserved(
 
 describe("writeOAuthCredentials", () => {
   const lifecycle = createAuthTestLifecycle([
-    "OPENCLAW_STATE_DIR",
-    "OPENCLAW_AGENT_DIR",
+    "ACTIVI_STATE_DIR",
+    "ACTIVI_AGENT_DIR",
     "PI_CODING_AGENT_DIR",
-    "OPENCLAW_OAUTH_DIR",
+    "ACTIVI_OAUTH_DIR",
   ]);
 
   let tempStateDir: string;
@@ -119,8 +119,8 @@ describe("writeOAuthCredentials", () => {
     await lifecycle.cleanup();
   });
 
-  it("writes auth-profiles.json under OPENCLAW_AGENT_DIR when set", async () => {
-    const env = await setupAuthTestEnv("openclaw-oauth-");
+  it("writes auth-profiles.json under ACTIVI_AGENT_DIR when set", async () => {
+    const env = await setupAuthTestEnv("activi-oauth-");
     lifecycle.setStateDir(env.stateDir);
 
     const creds = {
@@ -146,8 +146,8 @@ describe("writeOAuthCredentials", () => {
   });
 
   it("writes OAuth credentials to all sibling agent dirs when syncSiblingAgents=true", async () => {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-sync-"));
-    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "activi-oauth-sync-"));
+    process.env.ACTIVI_STATE_DIR = tempStateDir;
 
     const mainAgentDir = path.join(tempStateDir, "agents", "main", "agent");
     const kidAgentDir = path.join(tempStateDir, "agents", "kid", "agent");
@@ -156,7 +156,7 @@ describe("writeOAuthCredentials", () => {
     await fs.mkdir(kidAgentDir, { recursive: true });
     await fs.mkdir(workerAgentDir, { recursive: true });
 
-    process.env.OPENCLAW_AGENT_DIR = kidAgentDir;
+    process.env.ACTIVI_AGENT_DIR = kidAgentDir;
     process.env.PI_CODING_AGENT_DIR = kidAgentDir;
 
     const creds = {
@@ -183,15 +183,15 @@ describe("writeOAuthCredentials", () => {
   });
 
   it("writes OAuth credentials only to target dir by default", async () => {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-nosync-"));
-    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "activi-oauth-nosync-"));
+    process.env.ACTIVI_STATE_DIR = tempStateDir;
 
     const mainAgentDir = path.join(tempStateDir, "agents", "main", "agent");
     const kidAgentDir = path.join(tempStateDir, "agents", "kid", "agent");
     await fs.mkdir(mainAgentDir, { recursive: true });
     await fs.mkdir(kidAgentDir, { recursive: true });
 
-    process.env.OPENCLAW_AGENT_DIR = kidAgentDir;
+    process.env.ACTIVI_AGENT_DIR = kidAgentDir;
     process.env.PI_CODING_AGENT_DIR = kidAgentDir;
 
     const creds = {
@@ -214,11 +214,11 @@ describe("writeOAuthCredentials", () => {
     await expect(fs.readFile(authProfilePathFor(mainAgentDir), "utf8")).rejects.toThrow();
   });
 
-  it("syncs siblings from explicit agentDir outside OPENCLAW_STATE_DIR", async () => {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-oauth-external-"));
-    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+  it("syncs siblings from explicit agentDir outside ACTIVI_STATE_DIR", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "activi-oauth-external-"));
+    process.env.ACTIVI_STATE_DIR = tempStateDir;
 
-    // Create standard-layout agents tree *outside* OPENCLAW_STATE_DIR
+    // Create standard-layout agents tree *outside* ACTIVI_STATE_DIR
     const externalRoot = path.join(tempStateDir, "external", "agents");
     const extMain = path.join(externalRoot, "main", "agent");
     const extKid = path.join(externalRoot, "kid", "agent");
@@ -258,8 +258,8 @@ describe("writeOAuthCredentials", () => {
 
 describe("setMinimaxApiKey", () => {
   const lifecycle = createAuthTestLifecycle([
-    "OPENCLAW_STATE_DIR",
-    "OPENCLAW_AGENT_DIR",
+    "ACTIVI_STATE_DIR",
+    "ACTIVI_AGENT_DIR",
     "PI_CODING_AGENT_DIR",
   ]);
 
@@ -267,8 +267,8 @@ describe("setMinimaxApiKey", () => {
     await lifecycle.cleanup();
   });
 
-  it("writes to OPENCLAW_AGENT_DIR when set", async () => {
-    const env = await setupAuthTestEnv("openclaw-minimax-", { agentSubdir: "custom-agent" });
+  it("writes to ACTIVI_AGENT_DIR when set", async () => {
+    const env = await setupAuthTestEnv("activi-minimax-", { agentSubdir: "custom-agent" });
     lifecycle.setStateDir(env.stateDir);
 
     await setMinimaxApiKey("sk-minimax-test");

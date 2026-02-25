@@ -5,8 +5,8 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import { captureEnv } from "../test-utils/env.js";
 import type { UpdateCheckResult } from "./update-check.js";
 
-vi.mock("./openclaw-root.js", () => ({
-  resolveOpenClawPackageRoot: vi.fn(),
+vi.mock("./activi-root.js", () => ({
+  resolveActiviPackageRoot: vi.fn(),
 }));
 
 vi.mock("./update-check.js", async () => {
@@ -41,7 +41,7 @@ describe("update-startup", () => {
   let tempDir: string;
   let envSnapshot: ReturnType<typeof captureEnv>;
 
-  let resolveOpenClawPackageRoot: (typeof import("./openclaw-root.js"))["resolveOpenClawPackageRoot"];
+  let resolveActiviPackageRoot: (typeof import("./activi-root.js"))["resolveActiviPackageRoot"];
   let checkUpdateStatus: (typeof import("./update-check.js"))["checkUpdateStatus"];
   let resolveNpmChannelTag: (typeof import("./update-check.js"))["resolveNpmChannelTag"];
   let runGatewayUpdateCheck: (typeof import("./update-startup.js"))["runGatewayUpdateCheck"];
@@ -50,7 +50,7 @@ describe("update-startup", () => {
   let loaded = false;
 
   beforeAll(async () => {
-    suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-check-suite-"));
+    suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "activi-update-check-suite-"));
   });
 
   beforeEach(async () => {
@@ -58,8 +58,8 @@ describe("update-startup", () => {
     vi.setSystemTime(new Date("2026-01-17T10:00:00Z"));
     tempDir = path.join(suiteRoot, `case-${++suiteCase}`);
     await fs.mkdir(tempDir);
-    envSnapshot = captureEnv(["OPENCLAW_STATE_DIR", "NODE_ENV", "VITEST"]);
-    process.env.OPENCLAW_STATE_DIR = tempDir;
+    envSnapshot = captureEnv(["ACTIVI_STATE_DIR", "NODE_ENV", "VITEST"]);
+    process.env.ACTIVI_STATE_DIR = tempDir;
 
     process.env.NODE_ENV = "test";
 
@@ -68,13 +68,13 @@ describe("update-startup", () => {
 
     // Perf: load mocked modules once (after timers/env are set up).
     if (!loaded) {
-      ({ resolveOpenClawPackageRoot } = await import("./openclaw-root.js"));
+      ({ resolveActiviPackageRoot } = await import("./activi-root.js"));
       ({ checkUpdateStatus, resolveNpmChannelTag } = await import("./update-check.js"));
       ({ runGatewayUpdateCheck, getUpdateAvailable, resetUpdateAvailableStateForTest } =
         await import("./update-startup.js"));
       loaded = true;
     }
-    vi.mocked(resolveOpenClawPackageRoot).mockClear();
+    vi.mocked(resolveActiviPackageRoot).mockClear();
     vi.mocked(checkUpdateStatus).mockClear();
     vi.mocked(resolveNpmChannelTag).mockClear();
     resetUpdateAvailableStateForTest();
@@ -95,9 +95,9 @@ describe("update-startup", () => {
   });
 
   async function runUpdateCheckAndReadState(channel: "stable" | "beta") {
-    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");
+    vi.mocked(resolveActiviPackageRoot).mockResolvedValue("/opt/activi");
     vi.mocked(checkUpdateStatus).mockResolvedValue({
-      root: "/opt/openclaw",
+      root: "/opt/activi",
       installKind: "package",
       packageManager: "npm",
     } satisfies UpdateCheckResult);
@@ -183,9 +183,9 @@ describe("update-startup", () => {
   });
 
   it("emits update change callback when update state clears", async () => {
-    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue("/opt/openclaw");
+    vi.mocked(resolveActiviPackageRoot).mockResolvedValue("/opt/activi");
     vi.mocked(checkUpdateStatus).mockResolvedValue({
-      root: "/opt/openclaw",
+      root: "/opt/activi",
       installKind: "package",
       packageManager: "npm",
     } satisfies UpdateCheckResult);

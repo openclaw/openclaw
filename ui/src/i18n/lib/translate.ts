@@ -3,7 +3,7 @@ import type { Locale, TranslationMap } from "./types.ts";
 
 type Subscriber = (locale: Locale) => void;
 
-export const SUPPORTED_LOCALES: ReadonlyArray<Locale> = ["en", "zh-CN", "zh-TW", "pt-BR"];
+export const SUPPORTED_LOCALES: ReadonlyArray<Locale> = ["en", "de", "bs", "zh-CN", "zh-TW", "pt-BR"];
 
 export function isSupportedLocale(value: string | null | undefined): value is Locale {
   return value !== null && value !== undefined && SUPPORTED_LOCALES.includes(value as Locale);
@@ -19,7 +19,7 @@ class I18nManager {
   }
 
   private loadLocale() {
-    const saved = localStorage.getItem("openclaw.i18n.locale");
+    const saved = localStorage.getItem("activi.i18n.locale");
     if (isSupportedLocale(saved)) {
       this.locale = saved;
     } else {
@@ -28,8 +28,12 @@ class I18nManager {
         this.locale = navLang === "zh-TW" || navLang === "zh-HK" ? "zh-TW" : "zh-CN";
       } else if (navLang.startsWith("pt")) {
         this.locale = "pt-BR";
+      } else if (navLang.startsWith("de")) {
+        this.locale = "de";
+      } else if (navLang.startsWith("bs") || navLang.startsWith("hr") || navLang.startsWith("sr")) {
+        this.locale = "bs";
       } else {
-        this.locale = "en";
+        this.locale = "en"; // Default: English
       }
     }
   }
@@ -49,14 +53,22 @@ class I18nManager {
         let module: Record<string, TranslationMap>;
         if (locale === "zh-CN") {
           module = await import("../locales/zh-CN.ts");
+          this.translations[locale] = module.zh_CN;
         } else if (locale === "zh-TW") {
           module = await import("../locales/zh-TW.ts");
+          this.translations[locale] = module.zh_TW;
         } else if (locale === "pt-BR") {
           module = await import("../locales/pt-BR.ts");
+          this.translations[locale] = module.pt_BR;
+        } else if (locale === "de") {
+          module = await import("../locales/de.ts");
+          this.translations[locale] = module.de;
+        } else if (locale === "bs") {
+          module = await import("../locales/bs.ts");
+          this.translations[locale] = module.bs;
         } else {
           return;
         }
-        this.translations[locale] = module[locale.replace("-", "_")];
       } catch (e) {
         console.error(`Failed to load locale: ${locale}`, e);
         return;
@@ -64,7 +76,7 @@ class I18nManager {
     }
 
     this.locale = locale;
-    localStorage.setItem("openclaw.i18n.locale", locale);
+    localStorage.setItem("activi.i18n.locale", locale);
     this.notify();
   }
 

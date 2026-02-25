@@ -4,7 +4,7 @@ description: Batch-generate images via OpenAI Images API. Random prompt sampler 
 homepage: https://platform.openai.com/docs/api-reference/images
 metadata:
   {
-    "openclaw":
+    "activi":
       {
         "emoji": "🖼️",
         "requires": { "bins": ["python3"], "env": ["OPENAI_API_KEY"] },

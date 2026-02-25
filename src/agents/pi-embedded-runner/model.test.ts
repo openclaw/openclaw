@@ -5,7 +5,7 @@ vi.mock("../pi-model-discovery.js", () => ({
   discoverModels: vi.fn(() => ({ find: vi.fn(() => null) })),
 }));
 
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 import { buildInlineProviderModels, resolveModel } from "./model.js";
 import {
   makeModel,
@@ -47,7 +47,7 @@ function expectResolvedForwardCompatFallback(params: {
   provider: string;
   id: string;
   expectedModel: Record<string, unknown>;
-  cfg?: OpenClawConfig;
+  cfg?: ActiviConfig;
 }) {
   const result = resolveModel(params.provider, params.id, "/tmp/agent", params.cfg);
   expect(result.error).toBeUndefined();
@@ -161,7 +161,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as ActiviConfig;
 
     const result = resolveModel("custom", "missing-model", "/tmp/agent", cfg);
 
@@ -344,7 +344,7 @@ describe("resolveModel", () => {
     // This test verifies the ordering: codex fallback must fire BEFORE the generic providerCfg fallback.
     // If ordering is wrong, the generic fallback would use api: "openai-responses" (the default)
     // instead of "openai-codex-responses".
-    const cfg: OpenClawConfig = {
+    const cfg: ActiviConfig = {
       models: {
         providers: {
           "openai-codex": {
@@ -353,7 +353,7 @@ describe("resolveModel", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    } as unknown as ActiviConfig;
 
     expectResolvedForwardCompatFallback({
       provider: "openai-codex",
@@ -374,7 +374,7 @@ describe("resolveModel", () => {
     expect(result.model).toBeUndefined();
     expect(result.error).toContain("Unknown model: ollama/gemma3:4b");
     expect(result.error).toContain("OLLAMA_API_KEY");
-    expect(result.error).toContain("docs.openclaw.ai/providers/ollama");
+    expect(result.error).toContain("docs.activi.ai/providers/ollama");
   });
 
   it("includes auth hint for unknown vllm models", () => {

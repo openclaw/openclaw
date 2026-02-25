@@ -18,7 +18,7 @@ RUN set -eux; \
     sudo \
   && rm -rf /var/lib/apt/lists/*
 
-COPY run.sh /usr/local/bin/openclaw-install-smoke
-RUN chmod +x /usr/local/bin/openclaw-install-smoke
+COPY run.sh /usr/local/bin/activi-install-smoke
+RUN chmod +x /usr/local/bin/activi-install-smoke
 
-ENTRYPOINT ["/usr/local/bin/openclaw-install-smoke"]
+ENTRYPOINT ["/usr/local/bin/activi-install-smoke"]

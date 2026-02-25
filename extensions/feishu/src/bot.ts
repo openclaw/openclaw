@@ -1,4 +1,4 @@
-import type { ClawdbotConfig, RuntimeEnv } from "openclaw/plugin-sdk";
+import type { ActiviConfig, RuntimeEnv } from "activi/plugin-sdk";
 import {
   buildAgentMediaPayload,
   buildPendingHistoryContextFromMap,
@@ -9,7 +9,7 @@ import {
   resolveOpenProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
-} from "openclaw/plugin-sdk";
+} from "activi/plugin-sdk";
 import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { tryRecordMessagePersistent } from "./dedup.js";
@@ -333,7 +333,7 @@ function inferPlaceholder(messageType: string): string {
  * Similar to Discord's resolveMediaList().
  */
 async function resolveFeishuMediaList(params: {
-  cfg: ClawdbotConfig;
+  cfg: ActiviConfig;
   messageId: string;
   messageType: string;
   content: string;
@@ -497,7 +497,7 @@ export function parseFeishuMessageEvent(
 }
 
 export async function handleFeishuMessage(params: {
-  cfg: ClawdbotConfig;
+  cfg: ActiviConfig;
   event: FeishuMessageEvent;
   botOpenId?: string;
   runtime?: RuntimeEnv;

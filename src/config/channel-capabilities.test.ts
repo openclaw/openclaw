@@ -3,7 +3,7 @@ import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 import { resolveChannelCapabilities } from "./channel-capabilities.js";
-import type { OpenClawConfig } from "./config.js";
+import type { ActiviConfig } from "./config.js";
 
 describe("resolveChannelCapabilities", () => {
   beforeEach(() => {
@@ -32,7 +32,7 @@ describe("resolveChannelCapabilities", () => {
           },
         },
       },
-    } satisfies Partial<OpenClawConfig>;
+    } satisfies Partial<ActiviConfig>;
 
     expect(
       resolveChannelCapabilities({
@@ -53,7 +53,7 @@ describe("resolveChannelCapabilities", () => {
           },
         },
       },
-    } satisfies Partial<OpenClawConfig>;
+    } satisfies Partial<ActiviConfig>;
 
     expect(
       resolveChannelCapabilities({
@@ -73,7 +73,7 @@ describe("resolveChannelCapabilities", () => {
           },
         },
       },
-    } satisfies Partial<OpenClawConfig>;
+    } satisfies Partial<ActiviConfig>;
 
     expect(
       resolveChannelCapabilities({
@@ -96,7 +96,7 @@ describe("resolveChannelCapabilities", () => {
     );
     const cfg = {
       channels: { msteams: { capabilities: [" polls ", ""] } },
-    } satisfies Partial<OpenClawConfig>;
+    } satisfies Partial<ActiviConfig>;
 
     expect(
       resolveChannelCapabilities({
@@ -115,7 +115,7 @@ describe("resolveChannelCapabilities", () => {
           capabilities: { inlineButtons: "dm" },
         },
       },
-    } as unknown as Partial<OpenClawConfig>;
+    } as unknown as Partial<ActiviConfig>;
 
     // Should return undefined (not crash), allowing channel-specific handlers to process it.
     expect(

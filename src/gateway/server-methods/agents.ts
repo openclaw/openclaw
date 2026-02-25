@@ -178,7 +178,7 @@ function resolveAgentIdOrError(agentIdRaw: string, cfg: ReturnType<typeof loadCo
   return agentId;
 }
 
-function sanitizeIdentityLine(value: string): string {
+export function sanitizeIdentityLine(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 

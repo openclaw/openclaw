@@ -1,5 +1,5 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { emptyPluginConfigSchema } from "openclaw/plugin-sdk";
+import type { ActiviPluginApi } from "activi/plugin-sdk";
+import { emptyPluginConfigSchema } from "activi/plugin-sdk";
 import { nextcloudTalkPlugin } from "./src/channel.js";
 import { setNextcloudTalkRuntime } from "./src/runtime.js";
 
@@ -8,7 +8,7 @@ const plugin = {
   name: "Nextcloud Talk",
   description: "Nextcloud Talk channel plugin",
   configSchema: emptyPluginConfigSchema(),
-  register(api: OpenClawPluginApi) {
+  register(api: ActiviPluginApi) {
     setNextcloudTalkRuntime(api.runtime);
     api.registerChannel({ plugin: nextcloudTalkPlugin });
   },

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../../config/sessions.js";
 import { readChannelAllowFromStoreSync } from "../../pairing/pairing-store.js";
 import { normalizeE164 } from "../../utils.js";
@@ -7,7 +7,7 @@ import { normalizeChatChannelId } from "../registry.js";
 type HeartbeatRecipientsResult = { recipients: string[]; source: string };
 type HeartbeatRecipientsOpts = { to?: string; all?: boolean };
 
-function getSessionRecipients(cfg: OpenClawConfig) {
+function getSessionRecipients(cfg: ActiviConfig) {
   const sessionCfg = cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
   if (scope === "global") {
@@ -44,7 +44,7 @@ function getSessionRecipients(cfg: OpenClawConfig) {
 }
 
 export function resolveWhatsAppHeartbeatRecipients(
-  cfg: OpenClawConfig,
+  cfg: ActiviConfig,
   opts: HeartbeatRecipientsOpts = {},
 ): HeartbeatRecipientsResult {
   if (opts.to) {

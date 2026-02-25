@@ -19,7 +19,7 @@ function normalizeBase(input: string): string {
 }
 
 export default defineConfig(() => {
-  const envBase = process.env.OPENCLAW_CONTROL_UI_BASE_PATH?.trim();
+  const envBase = process.env.ACTIVI_CONTROL_UI_BASE_PATH?.trim();
   const base = envBase ? normalizeBase(envBase) : "./";
   return {
     base,
@@ -30,7 +30,17 @@ export default defineConfig(() => {
     build: {
       outDir: path.resolve(here, "../dist/control-ui"),
       emptyOutDir: true,
-      sourcemap: true,
+      sourcemap: process.env.NODE_ENV === "development",
+      chunkSizeWarningLimit: 1000,
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            "lit-core": ["lit", "lit/decorators.js", "lit/directives/repeat.js"],
+            "gateway-client": ["./src/ui/gateway.ts"],
+            "markdown": ["./src/ui/markdown.ts"],
+          },
+        },
+      },
     },
     server: {
       host: true,

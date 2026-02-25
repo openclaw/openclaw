@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 
 const hoisted = vi.hoisted(() => {
   const getThreadBindingManagerMock = vi.fn();
@@ -24,7 +24,7 @@ const { buildCommandTestParams } = await import("./commands.test-harness.js");
 
 const baseCfg = {
   session: { mainKey: "main", scope: "per-sender" },
-} satisfies OpenClawConfig;
+} satisfies ActiviConfig;
 
 type FakeBinding = {
   threadId: string;

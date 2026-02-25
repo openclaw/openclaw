@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { captureEnv } from "../test-utils/env.js";
 import { maybeRemoveDeprecatedCliAuthProfiles } from "./doctor-auth.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
@@ -23,9 +23,9 @@ function makePrompter(confirmValue: boolean): DoctorPrompter {
 }
 
 beforeEach(() => {
-  envSnapshot = captureEnv(["OPENCLAW_AGENT_DIR", "PI_CODING_AGENT_DIR"]);
-  tempAgentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
-  process.env.OPENCLAW_AGENT_DIR = tempAgentDir;
+  envSnapshot = captureEnv(["ACTIVI_AGENT_DIR", "PI_CODING_AGENT_DIR"]);
+  tempAgentDir = fs.mkdtempSync(path.join(os.tmpdir(), "activi-auth-"));
+  process.env.ACTIVI_AGENT_DIR = tempAgentDir;
   process.env.PI_CODING_AGENT_DIR = tempAgentDir;
 });
 
@@ -85,7 +85,7 @@ describe("maybeRemoveDeprecatedCliAuthProfiles", () => {
     } as const;
 
     const next = await maybeRemoveDeprecatedCliAuthProfiles(
-      cfg as unknown as OpenClawConfig,
+      cfg as unknown as ActiviConfig,
       makePrompter(true),
     );
 

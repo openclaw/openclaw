@@ -2,7 +2,7 @@ import type { Api, Context, Model } from "@mariozechner/pi-ai";
 import { complete } from "@mariozechner/pi-ai";
 import { minimaxUnderstandImage } from "../../agents/minimax-vlm.js";
 import { getApiKeyForModel, requireApiKey } from "../../agents/model-auth.js";
-import { ensureOpenClawModelsJson } from "../../agents/models-config.js";
+import { ensureActiviModelsJson } from "../../agents/models-config.js";
 import { discoverAuthStorage, discoverModels } from "../../agents/pi-model-discovery.js";
 import { coerceImageAssistantText } from "../../agents/tools/image-tool.helpers.js";
 import type { ImageDescriptionRequest, ImageDescriptionResult } from "../types.js";
@@ -10,7 +10,7 @@ import type { ImageDescriptionRequest, ImageDescriptionResult } from "../types.j
 export async function describeImageWithModel(
   params: ImageDescriptionRequest,
 ): Promise<ImageDescriptionResult> {
-  await ensureOpenClawModelsJson(params.cfg, params.agentDir);
+  await ensureActiviModelsJson(params.cfg, params.agentDir);
   const authStorage = discoverAuthStorage(params.agentDir);
   const modelRegistry = discoverModels(authStorage, params.agentDir);
   const model = modelRegistry.find(params.provider, params.model) as Model<Api> | null;

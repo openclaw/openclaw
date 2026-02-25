@@ -3,8 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import "./test-helpers/fast-coding-tools.js";
-import type { OpenClawConfig } from "../config/config.js";
-import { ensureOpenClawModelsJson } from "./models-config.js";
+import type { ActiviConfig } from "../config/config.js";
+import { ensureActiviModelsJson } from "./models-config.js";
 
 vi.mock("@mariozechner/pi-coding-agent", async () => {
   const actual = await vi.importActual<typeof import("@mariozechner/pi-coding-agent")>(
@@ -125,7 +125,7 @@ let runCounter = 0;
 beforeAll(async () => {
   vi.useRealTimers();
   ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner/run.js"));
-  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-embedded-agent-"));
+  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "activi-embedded-agent-"));
   agentDir = path.join(tempRoot, "agent");
   workspaceDir = path.join(tempRoot, "workspace");
   await fs.mkdir(agentDir, { recursive: true });
@@ -160,9 +160,9 @@ const makeOpenAiConfig = (modelIds: string[]) =>
         },
       },
     },
-  }) satisfies OpenClawConfig;
+  }) satisfies ActiviConfig;
 
-const ensureModels = (cfg: OpenClawConfig) => ensureOpenClawModelsJson(cfg, agentDir) as unknown;
+const ensureModels = (cfg: ActiviConfig) => ensureActiviModelsJson(cfg, agentDir) as unknown;
 
 const nextSessionFile = () => {
   sessionCounter += 1;
@@ -272,7 +272,7 @@ describe("runEmbeddedPiAgent", () => {
           },
         },
       },
-    } satisfies OpenClawConfig;
+    } satisfies ActiviConfig;
 
     await expect(
       runEmbeddedPiAgent({
@@ -304,7 +304,7 @@ describe("runEmbeddedPiAgent", () => {
           workspace: fallbackWorkspace,
         },
       },
-    } satisfies OpenClawConfig;
+    } satisfies ActiviConfig;
     await ensureModels(cfg);
 
     const result = await runEmbeddedPiAgent({
@@ -341,7 +341,7 @@ describe("runEmbeddedPiAgent", () => {
           },
         ],
       },
-    } satisfies OpenClawConfig;
+    } satisfies ActiviConfig;
     await ensureModels(cfg);
 
     await expect(

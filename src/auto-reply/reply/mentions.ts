@@ -1,7 +1,7 @@
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import { getChannelDock } from "../../channels/dock.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 import { escapeRegExp } from "../../utils.js";
 import type { MsgContext } from "../templating.js";
 
@@ -35,7 +35,7 @@ function normalizeMentionPatterns(patterns: string[]): string[] {
   return patterns.map(normalizeMentionPattern);
 }
 
-function resolveMentionPatterns(cfg: OpenClawConfig | undefined, agentId?: string): string[] {
+function resolveMentionPatterns(cfg: ActiviConfig | undefined, agentId?: string): string[] {
   if (!cfg) {
     return [];
   }
@@ -52,7 +52,7 @@ function resolveMentionPatterns(cfg: OpenClawConfig | undefined, agentId?: strin
   return derived.length > 0 ? derived : [];
 }
 
-export function buildMentionRegexes(cfg: OpenClawConfig | undefined, agentId?: string): RegExp[] {
+export function buildMentionRegexes(cfg: ActiviConfig | undefined, agentId?: string): RegExp[] {
   const patterns = normalizeMentionPatterns(resolveMentionPatterns(cfg, agentId));
   return patterns
     .map((pattern) => {
@@ -128,7 +128,7 @@ export function stripStructuralPrefixes(text: string): string {
 export function stripMentions(
   text: string,
   ctx: MsgContext,
-  cfg: OpenClawConfig | undefined,
+  cfg: ActiviConfig | undefined,
   agentId?: string,
 ): string {
   let result = text;

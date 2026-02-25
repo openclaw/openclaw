@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { ActiviConfig } from "activi/plugin-sdk";
 import { afterEach, beforeEach, vi } from "vitest";
 
 export const BASE_TWITCH_TEST_ACCOUNT = {
@@ -7,7 +7,7 @@ export const BASE_TWITCH_TEST_ACCOUNT = {
   channel: "#testchannel",
 };
 
-export function makeTwitchTestConfig(account: Record<string, unknown>): OpenClawConfig {
+export function makeTwitchTestConfig(account: Record<string, unknown>): ActiviConfig {
   return {
     channels: {
       twitch: {
@@ -16,7 +16,7 @@ export function makeTwitchTestConfig(account: Record<string, unknown>): OpenClaw
         },
       },
     },
-  } as unknown as OpenClawConfig;
+  } as unknown as ActiviConfig;
 }
 
 export function installTwitchTestHooks() {

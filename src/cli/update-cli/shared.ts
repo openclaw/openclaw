@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
-import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
+import { resolveActiviPackageRoot } from "../../infra/activi-root.js";
 import { readPackageName, readPackageVersion } from "../../infra/package-json.js";
 import { trimLogTail } from "../../infra/restart-sentinel.js";
 import { parseSemver } from "../../infra/runtime-guard.js";
@@ -50,10 +50,10 @@ export function parseTimeoutMsOrExit(timeout?: string): number | undefined | nul
   return timeoutMs;
 }
 
-const OPENCLAW_REPO_URL = "https://github.com/openclaw/openclaw.git";
+const ACTIVI_REPO_URL = "https://github.com/activi/activi.git";
 const MAX_LOG_CHARS = 8000;
 
-export const DEFAULT_PACKAGE_NAME = "openclaw";
+export const DEFAULT_PACKAGE_NAME = "activi";
 const CORE_PACKAGE_NAMES = new Set([DEFAULT_PACKAGE_NAME]);
 
 export function normalizeTag(value?: string | null): string | null {
@@ -64,8 +64,8 @@ export function normalizeTag(value?: string | null): string | null {
   if (!trimmed) {
     return null;
   }
-  if (trimmed.startsWith("openclaw@")) {
-    return trimmed.slice("openclaw@".length);
+  if (trimmed.startsWith("activi@")) {
+    return trimmed.slice("activi@".length);
   }
   if (trimmed.startsWith(`${DEFAULT_PACKAGE_NAME}@`)) {
     return trimmed.slice(`${DEFAULT_PACKAGE_NAME}@`.length);
@@ -120,7 +120,7 @@ export async function isEmptyDir(targetPath: string): Promise<boolean> {
 }
 
 export function resolveGitInstallDir(): string {
-  const override = process.env.OPENCLAW_GIT_DIR?.trim();
+  const override = process.env.ACTIVI_GIT_DIR?.trim();
   if (override) {
     return path.resolve(override);
   }
@@ -141,7 +141,7 @@ export function resolveNodeRunner(): string {
 
 export async function resolveUpdateRoot(): Promise<string> {
   return (
-    (await resolveOpenClawPackageRoot({
+    (await resolveActiviPackageRoot({
       moduleUrl: import.meta.url,
       argv1: process.argv[1],
       cwd: process.cwd(),
@@ -202,7 +202,7 @@ export async function ensureGitCheckout(params: {
   if (!dirExists) {
     return await runUpdateStep({
       name: "git clone",
-      argv: ["git", "clone", OPENCLAW_REPO_URL, params.dir],
+      argv: ["git", "clone", ACTIVI_REPO_URL, params.dir],
       timeoutMs: params.timeoutMs,
       progress: params.progress,
     });
@@ -212,13 +212,13 @@ export async function ensureGitCheckout(params: {
     const empty = await isEmptyDir(params.dir);
     if (!empty) {
       throw new Error(
-        `OPENCLAW_GIT_DIR points at a non-git directory: ${params.dir}. Set OPENCLAW_GIT_DIR to an empty folder or an openclaw checkout.`,
+        `ACTIVI_GIT_DIR points at a non-git directory: ${params.dir}. Set ACTIVI_GIT_DIR to an empty folder or an activi checkout.`,
       );
     }
 
     return await runUpdateStep({
       name: "git clone",
-      argv: ["git", "clone", OPENCLAW_REPO_URL, params.dir],
+      argv: ["git", "clone", ACTIVI_REPO_URL, params.dir],
       cwd: params.dir,
       timeoutMs: params.timeoutMs,
       progress: params.progress,
@@ -226,7 +226,7 @@ export async function ensureGitCheckout(params: {
   }
 
   if (!(await isCorePackage(params.dir))) {
-    throw new Error(`OPENCLAW_GIT_DIR does not look like a core checkout: ${params.dir}.`);
+    throw new Error(`ACTIVI_GIT_DIR does not look like a core checkout: ${params.dir}.`);
   }
 
   return null;
@@ -255,7 +255,7 @@ export async function resolveGlobalManager(params: {
 }
 
 export async function tryWriteCompletionCache(root: string, jsonMode: boolean): Promise<void> {
-  const binPath = path.join(root, "openclaw.mjs");
+  const binPath = path.join(root, "activi.mjs");
   if (!(await pathExists(binPath))) {
     return;
   }

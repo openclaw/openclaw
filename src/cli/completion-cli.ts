@@ -41,7 +41,7 @@ export function resolveShellFromEnv(env: NodeJS.ProcessEnv = process.env): Compl
 function sanitizeCompletionBasename(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
-    return "openclaw";
+    return "activi";
   }
   return trimmed.replace(/[^a-zA-Z0-9._-]/g, "-");
 }
@@ -61,7 +61,7 @@ export function resolveCompletionCachePath(shell: CompletionShell, binName: stri
 /** Check if the completion cache file exists for the given shell. */
 export async function completionCacheExists(
   shell: CompletionShell,
-  binName = "openclaw",
+  binName = "activi",
 ): Promise<boolean> {
   const cachePath = resolveCompletionCachePath(shell, binName);
   return pathExists(cachePath);
@@ -106,7 +106,7 @@ function formatCompletionSourceLine(
 }
 
 function isCompletionProfileHeader(line: string): boolean {
-  return line.trim() === "# OpenClaw Completion";
+  return line.trim() === "# Activi Completion";
 }
 
 function isCompletionProfileLine(line: string, binName: string, cachePath: string | null): boolean {
@@ -121,7 +121,7 @@ function isCompletionProfileLine(line: string, binName: string, cachePath: strin
 
 /** Check if a line uses the slow dynamic completion pattern (source <(...)) */
 function isSlowDynamicCompletionLine(line: string, binName: string): boolean {
-  // Matches patterns like: source <(openclaw completion --shell zsh)
+  // Matches patterns like: source <(activi.completion --shell zsh)
   return (
     line.includes(`<(${binName} completion`) ||
     (line.includes(`${binName} completion`) && line.includes("| source"))
@@ -153,7 +153,7 @@ function updateCompletionProfile(
   }
 
   const trimmed = filtered.join("\n").trimEnd();
-  const block = `# OpenClaw Completion\n${sourceLine}`;
+  const block = `# Activi Completion\n${sourceLine}`;
   const next = trimmed ? `${trimmed}\n\n${block}\n` : `${block}\n`;
   return { next, changed: next !== content, hadExisting };
 }
@@ -183,7 +183,7 @@ function getShellProfilePath(shell: CompletionShell): string {
 
 export async function isCompletionInstalled(
   shell: CompletionShell,
-  binName = "openclaw",
+  binName = "activi",
 ): Promise<boolean> {
   const profilePath = getShellProfilePath(shell);
 
@@ -201,11 +201,11 @@ export async function isCompletionInstalled(
 
 /**
  * Check if the profile uses the slow dynamic completion pattern.
- * Returns true if profile has `source <(openclaw completion ...)` instead of cached file.
+ * Returns true if profile has `source <(activi.completion ...)` instead of cached file.
  */
 export async function usesSlowDynamicCompletion(
   shell: CompletionShell,
-  binName = "openclaw",
+  binName = "activi",
 ): Promise<boolean> {
   const profilePath = getShellProfilePath(shell);
 
@@ -238,7 +238,7 @@ export function registerCompletionCli(program: Command) {
     .option("-i, --install", "Install completion script to shell profile")
     .option(
       "--write-state",
-      "Write completion scripts to $OPENCLAW_STATE_DIR/completions (no stdout)",
+      "Write completion scripts to $ACTIVI_STATE_DIR/completions (no stdout)",
     )
     .option("-y, --yes", "Skip confirmation (non-interactive)", false)
     .action(async (options) => {
@@ -293,7 +293,7 @@ export function registerCompletionCli(program: Command) {
     });
 }
 
-export async function installCompletion(shell: string, yes: boolean, binName = "openclaw") {
+export async function installCompletion(shell: string, yes: boolean, binName = "activi") {
   const home = process.env.HOME || os.homedir();
   let profilePath = "";
   let sourceLine = "";
@@ -596,7 +596,7 @@ function generateFishCompletion(program: Command): string {
     } // Only push if not root, or consistent root handling
 
     // Fish uses 'seen_subcommand_from' to determine context.
-    // For root: complete -c openclaw -n "__fish_use_subcommand" -a "subcmd" -d "desc"
+    // For root: complete -c activi -n "__fish_use_subcommand" -a "subcmd" -d "desc"
 
     // Root logic
     if (parents.length === 0) {
@@ -625,7 +625,7 @@ function generateFishCompletion(program: Command): string {
       // Actually, a robust fish completion often requires defining a function to check current line.
       // For simplicity, we'll assume standard fish helper __fish_seen_subcommand_from.
 
-      // To properly scope to 'openclaw gateway' and not 'openclaw other gateway', we need to check the sequence.
+      // To properly scope to 'activi gateway' and not 'activi other gateway', we need to check the sequence.
       // A simplified approach:
 
       // Subcommands

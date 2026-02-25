@@ -25,7 +25,7 @@ import { dispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply
 import { createReplyReferencePlanner } from "../../auto-reply/reply/reply-reference.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
 import { readSessionUpdatedAt, resolveStorePath } from "../../config/sessions.js";
 import type { DiscordAccountConfig } from "../../config/types.discord.js";
@@ -369,7 +369,7 @@ async function ensureAgentComponentInteractionAllowed(params: {
 }
 
 export type AgentComponentContext = {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   accountId: string;
   discordConfig?: DiscordAccountConfig;
   runtime?: RuntimeEnv;
@@ -1506,7 +1506,7 @@ class DiscordComponentChannelSelect extends ChannelSelectMenu {
 }
 
 class DiscordComponentModal extends Modal {
-  title = "OpenClaw form";
+  title = "Activi form";
   customId = "*";
   components = [];
   customIdParser = parseDiscordModalCustomIdForCarbon;

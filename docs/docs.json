@@ -1,14 +1,14 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "name": "OpenClaw",
+  "name": "Activi",
   "description": "Self-hosted gateway that connects WhatsApp, Telegram, Discord, iMessage, and more to AI coding agents. Run a single Gateway process on your own machine and message your AI assistant from anywhere.",
   "theme": "mint",
   "icons": {
     "library": "lucide"
   },
   "logo": {
-    "light": "/assets/pixel-lobster.svg",
-    "dark": "/assets/pixel-lobster.svg"
+    "light": "/assets/logo-activi.png",
+    "dark": "/assets/logo-activi.png"
   },
   "fonts": {
     "body": {
@@ -18,11 +18,11 @@
       "family": "DM Sans"
     }
   },
-  "favicon": "/assets/pixel-lobster.svg",
+  "favicon": "/assets/logo-activi.png",
   "colors": {
-    "primary": "#FF5A36",
-    "dark": "#FF5A36",
-    "light": "#FF8A6B"
+    "primary": "#6B6B6B",
+    "dark": "#4A4A4A",
+    "light": "#9A9A9A"
   },
   "styling": {
     "codeblocks": {
@@ -36,12 +36,12 @@
     "links": [
       {
         "label": "GitHub",
-        "href": "https://github.com/openclaw/openclaw",
+        "href": "https://github.com/activi/activi",
         "icon": "github"
       },
       {
         "label": "Releases",
-        "href": "https://github.com/openclaw/openclaw/releases",
+        "href": "https://github.com/activi/activi/releases",
         "icon": "package"
       }
     ]
@@ -260,28 +260,28 @@
       "destination": "/nodes/camera"
     },
     {
-      "source": "/clawd",
-      "destination": "/start/openclaw"
+      "source": "/activi",
+      "destination": "/start/activi"
     },
     {
-      "source": "/start/clawd",
-      "destination": "/start/openclaw"
+      "source": "/start/activi",
+      "destination": "/start/activi"
     },
     {
-      "source": "/start/clawd/",
-      "destination": "/start/openclaw"
+      "source": "/start/activi/",
+      "destination": "/start/activi"
     },
     {
-      "source": "/clawhub",
-      "destination": "/tools/clawhub"
+      "source": "/activihub",
+      "destination": "/tools/activihub"
     },
     {
-      "source": "/clawdhub",
-      "destination": "/tools/clawhub"
+      "source": "/activihub",
+      "destination": "/tools/activihub"
     },
     {
-      "source": "/tools/clawdhub",
-      "destination": "/tools/clawhub"
+      "source": "/tools/activihub",
+      "destination": "/tools/activihub"
     },
     {
       "source": "/configuration",
@@ -827,7 +827,7 @@
               },
               {
                 "group": "Guides",
-                "pages": ["start/openclaw"]
+                "pages": ["start/activi"]
               }
             ]
           },
@@ -996,7 +996,7 @@
                   "tools/slash-commands",
                   "tools/skills",
                   "tools/skills-config",
-                  "tools/clawhub",
+                  "tools/activihub",
                   "tools/plugin"
                 ]
               },
@@ -1338,7 +1338,7 @@
               },
               {
                 "group": "指南",
-                "pages": ["zh-CN/start/openclaw"]
+                "pages": ["zh-CN/start/activi"]
               }
             ]
           },
@@ -1513,7 +1513,7 @@
                   "zh-CN/tools/slash-commands",
                   "zh-CN/tools/skills",
                   "zh-CN/tools/skills-config",
-                  "zh-CN/tools/clawhub",
+                  "zh-CN/tools/activihub",
                   "zh-CN/tools/plugin"
                 ]
               },

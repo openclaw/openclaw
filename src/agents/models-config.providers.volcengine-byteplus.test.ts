@@ -7,7 +7,7 @@ import { resolveImplicitProviders } from "./models-config.providers.js";
 
 describe("Volcengine and BytePlus providers", () => {
   it("includes volcengine and volcengine-plan when VOLCANO_ENGINE_API_KEY is configured", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "activi-test-"));
     const envSnapshot = captureEnv(["VOLCANO_ENGINE_API_KEY"]);
     process.env.VOLCANO_ENGINE_API_KEY = "test-key";
 
@@ -23,7 +23,7 @@ describe("Volcengine and BytePlus providers", () => {
   });
 
   it("includes byteplus and byteplus-plan when BYTEPLUS_API_KEY is configured", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "activi-test-"));
     const envSnapshot = captureEnv(["BYTEPLUS_API_KEY"]);
     process.env.BYTEPLUS_API_KEY = "test-key";
 

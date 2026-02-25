@@ -1,13 +1,13 @@
 {
-  "name": "@openclaw/imessage",
+  "name": "@activi/imessage",
   "version": "2026.2.22",
   "private": true,
-  "description": "OpenClaw iMessage channel plugin",
+  "description": "Activi iMessage channel plugin",
   "type": "module",
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "activi": "workspace:*"
   },
-  "openclaw": {
+  "activi": {
     "extensions": [
       "./index.ts"
     ]

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { createTempHomeHarness, makeReplyConfig } from "./reply.test-harness.js";
 
 const agentMocks = vi.hoisted(() => ({
@@ -31,11 +31,11 @@ vi.mock("../web/session.js", () => ({
 
 import { getReplyFromConfig } from "./reply.js";
 
-const { withTempHome } = createTempHomeHarness({ prefix: "openclaw-rawbody-" });
+const { withTempHome } = createTempHomeHarness({ prefix: "activi-rawbody-" });
 
 describe("RawBody directive parsing", () => {
   beforeEach(() => {
-    vi.stubEnv("OPENCLAW_TEST_FAST", "1");
+    vi.stubEnv("ACTIVI_TEST_FAST", "1");
     agentMocks.runEmbeddedPiAgent.mockClear();
     agentMocks.loadModelCatalog.mockClear();
     agentMocks.loadModelCatalog.mockResolvedValue([
@@ -74,7 +74,7 @@ describe("RawBody directive parsing", () => {
       const res = await getReplyFromConfig(
         groupMessageCtx,
         {},
-        makeReplyConfig(home) as OpenClawConfig,
+        makeReplyConfig(home) as ActiviConfig,
       );
 
       const text = Array.isArray(res) ? res[0]?.text : res?.text;

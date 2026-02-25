@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import {
   applyOnboardingLocalWorkspaceConfig,
   ONBOARDING_DEFAULT_DM_SCOPE,
@@ -7,7 +7,7 @@ import {
 
 describe("applyOnboardingLocalWorkspaceConfig", () => {
   it("sets secure dmScope default when unset", () => {
-    const baseConfig: OpenClawConfig = {};
+    const baseConfig: ActiviConfig = {};
     const result = applyOnboardingLocalWorkspaceConfig(baseConfig, "/tmp/workspace");
 
     expect(result.session?.dmScope).toBe(ONBOARDING_DEFAULT_DM_SCOPE);
@@ -16,7 +16,7 @@ describe("applyOnboardingLocalWorkspaceConfig", () => {
   });
 
   it("preserves existing dmScope when already configured", () => {
-    const baseConfig: OpenClawConfig = {
+    const baseConfig: ActiviConfig = {
       session: {
         dmScope: "main",
       },
@@ -27,7 +27,7 @@ describe("applyOnboardingLocalWorkspaceConfig", () => {
   });
 
   it("preserves explicit non-main dmScope values", () => {
-    const baseConfig: OpenClawConfig = {
+    const baseConfig: ActiviConfig = {
       session: {
         dmScope: "per-account-channel-peer",
       },

@@ -6,7 +6,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { resolveStateDir } from "../config/paths.js";
 import { sendVoiceMessageDiscord } from "../discord/send.js";
 import * as ssrf from "../infra/net/ssrf.js";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { resolvePreferredActiviTmpDir } from "../infra/tmp-activi-dir.js";
 import { optimizeImageToPng } from "../media/image-ops.js";
 import { captureEnv } from "../test-utils/env.js";
 import {
@@ -52,7 +52,7 @@ async function createLargeTestJpeg(): Promise<{ buffer: Buffer; file: string }> 
 
 beforeAll(async () => {
   fixtureRoot = await fs.mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-media-test-"),
+    path.join(resolvePreferredActiviTmpDir(), "activi-media-test-"),
   );
   largeJpegBuffer = await sharp({
     create: {
@@ -110,14 +110,14 @@ afterEach(() => {
 
 describe("web media loading", () => {
   beforeAll(() => {
-    // Ensure state dir is stable and not influenced by other tests that stub OPENCLAW_STATE_DIR.
-    // Also keep it outside the OpenClaw temp root so default localRoots doesn't accidentally make all state readable.
-    stateDirSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-    process.env.OPENCLAW_STATE_DIR = path.join(
+    // Ensure state dir is stable and not influenced by other tests that stub ACTIVI_STATE_DIR.
+    // Also keep it outside the Activi temp root so default localRoots doesn't accidentally make all state readable.
+    stateDirSnapshot = captureEnv(["ACTIVI_STATE_DIR"]);
+    process.env.ACTIVI_STATE_DIR = path.join(
       path.parse(os.tmpdir()).root,
       "var",
       "lib",
-      "openclaw-media-state-test",
+      "activi-media-state-test",
     );
   });
 
@@ -348,7 +348,7 @@ describe("local media root guard", () => {
 
   it("allows local paths under an explicit root", async () => {
     const result = await loadWebMedia(tinyPngFile, 1024 * 1024, {
-      localRoots: [resolvePreferredOpenClawTmpDir()],
+      localRoots: [resolvePreferredActiviTmpDir()],
     });
     expect(result.kind).toBe("image");
   });
@@ -385,7 +385,7 @@ describe("local media root guard", () => {
     ).rejects.toMatchObject({ code: "invalid-root" });
   });
 
-  it("allows default OpenClaw state workspace and sandbox roots", async () => {
+  it("allows default Activi state workspace and sandbox roots", async () => {
     const stateDir = resolveStateDir();
     const readFile = vi.fn(async () => Buffer.from("generated-media"));
 
@@ -412,12 +412,12 @@ describe("local media root guard", () => {
     );
   });
 
-  it("rejects default OpenClaw state per-agent workspace-* roots without explicit local roots", async () => {
+  it("rejects default Activi state per-agent workspace-* roots without explicit local roots", async () => {
     const stateDir = resolveStateDir();
     const readFile = vi.fn(async () => Buffer.from("generated-media"));
 
     await expect(
-      loadWebMedia(path.join(stateDir, "workspace-clawdy", "tmp", "render.bin"), {
+      loadWebMedia(path.join(stateDir, "workspace-activiy", "tmp", "render.bin"), {
         maxBytes: 1024 * 1024,
         readFile,
       }),
@@ -427,7 +427,7 @@ describe("local media root guard", () => {
   it("allows per-agent workspace-* paths with explicit local roots", async () => {
     const stateDir = resolveStateDir();
     const readFile = vi.fn(async () => Buffer.from("generated-media"));
-    const agentWorkspaceDir = path.join(stateDir, "workspace-clawdy");
+    const agentWorkspaceDir = path.join(stateDir, "workspace-activiy");
 
     await expect(
       loadWebMedia(path.join(agentWorkspaceDir, "tmp", "render.bin"), {

@@ -3,7 +3,7 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import { setTelegramRuntime } from "../../extensions/telegram/src/runtime.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
@@ -75,7 +75,7 @@ describe("heartbeat transcript pruning", () => {
           agent: { workspace: tmpDir },
           sessionStore: storePath,
           channels: { telegram: {} },
-        } as unknown as OpenClawConfig;
+        } as unknown as ActiviConfig;
 
         await runHeartbeatOnce({
           agentId: undefined,
@@ -93,7 +93,7 @@ describe("heartbeat transcript pruning", () => {
         }
         expect(finalSize).toBeGreaterThanOrEqual(originalSize);
       },
-      { prefix: "openclaw-hb-prune-" },
+      { prefix: "activi-hb-prune-" },
     );
   }
 

@@ -22,7 +22,7 @@ async function emitCredsUpdateAndReadSaveCreds() {
 }
 
 function mockCredsJsonSpies(readContents: string) {
-  const credsSuffix = path.join(".openclaw", "credentials", "whatsapp", "default", "creds.json");
+  const credsSuffix = path.join(".activi", "credentials", "whatsapp", "default", "creds.json");
   const copySpy = vi.spyOn(fsSync, "copyFileSync").mockImplementation(() => {});
   const existsSpy = vi.spyOn(fsSync, "existsSync").mockImplementation((p) => {
     if (typeof p !== "string") {
@@ -207,7 +207,7 @@ describe("web session", () => {
   it("rotates creds backup when creds.json is valid JSON", async () => {
     const creds = mockCredsJsonSpies("{}");
     const backupSuffix = path.join(
-      ".openclaw",
+      ".activi",
       "credentials",
       "whatsapp",
       "default",

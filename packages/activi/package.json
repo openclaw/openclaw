@@ -1,0 +1,16 @@
+{
+  "name": "@activi/clawdbot",
+  "version": "2026.2.12",
+  "description": "Compatibility shim that forwards to activi",
+  "bin": {
+    "activi": "./bin.activi.js"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./index.js",
+    "./cli-entry": "./bin.activi.js"
+  },
+  "dependencies": {
+    "activi": "workspace:*"
+  }
+}

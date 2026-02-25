@@ -1,4 +1,4 @@
-import type { OpenClawConfig, RuntimeEnv } from "openclaw/plugin-sdk";
+import type { ActiviConfig, RuntimeEnv } from "activi/plugin-sdk";
 import { describe, expect, it } from "vitest";
 import { zaloPlugin } from "./channel.js";
 
@@ -18,7 +18,7 @@ describe("zalo directory", () => {
           allowFrom: ["zalo:123", "zl:234", "345"],
         },
       },
-    } as unknown as OpenClawConfig;
+    } as unknown as ActiviConfig;
 
     expect(zaloPlugin.directory).toBeTruthy();
     expect(zaloPlugin.directory?.listPeers).toBeTruthy();

@@ -46,16 +46,16 @@ async function getServerModule() {
 const GATEWAY_TEST_ENV_KEYS = [
   "HOME",
   "USERPROFILE",
-  "OPENCLAW_STATE_DIR",
-  "OPENCLAW_CONFIG_PATH",
-  "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
-  "OPENCLAW_SKIP_GMAIL_WATCHER",
-  "OPENCLAW_SKIP_CANVAS_HOST",
-  "OPENCLAW_BUNDLED_PLUGINS_DIR",
-  "OPENCLAW_SKIP_CHANNELS",
-  "OPENCLAW_SKIP_PROVIDERS",
-  "OPENCLAW_SKIP_CRON",
-  "OPENCLAW_TEST_MINIMAL_GATEWAY",
+  "ACTIVI_STATE_DIR",
+  "ACTIVI_CONFIG_PATH",
+  "ACTIVI_SKIP_BROWSER_CONTROL_SERVER",
+  "ACTIVI_SKIP_GMAIL_WATCHER",
+  "ACTIVI_SKIP_CANVAS_HOST",
+  "ACTIVI_BUNDLED_PLUGINS_DIR",
+  "ACTIVI_SKIP_CHANNELS",
+  "ACTIVI_SKIP_PROVIDERS",
+  "ACTIVI_SKIP_CRON",
+  "ACTIVI_TEST_MINIMAL_GATEWAY",
 ] as const;
 
 let gatewayEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
@@ -92,24 +92,24 @@ export async function writeSessionStore(params: {
 
 async function setupGatewayTestHome() {
   gatewayEnvSnapshot = captureEnv([...GATEWAY_TEST_ENV_KEYS]);
-  tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gateway-home-"));
+  tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "activi-gateway-home-"));
   process.env.HOME = tempHome;
   process.env.USERPROFILE = tempHome;
-  process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openclaw");
-  delete process.env.OPENCLAW_CONFIG_PATH;
+  process.env.ACTIVI_STATE_DIR = path.join(tempHome, ".activi");
+  delete process.env.ACTIVI_CONFIG_PATH;
 }
 
 function applyGatewaySkipEnv() {
-  process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
-  process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
-  process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
-  process.env.OPENCLAW_SKIP_CHANNELS = "1";
-  process.env.OPENCLAW_SKIP_PROVIDERS = "1";
-  process.env.OPENCLAW_SKIP_CRON = "1";
-  process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "1";
-  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = tempHome
-    ? path.join(tempHome, "openclaw-test-no-bundled-extensions")
-    : "openclaw-test-no-bundled-extensions";
+  process.env.ACTIVI_SKIP_BROWSER_CONTROL_SERVER = "1";
+  process.env.ACTIVI_SKIP_GMAIL_WATCHER = "1";
+  process.env.ACTIVI_SKIP_CANVAS_HOST = "1";
+  process.env.ACTIVI_SKIP_CHANNELS = "1";
+  process.env.ACTIVI_SKIP_PROVIDERS = "1";
+  process.env.ACTIVI_SKIP_CRON = "1";
+  process.env.ACTIVI_TEST_MINIMAL_GATEWAY = "1";
+  process.env.ACTIVI_BUNDLED_PLUGINS_DIR = tempHome
+    ? path.join(tempHome, "activi-test-no-bundled-extensions")
+    : "activi-test-no-bundled-extensions";
 }
 
 async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
@@ -121,9 +121,9 @@ async function resetGatewayTestState(options: { uniqueConfigRoot: boolean }) {
   }
   applyGatewaySkipEnv();
   if (options.uniqueConfigRoot) {
-    tempConfigRoot = await fs.mkdtemp(path.join(tempHome, "openclaw-test-"));
+    tempConfigRoot = await fs.mkdtemp(path.join(tempHome, "activi-test-"));
   } else {
-    tempConfigRoot = path.join(tempHome, ".openclaw-test");
+    tempConfigRoot = path.join(tempHome, ".activi-test");
     await fs.rm(tempConfigRoot, { recursive: true, force: true });
     await fs.mkdir(tempConfigRoot, { recursive: true });
   }
@@ -242,8 +242,8 @@ type GatewayTestMessage = {
   [key: string]: unknown;
 };
 
-const CONNECT_CHALLENGE_NONCE_KEY = "__openclawTestConnectChallengeNonce";
-const CONNECT_CHALLENGE_TRACKED_KEY = "__openclawTestConnectChallengeTracked";
+const CONNECT_CHALLENGE_NONCE_KEY = "__activiTestConnectChallengeNonce";
+const CONNECT_CHALLENGE_TRACKED_KEY = "__activiTestConnectChallengeTracked";
 type TrackedWs = WebSocket & Record<string, unknown>;
 
 export function getTrackedConnectChallengeNonce(ws: WebSocket): string | undefined {
@@ -352,8 +352,8 @@ export async function startServerWithClient(
 ) {
   const { wsHeaders, ...gatewayOpts } = opts ?? {};
   let port = await getFreePort();
-  const envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN"]);
-  const prev = process.env.OPENCLAW_GATEWAY_TOKEN;
+  const envSnapshot = captureEnv(["ACTIVI_GATEWAY_TOKEN"]);
+  const prev = process.env.ACTIVI_GATEWAY_TOKEN;
   if (typeof token === "string") {
     testState.gatewayAuth = { mode: "token", token };
   }
@@ -363,9 +363,9 @@ export async function startServerWithClient(
       ? (testState.gatewayAuth as { token?: string }).token
       : undefined);
   if (fallbackToken === undefined) {
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.ACTIVI_GATEWAY_TOKEN;
   } else {
-    process.env.OPENCLAW_GATEWAY_TOKEN = fallbackToken;
+    process.env.ACTIVI_GATEWAY_TOKEN = fallbackToken;
   }
 
   const started = await startGatewayServerWithRetries({ port, opts: gatewayOpts });
@@ -486,13 +486,13 @@ export async function connectReq(
       ? undefined
       : typeof (testState.gatewayAuth as { token?: unknown } | undefined)?.token === "string"
         ? ((testState.gatewayAuth as { token?: string }).token ?? undefined)
-        : process.env.OPENCLAW_GATEWAY_TOKEN;
+        : process.env.ACTIVI_GATEWAY_TOKEN;
   const defaultPassword =
     opts?.skipDefaultAuth === true
       ? undefined
       : typeof (testState.gatewayAuth as { password?: unknown } | undefined)?.password === "string"
         ? ((testState.gatewayAuth as { password?: string }).password ?? undefined)
-        : process.env.OPENCLAW_GATEWAY_PASSWORD;
+        : process.env.ACTIVI_GATEWAY_PASSWORD;
   const token = opts?.token ?? defaultToken;
   const password = opts?.password ?? defaultPassword;
   const requestedScopes = Array.isArray(opts?.scopes)

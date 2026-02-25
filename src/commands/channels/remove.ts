@@ -4,7 +4,7 @@ import {
   listChannelPlugins,
   normalizeChannelId,
 } from "../../channels/plugins/index.js";
-import { type OpenClawConfig, writeConfigFile } from "../../config/config.js";
+import { type ActiviConfig, writeConfigFile } from "../../config/config.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { deleteTelegramUpdateOffset } from "../../telegram/update-offset-store.js";
@@ -17,7 +17,7 @@ export type ChannelsRemoveOptions = {
   delete?: boolean;
 };
 
-function listAccountIds(cfg: OpenClawConfig, channel: ChatChannel): string[] {
+function listAccountIds(cfg: ActiviConfig, channel: ChatChannel): string[] {
   const plugin = getChannelPlugin(channel);
   if (!plugin) {
     return [];

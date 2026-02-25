@@ -29,7 +29,7 @@ async function setupPairedNode(baseDir: string): Promise<string> {
 
 describe("node pairing tokens", () => {
   test("reuses existing pending requests for the same node", async () => {
-    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-node-pairing-"));
+    const baseDir = await mkdtemp(join(tmpdir(), "activi-node-pairing-"));
     const first = await requestNodePairing(
       {
         nodeId: "node-1",
@@ -51,14 +51,14 @@ describe("node pairing tokens", () => {
   });
 
   test("generates base64url node tokens with 256-bit entropy output length", async () => {
-    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-node-pairing-"));
+    const baseDir = await mkdtemp(join(tmpdir(), "activi-node-pairing-"));
     const token = await setupPairedNode(baseDir);
     expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(Buffer.from(token, "base64url")).toHaveLength(32);
   });
 
   test("verifies token and rejects mismatches", async () => {
-    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-node-pairing-"));
+    const baseDir = await mkdtemp(join(tmpdir(), "activi-node-pairing-"));
     const token = await setupPairedNode(baseDir);
     await expect(verifyNodeToken("node-1", token, baseDir)).resolves.toEqual({
       ok: true,
@@ -70,7 +70,7 @@ describe("node pairing tokens", () => {
   });
 
   test("treats multibyte same-length token input as mismatch without throwing", async () => {
-    const baseDir = await mkdtemp(join(tmpdir(), "openclaw-node-pairing-"));
+    const baseDir = await mkdtemp(join(tmpdir(), "activi-node-pairing-"));
     const token = await setupPairedNode(baseDir);
     const multibyteToken = "é".repeat(token.length);
     expect(Buffer.from(multibyteToken).length).not.toBe(Buffer.from(token).length);

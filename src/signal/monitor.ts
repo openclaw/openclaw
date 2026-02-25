@@ -1,7 +1,7 @@
 import { chunkTextWithMode, resolveChunkMode, resolveTextChunkLimit } from "../auto-reply/chunk.js";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "../auto-reply/reply/history.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import {
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -33,7 +33,7 @@ export type MonitorSignalOpts = {
   abortSignal?: AbortSignal;
   account?: string;
   accountId?: string;
-  config?: OpenClawConfig;
+  config?: ActiviConfig;
   baseUrl?: string;
   autoStart?: boolean;
   startupTimeoutMs?: number;

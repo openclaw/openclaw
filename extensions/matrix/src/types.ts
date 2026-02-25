@@ -1,4 +1,4 @@
-import type { DmPolicy, GroupPolicy } from "openclaw/plugin-sdk";
+import type { DmPolicy, GroupPolicy } from "activi/plugin-sdk";
 export type { DmPolicy, GroupPolicy };
 
 export type ReplyToMode = "off" | "first" | "all";

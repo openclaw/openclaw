@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isFileMissingError, statRegularFile } from "./fs-utils.js";
@@ -121,7 +121,7 @@ type QmdManagerMode = "full" | "status";
 
 export class QmdMemoryManager implements MemorySearchManager {
   static async create(params: {
-    cfg: OpenClawConfig;
+    cfg: ActiviConfig;
     agentId: string;
     resolved: ResolvedMemoryBackendConfig;
     mode?: QmdManagerMode;
@@ -135,7 +135,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     return manager;
   }
 
-  private readonly cfg: OpenClawConfig;
+  private readonly cfg: ActiviConfig;
   private readonly agentId: string;
   private readonly qmd: ResolvedQmdConfig;
   private readonly workspaceDir: string;
@@ -175,7 +175,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private attemptedNullByteCollectionRepair = false;
 
   private constructor(params: {
-    cfg: OpenClawConfig;
+    cfg: ActiviConfig;
     agentId: string;
     resolved: ResolvedQmdConfig;
   }) {
@@ -1000,11 +1000,11 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
     if (!mcporter.startDaemon) {
       type McporterWarnGlobal = typeof globalThis & {
-        __openclawMcporterColdStartWarned?: boolean;
+        __activiMcporterColdStartWarned?: boolean;
       };
       const g: McporterWarnGlobal = globalThis;
-      if (!g.__openclawMcporterColdStartWarned) {
-        g.__openclawMcporterColdStartWarned = true;
+      if (!g.__activiMcporterColdStartWarned) {
+        g.__activiMcporterColdStartWarned = true;
         log.warn(
           "mcporter qmd bridge enabled but startDaemon=false; each query may cold-start QMD MCP. Consider setting memory.qmd.mcporter.startDaemon=true to keep it warm.",
         );
@@ -1012,21 +1012,21 @@ export class QmdMemoryManager implements MemorySearchManager {
       return;
     }
     type McporterGlobal = typeof globalThis & {
-      __openclawMcporterDaemonStart?: Promise<void>;
+      __activiMcporterDaemonStart?: Promise<void>;
     };
     const g: McporterGlobal = globalThis;
-    if (!g.__openclawMcporterDaemonStart) {
-      g.__openclawMcporterDaemonStart = (async () => {
+    if (!g.__activiMcporterDaemonStart) {
+      g.__activiMcporterDaemonStart = (async () => {
         try {
           await this.runMcporter(["daemon", "start"], { timeoutMs: 10_000 });
         } catch (err) {
           log.warn(`mcporter daemon start failed: ${String(err)}`);
           // Allow future searches to retry daemon start on transient failures.
-          delete g.__openclawMcporterDaemonStart;
+          delete g.__activiMcporterDaemonStart;
         }
       })();
     }
-    await g.__openclawMcporterDaemonStart;
+    await g.__activiMcporterDaemonStart;
   }
 
   private async runMcporter(

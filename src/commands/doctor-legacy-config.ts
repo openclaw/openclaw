@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import {
   resolveDiscordPreviewStreamMode,
   resolveSlackNativeStreaming,
@@ -6,12 +6,12 @@ import {
   resolveTelegramPreviewStreamMode,
 } from "../config/discord-preview-streaming.js";
 
-export function normalizeLegacyConfigValues(cfg: OpenClawConfig): {
-  config: OpenClawConfig;
+export function normalizeLegacyConfigValues(cfg: ActiviConfig): {
+  config: ActiviConfig;
   changes: string[];
 } {
   const changes: string[] = [];
-  let next: OpenClawConfig = cfg;
+  let next: ActiviConfig = cfg;
 
   const isRecord = (value: unknown): value is Record<string, unknown> =>
     Boolean(value) && typeof value === "object" && !Array.isArray(value);

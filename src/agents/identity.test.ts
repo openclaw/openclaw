@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { resolveAckReaction } from "./identity.js";
 
 describe("resolveAckReaction", () => {
   it("prefers account-level overrides", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: ActiviConfig = {
       messages: { ackReaction: "👀" },
       agents: { list: [{ id: "main", identity: { emoji: "✅" } }] },
       channels: {
@@ -23,7 +23,7 @@ describe("resolveAckReaction", () => {
   });
 
   it("falls back to channel-level overrides", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: ActiviConfig = {
       messages: { ackReaction: "👀" },
       agents: { list: [{ id: "main", identity: { emoji: "✅" } }] },
       channels: {
@@ -42,7 +42,7 @@ describe("resolveAckReaction", () => {
   });
 
   it("uses the global ackReaction when channel overrides are missing", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: ActiviConfig = {
       messages: { ackReaction: "✅" },
       agents: { list: [{ id: "main", identity: { emoji: "😺" } }] },
     };
@@ -51,7 +51,7 @@ describe("resolveAckReaction", () => {
   });
 
   it("falls back to the agent identity emoji when global config is unset", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: ActiviConfig = {
       agents: { list: [{ id: "main", identity: { emoji: "🔥" } }] },
     };
 
@@ -59,13 +59,13 @@ describe("resolveAckReaction", () => {
   });
 
   it("returns the default emoji when no config is present", () => {
-    const cfg: OpenClawConfig = {};
+    const cfg: ActiviConfig = {};
 
     expect(resolveAckReaction(cfg, "main")).toBe("👀");
   });
 
   it("allows empty strings to disable reactions", () => {
-    const cfg: OpenClawConfig = {
+    const cfg: ActiviConfig = {
       messages: { ackReaction: "👀" },
       channels: {
         telegram: {

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 import type { DmPolicy } from "../../config/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
@@ -23,11 +23,11 @@ export type SetupChannelsOptions = {
 };
 
 export type PromptAccountIdParams = {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   prompter: WizardPrompter;
   label: string;
   currentId?: string;
-  listAccountIds: (cfg: OpenClawConfig) => string[];
+  listAccountIds: (cfg: ActiviConfig) => string[];
   defaultAccountId: string;
 };
 
@@ -42,13 +42,13 @@ export type ChannelOnboardingStatus = {
 };
 
 export type ChannelOnboardingStatusContext = {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   options?: SetupChannelsOptions;
   accountOverrides: Partial<Record<ChannelId, string>>;
 };
 
 export type ChannelOnboardingConfigureContext = {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   runtime: RuntimeEnv;
   prompter: WizardPrompter;
   options?: SetupChannelsOptions;
@@ -58,7 +58,7 @@ export type ChannelOnboardingConfigureContext = {
 };
 
 export type ChannelOnboardingResult = {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   accountId?: string;
 };
 
@@ -67,13 +67,13 @@ export type ChannelOnboardingDmPolicy = {
   channel: ChannelId;
   policyKey: string;
   allowFromKey: string;
-  getCurrent: (cfg: OpenClawConfig) => DmPolicy;
-  setPolicy: (cfg: OpenClawConfig, policy: DmPolicy) => OpenClawConfig;
+  getCurrent: (cfg: ActiviConfig) => DmPolicy;
+  setPolicy: (cfg: ActiviConfig, policy: DmPolicy) => ActiviConfig;
   promptAllowFrom?: (params: {
-    cfg: OpenClawConfig;
+    cfg: ActiviConfig;
     prompter: WizardPrompter;
     accountId?: string;
-  }) => Promise<OpenClawConfig>;
+  }) => Promise<ActiviConfig>;
 };
 
 export type ChannelOnboardingAdapter = {
@@ -82,5 +82,5 @@ export type ChannelOnboardingAdapter = {
   configure: (ctx: ChannelOnboardingConfigureContext) => Promise<ChannelOnboardingResult>;
   dmPolicy?: ChannelOnboardingDmPolicy;
   onAccountRecorded?: (accountId: string, options?: SetupChannelsOptions) => void;
-  disable?: (cfg: OpenClawConfig) => OpenClawConfig;
+  disable?: (cfg: ActiviConfig) => ActiviConfig;
 };

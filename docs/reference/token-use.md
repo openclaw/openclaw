@@ -1,5 +1,5 @@
 ---
-summary: "How OpenClaw builds prompt context and reports token usage + costs"
+summary: "How Activi builds prompt context and reports token usage + costs"
 read_when:
   - Explaining token usage, costs, or context windows
   - Debugging context growth or compaction behavior
@@ -8,12 +8,12 @@ title: "Token Use and Costs"
 
 # Token use & costs
 
-OpenClaw tracks **tokens**, not characters. Tokens are model-specific, but most
+Activi tracks **tokens**, not characters. Tokens are model-specific, but most
 OpenAI-style models average ~4 characters per token for English text.
 
 ## How the system prompt is built
 
-OpenClaw assembles its own system prompt on every run. It includes:
+Activi assembles its own system prompt on every run. It includes:
 
 - Tool list + short descriptions
 - Skills list (only metadata; instructions are loaded on demand with `read`)
@@ -36,7 +36,7 @@ Everything the model receives counts toward the context limit:
 - Compaction summaries and pruning artifacts
 - Provider wrappers or safety headers (not visible, but still counted)
 
-For images, OpenClaw downscales transcript/tool image payloads before provider calls.
+For images, Activi downscales transcript/tool image payloads before provider calls.
 Use `agents.defaults.imageMaxDimensionPx` (default: `1200`) to tune this:
 
 - Lower values usually reduce vision-token usage and payload size.
@@ -53,12 +53,12 @@ Use these in chat:
 - `/usage off|tokens|full` → appends a **per-response usage footer** to every reply.
   - Persists per session (stored as `responseUsage`).
   - OAuth auth **hides cost** (tokens only).
-- `/usage cost` → shows a local cost summary from OpenClaw session logs.
+- `/usage cost` → shows a local cost summary from Activi session logs.
 
 Other surfaces:
 
 - **TUI/Web TUI:** `/status` + `/usage` are supported.
-- **CLI:** `openclaw status --usage` and `openclaw channels list` show
+- **CLI:** `activi status --usage` and `activi channels list` show
   provider quota windows (not per-response costs).
 
 ## Cost estimation (when shown)
@@ -70,12 +70,12 @@ models.providers.<provider>.models[].cost
 ```
 
 These are **USD per 1M tokens** for `input`, `output`, `cacheRead`, and
-`cacheWrite`. If pricing is missing, OpenClaw shows tokens only. OAuth tokens
+`cacheWrite`. If pricing is missing, Activi shows tokens only. OAuth tokens
 never show dollar cost.
 
 ## Cache TTL and pruning impact
 
-Provider prompt caching only applies within the cache TTL window. OpenClaw can
+Provider prompt caching only applies within the cache TTL window. Activi can
 optionally run **cache-ttl pruning**: it prunes the session once the cache TTL
 has expired, then resets the cache window so subsequent requests can re-use the
 freshly cached context instead of re-caching the full history. This keeps cache
@@ -110,7 +110,7 @@ agents:
 
 ### Example: enable Anthropic 1M context beta header
 
-Anthropic's 1M context window is currently beta-gated. OpenClaw can inject the
+Anthropic's 1M context window is currently beta-gated. Activi can inject the
 required `anthropic-beta` value when you enable `context1m` on supported Opus
 or Sonnet models.
 

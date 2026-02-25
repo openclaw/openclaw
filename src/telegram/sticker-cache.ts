@@ -8,7 +8,7 @@ import {
   modelSupportsVision,
 } from "../agents/model-catalog.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { STATE_DIR } from "../config/paths.js";
 import { logVerbose } from "../globals.js";
 import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
@@ -146,7 +146,7 @@ const VISION_PROVIDERS = ["openai", "anthropic", "google", "minimax"] as const;
 
 export interface DescribeStickerParams {
   imagePath: string;
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   agentDir?: string;
   agentId?: string;
 }

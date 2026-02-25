@@ -7,7 +7,7 @@ import { createPersistentDedupe } from "./persistent-dedupe.js";
 const tmpRoots: string[] = [];
 
 async function makeTmpRoot(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dedupe-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "activi-dedupe-"));
   tmpRoots.push(root);
   return root;
 }

@@ -3,7 +3,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import type { Command } from "commander";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { loadConfig, writeConfigFile } from "../config/io.js";
 import {
   buildWorkspaceHookStatus,
@@ -62,7 +62,7 @@ function mergeHookEntries(pluginEntries: HookEntry[], workspaceEntries: HookEntr
   return Array.from(merged.values());
 }
 
-function buildHooksReport(config: OpenClawConfig): HookStatusReport {
+function buildHooksReport(config: ActiviConfig): HookStatusReport {
   const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
   const workspaceEntries = loadWorkspaceHookEntries(workspaceDir, { config });
   const pluginReport = buildPluginStatusReport({ config, workspaceDir });
@@ -92,11 +92,11 @@ function resolveHookForToggle(
 }
 
 function buildConfigWithHookEnabled(params: {
-  config: OpenClawConfig;
+  config: ActiviConfig;
   hookName: string;
   enabled: boolean;
   ensureHooksEnabled?: boolean;
-}): OpenClawConfig {
+}): ActiviConfig {
   const entries = { ...params.config.hooks?.internal?.entries };
   entries[params.hookName] = { ...entries[params.hookName], enabled: params.enabled };
 
@@ -214,7 +214,7 @@ async function readInstalledPackageVersion(dir: string): Promise<string | undefi
 
 type HookInternalEntryLike = Record<string, unknown> & { enabled?: boolean };
 
-function enableInternalHookEntries(config: OpenClawConfig, hookNames: string[]): OpenClawConfig {
+function enableInternalHookEntries(config: ActiviConfig, hookNames: string[]): ActiviConfig {
   const entries = { ...config.hooks?.internal?.entries } as Record<string, HookInternalEntryLike>;
 
   for (const hookName of hookNames) {
@@ -266,7 +266,7 @@ export function formatHooksList(report: HookStatusReport, opts: HooksListOptions
 
   if (hooks.length === 0) {
     const message = opts.eligible
-      ? `No eligible hooks found. Run \`${formatCliCommand("openclaw hooks list")}\` to see all hooks.`
+      ? `No eligible hooks found. Run \`${formatCliCommand("activi hooks list")}\` to see all hooks.`
       : "No hooks found.";
     return message;
   }
@@ -322,7 +322,7 @@ export function formatHookInfo(
     if (opts.json) {
       return JSON.stringify({ error: "not found", hook: hookName }, null, 2);
     }
-    return `Hook "${hookName}" not found. Run \`${formatCliCommand("openclaw hooks list")}\` to see available hooks.`;
+    return `Hook "${hookName}" not found. Run \`${formatCliCommand("activi hooks list")}\` to see available hooks.`;
   }
 
   if (opts.json) {
@@ -510,7 +510,7 @@ export function registerHooksCli(program: Command): void {
     .addHelpText(
       "after",
       () =>
-        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/hooks", "docs.openclaw.ai/cli/hooks")}\n`,
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/hooks", "docs.activi.ai/cli/hooks")}\n`,
     );
 
   hooks
@@ -595,7 +595,7 @@ export function registerHooksCli(program: Command): void {
             process.exit(1);
           }
 
-          let next: OpenClawConfig = {
+          let next: ActiviConfig = {
             ...cfg,
             hooks: {
               ...cfg.hooks,

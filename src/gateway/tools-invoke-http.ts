@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { createOpenClawTools } from "../agents/openclaw-tools.js";
+import { createActiviTools } from "../agents/activi-tools.js";
 import {
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
@@ -210,9 +210,9 @@ export async function handleToolsInvokeHttpRequest(
 
   // Resolve message channel/account hints (optional headers) for policy inheritance.
   const messageChannel = normalizeMessageChannel(
-    getHeader(req, "x-openclaw-message-channel") ?? "",
+    getHeader(req, "x-activi-message-channel") ?? "",
   );
-  const accountId = getHeader(req, "x-openclaw-account-id")?.trim() || undefined;
+  const accountId = getHeader(req, "x-activi-account-id")?.trim() || undefined;
 
   const {
     agentId,
@@ -244,7 +244,7 @@ export async function handleToolsInvokeHttpRequest(
     : undefined;
 
   // Build tool list (core + plugin tools).
-  const allTools = createOpenClawTools({
+  const allTools = createActiviTools({
     agentSessionKey: sessionKey,
     agentChannel: messageChannel ?? undefined,
     agentAccountId: accountId,

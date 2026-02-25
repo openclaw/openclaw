@@ -1,6 +1,6 @@
 import { normalizeChatType } from "../channels/chat-type.js";
 import { createAccountListHelpers } from "../channels/plugins/account-helpers.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import type { SlackAccountConfig } from "../config/types.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import { resolveSlackAppToken, resolveSlackBotToken } from "./token.js";
@@ -34,7 +34,7 @@ export const listSlackAccountIds = listAccountIds;
 export const resolveDefaultSlackAccountId = resolveDefaultAccountId;
 
 function resolveAccountConfig(
-  cfg: OpenClawConfig,
+  cfg: ActiviConfig,
   accountId: string,
 ): SlackAccountConfig | undefined {
   const accounts = cfg.channels?.slack?.accounts;
@@ -44,7 +44,7 @@ function resolveAccountConfig(
   return accounts[accountId] as SlackAccountConfig | undefined;
 }
 
-function mergeSlackAccountConfig(cfg: OpenClawConfig, accountId: string): SlackAccountConfig {
+function mergeSlackAccountConfig(cfg: ActiviConfig, accountId: string): SlackAccountConfig {
   const { accounts: _ignored, ...base } = (cfg.channels?.slack ?? {}) as SlackAccountConfig & {
     accounts?: unknown;
   };
@@ -53,7 +53,7 @@ function mergeSlackAccountConfig(cfg: OpenClawConfig, accountId: string): SlackA
 }
 
 export function resolveSlackAccount(params: {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   accountId?: string | null;
 }): ResolvedSlackAccount {
   const accountId = normalizeAccountId(params.accountId);
@@ -94,7 +94,7 @@ export function resolveSlackAccount(params: {
   };
 }
 
-export function listEnabledSlackAccounts(cfg: OpenClawConfig): ResolvedSlackAccount[] {
+export function listEnabledSlackAccounts(cfg: ActiviConfig): ResolvedSlackAccount[] {
   return listSlackAccountIds(cfg)
     .map((accountId) => resolveSlackAccount({ cfg, accountId }))
     .filter((account) => account.enabled);

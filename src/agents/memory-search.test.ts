@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { resolveMemorySearchConfig } from "./memory-search.js";
 
-const asConfig = (cfg: OpenClawConfig): OpenClawConfig => cfg;
+const asConfig = (cfg: ActiviConfig): ActiviConfig => cfg;
 
 describe("memory search config", () => {
   it("returns null when disabled", () => {

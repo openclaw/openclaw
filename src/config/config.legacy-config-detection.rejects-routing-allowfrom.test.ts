@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "./config.js";
+import type { ActiviConfig } from "./config.js";
 import { migrateLegacyConfig, validateConfigObject } from "./config.js";
 
 function getLegacyRouting(config: unknown) {
@@ -107,12 +107,12 @@ describe("legacy config detection", () => {
   });
   it("migrates routing.groupChat.mentionPatterns to messages.groupChat.mentionPatterns", async () => {
     const res = migrateLegacyConfig({
-      routing: { groupChat: { mentionPatterns: ["@openclaw"] } },
+      routing: { groupChat: { mentionPatterns: ["@activi"] } },
     });
     expect(res.changes).toContain(
       "Moved routing.groupChat.mentionPatterns → messages.groupChat.mentionPatterns.",
     );
-    expect(res.config?.messages?.groupChat?.mentionPatterns).toEqual(["@openclaw"]);
+    expect(res.config?.messages?.groupChat?.mentionPatterns).toEqual(["@activi"]);
     expect(getLegacyRouting(res.config)?.groupChat).toBeUndefined();
   });
   it("migrates routing agentToAgent/queue/transcribeAudio to tools/messages/media", async () => {
@@ -314,7 +314,7 @@ describe("legacy config detection", () => {
         list: [
           {
             id: "work",
-            workspace: "~/openclaw-work",
+            workspace: "~/activi-work",
             tools: {
               elevated: {
                 enabled: false,
@@ -567,7 +567,7 @@ describe("legacy config detection", () => {
             },
           },
         },
-        assert: (config: NonNullable<OpenClawConfig>) => {
+        assert: (config: NonNullable<ActiviConfig>) => {
           expect(config.channels?.discord?.accounts?.work?.streaming).toBe("partial");
           expect(config.channels?.discord?.accounts?.work?.streamMode).toBeUndefined();
         },
@@ -581,7 +581,7 @@ describe("legacy config detection", () => {
             },
           },
         },
-        assert: (config: NonNullable<OpenClawConfig>) => {
+        assert: (config: NonNullable<ActiviConfig>) => {
           expect(config.channels?.slack?.streaming).toBe("progress");
           expect(config.channels?.slack?.streamMode).toBeUndefined();
           expect(config.channels?.slack?.nativeStreaming).toBe(true);
@@ -596,7 +596,7 @@ describe("legacy config detection", () => {
             },
           },
         },
-        assert: (config: NonNullable<OpenClawConfig>) => {
+        assert: (config: NonNullable<ActiviConfig>) => {
           expect(config.channels?.slack?.streaming).toBe("partial");
           expect(config.channels?.slack?.nativeStreaming).toBe(false);
         },

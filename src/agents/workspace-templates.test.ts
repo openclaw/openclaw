@@ -11,7 +11,7 @@ import {
 const tempDirs: string[] = [];
 
 async function makeTempRoot(): Promise<string> {
-  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-templates-"));
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "activi-templates-"));
   tempDirs.push(root);
   return root;
 }
@@ -26,7 +26,7 @@ describe("resolveWorkspaceTemplateDir", () => {
 
   it("resolves templates from package root when module url is dist-rooted", async () => {
     const root = await makeTempRoot();
-    await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
+    await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "activi" }));
 
     const templatesDir = path.join(root, "docs", "reference", "templates");
     await fs.mkdir(templatesDir, { recursive: true });
@@ -42,7 +42,7 @@ describe("resolveWorkspaceTemplateDir", () => {
 
   it("falls back to package-root docs path when templates directory is missing", async () => {
     const root = await makeTempRoot();
-    await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
+    await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "activi" }));
 
     const distDir = path.join(root, "dist");
     await fs.mkdir(distDir, { recursive: true });

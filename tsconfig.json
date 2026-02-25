@@ -18,9 +18,9 @@
     "target": "es2023",
     "useDefineForClassFields": false,
     "paths": {
-      "openclaw/plugin-sdk": ["./src/plugin-sdk/index.ts"],
-      "openclaw/plugin-sdk/*": ["./src/plugin-sdk/*.ts"],
-      "openclaw/plugin-sdk/account-id": ["./src/plugin-sdk/account-id.ts"]
+      "activi/plugin-sdk": ["./src/plugin-sdk/index.ts"],
+      "activi/plugin-sdk/*": ["./src/plugin-sdk/*.ts"],
+      "activi/plugin-sdk/account-id": ["./src/plugin-sdk/account-id.ts"]
     }
   },
   "include": ["src/**/*", "ui/**/*", "extensions/**/*"],

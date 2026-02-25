@@ -8,7 +8,7 @@ import { buildNvidiaProvider, resolveImplicitProviders } from "./models-config.p
 
 describe("NVIDIA provider", () => {
   it("should include nvidia when NVIDIA_API_KEY is configured", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "activi-test-"));
     await withEnvAsync({ NVIDIA_API_KEY: "test-key" }, async () => {
       const providers = await resolveImplicitProviders({ agentDir });
       expect(providers?.nvidia).toBeDefined();
@@ -17,7 +17,7 @@ describe("NVIDIA provider", () => {
   });
 
   it("resolves the nvidia api key value from env", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "activi-test-"));
     await withEnvAsync({ NVIDIA_API_KEY: "nvidia-test-api-key" }, async () => {
       const auth = await resolveApiKeyForProvider({
         provider: "nvidia",
@@ -49,7 +49,7 @@ describe("NVIDIA provider", () => {
 
 describe("MiniMax implicit provider (#15275)", () => {
   it("should use anthropic-messages API for API-key provider", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "activi-test-"));
     await withEnvAsync({ MINIMAX_API_KEY: "test-key" }, async () => {
       const providers = await resolveImplicitProviders({ agentDir });
       expect(providers?.minimax).toBeDefined();
@@ -61,7 +61,7 @@ describe("MiniMax implicit provider (#15275)", () => {
 
 describe("vLLM provider", () => {
   it("should not include vllm when no API key is configured", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "activi-test-"));
     await withEnvAsync({ VLLM_API_KEY: undefined }, async () => {
       const providers = await resolveImplicitProviders({ agentDir });
       expect(providers?.vllm).toBeUndefined();
@@ -69,7 +69,7 @@ describe("vLLM provider", () => {
   });
 
   it("should include vllm when VLLM_API_KEY is set", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "activi-test-"));
     await withEnvAsync({ VLLM_API_KEY: "test-key" }, async () => {
       const providers = await resolveImplicitProviders({ agentDir });
 

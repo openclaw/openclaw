@@ -86,13 +86,13 @@ describe("gateway auth", () => {
     expect(res.user).toBe(params.expected.user);
   }
 
-  it("resolves token/password from OPENCLAW gateway env vars", () => {
+  it("resolves token/password from ACTIVI gateway env vars", () => {
     expect(
       resolveGatewayAuth({
         authConfig: {},
         env: {
-          OPENCLAW_GATEWAY_TOKEN: "env-token",
-          OPENCLAW_GATEWAY_PASSWORD: "env-password",
+          ACTIVI_GATEWAY_TOKEN: "env-token",
+          ACTIVI_GATEWAY_PASSWORD: "env-password",
         } as NodeJS.ProcessEnv,
       }),
     ).toMatchObject({
@@ -103,13 +103,13 @@ describe("gateway auth", () => {
     });
   });
 
-  it("does not resolve legacy CLAWDBOT gateway env vars", () => {
+  it("does not resolve legacy ACTIVI gateway env vars", () => {
     expect(
       resolveGatewayAuth({
         authConfig: {},
         env: {
-          CLAWDBOT_GATEWAY_TOKEN: "legacy-token",
-          CLAWDBOT_GATEWAY_PASSWORD: "legacy-password",
+          ACTIVI_GATEWAY_TOKEN: "legacy-token",
+          ACTIVI_GATEWAY_PASSWORD: "legacy-password",
         } as NodeJS.ProcessEnv,
       }),
     ).toMatchObject({

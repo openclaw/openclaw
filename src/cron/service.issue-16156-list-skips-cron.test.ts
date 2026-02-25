@@ -40,7 +40,7 @@ function createCronFromStorePath(storePath: string) {
 
 describe("#16156: cron.list() must not silently advance past-due recurring jobs", () => {
   beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cron-16156-"));
+    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "activi-cron-16156-"));
   });
 
   afterAll(async () => {

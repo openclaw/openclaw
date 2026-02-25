@@ -84,7 +84,7 @@ let tempHomeId = 0;
 
 export function installWebAutoReplyTestHomeHooks() {
   beforeAll(async () => {
-    tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-web-home-suite-"));
+    tempHomeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "activi-web-home-suite-"));
   });
 
   beforeEach(async () => {
@@ -112,7 +112,7 @@ export function installWebAutoReplyTestHomeHooks() {
 export async function makeSessionStore(
   entries: Record<string, unknown> = {},
 ): Promise<{ storePath: string; cleanup: () => Promise<void> }> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "activi-session-"));
   const storePath = path.join(dir, "sessions.json");
   await fs.writeFile(storePath, JSON.stringify(entries));
   const cleanup = async () => {

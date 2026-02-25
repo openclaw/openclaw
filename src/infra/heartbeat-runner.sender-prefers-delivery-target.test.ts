@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import { seedMainSessionStore, withTempHeartbeatSandbox } from "./heartbeat-runner.test-utils.js";
@@ -13,7 +13,7 @@ describe("runHeartbeatOnce", () => {
   it("uses the delivery target as sender when lastTo differs", async () => {
     await withTempHeartbeatSandbox(
       async ({ tmpDir, storePath, replySpy }) => {
-        const cfg: OpenClawConfig = {
+        const cfg: ActiviConfig = {
           agents: {
             defaults: {
               workspace: tmpDir,
@@ -55,7 +55,7 @@ describe("runHeartbeatOnce", () => {
 
         expect(sendSlack).toHaveBeenCalled();
       },
-      { prefix: "openclaw-hb-" },
+      { prefix: "activi-hb-" },
     );
   });
 });

@@ -63,13 +63,13 @@ describe("profile CRUD endpoints", () => {
 
     state.testPort = await getFreePort();
     state.cdpBaseUrl = `http://127.0.0.1:${state.testPort + 1}`;
-    state.prevGatewayPort = process.env.OPENCLAW_GATEWAY_PORT;
-    process.env.OPENCLAW_GATEWAY_PORT = String(state.testPort - 2);
+    state.prevGatewayPort = process.env.ACTIVI_GATEWAY_PORT;
+    process.env.ACTIVI_GATEWAY_PORT = String(state.testPort - 2);
 
-    state.prevGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
-    state.prevGatewayPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
-    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    state.prevGatewayToken = process.env.ACTIVI_GATEWAY_TOKEN;
+    state.prevGatewayPassword = process.env.ACTIVI_GATEWAY_PASSWORD;
+    delete process.env.ACTIVI_GATEWAY_TOKEN;
+    delete process.env.ACTIVI_GATEWAY_PASSWORD;
 
     vi.stubGlobal(
       "fetch",
@@ -88,14 +88,14 @@ describe("profile CRUD endpoints", () => {
     vi.restoreAllMocks();
     restoreGatewayPortEnv(state.prevGatewayPort);
     if (state.prevGatewayToken !== undefined) {
-      process.env.OPENCLAW_GATEWAY_TOKEN = state.prevGatewayToken;
+      process.env.ACTIVI_GATEWAY_TOKEN = state.prevGatewayToken;
     } else {
-      delete process.env.OPENCLAW_GATEWAY_TOKEN;
+      delete process.env.ACTIVI_GATEWAY_TOKEN;
     }
     if (state.prevGatewayPassword !== undefined) {
-      process.env.OPENCLAW_GATEWAY_PASSWORD = state.prevGatewayPassword;
+      process.env.ACTIVI_GATEWAY_PASSWORD = state.prevGatewayPassword;
     } else {
-      delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+      delete process.env.ACTIVI_GATEWAY_PASSWORD;
     }
     await stopBrowserControlServer();
   });
@@ -125,7 +125,7 @@ describe("profile CRUD endpoints", () => {
     const createDuplicate = await realFetch(`${base}/profiles/create`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "openclaw" }),
+      body: JSON.stringify({ name: "activi" }),
     });
     expect(createDuplicate.status).toBe(409);
     const createDuplicateBody = (await createDuplicate.json()) as { error: string };
@@ -162,7 +162,7 @@ describe("profile CRUD endpoints", () => {
     const deleteMissingBody = (await deleteMissing.json()) as { error: string };
     expect(deleteMissingBody.error).toContain("not found");
 
-    const deleteDefault = await realFetch(`${base}/profiles/openclaw`, {
+    const deleteDefault = await realFetch(`${base}/profiles/activi`, {
       method: "DELETE",
     });
     expect(deleteDefault.status).toBe(400);

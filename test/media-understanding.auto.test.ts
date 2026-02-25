@@ -2,13 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { MsgContext } from "../src/auto-reply/templating.js";
-import type { OpenClawConfig } from "../src/config/config.js";
-import { resolvePreferredOpenClawTmpDir } from "../src/infra/tmp-openclaw-dir.js";
+import type { ActiviConfig } from "../src/config/config.js";
+import { resolvePreferredActiviTmpDir } from "../src/infra/tmp-activi-dir.js";
 import { applyMediaUnderstanding } from "../src/media-understanding/apply.js";
 import { clearMediaUnderstandingBinaryCacheForTests } from "../src/media-understanding/runner.js";
 
 const makeTempDir = async (prefix: string) => {
-  const baseDir = resolvePreferredOpenClawTmpDir();
+  const baseDir = resolvePreferredActiviTmpDir();
   await fs.mkdir(baseDir, { recursive: true });
   return await fs.mkdtemp(path.join(baseDir, prefix));
 };
@@ -20,7 +20,7 @@ const writeExecutable = async (dir: string, name: string, content: string) => {
 };
 
 const makeTempMedia = async (ext: string) => {
-  const dir = await makeTempDir("openclaw-media-e2e-");
+  const dir = await makeTempDir("activi-media-e2e-");
   const filePath = path.join(dir, `sample${ext}`);
   await fs.writeFile(filePath, "audio");
   return { dir, filePath };
@@ -75,8 +75,8 @@ describe("media understanding auto-detect (e2e)", () => {
 
   it.skipIf(process.platform === "win32")("uses sherpa-onnx-offline when available", async () => {
     await withEnvSnapshot(async () => {
-      const binDir = await createTrackedTempDir(tempPaths, "openclaw-bin-sherpa-");
-      const modelDir = await createTrackedTempDir(tempPaths, "openclaw-sherpa-model-");
+      const binDir = await createTrackedTempDir(tempPaths, "activi-bin-sherpa-");
+      const modelDir = await createTrackedTempDir(tempPaths, "activi-sherpa-model-");
 
       await fs.writeFile(path.join(modelDir, "tokens.txt"), "a");
       await fs.writeFile(path.join(modelDir, "encoder.onnx"), "a");
@@ -99,7 +99,7 @@ describe("media understanding auto-detect (e2e)", () => {
         MediaPath: filePath,
         MediaType: "audio/wav",
       };
-      const cfg: OpenClawConfig = { tools: { media: { audio: {} } } };
+      const cfg: ActiviConfig = { tools: { media: { audio: {} } } };
 
       await applyMediaUnderstanding({ ctx, cfg });
 
@@ -109,8 +109,8 @@ describe("media understanding auto-detect (e2e)", () => {
 
   it.skipIf(process.platform === "win32")("uses whisper-cli when sherpa is missing", async () => {
     await withEnvSnapshot(async () => {
-      const binDir = await createTrackedTempDir(tempPaths, "openclaw-bin-whispercpp-");
-      const modelDir = await createTrackedTempDir(tempPaths, "openclaw-whispercpp-model-");
+      const binDir = await createTrackedTempDir(tempPaths, "activi-bin-whispercpp-");
+      const modelDir = await createTrackedTempDir(tempPaths, "activi-whispercpp-model-");
 
       const modelPath = path.join(modelDir, "tiny.bin");
       await fs.writeFile(modelPath, "model");
@@ -138,7 +138,7 @@ describe("media understanding auto-detect (e2e)", () => {
         MediaPath: filePath,
         MediaType: "audio/wav",
       };
-      const cfg: OpenClawConfig = { tools: { media: { audio: {} } } };
+      const cfg: ActiviConfig = { tools: { media: { audio: {} } } };
 
       await applyMediaUnderstanding({ ctx, cfg });
 
@@ -148,7 +148,7 @@ describe("media understanding auto-detect (e2e)", () => {
 
   it.skipIf(process.platform === "win32")("uses gemini CLI for images when available", async () => {
     await withEnvSnapshot(async () => {
-      const binDir = await createTrackedTempDir(tempPaths, "openclaw-bin-gemini-");
+      const binDir = await createTrackedTempDir(tempPaths, "activi-bin-gemini-");
 
       await writeExecutable(
         binDir,
@@ -165,7 +165,7 @@ describe("media understanding auto-detect (e2e)", () => {
         MediaPath: filePath,
         MediaType: "image/png",
       };
-      const cfg: OpenClawConfig = { tools: { media: { image: {} } } };
+      const cfg: ActiviConfig = { tools: { media: { image: {} } } };
 
       await applyMediaUnderstanding({ ctx, cfg });
 
@@ -175,7 +175,7 @@ describe("media understanding auto-detect (e2e)", () => {
 
   it("skips auto-detect when no supported binaries are available", async () => {
     await withEnvSnapshot(async () => {
-      const emptyBinDir = await createTrackedTempDir(tempPaths, "openclaw-bin-empty-");
+      const emptyBinDir = await createTrackedTempDir(tempPaths, "activi-bin-empty-");
       process.env.PATH = emptyBinDir;
       delete process.env.SHERPA_ONNX_MODEL_DIR;
       delete process.env.WHISPER_CPP_MODEL;
@@ -186,7 +186,7 @@ describe("media understanding auto-detect (e2e)", () => {
         MediaPath: filePath,
         MediaType: "audio/wav",
       };
-      const cfg: OpenClawConfig = { tools: { media: { audio: {} } } };
+      const cfg: ActiviConfig = { tools: { media: { audio: {} } } };
 
       await applyMediaUnderstanding({ ctx, cfg });
 

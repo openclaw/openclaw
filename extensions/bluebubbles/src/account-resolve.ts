@@ -1,11 +1,11 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { ActiviConfig } from "activi/plugin-sdk";
 import { resolveBlueBubblesAccount } from "./accounts.js";
 
 export type BlueBubblesAccountResolveOpts = {
   serverUrl?: string;
   password?: string;
   accountId?: string;
-  cfg?: OpenClawConfig;
+  cfg?: ActiviConfig;
 };
 
 export function resolveBlueBubblesServerAccount(params: BlueBubblesAccountResolveOpts): {

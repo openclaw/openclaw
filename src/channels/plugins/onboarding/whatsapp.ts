@@ -1,7 +1,7 @@
 import path from "node:path";
 import { loginWeb } from "../../../channel-web.js";
 import { formatCliCommand } from "../../../cli/command-format.js";
-import type { OpenClawConfig } from "../../../config/config.js";
+import type { ActiviConfig } from "../../../config/config.js";
 import { mergeWhatsAppConfig } from "../../../config/merge-config.js";
 import type { DmPolicy } from "../../../config/types.js";
 import { DEFAULT_ACCOUNT_ID } from "../../../routing/session-key.js";
@@ -24,19 +24,19 @@ import {
 
 const channel = "whatsapp" as const;
 
-function setWhatsAppDmPolicy(cfg: OpenClawConfig, dmPolicy: DmPolicy): OpenClawConfig {
+function setWhatsAppDmPolicy(cfg: ActiviConfig, dmPolicy: DmPolicy): ActiviConfig {
   return mergeWhatsAppConfig(cfg, { dmPolicy });
 }
 
-function setWhatsAppAllowFrom(cfg: OpenClawConfig, allowFrom?: string[]): OpenClawConfig {
+function setWhatsAppAllowFrom(cfg: ActiviConfig, allowFrom?: string[]): ActiviConfig {
   return mergeWhatsAppConfig(cfg, { allowFrom }, { unsetOnUndefined: ["allowFrom"] });
 }
 
-function setWhatsAppSelfChatMode(cfg: OpenClawConfig, selfChatMode: boolean): OpenClawConfig {
+function setWhatsAppSelfChatMode(cfg: ActiviConfig, selfChatMode: boolean): ActiviConfig {
   return mergeWhatsAppConfig(cfg, { selfChatMode });
 }
 
-async function detectWhatsAppLinked(cfg: OpenClawConfig, accountId: string): Promise<boolean> {
+async function detectWhatsAppLinked(cfg: ActiviConfig, accountId: string): Promise<boolean> {
   const { authDir } = resolveWhatsAppAuthDir({ cfg, accountId });
   const credsPath = path.join(authDir, "creds.json");
   return await pathExists(credsPath);
@@ -49,7 +49,7 @@ async function promptWhatsAppOwnerAllowFrom(params: {
   const { prompter, existingAllowFrom } = params;
 
   await prompter.note(
-    "We need the sender/owner number so OpenClaw can allowlist you.",
+    "We need the sender/owner number so Activi can allowlist you.",
     "WhatsApp number",
   );
   const entry = await prompter.text({
@@ -81,12 +81,12 @@ async function promptWhatsAppOwnerAllowFrom(params: {
 }
 
 async function applyWhatsAppOwnerAllowlist(params: {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   prompter: WizardPrompter;
   existingAllowFrom: string[];
   title: string;
   messageLines: string[];
-}): Promise<OpenClawConfig> {
+}): Promise<ActiviConfig> {
   const { normalized, allowFrom } = await promptWhatsAppOwnerAllowFrom({
     prompter: params.prompter,
     existingAllowFrom: params.existingAllowFrom,
@@ -122,11 +122,11 @@ function parseWhatsAppAllowFromEntries(raw: string): { entries: string[]; invali
 }
 
 async function promptWhatsAppAllowFrom(
-  cfg: OpenClawConfig,
+  cfg: ActiviConfig,
   _runtime: RuntimeEnv,
   prompter: WizardPrompter,
   options?: { forceAllowlist?: boolean },
-): Promise<OpenClawConfig> {
+): Promise<ActiviConfig> {
   const existingPolicy = cfg.channels?.whatsapp?.dmPolicy ?? "pairing";
   const existingAllowFrom = cfg.channels?.whatsapp?.allowFrom ?? [];
   const existingLabel = existingAllowFrom.length > 0 ? existingAllowFrom.join(", ") : "unset";
@@ -159,7 +159,7 @@ async function promptWhatsAppAllowFrom(
     message: "WhatsApp phone setup",
     options: [
       { value: "personal", label: "This is my personal phone number" },
-      { value: "separate", label: "Separate phone just for OpenClaw" },
+      { value: "separate", label: "Separate phone just for Activi" },
     ],
   });
 
@@ -337,7 +337,7 @@ export const whatsappOnboardingAdapter: ChannelOnboardingAdapter = {
       }
     } else if (!linked) {
       await prompter.note(
-        `Run \`${formatCliCommand("openclaw channels login")}\` later to link WhatsApp.`,
+        `Run \`${formatCliCommand("activi channels login")}\` later to link WhatsApp.`,
         "WhatsApp",
       );
     }

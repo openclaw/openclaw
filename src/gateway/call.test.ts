@@ -335,7 +335,7 @@ describe("buildGatewayConnectionDetails", () => {
     expect((thrown as Error).message).toContain("plaintext ws://");
     expect((thrown as Error).message).toContain("wss://");
     expect((thrown as Error).message).toContain("Tailscale Serve/Funnel");
-    expect((thrown as Error).message).toContain("openclaw doctor --fix");
+    expect((thrown as Error).message).toContain("activi doctor --fix");
   });
 
   it("allows ws:// for loopback addresses in local mode", () => {
@@ -430,7 +430,7 @@ describe("callGateway url override auth requirements", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"]);
+    envSnapshot = captureEnv(["ACTIVI_GATEWAY_TOKEN", "ACTIVI_GATEWAY_PASSWORD"]);
     resetGatewayCallMocks();
     setGatewayNetworkDefaults(18789);
   });
@@ -440,8 +440,8 @@ describe("callGateway url override auth requirements", () => {
   });
 
   it("throws when url override is set without explicit credentials", async () => {
-    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
-    process.env.OPENCLAW_GATEWAY_PASSWORD = "env-password";
+    process.env.ACTIVI_GATEWAY_TOKEN = "env-token";
+    process.env.ACTIVI_GATEWAY_PASSWORD = "env-password";
     loadConfig.mockReturnValue({
       gateway: {
         mode: "local",
@@ -461,7 +461,7 @@ describe("callGateway password resolution", () => {
     {
       label: "password",
       authKey: "password",
-      envKey: "OPENCLAW_GATEWAY_PASSWORD",
+      envKey: "ACTIVI_GATEWAY_PASSWORD",
       envValue: "from-env",
       configValue: "from-config",
       explicitValue: "explicit-password",
@@ -469,7 +469,7 @@ describe("callGateway password resolution", () => {
     {
       label: "token",
       authKey: "token",
-      envKey: "OPENCLAW_GATEWAY_TOKEN",
+      envKey: "ACTIVI_GATEWAY_TOKEN",
       envValue: "env-token",
       configValue: "local-token",
       explicitValue: "explicit-token",
@@ -477,10 +477,10 @@ describe("callGateway password resolution", () => {
   ] as const;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_GATEWAY_PASSWORD", "OPENCLAW_GATEWAY_TOKEN"]);
+    envSnapshot = captureEnv(["ACTIVI_GATEWAY_PASSWORD", "ACTIVI_GATEWAY_TOKEN"]);
     resetGatewayCallMocks();
-    delete process.env.OPENCLAW_GATEWAY_PASSWORD;
-    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.ACTIVI_GATEWAY_PASSWORD;
+    delete process.env.ACTIVI_GATEWAY_TOKEN;
     setGatewayNetworkDefaults(18789);
   });
 
@@ -527,7 +527,7 @@ describe("callGateway password resolution", () => {
     },
   ])("$label", async ({ envPassword, config, expectedPassword }) => {
     if (envPassword !== undefined) {
-      process.env.OPENCLAW_GATEWAY_PASSWORD = envPassword;
+      process.env.ACTIVI_GATEWAY_PASSWORD = envPassword;
     }
     loadConfig.mockReturnValue(config);
 

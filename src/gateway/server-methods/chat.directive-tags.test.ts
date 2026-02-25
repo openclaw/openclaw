@@ -117,7 +117,7 @@ function createChatContext(): Pick<
 
 describe("chat directive tag stripping for non-streaming final payloads", () => {
   it("chat.inject keeps message defined when directive tag is the only content", async () => {
-    createTranscriptFixture("openclaw-chat-inject-directive-only-");
+    createTranscriptFixture("activi-chat-inject-directive-only-");
     const respond = vi.fn();
     const context = createChatContext();
 
@@ -146,7 +146,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("chat.send non-streaming final keeps message defined for directive-only assistant text", async () => {
-    createTranscriptFixture("openclaw-chat-send-directive-only-");
+    createTranscriptFixture("activi-chat-send-directive-only-");
     mockState.finalText = "[[reply_to_current]]";
     const respond = vi.fn();
     const context = createChatContext();

@@ -93,11 +93,12 @@ export async function sendChatMessage(
   if (msg) {
     contentBlocks.push({ type: "text", text: msg });
   }
-  // Add image previews to the message for display
+  // Add media previews to the message for display
   if (hasAttachments) {
     for (const att of attachments) {
+      const mediaType = att.mimeType.startsWith("video/") ? "video" : "image";
       contentBlocks.push({
-        type: "image",
+        type: mediaType,
         source: { type: "base64", media_type: att.mimeType, data: att.dataUrl },
       });
     }
@@ -127,8 +128,9 @@ export async function sendChatMessage(
           if (!parsed) {
             return null;
           }
+          const mediaType = att.mimeType.startsWith("video/") ? "video" : "image";
           return {
-            type: "image",
+            type: mediaType,
             mimeType: parsed.mimeType,
             content: parsed.content,
           };
@@ -191,7 +193,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
   }
 
   // Final from another run (e.g. sub-agent announce): refresh history to show new message.
-  // See https://github.com/openclaw/openclaw/issues/1909
+  // See https://github.com/activi/activi/issues/1909
   if (payload.runId && state.chatRunId && payload.runId !== state.chatRunId) {
     if (payload.state === "final") {
       return "final";

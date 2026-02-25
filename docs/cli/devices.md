@@ -1,59 +1,59 @@
 ---
-summary: "CLI reference for `openclaw devices` (device pairing + token rotation/revocation)"
+summary: "CLI reference for `activi devices` (device pairing + token rotation/revocation)"
 read_when:
   - You are approving device pairing requests
   - You need to rotate or revoke device tokens
 title: "devices"
 ---
 
-# `openclaw devices`
+# `activi devices`
 
 Manage device pairing requests and device-scoped tokens.
 
 ## Commands
 
-### `openclaw devices list`
+### `activi devices list`
 
 List pending pairing requests and paired devices.
 
 ```
-openclaw devices list
-openclaw devices list --json
+activi devices list
+activi devices list --json
 ```
 
-### `openclaw devices approve [requestId] [--latest]`
+### `activi devices approve [requestId] [--latest]`
 
-Approve a pending device pairing request. If `requestId` is omitted, OpenClaw
+Approve a pending device pairing request. If `requestId` is omitted, Activi
 automatically approves the most recent pending request.
 
 ```
-openclaw devices approve
-openclaw devices approve <requestId>
-openclaw devices approve --latest
+activi devices approve
+activi devices approve <requestId>
+activi devices approve --latest
 ```
 
-### `openclaw devices reject <requestId>`
+### `activi devices reject <requestId>`
 
 Reject a pending device pairing request.
 
 ```
-openclaw devices reject <requestId>
+activi devices reject <requestId>
 ```
 
-### `openclaw devices rotate --device <id> --role <role> [--scope <scope...>]`
+### `activi devices rotate --device <id> --role <role> [--scope <scope...>]`
 
 Rotate a device token for a specific role (optionally updating scopes).
 
 ```
-openclaw devices rotate --device <deviceId> --role operator --scope operator.read --scope operator.write
+activi devices rotate --device <deviceId> --role operator --scope operator.read --scope operator.write
 ```
 
-### `openclaw devices revoke --device <id> --role <role>`
+### `activi devices revoke --device <id> --role <role>`
 
 Revoke a device token for a specific role.
 
 ```
-openclaw devices revoke --device <deviceId> --role node
+activi devices revoke --device <deviceId> --role node
 ```
 
 ## Common options

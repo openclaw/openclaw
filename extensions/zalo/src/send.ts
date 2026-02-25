@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { ActiviConfig } from "activi/plugin-sdk";
 import { resolveZaloAccount } from "./accounts.js";
 import type { ZaloFetch } from "./api.js";
 import { sendMessage, sendPhoto } from "./api.js";
@@ -8,7 +8,7 @@ import { resolveZaloToken } from "./token.js";
 export type ZaloSendOptions = {
   token?: string;
   accountId?: string;
-  cfg?: OpenClawConfig;
+  cfg?: ActiviConfig;
   mediaUrl?: string;
   caption?: string;
   verbose?: boolean;

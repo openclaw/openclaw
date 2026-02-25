@@ -1,4 +1,4 @@
-import type { PluginRuntime } from "openclaw/plugin-sdk";
+import type { PluginRuntime } from "activi/plugin-sdk";
 
 let runtime: PluginRuntime | null = null;
 type LegacyRuntimeLogShape = { log?: (message: string) => void };

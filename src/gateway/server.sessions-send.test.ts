@@ -12,7 +12,7 @@ import {
   testState,
 } from "./test-helpers.js";
 
-const { createOpenClawTools } = await import("../agents/openclaw-tools.js");
+const { createActiviTools } = await import("../agents/activi-tools.js");
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -22,11 +22,11 @@ const gatewayToken = "test-token";
 let envSnapshot: ReturnType<typeof captureEnv>;
 
 beforeAll(async () => {
-  envSnapshot = captureEnv(["OPENCLAW_GATEWAY_PORT", "OPENCLAW_GATEWAY_TOKEN"]);
+  envSnapshot = captureEnv(["ACTIVI_GATEWAY_PORT", "ACTIVI_GATEWAY_TOKEN"]);
   gatewayPort = await getFreePort();
   testState.gatewayAuth = { mode: "token", token: gatewayToken };
-  process.env.OPENCLAW_GATEWAY_PORT = String(gatewayPort);
-  process.env.OPENCLAW_GATEWAY_TOKEN = gatewayToken;
+  process.env.ACTIVI_GATEWAY_PORT = String(gatewayPort);
+  process.env.ACTIVI_GATEWAY_TOKEN = gatewayToken;
   const { approveDevicePairing, requestDevicePairing } = await import("../infra/device-pairing.js");
   const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
     await import("../infra/device-identity.js");
@@ -34,7 +34,7 @@ beforeAll(async () => {
   const pending = await requestDevicePairing({
     deviceId: identity.deviceId,
     publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
-    clientId: "openclaw-cli",
+    clientId: "activi-cli",
     clientMode: "cli",
     role: "operator",
     scopes: ["operator.admin", "operator.read", "operator.write", "operator.approvals"],
@@ -94,7 +94,7 @@ describe("sessions_send gateway loopback", () => {
       });
     });
 
-    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_send");
+    const tool = createActiviTools().find((candidate) => candidate.name === "sessions_send");
     if (!tool) {
       throw new Error("missing sessions_send tool");
     }
@@ -127,9 +127,9 @@ describe("sessions_send gateway loopback", () => {
 describe("sessions_send label lookup", () => {
   it("finds session by label and sends message", { timeout: 60_000 }, async () => {
     // This is an operator feature; enable broader session tool targeting for this test.
-    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    const configPath = process.env.ACTIVI_CONFIG_PATH;
     if (!configPath) {
-      throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
+      throw new Error("ACTIVI_CONFIG_PATH missing in gateway test environment");
     }
     await fs.mkdir(path.dirname(configPath), { recursive: true });
     await fs.writeFile(
@@ -179,7 +179,7 @@ describe("sessions_send label lookup", () => {
       timeoutMs: 5000,
     });
 
-    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_send");
+    const tool = createActiviTools().find((candidate) => candidate.name === "sessions_send");
     if (!tool) {
       throw new Error("missing sessions_send tool");
     }
@@ -201,7 +201,7 @@ describe("sessions_send label lookup", () => {
   });
 
   it("returns error when label not found", { timeout: 60_000 }, async () => {
-    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_send");
+    const tool = createActiviTools().find((candidate) => candidate.name === "sessions_send");
     if (!tool) {
       throw new Error("missing sessions_send tool");
     }
@@ -217,7 +217,7 @@ describe("sessions_send label lookup", () => {
   });
 
   it("returns error when neither sessionKey nor label provided", { timeout: 60_000 }, async () => {
-    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_send");
+    const tool = createActiviTools().find((candidate) => candidate.name === "sessions_send");
     if (!tool) {
       throw new Error("missing sessions_send tool");
     }

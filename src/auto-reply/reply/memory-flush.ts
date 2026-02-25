@@ -2,7 +2,7 @@ import { lookupContextTokens } from "../../agents/context.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR } from "../../agents/pi-settings.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 import { resolveFreshSessionTotalTokens, type SessionEntry } from "../../config/sessions.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 
@@ -39,7 +39,7 @@ function formatDateStampInTimezone(nowMs: number, timezone: string): string {
 
 export function resolveMemoryFlushPromptForRun(params: {
   prompt: string;
-  cfg?: OpenClawConfig;
+  cfg?: ActiviConfig;
   nowMs?: number;
 }): string {
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
@@ -71,7 +71,7 @@ const normalizeNonNegativeInt = (value: unknown): number | null => {
   return int >= 0 ? int : null;
 };
 
-export function resolveMemoryFlushSettings(cfg?: OpenClawConfig): MemoryFlushSettings | null {
+export function resolveMemoryFlushSettings(cfg?: ActiviConfig): MemoryFlushSettings | null {
   const defaults = cfg?.agents?.defaults?.compaction?.memoryFlush;
   const enabled = defaults?.enabled ?? true;
   if (!enabled) {

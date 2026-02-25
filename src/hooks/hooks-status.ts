@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { evaluateEntryMetadataRequirementsForCurrentPlatform } from "../shared/entry-status.js";
 import type { RequirementConfigCheck, Requirements } from "../shared/requirements.js";
 import { CONFIG_DIR } from "../utils.js";
@@ -62,7 +62,7 @@ function normalizeInstallOptions(entry: HookEntry): HookInstallOption[] {
 
     if (!label) {
       if (spec.kind === "bundled") {
-        label = "Bundled with OpenClaw";
+        label = "Bundled with Activi";
       } else if (spec.kind === "npm" && spec.package) {
         label = `Install ${spec.package} (npm)`;
       } else if (spec.kind === "git" && spec.repository) {
@@ -78,12 +78,12 @@ function normalizeInstallOptions(entry: HookEntry): HookInstallOption[] {
 
 function buildHookStatus(
   entry: HookEntry,
-  config?: OpenClawConfig,
+  config?: ActiviConfig,
   eligibility?: HookEligibilityContext,
 ): HookStatusEntry {
   const hookKey = resolveHookKey(entry);
   const hookConfig = resolveHookConfig(config, hookKey);
-  const managedByPlugin = entry.hook.source === "openclaw-plugin";
+  const managedByPlugin = entry.hook.source === "activi-plugin";
   const disabled = managedByPlugin ? false : hookConfig?.enabled === false;
   const always = entry.metadata?.always === true;
   const events = entry.metadata?.events ?? [];
@@ -131,7 +131,7 @@ function buildHookStatus(
 export function buildWorkspaceHookStatus(
   workspaceDir: string,
   opts?: {
-    config?: OpenClawConfig;
+    config?: ActiviConfig;
     managedHooksDir?: string;
     entries?: HookEntry[];
     eligibility?: HookEligibilityContext;

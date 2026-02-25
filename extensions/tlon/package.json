@@ -1,15 +1,15 @@
 {
-  "name": "@openclaw/tlon",
+  "name": "@activi/tlon",
   "version": "2026.2.22",
-  "description": "OpenClaw Tlon/Urbit channel plugin",
+  "description": "Activi Tlon/Urbit channel plugin",
   "type": "module",
   "dependencies": {
     "@urbit/aura": "^3.0.0"
   },
   "devDependencies": {
-    "openclaw": "workspace:*"
+    "activi": "workspace:*"
   },
-  "openclaw": {
+  "activi": {
     "extensions": [
       "./index.ts"
     ],
@@ -24,7 +24,7 @@
       "quickstartAllowFrom": true
     },
     "install": {
-      "npmSpec": "@openclaw/tlon",
+      "npmSpec": "@activi/tlon",
       "localPath": "extensions/tlon",
       "defaultChoice": "npm"
     }

@@ -6,7 +6,7 @@ import { copyA2uiAssets } from "../../scripts/canvas-a2ui-copy.js";
 
 describe("canvas a2ui copy", () => {
   async function withA2uiFixture(run: (dir: string) => Promise<void>) {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-a2ui-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "activi-a2ui-"));
     try {
       await run(dir);
     } finally {
@@ -22,19 +22,19 @@ describe("canvas a2ui copy", () => {
     });
   });
 
-  it("skips missing assets when OPENCLAW_A2UI_SKIP_MISSING=1", async () => {
+  it("skips missing assets when ACTIVI_A2UI_SKIP_MISSING=1", async () => {
     await withA2uiFixture(async (dir) => {
-      const previous = process.env.OPENCLAW_A2UI_SKIP_MISSING;
-      process.env.OPENCLAW_A2UI_SKIP_MISSING = "1";
+      const previous = process.env.ACTIVI_A2UI_SKIP_MISSING;
+      process.env.ACTIVI_A2UI_SKIP_MISSING = "1";
       try {
         await expect(
           copyA2uiAssets({ srcDir: dir, outDir: path.join(dir, "out") }),
         ).resolves.toBeUndefined();
       } finally {
         if (previous === undefined) {
-          delete process.env.OPENCLAW_A2UI_SKIP_MISSING;
+          delete process.env.ACTIVI_A2UI_SKIP_MISSING;
         } else {
-          process.env.OPENCLAW_A2UI_SKIP_MISSING = previous;
+          process.env.ACTIVI_A2UI_SKIP_MISSING = previous;
         }
       }
     });

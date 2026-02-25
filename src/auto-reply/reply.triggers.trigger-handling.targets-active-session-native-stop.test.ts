@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { loadSessionStore } from "../config/sessions.js";
 import {
   getAbortEmbeddedPiRunMock,
@@ -16,16 +16,16 @@ import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./r
 let getReplyFromConfig: typeof import("./reply.js").getReplyFromConfig;
 let previousFastTestEnv: string | undefined;
 beforeAll(async () => {
-  previousFastTestEnv = process.env.OPENCLAW_TEST_FAST;
-  process.env.OPENCLAW_TEST_FAST = "1";
+  previousFastTestEnv = process.env.ACTIVI_TEST_FAST;
+  process.env.ACTIVI_TEST_FAST = "1";
   ({ getReplyFromConfig } = await import("./reply.js"));
 });
 afterAll(() => {
   if (previousFastTestEnv === undefined) {
-    delete process.env.OPENCLAW_TEST_FAST;
+    delete process.env.ACTIVI_TEST_FAST;
     return;
   }
-  process.env.OPENCLAW_TEST_FAST = previousFastTestEnv;
+  process.env.ACTIVI_TEST_FAST = previousFastTestEnv;
 });
 
 installTriggerHandlingE2eTestHooks();
@@ -180,7 +180,7 @@ describe("trigger handling", () => {
 
   it("uses the target agent model for native /status", async () => {
     await withTempHome(async (home) => {
-      const cfg = makeCfg(home) as unknown as OpenClawConfig;
+      const cfg = makeCfg(home) as unknown as ActiviConfig;
       cfg.agents = {
         ...cfg.agents,
         list: [{ id: "coding", model: "minimax/MiniMax-M2.1" }],

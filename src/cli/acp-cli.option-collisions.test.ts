@@ -32,7 +32,7 @@ describe("acp cli option collisions", () => {
     secrets: { token?: string; password?: string },
     run: (files: { tokenFile?: string; passwordFile?: string }) => Promise<T>,
   ): Promise<T> {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acp-cli-"));
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "activi-acp-cli-"));
     try {
       const files: { tokenFile?: string; passwordFile?: string } = {};
       if (secrets.token !== undefined) {
@@ -148,7 +148,7 @@ describe("acp cli option collisions", () => {
   });
 
   it("reports missing token-file read errors", async () => {
-    await parseAcp(["--token-file", "/tmp/openclaw-acp-missing-token.txt"]);
+    await parseAcp(["--token-file", "/tmp/activi-acp-missing-token.txt"]);
     expectCliError(/Failed to read Gateway token file/);
   });
 });

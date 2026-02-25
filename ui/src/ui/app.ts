@@ -86,7 +86,7 @@ import type { NostrProfileFormState } from "./views/channels.nostr-profile-form.
 
 declare global {
   interface Window {
-    __OPENCLAW_CONTROL_UI_BASE_PATH__?: string;
+    __ACTIVI_CONTROL_UI_BASE_PATH__?: string;
   }
 }
 
@@ -105,10 +105,15 @@ function resolveOnboardingMode(): boolean {
   return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
 }
 
-@customElement("openclaw-app")
-export class OpenClawApp extends LitElement {
+@customElement("activi-app")
+export class ActiviApp extends LitElement {
   private i18nController = new I18nController(this);
   @state() settings: UiSettings = loadSettings();
+  
+  // Performance optimization: prevent unnecessary re-renders
+  // Note: LitElement doesn't have shouldUpdate by default, but we can override it
+  // For now, let Lit handle updates automatically (it's already optimized)
+  // This is a placeholder for future optimizations if needed
   constructor() {
     super();
     if (isSupportedLocale(this.settings.locale)) {
@@ -154,6 +159,10 @@ export class OpenClawApp extends LitElement {
   @state() sidebarContent: string | null = null;
   @state() sidebarError: string | null = null;
   @state() splitRatio = this.settings.splitRatio;
+  // Right panel state
+  @state() rightPanelOpen = false;
+  @state() rightPanelTitle: string | null = null;
+  @state() rightPanelContent: unknown = null;
 
   @state() nodesLoading = false;
   @state() nodes: Array<Record<string, unknown>> = [];
@@ -319,7 +328,7 @@ export class OpenClawApp extends LitElement {
   paletteActiveIndex = 0;
   @state() streamMode = (() => {
     try {
-      const stored = localStorage.getItem("openclaw:stream-mode");
+      const stored = localStorage.getItem("activi:stream-mode");
       // Default to true (redacted) unless explicitly disabled
       return stored === null ? true : stored === "true";
     } catch {

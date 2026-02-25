@@ -12,7 +12,7 @@ import {
   type RequestPermissionResponse,
   type SessionNotification,
 } from "@agentclientprotocol/sdk";
-import { ensureOpenClawCliOnPath } from "../infra/path-env.js";
+import { ensureActiviCliOnPath } from "../infra/path-env.js";
 import { DANGEROUS_ACP_TOOLS } from "../security/dangerous-tools.js";
 
 const SAFE_AUTO_APPROVE_KINDS = new Set(["read", "search"]);
@@ -322,11 +322,11 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
   const verbose = Boolean(opts.verbose);
   const log = verbose ? (msg: string) => console.error(`[acp-client] ${msg}`) : () => {};
 
-  ensureOpenClawCliOnPath();
+  ensureActiviCliOnPath();
   const serverArgs = buildServerArgs(opts);
 
   const entryPath = resolveSelfEntryPath();
-  const serverCommand = opts.serverCommand ?? (entryPath ? process.execPath : "openclaw");
+  const serverCommand = opts.serverCommand ?? (entryPath ? process.execPath : "activi");
   const effectiveArgs = opts.serverCommand || !entryPath ? serverArgs : [entryPath, ...serverArgs];
 
   log(`spawning: ${serverCommand} ${effectiveArgs.join(" ")}`);
@@ -363,7 +363,7 @@ export async function createAcpClient(opts: AcpClientOptions = {}): Promise<AcpC
       fs: { readTextFile: true, writeTextFile: true },
       terminal: true,
     },
-    clientInfo: { name: "openclaw-acp-client", version: "1.0.0" },
+    clientInfo: { name: "activi-acp-client", version: "1.0.0" },
   });
 
   log("creating session");
@@ -387,7 +387,7 @@ export async function runAcpClientInteractive(opts: AcpClientOptions = {}): Prom
     output: process.stdout,
   });
 
-  console.log("OpenClaw ACP client");
+  console.log("Activi ACP client");
   console.log(`Session: ${sessionId}`);
   console.log('Type a prompt, or "exit" to quit.\n');
 

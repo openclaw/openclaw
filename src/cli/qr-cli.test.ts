@@ -64,10 +64,10 @@ describe("registerQrCli", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "");
-    vi.stubEnv("CLAWDBOT_GATEWAY_TOKEN", "");
-    vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", "");
-    vi.stubEnv("CLAWDBOT_GATEWAY_PASSWORD", "");
+    vi.stubEnv("ACTIVI_GATEWAY_TOKEN", "");
+    vi.stubEnv("ACTIVI_GATEWAY_TOKEN", "");
+    vi.stubEnv("ACTIVI_GATEWAY_PASSWORD", "");
+    vi.stubEnv("ACTIVI_GATEWAY_PASSWORD", "");
   });
 
   afterEach(() => {
@@ -109,7 +109,7 @@ describe("registerQrCli", () => {
     expect(output).toContain("Pairing QR");
     expect(output).toContain("ASCII-QR");
     expect(output).toContain("Gateway:");
-    expect(output).toContain("openclaw devices approve <requestId>");
+    expect(output).toContain("activi devices approve <requestId>");
   });
 
   it("accepts --token override when config has no auth", async () => {

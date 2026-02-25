@@ -7,7 +7,7 @@ import { buildKimiCodingProvider, resolveImplicitProviders } from "./models-conf
 
 describe("kimi-coding implicit provider (#22409)", () => {
   it("should include kimi-coding when KIMI_API_KEY is configured", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "activi-test-"));
     const envSnapshot = captureEnv(["KIMI_API_KEY"]);
     process.env.KIMI_API_KEY = "test-key";
 
@@ -31,7 +31,7 @@ describe("kimi-coding implicit provider (#22409)", () => {
   });
 
   it("should not include kimi-coding when no API key is configured", async () => {
-    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const agentDir = mkdtempSync(join(tmpdir(), "activi-test-"));
     const envSnapshot = captureEnv(["KIMI_API_KEY"]);
     delete process.env.KIMI_API_KEY;
 

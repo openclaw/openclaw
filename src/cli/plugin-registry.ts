@@ -1,7 +1,7 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { loadConfig } from "../config/config.js";
 import { createSubsystemLogger } from "../logging.js";
-import { loadOpenClawPlugins } from "../plugins/loader.js";
+import { loadActiviPlugins } from "../plugins/loader.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginLogger } from "../plugins/types.js";
 
@@ -30,7 +30,7 @@ export function ensurePluginRegistryLoaded(): void {
     error: (msg) => log.error(msg),
     debug: (msg) => log.debug(msg),
   };
-  loadOpenClawPlugins({
+  loadActiviPlugins({
     config,
     workspaceDir,
     logger,

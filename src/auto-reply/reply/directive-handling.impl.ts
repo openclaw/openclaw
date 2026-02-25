@@ -4,7 +4,7 @@ import {
   resolveSessionAgentId,
 } from "../../agents/agent-scope.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 import { type SessionEntry, updateSessionStore } from "../../config/sessions.js";
 import type { ExecAsk, ExecHost, ExecSecurity } from "../../infra/exec-approvals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -28,7 +28,7 @@ import {
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel } from "./directives.js";
 
 function resolveExecDefaults(params: {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   sessionEntry?: SessionEntry;
   agentId?: string;
 }): { host: ExecHost; security: ExecSecurity; ask: ExecAsk; node?: string } {

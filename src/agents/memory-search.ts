@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig, MemorySearchConfig } from "../config/config.js";
+import type { ActiviConfig, MemorySearchConfig } from "../config/config.js";
 import { resolveStateDir } from "../config/paths.js";
 import { clampInt, clampNumber, resolveUserPath } from "../utils.js";
 import { resolveAgentConfig } from "./agent-scope.js";
@@ -344,7 +344,7 @@ function mergeConfig(
 }
 
 export function resolveMemorySearchConfig(
-  cfg: OpenClawConfig,
+  cfg: ActiviConfig,
   agentId: string,
 ): ResolvedMemorySearchConfig | null {
   const defaults = cfg.agents?.defaults?.memorySearch;

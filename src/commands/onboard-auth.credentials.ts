@@ -1,13 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
-import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
+import { resolveActiviAgentDir } from "../agents/agent-paths.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { resolveStateDir } from "../config/paths.js";
 export { CLOUDFLARE_AI_GATEWAY_DEFAULT_MODEL_REF } from "../agents/cloudflare-ai-gateway.js";
 export { XAI_DEFAULT_MODEL_REF } from "./onboard-auth.models.js";
 
-const resolveAuthAgentDir = (agentDir?: string) => agentDir ?? resolveOpenClawAgentDir();
+const resolveAuthAgentDir = (agentDir?: string) => agentDir ?? resolveActiviAgentDir();
 
 export type WriteOAuthCredentialsOptions = {
   syncSiblingAgents?: boolean;

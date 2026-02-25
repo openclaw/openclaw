@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk";
+import type { ActiviConfig } from "activi/plugin-sdk";
 import {
   formatDocsLink,
   promptAccountId,
@@ -6,7 +6,7 @@ import {
   normalizeAccountId,
   type ChannelOnboardingAdapter,
   type WizardPrompter,
-} from "openclaw/plugin-sdk";
+} from "activi/plugin-sdk";
 import { buildTlonAccountFields } from "./account-fields.js";
 import type { TlonResolvedAccount } from "./types.js";
 import { listTlonAccountIds, resolveTlonAccount } from "./types.js";
@@ -19,7 +19,7 @@ function isConfigured(account: TlonResolvedAccount): boolean {
 }
 
 function applyAccountConfig(params: {
-  cfg: OpenClawConfig;
+  cfg: ActiviConfig;
   accountId: string;
   input: {
     name?: string;
@@ -31,7 +31,7 @@ function applyAccountConfig(params: {
     dmAllowlist?: string[];
     autoDiscoverChannels?: boolean;
   };
-}): OpenClawConfig {
+}): ActiviConfig {
   const { cfg, accountId, input } = params;
   const useDefault = accountId === DEFAULT_ACCOUNT_ID;
   const base = cfg.channels?.tlon ?? {};

@@ -1,8 +1,8 @@
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import type { ApplyAuthChoiceParams, ApplyAuthChoiceResult } from "./auth-choice.apply.js";
 import { promptAndConfigureVllm } from "./vllm-setup.js";
 
-function applyVllmDefaultModel(cfg: OpenClawConfig, modelRef: string): OpenClawConfig {
+function applyVllmDefaultModel(cfg: ActiviConfig, modelRef: string): ActiviConfig {
   const existingModel = cfg.agents?.defaults?.model;
   const fallbacks =
     existingModel && typeof existingModel === "object" && "fallbacks" in existingModel

@@ -10,7 +10,7 @@ import {
 let tempRoot: string | null = null;
 
 async function makeTempRoot() {
-  const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-state-dir-"));
+  const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "activi-state-dir-"));
   tempRoot = root;
   return root;
 }
@@ -25,9 +25,9 @@ afterEach(async () => {
 });
 
 describe("legacy state dir auto-migration", () => {
-  it("follows legacy symlink when it points at another legacy dir (clawdbot -> moltbot)", async () => {
+  it("follows legacy symlink when it points at another legacy dir .activi -> moltbot)", async () => {
     const root = await makeTempRoot();
-    const legacySymlink = path.join(root, ".clawdbot");
+    const legacySymlink = path.join(root, ".activi");
     const legacyDir = path.join(root, ".moltbot");
 
     fs.mkdirSync(legacyDir, { recursive: true });
@@ -44,9 +44,9 @@ describe("legacy state dir auto-migration", () => {
     expect(result.migrated).toBe(true);
     expect(result.warnings).toEqual([]);
 
-    const targetMarker = path.join(root, ".openclaw", "marker.txt");
+    const targetMarker = path.join(root, ".activi", "marker.txt");
     expect(fs.readFileSync(targetMarker, "utf-8")).toBe("ok");
     expect(fs.readFileSync(path.join(root, ".moltbot", "marker.txt"), "utf-8")).toBe("ok");
-    expect(fs.readFileSync(path.join(root, ".clawdbot", "marker.txt"), "utf-8")).toBe("ok");
+    expect(fs.readFileSync(path.join(root, ".activi", "marker.txt"), "utf-8")).toBe("ok");
   });
 });

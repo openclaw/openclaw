@@ -124,7 +124,7 @@ img.chat-avatar {
   object-position: center;
 }
 
-/* Logo avatar (OpenClaw favicon) - contain to show full logo */
+/* Logo avatar (Activi favicon) - contain to show full logo */
 img.chat-avatar.chat-avatar--logo {
   object-fit: contain;
   padding: 6px;

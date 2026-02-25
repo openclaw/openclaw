@@ -1,4 +1,4 @@
-import { isBlockedHostnameOrIp } from "openclaw/plugin-sdk";
+import { isBlockedHostnameOrIp } from "activi/plugin-sdk";
 
 export type UrbitBaseUrlValidation =
   | { ok: true; baseUrl: string; hostname: string }

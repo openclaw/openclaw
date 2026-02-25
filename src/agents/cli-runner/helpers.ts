@@ -5,7 +5,7 @@ import path from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import type { ImageContent } from "@mariozechner/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 import type { CliBackendConfig } from "../../config/types.js";
 import { buildTtsSystemPromptHint } from "../../tts/tts.js";
 import { isRecord } from "../../utils.js";
@@ -50,7 +50,7 @@ export type CliOutput = {
 
 export function buildSystemPrompt(params: {
   workspaceDir: string;
-  config?: OpenClawConfig;
+  config?: ActiviConfig;
   defaultThinkLevel?: ThinkLevel;
   extraSystemPrompt?: string;
   ownerNumbers?: string[];
@@ -72,7 +72,7 @@ export function buildSystemPrompt(params: {
     workspaceDir: params.workspaceDir,
     cwd: process.cwd(),
     runtime: {
-      host: "openclaw",
+      host: "activi",
       os: `${os.type()} ${os.release()}`,
       arch: os.arch(),
       node: process.version,
@@ -336,7 +336,7 @@ export function appendImagePathsToPrompt(prompt: string, paths: string[]): strin
 export async function writeCliImages(
   images: ImageContent[],
 ): Promise<{ paths: string[]; cleanup: () => Promise<void> }> {
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-images-"));
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "activi-cli-images-"));
   const paths: string[] = [];
   for (let i = 0; i < images.length; i += 1) {
     const image = images[i];

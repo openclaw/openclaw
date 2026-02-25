@@ -16,7 +16,7 @@ x-i18n:
 
 # 日志
 
-OpenClaw 在两个地方记录日志：
+Activi 在两个地方记录日志：
 
 - **文件日志**（JSON 行）由 Gateway 网关写入。
 - **控制台输出**显示在终端和控制 UI 中。
@@ -27,16 +27,16 @@ OpenClaw 在两个地方记录日志：
 
 默认情况下，Gateway 网关在以下位置写入滚动日志文件：
 
-`/tmp/openclaw/openclaw-YYYY-MM-DD.log`
+`/tmp/activi/activi-YYYY-MM-DD.log`
 
 日期使用 Gateway 网关主机的本地时区。
 
-你可以在 `~/.openclaw/openclaw.json` 中覆盖此设置：
+你可以在 `~/.activi/activi.json` 中覆盖此设置：
 
 ```json
 {
   "logging": {
-    "file": "/path/to/openclaw.log"
+    "file": "/path/to/activi.log"
   }
 }
 ```
@@ -48,7 +48,7 @@ OpenClaw 在两个地方记录日志：
 使用 CLI 通过 RPC 跟踪 Gateway 网关日志文件：
 
 ```bash
-openclaw logs --follow
+activi logs --follow
 ```
 
 输出模式：
@@ -69,7 +69,7 @@ openclaw logs --follow
 如果 Gateway 网关无法访问，CLI 会打印一个简短提示运行：
 
 ```bash
-openclaw doctor
+activi doctor
 ```
 
 ### 控制 UI（Web）
@@ -82,7 +82,7 @@ openclaw doctor
 要过滤渠道活动（WhatsApp/Telegram 等），使用：
 
 ```bash
-openclaw channels logs --channel whatsapp
+activi channels logs --channel whatsapp
 ```
 
 ## 日志格式
@@ -103,13 +103,13 @@ openclaw channels logs --channel whatsapp
 
 ## 配置日志
 
-所有日志配置都在 `~/.openclaw/openclaw.json` 的 `logging` 下。
+所有日志配置都在 `~/.activi/activi.json` 的 `logging` 下。
 
 ```json
 {
   "logging": {
     "level": "info",
-    "file": "/tmp/openclaw/openclaw-YYYY-MM-DD.log",
+    "file": "/tmp/activi/activi-YYYY-MM-DD.log",
     "consoleLevel": "info",
     "consoleStyle": "pretty",
     "redactSensitive": "tools",
@@ -152,7 +152,7 @@ openclaw channels logs --channel whatsapp
 
 - **OpenTelemetry（OTel）**：追踪、指标和日志的数据模型 + SDK。
 - **OTLP**：用于将 OTel 数据导出到收集器/后端的线路协议。
-- OpenClaw 目前通过 **OTLP/HTTP（protobuf）** 导出。
+- Activi 目前通过 **OTLP/HTTP（protobuf）** 导出。
 
 ### 导出的信号
 
@@ -211,7 +211,7 @@ openclaw channels logs --channel whatsapp
 环境变量覆盖（一次性）：
 
 ```
-OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload
+ACTIVI_DIAGNOSTICS=telegram.http,telegram.payload
 ```
 
 注意：
@@ -240,7 +240,7 @@ OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload
       "enabled": true,
       "endpoint": "http://otel-collector:4318",
       "protocol": "http/protobuf",
-      "serviceName": "openclaw-gateway",
+      "serviceName": "activi-gateway",
       "traces": true,
       "metrics": true,
       "logs": true,
@@ -253,7 +253,7 @@ OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload
 
 注意：
 
-- 你也可以使用 `openclaw plugins enable diagnostics-otel` 启用插件。
+- 你也可以使用 `activi plugins enable diagnostics-otel` 启用插件。
 - `protocol` 目前仅支持 `http/protobuf`。`grpc` 被忽略。
 - 指标包括令牌使用、成本、上下文大小、运行持续时间和消息流计数器/直方图（webhooks、队列、会话状态、队列深度/等待）。
 - 追踪/指标可以通过 `traces` / `metrics` 切换（默认：开启）。启用时，追踪包括模型使用 span 加上 webhook/消息处理 span。
@@ -264,45 +264,45 @@ OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload
 
 模型使用：
 
-- `openclaw.tokens`（计数器，属性：`openclaw.token`、`openclaw.channel`、`openclaw.provider`、`openclaw.model`）
-- `openclaw.cost.usd`（计数器，属性：`openclaw.channel`、`openclaw.provider`、`openclaw.model`）
-- `openclaw.run.duration_ms`（直方图，属性：`openclaw.channel`、`openclaw.provider`、`openclaw.model`）
-- `openclaw.context.tokens`（直方图，属性：`openclaw.context`、`openclaw.channel`、`openclaw.provider`、`openclaw.model`）
+- `activi.tokens`（计数器，属性：`activi.token`、`activi.channel`、`activi.provider`、`activi.model`）
+- `activi.cost.usd`（计数器，属性：`activi.channel`、`activi.provider`、`activi.model`）
+- `activi.run.duration_ms`（直方图，属性：`activi.channel`、`activi.provider`、`activi.model`）
+- `activi.context.tokens`（直方图，属性：`activi.context`、`activi.channel`、`activi.provider`、`activi.model`）
 
 消息流：
 
-- `openclaw.webhook.received`（计数器，属性：`openclaw.channel`、`openclaw.webhook`）
-- `openclaw.webhook.error`（计数器，属性：`openclaw.channel`、`openclaw.webhook`）
-- `openclaw.webhook.duration_ms`（直方图，属性：`openclaw.channel`、`openclaw.webhook`）
-- `openclaw.message.queued`（计数器，属性：`openclaw.channel`、`openclaw.source`）
-- `openclaw.message.processed`（计数器，属性：`openclaw.channel`、`openclaw.outcome`）
-- `openclaw.message.duration_ms`（直方图，属性：`openclaw.channel`、`openclaw.outcome`）
+- `activi.webhook.received`（计数器，属性：`activi.channel`、`activi.webhook`）
+- `activi.webhook.error`（计数器，属性：`activi.channel`、`activi.webhook`）
+- `activi.webhook.duration_ms`（直方图，属性：`activi.channel`、`activi.webhook`）
+- `activi.message.queued`（计数器，属性：`activi.channel`、`activi.source`）
+- `activi.message.processed`（计数器，属性：`activi.channel`、`activi.outcome`）
+- `activi.message.duration_ms`（直方图，属性：`activi.channel`、`activi.outcome`）
 
 队列 + 会话：
 
-- `openclaw.queue.lane.enqueue`（计数器，属性：`openclaw.lane`）
-- `openclaw.queue.lane.dequeue`（计数器，属性：`openclaw.lane`）
-- `openclaw.queue.depth`（直方图，属性：`openclaw.lane` 或 `openclaw.channel=heartbeat`）
-- `openclaw.queue.wait_ms`（直方图，属性：`openclaw.lane`）
-- `openclaw.session.state`（计数器，属性：`openclaw.state`、`openclaw.reason`）
-- `openclaw.session.stuck`（计数器，属性：`openclaw.state`）
-- `openclaw.session.stuck_age_ms`（直方图，属性：`openclaw.state`）
-- `openclaw.run.attempt`（计数器，属性：`openclaw.attempt`）
+- `activi.queue.lane.enqueue`（计数器，属性：`activi.lane`）
+- `activi.queue.lane.dequeue`（计数器，属性：`activi.lane`）
+- `activi.queue.depth`（直方图，属性：`activi.lane` 或 `activi.channel=heartbeat`）
+- `activi.queue.wait_ms`（直方图，属性：`activi.lane`）
+- `activi.session.state`（计数器，属性：`activi.state`、`activi.reason`）
+- `activi.session.stuck`（计数器，属性：`activi.state`）
+- `activi.session.stuck_age_ms`（直方图，属性：`activi.state`）
+- `activi.run.attempt`（计数器，属性：`activi.attempt`）
 
 ### 导出的 span（名称 + 关键属性）
 
-- `openclaw.model.usage`
-  - `openclaw.channel`、`openclaw.provider`、`openclaw.model`
-  - `openclaw.sessionKey`、`openclaw.sessionId`
-  - `openclaw.tokens.*`（input/output/cache_read/cache_write/total）
-- `openclaw.webhook.processed`
-  - `openclaw.channel`、`openclaw.webhook`、`openclaw.chatId`
-- `openclaw.webhook.error`
-  - `openclaw.channel`、`openclaw.webhook`、`openclaw.chatId`、`openclaw.error`
-- `openclaw.message.processed`
-  - `openclaw.channel`、`openclaw.outcome`、`openclaw.chatId`、`openclaw.messageId`、`openclaw.sessionKey`、`openclaw.sessionId`、`openclaw.reason`
-- `openclaw.session.stuck`
-  - `openclaw.state`、`openclaw.ageMs`、`openclaw.queueDepth`、`openclaw.sessionKey`、`openclaw.sessionId`
+- `activi.model.usage`
+  - `activi.channel`、`activi.provider`、`activi.model`
+  - `activi.sessionKey`、`activi.sessionId`
+  - `activi.tokens.*`（input/output/cache_read/cache_write/total）
+- `activi.webhook.processed`
+  - `activi.channel`、`activi.webhook`、`activi.chatId`
+- `activi.webhook.error`
+  - `activi.channel`、`activi.webhook`、`activi.chatId`、`activi.error`
+- `activi.message.processed`
+  - `activi.channel`、`activi.outcome`、`activi.chatId`、`activi.messageId`、`activi.sessionKey`、`activi.sessionId`、`activi.reason`
+- `activi.session.stuck`
+  - `activi.state`、`activi.ageMs`、`activi.queueDepth`、`activi.sessionKey`、`activi.sessionId`
 
 ### 采样 + 刷新
 
@@ -324,6 +324,6 @@ OPENCLAW_DIAGNOSTICS=telegram.http,telegram.payload
 
 ## 故障排除提示
 
-- **Gateway 网关无法访问？** 先运行 `openclaw doctor`。
+- **Gateway 网关无法访问？** 先运行 `activi doctor`。
 - **日志为空？** 检查 Gateway 网关是否正在运行并写入 `logging.file` 中的文件路径。
 - **需要更多细节？** 将 `logging.level` 设置为 `debug` 或 `trace` 并重试。

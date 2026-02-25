@@ -49,7 +49,7 @@ export const en: TranslationMap = {
     skills: "Skills and API keys.",
     nodes: "Paired devices and commands.",
     chat: "Gateway chat for quick interventions.",
-    config: "Edit openclaw.json.",
+    config: "Edit activi.json.",
     debug: "Snapshots, events, RPC.",
     logs: "Live gateway logs.",
   },
@@ -152,6 +152,8 @@ export const en: TranslationMap = {
   },
   languages: {
     en: "English",
+    de: "Deutsch",
+    bs: "Bosanski",
     zhCN: "简体中文 (Simplified Chinese)",
     zhTW: "繁體中文 (Traditional Chinese)",
     ptBR: "Português (Brazilian Portuguese)",

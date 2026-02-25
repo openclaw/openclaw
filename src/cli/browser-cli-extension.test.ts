@@ -129,7 +129,7 @@ function writeManifest(dir: string) {
 
 describe("bundled extension resolver (fs-mocked)", () => {
   it("walks up to find the assets directory", () => {
-    const root = abs("/tmp/openclaw-ext-root");
+    const root = abs("/tmp/activi-ext-root");
     const here = path.join(root, "dist", "cli");
     const assets = path.join(root, "assets", "chrome-extension");
 
@@ -140,7 +140,7 @@ describe("bundled extension resolver (fs-mocked)", () => {
   });
 
   it("prefers the nearest assets directory", () => {
-    const root = abs("/tmp/openclaw-ext-root-nearest");
+    const root = abs("/tmp/activi-ext-root-nearest");
     const here = path.join(root, "dist", "cli");
     const distAssets = path.join(root, "dist", "assets", "chrome-extension");
     const rootAssets = path.join(root, "assets", "chrome-extension");
@@ -155,7 +155,7 @@ describe("bundled extension resolver (fs-mocked)", () => {
 
 describe("browser extension install (fs-mocked)", () => {
   it("installs into the state dir (never node_modules)", async () => {
-    const tmp = abs("/tmp/openclaw-ext-install");
+    const tmp = abs("/tmp/activi-ext-install");
     const sourceDir = path.join(tmp, "source-ext");
     writeManifest(sourceDir);
     setFile(path.join(sourceDir, "test.txt"), "ok");
@@ -169,8 +169,8 @@ describe("browser extension install (fs-mocked)", () => {
   });
 
   it("copies extension path to clipboard", async () => {
-    const tmp = abs("/tmp/openclaw-ext-path");
-    await withEnvAsync({ OPENCLAW_STATE_DIR: tmp }, async () => {
+    const tmp = abs("/tmp/activi-ext-path");
+    await withEnvAsync({ ACTIVI_STATE_DIR: tmp }, async () => {
       copyToClipboard.mockResolvedValue(true);
 
       const dir = path.join(tmp, "browser", "chrome-extension");

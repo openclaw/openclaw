@@ -8,7 +8,7 @@ import {
 
 describe("deleteTelegramUpdateOffset", () => {
   it("removes the offset file so a new bot starts fresh", async () => {
-    await withStateDirEnv("openclaw-tg-offset-", async () => {
+    await withStateDirEnv("activi-tg-offset-", async () => {
       await writeTelegramUpdateOffset({ accountId: "default", updateId: 432_000_000 });
       expect(await readTelegramUpdateOffset({ accountId: "default" })).toBe(432_000_000);
 
@@ -18,13 +18,13 @@ describe("deleteTelegramUpdateOffset", () => {
   });
 
   it("does not throw when the offset file does not exist", async () => {
-    await withStateDirEnv("openclaw-tg-offset-", async () => {
+    await withStateDirEnv("activi-tg-offset-", async () => {
       await expect(deleteTelegramUpdateOffset({ accountId: "nonexistent" })).resolves.not.toThrow();
     });
   });
 
   it("only removes the targeted account offset, leaving others intact", async () => {
-    await withStateDirEnv("openclaw-tg-offset-", async () => {
+    await withStateDirEnv("activi-tg-offset-", async () => {
       await writeTelegramUpdateOffset({ accountId: "default", updateId: 100 });
       await writeTelegramUpdateOffset({ accountId: "alerts", updateId: 200 });
 

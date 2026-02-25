@@ -7,7 +7,7 @@ import {
   summarizeMapping,
   warnMissingProviderGroupPolicyFallbackOnce,
   type RuntimeEnv,
-} from "openclaw/plugin-sdk";
+} from "activi/plugin-sdk";
 import { resolveMatrixTargets } from "../../resolve-targets.js";
 import { getMatrixRuntime } from "../../runtime.js";
 import type { CoreConfig, ReplyToMode } from "../../types.js";

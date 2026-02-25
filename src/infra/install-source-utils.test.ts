@@ -9,7 +9,7 @@ import {
 } from "./install-source-utils.js";
 
 const runCommandWithTimeoutMock = vi.fn();
-const TEMP_DIR_PREFIX = "openclaw-install-source-utils-";
+const TEMP_DIR_PREFIX = "activi-install-source-utils-";
 
 vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
@@ -75,7 +75,7 @@ describe("withTempDir", () => {
     let observedDir = "";
     const markerFile = "marker.txt";
 
-    const value = await withTempDir("openclaw-install-source-utils-", async (tmpDir) => {
+    const value = await withTempDir("activi-install-source-utils-", async (tmpDir) => {
       observedDir = tmpDir;
       await fs.writeFile(path.join(tmpDir, markerFile), "ok", "utf-8");
       await expect(fs.stat(path.join(tmpDir, markerFile))).resolves.toBeDefined();
@@ -89,7 +89,7 @@ describe("withTempDir", () => {
 
 describe("resolveArchiveSourcePath", () => {
   it("returns not found error for missing archive paths", async () => {
-    const result = await resolveArchiveSourcePath("/tmp/does-not-exist-openclaw-archive.tgz");
+    const result = await resolveArchiveSourcePath("/tmp/does-not-exist-activi-archive.tgz");
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.error).toContain("archive not found");
@@ -126,31 +126,31 @@ describe("packNpmSpecToArchive", () => {
     mockPackCommandResult({
       stdout: JSON.stringify([
         {
-          id: "openclaw-plugin@1.2.3",
-          name: "openclaw-plugin",
+          id: "activi-plugin@1.2.3",
+          name: "activi-plugin",
           version: "1.2.3",
-          filename: "openclaw-plugin-1.2.3.tgz",
+          filename: "activi-plugin-1.2.3.tgz",
           integrity: "sha512-test-integrity",
           shasum: "abc123",
         },
       ]),
     });
 
-    const result = await runPack("openclaw-plugin@1.2.3", cwd);
+    const result = await runPack("activi-plugin@1.2.3", cwd);
 
     expect(result).toEqual({
       ok: true,
-      archivePath: path.join(cwd, "openclaw-plugin-1.2.3.tgz"),
+      archivePath: path.join(cwd, "activi-plugin-1.2.3.tgz"),
       metadata: {
-        name: "openclaw-plugin",
+        name: "activi-plugin",
         version: "1.2.3",
-        resolvedSpec: "openclaw-plugin@1.2.3",
+        resolvedSpec: "activi-plugin@1.2.3",
         integrity: "sha512-test-integrity",
         shasum: "abc123",
       },
     });
     expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
-      ["npm", "pack", "openclaw-plugin@1.2.3", "--ignore-scripts", "--json"],
+      ["npm", "pack", "activi-plugin@1.2.3", "--ignore-scripts", "--json"],
       expect.objectContaining({
         cwd,
         timeoutMs: 300_000,
@@ -161,14 +161,14 @@ describe("packNpmSpecToArchive", () => {
   it("falls back to parsing final stdout line when npm json output is unavailable", async () => {
     const cwd = await createFixtureDir();
     mockPackCommandResult({
-      stdout: "npm notice created package\nopenclaw-plugin-1.2.3.tgz\n",
+      stdout: "npm notice created package\nactivi-plugin-1.2.3.tgz\n",
     });
 
-    const result = await runPack("openclaw-plugin@1.2.3", cwd);
+    const result = await runPack("activi-plugin@1.2.3", cwd);
 
     expect(result).toEqual({
       ok: true,
-      archivePath: path.join(cwd, "openclaw-plugin-1.2.3.tgz"),
+      archivePath: path.join(cwd, "activi-plugin-1.2.3.tgz"),
       metadata: {},
     });
   });
@@ -196,7 +196,7 @@ describe("packNpmSpecToArchive", () => {
       stdout: " \n\n",
     });
 
-    const result = await runPack("openclaw-plugin@1.2.3", cwd, 5000);
+    const result = await runPack("activi-plugin@1.2.3", cwd, 5000);
 
     expect(result).toEqual({
       ok: false,
@@ -211,18 +211,18 @@ describe("packNpmSpecToArchive", () => {
         "npm notice creating package\n" +
         JSON.stringify([
           {
-            id: "@openclaw/plugin-demo@2.0.0",
-            filename: "openclaw-plugin-demo-2.0.0.tgz",
+            id: "@activi/plugin-demo@2.0.0",
+            filename: "activi-plugin-demo-2.0.0.tgz",
           },
         ]),
     });
 
-    const result = await runPack("@openclaw/plugin-demo@2.0.0", cwd);
+    const result = await runPack("@activi/plugin-demo@2.0.0", cwd);
     expect(result).toEqual({
       ok: true,
-      archivePath: path.join(cwd, "openclaw-plugin-demo-2.0.0.tgz"),
+      archivePath: path.join(cwd, "activi-plugin-demo-2.0.0.tgz"),
       metadata: {
-        resolvedSpec: "@openclaw/plugin-demo@2.0.0",
+        resolvedSpec: "@activi/plugin-demo@2.0.0",
       },
     });
   });

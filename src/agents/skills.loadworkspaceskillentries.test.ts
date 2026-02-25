@@ -7,7 +7,7 @@ import { loadWorkspaceSkillEntries } from "./skills.js";
 const tempDirs: string[] = [];
 
 async function createTempWorkspaceDir() {
-  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-"));
+  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "activi-"));
   tempDirs.push(workspaceDir);
   return workspaceDir;
 }
@@ -22,11 +22,11 @@ async function setupWorkspaceWithProsePlugin() {
   const workspaceDir = await createTempWorkspaceDir();
   const managedDir = path.join(workspaceDir, ".managed");
   const bundledDir = path.join(workspaceDir, ".bundled");
-  const pluginRoot = path.join(workspaceDir, ".openclaw", "extensions", "open-prose");
+  const pluginRoot = path.join(workspaceDir, ".activi", "extensions", "open-prose");
 
   await fs.mkdir(path.join(pluginRoot, "skills", "prose"), { recursive: true });
   await fs.writeFile(
-    path.join(pluginRoot, "openclaw.plugin.json"),
+    path.join(pluginRoot, "activi.plugin.json"),
     JSON.stringify(
       {
         id: "open-prose",

@@ -22,7 +22,7 @@ describe("host env security policy parity", () => {
   it("keeps macOS HostEnvSanitizer lists in sync with shared JSON policy", () => {
     const repoRoot = process.cwd();
     const policyPath = path.join(repoRoot, "src/infra/host-env-security-policy.json");
-    const swiftPath = path.join(repoRoot, "apps/macos/Sources/OpenClaw/HostEnvSanitizer.swift");
+    const swiftPath = path.join(repoRoot, "apps/macos/Sources/Activi/HostEnvSanitizer.swift");
 
     const policy = JSON.parse(fs.readFileSync(policyPath, "utf8")) as HostEnvSecurityPolicy;
     const swiftSource = fs.readFileSync(swiftPath, "utf8");

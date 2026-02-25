@@ -58,7 +58,7 @@ describe("resolveBootstrapFilesForRun", () => {
   it("applies bootstrap hook overrides", async () => {
     registerExtraBootstrapFileHook();
 
-    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const workspaceDir = await makeTempWorkspace("activi-bootstrap-");
     const files = await resolveBootstrapFilesForRun({ workspaceDir });
 
     expect(files.some((file) => file.path === path.join(workspaceDir, "EXTRA.md"))).toBe(true);
@@ -67,7 +67,7 @@ describe("resolveBootstrapFilesForRun", () => {
   it("drops malformed hook files with missing/invalid paths", async () => {
     registerMalformedBootstrapFileHook();
 
-    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const workspaceDir = await makeTempWorkspace("activi-bootstrap-");
     const warnings: string[] = [];
     const files = await resolveBootstrapFilesForRun({
       workspaceDir,
@@ -89,7 +89,7 @@ describe("resolveBootstrapContextForRun", () => {
   it("returns context files for hook-adjusted bootstrap files", async () => {
     registerExtraBootstrapFileHook();
 
-    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const workspaceDir = await makeTempWorkspace("activi-bootstrap-");
     const result = await resolveBootstrapContextForRun({ workspaceDir });
     const extra = result.contextFiles.find(
       (file) => file.path === path.join(workspaceDir, "EXTRA.md"),

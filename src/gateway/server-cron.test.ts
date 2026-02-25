@@ -2,7 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CliDeps } from "../cli/deps.js";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 
 const enqueueSystemEventMock = vi.fn();
@@ -49,7 +49,7 @@ describe("buildGatewayCronService", () => {
       cron: {
         store: path.join(tmpDir, "cron.json"),
       },
-    } as OpenClawConfig;
+    } as ActiviConfig;
     loadConfigMock.mockReturnValue(cfg);
 
     const state = buildGatewayCronService({
@@ -95,7 +95,7 @@ describe("buildGatewayCronService", () => {
       cron: {
         store: path.join(tmpDir, "cron.json"),
       },
-    } as OpenClawConfig;
+    } as ActiviConfig;
 
     loadConfigMock.mockReturnValue(cfg);
     fetchWithSsrFGuardMock.mockRejectedValue(

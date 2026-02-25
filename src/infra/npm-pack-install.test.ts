@@ -8,15 +8,15 @@ vi.mock("./install-source-utils.js", async (importOriginal) => {
   return {
     ...actual,
     withTempDir: vi.fn(async (_prefix: string, fn: (tmpDir: string) => Promise<unknown>) => {
-      return await fn("/tmp/openclaw-npm-pack-install-test");
+      return await fn("/tmp/activi-npm-pack-install-test");
     }),
     packNpmSpecToArchive: vi.fn(),
   };
 });
 
 describe("installFromNpmSpecArchive", () => {
-  const baseSpec = "@openclaw/test@1.0.0";
-  const baseArchivePath = "/tmp/openclaw-test.tgz";
+  const baseSpec = "@activi/test@1.0.0";
+  const baseArchivePath = "/tmp/activi-test.tgz";
 
   const mockPackedSuccess = (overrides?: {
     resolvedSpec?: string;
@@ -45,7 +45,7 @@ describe("installFromNpmSpecArchive", () => {
     }) => Promise<{ ok: boolean; [k: string]: unknown }>;
   }) =>
     await installFromNpmSpecArchive({
-      tempDirPrefix: "openclaw-test-",
+      tempDirPrefix: "activi-test-",
       spec: baseSpec,
       timeoutMs: 1000,
       expectedIntegrity: overrides.expectedIntegrity,
@@ -76,19 +76,19 @@ describe("installFromNpmSpecArchive", () => {
     const installFromArchive = vi.fn(async () => ({ ok: true as const }));
 
     const result = await installFromNpmSpecArchive({
-      tempDirPrefix: "openclaw-test-",
-      spec: "@openclaw/test@1.0.0",
+      tempDirPrefix: "activi-test-",
+      spec: "@activi/test@1.0.0",
       timeoutMs: 1000,
       installFromArchive,
     });
 
     expect(result).toEqual({ ok: false, error: "pack failed" });
     expect(installFromArchive).not.toHaveBeenCalled();
-    expect(withTempDir).toHaveBeenCalledWith("openclaw-test-", expect.any(Function));
+    expect(withTempDir).toHaveBeenCalledWith("activi-test-", expect.any(Function));
   });
 
   it("returns resolution metadata and installer result on success", async () => {
-    mockPackedSuccess({ name: "@openclaw/test", version: "1.0.0" });
+    mockPackedSuccess({ name: "@activi/test", version: "1.0.0" });
     const installFromArchive = vi.fn(async () => ({ ok: true as const, target: "done" }));
 
     const result = await runInstall({
@@ -98,9 +98,9 @@ describe("installFromNpmSpecArchive", () => {
 
     const okResult = expectWrappedOkResult(result, { ok: true, target: "done" });
     expect(okResult.integrityDrift).toBeUndefined();
-    expect(okResult.npmResolution.resolvedSpec).toBe("@openclaw/test@1.0.0");
+    expect(okResult.npmResolution.resolvedSpec).toBe("@activi/test@1.0.0");
     expect(okResult.npmResolution.resolvedAt).toBeTruthy();
-    expect(installFromArchive).toHaveBeenCalledWith({ archivePath: "/tmp/openclaw-test.tgz" });
+    expect(installFromArchive).toHaveBeenCalledWith({ archivePath: "/tmp/activi-test.tgz" });
   });
 
   it("proceeds when integrity drift callback accepts drift", async () => {
@@ -134,7 +134,7 @@ describe("installFromNpmSpecArchive", () => {
 
     expect(result).toEqual({
       ok: false,
-      error: "aborted: npm package integrity drift detected for @openclaw/test@1.0.0",
+      error: "aborted: npm package integrity drift detected for @activi/test@1.0.0",
     });
     expect(installFromArchive).not.toHaveBeenCalled();
   });
@@ -156,7 +156,7 @@ describe("installFromNpmSpecArchive", () => {
       actualIntegrity: "sha512-new",
     });
     expect(warn).toHaveBeenCalledWith(
-      "Integrity drift detected for @openclaw/test@1.0.0: expected sha512-old, got sha512-new",
+      "Integrity drift detected for @activi/test@1.0.0: expected sha512-old, got sha512-new",
     );
   });
 

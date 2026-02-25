@@ -1,7 +1,7 @@
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import {
   filterToolsByPolicy,
   isToolAllowedByPolicyName,
@@ -44,21 +44,21 @@ describe("pi-tools.policy", () => {
 describe("resolveSubagentToolPolicy depth awareness", () => {
   const baseCfg = {
     agents: { defaults: { subagents: { maxSpawnDepth: 2 } } },
-  } as unknown as OpenClawConfig;
+  } as unknown as ActiviConfig;
 
   const deepCfg = {
     agents: { defaults: { subagents: { maxSpawnDepth: 3 } } },
-  } as unknown as OpenClawConfig;
+  } as unknown as ActiviConfig;
 
   const leafCfg = {
     agents: { defaults: { subagents: { maxSpawnDepth: 1 } } },
-  } as unknown as OpenClawConfig;
+  } as unknown as ActiviConfig;
 
   it("applies subagent tools.alsoAllow to re-enable default-denied tools", () => {
     const cfg = {
       agents: { defaults: { subagents: { maxSpawnDepth: 2 } } },
       tools: { subagents: { tools: { alsoAllow: ["sessions_send"] } } },
-    } as unknown as OpenClawConfig;
+    } as unknown as ActiviConfig;
     const policy = resolveSubagentToolPolicy(cfg, 1);
     expect(isToolAllowedByPolicyName("sessions_send", policy)).toBe(true);
     expect(isToolAllowedByPolicyName("cron", policy)).toBe(false);
@@ -68,7 +68,7 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     const cfg = {
       agents: { defaults: { subagents: { maxSpawnDepth: 2 } } },
       tools: { subagents: { tools: { allow: ["sessions_send"] } } },
-    } as unknown as OpenClawConfig;
+    } as unknown as ActiviConfig;
     const policy = resolveSubagentToolPolicy(cfg, 1);
     expect(isToolAllowedByPolicyName("sessions_send", policy)).toBe(true);
   });
@@ -79,7 +79,7 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
       tools: {
         subagents: { tools: { allow: ["sessions_spawn"], alsoAllow: ["sessions_send"] } },
       },
-    } as unknown as OpenClawConfig;
+    } as unknown as ActiviConfig;
     const policy = resolveSubagentToolPolicy(cfg, 1);
     expect(policy.allow).toEqual(["sessions_spawn", "sessions_send"]);
   });
@@ -96,7 +96,7 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig;
+    } as unknown as ActiviConfig;
     const policy = resolveSubagentToolPolicy(cfg, 1);
     expect(isToolAllowedByPolicyName("sessions_send", policy)).toBe(false);
   });
@@ -105,7 +105,7 @@ describe("resolveSubagentToolPolicy depth awareness", () => {
     const cfg = {
       agents: { defaults: { subagents: { maxSpawnDepth: 2 } } },
       tools: { subagents: { tools: { alsoAllow: ["sessions_send"] } } },
-    } as unknown as OpenClawConfig;
+    } as unknown as ActiviConfig;
     const policy = resolveSubagentToolPolicy(cfg, 1);
     expect(policy.allow).toBeUndefined();
     expect(isToolAllowedByPolicyName("subagents", policy)).toBe(true);

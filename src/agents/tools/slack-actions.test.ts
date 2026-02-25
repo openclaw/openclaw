@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ActiviConfig } from "../../config/config.js";
 import { handleSlackAction } from "./slack-actions.js";
 
 const deleteSlackMessage = vi.fn(async (..._args: unknown[]) => ({}));
@@ -38,7 +38,7 @@ vi.mock("../../slack/actions.js", () => ({
 }));
 
 describe("handleSlackAction", () => {
-  function slackConfig(overrides?: Record<string, unknown>): OpenClawConfig {
+  function slackConfig(overrides?: Record<string, unknown>): ActiviConfig {
     return {
       channels: {
         slack: {
@@ -46,7 +46,7 @@ describe("handleSlackAction", () => {
           ...overrides,
         },
       },
-    } as OpenClawConfig;
+    } as ActiviConfig;
   }
 
   beforeEach(() => {
@@ -259,7 +259,7 @@ describe("handleSlackAction", () => {
   });
 
   it("auto-injects threadTs from context when replyToMode=all", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    const cfg = { channels: { slack: { botToken: "tok" } } } as ActiviConfig;
     sendSlackMessage.mockClear();
     await handleSlackAction(
       {
@@ -282,7 +282,7 @@ describe("handleSlackAction", () => {
   });
 
   it("replyToMode=first threads first message then stops", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    const cfg = { channels: { slack: { botToken: "tok" } } } as ActiviConfig;
     sendSlackMessage.mockClear();
     const hasRepliedRef = { value: false };
     const context = {
@@ -319,7 +319,7 @@ describe("handleSlackAction", () => {
   });
 
   it("replyToMode=first marks hasRepliedRef even when threadTs is explicit", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    const cfg = { channels: { slack: { botToken: "tok" } } } as ActiviConfig;
     sendSlackMessage.mockClear();
     const hasRepliedRef = { value: false };
     const context = {
@@ -359,7 +359,7 @@ describe("handleSlackAction", () => {
   });
 
   it("replyToMode=first without hasRepliedRef does not thread", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    const cfg = { channels: { slack: { botToken: "tok" } } } as ActiviConfig;
     sendSlackMessage.mockClear();
     await handleSlackAction({ action: "sendMessage", to: "channel:C123", content: "No ref" }, cfg, {
       currentChannelId: "C123",
@@ -375,7 +375,7 @@ describe("handleSlackAction", () => {
   });
 
   it("does not auto-inject threadTs when replyToMode=off", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    const cfg = { channels: { slack: { botToken: "tok" } } } as ActiviConfig;
     sendSlackMessage.mockClear();
     await handleSlackAction(
       {
@@ -398,7 +398,7 @@ describe("handleSlackAction", () => {
   });
 
   it("does not auto-inject threadTs when sending to different channel", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    const cfg = { channels: { slack: { botToken: "tok" } } } as ActiviConfig;
     sendSlackMessage.mockClear();
     await handleSlackAction(
       {
@@ -421,7 +421,7 @@ describe("handleSlackAction", () => {
   });
 
   it("explicit threadTs overrides context threadTs", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    const cfg = { channels: { slack: { botToken: "tok" } } } as ActiviConfig;
     sendSlackMessage.mockClear();
     await handleSlackAction(
       {
@@ -445,7 +445,7 @@ describe("handleSlackAction", () => {
   });
 
   it("handles channel target without prefix when replyToMode=all", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    const cfg = { channels: { slack: { botToken: "tok" } } } as ActiviConfig;
     sendSlackMessage.mockClear();
     await handleSlackAction(
       {
@@ -468,7 +468,7 @@ describe("handleSlackAction", () => {
   });
 
   it("adds normalized timestamps to readMessages payloads", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    const cfg = { channels: { slack: { botToken: "tok" } } } as ActiviConfig;
     readSlackMessages.mockResolvedValueOnce({
       messages: [{ ts: "1735689600.456", text: "hi" }],
       hasMore: false,
@@ -485,7 +485,7 @@ describe("handleSlackAction", () => {
   });
 
   it("passes threadId through to readSlackMessages", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    const cfg = { channels: { slack: { botToken: "tok" } } } as ActiviConfig;
     readSlackMessages.mockClear();
     readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
 
@@ -499,7 +499,7 @@ describe("handleSlackAction", () => {
   });
 
   it("adds normalized timestamps to pin payloads", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    const cfg = { channels: { slack: { botToken: "tok" } } } as ActiviConfig;
     listSlackPins.mockResolvedValueOnce([
       {
         type: "message",
@@ -520,7 +520,7 @@ describe("handleSlackAction", () => {
   it("uses user token for reads when available", async () => {
     const cfg = {
       channels: { slack: { botToken: "xoxb-1", userToken: "xoxp-1" } },
-    } as OpenClawConfig;
+    } as ActiviConfig;
     readSlackMessages.mockClear();
     readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
     await handleSlackAction({ action: "readMessages", channelId: "C1" }, cfg);
@@ -531,7 +531,7 @@ describe("handleSlackAction", () => {
   it("falls back to bot token for reads when user token missing", async () => {
     const cfg = {
       channels: { slack: { botToken: "xoxb-1" } },
-    } as OpenClawConfig;
+    } as ActiviConfig;
     readSlackMessages.mockClear();
     readSlackMessages.mockResolvedValueOnce({ messages: [], hasMore: false });
     await handleSlackAction({ action: "readMessages", channelId: "C1" }, cfg);
@@ -542,7 +542,7 @@ describe("handleSlackAction", () => {
   it("uses bot token for writes when userTokenReadOnly is true", async () => {
     const cfg = {
       channels: { slack: { botToken: "xoxb-1", userToken: "xoxp-1" } },
-    } as OpenClawConfig;
+    } as ActiviConfig;
     sendSlackMessage.mockClear();
     await handleSlackAction({ action: "sendMessage", to: "channel:C1", content: "Hello" }, cfg);
     const opts = sendSlackMessage.mock.calls[0]?.[2] as { token?: string } | undefined;
@@ -554,7 +554,7 @@ describe("handleSlackAction", () => {
       channels: {
         slack: { userToken: "xoxp-1", userTokenReadOnly: false },
       },
-    } as OpenClawConfig;
+    } as ActiviConfig;
     sendSlackMessage.mockClear();
     await handleSlackAction({ action: "sendMessage", to: "channel:C1", content: "Hello" }, cfg);
     const opts = sendSlackMessage.mock.calls[0]?.[2] as { token?: string } | undefined;
@@ -562,7 +562,7 @@ describe("handleSlackAction", () => {
   });
 
   it("returns all emojis when no limit is provided", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    const cfg = { channels: { slack: { botToken: "tok" } } } as ActiviConfig;
     const emojiMap = { wave: "url1", smile: "url2", heart: "url3" };
     listSlackEmojis.mockResolvedValueOnce({ ok: true, emoji: emojiMap });
     const result = await handleSlackAction({ action: "emojiList" }, cfg);
@@ -572,7 +572,7 @@ describe("handleSlackAction", () => {
   });
 
   it("applies limit to emoji-list results", async () => {
-    const cfg = { channels: { slack: { botToken: "tok" } } } as OpenClawConfig;
+    const cfg = { channels: { slack: { botToken: "tok" } } } as ActiviConfig;
     const emojiMap = { wave: "url1", smile: "url2", heart: "url3", fire: "url4", star: "url5" };
     listSlackEmojis.mockResolvedValueOnce({ ok: true, emoji: emojiMap });
     const result = await handleSlackAction({ action: "emojiList", limit: 2 }, cfg);

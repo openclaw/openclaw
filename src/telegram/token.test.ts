@@ -2,13 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
+import type { ActiviConfig } from "../config/config.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { resolveTelegramToken } from "./token.js";
 import { readTelegramUpdateOffset, writeTelegramUpdateOffset } from "./update-offset-store.js";
 
 function withTempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-token-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "activi-telegram-token-"));
 }
 
 describe("resolveTelegramToken", () => {
@@ -20,7 +20,7 @@ describe("resolveTelegramToken", () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "env-token");
     const cfg = {
       channels: { telegram: { botToken: "cfg-token" } },
-    } as OpenClawConfig;
+    } as ActiviConfig;
     const res = resolveTelegramToken(cfg);
     expect(res.token).toBe("cfg-token");
     expect(res.source).toBe("config");
@@ -30,7 +30,7 @@ describe("resolveTelegramToken", () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "env-token");
     const cfg = {
       channels: { telegram: {} },
-    } as OpenClawConfig;
+    } as ActiviConfig;
     const res = resolveTelegramToken(cfg);
     expect(res.token).toBe("env-token");
     expect(res.source).toBe("env");
@@ -41,7 +41,7 @@ describe("resolveTelegramToken", () => {
     const dir = withTempDir();
     const tokenFile = path.join(dir, "token.txt");
     fs.writeFileSync(tokenFile, "file-token\n", "utf-8");
-    const cfg = { channels: { telegram: { tokenFile } } } as OpenClawConfig;
+    const cfg = { channels: { telegram: { tokenFile } } } as ActiviConfig;
     const res = resolveTelegramToken(cfg);
     expect(res.token).toBe("file-token");
     expect(res.source).toBe("tokenFile");
@@ -52,7 +52,7 @@ describe("resolveTelegramToken", () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
     const cfg = {
       channels: { telegram: { botToken: "cfg-token" } },
-    } as OpenClawConfig;
+    } as ActiviConfig;
     const res = resolveTelegramToken(cfg);
     expect(res.token).toBe("cfg-token");
     expect(res.source).toBe("config");
@@ -64,7 +64,7 @@ describe("resolveTelegramToken", () => {
     const tokenFile = path.join(dir, "missing-token.txt");
     const cfg = {
       channels: { telegram: { tokenFile, botToken: "cfg-token" } },
-    } as OpenClawConfig;
+    } as ActiviConfig;
     const res = resolveTelegramToken(cfg);
     expect(res.token).toBe("");
     expect(res.source).toBe("none");
@@ -82,7 +82,7 @@ describe("resolveTelegramToken", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as ActiviConfig;
 
     const res = resolveTelegramToken(cfg, { accountId: "careynotifications" });
     expect(res.token).toBe("acct-token");
@@ -92,7 +92,7 @@ describe("resolveTelegramToken", () => {
 
 describe("telegram update offset store", () => {
   it("persists and reloads the last update id", async () => {
-    await withStateDirEnv("openclaw-telegram-", async () => {
+    await withStateDirEnv("activi-telegram-", async () => {
       expect(await readTelegramUpdateOffset({ accountId: "primary" })).toBeNull();
 
       await writeTelegramUpdateOffset({
