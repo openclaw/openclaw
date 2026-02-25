@@ -29,6 +29,7 @@ export function validateToken(received: string, expected: string): boolean {
  * Allowlist mode must be explicit; empty lists should not match any user.
  */
 export function checkUserAllowed(userId: string, allowedUserIds: string[]): boolean {
+  if (allowedUserIds.length === 0) return false;
   return allowedUserIds.includes(userId);
 }
 
