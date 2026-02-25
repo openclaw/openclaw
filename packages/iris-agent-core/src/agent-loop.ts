@@ -280,7 +280,7 @@ async function streamAssistantResponse(
     // undefined = use defaults; object = custom options
     messages = compressAgedToolResults(
       messages,
-      config.toolResultCompression ?? { ageTurns: 3, maxChars: 200 },
+      config.toolResultCompression ?? { ageTurns: 3, maxChars: 200, maxAssistantChars: 500 },
     );
   }
   if (config.transformContext) {

@@ -251,3 +251,126 @@ describe("compressAgedToolResults", () => {
     expect(JSON.stringify(msgs)).toBe(JSON.stringify(original));
   });
 });
+
+// ─── Stage 2: assistant message compression ───────────────────────────────────
+
+function assistantWithText(text: string): AgentMessage {
+  return {
+    role: "assistant",
+    content: [{ type: "text", text }],
+    stopReason: "end_turn",
+    timestamp: Date.now(),
+  } as AgentMessage;
+}
+
+function assistantWithThinkingAndText(thinking: string, text: string): AgentMessage {
+  return {
+    role: "assistant",
+    content: [
+      { type: "thinking", thinking },
+      { type: "text", text },
+    ],
+    stopReason: "end_turn",
+    timestamp: Date.now(),
+  } as AgentMessage;
+}
+
+function assistantWithToolCall(text: string, toolCallId: string): AgentMessage {
+  return {
+    role: "assistant",
+    content: [
+      { type: "text", text },
+      { type: "toolCall", id: toolCallId, name: "read", arguments: {} },
+    ],
+    stopReason: "tool_use",
+    timestamp: Date.now(),
+  } as AgentMessage;
+}
+
+describe("Stage 2: assistant message compression", () => {
+  /** Build N-turn context with a long assistant reply in turn 1. */
+  function makeMsgs(longText: string, totalTurns: number): AgentMessage[] {
+    const msgs: AgentMessage[] = [];
+    for (let i = 0; i < totalTurns; i++) {
+      msgs.push(userMsg(`t${i}`));
+      msgs.push(i === 0 ? assistantWithText(longText) : assistantMsg());
+    }
+    return msgs;
+  }
+
+  it("truncates long assistant text in old turns", () => {
+    const longText = "a".repeat(1000);
+    const msgs = makeMsgs(longText, 4); // 4 turns, ageTurns=2 → turns 1-2 are old
+    const result = compressAgedToolResults(msgs, {
+      ageTurns: 2,
+      maxChars: 200,
+      maxAssistantChars: 100,
+    });
+    const am = result[1] as { content: { text: string }[] };
+    expect(am.content[0]?.text.length).toBeLessThan(longText.length);
+    expect(am.content[0]?.text).toContain("aged-out");
+  });
+
+  it("leaves short assistant text unchanged even when old", () => {
+    const shortText = "hello";
+    const msgs = makeMsgs(shortText, 4);
+    const result = compressAgedToolResults(msgs, {
+      ageTurns: 2,
+      maxChars: 200,
+      maxAssistantChars: 100,
+    });
+    const am = result[1] as { content: { text: string }[] };
+    expect(am.content[0]?.text).toBe(shortText);
+  });
+
+  it("drops thinking blocks from old assistant messages", () => {
+    const msgs: AgentMessage[] = [
+      userMsg("t1"),
+      assistantWithThinkingAndText("long thinking...", "short reply"),
+      userMsg("t2"),
+      assistantMsg(),
+      userMsg("t3"),
+      assistantMsg(),
+    ];
+    const result = compressAgedToolResults(msgs, {
+      ageTurns: 2,
+      maxChars: 200,
+      maxAssistantChars: 500,
+    });
+    const am = result[1] as { content: unknown[] };
+    const hasThinking = am.content.some((b) => (b as { type?: string }).type === "thinking");
+    expect(hasThinking).toBe(false);
+    expect(am.content.some((b) => (b as { type?: string }).type === "text")).toBe(true);
+  });
+
+  it("preserves tool call blocks in old assistant messages", () => {
+    const msgs: AgentMessage[] = [
+      userMsg("t1"),
+      assistantWithToolCall("a".repeat(1000), "tc-old"),
+      userMsg("t2"),
+      assistantMsg(),
+      userMsg("t3"),
+      assistantMsg(),
+    ];
+    const result = compressAgedToolResults(msgs, {
+      ageTurns: 2,
+      maxChars: 200,
+      maxAssistantChars: 100,
+    });
+    const am = result[1] as { content: unknown[] };
+    const hasToolCall = am.content.some((b) => (b as { type?: string }).type === "toolCall");
+    expect(hasToolCall).toBe(true);
+  });
+
+  it("does not compress assistant text when maxAssistantChars is 0", () => {
+    const longText = "b".repeat(1000);
+    const msgs = makeMsgs(longText, 4);
+    const result = compressAgedToolResults(msgs, {
+      ageTurns: 2,
+      maxChars: 200,
+      maxAssistantChars: 0,
+    });
+    const am = result[1] as { content: { text: string }[] };
+    expect(am.content[0]?.text).toBe(longText);
+  });
+});
