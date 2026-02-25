@@ -5,6 +5,7 @@ import { hasProxyEnvConfigured } from "./proxy-env.js";
 import {
   closeDispatcher,
   createPinnedDispatcher,
+  PINNED_AUTO_SELECT_FAMILY_FALLBACK_TIMEOUT_MS,
   resolvePinnedHostnameWithPolicy,
   type LookupFn,
   SsrFBlockedError,
@@ -58,6 +59,8 @@ const CROSS_ORIGIN_REDIRECT_SENSITIVE_HEADERS = [
   "cookie",
   "cookie2",
 ];
+const RETRYABLE_METHODS_FOR_FAMILY_TIMEOUT = new Set(["GET", "HEAD"]);
+const RETRYABLE_FAMILY_ERROR_CODES = new Set(["ETIMEDOUT", "ENETUNREACH", "EHOSTUNREACH"]);
 
 export function withStrictGuardedFetchMode(params: GuardedFetchPresetOptions): GuardedFetchOptions {
   return { ...params, mode: GUARDED_FETCH_MODE.STRICT };
@@ -92,6 +95,49 @@ function stripSensitiveHeadersForCrossOriginRedirect(init?: RequestInit): Reques
     headers.delete(header);
   }
   return { ...init, headers };
+}
+
+function resolveRequestMethod(init?: RequestInit): string {
+  if (typeof init?.method !== "string") {
+    return "GET";
+  }
+  const normalized = init.method.trim().toUpperCase();
+  return normalized.length > 0 ? normalized : "GET";
+}
+
+function hasDualStackAddresses(addresses: readonly string[]): boolean {
+  let sawIpv4 = false;
+  let sawIpv6 = false;
+  for (const address of addresses) {
+    if (address.includes(":")) {
+      sawIpv6 = true;
+    } else {
+      sawIpv4 = true;
+    }
+    if (sawIpv4 && sawIpv6) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function readErrnoCode(error: unknown): string | undefined {
+  if (!error || typeof error !== "object") {
+    return undefined;
+  }
+  const maybeWithCode = error as { code?: unknown; cause?: unknown };
+  if (typeof maybeWithCode.code === "string") {
+    return maybeWithCode.code;
+  }
+  if (maybeWithCode.cause && maybeWithCode.cause !== error) {
+    return readErrnoCode(maybeWithCode.cause);
+  }
+  return undefined;
+}
+
+function isRetryableFamilyTimeoutError(error: unknown): boolean {
+  const code = readErrnoCode(error);
+  return typeof code === "string" && RETRYABLE_FAMILY_ERROR_CODES.has(code);
 }
 
 function buildAbortSignal(params: { timeoutMs?: number; signal?: AbortSignal }): {
@@ -181,20 +227,55 @@ export async function fetchWithSsrFGuard(params: GuardedFetchOptions): Promise<G
       });
       const canUseTrustedEnvProxy =
         mode === GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY && hasProxyEnvConfigured();
-      if (canUseTrustedEnvProxy) {
-        dispatcher = new EnvHttpProxyAgent();
-      } else if (params.pinDns !== false) {
-        dispatcher = createPinnedDispatcher(pinned);
-      }
-
-      const init: RequestInit & { dispatcher?: Dispatcher } = {
+      const requestMethod = resolveRequestMethod(currentInit);
+      const baseInit: RequestInit = {
         ...(currentInit ? { ...currentInit } : {}),
         redirect: "manual",
-        ...(dispatcher ? { dispatcher } : {}),
         ...(signal ? { signal } : {}),
       };
+      const runFetchAttempt = async (
+        autoSelectFamilyAttemptTimeoutMs?: number,
+      ): Promise<{ response: Response; dispatcher: Dispatcher | null }> => {
+        const attemptDispatcher = canUseTrustedEnvProxy
+          ? new EnvHttpProxyAgent()
+          : params.pinDns === false
+            ? null
+            : typeof autoSelectFamilyAttemptTimeoutMs === "number"
+              ? createPinnedDispatcher(pinned, {
+                  autoSelectFamilyAttemptTimeoutMs,
+                })
+              : createPinnedDispatcher(pinned);
+        const init: RequestInit & { dispatcher?: Dispatcher } = {
+          ...baseInit,
+          ...(attemptDispatcher ? { dispatcher: attemptDispatcher } : {}),
+        };
+        try {
+          const response = await fetcher(parsedUrl.toString(), init);
+          return { response, dispatcher: attemptDispatcher };
+        } catch (attemptError) {
+          await closeDispatcher(attemptDispatcher);
+          throw attemptError;
+        }
+      };
 
-      const response = await fetcher(parsedUrl.toString(), init);
+      let response: Response;
+      try {
+        const primaryAttempt = await runFetchAttempt();
+        response = primaryAttempt.response;
+        dispatcher = primaryAttempt.dispatcher;
+      } catch (primaryError) {
+        const shouldRetryWithRelaxedFamilyTimeout =
+          params.pinDns !== false &&
+          RETRYABLE_METHODS_FOR_FAMILY_TIMEOUT.has(requestMethod) &&
+          hasDualStackAddresses(pinned.addresses) &&
+          isRetryableFamilyTimeoutError(primaryError);
+        if (!shouldRetryWithRelaxedFamilyTimeout) {
+          throw primaryError;
+        }
+        const retryAttempt = await runFetchAttempt(PINNED_AUTO_SELECT_FAMILY_FALLBACK_TIMEOUT_MS);
+        response = retryAttempt.response;
+        dispatcher = retryAttempt.dispatcher;
+      }
 
       if (isRedirectStatus(response.status)) {
         const location = response.headers.get("location");

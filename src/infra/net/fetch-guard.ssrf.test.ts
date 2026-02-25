@@ -204,4 +204,73 @@ describe("fetchWithSsrFGuard hardening", () => {
       expectEnvProxy: true,
     });
   });
+
+  it("retries once for dual-stack GET requests on family timeout and succeeds", async () => {
+    const lookupFn = vi.fn(async () => [
+      { address: "2001:db8::1", family: 6 },
+      { address: "93.184.216.34", family: 4 },
+    ]) as unknown as LookupFn;
+    const timeoutError = Object.assign(new Error("connect timeout"), { code: "ETIMEDOUT" });
+    const fetchImpl = vi
+      .fn()
+      .mockRejectedValueOnce(timeoutError)
+      .mockResolvedValueOnce(okResponse("retried-ok"));
+
+    const result = await fetchWithSsrFGuard({
+      url: "https://api.example.com/file",
+      fetchImpl,
+      lookupFn,
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const [, firstInit] = fetchImpl.mock.calls[0] as [
+      string,
+      RequestInit & { dispatcher?: unknown },
+    ];
+    const [, secondInit] = fetchImpl.mock.calls[1] as [
+      string,
+      RequestInit & { dispatcher?: unknown },
+    ];
+    expect(firstInit.dispatcher).toBeDefined();
+    expect(secondInit.dispatcher).toBeDefined();
+    expect(secondInit.dispatcher).not.toBe(firstInit.dispatcher);
+    expect(await result.response.text()).toBe("retried-ok");
+    await result.release();
+  });
+
+  it("does not retry family timeout for non-idempotent methods", async () => {
+    const lookupFn = vi.fn(async () => [
+      { address: "2001:db8::1", family: 6 },
+      { address: "93.184.216.34", family: 4 },
+    ]) as unknown as LookupFn;
+    const timeoutError = Object.assign(new Error("connect timeout"), { code: "ETIMEDOUT" });
+    const fetchImpl = vi.fn().mockRejectedValue(timeoutError);
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://api.example.com/file",
+        fetchImpl,
+        lookupFn,
+        init: { method: "POST" },
+      }),
+    ).rejects.toThrow("connect timeout");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry family timeout for single-stack DNS results", async () => {
+    const lookupFn = vi.fn(async () => [
+      { address: "93.184.216.34", family: 4 },
+    ]) as unknown as LookupFn;
+    const timeoutError = Object.assign(new Error("connect timeout"), { code: "ETIMEDOUT" });
+    const fetchImpl = vi.fn().mockRejectedValue(timeoutError);
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://api.example.com/file",
+        fetchImpl,
+        lookupFn,
+      }),
+    ).rejects.toThrow("connect timeout");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
 });

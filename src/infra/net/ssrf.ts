@@ -329,18 +329,31 @@ export async function resolvePinnedHostname(
   return await resolvePinnedHostnameWithPolicy(hostname, { lookupFn });
 }
 
-// Happy Eyeballs (RFC 8305) attempt timeout for the pinned dispatcher.
-// 300ms (Node/undici default ~250ms) is too aggressive for higher-latency
-// networks where IPv6 is unreachable; 2500ms gives IPv4 enough runway to
-// connect while still failing fast when the host is truly down.
-const PINNED_AUTO_SELECT_FAMILY_TIMEOUT_MS = 2500;
+// Keep the default path close to Node/undici defaults for fast networks.
+export const PINNED_AUTO_SELECT_FAMILY_PRIMARY_TIMEOUT_MS = 300;
+// Use a relaxed timeout only for targeted retry paths on slow networks.
+export const PINNED_AUTO_SELECT_FAMILY_FALLBACK_TIMEOUT_MS = 2500;
 
-export function createPinnedDispatcher(pinned: PinnedHostname): Dispatcher {
+type CreatePinnedDispatcherOptions = {
+  autoSelectFamilyAttemptTimeoutMs?: number;
+};
+
+export function createPinnedDispatcher(
+  pinned: PinnedHostname,
+  options: CreatePinnedDispatcherOptions = {},
+): Dispatcher {
+  const autoSelectFamilyAttemptTimeoutMs =
+    typeof options.autoSelectFamilyAttemptTimeoutMs === "number" &&
+    Number.isFinite(options.autoSelectFamilyAttemptTimeoutMs) &&
+    options.autoSelectFamilyAttemptTimeoutMs > 0
+      ? Math.floor(options.autoSelectFamilyAttemptTimeoutMs)
+      : PINNED_AUTO_SELECT_FAMILY_PRIMARY_TIMEOUT_MS;
+
   return new Agent({
     connect: {
       lookup: pinned.lookup,
       autoSelectFamily: true,
-      autoSelectFamilyAttemptTimeout: PINNED_AUTO_SELECT_FAMILY_TIMEOUT_MS,
+      autoSelectFamilyAttemptTimeout: autoSelectFamilyAttemptTimeoutMs,
     },
   });
 }
