@@ -257,6 +257,35 @@ describe("processDiscordMessage ack reactions", () => {
     expect(emojis).toContain(DEFAULT_EMOJIS.stallHard);
     expect(emojis).toContain(DEFAULT_EMOJIS.done);
   });
+
+  it("applies status reaction emoji/timing overrides from config", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onReasoningStream?.();
+      return { queuedFinal: false, counts: { final: 0, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createBaseContext({
+      cfg: {
+        messages: {
+          ackReaction: "👀",
+          statusReactions: {
+            emojis: { queued: "🟦", thinking: "🧪", done: "🏁" },
+            timing: { debounceMs: 0 },
+          },
+        },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+      },
+    });
+
+    // oxlint-disable-next-line typescript/no-explicit-any
+    await processDiscordMessage(ctx as any);
+
+    const emojis = (
+      sendMocks.reactMessageDiscord.mock.calls as unknown as Array<[unknown, unknown, string]>
+    ).map((call) => call[2]);
+    expect(emojis).toContain("🟦");
+    expect(emojis).toContain("🏁");
+  });
 });
 
 describe("processDiscordMessage session routing", () => {
