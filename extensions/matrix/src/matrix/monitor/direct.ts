@@ -13,6 +13,16 @@ type DirectRoomTrackerOptions = {
 
 const DM_CACHE_TTL_MS = 30_000;
 
+/**
+ * Check if an error is a Matrix M_NOT_FOUND response (missing state event).
+ * The bot-sdk throws MatrixError with errcode/statusCode on the error object.
+ */
+function isMatrixNotFoundError(err: unknown): boolean {
+  if (typeof err !== "object" || err === null) return false;
+  const e = err as { errcode?: string; statusCode?: number };
+  return e.errcode === "M_NOT_FOUND" || e.statusCode === 404;
+}
+
 export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTrackerOptions = {}) {
   const log = opts.log ?? (() => {});
   const includeMemberCountInLogs = opts.includeMemberCountInLogs === true;
@@ -91,7 +101,6 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
         return true;
       }
 
-      // Check m.room.member state for is_direct flag
       const selfUserId = params.selfUserId ?? (await ensureSelfUserId());
       const directViaState =
         (await hasDirectFlag(roomId, senderId)) || (await hasDirectFlag(roomId, selfUserId ?? ""));
@@ -100,16 +109,35 @@ export function createDirectRoomTracker(client: MatrixClient, opts: DirectRoomTr
         return true;
       }
 
-      // Member count alone is NOT a reliable DM indicator.
-      // Explicitly configured group rooms with 2 members (e.g. bot + one user)
-      // were being misclassified as DMs, causing messages to be routed through
-      // DM policy instead of group policy and silently dropped.
-      // See: https://github.com/openclaw/openclaw/issues/20145
       if (!includeMemberCountInLogs) {
         log(`matrix: dm check room=${roomId} result=group`);
         return false;
       }
+
+      // Conservative fallback: 2-member rooms without an explicit room name are likely
+      // DMs with broken m.direct / is_direct flags. This has been observed on Continuwuity
+      // where m.direct pointed to the wrong room and is_direct was never set on the invite.
+      // Unlike the removed heuristic, this requires two signals (member count + no name)
+      // to avoid false positives on named 2-person group rooms.
       const memberCount = await resolveMemberCount(roomId);
+      if (memberCount === 2) {
+        try {
+          const nameState = await client.getRoomStateEvent(roomId, "m.room.name", "");
+          if (!nameState?.name?.trim()) {
+            log(`matrix: dm detected via fallback (2 members, no room name) room=${roomId}`);
+            return true;
+          }
+        } catch (err: unknown) {
+          if (isMatrixNotFoundError(err)) {
+            log(`matrix: dm detected via fallback (2 members, no room name) room=${roomId}`);
+            return true;
+          }
+          log(
+            `matrix: dm fallback skipped (room name check failed: ${String(err)}) room=${roomId}`,
+          );
+        }
+      }
+
       log(`matrix: dm check room=${roomId} result=group members=${memberCount ?? "unknown"}`);
       return false;
     },
