@@ -504,6 +504,94 @@ function createOpenRouterWrapper(
   };
 }
 
+function isGemini31Model(modelId: string): boolean {
+  const normalized = modelId.toLowerCase();
+  return normalized.includes("gemini-3.1-pro") || normalized.includes("gemini-3.1-flash");
+}
+
+function mapThinkLevelToGoogleThinkingLevel(
+  thinkingLevel: ThinkLevel,
+): "MINIMAL" | "LOW" | "MEDIUM" | "HIGH" | undefined {
+  switch (thinkingLevel) {
+    case "minimal":
+      return "MINIMAL";
+    case "low":
+      return "LOW";
+    case "medium":
+      return "MEDIUM";
+    case "high":
+    case "xhigh":
+      return "HIGH";
+    default:
+      return undefined;
+  }
+}
+
+function sanitizeGoogleThinkingPayload(params: {
+  payload: unknown;
+  modelId?: string;
+  thinkingLevel?: ThinkLevel;
+}): void {
+  if (!params.payload || typeof params.payload !== "object") {
+    return;
+  }
+  const payloadObj = params.payload as Record<string, unknown>;
+  const config = payloadObj.config;
+  if (!config || typeof config !== "object") {
+    return;
+  }
+  const configObj = config as Record<string, unknown>;
+  const thinkingConfig = configObj.thinkingConfig;
+  if (!thinkingConfig || typeof thinkingConfig !== "object") {
+    return;
+  }
+  const thinkingConfigObj = thinkingConfig as Record<string, unknown>;
+  const thinkingBudget = thinkingConfigObj.thinkingBudget;
+  if (typeof thinkingBudget !== "number" || thinkingBudget >= 0) {
+    return;
+  }
+
+  // pi-ai can emit thinkingBudget=-1 for some Gemini 3.1 IDs; a negative budget
+  // is invalid for Google-compatible backends and can lead to malformed handling.
+  delete thinkingConfigObj.thinkingBudget;
+
+  if (
+    typeof params.modelId === "string" &&
+    isGemini31Model(params.modelId) &&
+    params.thinkingLevel &&
+    params.thinkingLevel !== "off" &&
+    thinkingConfigObj.thinkingLevel === undefined
+  ) {
+    const mappedLevel = mapThinkLevelToGoogleThinkingLevel(params.thinkingLevel);
+    if (mappedLevel) {
+      thinkingConfigObj.thinkingLevel = mappedLevel;
+    }
+  }
+}
+
+function createGoogleThinkingPayloadWrapper(
+  baseStreamFn: StreamFn | undefined,
+  thinkingLevel?: ThinkLevel,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const onPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (model.api === "google-generative-ai") {
+          sanitizeGoogleThinkingPayload({
+            payload,
+            modelId: model.id,
+            thinkingLevel,
+          });
+        }
+        onPayload?.(payload);
+      },
+    });
+  };
+}
+
 /**
  * Create a streamFn wrapper that injects tool_stream=true for Z.AI providers.
  *
@@ -614,6 +702,10 @@ export function applyExtraParamsToAgent(
       agent.streamFn = createZaiToolStreamWrapper(agent.streamFn, true);
     }
   }
+
+  // Guard Google payloads against invalid negative thinking budgets emitted by
+  // upstream model-ID heuristics for Gemini 3.1 variants.
+  agent.streamFn = createGoogleThinkingPayloadWrapper(agent.streamFn, thinkingLevel);
 
   // Work around upstream pi-ai hardcoding `store: false` for Responses API.
   // Force `store=true` for direct OpenAI/OpenAI Codex providers so multi-turn
