@@ -228,5 +228,31 @@ describe("secrets migrate", () => {
     const configIndex = args.indexOf("--config");
     expect(configIndex).toBeGreaterThanOrEqual(0);
     expect(args[configIndex + 1]).toBe(sopsConfigPath);
+    const filenameOverrideIndex = args.indexOf("--filename-override");
+    expect(filenameOverrideIndex).toBeGreaterThanOrEqual(0);
+    expect(args[filenameOverrideIndex + 1]).toBe(
+      path.join(stateDir, "secrets.enc.json").replaceAll(path.sep, "/"),
+    );
+    const options = encryptCall?.[2] as { cwd?: string } | undefined;
+    expect(options?.cwd).toBe(stateDir);
+  });
+
+  it("passes a stable filename override for sops when config file is absent", async () => {
+    await runSecretsMigration({ env, write: true });
+
+    const encryptCall = runExecMock.mock.calls.find((call) =>
+      (call[1] as string[]).includes("--encrypt"),
+    );
+    expect(encryptCall).toBeTruthy();
+    const args = encryptCall?.[1] as string[];
+    const configIndex = args.indexOf("--config");
+    expect(configIndex).toBe(-1);
+    const filenameOverrideIndex = args.indexOf("--filename-override");
+    expect(filenameOverrideIndex).toBeGreaterThanOrEqual(0);
+    expect(args[filenameOverrideIndex + 1]).toBe(
+      path.join(stateDir, "secrets.enc.json").replaceAll(path.sep, "/"),
+    );
+    const options = encryptCall?.[2] as { cwd?: string } | undefined;
+    expect(options?.cwd).toBe(stateDir);
   });
 });
