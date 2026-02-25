@@ -123,6 +123,17 @@ describe("sandbox fs bridge shell compatibility", () => {
     expect(readPath).toContain("file_1095---");
   });
 
+  it("resolves dash-leading basenames into absolute container paths", async () => {
+    const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
+
+    await bridge.readFile({ filePath: "--leading.txt" });
+
+    const readCall = findCallByScriptFragment('cat -- "$1"');
+    expect(readCall).toBeDefined();
+    const readPath = readCall ? getDockerPathArg(readCall[0]) : "";
+    expect(readPath).toBe("/workspace/--leading.txt");
+  });
+
   it("resolves bind-mounted absolute container paths for reads", async () => {
     const sandbox = createSandbox({
       docker: {
