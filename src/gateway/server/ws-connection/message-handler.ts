@@ -565,18 +565,16 @@ export function attachGatewayWsMessageHandler(params: {
           return;
         }
 
-        // Shared token/password auth is already gateway-level trust for operator clients.
-        // In that case, don't force device pairing on first connect.
-        const skipPairingForOperatorSharedAuth =
-          role === "operator" && sharedAuthOk && !isControlUi && !isWebchat;
         const trustedProxyAuthOk =
           isControlUi &&
           resolvedAuth.mode === "trusted-proxy" &&
           authOk &&
           authMethod === "trusted-proxy";
-        const skipPairing =
-          shouldSkipControlUiPairing(controlUiAuthPolicy, sharedAuthOk, trustedProxyAuthOk) ||
-          skipPairingForOperatorSharedAuth;
+        const skipPairing = shouldSkipControlUiPairing(
+          controlUiAuthPolicy,
+          sharedAuthOk,
+          trustedProxyAuthOk,
+        );
         if (device && devicePublicKey && !skipPairing) {
           const formatAuditList = (items: string[] | undefined): string => {
             if (!items || items.length === 0) {
