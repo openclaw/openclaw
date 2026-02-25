@@ -166,6 +166,14 @@ actor VoiceWakeRuntime {
             }
             guard let audioEngine = self.audioEngine else { return }
 
+            guard AudioInputDeviceObserver.hasUsableDefaultInputDevice() else {
+                self.audioEngine = nil
+                throw NSError(
+                    domain: "VoiceWakeRuntime",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "No usable audio input device available"])
+            }
+
             let input = audioEngine.inputNode
             let format = input.outputFormat(forBus: 0)
             guard format.channelCount > 0, format.sampleRate > 0 else {
