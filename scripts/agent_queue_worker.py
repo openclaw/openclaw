@@ -32,6 +32,11 @@ try:
 except ImportError:
     pass  # fallback: raw sqlite3 still works
 
+try:
+    from shared.vault_paths import VAULT as _VAULT_PATH
+except ImportError:
+    _VAULT_PATH = Path(os.path.expanduser("~/knowledge"))
+
 def _get_model_chain_orig(default_model="openclaw:main", include_default=True):
     return [default_model]
 
@@ -72,7 +77,10 @@ if not GATEWAY_TOKEN:
                 if _line.startswith("OPENCLAW_TOKEN="):
                     GATEWAY_TOKEN = _line.strip().split("=", 1)[1]
                     break
-LLM_TIMEOUT = 150  # 2.5min (increased for 4000 max_tokens)
+# Keep model-fallback latency bounded so queue workers do not appear frozen.
+LLM_TIMEOUT = int(os.environ.get("OPENCLAW_LLM_TIMEOUT_SEC", "40"))
+# Hard cap for a single command's LLM phase to avoid long "claimed" stalls.
+LLM_BUDGET_SEC = int(os.environ.get("OPENCLAW_LLM_BUDGET_SEC", "90"))
 
 def _build_auto_context(agent: str, task_text: str) -> str:
     """Auto-build context (stub — context_builder removed)."""
@@ -91,8 +99,8 @@ QUALITY_REJECT_PATTERNS = [
 # ============================================================
 
 TOOL_USE_AGENTS = {"ron", "codex", "cowork", "guardian", "data-analyst"}
-TOOL_USE_MAX_TURNS = 5
-TOOL_USE_CMD_TIMEOUT = 30
+TOOL_USE_MAX_TURNS = int(os.environ.get("OPENCLAW_TOOL_TURNS", "2"))
+TOOL_USE_CMD_TIMEOUT = int(os.environ.get("OPENCLAW_TOOL_CMD_TIMEOUT_SEC", "20"))
 TOOL_USE_STDOUT_CAP = 2000
 
 _ACTION_MARKERS = {"[액션]", "[Action]"}
@@ -126,6 +134,7 @@ _CMD_WHITELIST_PREFIXES = [
     "python3 pipeline/shipbuilding_cycle_tracker.py",
     "python3 pipeline/choi_report_collector.py",
     "python3 pipeline/telegram_popular_posts.py",
+    "python3 pipeline/system_dashboard.py",
     "python3.13 pipeline/twitter_collector.py",
     "/opt/homebrew/bin/python3.13 pipeline/twitter_collector.py",
     # knowledge_search.py removed — file does not exist
@@ -138,6 +147,7 @@ _CMD_WHITELIST_PREFIXES = [
     "cat MEMORY.md",
     "cat TOOLS.md",
     "ls ",
+    "find ",
 ]
 
 _CMD_BLACKLIST_PATTERNS = [
@@ -366,6 +376,16 @@ def llm_execute(agent: str, task_title: str, task_body: str, context: str = "") 
     - Quality gate: retries once if response is too short or generic
     """
     system_msg = AGENT_ROLE_PROMPTS.get(agent, "작업을 실행하고 결과를 보고하라.")
+    started_at = time.time()
+
+    def _remaining_budget() -> float:
+        return float(LLM_BUDGET_SEC) - (time.time() - started_at)
+
+    def _next_timeout() -> int:
+        remaining = _remaining_budget()
+        if remaining <= 0:
+            return 0
+        return max(5, int(min(float(LLM_TIMEOUT), remaining)))
 
     # Auto-enrich context
     auto_ctx = _build_auto_context(agent, f"{task_title} {task_body}")
@@ -379,13 +399,16 @@ def llm_execute(agent: str, task_title: str, task_body: str, context: str = "") 
 
     def _call_llm(sys_msg: str, usr_msg: str, max_tokens: int = 4000) -> tuple[bool, str, str]:
         from shared.llm import llm_chat_with_fallback
+        call_timeout = _next_timeout()
+        if call_timeout <= 0:
+            return False, "llm budget exceeded", ""
         messages = [
             {"role": "system", "content": sys_msg},
             {"role": "user", "content": usr_msg[:16000]},
         ]
         content, used_model, error = llm_chat_with_fallback(
             messages, model_chain, temperature=0.3,
-            max_tokens=max_tokens, timeout=LLM_TIMEOUT,
+            max_tokens=max_tokens, timeout=call_timeout,
         )
         if content:
             return True, content, used_model
@@ -394,9 +417,12 @@ def llm_execute(agent: str, task_title: str, task_body: str, context: str = "") 
     # Multi-turn message support for tool-use loop
     def _call_llm_multi(messages: list[dict], max_tokens: int = 4000) -> tuple[bool, str, str]:
         from shared.llm import llm_chat_with_fallback
+        call_timeout = _next_timeout()
+        if call_timeout <= 0:
+            return False, "llm budget exceeded", ""
         content, used_model, error = llm_chat_with_fallback(
             messages, model_chain, temperature=0.3,
-            max_tokens=max_tokens, timeout=LLM_TIMEOUT,
+            max_tokens=max_tokens, timeout=call_timeout,
         )
         if content:
             return True, content, used_model
@@ -415,6 +441,8 @@ def llm_execute(agent: str, task_title: str, task_body: str, context: str = "") 
                 {"role": "assistant", "content": content},
             ]
             for _turn in range(TOOL_USE_MAX_TURNS):
+                if _remaining_budget() <= 0:
+                    break
                 tool_cmds = _extract_tool_calls(content)
                 if not tool_cmds:
                     break
@@ -448,7 +476,7 @@ def llm_execute(agent: str, task_title: str, task_body: str, context: str = "") 
         # Quality gate: retry once if response is too short or generic
         is_too_short = len(content.strip()) < MIN_RESPONSE_LEN
         is_generic = any(p in content[:100] for p in QUALITY_REJECT_PATTERNS)
-        if is_too_short or is_generic:
+        if (is_too_short or is_generic) and _remaining_budget() >= 15:
             retry_msg = (
                 f"{user_msg}\n\n"
                 f"[품질 보완 요청] 이전 응답이 너무 짧거나 형식적입니다. "
@@ -498,7 +526,11 @@ def bus_post(agent: str, content: str, ref: str = "", msg_type: str = "status") 
     except Exception:
         pass
 
-PLAYBOOKS_DIR = Path("/Users/ron/.openclaw/workspace/knowledge/ops/playbooks")
+PLAYBOOKS_DIR_CANDIDATES = [
+    Path("/Users/ron/.openclaw/workspace/knowledge/300 운영/320 플레이북/329 비넘버 통합"),
+    Path("/Users/ron/.openclaw/workspace/knowledge/300 운영/320 플레이북"),
+]
+PLAYBOOKS_DIR = next((p for p in PLAYBOOKS_DIR_CANDIDATES if p.exists()), PLAYBOOKS_DIR_CANDIDATES[0])
 
 
 def read_relevant_playbook(agent: str, text: str) -> str:
@@ -1286,9 +1318,18 @@ def _handle_data_analyst(title: str, body: str, text: str) -> tuple[bool, str]:
 
     # ZK 지식 현황
     if any(k in text for k in ["지식", "ZK", "제텔", "노트", "공백", "연결", "볼트"]):
-        vault = Path(os.path.expanduser("~/knowledge"))
+        vault = _VAULT_PATH
         inbox_count = len(list((vault / "100 지식" / "110 수신함").glob("*.md"))) if (vault / "100 지식" / "110 수신함").exists() else 0
-        notes_count = len(list((vault / "100 지식" / "120 노트").glob("*.md"))) if (vault / "100 지식" / "120 노트").exists() else 0
+        # v3: 5 category dirs + legacy 120 노트
+        cat_dirs = ["120 기업", "125 시장", "130 산업분석", "135 프로그래밍", "140 인사이트"]
+        notes_count = 0
+        for cd in cat_dirs:
+            d = vault / "100 지식" / cd
+            if d.exists():
+                notes_count += len(list(d.glob("*.md")))
+        legacy_d = vault / "100 지식" / "120 노트"
+        if legacy_d.exists():
+            notes_count += len(list(legacy_d.glob("*.md")))
         context_parts.append(f"[ZK현황] 수신함={inbox_count}건, 노트={notes_count}건")
         # 파이프라인 결과
         filtered_dir = WORKSPACE / "memory" / "filtered-ideas"

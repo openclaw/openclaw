@@ -25,13 +25,17 @@ from ingest_topic_media import (
     load_classification,
     sanitize_filename,
     update_sector_moc,
+    update_category_moc,
 )
+from shared.classify import _is_v3
+
+from shared.vault_paths import VAULT, INBOX
 
 REGISTRY_PATH = Path(os.path.expanduser(
     "~/.openclaw/backups/registry/note_registry_20260214-212234.json"
 ))
-INBOX_DIR = Path(os.path.expanduser("~/knowledge/100 지식/110 수신함"))
-MOC_DIR = Path(os.path.expanduser("~/knowledge/100 지식/130 구조노트"))
+INBOX_DIR = INBOX
+MOC_DIR = VAULT / "100 지식" / "150 구조노트"
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -86,21 +90,29 @@ def build_frontmatter(entry, gics):
 
     date_str = entry.get("created_at", "")[:10] or datetime.now().strftime("%Y-%m-%d")
 
-    return {
+    fm = {
         "title": title.replace('"', "'")[:80],
         "date": date_str,
         "tags": tags,
-        "sector": gics["sector"],
-        "industry_group": gics.get("industry_group", ""),
-        "industry": gics.get("industry", ""),
         "zk_type": "fleeting",
         "maturity": entry.get("maturity", "seedling"),
         "para_bucket": "inbox",
-        "domain": gics.get("domain", "general"),
         "source_type": "capture",
         "source": entry.get("source", ""),
         "registry_id": entry.get("id", ""),
     }
+
+    # v3: category/subcategory, v2 fallback: sector/industry_group/industry
+    if "category" in gics:
+        fm["category"] = gics["category"]
+        fm["subcategory"] = gics.get("subcategory", "")
+    else:
+        fm["sector"] = gics["sector"]
+        fm["industry_group"] = gics.get("industry_group", "")
+        fm["industry"] = gics.get("industry", "")
+        fm["domain"] = gics.get("domain", "general")
+
+    return fm
 
 
 def render_note(fm, title):
@@ -122,13 +134,15 @@ def render_note(fm, title):
     return "\n".join(lines)
 
 
-def unique_filepath(slug):
-    """reg-{slug}.md 파일명 고유성 보장."""
-    name = f"reg-{slug}.md"
+def unique_filepath(slug, date_str=""):
+    """날짜 접두사 포함 파일명 고유성 보장."""
+    if not date_str:
+        date_str = datetime.now().strftime("%Y-%m-%d")
+    name = f"{date_str}_{slug}.md"
     path = INBOX_DIR / name
     c = 1
     while path.exists():
-        name = f"reg-{slug}-{c}.md"
+        name = f"{date_str}_{slug}-{c}.md"
         path = INBOX_DIR / name
         c += 1
     return path, name
@@ -167,7 +181,7 @@ def run_batch(registry_path, classification, dry_run=False):
         tag_text = " ".join(entry.get("tags", []))
         text = f"{title} {tag_text}"
         gics = classify_by_text(text, classification=classification)
-        sector = gics["sector"]
+        sector = gics.get("category", gics.get("sector", "UNCLASSIFIED"))
 
         sector_counts[sector] = sector_counts.get(sector, 0) + 1
 
@@ -178,7 +192,8 @@ def run_batch(registry_path, classification, dry_run=False):
 
         # 노트 생성
         slug = sanitize_filename(title)
-        filepath, filename = unique_filepath(slug)
+        date_str = entry.get("created_at", "")[:10] or datetime.now().strftime("%Y-%m-%d")
+        filepath, filename = unique_filepath(slug, date_str)
         fm = build_frontmatter(entry, gics)
         content = render_note(fm, title)
 
@@ -187,10 +202,11 @@ def run_batch(registry_path, classification, dry_run=False):
         stats["created"] += 1
 
         # MOC 갱신
-        if sector != "UNCLASSIFIED":
-            sector_label = gics.get("sector_label", "")
+        category = gics.get("category", gics.get("sector", "UNCLASSIFIED"))
+        if category != "UNCLASSIFIED":
+            subcategory = gics.get("subcategory", gics.get("sector_label", ""))
             if not dry_run:
-                update_sector_moc(sector, sector_label, filename, title)
+                update_category_moc(category, subcategory, filename, title)
             stats["moc_updated"] += 1
 
         # 자기 중복 방지
@@ -239,33 +255,41 @@ def run_backfill(classification, dry_run=False):
         fm_text = content[3:end]
 
         # 이미 분류됨?
-        has_valid_sector = False
+        has_valid_class = False
         title, tags_raw = "", ""
         for line in fm_text.splitlines():
+            if line.startswith("category:"):
+                val = line.split(":", 1)[1].strip().strip('"').strip("'")
+                if val and val != "UNCLASSIFIED":
+                    has_valid_class = True
             if line.startswith("sector:"):
                 val = line.split(":", 1)[1].strip().strip('"').strip("'")
                 if val and val != "UNCLASSIFIED":
-                    has_valid_sector = True
+                    has_valid_class = True
             if line.startswith("title:"):
                 title = line.split(":", 1)[1].strip().strip('"').strip("'")
             if line.startswith("tags:"):
                 tags_raw = line.split(":", 1)[1].strip()
 
-        if has_valid_sector:
+        if has_valid_class:
             already += 1
             continue
 
         # 분류 시도
         text = f"{title} {tags_raw}"
         gics = classify_by_text(text, classification=classification)
-        if gics["sector"] == "UNCLASSIFIED":
+        cat = gics.get("category", gics.get("sector", "UNCLASSIFIED"))
+        if cat == "UNCLASSIFIED":
             skipped += 1
             continue
 
-        # frontmatter에 GICS 필드 삽입
-        insert = f'sector: "{gics["sector"]}"\nindustry_group: "{gics["industry_group"]}"\nindustry: "{gics["industry"]}"'
-        if "domain:" not in fm_text:
-            insert += f'\ndomain: "{gics["domain"]}"'
+        # frontmatter에 분류 필드 삽입 (v3: category/subcategory)
+        if "category" in gics:
+            insert = f'category: "{gics["category"]}"\nsubcategory: "{gics.get("subcategory", "")}"'
+        else:
+            insert = f'sector: "{gics["sector"]}"\nindustry_group: "{gics["industry_group"]}"\nindustry: "{gics["industry"]}"'
+            if "domain:" not in fm_text:
+                insert += f'\ndomain: "{gics["domain"]}"'
 
         new_fm = fm_text.rstrip() + "\n" + insert + "\n"
         new_content = "---\n" + new_fm + "---" + content[end + 3:]
@@ -273,7 +297,7 @@ def run_backfill(classification, dry_run=False):
         if not dry_run:
             md.write_text(new_content, encoding="utf-8")
         updated += 1
-        print(f"  backfill: {md.name} → {gics['sector']}")
+        print(f"  backfill: {md.name} → {cat}")
 
     print(f"\n완료: {updated}건 분류 추가, {already}건 이미 분류, {skipped}건 스킵")
     if dry_run:

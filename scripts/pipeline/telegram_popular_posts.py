@@ -46,6 +46,7 @@ BASE_URL = "https://t.me/s/"
 
 DB_PATH = Path(os.path.expanduser("~/.openclaw/data/ops_multiagent.db"))
 WORKSPACE = Path(os.path.expanduser("~/.openclaw/workspace"))
+from shared.vault_paths import INSIGHTS as VAULT_DIR
 MEMORY_DIR = WORKSPACE / "memory" / "popular-posts"
 CHANNELS_FILE = MEMORY_DIR / "channels.json"
 STATE_FILE = MEMORY_DIR / "state.json"
@@ -566,7 +567,7 @@ def analyze_posts(posts: list[dict]) -> dict:
     """
     empty = {
         "sentiment": 0, "sentiment_label": "", "keywords": [],
-        "stocks": [], "summary": "",
+        "stocks": [], "sectors": [], "summary": "",
     }
     if not posts:
         return empty
@@ -590,6 +591,11 @@ def analyze_posts(posts: list[dict]) -> dict:
             '  "sentiment_label": "중립",\n'
             '  "keywords": [{"word": "키워드", "count": 5}, ...],\n'
             '  "stocks": [{"name": "종목명", "score": 50}, ...],\n'
+            '  "sectors": [\n'
+            '    {"name": "반도체", "sentiment": 30, '
+            '"summary": "1줄 요약", "count": 5},\n'
+            "    ...\n"
+            "  ],\n"
             '  "summary": "2-3문장 종합 요약"\n'
             "}\n\n"
             "규칙:\n"
@@ -598,6 +604,8 @@ def analyze_posts(posts: list[dict]) -> dict:
             "약간 긍정/긍정/극도 긍정\n"
             "- keywords: 상위 5-10개, 투자/경제 핵심 키워드 + 빈도수\n"
             "- stocks: 언급된 종목명 + 감성점수(-100~+100), 최대 10개\n"
+            "- sectors: 관련 섹터별 그룹핑. 섹터별 감성(-100~100), "
+            "1줄 요약, 해당 게시물 수\n"
             "- summary: 전체 시장 분위기 2-3줄 한국어 요약"
         )},
         {"role": "user", "content": f"인기 게시물 {len(posts)}개:\n\n{combined}"},
@@ -672,10 +680,27 @@ def format_report(top_posts: list[dict], analysis: dict,
                 stock_items.append(f"{name} {s_sign}{score}")
         parts.append(" · ".join(stock_items))
 
+    # Sectors
+    sectors = analysis.get("sectors", [])
+    if sectors:
+        parts.append("")
+        parts.append("─ ─ ─ ─ ─ ─ ─ ─")
+        parts.append("*섹터별 동향*")
+        for sec in sectors:
+            if isinstance(sec, dict):
+                sec_name = sec.get("name", "")
+                sec_sent = sec.get("sentiment", 0)
+                sec_summary = sec.get("summary", "")
+                sec_count = sec.get("count", 0)
+                s_sign = "+" if sec_sent > 0 else ""
+                parts.append(f"  {sec_name} ({s_sign}{sec_sent}, {sec_count}건)")
+                if sec_summary:
+                    parts.append(f"  └ {sec_summary}")
+
     # Top posts
     n = min(TOP_N, len(top_posts))
     parts.append("")
-    parts.append(f"─ ─ ─ ─ ─ ─ ─ ─")
+    parts.append("─ ─ ─ ─ ─ ─ ─ ─")
     parts.append(f"*TOP {n} 인기 게시물*")
     for i, p in enumerate(top_posts[:TOP_N], 1):
         title = _first_line(p.get("text", ""))
@@ -807,6 +832,138 @@ def save_report(report_text: str):
     log(f"Report saved: {path}")
 
 
+def save_vault_note(top_posts: list[dict], analysis: dict,
+                    channel_count: int, post_count: int):
+    """Save TOP 50 posts + analysis as an Obsidian vault note."""
+    now = datetime.now()
+    date_str = now.strftime("%Y-%m-%d")
+    time_str = now.strftime("%H:%M")
+
+    # Extract tags from keywords
+    keywords = analysis.get("keywords", [])
+    kw_tags = []
+    for kw in keywords[:8]:
+        if isinstance(kw, dict):
+            kw_tags.append(kw.get("keyword", ""))
+        elif isinstance(kw, str):
+            kw_tags.append(kw)
+    kw_tags = [t.replace(" ", "-") for t in kw_tags if t]
+
+    # Extract sector names
+    sectors = analysis.get("sectors", [])
+    sector_names = []
+    for sec in sectors:
+        if isinstance(sec, dict):
+            sector_names.append(sec.get("name", ""))
+
+    # Frontmatter
+    sentiment = analysis.get("sentiment", 0)
+    fm_tags = ["popular-posts"] + kw_tags
+    lines = [
+        "---",
+        f"date: {date_str}",
+        f"time: {time_str}",
+        f"tags: [{', '.join(fm_tags)}]",
+        f"sentiment: {sentiment}",
+        f"channels: {channel_count}",
+        f"posts: {post_count}",
+        "type: popular-posts",
+        "---",
+        "",
+        f"# 텔레그램 인기 게시물 ({date_str} {time_str})",
+        "",
+        f"수집: {channel_count}개 채널 | {post_count}개 게시물",
+    ]
+
+    # Sentiment
+    s_sign = "+" if sentiment > 0 else ""
+    s_label = analysis.get("sentiment_label", "")
+    lines.append(f"종합 감성: {s_sign}{sentiment} ({s_label})")
+    lines.append("")
+
+    # Keywords
+    if keywords:
+        kw_parts = []
+        for kw in keywords:
+            if isinstance(kw, dict):
+                name = kw.get("keyword", "")
+                count = kw.get("count", 0)
+                kw_parts.append(f"{name} ({count})" if count else name)
+            elif isinstance(kw, str):
+                kw_parts.append(kw)
+        lines.append("## 주요 키워드")
+        lines.append(" · ".join(kw_parts))
+        lines.append("")
+
+    # Stocks
+    stocks = analysis.get("stocks", [])
+    if stocks:
+        stock_parts = []
+        for st in stocks:
+            if isinstance(st, dict):
+                name = st.get("name", "")
+                sent = st.get("sentiment", 0)
+                s = "+" if sent > 0 else ""
+                stock_parts.append(f"{name} {s}{sent}")
+            elif isinstance(st, str):
+                stock_parts.append(st)
+        lines.append("## 주목 종목")
+        lines.append(" · ".join(stock_parts))
+        lines.append("")
+
+    # Sectors
+    if sectors:
+        lines.append("## 섹터별 동향")
+        for sec in sectors:
+            if isinstance(sec, dict):
+                sec_name = sec.get("name", "")
+                sec_sent = sec.get("sentiment", 0)
+                sec_summary = sec.get("summary", "")
+                sec_count = sec.get("count", 0)
+                ss = "+" if sec_sent > 0 else ""
+                lines.append(f"- **{sec_name}** ({ss}{sec_sent}, {sec_count}건)")
+                if sec_summary:
+                    lines.append(f"  - {sec_summary}")
+        lines.append("")
+
+    # Summary
+    summary = analysis.get("summary", "")
+    if summary:
+        lines.append("## 종합 요약")
+        lines.append(summary)
+        lines.append("")
+
+    # TOP 50 posts
+    n = min(LLM_BATCH_SIZE, len(top_posts))
+    lines.append(f"## TOP {n} 게시물")
+    lines.append("")
+    for i, p in enumerate(top_posts[:LLM_BATCH_SIZE], 1):
+        ch = p.get("channel_name", p.get("channel_id", ""))
+        text = (p.get("text", "") or "")[:200].replace("\n", " ")
+        views = p.get("views", 0)
+        reactions = p.get("reactions", 0)
+        score = p.get("popularity_score", 0)
+        link = p.get("link", "")
+
+        lines.append(f"### {i}. {ch}")
+        lines.append(f"> {text}")
+        metrics = f"조회 {views:,}"
+        if reactions > 0:
+            metrics += f" · 반응 {reactions}"
+        metrics += f" · 스코어 {score:.1f}"
+        lines.append(metrics)
+        if link:
+            lines.append(f"[원문]({link})")
+        lines.append("")
+
+    # Write to vault
+    VAULT_DIR.mkdir(parents=True, exist_ok=True)
+    filename = f"popular-posts-{date_str}-{now.strftime('%H%M')}.md"
+    path = VAULT_DIR / filename
+    path.write_text("\n".join(lines), encoding="utf-8")
+    log(f"Vault note saved: {path}")
+
+
 def cleanup_old_reports(days: int = REPORT_RETENTION_DAYS):
     """Remove reports older than N days."""
     if not REPORTS_DIR.exists():
@@ -901,6 +1058,11 @@ def run_pipeline(notify: bool = False, dry_run: bool = False,
     else:
         # Archive
         save_report(report)
+        # Save to Obsidian vault (TOP 50 + analysis)
+        try:
+            save_vault_note(top_posts, analysis, len(channels), len(posts))
+        except Exception as e:
+            log(f"Vault note save failed: {e}", level="WARN")
         # Send
         if notify:
             ok = notify_telegram(report)

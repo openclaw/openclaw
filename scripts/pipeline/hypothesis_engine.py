@@ -31,10 +31,16 @@ from datetime import datetime
 from pathlib import Path
 from urllib.request import Request, urlopen
 
+# Ensure shared modules are importable when run directly
+import sys as _sys
+_sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from shared.classify import get_vault_note_dirs  # noqa: E402
+
+from shared.vault_paths import VAULT, INBOX
+
 WORKSPACE = Path(os.path.expanduser("~/.openclaw/workspace"))
-VAULT = Path(os.path.expanduser("~/knowledge"))
-INBOX_DIR = VAULT / "100 지식" / "110 수신함"
-NOTES_DIR = VAULT / "100 지식" / "120 노트"
+INBOX_DIR = INBOX
+NOTES_DIR = VAULT / "100 지식" / "120 노트"  # v2 legacy
 IDEA_SOURCES = Path(os.path.expanduser("~/.openclaw/idea_sources.json"))
 FILTERED_DIR = WORKSPACE / "memory" / "filtered-ideas"
 HYPOTHESIS_DIR = WORKSPACE / "memory" / "hypotheses"
@@ -219,15 +225,15 @@ def load_recent_discoveries():
 def load_vault_discoveries(max_items=30):
     """볼트 노트 크로스링크 클러스터에서 가설 후보 추출.
 
-    3가지 패턴:
-      1. 산업 클러스터: 같은 industry에 3+ 보강 노트
-      2. 크로스섹터 브릿지: 2+ 다른 섹터로 연결된 노트
-      3. 산업군 시계열: 같은 industry_group에 4+ 노트 축적
+    3가지 패턴 (v3: category/subcategory 기반):
+      1. 서브카테고리 클러스터: 같은 subcategory에 3+ 보강 노트
+      2. 크로스카테고리 브릿지: 2+ 다른 category로 연결된 노트
+      3. 카테고리 시계열: 같은 category에 4+ 노트 축적
     """
     all_notes = {}            # stem → note_info
-    notes_by_industry = defaultdict(list)
+    notes_by_subcategory = defaultdict(list)
 
-    for search_dir in [INBOX_DIR, NOTES_DIR]:
+    for search_dir in get_vault_note_dirs(include_inbox=True):
         if not search_dir.exists():
             continue
         for f in search_dir.glob("*.md"):
@@ -235,17 +241,21 @@ def load_vault_discoveries(max_items=30):
             if not meta:
                 continue
 
-            sector = meta.get("sector", "UNCLASSIFIED")
-            industry = meta.get("industry", "")
+            # v3 우선, v2 fallback
+            category = meta.get("category", "")
+            if not category or category == "UNCLASSIFIED":
+                category = meta.get("sector", "UNCLASSIFIED")
+            subcategory = meta.get("subcategory", meta.get("industry", ""))
+            if not subcategory:
+                subcategory = meta.get("industry_group", "")
             enriched = bool(meta.get("enriched_at") or meta.get("enrichment_method"))
 
             note_info = {
                 "filename": f.name,
                 "stem": f.stem,
                 "title": meta.get("title", f.stem)[:80],
-                "sector": sector,
-                "industry": industry,
-                "industry_group": meta.get("industry_group", ""),
+                "category": category,
+                "subcategory": subcategory,
                 "domain": meta.get("domain", "general"),
                 "enriched": enriched,
                 "body_len": len(body.strip()) if body else 0,
@@ -254,89 +264,88 @@ def load_vault_discoveries(max_items=30):
             }
             all_notes[f.stem] = note_info
 
-            if industry:
-                notes_by_industry[industry].append(note_info)
+            if subcategory:
+                notes_by_subcategory[subcategory].append(note_info)
 
     discoveries = []
 
-    # ── 패턴 1: 산업 클러스터 (같은 industry에 보강 노트 3+) ──
-    for industry, notes in notes_by_industry.items():
+    # ── 패턴 1: 서브카테고리 클러스터 (같은 subcategory에 보강 노트 3+) ──
+    for subcategory, notes in notes_by_subcategory.items():
         enriched = [n for n in notes if n["enriched"] and n["body_len"] > 50]
         if len(enriched) < 3:
             continue
 
-        sector = enriched[0]["sector"]
+        category = enriched[0]["category"]
         titles = [n["title"] for n in enriched[:6]]
         snippets = " ".join(n["body_snippet"] for n in enriched[:3])
         score = min(10, len(enriched) // 2 + 3)
 
         discoveries.append({
-            "id": f"vault:cluster:{industry}:{len(enriched)}",
-            "source": f"vault/{sector}/{industry}",
+            "id": f"vault:cluster:{subcategory}:{len(enriched)}",
+            "source": f"vault/{category}/{subcategory}",
             "source_type": "vault_cluster",
             "type": "industry_cluster",
-            "text": (f"[{industry}] {len(enriched)}건 노트 클러스터. "
+            "text": (f"[{subcategory}] {len(enriched)}건 노트 클러스터. "
                      f"주요: {', '.join(titles)}. {snippets[:400]}"),
             "score": score,
-            "industry": industry,
-            "sector": sector,
+            "subcategory": subcategory,
+            "category": category,
             "domain": enriched[0].get("domain", "general"),
             "note_count": len(enriched),
             "evidence_notes": [n["filename"] for n in enriched[:10]],
         })
 
-    # ── 패턴 2: 크로스섹터 브릿지 (2+ 다른 섹터로 연결) ──
+    # ── 패턴 2: 크로스카테고리 브릿지 (2+ 다른 category로 연결) ──
     for stem, note in all_notes.items():
-        if not note["links"] or note["sector"] == "UNCLASSIFIED":
+        if not note["links"] or note["category"] == "UNCLASSIFIED":
             continue
-        cross_sectors = {}
+        cross_categories = {}
         for link in note["links"]:
             linked = all_notes.get(link)
             if (linked
-                    and linked["sector"] != "UNCLASSIFIED"
-                    and linked["sector"] != note["sector"]):
-                cross_sectors.setdefault(linked["sector"], []).append(linked["title"])
+                    and linked["category"] != "UNCLASSIFIED"
+                    and linked["category"] != note["category"]):
+                cross_categories.setdefault(linked["category"], []).append(linked["title"])
 
-        if len(cross_sectors) >= 2:
-            sector_list = list(cross_sectors.keys())
+        if len(cross_categories) >= 2:
+            category_list = list(cross_categories.keys())
             detail = " / ".join(
-                f"{s}: {', '.join(ns[:2])}" for s, ns in cross_sectors.items()
+                f"{c}: {', '.join(ns[:2])}" for c, ns in cross_categories.items()
             )
             discoveries.append({
                 "id": f"vault:bridge:{stem}",
-                "source": f"vault/bridge/{note['sector']}",
+                "source": f"vault/bridge/{note['category']}",
                 "source_type": "vault_bridge",
                 "type": "cross_sector_bridge",
-                "text": (f"'{note['title']}'({note['sector']})가 "
-                         f"{', '.join(sector_list)}과 교차 연결. {detail}"),
-                "score": 7 + len(cross_sectors),
-                "sectors": [note["sector"]] + sector_list,
+                "text": (f"'{note['title']}'({note['category']})가 "
+                         f"{', '.join(category_list)}과 교차 연결. {detail}"),
+                "score": 7 + len(cross_categories),
+                "categories": [note["category"]] + category_list,
                 "domain": "investment",
                 "bridge_note": note["filename"],
                 "evidence_notes": [note["filename"]],
             })
 
-    # ── 패턴 3: 산업군 시계열 (industry_group에 4+ 보강 노트) ──
-    by_ig = defaultdict(list)
-    for industry, notes in notes_by_industry.items():
+    # ── 패턴 3: 카테고리 시계열 (같은 category에 4+ 보강 노트) ──
+    by_cat = defaultdict(list)
+    for subcategory, notes in notes_by_subcategory.items():
         if notes:
-            ig = notes[0].get("industry_group", industry[:6])
-            by_ig[ig].extend(notes)
+            cat = notes[0].get("category", subcategory[:6])
+            by_cat[cat].extend(notes)
 
-    for ig, notes in by_ig.items():
+    for cat, notes in by_cat.items():
         enriched = [n for n in notes if n["enriched"]]
         if len(enriched) < 4:
             continue
         titles = [n["title"] for n in enriched[:5]]
         discoveries.append({
-            "id": f"vault:temporal:{ig}:{len(enriched)}",
-            "source": f"vault/temporal/{ig}",
+            "id": f"vault:temporal:{cat}:{len(enriched)}",
+            "source": f"vault/temporal/{cat}",
             "source_type": "vault_temporal",
             "type": "temporal_cluster",
-            "text": f"[{ig}] {len(enriched)}건 시계열 축적. 주요: {', '.join(titles)}",
+            "text": f"[{cat}] {len(enriched)}건 시계열 축적. 주요: {', '.join(titles)}",
             "score": min(10, len(enriched) // 3 + 4),
-            "industry_group": ig,
-            "sector": enriched[0]["sector"],
+            "category": cat,
             "domain": enriched[0].get("domain", "general"),
             "note_count": len(enriched),
             "evidence_notes": [n["filename"] for n in enriched[:10]],
@@ -372,8 +381,8 @@ def match_discovery_to_bottleneck(discovery, bottlenecks):
     text = discovery.get("text", "").lower()
     text_kw = set(re.findall(r"[a-zA-Z가-힣]{2,}", text))
 
-    # 섹터/산업 키워드도 포함
-    for field in ("sector", "industry", "industry_group"):
+    # 카테고리/서브카테고리 키워드 포함 (+ v2 fallback)
+    for field in ("category", "subcategory", "sector", "industry", "industry_group"):
         val = discovery.get(field, "")
         if val:
             text_kw.add(val.lower())

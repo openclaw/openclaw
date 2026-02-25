@@ -24,8 +24,18 @@ import sqlite3
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import sys as _sys
+_sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from shared.classify import get_vault_note_dirs  # noqa: E402
+
+from shared.vault_paths import VAULT
+
 WORKSPACE = Path(os.path.expanduser("~/.openclaw/workspace"))
-VAULT = Path(os.path.expanduser("~/knowledge"))
+
+
+def _get_evidence_dirs():
+    """Vault dirs for evidence note search."""
+    return get_vault_note_dirs()
 HYPOTHESIS_DIR = WORKSPACE / "memory" / "hypotheses"
 EVAL_DIR = WORKSPACE / "memory" / "experiment-results"
 DB_PATH = Path(os.path.expanduser("~/.openclaw/data/ops_multiagent.db"))
@@ -136,8 +146,7 @@ def count_evidence_links(hyp):
         return 0
     total_links = 0
     for note_name in evidence[:5]:
-        for search_dir in [VAULT / "100 지식" / "110 수신함",
-                           VAULT / "100 지식" / "120 노트"]:
+        for search_dir in _get_evidence_dirs():
             path = search_dir / note_name
             if path.exists():
                 try:

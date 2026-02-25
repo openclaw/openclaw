@@ -36,15 +36,14 @@ from shared.classify import (  # noqa: E402
     classify_by_text,
     load_classification,
     strip_meta_phrases,
+    get_vault_note_dirs,
+    _is_v3,
 )
 from shared.frontmatter import parse_frontmatter, update_frontmatter  # noqa: E402
 
-VAULT = Path(os.path.expanduser("~/knowledge"))
-NOTE_DIRS = [
-    VAULT / "100 지식" / "110 수신함",
-    VAULT / "100 지식" / "120 노트",
-]
-REPORT_DIR = VAULT / "300 운영" / "340 리포트"
+from shared.vault_paths import VAULT, REPORTS
+
+REPORT_DIR = REPORTS
 CATCHALL_INDUSTRY = "I104020"
 APPLY_CAP = 300
 # Low threshold: any match is better than staying in wrong catch-all category
@@ -52,16 +51,21 @@ MIN_CONFIDENCE = 0.25
 
 
 def find_catchall_notes() -> list[dict]:
-    """Find all notes classified as the catch-all industry."""
+    """Find all notes classified as the catch-all or UNCLASSIFIED."""
     notes = []
-    for d in NOTE_DIRS:
+    for d in get_vault_note_dirs():
         if not d.exists():
             continue
         for f in d.glob("*.md"):
             meta, body = parse_frontmatter(f)
             if not meta:
                 continue
-            if meta.get("industry") == CATCHALL_INDUSTRY:
+            # v2: catch-all industry I104020
+            # v3: UNCLASSIFIED category or empty category
+            is_catchall = meta.get("industry") == CATCHALL_INDUSTRY
+            cat = meta.get("category", "")
+            is_unclassified = (not cat or cat == "UNCLASSIFIED") and not meta.get("sector")
+            if is_catchall or is_unclassified:
                 notes.append({
                     "path": f,
                     "filename": f.name,
@@ -75,49 +79,77 @@ def reclassify_note(note: dict, classification: dict) -> dict | None:
     """Re-classify a single note with meta-phrase stripping.
 
     Returns reclassification result dict or None if no change.
+    Supports both v3 (category/subcategory) and v2 (sector/industry).
     """
     body = note["body"] or ""
     title = note["meta"].get("title", note["filename"])
     text = f"{title}\n{body}"
 
     result = classify_by_text(text, classification=classification)
+    is_v3_cls = _is_v3(classification)
 
-    # Skip if still same industry or UNCLASSIFIED
-    if result["sector"] == "UNCLASSIFIED":
-        return None
-    if result["industry"] == CATCHALL_INDUSTRY:
-        return None
-    if result["confidence"] < MIN_CONFIDENCE:
-        return None
+    if is_v3_cls:
+        cat = result.get("category", "UNCLASSIFIED")
+        if cat == "UNCLASSIFIED":
+            return None
+        if result.get("confidence", 0) < MIN_CONFIDENCE:
+            return None
 
-    return {
-        "file": note["filename"],
-        "path": str(note["path"]),
-        "prev_sector": note["meta"].get("sector", ""),
-        "prev_industry": CATCHALL_INDUSTRY,
-        "new_sector": result["sector"],
-        "new_sector_label": result["sector_label"],
-        "new_ig": result["industry_group"],
-        "new_ig_label": result.get("ig_label", ""),
-        "new_industry": result["industry"],
-        "new_i_label": result.get("i_label", ""),
-        "new_domain": result["domain"],
-        "confidence": result["confidence"],
-        "matched_tags": result["matched_tags"],
-    }
+        return {
+            "file": note["filename"],
+            "path": str(note["path"]),
+            "prev_category": note["meta"].get("category", note["meta"].get("sector", "")),
+            "prev_subcategory": note["meta"].get("subcategory", note["meta"].get("industry", "")),
+            "new_category": cat,
+            "new_subcategory": result.get("subcategory", ""),
+            "new_sector_label": cat,  # display compat
+            "new_i_label": result.get("subcategory", ""),
+            "confidence": result["confidence"],
+            "matched_tags": result["matched_tags"],
+        }
+    else:
+        if result["sector"] == "UNCLASSIFIED":
+            return None
+        if result["industry"] == CATCHALL_INDUSTRY:
+            return None
+        if result["confidence"] < MIN_CONFIDENCE:
+            return None
+
+        return {
+            "file": note["filename"],
+            "path": str(note["path"]),
+            "prev_category": note["meta"].get("sector", ""),
+            "prev_subcategory": CATCHALL_INDUSTRY,
+            "new_category": result["sector"],
+            "new_subcategory": result.get("industry", ""),
+            "new_sector_label": result["sector_label"],
+            "new_i_label": result.get("i_label", ""),
+            "confidence": result["confidence"],
+            "matched_tags": result["matched_tags"],
+        }
 
 
-def apply_reclassification(note_path: Path, reclass: dict) -> bool:
-    """Apply reclassification to a note's frontmatter."""
-    updates = {
-        "sector": reclass["new_sector"],
-        "industry_group": reclass["new_ig"],
-        "industry": reclass["new_industry"],
-        "domain": reclass["new_domain"],
-        "prev_industry": reclass["prev_industry"],
-        "reclassified_at": datetime.now().strftime("%Y-%m-%d"),
-        "reclassified_by": "reclassify_catchall",
-    }
+def apply_reclassification(note_path: Path, reclass: dict,
+                           classification: dict | None = None) -> bool:
+    """Apply reclassification to a note's frontmatter (v3 or v2)."""
+    is_v3_cls = _is_v3(classification) if classification else True
+    if is_v3_cls:
+        updates = {
+            "category": reclass["new_category"],
+            "subcategory": reclass["new_subcategory"],
+            "prev_category": reclass.get("prev_category", ""),
+            "reclassified_at": datetime.now().strftime("%Y-%m-%d"),
+            "reclassified_by": "reclassify_catchall",
+        }
+    else:
+        updates = {
+            "sector": reclass["new_category"],
+            "industry_group": reclass.get("new_ig", ""),
+            "industry": reclass["new_subcategory"],
+            "prev_industry": reclass.get("prev_subcategory", ""),
+            "reclassified_at": datetime.now().strftime("%Y-%m-%d"),
+            "reclassified_by": "reclassify_catchall",
+        }
     try:
         update_frontmatter(note_path, updates)
         return True
@@ -128,7 +160,7 @@ def apply_reclassification(note_path: Path, reclass: dict) -> bool:
 def generate_report(results: list[dict], total: int, skipped: int) -> str:
     """Generate markdown reclassification report."""
     date_str = datetime.now().strftime("%Y-%m-%d")
-    sector_counts = Counter(r["new_sector"] for r in results)
+    sector_counts = Counter(r["new_category"] for r in results)
 
     lines = [
         "---",
@@ -151,19 +183,19 @@ def generate_report(results: list[dict], total: int, skipped: int) -> str:
         "|------|------|",
     ]
 
-    for s_code in sorted(sector_counts.keys()):
-        label = results[0]["new_sector_label"] if results else s_code
+    for cat in sorted(sector_counts.keys()):
+        label = cat
         for r in results:
-            if r["new_sector"] == s_code:
-                label = r["new_sector_label"]
+            if r["new_category"] == cat:
+                label = r.get("new_sector_label", cat)
                 break
-        lines.append(f"| {label} ({s_code}) | {sector_counts[s_code]} |")
+        lines.append(f"| {label} | {sector_counts[cat]} |")
 
     lines.extend(["", "## 상세 목록", ""])
-    for r in results[:50]:  # Top 50 for readability
+    for r in results[:50]:
         lines.append(
-            f"- `{r['file']}` → **{r['new_sector_label']}** "
-            f"`{r['new_industry']}` {r['new_i_label']} "
+            f"- `{r['file']}` → **{r.get('new_sector_label', r['new_category'])}** "
+            f"`{r['new_subcategory']}` {r.get('new_i_label', '')} "
             f"(confidence: {r['confidence']:.2f}, tags: {', '.join(r['matched_tags'][:3])})"
         )
     if len(results) > 50:
@@ -202,48 +234,48 @@ def main():
     for note in notes:
         reclass = reclassify_note(note, classification)
         if reclass:
-            if args.target and reclass["new_industry"] != args.target:
+            if args.target and reclass.get("new_subcategory", reclass.get("new_industry")) != args.target:
                 continue
             results.append(reclass)
 
     skipped = total - len(results)
 
     if args.json:
-        sector_counts = Counter(r["new_sector"] for r in results)
+        cat_counts = Counter(r["new_category"] for r in results)
         output = {
             "status": "ok",
             "mode": "apply" if args.apply else "dry-run",
             "total_catchall": total,
             "reclassified": len(results),
             "skipped": skipped,
-            "by_sector": dict(sector_counts),
+            "by_category": dict(cat_counts),
             "details": results[:20],
         }
         print(json.dumps(output, ensure_ascii=False, indent=2))
         return 0
 
     # Print summary
-    print(f"I104020 catch-all 노트: {total}건")
+    print(f"미분류/catch-all 노트: {total}건")
     print(f"재분류 대상: {len(results)}건")
     print(f"유지 (UNCLASSIFIED/저신뢰/동일): {skipped}건")
     print()
 
-    sector_counts = Counter(r["new_sector"] for r in results)
-    print("재분류 대상 섹터별:")
-    for s_code in sorted(sector_counts.keys()):
-        label = s_code
+    cat_counts = Counter(r["new_category"] for r in results)
+    print("재분류 대상 카테고리별:")
+    for cat in sorted(cat_counts.keys()):
+        label = cat
         for r in results:
-            if r["new_sector"] == s_code:
-                label = r["new_sector_label"]
+            if r["new_category"] == cat:
+                label = r.get("new_sector_label", cat)
                 break
-        print(f"  {label} ({s_code}): {sector_counts[s_code]}건")
+        print(f"  {label}: {cat_counts[cat]}건")
 
     if args.apply:
         applied = 0
         cap = min(len(results), APPLY_CAP)
         for r in results[:cap]:
             path = Path(r["path"])
-            if apply_reclassification(path, r):
+            if apply_reclassification(path, r, classification):
                 applied += 1
 
         print(f"\n적용 완료: {applied}/{cap}건")
@@ -260,8 +292,8 @@ def main():
         print()
         for r in results[:10]:
             print(
-                f"  {r['file'][:50]:50s} → {r['new_sector']} "
-                f"{r['new_i_label']} (conf={r['confidence']:.2f})"
+                f"  {r['file'][:50]:50s} → {r['new_category']} "
+                f"{r.get('new_i_label', r.get('new_subcategory', ''))} (conf={r['confidence']:.2f})"
             )
         if len(results) > 10:
             print(f"  ... 외 {len(results) - 10}건")

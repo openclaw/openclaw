@@ -21,14 +21,11 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
-VAULT = Path(os.path.expanduser("~/knowledge"))
-CLASSIFICATION = VAULT / "900 시스템" / "classification.json"
-REPORT_DIR = VAULT / "300 운영" / "340 리포트"
-NOTE_DIRS = [
-    VAULT / "100 지식" / "110 수신함",
-    VAULT / "100 지식" / "120 노트",
-]
-MOC_DIR = VAULT / "100 지식" / "130 구조노트"
+from shared.vault_paths import VAULT, CLASSIFICATION_FILE, REPORTS
+
+CLASSIFICATION = CLASSIFICATION_FILE
+REPORT_DIR = REPORTS
+MOC_DIR = VAULT / "100 지식" / "150 구조노트"
 REGISTRY_DIR = Path(os.path.expanduser("~/.openclaw/backups/registry"))
 
 # 과밀/과소 임계치
@@ -37,7 +34,10 @@ EMPTY_GRACE_WEEKS = 4  # 빈 카테고리 n주 연속이면 삭제 후보
 
 
 from shared.log import make_logger
-from shared.classify import classify_by_tags, classify_by_text, load_classification
+from shared.classify import (
+    classify_by_tags, classify_by_text, load_classification,
+    get_vault_note_dirs, _is_v3,
+)
 from shared.frontmatter import update_frontmatter
 
 log = make_logger()
@@ -46,7 +46,7 @@ log = make_logger()
 def load_vault_notes():
     """볼트 내 모든 .md 노트 로드 (frontmatter 파싱)."""
     notes = []
-    for d in NOTE_DIRS:
+    for d in get_vault_note_dirs():
         if not d.exists():
             continue
         for f in d.glob("*.md"):
@@ -57,7 +57,10 @@ def load_vault_notes():
 
 
 def parse_note(path):
-    """마크다운 파일에서 frontmatter 태그 추출."""
+    """마크다운 파일에서 frontmatter 태그 추출.
+
+    v3 우선 (category/subcategory), v2 fallback (sector/industry_group/industry).
+    """
     try:
         text = path.read_text(encoding="utf-8")
     except Exception:
@@ -67,15 +70,16 @@ def parse_note(path):
         "path": str(path),
         "filename": path.name,
         "tags": [],
-        "sector": "",
-        "industry_group": "",
-        "industry": "",
+        "category": "",
+        "subcategory": "",
         "zk_type": "",
         "domain": "",
         "links": [],
     }
 
     # YAML frontmatter 파싱
+    _sector = ""
+    _ig = ""
     if text.startswith("---"):
         end = text.find("---", 3)
         if end > 0:
@@ -83,23 +87,31 @@ def parse_note(path):
             for line in fm.split("\n"):
                 line = line.strip()
                 if line.startswith("tags:"):
-                    # inline tags: [tag1, tag2]
                     m = re.search(r"\[(.+)\]", line)
                     if m:
                         note["tags"] = [t.strip().strip('"').strip("'")
                                         for t in m.group(1).split(",")]
                 elif line.startswith("- ") and note["tags"] is not None:
                     note["tags"].append(line[2:].strip().strip('"').strip("'"))
+                elif line.startswith("category:"):
+                    note["category"] = line.split(":", 1)[1].strip().strip('"')
+                elif line.startswith("subcategory:"):
+                    note["subcategory"] = line.split(":", 1)[1].strip().strip('"')
                 elif line.startswith("sector:"):
-                    note["sector"] = line.split(":", 1)[1].strip().strip('"')
+                    _sector = line.split(":", 1)[1].strip().strip('"')
                 elif line.startswith("industry_group:"):
-                    note["industry_group"] = line.split(":", 1)[1].strip().strip('"')
-                elif line.startswith("industry:"):
-                    note["industry"] = line.split(":", 1)[1].strip().strip('"')
+                    _ig = line.split(":", 1)[1].strip().strip('"')
                 elif line.startswith("zk_type:"):
                     note["zk_type"] = line.split(":", 1)[1].strip().strip('"')
                 elif line.startswith("domain:"):
                     note["domain"] = line.split(":", 1)[1].strip().strip('"')
+
+    # v2 fallback: sector → category, industry_group → subcategory
+    if not note["category"] or note["category"] == "UNCLASSIFIED":
+        if _sector and _sector != "UNCLASSIFIED":
+            note["category"] = _sector
+    if not note["subcategory"] and _ig:
+        note["subcategory"] = _ig
 
     # wikilinks 추출
     note["links"] = re.findall(r"\[\[(.+?)\]\]", text)
@@ -125,14 +137,14 @@ def load_registry_notes():
 
 
 def analyze_distribution(notes, classification):
-    """노트 분포 분석."""
+    """노트 분포 분석 (v3: category/subcategory)."""
+    is_v3 = _is_v3(classification) if classification else False
     stats = {
         "total_notes": len(notes),
         "classified": 0,
         "unclassified": 0,
-        "by_sector": defaultdict(int),
-        "by_industry_group": defaultdict(int),
-        "by_industry": defaultdict(int),
+        "by_category": defaultdict(int),
+        "by_subcategory": defaultdict(int),
         "by_domain": defaultdict(int),
         "unlinked": 0,
         "tag_clusters": defaultdict(int),
@@ -143,15 +155,28 @@ def analyze_distribution(notes, classification):
         for t in tags:
             stats["tag_clusters"][t] += 1
 
-        matches = classify_by_tags(tags, classification)
-        if matches:
-            best = matches[0]
+        cat = note.get("category", "")
+        subcat = note.get("subcategory", "")
+
+        if cat and cat != "UNCLASSIFIED":
             stats["classified"] += 1
-            stats["by_sector"][best["sector"]] += 1
-            stats["by_industry_group"][best["industry_group"]] += 1
-            stats["by_industry"][best["industry"]] += 1
+            stats["by_category"][cat] += 1
+            if subcat:
+                stats["by_subcategory"][subcat] += 1
         else:
-            stats["unclassified"] += 1
+            # Fallback: try tag-based classification
+            matches = classify_by_tags(tags, classification)
+            if matches:
+                best = matches[0]
+                stats["classified"] += 1
+                if is_v3:
+                    stats["by_category"][best.get("category", "")] += 1
+                    stats["by_subcategory"][best.get("subcategory", "")] += 1
+                else:
+                    stats["by_category"][best.get("sector", "")] += 1
+                    stats["by_subcategory"][best.get("industry_group", "")] += 1
+            else:
+                stats["unclassified"] += 1
 
         domain = note.get("domain", "") or note.get("topic", "")
         stats["by_domain"][domain] += 1
@@ -163,32 +188,46 @@ def analyze_distribution(notes, classification):
 
 
 def generate_suggestions(stats, classification):
-    """구조 변경 제안 생성."""
+    """구조 변경 제안 생성 (v3 categories)."""
     suggestions = []
-    sectors = classification.get("sectors", {})
+    is_v3 = _is_v3(classification) if classification else False
 
-    # 1. 빈 industry 감지
-    for s_code, sector in sectors.items():
-        for ig_code, ig in sector.get("industry_groups", {}).items():
-            for i_code, industry in ig.get("industries", {}).items():
-                if stats["by_industry"].get(i_code, 0) == 0:
+    # 1. 빈 subcategory 감지
+    if is_v3:
+        categories = classification.get("categories", {})
+        for cat_name, cat_def in categories.items():
+            for subcat_name, subcat_def in cat_def.get("subcategories", {}).items():
+                if stats["by_subcategory"].get(subcat_name, 0) == 0:
                     suggestions.append({
                         "type": "empty_category",
                         "severity": "low",
-                        "target": f"{s_code}/{ig_code}/{i_code}",
-                        "label": f"{sector['label']} > {ig['label']} > {industry['label']}",
+                        "target": f"{cat_name}/{subcat_name}",
+                        "label": f"{cat_name} > {subcat_name}",
                         "suggestion": f"노트 0개 — {EMPTY_GRACE_WEEKS}주 연속이면 삭제 후보",
                     })
+    else:
+        sectors = classification.get("sectors", {})
+        for s_code, sector in sectors.items():
+            for ig_code, ig in sector.get("industry_groups", {}).items():
+                for i_code, industry in ig.get("industries", {}).items():
+                    if stats["by_subcategory"].get(i_code, 0) == 0:
+                        suggestions.append({
+                            "type": "empty_category",
+                            "severity": "low",
+                            "target": f"{s_code}/{ig_code}/{i_code}",
+                            "label": f"{sector['label']} > {ig['label']} > {industry['label']}",
+                            "suggestion": f"노트 0개 — {EMPTY_GRACE_WEEKS}주 연속이면 삭제 후보",
+                        })
 
-    # 2. 과밀 industry 감지
-    for i_code, count in stats["by_industry"].items():
+    # 2. 과밀 subcategory 감지
+    for subcat, count in stats["by_subcategory"].items():
         if count >= OVERCROWDED_THRESHOLD:
             suggestions.append({
                 "type": "overcrowded",
                 "severity": "high",
-                "target": i_code,
+                "target": subcat,
                 "count": count,
-                "suggestion": f"노트 {count}개 — 하위 industry 분할 필요",
+                "suggestion": f"노트 {count}개 — 하위 카테고리 분할 필요",
             })
 
     # 3. 미분류 노트
@@ -204,10 +243,16 @@ def generate_suggestions(stats, classification):
 
     # 4. 새 태그 클러스터 (분류에 없는 빈출 태그)
     all_known_tags = set()
-    for s_code, sector in sectors.items():
-        for ig_code, ig in sector.get("industry_groups", {}).items():
-            for i_code, industry in ig.get("industries", {}).items():
-                all_known_tags.update(t.lower() for t in industry.get("tags", []))
+    if is_v3:
+        categories = classification.get("categories", {})
+        for cat_def in categories.values():
+            for subcat_def in cat_def.get("subcategories", {}).values():
+                all_known_tags.update(t.lower() for t in subcat_def.get("tags", []))
+    else:
+        for sector in classification.get("sectors", {}).values():
+            for ig in sector.get("industry_groups", {}).values():
+                for industry in ig.get("industries", {}).values():
+                    all_known_tags.update(t.lower() for t in industry.get("tags", []))
 
     for tag, count in sorted(stats["tag_clusters"].items(), key=lambda x: -x[1]):
         if tag.lower() not in all_known_tags and count >= 5:
@@ -216,7 +261,7 @@ def generate_suggestions(stats, classification):
                 "severity": "medium",
                 "tag": tag,
                 "count": count,
-                "suggestion": f"태그 '{tag}' {count}회 출현 — 신규 industry 추가 검토",
+                "suggestion": f"태그 '{tag}' {count}회 출현 — 신규 카테고리 추가 검토",
             })
 
     # 5. 연결도 낮은 노트
@@ -260,13 +305,15 @@ def apply_safe_changes(notes, classification, dry_run=False):
     applied = 0
     date_str = datetime.now().strftime("%Y-%m-%d")
 
+    is_v3 = _is_v3(classification) if classification else False
+
     for note in notes:
         if applied >= AUTO_APPLY_CAP:
             break
 
         # Only process UNCLASSIFIED notes
-        sector = note.get("sector", "")
-        if sector and sector != "UNCLASSIFIED":
+        cat = note.get("category", "")
+        if cat and cat != "UNCLASSIFIED":
             continue
 
         # Try text-based classification from note content
@@ -281,29 +328,52 @@ def apply_safe_changes(notes, classification, dry_run=False):
 
         result = classify_by_text(text, classification=classification)
 
-        if result["sector"] == "UNCLASSIFIED":
-            continue
-        if result.get("confidence", 0) < AUTO_APPLY_MIN_CONFIDENCE:
-            continue
+        if is_v3:
+            if result.get("category", "UNCLASSIFIED") == "UNCLASSIFIED":
+                continue
+            if result.get("confidence", 0) < AUTO_APPLY_MIN_CONFIDENCE:
+                continue
 
-        change = {
-            "file": note.get("filename", ""),
-            "path": str(path),
-            "new_sector": result["sector"],
-            "new_industry": result["industry"],
-            "confidence": result["confidence"],
-            "matched_tags": result["matched_tags"],
-        }
+            change = {
+                "file": note.get("filename", ""),
+                "path": str(path),
+                "new_category": result["category"],
+                "new_subcategory": result["subcategory"],
+                "confidence": result["confidence"],
+                "matched_tags": result["matched_tags"],
+            }
 
-        if not dry_run:
-            update_frontmatter(path, {
-                "sector": result["sector"],
-                "industry_group": result["industry_group"],
-                "industry": result["industry"],
-                "domain": result.get("domain", ""),
-                "auto_classified": True,
-                "auto_classified_at": date_str,
-            })
+            if not dry_run:
+                update_frontmatter(path, {
+                    "category": result["category"],
+                    "subcategory": result["subcategory"],
+                    "auto_classified": True,
+                    "auto_classified_at": date_str,
+                })
+        else:
+            if result.get("sector", "UNCLASSIFIED") == "UNCLASSIFIED":
+                continue
+            if result.get("confidence", 0) < AUTO_APPLY_MIN_CONFIDENCE:
+                continue
+
+            change = {
+                "file": note.get("filename", ""),
+                "path": str(path),
+                "new_category": result["sector"],
+                "new_subcategory": result.get("industry", ""),
+                "confidence": result["confidence"],
+                "matched_tags": result["matched_tags"],
+            }
+
+            if not dry_run:
+                update_frontmatter(path, {
+                    "sector": result["sector"],
+                    "industry_group": result["industry_group"],
+                    "industry": result["industry"],
+                    "domain": result.get("domain", ""),
+                    "auto_classified": True,
+                    "auto_classified_at": date_str,
+                })
 
         changes.append(change)
         applied += 1
@@ -366,29 +436,20 @@ def generate_report(stats, suggestions, classification):
         f"- 미분류: **{stats['unclassified']}**건",
         f"- 링크 없음: **{stats['unlinked']}**건",
         "",
-        "## 섹터별 분포",
+        "## 카테고리별 분포",
         "",
-        "| 섹터 | 노트 수 |",
-        "|------|---------|",
+        "| 카테고리 | 노트 수 |",
+        "|----------|---------|",
     ]
 
-    sectors = classification.get("sectors", {})
-    for s_code in sorted(stats["by_sector"].keys()):
-        label = sectors.get(s_code, {}).get("label", s_code)
-        count = stats["by_sector"][s_code]
-        lines.append(f"| {label} ({s_code}) | {count} |")
+    for cat in sorted(stats["by_category"].keys()):
+        count = stats["by_category"][cat]
+        lines.append(f"| {cat} | {count} |")
 
-    lines.extend(["", "## 산업군별 분포", "", "| 산업군 | 노트 수 |", "|--------|---------|"])
-    for ig_code in sorted(stats["by_industry_group"].keys()):
-        # Find label
-        ig_label = ig_code
-        for s in sectors.values():
-            ig_data = s.get("industry_groups", {}).get(ig_code)
-            if ig_data:
-                ig_label = ig_data["label"]
-                break
-        count = stats["by_industry_group"][ig_code]
-        lines.append(f"| {ig_label} ({ig_code}) | {count} |")
+    lines.extend(["", "## 서브카테고리별 분포", "", "| 서브카테고리 | 노트 수 |", "|--------------|---------|"])
+    for subcat in sorted(stats["by_subcategory"].keys()):
+        count = stats["by_subcategory"][subcat]
+        lines.append(f"| {subcat} | {count} |")
 
     lines.extend(["", "## 제안 사항", ""])
     if not suggestions:
@@ -512,7 +573,7 @@ def main():
         "unclassified": stats["unclassified"],
         "suggestions": len(suggestions),
         "suggestion_types": [s["type"] for s in suggestions],
-        "top_sectors": dict(sorted(stats["by_sector"].items(), key=lambda x: -x[1])[:5]),
+        "top_categories": dict(sorted(stats["by_category"].items(), key=lambda x: -x[1])[:5]),
     }
     if proposals is not None:
         result["proposals"] = proposals

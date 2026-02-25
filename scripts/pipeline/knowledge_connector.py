@@ -23,16 +23,18 @@ import shutil
 from datetime import datetime
 from pathlib import Path
 
+from shared.vault_paths import VAULT, INBOX
+
 WORKSPACE = Path(os.path.expanduser("~/.openclaw/workspace"))
-VAULT = Path(os.path.expanduser("~/knowledge"))
-INBOX_DIR = VAULT / "100 지식" / "110 수신함"
-NOTES_DIR = VAULT / "100 지식" / "120 노트"
-STRUCT_DIR = VAULT / "100 지식" / "130 구조노트"
+INBOX_DIR = INBOX
+NOTES_DIR = VAULT / "100 지식" / "120 노트"  # v2 legacy
+STRUCT_DIR = VAULT / "100 지식" / "150 구조노트"
 FILTERED_DIR = WORKSPACE / "memory" / "filtered-ideas"
 REPORT_DIR = WORKSPACE / "memory" / "knowledge-connections"
 
 
 from shared.log import make_logger
+from shared.classify import get_vault_note_dirs
 log = make_logger()
 
 
@@ -87,9 +89,9 @@ def compute_similarity(kw_a, kw_b):
 
 
 def scan_vault():
-    """볼트 전체 노트 스캔."""
+    """볼트 전체 노트 스캔 (v3 카테고리 디렉토리 + inbox + legacy)."""
     notes = []
-    for search_dir in [INBOX_DIR, NOTES_DIR]:
+    for search_dir in get_vault_note_dirs():
         if not search_dir.exists():
             continue
         for md_file in search_dir.glob("*.md"):

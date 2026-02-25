@@ -22,13 +22,14 @@ import re
 from datetime import datetime
 from pathlib import Path
 
+from shared.vault_paths import VAULT, INBOX
+
 WORKSPACE = Path(os.path.expanduser("~/.openclaw/workspace"))
-VAULT = Path(os.path.expanduser("~/knowledge"))
 GITHUB_IDEAS_DIR = WORKSPACE / "memory" / "github-ideas"
 TELEGRAM_TOPICS_DIR = WORKSPACE / "memory" / "telegram-topics"
 BLOG_INSIGHTS_DIR = WORKSPACE / "memory" / "blog-insights"
-VAULT_INBOX_DIR = VAULT / "100 지식" / "110 수신함"
-VAULT_NOTES_DIR = VAULT / "100 지식" / "120 노트"
+VAULT_INBOX_DIR = INBOX
+VAULT_NOTES_DIR = VAULT / "100 지식" / "120 노트"  # v2 legacy
 FILTERED_DIR = WORKSPACE / "memory" / "filtered-ideas"
 PROCESSED_FILE = FILTERED_DIR / ".processed_filter.json"
 
@@ -49,6 +50,7 @@ KEYWORD_SCORES = {
 
 
 from shared.log import make_logger
+from shared.classify import get_vault_note_dirs
 log = make_logger()
 
 
@@ -149,8 +151,8 @@ def collect_candidates():
             except Exception:
                 continue
 
-    # Vault 보강 노트 (enriched notes with body content)
-    for search_dir in [VAULT_INBOX_DIR, VAULT_NOTES_DIR]:
+    # Vault 보강 노트 (enriched notes with body content) — v3 전체 디렉토리
+    for search_dir in get_vault_note_dirs():
         if not search_dir.exists():
             continue
         for md_file in search_dir.glob("*.md"):

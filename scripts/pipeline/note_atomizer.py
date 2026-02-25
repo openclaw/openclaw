@@ -36,12 +36,13 @@ from shared.log import make_logger
 # Constants & Paths
 # ══════════════════════════════════════════════════════════════════════════════
 
+from shared.vault_paths import VAULT, INBOX, NOTES, STRUCTURE, REPORTS
+
 WORKSPACE = Path(os.path.expanduser("~/.openclaw/workspace"))
-VAULT = Path(os.path.expanduser("~/knowledge"))
-INBOX_DIR = VAULT / "100 지식" / "110 수신함"
-NOTES_DIR = VAULT / "100 지식" / "120 노트"
-MOC_DIR = VAULT / "100 지식" / "130 구조노트"
-REPORT_DIR = VAULT / "300 운영" / "340 리포트"
+INBOX_DIR = INBOX
+NOTES_DIR = VAULT / "100 지식" / "120 노트"  # v2 legacy
+MOC_DIR = STRUCTURE
+REPORT_DIR = REPORTS
 STATE_FILE = WORKSPACE / "memory" / "note_atomizer_state.json"
 TELEGRAM_DATA_DIR = WORKSPACE / "memory" / "telegram-topics"
 ANALYSIS_EXPORT_DIR = Path(os.path.expanduser(
