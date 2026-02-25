@@ -1,50 +1,6 @@
-import { type AddressInfo } from "node:net";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { createNextcloudTalkWebhookServer } from "./monitor.js";
+import { describe, expect, it, vi } from "vitest";
+import { startWebhookServer } from "./monitor.test-harness.js";
 import { generateNextcloudTalkSignature } from "./signature.js";
-
-type WebhookHarness = {
-  webhookUrl: string;
-  stop: () => Promise<void>;
-};
-
-const cleanupFns: Array<() => Promise<void>> = [];
-
-afterEach(async () => {
-  while (cleanupFns.length > 0) {
-    const cleanup = cleanupFns.pop();
-    if (cleanup) {
-      await cleanup();
-    }
-  }
-});
-
-async function startWebhookServer(params: {
-  path: string;
-  isBackendAllowed: (backend: string) => boolean;
-  onMessage: () => void | Promise<void>;
-}): Promise<WebhookHarness> {
-  const { server, start } = createNextcloudTalkWebhookServer({
-    port: 0,
-    host: "127.0.0.1",
-    path: params.path,
-    secret: "nextcloud-secret",
-    isBackendAllowed: params.isBackendAllowed,
-    onMessage: params.onMessage,
-  });
-  await start();
-  const address = server.address() as AddressInfo | null;
-  if (!address) {
-    throw new Error("missing server address");
-  }
-  return {
-    webhookUrl: `http://127.0.0.1:${address.port}${params.path}`,
-    stop: () =>
-      new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      }),
-  };
-}
 
 describe("createNextcloudTalkWebhookServer backend allowlist", () => {
   it("rejects requests from unexpected backend origins", async () => {
@@ -54,7 +10,6 @@ describe("createNextcloudTalkWebhookServer backend allowlist", () => {
       isBackendAllowed: (backend) => backend === "https://nextcloud.expected",
       onMessage,
     });
-    cleanupFns.push(harness.stop);
 
     const payload = {
       type: "Create",
