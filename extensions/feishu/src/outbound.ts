@@ -1,9 +1,12 @@
 import fs from "fs";
 import path from "path";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk";
-import { sendMediaFeishu } from "./media.js";
+import { getStreamAppender } from "./active-streams.js";
+import { sendMediaFeishu, uploadImageFeishu } from "./media.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { sendMessageFeishu } from "./send.js";
+
+const IMAGE_EXTS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".tiff"]);
 
 function normalizePossibleLocalImagePath(text: string | undefined): string | null {
   const raw = text?.trim();
@@ -18,10 +21,7 @@ function normalizePossibleLocalImagePath(text: string | undefined): string | nul
   if (/^(https?:\/\/|data:|file:\/\/)/i.test(raw)) return null;
 
   const ext = path.extname(raw).toLowerCase();
-  const isImageExt = [".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp", ".ico", ".tiff"].includes(
-    ext,
-  );
-  if (!isImageExt) return null;
+  if (!IMAGE_EXTS.has(ext)) return null;
 
   if (!path.isAbsolute(raw)) return null;
   if (!fs.existsSync(raw)) return null;
@@ -31,7 +31,6 @@ function normalizePossibleLocalImagePath(text: string | undefined): string | nul
   try {
     if (!fs.statSync(raw).isFile()) return null;
   } catch {
-    // File may have been deleted or became inaccessible between checks
     return null;
   }
 
@@ -44,12 +43,22 @@ export const feishuOutbound: ChannelOutboundAdapter = {
   chunkerMode: "markdown",
   textChunkLimit: 4000,
   sendText: async ({ cfg, to, text, accountId }) => {
-    // Scheme A compatibility shim:
-    // when upstream accidentally returns a local image path as plain text,
-    // auto-upload and send as Feishu image message instead of leaking path text.
+    const appender = getStreamAppender(to);
+
+    // Auto-convert local image path to image message
     const localImagePath = normalizePossibleLocalImagePath(text);
     if (localImagePath) {
       try {
+        if (appender) {
+          const imageData = fs.readFileSync(localImagePath);
+          const { imageKey } = await uploadImageFeishu({
+            cfg,
+            image: imageData,
+            accountId: accountId ?? undefined,
+          });
+          appender(`\n![image](${imageKey})\n`);
+          return { channel: "feishu", messageId: "", chatId: to };
+        }
         const result = await sendMediaFeishu({
           cfg,
           to,
@@ -59,20 +68,53 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         return { channel: "feishu", ...result };
       } catch (err) {
         console.error(`[feishu] local image path auto-send failed:`, err);
-        // fall through to plain text as last resort
       }
     }
 
+    if (appender) {
+      appender(`\n\n${text}`);
+      return { channel: "feishu", messageId: "", chatId: to };
+    }
     const result = await sendMessageFeishu({ cfg, to, text, accountId: accountId ?? undefined });
     return { channel: "feishu", ...result };
   },
   sendMedia: async ({ cfg, to, text, mediaUrl, accountId, mediaLocalRoots }) => {
-    // Send text first if provided
+    const appender = getStreamAppender(to);
+
+    if (appender) {
+      // Streaming active: embed everything into the card
+      if (mediaUrl) {
+        try {
+          const loaded = await getFeishuRuntime().media.loadWebMedia(mediaUrl, {
+            maxBytes: 30 * 1024 * 1024,
+            optimizeImages: false,
+          });
+          const ext = path.extname(loaded.fileName ?? "file").toLowerCase();
+          if (IMAGE_EXTS.has(ext)) {
+            const { imageKey } = await uploadImageFeishu({
+              cfg,
+              image: loaded.buffer,
+              accountId: accountId ?? undefined,
+            });
+            appender(`\n![image](${imageKey})\n`);
+          } else {
+            appender(`\n📎 [${loaded.fileName ?? "file"}](${mediaUrl})\n`);
+          }
+        } catch (err) {
+          console.error(`[feishu] streaming media embed failed:`, err);
+          appender(`\n📎 ${mediaUrl}\n`);
+        }
+      }
+      if (text?.trim()) {
+        appender(`\n\n${text}`);
+      }
+      return { channel: "feishu", messageId: "", chatId: to };
+    }
+
+    // No active stream: send normally
     if (text?.trim()) {
       await sendMessageFeishu({ cfg, to, text, accountId: accountId ?? undefined });
     }
-
-    // Upload and send media if URL or local path provided
     if (mediaUrl) {
       try {
         const result = await sendMediaFeishu({
@@ -84,9 +126,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         });
         return { channel: "feishu", ...result };
       } catch (err) {
-        // Log the error for debugging
         console.error(`[feishu] sendMediaFeishu failed:`, err);
-        // Fallback to URL link if upload fails
         const fallbackText = `📎 ${mediaUrl}`;
         const result = await sendMessageFeishu({
           cfg,
@@ -98,7 +138,6 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       }
     }
 
-    // No media URL, just return text result
     const result = await sendMessageFeishu({
       cfg,
       to,
