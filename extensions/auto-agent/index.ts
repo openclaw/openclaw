@@ -139,7 +139,7 @@ async function runAutonomousTask(
   try {
     const body: any = {
       sessionKey,
-      prompt: `You are an autonomous agent task runner. Complete this task concisely:\n\n${task}\n\nRespond with your findings and any actions taken.`,
+      message: `You are an autonomous agent task runner. Complete this task concisely:\n\n${task}\n\nRespond with your findings and any actions taken.`,
       model: cfg.subagentModel ?? "auto",
     };
     if (visionFrame) {
@@ -152,7 +152,7 @@ async function runAutonomousTask(
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${api.config.gateway?.auth?.token ?? ""}`,
+        Authorization: `Bearer ${api.config.hooks?.token ?? api.config.gateway?.auth?.token ?? ""}`,
       },
       body: JSON.stringify(body),
     });

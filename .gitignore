@@ -153,5 +153,7 @@ dist/protocol.schema.json
 # Synthing
 **/.stfolder/
 src/agents/tools/web-search.ts
-.gitignore
-.gitignore
+
+# GPT-5.2 Evolution & Logs
+*.log
+_docs/
