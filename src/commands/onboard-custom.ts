@@ -303,7 +303,7 @@ async function requestOpenAiVerification(params: {
     body: {
       model: params.modelId,
       messages: [{ role: "user", content: "Hi" }],
-      max_tokens: 5,
+      max_tokens: 1024,
     },
   });
 }
@@ -329,7 +329,7 @@ async function requestAnthropicVerification(params: {
     headers: buildAnthropicHeaders(params.apiKey),
     body: {
       model: params.modelId,
-      max_tokens: 16,
+      max_tokens: 1024,
       messages: [{ role: "user", content: "Hi" }],
     },
   });
@@ -381,6 +381,26 @@ async function promptCustomApiModelId(prompter: WizardPrompter): Promise<string>
       validate: (val) => (val.trim() ? undefined : "Model ID is required"),
     })
   ).trim();
+}
+
+async function applyCustomApiRetryChoice(params: {
+  prompter: WizardPrompter;
+  retryChoice: CustomApiRetryChoice;
+  current: { baseUrl: string; apiKey: string; modelId: string };
+}): Promise<{ baseUrl: string; apiKey: string; modelId: string }> {
+  let { baseUrl, apiKey, modelId } = params.current;
+  if (params.retryChoice === "baseUrl" || params.retryChoice === "both") {
+    const retryInput = await promptBaseUrlAndKey({
+      prompter: params.prompter,
+      initialBaseUrl: baseUrl,
+    });
+    baseUrl = retryInput.baseUrl;
+    apiKey = retryInput.apiKey;
+  }
+  if (params.retryChoice === "model" || params.retryChoice === "both") {
+    modelId = await promptCustomApiModelId(params.prompter);
+  }
+  return { baseUrl, apiKey, modelId };
 }
 
 function resolveProviderApi(
@@ -618,17 +638,11 @@ export async function promptCustomApiConfig(params: {
             "Endpoint detection",
           );
           const retryChoice = await promptCustomApiRetryChoice(prompter);
-          if (retryChoice === "baseUrl" || retryChoice === "both") {
-            const retryInput = await promptBaseUrlAndKey({
-              prompter,
-              initialBaseUrl: baseUrl,
-            });
-            baseUrl = retryInput.baseUrl;
-            apiKey = retryInput.apiKey;
-          }
-          if (retryChoice === "model" || retryChoice === "both") {
-            modelId = await promptCustomApiModelId(prompter);
-          }
+          ({ baseUrl, apiKey, modelId } = await applyCustomApiRetryChoice({
+            prompter,
+            retryChoice,
+            current: { baseUrl, apiKey, modelId },
+          }));
           continue;
         }
       }
@@ -653,17 +667,11 @@ export async function promptCustomApiConfig(params: {
       verifySpinner.stop(`Verification failed: ${formatVerificationError(result.error)}`);
     }
     const retryChoice = await promptCustomApiRetryChoice(prompter);
-    if (retryChoice === "baseUrl" || retryChoice === "both") {
-      const retryInput = await promptBaseUrlAndKey({
-        prompter,
-        initialBaseUrl: baseUrl,
-      });
-      baseUrl = retryInput.baseUrl;
-      apiKey = retryInput.apiKey;
-    }
-    if (retryChoice === "model" || retryChoice === "both") {
-      modelId = await promptCustomApiModelId(prompter);
-    }
+    ({ baseUrl, apiKey, modelId } = await applyCustomApiRetryChoice({
+      prompter,
+      retryChoice,
+      current: { baseUrl, apiKey, modelId },
+    }));
     if (compatibilityChoice === "unknown") {
       compatibility = null;
     }

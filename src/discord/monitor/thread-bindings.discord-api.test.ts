@@ -22,7 +22,7 @@ const { resolveChannelIdForBinding } = await import("./thread-bindings.discord-a
 
 describe("resolveChannelIdForBinding", () => {
   beforeEach(() => {
-    hoisted.restGet.mockReset();
+    hoisted.restGet.mockClear();
     hoisted.createDiscordRestClient.mockClear();
   });
 

@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import {
+  createLoggerBackedRuntime,
   type RuntimeEnv,
   isRequestBodyLimitError,
   readRequestBodyWithLimit,
@@ -91,6 +92,7 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
     opts.maxBodyBytes > 0
       ? Math.floor(opts.maxBodyBytes)
       : DEFAULT_WEBHOOK_MAX_BODY_BYTES;
+  const readBody = opts.readBody ?? readNextcloudTalkWebhookBody;
 
   const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
     if (req.url === HEALTH_PATH) {
@@ -106,8 +108,6 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
     }
 
     try {
-      const body = await readNextcloudTalkWebhookBody(req, maxBodyBytes);
-
       const headers = extractNextcloudTalkHeaders(
         req.headers as Record<string, string | string[] | undefined>,
       );
@@ -116,6 +116,8 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
         res.end(JSON.stringify({ error: "Missing signature headers" }));
         return;
       }
+
+      const body = await readBody(req, maxBodyBytes);
 
       const isValid = verifyNextcloudTalkSignature({
         signature: headers.signature,
@@ -212,13 +214,12 @@ export async function monitorNextcloudTalkProvider(
     cfg,
     accountId: opts.accountId,
   });
-  const runtime: RuntimeEnv = opts.runtime ?? {
-    log: (...args: unknown[]) => core.logging.getChildLogger().info(args.map(String).join(" ")),
-    error: (...args: unknown[]) => core.logging.getChildLogger().error(args.map(String).join(" ")),
-    exit: () => {
-      throw new Error("Runtime exit not available");
-    },
-  };
+  const runtime: RuntimeEnv =
+    opts.runtime ??
+    createLoggerBackedRuntime({
+      logger: core.logging.getChildLogger(),
+      exitError: () => new Error("Runtime exit not available"),
+    });
 
   if (!account.secret) {
     throw new Error(`Nextcloud Talk bot secret not configured for account "${account.accountId}"`);

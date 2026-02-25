@@ -1,9 +1,17 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_COPILOT_API_BASE_URL,
   resolveCopilotApiToken,
 } from "../providers/github-copilot-token.js";
+import {
+  KILOCODE_BASE_URL,
+  KILOCODE_DEFAULT_CONTEXT_WINDOW,
+  KILOCODE_DEFAULT_COST,
+  KILOCODE_DEFAULT_MAX_TOKENS,
+  KILOCODE_MODEL_CATALOG,
+} from "../providers/kilocode-shared.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
 import {
@@ -143,6 +151,17 @@ const OLLAMA_DEFAULT_COST = {
   cacheWrite: 0,
 };
 
+const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
+const OPENROUTER_DEFAULT_MODEL_ID = "auto";
+const OPENROUTER_DEFAULT_CONTEXT_WINDOW = 200000;
+const OPENROUTER_DEFAULT_MAX_TOKENS = 8192;
+const OPENROUTER_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
+
 const VLLM_BASE_URL = "http://127.0.0.1:8000/v1";
 const VLLM_DEFAULT_CONTEXT_WINDOW = 128000;
 const VLLM_DEFAULT_MAX_TOKENS = 8192;
@@ -174,6 +193,8 @@ const NVIDIA_DEFAULT_COST = {
   cacheRead: 0,
   cacheWrite: 0,
 };
+
+const log = createSubsystemLogger("agents/model-providers");
 
 interface OllamaModel {
   name: string;
@@ -224,12 +245,12 @@ async function discoverOllamaModels(baseUrl?: string): Promise<ModelDefinitionCo
       signal: AbortSignal.timeout(5000),
     });
     if (!response.ok) {
-      console.warn(`Failed to discover Ollama models: ${response.status}`);
+      log.warn(`Failed to discover Ollama models: ${response.status}`);
       return [];
     }
     const data = (await response.json()) as OllamaTagsResponse;
     if (!data.models || data.models.length === 0) {
-      console.warn("No Ollama models found on local instance");
+      log.warn("No Ollama models found on local instance");
       return [];
     }
     return data.models.map((model) => {
@@ -247,7 +268,7 @@ async function discoverOllamaModels(baseUrl?: string): Promise<ModelDefinitionCo
       };
     });
   } catch (error) {
-    console.warn(`Failed to discover Ollama models: ${String(error)}`);
+    log.warn(`Failed to discover Ollama models: ${String(error)}`);
     return [];
   }
 }
@@ -271,13 +292,13 @@ async function discoverVllmModels(
       signal: AbortSignal.timeout(5000),
     });
     if (!response.ok) {
-      console.warn(`Failed to discover vLLM models: ${response.status}`);
+      log.warn(`Failed to discover vLLM models: ${response.status}`);
       return [];
     }
     const data = (await response.json()) as VllmModelsResponse;
     const models = data.data ?? [];
     if (models.length === 0) {
-      console.warn("No vLLM models found on local instance");
+      log.warn("No vLLM models found on local instance");
       return [];
     }
 
@@ -300,7 +321,7 @@ async function discoverVllmModels(
         } satisfies ModelDefinitionConfig;
       });
   } catch (error) {
-    console.warn(`Failed to discover vLLM models: ${String(error)}`);
+    log.warn(`Failed to discover vLLM models: ${String(error)}`);
     return [];
   }
 }
@@ -499,7 +520,7 @@ function buildMoonshotProvider(): ProviderConfig {
         id: MOONSHOT_DEFAULT_MODEL_ID,
         name: "Kimi K2.5",
         reasoning: false,
-        input: ["text"],
+        input: ["text", "image"],
         cost: MOONSHOT_DEFAULT_COST,
         contextWindow: MOONSHOT_DEFAULT_CONTEXT_WINDOW,
         maxTokens: MOONSHOT_DEFAULT_MAX_TOKENS,
@@ -656,6 +677,30 @@ function buildTogetherProvider(): ProviderConfig {
   };
 }
 
+function buildOpenrouterProvider(): ProviderConfig {
+  return {
+    baseUrl: OPENROUTER_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: OPENROUTER_DEFAULT_MODEL_ID,
+        name: "OpenRouter Auto",
+        // reasoning: false here is a catalog default only; it does NOT cause
+        // `reasoning.effort: "none"` to be sent for the "auto" routing model.
+        // applyExtraParamsToAgent skips the reasoning effort injection for
+        // model id "auto" because it dynamically routes to any OpenRouter model
+        // (including ones where reasoning is mandatory and cannot be disabled).
+        // See: openclaw/openclaw#24851
+        reasoning: false,
+        input: ["text", "image"],
+        cost: OPENROUTER_DEFAULT_COST,
+        contextWindow: OPENROUTER_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: OPENROUTER_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 async function buildVllmProvider(params?: {
   baseUrl?: string;
   apiKey?: string;
@@ -668,6 +713,7 @@ async function buildVllmProvider(params?: {
     models,
   };
 }
+
 export function buildQianfanProvider(): ProviderConfig {
   return {
     baseUrl: QIANFAN_BASE_URL,
@@ -728,6 +774,22 @@ export function buildNvidiaProvider(): ProviderConfig {
         maxTokens: 2048,
       },
     ],
+  };
+}
+
+export function buildKilocodeProvider(): ProviderConfig {
+  return {
+    baseUrl: KILOCODE_BASE_URL,
+    api: "openai-completions",
+    models: KILOCODE_MODEL_CATALOG.map((model) => ({
+      id: model.id,
+      name: model.name,
+      reasoning: model.reasoning,
+      input: model.input,
+      cost: KILOCODE_DEFAULT_COST,
+      contextWindow: model.contextWindow ?? KILOCODE_DEFAULT_CONTEXT_WINDOW,
+      maxTokens: model.maxTokens ?? KILOCODE_DEFAULT_MAX_TOKENS,
+    })),
   };
 }
 
@@ -904,11 +966,25 @@ export async function resolveImplicitProviders(params: {
     providers.qianfan = { ...buildQianfanProvider(), apiKey: qianfanKey };
   }
 
+  const openrouterKey =
+    resolveEnvApiKeyVarName("openrouter") ??
+    resolveApiKeyFromProfiles({ provider: "openrouter", store: authStore });
+  if (openrouterKey) {
+    providers.openrouter = { ...buildOpenrouterProvider(), apiKey: openrouterKey };
+  }
+
   const nvidiaKey =
     resolveEnvApiKeyVarName("nvidia") ??
     resolveApiKeyFromProfiles({ provider: "nvidia", store: authStore });
   if (nvidiaKey) {
     providers.nvidia = { ...buildNvidiaProvider(), apiKey: nvidiaKey };
+  }
+
+  const kilocodeKey =
+    resolveEnvApiKeyVarName("kilocode") ??
+    resolveApiKeyFromProfiles({ provider: "kilocode", store: authStore });
+  if (kilocodeKey) {
+    providers.kilocode = { ...buildKilocodeProvider(), apiKey: kilocodeKey };
   }
 
   return providers;

@@ -8,6 +8,7 @@ import {
   resolvePairingPaths,
   writeJsonAtomic,
 } from "./pairing-files.js";
+import { rejectPendingPairingRequest } from "./pairing-pending.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
 export type DevicePairingPendingRequest = {
@@ -332,8 +333,17 @@ export async function approveDevicePairing(
     const tokens = existing?.tokens ? { ...existing.tokens } : {};
     const roleForToken = normalizeRole(pending.role);
     if (roleForToken) {
-      const nextScopes = normalizeDeviceAuthScopes(pending.scopes);
       const existingToken = tokens[roleForToken];
+      const requestedScopes = normalizeDeviceAuthScopes(pending.scopes);
+      const nextScopes =
+        requestedScopes.length > 0
+          ? requestedScopes
+          : normalizeDeviceAuthScopes(
+              existingToken?.scopes ??
+                approvedScopes ??
+                existing?.approvedScopes ??
+                existing?.scopes,
+            );
       const now = Date.now();
       tokens[roleForToken] = {
         token: newToken(),
@@ -373,14 +383,17 @@ export async function rejectDevicePairing(
   baseDir?: string,
 ): Promise<{ requestId: string; deviceId: string } | null> {
   return await withLock(async () => {
-    const state = await loadState(baseDir);
-    const pending = state.pendingById[requestId];
-    if (!pending) {
-      return null;
-    }
-    delete state.pendingById[requestId];
-    await persistState(state, baseDir);
-    return { requestId, deviceId: pending.deviceId };
+    return await rejectPendingPairingRequest<
+      DevicePairingPendingRequest,
+      DevicePairingStateFile,
+      "deviceId"
+    >({
+      requestId,
+      idKey: "deviceId",
+      loadState: () => loadState(baseDir),
+      persistState: (state) => persistState(state, baseDir),
+      getId: (pending: DevicePairingPendingRequest) => pending.deviceId,
+    });
   });
 }
 

@@ -154,8 +154,8 @@ describe("createTelegramBot", () => {
   });
 
   it("blocks callback_query when inline buttons are allowlist-only and sender not authorized", async () => {
-    onSpy.mockReset();
-    replySpy.mockReset();
+    onSpy.mockClear();
+    replySpy.mockClear();
 
     createTelegramBot({
       token: "tok",
@@ -194,8 +194,8 @@ describe("createTelegramBot", () => {
   });
 
   it("edits commands list for pagination callbacks", async () => {
-    onSpy.mockReset();
-    listSkillCommandsForAgents.mockReset();
+    onSpy.mockClear();
+    listSkillCommandsForAgents.mockClear();
 
     createTelegramBot({ token: "tok" });
     const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
@@ -235,8 +235,8 @@ describe("createTelegramBot", () => {
   });
 
   it("blocks pagination callbacks when allowlist rejects sender", async () => {
-    onSpy.mockReset();
-    editMessageTextSpy.mockReset();
+    onSpy.mockClear();
+    editMessageTextSpy.mockClear();
 
     createTelegramBot({
       token: "tok",
@@ -275,8 +275,8 @@ describe("createTelegramBot", () => {
   });
 
   it("includes sender identity in group envelope headers", async () => {
-    onSpy.mockReset();
-    replySpy.mockReset();
+    onSpy.mockClear();
+    replySpy.mockClear();
 
     loadConfig.mockReturnValue({
       agents: {
@@ -326,9 +326,9 @@ describe("createTelegramBot", () => {
   });
 
   it("uses quote text when a Telegram partial reply is received", async () => {
-    onSpy.mockReset();
-    sendMessageSpy.mockReset();
-    replySpy.mockReset();
+    onSpy.mockClear();
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
 
     createTelegramBot({ token: "tok" });
     const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
@@ -361,9 +361,9 @@ describe("createTelegramBot", () => {
   });
 
   it("handles quote-only replies without reply metadata", async () => {
-    onSpy.mockReset();
-    sendMessageSpy.mockReset();
-    replySpy.mockReset();
+    onSpy.mockClear();
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
 
     createTelegramBot({ token: "tok" });
     const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
@@ -391,9 +391,9 @@ describe("createTelegramBot", () => {
   });
 
   it("uses external_reply quote text for partial replies", async () => {
-    onSpy.mockReset();
-    sendMessageSpy.mockReset();
-    replySpy.mockReset();
+    onSpy.mockClear();
+    sendMessageSpy.mockClear();
+    replySpy.mockClear();
 
     createTelegramBot({ token: "tok" });
     const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
@@ -425,9 +425,59 @@ describe("createTelegramBot", () => {
     expect(payload.ReplyToSender).toBe("Ada");
   });
 
-  it("accepts group replies to the bot without explicit mention when requireMention is enabled", async () => {
+  it("propagates forwarded origin from external_reply targets", async () => {
     onSpy.mockReset();
+    sendMessageSpy.mockReset();
     replySpy.mockReset();
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+    await handler({
+      message: {
+        chat: { id: 7, type: "private" },
+        text: "Thoughts?",
+        date: 1736380800,
+        external_reply: {
+          message_id: 9003,
+          text: "forwarded text",
+          from: { first_name: "Ada" },
+          quote: {
+            text: "forwarded snippet",
+          },
+          forward_origin: {
+            type: "user",
+            sender_user: {
+              id: 999,
+              first_name: "Bob",
+              last_name: "Smith",
+              username: "bobsmith",
+              is_bot: false,
+            },
+            date: 500,
+          },
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = replySpy.mock.calls[0][0];
+    expect(payload.ReplyToForwardedFrom).toBe("Bob Smith (@bobsmith)");
+    expect(payload.ReplyToForwardedFromType).toBe("user");
+    expect(payload.ReplyToForwardedFromId).toBe("999");
+    expect(payload.ReplyToForwardedFromUsername).toBe("bobsmith");
+    expect(payload.ReplyToForwardedFromTitle).toBe("Bob Smith");
+    expect(payload.ReplyToForwardedDate).toBe(500000);
+    expect(payload.Body).toContain(
+      "[Forwarded from Bob Smith (@bobsmith) at 1970-01-01T00:08:20.000Z]",
+    );
+  });
+
+  it("accepts group replies to the bot without explicit mention when requireMention is enabled", async () => {
+    onSpy.mockClear();
+    replySpy.mockClear();
     loadConfig.mockReturnValue({
       channels: {
         telegram: { groups: { "*": { requireMention: true } } },
@@ -458,8 +508,8 @@ describe("createTelegramBot", () => {
   });
 
   it("inherits group allowlist + requireMention in topics", async () => {
-    onSpy.mockReset();
-    replySpy.mockReset();
+    onSpy.mockClear();
+    replySpy.mockClear();
     loadConfig.mockReturnValue({
       channels: {
         telegram: {
@@ -501,8 +551,8 @@ describe("createTelegramBot", () => {
   });
 
   it("prefers topic allowFrom over group allowFrom", async () => {
-    onSpy.mockReset();
-    replySpy.mockReset();
+    onSpy.mockClear();
+    replySpy.mockClear();
     loadConfig.mockReturnValue({
       channels: {
         telegram: {
@@ -543,8 +593,8 @@ describe("createTelegramBot", () => {
   });
 
   it("allows group messages for per-group groupPolicy open override (global groupPolicy allowlist)", async () => {
-    onSpy.mockReset();
-    replySpy.mockReset();
+    onSpy.mockClear();
+    replySpy.mockClear();
     loadConfig.mockReturnValue({
       channels: {
         telegram: {
@@ -578,8 +628,8 @@ describe("createTelegramBot", () => {
   });
 
   it("blocks control commands from unauthorized senders in per-group open groups", async () => {
-    onSpy.mockReset();
-    replySpy.mockReset();
+    onSpy.mockClear();
+    replySpy.mockClear();
     loadConfig.mockReturnValue({
       channels: {
         telegram: {
@@ -612,10 +662,10 @@ describe("createTelegramBot", () => {
     expect(replySpy).not.toHaveBeenCalled();
   });
   it("sets command target session key for dm topic commands", async () => {
-    onSpy.mockReset();
-    sendMessageSpy.mockReset();
-    commandSpy.mockReset();
-    replySpy.mockReset();
+    onSpy.mockClear();
+    sendMessageSpy.mockClear();
+    commandSpy.mockClear();
+    replySpy.mockClear();
     replySpy.mockResolvedValue({ text: "response" });
 
     loadConfig.mockReturnValue({
@@ -654,10 +704,10 @@ describe("createTelegramBot", () => {
   });
 
   it("allows native DM commands for paired users", async () => {
-    onSpy.mockReset();
-    sendMessageSpy.mockReset();
-    commandSpy.mockReset();
-    replySpy.mockReset();
+    onSpy.mockClear();
+    sendMessageSpy.mockClear();
+    commandSpy.mockClear();
+    replySpy.mockClear();
     replySpy.mockResolvedValue({ text: "response" });
 
     loadConfig.mockReturnValue({
@@ -698,10 +748,10 @@ describe("createTelegramBot", () => {
   });
 
   it("blocks native DM commands for unpaired users", async () => {
-    onSpy.mockReset();
-    sendMessageSpy.mockReset();
-    commandSpy.mockReset();
-    replySpy.mockReset();
+    onSpy.mockClear();
+    sendMessageSpy.mockClear();
+    commandSpy.mockClear();
+    replySpy.mockClear();
 
     loadConfig.mockReturnValue({
       commands: { native: true },
@@ -740,15 +790,15 @@ describe("createTelegramBot", () => {
   });
 
   it("registers message_reaction handler", () => {
-    onSpy.mockReset();
+    onSpy.mockClear();
     createTelegramBot({ token: "tok" });
     const reactionHandler = onSpy.mock.calls.find((call) => call[0] === "message_reaction");
     expect(reactionHandler).toBeDefined();
   });
 
   it("enqueues system event for reaction", async () => {
-    onSpy.mockReset();
-    enqueueSystemEventSpy.mockReset();
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
 
     loadConfig.mockReturnValue({
       channels: {
@@ -783,8 +833,8 @@ describe("createTelegramBot", () => {
   });
 
   it("skips reaction when reactionNotifications is off", async () => {
-    onSpy.mockReset();
-    enqueueSystemEventSpy.mockReset();
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
     wasSentByBot.mockReturnValue(true);
 
     loadConfig.mockReturnValue({
@@ -814,8 +864,8 @@ describe("createTelegramBot", () => {
   });
 
   it("defaults reactionNotifications to own", async () => {
-    onSpy.mockReset();
-    enqueueSystemEventSpy.mockReset();
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
     wasSentByBot.mockReturnValue(true);
 
     loadConfig.mockReturnValue({
@@ -845,8 +895,8 @@ describe("createTelegramBot", () => {
   });
 
   it("allows reaction in all mode regardless of message sender", async () => {
-    onSpy.mockReset();
-    enqueueSystemEventSpy.mockReset();
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
     wasSentByBot.mockReturnValue(false);
 
     loadConfig.mockReturnValue({
@@ -880,8 +930,8 @@ describe("createTelegramBot", () => {
   });
 
   it("skips reaction in own mode when message is not sent by bot", async () => {
-    onSpy.mockReset();
-    enqueueSystemEventSpy.mockReset();
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
     wasSentByBot.mockReturnValue(false);
 
     loadConfig.mockReturnValue({
@@ -911,8 +961,8 @@ describe("createTelegramBot", () => {
   });
 
   it("allows reaction in own mode when message is sent by bot", async () => {
-    onSpy.mockReset();
-    enqueueSystemEventSpy.mockReset();
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
     wasSentByBot.mockReturnValue(true);
 
     loadConfig.mockReturnValue({
@@ -942,8 +992,8 @@ describe("createTelegramBot", () => {
   });
 
   it("skips reaction from bot users", async () => {
-    onSpy.mockReset();
-    enqueueSystemEventSpy.mockReset();
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
     wasSentByBot.mockReturnValue(true);
 
     loadConfig.mockReturnValue({
@@ -973,8 +1023,8 @@ describe("createTelegramBot", () => {
   });
 
   it("skips reaction removal (only processes added reactions)", async () => {
-    onSpy.mockReset();
-    enqueueSystemEventSpy.mockReset();
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
 
     loadConfig.mockReturnValue({
       channels: {
@@ -1003,8 +1053,8 @@ describe("createTelegramBot", () => {
   });
 
   it("enqueues one event per added emoji reaction", async () => {
-    onSpy.mockReset();
-    enqueueSystemEventSpy.mockReset();
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
 
     loadConfig.mockReturnValue({
       channels: {
@@ -1041,8 +1091,8 @@ describe("createTelegramBot", () => {
   });
 
   it("routes forum group reactions to the general topic (thread id not available on reactions)", async () => {
-    onSpy.mockReset();
-    enqueueSystemEventSpy.mockReset();
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
 
     loadConfig.mockReturnValue({
       channels: {
@@ -1080,8 +1130,8 @@ describe("createTelegramBot", () => {
   });
 
   it("uses correct session key for forum group reactions in general topic", async () => {
-    onSpy.mockReset();
-    enqueueSystemEventSpy.mockReset();
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
 
     loadConfig.mockReturnValue({
       channels: {
@@ -1118,8 +1168,8 @@ describe("createTelegramBot", () => {
   });
 
   it("uses correct session key for regular group reactions without topic", async () => {
-    onSpy.mockReset();
-    enqueueSystemEventSpy.mockReset();
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
 
     loadConfig.mockReturnValue({
       channels: {

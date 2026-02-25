@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { getPrimaryCommand, hasHelpOrVersion } from "../argv.js";
 import { reparseProgramFromActionArgs } from "./action-reparse.js";
+import { removeCommand, removeCommandByName } from "./command-tree.js";
 
 type SubCliRegistrar = (program: Command) => Promise<void> | void;
 
@@ -296,23 +297,12 @@ export function getSubCliCommandsWithSubcommands(): string[] {
   return entries.filter((entry) => entry.hasSubcommands).map((entry) => entry.name);
 }
 
-function removeCommand(program: Command, command: Command) {
-  const commands = program.commands as Command[];
-  const index = commands.indexOf(command);
-  if (index >= 0) {
-    commands.splice(index, 1);
-  }
-}
-
 export async function registerSubCliByName(program: Command, name: string): Promise<boolean> {
   const entry = entries.find((candidate) => candidate.name === name);
   if (!entry) {
     return false;
   }
-  const existing = program.commands.find((cmd) => cmd.name() === entry.name);
-  if (existing) {
-    removeCommand(program, existing);
-  }
+  removeCommandByName(program, entry.name);
   await entry.register(program);
   return true;
 }

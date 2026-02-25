@@ -87,7 +87,7 @@ export class TelnyxProvider implements VoiceCallProvider {
       skipVerification: this.options.skipVerification,
     });
 
-    return { ok: result.ok, reason: result.reason };
+    return { ok: result.ok, reason: result.reason, isReplay: result.isReplay };
   }
 
   /**

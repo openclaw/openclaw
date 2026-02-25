@@ -41,6 +41,44 @@ const testItems = [
 ];
 
 describe("SearchableSelectList", () => {
+  function typeInput(list: SearchableSelectList, text: string) {
+    for (const ch of text) {
+      list.handleInput(ch);
+    }
+  }
+
+  function expectSelectedValueForQuery(
+    list: SearchableSelectList,
+    query: string,
+    expectedValue: string,
+  ) {
+    typeInput(list, query);
+    const selected = list.getSelectedItem();
+    expect(selected?.value).toBe(expectedValue);
+  }
+
+  function expectNoMatchesForQuery(list: SearchableSelectList, query: string) {
+    typeInput(list, query);
+    const output = list.render(80);
+    expect(output.some((line) => line.includes("No matches"))).toBe(true);
+  }
+
+  function expectDescriptionVisibilityAtWidth(width: number, shouldContainDescription: boolean) {
+    const items = [
+      { value: "one", label: "one", description: "desc" },
+      { value: "two", label: "two", description: "desc" },
+    ];
+    const list = new SearchableSelectList(items, 5, mockTheme);
+    // Ensure first row is non-selected so description styling path is exercised.
+    list.setSelectedIndex(1);
+    const output = list.render(width).join("\n");
+    if (shouldContainDescription) {
+      expect(output).toContain("(desc)");
+    } else {
+      expect(output).not.toContain("(desc)");
+    }
+  }
+
   it("renders all items when no filter is applied", () => {
     const list = new SearchableSelectList(testItems, 5, mockTheme);
     const output = list.render(80);
@@ -61,27 +99,11 @@ describe("SearchableSelectList", () => {
   });
 
   it("does not show description layout at width 40 (boundary)", () => {
-    const items = [
-      { value: "one", label: "one", description: "desc" },
-      { value: "two", label: "two", description: "desc" },
-    ];
-    const list = new SearchableSelectList(items, 5, mockTheme);
-    list.setSelectedIndex(1); // ensure first row is not selected so description styling is applied
-
-    const output = list.render(40).join("\n");
-    expect(output).not.toContain("(desc)");
+    expectDescriptionVisibilityAtWidth(40, false);
   });
 
   it("shows description layout at width 41 (boundary)", () => {
-    const items = [
-      { value: "one", label: "one", description: "desc" },
-      { value: "two", label: "two", description: "desc" },
-    ];
-    const list = new SearchableSelectList(items, 5, mockTheme);
-    list.setSelectedIndex(1); // ensure first row is not selected so description styling is applied
-
-    const output = list.render(41).join("\n");
-    expect(output).toContain("(desc)");
+    expectDescriptionVisibilityAtWidth(41, true);
   });
 
   it("keeps ANSI-highlighted description rows within terminal width", () => {
@@ -93,9 +115,7 @@ describe("SearchableSelectList", () => {
     const list = new SearchableSelectList(items, 5, ansiHighlightTheme);
     list.setSelectedIndex(1); // make first row non-selected so description styling is applied
 
-    for (const ch of "provider") {
-      list.handleInput(ch);
-    }
+    typeInput(list, "provider");
 
     const width = 80;
     const output = list.render(width);
@@ -111,21 +131,14 @@ describe("SearchableSelectList", () => {
     ];
     const list = new SearchableSelectList(items, 5, mockTheme);
 
-    for (const ch of "32m") {
-      list.handleInput(ch);
-    }
-
-    const output = list.render(80);
-    expect(output.some((line) => line.includes("No matches"))).toBe(true);
+    expectNoMatchesForQuery(list, "32m");
   });
 
   it("does not corrupt ANSI sequences when highlighting multiple tokens", () => {
     const items = [{ value: "gpt-model", label: "gpt-model" }];
     const list = new SearchableSelectList(items, 5, ansiHighlightTheme);
 
-    for (const ch of "gpt m") {
-      list.handleInput(ch);
-    }
+    typeInput(list, "gpt m");
 
     const renderedLine = list.render(80).find((line) => stripAnsi(line).includes("gpt-model"));
     expect(renderedLine).toBeDefined();
@@ -137,12 +150,7 @@ describe("SearchableSelectList", () => {
     const list = new SearchableSelectList(testItems, 5, mockTheme);
 
     // Simulate typing "gemini" - unique enough to narrow down
-    list.handleInput("g");
-    list.handleInput("e");
-    list.handleInput("m");
-    list.handleInput("i");
-    list.handleInput("n");
-    list.handleInput("i");
+    typeInput(list, "gemini");
 
     const selected = list.getSelectedItem();
     expect(selected?.value).toBe("google/gemini-pro");
@@ -162,9 +170,7 @@ describe("SearchableSelectList", () => {
     const list = new SearchableSelectList(items, 5, mockTheme);
 
     // Type "opus" - should match "opus-direct" first (earliest exact substring)
-    for (const ch of "opus") {
-      list.handleInput(ch);
-    }
+    typeInput(list, "opus");
 
     // First result should be "opus-direct" where "opus" appears at position 0
     const selected = list.getSelectedItem();
@@ -179,12 +185,7 @@ describe("SearchableSelectList", () => {
     ];
     const list = new SearchableSelectList(items, 5, mockTheme);
 
-    for (const ch of "opus") {
-      list.handleInput(ch);
-    }
-
-    const selected = list.getSelectedItem();
-    expect(selected?.value).toBe("late-label");
+    expectSelectedValueForQuery(list, "opus", "late-label");
   });
 
   it("exact label match beats description match", () => {
@@ -198,9 +199,7 @@ describe("SearchableSelectList", () => {
     ];
     const list = new SearchableSelectList(items, 5, mockTheme);
 
-    for (const ch of "opus") {
-      list.handleInput(ch);
-    }
+    typeInput(list, "opus");
 
     // Label match should win over description match
     const selected = list.getSelectedItem();
@@ -214,21 +213,14 @@ describe("SearchableSelectList", () => {
     ];
     const list = new SearchableSelectList(items, 5, mockTheme);
 
-    for (const ch of "opus") {
-      list.handleInput(ch);
-    }
-
-    const selected = list.getSelectedItem();
-    expect(selected?.value).toBe("second");
+    expectSelectedValueForQuery(list, "opus", "second");
   });
 
   it("filters items with fuzzy matching", () => {
     const list = new SearchableSelectList(testItems, 5, mockTheme);
 
     // Simulate typing "gpt" which should match openai/gpt-4 models
-    list.handleInput("g");
-    list.handleInput("p");
-    list.handleInput("t");
+    typeInput(list, "gpt");
 
     const selected = list.getSelectedItem();
     expect(selected?.value).toContain("gpt");
@@ -241,9 +233,7 @@ describe("SearchableSelectList", () => {
     ];
     const list = new SearchableSelectList(items, 5, mockTheme);
 
-    for (const ch of "g4") {
-      list.handleInput(ch);
-    }
+    typeInput(list, "g4");
 
     const selected = list.getSelectedItem();
     expect(selected?.value).toBe("gpt-4");
@@ -252,9 +242,7 @@ describe("SearchableSelectList", () => {
   it("highlights matches in rendered output", () => {
     const list = new SearchableSelectList(testItems, 5, mockTheme);
 
-    for (const ch of "gpt") {
-      list.handleInput(ch);
-    }
+    typeInput(list, "gpt");
 
     const output = list.render(80).join("\n");
     expect(output).toContain("*gpt*");
@@ -263,13 +251,7 @@ describe("SearchableSelectList", () => {
   it("shows no match message when filter yields no results", () => {
     const list = new SearchableSelectList(testItems, 5, mockTheme);
 
-    // Type something that won't match
-    list.handleInput("x");
-    list.handleInput("y");
-    list.handleInput("z");
-
-    const output = list.render(80);
-    expect(output.some((line) => line.includes("No matches"))).toBe(true);
+    expectNoMatchesForQuery(list, "xyz");
   });
 
   it("navigates with arrow keys", () => {

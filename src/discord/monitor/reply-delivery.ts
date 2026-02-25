@@ -100,6 +100,26 @@ async function sendDiscordChunkWithFallback(params: {
   });
 }
 
+async function sendAdditionalDiscordMedia(params: {
+  target: string;
+  token: string;
+  rest?: RequestClient;
+  accountId?: string;
+  mediaUrls: string[];
+  resolveReplyTo: () => string | undefined;
+}) {
+  for (const mediaUrl of params.mediaUrls) {
+    const replyTo = params.resolveReplyTo();
+    await sendMessageDiscord(params.target, "", {
+      token: params.token,
+      rest: params.rest,
+      mediaUrl,
+      accountId: params.accountId,
+      replyTo,
+    });
+  }
+}
+
 export async function deliverDiscordReply(params: {
   replies: ReplyPayload[];
   target: string;
@@ -206,16 +226,14 @@ export async function deliverDiscordReply(params: {
         avatarUrl: persona.avatarUrl,
       });
       // Additional media items are sent as regular attachments (voice is single-file only).
-      for (const extra of mediaList.slice(1)) {
-        const replyTo = resolveReplyTo();
-        await sendMessageDiscord(params.target, "", {
-          token: params.token,
-          rest: params.rest,
-          mediaUrl: extra,
-          accountId: params.accountId,
-          replyTo,
-        });
-      }
+      await sendAdditionalDiscordMedia({
+        target: params.target,
+        token: params.token,
+        rest: params.rest,
+        accountId: params.accountId,
+        mediaUrls: mediaList.slice(1),
+        resolveReplyTo,
+      });
       continue;
     }
 
@@ -227,15 +245,13 @@ export async function deliverDiscordReply(params: {
       accountId: params.accountId,
       replyTo,
     });
-    for (const extra of mediaList.slice(1)) {
-      const replyTo = resolveReplyTo();
-      await sendMessageDiscord(params.target, "", {
-        token: params.token,
-        rest: params.rest,
-        mediaUrl: extra,
-        accountId: params.accountId,
-        replyTo,
-      });
-    }
+    await sendAdditionalDiscordMedia({
+      target: params.target,
+      token: params.token,
+      rest: params.rest,
+      accountId: params.accountId,
+      mediaUrls: mediaList.slice(1),
+      resolveReplyTo,
+    });
   }
 }

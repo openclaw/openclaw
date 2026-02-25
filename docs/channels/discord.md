@@ -397,7 +397,9 @@ Example:
     `allowlist` behavior:
 
     - guild must match `channels.discord.guilds` (`id` preferred, slug accepted)
-    - optional sender allowlists: `users` (IDs or names) and `roles` (role IDs only); if either is configured, senders are allowed when they match `users` OR `roles`
+    - optional sender allowlists: `users` (stable IDs recommended) and `roles` (role IDs only); if either is configured, senders are allowed when they match `users` OR `roles`
+    - direct name/tag matching is disabled by default; enable `channels.discord.dangerouslyAllowNameMatching: true` only as break-glass compatibility mode
+    - names/tags are supported for `users`, but IDs are safer; `openclaw security audit` warns when name/tag entries are used
     - if a guild has `channels` configured, non-listed channels are denied
     - if a guild has no `channels` block, all channels in that allowlisted guild are allowed
 
@@ -424,7 +426,7 @@ Example:
 }
 ```
 
-    If you only set `DISCORD_BOT_TOKEN` and do not create a `channels.discord` block, runtime fallback is `groupPolicy="open"` (with a warning in logs).
+    If you only set `DISCORD_BOT_TOKEN` and do not create a `channels.discord` block, runtime fallback is `groupPolicy="allowlist"` (with a warning in logs), even if `channels.defaults.groupPolicy` is `open`.
 
   </Tab>
 
@@ -562,7 +564,9 @@ Default slash command settings:
   <Accordion title="Live stream preview">
     OpenClaw can stream draft replies by sending a temporary message and editing it as text arrives.
 
-    - `channels.discord.streamMode` controls preview streaming (`off` | `partial` | `block`, default: `off`).
+    - `channels.discord.streaming` controls preview streaming (`off` | `partial` | `block` | `progress`, default: `off`).
+    - `progress` is accepted for cross-channel consistency and maps to `partial` on Discord.
+    - `channels.discord.streamMode` is a legacy alias and is auto-migrated.
     - `partial` edits a single preview message as tokens arrive.
     - `block` emits draft-sized chunks (use `draftChunk` to tune size and breakpoints).
 
@@ -572,7 +576,7 @@ Default slash command settings:
 {
   channels: {
     discord: {
-      streamMode: "partial",
+      streaming: "partial",
     },
   },
 }
@@ -584,7 +588,7 @@ Default slash command settings:
 {
   channels: {
     discord: {
-      streamMode: "block",
+      streaming: "block",
       draftChunk: {
         minChars: 200,
         maxChars: 800,
@@ -621,6 +625,49 @@ Default slash command settings:
     - thread config inherits parent channel config unless a thread-specific entry exists
 
     Channel topics are injected as **untrusted** context (not as system prompt).
+
+  </Accordion>
+
+  <Accordion title="Thread-bound sessions for subagents">
+    Discord can bind a thread to a session target so follow-up messages in that thread keep routing to the same session (including subagent sessions).
+
+    Commands:
+
+    - `/focus <target>` bind current/new thread to a subagent/session target
+    - `/unfocus` remove current thread binding
+    - `/agents` show active runs and binding state
+    - `/session ttl <duration|off>` inspect/update auto-unfocus TTL for focused bindings
+
+    Config:
+
+```json5
+{
+  session: {
+    threadBindings: {
+      enabled: true,
+      ttlHours: 24,
+    },
+  },
+  channels: {
+    discord: {
+      threadBindings: {
+        enabled: true,
+        ttlHours: 24,
+        spawnSubagentSessions: false, // opt-in
+      },
+    },
+  },
+}
+```
+
+    Notes:
+
+    - `session.threadBindings.*` sets global defaults.
+    - `channels.discord.threadBindings.*` overrides Discord behavior.
+    - `spawnSubagentSessions` must be true to auto-create/bind threads for `sessions_spawn({ thread: true })`.
+    - If thread bindings are disabled for an account, `/focus` and related thread binding operations are unavailable.
+
+    See [Sub-agents](/tools/subagents) and [Configuration Reference](/gateway/configuration-reference).
 
   </Accordion>
 
@@ -722,7 +769,7 @@ Default slash command settings:
     Notes:
 
     - allowlists can use `pk:<memberId>`
-    - member display names are matched by name/slug
+    - member display names are matched by name/slug only when `channels.discord.dangerouslyAllowNameMatching: true`
     - lookups use original message ID and are time-window constrained
     - if lookup fails, proxied messages are treated as bot messages and dropped unless `allowBots=true`
 
@@ -872,6 +919,8 @@ Auto-join example:
             channelId: "234567890123456789",
           },
         ],
+        daveEncryption: true,
+        decryptionFailureTolerance: 24,
         tts: {
           provider: "openai",
           openai: { voice: "alloy" },
@@ -886,6 +935,10 @@ Notes:
 
 - `voice.tts` overrides `messages.tts` for voice playback only.
 - Voice is enabled by default; set `channels.discord.voice.enabled=false` to disable it.
+- `voice.daveEncryption` and `voice.decryptionFailureTolerance` pass through to `@discordjs/voice` join options.
+- `@discordjs/voice` defaults are `daveEncryption=true` and `decryptionFailureTolerance=24` if unset.
+- OpenClaw also watches receive decrypt failures and auto-recovers by leaving/rejoining the voice channel after repeated failures in a short window.
+- If receive logs repeatedly show `DecryptionFailed(UnencryptedWhenPassthroughDisabled)`, this may be the upstream `@discordjs/voice` receive bug tracked in [discord.js #11419](https://github.com/discordjs/discord.js/issues/11419).
 
 ## Voice messages
 
@@ -961,6 +1014,18 @@ openclaw logs --follow
     If you set `channels.discord.allowBots=true`, use strict mention and allowlist rules to avoid loop behavior.
 
   </Accordion>
+
+  <Accordion title="Voice STT drops with DecryptionFailed(...)">
+
+    - keep OpenClaw current (`openclaw update`) so the Discord voice receive recovery logic is present
+    - confirm `channels.discord.voice.daveEncryption=true` (default)
+    - start from `channels.discord.voice.decryptionFailureTolerance=24` (upstream default) and tune only if needed
+    - watch logs for:
+      - `discord voice: DAVE decrypt failures detected`
+      - `discord voice: repeated decrypt failures; attempting rejoin`
+    - if failures continue after automatic rejoin, collect logs and compare against [discord.js #11419](https://github.com/discordjs/discord.js/issues/11419)
+
+  </Accordion>
 </AccordionGroup>
 
 ## Configuration reference pointers
@@ -976,7 +1041,7 @@ High-signal Discord fields:
 - command: `commands.native`, `commands.useAccessGroups`, `configWrites`, `slashCommand.*`
 - reply/history: `replyToMode`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 - delivery: `textChunkLimit`, `chunkMode`, `maxLinesPerMessage`
-- streaming: `streamMode`, `draftChunk`, `blockStreaming`, `blockStreamingCoalesce`
+- streaming: `streaming` (legacy alias: `streamMode`), `draftChunk`, `blockStreaming`, `blockStreamingCoalesce`
 - media/retry: `mediaMaxMb`, `retry`
 - actions: `actions.*`
 - presence: `activity`, `status`, `activityType`, `activityUrl`

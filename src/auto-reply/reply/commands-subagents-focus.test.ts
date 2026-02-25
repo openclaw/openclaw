@@ -4,6 +4,7 @@ import {
   resetSubagentRegistryForTests,
 } from "../../agents/subagent-registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { installSubagentsCommandCoreMocks } from "./commands-subagents.test-mocks.js";
 
 const hoisted = vi.hoisted(() => {
   const callGatewayMock = vi.fn();
@@ -29,18 +30,7 @@ vi.mock("../../discord/monitor/thread-bindings.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig: () => ({}),
-  };
-});
-
-// Prevent transitive import chain from reaching discord/monitor which needs https-proxy-agent.
-vi.mock("../../discord/monitor/gateway-plugin.js", () => ({
-  createDiscordGatewayPlugin: () => ({}),
-}));
+installSubagentsCommandCoreMocks();
 
 const { handleSubagentsCommand } = await import("./commands-subagents.js");
 const { buildCommandTestParams } = await import("./commands-spawn.test-harness.js");
@@ -58,6 +48,25 @@ type FakeBinding = {
   boundBy: string;
   boundAt: number;
 };
+
+function createFakeBinding(
+  overrides: Pick<FakeBinding, "threadId" | "targetKind" | "targetSessionKey" | "agentId"> &
+    Partial<FakeBinding>,
+): FakeBinding {
+  return {
+    accountId: "default",
+    channelId: "parent-1",
+    boundBy: "user-1",
+    boundAt: Date.now(),
+    ...overrides,
+  };
+}
+
+function expectAgentListContainsThreadBinding(text: string, label: string, threadId: string): void {
+  expect(text).toContain("agents:");
+  expect(text).toContain(label);
+  expect(text).toContain(`thread:${threadId}`);
+}
 
 function createFakeThreadBindingManager(initialBindings: FakeBinding[] = []) {
   const byThread = new Map<string, FakeBinding>(
@@ -131,27 +140,45 @@ function createDiscordCommandParams(commandBody: string) {
   return params;
 }
 
+function createStoredBinding(overrides?: Partial<FakeBinding>): FakeBinding {
+  return {
+    accountId: "default",
+    channelId: "parent-1",
+    threadId: "thread-1",
+    targetKind: "subagent",
+    targetSessionKey: "agent:main:subagent:child",
+    agentId: "main",
+    label: "child",
+    boundBy: "user-1",
+    boundAt: Date.now(),
+    ...overrides,
+  };
+}
+
+async function focusCodexAcpInThread(fake = createFakeThreadBindingManager()) {
+  hoisted.getThreadBindingManagerMock.mockReturnValue(fake.manager);
+  hoisted.callGatewayMock.mockImplementation(async (request: unknown) => {
+    const method = (request as { method?: string }).method;
+    if (method === "sessions.resolve") {
+      return { key: "agent:codex-acp:session-1" };
+    }
+    return {};
+  });
+  const params = createDiscordCommandParams("/focus codex-acp");
+  const result = await handleSubagentsCommand(params, true);
+  return { fake, result };
+}
+
 describe("/focus, /unfocus, /agents", () => {
   beforeEach(() => {
     resetSubagentRegistryForTests();
-    hoisted.callGatewayMock.mockReset();
-    hoisted.getThreadBindingManagerMock.mockReset();
-    hoisted.resolveThreadBindingThreadNameMock.mockReset().mockReturnValue("🤖 codex");
+    hoisted.callGatewayMock.mockClear();
+    hoisted.getThreadBindingManagerMock.mockClear().mockReturnValue(null);
+    hoisted.resolveThreadBindingThreadNameMock.mockClear().mockReturnValue("🤖 codex");
   });
 
   it("/focus resolves ACP sessions and binds the current Discord thread", async () => {
-    const fake = createFakeThreadBindingManager();
-    hoisted.getThreadBindingManagerMock.mockReturnValue(fake.manager);
-    hoisted.callGatewayMock.mockImplementation(async (request: unknown) => {
-      const method = (request as { method?: string }).method;
-      if (method === "sessions.resolve") {
-        return { key: "agent:codex-acp:session-1" };
-      }
-      return {};
-    });
-
-    const params = createDiscordCommandParams("/focus codex-acp");
-    const result = await handleSubagentsCommand(params, true);
+    const { fake, result } = await focusCodexAcpInThread();
 
     expect(result?.reply?.text).toContain("bound this thread");
     expect(result?.reply?.text).toContain("(acp)");
@@ -168,19 +195,7 @@ describe("/focus, /unfocus, /agents", () => {
   });
 
   it("/unfocus removes an active thread binding for the binding owner", async () => {
-    const fake = createFakeThreadBindingManager([
-      {
-        accountId: "default",
-        channelId: "parent-1",
-        threadId: "thread-1",
-        targetKind: "subagent",
-        targetSessionKey: "agent:main:subagent:child",
-        agentId: "main",
-        label: "child",
-        boundBy: "user-1",
-        boundAt: Date.now(),
-      },
-    ]);
+    const fake = createFakeThreadBindingManager([createStoredBinding()]);
     hoisted.getThreadBindingManagerMock.mockReturnValue(fake.manager);
 
     const params = createDiscordCommandParams("/unfocus");
@@ -196,30 +211,8 @@ describe("/focus, /unfocus, /agents", () => {
   });
 
   it("/focus rejects rebinding when the thread is focused by another user", async () => {
-    const fake = createFakeThreadBindingManager([
-      {
-        accountId: "default",
-        channelId: "parent-1",
-        threadId: "thread-1",
-        targetKind: "subagent",
-        targetSessionKey: "agent:main:subagent:child",
-        agentId: "main",
-        label: "child",
-        boundBy: "user-2",
-        boundAt: Date.now(),
-      },
-    ]);
-    hoisted.getThreadBindingManagerMock.mockReturnValue(fake.manager);
-    hoisted.callGatewayMock.mockImplementation(async (request: unknown) => {
-      const method = (request as { method?: string }).method;
-      if (method === "sessions.resolve") {
-        return { key: "agent:codex-acp:session-1" };
-      }
-      return {};
-    });
-
-    const params = createDiscordCommandParams("/focus codex-acp");
-    const result = await handleSubagentsCommand(params, true);
+    const fake = createFakeThreadBindingManager([createStoredBinding({ boundBy: "user-2" })]);
+    const { result } = await focusCodexAcpInThread(fake);
 
     expect(result?.reply?.text).toContain("Only user-2 can refocus this thread.");
     expect(fake.manager.bindTarget).not.toHaveBeenCalled();
@@ -238,39 +231,27 @@ describe("/focus, /unfocus, /agents", () => {
     });
 
     const fake = createFakeThreadBindingManager([
-      {
-        accountId: "default",
-        channelId: "parent-1",
+      createFakeBinding({
         threadId: "thread-1",
         targetKind: "subagent",
         targetSessionKey: "agent:main:subagent:child-1",
         agentId: "main",
         label: "child-1",
-        boundBy: "user-1",
-        boundAt: Date.now(),
-      },
-      {
-        accountId: "default",
-        channelId: "parent-1",
+      }),
+      createFakeBinding({
         threadId: "thread-2",
         targetKind: "acp",
         targetSessionKey: "agent:main:main",
         agentId: "codex-acp",
         label: "main-session",
-        boundBy: "user-1",
-        boundAt: Date.now(),
-      },
-      {
-        accountId: "default",
-        channelId: "parent-1",
+      }),
+      createFakeBinding({
         threadId: "thread-3",
         targetKind: "acp",
         targetSessionKey: "agent:codex-acp:session-2",
         agentId: "codex-acp",
         label: "codex-acp",
-        boundBy: "user-1",
-        boundAt: Date.now(),
-      },
+      }),
     ]);
     hoisted.getThreadBindingManagerMock.mockReturnValue(fake.manager);
 
@@ -300,17 +281,13 @@ describe("/focus, /unfocus, /agents", () => {
     });
 
     const fake = createFakeThreadBindingManager([
-      {
-        accountId: "default",
-        channelId: "parent-1",
+      createFakeBinding({
         threadId: "thread-persistent-1",
         targetKind: "subagent",
         targetSessionKey: "agent:main:subagent:persistent-1",
         agentId: "main",
         label: "persistent-1",
-        boundBy: "user-1",
-        boundAt: Date.now(),
-      },
+      }),
     ]);
     hoisted.getThreadBindingManagerMock.mockReturnValue(fake.manager);
 
@@ -318,9 +295,7 @@ describe("/focus, /unfocus, /agents", () => {
     const result = await handleSubagentsCommand(params, true);
     const text = result?.reply?.text ?? "";
 
-    expect(text).toContain("agents:");
-    expect(text).toContain("persistent-1");
-    expect(text).toContain("thread:thread-persistent-1");
+    expectAgentListContainsThreadBinding(text, "persistent-1", "thread-persistent-1");
   });
 
   it("/focus is discord-only", async () => {

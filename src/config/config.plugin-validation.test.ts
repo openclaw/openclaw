@@ -103,6 +103,48 @@ describe("config plugin validation", () => {
     }
   });
 
+  it("warns for removed legacy plugin ids instead of failing validation", async () => {
+    const home = await createCaseHome();
+    const removedId = "google-antigravity-auth";
+    const res = validateInHome(home, {
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: false,
+        entries: { [removedId]: { enabled: true } },
+        allow: [removedId],
+        deny: [removedId],
+        slots: { memory: removedId },
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.warnings).toEqual(
+        expect.arrayContaining([
+          {
+            path: `plugins.entries.${removedId}`,
+            message:
+              "plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
+          },
+          {
+            path: "plugins.allow",
+            message:
+              "plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
+          },
+          {
+            path: "plugins.deny",
+            message:
+              "plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
+          },
+          {
+            path: "plugins.slots.memory",
+            message:
+              "plugin removed: google-antigravity-auth (stale config entry ignored; remove it from plugins config)",
+          },
+        ]),
+      );
+    }
+  });
+
   it("surfaces plugin config diagnostics", async () => {
     const home = await createCaseHome();
     const pluginDir = path.join(home, "bad-plugin");
@@ -143,6 +185,21 @@ describe("config plugin validation", () => {
     const res = validateInHome(home, {
       agents: { list: [{ id: "pi" }] },
       plugins: { enabled: false, entries: { discord: { enabled: true } } },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts channels.modelByChannel", async () => {
+    const home = await createCaseHome();
+    const res = validateInHome(home, {
+      agents: { list: [{ id: "pi" }] },
+      channels: {
+        modelByChannel: {
+          openai: {
+            whatsapp: "openai/gpt-5.2",
+          },
+        },
+      },
     });
     expect(res.ok).toBe(true);
   });

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildTelegramMessageContext } from "./bot-message-context.js";
+import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 
 const transcribeFirstAudioMock = vi.fn();
 
@@ -11,39 +11,22 @@ describe("buildTelegramMessageContext audio transcript body", () => {
   it("uses preflight transcript as BodyForAgent for mention-gated group voice messages", async () => {
     transcribeFirstAudioMock.mockResolvedValueOnce("hey bot please help");
 
-    const ctx = await buildTelegramMessageContext({
-      primaryCtx: {
-        message: {
-          message_id: 1,
-          chat: { id: -1001234567890, type: "supergroup", title: "Test Group" },
-          date: 1700000000,
-          from: { id: 42, first_name: "Alice" },
-          voice: { file_id: "voice-1" },
-        },
-        me: { id: 7, username: "bot" },
-      } as never,
+    const ctx = await buildTelegramMessageContextForTest({
+      message: {
+        message_id: 1,
+        chat: { id: -1001234567890, type: "supergroup", title: "Test Group" },
+        date: 1700000000,
+        text: undefined,
+        from: { id: 42, first_name: "Alice" },
+        voice: { file_id: "voice-1" },
+      },
       allMedia: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg" }],
-      storeAllowFrom: [],
       options: { forceWasMentioned: true },
-      bot: {
-        api: {
-          sendChatAction: vi.fn(),
-          setMessageReaction: vi.fn(),
-        },
-      } as never,
       cfg: {
         agents: { defaults: { model: "anthropic/claude-opus-4-5", workspace: "/tmp/openclaw" } },
         channels: { telegram: {} },
         messages: { groupChat: { mentionPatterns: ["\\bbot\\b"] } },
-      } as never,
-      account: { accountId: "default" } as never,
-      historyLimit: 0,
-      groupHistories: new Map(),
-      dmPolicy: "open",
-      allowFrom: [],
-      groupAllowFrom: [],
-      ackReactionScope: "off",
-      logger: { info: vi.fn() },
+      },
       resolveGroupActivation: () => true,
       resolveGroupRequireMention: () => true,
       resolveTelegramGroupConfig: () => ({

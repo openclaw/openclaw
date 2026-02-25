@@ -2,7 +2,7 @@ const HELP_FLAGS = new Set(["-h", "--help"]);
 const VERSION_FLAGS = new Set(["-V", "--version"]);
 const ROOT_VERSION_ALIAS_FLAG = "-v";
 const ROOT_BOOLEAN_FLAGS = new Set(["--dev", "--no-color"]);
-const ROOT_VALUE_FLAGS = new Set(["--profile"]);
+const ROOT_VALUE_FLAGS = new Set(["--profile", "--log-level"]);
 const FLAG_TERMINATOR = "--";
 
 export function hasHelpOrVersion(argv: string[]): boolean {

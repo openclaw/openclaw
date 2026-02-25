@@ -260,6 +260,14 @@ async function resolvePatchPath(
       filePath,
       cwd: options.cwd,
     });
+    if (options.workspaceOnly !== false) {
+      await assertSandboxPath({
+        filePath: resolved.hostPath,
+        cwd: options.cwd,
+        root: options.cwd,
+        allowFinalSymlink: purpose === "unlink",
+      });
+    }
     return {
       resolved: resolved.hostPath,
       display: resolved.relativePath || resolved.hostPath,

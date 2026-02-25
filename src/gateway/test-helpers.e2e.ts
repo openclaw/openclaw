@@ -88,7 +88,43 @@ export async function connectGatewayClient(params: {
 
 export async function connectDeviceAuthReq(params: { url: string; token?: string }) {
   const ws = new WebSocket(params.url);
+  const connectNoncePromise = new Promise<string>((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error("timeout waiting for connect challenge")),
+      5000,
+    );
+    const closeHandler = (code: number, reason: Buffer) => {
+      clearTimeout(timer);
+      ws.off("message", handler);
+      reject(new Error(`closed ${code}: ${rawDataToString(reason)}`));
+    };
+    const handler = (data: WebSocket.RawData) => {
+      try {
+        const obj = JSON.parse(rawDataToString(data)) as {
+          type?: unknown;
+          event?: unknown;
+          payload?: { nonce?: unknown } | null;
+        };
+        if (obj.type !== "event" || obj.event !== "connect.challenge") {
+          return;
+        }
+        const nonce = obj.payload?.nonce;
+        if (typeof nonce !== "string" || nonce.trim().length === 0) {
+          return;
+        }
+        clearTimeout(timer);
+        ws.off("message", handler);
+        ws.off("close", closeHandler);
+        resolve(nonce.trim());
+      } catch {
+        // ignore parse errors while waiting for challenge
+      }
+    };
+    ws.on("message", handler);
+    ws.once("close", closeHandler);
+  });
   await new Promise<void>((resolve) => ws.once("open", resolve));
+  const connectNonce = await connectNoncePromise;
   const identity = loadOrCreateDeviceIdentity();
   const signedAtMs = Date.now();
   const payload = buildDeviceAuthPayload({
@@ -99,12 +135,14 @@ export async function connectDeviceAuthReq(params: { url: string; token?: string
     scopes: [],
     signedAtMs,
     token: params.token ?? null,
+    nonce: connectNonce,
   });
   const device = {
     id: identity.deviceId,
     publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
     signature: signDevicePayload(identity.privateKeyPem, payload),
     signedAt: signedAtMs,
+    nonce: connectNonce,
   };
   ws.send(
     JSON.stringify({

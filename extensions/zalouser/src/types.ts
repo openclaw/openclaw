@@ -68,35 +68,30 @@ export type ListenOptions = CommonOptions & {
   prefix?: string;
 };
 
-export type ZalouserAccountConfig = {
+type ZalouserToolConfig = { allow?: string[]; deny?: string[] };
+
+type ZalouserGroupConfig = {
+  allow?: boolean;
+  enabled?: boolean;
+  tools?: ZalouserToolConfig;
+};
+
+type ZalouserSharedConfig = {
   enabled?: boolean;
   name?: string;
   profile?: string;
   dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
   allowFrom?: Array<string | number>;
   groupPolicy?: "open" | "allowlist" | "disabled";
-  groups?: Record<
-    string,
-    { allow?: boolean; enabled?: boolean; tools?: { allow?: string[]; deny?: string[] } }
-  >;
+  groups?: Record<string, ZalouserGroupConfig>;
   messagePrefix?: string;
   responsePrefix?: string;
 };
 
-export type ZalouserConfig = {
-  enabled?: boolean;
-  name?: string;
-  profile?: string;
+export type ZalouserAccountConfig = ZalouserSharedConfig;
+
+export type ZalouserConfig = ZalouserSharedConfig & {
   defaultAccount?: string;
-  dmPolicy?: "pairing" | "allowlist" | "open" | "disabled";
-  allowFrom?: Array<string | number>;
-  groupPolicy?: "open" | "allowlist" | "disabled";
-  groups?: Record<
-    string,
-    { allow?: boolean; enabled?: boolean; tools?: { allow?: string[]; deny?: string[] } }
-  >;
-  messagePrefix?: string;
-  responsePrefix?: string;
   accounts?: Record<string, ZalouserAccountConfig>;
 };
 

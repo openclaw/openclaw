@@ -84,6 +84,7 @@ export type DiscordMessagePreflightContext = {
 
   historyEntry?: HistoryEntry;
   threadBindings: ThreadBindingManager;
+  discordRestFetch?: typeof fetch;
 };
 
 export type DiscordMessagePreflightParams = {
@@ -106,6 +107,7 @@ export type DiscordMessagePreflightParams = {
   ackReactionScope: DiscordMessagePreflightContext["ackReactionScope"];
   groupPolicy: DiscordMessagePreflightContext["groupPolicy"];
   threadBindings: ThreadBindingManager;
+  discordRestFetch?: typeof fetch;
   data: DiscordMessageEvent;
   client: Client;
 };

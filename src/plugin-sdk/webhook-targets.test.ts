@@ -70,47 +70,38 @@ describe("rejectNonPostWebhookRequest", () => {
 });
 
 describe("resolveSingleWebhookTarget", () => {
-  it("returns none when no target matches", () => {
-    const result = resolveSingleWebhookTarget(["a", "b"], (value) => value === "c");
+  const resolvers: Array<{
+    name: string;
+    run: (
+      targets: readonly string[],
+      isMatch: (value: string) => boolean | Promise<boolean>,
+    ) => Promise<{ kind: "none" } | { kind: "single"; target: string } | { kind: "ambiguous" }>;
+  }> = [
+    {
+      name: "sync",
+      run: async (targets, isMatch) =>
+        resolveSingleWebhookTarget(targets, (value) => Boolean(isMatch(value))),
+    },
+    {
+      name: "async",
+      run: (targets, isMatch) =>
+        resolveSingleWebhookTargetAsync(targets, async (value) => Boolean(await isMatch(value))),
+    },
+  ];
+
+  it.each(resolvers)("returns none when no target matches ($name)", async ({ run }) => {
+    const result = await run(["a", "b"], (value) => value === "c");
     expect(result).toEqual({ kind: "none" });
   });
 
-  it("returns the single match", () => {
-    const result = resolveSingleWebhookTarget(["a", "b"], (value) => value === "b");
+  it.each(resolvers)("returns the single match ($name)", async ({ run }) => {
+    const result = await run(["a", "b"], (value) => value === "b");
     expect(result).toEqual({ kind: "single", target: "b" });
   });
 
-  it("returns ambiguous after second match", () => {
+  it.each(resolvers)("returns ambiguous after second match ($name)", async ({ run }) => {
     const calls: string[] = [];
-    const result = resolveSingleWebhookTarget(["a", "b", "c"], (value) => {
-      calls.push(value);
-      return value === "a" || value === "b";
-    });
-    expect(result).toEqual({ kind: "ambiguous" });
-    expect(calls).toEqual(["a", "b"]);
-  });
-});
-
-describe("resolveSingleWebhookTargetAsync", () => {
-  it("returns none when no target matches", async () => {
-    const result = await resolveSingleWebhookTargetAsync(
-      ["a", "b"],
-      async (value) => value === "c",
-    );
-    expect(result).toEqual({ kind: "none" });
-  });
-
-  it("returns the single async match", async () => {
-    const result = await resolveSingleWebhookTargetAsync(
-      ["a", "b"],
-      async (value) => value === "b",
-    );
-    expect(result).toEqual({ kind: "single", target: "b" });
-  });
-
-  it("returns ambiguous after second async match", async () => {
-    const calls: string[] = [];
-    const result = await resolveSingleWebhookTargetAsync(["a", "b", "c"], async (value) => {
+    const result = await run(["a", "b", "c"], (value) => {
       calls.push(value);
       return value === "a" || value === "b";
     });
