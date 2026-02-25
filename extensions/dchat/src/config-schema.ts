@@ -68,7 +68,13 @@ export function listDchatAccountIds(cfg: CoreConfig): string[] {
 }
 
 export function resolveDefaultDchatAccountId(cfg: CoreConfig): string {
-  return DEFAULT_ACCOUNT_ID;
+  const dchatConfig = cfg.channels?.dchat;
+  if (dchatConfig?.defaultAccount) return dchatConfig.defaultAccount;
+  // If top-level seed exists, treat as the default account
+  if (dchatConfig?.seed?.trim()) return DEFAULT_ACCOUNT_ID;
+  // Otherwise pick the first named account
+  const named = dchatConfig?.accounts ? Object.keys(dchatConfig.accounts) : [];
+  return named[0] ?? DEFAULT_ACCOUNT_ID;
 }
 
 export function resolveDchatAccountConfig(params: {
@@ -102,7 +108,7 @@ export function resolveDchatAccount(params: {
     accountId,
     name: accountConfig.name || accountId,
     enabled: accountConfig.enabled !== false,
-    configured: hasSeed || hasKeystore,
+    configured: hasSeed,
     seed: accountConfig.seed?.trim(),
     numSubClients: accountConfig.numSubClients ?? 4,
     ipfsGateway: accountConfig.ipfsGateway ?? "64.225.88.71:80",

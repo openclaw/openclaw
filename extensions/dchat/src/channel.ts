@@ -34,9 +34,9 @@ import {
   textToNkn,
 } from "./wire.js";
 
-// Per-account NKN bus instances, keyed by accountId
+// Per-account NKN bus instances and dedup trackers, keyed by accountId
 const busMap = new Map<string, NknBus>();
-const seenTracker = new SeenTracker();
+const seenMap = new Map<string, SeenTracker>();
 
 const meta = {
   id: "dchat",
@@ -179,7 +179,8 @@ export const dchatPlugin: ChannelPlugin<ResolvedDchatAccount> = {
         }
       } else if (groupId) {
         // Private group: not yet supported, send to the group ID as direct
-        bus.sendNoReply(to, payload);
+        const dest = to.replace(/^group:/i, "");
+        bus.sendNoReply(dest, payload);
       } else {
         // Direct message: extract address from "dchat:addr" or raw address
         const dest = to.replace(/^dchat:/i, "");
@@ -292,6 +293,8 @@ export const dchatPlugin: ChannelPlugin<ResolvedDchatAccount> = {
 
       const bus = new NknBus();
       busMap.set(account.accountId, bus);
+      const seenTracker = new SeenTracker();
+      seenMap.set(account.accountId, seenTracker);
 
       try {
         const address = await bus.connect(
@@ -572,6 +575,7 @@ export const dchatPlugin: ChannelPlugin<ResolvedDchatAccount> = {
       } finally {
         await bus.disconnect();
         busMap.delete(account.accountId);
+        seenMap.delete(account.accountId);
       }
     },
   },
