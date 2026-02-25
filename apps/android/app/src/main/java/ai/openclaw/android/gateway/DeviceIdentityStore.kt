@@ -3,11 +3,7 @@ package ai.openclaw.android.gateway
 import android.content.Context
 import android.util.Base64
 import java.io.File
-import java.security.KeyFactory
-import java.security.KeyPairGenerator
 import java.security.MessageDigest
-import java.security.Signature
-import java.security.spec.PKCS8EncodedKeySpec
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -22,21 +18,26 @@ data class DeviceIdentity(
 class DeviceIdentityStore(context: Context) {
   private val json = Json { ignoreUnknownKeys = true }
   private val identityFile = File(context.filesDir, "openclaw/identity/device.json")
+  @Volatile private var cachedIdentity: DeviceIdentity? = null
 
   @Synchronized
   fun loadOrCreate(): DeviceIdentity {
+    cachedIdentity?.let { return it }
     val existing = load()
     if (existing != null) {
       val derived = deriveDeviceId(existing.publicKeyRawBase64)
       if (derived != null && derived != existing.deviceId) {
         val updated = existing.copy(deviceId = derived)
         save(updated)
+        cachedIdentity = updated
         return updated
       }
+      cachedIdentity = existing
       return existing
     }
     val fresh = generate()
     save(fresh)
+    cachedIdentity = fresh
     return fresh
   }
 
@@ -151,22 +152,16 @@ class DeviceIdentityStore(context: Context) {
     }
   }
 
-  private fun stripSpkiPrefix(spki: ByteArray): ByteArray {
-    if (spki.size == ED25519_SPKI_PREFIX.size + 32 &&
-      spki.copyOfRange(0, ED25519_SPKI_PREFIX.size).contentEquals(ED25519_SPKI_PREFIX)
-    ) {
-      return spki.copyOfRange(ED25519_SPKI_PREFIX.size, spki.size)
-    }
-    return spki
-  }
-
   private fun sha256Hex(data: ByteArray): String {
     val digest = MessageDigest.getInstance("SHA-256").digest(data)
-    val out = StringBuilder(digest.size * 2)
+    val out = CharArray(digest.size * 2)
+    var i = 0
     for (byte in digest) {
-      out.append(String.format("%02x", byte))
+      val v = byte.toInt() and 0xff
+      out[i++] = HEX[v ushr 4]
+      out[i++] = HEX[v and 0x0f]
     }
-    return out.toString()
+    return String(out)
   }
 
   private fun base64UrlEncode(data: ByteArray): String {
@@ -174,9 +169,6 @@ class DeviceIdentityStore(context: Context) {
   }
 
   companion object {
-    private val ED25519_SPKI_PREFIX =
-      byteArrayOf(
-        0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00,
-      )
+    private val HEX = "0123456789abcdef".toCharArray()
   }
 }
