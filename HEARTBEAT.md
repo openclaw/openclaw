@@ -28,14 +28,15 @@
   3. 진행 상황 Discord DM 보고
 - **완료 조건:** PR 머지됨
 
-#### MAIBOTALKS App Store 심사 추적
+#### MAIBOTALKS App Store 심사 추적 (재제출)
 
 - **URL:** https://appstoreconnect.apple.com/apps/6759508239/appstore/ios/version/inflight
-- **상태:** 심사 대기 중 (2026-02-22 제출, 메타데이터 2026-02-24 수정 완료)
+- **상태:** 심사 대기 중 (2026-02-25 15:36 재제출, Build 5)
+- **이전:** 2026-02-25 거부 (2.1.0 + 5.1.1) → 코드 수정 + 구독 상품 생성 + 재제출 완료
 - **체크:** `curl -s "https://botalks.app/" -o /dev/null -w "%{http_code}"` (사이트 정상 여부)
 - **할 일:**
   1. 심사 결과 나오면 → Discord DM 즉시 보고
-  2. 승인 시 → 출시 준비 (ASC 인앱 구독 상품 생성 필요)
+  2. 승인 시 → 자동 출시 (설정 완료)
   3. 거부 시 → 사유 분석 → 수정 계획 수립 → Discord DM 보고
 - **완료 조건:** App Store 출시 완료 또는 거부 대응 완료
 
@@ -54,6 +55,15 @@
 ---
 
 ## Weekly (크론으로 실행)
+
+### 📈 M.AI.UPbit 퀀트 모멘텀 리포트 (매주 월요일 07:00 KST)
+
+- `cd C:\TEST\M.AI.UPbit; $env:PYTHONPATH="C:\TEST\M.AI.UPbit"; python scripts/quant.py momentum --top 5`
+- 듀얼 모멘텀 상위 5종목 랭킹 + 매매 신호
+- `python scripts/quant.py factor --top 5` — 멀티팩터 랭킹 병행
+- `python scripts/quant.py allocate` — GTAA 자산배분 비중
+- Obsidian 노트: `01.PROJECT/16.M.AI.UPbit/{날짜}_Quant_Weekly.md`
+- Discord DM 요약 (상위 종목 + 추천 배분)
 
 ### 🎯 주간 기회 리뷰 (매주 월요일 07:30 KST)
 
@@ -120,6 +130,13 @@
 - 매매 시그널 + 종합 추천 (buy/sell/hold)
 - Obsidian 노트: `01.PROJECT/16.M.AI.UPbit/{날짜}_Daily_Report.md`
 - Discord DM 요약 보고
+
+### 📐 M.AI.UPbit 퀀트 시즌 체크 (매일 06:35 KST)
+
+- `cd C:\TEST\M.AI.UPbit; $env:PYTHONPATH="C:\TEST\M.AI.UPbit"; python scripts/quant.py season`
+- 할빙 사이클 기반 강세/약세장 판단 (bullish/bearish + multiplier)
+- **알림 조건:** season이 바뀌거나 next_halving D-30 이내일 때만 Discord DM
+- 정상 사이클이면 조용히
 
 ### 🌅 모닝 브리핑 (매일 06:00 KST)
 

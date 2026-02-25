@@ -46,4 +46,13 @@ related:
 
 ---
 
-_Last updated: 2026-02-19_
+---
+
+### Tech Intelligence 인사이트 (2026-02-24)
+
+- **Cognitive Digital Twin**: 2026 Industry 5.0 패러다임 — Decision-Grade DT + Agentic OT(자율 최적화)
+- **NSF Center for DT in Manufacturing**: 표준 프레임워크 공개 예정 — MAIAX 아키텍처 정당성 확보 기회
+- **TDME (MDPI)**: Deep RL + 다차원 경제 지표 보상 시그널 — PPO 보상 함수 확장 참고
+- **InfluxDB 3.x**: Arrow+Parquet 기반 쿼리 성능 대폭 향상 — 마이그레이션 검토
+
+_Last updated: 2026-02-24_

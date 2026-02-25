@@ -317,6 +317,47 @@ maiupbit recommend --method performance --top 5 --format json
 | "리포트 만들어줘"      | `scripts/daily_report.py`                                           |
 | "추천 종목 알려줘"     | `maiupbit recommend --method performance --top 5 --format json`     |
 
+**퀀트 전략 요청 패턴 → 실행 매핑 (Phase 7, 강환국 전략):**
+
+| 지니님 말                 | 실행                                                                              |
+| ------------------------- | --------------------------------------------------------------------------------- |
+| "지금 시즌 어때?"         | `$env:PYTHONPATH="C:\TEST\M.AI.UPbit"; python scripts/quant.py season`            |
+| "모멘텀 좋은 코인 알려줘" | `$env:PYTHONPATH="C:\TEST\M.AI.UPbit"; python scripts/quant.py momentum --top 5`  |
+| "돌파 전략 BTC"           | `$env:PYTHONPATH="C:\TEST\M.AI.UPbit"; python scripts/quant.py breakout KRW-BTC`  |
+| "팩터 분석해줘"           | `$env:PYTHONPATH="C:\TEST\M.AI.UPbit"; python scripts/quant.py factor --top 5`    |
+| "GTAA 자산배분 알려줘"    | `$env:PYTHONPATH="C:\TEST\M.AI.UPbit"; python scripts/quant.py allocate`          |
+| "퀀트 백테스트 해줘"      | `$env:PYTHONPATH="C:\TEST\M.AI.UPbit"; python scripts/quant.py backtest momentum` |
+| "퀀트 전략 전체 분석"     | `python -m maiupbit quant momentum --top 5` (PYTHONPATH 불필요)                   |
+
+> ⚠️ **주의**: `scripts/quant.py` 직접 실행 시 반드시 `$env:PYTHONPATH="C:\TEST\M.AI.UPbit"` 설정 필요
+> (maiupbit 패키지가 pip install -e .로 전역 설치 안 됨)
+> **대안**: `python -m maiupbit quant <서브커맨드>` — PYTHONPATH 불필요, 권장
+
+**quant.py 서브커맨드 (Phase 7):**
+
+```powershell
+$env:PYTHONPATH = "C:\TEST\M.AI.UPbit"
+
+# 시즌 정보 (할빙 사이클 기반 강세/약세장 판단)
+python scripts/quant.py season
+# → {"command":"season","season":"bullish","multiplier":1.2,"halving_phase":"mid_cycle",...}
+
+# 듀얼 모멘텀 랭킹
+python scripts/quant.py momentum [--symbols KRW-BTC,KRW-ETH,...] [--top 5] [--days 400]
+
+# 래리 윌리엄스 변동성 돌파
+python scripts/quant.py breakout KRW-BTC [--k 0.5] [--days 60]
+
+# 멀티팩터 랭킹 (모멘텀+변동성+거래량)
+python scripts/quant.py factor [--symbols KRW-BTC,KRW-ETH,...] [--top 5]
+
+# GTAA 자산배분 (강환국 스타일)
+python scripts/quant.py allocate [--symbols KRW-BTC,KRW-ETH,...]
+
+# 전략 백테스트
+python scripts/quant.py backtest momentum [--symbols KRW-BTC,...] [--days 365]
+```
+
 **⚠️ 매매 안전 규칙:**
 
 - `trade.py`는 **절대 --confirm 없이 실행 금지** (미리보기만 보여주고 지니님 확인 대기)

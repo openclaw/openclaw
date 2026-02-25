@@ -819,4 +819,13 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 - `61d4aed feat(sprint3): 통합 대시보드 + KPI - 구독/주문 KPI, 매출 추이, 브랜드 비교, 최근 주문 (02-12)`
 <!-- AUTO:subrepo-commits:END -->
 
-_Last updated: 2026-02-12_
+---
+
+### Tech Intelligence 인사이트 (2026-02-24)
+
+- **InfiniteTalk**: SadTalker 대체 1순위 — 립싱크 오차 1.8mm(vs SadTalker 3.2mm), 전신 모션, 무제한 길이. Model 01 파이프라인 교체 후보
+- **Google UCP**: AI 에이전트 커머스 — 제품 데이터 JSON-LD 구조화하면 Google AI Shopping 노출 가능
+- **TikTok Local Feed**: 베트남 현지 콘텐츠 우선 노출 기능 출시 — 현지화 콘텐츠 전략 강화 필요
+- **Pocket TTS**: CPU 실시간 TTS + 음성 클로닝 — edge-tts 보완/대안
+
+_Last updated: 2026-02-24_

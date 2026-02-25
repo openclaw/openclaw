@@ -43,7 +43,7 @@ related:
 | 2026-02-17 | 실기기 테스트 가이드 (T003)                             | ✅ 완료      |
 | 2026-02-22 | EAS Build + App Store Connect 제출                      | ✅ 완료      |
 | 2026-02-22 | TestFlight 외부 베타 통과                               | ✅ 완료      |
-| 2026-02-22 | **App Store 심사 제출** (v1.0.0)                        | 🟡 심사 대기 |
+| 2026-02-22 | **App Store 심사 제출** (v1.0.0)                        | ❌ 거부됨    |
 | 2026-02-24 | botalks-web GitHub Pages 배포 (privacy/terms/support)   | ✅ 완료      |
 | 2026-02-24 | 심사 긴급 수정 가이드 (I007) 작성                       | ✅ 완료      |
 | 2026-02-24 | ASC Support URL + Marketing URL 변경                    | ✅ 완료      |
@@ -55,10 +55,30 @@ related:
 | 2026-02-24 | 수익화 모델 변경: 일회성 → 구독 (₩3,900/월, ₩29,900/년) | ✅ 완료      |
 | 2026-02-24 | ImprovMX 이메일 포워딩 (support@botalks.app)            | ✅ 완료      |
 | 2026-02-24 | DNS MX + SPF 레코드 추가                                | ✅ 완료      |
+| 2026-02-25 | App Store 심사 거부 대응 (2.1.0 + 5.1.1)                | ✅ 완료      |
+| 2026-02-25 | DataConsentScreen 추가 (Apple 5.1.1 대응)               | ✅ 완료      |
+| 2026-02-25 | StoreKit IAP 구독 연동 (react-native-iap)               | ✅ 완료      |
+| 2026-02-25 | Privacy Policy 상세 업데이트 (EN+KO)                    | ✅ 완료      |
+| 2026-02-25 | ASC 구독 상품 생성 (Monthly+Annual)                     | ✅ 완료      |
+| 2026-02-25 | EAS Build #5 + ASC 제출                                 | ✅ 완료      |
+| 2026-02-25 | **심사 재제출** (빌드 5, 오후 3:36)                     | 🟡 심사 대기 |
 
-## ✅ App Store 심사 — 인프라 완료 (2026-02-24)
+## ✅ App Store 심사 — 재제출 완료 (2026-02-25)
 
-**상태:** 심사 대기 중 (2026-02-22 제출) → 모든 인프라 + ASC 메타데이터 수정 완료 (2026-02-24)
+**상태:** 심사 대기 중 (Build 5, 2026-02-25 15:36 재제출)
+
+### 심사 거부 → 대응 → 재제출 이력
+
+| 날짜       | 이벤트                                                |
+| ---------- | ----------------------------------------------------- |
+| 2026-02-22 | 최초 심사 제출 (Build 3/4)                            |
+| 2026-02-25 | **거부** — 2.1.0 (App Completeness) + 5.1.1 (Privacy) |
+| 2026-02-25 | Resolution Center 답변 제출                           |
+| 2026-02-25 | 코드 수정 (DataConsentScreen + IAP + 무료체험 제거)   |
+| 2026-02-25 | Privacy Policy 상세 업데이트 (botalks.app)            |
+| 2026-02-25 | ASC 구독 상품 생성 (Monthly+Annual)                   |
+| 2026-02-25 | EAS Build #5 성공 + ASC 제출                          |
+| 2026-02-25 | **심사 재제출** (Build 5, 15:36 KST)                  |
 
 ### botalks-web 정적 사이트
 
@@ -173,7 +193,10 @@ related:
 - 무료 버전 없음, 무료 체험 없음
 - 사용자가 자기 OpenClaw Gateway 인프라 비용 부담
 - BEP: 월간 구독자 약 6명
-- **ASC 인앱 구독 상품 미생성** — App Store Connect에서 월간/연간 구독 상품 + StoreKit 연동 필요 (다음 작업)
+- **ASC 인앱 구독 상품 생성 완료** (2026-02-25)
+  - 구독 그룹: "BOTALKS Premium Subscriptions" (Group ID: 21948758)
+  - Monthly: `botalks_monthly` ($2.99/₩3,900, Apple ID: 6759634601)
+  - Annual: `botalks_annual` ($19.99/₩29,900, Apple ID: 6759634851)
 
 ## 사업 모델: OpenClaw 앱 팩토리 (A002)
 
@@ -208,7 +231,8 @@ related:
 - [x] botalks-web 전면 리디자인 (glassmorphism + i18n) ✅ (2026-02-24)
 - [x] ImprovMX 이메일 포워딩 (`support@botalks.app`) ✅ (2026-02-24)
 - [x] DNS MX + SPF 레코드 추가 + 이메일 수신 테스트 ✅ (2026-02-24)
-- [ ] **ASC 인앱 구독 상품 생성** — 월간 ₩3,900 / 연간 ₩29,900 (StoreKit 연동 필요)
+- [x] **ASC 인앱 구독 상품 생성** — 월간 ₩3,900 / 연간 ₩29,900 ✅ (2026-02-25)
+- [x] **App Store 심사 거부 대응 + 재제출** — Build 5, 빌드 연결 + 심사 재제출 ✅ (2026-02-25)
 - [ ] EAS Build (Android) + Google Play 제출
 - [ ] Tailscale funnel/VPS 데모 Gateway (다음 버전 심사용)
 

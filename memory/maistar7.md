@@ -47,6 +47,13 @@ related:
 > ⚠️ **이전 방식 폐기**: "Phase 1에서 MAIBOT에 스킬 추가 → Phase 2에서 분리" 방식 폐기.  
 > MVP부터 독립 인스턴스로 시작한다.
 
+### Tech Intelligence 인사이트 (2026-02-24)
+
+- **Zalo Business Solutions (ZBS)** 출범: Zalo OA 대규모 대화 분류, 멀티디바이스, 챗봇 심층 통합 — MVP 최우선 활용
+- **ZBS Template Message**: UID+전화번호 발송 통합 — 기술 프로세스 단순화
+- **카카오비즈니스 파트너센터** 통합 개편 (2025-12-08) — 한국 기업측 API 활용
+- **FastAPI + Pydantic v2(Rust)**: 5~50x 성능 향상 + SQLModel 프로덕션 패턴 확립
+
 ### OpenClaw 인프라 활용
 
 | 기능         | OpenClaw 기존 인프라                  | 추가 비용 |
