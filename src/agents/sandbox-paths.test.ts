@@ -50,7 +50,7 @@ describe("resolveSandboxedMediaSource", () => {
         media,
         sandboxRoot: sandboxDir,
       });
-      expect(result).toBe(expected);
+      expect(result).toBe(path.resolve(expected));
     });
   });
 
