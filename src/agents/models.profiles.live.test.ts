@@ -45,6 +45,23 @@ function logProgress(message: string): void {
   console.log(`[live] ${message}`);
 }
 
+function formatFailurePreview(
+  failures: Array<{ model: string; error: string }>,
+  maxItems: number,
+): string {
+  const limit = Math.max(1, maxItems);
+  const lines = failures.slice(0, limit).map((failure, index) => {
+    const normalized = failure.error.replace(/\s+/g, " ").trim();
+    const clipped = normalized.length > 320 ? `${normalized.slice(0, 317)}...` : normalized;
+    return `${index + 1}. ${failure.model}: ${clipped}`;
+  });
+  const remaining = failures.length - limit;
+  if (remaining > 0) {
+    lines.push(`... and ${remaining} more`);
+  }
+  return lines.join("\n");
+}
+
 function isGoogleModelNotFoundError(err: unknown): boolean {
   const msg = String(err);
   if (!/not found/i.test(msg)) {
@@ -93,6 +110,16 @@ function isInstructionsRequiredError(raw: string): boolean {
 
 function isModelTimeoutError(raw: string): boolean {
   return /model call timed out after \d+ms/i.test(raw);
+}
+
+function isProviderUnavailableErrorMessage(raw: string): boolean {
+  const msg = raw.toLowerCase();
+  return (
+    msg.includes("no allowed providers are available") ||
+    msg.includes("provider unavailable") ||
+    msg.includes("upstream provider unavailable") ||
+    msg.includes("upstream error from google")
+  );
 }
 
 function toInt(value: string | undefined, fallback: number): number {
@@ -592,6 +619,11 @@ describeLive("live models (profile keys)", () => {
               logProgress(`${progressLabel}: skip (timeout)`);
               break;
             }
+            if (allowNotFoundSkip && isProviderUnavailableErrorMessage(message)) {
+              skipped.push({ model: id, reason: message });
+              logProgress(`${progressLabel}: skip (provider unavailable)`);
+              break;
+            }
             logProgress(`${progressLabel}: failed`);
             failures.push({ model: id, error: message });
             break;
@@ -600,11 +632,10 @@ describeLive("live models (profile keys)", () => {
       }
 
       if (failures.length > 0) {
-        const preview = failures
-          .slice(0, 10)
-          .map((f) => `- ${f.model}: ${f.error}`)
-          .join("\n");
-        throw new Error(`live model failures (${failures.length}):\n${preview}`);
+        const preview = formatFailurePreview(failures, 20);
+        throw new Error(
+          `live model failures (${failures.length}, showing ${Math.min(failures.length, 20)}):\n${preview}`,
+        );
       }
 
       void skipped;

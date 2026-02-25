@@ -111,6 +111,23 @@ function logProgress(message: string): void {
   console.log(`[live] ${message}`);
 }
 
+function formatFailurePreview(
+  failures: Array<{ model: string; error: string }>,
+  maxItems: number,
+): string {
+  const limit = Math.max(1, maxItems);
+  const lines = failures.slice(0, limit).map((failure, index) => {
+    const normalized = failure.error.replace(/\s+/g, " ").trim();
+    const clipped = normalized.length > 320 ? `${normalized.slice(0, 317)}...` : normalized;
+    return `${index + 1}. ${failure.model}: ${clipped}`;
+  });
+  const remaining = failures.length - limit;
+  if (remaining > 0) {
+    lines.push(`... and ${remaining} more`);
+  }
+  return lines.join("\n");
+}
+
 function assertNoReasoningTags(params: {
   text: string;
   model: string;
@@ -177,6 +194,16 @@ function isRefreshTokenReused(error: string): boolean {
 function isChatGPTUsageLimitErrorMessage(raw: string): boolean {
   const msg = raw.toLowerCase();
   return msg.includes("hit your chatgpt usage limit") && msg.includes("try again in");
+}
+
+function isProviderUnavailableErrorMessage(raw: string): boolean {
+  const msg = raw.toLowerCase();
+  return (
+    msg.includes("no allowed providers are available") ||
+    msg.includes("provider unavailable") ||
+    msg.includes("upstream provider unavailable") ||
+    msg.includes("upstream error from google")
+  );
 }
 
 function isInstructionsRequiredError(error: string): boolean {
@@ -1013,6 +1040,11 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             logProgress(`${progressLabel}: skip (anthropic empty response)`);
             break;
           }
+          if (isProviderUnavailableErrorMessage(message)) {
+            skippedCount += 1;
+            logProgress(`${progressLabel}: skip (provider unavailable)`);
+            break;
+          }
           // OpenAI Codex refresh tokens can become single-use; skip instead of failing all live tests.
           if (model.provider === "openai-codex" && isRefreshTokenReused(message)) {
             logProgress(`${progressLabel}: skip (codex refresh token reused)`);
@@ -1061,11 +1093,10 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     }
 
     if (failures.length > 0) {
-      const preview = failures
-        .slice(0, 20)
-        .map((f) => `- ${f.model}: ${f.error}`)
-        .join("\n");
-      throw new Error(`gateway live model failures (${failures.length}):\n${preview}`);
+      const preview = formatFailurePreview(failures, 20);
+      throw new Error(
+        `gateway live model failures (${failures.length}, showing ${Math.min(failures.length, 20)}):\n${preview}`,
+      );
     }
     if (skippedCount === total) {
       logProgress(`[${params.label}] skipped all models (missing profiles)`);
