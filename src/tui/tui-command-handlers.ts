@@ -9,7 +9,6 @@ import type { SessionsPatchResult } from "../gateway/protocol/index.js";
 import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { helpText, parseCommand } from "./commands.js";
-import { applyTheme, currentThemeName, getThemeNames, resetTerminalColors } from "./theme/theme.js";
 import type { ChatLog } from "./components/chat-log.js";
 import {
   createFilterableSelectList,
@@ -17,6 +16,7 @@ import {
   createSettingsList,
 } from "./components/selectors.js";
 import type { GatewayChatClient } from "./gateway-chat.js";
+import { applyTheme, currentThemeName, getThemeNames } from "./theme/theme.js";
 import { formatStatusSummary } from "./tui-status-summary.js";
 import type {
   AgentSummary,
@@ -451,9 +451,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.addSystem(`theme set to ${args}`);
           await loadHistory();
         } else {
-          chatLog.addSystem(
-            `unknown theme: ${args}. available: ${getThemeNames().join(", ")}`,
-          );
+          chatLog.addSystem(`unknown theme: ${args}. available: ${getThemeNames().join(", ")}`);
         }
         break;
       case "settings":

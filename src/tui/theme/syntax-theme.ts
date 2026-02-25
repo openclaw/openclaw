@@ -1,6 +1,6 @@
 import chalk from "chalk";
 
-type HighlightTheme = Record<string, ((text: string) => string) | typeof chalk.italic | typeof chalk.bold>;
+type HighlightTheme = Record<string, ((text: string) => string) | typeof chalk.italic>;
 
 /**
  * Syntax highlighting theme for code blocks (dark variant).
@@ -144,12 +144,12 @@ export function applySyntaxThemeVariant(
   fallback: (text: string) => string,
 ): void {
   const colors = isLight ? LIGHT_SYNTAX : DARK_SYNTAX;
-  const updated: Record<string, ((text: string) => string) | typeof chalk.italic | typeof chalk.bold> = {};
+  const updated: Record<string, ((text: string) => string) | typeof chalk.italic> = {};
   for (const [key, hex] of Object.entries(colors)) {
     updated[key] = chalk.hex(hex);
   }
   updated.emphasis = chalk.italic;
   updated.strong = chalk.bold;
-  updated.default = isLight ? chalk.hex(LIGHT_SYNTAX.default!) : fallback;
+  updated.default = isLight ? chalk.hex(LIGHT_SYNTAX.default) : fallback;
   Object.assign(syntaxTheme, updated);
 }
