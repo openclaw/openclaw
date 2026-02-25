@@ -13,6 +13,8 @@ function createBlockReplyHarness(blockReplyBreak: "message_end" | "text_end") {
   subscribeEmbeddedPiSession({
     session,
     runId: "run",
+    messageProvider: "bluebubbles",
+    originatingTo: "+14155592088",
     onBlockReply,
     blockReplyBreak,
   });
@@ -22,6 +24,7 @@ function createBlockReplyHarness(blockReplyBreak: "message_end" | "text_end") {
 async function emitMessageToolLifecycle(params: {
   emit: (evt: unknown) => void;
   toolCallId: string;
+  to?: string;
   message: string;
   result: unknown;
 }) {
@@ -29,7 +32,7 @@ async function emitMessageToolLifecycle(params: {
     type: "tool_execution_start",
     toolName: "message",
     toolCallId: params.toolCallId,
-    args: { action: "send", to: "+1555", message: params.message },
+    args: { action: "send", to: params.to ?? "+1555", message: params.message },
   });
   // Wait for async handler to complete.
   await Promise.resolve();
@@ -64,6 +67,7 @@ describe("subscribeEmbeddedPiSession", () => {
     await emitMessageToolLifecycle({
       emit,
       toolCallId: "tool-message-1",
+      to: "+14155592088",
       message: messageText,
       result: "ok",
     });
@@ -78,10 +82,41 @@ describe("subscribeEmbeddedPiSession", () => {
     await emitMessageToolLifecycle({
       emit,
       toolCallId: "tool-message-err",
+      to: "+14155592088",
       message: messageText,
       result: { details: { status: "error" } },
     });
     emitAssistantMessageEnd(emit, messageText);
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+  });
+  it("does not suppress message_end replies when message tool sent to a different target", async () => {
+    const { emit, onBlockReply } = createBlockReplyHarness("message_end");
+
+    const messageText = "Done - I replied in Juan chat.";
+    await emitMessageToolLifecycle({
+      emit,
+      toolCallId: "tool-message-other-chat",
+      to: "any;+;c9e1c78203f74195b1db32e57529fb6a",
+      message: messageText,
+      result: "ok",
+    });
+    emitAssistantMessageEnd(emit, messageText);
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+  });
+  it("does not suppress text_end block replies when message tool sent to a different target", async () => {
+    const { emit, onBlockReply } = createBlockReplyHarness("text_end");
+
+    const messageText = "Done - I replied in Juan chat.";
+    await emitMessageToolLifecycle({
+      emit,
+      toolCallId: "tool-message-other-chat-text-end",
+      to: "any;+;c9e1c78203f74195b1db32e57529fb6a",
+      message: messageText,
+      result: "ok",
+    });
+    emitAssistantTextEndBlock(emit, messageText);
 
     expect(onBlockReply).toHaveBeenCalledTimes(1);
   });
