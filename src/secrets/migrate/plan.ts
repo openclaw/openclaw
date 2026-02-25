@@ -6,7 +6,7 @@ import { isDeepStrictEqual } from "node:util";
 import { listAgentIds, resolveAgentDir } from "../../agents/agent-scope.js";
 import { resolveAuthStorePath } from "../../agents/auth-profiles/paths.js";
 import { resolveStateDir, type OpenClawConfig } from "../../config/config.js";
-import { isSecretRef } from "../../config/types.secrets.js";
+import { coerceSecretRef, DEFAULT_SECRET_PROVIDER_ALIAS } from "../../config/types.secrets.js";
 import { resolveConfigDir, resolveUserPath } from "../../utils.js";
 import {
   encodeJsonPointerToken,
@@ -14,12 +14,11 @@ import {
   setJsonPointer,
 } from "../json-pointer.js";
 import { listKnownSecretEnvVarNames } from "../provider-env-vars.js";
-import { isNonEmptyString, isRecord, normalizePositiveInt } from "../shared.js";
-import { decryptSopsJsonFile, DEFAULT_SOPS_TIMEOUT_MS } from "../sops.js";
+import { isNonEmptyString, isRecord } from "../shared.js";
 import { createSecretsMigrationConfigIO } from "./config-io.js";
 import type { AuthStoreChange, EnvChange, MigrationCounters, MigrationPlan } from "./types.js";
 
-const DEFAULT_SECRETS_FILE_PATH = "~/.openclaw/secrets.enc.json";
+const DEFAULT_SECRETS_FILE_PATH = "~/.openclaw/secrets.json";
 
 function readJsonPointer(root: unknown, pointer: string): unknown {
   return readJsonPointerRaw(root, pointer, { onMissing: "undefined" });
@@ -83,63 +82,59 @@ function resolveFileSource(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): {
+  providerName: string;
   path: string;
-  timeoutMs: number;
-  hadConfiguredSource: boolean;
+  hadConfiguredProvider: boolean;
 } {
-  const source = config.secrets?.sources?.file;
-  if (source && source.type === "sops" && isNonEmptyString(source.path)) {
-    return {
-      path: resolveUserPath(source.path),
-      timeoutMs: normalizePositiveInt(source.timeoutMs, DEFAULT_SOPS_TIMEOUT_MS),
-      hadConfiguredSource: true,
-    };
+  const configuredProviders = config.secrets?.providers;
+  const defaultProviderName =
+    config.secrets?.defaults?.file?.trim() || DEFAULT_SECRET_PROVIDER_ALIAS;
+
+  if (configuredProviders) {
+    const defaultProvider = configuredProviders[defaultProviderName];
+    if (defaultProvider?.source === "file" && isNonEmptyString(defaultProvider.path)) {
+      return {
+        providerName: defaultProviderName,
+        path: resolveUserPath(defaultProvider.path),
+        hadConfiguredProvider: true,
+      };
+    }
+
+    for (const [providerName, provider] of Object.entries(configuredProviders)) {
+      if (provider?.source === "file" && isNonEmptyString(provider.path)) {
+        return {
+          providerName,
+          path: resolveUserPath(provider.path),
+          hadConfiguredProvider: true,
+        };
+      }
+    }
   }
 
   return {
+    providerName: defaultProviderName,
     path: resolveUserPath(resolveDefaultSecretsConfigPath(env)),
-    timeoutMs: DEFAULT_SOPS_TIMEOUT_MS,
-    hadConfiguredSource: false,
+    hadConfiguredProvider: false,
   };
 }
 
 function resolveDefaultSecretsConfigPath(env: NodeJS.ProcessEnv): string {
   if (env.OPENCLAW_STATE_DIR?.trim() || env.CLAWDBOT_STATE_DIR?.trim()) {
-    return path.join(resolveStateDir(env, os.homedir), "secrets.enc.json");
+    return path.join(resolveStateDir(env, os.homedir), "secrets.json");
   }
   return DEFAULT_SECRETS_FILE_PATH;
 }
 
-async function decryptSopsJson(
-  pathname: string,
-  timeoutMs: number,
-  sopsConfigPath?: string,
-): Promise<Record<string, unknown>> {
+async function readSecretsFileJson(pathname: string): Promise<Record<string, unknown>> {
   if (!fs.existsSync(pathname)) {
     return {};
   }
-  const parsed = await decryptSopsJsonFile({
-    path: pathname,
-    timeoutMs,
-    configPath: sopsConfigPath,
-    missingBinaryMessage:
-      "sops binary not found in PATH. Install sops >= 3.9.0 to run secrets migrate.",
-  });
+  const raw = fs.readFileSync(pathname, "utf8");
+  const parsed = JSON.parse(raw) as unknown;
   if (!isRecord(parsed)) {
-    throw new Error("sops decrypt failed: decrypted payload is not a JSON object");
+    throw new Error("Secrets file payload is not a JSON object.");
   }
   return parsed;
-}
-
-function resolveExistingSopsConfigPath(env: NodeJS.ProcessEnv): string | undefined {
-  const configDir = resolveConfigDir(env, os.homedir);
-  const candidates = [".sops.yaml", ".sops.yml"].map((name) => path.join(configDir, name));
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
-      return candidate;
-    }
-  }
-  return undefined;
 }
 
 function migrateModelProviderSecrets(params: {
@@ -147,6 +142,7 @@ function migrateModelProviderSecrets(params: {
   payload: Record<string, unknown>;
   counters: MigrationCounters;
   migratedValues: Set<string>;
+  fileProviderName: string;
 }): void {
   const providers = params.config.models?.providers as
     | Record<string, { apiKey?: unknown }>
@@ -155,7 +151,7 @@ function migrateModelProviderSecrets(params: {
     return;
   }
   for (const [providerId, provider] of Object.entries(providers)) {
-    if (isSecretRef(provider.apiKey)) {
+    if (coerceSecretRef(provider.apiKey)) {
       continue;
     }
     if (!isNonEmptyString(provider.apiKey)) {
@@ -168,7 +164,7 @@ function migrateModelProviderSecrets(params: {
       setJsonPointer(params.payload, id, value);
       params.counters.secretsWritten += 1;
     }
-    provider.apiKey = { source: "file", id };
+    provider.apiKey = { source: "file", provider: params.fileProviderName, id };
     params.counters.configRefs += 1;
     params.migratedValues.add(value);
   }
@@ -179,13 +175,14 @@ function migrateSkillEntrySecrets(params: {
   payload: Record<string, unknown>;
   counters: MigrationCounters;
   migratedValues: Set<string>;
+  fileProviderName: string;
 }): void {
   const entries = params.config.skills?.entries as Record<string, { apiKey?: unknown }> | undefined;
   if (!entries) {
     return;
   }
   for (const [skillKey, entry] of Object.entries(entries)) {
-    if (!isRecord(entry) || isSecretRef(entry.apiKey)) {
+    if (!isRecord(entry) || coerceSecretRef(entry.apiKey)) {
       continue;
     }
     if (!isNonEmptyString(entry.apiKey)) {
@@ -198,7 +195,7 @@ function migrateSkillEntrySecrets(params: {
       setJsonPointer(params.payload, id, value);
       params.counters.secretsWritten += 1;
     }
-    entry.apiKey = { source: "file", id };
+    entry.apiKey = { source: "file", provider: params.fileProviderName, id };
     params.counters.configRefs += 1;
     params.migratedValues.add(value);
   }
@@ -209,17 +206,14 @@ function migrateGoogleChatServiceAccount(params: {
   pointerId: string;
   counters: MigrationCounters;
   payload: Record<string, unknown>;
+  fileProviderName: string;
 }): void {
-  const explicitRef = isSecretRef(params.account.serviceAccountRef)
-    ? params.account.serviceAccountRef
-    : null;
-  const inlineRef = isSecretRef(params.account.serviceAccount)
-    ? params.account.serviceAccount
-    : null;
+  const explicitRef = coerceSecretRef(params.account.serviceAccountRef);
+  const inlineRef = coerceSecretRef(params.account.serviceAccount);
   if (explicitRef || inlineRef) {
     if (
       params.account.serviceAccount !== undefined &&
-      !isSecretRef(params.account.serviceAccount)
+      !coerceSecretRef(params.account.serviceAccount)
     ) {
       delete params.account.serviceAccount;
       params.counters.plaintextRemoved += 1;
@@ -242,7 +236,11 @@ function migrateGoogleChatServiceAccount(params: {
     params.counters.secretsWritten += 1;
   }
 
-  params.account.serviceAccountRef = { source: "file", id };
+  params.account.serviceAccountRef = {
+    source: "file",
+    provider: params.fileProviderName,
+    id,
+  };
   delete params.account.serviceAccount;
   params.counters.configRefs += 1;
 }
@@ -251,6 +249,7 @@ function migrateGoogleChatSecrets(params: {
   config: OpenClawConfig;
   payload: Record<string, unknown>;
   counters: MigrationCounters;
+  fileProviderName: string;
 }): void {
   const googlechat = params.config.channels?.googlechat;
   if (!isRecord(googlechat)) {
@@ -262,6 +261,7 @@ function migrateGoogleChatSecrets(params: {
     pointerId: "/channels/googlechat",
     payload: params.payload,
     counters: params.counters,
+    fileProviderName: params.fileProviderName,
   });
 
   if (!isRecord(googlechat.accounts)) {
@@ -276,6 +276,7 @@ function migrateGoogleChatSecrets(params: {
       pointerId: `/channels/googlechat/accounts/${encodeJsonPointerToken(accountId)}`,
       payload: params.payload,
       counters: params.counters,
+      fileProviderName: params.fileProviderName,
     });
   }
 }
@@ -325,6 +326,7 @@ function migrateAuthStoreSecrets(params: {
   payload: Record<string, unknown>;
   counters: MigrationCounters;
   migratedValues: Set<string>;
+  fileProviderName: string;
 }): boolean {
   const profiles = params.store.profiles;
   if (!isRecord(profiles)) {
@@ -337,7 +339,7 @@ function migrateAuthStoreSecrets(params: {
       continue;
     }
     if (profileValue.type === "api_key") {
-      const keyRef = isSecretRef(profileValue.keyRef) ? profileValue.keyRef : null;
+      const keyRef = coerceSecretRef(profileValue.keyRef);
       const key = isNonEmptyString(profileValue.key) ? profileValue.key.trim() : "";
       if (keyRef) {
         if (key) {
@@ -356,7 +358,7 @@ function migrateAuthStoreSecrets(params: {
         setJsonPointer(params.payload, id, key);
         params.counters.secretsWritten += 1;
       }
-      profileValue.keyRef = { source: "file", id };
+      profileValue.keyRef = { source: "file", provider: params.fileProviderName, id };
       delete profileValue.key;
       params.counters.authProfileRefs += 1;
       params.migratedValues.add(key);
@@ -365,7 +367,7 @@ function migrateAuthStoreSecrets(params: {
     }
 
     if (profileValue.type === "token") {
-      const tokenRef = isSecretRef(profileValue.tokenRef) ? profileValue.tokenRef : null;
+      const tokenRef = coerceSecretRef(profileValue.tokenRef);
       const token = isNonEmptyString(profileValue.token) ? profileValue.token.trim() : "";
       if (tokenRef) {
         if (token) {
@@ -384,7 +386,7 @@ function migrateAuthStoreSecrets(params: {
         setJsonPointer(params.payload, id, token);
         params.counters.secretsWritten += 1;
       }
-      profileValue.tokenRef = { source: "file", id };
+      profileValue.tokenRef = { source: "file", provider: params.fileProviderName, id };
       delete profileValue.token;
       params.counters.authProfileRefs += 1;
       params.migratedValues.add(token);
@@ -412,12 +414,7 @@ export async function buildMigrationPlan(params: {
   const stateDir = resolveStateDir(params.env, os.homedir);
   const nextConfig = structuredClone(snapshot.config);
   const fileSource = resolveFileSource(nextConfig, params.env);
-  const sopsConfigPath = resolveExistingSopsConfigPath(params.env);
-  const previousPayload = await decryptSopsJson(
-    fileSource.path,
-    fileSource.timeoutMs,
-    sopsConfigPath,
-  );
+  const previousPayload = await readSecretsFileJson(fileSource.path);
   const nextPayload = structuredClone(previousPayload);
 
   const counters: MigrationCounters = {
@@ -436,17 +433,20 @@ export async function buildMigrationPlan(params: {
     payload: nextPayload,
     counters,
     migratedValues,
+    fileProviderName: fileSource.providerName,
   });
   migrateSkillEntrySecrets({
     config: nextConfig,
     payload: nextPayload,
     counters,
     migratedValues,
+    fileProviderName: fileSource.providerName,
   });
   migrateGoogleChatSecrets({
     config: nextConfig,
     payload: nextPayload,
     counters,
+    fileProviderName: fileSource.providerName,
   });
 
   const authStoreChanges: AuthStoreChange[] = [];
@@ -473,6 +473,7 @@ export async function buildMigrationPlan(params: {
       payload: nextPayload,
       counters,
       migratedValues,
+      fileProviderName: fileSource.providerName,
     });
     if (!changed) {
       continue;
@@ -481,15 +482,17 @@ export async function buildMigrationPlan(params: {
   }
   counters.authStoresChanged = authStoreChanges.length;
 
-  if (counters.secretsWritten > 0 && !fileSource.hadConfiguredSource) {
+  if (counters.secretsWritten > 0 && !fileSource.hadConfiguredProvider) {
     const defaultConfigPath = resolveDefaultSecretsConfigPath(params.env);
     nextConfig.secrets ??= {};
-    nextConfig.secrets.sources ??= {};
-    nextConfig.secrets.sources.file = {
-      type: "sops",
+    nextConfig.secrets.providers ??= {};
+    nextConfig.secrets.providers[fileSource.providerName] = {
+      source: "file",
       path: defaultConfigPath,
-      timeoutMs: DEFAULT_SOPS_TIMEOUT_MS,
+      mode: "jsonPointer",
     };
+    nextConfig.secrets.defaults ??= {};
+    nextConfig.secrets.defaults.file ??= fileSource.providerName;
   }
 
   const configChanged = !isDeepStrictEqual(snapshot.config, nextConfig);
@@ -536,8 +539,6 @@ export async function buildMigrationPlan(params: {
     payloadChanged,
     nextPayload,
     secretsFilePath: fileSource.path,
-    secretsFileTimeoutMs: fileSource.timeoutMs,
-    sopsConfigPath,
     envChange,
     backupTargets: [...backupTargets],
   };

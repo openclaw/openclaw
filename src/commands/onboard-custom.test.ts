@@ -238,6 +238,7 @@ describe("promptCustomApiConfig", () => {
 
     expect(result.config.models?.providers?.custom?.apiKey).toEqual({
       source: "env",
+      provider: "default",
       id: "CUSTOM_PROVIDER_API_KEY",
     });
     const firstCall = fetchMock.mock.calls[0]?.[1] as
@@ -246,7 +247,7 @@ describe("promptCustomApiConfig", () => {
     expect(firstCall?.headers?.Authorization).toBe("Bearer test-env-key");
   });
 
-  it("re-prompts source after encrypted file ref preflight fails and succeeds with env ref", async () => {
+  it("re-prompts source after provider ref preflight fails and succeeds with env ref", async () => {
     vi.stubEnv("CUSTOM_PROVIDER_API_KEY", "test-env-key");
     const prompter = createTestPrompter({
       text: [
@@ -257,18 +258,29 @@ describe("promptCustomApiConfig", () => {
         "custom",
         "",
       ],
-      select: ["ref", "file", "env", "openai"],
+      select: ["ref", "provider", "filemain", "env", "openai"],
     });
     stubFetchSequence([{ ok: true }]);
 
-    const result = await runPromptCustomApi(prompter);
+    const result = await runPromptCustomApi(prompter, {
+      secrets: {
+        providers: {
+          filemain: {
+            source: "file",
+            path: "/tmp/openclaw-missing-provider.json",
+            mode: "jsonPointer",
+          },
+        },
+      },
+    });
 
     expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining("Could not validate this encrypted file reference."),
+      expect.stringContaining("Could not validate provider reference"),
       "Reference check failed",
     );
     expect(result.config.models?.providers?.custom?.apiKey).toEqual({
       source: "env",
+      provider: "default",
       id: "CUSTOM_PROVIDER_API_KEY",
     });
   });
