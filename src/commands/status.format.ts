@@ -36,11 +36,11 @@ export const formatTokensCompact = (
 
   // Add cache hit rate if there are cached reads
   if (typeof cacheRead === "number" && cacheRead > 0) {
-    const total =
-      typeof used === "number"
-        ? used
-        : cacheRead + (typeof cacheWrite === "number" ? cacheWrite : 0);
-    const hitRate = Math.round((cacheRead / total) * 100);
+    const fallbackTotal = cacheRead + (typeof cacheWrite === "number" ? cacheWrite : 0);
+    const total = typeof used === "number" && used > 0 ? used : fallbackTotal;
+    // Session totals can be stale/misaligned for older entries; never show impossible cache rates.
+    const effectiveTotal = Math.max(total, fallbackTotal, cacheRead);
+    const hitRate = Math.min(100, Math.round((cacheRead / effectiveTotal) * 100));
     result += ` · 🗄️ ${hitRate}% cached`;
   }
 
