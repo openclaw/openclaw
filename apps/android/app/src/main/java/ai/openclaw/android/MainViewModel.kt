@@ -8,6 +8,7 @@ import ai.openclaw.android.node.CameraCaptureManager
 import ai.openclaw.android.node.CanvasController
 import ai.openclaw.android.node.ScreenRecordManager
 import ai.openclaw.android.node.SmsManager
+import ai.openclaw.android.voice.VoiceConversationEntry
 import kotlinx.coroutines.flow.StateFlow
 
 class MainViewModel(app: Application) : AndroidViewModel(app) {
@@ -50,6 +51,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val micLiveTranscript: StateFlow<String?> = runtime.micLiveTranscript
   val micIsListening: StateFlow<Boolean> = runtime.micIsListening
   val micQueuedMessages: StateFlow<List<String>> = runtime.micQueuedMessages
+  val micConversation: StateFlow<List<VoiceConversationEntry>> = runtime.micConversation
   val micInputLevel: StateFlow<Float> = runtime.micInputLevel
   val micIsSending: StateFlow<Boolean> = runtime.micIsSending
   val manualEnabled: StateFlow<Boolean> = runtime.manualEnabled
