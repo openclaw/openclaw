@@ -1,11 +1,12 @@
 import { Type } from "@sinclair/typebox";
 import { loadConfig } from "../../config/config.js";
-import { callGateway } from "../../gateway/call.js";
 import { capArrayByJsonBytes } from "../../gateway/session-utils.fs.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
+// Use repair approval wrapper for local loopback auto-repair on pairing required
+import { callGatewayWithRepairApproval as callGateway } from "./sessions-gateway-repair.js";
 import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,

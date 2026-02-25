@@ -322,6 +322,9 @@ Common signatures:
 
 - `device identity required` → device auth not satisfied.
 - `pairing required` → sender/device must be approved.
+- `unauthorized: device token mismatch (rotate/reissue device token)` → when shared auth
+  (`gateway token` or `password`) is configured, operator clients automatically clear stale
+  persisted device token state and retry once without stored device-token fallback.
 
 If the service config and runtime still disagree after checks, reinstall service metadata from the same profile/state directory:
 
@@ -335,3 +338,56 @@ Related:
 - [/gateway/pairing](/gateway/pairing)
 - [/gateway/authentication](/gateway/authentication)
 - [/gateway/background-process](/gateway/background-process)
+
+## Two-layer recovery for Agent Team session workflows
+
+Agent Teams use session tools (`sessions_list`, `sessions_history`, `sessions_send`) that communicate with the gateway. Two recovery layers handle common runtime issues:
+
+### Layer 1: Config token fallback on env/config drift
+
+When running in local mode, `OPENCLAW_GATEWAY_TOKEN` env var takes precedence over `gateway.auth.token` in config. If the env token is stale but config token is valid, the client now retries with the config token:
+
+1. **Attempt 1**: env token + stored device token
+2. **Attempt 2**: env token + no stored device token (device token mismatch retry)
+3. **Attempt 3** (NEW): config token + no stored device token (config fallback on double-mismatch)
+
+Conditions for config fallback:
+
+- Local mode (not remote)
+- No URL override
+- No explicit token/password passed to the call
+- Config token differs from env token
+- Both first two attempts failed with "device token mismatch"
+
+### Layer 2: Auto-repair pairing approval for local loopback
+
+Session tools may encounter `pairing required` (WS close 1008) when connecting to the gateway. For Agent Teams running on loopback, repair pairings are now auto-approved:
+
+**Auto-approve conditions** (all must be true):
+
+- Local loopback mode (no remote URL, no URL override)
+- Pending request has `isRepair === true`
+- Pending request `deviceId` matches local device
+- Pending request `role === "operator"`
+- Pending request `ts` within 120,000ms of now
+
+If all conditions match, the pending request is automatically approved and the gateway call is retried once.
+
+### Manual fallback
+
+If automatic recovery fails or conditions aren't met:
+
+```bash
+# List pending device approvals
+openclaw devices list
+
+# Manually approve a specific request
+openclaw devices approve <requestId>
+```
+
+### Error hints
+
+When auto-repair cannot proceed, errors include a hint:
+
+- `GatewayRepairError: pairing required but no valid repair candidate found` - check with `openclaw devices list`
+- Check that the request is recent (< 2 min), matches your device ID, and has role `operator`

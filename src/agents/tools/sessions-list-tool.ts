@@ -2,10 +2,11 @@ import path from "node:path";
 import { Type } from "@sinclair/typebox";
 import { loadConfig } from "../../config/config.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
-import { callGateway } from "../../gateway/call.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringArrayParam } from "./common.js";
+// Use repair approval wrapper for local loopback auto-repair on pairing required
+import { callGatewayWithRepairApproval as callGateway } from "./sessions-gateway-repair.js";
 import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,

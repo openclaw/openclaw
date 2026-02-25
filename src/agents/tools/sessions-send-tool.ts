@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import { Type } from "@sinclair/typebox";
 import { loadConfig } from "../../config/config.js";
-import { callGateway } from "../../gateway/call.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { SESSION_LABEL_MAX_LENGTH } from "../../sessions/session-label.js";
 import {
@@ -11,6 +10,8 @@ import {
 import { AGENT_LANE_NESTED } from "../lanes.js";
 import type { AnyAgentTool } from "./common.js";
 import { jsonResult, readStringParam } from "./common.js";
+// Use repair approval wrapper for local loopback auto-repair on pairing required
+import { callGatewayWithRepairApproval as callGateway } from "./sessions-gateway-repair.js";
 import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,

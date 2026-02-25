@@ -12,6 +12,8 @@ let lastClientOptions: {
   token?: string;
   password?: string;
   scopes?: string[];
+  allowStoredDeviceToken?: boolean;
+  deviceIdentity?: unknown;
   onHelloOk?: () => void | Promise<void>;
   onClose?: (code: number, reason: string) => void;
 } | null = null;
@@ -19,6 +21,18 @@ type StartMode = "hello" | "close" | "silent";
 let startMode: StartMode = "hello";
 let closeCode = 1006;
 let closeReason = "";
+const clientOptionsHistory: Array<{
+  url?: string;
+  token?: string;
+  password?: string;
+  scopes?: string[];
+  allowStoredDeviceToken?: boolean;
+  deviceIdentity?: unknown;
+  onHelloOk?: () => void | Promise<void>;
+  onClose?: (code: number, reason: string) => void;
+}> = [];
+const startSequence: Array<{ mode: StartMode; closeCode?: number; closeReason?: string }> = [];
+let startSequenceIndex = 0;
 
 vi.mock("./client.js", () => ({
   describeGatewayCloseCode: (code: number) => {
@@ -36,15 +50,31 @@ vi.mock("./client.js", () => ({
       token?: string;
       password?: string;
       scopes?: string[];
+      allowStoredDeviceToken?: boolean;
+      deviceIdentity?: unknown;
       onHelloOk?: () => void | Promise<void>;
       onClose?: (code: number, reason: string) => void;
     }) {
       lastClientOptions = opts;
+      clientOptionsHistory.push(opts);
     }
     async request() {
       return { ok: true };
     }
     start() {
+      const next = startSequence[startSequenceIndex];
+      if (next) {
+        startSequenceIndex += 1;
+        if (next.mode === "hello") {
+          void lastClientOptions?.onHelloOk?.();
+          return;
+        }
+        if (next.mode === "close") {
+          lastClientOptions?.onClose?.(next.closeCode ?? 1006, next.closeReason ?? "");
+          return;
+        }
+        return;
+      }
       if (startMode === "hello") {
         void lastClientOptions?.onHelloOk?.();
       } else if (startMode === "close") {
@@ -55,8 +85,13 @@ vi.mock("./client.js", () => ({
   },
 }));
 
-const { buildGatewayConnectionDetails, callGateway, callGatewayCli, callGatewayScoped } =
-  await import("./call.js");
+const {
+  buildGatewayConnectionDetails,
+  callGateway,
+  callGatewayCli,
+  callGatewayScoped,
+  isLocalLoopbackGateway,
+} = await import("./call.js");
 
 function resetGatewayCallMocks() {
   loadConfig.mockClear();
@@ -64,9 +99,12 @@ function resetGatewayCallMocks() {
   pickPrimaryTailnetIPv4.mockClear();
   pickPrimaryLanIPv4.mockClear();
   lastClientOptions = null;
+  clientOptionsHistory.length = 0;
   startMode = "hello";
   closeCode = 1006;
   closeReason = "";
+  startSequence.length = 0;
+  startSequenceIndex = 0;
 }
 
 function setGatewayNetworkDefaults(port = 18789) {
@@ -406,6 +444,54 @@ describe("callGateway error details", () => {
   });
 });
 
+describe("callGateway stale device token recovery", () => {
+  beforeEach(() => {
+    resetGatewayCallMocks();
+    setLocalLoopbackGatewayConfig();
+  });
+
+  it("retries once on device token mismatch when shared auth is present", async () => {
+    startSequence.push(
+      {
+        mode: "close",
+        closeCode: 1008,
+        closeReason: "unauthorized: device token mismatch (rotate/reissue device token)",
+      },
+      { mode: "hello" },
+    );
+
+    const result = await callGateway({ method: "health", token: "explicit-token" });
+    expect(result).toEqual({ ok: true });
+    expect(clientOptionsHistory).toHaveLength(2);
+    expect(clientOptionsHistory[0]?.allowStoredDeviceToken).toBe(true);
+    expect(clientOptionsHistory[1]?.allowStoredDeviceToken).toBe(false);
+  });
+
+  it("does not retry on non-mismatch close reasons", async () => {
+    startSequence.push({
+      mode: "close",
+      closeCode: 1008,
+      closeReason: "unauthorized: signature invalid",
+    });
+
+    await expect(callGateway({ method: "health", token: "explicit-token" })).rejects.toThrow(
+      "signature invalid",
+    );
+    expect(clientOptionsHistory).toHaveLength(1);
+  });
+
+  it("does not retry mismatch when shared auth is missing", async () => {
+    startSequence.push({
+      mode: "close",
+      closeCode: 1008,
+      closeReason: "unauthorized: device token mismatch (rotate/reissue device token)",
+    });
+
+    await expect(callGateway({ method: "health" })).rejects.toThrow("device token mismatch");
+    expect(clientOptionsHistory).toHaveLength(1);
+  });
+});
+
 describe("callGateway url override auth requirements", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
@@ -536,5 +622,171 @@ describe("callGateway password resolution", () => {
     });
 
     expect(lastClientOptions?.[testCase.authKey]).toBe(testCase.explicitValue);
+  });
+});
+
+describe("callGateway config token fallback on env/config drift", () => {
+  let envSnapshot: ReturnType<typeof captureEnv>;
+
+  beforeEach(() => {
+    envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN", "CLAWDBOT_GATEWAY_TOKEN"]);
+    resetGatewayCallMocks();
+    delete process.env.OPENCLAW_GATEWAY_TOKEN;
+    delete process.env.CLAWDBOT_GATEWAY_TOKEN;
+    setGatewayNetworkDefaults(18789);
+  });
+
+  afterEach(() => {
+    envSnapshot.restore();
+  });
+
+  it("falls back to config token on env/config double-mismatch", async () => {
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback", auth: { token: "config-token" } },
+    });
+    startSequence.push(
+      {
+        mode: "close",
+        closeCode: 1008,
+        closeReason: "unauthorized: device token mismatch (rotate/reissue device token)",
+      },
+      {
+        mode: "close",
+        closeCode: 1008,
+        closeReason: "unauthorized: device token mismatch (rotate/reissue device token)",
+      },
+      { mode: "hello" },
+    );
+
+    const result = await callGateway({ method: "health" });
+    expect(result).toEqual({ ok: true });
+    expect(clientOptionsHistory).toHaveLength(3);
+    expect(clientOptionsHistory[0]?.token).toBe("env-token");
+    expect(clientOptionsHistory[0]?.allowStoredDeviceToken).toBe(true);
+    expect(clientOptionsHistory[1]?.token).toBe("env-token");
+    expect(clientOptionsHistory[1]?.allowStoredDeviceToken).toBe(false);
+    expect(clientOptionsHistory[2]?.token).toBe("config-token");
+    expect(clientOptionsHistory[2]?.allowStoredDeviceToken).toBe(false);
+  });
+
+  it("does not use config fallback when env and config tokens are identical", async () => {
+    process.env.OPENCLAW_GATEWAY_TOKEN = "same-token";
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback", auth: { token: "same-token" } },
+    });
+    startSequence.push(
+      {
+        mode: "close",
+        closeCode: 1008,
+        closeReason: "unauthorized: device token mismatch (rotate/reissue device token)",
+      },
+      {
+        mode: "close",
+        closeCode: 1008,
+        closeReason: "unauthorized: device token mismatch (rotate/reissue device token)",
+      },
+    );
+
+    await expect(callGateway({ method: "health" })).rejects.toThrow("device token mismatch");
+    expect(clientOptionsHistory).toHaveLength(2);
+  });
+
+  it("does not use config fallback when config token is missing", async () => {
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback", auth: {} },
+    });
+    startSequence.push(
+      {
+        mode: "close",
+        closeCode: 1008,
+        closeReason: "unauthorized: device token mismatch (rotate/reissue device token)",
+      },
+      {
+        mode: "close",
+        closeCode: 1008,
+        closeReason: "unauthorized: device token mismatch (rotate/reissue device token)",
+      },
+    );
+
+    await expect(callGateway({ method: "health" })).rejects.toThrow("device token mismatch");
+    expect(clientOptionsHistory).toHaveLength(2);
+  });
+
+  it("does not use config fallback in remote mode", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "remote",
+        remote: { url: "wss://remote.example:18789", token: "remote-token" },
+        auth: { token: "config-token" },
+      },
+    });
+    startSequence.push(
+      {
+        mode: "close",
+        closeCode: 1008,
+        closeReason: "unauthorized: device token mismatch (rotate/reissue device token)",
+      },
+      {
+        mode: "close",
+        closeCode: 1008,
+        closeReason: "unauthorized: device token mismatch (rotate/reissue device token)",
+      },
+    );
+
+    await expect(callGateway({ method: "health" })).rejects.toThrow("device token mismatch");
+    expect(clientOptionsHistory).toHaveLength(2);
+  });
+
+  it("does not use config fallback when second error is not a mismatch", async () => {
+    process.env.OPENCLAW_GATEWAY_TOKEN = "env-token";
+    loadConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback", auth: { token: "config-token" } },
+    });
+    startSequence.push(
+      {
+        mode: "close",
+        closeCode: 1008,
+        closeReason: "unauthorized: device token mismatch (rotate/reissue device token)",
+      },
+      {
+        mode: "close",
+        closeCode: 1008,
+        closeReason: "unauthorized: signature invalid",
+      },
+    );
+
+    await expect(callGateway({ method: "health" })).rejects.toThrow("signature invalid");
+    expect(clientOptionsHistory).toHaveLength(2);
+  });
+});
+
+describe("isLocalLoopbackGateway", () => {
+  beforeEach(() => {
+    resetGatewayCallMocks();
+    setGatewayNetworkDefaults(18789);
+  });
+
+  it("returns true for local mode without url override", () => {
+    loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
+    expect(isLocalLoopbackGateway()).toBe(true);
+  });
+
+  it("returns false for remote mode", () => {
+    loadConfig.mockReturnValue({
+      gateway: { mode: "remote", remote: { url: "wss://remote.example:18789" } },
+    });
+    expect(isLocalLoopbackGateway()).toBe(false);
+  });
+
+  it("returns false when url override is set", () => {
+    loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
+    expect(isLocalLoopbackGateway({ url: "wss://override.example/ws" })).toBe(false);
+  });
+
+  it("returns true when url override is empty string", () => {
+    loadConfig.mockReturnValue({ gateway: { mode: "local", bind: "loopback" } });
+    expect(isLocalLoopbackGateway({ url: "" })).toBe(true);
   });
 });

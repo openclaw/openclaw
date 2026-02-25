@@ -305,6 +305,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
   url: string;
   token?: string;
   password?: string;
+  allowStoredDeviceToken?: boolean;
   tlsFingerprint?: string;
   timeoutMs: number;
   safeTimerTimeoutMs: number;
@@ -342,6 +343,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       role: "operator",
       scopes,
       deviceIdentity: loadOrCreateDeviceIdentity(),
+      allowStoredDeviceToken: params.allowStoredDeviceToken ?? true,
       minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
       onHelloOk: async () => {
@@ -378,6 +380,43 @@ async function executeGatewayRequestWithScopes<T>(params: {
   });
 }
 
+function isDeviceTokenMismatchError(err: unknown): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  return err.message.toLowerCase().includes("device token mismatch");
+}
+
+function resolveConfigFallbackToken(
+  context: ResolvedGatewayCallContext,
+  currentToken: string | undefined,
+): string | undefined {
+  // Only in local mode without URL override
+  if (context.isRemoteMode || context.urlOverride) {
+    return undefined;
+  }
+  // Only when no explicit auth was provided (env took precedence)
+  if (context.explicitAuth.token || context.explicitAuth.password) {
+    return undefined;
+  }
+  // Get config token
+  const configToken = trimToUndefined(context.config.gateway?.auth?.token);
+  // Only if different from current token (env token)
+  if (!configToken || configToken === currentToken) {
+    return undefined;
+  }
+  return configToken;
+}
+
+export function isLocalLoopbackGateway(opts?: { url?: string }): boolean {
+  const urlOverride = trimToUndefined(opts?.url);
+  if (urlOverride) {
+    return false;
+  }
+  const config = loadConfig();
+  return config.gateway?.mode !== "remote";
+}
+
 async function callGatewayWithScopes<T = Record<string, unknown>>(
   opts: CallGatewayBaseOptions,
   scopes: OperatorScope[],
@@ -399,17 +438,45 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
   const url = connectionDetails.url;
   const tlsFingerprint = await resolveGatewayTlsFingerprint({ opts, context, url });
   const { token, password } = resolveGatewayCredentials(context);
-  return await executeGatewayRequestWithScopes<T>({
-    opts,
-    scopes,
-    url,
-    token,
-    password,
-    tlsFingerprint,
-    timeoutMs,
-    safeTimerTimeoutMs,
-    connectionDetails,
-  });
+  const hasSharedAuth = Boolean(token || password);
+
+  async function attemptCall(
+    tokenToUse: string | undefined,
+    passwordToUse: string | undefined,
+    allowStored: boolean,
+  ): Promise<T> {
+    return await executeGatewayRequestWithScopes<T>({
+      opts,
+      scopes,
+      url,
+      token: tokenToUse,
+      password: passwordToUse,
+      allowStoredDeviceToken: allowStored,
+      tlsFingerprint,
+      timeoutMs,
+      safeTimerTimeoutMs,
+      connectionDetails,
+    });
+  }
+
+  try {
+    return await attemptCall(token, password, true);
+  } catch (err) {
+    // Layer 1: Retry without stored device token on mismatch
+    if (!hasSharedAuth || !isDeviceTokenMismatchError(err)) {
+      throw err;
+    }
+    try {
+      return await attemptCall(token, password, false);
+    } catch (secondErr) {
+      // Layer 2: Config fallback on double-mismatch
+      const fallbackToken = resolveConfigFallbackToken(context, token);
+      if (!fallbackToken || !isDeviceTokenMismatchError(secondErr)) {
+        throw secondErr;
+      }
+      return await attemptCall(fallbackToken, undefined, false);
+    }
+  }
 }
 
 export async function callGatewayScoped<T = Record<string, unknown>>(
