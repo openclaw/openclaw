@@ -103,6 +103,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   // 2. gateway.remote.url from config (remote mode, e.g. wss://gw.hanzo.bot)
   // 3. Constructed from CLI --host/--port/--tls options
   const envGatewayUrl = process.env.BOT_NODE_GATEWAY_URL?.trim();
+  const envGatewayHost = process.env.BOT_NODE_GATEWAY_HOST?.trim();
   const remoteUrl = isRemoteMode ? cfg.gateway?.remote?.url : undefined;
   const host = gateway.host ?? "127.0.0.1";
   const port = gateway.port ?? 18789;
@@ -112,8 +113,17 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   // eslint-disable-next-line no-console
   console.log(`node host PATH: ${pathEnv}`);
 
+  // Build optional WS headers — BOT_NODE_GATEWAY_HOST overrides the Host
+  // header sent to the gateway.  Useful when BOT_NODE_GATEWAY_URL points to a
+  // direct IP (bypassing CDN/proxy) but nginx-ingress still needs the original
+  // hostname for virtual-host routing.
+  const wsHeaders: Record<string, string> | undefined = envGatewayHost
+    ? { Host: envGatewayHost }
+    : undefined;
+
   const client = new GatewayClient({
     url,
+    wsHeaders,
     token: token?.trim() || undefined,
     password: password?.trim() || undefined,
     instanceId: nodeId,
