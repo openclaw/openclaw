@@ -11,6 +11,7 @@ import {
   type User,
 } from "@buape/carbon";
 import type { OpenClawConfig } from "../../config/config.js";
+import { callGatewayLeastPrivilege } from "../../gateway/call.js";
 import { danger, logVerbose } from "../../globals.js";
 import { formatDurationSeconds } from "../../infra/format-time/format-duration.ts";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
@@ -773,6 +774,35 @@ async function handleDiscordMemberAddEvent(params: {
     });
 
     enqueueSystemEvent(text, { sessionKey: route.sessionKey, contextKey });
+
+    // Resolve welcome channel: explicit config > Discord system channel
+    const welcomeChannelId =
+      guildInfo?.memberJoinChannel?.trim() ||
+      (typeof data.guild.systemChannelId === "string" ? data.guild.systemChannelId.trim() : null) ||
+      null;
+
+    if (welcomeChannelId) {
+      void callGatewayLeastPrivilege({
+        method: "agent",
+        params: {
+          sessionKey: route.sessionKey,
+          message: `Discord member joined: ${userTag} joined ${guildSlug}. Welcome them.`,
+          channel: "discord",
+          accountId: params.accountId,
+          to: `channel:${welcomeChannelId}`,
+          deliver: true,
+          idempotencyKey: contextKey,
+        },
+      }).catch((err: unknown) => {
+        params.logger.error(
+          danger(`discord member-add: failed to trigger welcome agent: ${String(err)}`),
+        );
+      });
+    } else {
+      params.logger.debug(
+        "discord member-add: no welcome channel configured, skipping agent trigger",
+      );
+    }
   } catch (err) {
     params.logger.error(danger(`discord member-add handler failed: ${String(err)}`));
   }
