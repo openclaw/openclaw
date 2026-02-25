@@ -2,12 +2,14 @@ import { describe, it, expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import {
+  buildAllowedModelSet,
   parseModelRef,
-  resolveModelRefFromString,
-  resolveConfiguredModelRef,
   buildModelAliasIndex,
-  normalizeProviderId,
   modelKey,
+  normalizeProviderId,
+  resolveAllowedModelRef,
+  resolveConfiguredModelRef,
+  resolveModelRefFromString,
 } from "./model-selection.js";
 
 describe("model-selection", () => {
@@ -156,6 +158,71 @@ describe("model-selection", () => {
       });
       expect(index.byAlias.get("smart")?.ref).toEqual({ provider: "openai", model: "gpt-4o" });
       expect(index.byKey.get(modelKey("anthropic", "claude-3-5-sonnet"))).toEqual(["fast"]);
+    });
+  });
+
+  describe("buildAllowedModelSet", () => {
+    it("keeps explicitly allowlisted models even when missing from bundled catalog", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.2" },
+            models: {
+              "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const catalog = [
+        { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
+        { provider: "openai", id: "gpt-5.2", name: "gpt-5.2" },
+      ];
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog,
+        defaultProvider: "anthropic",
+      });
+
+      expect(result.allowAny).toBe(false);
+      expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(true);
+      expect(result.allowedCatalog).toEqual([
+        { provider: "anthropic", id: "claude-sonnet-4-6", name: "claude-sonnet-4-6" },
+      ]);
+    });
+  });
+
+  describe("resolveAllowedModelRef", () => {
+    it("accepts explicit allowlist refs absent from bundled catalog", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.2" },
+            models: {
+              "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const catalog = [
+        { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
+        { provider: "openai", id: "gpt-5.2", name: "gpt-5.2" },
+      ];
+
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog,
+        raw: "anthropic/claude-sonnet-4-6",
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.2",
+      });
+
+      expect(result).toEqual({
+        key: "anthropic/claude-sonnet-4-6",
+        ref: { provider: "anthropic", model: "claude-sonnet-4-6" },
+      });
     });
   });
 
