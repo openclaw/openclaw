@@ -15,4 +15,7 @@ export {
 } from "../infra/http-body.js";
 export { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 export type { OpenClawPluginApi } from "../plugins/types.js";
+export { callGateway } from "../gateway/call.js";
+export type { CallGatewayOptions } from "../gateway/call.js";
 export { sleep } from "../utils.js";
+export { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";

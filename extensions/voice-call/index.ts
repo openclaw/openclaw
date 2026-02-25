@@ -347,8 +347,11 @@ const voiceCallPlugin = {
             return;
           }
           const rt = await ensureRuntime();
+          const mode =
+            params?.mode === "notify" || params?.mode === "conversation" ? params.mode : undefined;
           const result = await rt.manager.initiateCall(to, undefined, {
             message: message || undefined,
+            mode,
           });
           if (!result.success) {
             respond(false, { error: result.error || "initiate failed" });
@@ -488,7 +491,6 @@ const voiceCallPlugin = {
         registerVoiceCallCli({
           program,
           config,
-          ensureRuntime,
           logger: api.logger,
         }),
       { commands: ["voicecall"] },
