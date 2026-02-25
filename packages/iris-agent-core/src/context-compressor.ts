@@ -23,6 +23,40 @@ export interface ToolResultCompressionOptions {
 }
 
 const COMPRESSION_LABEL = "aged-out";
+const CHARS_PER_TOKEN = 4;
+
+/**
+ * Rough character count across all message content blocks.
+ * Used to measure compression savings (not an exact tokenizer).
+ */
+export function estimateMessageChars(messages: AgentMessage[]): number {
+  let total = 0;
+  for (const msg of messages) {
+    const content = (msg as { content?: unknown }).content;
+    if (typeof content === "string") {
+      total += content.length;
+    } else if (Array.isArray(content)) {
+      for (const block of content) {
+        if (isTextBlock(block)) {
+          total += block.text.length;
+        } else {
+          // thinking / toolCall / image — use JSON length as a rough estimate
+          try {
+            total += JSON.stringify(block).length;
+          } catch {
+            total += 64;
+          }
+        }
+      }
+    }
+  }
+  return total;
+}
+
+/** Convert a char estimate to approximate tokens. */
+export function charsToTokens(chars: number): number {
+  return Math.round(chars / CHARS_PER_TOKEN);
+}
 
 function role(msg: AgentMessage): string {
   return (msg as { role?: string }).role ?? "";

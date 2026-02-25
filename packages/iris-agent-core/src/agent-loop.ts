@@ -13,7 +13,11 @@
 
 import type { AssistantMessage, ToolCall } from "@mariozechner/pi-ai";
 import { EventStream, streamSimple, validateToolArguments } from "@mariozechner/pi-ai";
-import { compressAgedToolResults } from "./context-compressor.js";
+import {
+  charsToTokens,
+  compressAgedToolResults,
+  estimateMessageChars,
+} from "./context-compressor.js";
 import type {
   AgentContext,
   AgentEvent,
@@ -268,6 +272,20 @@ async function runLoop(
   stream.end(newMessages);
 }
 
+/** Log compression savings to stderr. Only emits when something was actually compressed. */
+function logCompressionStats(beforeChars: number, afterChars: number): void {
+  const savedChars = beforeChars - afterChars;
+  if (savedChars <= 0) {
+    return;
+  }
+  const pct = Math.round((savedChars / beforeChars) * 100);
+  const savedTokens = charsToTokens(savedChars);
+  process.stderr.write(
+    `[iris-compress] before=${beforeChars}ch after=${afterChars}ch` +
+      ` saved=${savedChars}ch (~${savedTokens}tok, ${pct}%)\n`,
+  );
+}
+
 async function streamAssistantResponse(
   context: AgentContext,
   config: AgentLoopConfig,
@@ -277,11 +295,14 @@ async function streamAssistantResponse(
 ): Promise<AssistantMessage> {
   let messages = context.messages;
   if (config.toolResultCompression !== false) {
-    // undefined = use defaults; object = custom options
-    messages = compressAgedToolResults(
-      messages,
-      config.toolResultCompression ?? { ageTurns: 3, maxChars: 200, maxAssistantChars: 500 },
-    );
+    const opts = config.toolResultCompression ?? {
+      ageTurns: 3,
+      maxChars: 200,
+      maxAssistantChars: 500,
+    };
+    const beforeChars = estimateMessageChars(messages);
+    messages = compressAgedToolResults(messages, opts);
+    logCompressionStats(beforeChars, estimateMessageChars(messages));
   }
   if (config.transformContext) {
     messages = await config.transformContext(messages, signal);
