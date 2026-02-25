@@ -226,11 +226,11 @@ function auditGatewayToken(
   issues: ServiceConfigIssue[],
   expectedGatewayToken?: string,
 ) {
-  const expectedToken = expectedGatewayToken?.trim();
+  const expectedToken = normalizeGatewayToken(expectedGatewayToken);
   if (!expectedToken) {
     return;
   }
-  const serviceToken = command?.environment?.OPENCLAW_GATEWAY_TOKEN?.trim();
+  const serviceToken = normalizeGatewayToken(command?.environment?.OPENCLAW_GATEWAY_TOKEN);
   if (serviceToken === expectedToken) {
     return;
   }
