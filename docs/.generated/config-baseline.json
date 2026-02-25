@@ -36638,6 +36638,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.whatsapp.accounts.*.groups.*.systemPrompt",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.whatsapp.accounts.*.groups.*.tools",
       "kind": "channel",
       "type": "object",
@@ -36936,6 +36946,16 @@
       "path": "channels.whatsapp.accounts.*.sendReadReceipts",
       "kind": "channel",
       "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.whatsapp.accounts.*.systemPrompt",
+      "kind": "channel",
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,
@@ -37335,6 +37355,16 @@
       "hasChildren": false
     },
     {
+      "path": "channels.whatsapp.groups.*.systemPrompt",
+      "kind": "channel",
+      "type": "string",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
       "path": "channels.whatsapp.groups.*.tools",
       "kind": "channel",
       "type": "object",
@@ -37629,6 +37659,16 @@
       "path": "channels.whatsapp.sendReadReceipts",
       "kind": "channel",
       "type": "boolean",
+      "required": false,
+      "deprecated": false,
+      "sensitive": false,
+      "tags": [],
+      "hasChildren": false
+    },
+    {
+      "path": "channels.whatsapp.systemPrompt",
+      "kind": "channel",
+      "type": "string",
       "required": false,
       "deprecated": false,
       "sensitive": false,

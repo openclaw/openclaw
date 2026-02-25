@@ -32,6 +32,7 @@ import {
   resolveDmGroupAccessWithCommandGate,
 } from "openclaw/plugin-sdk/security-runtime";
 import { jidToE164, normalizeE164 } from "openclaw/plugin-sdk/text-runtime";
+import { resolveWhatsAppGroupSystemPrompt } from "openclaw/plugin-sdk/whatsapp-shared";
 import { resolveWhatsAppAccount } from "../../accounts.js";
 import {
   getPrimaryIdentityId,
@@ -306,6 +307,16 @@ export async function processMessage(params: {
         )
       : undefined;
 
+  const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.route.accountId });
+  // Resolve combined system prompt (account-level + group-level if applicable)
+  const groupSystemPrompt =
+    params.msg.chatType === "group"
+      ? resolveWhatsAppGroupSystemPrompt({
+          accountConfig: account,
+          groupId: conversationId,
+        })
+      : undefined;
+
   const ctxPayload = finalizeInboundContext({
     Body: combinedBody,
     BodyForAgent: params.msg.body,
@@ -336,6 +347,7 @@ export async function processMessage(params: {
     SenderE164: sender.e164 ?? undefined,
     CommandAuthorized: commandAuthorized,
     WasMentioned: params.msg.wasMentioned,
+    GroupSystemPrompt: groupSystemPrompt,
     ...(params.msg.location ? toLocationContext(params.msg.location) : {}),
     Provider: "whatsapp",
     Surface: "whatsapp",

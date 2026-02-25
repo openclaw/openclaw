@@ -21,6 +21,8 @@ export type WhatsAppGroupConfig = {
   requireMention?: boolean;
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
+  /** Optional system prompt for this group. */
+  systemPrompt?: string;
 };
 
 export type WhatsAppAckReactionConfig = {
@@ -108,6 +110,8 @@ export type WhatsAppConfig = WhatsAppConfigCore &
     defaultAccount?: string;
     /** Per-action tool gating (default: true for all). */
     actions?: WhatsAppActionConfig;
+    /** Optional system prompt for all accounts (global default). */
+    systemPrompt?: string;
   };
 
 export type WhatsAppAccountConfig = WhatsAppConfigCore &
@@ -118,4 +122,6 @@ export type WhatsAppAccountConfig = WhatsAppConfigCore &
     enabled?: boolean;
     /** Override auth directory (Baileys multi-file auth state). */
     authDir?: string;
+    /** Optional system prompt for this account (global for all groups). */
+    systemPrompt?: string;
   };

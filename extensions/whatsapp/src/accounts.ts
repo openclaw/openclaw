@@ -34,6 +34,7 @@ export type ResolvedWhatsAppAccount = {
   ackReaction?: WhatsAppAccountConfig["ackReaction"];
   groups?: WhatsAppAccountConfig["groups"];
   debounceMs?: number;
+  systemPrompt?: string;
 };
 
 export const DEFAULT_WHATSAPP_MEDIA_MAX_MB = 50;
@@ -156,6 +157,7 @@ export function resolveWhatsAppAccount(params: {
     ackReaction: merged.ackReaction,
     groups: merged.groups,
     debounceMs: merged.debounceMs,
+    systemPrompt: merged.systemPrompt,
   };
 }
 
