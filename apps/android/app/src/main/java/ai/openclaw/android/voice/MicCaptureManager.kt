@@ -45,6 +45,7 @@ class MicCaptureManager(
     private const val speechCompleteSilenceMs = 1_500L
     private const val speechPossibleSilenceMs = 900L
     private const val maxConversationEntries = 40
+    private const val pendingRunTimeoutMs = 45_000L
   }
 
   private data class QueuedUtterance(
@@ -87,6 +88,7 @@ class MicCaptureManager(
 
   private var recognizer: SpeechRecognizer? = null
   private var restartJob: Job? = null
+  private var pendingRunTimeoutJob: Job? = null
   private var stopRequested = false
 
   fun setMicEnabled(enabled: Boolean) {
@@ -274,6 +276,8 @@ class MicCaptureManager(
 
     val next = messageQueue.first()
     _isSending.value = true
+    pendingRunTimeoutJob?.cancel()
+    pendingRunTimeoutJob = null
     _statusText.value = if (_micEnabled.value) "Listening · sending queued voice" else "Sending queued voice"
 
     scope.launch {
@@ -281,13 +285,19 @@ class MicCaptureManager(
         val runId = sendToGateway(next.text)
         pendingRunId = runId
         if (runId == null) {
+          pendingRunTimeoutJob?.cancel()
+          pendingRunTimeoutJob = null
           messageQueue.removeFirst()
           publishQueue()
           _isSending.value = false
           pendingAssistantEntryId = null
           sendQueuedIfIdle()
+        } else {
+          armPendingRunTimeout(runId)
         }
       } catch (err: Throwable) {
+        pendingRunTimeoutJob?.cancel()
+        pendingRunTimeoutJob = null
         _isSending.value = false
         pendingRunId = null
         pendingAssistantEntryId = null
@@ -301,7 +311,28 @@ class MicCaptureManager(
     }
   }
 
+  private fun armPendingRunTimeout(runId: String) {
+    pendingRunTimeoutJob?.cancel()
+    pendingRunTimeoutJob =
+      scope.launch {
+        delay(pendingRunTimeoutMs)
+        if (pendingRunId != runId) return@launch
+        pendingRunId = null
+        pendingAssistantEntryId = null
+        _isSending.value = false
+        _statusText.value =
+          if (gatewayConnected) {
+            "Voice reply timed out; retrying queued turn"
+          } else {
+            queuedWaitingStatus()
+          }
+        sendQueuedIfIdle()
+      }
+  }
+
   private fun completePendingTurn() {
+    pendingRunTimeoutJob?.cancel()
+    pendingRunTimeoutJob = null
     if (messageQueue.isNotEmpty()) {
       messageQueue.removeFirst()
       publishQueue()
