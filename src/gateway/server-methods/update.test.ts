@@ -6,6 +6,9 @@ import type { UpdateRunResult } from "../../infra/update-runner.js";
 let capturedPayload: RestartSentinelPayload | undefined;
 
 const runGatewayUpdateMock = vi.fn<() => Promise<UpdateRunResult>>();
+const runCommandWithTimeoutMock = vi.fn();
+const pathExistsMock = vi.fn();
+const serviceIsLoadedMock = vi.fn();
 
 const scheduleGatewaySigusr1RestartMock = vi.fn(() => ({ scheduled: true }));
 
@@ -59,6 +62,24 @@ vi.mock("../../infra/update-runner.js", () => ({
   runGatewayUpdate: runGatewayUpdateMock,
 }));
 
+vi.mock("../../process/exec.js", () => ({
+  runCommandWithTimeout: runCommandWithTimeoutMock,
+}));
+
+vi.mock("../../utils.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../utils.js")>();
+  return {
+    ...actual,
+    pathExists: pathExistsMock,
+  };
+});
+
+vi.mock("../../daemon/service.js", () => ({
+  resolveGatewayService: () => ({
+    isLoaded: serviceIsLoadedMock,
+  }),
+}));
+
 vi.mock("../protocol/index.js", () => ({
   validateUpdateRunParams: () => true,
 }));
@@ -86,6 +107,16 @@ beforeEach(() => {
   });
   scheduleGatewaySigusr1RestartMock.mockClear();
   scheduleGatewaySigusr1RestartMock.mockReturnValue({ scheduled: true });
+  runCommandWithTimeoutMock.mockClear();
+  runCommandWithTimeoutMock.mockResolvedValue({
+    code: 0,
+    stdout: "",
+    stderr: "",
+  });
+  pathExistsMock.mockClear();
+  pathExistsMock.mockResolvedValue(true);
+  serviceIsLoadedMock.mockClear();
+  serviceIsLoadedMock.mockResolvedValue(true);
 });
 
 async function invokeUpdateRun(
@@ -165,6 +196,7 @@ describe("update.run restart scheduling", () => {
     });
 
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
     expect(payload?.ok).toBe(true);
     expect(payload?.restart).toEqual({ scheduled: true });
   });
@@ -186,7 +218,30 @@ describe("update.run restart scheduling", () => {
     });
 
     expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
     expect(payload?.ok).toBe(false);
     expect(payload?.restart).toBeNull();
+  });
+
+  it("skips service-env refresh when daemon service is not installed", async () => {
+    serviceIsLoadedMock.mockResolvedValueOnce(false);
+
+    await invokeUpdateRun({});
+
+    expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("still schedules restart when service-env refresh command fails", async () => {
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      code: 1,
+      stdout: "",
+      stderr: "boom",
+    });
+
+    await invokeUpdateRun({});
+
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
+    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
   });
 });
