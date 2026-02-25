@@ -532,6 +532,22 @@ export function createGatewayHttpServer(opts: {
         const nodeId = requestUrl.searchParams.get("nodeId") ?? undefined;
         res.statusCode = 200;
         res.setHeader("Content-Type", "text/html; charset=utf-8");
+        // Security headers: prevent token leaks, clickjacking, MIME sniffing.
+        res.setHeader("Referrer-Policy", "no-referrer");
+        res.setHeader("X-Content-Type-Options", "nosniff");
+        res.setHeader("X-Frame-Options", "DENY");
+        res.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+        res.setHeader("Cache-Control", "no-store");
+        res.setHeader(
+          "Content-Security-Policy",
+          [
+            "default-src 'none'",
+            "script-src https://esm.sh",
+            `style-src 'unsafe-inline'`,
+            `connect-src wss://${req.headers.host ?? "*"} ws://localhost:*`,
+            "frame-ancestors 'none'",
+          ].join("; "),
+        );
         res.end(vncViewerHtml(origin, nodeId, token));
         return;
       }

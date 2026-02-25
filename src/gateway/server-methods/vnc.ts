@@ -13,7 +13,7 @@
 
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
-import { randomUUID } from "node:crypto";
+import { createHmac, randomBytes, randomUUID } from "node:crypto";
 import { createConnection, type Socket } from "node:net";
 import { WebSocket, WebSocketServer } from "ws";
 import type { NodeRegistry } from "../node-registry.js";
@@ -50,6 +50,36 @@ export function createVncProxy(opts?: {
   const vncHost = opts?.vncHost ?? process.env.BOT_VNC_HOST?.trim() ?? DEFAULT_VNC_HOST;
   const vncPort = Number(process.env.BOT_VNC_PORT?.trim() ?? opts?.vncPort ?? DEFAULT_VNC_PORT);
   const nodeRegistry = opts?.nodeRegistry;
+
+  // Per-instance HMAC-SHA256 signing key for tunnel tokens.
+  // Regenerated on every gateway restart — old tokens are inherently invalidated.
+  const tunnelSigningKey = randomBytes(32);
+
+  /** Create a signed tunnel token: `uuid.hmac` */
+  function signTunnelId(tunnelId: string): string {
+    const mac = createHmac("sha256", tunnelSigningKey).update(tunnelId).digest("hex");
+    return `${tunnelId}.${mac}`;
+  }
+
+  /** Verify and extract the tunnel UUID from a signed token. Returns null if invalid. */
+  function verifyTunnelToken(token: string): string | null {
+    const dotIdx = token.indexOf(".");
+    if (dotIdx < 0) {
+      return null;
+    }
+    const tunnelId = token.substring(0, dotIdx);
+    const providedMac = token.substring(dotIdx + 1);
+    const expectedMac = createHmac("sha256", tunnelSigningKey).update(tunnelId).digest("hex");
+    // Constant-time comparison to prevent timing attacks.
+    if (providedMac.length !== expectedMac.length) {
+      return null;
+    }
+    let mismatch = 0;
+    for (let i = 0; i < expectedMac.length; i++) {
+      mismatch |= providedMac.charCodeAt(i) ^ expectedMac.charCodeAt(i);
+    }
+    return mismatch === 0 ? tunnelId : null;
+  }
 
   // --- Local VNC proxy (original) ---
 
@@ -198,6 +228,7 @@ export function createVncProxy(opts?: {
     const tempWss = new WebSocketServer({ noServer: true });
     tempWss.handleUpgrade(req, socket, head, (browserWs) => {
       const tunnelId = randomUUID();
+      const signedToken = signTunnelId(tunnelId);
       const timer = setTimeout(() => {
         pendingTunnels.delete(tunnelId);
         browserWs.close(1011, "tunnel timeout: node did not connect back");
@@ -211,13 +242,13 @@ export function createVncProxy(opts?: {
       // leg), so we only fall back to ws for localhost/127.x development.
       const isLocalDev = host === "localhost" || host.startsWith("127.");
       const isSecure = !isLocalDev;
-      const tunnelUrl = `${isSecure ? "wss" : "ws"}://${host}/vnc-tunnel?tunnelId=${tunnelId}`;
+      const tunnelUrl = `${isSecure ? "wss" : "ws"}://${host}/vnc-tunnel?tunnelId=${signedToken}`;
 
       // Invoke the node to open a VNC tunnel.
       void nodeRegistry!.invoke({
         nodeId,
         command: "vnc.tunnel.open",
-        params: { tunnelId, tunnelUrl },
+        params: { tunnelId: signedToken, tunnelUrl },
         timeoutMs: TUNNEL_TIMEOUT_MS,
       });
     });
@@ -229,9 +260,17 @@ export function createVncProxy(opts?: {
     if (url.pathname !== "/vnc-tunnel") {
       return false;
     }
-    const tunnelId = url.searchParams.get("tunnelId");
-    if (!tunnelId || !pendingTunnels.has(tunnelId)) {
+    const signedToken = url.searchParams.get("tunnelId");
+    if (!signedToken) {
       const msg = `HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n`;
+      socket.write(msg);
+      socket.destroy();
+      return true;
+    }
+    // Verify HMAC signature before looking up the tunnel.
+    const tunnelId = verifyTunnelToken(signedToken);
+    if (!tunnelId || !pendingTunnels.has(tunnelId)) {
+      const msg = `HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n`;
       socket.write(msg);
       socket.destroy();
       return true;
@@ -281,6 +320,7 @@ export function vncViewerHtml(gatewayOrigin: string, nodeId?: string, token?: st
 <head>
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="referrer" content="no-referrer"/>
   <title>Hanzo Bot — Remote Desktop</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
