@@ -7,11 +7,7 @@ import { buildAgentSessionKey } from "../../routing/resolve-route.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
 import type { DiscordMessageEvent } from "./listeners.js";
-import {
-  resolveDiscordChannelInfo,
-  resolveDiscordEmbedText,
-  resolveDiscordMessageChannelId,
-} from "./message-utils.js";
+import { resolveDiscordChannelInfo, resolveDiscordMessageChannelId } from "./message-utils.js";
 
 export type DiscordThreadChannel = {
   id: string;
@@ -188,9 +184,8 @@ export async function resolveDiscordThreadStarter(params: {
     if (!starter) {
       return null;
     }
-    const content = starter.content?.trim() ?? "";
-    const embedText = resolveDiscordEmbedText(starter.embeds?.[0]);
-    const text = content || embedText;
+    // Security hardening: never treat embed preview metadata as trusted input.
+    const text = starter.content?.trim() ?? "";
     if (!text) {
       return null;
     }
