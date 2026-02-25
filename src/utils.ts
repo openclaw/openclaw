@@ -121,6 +121,20 @@ export function isSelfChatMode(
   });
 }
 
+/**
+ * WhatsApp JIDs for Brazil omit the extra "9" used in many mobile E.164 numbers.
+ * Converts 55 + DD + 9 + XXXXXXXX (13 digits) into 55 + DD + XXXXXXXX (12 digits).
+ */
+function normalizeBrazilianMobile(digits: string): string {
+  if (digits.length !== 13 || !digits.startsWith("55")) {
+    return digits;
+  }
+  if (digits[4] !== "9") {
+    return digits;
+  }
+  return digits.slice(0, 4) + digits.slice(5);
+}
+
 export function toWhatsappJid(number: string): string {
   const withoutPrefix = number.replace(/^whatsapp:/, "").trim();
   if (withoutPrefix.includes("@")) {
@@ -128,7 +142,8 @@ export function toWhatsappJid(number: string): string {
   }
   const e164 = normalizeE164(withoutPrefix);
   const digits = e164.replace(/\D/g, "");
-  return `${digits}@s.whatsapp.net`;
+  const normalized = normalizeBrazilianMobile(digits);
+  return `${normalized}@s.whatsapp.net`;
 }
 
 export type JidToE164Options = {

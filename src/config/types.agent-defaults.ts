@@ -166,6 +166,12 @@ export type AgentDefaultsConfig = {
   verboseDefault?: "off" | "on" | "full";
   /** Default elevated level when no /elevated directive is present. */
   elevatedDefault?: "off" | "on" | "ask" | "full";
+  /**
+   * Controls auto-delivery behavior for assistant text.
+   * - "auto": normal block/final delivery
+   * - "tool-only": suppress auto-delivery; only explicit message tool sends are delivered
+   */
+  replyMode?: "auto" | "tool-only";
   /** Default block streaming level when no override is present. */
   blockStreamingDefault?: "off" | "on";
   /**

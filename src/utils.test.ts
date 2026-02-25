@@ -90,6 +90,19 @@ describe("normalizeE164 & toWhatsappJid", () => {
     expect(toWhatsappJid("whatsapp:123456789-987654321@g.us")).toBe("123456789-987654321@g.us");
     expect(toWhatsappJid("1555123@s.whatsapp.net")).toBe("1555123@s.whatsapp.net");
   });
+
+  it("normalizes Brazilian mobile numbers by stripping the extra 9", () => {
+    expect(toWhatsappJid("+5569996021005")).toBe("556996021005@s.whatsapp.net");
+    expect(toWhatsappJid("+5511999887766")).toBe("551199887766@s.whatsapp.net");
+    expect(toWhatsappJid("whatsapp:+5521987654321")).toBe("552187654321@s.whatsapp.net");
+  });
+
+  it("keeps non-Brazilian and already-normalized numbers unchanged", () => {
+    expect(toWhatsappJid("+12025551234")).toBe("12025551234@s.whatsapp.net");
+    expect(toWhatsappJid("+5491155551234")).toBe("5491155551234@s.whatsapp.net");
+    expect(toWhatsappJid("+551133224455")).toBe("551133224455@s.whatsapp.net");
+    expect(toWhatsappJid("+556996021005")).toBe("556996021005@s.whatsapp.net");
+  });
 });
 
 describe("jidToE164", () => {

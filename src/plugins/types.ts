@@ -309,6 +309,7 @@ export type PluginHookName =
   | "message_received"
   | "message_sending"
   | "message_sent"
+  | "message_transcribed"
   | "before_tool_call"
   | "after_tool_call"
   | "tool_result_persist"
@@ -361,6 +362,14 @@ export type PluginHookBeforeAgentStartEvent = {
   prompt: string;
   /** Optional because legacy hook can run in pre-session phase. */
   messages?: unknown[];
+  /** Optional sender metadata for sender-aware context hooks. */
+  senderMetadata?: {
+    senderE164?: string;
+    senderName?: string;
+    chatType?: "group" | "direct";
+    senderIsOwner?: boolean;
+    sessionKey?: string;
+  };
 };
 
 export type PluginHookBeforeAgentStartResult = PluginHookBeforePromptBuildResult &
@@ -467,6 +476,15 @@ export type PluginHookMessageSentEvent = {
   content: string;
   success: boolean;
   error?: string;
+  metadata?: Record<string, unknown>;
+};
+
+// message_transcribed hook
+export type PluginHookMessageTranscribedEvent = {
+  from: string;
+  transcript: string;
+  timestamp?: number;
+  metadata?: Record<string, unknown>;
 };
 
 // Tool context
@@ -699,6 +717,10 @@ export type PluginHookHandlerMap = {
   ) => Promise<PluginHookMessageSendingResult | void> | PluginHookMessageSendingResult | void;
   message_sent: (
     event: PluginHookMessageSentEvent,
+    ctx: PluginHookMessageContext,
+  ) => Promise<void> | void;
+  message_transcribed: (
+    event: PluginHookMessageTranscribedEvent,
     ctx: PluginHookMessageContext,
   ) => Promise<void> | void;
   before_tool_call: (

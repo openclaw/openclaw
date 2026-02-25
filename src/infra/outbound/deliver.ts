@@ -467,6 +467,12 @@ async function deliverOutboundPayloadsCore(
               content: params.content,
               success: params.success,
               ...(params.error ? { error: params.error } : {}),
+              metadata: {
+                channel,
+                accountId,
+                messageId: params.messageId,
+                mediaUrls: payloadSummary.mediaUrls,
+              },
             },
             {
               channelId: channel,

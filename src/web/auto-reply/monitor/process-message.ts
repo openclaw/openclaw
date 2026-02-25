@@ -29,6 +29,7 @@ import { readChannelAllowFromStore } from "../../../pairing/pairing-store.js";
 import type { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import { jidToE164, normalizeE164 } from "../../../utils.js";
 import { resolveWhatsAppAccount } from "../../accounts.js";
+import { getActiveWebListener } from "../../active-listener.js";
 import { newConnectionId } from "../../reconnect.js";
 import { formatError } from "../../session.js";
 import { deliverWebReply } from "../deliver-reply.js";
@@ -55,6 +56,33 @@ function normalizeAllowFromE164(values: Array<string | number> | undefined): str
     .filter((entry) => entry && entry !== "*")
     .map((entry) => normalizeE164(entry))
     .filter((entry): entry is string => Boolean(entry));
+}
+
+function normalizeMaybeE164(value: string | null | undefined): string | undefined {
+  if (!value?.trim()) {
+    return undefined;
+  }
+  const normalized = normalizeE164(value);
+  return normalized.replace(/\D/g, "").length > 0 ? normalized : undefined;
+}
+
+function resolveSmartRouterOwnerTarget(params: {
+  cfg: ReturnType<typeof loadConfig>;
+  fallbackAllowFrom: Array<string | number> | undefined;
+}): string | undefined {
+  const smartRouter = (
+    params.cfg as ReturnType<typeof loadConfig> & {
+      smartRouter?: { enabled?: boolean; ownerPhone?: string };
+    }
+  ).smartRouter;
+  if (!smartRouter?.enabled) {
+    return undefined;
+  }
+  const explicitOwner = normalizeMaybeE164(smartRouter.ownerPhone);
+  if (explicitOwner) {
+    return explicitOwner;
+  }
+  return normalizeAllowFromE164(params.fallbackAllowFrom)[0];
 }
 
 async function resolveWhatsAppCommandAuthorized(params: {
@@ -259,6 +287,18 @@ export async function processMessage(params: {
   const commandAuthorized = shouldComputeCommandAuthorized(params.msg.body, params.cfg)
     ? await resolveWhatsAppCommandAuthorized({ cfg: params.cfg, msg: params.msg })
     : undefined;
+  const account = resolveWhatsAppAccount({ cfg: params.cfg, accountId: params.route.accountId });
+  const smartRouterOwnerTarget = resolveSmartRouterOwnerTarget({
+    cfg: params.cfg,
+    fallbackAllowFrom: account.allowFrom,
+  });
+  const inboundSenderE164 = normalizeMaybeE164(dmRouteTarget);
+  const shouldRouteDirectRepliesToOwner = Boolean(
+    smartRouterOwnerTarget &&
+    params.msg.chatType !== "group" &&
+    inboundSenderE164 &&
+    inboundSenderE164 !== smartRouterOwnerTarget,
+  );
   const configuredResponsePrefix = params.cfg.messages?.responsePrefix;
   const { onModelSelected, ...prefixOptions } = createReplyPrefixOptions({
     cfg: params.cfg,
@@ -375,6 +415,44 @@ export async function processMessage(params: {
           // Only deliver final replies to external messaging channels (WhatsApp).
           // Block (reasoning/thinking) and tool updates are meant for the internal
           // web UI only; sending them here leaks chain-of-thought to end users.
+          return;
+        }
+        const shouldUseSmartRouter =
+          shouldRouteDirectRepliesToOwner &&
+          Boolean(payload.text) &&
+          !payload.mediaUrl &&
+          !payload.mediaUrls?.length;
+        if (shouldUseSmartRouter && smartRouterOwnerTarget) {
+          const listener = getActiveWebListener(params.route.accountId);
+          if (!listener) {
+            whatsappOutboundLog.warn(
+              "[SmartRouter] No active WhatsApp listener for owner routing; skipping send",
+            );
+            return;
+          }
+          try {
+            const sendOptions = params.route.accountId ? { accountId: params.route.accountId } : {};
+            await listener.sendMessage(
+              smartRouterOwnerTarget,
+              payload.text!,
+              undefined,
+              undefined,
+              sendOptions,
+            );
+            didSendReply = true;
+            params.rememberSentText(payload.text, {
+              combinedBody,
+              combinedBodySessionKey: params.route.sessionKey,
+              logVerboseMessage: true,
+            });
+            whatsappOutboundLog.info(
+              `[SmartRouter] Routed direct reply to owner ${smartRouterOwnerTarget}`,
+            );
+          } catch (err) {
+            whatsappOutboundLog.warn(
+              `[SmartRouter] Failed owner routing to ${smartRouterOwnerTarget}: ${formatError(err)}`,
+            );
+          }
           return;
         }
         await deliverWebReply({

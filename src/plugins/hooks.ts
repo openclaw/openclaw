@@ -31,6 +31,7 @@ import type {
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
+  PluginHookMessageTranscribedEvent,
   PluginHookName,
   PluginHookRegistration,
   PluginHookSessionContext,
@@ -71,6 +72,7 @@ export type {
   PluginHookMessageSendingEvent,
   PluginHookMessageSendingResult,
   PluginHookMessageSentEvent,
+  PluginHookMessageTranscribedEvent,
   PluginHookToolContext,
   PluginHookBeforeToolCallEvent,
   PluginHookBeforeToolCallResult,
@@ -417,6 +419,17 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     return runVoidHook("message_sent", event, ctx);
   }
 
+  /**
+   * Run message_transcribed hook.
+   * Fired after inbound transcription completes.
+   */
+  async function runMessageTranscribed(
+    event: PluginHookMessageTranscribedEvent,
+    ctx: PluginHookMessageContext,
+  ): Promise<void> {
+    return runVoidHook("message_transcribed", event, ctx);
+  }
+
   // =========================================================================
   // Tool Hooks
   // =========================================================================
@@ -728,6 +741,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     runMessageReceived,
     runMessageSending,
     runMessageSent,
+    runMessageTranscribed,
     // Tool hooks
     runBeforeToolCall,
     runAfterToolCall,

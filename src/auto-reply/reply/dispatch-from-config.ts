@@ -189,6 +189,23 @@ export async function dispatchReplyFromConfig(params: {
             senderE164: ctx.SenderE164,
             guildId: ctx.GroupSpace,
             channelName: ctx.GroupChannel,
+            chatType: ctx.ChatType,
+            groupSubject: ctx.GroupSubject,
+            mediaPath: ctx.MediaPath,
+            mediaUrl: ctx.MediaUrl,
+            mediaType: ctx.MediaType,
+            mediaPaths: Array.isArray(ctx.MediaPaths)
+              ? ctx.MediaPaths
+              : ctx.MediaPath
+                ? [ctx.MediaPath]
+                : undefined,
+            mediaTypes: Array.isArray(ctx.MediaTypes)
+              ? ctx.MediaTypes
+              : ctx.MediaType
+                ? [ctx.MediaType]
+                : undefined,
+            mediaRemoteHost: ctx.MediaRemoteHost,
+            transcript: ctx.Transcript,
           },
         },
         {
@@ -224,6 +241,23 @@ export async function dispatchReplyFromConfig(params: {
           senderE164: ctx.SenderE164,
           guildId: ctx.GroupSpace,
           channelName: ctx.GroupChannel,
+          chatType: ctx.ChatType,
+          groupSubject: ctx.GroupSubject,
+          mediaPath: ctx.MediaPath,
+          mediaUrl: ctx.MediaUrl,
+          mediaType: ctx.MediaType,
+          mediaPaths: Array.isArray(ctx.MediaPaths)
+            ? ctx.MediaPaths
+            : ctx.MediaPath
+              ? [ctx.MediaPath]
+              : undefined,
+          mediaTypes: Array.isArray(ctx.MediaTypes)
+            ? ctx.MediaTypes
+            : ctx.MediaType
+              ? [ctx.MediaType]
+              : undefined,
+          mediaRemoteHost: ctx.MediaRemoteHost,
+          transcript: ctx.Transcript,
         },
       }),
     ).catch((err) => {
@@ -346,6 +380,9 @@ export async function dispatchReplyFromConfig(params: {
         ...params.replyOptions,
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
+            if ((cfg.agents?.defaults?.replyMode ?? "auto") === "tool-only") {
+              return;
+            }
             const ttsPayload = await maybeApplyTtsToPayload({
               payload,
               cfg,
@@ -368,6 +405,9 @@ export async function dispatchReplyFromConfig(params: {
         },
         onBlockReply: (payload: ReplyPayload, context) => {
           const run = async () => {
+            if ((cfg.agents?.defaults?.replyMode ?? "auto") === "tool-only") {
+              return;
+            }
             // Suppress reasoning payloads — channels using this generic dispatch
             // path (WhatsApp, web, etc.) do not have a dedicated reasoning lane.
             // Telegram has its own dispatch path that handles reasoning splitting.
@@ -403,10 +443,11 @@ export async function dispatchReplyFromConfig(params: {
     );
 
     const replies = replyResult ? (Array.isArray(replyResult) ? replyResult : [replyResult]) : [];
+    const isToolOnlyMode = (cfg.agents?.defaults?.replyMode ?? "auto") === "tool-only";
 
     let queuedFinal = false;
     let routedFinalCount = 0;
-    for (const reply of replies) {
+    for (const reply of isToolOnlyMode ? [] : replies) {
       // Suppress reasoning payloads from channel delivery — channels using this
       // generic dispatch path do not have a dedicated reasoning lane.
       if (shouldSuppressReasoningPayload(reply)) {
