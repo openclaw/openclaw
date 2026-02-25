@@ -26,11 +26,13 @@ function restoreMinimaxEnv(): void {
 function createPrompter(params?: {
   confirm?: WizardPrompter["confirm"];
   note?: WizardPrompter["note"];
+  select?: WizardPrompter["select"];
   text?: WizardPrompter["text"];
 }): WizardPrompter {
   return {
     confirm: params?.confirm ?? (vi.fn(async () => true) as WizardPrompter["confirm"]),
     note: params?.note ?? (vi.fn(async () => undefined) as WizardPrompter["note"]),
+    ...(params?.select ? { select: params.select } : {}),
     text: params?.text ?? (vi.fn(async () => "prompt-key") as WizardPrompter["text"]),
   } as unknown as WizardPrompter;
 }
@@ -53,6 +55,7 @@ async function runEnsureMinimaxApiKeyFlow(params: { confirmResult: boolean; text
   const setCredential = vi.fn(async () => undefined);
 
   const result = await ensureApiKeyFromEnvOrPrompt({
+    config: {},
     provider: "minimax",
     envLabel: "MINIMAX_API_KEY",
     promptMessage: "Enter key",
@@ -143,7 +146,7 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
     });
 
     expect(result).toBe("prompted-key");
-    expect(setCredential).toHaveBeenCalledWith("prompted-key", undefined);
+    expect(setCredential).toHaveBeenCalledWith("prompted-key", "plaintext");
     expect(text).toHaveBeenCalledWith(
       expect.objectContaining({
         message: "Enter key",
@@ -162,6 +165,7 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
     const setCredential = vi.fn(async () => undefined);
 
     const result = await ensureApiKeyFromEnvOrPrompt({
+      config: {},
       provider: "minimax",
       envLabel: "MINIMAX_API_KEY",
       promptMessage: "Enter key",
@@ -173,37 +177,68 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
     });
 
     expect(result).toBe("env-key");
-    expect(setCredential).toHaveBeenCalledWith("${MINIMAX_API_KEY}", "ref");
+    expect(setCredential).toHaveBeenCalledWith({ source: "env", id: "MINIMAX_API_KEY" }, "ref");
     expect(text).not.toHaveBeenCalled();
   });
 
-  it("shows a ref-mode note when plaintext input is provided in ref mode", async () => {
-    delete process.env.MINIMAX_API_KEY;
+  it("re-prompts after sops ref validation failure and succeeds with env ref", async () => {
+    process.env.MINIMAX_API_KEY = "env-key";
     delete process.env.MINIMAX_OAUTH_TOKEN;
 
-    const { confirm, note, text } = createPromptSpies({
-      confirmResult: false,
-      textResult: "  prompted-key  ",
-    });
+    const selectValues: Array<"file" | "env"> = ["file", "env"];
+    const select = vi.fn(async () => selectValues.shift() ?? "env") as WizardPrompter["select"];
+    const text = vi
+      .fn<WizardPrompter["text"]>()
+      .mockResolvedValueOnce("/providers/minimax/apiKey")
+      .mockResolvedValueOnce("MINIMAX_API_KEY");
+    const note = vi.fn(async () => undefined);
     const setCredential = vi.fn(async () => undefined);
 
     const result = await ensureApiKeyFromEnvOrPrompt({
+      config: {},
       provider: "minimax",
       envLabel: "MINIMAX_API_KEY",
       promptMessage: "Enter key",
       normalize: (value) => value.trim(),
       validate: () => undefined,
-      prompter: createPrompter({ confirm, note, text }),
+      prompter: createPrompter({ select, text, note }),
       secretInputMode: "ref",
       setCredential,
     });
 
-    expect(result).toBe("prompted-key");
-    expect(setCredential).toHaveBeenCalledWith("prompted-key", "ref");
+    expect(result).toBe("env-key");
+    expect(setCredential).toHaveBeenCalledWith({ source: "env", id: "MINIMAX_API_KEY" }, "ref");
     expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("secret-input-mode=ref stores an env reference"),
-      "Ref mode note",
+      expect.stringContaining("Could not validate this encrypted file reference."),
+      "Reference check failed",
     );
+  });
+
+  it("never includes resolved env secret values in reference validation notes", async () => {
+    process.env.MINIMAX_API_KEY = "sk-minimax-redacted-value";
+    delete process.env.MINIMAX_OAUTH_TOKEN;
+
+    const select = vi.fn(async () => "env") as WizardPrompter["select"];
+    const text = vi.fn<WizardPrompter["text"]>().mockResolvedValue("MINIMAX_API_KEY");
+    const note = vi.fn(async () => undefined);
+    const setCredential = vi.fn(async () => undefined);
+
+    const result = await ensureApiKeyFromEnvOrPrompt({
+      config: {},
+      provider: "minimax",
+      envLabel: "MINIMAX_API_KEY",
+      promptMessage: "Enter key",
+      normalize: (value) => value.trim(),
+      validate: () => undefined,
+      prompter: createPrompter({ select, text, note }),
+      secretInputMode: "ref",
+      setCredential,
+    });
+
+    expect(result).toBe("sk-minimax-redacted-value");
+    const noteMessages = note.mock.calls.map((call) => String(call.at(0) ?? "")).join("\n");
+    expect(noteMessages).toContain("Validated environment variable MINIMAX_API_KEY.");
+    expect(noteMessages).not.toContain("sk-minimax-redacted-value");
   });
 });
 
@@ -218,6 +253,7 @@ describe("ensureApiKeyFromOptionEnvOrPrompt", () => {
     const result = await ensureApiKeyFromOptionEnvOrPrompt({
       token: "  opts-key  ",
       tokenProvider: " HUGGINGFACE ",
+      config: {},
       expectedProviders: ["huggingface"],
       provider: "huggingface",
       envLabel: "HF_TOKEN",
@@ -250,6 +286,7 @@ describe("ensureApiKeyFromOptionEnvOrPrompt", () => {
     const result = await ensureApiKeyFromOptionEnvOrPrompt({
       token: "opts-key",
       tokenProvider: "openai",
+      config: {},
       expectedProviders: ["minimax"],
       provider: "minimax",
       envLabel: "MINIMAX_API_KEY",
