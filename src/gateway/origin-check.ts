@@ -28,6 +28,7 @@ function parseOrigin(
 
 export function checkBrowserOrigin(params: {
   requestHost?: string;
+  requestForwardedHost?: string;
   origin?: string;
   allowedOrigins?: string[];
   allowHostHeaderOriginFallback?: boolean;
@@ -46,17 +47,23 @@ export function checkBrowserOrigin(params: {
   }
 
   const requestHost = normalizeHostHeader(params.requestHost);
-  if (
-    params.allowHostHeaderOriginFallback === true &&
-    requestHost &&
-    parsedOrigin.host === requestHost
-  ) {
-    return { ok: true, matchedBy: "host-header-fallback" };
+  const requestForwardedHost = normalizeHostHeader(params.requestForwardedHost);
+  if (params.allowHostHeaderOriginFallback === true) {
+    if (requestHost && parsedOrigin.host === requestHost) {
+      return { ok: true };
+    }
+    if (requestForwardedHost && parsedOrigin.host === requestForwardedHost) {
+      return { ok: true };
+    }
   }
 
-  // Dev fallback only for genuinely local socket clients, not Host-header claims.
-  if (params.isLocalClient && isLoopbackHost(parsedOrigin.hostname)) {
-    return { ok: true, matchedBy: "local-loopback" };
+  const requestHostname = resolveHostName(requestHost);
+  const requestForwardedHostname = resolveHostName(requestForwardedHost);
+  if (
+    isLoopbackHost(parsedOrigin.hostname) &&
+    (isLoopbackHost(requestHostname) || isLoopbackHost(requestForwardedHostname))
+  ) {
+    return { ok: true };
   }
 
   return { ok: false, reason: "origin not allowed" };
