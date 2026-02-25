@@ -120,6 +120,8 @@ describe("isChatStopCommand", () => {
     expect(isChatStopCommand("/stop")).toBe(true);
     expect(isChatStopCommand("abort")).toBe(true);
     expect(isChatStopCommand("esc")).toBe(true);
+    expect(isChatStopCommand("wait")).toBe(true);
+    expect(isChatStopCommand("exit")).toBe(true);
   });
 
   it("rejects non-stop text", () => {
