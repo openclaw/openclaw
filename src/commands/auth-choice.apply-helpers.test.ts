@@ -177,15 +177,18 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
     });
 
     expect(result).toBe("env-key");
-    expect(setCredential).toHaveBeenCalledWith({ source: "env", id: "MINIMAX_API_KEY" }, "ref");
+    expect(setCredential).toHaveBeenCalledWith(
+      { source: "env", provider: "default", id: "MINIMAX_API_KEY" },
+      "ref",
+    );
     expect(text).not.toHaveBeenCalled();
   });
 
-  it("re-prompts after sops ref validation failure and succeeds with env ref", async () => {
+  it("re-prompts after provider ref validation failure and succeeds with env ref", async () => {
     process.env.MINIMAX_API_KEY = "env-key";
     delete process.env.MINIMAX_OAUTH_TOKEN;
 
-    const selectValues: Array<"file" | "env"> = ["file", "env"];
+    const selectValues: Array<"provider" | "env" | "filemain"> = ["provider", "filemain", "env"];
     const select = vi.fn(async () => selectValues.shift() ?? "env") as WizardPrompter["select"];
     const text = vi
       .fn<WizardPrompter["text"]>()
@@ -195,7 +198,17 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
     const setCredential = vi.fn(async () => undefined);
 
     const result = await ensureApiKeyFromEnvOrPrompt({
-      config: {},
+      config: {
+        secrets: {
+          providers: {
+            filemain: {
+              source: "file",
+              path: "/tmp/does-not-exist-secrets.json",
+              mode: "jsonPointer",
+            },
+          },
+        },
+      },
       provider: "minimax",
       envLabel: "MINIMAX_API_KEY",
       promptMessage: "Enter key",
@@ -207,9 +220,12 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
     });
 
     expect(result).toBe("env-key");
-    expect(setCredential).toHaveBeenCalledWith({ source: "env", id: "MINIMAX_API_KEY" }, "ref");
+    expect(setCredential).toHaveBeenCalledWith(
+      { source: "env", provider: "default", id: "MINIMAX_API_KEY" },
+      "ref",
+    );
     expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("Could not validate this encrypted file reference."),
+      expect.stringContaining("Could not validate provider reference"),
       "Reference check failed",
     );
   });
