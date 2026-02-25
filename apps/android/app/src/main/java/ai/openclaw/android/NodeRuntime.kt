@@ -20,6 +20,7 @@ import ai.openclaw.android.gateway.probeGatewayTlsFingerprint
 import ai.openclaw.android.node.*
 import ai.openclaw.android.protocol.OpenClawCanvasA2UIAction
 import ai.openclaw.android.voice.MicCaptureManager
+import ai.openclaw.android.voice.VoiceConversationEntry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -304,6 +305,9 @@ class NodeRuntime(context: Context) {
 
   val micQueuedMessages: StateFlow<List<String>>
     get() = micCapture.queuedMessages
+
+  val micConversation: StateFlow<List<VoiceConversationEntry>>
+    get() = micCapture.conversation
 
   val micInputLevel: StateFlow<Float>
     get() = micCapture.inputLevel
