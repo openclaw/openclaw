@@ -453,17 +453,15 @@ export function resolveDiscordMessageText(
   message: Message,
   options?: { fallbackText?: string; includeForwarded?: boolean },
 ): string {
-  const embedText = resolveDiscordEmbedText(
-    (message.embeds?.[0] as { title?: string | null; description?: string | null } | undefined) ??
-      null,
-  );
   const baseText =
     message.content?.trim() ||
     buildDiscordMediaPlaceholder({
       attachments: message.attachments ?? undefined,
       stickers: resolveDiscordMessageStickers(message),
     }) ||
-    embedText ||
+    // Security hardening: never ingest embed preview text into agent input.
+    // Embed metadata (titles/descriptions) can come from remote URLs and must
+    // stay untrusted unless explicitly requested via web tools.
     options?.fallbackText?.trim() ||
     "";
   if (!options?.includeForwarded) {
@@ -527,8 +525,9 @@ function resolveDiscordSnapshotMessageText(snapshot: DiscordSnapshotMessage): st
     attachments: snapshot.attachments ?? undefined,
     stickers: resolveDiscordSnapshotStickers(snapshot),
   });
-  const embedText = resolveDiscordEmbedText(snapshot.embeds?.[0]);
-  return content || attachmentText || embedText || "";
+  // Security hardening: forwarded snapshots must not pull embed preview text.
+  // Only explicit user-authored content and media placeholders are included.
+  return content || attachmentText || "";
 }
 
 function formatDiscordSnapshotAuthor(

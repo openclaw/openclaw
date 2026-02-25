@@ -510,6 +510,44 @@ describe("resolveDiscordMessageText", () => {
     expect(text).toContain("forwarded hello");
   });
 
+  it("ignores embed preview text when content is empty", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "",
+        embeds: [{ description: "IGNORE THIS PREVIEW" }],
+      }),
+    );
+
+    expect(text).toBe("");
+  });
+
+  it("ignores forwarded snapshot embed preview text", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "",
+        rawData: {
+          message_snapshots: [
+            {
+              message: {
+                content: "",
+                embeds: [{ title: "Preview title", description: "Injected preview" }],
+                attachments: [],
+                author: {
+                  id: "u2",
+                  username: "Bob",
+                  discriminator: "0",
+                },
+              },
+            },
+          ],
+        },
+      }),
+      { includeForwarded: true },
+    );
+
+    expect(text).toBe("");
+  });
+
   it("uses sticker placeholders when content is empty", () => {
     const text = resolveDiscordMessageText(
       asMessage({
