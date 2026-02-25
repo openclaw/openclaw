@@ -4,7 +4,12 @@ import type { OAuthCredentials } from "@mariozechner/pi-ai";
 import { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { resolveStateDir } from "../config/paths.js";
-import { isSecretRef, type SecretInput, type SecretRef } from "../config/types.secrets.js";
+import {
+  coerceSecretRef,
+  DEFAULT_SECRET_PROVIDER_ALIAS,
+  type SecretInput,
+  type SecretRef,
+} from "../config/types.secrets.js";
 import { KILOCODE_DEFAULT_MODEL_REF } from "../providers/kilocode-shared.js";
 import { PROVIDER_ENV_VARS } from "../secrets/provider-env-vars.js";
 import { normalizeSecretInput } from "../utils/normalize-secret-input.js";
@@ -22,7 +27,7 @@ export type ApiKeyStorageOptions = {
 };
 
 function buildEnvSecretRef(id: string): SecretRef {
-  return { source: "env", id };
+  return { source: "env", provider: DEFAULT_SECRET_PROVIDER_ALIAS, id };
 }
 
 function parseEnvSecretRef(value: string): SecretRef | null {
@@ -49,8 +54,9 @@ function resolveApiKeySecretInput(
   input: SecretInput,
   options?: ApiKeyStorageOptions,
 ): SecretInput {
-  if (isSecretRef(input)) {
-    return input;
+  const coercedRef = coerceSecretRef(input);
+  if (coercedRef) {
+    return coercedRef;
   }
   const normalized = normalizeSecretInput(input);
   const inlineEnvRef = parseEnvSecretRef(normalized);

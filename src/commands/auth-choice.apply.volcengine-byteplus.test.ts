@@ -88,7 +88,7 @@ describe("volcengine/byteplus auth choice", () => {
       profiles?: Record<string, { key?: string; keyRef?: unknown }>;
     }>(agentDir);
     expect(parsed.profiles?.["volcengine:default"]).toMatchObject({
-      keyRef: { source: "env", id: "VOLCANO_ENGINE_API_KEY" },
+      keyRef: { source: "env", provider: "default", id: "VOLCANO_ENGINE_API_KEY" },
     });
     expect(parsed.profiles?.["volcengine:default"]?.key).toBeUndefined();
   });
@@ -153,7 +153,7 @@ describe("volcengine/byteplus auth choice", () => {
       profiles?: Record<string, { key?: string; keyRef?: unknown }>;
     }>(agentDir);
     expect(parsed.profiles?.["byteplus:default"]).toMatchObject({
-      keyRef: { source: "env", id: "BYTEPLUS_API_KEY" },
+      keyRef: { source: "env", provider: "default", id: "BYTEPLUS_API_KEY" },
     });
     expect(parsed.profiles?.["byteplus:default"]?.key).toBeUndefined();
   });

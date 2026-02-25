@@ -17,13 +17,13 @@ describe("saveAuthProfileStore", () => {
             type: "api_key",
             provider: "openai",
             key: "sk-runtime-value",
-            keyRef: { source: "env", id: "OPENAI_API_KEY" },
+            keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
           },
           "github-copilot:default": {
             type: "token",
             provider: "github-copilot",
             token: "gh-runtime-token",
-            tokenRef: { source: "env", id: "GITHUB_TOKEN" },
+            tokenRef: { source: "env", provider: "default", id: "GITHUB_TOKEN" },
           },
           "anthropic:default": {
             type: "api_key",
@@ -45,12 +45,14 @@ describe("saveAuthProfileStore", () => {
       expect(parsed.profiles["openai:default"]?.key).toBeUndefined();
       expect(parsed.profiles["openai:default"]?.keyRef).toEqual({
         source: "env",
+        provider: "default",
         id: "OPENAI_API_KEY",
       });
 
       expect(parsed.profiles["github-copilot:default"]?.token).toBeUndefined();
       expect(parsed.profiles["github-copilot:default"]?.tokenRef).toEqual({
         source: "env",
+        provider: "default",
         id: "GITHUB_TOKEN",
       });
 

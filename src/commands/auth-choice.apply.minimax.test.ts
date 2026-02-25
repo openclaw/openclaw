@@ -181,6 +181,7 @@ describe("applyAuthChoiceMiniMax", () => {
     const parsed = await readAuthProfiles(agentDir);
     expect(parsed.profiles?.["minimax-cn:default"]?.keyRef).toEqual({
       source: "env",
+      provider: "default",
       id: "MINIMAX_API_KEY",
     });
     expect(parsed.profiles?.["minimax-cn:default"]?.key).toBeUndefined();

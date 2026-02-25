@@ -5,16 +5,26 @@ describe("config secret refs schema", () => {
   it("accepts top-level secrets sources and model apiKey refs", () => {
     const result = validateConfigObjectRaw({
       secrets: {
-        sources: {
-          env: { type: "env" },
-          file: { type: "sops", path: "~/.openclaw/secrets.enc.json", timeoutMs: 10_000 },
+        providers: {
+          default: { source: "env" },
+          filemain: {
+            source: "file",
+            path: "~/.openclaw/secrets.json",
+            mode: "jsonPointer",
+            timeoutMs: 10_000,
+          },
+          vault: {
+            source: "exec",
+            command: "/usr/local/bin/openclaw-secret-resolver",
+            args: ["resolve"],
+          },
         },
       },
       models: {
         providers: {
           openai: {
             baseUrl: "https://api.openai.com/v1",
-            apiKey: { source: "env", id: "OPENAI_API_KEY" },
+            apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
             models: [{ id: "gpt-5", name: "gpt-5" }],
           },
         },
@@ -28,7 +38,11 @@ describe("config secret refs schema", () => {
     const result = validateConfigObjectRaw({
       channels: {
         googlechat: {
-          serviceAccountRef: { source: "file", id: "/channels/googlechat/serviceAccount" },
+          serviceAccountRef: {
+            source: "file",
+            provider: "filemain",
+            id: "/channels/googlechat/serviceAccount",
+          },
         },
       },
     });
@@ -42,7 +56,7 @@ describe("config secret refs schema", () => {
         entries: {
           "review-pr": {
             enabled: true,
-            apiKey: { source: "env", id: "SKILL_REVIEW_PR_API_KEY" },
+            apiKey: { source: "env", provider: "default", id: "SKILL_REVIEW_PR_API_KEY" },
           },
         },
       },
@@ -57,7 +71,7 @@ describe("config secret refs schema", () => {
         providers: {
           openai: {
             baseUrl: "https://api.openai.com/v1",
-            apiKey: { source: "env", id: "bad id with spaces" },
+            apiKey: { source: "env", provider: "default", id: "bad id with spaces" },
             models: [{ id: "gpt-5", name: "gpt-5" }],
           },
         },
@@ -78,7 +92,7 @@ describe("config secret refs schema", () => {
         providers: {
           openai: {
             baseUrl: "https://api.openai.com/v1",
-            apiKey: { source: "env", id: "/providers/openai/apiKey" },
+            apiKey: { source: "env", provider: "default", id: "/providers/openai/apiKey" },
             models: [{ id: "gpt-5", name: "gpt-5" }],
           },
         },
@@ -103,7 +117,7 @@ describe("config secret refs schema", () => {
         providers: {
           openai: {
             baseUrl: "https://api.openai.com/v1",
-            apiKey: { source: "file", id: "providers/openai/apiKey" },
+            apiKey: { source: "file", provider: "default", id: "providers/openai/apiKey" },
             models: [{ id: "gpt-5", name: "gpt-5" }],
           },
         },
