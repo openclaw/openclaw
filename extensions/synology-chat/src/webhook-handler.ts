@@ -1,6 +1,6 @@
 /**
  * Inbound webhook handler for Synology Chat outgoing webhooks.
- * Parses form-urlencoded body, validates security, delivers to agent.
+ * Parses form-urlencoded/JSON body, validates security, delivers to agent.
  */
 
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -69,34 +69,150 @@ async function readBody(req: IncomingMessage): Promise<
   }
 }
 
-/** Parse form-urlencoded body into SynologyWebhookPayload. */
-function parsePayload(body: string): SynologyWebhookPayload | null {
-  const parsed = querystring.parse(body);
+function firstNonEmptyString(value: unknown): string | undefined {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const normalized = firstNonEmptyString(item);
+      if (normalized) return normalized;
+    }
+    return undefined;
+  }
+  if (value === null || value === undefined) return undefined;
+  const str = String(value).trim();
+  return str.length > 0 ? str : undefined;
+}
 
-  const token = String(parsed.token ?? "");
-  const userId = String(parsed.user_id ?? "");
-  const username = String(parsed.username ?? "unknown");
-  const text = String(parsed.text ?? "");
+function pickAlias(record: Record<string, unknown>, aliases: string[]): string | undefined {
+  for (const alias of aliases) {
+    const normalized = firstNonEmptyString(record[alias]);
+    if (normalized) return normalized;
+  }
+  return undefined;
+}
+
+function parseQueryParams(req: IncomingMessage): Record<string, unknown> {
+  try {
+    const url = new URL(req.url ?? "", "http://localhost");
+    const out: Record<string, unknown> = {};
+    for (const [key, value] of url.searchParams.entries()) {
+      out[key] = value;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function parseFormBody(body: string): Record<string, unknown> {
+  return querystring.parse(body) as Record<string, unknown>;
+}
+
+function parseJsonBody(body: string): Record<string, unknown> {
+  if (!body.trim()) return {};
+  const parsed = JSON.parse(body);
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+    throw new Error("Invalid JSON body");
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function headerValue(header: string | string[] | undefined): string | undefined {
+  return firstNonEmptyString(header);
+}
+
+function extractTokenFromHeaders(req: IncomingMessage): string | undefined {
+  const explicit =
+    headerValue(req.headers["x-synology-token"]) ??
+    headerValue(req.headers["x-webhook-token"]) ??
+    headerValue(req.headers["x-openclaw-token"]);
+  if (explicit) return explicit;
+
+  const auth = headerValue(req.headers.authorization);
+  if (!auth) return undefined;
+
+  const bearerMatch = auth.match(/^Bearer\s+(.+)$/i);
+  if (bearerMatch?.[1]) return bearerMatch[1].trim();
+  return auth.trim();
+}
+
+/**
+ * Parse/normalize incoming webhook payload.
+ *
+ * Supports:
+ * - application/x-www-form-urlencoded
+ * - application/json
+ *
+ * Token resolution order: body.token -> query.token -> headers
+ * Field aliases:
+ * - user_id <- user_id | userId | user
+ * - text    <- text | message | content
+ */
+function parsePayload(req: IncomingMessage, body: string): SynologyWebhookPayload | null {
+  const contentType = String(req.headers["content-type"] ?? "").toLowerCase();
+
+  let bodyFields: Record<string, unknown> = {};
+  if (contentType.includes("application/json")) {
+    bodyFields = parseJsonBody(body);
+  } else if (contentType.includes("application/x-www-form-urlencoded")) {
+    bodyFields = parseFormBody(body);
+  } else {
+    // Fallback for clients with missing/incorrect content-type.
+    // Try JSON first, then form-urlencoded.
+    try {
+      bodyFields = parseJsonBody(body);
+    } catch {
+      bodyFields = parseFormBody(body);
+    }
+  }
+
+  const queryFields = parseQueryParams(req);
+  const headerToken = extractTokenFromHeaders(req);
+
+  const token =
+    pickAlias(bodyFields, ["token"]) ?? pickAlias(queryFields, ["token"]) ?? headerToken;
+  const userId =
+    pickAlias(bodyFields, ["user_id", "userId", "user"]) ??
+    pickAlias(queryFields, ["user_id", "userId", "user"]);
+  const text =
+    pickAlias(bodyFields, ["text", "message", "content"]) ??
+    pickAlias(queryFields, ["text", "message", "content"]);
 
   if (!token || !userId || !text) return null;
 
   return {
     token,
-    channel_id: parsed.channel_id ? String(parsed.channel_id) : undefined,
-    channel_name: parsed.channel_name ? String(parsed.channel_name) : undefined,
+    channel_id:
+      pickAlias(bodyFields, ["channel_id"]) ?? pickAlias(queryFields, ["channel_id"]) ?? undefined,
+    channel_name:
+      pickAlias(bodyFields, ["channel_name"]) ??
+      pickAlias(queryFields, ["channel_name"]) ??
+      undefined,
     user_id: userId,
-    username,
-    post_id: parsed.post_id ? String(parsed.post_id) : undefined,
-    timestamp: parsed.timestamp ? String(parsed.timestamp) : undefined,
+    username:
+      pickAlias(bodyFields, ["username", "user_name", "name"]) ??
+      pickAlias(queryFields, ["username", "user_name", "name"]) ??
+      "unknown",
+    post_id: pickAlias(bodyFields, ["post_id"]) ?? pickAlias(queryFields, ["post_id"]) ?? undefined,
+    timestamp:
+      pickAlias(bodyFields, ["timestamp"]) ?? pickAlias(queryFields, ["timestamp"]) ?? undefined,
     text,
-    trigger_word: parsed.trigger_word ? String(parsed.trigger_word) : undefined,
+    trigger_word:
+      pickAlias(bodyFields, ["trigger_word", "triggerWord"]) ??
+      pickAlias(queryFields, ["trigger_word", "triggerWord"]) ??
+      undefined,
   };
 }
 
 /** Send a JSON response. */
-function respond(res: ServerResponse, statusCode: number, body: Record<string, unknown>) {
+function respondJson(res: ServerResponse, statusCode: number, body: Record<string, unknown>) {
   res.writeHead(statusCode, { "Content-Type": "application/json" });
   res.end(JSON.stringify(body));
+}
+
+/** Send a no-content ACK. */
+function respondNoContent(res: ServerResponse) {
+  res.writeHead(204);
+  res.end();
 }
 
 export interface WebhookHandlerDeps {
@@ -121,13 +237,13 @@ export interface WebhookHandlerDeps {
  * Create an HTTP request handler for Synology Chat outgoing webhooks.
  *
  * This handler:
- * 1. Parses form-urlencoded body
+ * 1. Parses form-urlencoded/JSON payload
  * 2. Validates token (constant-time)
  * 3. Checks user allowlist
  * 4. Checks rate limit
  * 5. Sanitizes input
- * 6. Delivers to the agent via deliver()
- * 7. Sends the agent response back to Synology Chat
+ * 6. Immediately ACKs request (204)
+ * 7. Delivers to the agent asynchronously and sends final reply via incomingUrl
  */
 export function createWebhookHandler(deps: WebhookHandlerDeps) {
   const { account, deliver, log } = deps;
@@ -136,29 +252,36 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
   return async (req: IncomingMessage, res: ServerResponse) => {
     // Only accept POST
     if (req.method !== "POST") {
-      respond(res, 405, { error: "Method not allowed" });
+      respondJson(res, 405, { error: "Method not allowed" });
       return;
     }
 
     // Parse body
-    const body = await readBody(req);
-    if (!body.ok) {
-      log?.error("Failed to read request body", body.error);
-      respond(res, body.statusCode, { error: body.error });
+    const bodyResult = await readBody(req);
+    if (!bodyResult.ok) {
+      log?.error("Failed to read request body", bodyResult.error);
+      respondJson(res, bodyResult.statusCode, { error: bodyResult.error });
       return;
     }
 
     // Parse payload
-    const payload = parsePayload(body.body);
+    let payload: SynologyWebhookPayload | null = null;
+    try {
+      payload = parsePayload(req, bodyResult.body);
+    } catch (err) {
+      log?.warn("Failed to parse webhook payload", err);
+      respondJson(res, 400, { error: "Invalid request body" });
+      return;
+    }
     if (!payload) {
-      respond(res, 400, { error: "Missing required fields (token, user_id, text)" });
+      respondJson(res, 400, { error: "Missing required fields (token, user_id, text)" });
       return;
     }
 
     // Token validation
     if (!validateToken(payload.token, account.token)) {
       log?.warn(`Invalid token from ${req.socket?.remoteAddress}`);
-      respond(res, 401, { error: "Invalid token" });
+      respondJson(res, 401, { error: "Invalid token" });
       return;
     }
 
@@ -166,25 +289,25 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
     const auth = authorizeUserForDm(payload.user_id, account.dmPolicy, account.allowedUserIds);
     if (!auth.allowed) {
       if (auth.reason === "disabled") {
-        respond(res, 403, { error: "DMs are disabled" });
+        respondJson(res, 403, { error: "DMs are disabled" });
         return;
       }
       if (auth.reason === "allowlist-empty") {
         log?.warn("Synology Chat allowlist is empty while dmPolicy=allowlist; rejecting message");
-        respond(res, 403, {
+        respondJson(res, 403, {
           error: "Allowlist is empty. Configure allowedUserIds or use dmPolicy=open.",
         });
         return;
       }
       log?.warn(`Unauthorized user: ${payload.user_id}`);
-      respond(res, 403, { error: "User not authorized" });
+      respondJson(res, 403, { error: "User not authorized" });
       return;
     }
 
     // Rate limit
     if (!rateLimiter.check(payload.user_id)) {
       log?.warn(`Rate limit exceeded for user: ${payload.user_id}`);
-      respond(res, 429, { error: "Rate limit exceeded" });
+      respondJson(res, 429, { error: "Rate limit exceeded" });
       return;
     }
 
@@ -197,15 +320,15 @@ export function createWebhookHandler(deps: WebhookHandlerDeps) {
     }
 
     if (!cleanText) {
-      respond(res, 200, { text: "" });
+      respondNoContent(res);
       return;
     }
 
     const preview = cleanText.length > 100 ? `${cleanText.slice(0, 100)}...` : cleanText;
     log?.info(`Message from ${payload.username} (${payload.user_id}): ${preview}`);
 
-    // Respond 200 immediately to avoid Synology Chat timeout
-    respond(res, 200, { text: "Processing..." });
+    // ACK immediately so Synology Chat won't remain in "Processing..."
+    respondNoContent(res);
 
     // Deliver to agent asynchronously (with 120s timeout to match nginx proxy_read_timeout)
     try {
