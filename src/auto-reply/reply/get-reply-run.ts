@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
+import { loadSessionMemory } from "../../agents/iris-session-memory.js";
 import {
   abortEmbeddedPiRun,
   isEmbeddedPiRunActive,
@@ -257,7 +258,15 @@ export async function runPreparedReply(
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? sessionCtx : { ...sessionCtx, ThreadStarterBody: undefined },
   );
-  const extraSystemPrompt = [inboundMetaPrompt, groupChatContext, groupIntro, groupSystemPrompt]
+  // Iris Stage 4: inject previous session memory on new session start
+  const irisMemory = isNewSession ? await loadSessionMemory(agentDir) : undefined;
+  const extraSystemPrompt = [
+    irisMemory,
+    inboundMetaPrompt,
+    groupChatContext,
+    groupIntro,
+    groupSystemPrompt,
+  ]
     .filter(Boolean)
     .join("\n\n");
   const baseBody = sessionCtx.BodyStripped ?? sessionCtx.Body ?? "";
