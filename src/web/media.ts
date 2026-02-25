@@ -137,6 +137,13 @@ async function assertLocalMediaAllowed(
   );
 }
 
+export async function validateLocalMediaPathAllowed(
+  mediaPath: string,
+  localRoots?: readonly string[],
+): Promise<void> {
+  await assertLocalMediaAllowed(mediaPath, localRoots);
+}
+
 const HEIC_MIME_RE = /^image\/hei[cf]$/i;
 const HEIC_EXT_RE = /\.(heic|heif)$/i;
 const MB = 1024 * 1024;
