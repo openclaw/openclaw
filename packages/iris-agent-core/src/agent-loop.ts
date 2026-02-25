@@ -296,9 +296,9 @@ async function streamAssistantResponse(
   let messages = context.messages;
   if (config.toolResultCompression !== false) {
     const opts = config.toolResultCompression ?? {
-      ageTurns: 3,
-      maxChars: 200,
-      maxAssistantChars: 500,
+      ageTurns: 2,
+      maxChars: 100,
+      maxAssistantChars: 300,
     };
     const beforeChars = estimateMessageChars(messages);
     messages = compressAgedToolResults(messages, opts);
