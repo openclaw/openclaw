@@ -321,14 +321,36 @@ openclaw pairing approve feishu <配对码>
 }
 ```
 
-### 仅允许特定用户在群组中使用
+### 仅允许特定群组
 
 ```json5
 {
   channels: {
     feishu: {
       groupPolicy: "allowlist",
-      groupAllowFrom: ["ou_xxx", "ou_yyy"],
+      // 飞书群 ID（chat_id）形如：oc_xxx
+      groupAllowFrom: ["oc_xxx", "oc_yyy"],
+    },
+  },
+}
+```
+
+### 仅允许特定用户在群内触发控制命令（例如 /reset、/new）
+
+除了“允许该群接入”之外，`/reset`、`/new` 等控制命令还会经过命令授权，需要放行**发送者**的 open_id。
+
+```json5
+{
+  channels: {
+    feishu: {
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["oc_xxx"],
+      groups: {
+        oc_xxx: {
+          // 飞书用户 ID（open_id）形如：ou_xxx
+          allowFrom: ["ou_user1", "ou_user2"],
+        },
+      },
     },
   },
 }
