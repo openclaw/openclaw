@@ -117,7 +117,7 @@ fun PostOnboardingTabs(viewModel: MainViewModel, modifier: Modifier = Modifier) 
       when (activeTab) {
         HomeTab.Connect -> ConnectTabScreen(viewModel = viewModel)
         HomeTab.Chat -> ChatSheet(viewModel = viewModel)
-        HomeTab.Voice -> ComingSoonTabScreen(label = "VOICE", title = "Coming soon", description = "Voice mode is coming soon.")
+        HomeTab.Voice -> VoiceTabScreen(viewModel = viewModel)
         HomeTab.Screen -> ScreenTabScreen(viewModel = viewModel)
         HomeTab.Settings -> SettingsSheet(viewModel = viewModel)
       }
@@ -315,25 +315,6 @@ private fun BottomTabBar(
           }
         }
       }
-    }
-  }
-}
-
-@Composable
-private fun ComingSoonTabScreen(
-  label: String,
-  title: String,
-  description: String,
-) {
-  Box(modifier = Modifier.fillMaxSize().padding(horizontal = 22.dp, vertical = 18.dp)) {
-    Column(
-      modifier = Modifier.align(Alignment.Center),
-      horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-      Text(label, style = mobileCaption1.copy(fontWeight = FontWeight.Bold), color = mobileAccent)
-      Text(title, style = mobileTitle1, color = mobileText)
-      Text(description, style = mobileBody, color = mobileTextSecondary)
     }
   }
 }
