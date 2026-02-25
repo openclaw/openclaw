@@ -5,7 +5,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { listAgentIds, resolveAgentDir } from "../../agents/agent-scope.js";
 import { resolveAuthStorePath } from "../../agents/auth-profiles/paths.js";
-import { createConfigIO, resolveStateDir, type OpenClawConfig } from "../../config/config.js";
+import { resolveStateDir, type OpenClawConfig } from "../../config/config.js";
 import { isSecretRef } from "../../config/types.secrets.js";
 import { resolveConfigDir, resolveUserPath } from "../../utils.js";
 import {
@@ -16,6 +16,7 @@ import {
 import { listKnownSecretEnvVarNames } from "../provider-env-vars.js";
 import { isNonEmptyString, isRecord, normalizePositiveInt } from "../shared.js";
 import { decryptSopsJsonFile, DEFAULT_SOPS_TIMEOUT_MS } from "../sops.js";
+import { createSecretsMigrationConfigIO } from "./config-io.js";
 import type { AuthStoreChange, EnvChange, MigrationCounters, MigrationPlan } from "./types.js";
 
 const DEFAULT_SECRETS_FILE_PATH = "~/.openclaw/secrets.enc.json";
@@ -112,6 +113,7 @@ function resolveDefaultSecretsConfigPath(env: NodeJS.ProcessEnv): string {
 async function decryptSopsJson(
   pathname: string,
   timeoutMs: number,
+  sopsConfigPath?: string,
 ): Promise<Record<string, unknown>> {
   if (!fs.existsSync(pathname)) {
     return {};
@@ -119,6 +121,7 @@ async function decryptSopsJson(
   const parsed = await decryptSopsJsonFile({
     path: pathname,
     timeoutMs,
+    configPath: sopsConfigPath,
     missingBinaryMessage:
       "sops binary not found in PATH. Install sops >= 3.9.0 to run secrets migrate.",
   });
@@ -126,6 +129,17 @@ async function decryptSopsJson(
     throw new Error("sops decrypt failed: decrypted payload is not a JSON object");
   }
   return parsed;
+}
+
+function resolveExistingSopsConfigPath(env: NodeJS.ProcessEnv): string | undefined {
+  const configDir = resolveConfigDir(env, os.homedir);
+  const candidates = [".sops.yaml", ".sops.yml"].map((name) => path.join(configDir, name));
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
 }
 
 function migrateModelProviderSecrets(params: {
@@ -385,7 +399,7 @@ export async function buildMigrationPlan(params: {
   env: NodeJS.ProcessEnv;
   scrubEnv: boolean;
 }): Promise<MigrationPlan> {
-  const io = createConfigIO({ env: params.env });
+  const io = createSecretsMigrationConfigIO({ env: params.env });
   const { snapshot, writeOptions } = await io.readConfigFileSnapshotForWrite();
   if (!snapshot.valid) {
     const issues =
@@ -398,7 +412,12 @@ export async function buildMigrationPlan(params: {
   const stateDir = resolveStateDir(params.env, os.homedir);
   const nextConfig = structuredClone(snapshot.config);
   const fileSource = resolveFileSource(nextConfig, params.env);
-  const previousPayload = await decryptSopsJson(fileSource.path, fileSource.timeoutMs);
+  const sopsConfigPath = resolveExistingSopsConfigPath(params.env);
+  const previousPayload = await decryptSopsJson(
+    fileSource.path,
+    fileSource.timeoutMs,
+    sopsConfigPath,
+  );
   const nextPayload = structuredClone(previousPayload);
 
   const counters: MigrationCounters = {
@@ -518,6 +537,7 @@ export async function buildMigrationPlan(params: {
     nextPayload,
     secretsFilePath: fileSource.path,
     secretsFileTimeoutMs: fileSource.timeoutMs,
+    sopsConfigPath,
     envChange,
     backupTargets: [...backupTargets],
   };

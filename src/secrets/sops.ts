@@ -34,10 +34,16 @@ export async function decryptSopsJsonFile(params: {
   path: string;
   timeoutMs?: number;
   missingBinaryMessage: string;
+  configPath?: string;
 }): Promise<unknown> {
   const timeoutMs = normalizeTimeoutMs(params.timeoutMs);
   try {
-    const { stdout } = await runExec("sops", ["--decrypt", "--output-type", "json", params.path], {
+    const args: string[] = [];
+    if (typeof params.configPath === "string" && params.configPath.trim().length > 0) {
+      args.push("--config", params.configPath);
+    }
+    args.push("--decrypt", "--output-type", "json", params.path);
+    const { stdout } = await runExec("sops", args, {
       timeoutMs,
       maxBuffer: MAX_SOPS_OUTPUT_BYTES,
     });
@@ -61,6 +67,7 @@ export async function encryptSopsJsonFile(params: {
   payload: Record<string, unknown>;
   timeoutMs?: number;
   missingBinaryMessage: string;
+  configPath?: string;
 }): Promise<void> {
   ensureDirForFile(params.path);
   const timeoutMs = normalizeTimeoutMs(params.timeoutMs);
@@ -77,23 +84,24 @@ export async function encryptSopsJsonFile(params: {
   fs.chmodSync(tmpPlain, 0o600);
 
   try {
-    await runExec(
-      "sops",
-      [
-        "--encrypt",
-        "--input-type",
-        "json",
-        "--output-type",
-        "json",
-        "--output",
-        tmpEncrypted,
-        tmpPlain,
-      ],
-      {
-        timeoutMs,
-        maxBuffer: MAX_SOPS_OUTPUT_BYTES,
-      },
+    const args: string[] = [];
+    if (typeof params.configPath === "string" && params.configPath.trim().length > 0) {
+      args.push("--config", params.configPath);
+    }
+    args.push(
+      "--encrypt",
+      "--input-type",
+      "json",
+      "--output-type",
+      "json",
+      "--output",
+      tmpEncrypted,
+      tmpPlain,
     );
+    await runExec("sops", args, {
+      timeoutMs,
+      maxBuffer: MAX_SOPS_OUTPUT_BYTES,
+    });
     fs.renameSync(tmpEncrypted, params.path);
     fs.chmodSync(params.path, 0o600);
   } catch (err) {

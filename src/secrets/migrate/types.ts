@@ -46,6 +46,7 @@ export type MigrationPlan = {
   nextPayload: Record<string, unknown>;
   secretsFilePath: string;
   secretsFileTimeoutMs: number;
+  sopsConfigPath?: string;
   envChange: EnvChange | null;
   backupTargets: string[];
 };

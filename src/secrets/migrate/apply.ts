@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import { createConfigIO } from "../../config/config.js";
 import { ensureDirForFile, writeJsonFileSecure } from "../shared.js";
 import { encryptSopsJsonFile } from "../sops.js";
 import {
@@ -8,17 +7,20 @@ import {
   resolveUniqueBackupId,
   restoreFromManifest,
 } from "./backup.js";
+import { createSecretsMigrationConfigIO } from "./config-io.js";
 import type { MigrationPlan, SecretsMigrationRunResult } from "./types.js";
 
 async function encryptSopsJson(params: {
   pathname: string;
   timeoutMs: number;
   payload: Record<string, unknown>;
+  sopsConfigPath?: string;
 }): Promise<void> {
   await encryptSopsJsonFile({
     path: params.pathname,
     payload: params.payload,
     timeoutMs: params.timeoutMs,
+    configPath: params.sopsConfigPath,
     missingBinaryMessage:
       "sops binary not found in PATH. Install sops >= 3.9.0 to run secrets migrate.",
   });
@@ -54,11 +56,12 @@ export async function applyMigrationPlan(params: {
         pathname: plan.secretsFilePath,
         timeoutMs: plan.secretsFileTimeoutMs,
         payload: plan.nextPayload,
+        sopsConfigPath: plan.sopsConfigPath,
       });
     }
 
     if (plan.configChanged) {
-      const io = createConfigIO({ env: params.env });
+      const io = createSecretsMigrationConfigIO({ env: params.env });
       await io.writeConfigFile(plan.nextConfig, plan.configWriteOptions);
     }
 
