@@ -39,6 +39,28 @@ export async function updateAuthProfileStoreWithLock(params: {
   }
 }
 
+/**
+ * Normalise a raw auth-profiles.json credential entry.
+ *
+ * The official format uses `type` and (for api_key credentials) `key`.
+ * A common mistake — caused by the similarity with the `openclaw.json`
+ * `auth.profiles` section which uses `mode` — is to write `mode` instead of
+ * `type` and `apiKey` instead of `key`.  Accept both spellings so users don't
+ * silently lose their credentials.
+ */
+function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<AuthProfileCredential> {
+  const entry = { ...raw } as Record<string, unknown>;
+  // mode → type alias (openclaw.json uses "mode"; auth-profiles.json uses "type")
+  if (!("type" in entry) && typeof entry["mode"] === "string") {
+    entry["type"] = entry["mode"];
+  }
+  // apiKey → key alias for ApiKeyCredential
+  if (!("key" in entry) && typeof entry["apiKey"] === "string") {
+    entry["key"] = entry["apiKey"];
+  }
+  return entry as Partial<AuthProfileCredential>;
+}
+
 function coerceLegacyStore(raw: unknown): LegacyAuthStore | null {
   if (!raw || typeof raw !== "object") {
     return null;
@@ -52,7 +74,7 @@ function coerceLegacyStore(raw: unknown): LegacyAuthStore | null {
     if (!value || typeof value !== "object") {
       continue;
     }
-    const typed = value as Partial<AuthProfileCredential>;
+    const typed = normalizeRawCredentialEntry(value as Record<string, unknown>);
     if (typed.type !== "api_key" && typed.type !== "oauth" && typed.type !== "token") {
       continue;
     }
@@ -78,7 +100,7 @@ function coerceAuthStore(raw: unknown): AuthProfileStore | null {
     if (!value || typeof value !== "object") {
       continue;
     }
-    const typed = value as Partial<AuthProfileCredential>;
+    const typed = normalizeRawCredentialEntry(value as Record<string, unknown>);
     if (typed.type !== "api_key" && typed.type !== "oauth" && typed.type !== "token") {
       continue;
     }

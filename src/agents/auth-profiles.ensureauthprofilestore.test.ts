@@ -122,4 +122,36 @@ describe("ensureAuthProfileStore", () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it("accepts mode/apiKey aliases so users who follow openclaw.json format are not silently broken", () => {
+    // A common mistake: users write auth-profiles.json using the same field names
+    // as openclaw.json auth.profiles ("mode" + "apiKey") instead of the canonical
+    // auth-profiles.json fields ("type" + "key"). The parser now normalises both.
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-alias-"));
+    try {
+      const storeWithAliases = {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "anthropic:work": {
+            provider: "anthropic",
+            mode: "api_key", // alias for "type"
+            apiKey: "sk-ant-alias-test", // alias for "key"
+          },
+        },
+      };
+      fs.writeFileSync(
+        path.join(agentDir, "auth-profiles.json"),
+        `${JSON.stringify(storeWithAliases, null, 2)}\n`,
+        "utf8",
+      );
+
+      const store = ensureAuthProfileStore(agentDir);
+      const profile = store.profiles["anthropic:work"];
+      expect(profile).toBeDefined();
+      expect(profile?.type).toBe("api_key");
+      expect((profile as { key?: string }).key).toBe("sk-ant-alias-test");
+    } finally {
+      fs.rmSync(agentDir, { recursive: true, force: true });
+    }
+  });
 });
