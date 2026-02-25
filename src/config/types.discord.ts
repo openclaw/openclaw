@@ -107,6 +107,10 @@ export type DiscordVoiceConfig = {
   enabled?: boolean;
   /** Voice channels to auto-join on startup. */
   autoJoin?: DiscordVoiceAutoJoinConfig[];
+  /** Enable/disable DAVE end-to-end encryption (default: true; Discord may require this). */
+  daveEncryption?: boolean;
+  /** Consecutive decrypt failures before DAVE session reinitialization (default: 24). */
+  decryptionFailureTolerance?: number;
   /** Optional TTS overrides for Discord voice output. */
   tts?: TtsConfig;
 };

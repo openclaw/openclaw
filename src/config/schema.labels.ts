@@ -677,6 +677,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "channels.discord.intents.guildMembers": "Discord Guild Members Intent",
   "channels.discord.voice.enabled": "Discord Voice Enabled",
   "channels.discord.voice.autoJoin": "Discord Voice Auto-Join",
+  "channels.discord.voice.daveEncryption": "Discord Voice DAVE Encryption",
+  "channels.discord.voice.decryptionFailureTolerance": "Discord Voice Decrypt Failure Tolerance",
   "channels.discord.voice.tts": "Discord Voice Text-to-Speech",
   "channels.discord.pluralkit.enabled": "Discord PluralKit Enabled",
   "channels.discord.pluralkit.token": "Discord PluralKit Token",
