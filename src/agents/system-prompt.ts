@@ -283,6 +283,7 @@ export function buildAgentSystemPrompt(params: {
     "process",
     "web_search",
     "web_fetch",
+    "x_search",
     "browser",
     "canvas",
     "nodes",
