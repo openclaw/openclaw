@@ -20,7 +20,7 @@ Transcribe an audio file via OpenAI’s `/v1/audio/transcriptions` endpoint.
 ## Quick start
 
 ```bash
-{baseDir}/scripts/transcribe.sh /path/to/audio.m4a
+bash {baseDir}/scripts/transcribe.sh /path/to/audio.m4a
 ```
 
 Defaults:
@@ -31,10 +31,10 @@ Defaults:
 ## Useful flags
 
 ```bash
-{baseDir}/scripts/transcribe.sh /path/to/audio.ogg --model whisper-1 --out /tmp/transcript.txt
-{baseDir}/scripts/transcribe.sh /path/to/audio.m4a --language en
-{baseDir}/scripts/transcribe.sh /path/to/audio.m4a --prompt "Speaker names: Peter, Daniel"
-{baseDir}/scripts/transcribe.sh /path/to/audio.m4a --json --out /tmp/transcript.json
+bash {baseDir}/scripts/transcribe.sh /path/to/audio.ogg --model whisper-1 --out /tmp/transcript.txt
+bash {baseDir}/scripts/transcribe.sh /path/to/audio.m4a --language en
+bash {baseDir}/scripts/transcribe.sh /path/to/audio.m4a --prompt "Speaker names: Peter, Daniel"
+bash {baseDir}/scripts/transcribe.sh /path/to/audio.m4a --json --out /tmp/transcript.json
 ```
 
 ## API key
