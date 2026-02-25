@@ -83,6 +83,48 @@ export function agentLoopContinue(
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
+/** Stable JSON serialisation (sorted keys) for use as cache keys. */
+function stableJson(v: unknown): string {
+  if (v === null || typeof v !== "object") {
+    return JSON.stringify(v);
+  }
+  if (Array.isArray(v)) {
+    return `[${v.map(stableJson).join(",")}]`;
+  }
+  const pairs = Object.keys(v as Record<string, unknown>)
+    .toSorted()
+    .map((k) => `${JSON.stringify(k)}:${stableJson((v as Record<string, unknown>)[k])}`);
+  return `{${pairs.join(",")}}`;
+}
+
+function toolCacheKey(toolName: string, args: unknown): string {
+  return `${toolName}\x00${stableJson(args)}`;
+}
+
+/** Combine parent signal + optional per-tool timeout into one AbortSignal. */
+function makeToolSignal(
+  parent: AbortSignal | undefined,
+  timeoutMs: number | undefined,
+): AbortSignal | undefined {
+  const signals: AbortSignal[] = [];
+  if (parent) {
+    signals.push(parent);
+  }
+  if (timeoutMs && timeoutMs > 0) {
+    signals.push(AbortSignal.timeout(timeoutMs));
+  }
+  if (signals.length === 0) {
+    return undefined;
+  }
+  if (signals.length === 1) {
+    return signals[0];
+  }
+  return AbortSignal.any(signals);
+}
+
+type CacheEntry = { result: AgentToolResult<unknown>; ts: number };
+type ToolCache = Map<string, CacheEntry>;
+
 function createAgentStream(): EventStream<AgentEvent, AgentMessage[]> {
   return new EventStream(
     (event: AgentEvent) => event.type === "agent_end",
@@ -100,6 +142,8 @@ async function runLoop(
 ): Promise<void> {
   let firstTurn = true;
   let pendingMessages: AgentMessage[] = (await config.getSteeringMessages?.()) ?? [];
+  // One cache per agent run; shared across all parallel batches.
+  const toolCache: ToolCache = new Map();
 
   while (true) {
     let hasMoreToolCalls = true;
@@ -143,13 +187,18 @@ async function runLoop(
       const toolResults: AgentMessage[] = [];
 
       if (hasMoreToolCalls) {
-        // ← PARALLEL execution happens here
+        // ← PARALLEL execution (with timeout, cache, dedup)
         const toolExecution = await executeToolCallsParallel(
           currentContext.tools,
           message,
           signal,
           stream,
           config.getSteeringMessages,
+          {
+            toolTimeoutMs: config.toolTimeoutMs,
+            toolCacheMs: config.toolCacheMs,
+            toolCache,
+          },
         );
         toolResults.push(...toolExecution.toolResults);
         steeringAfterTools = toolExecution.steeringMessages ?? null;
@@ -289,6 +338,7 @@ async function executeToolCallsParallel(
   signal: AbortSignal | undefined,
   stream: EventStream<AgentEvent, AgentMessage[]>,
   getSteeringMessages?: () => Promise<AgentMessage[]>,
+  opts?: { toolTimeoutMs?: number; toolCacheMs?: number; toolCache?: ToolCache },
 ): Promise<{ toolResults: AgentMessage[]; steeringMessages?: AgentMessage[] }> {
   const toolCalls = assistantMessage.content.filter((c): c is ToolCall => c.type === "toolCall");
 
@@ -316,8 +366,16 @@ async function executeToolCallsParallel(
     });
   }
 
+  const { toolTimeoutMs, toolCacheMs, toolCache } = opts ?? {};
+
   // Per-tool durations for observability (sequential-equivalent estimate).
+  // Cache hits get duration=0 (they're instant).
   const toolDurations: number[] = Array.from({ length: toolCalls.length }, () => 0);
+  let cacheHits = 0;
+
+  // Within-batch dedup: same (name, args) key shares one Promise so the tool
+  // executes only once even if the LLM requested it multiple times in one turn.
+  const batchPromises = new Map<string, Promise<AgentToolResult<unknown>>>();
 
   // Launch every tool concurrently.
   const batchStart = Date.now();
@@ -326,31 +384,67 @@ async function executeToolCallsParallel(
     if (!tool) {
       throw new Error(`Tool ${toolCall.name} not found`);
     }
+
+    const cacheKey = toolCacheKey(toolCall.name, toolCall.arguments);
+
+    // ── Cross-turn cache hit ──────────────────────────────────────────────────
+    if (tool.cacheable && toolCache && toolCacheMs) {
+      const entry = toolCache.get(cacheKey);
+      const maxAge = toolCacheMs === -1 ? Infinity : toolCacheMs;
+      if (entry && Date.now() - entry.ts <= maxAge) {
+        cacheHits++;
+        return entry.result;
+      }
+    }
+
+    // ── Within-batch dedup ────────────────────────────────────────────────────
+    // If another slot in this batch is already running the same (name, args),
+    // share its Promise rather than launching a duplicate execution.
+    const existing = batchPromises.get(cacheKey);
+    if (existing) {
+      return existing;
+    }
+
     // validateToolArguments narrows to the tool's specific parameter schema.
     const validatedArgs = validateToolArguments(
       tool as Parameters<typeof validateToolArguments>[0],
       toolCall,
     );
-    const toolStart = Date.now();
-    try {
-      return await tool.execute(
-        toolCall.id,
-        validatedArgs,
-        signal,
-        (partialResult: AgentToolResult<unknown>) => {
-          // Partial updates stream in naturally — interleaved across tools is fine.
-          stream.push({
-            type: "tool_execution_update",
-            toolCallId: toolCall.id,
-            toolName: toolCall.name,
-            args: toolCall.arguments,
-            partialResult,
-          });
-        },
-      );
-    } finally {
-      toolDurations[i] = Date.now() - toolStart;
-    }
+
+    const toolSignal = makeToolSignal(signal, toolTimeoutMs);
+
+    const promise = (async () => {
+      const toolStart = Date.now();
+      try {
+        const result = await tool.execute(
+          toolCall.id,
+          validatedArgs,
+          toolSignal,
+          (partialResult: AgentToolResult<unknown>) => {
+            // Partial updates stream naturally — interleaved across tools is fine.
+            stream.push({
+              type: "tool_execution_update",
+              toolCallId: toolCall.id,
+              toolName: toolCall.name,
+              args: toolCall.arguments,
+              partialResult,
+            });
+          },
+        );
+
+        // Store in cross-turn cache on success (cacheable tools only).
+        if (tool.cacheable && toolCache && toolCacheMs) {
+          toolCache.set(cacheKey, { result, ts: Date.now() });
+        }
+
+        return result;
+      } finally {
+        toolDurations[i] = Date.now() - toolStart;
+      }
+    })();
+
+    batchPromises.set(cacheKey, promise);
+    return promise;
   });
 
   // Wait for every tool (allSettled never throws).
@@ -365,8 +459,9 @@ async function executeToolCallsParallel(
     const seqEstimate = toolDurations.reduce((a, b) => a + b, 0);
     const saved = seqEstimate - wall;
     const names = toolCalls.map((tc) => tc.name).join(",");
+    const cacheStr = cacheHits > 0 ? ` cached=${cacheHits}` : "";
     process.stderr.write(
-      `[iris-parallel] n=${toolCalls.length} wall=${wall}ms seq_est=${seqEstimate}ms saved=${saved}ms tools=[${names}]\n`,
+      `[iris-parallel] n=${toolCalls.length} wall=${wall}ms seq_est=${seqEstimate}ms saved=${saved}ms${cacheStr} tools=[${names}]\n`,
     );
   }
 

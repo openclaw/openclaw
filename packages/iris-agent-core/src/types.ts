@@ -25,6 +25,20 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
   getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
   getSteeringMessages?: () => Promise<AgentMessage[]>;
   getFollowUpMessages?: () => Promise<AgentMessage[]>;
+  /**
+   * Per-tool execution timeout in milliseconds.
+   * When a tool exceeds this limit its AbortSignal is triggered and the tool
+   * receives an error result. Other tools in the same parallel batch continue.
+   * 0 or undefined = no timeout.
+   */
+  toolTimeoutMs?: number;
+  /**
+   * Tool result cache TTL in milliseconds.
+   * Only tools with `cacheable: true` are cached.
+   * -1 = session-scoped (cache lives for the entire agent run).
+   *  0 or undefined = caching disabled.
+   */
+  toolCacheMs?: number;
 }
 
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
@@ -55,6 +69,13 @@ export interface AgentTool<
   TDetails = unknown,
 > extends Tool<TParameters> {
   label: string;
+  /**
+   * When true, results are memoized by (name, args) for the duration of
+   * the agent run (subject to toolCacheMs in AgentLoopConfig).
+   * Set only for pure/idempotent tools (read, grep, find, ls, web_fetch…).
+   * Never set for tools with side effects (exec, write, edit…).
+   */
+  cacheable?: boolean;
   execute: (
     toolCallId: string,
     params: unknown,
