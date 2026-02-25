@@ -328,13 +328,20 @@ class NodeRuntime(context: Context) {
 
   private fun updateStatus() {
     _isConnected.value = operatorConnected
+    val operator = operatorStatusText.trim()
+    val node = nodeStatusText.trim()
     _statusText.value =
       when {
         operatorConnected && _nodeConnected.value -> "Connected"
         operatorConnected && !_nodeConnected.value -> "Connected (node offline)"
-        !operatorConnected && _nodeConnected.value -> "Connected (operator offline)"
-        operatorStatusText.isNotBlank() && operatorStatusText != "Offline" -> operatorStatusText
-        else -> nodeStatusText
+        !operatorConnected && _nodeConnected.value ->
+          if (operator.isNotEmpty() && operator != "Offline") {
+            "Connected (operator: $operator)"
+          } else {
+            "Connected (operator offline)"
+          }
+        operator.isNotBlank() && operator != "Offline" -> operator
+        else -> node
       }
   }
 
@@ -614,17 +621,14 @@ class NodeRuntime(context: Context) {
     prefs.setTalkEnabled(value)
   }
 
-  fun logGatewayDebugSnapshot(source: String = "manual") {
-    val flowToken = gatewayToken.value.trim()
-    val loadedToken = prefs.loadGatewayToken().orEmpty()
-    Log.i(
-      "OpenClawGatewayDebug",
-      "source=$source manualEnabled=${manualEnabled.value} host=${manualHost.value} port=${manualPort.value} tls=${manualTls.value} flowTokenLen=${flowToken.length} loadTokenLen=${loadedToken.length} connected=${isConnected.value} status=${statusText.value}",
-    )
-  }
-
   fun refreshGatewayConnection() {
-    val endpoint = connectedEndpoint ?: return
+    val endpoint =
+      connectedEndpoint ?: run {
+        _statusText.value = "Failed: no cached gateway endpoint"
+        return
+      }
+    operatorStatusText = "Connecting…"
+    updateStatus()
     val token = prefs.loadGatewayToken()
     val password = prefs.loadGatewayPassword()
     val tls = connectionManager.resolveTlsParams(endpoint)
