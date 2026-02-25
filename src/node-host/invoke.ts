@@ -483,6 +483,9 @@ export async function handleInvoke(
   if (command === "vnc.tunnel.open") {
     try {
       const params = decodeParams<{ tunnelId: string; tunnelUrl: string }>(frame.paramsJSON);
+      console.error(
+        `[vnc] received vnc.tunnel.open: tunnelId=${params.tunnelId?.substring(0, 8)} tunnelUrl=${params.tunnelUrl?.substring(0, 80)}`,
+      );
       if (!params.tunnelId || !params.tunnelUrl) {
         throw new Error("INVALID_REQUEST: tunnelId and tunnelUrl required");
       }
@@ -839,16 +842,21 @@ export async function handleInvoke(
 async function openVncTunnel(tunnelId: string, tunnelUrl: string): Promise<void> {
   const { createConnection } = await import("node:net");
   const { WebSocket: WsClient } = await import("ws");
+  const log = (msg: string) => console.error(`[vnc-tunnel ${tunnelId.substring(0, 8)}] ${msg}`);
 
   const vncHost = process.env.BOT_VNC_HOST?.trim() ?? "127.0.0.1";
   const vncPort = Number(process.env.BOT_VNC_PORT?.trim() ?? 5900);
+
+  log(`opening tunnel to ${tunnelUrl.substring(0, 80)}, vnc=${vncHost}:${vncPort}`);
 
   // Connect back to the gateway's /vnc-tunnel endpoint.
   const ws = new WsClient(tunnelUrl, { maxPayload: 25 * 1024 * 1024 });
 
   ws.on("open", () => {
+    log("tunnel WS connected, connecting to local VNC server");
     // Now connect to the local VNC server.
     const tcp = createConnection({ host: vncHost, port: vncPort }, () => {
+      log("VNC TCP connected — relaying data");
       // TCP → WS
       tcp.on("data", (data: Buffer) => {
         if (ws.readyState === WsClient.OPEN) {
@@ -860,6 +868,7 @@ async function openVncTunnel(tunnelId: string, tunnelUrl: string): Promise<void>
     });
 
     tcp.on("error", (err) => {
+      log(`VNC TCP error: ${err.message}`);
       ws.close(1011, `Cannot connect to VNC at ${vncHost}:${vncPort}: ${err.message}`);
     });
 
@@ -870,20 +879,22 @@ async function openVncTunnel(tunnelId: string, tunnelUrl: string): Promise<void>
       }
     });
 
-    ws.on("close", () => {
+    ws.on("close", (code, reason) => {
+      log(`tunnel WS closed: code=${code} reason=${String(reason)}`);
       if (tcp && !tcp.destroyed) {
         tcp.end();
       }
     });
-    ws.on("error", () => {
+    ws.on("error", (err) => {
+      log(`tunnel WS error: ${err.message}`);
       if (tcp && !tcp.destroyed) {
         tcp.destroy();
       }
     });
   });
 
-  ws.on("error", () => {
-    // Tunnel connection failed — nothing to clean up.
+  ws.on("error", (err) => {
+    log(`tunnel WS connect error: ${err.message}`);
   });
 }
 
