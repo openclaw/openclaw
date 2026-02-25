@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.only
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
@@ -269,18 +268,21 @@ private fun BottomTabBar(
   Box(
     modifier =
       Modifier
-        .fillMaxWidth()
-        .windowInsetsPadding(safeInsets),
+        .fillMaxWidth(),
   ) {
     Surface(
-      modifier = Modifier.fillMaxWidth().offset(y = (-4).dp),
+      modifier = Modifier.fillMaxWidth(),
       color = Color.White.copy(alpha = 0.97f),
       shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
       border = BorderStroke(1.dp, mobileBorder),
       shadowElevation = 6.dp,
     ) {
       Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 10.dp),
+        modifier =
+          Modifier
+            .fillMaxWidth()
+            .windowInsetsPadding(safeInsets)
+            .padding(horizontal = 10.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.spacedBy(6.dp),
         verticalAlignment = Alignment.CenterVertically,
       ) {
