@@ -250,8 +250,12 @@ async function streamAssistantResponse(
   streamFn?: StreamFn,
 ): Promise<AssistantMessage> {
   let messages = context.messages;
-  if (config.toolResultCompression) {
-    messages = compressAgedToolResults(messages, config.toolResultCompression);
+  if (config.toolResultCompression !== false) {
+    // undefined = use defaults; object = custom options
+    messages = compressAgedToolResults(
+      messages,
+      config.toolResultCompression ?? { ageTurns: 3, maxChars: 200 },
+    );
   }
   if (config.transformContext) {
     messages = await config.transformContext(messages, signal);

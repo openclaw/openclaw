@@ -44,9 +44,11 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
    * Age-based tool result compression.
    * Truncates text content of ToolResultMessages in old turns to reduce
    * context bloat. Runs before every LLM call, before transformContext.
-   * undefined = disabled.
+   * undefined  = use defaults (ageTurns: 3, maxChars: 200) — on by default.
+   * false      = disabled.
+   * object     = custom options.
    */
-  toolResultCompression?: ToolResultCompressionOptions;
+  toolResultCompression?: ToolResultCompressionOptions | false;
 }
 
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";

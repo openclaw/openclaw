@@ -1,9 +1,122 @@
 /**
  * Unit tests for age-based tool result compression.
  */
+import { EventStream } from "@mariozechner/pi-ai";
+import type { AssistantMessage, Model } from "@mariozechner/pi-ai";
 import { describe, expect, it } from "vitest";
+import { agentLoop } from "./agent-loop.js";
 import { compressAgedToolResults } from "./context-compressor.js";
-import type { AgentMessage } from "./types.js";
+import type { AgentContext, AgentLoopConfig, AgentMessage } from "./types.js";
+
+// ─── agentLoop default-on helpers ─────────────────────────────────────────────
+
+function mockDoneStreamFn() {
+  const doneMsg: AssistantMessage = {
+    role: "assistant",
+    content: [{ type: "text", text: "done" }],
+    stopReason: "end_turn",
+    timestamp: Date.now(),
+  };
+  return async (_model: Model<string>, _ctx: unknown, _opts: unknown) => {
+    const stream = new EventStream<{ type: string; partial: AssistantMessage }, AssistantMessage>(
+      (e) => e.type === "done",
+      () => doneMsg,
+    );
+    stream.push({ type: "done", partial: doneMsg });
+    stream.end(doneMsg);
+    return stream as ReturnType<typeof import("@mariozechner/pi-ai").streamSimple>;
+  };
+}
+
+/** Build a context with N user-turns and a long tool result in the first turn. */
+function makeCtxWithOldToolResult(longText: string, totalUserTurns: number): AgentContext {
+  const messages: AgentMessage[] = [];
+  for (let i = 0; i < totalUserTurns; i++) {
+    messages.push({ role: "user", content: [{ type: "text", text: `t${i}` }], timestamp: i });
+    if (i === 0) {
+      messages.push({
+        role: "toolResult",
+        toolCallId: "tc1",
+        toolName: "read",
+        content: [{ type: "text", text: longText }],
+        isError: false,
+        timestamp: i + 0.5,
+      } as AgentMessage);
+    }
+  }
+  return { systemPrompt: "test", tools: [], messages };
+}
+
+async function runWithCapture(
+  ctx: AgentContext,
+  cfg: AgentLoopConfig,
+  streamFn: ReturnType<typeof mockDoneStreamFn>,
+): Promise<AgentMessage[]> {
+  let captured: AgentMessage[] = [];
+  const wrappedCfg: AgentLoopConfig = {
+    ...cfg,
+    convertToLlm: (msgs) => {
+      captured = msgs;
+      return msgs;
+    },
+  };
+  const loop = agentLoop(
+    [{ role: "user", content: [{ type: "text", text: "go" }], timestamp: 999 }],
+    ctx,
+    wrappedCfg,
+    undefined,
+    streamFn,
+  );
+  for await (const _e of loop) {
+    /* drain */
+  }
+  return captured;
+}
+
+// ─── agentLoop default-on tests ───────────────────────────────────────────────
+
+describe("agentLoop default compression", () => {
+  it("compresses old tool results by default (no toolResultCompression option set)", async () => {
+    const longText = "z".repeat(500);
+    const streamFn = mockDoneStreamFn();
+    const cfg: AgentLoopConfig = {
+      model: { provider: "anthropic", id: "claude-3-5-haiku-20241022" } as Model<string>,
+      convertToLlm: (msgs) => msgs, // overridden by runWithCapture
+      apiKey: "test-key",
+      // toolResultCompression omitted → defaults apply
+    };
+    const ctx = makeCtxWithOldToolResult(longText, 4); // 4 turns → first is old
+
+    const captured = await runWithCapture(ctx, cfg, streamFn);
+
+    const tr = captured.find((m) => (m as { role?: string }).role === "toolResult") as
+      | { content: { text: string }[] }
+      | undefined;
+    expect(tr).toBeDefined();
+    expect(tr!.content[0]?.text.length).toBeLessThan(longText.length);
+    expect(tr!.content[0]?.text).toContain("aged-out");
+  });
+
+  it("skips compression when toolResultCompression is false", async () => {
+    const longText = "z".repeat(500);
+    const streamFn = mockDoneStreamFn();
+    const cfg: AgentLoopConfig = {
+      model: { provider: "anthropic", id: "claude-3-5-haiku-20241022" } as Model<string>,
+      convertToLlm: (msgs) => msgs,
+      apiKey: "test-key",
+      toolResultCompression: false,
+    };
+    const ctx = makeCtxWithOldToolResult(longText, 4);
+
+    const captured = await runWithCapture(ctx, cfg, streamFn);
+
+    const tr = captured.find((m) => (m as { role?: string }).role === "toolResult") as
+      | { content: { text: string }[] }
+      | undefined;
+    expect(tr).toBeDefined();
+    expect(tr!.content[0]?.text).toBe(longText); // unchanged
+  });
+});
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
