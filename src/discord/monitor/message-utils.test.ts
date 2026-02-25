@@ -367,6 +367,34 @@ describe("resolveDiscordMessageText", () => {
 
     expect(text).toBe("hello from content");
   });
+
+  it("joins forwarded snapshot embed title and description when content is empty", () => {
+    const text = resolveDiscordMessageText(
+      asMessage({
+        content: "",
+        rawData: {
+          message_snapshots: [
+            {
+              message: {
+                content: "",
+                embeds: [{ title: "Forwarded title", description: "Forwarded details" }],
+                attachments: [],
+                author: {
+                  id: "u2",
+                  username: "Bob",
+                  discriminator: "0",
+                },
+              },
+            },
+          ],
+        },
+      }),
+      { includeForwarded: true },
+    );
+
+    expect(text).toContain("[Forwarded message from @Bob]");
+    expect(text).toContain("Forwarded title\nForwarded details");
+  });
 });
 
 describe("resolveDiscordChannelInfo", () => {
