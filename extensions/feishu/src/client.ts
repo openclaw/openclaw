@@ -2,7 +2,7 @@ import * as Lark from "@larksuiteoapi/node-sdk";
 import { HttpsProxyAgent } from "https-proxy-agent";
 import type { FeishuDomain, ResolvedFeishuAccount } from "./types.js";
 
-function getWsProxyAgent(): HttpsProxyAgent | undefined {
+function getWsProxyAgent(): HttpsProxyAgent<string> | undefined {
   const proxyUrl =
     process.env.https_proxy ||
     process.env.HTTPS_PROXY ||
