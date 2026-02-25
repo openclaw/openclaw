@@ -315,6 +315,8 @@ const DiscordVoiceSchema = z
   .object({
     enabled: z.boolean().optional(),
     autoJoin: z.array(DiscordVoiceAutoJoinSchema).optional(),
+    daveEncryption: z.boolean().optional(),
+    decryptionFailureTolerance: z.number().int().min(0).optional(),
     tts: TtsConfigSchema.optional(),
   })
   .strict()
