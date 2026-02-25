@@ -6,12 +6,38 @@ export const middlewareUseSpy: Mock = vi.fn();
 export const onSpy: Mock = vi.fn();
 export const stopSpy: Mock = vi.fn();
 export const sendChatActionSpy: Mock = vi.fn();
-export const saveMediaBufferSpy: Mock = vi.fn(async (buffer: Buffer, contentType?: string) => ({
-  id: "media",
-  path: "/tmp/telegram-media",
-  size: buffer.byteLength,
-  contentType: contentType ?? "application/octet-stream",
-}));
+
+async function defaultSaveMediaBuffer(buffer: Buffer, contentType?: string) {
+  return {
+    id: "media",
+    path: "/tmp/telegram-media",
+    size: buffer.byteLength,
+    contentType: contentType ?? "application/octet-stream",
+  };
+}
+
+const saveMediaBufferSpy: Mock = vi.fn(defaultSaveMediaBuffer);
+
+export function setNextSavedMediaPath(params: {
+  path: string;
+  id?: string;
+  contentType?: string;
+  size?: number;
+}) {
+  saveMediaBufferSpy.mockImplementationOnce(
+    async (buffer: Buffer, detectedContentType?: string) => ({
+      id: params.id ?? "media",
+      path: params.path,
+      size: params.size ?? buffer.byteLength,
+      contentType: params.contentType ?? detectedContentType ?? "application/octet-stream",
+    }),
+  );
+}
+
+export function resetSaveMediaBufferMock() {
+  saveMediaBufferSpy.mockReset();
+  saveMediaBufferSpy.mockImplementation(defaultSaveMediaBuffer);
+}
 
 type ApiStub = {
   config: { use: (arg: unknown) => void };
@@ -29,6 +55,7 @@ const apiStub: ApiStub = {
 
 beforeEach(() => {
   resetInboundDedupe();
+  resetSaveMediaBufferMock();
 });
 
 vi.mock("grammy", () => ({
