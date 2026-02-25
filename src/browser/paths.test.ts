@@ -6,6 +6,7 @@ import {
   resolveExistingPathsWithinRoot,
   resolvePathsWithinRoot,
   resolvePathWithinRoot,
+  resolveStrictExistingPathsWithinRoot,
 } from "./paths.js";
 
 async function createFixtureRoot(): Promise<{ baseDir: string; uploadsDir: string }> {
@@ -192,6 +193,29 @@ describe("resolveExistingPathsWithinRoot", () => {
       });
     },
   );
+});
+
+describe("resolveStrictExistingPathsWithinRoot", () => {
+  function expectInvalidResult(
+    result: Awaited<ReturnType<typeof resolveStrictExistingPathsWithinRoot>>,
+    expectedSnippet: string,
+  ) {
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain(expectedSnippet);
+    }
+  }
+
+  it("rejects missing files instead of returning lexical fallbacks", async () => {
+    await withFixtureRoot(async ({ uploadsDir }) => {
+      const result = await resolveStrictExistingPathsWithinRoot({
+        rootDir: uploadsDir,
+        requestedPaths: ["missing.txt"],
+        scopeLabel: "uploads directory",
+      });
+      expectInvalidResult(result, "regular non-symlink file");
+    });
+  });
 });
 
 describe("resolvePathWithinRoot", () => {
