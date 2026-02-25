@@ -114,6 +114,65 @@ export type SessionEntry = {
   systemPromptReport?: SessionSystemPromptReport;
 };
 
+function normalizeRuntimeField(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+export function normalizeSessionRuntimeModelFields(entry: SessionEntry): SessionEntry {
+  const normalizedModel = normalizeRuntimeField(entry.model);
+  const normalizedProvider = normalizeRuntimeField(entry.modelProvider);
+  let next = entry;
+
+  if (!normalizedModel) {
+    if (entry.model !== undefined || entry.modelProvider !== undefined) {
+      next = { ...next };
+      delete next.model;
+      delete next.modelProvider;
+    }
+    return next;
+  }
+
+  if (entry.model !== normalizedModel) {
+    if (next === entry) {
+      next = { ...next };
+    }
+    next.model = normalizedModel;
+  }
+
+  if (!normalizedProvider) {
+    if (entry.modelProvider !== undefined) {
+      if (next === entry) {
+        next = { ...next };
+      }
+      delete next.modelProvider;
+    }
+    return next;
+  }
+
+  if (entry.modelProvider !== normalizedProvider) {
+    if (next === entry) {
+      next = { ...next };
+    }
+    next.modelProvider = normalizedProvider;
+  }
+  return next;
+}
+
+export function setSessionRuntimeModel(
+  entry: SessionEntry,
+  runtime: { provider: string; model: string },
+): boolean {
+  const provider = runtime.provider.trim();
+  const model = runtime.model.trim();
+  if (!provider || !model) {
+    return false;
+  }
+  entry.modelProvider = provider;
+  entry.model = model;
+  return true;
+}
+
 export function mergeSessionEntry(
   existing: SessionEntry | undefined,
   patch: Partial<SessionEntry>,
@@ -121,9 +180,20 @@ export function mergeSessionEntry(
   const sessionId = patch.sessionId ?? existing?.sessionId ?? crypto.randomUUID();
   const updatedAt = Math.max(existing?.updatedAt ?? 0, patch.updatedAt ?? 0, Date.now());
   if (!existing) {
-    return { ...patch, sessionId, updatedAt };
+    return normalizeSessionRuntimeModelFields({ ...patch, sessionId, updatedAt });
   }
-  return { ...existing, ...patch, sessionId, updatedAt };
+  const next = { ...existing, ...patch, sessionId, updatedAt };
+
+  // Guard against stale provider carry-over when callers patch runtime model
+  // without also patching runtime provider.
+  if (Object.hasOwn(patch, "model") && !Object.hasOwn(patch, "modelProvider")) {
+    const patchedModel = normalizeRuntimeField(patch.model);
+    const existingModel = normalizeRuntimeField(existing.model);
+    if (patchedModel && patchedModel !== existingModel) {
+      delete next.modelProvider;
+    }
+  }
+  return normalizeSessionRuntimeModelFields(next);
 }
 
 export function resolveFreshSessionTotalTokens(
