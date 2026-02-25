@@ -155,6 +155,7 @@ export function isCompactionFailureError(errorMessage?: string): boolean {
 const ERROR_PAYLOAD_PREFIX_RE =
   /^(?:error|api\s*error|apierror|openai\s*error|anthropic\s*error|gateway\s*error)[:\s-]+/i;
 const FINAL_TAG_RE = /<\s*\/?\s*final\s*>/gi;
+const CORTEX_TAG_RE = /<\s*\/?\s*(?:mem|file|correction|ref|ctx)(?:\s[^>]*)?>\s*/gi;
 const ERROR_PREFIX_RE =
   /^(?:error|api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|request failed|failed|exception)[:\s-]+/i;
 const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
@@ -554,7 +555,8 @@ export function sanitizeUserFacingText(text: string, opts?: { errorContext?: boo
     return text;
   }
   const errorContext = opts?.errorContext ?? false;
-  const stripped = stripFinalTagsFromText(text);
+  let stripped = stripFinalTagsFromText(text);
+  stripped = stripped.replace(CORTEX_TAG_RE, "");
   const trimmed = stripped.trim();
   if (!trimmed) {
     return "";
