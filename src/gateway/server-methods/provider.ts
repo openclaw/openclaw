@@ -1,4 +1,5 @@
 import { loadConfig } from "../../config/config.js";
+import { loadProviderUsageSummary } from "../../infra/provider-usage.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 // Types for provider usage responses
@@ -339,10 +340,65 @@ export const providerHandlers: GatewayRequestHandlers = {
       );
     }
 
-    const providerResults = await Promise.all(tasks);
+    // Also fetch internal gateway usage (rate-limit windows tracked per provider).
+    // This covers Anthropic and OpenAI-Codex regardless of admin key availability.
+    const [providerResults, internalSummary] = await Promise.all([
+      Promise.all(tasks),
+      withTimeout(loadProviderUsageSummary(), TIMEOUT_MS, null),
+    ]);
+
+    // Build a map from the external API results for easy lookup
+    const externalMap = new Map<string, ProviderUsageEntry>(
+      providerResults.map((p) => [p.provider, p]),
+    );
+
+    // Convert internal snapshots to ProviderUsageEntry format and merge
+    const internalProviders: ProviderUsageEntry[] = [];
+    for (const snap of internalSummary?.providers ?? []) {
+      // Skip providers already handled by external API with richer data
+      const external = externalMap.get(snap.provider);
+      if (external && !external.error) {
+        // Enrich external entry with internal window data if available
+        if (snap.windows.length > 0) {
+          const primaryWindow = snap.windows[0];
+          external.quota = {
+            used: primaryWindow.usedPercent,
+            limit: 100,
+            remaining: Math.max(0, 100 - primaryWindow.usedPercent),
+            resetAt: primaryWindow.resetAt,
+            period: primaryWindow.label,
+          };
+        }
+        continue;
+      }
+
+      // Convert internal-only providers to ProviderUsageEntry
+      const entry: ProviderUsageEntry = {
+        provider: snap.provider,
+        displayName: snap.displayName,
+        error: snap.error,
+      };
+      if (snap.windows.length > 0) {
+        const primaryWindow = snap.windows[0];
+        entry.quota = {
+          used: primaryWindow.usedPercent,
+          limit: 100,
+          remaining: Math.max(0, 100 - primaryWindow.usedPercent),
+          resetAt: primaryWindow.resetAt,
+          period: primaryWindow.label,
+        };
+      }
+      if (snap.plan) {
+        entry.usage = { cost: undefined };
+      }
+      internalProviders.push(entry);
+    }
+
+    const allProviders = [...providerResults, ...internalProviders];
+
     const result: ProviderUsageResult = {
       updatedAt: Date.now(),
-      providers: providerResults,
+      providers: allProviders,
     };
 
     respond(true, result, undefined);
