@@ -45,14 +45,13 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val locationMode: StateFlow<LocationMode> = runtime.locationMode
   val locationPreciseEnabled: StateFlow<Boolean> = runtime.locationPreciseEnabled
   val preventSleep: StateFlow<Boolean> = runtime.preventSleep
-  val wakeWords: StateFlow<List<String>> = runtime.wakeWords
-  val voiceWakeMode: StateFlow<VoiceWakeMode> = runtime.voiceWakeMode
-  val voiceWakeStatusText: StateFlow<String> = runtime.voiceWakeStatusText
-  val voiceWakeIsListening: StateFlow<Boolean> = runtime.voiceWakeIsListening
-  val talkEnabled: StateFlow<Boolean> = runtime.talkEnabled
-  val talkStatusText: StateFlow<String> = runtime.talkStatusText
-  val talkIsListening: StateFlow<Boolean> = runtime.talkIsListening
-  val talkIsSpeaking: StateFlow<Boolean> = runtime.talkIsSpeaking
+  val micEnabled: StateFlow<Boolean> = runtime.micEnabled
+  val micStatusText: StateFlow<String> = runtime.micStatusText
+  val micLiveTranscript: StateFlow<String?> = runtime.micLiveTranscript
+  val micIsListening: StateFlow<Boolean> = runtime.micIsListening
+  val micQueuedMessages: StateFlow<List<String>> = runtime.micQueuedMessages
+  val micInputLevel: StateFlow<Float> = runtime.micInputLevel
+  val micIsSending: StateFlow<Boolean> = runtime.micIsSending
   val manualEnabled: StateFlow<Boolean> = runtime.manualEnabled
   val manualHost: StateFlow<String> = runtime.manualHost
   val manualPort: StateFlow<Int> = runtime.manualPort
@@ -128,20 +127,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     runtime.setCanvasDebugStatusEnabled(value)
   }
 
-  fun setWakeWords(words: List<String>) {
-    runtime.setWakeWords(words)
-  }
-
-  fun resetWakeWordsDefaults() {
-    runtime.resetWakeWordsDefaults()
-  }
-
-  fun setVoiceWakeMode(mode: VoiceWakeMode) {
-    runtime.setVoiceWakeMode(mode)
-  }
-
-  fun setTalkEnabled(enabled: Boolean) {
-    runtime.setTalkEnabled(enabled)
+  fun setMicEnabled(enabled: Boolean) {
+    runtime.setMicEnabled(enabled)
   }
 
   fun refreshGatewayConnection() {
