@@ -174,6 +174,7 @@ Common signatures:
 - `cron: timer tick failed` → scheduler tick failed; check file/log/runtime errors.
 - `heartbeat skipped` with `reason=quiet-hours` → outside active hours window.
 - `heartbeat: unknown accountId` → invalid account id for heartbeat delivery target.
+- `heartbeat skipped` with `reason=dm-blocked` → heartbeat target resolved to a DM-style `user:<id>` destination (blocked by design).
 
 Related:
 
