@@ -126,6 +126,29 @@ function makeToolSignal(
 type CacheEntry = { result: AgentToolResult<unknown>; ts: number };
 type ToolCache = Map<string, CacheEntry>;
 
+type SessionTokens = { input: number; output: number; cacheRead: number; cacheWrite: number };
+
+/** Log per-turn and cumulative token usage to stderr. */
+function logTokenUsage(message: AssistantMessage, session: SessionTokens): void {
+  const u = message.usage;
+  if (!u) {
+    return;
+  }
+  session.input += u.input ?? 0;
+  session.output += u.output ?? 0;
+  session.cacheRead += u.cacheRead ?? 0;
+  session.cacheWrite += u.cacheWrite ?? 0;
+  const totalCost = u.cost?.total ?? 0;
+  const sessionTotal = session.input + session.output + session.cacheRead + session.cacheWrite;
+  process.stderr.write(
+    `[iris-tokens] turn in=${u.input} out=${u.output}` +
+      (u.cacheRead ? ` cacheRead=${u.cacheRead}` : "") +
+      (u.cacheWrite ? ` cacheWrite=${u.cacheWrite}` : "") +
+      (totalCost > 0 ? ` cost=$${totalCost.toFixed(4)}` : "") +
+      ` | session total=${sessionTotal}\n`,
+  );
+}
+
 function createAgentStream(): EventStream<AgentEvent, AgentMessage[]> {
   return new EventStream(
     (event: AgentEvent) => event.type === "agent_end",
@@ -145,6 +168,8 @@ async function runLoop(
   let pendingMessages: AgentMessage[] = (await config.getSteeringMessages?.()) ?? [];
   // One cache per agent run; shared across all parallel batches.
   const toolCache: ToolCache = new Map();
+  // Accumulate token usage across all turns in this agent run.
+  const sessionTokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
   while (true) {
     let hasMoreToolCalls = true;
@@ -175,6 +200,7 @@ async function runLoop(
         streamFn,
       );
       newMessages.push(message);
+      logTokenUsage(message, sessionTokens);
 
       if (message.stopReason === "error" || message.stopReason === "aborted") {
         stream.push({ type: "turn_end", message, toolResults: [] });
