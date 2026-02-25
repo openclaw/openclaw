@@ -153,7 +153,7 @@ class SecurePrefs(context: Context) {
 
   fun setGatewayToken(value: String) {
     val trimmed = value.trim()
-    prefs.edit(commit = true) { putString("gateway.manual.token", trimmed) }
+    prefs.edit { putString("gateway.manual.token", trimmed) }
     _gatewayToken.value = trimmed
   }
 
