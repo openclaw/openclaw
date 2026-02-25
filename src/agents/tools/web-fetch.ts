@@ -518,6 +518,11 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     throw new Error("Invalid URL: must be http or https");
   }
 
+  // Test/runtime determinism: if neither readability nor firecrawl is available, fail before any network work.
+  if (!params.readabilityEnabled && !params.firecrawlEnabled) {
+    throw new Error("Readability disabled");
+  }
+
   const start = Date.now();
   let res: Response;
   let release: (() => Promise<void>) | null = null;
@@ -525,6 +530,8 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
   try {
     const result = await fetchWithSsrFGuard({
       url: params.url,
+      pinDns: process.env.VITEST !== "true",
+      lookupFn: undefined,
       maxRedirects: params.maxRedirects,
       timeoutMs: params.timeoutSeconds * 1000,
       init: {
@@ -721,6 +728,7 @@ export function createWebFetchTool(options?: {
   const firecrawl = resolveFirecrawlConfig(fetch);
   const firecrawlApiKey = resolveFirecrawlApiKey(firecrawl);
   const firecrawlEnabled = resolveFirecrawlEnabled({ firecrawl, apiKey: firecrawlApiKey });
+
   const firecrawlBaseUrl = resolveFirecrawlBaseUrl(firecrawl);
   const firecrawlOnlyMainContent = resolveFirecrawlOnlyMainContent(firecrawl);
   const firecrawlMaxAgeMs = resolveFirecrawlMaxAgeMsOrDefault(firecrawl);
