@@ -126,10 +126,11 @@ describe("secrets runtime snapshot", () => {
     expect(runExecMock).toHaveBeenCalledWith(
       "sops",
       ["--decrypt", "--output-type", "json", expect.stringContaining("secrets.enc.json")],
-      {
+      expect.objectContaining({
         timeoutMs: 7000,
         maxBuffer: 10 * 1024 * 1024,
-      },
+        cwd: expect.stringContaining(".openclaw"),
+      }),
     );
   });
 
