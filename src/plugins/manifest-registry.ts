@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveUserPath } from "../utils.js";
 import { normalizePluginsConfig, type NormalizedPluginsConfig } from "./config-state.js";
@@ -47,6 +48,10 @@ export type PluginManifestRegistry = {
 const registryCache = new Map<string, { expiresAt: number; registry: PluginManifestRegistry }>();
 
 const DEFAULT_MANIFEST_CACHE_MS = 200;
+
+function pathsMatch(a: string, b: string): boolean {
+  return path.resolve(a) === path.resolve(b);
+}
 
 export function clearPluginManifestRegistryCache(): void {
   registryCache.clear();
@@ -204,7 +209,9 @@ export function loadPluginManifestRegistry(params: {
       // Check whether both candidates point to the same physical directory
       // (e.g. via symlinks or different path representations). If so, this
       // is a false-positive duplicate and can be silently skipped.
-      const samePath = existing.candidate.rootDir === candidate.rootDir;
+      const samePath =
+        pathsMatch(existing.candidate.rootDir, candidate.rootDir) ||
+        pathsMatch(existing.candidate.source, candidate.source);
       const samePlugin = (() => {
         if (samePath) {
           return true;
