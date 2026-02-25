@@ -299,6 +299,36 @@ describe("exec approvals command resolution", () => {
     expect(allowlistEval.segmentSatisfiedBy).toEqual([null]);
   });
 
+  it("fails closed when transparent env wrappers exceed unwrap depth", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const binDir = path.join(dir, "bin");
+    fs.mkdirSync(binDir, { recursive: true });
+    const envPath = path.join(binDir, "env");
+    fs.writeFileSync(envPath, "#!/bin/sh\n");
+    fs.chmodSync(envPath, 0o755);
+
+    const analysis = analyzeArgvCommand({
+      argv: [envPath, envPath, envPath, envPath, envPath, "/bin/sh", "-c", "echo pwned"],
+      cwd: dir,
+      env: makePathEnv(binDir),
+    });
+    const allowlistEval = evaluateExecAllowlist({
+      analysis,
+      allowlist: [{ pattern: envPath }],
+      safeBins: normalizeSafeBins([]),
+      cwd: dir,
+    });
+
+    expect(analysis.ok).toBe(true);
+    expect(analysis.segments[0]?.resolution?.policyBlocked).toBe(true);
+    expect(analysis.segments[0]?.resolution?.blockedWrapper).toBe("env");
+    expect(allowlistEval.allowlistSatisfied).toBe(false);
+    expect(allowlistEval.segmentSatisfiedBy).toEqual([null]);
+  });
+
   it("unwraps env wrapper with shell inner executable", () => {
     const resolution = resolveCommandResolutionFromArgv(["/usr/bin/env", "bash", "-lc", "echo hi"]);
     expect(resolution?.rawExecutable).toBe("bash");
