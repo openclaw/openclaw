@@ -40,7 +40,10 @@ export type EmbeddingProviderId = "openai" | "local" | "gemini" | "voyage" | "mi
 export type EmbeddingProviderRequest = EmbeddingProviderId | "auto";
 export type EmbeddingProviderFallback = EmbeddingProviderId | "none";
 
-const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "voyage", "mistral", "ollama"] as const;
+// Remote providers considered for auto-selection when provider === "auto".
+// Ollama is intentionally excluded here so that "auto" mode does not
+// implicitly assume a local Ollama instance is available.
+const REMOTE_EMBEDDING_PROVIDER_IDS = ["openai", "gemini", "voyage", "mistral"] as const;
 
 export type EmbeddingProviderResult = {
   provider: EmbeddingProvider | null;
