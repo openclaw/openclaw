@@ -478,6 +478,17 @@ export function resolveDispatchWrapperExecutionPlan(
     }
     current = unwrap.argv;
   }
+  if (wrappers.length >= maxDepth) {
+    const overflow = unwrapKnownDispatchWrapperInvocation(current);
+    if (overflow.kind === "blocked" || overflow.kind === "unwrapped") {
+      return {
+        argv: current,
+        wrappers,
+        policyBlocked: true,
+        blockedWrapper: overflow.wrapper,
+      };
+    }
+  }
   return { argv: current, wrappers, policyBlocked: false };
 }
 
