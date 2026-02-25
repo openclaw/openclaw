@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
 import { drainSystemEvents } from "../infra/system-events.js";
@@ -234,6 +235,45 @@ describe("gateway hot reload", () => {
     );
   }
 
+  async function writeAuthProfileEnvRefStore() {
+    const stateDir = process.env.OPENCLAW_STATE_DIR;
+    if (!stateDir) {
+      throw new Error("OPENCLAW_STATE_DIR is not set");
+    }
+    const authStorePath = path.join(stateDir, "agents", "main", "agent", "auth-profiles.json");
+    await fs.mkdir(path.dirname(authStorePath), { recursive: true });
+    await fs.writeFile(
+      authStorePath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          profiles: {
+            missing: {
+              type: "api_key",
+              provider: "openai",
+              keyRef: { source: "env", id: "MISSING_OPENCLAW_AUTH_REF" },
+            },
+          },
+          selectedProfileId: "missing",
+          lastUsedProfileByModel: {},
+          usageStats: {},
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+  }
+
+  async function removeMainAuthProfileStore() {
+    const stateDir = process.env.OPENCLAW_STATE_DIR;
+    if (!stateDir) {
+      return;
+    }
+    const authStorePath = path.join(stateDir, "agents", "main", "agent", "auth-profiles.json");
+    await fs.rm(authStorePath, { force: true });
+  }
+
   it("applies hot reload actions and emits restart signal", async () => {
     await withGatewayServer(async () => {
       const onHotReload = hoisted.getOnHotReload();
@@ -347,6 +387,18 @@ describe("gateway hot reload", () => {
     );
   });
 
+  it("fails startup when auth-profile secret refs are unresolved", async () => {
+    await writeAuthProfileEnvRefStore();
+    delete process.env.MISSING_OPENCLAW_AUTH_REF;
+    try {
+      await expect(withGatewayServer(async () => {})).rejects.toThrow(
+        'Environment variable "MISSING_OPENCLAW_AUTH_REF" is missing or empty.',
+      );
+    } finally {
+      await removeMainAuthProfileStore();
+    }
+  });
+
   it("emits one-shot degraded and recovered system events during secret reload transitions", async () => {
     await writeEnvRefConfig();
     process.env.OPENAI_API_KEY = "sk-startup";
@@ -401,6 +453,24 @@ describe("gateway hot reload", () => {
         true,
       );
     });
+  });
+
+  it("serves secrets.reload immediately after startup without race failures", async () => {
+    await writeEnvRefConfig();
+    process.env.OPENAI_API_KEY = "sk-startup";
+    const { server, ws } = await startServerWithClient();
+    try {
+      await connectOk(ws);
+      const [first, second] = await Promise.all([
+        rpcReq<{ warningCount: number }>(ws, "secrets.reload", {}),
+        rpcReq<{ warningCount: number }>(ws, "secrets.reload", {}),
+      ]);
+      expect(first.ok).toBe(true);
+      expect(second.ok).toBe(true);
+    } finally {
+      ws.close();
+      await server.close();
+    }
   });
 });
 

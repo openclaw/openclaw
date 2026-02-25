@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { maskApiKey } from "../utils/mask-api-key.js";
 import {
   ensureAuthProfileStore,
   resolveAuthProfileDisplayLabel,
@@ -13,10 +14,7 @@ function formatApiKeySnippet(apiKey: string): string {
   if (!compact) {
     return "unknown";
   }
-  const edge = compact.length >= 12 ? 6 : 4;
-  const head = compact.slice(0, edge);
-  const tail = compact.slice(-edge);
-  return `${head}…${tail}`;
+  return maskApiKey(compact);
 }
 
 function formatCredentialSnippet(params: {

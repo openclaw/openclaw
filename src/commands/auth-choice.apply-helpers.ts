@@ -5,6 +5,14 @@ import type { ApplyAuthChoiceParams } from "./auth-choice.apply.js";
 import { applyDefaultModelChoice } from "./auth-choice.default-model.js";
 import type { SecretInputMode } from "./onboard-types.js";
 
+const INLINE_ENV_REF_RE = /^\$\{([A-Z][A-Z0-9_]*)\}$/;
+const ENV_SOURCE_LABEL_RE = /(?:^|:\s)([A-Z][A-Z0-9_]*)$/;
+
+function extractEnvVarFromSourceLabel(source: string): string | undefined {
+  const match = ENV_SOURCE_LABEL_RE.exec(source.trim());
+  return match?.[1];
+}
+
 export function createAuthChoiceAgentModelNoter(
   params: ApplyAuthChoiceParams,
 ): (model: string) => Promise<void> {
@@ -205,7 +213,14 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
         prompter: params.prompter,
         explicitMode: params.secretInputMode,
       });
-      await params.setCredential(envKey.apiKey, mode);
+      const explicitEnvRef =
+        mode === "ref"
+          ? (() => {
+              const envVar = extractEnvVarFromSourceLabel(envKey.source);
+              return envVar ? `\${${envVar}}` : envKey.apiKey;
+            })()
+          : envKey.apiKey;
+      await params.setCredential(explicitEnvRef, mode);
       return envKey.apiKey;
     }
   }
@@ -215,6 +230,12 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
     validate: params.validate,
   });
   const apiKey = params.normalize(String(key ?? ""));
+  if (params.secretInputMode === "ref" && !INLINE_ENV_REF_RE.test(apiKey)) {
+    await params.prompter.note(
+      "secret-input-mode=ref stores an env reference, not plaintext key input. Enter ${ENV_VAR} to target a specific variable, or keep current input to use the provider default env var.",
+      "Ref mode note",
+    );
+  }
   await params.setCredential(apiKey, params.secretInputMode);
   return apiKey;
 }

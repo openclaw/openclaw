@@ -150,6 +150,61 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
       }),
     );
   });
+
+  it("uses explicit inline env ref when secret-input-mode=ref selects existing env key", async () => {
+    process.env.MINIMAX_API_KEY = "env-key";
+    delete process.env.MINIMAX_OAUTH_TOKEN;
+
+    const { confirm, text } = createPromptSpies({
+      confirmResult: true,
+      textResult: "prompt-key",
+    });
+    const setCredential = vi.fn(async () => undefined);
+
+    const result = await ensureApiKeyFromEnvOrPrompt({
+      provider: "minimax",
+      envLabel: "MINIMAX_API_KEY",
+      promptMessage: "Enter key",
+      normalize: (value) => value.trim(),
+      validate: () => undefined,
+      prompter: createPrompter({ confirm, text }),
+      secretInputMode: "ref",
+      setCredential,
+    });
+
+    expect(result).toBe("env-key");
+    expect(setCredential).toHaveBeenCalledWith("${MINIMAX_API_KEY}", "ref");
+    expect(text).not.toHaveBeenCalled();
+  });
+
+  it("shows a ref-mode note when plaintext input is provided in ref mode", async () => {
+    delete process.env.MINIMAX_API_KEY;
+    delete process.env.MINIMAX_OAUTH_TOKEN;
+
+    const { confirm, note, text } = createPromptSpies({
+      confirmResult: false,
+      textResult: "  prompted-key  ",
+    });
+    const setCredential = vi.fn(async () => undefined);
+
+    const result = await ensureApiKeyFromEnvOrPrompt({
+      provider: "minimax",
+      envLabel: "MINIMAX_API_KEY",
+      promptMessage: "Enter key",
+      normalize: (value) => value.trim(),
+      validate: () => undefined,
+      prompter: createPrompter({ confirm, note, text }),
+      secretInputMode: "ref",
+      setCredential,
+    });
+
+    expect(result).toBe("prompted-key");
+    expect(setCredential).toHaveBeenCalledWith("prompted-key", "ref");
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("secret-input-mode=ref stores an env reference"),
+      "Ref mode note",
+    );
+  });
 });
 
 describe("ensureApiKeyFromOptionEnvOrPrompt", () => {
