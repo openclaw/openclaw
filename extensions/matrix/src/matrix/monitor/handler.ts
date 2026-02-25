@@ -435,6 +435,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           kind: isDirectMessage ? "direct" : "channel",
           id: isDirectMessage ? senderId : roomId,
         },
+        // For DMs, pass roomId as parentPeer so the conversation is bindable by room ID
+        // while preserving DM trust semantics (secure 1:1, no group restrictions).
+        parentPeer: isDirectMessage ? { kind: "channel", id: roomId } : undefined,
       });
 
       const route = {
