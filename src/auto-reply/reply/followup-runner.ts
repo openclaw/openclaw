@@ -135,7 +135,7 @@ export function createFollowupRunner(params: {
           agentDir: queued.run.agentDir,
           fallbacksOverride: resolveAgentModelFallbacksOverride(
             queued.run.config,
-            resolveAgentIdFromSessionKey(queued.run.sessionKey),
+            queued.run.agentId ?? resolveAgentIdFromSessionKey(queued.run.sessionKey),
           ),
           run: (provider, model) => {
             const authProfile = resolveRunAuthProfile(queued.run, provider);

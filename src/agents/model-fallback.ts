@@ -164,7 +164,9 @@ function resolveImageFallbackCandidates(params: {
   const imageFallbacks = resolveAgentModelFallbackValues(params.cfg?.agents?.defaults?.imageModel);
 
   for (const raw of imageFallbacks) {
-    addRaw(raw, true);
+    // Explicitly configured image fallbacks should remain reachable even when a
+    // model allowlist is present.
+    addRaw(raw, false);
   }
 
   return candidates;
@@ -235,7 +237,9 @@ function resolveFallbackCandidates(params: {
     if (!resolved) {
       continue;
     }
-    addCandidate(resolved.ref, true);
+    // Fallbacks are explicit user intent; do not silently filter them by the
+    // model allowlist.
+    addCandidate(resolved.ref, false);
   }
 
   if (params.fallbacksOverride === undefined && primary?.provider && primary.model) {
