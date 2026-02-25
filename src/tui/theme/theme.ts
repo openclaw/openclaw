@@ -302,8 +302,8 @@ export function resetTerminalColors(): void {
  * Call this after tui.start().
  */
 export function applyInitialTerminalColors(): void {
-  process.stdout.write(`\x1b]10;${palette.text}\x07`);
   if (palette.terminalBg) {
+    process.stdout.write(`\x1b]10;${palette.text}\x07`);
     process.stdout.write(`\x1b]11;${palette.terminalBg}\x07`);
   }
 }
