@@ -102,6 +102,68 @@ async function fetchWithAuthFallback(params: {
     requireHttps: true,
     shouldAttachAuth: (url) => isUrlAllowed(url, params.authAllowHosts),
   });
+  if (firstAttempt.ok) {
+    return firstAttempt;
+  }
+  if (!params.tokenProvider) {
+    return firstAttempt;
+  }
+  if (firstAttempt.status !== 401 && firstAttempt.status !== 403) {
+    return firstAttempt;
+  }
+  if (!isUrlAllowed(params.url, params.authAllowHosts)) {
+    return firstAttempt;
+  }
+
+  const scopes = scopeCandidatesForUrl(params.url);
+  for (const scope of scopes) {
+    try {
+      const token = await params.tokenProvider.getAccessToken(scope);
+      const authHeaders = new Headers(params.requestInit?.headers);
+      authHeaders.set("Authorization", `Bearer ${token}`);
+      const authAttempt = await safeFetch({
+        url: params.url,
+        allowHosts: params.allowHosts,
+        fetchFn,
+        requestInit: {
+          ...params.requestInit,
+          headers: authHeaders,
+        },
+        resolveFn: params.resolveFn,
+      });
+      if (authAttempt.ok) {
+        return authAttempt;
+      }
+      if (authAttempt.status !== 401 && authAttempt.status !== 403) {
+        // Non-auth failures (including redirects in guarded fetch mode) should
+        // be handled by the caller's redirect/error policy.
+        return authAttempt;
+      }
+
+      const finalUrl =
+        typeof authAttempt.url === "string" && authAttempt.url ? authAttempt.url : "";
+      if (!finalUrl || finalUrl === params.url || !isUrlAllowed(finalUrl, params.authAllowHosts)) {
+        continue;
+      }
+      const redirectedAuthAttempt = await safeFetch({
+        url: finalUrl,
+        allowHosts: params.allowHosts,
+        fetchFn,
+        requestInit: {
+          ...params.requestInit,
+          headers: authHeaders,
+        },
+        resolveFn: params.resolveFn,
+      });
+      if (redirectedAuthAttempt.ok) {
+        return redirectedAuthAttempt;
+      }
+    } catch {
+      // Try the next scope.
+    }
+  }
+
+  return firstAttempt;
 }
 
 /**
