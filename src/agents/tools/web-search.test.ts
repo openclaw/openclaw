@@ -7,6 +7,7 @@ const {
   resolvePerplexityBaseUrl,
   isDirectPerplexityBaseUrl,
   resolvePerplexityRequestModel,
+  normalizeBraveLanguageParams,
   normalizeFreshness,
   freshnessToPerplexityRecency,
   resolveGrokApiKey,
@@ -90,6 +91,28 @@ describe("web_search perplexity model normalization", () => {
     expect(resolvePerplexityRequestModel("not-a-url", "perplexity/sonar-pro")).toBe(
       "perplexity/sonar-pro",
     );
+  });
+});
+
+describe("web_search brave language param normalization", () => {
+  it("normalizes and auto-corrects swapped Brave language params", () => {
+    expect(normalizeBraveLanguageParams({ search_lang: "tr-TR", ui_lang: "tr" })).toEqual({
+      search_lang: "tr",
+      ui_lang: "tr-TR",
+    });
+    expect(normalizeBraveLanguageParams({ search_lang: "EN", ui_lang: "en-us" })).toEqual({
+      search_lang: "en",
+      ui_lang: "en-US",
+    });
+  });
+
+  it("flags invalid Brave language formats", () => {
+    expect(normalizeBraveLanguageParams({ search_lang: "en-US" })).toEqual({
+      invalidField: "search_lang",
+    });
+    expect(normalizeBraveLanguageParams({ ui_lang: "en" })).toEqual({
+      invalidField: "ui_lang",
+    });
   });
 });
 
