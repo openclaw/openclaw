@@ -5,9 +5,9 @@ import java.util.Base64
 import java.util.Locale
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 
 internal data class GatewayEndpointConfig(
   val host: String,
@@ -113,20 +113,8 @@ internal fun decodeGatewaySetupCode(rawInput: String): GatewaySetupCode? {
 }
 
 internal fun resolveScannedSetupCode(rawInput: String): String? {
-  val trimmed = rawInput.trim()
-  if (trimmed.isEmpty()) return null
-
-  if (decodeGatewaySetupCode(trimmed) != null) {
-    return trimmed
-  }
-
-  val obj = parseJsonObject(trimmed) ?: return null
-  val setupCode = jsonField(obj, "setupCode") ?: return null
-  return if (decodeGatewaySetupCode(setupCode) != null) {
-    setupCode
-  } else {
-    null
-  }
+  val setupCode = resolveSetupCodeCandidate(rawInput) ?: return null
+  return setupCode.takeIf { decodeGatewaySetupCode(it) != null }
 }
 
 internal fun composeGatewayManualUrl(hostInput: String, portInput: String, tls: Boolean): String? {
@@ -141,7 +129,14 @@ private fun parseJsonObject(input: String): JsonObject? {
   return runCatching { gatewaySetupJson.parseToJsonElement(input).jsonObject }.getOrNull()
 }
 
+private fun resolveSetupCodeCandidate(rawInput: String): String? {
+  val trimmed = rawInput.trim()
+  if (trimmed.isEmpty()) return null
+  val qrSetupCode = parseJsonObject(trimmed)?.let { jsonField(it, "setupCode") }
+  return qrSetupCode ?: trimmed
+}
+
 private fun jsonField(obj: JsonObject, key: String): String? {
-  val value = obj[key]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+  val value = (obj[key] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
   return value.ifEmpty { null }
 }
