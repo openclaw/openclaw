@@ -3,6 +3,7 @@ import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelId, ChannelThreadingToolContext } from "../../channels/plugins/types.js";
 import { normalizeAnyChannelId, normalizeChannelId } from "../../channels/registry.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import type { TemplateContext } from "../templating.js";
 import {
@@ -20,13 +21,15 @@ const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
  */
 export function buildThreadingToolContext(params: {
   sessionCtx: TemplateContext;
+  sessionEntry?: SessionEntry;
   config: OpenClawConfig | undefined;
   hasRepliedRef: { value: boolean } | undefined;
 }): ChannelThreadingToolContext {
-  const { sessionCtx, config, hasRepliedRef } = params;
+  const { sessionCtx, sessionEntry, config, hasRepliedRef } = params;
   const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
   const originProvider = resolveOriginMessageProvider({
     originatingChannel: sessionCtx.OriginatingChannel,
+    lastChannel: sessionEntry?.lastChannel,
     provider: sessionCtx.Provider,
   });
   const originTo = resolveOriginMessageTo({
@@ -157,6 +160,7 @@ export function buildEmbeddedContextFromTemplate(params: {
   run: FollowupRun["run"];
   sessionCtx: TemplateContext;
   hasRepliedRef: { value: boolean } | undefined;
+  sessionEntry?: SessionEntry;
 }) {
   return {
     sessionId: params.run.sessionId,
@@ -164,6 +168,7 @@ export function buildEmbeddedContextFromTemplate(params: {
     agentId: params.run.agentId,
     messageProvider: resolveOriginMessageProvider({
       originatingChannel: params.sessionCtx.OriginatingChannel,
+      lastChannel: params.sessionEntry?.lastChannel,
       provider: params.sessionCtx.Provider,
     }),
     agentAccountId: params.sessionCtx.AccountId,
@@ -175,6 +180,7 @@ export function buildEmbeddedContextFromTemplate(params: {
     // Provider threading context for tool auto-injection
     ...buildThreadingToolContext({
       sessionCtx: params.sessionCtx,
+      sessionEntry: params.sessionEntry,
       config: params.run.config,
       hasRepliedRef: params.hasRepliedRef,
     }),
@@ -195,6 +201,7 @@ export function buildEmbeddedRunContexts(params: {
   sessionCtx: TemplateContext;
   hasRepliedRef: { value: boolean } | undefined;
   provider: string;
+  sessionEntry?: SessionEntry;
 }) {
   return {
     authProfile: resolveRunAuthProfile(params.run, params.provider),
@@ -202,6 +209,7 @@ export function buildEmbeddedRunContexts(params: {
       run: params.run,
       sessionCtx: params.sessionCtx,
       hasRepliedRef: params.hasRepliedRef,
+      sessionEntry: params.sessionEntry,
     }),
     senderContext: buildTemplateSenderContext(params.sessionCtx),
   };
@@ -212,6 +220,7 @@ export function buildEmbeddedRunExecutionParams(params: {
   sessionCtx: TemplateContext;
   hasRepliedRef: { value: boolean } | undefined;
   provider: string;
+  sessionEntry?: SessionEntry;
   model: string;
   runId: string;
   allowTransientCooldownProbe?: boolean;
