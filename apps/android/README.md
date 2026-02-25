@@ -34,6 +34,56 @@ cd apps/android
 
 `gradlew` auto-detects the Android SDK at `~/Library/Android/sdk` (macOS default) if `ANDROID_SDK_ROOT` / `ANDROID_HOME` are unset.
 
+## Run on a Real Android Phone (USB)
+
+1) On phone, enable **Developer options** + **USB debugging**.
+2) Connect by USB and accept the debugging trust prompt on phone.
+3) Verify ADB can see the device:
+
+```bash
+adb devices -l
+```
+
+4) Install + launch debug build:
+
+```bash
+pnpm android:install
+pnpm android:run
+```
+
+If `adb devices -l` shows `unauthorized`, re-plug and accept the trust prompt again.
+
+### USB-only gateway testing (no LAN dependency)
+
+Use `adb reverse` so Android `localhost:18789` tunnels to your laptop `localhost:18789`.
+
+Terminal A (gateway):
+
+```bash
+pnpm openclaw gateway --port 18789 --verbose
+```
+
+Terminal B (USB tunnel):
+
+```bash
+adb reverse tcp:18789 tcp:18789
+```
+
+Then in app **Connect → Manual**:
+
+- Host: `127.0.0.1`
+- Port: `18789`
+- TLS: off
+
+## Hot Reload / Fast Iteration
+
+This app is native Kotlin + Jetpack Compose.
+
+- For Compose UI edits: use Android Studio **Live Edit** on a debug build (works on physical devices; project `minSdk=31` already meets API requirement).
+- For many non-structural code/resource changes: use Android Studio **Apply Changes**.
+- For structural/native/manifest/Gradle changes: do full reinstall (`pnpm android:run`).
+- Canvas web content already supports live reload when loaded from Gateway `__openclaw__/canvas/` (see `docs/platforms/android.md`).
+
 ## Connect / Pair
 
 1) Start the gateway (on your main machine):
