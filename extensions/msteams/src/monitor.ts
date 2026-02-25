@@ -1,3 +1,4 @@
+import type { Server } from "node:http";
 import type { Request, Response } from "express";
 import {
   DEFAULT_WEBHOOK_MAX_BODY_BYTES,
@@ -34,6 +35,31 @@ export type MonitorMSTeamsResult = {
 };
 
 const MSTEAMS_WEBHOOK_MAX_BODY_BYTES = DEFAULT_WEBHOOK_MAX_BODY_BYTES;
+const MSTEAMS_WEBHOOK_INACTIVITY_TIMEOUT_MS = 30_000;
+const MSTEAMS_WEBHOOK_REQUEST_TIMEOUT_MS = 30_000;
+const MSTEAMS_WEBHOOK_HEADERS_TIMEOUT_MS = 15_000;
+
+export type ApplyMSTeamsWebhookTimeoutsOpts = {
+  inactivityTimeoutMs?: number;
+  requestTimeoutMs?: number;
+  headersTimeoutMs?: number;
+};
+
+export function applyMSTeamsWebhookTimeouts(
+  httpServer: Server,
+  opts?: ApplyMSTeamsWebhookTimeoutsOpts,
+): void {
+  const inactivityTimeoutMs = opts?.inactivityTimeoutMs ?? MSTEAMS_WEBHOOK_INACTIVITY_TIMEOUT_MS;
+  const requestTimeoutMs = opts?.requestTimeoutMs ?? MSTEAMS_WEBHOOK_REQUEST_TIMEOUT_MS;
+  const headersTimeoutMs = Math.min(
+    opts?.headersTimeoutMs ?? MSTEAMS_WEBHOOK_HEADERS_TIMEOUT_MS,
+    requestTimeoutMs,
+  );
+
+  httpServer.setTimeout(inactivityTimeoutMs);
+  httpServer.requestTimeout = requestTimeoutMs;
+  httpServer.headersTimeout = headersTimeoutMs;
+}
 
 export async function monitorMSTeamsProvider(
   opts: MonitorMSTeamsOpts,
@@ -289,6 +315,7 @@ export async function monitorMSTeamsProvider(
     httpServer.once("listening", onListening);
     httpServer.once("error", onError);
   });
+  applyMSTeamsWebhookTimeouts(httpServer);
 
   httpServer.on("error", (err) => {
     log.error("msteams server error", { error: String(err) });
