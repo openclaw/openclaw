@@ -330,7 +330,14 @@ export function resolveHeartbeatDeliveryTarget(params: {
     to: resolved.to,
     sessionChatType: sessionChatTypeHint,
   });
-  if (deliveryChatType === "direct" && heartbeat?.directPolicy === "block") {
+  // Only block DM delivery for implicit routing (target: "last" without explicit `to`).
+  // When the user explicitly configures heartbeat.to pointing to a DM, respect it. (#26338)
+  const isImplicitRouting = target === "last" && !heartbeat?.to;
+  if (
+    deliveryChatType === "direct" &&
+    heartbeat?.directPolicy === "block" &&
+    isImplicitRouting
+  ) {
     return buildNoHeartbeatDeliveryTarget({
       reason: "dm-blocked",
       accountId: effectiveAccountId,

@@ -478,6 +478,46 @@ describe("resolveSessionDeliveryTarget", () => {
     expect(resolved.reason).toBe("dm-blocked");
   });
 
+  it("allows heartbeat delivery to explicit DM target (Telegram)", () => {
+    const cfg: OpenClawConfig = {};
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg,
+      entry: {
+        sessionId: "sess-heartbeat-explicit-dm",
+        updatedAt: 1,
+        lastChannel: "telegram",
+        lastTo: "-1001234567890",
+      },
+      heartbeat: {
+        target: "telegram",
+        to: "5232990709",
+      },
+    });
+
+    expect(resolved.channel).toBe("telegram");
+    expect(resolved.to).toBe("5232990709");
+  });
+
+  it("allows heartbeat delivery to explicit DM target (Discord)", () => {
+    const cfg: OpenClawConfig = {};
+    const resolved = resolveHeartbeatDeliveryTarget({
+      cfg,
+      entry: {
+        sessionId: "sess-heartbeat-explicit-discord-dm",
+        updatedAt: 1,
+        lastChannel: "discord",
+        lastTo: "channel:999",
+      },
+      heartbeat: {
+        target: "discord",
+        to: "user:12345",
+      },
+    });
+
+    expect(resolved.channel).toBe("discord");
+    expect(resolved.to).toBe("user:12345");
+  });
+
   it("keeps heartbeat delivery to Discord channels", () => {
     const cfg: OpenClawConfig = {};
     const resolved = resolveHeartbeatDeliveryTarget({
