@@ -1,3 +1,5 @@
+import { createTypingKeepaliveLoop } from "./typing-lifecycle.js";
+
 export type TypingCallbacks = {
   onReplyStart: () => Promise<void>;
   onIdle?: () => void;
@@ -14,8 +16,6 @@ export function createTypingCallbacks(params: {
 }): TypingCallbacks {
   const stop = params.stop;
   const keepaliveIntervalMs = params.keepaliveIntervalMs ?? 3_000;
-  let keepaliveTimer: ReturnType<typeof setInterval> | undefined;
-  let keepaliveStartInFlight = false;
   let stopSent = false;
 
   const fireStart = async () => {
@@ -26,35 +26,20 @@ export function createTypingCallbacks(params: {
     }
   };
 
-  const clearKeepalive = () => {
-    if (!keepaliveTimer) {
-      return;
-    }
-    clearInterval(keepaliveTimer);
-    keepaliveTimer = undefined;
-    keepaliveStartInFlight = false;
-  };
+  const keepaliveLoop = createTypingKeepaliveLoop({
+    intervalMs: keepaliveIntervalMs,
+    onTick: fireStart,
+  });
 
   const onReplyStart = async () => {
     stopSent = false;
-    clearKeepalive();
+    keepaliveLoop.stop();
     await fireStart();
-    if (keepaliveIntervalMs <= 0) {
-      return;
-    }
-    keepaliveTimer = setInterval(() => {
-      if (keepaliveStartInFlight) {
-        return;
-      }
-      keepaliveStartInFlight = true;
-      void fireStart().finally(() => {
-        keepaliveStartInFlight = false;
-      });
-    }, keepaliveIntervalMs);
+    keepaliveLoop.start();
   };
 
   const fireStop = () => {
-    clearKeepalive();
+    keepaliveLoop.stop();
     if (!stop || stopSent) {
       return;
     }
