@@ -130,6 +130,13 @@ type PromptBuildHookRunner = {
   ) => Promise<PluginHookBeforeAgentStartResult | undefined>;
 };
 
+class PluginHookBlockError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PluginHookBlockError";
+  }
+}
+
 export function isOllamaCompatProvider(model: {
   provider?: string;
   baseUrl?: string;
@@ -1477,16 +1484,19 @@ export async function runEmbeddedAttempt(
                 },
               );
               if (llmInputResult?.block) {
-                throw new Error(llmInputResult.blockReason ?? "LLM request blocked by plugin hook");
+                throw new PluginHookBlockError(
+                  llmInputResult.blockReason ?? "LLM request blocked by plugin hook",
+                );
               }
               if (llmInputResult?.prompt) {
                 effectivePrompt = llmInputResult.prompt;
               }
               if (llmInputResult?.systemPrompt) {
+                log.info(`llm_input hook modified systemPrompt for session=${params.sessionId}`);
                 applySystemPromptOverrideToSession(activeSession, llmInputResult.systemPrompt);
               }
             } catch (err) {
-              if (err instanceof Error && err.message.includes("blocked by plugin hook")) {
+              if (err instanceof PluginHookBlockError) {
                 throw err;
               }
               log.warn(`llm_input hook failed: ${String(err)}`);

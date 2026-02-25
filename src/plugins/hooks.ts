@@ -331,6 +331,9 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
    * Run llm_input hook.
    * Allows plugins to observe, modify, or block the LLM input payload.
    * Runs sequentially so plugins can modify prompt content or block the call.
+   *
+   * Merge: each field uses first-set-wins — earlier handlers' values are
+   * preserved when later handlers return undefined for that field.
    */
   async function runLlmInput(
     event: PluginHookLlmInputEvent,
@@ -472,9 +475,10 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
   }
 
   /**
-   * Run after_tool_call hook.
+   * Run after_tool_call hook (modifying).
    * Allows plugins to observe or modify tool results before they reach the LLM.
    * Runs sequentially so plugins can redact or transform results.
+   * Use in the adapter path where results can still be modified.
    */
   async function runAfterToolCall(
     event: PluginHookAfterToolCallEvent,
@@ -484,10 +488,24 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
       "after_tool_call",
       event,
       ctx,
+      // Last-wins: plugin load order determines which redaction takes precedence
       (acc, next) => ({
         result: next.result !== undefined ? next.result : acc?.result,
       }),
     );
+  }
+
+  /**
+   * Run after_tool_call hook (audit-only).
+   * Runs handlers in parallel for observation only — results are already
+   * committed to the session so modifications are discarded.
+   * Use in the subscribe handler path where results cannot be modified.
+   */
+  async function runAfterToolCallVoid(
+    event: PluginHookAfterToolCallEvent,
+    ctx: PluginHookToolContext,
+  ): Promise<void> {
+    return runVoidHook("after_tool_call", event, ctx);
   }
 
   /**
@@ -768,6 +786,7 @@ export function createHookRunner(registry: PluginRegistry, options: HookRunnerOp
     // Tool hooks
     runBeforeToolCall,
     runAfterToolCall,
+    runAfterToolCallVoid,
     runToolResultPersist,
     // Message write hooks
     runBeforeMessageWrite,
