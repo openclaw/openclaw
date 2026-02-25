@@ -436,6 +436,7 @@ export const dispatchTelegramMessage = async ({
       cfg,
       dispatcherOptions: {
         ...prefixOptions,
+        typingCallbacks,
         deliver: async (payload, info) => {
           const previewButtons = (
             payload.channelData?.telegram as { buttons?: TelegramInlineButtons } | undefined
@@ -540,9 +541,6 @@ export const dispatchTelegramMessage = async ({
           deliveryState.markNonSilentFailure();
           runtime.error?.(danger(`telegram ${info.kind} reply failed: ${String(err)}`));
         },
-        onReplyStart: typingCallbacks.onReplyStart,
-        onIdle: typingCallbacks.onIdle,
-        onCleanup: typingCallbacks.onCleanup,
       },
       replyOptions: {
         skillFilter,
