@@ -33,7 +33,9 @@ export function queueEmbeddedPiMessage(sessionId: string, text: string): boolean
     return false;
   }
   logMessageQueued({ sessionId, source: "pi-embedded-runner" });
-  void handle.queueMessage(text);
+  void handle.queueMessage(text).catch((err) => {
+    diag.warn(`queue message error: sessionId=${sessionId} error=${String(err)}`);
+  });
   return true;
 }
 

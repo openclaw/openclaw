@@ -2,7 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { abortEmbeddedPiRun, compactEmbeddedPiSession } from "../../agents/pi-embedded.js";
+import {
+  abortEmbeddedPiRun,
+  compactEmbeddedPiSession,
+  isEmbeddedPiRunActive,
+  waitForEmbeddedPiRunEnd,
+} from "../../agents/pi-embedded.js";
 import {
   addSubagentRunForTests,
   listSubagentRunsForRequester,
@@ -428,6 +433,40 @@ describe("/compact command", () => {
         agentDir,
       }),
     );
+  });
+
+  it("returns a retry message when active run does not settle after abort", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/compact", cfg);
+    vi.mocked(isEmbeddedPiRunActive).mockReturnValueOnce(true);
+    vi.mocked(waitForEmbeddedPiRunEnd).mockResolvedValueOnce(false);
+
+    const result = await handleCompactCommand(
+      {
+        ...params,
+        sessionEntry: {
+          sessionId: "session-compact-stuck",
+          updatedAt: Date.now(),
+        },
+      },
+      true,
+    );
+
+    expect(vi.mocked(abortEmbeddedPiRun)).toHaveBeenCalledWith("session-compact-stuck");
+    expect(vi.mocked(waitForEmbeddedPiRunEnd)).toHaveBeenCalledWith(
+      "session-compact-stuck",
+      15_000,
+    );
+    expect(vi.mocked(compactEmbeddedPiSession)).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: {
+        text: "⚙️ Compaction unavailable right now (active run did not settle after abort). Try again shortly.",
+      },
+    });
   });
 });
 

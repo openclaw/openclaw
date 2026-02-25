@@ -515,6 +515,7 @@ export async function compactEmbeddedPiSessionDirect(
 
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
+      allowReentrant: false,
       maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
         timeoutMs: EMBEDDED_COMPACTION_TIMEOUT_MS,
       }),

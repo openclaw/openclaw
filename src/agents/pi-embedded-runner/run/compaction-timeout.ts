@@ -27,6 +27,43 @@ export type SnapshotSelection = {
   source: "pre-compaction" | "current";
 };
 
+export async function waitForCompactionRetryWithTimeout(params: {
+  waitForCompactionRetry: () => Promise<void>;
+  timeoutMs: number;
+}): Promise<boolean> {
+  const timeoutMs = Math.max(1, Math.floor(params.timeoutMs));
+  return await new Promise<boolean>((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      resolve(false);
+    }, timeoutMs);
+    timer.unref?.();
+
+    void params.waitForCompactionRetry().then(
+      () => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        resolve(true);
+      },
+      (err) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
 export function selectCompactionTimeoutSnapshot(
   params: SnapshotSelectionParams,
 ): SnapshotSelection {

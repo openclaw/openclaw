@@ -66,7 +66,15 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   const sessionId = params.sessionEntry.sessionId;
   if (isEmbeddedPiRunActive(sessionId)) {
     abortEmbeddedPiRun(sessionId);
-    await waitForEmbeddedPiRunEnd(sessionId, 15_000);
+    const settled = await waitForEmbeddedPiRunEnd(sessionId, 15_000);
+    if (!settled) {
+      return {
+        shouldContinue: false,
+        reply: {
+          text: "⚙️ Compaction unavailable right now (active run did not settle after abort). Try again shortly.",
+        },
+      };
+    }
   }
   const customInstructions = extractCompactInstructions({
     rawBody: params.ctx.CommandBody ?? params.ctx.RawBody ?? params.ctx.Body,
