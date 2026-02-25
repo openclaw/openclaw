@@ -8,7 +8,7 @@ import type { createIMessageRpcClient } from "../client.js";
 import { sendMessageIMessage } from "../send.js";
 
 type SentMessageCache = {
-  remember: (scope: string, text: string) => void;
+  remember: (scope: string, lookup: { text?: string; messageId?: string }) => void;
 };
 
 export async function deliverReplies(params: {
@@ -39,31 +39,32 @@ export async function deliverReplies(params: {
       continue;
     }
     if (mediaList.length === 0) {
-      sentMessageCache?.remember(scope, text);
+      sentMessageCache?.remember(scope, { text });
       for (const chunk of chunkTextWithMode(text, textLimit, chunkMode)) {
-        await sendMessageIMessage(target, chunk, {
+        const sent = await sendMessageIMessage(target, chunk, {
           maxBytes,
           client,
           accountId,
           replyToId: payload.replyToId,
         });
-        sentMessageCache?.remember(scope, chunk);
+        sentMessageCache?.remember(scope, { text: chunk, messageId: sent.messageId });
       }
     } else {
       let first = true;
       for (const url of mediaList) {
         const caption = first ? text : "";
         first = false;
-        await sendMessageIMessage(target, caption, {
+        const sent = await sendMessageIMessage(target, caption, {
           mediaUrl: url,
           maxBytes,
           client,
           accountId,
           replyToId: payload.replyToId,
         });
-        if (caption) {
-          sentMessageCache?.remember(scope, caption);
-        }
+        sentMessageCache?.remember(scope, {
+          text: caption || undefined,
+          messageId: sent.messageId,
+        });
       }
     }
     runtime.log?.(`imessage: delivered reply to ${target}`);
