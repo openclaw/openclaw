@@ -1,6 +1,10 @@
 import { resolveEnvApiKey } from "../agents/model-auth.js";
 import type { OpenClawConfig } from "../config/types.js";
-import type { SecretInput, SecretRef } from "../config/types.secrets.js";
+import {
+  DEFAULT_SECRET_PROVIDER_ALIAS,
+  type SecretInput,
+  type SecretRef,
+} from "../config/types.secrets.js";
 import { encodeJsonPointerToken } from "../secrets/json-pointer.js";
 import { PROVIDER_ENV_VARS } from "../secrets/provider-env-vars.js";
 import { resolveSecretRefString } from "../secrets/resolve.js";
@@ -14,7 +18,7 @@ const ENV_SOURCE_LABEL_RE = /(?:^|:\s)([A-Z][A-Z0-9_]*)$/;
 const ENV_SECRET_REF_ID_RE = /^[A-Z][A-Z0-9_]{0,127}$/;
 const FILE_SECRET_REF_SEGMENT_RE = /^(?:[^~]|~0|~1)*$/;
 
-type SecretRefSourceChoice = "env" | "file";
+type SecretRefChoice = "env" | "provider";
 
 function isValidFileSecretRefId(value: string): boolean {
   if (!value.startsWith("/")) {
@@ -43,11 +47,36 @@ function resolveDefaultProviderEnvVar(provider: string): string | undefined {
   return envVars?.find((candidate) => candidate.trim().length > 0);
 }
 
-function resolveDefaultSopsPointerId(provider: string): string {
+function resolveDefaultFilePointerId(provider: string): string {
   return `/providers/${encodeJsonPointerToken(provider)}/apiKey`;
 }
 
+function resolveDefaultProviderAlias(
+  config: OpenClawConfig,
+  source: "env" | "file" | "exec",
+): string {
+  const configured =
+    source === "env"
+      ? config.secrets?.defaults?.env
+      : source === "file"
+        ? config.secrets?.defaults?.file
+        : config.secrets?.defaults?.exec;
+  if (configured?.trim()) {
+    return configured.trim();
+  }
+  const providers = config.secrets?.providers;
+  if (providers) {
+    for (const [providerName, provider] of Object.entries(providers)) {
+      if (provider?.source === source) {
+        return providerName;
+      }
+    }
+  }
+  return DEFAULT_SECRET_PROVIDER_ALIAS;
+}
+
 function resolveRefFallbackInput(params: {
+  config: OpenClawConfig;
   provider: string;
   preferredEnvVar?: string;
   envKeyValue?: string;
@@ -57,7 +86,11 @@ function resolveRefFallbackInput(params: {
     const value = process.env[fallbackEnvVar]?.trim();
     if (value) {
       return {
-        input: { source: "env", id: fallbackEnvVar },
+        input: {
+          source: "env",
+          provider: resolveDefaultProviderAlias(params.config, "env"),
+          id: fallbackEnvVar,
+        },
         resolvedValue: value,
       };
     }
@@ -81,11 +114,11 @@ async function resolveApiKeyRefForOnboarding(params: {
 }): Promise<{ ref: SecretRef; resolvedValue: string }> {
   const defaultEnvVar =
     params.preferredEnvVar ?? resolveDefaultProviderEnvVar(params.provider) ?? "";
-  const defaultFilePointer = resolveDefaultSopsPointerId(params.provider);
-  let sourceChoice: SecretRefSourceChoice = "env";
+  const defaultFilePointer = resolveDefaultFilePointerId(params.provider);
+  let sourceChoice: SecretRefChoice = "env";
 
   while (true) {
-    const sourceRaw: SecretRefSourceChoice = await params.prompter.select<SecretRefSourceChoice>({
+    const sourceRaw: SecretRefChoice = await params.prompter.select<SecretRefChoice>({
       message: "Where is this API key stored?",
       initialValue: sourceChoice,
       options: [
@@ -95,13 +128,13 @@ async function resolveApiKeyRefForOnboarding(params: {
           hint: "Reference a variable from your runtime environment",
         },
         {
-          value: "file",
-          label: "Encrypted sops file",
-          hint: "Reference a JSON pointer from secrets.sources.file",
+          value: "provider",
+          label: "Configured secret provider",
+          hint: "Use a configured file or exec secret provider",
         },
       ],
     });
-    const source: SecretRefSourceChoice = sourceRaw === "file" ? "file" : "env";
+    const source: SecretRefChoice = sourceRaw === "provider" ? "provider" : "env";
     sourceChoice = source;
 
     if (source === "env") {
@@ -128,7 +161,11 @@ async function resolveApiKeyRefForOnboarding(params: {
           `No valid environment variable name provided for provider "${params.provider}".`,
         );
       }
-      const ref: SecretRef = { source: "env", id: envVar };
+      const ref: SecretRef = {
+        source: "env",
+        provider: resolveDefaultProviderAlias(params.config, "env"),
+        id: envVar,
+      };
       const resolvedValue = await resolveSecretRefString(ref, {
         config: params.config,
         env: process.env,
@@ -140,36 +177,94 @@ async function resolveApiKeyRefForOnboarding(params: {
       return { ref, resolvedValue };
     }
 
-    const pointerRaw = await params.prompter.text({
-      message: "JSON pointer inside encrypted secrets file",
-      initialValue: defaultFilePointer,
-      placeholder: "/providers/openai/apiKey",
+    const externalProviders = Object.entries(params.config.secrets?.providers ?? {}).filter(
+      ([, provider]) => provider?.source === "file" || provider?.source === "exec",
+    );
+    if (externalProviders.length === 0) {
+      await params.prompter.note(
+        "No file/exec secret providers are configured yet. Add one under secrets.providers, or select Environment variable.",
+        "No providers configured",
+      );
+      continue;
+    }
+    const defaultProvider = resolveDefaultProviderAlias(params.config, "file");
+    const selectedProvider = await params.prompter.select<string>({
+      message: "Select secret provider",
+      initialValue:
+        externalProviders.find(([providerName]) => providerName === defaultProvider)?.[0] ??
+        externalProviders[0]?.[0],
+      options: externalProviders.map(([providerName, provider]) => ({
+        value: providerName,
+        label: providerName,
+        hint: provider?.source === "exec" ? "Exec provider" : "File provider",
+      })),
+    });
+    const providerEntry = params.config.secrets?.providers?.[selectedProvider];
+    if (!providerEntry || (providerEntry.source !== "file" && providerEntry.source !== "exec")) {
+      await params.prompter.note(
+        `Provider "${selectedProvider}" is not a file/exec provider.`,
+        "Invalid provider",
+      );
+      continue;
+    }
+    const idPrompt =
+      providerEntry.source === "file"
+        ? "Secret id (JSON pointer for jsonPointer mode, or 'value' for raw mode)"
+        : "Secret id for the exec provider";
+    const idDefault =
+      providerEntry.source === "file"
+        ? providerEntry.mode === "raw"
+          ? "value"
+          : defaultFilePointer
+        : `${params.provider}/apiKey`;
+    const idRaw = await params.prompter.text({
+      message: idPrompt,
+      initialValue: idDefault,
+      placeholder: providerEntry.source === "file" ? "/providers/openai/apiKey" : "openai/api-key",
       validate: (value) => {
         const candidate = value.trim();
-        if (!isValidFileSecretRefId(candidate)) {
+        if (!candidate) {
+          return "Secret id cannot be empty.";
+        }
+        if (
+          providerEntry.source === "file" &&
+          providerEntry.mode !== "raw" &&
+          !isValidFileSecretRefId(candidate)
+        ) {
           return 'Use an absolute JSON pointer like "/providers/openai/apiKey".';
+        }
+        if (
+          providerEntry.source === "file" &&
+          providerEntry.mode === "raw" &&
+          candidate !== "value"
+        ) {
+          return 'Raw file mode expects id "value".';
         }
         return undefined;
       },
     });
-    const pointer = String(pointerRaw ?? "").trim() || defaultFilePointer;
-    const ref: SecretRef = { source: "file", id: pointer };
+    const id = String(idRaw ?? "").trim() || idDefault;
+    const ref: SecretRef = {
+      source: providerEntry.source,
+      provider: selectedProvider,
+      id,
+    };
     try {
       const resolvedValue = await resolveSecretRefString(ref, {
         config: params.config,
         env: process.env,
       });
       await params.prompter.note(
-        `Validated encrypted file reference ${pointer}. OpenClaw will store a reference, not the key value.`,
+        `Validated ${providerEntry.source} reference ${selectedProvider}:${id}. OpenClaw will store a reference, not the key value.`,
         "Reference validated",
       );
       return { ref, resolvedValue };
     } catch (error) {
       await params.prompter.note(
         [
-          "Could not validate this encrypted file reference.",
+          `Could not validate provider reference ${selectedProvider}:${id}.`,
           formatErrorMessage(error),
-          "Check secrets.sources.file configuration and sops key access, then try again.",
+          "Check your provider configuration and try again.",
         ].join("\n"),
         "Reference check failed",
       );
@@ -287,7 +382,7 @@ export async function resolveSecretInputModeForEnvSelection(params: {
       {
         value: "ref",
         label: "Use secret reference",
-        hint: "Stores a reference to env or encrypted sops secrets",
+        hint: "Stores a reference to env or configured external secret providers",
       },
     ],
   });
@@ -379,6 +474,7 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
   if (selectedMode === "ref") {
     if (typeof params.prompter.select !== "function") {
       const fallback = resolveRefFallbackInput({
+        config: params.config,
         provider: params.provider,
         preferredEnvVar: envKey?.source ? extractEnvVarFromSourceLabel(envKey.source) : undefined,
         envKeyValue: envKey?.apiKey,
