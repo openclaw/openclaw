@@ -805,6 +805,8 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
           runtime.error?.(`mattermost ${info.kind} reply failed: ${String(err)}`);
         },
         onReplyStart: typingCallbacks.onReplyStart,
+        onIdle: typingCallbacks.onIdle,
+        onCleanup: typingCallbacks.onCleanup,
       });
 
     await core.channel.reply.dispatchReplyFromConfig({
