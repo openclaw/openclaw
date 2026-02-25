@@ -13,6 +13,7 @@
 
 import type { AssistantMessage, ToolCall } from "@mariozechner/pi-ai";
 import { EventStream, streamSimple, validateToolArguments } from "@mariozechner/pi-ai";
+import { compressAgedToolResults } from "./context-compressor.js";
 import type {
   AgentContext,
   AgentEvent,
@@ -249,6 +250,9 @@ async function streamAssistantResponse(
   streamFn?: StreamFn,
 ): Promise<AssistantMessage> {
   let messages = context.messages;
+  if (config.toolResultCompression) {
+    messages = compressAgedToolResults(messages, config.toolResultCompression);
+  }
   if (config.transformContext) {
     messages = await config.transformContext(messages, signal);
   }

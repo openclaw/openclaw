@@ -10,3 +10,4 @@ export * from "./types.js";
 export * from "./agent-loop.js";
 export * from "./agent.js";
 export * from "./proxy.js";
+export * from "./context-compressor.js";

@@ -13,6 +13,7 @@ import type {
   Tool,
   ToolResultMessage,
 } from "@mariozechner/pi-ai";
+import type { ToolResultCompressionOptions } from "./context-compressor.js";
 
 export type StreamFn = (
   ...args: Parameters<typeof streamSimple>
@@ -39,6 +40,13 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
    *  0 or undefined = caching disabled.
    */
   toolCacheMs?: number;
+  /**
+   * Age-based tool result compression.
+   * Truncates text content of ToolResultMessages in old turns to reduce
+   * context bloat. Runs before every LLM call, before transformContext.
+   * undefined = disabled.
+   */
+  toolResultCompression?: ToolResultCompressionOptions;
 }
 
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";

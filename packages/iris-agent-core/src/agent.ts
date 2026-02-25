@@ -65,7 +65,7 @@ export class IrisAgent {
   private followUpQueue: AgentMessage[] = [];
   private steeringMode: "one-at-a-time" | "all";
   private followUpMode: "one-at-a-time" | "all";
-  private streamFn: StreamFn;
+  streamFn: StreamFn;
   private _sessionId?: string;
   private getApiKey?: IrisAgentOptions["getApiKey"];
   private _thinkingBudgets?: Record<string, number>;
