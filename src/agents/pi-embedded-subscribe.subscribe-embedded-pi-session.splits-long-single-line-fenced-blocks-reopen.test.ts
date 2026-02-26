@@ -6,6 +6,7 @@ import {
   expectFencedChunks,
 } from "./pi-embedded-subscribe.e2e-harness.js";
 import { subscribeEmbeddedPiSession } from "./pi-embedded-subscribe.js";
+import { makeZeroUsageSnapshot } from "./usage.js";
 
 type SessionEventHandler = (evt: unknown) => void;
 
@@ -114,5 +115,41 @@ describe("subscribeEmbeddedPiSession", () => {
     await waitPromise;
     expect(resolved).toBe(true);
     expect(subscription.isCompacting()).toBe(false);
+  });
+
+  it("resets assistant usage to a zero snapshot after compaction without retry", () => {
+    const listeners: SessionEventHandler[] = [];
+    const session = {
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "old" }],
+          usage: {
+            input: 120,
+            output: 30,
+            cacheRead: 5,
+            cacheWrite: 0,
+            totalTokens: 155,
+            cost: { input: 0.001, output: 0.002, cacheRead: 0, cacheWrite: 0, total: 0.003 },
+          },
+        },
+      ],
+      subscribe: (listener: SessionEventHandler) => {
+        listeners.push(listener);
+        return () => {};
+      },
+    } as unknown as Parameters<typeof subscribeEmbeddedPiSession>[0]["session"];
+
+    subscribeEmbeddedPiSession({
+      session,
+      runId: "run-3",
+    });
+
+    for (const listener of listeners) {
+      listener({ type: "auto_compaction_end", willRetry: false });
+    }
+
+    const usage = (session.messages?.[0] as { usage?: unknown } | undefined)?.usage;
+    expect(usage).toEqual(makeZeroUsageSnapshot());
   });
 });

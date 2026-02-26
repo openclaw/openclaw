@@ -2,6 +2,7 @@ import type { AgentEvent } from "@mariozechner/pi-agent-core";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
+import { makeZeroUsageSnapshot } from "./usage.js";
 
 export function handleAutoCompactionStart(ctx: EmbeddedPiSubscribeContext) {
   ctx.state.compactionInFlight = true;
@@ -96,9 +97,8 @@ function clearStaleAssistantUsageOnSessionMessages(ctx: EmbeddedPiSubscribeConte
     if (candidate.role !== "assistant") {
       continue;
     }
-    if (!("usage" in candidate)) {
-      continue;
-    }
-    delete (candidate as { usage?: unknown }).usage;
+    // pi-coding-agent expects assistant usage to exist when computing context usage.
+    // Reset stale snapshots to zeros instead of deleting the field.
+    candidate.usage = makeZeroUsageSnapshot();
   }
 }
