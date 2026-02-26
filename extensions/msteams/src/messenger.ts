@@ -10,7 +10,7 @@ import {
 } from "openclaw/plugin-sdk";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { StoredConversationReference } from "./conversation-store.js";
-import { classifyMSTeamsSendError } from "./errors.js";
+import { classifyMSTeamsSendError, isRevokedProxyError } from "./errors.js";
 import { prepareFileConsentActivity, requiresFileConsent } from "./file-consent-helpers.js";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
 import {
@@ -467,7 +467,15 @@ export async function sendMSTeamsMessages(params: {
     if (!ctx) {
       throw new Error("Missing context for replyStyle=thread");
     }
-    return await sendMessagesInContext(ctx);
+    try {
+      return await sendMessagesInContext(ctx);
+    } catch (err) {
+      if (!isRevokedProxyError(err)) {
+        throw err;
+      }
+      // Turn context revoked (debounced message) — fall back to proactive
+      // messaging so the reply still reaches the user.
+    }
   }
 
   const baseRef = buildConversationReference(params.conversationRef);
