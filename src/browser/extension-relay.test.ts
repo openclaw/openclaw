@@ -208,6 +208,17 @@ describe("chrome extension relay server", () => {
     expect(err.message).toContain("401");
   });
 
+  it("deduplicates concurrent relay starts for the same requested port", async () => {
+    const port = await getFreePort();
+    cdpUrl = `http://127.0.0.1:${port}`;
+    const [first, second] = await Promise.all([
+      ensureChromeExtensionRelayServer({ cdpUrl }),
+      ensureChromeExtensionRelayServer({ cdpUrl }),
+    ]);
+    expect(first).toBe(second);
+    expect(first.port).toBe(port);
+  });
+
   it("allows CORS preflight from chrome-extension origins", async () => {
     const port = await getFreePort();
     cdpUrl = `http://127.0.0.1:${port}`;
