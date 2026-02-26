@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isSilentReplyText } from "./tokens.js";
+import { isSilentReplyPrefixText, isSilentReplyText } from "./tokens.js";
 
 describe("isSilentReplyText", () => {
   it("returns true for exact token", () => {
@@ -33,5 +33,26 @@ describe("isSilentReplyText", () => {
   it("works with custom token", () => {
     expect(isSilentReplyText("HEARTBEAT_OK", "HEARTBEAT_OK")).toBe(true);
     expect(isSilentReplyText("Checked inbox. HEARTBEAT_OK", "HEARTBEAT_OK")).toBe(false);
+  });
+});
+
+describe("isSilentReplyPrefixText", () => {
+  it("matches uppercase underscore prefixes", () => {
+    expect(isSilentReplyPrefixText("NO_")).toBe(true);
+    expect(isSilentReplyPrefixText("NO_RE")).toBe(true);
+    expect(isSilentReplyPrefixText("NO_REPLY")).toBe(true);
+    expect(isSilentReplyPrefixText("  HEARTBEAT_", "HEARTBEAT_OK")).toBe(true);
+  });
+
+  it("rejects ambiguous natural-language prefixes", () => {
+    expect(isSilentReplyPrefixText("N")).toBe(false);
+    expect(isSilentReplyPrefixText("No")).toBe(false);
+    expect(isSilentReplyPrefixText("Hello")).toBe(false);
+  });
+
+  it("rejects non-prefixes and mixed characters", () => {
+    expect(isSilentReplyPrefixText("NO_X")).toBe(false);
+    expect(isSilentReplyPrefixText("NO_REPLY more")).toBe(false);
+    expect(isSilentReplyPrefixText("NO-")).toBe(false);
   });
 });
