@@ -139,7 +139,7 @@ describe("resolveChannelGroupPolicy", () => {
           },
         },
       },
-    } as OpenClawConfig;
+    } as unknown as OpenClawConfig;
 
     const policy = resolveChannelGroupPolicy({
       cfg,
