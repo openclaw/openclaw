@@ -1,7 +1,10 @@
 import { describe, expect, test } from "vitest";
+import {
+  buildSystemRunApprovalBindingV1,
+  buildSystemRunApprovalEnvBinding,
+} from "../infra/system-run-approval-binding.js";
 import { ExecApprovalManager, type ExecApprovalRecord } from "./exec-approval-manager.js";
 import { sanitizeSystemRunParamsForForwarding } from "./node-invoke-system-run-approval.js";
-import { buildSystemRunApprovalEnvBinding } from "./system-run-approval-binding.js";
 
 describe("sanitizeSystemRunParamsForForwarding", () => {
   const now = Date.now();
@@ -14,7 +17,12 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     },
   };
 
-  function makeRecord(command: string, commandArgv?: string[]): ExecApprovalRecord {
+  function makeRecord(
+    command: string,
+    commandArgv?: string[],
+    bindingArgv?: string[],
+  ): ExecApprovalRecord {
+    const effectiveBindingArgv = bindingArgv ?? commandArgv ?? [command];
     return {
       id: "approval-1",
       request: {
@@ -22,6 +30,12 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
         nodeId: "node-1",
         command,
         commandArgv,
+        systemRunBindingV1: buildSystemRunApprovalBindingV1({
+          argv: effectiveBindingArgv,
+          cwd: null,
+          agentId: null,
+          sessionKey: null,
+        }).binding,
         cwd: null,
         agentId: null,
         sessionKey: null,
@@ -97,7 +111,16 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       },
       nodeId: "node-1",
       client,
-      execApprovalManager: manager(makeRecord("echo SAFE&&whoami")),
+      execApprovalManager: manager(
+        makeRecord("echo SAFE&&whoami", undefined, [
+          "cmd.exe",
+          "/d",
+          "/s",
+          "/c",
+          "echo",
+          "SAFE&&whoami",
+        ]),
+      ),
       nowMs: now,
     });
     expectAllowOnceForwardingResult(result);
@@ -135,7 +158,13 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       nodeId: "node-1",
       client,
       execApprovalManager: manager(
-        makeRecord('/usr/bin/env BASH_ENV=/tmp/payload.sh bash -lc "echo SAFE"'),
+        makeRecord('/usr/bin/env BASH_ENV=/tmp/payload.sh bash -lc "echo SAFE"', undefined, [
+          "/usr/bin/env",
+          "BASH_ENV=/tmp/payload.sh",
+          "bash",
+          "-lc",
+          "echo SAFE",
+        ]),
       ),
       nowMs: now,
     });
@@ -289,6 +318,13 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
         host: "node",
         nodeId: "node-1",
         command: "echo SAFE",
+        commandArgv: ["echo", "SAFE"],
+        systemRunBindingV1: buildSystemRunApprovalBindingV1({
+          argv: ["echo", "SAFE"],
+          cwd: null,
+          agentId: null,
+          sessionKey: null,
+        }).binding,
         cwd: null,
         agentId: null,
         sessionKey: null,
