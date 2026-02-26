@@ -45,8 +45,10 @@ describe("shared ip helpers", () => {
     }
   });
 
-  it("treats deprecated site-local IPv6 as private/internal", () => {
+  it("treats blocked IPv6 classes as private/internal", () => {
     expect(isPrivateOrLoopbackIpAddress("fec0::1")).toBe(true);
+    expect(isPrivateOrLoopbackIpAddress("ff02::1")).toBe(true);
+    expect(isPrivateOrLoopbackIpAddress("[ff05::1:3]")).toBe(true);
     expect(isPrivateOrLoopbackIpAddress("2001:4860:4860::8888")).toBe(false);
   });
 });

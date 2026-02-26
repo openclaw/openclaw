@@ -27,6 +27,7 @@ const PRIVATE_OR_LOOPBACK_IPV6_RANGES = new Set<Ipv6Range>([
   "loopback",
   "linkLocal",
   "uniqueLocal",
+  "multicast",
 ]);
 const RFC2544_BENCHMARK_PREFIX: [ipaddr.IPv4, number] = [ipaddr.IPv4.parse("198.18.0.0"), 15];
 export type Ipv4SpecialUseBlockOptions = {
