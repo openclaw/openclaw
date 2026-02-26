@@ -131,10 +131,11 @@ async function expectHelloOkServerVersion(port: number, expectedVersion: string)
 }
 
 async function createSignedDevice(params: {
-  token: string;
+  token?: string | null;
   scopes: string[];
   clientId: string;
   clientMode: string;
+  role?: "operator" | "node";
   identityPath?: string;
   nonce: string;
   signedAtMs?: number;
@@ -149,10 +150,10 @@ async function createSignedDevice(params: {
     deviceId: identity.deviceId,
     clientId: params.clientId,
     clientMode: params.clientMode,
-    role: "operator",
+    role: params.role ?? "operator",
     scopes: params.scopes,
     signedAtMs,
-    token: params.token,
+    token: params.token ?? null,
     nonce: params.nonce,
   });
   return {
@@ -185,6 +186,23 @@ async function approvePendingPairingIfNeeded() {
   if (pending?.requestId) {
     await approveDevicePairing(pending.requestId);
   }
+}
+
+async function configureTrustedProxyControlUiAuth() {
+  testState.gatewayAuth = {
+    mode: "trusted-proxy",
+    trustedProxy: {
+      userHeader: "x-forwarded-user",
+      requiredHeaders: ["x-forwarded-proto"],
+    },
+  };
+  const { writeConfigFile } = await import("../config/config.js");
+  await writeConfigFile({
+    gateway: {
+      trustedProxies: ["127.0.0.1"],
+    },
+    // oxlint-disable-next-line typescript/no-explicit-any
+  } as any);
 }
 
 function isConnectResMessage(id: string) {
@@ -772,6 +790,90 @@ describe("gateway server auth/connect", () => {
       expect(status.error?.message).toContain("missing scope");
       const health = await rpcReq(ws, "health");
       expect(health.ok).toBe(true);
+      ws.close();
+    });
+  });
+
+  test("allows trusted-proxy control ui operator without device identity", async () => {
+    await configureTrustedProxyControlUiAuth();
+    await withGatewayServer(async ({ port }) => {
+      const ws = await openWs(port, {
+        origin: "https://localhost",
+        "x-forwarded-for": "203.0.113.10",
+        "x-forwarded-proto": "https",
+        "x-forwarded-user": "peter@example.com",
+      });
+      const res = await connectReq(ws, {
+        skipDefaultAuth: true,
+        role: "operator",
+        device: null,
+        client: { ...CONTROL_UI_CLIENT },
+      });
+      expect(res.ok).toBe(true);
+      const status = await rpcReq(ws, "status");
+      expect(status.ok).toBe(false);
+      expect(status.error?.message ?? "").toContain("missing scope");
+      const health = await rpcReq(ws, "health");
+      expect(health.ok).toBe(true);
+      ws.close();
+    });
+  });
+
+  test("rejects trusted-proxy control ui node role without device identity", async () => {
+    await configureTrustedProxyControlUiAuth();
+    await withGatewayServer(async ({ port }) => {
+      const ws = await openWs(port, {
+        origin: "https://localhost",
+        "x-forwarded-for": "203.0.113.10",
+        "x-forwarded-proto": "https",
+        "x-forwarded-user": "peter@example.com",
+      });
+      const res = await connectReq(ws, {
+        skipDefaultAuth: true,
+        role: "node",
+        device: null,
+        client: { ...CONTROL_UI_CLIENT },
+      });
+      expect(res.ok).toBe(false);
+      expect(res.error?.message ?? "").toContain("control ui requires device identity");
+      expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
+        ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
+      );
+      ws.close();
+    });
+  });
+
+  test("requires pairing for trusted-proxy control ui node role with unpaired device", async () => {
+    await configureTrustedProxyControlUiAuth();
+    await withGatewayServer(async ({ port }) => {
+      const ws = await openWs(port, {
+        origin: "https://localhost",
+        "x-forwarded-for": "203.0.113.10",
+        "x-forwarded-proto": "https",
+        "x-forwarded-user": "peter@example.com",
+      });
+      const challengeNonce = await readConnectChallengeNonce(ws);
+      expect(challengeNonce).toBeTruthy();
+      const { device } = await createSignedDevice({
+        token: null,
+        role: "node",
+        scopes: [],
+        clientId: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+        clientMode: GATEWAY_CLIENT_MODES.WEBCHAT,
+        nonce: String(challengeNonce),
+      });
+      const res = await connectReq(ws, {
+        skipDefaultAuth: true,
+        role: "node",
+        scopes: [],
+        device,
+        client: { ...CONTROL_UI_CLIENT },
+      });
+      expect(res.ok).toBe(false);
+      expect(res.error?.message ?? "").toContain("pairing required");
+      expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
+        ConnectErrorDetailCodes.PAIRING_REQUIRED,
+      );
       ws.close();
     });
   });
