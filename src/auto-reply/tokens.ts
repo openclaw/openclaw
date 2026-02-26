@@ -3,31 +3,6 @@ import { escapeRegExp } from "../utils.js";
 export const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
 export const SILENT_REPLY_TOKEN = "NO_REPLY";
 
-const silentExactRegexByToken = new Map<string, RegExp>();
-const silentTrailingRegexByToken = new Map<string, RegExp>();
-
-function getSilentExactRegex(token: string): RegExp {
-  const cached = silentExactRegexByToken.get(token);
-  if (cached) {
-    return cached;
-  }
-  const escaped = escapeRegExp(token);
-  const regex = new RegExp(`^\\s*${escaped}\\s*$`);
-  silentExactRegexByToken.set(token, regex);
-  return regex;
-}
-
-function getSilentTrailingRegex(token: string): RegExp {
-  const cached = silentTrailingRegexByToken.get(token);
-  if (cached) {
-    return cached;
-  }
-  const escaped = escapeRegExp(token);
-  const regex = new RegExp(`(?:^|\\s+|\\*+)${escaped}\\s*$`);
-  silentTrailingRegexByToken.set(token, regex);
-  return regex;
-}
-
 export function isSilentReplyText(
   text: string | undefined,
   token: string = SILENT_REPLY_TOKEN,
@@ -35,9 +10,14 @@ export function isSilentReplyText(
   if (!text) {
     return false;
   }
-  // Match only the exact silent token with optional surrounding whitespace.
-  // This prevents substantive replies ending with NO_REPLY from being suppressed (#19537).
-  return getSilentExactRegex(token).test(text);
+  const escaped = escapeRegExp(token);
+  // Use explicit ASCII whitespace [ \t\r\n] instead of \s to avoid false-positives
+  // with non-ASCII characters. JavaScript's \s matches all Unicode whitespace
+  // (including U+3000 ideographic space and other CJK-adjacent whitespace), and
+  // older versions of this regex used \W/\b which match all non-ASCII characters —
+  // causing CJK messages containing the token to be silently dropped (#24773).
+  // This ensures only the bare token (with optional ASCII spacing) is treated as silent.
+  return new RegExp(`^[ \\t\\r\\n]*${escaped}[ \\t\\r\\n]*$`).test(text);
 }
 
 /**
@@ -46,7 +26,8 @@ export function isSilentReplyText(
  * If the result is empty, the entire message should be treated as silent.
  */
 export function stripSilentToken(text: string, token: string = SILENT_REPLY_TOKEN): string {
-  return text.replace(getSilentTrailingRegex(token), "").trim();
+  const escaped = escapeRegExp(token);
+  return text.replace(new RegExp(`(?:^|\\s+|\\*+)${escaped}\\s*$`), "").trim();
 }
 
 export function isSilentReplyPrefixText(

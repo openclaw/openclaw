@@ -34,6 +34,17 @@ describe("isSilentReplyText", () => {
     expect(isSilentReplyText("HEARTBEAT_OK", "HEARTBEAT_OK")).toBe(true);
     expect(isSilentReplyText("Checked inbox. HEARTBEAT_OK", "HEARTBEAT_OK")).toBe(false);
   });
+
+  // Regression: \W and \b anchors match all non-ASCII chars, causing CJK messages
+  // containing the token to be silently dropped (#24773).
+  it("returns false for CJK text containing the token (#24773)", () => {
+    expect(isSilentReplyText("好的，NO_REPLY 只是一个例子")).toBe(false);
+    expect(isSilentReplyText("NO_REPLY 只是一个例子")).toBe(false);
+    expect(isSilentReplyText("好的 NO_REPLY")).toBe(false);
+    expect(isSilentReplyText("HEARTBEAT_OK 确认", "HEARTBEAT_OK")).toBe(false);
+    expect(isSilentReplyText("返事なし NO_REPLY")).toBe(false);
+    expect(isSilentReplyText("NO_REPLY 返事なし")).toBe(false);
+  });
 });
 
 describe("stripSilentToken", () => {
