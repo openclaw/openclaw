@@ -13,12 +13,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
+import { openVerifiedFileSync } from "../infra/safe-open-sync.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isPlainObject } from "../utils.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 
 export const INCLUDE_KEY = "$include";
 export const MAX_INCLUDE_DEPTH = 10;
+export const MAX_INCLUDE_FILE_BYTES = 2 * 1024 * 1024;
 
 // ============================================================================
 // Types
@@ -26,7 +28,16 @@ export const MAX_INCLUDE_DEPTH = 10;
 
 export type IncludeResolver = {
   readFile: (path: string) => string;
+  readFileWithGuards?: (params: IncludeFileReadParams) => string;
   parseJson: (raw: string) => unknown;
+};
+
+export type IncludeFileReadParams = {
+  includePath: string;
+  resolvedPath: string;
+  rootRealDir: string;
+  ioFs?: typeof fs;
+  maxBytes?: number;
 };
 
 // ============================================================================
@@ -227,8 +238,18 @@ class IncludeProcessor {
 
   private readFile(includePath: string, resolvedPath: string): string {
     try {
+      if (this.resolver.readFileWithGuards) {
+        return this.resolver.readFileWithGuards({
+          includePath,
+          resolvedPath,
+          rootRealDir: this.rootRealDir,
+        });
+      }
       return this.resolver.readFile(resolvedPath);
     } catch (err) {
+      if (err instanceof ConfigIncludeError) {
+        throw err;
+      }
       throw new ConfigIncludeError(
         `Failed to read include file: ${includePath} (resolved: ${resolvedPath})`,
         includePath,
@@ -265,12 +286,78 @@ function safeRealpath(target: string): string {
   }
 }
 
+function canUseVerifiedFileOpen(ioFs: typeof fs): boolean {
+  return (
+    typeof ioFs.openSync === "function" &&
+    typeof ioFs.closeSync === "function" &&
+    typeof ioFs.fstatSync === "function" &&
+    typeof ioFs.lstatSync === "function" &&
+    typeof ioFs.realpathSync === "function" &&
+    typeof ioFs.readFileSync === "function" &&
+    typeof ioFs.constants === "object" &&
+    ioFs.constants !== null
+  );
+}
+
+export function readConfigIncludeFileWithGuards(params: IncludeFileReadParams): string {
+  const ioFs = params.ioFs ?? fs;
+  const maxBytes = params.maxBytes ?? MAX_INCLUDE_FILE_BYTES;
+  let realPath = params.resolvedPath;
+  try {
+    realPath = ioFs.realpathSync(params.resolvedPath);
+    if (!isPathInside(params.rootRealDir, realPath)) {
+      throw new ConfigIncludeError(
+        `Include path resolves outside config directory (symlink): ${params.includePath}`,
+        params.includePath,
+      );
+    }
+  } catch (err) {
+    if (err instanceof ConfigIncludeError) {
+      throw err;
+    }
+    // File may not exist yet; read path will report a precise error below.
+  }
+
+  if (!canUseVerifiedFileOpen(ioFs)) {
+    return ioFs.readFileSync(params.resolvedPath, "utf-8");
+  }
+
+  const opened = openVerifiedFileSync({
+    filePath: params.resolvedPath,
+    resolvedPath: realPath,
+    rejectHardlinks: true,
+    maxBytes,
+    ioFs,
+  });
+  if (!opened.ok) {
+    if (opened.reason === "validation") {
+      throw new ConfigIncludeError(
+        `Include file failed security checks (regular file, max ${maxBytes} bytes, no hardlinks): ${params.includePath}`,
+        params.includePath,
+      );
+    }
+    throw new ConfigIncludeError(
+      `Failed to read include file: ${params.includePath} (resolved: ${params.resolvedPath})`,
+      params.includePath,
+      opened.error instanceof Error ? opened.error : undefined,
+    );
+  }
+
+  try {
+    return ioFs.readFileSync(opened.fd, "utf-8");
+  } finally {
+    ioFs.closeSync(opened.fd);
+  }
+}
+
 // ============================================================================
 // Public API
 // ============================================================================
 
 const defaultResolver: IncludeResolver = {
   readFile: (p) => fs.readFileSync(p, "utf-8"),
+  readFileWithGuards: ({ includePath, resolvedPath, rootRealDir }) =>
+    readConfigIncludeFileWithGuards({ includePath, resolvedPath, rootRealDir }),
   parseJson: (raw) => JSON5.parse(raw),
 };
 
