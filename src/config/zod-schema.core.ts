@@ -416,7 +416,7 @@ export const TtsConfigSchema = z
         model: z.string().optional(),
         voiceId: z.string().optional(),
         speed: z.number().min(0.5).max(2).optional(),
-        vol: z.number().gt(0).max(10).optional(),
+        vol: z.number().min(0).max(10).optional(),
         pitch: z.number().int().min(-12).max(12).optional(),
         emotion: z
           .enum([
