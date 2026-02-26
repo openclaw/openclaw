@@ -27,12 +27,16 @@ function resolveWithMocks(params: {
   lstatSync: NonNullable<TmpDirOptions["lstatSync"]>;
   fallbackLstatSync?: NonNullable<TmpDirOptions["lstatSync"]>;
   accessSync?: NonNullable<TmpDirOptions["accessSync"]>;
+  chmodSync?: NonNullable<TmpDirOptions["chmodSync"]>;
+  warn?: NonNullable<TmpDirOptions["warn"]>;
   uid?: number;
   tmpdirPath?: string;
 }) {
   const uid = params.uid ?? 501;
   const fallbackPath = fallbackTmp(uid);
   const accessSync = params.accessSync ?? vi.fn();
+  const chmodSync = params.chmodSync ?? vi.fn();
+  const warn = params.warn ?? vi.fn();
   const wrappedLstatSync = vi.fn((target: string) => {
     if (target === POSIX_OPENCLAW_TMP_DIR) {
       return params.lstatSync(target);
@@ -50,10 +54,12 @@ function resolveWithMocks(params: {
   const tmpdir = vi.fn(() => params.tmpdirPath ?? "/var/fallback");
   const resolved = resolvePreferredOpenClawTmpDir({
     accessSync,
+    chmodSync,
     lstatSync: wrappedLstatSync,
     mkdirSync,
     getuid,
     tmpdir,
+    warn,
   });
   return { resolved, accessSync, lstatSync: wrappedLstatSync, mkdirSync, tmpdir };
 }
@@ -207,5 +213,96 @@ describe("resolvePreferredOpenClawTmpDir", () => {
 
     expect(resolved).toBe(fallbackTmp());
     expect(mkdirSync).toHaveBeenCalledWith(fallbackTmp(), { recursive: true, mode: 0o700 });
+  });
+
+  it("repairs fallback directory permissions after create when umask makes it group-writable", () => {
+    const fallbackPath = fallbackTmp();
+    let fallbackMode = 0o40775;
+    const lstatSync = vi.fn<NonNullable<TmpDirOptions["lstatSync"]>>(() => {
+      throw nodeErrorWithCode("ENOENT");
+    });
+    const fallbackLstatSync = vi
+      .fn<NonNullable<TmpDirOptions["lstatSync"]>>()
+      .mockImplementationOnce(() => {
+        throw nodeErrorWithCode("ENOENT");
+      })
+      .mockImplementation(() => ({
+        isDirectory: () => true,
+        isSymbolicLink: () => false,
+        uid: 501,
+        mode: fallbackMode,
+      }));
+    const chmodSync = vi.fn((target: string, mode: number) => {
+      if (target === fallbackPath && mode === 0o700) {
+        fallbackMode = 0o40700;
+      }
+    });
+
+    const resolved = resolvePreferredOpenClawTmpDir({
+      accessSync: vi.fn((target: string) => {
+        if (target === "/tmp") {
+          throw new Error("read-only");
+        }
+      }),
+      lstatSync: vi.fn((target: string) => {
+        if (target === POSIX_OPENCLAW_TMP_DIR) {
+          return lstatSync(target);
+        }
+        if (target === fallbackPath) {
+          return fallbackLstatSync(target);
+        }
+        return secureDirStat(501);
+      }),
+      mkdirSync: vi.fn(),
+      chmodSync,
+      getuid: vi.fn(() => 501),
+      tmpdir: vi.fn(() => "/var/fallback"),
+      warn: vi.fn(),
+    });
+
+    expect(resolved).toBe(fallbackPath);
+    expect(chmodSync).toHaveBeenCalledWith(fallbackPath, 0o700);
+  });
+
+  it("repairs existing fallback directory when permissions are too broad", () => {
+    const fallbackPath = fallbackTmp();
+    let fallbackMode = 0o40775;
+    const chmodSync = vi.fn((target: string, mode: number) => {
+      if (target === fallbackPath && mode === 0o700) {
+        fallbackMode = 0o40700;
+      }
+    });
+    const warn = vi.fn();
+
+    const resolved = resolvePreferredOpenClawTmpDir({
+      accessSync: vi.fn((target: string) => {
+        if (target === "/tmp") {
+          throw new Error("read-only");
+        }
+      }),
+      lstatSync: vi.fn((target: string) => {
+        if (target === POSIX_OPENCLAW_TMP_DIR) {
+          throw nodeErrorWithCode("ENOENT");
+        }
+        if (target === fallbackPath) {
+          return {
+            isDirectory: () => true,
+            isSymbolicLink: () => false,
+            uid: 501,
+            mode: fallbackMode,
+          };
+        }
+        return secureDirStat(501);
+      }),
+      mkdirSync: vi.fn(),
+      chmodSync,
+      getuid: vi.fn(() => 501),
+      tmpdir: vi.fn(() => "/var/fallback"),
+      warn,
+    });
+
+    expect(resolved).toBe(fallbackPath);
+    expect(chmodSync).toHaveBeenCalledWith(fallbackPath, 0o700);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("tightened permissions on temp dir"));
   });
 });
