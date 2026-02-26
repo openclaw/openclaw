@@ -2,6 +2,7 @@ import path from "node:path";
 import { z } from "zod";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import { isValidFileSecretRefId } from "../secrets/ref-contract.js";
+import { MODEL_APIS } from "./types.models.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
@@ -179,16 +180,7 @@ export const SecretsConfigSchema = z
   .strict()
   .optional();
 
-export const ModelApiSchema = z.union([
-  z.literal("openai-completions"),
-  z.literal("openai-responses"),
-  z.literal("openai-codex-responses"),
-  z.literal("anthropic-messages"),
-  z.literal("google-generative-ai"),
-  z.literal("github-copilot"),
-  z.literal("bedrock-converse-stream"),
-  z.literal("ollama"),
-]);
+export const ModelApiSchema = z.enum(MODEL_APIS);
 
 export const ModelCompatSchema = z
   .object({
