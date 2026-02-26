@@ -69,6 +69,7 @@ import { renderAgents } from "./views/agents.ts";
 import { renderChannels } from "./views/channels.ts";
 import { renderChat } from "./views/chat.ts";
 import { renderConfig } from "./views/config.ts";
+import { renderConversations } from "./views/conversations.ts";
 import { renderCron } from "./views/cron.ts";
 import { renderDebug } from "./views/debug.ts";
 import { renderExecApprovalPrompt } from "./views/exec-approval.ts";
@@ -1134,6 +1135,7 @@ export function renderApp(state: AppViewState) {
               })
             : nothing
         }
+        ${state.tab === "conversations" ? renderConversations() : nothing}
       </main>
       ${renderExecApprovalPrompt(state)}
       ${renderGatewayUrlConfirmation(state)}

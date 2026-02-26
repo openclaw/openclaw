@@ -1,0 +1,38 @@
+{
+  "id": "chat-history-supabase",
+  "name": "Chat History (Supabase)",
+  "description": "Persists all messages to Supabase and serves a real-time chat monitoring UI at /conversations.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["supabaseUrl", "supabaseServiceKey"],
+    "properties": {
+      "supabaseUrl": {
+        "type": "string",
+        "description": "Supabase project URL (e.g. https://xxx.supabase.co)"
+      },
+      "supabaseServiceKey": {
+        "type": "string",
+        "description": "Supabase service role key — used for server-side inserts and updates"
+      },
+      "supabaseAnonKey": {
+        "type": "string",
+        "description": "Supabase anon key — used in the browser UI for Realtime subscriptions. Falls back to service key if not set (local use only)."
+      }
+    },
+    "uiHints": {
+      "supabaseUrl": {
+        "label": "Supabase URL",
+        "placeholder": "https://xxx.supabase.co"
+      },
+      "supabaseServiceKey": {
+        "label": "Service Role Key",
+        "sensitive": true
+      },
+      "supabaseAnonKey": {
+        "label": "Anon Key (optional)",
+        "sensitive": true
+      }
+    }
+  }
+}
