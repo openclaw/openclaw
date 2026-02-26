@@ -24,7 +24,7 @@ const SessionsHistoryToolSchema = Type.Object({
 });
 
 const SESSIONS_HISTORY_MAX_BYTES = 80 * 1024;
-const SESSIONS_HISTORY_TEXT_MAX_CHARS = 4000;
+const SESSIONS_HISTORY_TEXT_MAX_CHARS = 16_000;
 type GatewayCaller = typeof callGateway;
 
 // sandbox policy handling is shared with sessions-list-tool via sessions-helpers.ts
