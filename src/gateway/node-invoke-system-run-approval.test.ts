@@ -13,14 +13,14 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     },
   };
 
-  function makeRecord(command: string, commandArgv?: string[] | null): ExecApprovalRecord {
+  function makeRecord(command: string, commandArgv?: string[]): ExecApprovalRecord {
     return {
       id: "approval-1",
       request: {
         host: "node",
         nodeId: "node-1",
         command,
-        commandArgv: commandArgv ?? null,
+        commandArgv,
         cwd: null,
         agentId: null,
         sessionKey: null,
