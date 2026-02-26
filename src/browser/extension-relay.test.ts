@@ -332,6 +332,19 @@ describe("chrome extension relay server", () => {
     ext.close();
   });
 
+  it("accepts /json endpoints with relay token query param", async () => {
+    const port = await getFreePort();
+    cdpUrl = `http://127.0.0.1:${port}`;
+    await ensureChromeExtensionRelayServer({ cdpUrl });
+
+    const token = relayAuthHeaders(cdpUrl)["x-openclaw-relay-token"];
+    expect(token).toBeTruthy();
+    const versionRes = await fetch(
+      `${cdpUrl}/json/version?token=${encodeURIComponent(String(token))}`,
+    );
+    expect(versionRes.status).toBe(200);
+  });
+
   it("accepts raw gateway token for relay auth compatibility", async () => {
     const port = await getFreePort();
     cdpUrl = `http://127.0.0.1:${port}`;
