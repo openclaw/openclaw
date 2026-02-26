@@ -27,6 +27,16 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import java.util.concurrent.atomic.AtomicReference
 
+private class InMemoryDeviceAuthStore : DeviceAuthTokenStore {
+  private val tokens = mutableMapOf<String, String>()
+
+  override fun loadToken(deviceId: String, role: String): String? = tokens["${deviceId.trim()}|${role.trim()}"]?.trim()?.takeIf { it.isNotEmpty() }
+
+  override fun saveToken(deviceId: String, role: String, token: String) {
+    tokens["${deviceId.trim()}|${role.trim()}"] = token.trim()
+  }
+}
+
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
 class GatewaySessionInvokeTest {
@@ -84,11 +94,12 @@ class GatewaySessionInvokeTest {
 
     val app = RuntimeEnvironment.getApplication()
     val sessionJob = SupervisorJob()
+    val deviceAuthStore = InMemoryDeviceAuthStore()
     val session =
       GatewaySession(
         scope = CoroutineScope(sessionJob + Dispatchers.Default),
         identityStore = DeviceIdentityStore(app),
-        deviceAuthStore = null,
+        deviceAuthStore = deviceAuthStore,
         onConnected = { _, _, _ ->
           if (!connected.isCompleted) connected.complete(Unit)
         },
@@ -218,11 +229,12 @@ class GatewaySessionInvokeTest {
 
     val app = RuntimeEnvironment.getApplication()
     val sessionJob = SupervisorJob()
+    val deviceAuthStore = InMemoryDeviceAuthStore()
     val session =
       GatewaySession(
         scope = CoroutineScope(sessionJob + Dispatchers.Default),
         identityStore = DeviceIdentityStore(app),
-        deviceAuthStore = null,
+        deviceAuthStore = deviceAuthStore,
         onConnected = { _, _, _ ->
           if (!connected.isCompleted) connected.complete(Unit)
         },
@@ -347,11 +359,12 @@ class GatewaySessionInvokeTest {
 
     val app = RuntimeEnvironment.getApplication()
     val sessionJob = SupervisorJob()
+    val deviceAuthStore = InMemoryDeviceAuthStore()
     val session =
       GatewaySession(
         scope = CoroutineScope(sessionJob + Dispatchers.Default),
         identityStore = DeviceIdentityStore(app),
-        deviceAuthStore = null,
+        deviceAuthStore = deviceAuthStore,
         onConnected = { _, _, _ ->
           if (!connected.isCompleted) connected.complete(Unit)
         },
