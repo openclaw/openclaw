@@ -59,6 +59,7 @@ import { getBearerToken } from "./http-utils.js";
 import { handleOpenAiHttpRequest } from "./openai-http.js";
 import { handleOpenResponsesHttpRequest } from "./openresponses-http.js";
 import { GATEWAY_CLIENT_MODES, normalizeGatewayClientMode } from "./protocol/client-info.js";
+import { isProtectedPluginRoutePath } from "./security-path.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 
@@ -86,52 +87,6 @@ function isCanvasPath(pathname: string): boolean {
     pathname.startsWith(`${CANVAS_HOST_PATH}/`) ||
     pathname === CANVAS_WS_PATH
   );
-}
-
-function normalizeSecurityPath(pathname: string): string {
-  const collapsed = pathname.replace(/\/{2,}/g, "/");
-  if (collapsed.length <= 1) {
-    return collapsed;
-  }
-  return collapsed.replace(/\/+$/, "");
-}
-
-function canonicalizePathForSecurity(pathname: string): {
-  path: string;
-  malformedEncoding: boolean;
-} {
-  let decoded = pathname;
-  let malformedEncoding = false;
-  try {
-    decoded = decodeURIComponent(pathname);
-  } catch {
-    malformedEncoding = true;
-  }
-  return {
-    path: normalizeSecurityPath(decoded.toLowerCase()) || "/",
-    malformedEncoding,
-  };
-}
-
-function hasProtectedPluginChannelPrefix(pathname: string): boolean {
-  return (
-    pathname === "/api/channels" ||
-    pathname.startsWith("/api/channels/") ||
-    pathname.startsWith("/api/channels%")
-  );
-}
-
-function isProtectedPluginChannelPath(pathname: string): boolean {
-  const canonicalPath = canonicalizePathForSecurity(pathname);
-  if (hasProtectedPluginChannelPrefix(canonicalPath.path)) {
-    return true;
-  }
-  if (!canonicalPath.malformedEncoding) {
-    return false;
-  }
-  // Fail closed on bad %-encoding. Keep channel-prefix paths protected even
-  // when URL decoding fails.
-  return hasProtectedPluginChannelPrefix(normalizeSecurityPath(pathname.toLowerCase()));
 }
 
 function isNodeWsClient(client: GatewayWsClient): boolean {
@@ -213,6 +168,34 @@ async function authorizeCanvasRequest(params: {
     return { ok: true };
   }
   return lastAuthFailure ?? { ok: false, reason: "unauthorized" };
+}
+
+async function enforcePluginRouteGatewayAuth(params: {
+  requestPath: string;
+  req: IncomingMessage;
+  res: ServerResponse;
+  auth: ResolvedGatewayAuth;
+  trustedProxies: string[];
+  allowRealIpFallback: boolean;
+  rateLimiter?: AuthRateLimiter;
+}): Promise<boolean> {
+  if (!isProtectedPluginRoutePath(params.requestPath)) {
+    return true;
+  }
+  const token = getBearerToken(params.req);
+  const authResult = await authorizeHttpGatewayConnect({
+    auth: params.auth,
+    connectAuth: token ? { token, password: token } : null,
+    req: params.req,
+    trustedProxies: params.trustedProxies,
+    allowRealIpFallback: params.allowRealIpFallback,
+    rateLimiter: params.rateLimiter,
+  });
+  if (!authResult.ok) {
+    sendGatewayAuthFailure(params.res, authResult);
+    return false;
+  }
+  return true;
 }
 
 function writeUpgradeAuthFailure(
@@ -536,23 +519,20 @@ export function createGatewayHttpServer(opts: {
         return;
       }
       if (handlePluginRequest) {
-        // Channel HTTP endpoints are gateway-auth protected by default.
-        // Non-channel plugin routes remain plugin-owned and must enforce
+        // Protected plugin route prefixes are gateway-auth protected by default.
+        // Non-protected plugin routes remain plugin-owned and must enforce
         // their own auth when exposing sensitive functionality.
-        if (isProtectedPluginChannelPath(requestPath)) {
-          const token = getBearerToken(req);
-          const authResult = await authorizeHttpGatewayConnect({
-            auth: resolvedAuth,
-            connectAuth: token ? { token, password: token } : null,
-            req,
-            trustedProxies,
-            allowRealIpFallback,
-            rateLimiter,
-          });
-          if (!authResult.ok) {
-            sendGatewayAuthFailure(res, authResult);
-            return;
-          }
+        const pluginAuthOk = await enforcePluginRouteGatewayAuth({
+          requestPath,
+          req,
+          res,
+          auth: resolvedAuth,
+          trustedProxies,
+          allowRealIpFallback,
+          rateLimiter,
+        });
+        if (!pluginAuthOk) {
+          return;
         }
         if (await handlePluginRequest(req, res)) {
           return;
