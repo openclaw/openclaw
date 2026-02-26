@@ -442,6 +442,36 @@ describe("onboard (non-interactive): provider auth", () => {
     },
   );
 
+  it("stores the detected env alias as keyRef for opencode ref mode", async () => {
+    await withOnboardEnv("openclaw-onboard-ref-opencode-alias-", async ({ runtime }) => {
+      await withEnvAsync(
+        {
+          OPENCODE_API_KEY: undefined,
+          OPENCODE_ZEN_API_KEY: "opencode-zen-env-key",
+        },
+        async () => {
+          await runNonInteractiveOnboardingWithDefaults(runtime, {
+            authChoice: "opencode-zen",
+            secretInputMode: "ref",
+            skipSkills: true,
+          });
+
+          const store = ensureAuthProfileStore();
+          const profile = store.profiles["opencode:default"];
+          expect(profile?.type).toBe("api_key");
+          if (profile?.type === "api_key") {
+            expect(profile.key).toBeUndefined();
+            expect(profile.keyRef).toEqual({
+              source: "env",
+              provider: "default",
+              id: "OPENCODE_ZEN_API_KEY",
+            });
+          }
+        },
+      );
+    });
+  });
+
   it("rejects vLLM auth choice in non-interactive mode", async () => {
     await withOnboardEnv("openclaw-onboard-vllm-non-interactive-", async ({ runtime }) => {
       await expect(
