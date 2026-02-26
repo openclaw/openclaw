@@ -16,7 +16,6 @@ import {
   readResponseText,
   resolveCacheTtlMs,
   resolveTimeoutSeconds,
-  withTimeout,
   writeCache,
 } from "./web-shared.js";
 
@@ -600,6 +599,21 @@ function resolveGeminiModel(gemini?: GeminiConfig): string {
   return fromConfig || DEFAULT_GEMINI_MODEL;
 }
 
+async function fetchTrustedWebSearchEndpoint(params: {
+  url: string;
+  timeoutSeconds: number;
+  init: RequestInit;
+}): Promise<{ response: Response; release: () => Promise<void> }> {
+  const { response, release } = await fetchWithSsrFGuard({
+    url: params.url,
+    init: params.init,
+    timeoutMs: params.timeoutSeconds * 1000,
+    policy: TRUSTED_NETWORK_SSRF_POLICY,
+    proxy: "env",
+  });
+  return { response, release };
+}
+
 async function runGeminiSearch(params: {
   query: string;
   apiKey: string;
@@ -608,75 +622,81 @@ async function runGeminiSearch(params: {
 }): Promise<{ content: string; citations: Array<{ url: string; title?: string }> }> {
   const endpoint = `${GEMINI_API_BASE}/models/${params.model}:generateContent`;
 
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "x-goog-api-key": params.apiKey,
-    },
-    body: JSON.stringify({
-      contents: [
-        {
-          parts: [{ text: params.query }],
-        },
-      ],
-      tools: [{ google_search: {} }],
-    }),
-    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
-  });
-
-  if (!res.ok) {
-    const detailResult = await readResponseText(res, { maxBytes: 64_000 });
-    // Strip API key from any error detail to prevent accidental key leakage in logs
-    const safeDetail = (detailResult.text || res.statusText).replace(/key=[^&\s]+/gi, "key=***");
-    throw new Error(`Gemini API error (${res.status}): ${safeDetail}`);
-  }
-
-  let data: GeminiGroundingResponse;
-  try {
-    data = (await res.json()) as GeminiGroundingResponse;
-  } catch (err) {
-    const safeError = String(err).replace(/key=[^&\s]+/gi, "key=***");
-    throw new Error(`Gemini API returned invalid JSON: ${safeError}`, { cause: err });
-  }
-
-  if (data.error) {
-    const rawMsg = data.error.message || data.error.status || "unknown";
-    const safeMsg = rawMsg.replace(/key=[^&\s]+/gi, "key=***");
-    throw new Error(`Gemini API error (${data.error.code}): ${safeMsg}`);
-  }
-
-  const candidate = data.candidates?.[0];
-  const content =
-    candidate?.content?.parts
-      ?.map((p) => p.text)
-      .filter(Boolean)
-      .join("\n") ?? "No response";
-
-  const groundingChunks = candidate?.groundingMetadata?.groundingChunks ?? [];
-  const rawCitations = groundingChunks
-    .filter((chunk) => chunk.web?.uri)
-    .map((chunk) => ({
-      url: chunk.web!.uri!,
-      title: chunk.web?.title || undefined,
-    }));
-
-  // Resolve Google grounding redirect URLs to direct URLs with concurrency cap.
-  // Gemini typically returns 3-8 citations; cap at 10 concurrent to be safe.
-  const MAX_CONCURRENT_REDIRECTS = 10;
-  const citations: Array<{ url: string; title?: string }> = [];
-  for (let i = 0; i < rawCitations.length; i += MAX_CONCURRENT_REDIRECTS) {
-    const batch = rawCitations.slice(i, i + MAX_CONCURRENT_REDIRECTS);
-    const resolved = await Promise.all(
-      batch.map(async (citation) => {
-        const resolvedUrl = await resolveRedirectUrl(citation.url);
-        return { ...citation, url: resolvedUrl };
+  const { response: res, release } = await fetchTrustedWebSearchEndpoint({
+    url: endpoint,
+    timeoutSeconds: params.timeoutSeconds,
+    init: {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": params.apiKey,
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [{ text: params.query }],
+          },
+        ],
+        tools: [{ google_search: {} }],
       }),
-    );
-    citations.push(...resolved);
-  }
+    },
+  });
+  try {
+    if (!res.ok) {
+      const detailResult = await readResponseText(res, { maxBytes: 64_000 });
+      // Strip API key from any error detail to prevent accidental key leakage in logs
+      const safeDetail = (detailResult.text || res.statusText).replace(/key=[^&\s]+/gi, "key=***");
+      throw new Error(`Gemini API error (${res.status}): ${safeDetail}`);
+    }
 
-  return { content, citations };
+    let data: GeminiGroundingResponse;
+    try {
+      data = (await res.json()) as GeminiGroundingResponse;
+    } catch (err) {
+      const safeError = String(err).replace(/key=[^&\s]+/gi, "key=***");
+      throw new Error(`Gemini API returned invalid JSON: ${safeError}`, { cause: err });
+    }
+
+    if (data.error) {
+      const rawMsg = data.error.message || data.error.status || "unknown";
+      const safeMsg = rawMsg.replace(/key=[^&\s]+/gi, "key=***");
+      throw new Error(`Gemini API error (${data.error.code}): ${safeMsg}`);
+    }
+
+    const candidate = data.candidates?.[0];
+    const content =
+      candidate?.content?.parts
+        ?.map((p) => p.text)
+        .filter(Boolean)
+        .join("\n") ?? "No response";
+
+    const groundingChunks = candidate?.groundingMetadata?.groundingChunks ?? [];
+    const rawCitations = groundingChunks
+      .filter((chunk) => chunk.web?.uri)
+      .map((chunk) => ({
+        url: chunk.web!.uri!,
+        title: chunk.web?.title || undefined,
+      }));
+
+    // Resolve Google grounding redirect URLs to direct URLs with concurrency cap.
+    // Gemini typically returns 3-8 citations; cap at 10 concurrent to be safe.
+    const MAX_CONCURRENT_REDIRECTS = 10;
+    const citations: Array<{ url: string; title?: string }> = [];
+    for (let i = 0; i < rawCitations.length; i += MAX_CONCURRENT_REDIRECTS) {
+      const batch = rawCitations.slice(i, i + MAX_CONCURRENT_REDIRECTS);
+      const resolved = await Promise.all(
+        batch.map(async (citation) => {
+          const resolvedUrl = await resolveRedirectUrl(citation.url);
+          return { ...citation, url: resolvedUrl };
+        }),
+      );
+      citations.push(...resolved);
+    }
+
+    return { content, citations };
+  } finally {
+    await release();
+  }
 }
 
 const REDIRECT_TIMEOUT_MS = 5000;
@@ -692,6 +712,7 @@ async function resolveRedirectUrl(url: string): Promise<string> {
       init: { method: "HEAD" },
       timeoutMs: REDIRECT_TIMEOUT_MS,
       policy: TRUSTED_NETWORK_SSRF_POLICY,
+      proxy: "env",
     });
     try {
       return finalUrl || url;
@@ -871,27 +892,33 @@ async function runPerplexitySearch(params: {
     body.search_recency_filter = recencyFilter;
   }
 
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${params.apiKey}`,
-      "HTTP-Referer": "https://openclaw.ai",
-      "X-Title": "OpenClaw Web Search",
+  const { response: res, release } = await fetchTrustedWebSearchEndpoint({
+    url: endpoint,
+    timeoutSeconds: params.timeoutSeconds,
+    init: {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${params.apiKey}`,
+        "HTTP-Referer": "https://openclaw.ai",
+        "X-Title": "OpenClaw Web Search",
+      },
+      body: JSON.stringify(body),
     },
-    body: JSON.stringify(body),
-    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
   });
+  try {
+    if (!res.ok) {
+      return await throwWebSearchApiError(res, "Perplexity");
+    }
 
-  if (!res.ok) {
-    return throwWebSearchApiError(res, "Perplexity");
+    const data = (await res.json()) as PerplexitySearchResponse;
+    const content = data.choices?.[0]?.message?.content ?? "No response";
+    const citations = data.citations ?? [];
+
+    return { content, citations };
+  } finally {
+    await release();
   }
-
-  const data = (await res.json()) as PerplexitySearchResponse;
-  const content = data.choices?.[0]?.message?.content ?? "No response";
-  const citations = data.citations ?? [];
-
-  return { content, citations };
 }
 
 async function runGrokSearch(params: {
@@ -921,28 +948,34 @@ async function runGrokSearch(params: {
   // citations are returned automatically when available — we just parse
   // them from the response without requesting them explicitly (#12910).
 
-  const res = await fetch(XAI_API_ENDPOINT, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${params.apiKey}`,
+  const { response: res, release } = await fetchTrustedWebSearchEndpoint({
+    url: XAI_API_ENDPOINT,
+    timeoutSeconds: params.timeoutSeconds,
+    init: {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${params.apiKey}`,
+      },
+      body: JSON.stringify(body),
     },
-    body: JSON.stringify(body),
-    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
   });
+  try {
+    if (!res.ok) {
+      return await throwWebSearchApiError(res, "xAI");
+    }
 
-  if (!res.ok) {
-    return throwWebSearchApiError(res, "xAI");
+    const data = (await res.json()) as GrokSearchResponse;
+    const { text: extractedText, annotationCitations } = extractGrokContent(data);
+    const content = extractedText ?? "No response";
+    // Prefer top-level citations; fall back to annotation-derived ones
+    const citations = (data.citations ?? []).length > 0 ? data.citations! : annotationCitations;
+    const inlineCitations = data.inline_citations;
+
+    return { content, citations, inlineCitations };
+  } finally {
+    await release();
   }
-
-  const data = (await res.json()) as GrokSearchResponse;
-  const { text: extractedText, annotationCitations } = extractGrokContent(data);
-  const content = extractedText ?? "No response";
-  // Prefer top-level citations; fall back to annotation-derived ones
-  const citations = (data.citations ?? []).length > 0 ? data.citations! : annotationCitations;
-  const inlineCitations = data.inline_citations;
-
-  return { content, citations, inlineCitations };
 }
 
 function extractKimiMessageText(message: KimiMessage | undefined): string | undefined {
@@ -1014,65 +1047,71 @@ async function runKimiSearch(params: {
   const MAX_ROUNDS = 3;
 
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
-    const res = await fetch(endpoint, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${params.apiKey}`,
+    const { response: res, release } = await fetchTrustedWebSearchEndpoint({
+      url: endpoint,
+      timeoutSeconds: params.timeoutSeconds,
+      init: {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${params.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: params.model,
+          messages,
+          tools: [KIMI_WEB_SEARCH_TOOL],
+        }),
       },
-      body: JSON.stringify({
-        model: params.model,
-        messages,
-        tools: [KIMI_WEB_SEARCH_TOOL],
-      }),
-      signal: withTimeout(undefined, params.timeoutSeconds * 1000),
     });
-
-    if (!res.ok) {
-      return throwWebSearchApiError(res, "Kimi");
-    }
-
-    const data = (await res.json()) as KimiSearchResponse;
-    for (const citation of extractKimiCitations(data)) {
-      collectedCitations.add(citation);
-    }
-    const choice = data.choices?.[0];
-    const message = choice?.message;
-    const text = extractKimiMessageText(message);
-    const toolCalls = message?.tool_calls ?? [];
-
-    if (choice?.finish_reason !== "tool_calls" || toolCalls.length === 0) {
-      return { content: text ?? "No response", citations: [...collectedCitations] };
-    }
-
-    messages.push({
-      role: "assistant",
-      content: message?.content ?? "",
-      ...(message?.reasoning_content
-        ? {
-            reasoning_content: message.reasoning_content,
-          }
-        : {}),
-      tool_calls: toolCalls,
-    });
-
-    const toolContent = buildKimiToolResultContent(data);
-    let pushedToolResult = false;
-    for (const toolCall of toolCalls) {
-      const toolCallId = toolCall.id?.trim();
-      if (!toolCallId) {
-        continue;
+    try {
+      if (!res.ok) {
+        return await throwWebSearchApiError(res, "Kimi");
       }
-      pushedToolResult = true;
-      messages.push({
-        role: "tool",
-        tool_call_id: toolCallId,
-        content: toolContent,
-      });
-    }
 
-    if (!pushedToolResult) {
-      return { content: text ?? "No response", citations: [...collectedCitations] };
+      const data = (await res.json()) as KimiSearchResponse;
+      for (const citation of extractKimiCitations(data)) {
+        collectedCitations.add(citation);
+      }
+      const choice = data.choices?.[0];
+      const message = choice?.message;
+      const text = extractKimiMessageText(message);
+      const toolCalls = message?.tool_calls ?? [];
+
+      if (choice?.finish_reason !== "tool_calls" || toolCalls.length === 0) {
+        return { content: text ?? "No response", citations: [...collectedCitations] };
+      }
+
+      messages.push({
+        role: "assistant",
+        content: message?.content ?? "",
+        ...(message?.reasoning_content
+          ? {
+              reasoning_content: message.reasoning_content,
+            }
+          : {}),
+        tool_calls: toolCalls,
+      });
+
+      const toolContent = buildKimiToolResultContent(data);
+      let pushedToolResult = false;
+      for (const toolCall of toolCalls) {
+        const toolCallId = toolCall.id?.trim();
+        if (!toolCallId) {
+          continue;
+        }
+        pushedToolResult = true;
+        messages.push({
+          role: "tool",
+          tool_call_id: toolCallId,
+          content: toolContent,
+        });
+      }
+
+      if (!pushedToolResult) {
+        return { content: text ?? "No response", citations: [...collectedCitations] };
+      }
+    } finally {
+      await release();
     }
   }
 
@@ -1248,41 +1287,49 @@ async function runWebSearch(params: {
     url.searchParams.set("freshness", params.freshness);
   }
 
-  // Resolve proxy from environment variables
-  const proxyUrl = resolveProxyUrl();
-  const dispatcher = proxyUrl ? new ProxyAgent(proxyUrl) : undefined;
-
-  const res = await undiciFetch(url.toString(), {
-    method: "GET",
-    headers: {
-      Accept: "application/json",
-      "X-Subscription-Token": params.apiKey,
+  const { response: res, release } = await fetchTrustedWebSearchEndpoint({
+    url: url.toString(),
+    timeoutSeconds: params.timeoutSeconds,
+    init: {
+      method: "GET",
+      headers: {
+        Accept: "application/json",
+        "X-Subscription-Token": params.apiKey,
+      },
     },
-    signal: withTimeout(undefined, params.timeoutSeconds * 1000),
-    ...(dispatcher ? { dispatcher } : {}),
   });
+  let mapped: Array<{
+    title: string;
+    url: string;
+    description: string;
+    published?: string;
+    siteName?: string;
+  }> = [];
+  try {
+    if (!res.ok) {
+      const detailResult = await readResponseText(res, { maxBytes: 64_000 });
+      const detail = detailResult.text;
+      throw new Error(`Brave Search API error (${res.status}): ${detail || res.statusText}`);
+    }
 
-  if (!res.ok) {
-    const detailResult = await readResponseText(res, { maxBytes: 64_000 });
-    const detail = detailResult.text;
-    throw new Error(`Brave Search API error (${res.status}): ${detail || res.statusText}`);
+    const data = (await res.json()) as BraveSearchResponse;
+    const results = Array.isArray(data.web?.results) ? (data.web?.results ?? []) : [];
+    mapped = results.map((entry) => {
+      const description = entry.description ?? "";
+      const title = entry.title ?? "";
+      const url = entry.url ?? "";
+      const rawSiteName = resolveSiteName(url);
+      return {
+        title: title ? wrapWebContent(title, "web_search") : "",
+        url, // Keep raw for tool chaining
+        description: description ? wrapWebContent(description, "web_search") : "",
+        published: entry.age || undefined,
+        siteName: rawSiteName || undefined,
+      };
+    });
+  } finally {
+    await release();
   }
-
-  const data = (await res.json()) as BraveSearchResponse;
-  const results = Array.isArray(data.web?.results) ? (data.web?.results ?? []) : [];
-  const mapped = results.map((entry) => {
-    const description = entry.description ?? "";
-    const title = entry.title ?? "";
-    const url = entry.url ?? "";
-    const rawSiteName = resolveSiteName(url);
-    return {
-      title: title ? wrapWebContent(title, "web_search") : "",
-      url, // Keep raw for tool chaining
-      description: description ? wrapWebContent(description, "web_search") : "",
-      published: entry.age || undefined,
-      siteName: rawSiteName || undefined,
-    };
-  });
 
   const payload = {
     query: params.query,
