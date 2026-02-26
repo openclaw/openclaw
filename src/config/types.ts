@@ -2,6 +2,7 @@
 
 export * from "./types.agent-defaults.js";
 export * from "./types.agents.js";
+export * from "./types.acp.js";
 export * from "./types.approvals.js";
 export * from "./types.auth.js";
 export * from "./types.base.js";

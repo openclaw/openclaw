@@ -405,6 +405,7 @@ export const DiscordAccountSchema = z
         enabled: z.boolean().optional(),
         ttlHours: z.number().nonnegative().optional(),
         spawnSubagentSessions: z.boolean().optional(),
+        spawnAcpSessions: z.boolean().optional(),
       })
       .strict()
       .optional(),
