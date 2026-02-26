@@ -90,12 +90,13 @@ function sanitizeMimeType(value?: string): string | undefined {
   if (!value) {
     return undefined;
   }
-  const trimmed = value.trim().toLowerCase();
+  const trimmed = value.trim();
   if (!trimmed) {
     return undefined;
   }
-  const match = trimmed.match(/^([a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+)/);
-  return match?.[1];
+  const normalized = trimmed.normalize("NFKC");
+  const match = normalized.match(/^([a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+)(?:\s*;[^\r\n]*)?$/i);
+  return match?.[1]?.toLowerCase();
 }
 
 function resolveFileLimits(cfg: OpenClawConfig) {

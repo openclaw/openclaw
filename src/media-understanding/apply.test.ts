@@ -890,6 +890,22 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toContain('mime="application/json"');
   });
 
+  it("rejects MIME values with trailing junk instead of prefix-matching", async () => {
+    const filePath = await createTempMediaFile({
+      fileName: "binary.bin",
+      // Keep payload empty so text heuristics do not override the provided MIME.
+      content: Buffer.alloc(0),
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:document>",
+      mediaPath: filePath,
+      mediaType: "application/xml\njunk",
+    });
+
+    expectFileNotApplied({ ctx, result, body: "<media:document>" });
+  });
+
   it("handles path traversal attempts in filenames safely", async () => {
     // Even if a file somehow got a path-like name, it should be handled safely
     const filePath = await createTempMediaFile({

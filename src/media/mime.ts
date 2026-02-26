@@ -57,7 +57,8 @@ export function normalizeMimeType(mime?: string | null): string | undefined {
   if (!mime) {
     return undefined;
   }
-  const cleaned = mime.split(";")[0]?.trim().toLowerCase();
+  const normalizedMime = mime.normalize("NFKC");
+  const cleaned = normalizedMime.split(";")[0]?.trim().toLowerCase();
   return cleaned || undefined;
 }
 

@@ -114,6 +114,7 @@ describe("isAudioFileName", () => {
 describe("normalizeMimeType", () => {
   it.each([
     { input: "Audio/MP4; codecs=mp4a.40.2", expected: "audio/mp4" },
+    { input: "Ａｐｐｌｉｃａｔｉｏｎ／Ｊｓｏｎ； charset=utf-8", expected: "application/json" },
     { input: "   ", expected: undefined },
     { input: null, expected: undefined },
     { input: undefined, expected: undefined },

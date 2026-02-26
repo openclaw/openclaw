@@ -13,10 +13,15 @@ async function waitForMicrotaskTurn(): Promise<void> {
 let fetchWithGuard: typeof import("./input-files.js").fetchWithGuard;
 let extractImageContentFromSource: typeof import("./input-files.js").extractImageContentFromSource;
 let extractFileContentFromSource: typeof import("./input-files.js").extractFileContentFromSource;
+let normalizeInputMimeType: typeof import("./input-files.js").normalizeMimeType;
 
 beforeAll(async () => {
-  ({ fetchWithGuard, extractImageContentFromSource, extractFileContentFromSource } =
-    await import("./input-files.js"));
+  ({
+    fetchWithGuard,
+    extractImageContentFromSource,
+    extractFileContentFromSource,
+    normalizeMimeType: normalizeInputMimeType,
+  } = await import("./input-files.js"));
 });
 
 describe("fetchWithGuard", () => {
@@ -150,5 +155,13 @@ describe("input image base64 validation", () => {
       },
     );
     expect(image.data).toBe("aGVsbG8=");
+  });
+});
+
+describe("normalizeMimeType", () => {
+  it("normalizes NFKC fullwidth MIME inputs", () => {
+    expect(normalizeInputMimeType("Ａｐｐｌｉｃａｔｉｏｎ／ＸＭＬ； charset=utf-8")).toBe(
+      "application/xml",
+    );
   });
 });

@@ -143,7 +143,8 @@ export function normalizeMimeType(value: string | undefined): string | undefined
   if (!value) {
     return undefined;
   }
-  const [raw] = value.split(";");
+  const normalizedValue = value.normalize("NFKC");
+  const [raw] = normalizedValue.split(";");
   const normalized = raw?.trim().toLowerCase();
   return normalized || undefined;
 }
