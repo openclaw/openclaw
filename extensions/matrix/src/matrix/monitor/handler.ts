@@ -655,31 +655,39 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           },
         });
 
-      const { queuedFinal, counts } = await core.channel.reply.dispatchReplyFromConfig({
-        ctx: ctxPayload,
-        cfg,
-        dispatcher,
-        replyOptions: {
-          ...replyOptions,
-          skillFilter: roomConfig?.skills,
-          onModelSelected,
-        },
-      });
-      markDispatchIdle();
-      if (!queuedFinal) {
-        return;
-      }
-      didSendReply = true;
-      const finalCount = counts.final;
-      logVerboseMessage(
-        `matrix: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyTarget}`,
-      );
-      if (didSendReply) {
-        const previewText = bodyText.replace(/\s+/g, " ").slice(0, 160);
-        core.system.enqueueSystemEvent(`Matrix message from ${senderName}: ${previewText}`, {
-          sessionKey: route.sessionKey,
-          contextKey: `matrix:message:${roomId}:${messageId || "unknown"}`,
+      try {
+        const { queuedFinal, counts } = await core.channel.reply.dispatchReplyFromConfig({
+          ctx: ctxPayload,
+          cfg,
+          dispatcher,
+          replyOptions: {
+            ...replyOptions,
+            skillFilter: roomConfig?.skills,
+            onModelSelected,
+          },
         });
+        if (!queuedFinal) {
+          return;
+        }
+        didSendReply = true;
+        const finalCount = counts.final;
+        logVerboseMessage(
+          `matrix: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${replyTarget}`,
+        );
+        if (didSendReply) {
+          const previewText = bodyText.replace(/\s+/g, " ").slice(0, 160);
+          core.system.enqueueSystemEvent(`Matrix message from ${senderName}: ${previewText}`, {
+            sessionKey: route.sessionKey,
+            contextKey: `matrix:message:${roomId}:${messageId || "unknown"}`,
+          });
+        }
+      } finally {
+        dispatcher.markComplete();
+        try {
+          await dispatcher.waitForIdle();
+        } finally {
+          markDispatchIdle();
+        }
       }
     } catch (err) {
       runtime.error?.(`matrix handler failed: ${String(err)}`);
