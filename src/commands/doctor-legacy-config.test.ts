@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { normalizeLegacyConfigValues } from "./doctor-legacy-config.js";
+import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 
-describe("normalizeLegacyConfigValues preview streaming aliases", () => {
+describe("normalizeCompatibilityConfigValues preview streaming aliases", () => {
   it("normalizes telegram boolean streaming aliases to enum", () => {
-    const res = normalizeLegacyConfigValues({
+    const res = normalizeCompatibilityConfigValues({
       channels: {
         telegram: {
           streaming: false,
@@ -17,7 +17,7 @@ describe("normalizeLegacyConfigValues preview streaming aliases", () => {
   });
 
   it("normalizes discord boolean streaming aliases to enum", () => {
-    const res = normalizeLegacyConfigValues({
+    const res = normalizeCompatibilityConfigValues({
       channels: {
         discord: {
           streaming: true,

@@ -152,6 +152,12 @@ For actions/directory reads, user token can be preferred when configured. For wr
     - `dm.groupEnabled` (group DMs default false)
     - `dm.groupChannels` (optional MPIM allowlist)
 
+    Multi-account precedence:
+
+    - `channels.slack.accounts.default.allowFrom` applies only to the `default` account.
+    - Named accounts inherit `channels.slack.allowFrom` when their own `allowFrom` is unset.
+    - Named accounts do not inherit `channels.slack.accounts.default.allowFrom`.
+
     Pairing in DMs uses `openclaw pairing approve slack <code>`.
 
   </Tab>
