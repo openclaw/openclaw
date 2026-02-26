@@ -649,6 +649,14 @@ const ERROR_PATTERNS = {
     "plans & billing",
     "insufficient balance",
   ],
+  authPermanent: [
+    /api[_ ]?key[_ ]?(?:revoked|invalid|deactivated|deleted)/i,
+    "invalid_api_key",
+    "key has been disabled",
+    "key has been revoked",
+    "account has been deactivated",
+    /could not (?:authenticate|validate).*(?:api[_ ]?key|credentials)/i,
+  ],
   auth: [
     /invalid[_ ]?api[_ ]?key/,
     "incorrect api key",
@@ -753,6 +761,10 @@ export function isBillingAssistantError(msg: AssistantMessage | undefined): bool
     return false;
   }
   return isBillingErrorMessage(msg.errorMessage ?? "");
+}
+
+export function isAuthPermanentErrorMessage(raw: string): boolean {
+  return matchesErrorPatterns(raw, ERROR_PATTERNS.authPermanent);
 }
 
 export function isAuthErrorMessage(raw: string): boolean {
@@ -898,6 +910,9 @@ export function classifyFailoverReason(raw: string): FailoverReason | null {
   }
   if (isTimeoutErrorMessage(raw)) {
     return "timeout";
+  }
+  if (isAuthPermanentErrorMessage(raw)) {
+    return "auth_permanent";
   }
   if (isAuthErrorMessage(raw)) {
     return "auth";
