@@ -841,8 +841,8 @@ export async function handleFeishuMessage(params: {
       messageBody += `\n\n[System: Your reply will automatically @mention: ${targetNames}. Do not write @xxx yourself.]`;
     }
 
-    // Include message_id in body so the agent can use it (e.g. for Feishu API media download or reply).
-    messageBody = `[message_id: ${ctx.messageId}] ${messageBody}`;
+    // Keep message_id on its own line so shared message-id hint stripping can parse it reliably.
+    messageBody = `[message_id: ${ctx.messageId}]\n${messageBody}`;
 
     const envelopeFrom = isGroup ? `${ctx.chatId}:${ctx.senderOpenId}` : ctx.senderOpenId;
 
