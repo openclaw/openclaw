@@ -639,6 +639,11 @@ export function createNodesTool(options?: {
             const env = parseEnvPairs(params.env);
             const commandTimeoutMs = parseTimeoutMs(params.commandTimeoutMs);
             const invokeTimeoutMs = parseTimeoutMs(params.invokeTimeoutMs);
+            // Extend HTTP timeout to match the invoke timeout so the
+            // connection isn't dropped before the node finishes.
+            const invokeGatewayOpts = invokeTimeoutMs
+              ? { ...gatewayOpts, timeoutMs: invokeTimeoutMs + 5_000 }
+              : gatewayOpts;
             const needsScreenRecording =
               typeof params.needsScreenRecording === "boolean"
                 ? params.needsScreenRecording
@@ -677,13 +682,17 @@ export function createNodesTool(options?: {
 
             // First attempt without approval flags.
             try {
-              const raw = await callGatewayTool<{ payload?: unknown }>("node.invoke", gatewayOpts, {
-                nodeId,
-                command: "system.run",
-                params: runParams,
-                timeoutMs: invokeTimeoutMs,
-                idempotencyKey: crypto.randomUUID(),
-              });
+              const raw = await callGatewayTool<{ payload?: unknown }>(
+                "node.invoke",
+                invokeGatewayOpts,
+                {
+                  nodeId,
+                  command: "system.run",
+                  params: runParams,
+                  timeoutMs: invokeTimeoutMs,
+                  idempotencyKey: crypto.randomUUID(),
+                },
+              );
               return jsonResult(raw?.payload ?? {});
             } catch (firstErr) {
               const msg = firstErr instanceof Error ? firstErr.message : String(firstErr);
@@ -734,18 +743,22 @@ export function createNodesTool(options?: {
             }
 
             // Retry with the approval decision.
-            const raw = await callGatewayTool<{ payload?: unknown }>("node.invoke", gatewayOpts, {
-              nodeId,
-              command: "system.run",
-              params: {
-                ...runParams,
-                runId: approvalId,
-                approved: true,
-                approvalDecision,
+            const raw = await callGatewayTool<{ payload?: unknown }>(
+              "node.invoke",
+              invokeGatewayOpts,
+              {
+                nodeId,
+                command: "system.run",
+                params: {
+                  ...runParams,
+                  runId: approvalId,
+                  approved: true,
+                  approvalDecision,
+                },
+                timeoutMs: invokeTimeoutMs,
+                idempotencyKey: crypto.randomUUID(),
               },
-              timeoutMs: invokeTimeoutMs,
-              idempotencyKey: crypto.randomUUID(),
-            });
+            );
             return jsonResult(raw?.payload ?? {});
           }
           case "invoke": {
@@ -774,7 +787,12 @@ export function createNodesTool(options?: {
               }
             }
             const invokeTimeoutMs = parseTimeoutMs(params.invokeTimeoutMs);
-            const raw = await callGatewayTool("node.invoke", gatewayOpts, {
+            // Extend HTTP timeout to match the invoke timeout so the
+            // connection isn't dropped before the node finishes.
+            const invokeGatewayOpts = invokeTimeoutMs
+              ? { ...gatewayOpts, timeoutMs: invokeTimeoutMs + 5_000 }
+              : gatewayOpts;
+            const raw = await callGatewayTool("node.invoke", invokeGatewayOpts, {
               nodeId,
               command: invokeCommand,
               params: invokeParams,
