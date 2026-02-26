@@ -67,9 +67,9 @@ export type StatusReactionsTimingConfig = {
   stallSoftMs?: number;
   /** Hard stall warning timeout (ms). Default: 60000. */
   stallHardMs?: number;
-  /** How long to hold done emoji before cleanup (ms). Default: 1500. */
+  /** How long to hold done emoji before cleanup (ms). Default: 2000. */
   doneHoldMs?: number;
-  /** How long to hold error emoji before cleanup (ms). Default: 2500. */
+  /** How long to hold error emoji before cleanup (ms). Default: 2000. */
   errorHoldMs?: number;
 };
 

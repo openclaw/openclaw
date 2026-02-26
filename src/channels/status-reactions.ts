@@ -30,8 +30,8 @@ export type StatusReactionTiming = {
   debounceMs?: number; // Default: 700
   stallSoftMs?: number; // Default: 10000
   stallHardMs?: number; // Default: 30000
-  doneHoldMs?: number; // Default: 1500 (not used in controller, but exported for callers)
-  errorHoldMs?: number; // Default: 2500 (not used in controller, but exported for callers)
+  doneHoldMs?: number; // Default: 2000 (not used in controller, but exported for callers)
+  errorHoldMs?: number; // Default: 2000 (not used in controller, but exported for callers)
 };
 
 export type StatusReactionController = {
@@ -64,8 +64,8 @@ export const DEFAULT_TIMING: Required<StatusReactionTiming> = {
   debounceMs: 700,
   stallSoftMs: 10_000,
   stallHardMs: 30_000,
-  doneHoldMs: 1500,
-  errorHoldMs: 2500,
+  doneHoldMs: 2000,
+  errorHoldMs: 2000,
 };
 
 export const CODING_TOOL_TOKENS: string[] = [
