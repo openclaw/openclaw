@@ -180,7 +180,10 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             "Also preview pruning entries with missing transcript files.",
           ],
           ["openclaw sessions cleanup --enforce", "Apply maintenance now."],
-          ["openclaw sessions cleanup --fix-missing", "Prune entries with missing transcript files."],
+          [
+            "openclaw sessions cleanup --fix-missing",
+            "Prune entries with missing transcript files.",
+          ],
           ["openclaw sessions cleanup --agent work --dry-run", "Preview one agent store."],
           ["openclaw sessions cleanup --all-agents --dry-run", "Preview all agent stores."],
           [
