@@ -35,6 +35,8 @@ canonical_build_from_version() {
     local year="${BASH_REMATCH[1]}"
     local month="${BASH_REMATCH[2]}"
     local day="${BASH_REMATCH[3]}"
+    local month_dec=$((10#$month))
+    local day_dec=$((10#$day))
     local suffix="${BASH_REMATCH[4]:-}"
     local lane=90
     # Keep stable releases above same-day prereleases so Sparkle can advance beta -> stable.
@@ -48,7 +50,7 @@ canonical_build_from_version() {
         lane=1
       fi
     fi
-    printf "%d%02d%02d%02d" "$year" "$month" "$day" "$lane"
+    printf "%d%02d%02d%02d" "$year" "$month_dec" "$day_dec" "$lane"
     return 0
   fi
   return 1
