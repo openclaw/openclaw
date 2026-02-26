@@ -19,6 +19,11 @@ const allowedFiles = new Set([
 const storeIdentifierRe = /^(?:storeAllowFrom|storedAllowFrom|storeAllowList)$/i;
 const groupNameRe =
   /(?:groupAllowFrom|effectiveGroupAllowFrom|groupAllowed|groupAllow|groupAuth|groupSender)/i;
+const storeSourceCallNames = new Set([
+  "readChannelAllowFromStore",
+  "readChannelAllowFromStoreSync",
+  "readStoreAllowFromForDmPolicy",
+]);
 const allowedResolverCallNames = new Set([
   "resolveEffectiveAllowFromLists",
   "resolveDmGroupAccessWithLists",
@@ -73,7 +78,7 @@ function getDeclarationNameText(name) {
   return null;
 }
 
-function containsStoreIdentifier(node) {
+function containsPairingStoreSource(node) {
   let found = false;
   const visit = (current) => {
     if (found) {
@@ -82,6 +87,13 @@ function containsStoreIdentifier(node) {
     if (ts.isIdentifier(current) && storeIdentifierRe.test(current.text)) {
       found = true;
       return;
+    }
+    if (ts.isCallExpression(current)) {
+      const callName = getCallName(current);
+      if (callName && storeSourceCallNames.has(callName)) {
+        found = true;
+        return;
+      }
     }
     ts.forEachChild(current, visit);
   };
@@ -123,7 +135,7 @@ function isSuspiciousNormalizeWithStoreCall(node) {
     if (!name) {
       continue;
     }
-    if (name === "storeAllowFrom" && containsStoreIdentifier(property.initializer)) {
+    if (name === "storeAllowFrom" && containsPairingStoreSource(property.initializer)) {
       hasStoreProp = true;
     }
     if (name === "allowFrom" && groupNameRe.test(property.initializer.getText())) {
@@ -140,7 +152,7 @@ function findViolations(content, filePath) {
   const visit = (node) => {
     if (ts.isVariableDeclaration(node) && node.initializer) {
       const name = getDeclarationNameText(node.name);
-      if (name && groupNameRe.test(name) && containsStoreIdentifier(node.initializer)) {
+      if (name && groupNameRe.test(name) && containsPairingStoreSource(node.initializer)) {
         const callName = getCallName(node.initializer);
         if (callName && allowedResolverCallNames.has(callName)) {
           ts.forEachChild(node, visit);
@@ -155,7 +167,7 @@ function findViolations(content, filePath) {
 
     if (ts.isPropertyAssignment(node)) {
       const propName = getPropertyNameText(node.name);
-      if (propName && groupNameRe.test(propName) && containsStoreIdentifier(node.initializer)) {
+      if (propName && groupNameRe.test(propName) && containsPairingStoreSource(node.initializer)) {
         violations.push({
           line: toLine(sourceFile, node),
           reason: `group-scoped property "${propName}" references pairing-store identifiers`,

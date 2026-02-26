@@ -35,6 +35,31 @@ export function resolveEffectiveAllowFromLists(params: {
 }
 
 export type DmGroupAccessDecision = "allow" | "block" | "pairing";
+export const DM_GROUP_ACCESS_REASON = {
+  GROUP_POLICY_ALLOWED: "group_policy_allowed",
+  GROUP_POLICY_DISABLED: "group_policy_disabled",
+  GROUP_POLICY_EMPTY_ALLOWLIST: "group_policy_empty_allowlist",
+  GROUP_POLICY_NOT_ALLOWLISTED: "group_policy_not_allowlisted",
+  DM_POLICY_OPEN: "dm_policy_open",
+  DM_POLICY_DISABLED: "dm_policy_disabled",
+  DM_POLICY_ALLOWLISTED: "dm_policy_allowlisted",
+  DM_POLICY_PAIRING_REQUIRED: "dm_policy_pairing_required",
+  DM_POLICY_NOT_ALLOWLISTED: "dm_policy_not_allowlisted",
+} as const;
+export type DmGroupAccessReasonCode =
+  (typeof DM_GROUP_ACCESS_REASON)[keyof typeof DM_GROUP_ACCESS_REASON];
+
+export async function readStoreAllowFromForDmPolicy(params: {
+  provider: ChannelId;
+  dmPolicy?: string | null;
+  shouldRead?: boolean | null;
+  readStore?: (provider: ChannelId) => Promise<string[]>;
+}): Promise<string[]> {
+  if (params.shouldRead === false || params.dmPolicy === "allowlist") {
+    return [];
+  }
+  return await (params.readStore ?? readChannelAllowFromStore)(params.provider).catch(() => []);
+}
 
 export function resolveDmGroupAccessDecision(params: {
   isGroup: boolean;
@@ -45,6 +70,7 @@ export function resolveDmGroupAccessDecision(params: {
   isSenderAllowed: (allowFrom: string[]) => boolean;
 }): {
   decision: DmGroupAccessDecision;
+  reasonCode: DmGroupAccessReasonCode;
   reason: string;
 } {
   const dmPolicy = params.dmPolicy ?? "pairing";
@@ -54,32 +80,68 @@ export function resolveDmGroupAccessDecision(params: {
 
   if (params.isGroup) {
     if (groupPolicy === "disabled") {
-      return { decision: "block", reason: "groupPolicy=disabled" };
+      return {
+        decision: "block",
+        reasonCode: DM_GROUP_ACCESS_REASON.GROUP_POLICY_DISABLED,
+        reason: "groupPolicy=disabled",
+      };
     }
     if (groupPolicy === "allowlist") {
       if (effectiveGroupAllowFrom.length === 0) {
-        return { decision: "block", reason: "groupPolicy=allowlist (empty allowlist)" };
+        return {
+          decision: "block",
+          reasonCode: DM_GROUP_ACCESS_REASON.GROUP_POLICY_EMPTY_ALLOWLIST,
+          reason: "groupPolicy=allowlist (empty allowlist)",
+        };
       }
       if (!params.isSenderAllowed(effectiveGroupAllowFrom)) {
-        return { decision: "block", reason: "groupPolicy=allowlist (not allowlisted)" };
+        return {
+          decision: "block",
+          reasonCode: DM_GROUP_ACCESS_REASON.GROUP_POLICY_NOT_ALLOWLISTED,
+          reason: "groupPolicy=allowlist (not allowlisted)",
+        };
       }
     }
-    return { decision: "allow", reason: `groupPolicy=${groupPolicy}` };
+    return {
+      decision: "allow",
+      reasonCode: DM_GROUP_ACCESS_REASON.GROUP_POLICY_ALLOWED,
+      reason: `groupPolicy=${groupPolicy}`,
+    };
   }
 
   if (dmPolicy === "disabled") {
-    return { decision: "block", reason: "dmPolicy=disabled" };
+    return {
+      decision: "block",
+      reasonCode: DM_GROUP_ACCESS_REASON.DM_POLICY_DISABLED,
+      reason: "dmPolicy=disabled",
+    };
   }
   if (dmPolicy === "open") {
-    return { decision: "allow", reason: "dmPolicy=open" };
+    return {
+      decision: "allow",
+      reasonCode: DM_GROUP_ACCESS_REASON.DM_POLICY_OPEN,
+      reason: "dmPolicy=open",
+    };
   }
   if (params.isSenderAllowed(effectiveAllowFrom)) {
-    return { decision: "allow", reason: `dmPolicy=${dmPolicy} (allowlisted)` };
+    return {
+      decision: "allow",
+      reasonCode: DM_GROUP_ACCESS_REASON.DM_POLICY_ALLOWLISTED,
+      reason: `dmPolicy=${dmPolicy} (allowlisted)`,
+    };
   }
   if (dmPolicy === "pairing") {
-    return { decision: "pairing", reason: "dmPolicy=pairing (not allowlisted)" };
+    return {
+      decision: "pairing",
+      reasonCode: DM_GROUP_ACCESS_REASON.DM_POLICY_PAIRING_REQUIRED,
+      reason: "dmPolicy=pairing (not allowlisted)",
+    };
   }
-  return { decision: "block", reason: `dmPolicy=${dmPolicy} (not allowlisted)` };
+  return {
+    decision: "block",
+    reasonCode: DM_GROUP_ACCESS_REASON.DM_POLICY_NOT_ALLOWLISTED,
+    reason: `dmPolicy=${dmPolicy} (not allowlisted)`,
+  };
 }
 
 export function resolveDmGroupAccessWithLists(params: {
@@ -93,6 +155,7 @@ export function resolveDmGroupAccessWithLists(params: {
   isSenderAllowed: (allowFrom: string[]) => boolean;
 }): {
   decision: DmGroupAccessDecision;
+  reasonCode: DmGroupAccessReasonCode;
   reason: string;
   effectiveAllowFrom: string[];
   effectiveGroupAllowFrom: string[];
@@ -134,9 +197,10 @@ export async function resolveDmAllowState(params: {
     Array.isArray(params.allowFrom) ? params.allowFrom : undefined,
   );
   const hasWildcard = configAllowFrom.includes("*");
-  const storeAllowFrom = await (params.readStore ?? readChannelAllowFromStore)(
-    params.provider,
-  ).catch(() => []);
+  const storeAllowFrom = await readStoreAllowFromForDmPolicy({
+    provider: params.provider,
+    readStore: params.readStore,
+  });
   const normalizeEntry = params.normalizeEntry ?? ((value: string) => value);
   const normalizedCfg = configAllowFrom
     .filter((value) => value !== "*")
