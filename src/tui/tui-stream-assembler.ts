@@ -151,7 +151,7 @@ export class TuiStreamAssembler {
     const streamedDisplayText = state.displayText;
     const streamedTextBlocks = [...state.contentBlocks];
     const streamedSawNonTextContentBlocks = state.sawNonTextContentBlocks;
-    this.updateRunState(state, message, showThinking);
+    this.updateRunState(state, message, showThinking, { protectBoundaryDrops: true });
     const finalComposed = state.displayText;
     const shouldKeepStreamedText =
       streamedSawNonTextContentBlocks &&
