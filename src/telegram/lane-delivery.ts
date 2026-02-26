@@ -109,11 +109,15 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     text: string;
     skipRegressive: "always" | "existingOnly";
     hadPreviewMessage: boolean;
-  }): boolean =>
-    Boolean(args.currentPreviewText) &&
-    args.currentPreviewText.startsWith(args.text) &&
-    args.text.length < args.currentPreviewText.length &&
-    (args.skipRegressive === "always" || args.hadPreviewMessage);
+  }): boolean => {
+    const currentPreviewText = args.currentPreviewText;
+    return (
+      currentPreviewText !== undefined &&
+      currentPreviewText.startsWith(args.text) &&
+      args.text.length < currentPreviewText.length &&
+      (args.skipRegressive === "always" || args.hadPreviewMessage)
+    );
+  };
 
   const tryEditPreviewMessage = async (args: {
     laneName: LaneName;
