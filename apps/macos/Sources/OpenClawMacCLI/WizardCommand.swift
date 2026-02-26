@@ -280,7 +280,7 @@ actor GatewayWizardClient {
         let connectNonce = try await self.waitForConnectChallenge()
         let identity = DeviceIdentityStore.loadOrCreate()
         let signedAtMs = Int(Date().timeIntervalSince1970 * 1000)
-        let payload = buildDeviceAuthPayloadV3(
+        let payload = GatewayDeviceAuthPayload.buildV3(
             deviceId: identity.deviceId,
             clientId: clientId,
             clientMode: clientMode,
@@ -325,44 +325,6 @@ actor GatewayWizardClient {
                 return
             }
         }
-    }
-
-    private func buildDeviceAuthPayloadV3(
-        deviceId: String,
-        clientId: String,
-        clientMode: String,
-        role: String,
-        scopes: [String],
-        signedAtMs: Int,
-        token: String?,
-        nonce: String,
-        platform: String?,
-        deviceFamily: String?) -> String
-    {
-        let scopeString = scopes.joined(separator: ",")
-        let authToken = token ?? ""
-        let normalizedPlatform = normalizeMetadataField(platform)
-        let normalizedDeviceFamily = normalizeMetadataField(deviceFamily)
-        return [
-            "v3",
-            deviceId,
-            clientId,
-            clientMode,
-            role,
-            scopeString,
-            String(signedAtMs),
-            authToken,
-            nonce,
-            normalizedPlatform,
-            normalizedDeviceFamily,
-        ].joined(separator: "|")
-    }
-
-    private func normalizeMetadataField(_ value: String?) -> String {
-        guard let value else { return "" }
-        return value
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased(with: Locale(identifier: "en_US_POSIX"))
     }
 
     private func waitForConnectChallenge() async throws -> String {
