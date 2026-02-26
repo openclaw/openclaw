@@ -234,4 +234,32 @@ describe("config plugin validation", () => {
       });
     }
   });
+
+  it("accepts heartbeat directPolicy enum values", async () => {
+    const home = await createCaseHome();
+    const res = validateInHome(home, {
+      agents: {
+        defaults: { heartbeat: { target: "last", directPolicy: "block" } },
+        list: [{ id: "pi", heartbeat: { directPolicy: "allow" } }],
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects invalid heartbeat directPolicy values", async () => {
+    const home = await createCaseHome();
+    const res = validateInHome(home, {
+      agents: {
+        defaults: { heartbeat: { directPolicy: "maybe" } },
+        list: [{ id: "pi" }],
+      },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      const hasIssue = res.issues.some(
+        (issue) => issue.path === "agents.defaults.heartbeat.directPolicy",
+      );
+      expect(hasIssue).toBe(true);
+    }
+  });
 });
