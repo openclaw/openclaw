@@ -52,7 +52,6 @@ const plugin = {
   register(api: OpenClawPluginApi) {
     setFeishuRuntime(api.runtime);
     api.registerChannel({ plugin: feishuPlugin });
-
     registerFeishuDocTools(api);
     registerFeishuWikiTools(api);
     registerFeishuDriveTools(api);
