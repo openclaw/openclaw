@@ -114,7 +114,7 @@ describe("model-selection", () => {
       });
     });
 
-    it("keeps openai gpt-5.3 codex refs on the openai provider", () => {
+    it("keeps openai gpt-5.3 codex refs on the openai provider and reroute openai/gpt-5.3-codex-spark to openai-codex", () => {
       expect(parseModelRef("openai/gpt-5.3-codex", "anthropic")).toEqual({
         provider: "openai",
         model: "gpt-5.3-codex",
@@ -123,9 +123,13 @@ describe("model-selection", () => {
         provider: "openai",
         model: "gpt-5.3-codex",
       });
-      expect(parseModelRef("openai/gpt-5.3-codex-codex", "anthropic")).toEqual({
-        provider: "openai",
-        model: "gpt-5.3-codex-codex",
+      expect(parseModelRef("openai/gpt-5.3-codex-spark", "anthropic")).toEqual({
+        provider: "openai-codex",
+        model: "gpt-5.3-codex-spark",
+      });
+      expect(parseModelRef("gpt-5.3-codex-spark", "openai")).toEqual({
+        provider: "openai-codex",
+        model: "gpt-5.3-codex-spark",
       });
     });
 
