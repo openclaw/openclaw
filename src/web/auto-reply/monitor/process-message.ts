@@ -76,15 +76,14 @@ async function resolveWhatsAppCommandAuthorized(params: {
   const configuredGroupAllowFrom =
     account.groupAllowFrom ?? (configuredAllowFrom.length > 0 ? configuredAllowFrom : undefined);
 
-  const storeAllowFrom =
-    isGroup
-      ? []
-      : await readStoreAllowFromForDmPolicy({
-          provider: "whatsapp",
-          dmPolicy,
-          readStore: (provider) =>
-            readChannelAllowFromStore(provider, process.env, params.msg.accountId),
-        });
+  const storeAllowFrom = isGroup
+    ? []
+    : await readStoreAllowFromForDmPolicy({
+        provider: "whatsapp",
+        dmPolicy,
+        readStore: (provider) =>
+          readChannelAllowFromStore(provider, process.env, params.msg.accountId),
+      });
   const dmAllowFrom =
     configuredAllowFrom.length > 0
       ? configuredAllowFrom
