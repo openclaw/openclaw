@@ -27,6 +27,22 @@ function waitForError(ws: WebSocket) {
   });
 }
 
+function waitForClose(ws: WebSocket, timeoutMs = RELAY_MESSAGE_TIMEOUT_MS) {
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error("timeout"));
+    }, timeoutMs);
+    ws.once("close", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    ws.once("error", (err) => {
+      clearTimeout(timer);
+      reject(err instanceof Error ? err : new Error(String(err)));
+    });
+  });
+}
+
 function relayAuthHeaders(url: string) {
   return getChromeExtensionRelayAuthHeaders(url);
 }
@@ -132,8 +148,14 @@ describe("chrome extension relay server", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
 
   beforeEach(() => {
-    envSnapshot = captureEnv(["OPENCLAW_GATEWAY_TOKEN"]);
+    envSnapshot = captureEnv([
+      "OPENCLAW_GATEWAY_TOKEN",
+      "OPENCLAW_EXTENSION_RELAY_RECONNECT_GRACE_MS",
+      "OPENCLAW_EXTENSION_RELAY_COMMAND_RECONNECT_WAIT_MS",
+    ]);
     process.env.OPENCLAW_GATEWAY_TOKEN = TEST_GATEWAY_TOKEN;
+    delete process.env.OPENCLAW_EXTENSION_RELAY_RECONNECT_GRACE_MS;
+    delete process.env.OPENCLAW_EXTENSION_RELAY_COMMAND_RECONNECT_WAIT_MS;
   });
 
   afterEach(async () => {
@@ -339,6 +361,97 @@ describe("chrome extension relay server", () => {
     expect(status.connected).toBe(true);
 
     ext2.close();
+  });
+
+  it("keeps CDP clients alive across a brief extension reconnect", async () => {
+    const { port, ext: ext1 } = await startRelayWithExtension();
+    const cdp = new WebSocket(`ws://127.0.0.1:${port}/cdp`, {
+      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/cdp`),
+    });
+    await waitForOpen(cdp);
+
+    let cdpClosed = false;
+    cdp.once("close", () => {
+      cdpClosed = true;
+    });
+
+    const ext1Closed = waitForClose(ext1, 2_000);
+    ext1.close();
+    await ext1Closed;
+
+    await new Promise((r) => setTimeout(r, 200));
+    const ext2 = new WebSocket(`ws://127.0.0.1:${port}/extension`, {
+      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
+    });
+    await waitForOpen(ext2);
+
+    await new Promise((r) => setTimeout(r, 200));
+    expect(cdpClosed).toBe(false);
+
+    cdp.close();
+    ext2.close();
+  });
+
+  it("waits briefly for extension reconnect before failing CDP commands", async () => {
+    const { port, ext: ext1 } = await startRelayWithExtension();
+    const cdp = new WebSocket(`ws://127.0.0.1:${port}/cdp`, {
+      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/cdp`),
+    });
+    await waitForOpen(cdp);
+    const cdpQueue = createMessageQueue(cdp);
+
+    const ext1Closed = waitForClose(ext1, 2_000);
+    ext1.close();
+    await ext1Closed;
+
+    cdp.send(JSON.stringify({ id: 41, method: "Runtime.enable" }));
+    await new Promise((r) => setTimeout(r, 150));
+
+    const ext2 = new WebSocket(`ws://127.0.0.1:${port}/extension`, {
+      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/extension`),
+    });
+    const ext2Queue = createMessageQueue(ext2);
+    await waitForOpen(ext2);
+
+    while (true) {
+      const msg = JSON.parse(await ext2Queue.next(4_000)) as {
+        id?: number;
+        method?: string;
+      };
+      if (msg.method === "ping") {
+        ext2.send(JSON.stringify({ method: "pong" }));
+        continue;
+      }
+      if (msg.method === "forwardCDPCommand" && typeof msg.id === "number") {
+        ext2.send(JSON.stringify({ id: msg.id, result: { ok: true } }));
+        break;
+      }
+    }
+
+    const response = JSON.parse(await cdpQueue.next(6_000)) as {
+      id?: number;
+      result?: { ok?: boolean };
+      error?: { message?: string };
+    };
+    expect(response.id).toBe(41);
+    expect(response.error).toBeUndefined();
+    expect(response.result?.ok).toBe(true);
+
+    cdp.close();
+    ext2.close();
+  });
+
+  it("closes CDP clients after reconnect grace when extension stays disconnected", async () => {
+    process.env.OPENCLAW_EXTENSION_RELAY_RECONNECT_GRACE_MS = "150";
+
+    const { port, ext } = await startRelayWithExtension();
+    const cdp = new WebSocket(`ws://127.0.0.1:${port}/cdp`, {
+      headers: relayAuthHeaders(`ws://127.0.0.1:${port}/cdp`),
+    });
+    await waitForOpen(cdp);
+
+    ext.close();
+    await waitForClose(cdp, 2_000);
   });
 
   it("accepts extension websocket access with relay token query param", async () => {
