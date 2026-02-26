@@ -1141,6 +1141,7 @@
                       "gateway/configuration-examples",
                       "gateway/authentication",
                       "gateway/secrets",
+                      "gateway/secrets-plan-contract",
                       "gateway/trusted-proxy-auth",
                       "gateway/health",
                       "gateway/heartbeat",
