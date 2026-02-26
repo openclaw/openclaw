@@ -21,7 +21,7 @@ import {
   type GatewayClientMode,
   type GatewayClientName,
 } from "../utils/message-channel.js";
-import { buildDeviceAuthPayload } from "./device-auth.js";
+import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { isSecureWebSocketUrl } from "./net.js";
 import {
   type ConnectParams,
@@ -52,6 +52,7 @@ export type GatewayClientOptions = {
   clientDisplayName?: string;
   clientVersion?: string;
   platform?: string;
+  deviceFamily?: string;
   mode?: GatewayClientMode;
   role?: string;
   scopes?: string[];
@@ -265,11 +266,12 @@ export class GatewayClient {
         : undefined;
     const signedAtMs = Date.now();
     const scopes = this.opts.scopes ?? ["operator.admin"];
+    const platform = this.opts.platform ?? process.platform;
     const device = (() => {
       if (!this.opts.deviceIdentity) {
         return undefined;
       }
-      const payload = buildDeviceAuthPayload({
+      const payload = buildDeviceAuthPayloadV3({
         deviceId: this.opts.deviceIdentity.deviceId,
         clientId: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
         clientMode: this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND,
@@ -278,6 +280,8 @@ export class GatewayClient {
         signedAtMs,
         token: authToken ?? null,
         nonce,
+        platform,
+        deviceFamily: this.opts.deviceFamily,
       });
       const signature = signDevicePayload(this.opts.deviceIdentity.privateKeyPem, payload);
       return {
@@ -295,7 +299,8 @@ export class GatewayClient {
         id: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
         displayName: this.opts.clientDisplayName,
         version: this.opts.clientVersion ?? "dev",
-        platform: this.opts.platform ?? process.platform,
+        platform,
+        deviceFamily: this.opts.deviceFamily,
         mode: this.opts.mode ?? GATEWAY_CLIENT_MODES.BACKEND,
         instanceId: this.opts.instanceId,
       },

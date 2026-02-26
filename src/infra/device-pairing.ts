@@ -17,6 +17,7 @@ export type DevicePairingPendingRequest = {
   publicKey: string;
   displayName?: string;
   platform?: string;
+  deviceFamily?: string;
   clientId?: string;
   clientMode?: string;
   role?: string;
@@ -52,6 +53,7 @@ export type PairedDevice = {
   publicKey: string;
   displayName?: string;
   platform?: string;
+  deviceFamily?: string;
   clientId?: string;
   clientMode?: string;
   role?: string;
@@ -165,6 +167,7 @@ function mergePendingDevicePairingRequest(
     ...existing,
     displayName: incoming.displayName ?? existing.displayName,
     platform: incoming.platform ?? existing.platform,
+    deviceFamily: incoming.deviceFamily ?? existing.deviceFamily,
     clientId: incoming.clientId ?? existing.clientId,
     clientMode: incoming.clientMode ?? existing.clientMode,
     role: existingRole ?? incomingRole ?? undefined,
@@ -297,6 +300,7 @@ export async function requestDevicePairing(
       publicKey: req.publicKey,
       displayName: req.displayName,
       platform: req.platform,
+      deviceFamily: req.deviceFamily,
       clientId: req.clientId,
       clientMode: req.clientMode,
       role: req.role,
@@ -360,6 +364,7 @@ export async function approveDevicePairing(
       publicKey: pending.publicKey,
       displayName: pending.displayName,
       platform: pending.platform,
+      deviceFamily: pending.deviceFamily,
       clientId: pending.clientId,
       clientMode: pending.clientMode,
       role: pending.role,

@@ -215,6 +215,10 @@ The Gateway treats these as **claims** and enforces server-side allowlists.
   Control UI can omit it **only** when `gateway.controlUi.dangerouslyDisableDeviceAuth`
   is enabled for break-glass use.
 - All connections must sign the server-provided `connect.challenge` nonce.
+- Preferred signature payload is `v3`, which binds `platform` and `deviceFamily`
+  in addition to device/client/role/scopes/token/nonce fields.
+- Legacy `v2` signatures remain accepted for compatibility, but paired-device
+  metadata pinning still controls command policy on reconnect.
 
 ## TLS + pinning
 
