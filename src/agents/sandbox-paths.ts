@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, URL } from "node:url";
+import { assertNoHardlinkedFinalPath } from "../infra/hardlink-guards.js";
 import { isNotFoundPathError, isPathInside } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 
@@ -62,10 +63,17 @@ export async function assertSandboxPath(params: {
   cwd: string;
   root: string;
   allowFinalSymlink?: boolean;
+  allowFinalHardlink?: boolean;
 }) {
   const resolved = resolveSandboxPath(params);
   await assertNoSymlinkEscape(resolved.relative, path.resolve(params.root), {
     allowFinalSymlink: params.allowFinalSymlink,
+  });
+  await assertNoHardlinkedFinalPath({
+    filePath: resolved.resolved,
+    root: path.resolve(params.root),
+    boundaryLabel: "sandbox root",
+    allowFinalHardlink: params.allowFinalHardlink,
   });
   return resolved;
 }
@@ -195,27 +203,11 @@ async function assertNoTmpAliasEscape(params: {
   tmpRoot: string;
 }): Promise<void> {
   await assertNoSymlinkEscape(path.relative(params.tmpRoot, params.filePath), params.tmpRoot);
-  await assertNoHardlinkedFinalPath(params.filePath, params.tmpRoot);
-}
-
-async function assertNoHardlinkedFinalPath(filePath: string, tmpRoot: string): Promise<void> {
-  let stat: Awaited<ReturnType<typeof fs.stat>>;
-  try {
-    stat = await fs.stat(filePath);
-  } catch (err) {
-    if (isNotFoundPathError(err)) {
-      return;
-    }
-    throw err;
-  }
-  if (!stat.isFile()) {
-    return;
-  }
-  if (stat.nlink > 1) {
-    throw new Error(
-      `Hardlinked tmp media path is not allowed under tmp root (${shortPath(tmpRoot)}): ${shortPath(filePath)}`,
-    );
-  }
+  await assertNoHardlinkedFinalPath({
+    filePath: params.filePath,
+    root: params.tmpRoot,
+    boundaryLabel: "tmp root",
+  });
 }
 
 async function assertNoSymlinkEscape(

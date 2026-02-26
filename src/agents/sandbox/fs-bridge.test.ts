@@ -195,6 +195,42 @@ describe("sandbox fs bridge shell compatibility", () => {
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
+  it("rejects pre-existing host hardlink escapes before docker exec", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fs-bridge-hardlink-"));
+    const workspaceDir = path.join(stateDir, "workspace");
+    const outsideDir = path.join(stateDir, "outside");
+    const outsideFile = path.join(outsideDir, "secret.txt");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(outsideDir, { recursive: true });
+    await fs.writeFile(outsideFile, "classified");
+    const hardlinkPath = path.join(workspaceDir, "link.txt");
+    try {
+      try {
+        await fs.link(outsideFile, hardlinkPath);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+          return;
+        }
+        throw err;
+      }
+
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+        }),
+      });
+
+      await expect(bridge.readFile({ filePath: "link.txt" })).rejects.toThrow(/hardlink|sandbox/i);
+      expect(mockedExecDockerRaw).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("rejects container-canonicalized paths outside allowed mounts", async () => {
     mockedExecDockerRaw.mockImplementation(async (args) => {
       const script = getDockerScript(args);

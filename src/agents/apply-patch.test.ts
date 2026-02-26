@@ -159,6 +159,42 @@ describe("applyPatch", () => {
     });
   });
 
+  it("rejects hardlink alias escapes by default", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withTempDir(async (dir) => {
+      const outside = path.join(
+        path.dirname(dir),
+        `outside-hardlink-${process.pid}-${Date.now()}.txt`,
+      );
+      const linkPath = path.join(dir, "hardlink.txt");
+      await fs.writeFile(outside, "initial\n", "utf8");
+      try {
+        try {
+          await fs.link(outside, linkPath);
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+            return;
+          }
+          throw err;
+        }
+        const patch = `*** Begin Patch
+*** Update File: hardlink.txt
+@@
+-initial
++pwned
+*** End Patch`;
+        await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(/hardlink|sandbox/i);
+        const outsideContents = await fs.readFile(outside, "utf8");
+        expect(outsideContents).toBe("initial\n");
+      } finally {
+        await fs.rm(linkPath, { force: true });
+        await fs.rm(outside, { force: true });
+      }
+    });
+  });
+
   it("allows symlinks that resolve within cwd by default", async () => {
     await withTempDir(async (dir) => {
       const target = path.join(dir, "target.txt");
