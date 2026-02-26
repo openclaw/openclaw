@@ -45,6 +45,16 @@ type MemberType =
   | "groupid"
   | "wikispaceid";
 type PermType = "view" | "edit" | "full_access";
+type PublicTokenType =
+  | "doc"
+  | "sheet"
+  | "file"
+  | "wiki"
+  | "bitable"
+  | "docx"
+  | "mindnote"
+  | "minutes"
+  | "slides";
 
 // ============ Actions ============
 
@@ -115,6 +125,49 @@ async function removeMember(
   };
 }
 
+async function getPublic(client: Lark.Client, token: string, type: string) {
+  const res = await client.drive.permissionPublic.get({
+    path: { token },
+    params: { type: type as PublicTokenType },
+  });
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
+  return { permission_public: res.data?.permission_public ?? {} };
+}
+
+async function updatePublic(
+  client: Lark.Client,
+  token: string,
+  type: string,
+  opts: {
+    external_access?: boolean;
+    security_entity?: string;
+    comment_entity?: string;
+    share_entity?: string;
+    link_share_entity?: string;
+    invite_external?: boolean;
+  },
+) {
+  const data: Record<string, unknown> = {};
+  if (opts.external_access !== undefined) data.external_access = opts.external_access;
+  if (opts.security_entity) data.security_entity = opts.security_entity;
+  if (opts.comment_entity) data.comment_entity = opts.comment_entity;
+  if (opts.share_entity) data.share_entity = opts.share_entity;
+  if (opts.link_share_entity) data.link_share_entity = opts.link_share_entity;
+  if (opts.invite_external !== undefined) data.invite_external = opts.invite_external;
+
+  const res = await client.drive.permissionPublic.patch({
+    path: { token },
+    params: { type: type as PublicTokenType },
+    data,
+  });
+  if (res.code !== 0) {
+    throw new Error(res.msg);
+  }
+  return { success: true, permission_public: res.data?.permission_public ?? {} };
+}
+
 // ============ Tool Registration ============
 
 export function registerFeishuPermTools(api: OpenClawPluginApi) {
@@ -142,7 +195,8 @@ export function registerFeishuPermTools(api: OpenClawPluginApi) {
       return {
         name: "feishu_perm",
         label: "Feishu Perm",
-        description: "Feishu permission management. Actions: list, add, remove",
+        description:
+          "Feishu permission management. Actions: list, add, remove, get_public, update_public",
         parameters: FeishuPermSchema,
         async execute(_toolCallId, params) {
           const p = params as FeishuPermParams;
@@ -158,6 +212,19 @@ export function registerFeishuPermTools(api: OpenClawPluginApi) {
               case "remove":
                 return json(
                   await removeMember(client, p.token, p.type, p.member_type, p.member_id),
+                );
+              case "get_public":
+                return json(await getPublic(client, p.token, p.type));
+              case "update_public":
+                return json(
+                  await updatePublic(client, p.token, p.type, {
+                    external_access: p.external_access,
+                    security_entity: p.security_entity,
+                    comment_entity: p.comment_entity,
+                    share_entity: p.share_entity,
+                    link_share_entity: p.link_share_entity,
+                    invite_external: p.invite_external,
+                  }),
                 );
               default:
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exhaustive check fallback
