@@ -308,7 +308,7 @@ CREDIT_CSV = WORKSPACE / "memory" / "backup" / "vps-brain" / "skills" \
 
 
 def generate_credit_chart(mkt: dict) -> Path | None:
-    """신용비율 현황 차트 — 비율+시그널존 + 잔고/예수금."""
+    """신용비율 현황 차트 — 비율+5MA+KOSPI+시그널존."""
     if not CREDIT_CSV.exists():
         return None
     try:
@@ -321,42 +321,55 @@ def generate_credit_chart(mkt: dict) -> Path | None:
 
     try:
         df = pd.read_csv(str(CREDIT_CSV), parse_dates=["date"], index_col="date")
-        df = df.dropna(subset=["ratio"]).tail(90)  # 최근 90일
+        df = df.dropna(subset=["ratio"])
+        df = df.loc["2020-01-01":]  # 2020년 1월부터
         if len(df) < 5:
             return None
+
+        df["ratio_5ma"] = df["ratio"].rolling(5).mean()
+
+        # KOSPI 로드
+        kospi_close = None
+        try:
+            import yfinance as yf
+            kospi = yf.download("^KS11", start="2020-01-01", progress=False)
+            kospi_close = kospi["Close"].squeeze()
+            kospi_close.index = kospi_close.index.tz_localize(None)
+        except Exception as e:
+            log(f"KOSPI download for credit chart: {e}")
 
         date_str = datetime.now().strftime("%Y-%m-%d")
         credit = mkt.get("credit_data", {})
 
-        fig, (ax_top, ax_bot) = plt.subplots(
-            2, 1, figsize=(10, 6.5), height_ratios=[3, 2], sharex=True)
-        fig.suptitle(
-            f"신용비율 (신용잔고 / (신용잔고+예수금) x 100)  {date_str}",
-            fontsize=12, fontweight="bold",
-        )
+        fig, ax1 = plt.subplots(figsize=(13, 6))
 
-        # 상단: 비율 + 시그널존
-        ax_top.plot(df.index, df["ratio"], color="#d62728", linewidth=2,
-                    marker="o", markersize=2, label="신용비율 (%)", zorder=5)
-        ax_top.set_ylabel("비율 (%)", color="#d62728", fontsize=10)
-        ax_top.axhline(y=30, color="green", linestyle="--", alpha=0.4)
-        ax_top.axhline(y=35, color="orange", linestyle="--", alpha=0.4)
-        ax_top.axhline(y=40, color="red", linestyle="--", alpha=0.4)
-        ax_top.axhspan(0, 30, alpha=0.03, color="green")
-        ax_top.axhspan(30, 35, alpha=0.03, color="yellow")
-        ax_top.axhspan(35, 40, alpha=0.03, color="orange")
-        ax_top.axhspan(40, 55, alpha=0.03, color="red")
+        # 시그널존 배경
+        ax1.axhspan(0, 30, alpha=0.05, color="green")
+        ax1.axhspan(30, 35, alpha=0.05, color="yellow")
+        ax1.axhspan(35, 40, alpha=0.05, color="orange")
+        ax1.axhspan(40, 55, alpha=0.05, color="red")
+        ax1.axhline(y=30, color="green", linestyle="--", alpha=0.5, linewidth=0.8)
+        ax1.axhline(y=35, color="orange", linestyle="--", alpha=0.5, linewidth=0.8)
+        ax1.axhline(y=40, color="red", linestyle="--", alpha=0.5, linewidth=0.8)
 
-        from datetime import timedelta
-        x_right = df.index[-1] + timedelta(days=1)
-        ax_top.text(x_right, 28, "매수고려", fontsize=7, color="green", va="center")
-        ax_top.text(x_right, 32.5, "중립", fontsize=7, color="#b8860b", va="center")
-        ax_top.text(x_right, 37.5, "주의", fontsize=7, color="orange", va="center")
-        ax_top.text(x_right, 42, "매도경고", fontsize=7, color="red", va="center")
+        # 시그널 라벨
+        ax1.text(df.index[3], 27, "매수고려 (<30%)", fontsize=7, color="green", va="center")
+        ax1.text(df.index[3], 32.5, "중립", fontsize=7, color="#b8860b", va="center")
+        ax1.text(df.index[3], 37.5, "주의", fontsize=7, color="orange", va="center")
+        ax1.text(df.index[3], 42.5, "매도경고 (>40%)", fontsize=7, color="red", va="center")
 
+        # 신용비율 + 5MA
+        ax1.plot(df.index, df["ratio"], color="#d62728", linewidth=1.0,
+                 alpha=0.5, label="신용비율 (%)", zorder=4)
+        ax1.plot(df.index, df["ratio_5ma"], color="#d62728", linewidth=2.0,
+                 label="5MA", zorder=5)
+        ax1.set_ylabel("신용비율 (%)", color="#d62728", fontsize=10)
+        ax1.tick_params(axis="y", labelcolor="#d62728")
+
+        # 현재값 어노테이션
         last_ratio = df["ratio"].iloc[-1]
         signal = credit.get("signal", "") if credit else ""
-        ax_top.annotate(
+        ax1.annotate(
             f"{last_ratio:.1f}% [{signal}]",
             xy=(df.index[-1], last_ratio),
             xytext=(0, 15), textcoords="offset points", ha="center",
@@ -364,37 +377,34 @@ def generate_credit_chart(mkt: dict) -> Path | None:
             bbox=dict(boxstyle="round,pad=0.3", facecolor="white",
                       edgecolor="#d62728", alpha=0.9))
 
-        r_min, r_max = min(df["ratio"].min(), 25), max(df["ratio"].max(), 42)
-        margin = max((r_max - r_min) * 0.1, 1)
-        ax_top.set_ylim(r_min - margin, r_max + margin)
-        ax_top.legend(loc="upper left", fontsize=7)
-        ax_top.grid(True, alpha=0.2)
+        r_min, r_max = min(df["ratio"].min(), 25), max(df["ratio"].max(), 45)
+        ax1.set_ylim(r_min - 2, r_max + 2)
 
-        # 하단: 신용잔고 + 예수금
-        if "credit_balance" in df.columns and "deposit" in df.columns:
-            ax_bot.plot(df.index, df["credit_balance"], color="#1f77b4",
-                        linewidth=1.8, marker="s", markersize=2, label="신용잔고 (조)")
-            ax_bot.set_ylabel("신용잔고 (조원)", color="#1f77b4", fontsize=9)
-            last_c = df["credit_balance"].iloc[-1]
-            ax_bot.annotate(f"{last_c:.1f}조", xy=(df.index[-1], last_c),
-                            xytext=(5, 8), textcoords="offset points",
-                            fontsize=8, color="#1f77b4", fontweight="bold")
+        # KOSPI 오버레이
+        if kospi_close is not None and len(kospi_close) > 0:
+            ax2 = ax1.twinx()
+            ax2.plot(kospi_close.index, kospi_close.values, color="#1f77b4",
+                     linewidth=1.0, alpha=0.6, label="KOSPI")
+            ax2.set_ylabel("KOSPI", color="#1f77b4", fontsize=10)
+            ax2.tick_params(axis="y", labelcolor="#1f77b4")
+            l1, lb1 = ax1.get_legend_handles_labels()
+            l2, lb2 = ax2.get_legend_handles_labels()
+            ax1.legend(l1 + l2, lb1 + lb2, loc="upper right", fontsize=8)
+        else:
+            ax1.legend(loc="upper right", fontsize=8)
 
-            ax_dep = ax_bot.twinx()
-            ax_dep.plot(df.index, df["deposit"], color="#ff7f0e",
-                        linewidth=1.8, marker="^", markersize=2, label="예수금 (조)")
-            ax_dep.set_ylabel("예수금 (조원)", color="#ff7f0e", fontsize=9)
-            last_d = df["deposit"].iloc[-1]
-            ax_dep.annotate(f"{last_d:.1f}조", xy=(df.index[-1], last_d),
-                            xytext=(5, -12), textcoords="offset points",
-                            fontsize=8, color="#ff7f0e", fontweight="bold")
+        ax1.set_title(
+            f"KOSPI 매수판단 신호 — 신용비율  {date_str}",
+            fontsize=13, fontweight="bold",
+        )
+        ax1.grid(True, alpha=0.12)
 
-            l1, lb1 = ax_bot.get_legend_handles_labels()
-            l2, lb2 = ax_dep.get_legend_handles_labels()
-            ax_bot.legend(l1 + l2, lb1 + lb2, loc="upper left", fontsize=7)
-
-        ax_bot.grid(True, alpha=0.2)
-        ax_bot.xaxis.set_major_formatter(mdates.DateFormatter("%m/%d"))
+        ax1.xaxis.set_major_locator(mdates.YearLocator())
+        ax1.xaxis.set_minor_locator(mdates.MonthLocator(bymonth=[4, 7, 10]))
+        ax1.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+        ax1.xaxis.set_minor_formatter(mdates.DateFormatter("%m"))
+        ax1.tick_params(axis="x", which="minor", labelsize=7, pad=1)
+        ax1.tick_params(axis="x", which="major", labelsize=9, pad=12)
         plt.tight_layout()
 
         CHART_DIR.mkdir(parents=True, exist_ok=True)
@@ -2177,9 +2187,11 @@ def main() -> int:
             if credit_path:
                 if _send_telegram_photo(
                     credit_path,
+                    "KOSPI 매수판단 신호 — 신용비율\n"
                     "신용비율 = 신용잔고 ÷ (신용잔고+예수금) × 100\n"
-                    "상단: 비율 추이 (30%↓매수·35%↑주의·40%↑매도경고)\n"
-                    "하단: 신용잔고(조) / 예수금(조)",
+                    "개인투자자 레버리지 수준을 나타내며, 높을수록 과열·낮을수록 매수 기회\n"
+                    "<30% 매수고려 | 30-35% 중립 | 35-40% 주의 | >40% 매도경고\n"
+                    "연한선: 일별 | 굵은선: 5일이동평균 | 파란선: KOSPI",
                 ):
                     log("Credit chart sent to DM")
                 else:
