@@ -203,7 +203,9 @@ export const dchatPlugin: ChannelPlugin<ResolvedDchatAccount> = {
         name,
       }),
     validateInput: ({ input }) => {
-      if (input.useEnv) return null;
+      if (input.useEnv) {
+        return "D-Chat does not support --use-env; provide a wallet seed via --access-token";
+      }
       // Wallet seed is passed via accessToken field
       const seed = input.accessToken?.trim();
       if (!seed) {
@@ -429,12 +431,25 @@ export const dchatPlugin: ChannelPlugin<ResolvedDchatAccount> = {
                 return;
               }
 
-              const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {});
+              // Resolve agent route for multi-agent session key scoping
+              const route = core.channel.routing.resolveAgentRoute({
+                cfg,
+                channel: "dchat",
+                accountId: account.accountId,
+                peer: {
+                  kind: isGroup ? "group" : "direct",
+                  id: isGroup ? (inbound.groupSubject ?? "unknown") : src,
+                },
+              });
+
+              const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {
+                agentId: route.agentId,
+              });
 
               const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
               const previousTimestamp = core.channel.session.readSessionUpdatedAt({
                 storePath,
-                sessionKey: inbound.sessionKey,
+                sessionKey: route.sessionKey,
               });
 
               const body = core.channel.reply.formatAgentEnvelope({
@@ -462,7 +477,7 @@ export const dchatPlugin: ChannelPlugin<ResolvedDchatAccount> = {
                   inbound.chatType === "direct"
                     ? `dchat:${src}`
                     : `topic:${inbound.groupSubject ?? ""}`,
-                SessionKey: inbound.sessionKey,
+                SessionKey: route.sessionKey,
                 AccountId: account.accountId,
                 ChatType: inbound.chatType === "direct" ? "direct" : "channel",
                 ConversationLabel:
@@ -486,12 +501,12 @@ export const dchatPlugin: ChannelPlugin<ResolvedDchatAccount> = {
               // Record session
               core.channel.session.recordInboundSession({
                 storePath,
-                sessionKey: ctxPayload.SessionKey ?? inbound.sessionKey,
+                sessionKey: route.sessionKey,
                 ctx: ctxPayload,
                 updateLastRoute:
                   inbound.chatType === "direct"
                     ? {
-                        sessionKey: inbound.sessionKey,
+                        sessionKey: route.sessionKey,
                         channel: "dchat",
                         to: `dchat:${src}`,
                         accountId: account.accountId,
@@ -526,6 +541,9 @@ export const dchatPlugin: ChannelPlugin<ResolvedDchatAccount> = {
                       if (dests.length > 0) {
                         bus.sendToMultiple(dests, replyPayload);
                       }
+                    } else if (groupIdFromKey) {
+                      // Private group: route reply to the group address
+                      bus.sendNoReply(groupIdFromKey, replyPayload);
                     } else {
                       bus.sendNoReply(src, replyPayload);
                     }
