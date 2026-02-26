@@ -1,5 +1,6 @@
 import {
   GROUP_POLICY_BLOCKED_LABEL,
+  createScopedPairingAccess,
   createNormalizedOutboundDeliverer,
   createReplyPrefixOptions,
   formatTextWithAttachmentLinks,
@@ -58,6 +59,11 @@ export async function handleNextcloudTalkInbound(params: {
 }): Promise<void> {
   const { message, account, config, runtime, statusSink } = params;
   const core = getNextcloudTalkRuntime();
+  const pairing = createScopedPairingAccess({
+    core,
+    channel: CHANNEL_ID,
+    accountId: account.accountId,
+  });
 
   const rawBody = message.text?.trim() ?? "";
   if (!rawBody) {
@@ -99,8 +105,9 @@ export async function handleNextcloudTalkInbound(params: {
   const configGroupAllowFrom = normalizeNextcloudTalkAllowlist(account.config.groupAllowFrom);
   const storeAllowFrom = await readStoreAllowFromForDmPolicy({
     provider: CHANNEL_ID,
+    accountId: account.accountId,
     dmPolicy,
-    readStore: (provider) => core.channel.pairing.readAllowFromStore(provider),
+    readStore: pairing.readStoreForDmPolicy,
   });
   const storeAllowList = normalizeNextcloudTalkAllowlist(storeAllowFrom);
 
@@ -167,8 +174,7 @@ export async function handleNextcloudTalkInbound(params: {
   } else {
     if (access.decision !== "allow") {
       if (access.decision === "pairing") {
-        const { code, created } = await core.channel.pairing.upsertPairingRequest({
-          channel: CHANNEL_ID,
+        const { code, created } = await pairing.upsertPairingRequest({
           id: senderId,
           meta: { name: senderName || undefined },
         });

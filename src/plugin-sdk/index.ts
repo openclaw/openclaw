@@ -216,6 +216,7 @@ export {
   type SenderGroupAccessReason,
 } from "./group-access.js";
 export { resolveSenderCommandAuthorization } from "./command-auth.js";
+export { createScopedPairingAccess } from "./pairing-access.js";
 export { handleSlackMessageAction } from "./slack-message-actions.js";
 export { extractToolSend } from "./tool-send.js";
 export {
