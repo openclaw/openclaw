@@ -85,6 +85,7 @@ class ConnectionManager(
     buildList {
       add(OpenClawCapability.Canvas.rawValue)
       add(OpenClawCapability.Screen.rawValue)
+      add(OpenClawCapability.Device.rawValue)
       if (cameraEnabled()) add(OpenClawCapability.Camera.rawValue)
       if (smsAvailable()) add(OpenClawCapability.Sms.rawValue)
       if (voiceWakeMode() != VoiceWakeMode.Off && hasRecordAudioPermission()) {
