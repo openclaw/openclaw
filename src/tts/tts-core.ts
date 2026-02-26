@@ -278,6 +278,7 @@ export function parseTtsDirectives(
                 ...overrides.elevenlabs,
                 voiceSettings: { ...overrides.elevenlabs?.voiceSettings, speed: value },
               };
+              overrides.minimax = { ...overrides.minimax, speed: value };
             }
             break;
           case "speakerboost":
@@ -353,6 +354,42 @@ export function parseTtsDirectives(
               break;
             }
             overrides.minimax = { ...overrides.minimax, emotion: rawValue };
+            break;
+          case "vol":
+          case "volume":
+            if (!policy.allowVoiceSettings) {
+              break;
+            }
+            {
+              const value = parseNumberValue(rawValue);
+              if (value == null) {
+                warnings.push("invalid vol value");
+                break;
+              }
+              requireInRange(value, 0, 10, "vol");
+              overrides.minimax = { ...overrides.minimax, vol: value };
+            }
+            break;
+          case "pitch":
+            if (!policy.allowVoiceSettings) {
+              break;
+            }
+            {
+              const value = parseNumberValue(rawValue);
+              if (value == null) {
+                warnings.push("invalid pitch value");
+                break;
+              }
+              requireInRange(value, -12, 12, "pitch");
+              overrides.minimax = { ...overrides.minimax, pitch: value };
+            }
+            break;
+          case "language_boost":
+          case "languageboost":
+            if (!policy.allowVoiceSettings) {
+              break;
+            }
+            overrides.minimax = { ...overrides.minimax, languageBoost: rawValue };
             break;
           default:
             break;

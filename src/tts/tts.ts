@@ -207,7 +207,10 @@ export type TtsDirectiveOverrides = {
     voiceId?: string;
     model?: string;
     speed?: number;
+    vol?: number;
+    pitch?: number;
     emotion?: string;
+    languageBoost?: string;
   };
 };
 
@@ -766,23 +769,20 @@ export async function textToSpeech(params: {
           timeoutMs: config.timeoutMs,
         });
       } else if (provider === "minimax") {
-        const minimaxModelOverride = params.overrides?.minimax?.model;
-        const minimaxVoiceOverride = params.overrides?.minimax?.voiceId;
-        const minimaxSpeedOverride = params.overrides?.minimax?.speed;
-        const minimaxEmotionOverride = params.overrides?.minimax?.emotion;
+        const minimaxOverrides = params.overrides?.minimax;
         audioBuffer = await minimaxTTS({
           text: params.text,
           apiKey,
           baseUrl: config.minimax.baseUrl,
-          model: minimaxModelOverride ?? config.minimax.model,
-          voiceId: minimaxVoiceOverride ?? config.minimax.voiceId,
+          model: minimaxOverrides?.model ?? config.minimax.model,
+          voiceId: minimaxOverrides?.voiceId ?? config.minimax.voiceId,
           audioFormat: "mp3",
           sampleRate: 32000,
-          speed: minimaxSpeedOverride ?? config.minimax.speed,
-          vol: config.minimax.vol,
-          pitch: config.minimax.pitch,
-          emotion: minimaxEmotionOverride ?? config.minimax.emotion,
-          languageBoost: config.minimax.languageBoost,
+          speed: minimaxOverrides?.speed ?? config.minimax.speed,
+          vol: minimaxOverrides?.vol ?? config.minimax.vol,
+          pitch: minimaxOverrides?.pitch ?? config.minimax.pitch,
+          emotion: minimaxOverrides?.emotion ?? config.minimax.emotion,
+          languageBoost: minimaxOverrides?.languageBoost ?? config.minimax.languageBoost,
           timeoutMs: config.timeoutMs,
         });
       } else {

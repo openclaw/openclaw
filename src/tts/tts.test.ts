@@ -348,12 +348,26 @@ describe("tts", () => {
     it("accepts minimax as provider override and parses minimax directives", () => {
       const policy = resolveModelOverridePolicy({ enabled: true, allowProvider: true });
       const input =
-        "Hello [[tts:provider=minimax minimax_voice=English_radiant_girl emotion=happy]] world";
+        "Hello [[tts:provider=minimax minimax_voice=English_radiant_girl emotion=happy speed=1.5 vol=7 pitch=-3 language_boost=en]] world";
       const result = parseTtsDirectives(input, policy);
 
       expect(result.overrides.provider).toBe("minimax");
       expect(result.overrides.minimax?.voiceId).toBe("English_radiant_girl");
       expect(result.overrides.minimax?.emotion).toBe("happy");
+      expect(result.overrides.minimax?.speed).toBe(1.5);
+      expect(result.overrides.minimax?.vol).toBe(7);
+      expect(result.overrides.minimax?.pitch).toBe(-3);
+      expect(result.overrides.minimax?.languageBoost).toBe("en");
+    });
+
+    it("rejects out-of-range minimax vol and pitch directives", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true });
+      const input = "Hello [[tts:vol=15 pitch=20]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.minimax?.vol).toBeUndefined();
+      expect(result.overrides.minimax?.pitch).toBeUndefined();
+      expect(result.warnings.length).toBeGreaterThan(0);
     });
 
     it("parses minimax model via generic model directive", () => {
