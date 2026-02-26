@@ -1,7 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import { listEnabledFeishuAccounts } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
-import type { FeishuConfig } from "./types.js";
 
 // ============ Helpers ============
 
@@ -532,13 +532,19 @@ const UpdateRecordSchema = Type.Object({
 // ============ Tool Registration ============
 
 export function registerFeishuBitableTools(api: OpenClawPluginApi) {
-  const feishuCfg = api.config?.channels?.feishu as FeishuConfig | undefined;
-  if (!feishuCfg?.appId || !feishuCfg?.appSecret) {
-    api.logger.debug?.("feishu_bitable: Feishu credentials not configured, skipping bitable tools");
+  if (!api.config) {
+    api.logger.debug?.("feishu_bitable: No config available, skipping bitable tools");
     return;
   }
 
-  const getClient = () => createFeishuClient(feishuCfg);
+  const accounts = listEnabledFeishuAccounts(api.config);
+  if (accounts.length === 0) {
+    api.logger.debug?.("feishu_bitable: No Feishu accounts configured, skipping bitable tools");
+    return;
+  }
+
+  const firstAccount = accounts[0];
+  const getClient = () => createFeishuClient(firstAccount);
 
   // Tool 0: feishu_bitable_get_meta (helper to parse URLs)
   api.registerTool(
