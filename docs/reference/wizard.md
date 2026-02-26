@@ -20,6 +20,8 @@ For a high-level overview, see [Onboarding Wizard](/start/wizard).
     - If `~/.openclaw/openclaw.json` exists, choose **Keep / Modify / Reset**.
     - Re-running the wizard does **not** wipe anything unless you explicitly choose **Reset**
       (or pass `--reset`).
+    - CLI `--reset` defaults to `config+creds+sessions`; use `--reset-scope full`
+      to also remove workspace.
     - If the config is invalid or contains legacy keys, the wizard stops and asks
       you to run `openclaw doctor` before continuing.
     - Reset uses `trash` (never `rm`) and offers scopes:
