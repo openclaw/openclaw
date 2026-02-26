@@ -104,6 +104,7 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
       threadId: target.threadId,
       payloads: [{ text }],
       agentId: resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg }),
+      sessionKey: params.sessionKey,
     });
   } catch (err) {
     log.warn(`Failed to deliver session maintenance warning: ${String(err)}`);

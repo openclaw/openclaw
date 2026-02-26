@@ -95,6 +95,7 @@ export async function scheduleRestartSentinelWake(_params: { deps: CliDeps }) {
       payloads: [{ text: message }],
       agentId: resolveSessionAgentId({ sessionKey, config: cfg }),
       bestEffort: true,
+      sessionKey,
     });
   } catch (err) {
     enqueueSystemEvent(`${summary}\n${String(err)}`, { sessionKey });
