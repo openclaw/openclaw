@@ -1,6 +1,7 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { describe, expect, test, vi } from "vitest";
 import { registerFeishuDocTools } from "./docx.js";
+import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 
 const createFeishuClientMock = vi.fn((creds: { appId?: string } | undefined) => ({
   __appId: creds?.appId,
@@ -19,54 +20,6 @@ vi.mock("@larksuiteoapi/node-sdk", () => {
   };
 });
 
-type ToolLike = {
-  name: string;
-  execute: (toolCallId: string, params: unknown) => Promise<unknown>;
-};
-
-type ToolContextLike = {
-  agentAccountId?: string;
-};
-
-type ToolFactoryLike = (ctx: ToolContextLike) => ToolLike | ToolLike[] | null | undefined;
-
-function createApi(cfg: OpenClawPluginApi["config"]) {
-  const registered: Array<{
-    tool: ToolLike | ToolFactoryLike;
-    opts?: { name?: string };
-  }> = [];
-
-  const api: Partial<OpenClawPluginApi> = {
-    config: cfg,
-    logger: {
-      info: () => {},
-      warn: () => {},
-      error: () => {},
-      debug: () => {},
-    },
-    registerTool: (tool, opts) => {
-      registered.push({ tool, opts });
-    },
-  };
-
-  const resolveTool = (name: string, ctx: ToolContextLike): ToolLike => {
-    const entry = registered.find((item) => item.opts?.name === name);
-    if (!entry) {
-      throw new Error(`Tool not registered: ${name}`);
-    }
-    if (typeof entry.tool === "function") {
-      const built = entry.tool(ctx);
-      if (!built || Array.isArray(built)) {
-        throw new Error(`Unexpected tool factory output for ${name}`);
-      }
-      return built as ToolLike;
-    }
-    return entry.tool as ToolLike;
-  };
-
-  return { api: api as OpenClawPluginApi, resolveTool };
-}
-
 describe("feishu_doc account selection", () => {
   test("uses agentAccountId context when params omit accountId", async () => {
     const cfg = {
@@ -81,7 +34,7 @@ describe("feishu_doc account selection", () => {
       },
     } as OpenClawPluginApi["config"];
 
-    const { api, resolveTool } = createApi(cfg);
+    const { api, resolveTool } = createToolFactoryHarness(cfg);
     registerFeishuDocTools(api);
 
     const docToolA = resolveTool("feishu_doc", { agentAccountId: "a" });
@@ -108,7 +61,7 @@ describe("feishu_doc account selection", () => {
       },
     } as OpenClawPluginApi["config"];
 
-    const { api, resolveTool } = createApi(cfg);
+    const { api, resolveTool } = createToolFactoryHarness(cfg);
     registerFeishuDocTools(api);
 
     const docTool = resolveTool("feishu_doc", { agentAccountId: "b" });
