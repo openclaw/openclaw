@@ -186,8 +186,14 @@ export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>)
 export function getStatusCode(err: unknown) {
   return (
     (err as { output?: { statusCode?: number } })?.output?.statusCode ??
-    (err as { status?: number })?.status
+    (err as { status?: number })?.status ??
+    (err as { error?: { output?: { statusCode?: number } } })?.error?.output?.statusCode
   );
+}
+
+/** Await any pending credential saves. */
+export function waitForCredsSaveQueue(): Promise<void> {
+  return credsSaveQueue;
 }
 
 function safeStringify(value: unknown, limit = 800): string {
