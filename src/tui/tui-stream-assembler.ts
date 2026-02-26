@@ -97,7 +97,10 @@ export class TuiStreamAssembler {
     state: RunStreamState,
     message: unknown,
     showThinking: boolean,
-    opts?: { protectBoundaryDrops?: boolean },
+    opts?: {
+      protectBoundaryDrops?: boolean;
+      useIncomingNonTextForBoundaryDrops?: boolean;
+    },
   ) {
     const thinkingText = extractThinkingFromMessage(message);
     const contentText = extractContentFromMessage(message);
@@ -108,9 +111,11 @@ export class TuiStreamAssembler {
     }
     if (contentText) {
       const nextContentBlocks = textBlocks.length > 0 ? textBlocks : [contentText];
+      const useIncomingNonTextForBoundaryDrops = opts?.useIncomingNonTextForBoundaryDrops !== false;
       const shouldPreserveBoundaryDroppedText =
         opts?.protectBoundaryDrops === true &&
-        (state.sawNonTextContentBlocks || sawNonTextContentBlocks) &&
+        (state.sawNonTextContentBlocks ||
+          (useIncomingNonTextForBoundaryDrops && sawNonTextContentBlocks)) &&
         isDroppedBoundaryTextBlockSubset({
           streamedTextBlocks: state.contentBlocks,
           finalTextBlocks: nextContentBlocks,
@@ -151,7 +156,10 @@ export class TuiStreamAssembler {
     const streamedDisplayText = state.displayText;
     const streamedTextBlocks = [...state.contentBlocks];
     const streamedSawNonTextContentBlocks = state.sawNonTextContentBlocks;
-    this.updateRunState(state, message, showThinking, { protectBoundaryDrops: true });
+    this.updateRunState(state, message, showThinking, {
+      protectBoundaryDrops: true,
+      useIncomingNonTextForBoundaryDrops: false,
+    });
     const finalComposed = state.displayText;
     const shouldKeepStreamedText =
       streamedSawNonTextContentBlocks &&
