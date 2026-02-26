@@ -176,4 +176,63 @@ describe("secrets apply", () => {
     expect(second.changed).toBe(false);
     expect(second.changedFiles).toEqual([]);
   });
+
+  it("applies provider upserts and deletes from plan", async () => {
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          secrets: {
+            providers: {
+              envmain: { source: "env" },
+              fileold: { source: "file", path: "/tmp/old-secrets.json", mode: "json" },
+            },
+          },
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                api: "openai-completions",
+                models: [{ id: "gpt-5", name: "gpt-5" }],
+              },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const plan: SecretsApplyPlan = {
+      version: 1,
+      protocolVersion: 1,
+      generatedAt: new Date().toISOString(),
+      generatedBy: "manual",
+      providerUpserts: {
+        filemain: {
+          source: "file",
+          path: "/tmp/new-secrets.json",
+          mode: "json",
+        },
+      },
+      providerDeletes: ["fileold"],
+      targets: [],
+    };
+
+    const result = await runSecretsApply({ plan, env, write: true });
+    expect(result.changed).toBe(true);
+
+    const nextConfig = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+      secrets?: {
+        providers?: Record<string, unknown>;
+      };
+    };
+    expect(nextConfig.secrets?.providers?.fileold).toBeUndefined();
+    expect(nextConfig.secrets?.providers?.filemain).toEqual({
+      source: "file",
+      path: "/tmp/new-secrets.json",
+      mode: "json",
+    });
+  });
 });
