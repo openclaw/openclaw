@@ -1,78 +1,92 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# CyborgClaw Strike Echo Smoke Test (deterministic)
-# Fixes two hazards:
-# 1) /reset parsing ambiguity: /reset must be its own message
-# 2) session cross-talk: never send concurrent A/B turns into the same session
-#
-# Approach: 2-phase (reset -> burst) + 10 unique sessions per run.
+# CyborgClaw Strike Echo Smoke Test (deterministic + provider pinned)
+# - /reset must be its own message
+# - one request per session (no A/B cross-talk)
+# - FORCE agent=main
+# - REQUIRE provider/model receipt: openai-codex / gpt-5.3-codex
 
 TMP_PREFIX="/tmp/cc-echo"
 ERR_PATTERNS='rate limit|FailoverError|INVALID_REQUEST|No session found|cooldown'
 
-# Unique-ish run id: HHMMSS + PID (no external deps)
 RUN_ID="$(date +%H%M%S)-$$"
 
-# Build 10 session ids that won't collide with other runs
-# (keeps repeated executions “stateless enough”)
 SESSIONS=()
 for i in $(seq 1 10); do
   SESSIONS+=("9${RUN_ID//-/}$(printf '%02d' "$i")")
 done
 
 cleanup() {
-  rm -f "${TMP_PREFIX}-"*.out 2>/dev/null || true
+  rm -f "${TMP_PREFIX}-"*.out "${TMP_PREFIX}-"*.json 2>/dev/null || true
 }
 trap cleanup EXIT
 
 echo "[strike_echo] run_id=$RUN_ID"
 echo "[strike_echo] phase 1: resetting sessions..."
 
-# Phase 1: reset all sessions (concurrently)
 for s in "${SESSIONS[@]}"; do
-  (openclaw agent --session-id "$s" --message "/reset" \
+  (openclaw agent --agent main --session-id "$s" --message "/reset" \
     < /dev/null > "${TMP_PREFIX}-${s}-reset.out" 2>&1) &
 done
 wait
 
 echo "[strike_echo] phase 2: starting burst..."
 
-# Phase 2: one echo per session (concurrently)
 for s in "${SESSIONS[@]}"; do
-  (openclaw agent --session-id "$s" --message "Reply with EXACTLY this text and nothing else: ECHO-$s" \
-    < /dev/null > "${TMP_PREFIX}-${s}.out" 2>&1) &
+  (openclaw agent --agent main --session-id "$s" \
+      --message "Reply with EXACTLY this text and nothing else: ECHO-$s" \
+      --json < /dev/null > "${TMP_PREFIX}-${s}.json" 2>&1) &
 done
 wait
 
 echo "[strike_echo] burst complete. verifying..."
 
-# 1) Confirm we got 10 echo outputs
-file_count="$(ls -1 ${TMP_PREFIX}-*.out 2>/dev/null | grep -v -- '-reset\.out$' | wc -l | tr -d ' ')"
+# 1) Confirm we got 10 json output files
+file_count="$(ls -1 ${TMP_PREFIX}-*.json 2>/dev/null | wc -l | tr -d ' ')"
 if [[ "$file_count" != "10" ]]; then
-  echo "[strike_echo][FAIL] expected 10 echo output files, got $file_count"
-  ls -1 ${TMP_PREFIX}-*.out 2>/dev/null || true
+  echo "[strike_echo][FAIL] expected 10 json output files, got $file_count"
+  ls -1 ${TMP_PREFIX}-*.json 2>/dev/null || true
   exit 1
 fi
 
-# 2) Confirm 10/10 echoed markers exist (one per file)
-match_count="$(rg -n "ECHO-9[0-9]{7,}" ${TMP_PREFIX}-*.out | grep -v -- '-reset\.out:' | wc -l | tr -d ' ')"
-if [[ "$match_count" != "10" ]]; then
-  echo "[strike_echo][FAIL] expected 10 echo matches, got $match_count"
-  echo "---- file previews ----"
-  for f in ${TMP_PREFIX}-*.out; do
-    [[ "$f" == *-reset.out ]] && continue
-    echo "===== $f ====="
-    sed -n '1,8p' "$f" || true
-  done
+# 2) Confirm all 10 runs are ok, echo text matches, and provider/model pinned
+bad=0
+for s in "${SESSIONS[@]}"; do
+  f="${TMP_PREFIX}-${s}.json"
+
+  status="$(jq -r '.status // empty' "$f" 2>/dev/null || true)"
+  text="$(jq -r '.result.payloads[0].text // empty' "$f" 2>/dev/null || true)"
+  provider="$(jq -r '.result.meta.agentMeta.provider // empty' "$f" 2>/dev/null || true)"
+  model="$(jq -r '.result.meta.agentMeta.model // empty' "$f" 2>/dev/null || true)"
+
+  if [[ "$status" != "ok" ]]; then
+    echo "[strike_echo][FAIL] $s status=$status"
+    bad=1
+    continue
+  fi
+
+  if [[ "$text" != "ECHO-$s" ]]; then
+    echo "[strike_echo][FAIL] $s echo mismatch: got='$text' expected='ECHO-$s'"
+    bad=1
+  fi
+
+  if [[ "$provider" != "openai-codex" || "$model" != "gpt-5.3-codex" ]]; then
+    echo "[strike_echo][FAIL] $s provider/model mismatch: provider='$provider' model='$model' (expected openai-codex / gpt-5.3-codex)"
+    bad=1
+  fi
+done
+
+if [[ "$bad" != "0" ]]; then
+  echo "[strike_echo][FAIL] provider/model pin or echo verification failed."
   exit 1
 fi
 
-# 3) Confirm no known error patterns appear in echo outputs
-if rg -n -i "$ERR_PATTERNS" ${TMP_PREFIX}-*.out >/dev/null; then
-  echo "[strike_echo][FAIL] detected error patterns in outputs:"
-  rg -n -i "$ERR_PATTERNS" ${TMP_PREFIX}-*.out || true
+# 3) Confirm no known error patterns appear anywhere in reset outputs or JSON
+if rg -n -i "$ERR_PATTERNS" ${TMP_PREFIX}-* >/dev/null; then
+  echo "[strike_echo][FAIL] detected error patterns:"
+  rg -n -i "$ERR_PATTERNS" ${TMP_PREFIX}-* || true
   exit 1
 fi
 
-echo "[strike_echo][PASS] 10/10 echoes returned; no error patterns detected."
+echo "[strike_echo][PASS] 10/10 echoes returned; provider/model pinned to openai-codex/gpt-5.3-codex; no error patterns detected."
