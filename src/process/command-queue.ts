@@ -12,6 +12,20 @@ export class CommandLaneClearedError extends Error {
   }
 }
 
+/**
+ * Dedicated error type thrown when a new command is rejected because the
+ * gateway is currently draining for restart.
+ */
+export class GatewayDrainingError extends Error {
+  constructor() {
+    super("Gateway is draining for restart; new tasks are not accepted");
+    this.name = "GatewayDrainingError";
+  }
+}
+
+// Set while gateway is draining for restart; new enqueues are rejected.
+let gatewayDraining = false;
+
 // Minimal in-process queue to serialize command executions.
 // Default lane ("main") preserves the existing behavior. Additional lanes allow
 // low-risk parallelism (e.g. cron jobs) without interleaving stdin / logs for
@@ -66,55 +80,75 @@ function completeTask(state: LaneState, taskId: number, taskGeneration: number):
 function drainLane(lane: string) {
   const state = getLaneState(lane);
   if (state.draining) {
+    if (state.activeTaskIds.size === 0 && state.queue.length > 0) {
+      diag.warn(
+        `drainLane blocked: lane=${lane} draining=true active=0 queue=${state.queue.length}`,
+      );
+    }
     return;
   }
   state.draining = true;
 
   const pump = () => {
-    while (state.activeTaskIds.size < state.maxConcurrent && state.queue.length > 0) {
-      const entry = state.queue.shift() as QueueEntry;
-      const waitedMs = Date.now() - entry.enqueuedAt;
-      if (waitedMs >= entry.warnAfterMs) {
-        entry.onWait?.(waitedMs, state.queue.length);
-        diag.warn(
-          `lane wait exceeded: lane=${lane} waitedMs=${waitedMs} queueAhead=${state.queue.length}`,
-        );
-      }
-      logLaneDequeue(lane, waitedMs, state.queue.length);
-      const taskId = nextTaskId++;
-      const taskGeneration = state.generation;
-      state.activeTaskIds.add(taskId);
-      void (async () => {
-        const startTime = Date.now();
-        try {
-          const result = await entry.task();
-          const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
-          if (completedCurrentGeneration) {
-            diag.debug(
-              `lane task done: lane=${lane} durationMs=${Date.now() - startTime} active=${state.activeTaskIds.size} queued=${state.queue.length}`,
-            );
-            pump();
+    try {
+      while (state.activeTaskIds.size < state.maxConcurrent && state.queue.length > 0) {
+        const entry = state.queue.shift() as QueueEntry;
+        const waitedMs = Date.now() - entry.enqueuedAt;
+        if (waitedMs >= entry.warnAfterMs) {
+          try {
+            entry.onWait?.(waitedMs, state.queue.length);
+          } catch (err) {
+            diag.error(`lane onWait callback failed: lane=${lane} error="${String(err)}"`);
           }
-          entry.resolve(result);
-        } catch (err) {
-          const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
-          const isProbeLane = lane.startsWith("auth-probe:") || lane.startsWith("session:probe-");
-          if (!isProbeLane) {
-            diag.error(
-              `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${String(err)}"`,
-            );
-          }
-          if (completedCurrentGeneration) {
-            pump();
-          }
-          entry.reject(err);
+          diag.warn(
+            `lane wait exceeded: lane=${lane} waitedMs=${waitedMs} queueAhead=${state.queue.length}`,
+          );
         }
-      })();
+        logLaneDequeue(lane, waitedMs, state.queue.length);
+        const taskId = nextTaskId++;
+        const taskGeneration = state.generation;
+        state.activeTaskIds.add(taskId);
+        void (async () => {
+          const startTime = Date.now();
+          try {
+            const result = await entry.task();
+            const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
+            if (completedCurrentGeneration) {
+              diag.debug(
+                `lane task done: lane=${lane} durationMs=${Date.now() - startTime} active=${state.activeTaskIds.size} queued=${state.queue.length}`,
+              );
+              pump();
+            }
+            entry.resolve(result);
+          } catch (err) {
+            const completedCurrentGeneration = completeTask(state, taskId, taskGeneration);
+            const isProbeLane = lane.startsWith("auth-probe:") || lane.startsWith("session:probe-");
+            if (!isProbeLane) {
+              diag.error(
+                `lane task error: lane=${lane} durationMs=${Date.now() - startTime} error="${String(err)}"`,
+              );
+            }
+            if (completedCurrentGeneration) {
+              pump();
+            }
+            entry.reject(err);
+          }
+        })();
+      }
+    } finally {
+      state.draining = false;
     }
-    state.draining = false;
   };
 
   pump();
+}
+
+/**
+ * Mark gateway as draining for restart so new enqueues fail fast with
+ * `GatewayDrainingError` instead of being silently killed on shutdown.
+ */
+export function markGatewayDraining(): void {
+  gatewayDraining = true;
 }
 
 export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {
@@ -132,6 +166,9 @@ export function enqueueCommandInLane<T>(
     onWait?: (waitMs: number, queuedAhead: number) => void;
   },
 ): Promise<T> {
+  if (gatewayDraining) {
+    return Promise.reject(new GatewayDrainingError());
+  }
   const cleaned = lane.trim() || CommandLane.Main;
   const warnAfterMs = opts?.warnAfterMs ?? 2_000;
   const state = getLaneState(cleaned);
@@ -205,6 +242,7 @@ export function clearCommandLane(lane: string = CommandLane.Main) {
  * `enqueueCommandInLane()` call (which may never come).
  */
 export function resetAllLanes(): void {
+  gatewayDraining = false;
   const lanesToDrain: string[] = [];
   for (const state of lanes.values()) {
     state.generation += 1;

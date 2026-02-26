@@ -113,6 +113,80 @@ export function getAbortMemory(key: string): boolean | undefined {
   return ABORT_MEMORY.get(normalized);
 }
 
+export type AbortCutoff = {
+  messageSid?: string;
+  timestamp?: number;
+};
+
+export function resolveAbortCutoffFromContext(ctx: MsgContext): AbortCutoff | undefined {
+  const messageSid =
+    (typeof ctx.MessageSidFull === "string" && ctx.MessageSidFull.trim()) ||
+    (typeof ctx.MessageSid === "string" && ctx.MessageSid.trim()) ||
+    undefined;
+  const timestamp =
+    typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp) ? ctx.Timestamp : undefined;
+  if (!messageSid && timestamp === undefined) {
+    return undefined;
+  }
+  return { messageSid, timestamp };
+}
+
+function toNumericMessageSid(value: string | undefined): bigint | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed || !/^\d+$/.test(trimmed)) {
+    return undefined;
+  }
+  try {
+    return BigInt(trimmed);
+  } catch {
+    return undefined;
+  }
+}
+
+export function shouldSkipMessageByAbortCutoff(params: {
+  cutoffMessageSid?: string;
+  cutoffTimestamp?: number;
+  messageSid?: string;
+  timestamp?: number;
+}): boolean {
+  const cutoffSid = params.cutoffMessageSid?.trim();
+  const currentSid = params.messageSid?.trim();
+  if (cutoffSid && currentSid) {
+    const cutoffNumeric = toNumericMessageSid(cutoffSid);
+    const currentNumeric = toNumericMessageSid(currentSid);
+    if (cutoffNumeric !== undefined && currentNumeric !== undefined) {
+      return currentNumeric <= cutoffNumeric;
+    }
+    if (currentSid === cutoffSid) {
+      return true;
+    }
+  }
+  if (
+    typeof params.cutoffTimestamp === "number" &&
+    Number.isFinite(params.cutoffTimestamp) &&
+    typeof params.timestamp === "number" &&
+    Number.isFinite(params.timestamp)
+  ) {
+    return params.timestamp <= params.cutoffTimestamp;
+  }
+  return false;
+}
+
+function shouldPersistAbortCutoff(params: {
+  commandSessionKey?: string;
+  targetSessionKey?: string;
+}): boolean {
+  const commandSessionKey = params.commandSessionKey?.trim();
+  const targetSessionKey = params.targetSessionKey?.trim();
+  if (!commandSessionKey || !targetSessionKey) {
+    return true;
+  }
+  // Native targeted /stop can run from a slash/session-control key while the
+  // actual target session uses different message id/timestamp spaces.
+  // Persist cutoff only when command source and target are the same session.
+  return commandSessionKey === targetSessionKey;
+}
+
 function pruneAbortMemory(): void {
   if (ABORT_MEMORY.size <= ABORT_MEMORY_MAX) {
     return;
@@ -302,8 +376,16 @@ export async function tryFastAbortFromMessage(params: {
         `abort: cleared followups=${cleared.followupCleared} lane=${cleared.laneCleared} keys=${cleared.keys.join(",")}`,
       );
     }
+    const abortCutoff = shouldPersistAbortCutoff({
+      commandSessionKey: ctx.SessionKey,
+      targetSessionKey: key ?? targetKey,
+    })
+      ? resolveAbortCutoffFromContext(ctx)
+      : undefined;
     if (entry && key) {
       entry.abortedLastRun = true;
+      entry.abortCutoffMessageSid = abortCutoff?.messageSid;
+      entry.abortCutoffTimestamp = abortCutoff?.timestamp;
       entry.updatedAt = Date.now();
       store[key] = entry;
       await updateSessionStore(storePath, (nextStore) => {
@@ -312,6 +394,8 @@ export async function tryFastAbortFromMessage(params: {
           return;
         }
         nextEntry.abortedLastRun = true;
+        nextEntry.abortCutoffMessageSid = abortCutoff?.messageSid;
+        nextEntry.abortCutoffTimestamp = abortCutoff?.timestamp;
         nextEntry.updatedAt = Date.now();
         nextStore[key] = nextEntry;
       });
