@@ -43,6 +43,7 @@ export function createExecApprovalHandlers(
       const p = params as {
         id?: string;
         command: string;
+        commandArgv?: string[] | null;
         cwd?: string;
         nodeId?: string;
         host?: string;
@@ -60,6 +61,9 @@ export function createExecApprovalHandlers(
       const explicitId = typeof p.id === "string" && p.id.trim().length > 0 ? p.id.trim() : null;
       const host = typeof p.host === "string" ? p.host.trim() : "";
       const nodeId = typeof p.nodeId === "string" ? p.nodeId.trim() : "";
+      const commandArgv = Array.isArray(p.commandArgv)
+        ? p.commandArgv.map((entry) => String(entry))
+        : null;
       if (host === "node" && !nodeId) {
         respond(
           false,
@@ -78,6 +82,7 @@ export function createExecApprovalHandlers(
       }
       const request = {
         command: p.command,
+        commandArgv,
         cwd: p.cwd ?? null,
         nodeId: host === "node" ? nodeId : null,
         host: host || null,
