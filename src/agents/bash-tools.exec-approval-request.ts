@@ -8,6 +8,7 @@ import { callGatewayTool } from "./tools/gateway.js";
 export type RequestExecApprovalDecisionParams = {
   id: string;
   command: string;
+  commandArgv?: string[];
   cwd: string;
   nodeId?: string;
   host: "gateway" | "node";
@@ -62,6 +63,7 @@ export async function registerExecApprovalRequest(
     {
       id: params.id,
       command: params.command,
+      commandArgv: params.commandArgv,
       cwd: params.cwd,
       nodeId: params.nodeId,
       host: params.host,
@@ -116,6 +118,7 @@ export async function requestExecApprovalDecision(
 export async function requestExecApprovalDecisionForHost(params: {
   approvalId: string;
   command: string;
+  commandArgv?: string[];
   workdir: string;
   host: "gateway" | "node";
   nodeId?: string;
@@ -128,6 +131,7 @@ export async function requestExecApprovalDecisionForHost(params: {
   return await requestExecApprovalDecision({
     id: params.approvalId,
     command: params.command,
+    commandArgv: params.commandArgv,
     cwd: params.workdir,
     nodeId: params.nodeId,
     host: params.host,
@@ -142,6 +146,7 @@ export async function requestExecApprovalDecisionForHost(params: {
 export async function registerExecApprovalRequestForHost(params: {
   approvalId: string;
   command: string;
+  commandArgv?: string[];
   workdir: string;
   host: "gateway" | "node";
   nodeId?: string;
@@ -154,6 +159,7 @@ export async function registerExecApprovalRequestForHost(params: {
   return await registerExecApprovalRequest({
     id: params.approvalId,
     command: params.command,
+    commandArgv: params.commandArgv,
     cwd: params.workdir,
     nodeId: params.nodeId,
     host: params.host,

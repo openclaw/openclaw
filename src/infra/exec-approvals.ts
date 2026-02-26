@@ -15,6 +15,7 @@ export type ExecApprovalRequest = {
   id: string;
   request: {
     command: string;
+    commandArgv?: string[] | null;
     cwd?: string | null;
     nodeId?: string | null;
     host?: string | null;
