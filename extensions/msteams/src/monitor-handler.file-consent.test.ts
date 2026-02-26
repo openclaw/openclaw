@@ -227,9 +227,6 @@ describe("msteams file consent invoke authz", () => {
       }),
     );
 
-    // Wait a bit for async handler to complete
-    await new Promise((resolve) => setTimeout(resolve, 100));
-
     expect(fileConsentMockState.uploadToConsentUrl).not.toHaveBeenCalled();
     expect(getPendingUpload(uploadId)).toBeDefined();
     expect(sendActivity).toHaveBeenCalledTimes(1);
