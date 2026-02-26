@@ -353,9 +353,7 @@ export function parseTtsDirectives(
             if (!policy.allowVoiceSettings) {
               break;
             }
-            if (
-              !(MINIMAX_TTS_EMOTIONS as readonly string[]).includes(rawValue.toLowerCase())
-            ) {
+            if (!(MINIMAX_TTS_EMOTIONS as readonly string[]).includes(rawValue.toLowerCase())) {
               warnings.push(`invalid MiniMax emotion "${rawValue}"`);
               break;
             }
