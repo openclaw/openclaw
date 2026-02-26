@@ -257,6 +257,28 @@ describe("resolveTypingMode", () => {
         },
         expected: "never",
       },
+      {
+        name: "suppressTyping forces never",
+        input: {
+          configured: "instant" as const,
+          isGroupChat: false,
+          wasMentioned: false,
+          isHeartbeat: false,
+          suppressTyping: true,
+        },
+        expected: "never",
+      },
+      {
+        name: "typingPolicy system_event forces never",
+        input: {
+          configured: "instant" as const,
+          isGroupChat: false,
+          wasMentioned: false,
+          isHeartbeat: false,
+          typingPolicy: "system_event" as const,
+        },
+        expected: "never",
+      },
     ] as const;
 
     for (const testCase of cases) {
