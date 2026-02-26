@@ -13,6 +13,7 @@ import { isRecord } from "./shared.js";
 type ConfigureCandidate = {
   type: "models.providers.apiKey" | "skills.entries.apiKey" | "channels.googlechat.serviceAccount";
   path: string;
+  pathSegments: string[];
   label: string;
   providerId?: string;
   accountId?: string;
@@ -134,6 +135,7 @@ function buildCandidates(config: OpenClawConfig): ConfigureCandidate[] {
       out.push({
         type: "models.providers.apiKey",
         path: `models.providers.${providerId}.apiKey`,
+        pathSegments: ["models", "providers", providerId, "apiKey"],
         label: `Provider API key: ${providerId}`,
         providerId,
       });
@@ -149,6 +151,7 @@ function buildCandidates(config: OpenClawConfig): ConfigureCandidate[] {
       out.push({
         type: "skills.entries.apiKey",
         path: `skills.entries.${entryId}.apiKey`,
+        pathSegments: ["skills", "entries", entryId, "apiKey"],
         label: `Skill API key: ${entryId}`,
       });
     }
@@ -159,6 +162,7 @@ function buildCandidates(config: OpenClawConfig): ConfigureCandidate[] {
     out.push({
       type: "channels.googlechat.serviceAccount",
       path: "channels.googlechat.serviceAccount",
+      pathSegments: ["channels", "googlechat", "serviceAccount"],
       label: "Google Chat serviceAccount (default)",
     });
     const accounts = googlechat.accounts;
@@ -170,6 +174,7 @@ function buildCandidates(config: OpenClawConfig): ConfigureCandidate[] {
         out.push({
           type: "channels.googlechat.serviceAccount",
           path: `channels.googlechat.accounts.${accountId}.serviceAccount`,
+          pathSegments: ["channels", "googlechat", "accounts", accountId, "serviceAccount"],
           label: `Google Chat serviceAccount (${accountId})`,
           accountId,
         });
@@ -845,6 +850,7 @@ export async function runSecretsConfigureInteractive(
     targets: [...selectedByPath.values()].map((entry) => ({
       type: entry.type,
       path: entry.path,
+      pathSegments: [...entry.pathSegments],
       ref: entry.ref,
       ...(entry.providerId ? { providerId: entry.providerId } : {}),
       ...(entry.accountId ? { accountId: entry.accountId } : {}),
