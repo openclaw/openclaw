@@ -125,7 +125,7 @@ export function createWebOnMessageHandler(params: {
       });
 
       const gating = applyGroupGating({
-        cfg: params.cfg,
+        cfg: loadConfig(),
         msg,
         conversationId,
         groupHistoryKey,
