@@ -320,6 +320,49 @@ describe("secrets apply", () => {
     expect(rawConfig).not.toContain("sk-skill-plaintext");
   });
 
+  it("rejects plan targets that do not match allowed secret-bearing paths", async () => {
+    const plan: SecretsApplyPlan = {
+      version: 1,
+      protocolVersion: 1,
+      generatedAt: new Date().toISOString(),
+      generatedBy: "manual",
+      targets: [
+        {
+          type: "models.providers.apiKey",
+          path: "models.providers.openai.baseUrl",
+          pathSegments: ["models", "providers", "openai", "baseUrl"],
+          providerId: "openai",
+          ref: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        },
+      ],
+    };
+
+    await expect(runSecretsApply({ plan, env, write: false })).rejects.toThrow(
+      "Invalid plan target path",
+    );
+  });
+
+  it("rejects plan targets with forbidden prototype-like path segments", async () => {
+    const plan: SecretsApplyPlan = {
+      version: 1,
+      protocolVersion: 1,
+      generatedAt: new Date().toISOString(),
+      generatedBy: "manual",
+      targets: [
+        {
+          type: "skills.entries.apiKey",
+          path: "skills.entries.__proto__.apiKey",
+          pathSegments: ["skills", "entries", "__proto__", "apiKey"],
+          ref: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        },
+      ],
+    };
+
+    await expect(runSecretsApply({ plan, env, write: false })).rejects.toThrow(
+      "Invalid plan target path",
+    );
+  });
+
   it("applies provider upserts and deletes from plan", async () => {
     await fs.writeFile(
       configPath,
