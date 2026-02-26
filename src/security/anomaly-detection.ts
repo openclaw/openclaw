@@ -521,6 +521,10 @@ let defaultCredentialDetector: CredentialAccessDetector | undefined;
 export function getAnomalyDetector(config?: AnomalyDetectionConfig): AnomalyDetector {
   if (!defaultDetector) {
     defaultDetector = new AnomalyDetector(config);
+  } else if (config !== undefined) {
+    log.warn(
+      "getAnomalyDetector() called again with config — singleton already initialized; config ignored",
+    );
   }
   return defaultDetector;
 }

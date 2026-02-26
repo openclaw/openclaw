@@ -397,6 +397,10 @@ let defaultRunner: MonitorRunner | undefined;
 export function getMonitorRunner(config?: MonitorRunnerConfig): MonitorRunner {
   if (!defaultRunner) {
     defaultRunner = new MonitorRunner(config);
+  } else if (config !== undefined) {
+    log.warn(
+      "getMonitorRunner() called again with config — singleton already initialized; config ignored",
+    );
   }
   return defaultRunner;
 }

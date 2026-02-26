@@ -517,6 +517,10 @@ let defaultMonitor: SessionRiskMonitor | undefined;
 export function getSessionRiskMonitor(config?: SessionMonitoringConfig): SessionRiskMonitor {
   if (!defaultMonitor) {
     defaultMonitor = new SessionRiskMonitor(config);
+  } else if (config !== undefined) {
+    log.warn(
+      "getSessionRiskMonitor() called again with config — singleton already initialized; config ignored",
+    );
   }
   return defaultMonitor;
 }

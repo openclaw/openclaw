@@ -200,7 +200,7 @@ export class SecurityEventsManager {
   private alertingConfig: Required<AlertingConfig>;
   private ringBuffer: RingBuffer<SecurityEvent>;
   private dedupeMap = new Map<string, { event: SecurityEvent; expiry: number }>();
-  private emitter = new EventEmitter();
+  private emitter = new EventEmitter().setMaxListeners(100);
   private initialized = false;
 
   constructor(config?: SecurityEventsConfig, alerting?: AlertingConfig) {
@@ -658,6 +658,12 @@ export class SecurityEventsManager {
       return;
     }
 
+    // M-05: Enforce HTTPS to prevent Bearer token from being sent in plaintext
+    if (!url.startsWith("https://")) {
+      log.warn("webhook URL must use HTTPS to protect the Bearer token; alert not sent", { url });
+      return;
+    }
+
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
     };
@@ -706,6 +712,10 @@ export function getSecurityEventsManager(
 ): SecurityEventsManager {
   if (!defaultManager) {
     defaultManager = new SecurityEventsManager(config, alerting);
+  } else if (config !== undefined || alerting !== undefined) {
+    log.warn(
+      "getSecurityEventsManager() called again with config — singleton already initialized; config ignored",
+    );
   }
   return defaultManager;
 }

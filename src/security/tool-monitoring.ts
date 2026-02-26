@@ -562,6 +562,10 @@ let defaultMonitor: ToolMonitor | undefined;
 export function getToolMonitor(config?: ToolMonitoringConfig): ToolMonitor {
   if (!defaultMonitor) {
     defaultMonitor = new ToolMonitor(config);
+  } else if (config !== undefined) {
+    log.warn(
+      "getToolMonitor() called again with config — singleton already initialized; config ignored",
+    );
   }
   return defaultMonitor;
 }
