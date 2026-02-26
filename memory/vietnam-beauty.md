@@ -812,11 +812,11 @@ python src/workers/video_worker.py --api-url https://maibeauty-api-production.up
 
 <!-- AUTO:subrepo-commits:START -->
 
+- `dc4b5fb fix(web-admin): keep login redirects under GitHub Pages base path (02-26)`
 - `52b3aca feat: add automation preview API and harden UCP discovery/feed (02-26)`
 - `41df989 chore: add deploy.json for MAI Universe pipeline (02-21)`
 - `511a8fe chore: commit pending changes and update gitignore (02-20)`
 - `fe4a008 docs: A014 완판원정대 x MAIBEAUTY 적합성 종합 분석 (02-19)`
-- `274f6c2 feat: add alembic migrations 012-014 (subscriptions, users multibrand, orders extension) (02-12)`
 <!-- AUTO:subrepo-commits:END -->
 
 ---
