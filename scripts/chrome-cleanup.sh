@@ -275,7 +275,7 @@ do_scan() {
     local remaining="${#surviving[@]}"
     if [[ "$remaining" -gt "$MAX_CHROME_INSTANCES" ]]; then
         # Sort by elapsed time (oldest first), prefer non-CDP
-        IFS=$'\n' read -r -d '' -a sorted < <(printf '%s\n' "${surviving[@]}" | sort -t: -k2 -n -r)
+        IFS=$'\n' read -r -d '' -a sorted < <(printf '%s\n' "${surviving[@]}" | sort -t: -k2 -n)
         
         local to_kill=$(( remaining - MAX_CHROME_INSTANCES ))
         for entry in "${sorted[@]:$MAX_CHROME_INSTANCES}"; do
