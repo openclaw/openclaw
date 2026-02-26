@@ -99,6 +99,10 @@ export function createTypingController(params: {
     if (sealed) {
       return;
     }
+    // Late callbacks after a run completed should never restart typing.
+    if (runComplete) {
+      return;
+    }
     await onReplyStart?.();
   };
 
