@@ -1,9 +1,8 @@
-import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, URL } from "node:url";
-import { assertNoHardlinkedFinalPath } from "../infra/hardlink-guards.js";
-import { isNotFoundPathError, isPathInside } from "../infra/path-guards.js";
+import { assertNoPathAliasEscape, type PathAliasPolicy } from "../infra/path-alias-guards.js";
+import { isPathInside } from "../infra/path-guards.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
@@ -62,18 +61,19 @@ export async function assertSandboxPath(params: {
   filePath: string;
   cwd: string;
   root: string;
-  allowFinalSymlink?: boolean;
-  allowFinalHardlink?: boolean;
+  allowFinalSymlinkForUnlink?: boolean;
+  allowFinalHardlinkForUnlink?: boolean;
 }) {
   const resolved = resolveSandboxPath(params);
-  await assertNoSymlinkEscape(resolved.relative, path.resolve(params.root), {
-    allowFinalSymlink: params.allowFinalSymlink,
-  });
-  await assertNoHardlinkedFinalPath({
-    filePath: resolved.resolved,
-    root: path.resolve(params.root),
+  const policy: PathAliasPolicy = {
+    allowFinalSymlinkForUnlink: params.allowFinalSymlinkForUnlink,
+    allowFinalHardlinkForUnlink: params.allowFinalHardlinkForUnlink,
+  };
+  await assertNoPathAliasEscape({
+    absolutePath: resolved.resolved,
+    rootPath: path.resolve(params.root),
     boundaryLabel: "sandbox root",
-    allowFinalHardlink: params.allowFinalHardlink,
+    policy,
   });
   return resolved;
 }
@@ -202,60 +202,11 @@ async function assertNoTmpAliasEscape(params: {
   filePath: string;
   tmpRoot: string;
 }): Promise<void> {
-  await assertNoSymlinkEscape(path.relative(params.tmpRoot, params.filePath), params.tmpRoot);
-  await assertNoHardlinkedFinalPath({
-    filePath: params.filePath,
-    root: params.tmpRoot,
+  await assertNoPathAliasEscape({
+    absolutePath: params.filePath,
+    rootPath: params.tmpRoot,
     boundaryLabel: "tmp root",
   });
-}
-
-async function assertNoSymlinkEscape(
-  relative: string,
-  root: string,
-  options?: { allowFinalSymlink?: boolean },
-) {
-  if (!relative) {
-    return;
-  }
-  const rootReal = await tryRealpath(root);
-  const parts = relative.split(path.sep).filter(Boolean);
-  let current = root;
-  for (let idx = 0; idx < parts.length; idx += 1) {
-    const part = parts[idx];
-    const isLast = idx === parts.length - 1;
-    current = path.join(current, part);
-    try {
-      const stat = await fs.lstat(current);
-      if (stat.isSymbolicLink()) {
-        // Unlinking a symlink itself is safe even if it points outside the root. What we
-        // must prevent is traversing through a symlink to reach targets outside root.
-        if (options?.allowFinalSymlink && isLast) {
-          return;
-        }
-        const target = await tryRealpath(current);
-        if (!isPathInside(rootReal, target)) {
-          throw new Error(
-            `Symlink escapes sandbox root (${shortPath(rootReal)}): ${shortPath(current)}`,
-          );
-        }
-        current = target;
-      }
-    } catch (err) {
-      if (isNotFoundPathError(err)) {
-        return;
-      }
-      throw err;
-    }
-  }
-}
-
-async function tryRealpath(value: string): Promise<string> {
-  try {
-    return await fs.realpath(value);
-  } catch {
-    return path.resolve(value);
-  }
 }
 
 function shortPath(value: string) {
