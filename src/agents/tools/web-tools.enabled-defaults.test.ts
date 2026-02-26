@@ -1,3 +1,4 @@
+import { EnvHttpProxyAgent } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { createWebFetchTool, createWebSearchTool } from "./web-tools.js";
@@ -142,6 +143,19 @@ describe("web_search country and language parameters", () => {
 
     expect(mockFetch).not.toHaveBeenCalled();
     expect(result?.details).toMatchObject({ error: "invalid_freshness" });
+  });
+
+  it("uses proxy-aware dispatcher when HTTP_PROXY is configured", async () => {
+    vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
+    const mockFetch = installMockFetch({ web: { results: [] } });
+    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+
+    await tool?.execute?.("call-1", { query: "proxy-test" });
+
+    const requestInit = mockFetch.mock.calls[0]?.[1] as
+      | (RequestInit & { dispatcher?: unknown })
+      | undefined;
+    expect(requestInit?.dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
   });
 });
 

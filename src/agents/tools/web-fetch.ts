@@ -527,6 +527,7 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
       url: params.url,
       maxRedirects: params.maxRedirects,
       timeoutMs: params.timeoutSeconds * 1000,
+      proxy: "env",
       init: {
         headers: {
           Accept: "text/markdown, text/html;q=0.9, */*;q=0.1",
