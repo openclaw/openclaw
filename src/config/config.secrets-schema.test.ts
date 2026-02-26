@@ -35,6 +35,22 @@ describe("config secret refs schema", () => {
     expect(result.ok).toBe(true);
   });
 
+  it("accepts openai-codex-responses as a model api value", () => {
+    const result = validateConfigObjectRaw({
+      models: {
+        providers: {
+          "openai-codex": {
+            baseUrl: "https://chatgpt.com/backend-api",
+            api: "openai-codex-responses",
+            models: [{ id: "gpt-5.3-codex", name: "gpt-5.3-codex" }],
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   it("accepts googlechat serviceAccount refs", () => {
     const result = validateConfigObjectRaw({
       channels: {
