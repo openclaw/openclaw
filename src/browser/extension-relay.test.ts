@@ -208,6 +208,18 @@ describe("chrome extension relay server", () => {
     expect(err.message).toContain("401");
   });
 
+  it("returns 400 for malformed percent-encoding in target action routes", async () => {
+    const port = await getFreePort();
+    cdpUrl = `http://127.0.0.1:${port}`;
+    await ensureChromeExtensionRelayServer({ cdpUrl });
+
+    const res = await fetch(`${cdpUrl}/json/activate/%E0%A4%A`, {
+      headers: relayAuthHeaders(cdpUrl),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("invalid targetId encoding");
+  });
+
   it("deduplicates concurrent relay starts for the same requested port", async () => {
     const port = await getFreePort();
     cdpUrl = `http://127.0.0.1:${port}`;
