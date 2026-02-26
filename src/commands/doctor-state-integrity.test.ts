@@ -171,4 +171,28 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(text).not.toContain("--active");
     expect(text).not.toContain(" ls ");
   });
+
+  it("ignores slash-routing sessions for recent missing transcript warnings", async () => {
+    const cfg: OpenClawConfig = {};
+    setupSessionState(cfg, process.env, process.env.HOME ?? "");
+    const storePath = resolveStorePath(cfg.session?.store, { agentId: "main" });
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:telegram:slash:6790081233": {
+            sessionId: "missing-slash-transcript",
+            updatedAt: Date.now(),
+          },
+        },
+        null,
+        2,
+      ),
+    );
+
+    await noteStateIntegrity(cfg, { confirmSkipInNonInteractive: vi.fn(async () => false) });
+
+    const text = stateIntegrityText();
+    expect(text).not.toContain("recent sessions are missing transcripts");
+  });
 });
