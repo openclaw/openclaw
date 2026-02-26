@@ -9,6 +9,9 @@ const HOME_ENV_KEYS = [
   "HOMEDRIVE",
   "HOMEPATH",
   "OPENCLAW_STATE_DIR",
+  "OPENCLAW_CONFIG_PATH",
+  "CLAWDBOT_STATE_DIR",
+  "CLAWDBOT_CONFIG_PATH",
 ] as const;
 
 export type TempHomeEnv = {
@@ -24,6 +27,9 @@ export async function createTempHomeEnv(prefix: string): Promise<TempHomeEnv> {
   process.env.HOME = home;
   process.env.USERPROFILE = home;
   process.env.OPENCLAW_STATE_DIR = path.join(home, ".openclaw");
+  delete process.env.OPENCLAW_CONFIG_PATH;
+  delete process.env.CLAWDBOT_STATE_DIR;
+  delete process.env.CLAWDBOT_CONFIG_PATH;
 
   if (process.platform === "win32") {
     const match = home.match(/^([A-Za-z]:)(.*)$/);

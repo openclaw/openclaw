@@ -11,6 +11,9 @@ type EnvSnapshot = {
   homePath: string | undefined;
   openclawHome: string | undefined;
   stateDir: string | undefined;
+  configPath: string | undefined;
+  legacyConfigPath: string | undefined;
+  legacyStateDir: string | undefined;
 };
 
 type SharedHomeRootState = {
@@ -28,6 +31,9 @@ function snapshotEnv(): EnvSnapshot {
     homePath: process.env.HOMEPATH,
     openclawHome: process.env.OPENCLAW_HOME,
     stateDir: process.env.OPENCLAW_STATE_DIR,
+    configPath: process.env.OPENCLAW_CONFIG_PATH,
+    legacyConfigPath: process.env.CLAWDBOT_CONFIG_PATH,
+    legacyStateDir: process.env.CLAWDBOT_STATE_DIR,
   };
 }
 
@@ -45,6 +51,9 @@ function restoreEnv(snapshot: EnvSnapshot) {
   restoreKey("HOMEPATH", snapshot.homePath);
   restoreKey("OPENCLAW_HOME", snapshot.openclawHome);
   restoreKey("OPENCLAW_STATE_DIR", snapshot.stateDir);
+  restoreKey("OPENCLAW_CONFIG_PATH", snapshot.configPath);
+  restoreKey("CLAWDBOT_CONFIG_PATH", snapshot.legacyConfigPath);
+  restoreKey("CLAWDBOT_STATE_DIR", snapshot.legacyStateDir);
 }
 
 function snapshotExtraEnv(keys: string[]): Record<string, string | undefined> {
@@ -68,9 +77,12 @@ function restoreExtraEnv(snapshot: Record<string, string | undefined>) {
 function setTempHome(base: string) {
   process.env.HOME = base;
   process.env.USERPROFILE = base;
-  // Ensure tests using HOME isolation aren't affected by leaked OPENCLAW_HOME.
+  // Ensure tests using HOME isolation aren't affected by leaked explicit config/state paths.
   delete process.env.OPENCLAW_HOME;
   process.env.OPENCLAW_STATE_DIR = path.join(base, ".openclaw");
+  delete process.env.OPENCLAW_CONFIG_PATH;
+  delete process.env.CLAWDBOT_CONFIG_PATH;
+  delete process.env.CLAWDBOT_STATE_DIR;
 
   if (process.platform !== "win32") {
     return;
