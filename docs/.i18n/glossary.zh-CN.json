@@ -206,5 +206,57 @@
   {
     "source": "env var",
     "target": "环境变量"
+  },
+  {
+    "source": "Xiaohongshu",
+    "target": "小红书"
+  },
+  {
+    "source": "Little Red Book",
+    "target": "小红书"
+  },
+  {
+    "source": "seeding",
+    "target": "种草"
+  },
+  {
+    "source": "content workflow",
+    "target": "内容工作流"
+  },
+  {
+    "source": "content calendar",
+    "target": "内容日历"
+  },
+  {
+    "source": "hook",
+    "target": "开场钩子"
+  },
+  {
+    "source": "call to action",
+    "target": "行动引导"
+  },
+  {
+    "source": "parenting",
+    "target": "亲子"
+  },
+  {
+    "source": "ages 3-8",
+    "target": "3-8 岁"
+  },
+  {
+    "source": "copywriting",
+    "target": "文案"
+  },
+  {
+    "source": "brand safety",
+    "target": "品牌安全"
+  },
+  {
+    "source": "compliance",
+    "target": "合规"
+  },
+  {
+    "source": "mydazy",
+    "target": "mydazy"
   }
 ]
