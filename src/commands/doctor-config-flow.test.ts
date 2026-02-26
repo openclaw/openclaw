@@ -198,11 +198,11 @@ describe("doctor config flow", () => {
       };
       expect(cfg.channels.telegram.allowFrom).toBeUndefined();
       expect(cfg.channels.telegram.groupAllowFrom).toBeUndefined();
-      expect(cfg.channels.telegram.accounts.default.allowFrom).toEqual(["111"]);
-      expect(cfg.channels.telegram.accounts.default.groupAllowFrom).toEqual(["222"]);
       expect(cfg.channels.telegram.groups["-100123"].allowFrom).toEqual(["333"]);
       expect(cfg.channels.telegram.groups["-100123"].topics["99"].allowFrom).toEqual(["444"]);
       expect(cfg.channels.telegram.accounts.alerts.allowFrom).toEqual(["444"]);
+      expect(cfg.channels.telegram.accounts.default.allowFrom).toEqual(["111"]);
+      expect(cfg.channels.telegram.accounts.default.groupAllowFrom).toEqual(["222"]);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -261,11 +261,17 @@ describe("doctor config flow", () => {
       });
 
       const cfg = result.cfg as unknown as {
-        channels: { discord: RepairedDiscordPolicy };
+        channels: {
+          discord: Omit<RepairedDiscordPolicy, "allowFrom"> & {
+            allowFrom?: string[];
+            accounts: Record<string, DiscordAccountRule> & {
+              default: { allowFrom: string[] };
+            };
+          };
+        };
       };
 
       expect(cfg.channels.discord.allowFrom).toBeUndefined();
-      expect(cfg.channels.discord.accounts.default.allowFrom).toEqual(["123"]);
       expect(cfg.channels.discord.dm.allowFrom).toEqual(["456"]);
       expect(cfg.channels.discord.dm.groupChannels).toEqual(["789"]);
       expect(cfg.channels.discord.execApprovals.approvers).toEqual(["321"]);
@@ -273,6 +279,7 @@ describe("doctor config flow", () => {
       expect(cfg.channels.discord.guilds["100"].roles).toEqual(["222"]);
       expect(cfg.channels.discord.guilds["100"].channels.general.users).toEqual(["333"]);
       expect(cfg.channels.discord.guilds["100"].channels.general.roles).toEqual(["444"]);
+      expect(cfg.channels.discord.accounts.default.allowFrom).toEqual(["123"]);
       expect(cfg.channels.discord.accounts.work.allowFrom).toEqual(["555"]);
       expect(cfg.channels.discord.accounts.work.dm.allowFrom).toEqual(["666"]);
       expect(cfg.channels.discord.accounts.work.dm.groupChannels).toEqual(["777"]);
@@ -286,6 +293,35 @@ describe("doctor config flow", () => {
         "1212",
       ]);
     });
+  });
+
+  it("does not restore top-level allowFrom when config is intentionally default-account scoped", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        channels: {
+          discord: {
+            accounts: {
+              default: { token: "discord-default-token", allowFrom: ["123"] },
+              work: { token: "discord-work-token" },
+            },
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const cfg = result.cfg as {
+      channels: {
+        discord: {
+          allowFrom?: string[];
+          accounts: Record<string, { allowFrom?: string[] }>;
+        };
+      };
+    };
+
+    expect(cfg.channels.discord.allowFrom).toBeUndefined();
+    expect(cfg.channels.discord.accounts.default.allowFrom).toEqual(["123"]);
   });
 
   it('adds allowFrom ["*"] when dmPolicy="open" and allowFrom is missing on repair', async () => {
