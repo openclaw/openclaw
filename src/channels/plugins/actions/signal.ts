@@ -136,8 +136,8 @@ export const signalMessageActions: ChannelMessageActionAdapter = {
       }
       const targetAuthor = readStringParam(params, "targetAuthor");
       const targetAuthorUuid = readStringParam(params, "targetAuthorUuid");
-      if (target.groupId && !targetAuthor && !targetAuthorUuid) {
-        throw new Error("targetAuthor or targetAuthorUuid required for group reactions.");
+      if (!targetAuthor && !targetAuthorUuid) {
+        throw new Error("targetAuthor or targetAuthorUuid required for Signal reactions.");
       }
 
       const emoji = readStringParam(params, "emoji", { allowEmpty: true });
