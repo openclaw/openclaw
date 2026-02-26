@@ -105,11 +105,15 @@ vi.mock("../../agents/cli-session.js", () => ({
   setCliSessionId: vi.fn(),
 }));
 
-vi.mock("../../auto-reply/thinking.js", () => ({
-  normalizeThinkLevel: vi.fn().mockReturnValue(undefined),
-  normalizeVerboseLevel: vi.fn().mockReturnValue("off"),
-  supportsXHighThinking: vi.fn().mockReturnValue(false),
-}));
+vi.mock("../../auto-reply/thinking.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../auto-reply/thinking.js")>();
+  return {
+    normalizeElevatedLevel: actual.normalizeElevatedLevel,
+    normalizeThinkLevel: vi.fn().mockReturnValue(undefined),
+    normalizeVerboseLevel: vi.fn().mockReturnValue("off"),
+    supportsXHighThinking: vi.fn().mockReturnValue(false),
+  };
+});
 
 vi.mock("../../cli/outbound-send-deps.js", () => ({
   createOutboundSendDeps: vi.fn().mockReturnValue({}),
@@ -335,6 +339,76 @@ describe("runCronIsolatedAgentTurn — elevated exec (#18748)", () => {
       enabled: true,
       allowed: true,
       defaultLevel: "on",
+    });
+  });
+
+  it("disables elevated when tools.elevated is not configured (no implicit opt-in)", async () => {
+    const result = await runCronIsolatedAgentTurn(
+      makeParams({
+        cfg: {},
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(runWithModelFallbackMock).toHaveBeenCalledOnce();
+
+    const runFn = runWithModelFallbackMock.mock.calls[0][0].run;
+    await runFn("openai", "gpt-4");
+
+    const { runEmbeddedPiAgent } = await import("../../agents/pi-embedded.js");
+    const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0];
+    expect(callArgs.bashElevated).toEqual({
+      enabled: false,
+      allowed: false,
+      defaultLevel: "off",
+    });
+  });
+
+  it("honours session persisted elevated level over config default", async () => {
+    resolveCronSessionMock.mockReturnValue({
+      storePath: "/tmp/store.json",
+      store: {},
+      sessionEntry: {
+        sessionId: "test-session-id",
+        updatedAt: 0,
+        systemSent: false,
+        skillsSnapshot: undefined,
+        elevatedLevel: "off",
+      },
+      systemSent: false,
+      isNewSession: false,
+    });
+
+    const result = await runCronIsolatedAgentTurn(
+      makeParams({
+        cfg: {
+          tools: {
+            elevated: {
+              enabled: true,
+            },
+          },
+          agents: {
+            defaults: {
+              elevatedDefault: "full",
+            },
+          },
+        },
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(runWithModelFallbackMock).toHaveBeenCalledOnce();
+
+    const runFn = runWithModelFallbackMock.mock.calls[0][0].run;
+    await runFn("openai", "gpt-4");
+
+    const { runEmbeddedPiAgent } = await import("../../agents/pi-embedded.js");
+    const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0];
+    // Session has elevatedLevel: "off" which should override the config's "full" default
+    expect(callArgs.bashElevated).toEqual({
+      enabled: true,
+      allowed: true,
+      defaultLevel: "off",
     });
   });
 

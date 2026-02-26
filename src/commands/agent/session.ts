@@ -2,6 +2,8 @@ import crypto from "node:crypto";
 import { listAgentIds } from "../../agents/agent-scope.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import {
+  type ElevatedLevel,
+  normalizeElevatedLevel,
   normalizeThinkLevel,
   normalizeVerboseLevel,
   type ThinkLevel,
@@ -31,6 +33,7 @@ export type SessionResolution = {
   isNewSession: boolean;
   persistedThinking?: ThinkLevel;
   persistedVerbose?: VerboseLevel;
+  persistedElevated?: ElevatedLevel;
 };
 
 type SessionKeyResolution = {
@@ -152,6 +155,10 @@ export function resolveSession(opts: {
     fresh && sessionEntry?.verboseLevel
       ? normalizeVerboseLevel(sessionEntry.verboseLevel)
       : undefined;
+  const persistedElevated =
+    fresh && sessionEntry?.elevatedLevel
+      ? normalizeElevatedLevel(sessionEntry.elevatedLevel)
+      : undefined;
 
   return {
     sessionId,
@@ -162,5 +169,6 @@ export function resolveSession(opts: {
     isNewSession,
     persistedThinking,
     persistedVerbose,
+    persistedElevated,
   };
 }

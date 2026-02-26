@@ -433,6 +433,7 @@ async function agentCommandInternal(
     isNewSession,
     persistedThinking,
     persistedVerbose,
+    persistedElevated,
   } = sessionResolution;
   const sessionAgentId =
     agentIdOverride ??
@@ -829,10 +830,13 @@ async function agentCommandInternal(
       // Resolve elevated exec permissions so agent command runs (including
       // sessions_send nested runs) can use elevated tools when configured.
       // Agent commands are system-initiated (no sender), so only enablement applies.
+      // Persisted session elevated level takes priority over config default
+      // (honours /elevated off set during the session).
       const bashElevated = resolveSystemElevatedDefaults({
         cfg,
         agentId: sessionAgentId,
-        elevatedDefault: agentCfg?.elevatedDefault as ElevatedLevel | undefined,
+        elevatedDefault:
+          persistedElevated ?? (agentCfg?.elevatedDefault as ElevatedLevel | undefined),
       });
 
       // Keep fallback candidate resolution centralized so session model overrides,

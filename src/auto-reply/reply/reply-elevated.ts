@@ -240,13 +240,18 @@ export function resolveElevatedPermissions(params: {
  * Resolve elevated exec defaults for system-initiated contexts (cron, agent
  * command, sessions_send) where there is no sender to verify against
  * `allowFrom`. Only the global and per-agent `enabled` gates apply.
+ *
+ * Unlike the inbound path (`resolveElevatedPermissions`) which uses
+ * `!== false` (default-enabled) because `allowFrom` acts as a second gate,
+ * system-initiated contexts have no sender so we require explicit
+ * `enabled: true` to avoid silently granting host-exec privileges.
  */
 export function resolveSystemElevatedDefaults(params: {
   cfg: OpenClawConfig;
   agentId: string;
   elevatedDefault?: ElevatedLevel;
 }): ExecElevatedDefaults {
-  const globalEnabled = params.cfg.tools?.elevated?.enabled !== false;
+  const globalEnabled = params.cfg.tools?.elevated?.enabled === true;
   const agentEnabled =
     resolveAgentConfig(params.cfg, params.agentId)?.tools?.elevated?.enabled !== false;
   const enabled = globalEnabled && agentEnabled;
