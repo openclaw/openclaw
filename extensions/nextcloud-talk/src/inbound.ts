@@ -4,6 +4,7 @@ import {
   createReplyPrefixOptions,
   formatTextWithAttachmentLinks,
   logInboundDrop,
+  readStoreAllowFromForDmPolicy,
   resolveControlCommandGate,
   resolveOutboundMediaUrls,
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -96,10 +97,11 @@ export async function handleNextcloudTalkInbound(params: {
 
   const configAllowFrom = normalizeNextcloudTalkAllowlist(account.config.allowFrom);
   const configGroupAllowFrom = normalizeNextcloudTalkAllowlist(account.config.groupAllowFrom);
-  const storeAllowFrom =
-    dmPolicy === "allowlist"
-      ? []
-      : await core.channel.pairing.readAllowFromStore(CHANNEL_ID).catch(() => []);
+  const storeAllowFrom = await readStoreAllowFromForDmPolicy({
+    provider: CHANNEL_ID,
+    dmPolicy,
+    readStore: (provider) => core.channel.pairing.readAllowFromStore(provider),
+  });
   const storeAllowList = normalizeNextcloudTalkAllowlist(storeAllowFrom);
 
   const roomMatch = resolveNextcloudTalkRoomMatch({
