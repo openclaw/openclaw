@@ -688,7 +688,6 @@ export async function processMessage(
           chatIdentifier: message.chatIdentifier ?? undefined,
         })
       : false;
-  const dmAuthorized = dmPolicy === "open" || ownerAllowedForCommands;
   const commandGate = resolveControlCommandGate({
     useAccessGroups,
     authorizers: [
@@ -698,7 +697,7 @@ export async function processMessage(
     allowTextCommands: true,
     hasControlCommand: hasControlCmd,
   });
-  const commandAuthorized = isGroup ? commandGate.commandAuthorized : dmAuthorized;
+  const commandAuthorized = commandGate.commandAuthorized;
 
   // Block control commands from unauthorized senders in groups
   if (isGroup && commandGate.shouldBlock) {
