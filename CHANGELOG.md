@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 - Onboarding/Plugins: let channel plugins own interactive onboarding flows with optional `configureInteractive` and `configureWhenConfigured` hooks while preserving the generic fallback path. (#27191) thanks @gumadeiras.
 - Android/Nodes: add `notifications.list` support on Android nodes and expose `nodes notifications_list` in agent tooling for listing active device notifications. (#27344) thanks @obviyus.
 - Android/Nodes: add Android `device` capability plus `device.status` and `device.info` node commands, including runtime handler wiring and protocol/registry coverage for device status/info payloads. (#27664) Thanks @obviyus.
+- Docs/Contributing: add Nimrod Gutman to the maintainer roster in `CONTRIBUTING.md`. (#27840) Thanks @ngutman.
 
 ### Fixes
 
