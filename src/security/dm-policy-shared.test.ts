@@ -54,6 +54,17 @@ describe("security/dm-policy-shared", () => {
     expect(lists.effectiveGroupAllowFrom).toEqual(["owner"]);
   });
 
+  it("can keep group allowlist empty when fallback is disabled", () => {
+    const lists = resolveEffectiveAllowFromLists({
+      allowFrom: ["owner"],
+      groupAllowFrom: [],
+      storeAllowFrom: ["paired-user"],
+      groupAllowFromFallbackToAllowFrom: false,
+    });
+    expect(lists.effectiveAllowFrom).toEqual(["owner", "paired-user"]);
+    expect(lists.effectiveGroupAllowFrom).toEqual([]);
+  });
+
   it("excludes storeAllowFrom when dmPolicy is allowlist", () => {
     const lists = resolveEffectiveAllowFromLists({
       allowFrom: ["+1111"],

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveMattermostEffectiveAllowFromLists } from "./monitor.js";
+import { resolveMattermostEffectiveAllowFromLists } from "./monitor-auth.js";
 
 describe("mattermost monitor authz", () => {
   it("keeps DM allowlist merged with pairing-store entries", () => {
