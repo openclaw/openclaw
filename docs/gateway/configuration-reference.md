@@ -1741,6 +1741,10 @@ OpenClaw uses the pi-coding-agent model catalog. Add custom providers via `model
 
 - Use `authHeader: true` + `headers` for custom auth needs.
 - Override agent config root with `OPENCLAW_AGENT_DIR` (or `PI_CODING_AGENT_DIR`).
+- Merge precedence for matching provider IDs:
+  - Non-empty agent `models.json` `apiKey`/`baseUrl` win.
+  - Empty or missing agent `apiKey`/`baseUrl` fall back to `models.providers` in config.
+  - Use `models.mode: "replace"` when you want config to fully rewrite `models.json`.
 
 ### Provider examples
 
