@@ -232,6 +232,10 @@ await session.prompt(effectivePrompt, { images: imageResult.images });
 
 The SDK handles the full agent loop: sending to LLM, executing tool calls, streaming responses.
 
+Image injection is prompt-local: OpenClaw loads image refs from the current prompt and
+passes them via `images` for that turn only. It does not re-scan older history turns
+to re-inject image payloads.
+
 ## Tool Architecture
 
 ### Tool Pipeline

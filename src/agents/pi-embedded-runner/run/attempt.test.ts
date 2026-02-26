@@ -3,24 +3,29 @@ import type { ImageContent } from "@mariozechner/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import {
-  injectHistoryImagesIntoMessages,
+  PRUNED_HISTORY_IMAGE_MARKER,
+  pruneProcessedHistoryImages,
   resolveAttemptFsWorkspaceOnly,
   resolvePromptBuildHookResult,
   resolvePromptModeForSession,
 } from "./attempt.js";
 
-describe("injectHistoryImagesIntoMessages", () => {
+describe("pruneProcessedHistoryImages", () => {
   const image: ImageContent = { type: "image", data: "abc", mimeType: "image/png" };
 
-  it("injects history images and converts string content", () => {
+  it("prunes image blocks from user messages that already have assistant replies", () => {
     const messages: AgentMessage[] = [
       {
         role: "user",
-        content: "See /tmp/photo.png",
+        content: [{ type: "text", text: "See /tmp/photo.png" }, { ...image }],
       } as AgentMessage,
+      {
+        role: "assistant",
+        content: "got it",
+      } as unknown as AgentMessage,
     ];
 
-    const didMutate = injectHistoryImagesIntoMessages(messages, new Map([[0, [image]]]));
+    const didMutate = pruneProcessedHistoryImages(messages);
 
     expect(didMutate).toBe(true);
     const firstUser = messages[0] as Extract<AgentMessage, { role: "user" }> | undefined;
@@ -28,10 +33,10 @@ describe("injectHistoryImagesIntoMessages", () => {
     const content = firstUser?.content as Array<{ type: string; text?: string; data?: string }>;
     expect(content).toHaveLength(2);
     expect(content[0]?.type).toBe("text");
-    expect(content[1]).toMatchObject({ type: "image", data: "abc" });
+    expect(content[1]).toMatchObject({ type: "text", text: PRUNED_HISTORY_IMAGE_MARKER });
   });
 
-  it("avoids duplicating existing image content", () => {
+  it("does not prune latest user message when no assistant response exists yet", () => {
     const messages: AgentMessage[] = [
       {
         role: "user",
@@ -39,7 +44,7 @@ describe("injectHistoryImagesIntoMessages", () => {
       } as AgentMessage,
     ];
 
-    const didMutate = injectHistoryImagesIntoMessages(messages, new Map([[0, [image]]]));
+    const didMutate = pruneProcessedHistoryImages(messages);
 
     expect(didMutate).toBe(false);
     const first = messages[0] as Extract<AgentMessage, { role: "user" }> | undefined;
@@ -47,21 +52,22 @@ describe("injectHistoryImagesIntoMessages", () => {
       throw new Error("expected array content");
     }
     expect(first.content).toHaveLength(2);
+    expect(first.content[1]).toMatchObject({ type: "image", data: "abc" });
   });
 
-  it("ignores non-user messages and out-of-range indices", () => {
+  it("does not change messages when no assistant turn exists", () => {
     const messages: AgentMessage[] = [
       {
-        role: "assistant",
+        role: "user",
         content: "noop",
-      } as unknown as AgentMessage,
+      } as AgentMessage,
     ];
 
-    const didMutate = injectHistoryImagesIntoMessages(messages, new Map([[1, [image]]]));
+    const didMutate = pruneProcessedHistoryImages(messages);
 
     expect(didMutate).toBe(false);
-    const firstAssistant = messages[0] as Extract<AgentMessage, { role: "assistant" }> | undefined;
-    expect(firstAssistant?.content).toBe("noop");
+    const firstUser = messages[0] as Extract<AgentMessage, { role: "user" }> | undefined;
+    expect(firstUser?.content).toBe("noop");
   });
 });
 
