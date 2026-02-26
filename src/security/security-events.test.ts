@@ -575,4 +575,77 @@ describe("SecurityEventsManager", () => {
       expect(recent[0].id).toBe("existing-123");
     });
   });
+
+  describe("dedupeMap auto-prune and FIFO eviction (TC-4)", () => {
+    it("pruneDedup removes expired entries and returns their count", async () => {
+      // Use a 1ms dedup window so entries expire almost immediately
+      const shortManager = new SecurityEventsManager(
+        { store: path.join(tempDir, "prune-test.jsonl") },
+        { dedupeWindow: 1 },
+      );
+
+      const base: SecurityEventEmitParams = {
+        type: "injection_detected",
+        severity: "warn",
+        source: "prune-test",
+        message: "",
+      };
+
+      // Emit 5 unique events — each gets its own dedup entry
+      for (let i = 0; i < 5; i++) {
+        shortManager.emit({ ...base, message: `unique-prune-${i}` });
+      }
+
+      // Wait for the 1ms dedup window to expire
+      await new Promise((resolve) => setTimeout(resolve, 10));
+
+      // pruneDedup should remove all 5 expired entries and return 5
+      const pruned = shortManager.pruneDedup();
+      expect(pruned).toBe(5);
+    });
+
+    it("pruneDedup keeps live entries and returns 0", () => {
+      const liveManager = new SecurityEventsManager(
+        { store: path.join(tempDir, "live-prune.jsonl") },
+        { dedupeWindow: 60_000 }, // 1-minute window — nothing will expire
+      );
+
+      liveManager.emit({
+        type: "tool_abuse_detected",
+        severity: "warn",
+        source: "prune-test",
+        message: "live-entry",
+      });
+
+      // All entries are still within their window — nothing pruned
+      const pruned = liveManager.pruneDedup();
+      expect(pruned).toBe(0);
+    });
+
+    it("after pruning expired entries, same fingerprint creates a new event", async () => {
+      // 1ms window — entries expire almost immediately
+      const shortManager = new SecurityEventsManager(
+        { store: path.join(tempDir, "fifo-prune.jsonl") },
+        { dedupeWindow: 1 },
+      );
+
+      const params: SecurityEventEmitParams = {
+        type: "auth_rate_limited",
+        severity: "warn",
+        source: "prune-test",
+        message: "repro-event",
+      };
+
+      const first = shortManager.emit(params);
+
+      // Let the 1ms dedup window expire and prune
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const pruned = shortManager.pruneDedup();
+      expect(pruned).toBeGreaterThan(0);
+
+      // After the entry was pruned, the same params should yield a brand-new event
+      const fresh = shortManager.emit(params);
+      expect(fresh.id).not.toBe(first.id);
+    });
+  });
 });
