@@ -26,6 +26,7 @@ import {
   resolveMatrixAllowListMatch,
   resolveMatrixAllowListMatches,
 } from "./allowlist.js";
+import { resolveMatrixBodyForAgent } from "./inbound-body.js";
 import { resolveMatrixLocation, type MatrixLocationPayload } from "./location.js";
 import { downloadMatrixMedia } from "./media.js";
 import { resolveMentions } from "./mentions.js";
@@ -215,6 +216,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       }
 
       const senderName = await getMemberDisplayName(roomId, senderId);
+      const senderUsername = senderId.split(":")[0]?.replace(/^@/, "");
       const storeAllowFrom = isDirectMessage
         ? await readStoreAllowFromForDmPolicy({
             provider: "matrix",
@@ -521,19 +523,26 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         storePath,
         sessionKey: route.sessionKey,
       });
-      const body = core.channel.reply.formatAgentEnvelope({
+      const body = core.channel.reply.formatInboundEnvelope({
         channel: "Matrix",
         from: envelopeFrom,
         timestamp: eventTs ?? undefined,
         previousTimestamp,
         envelope: envelopeOptions,
         body: textWithId,
+        chatType: isDirectMessage ? "direct" : "channel",
+        sender: { name: senderName, username: senderUsername },
       });
 
       const groupSystemPrompt = roomConfig?.systemPrompt?.trim() || undefined;
       const ctxPayload = core.channel.reply.finalizeInboundContext({
         Body: body,
-        BodyForAgent: bodyText,
+        BodyForAgent: resolveMatrixBodyForAgent({
+          isDirectMessage,
+          bodyText,
+          senderName,
+          senderId,
+        }),
         RawBody: bodyText,
         CommandBody: bodyText,
         From: isDirectMessage ? `matrix:${senderId}` : `matrix:channel:${roomId}`,
@@ -544,7 +553,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         ConversationLabel: envelopeFrom,
         SenderName: senderName,
         SenderId: senderId,
-        SenderUsername: senderId.split(":")[0]?.replace(/^@/, ""),
+        SenderUsername: senderUsername,
         GroupSubject: isRoom ? (roomName ?? roomId) : undefined,
         GroupChannel: isRoom ? (roomInfo.canonicalAlias ?? roomId) : undefined,
         GroupSystemPrompt: isRoom ? groupSystemPrompt : undefined,
