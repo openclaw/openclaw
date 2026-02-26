@@ -155,6 +155,13 @@ function loadSkillEntries(
     dir: managedSkillsDir,
     source: "bot-managed",
   });
+  // Hanzo canonical skills dir: ~/.hanzo/skills (installed via `bot skills add`)
+  // This is the single source of truth — symlinked into .claude/skills, .agents/skills, .cursor/skills
+  const hanzoSkillsDir = path.resolve(os.homedir(), ".hanzo", "skills");
+  const hanzoSkills = loadSkills({
+    dir: hanzoSkillsDir,
+    source: "hanzo-managed",
+  });
   const personalAgentsSkillsDir = path.resolve(os.homedir(), ".agents", "skills");
   const personalAgentsSkills = loadSkills({
     dir: personalAgentsSkillsDir,
@@ -171,7 +178,7 @@ function loadSkillEntries(
   });
 
   const merged = new Map<string, Skill>();
-  // Precedence: extra < bundled < managed < agents-skills-personal < agents-skills-project < workspace
+  // Precedence: extra < bundled < managed < hanzo < agents-skills-personal < agents-skills-project < workspace
   for (const skill of extraSkills) {
     merged.set(skill.name, skill);
   }
@@ -179,6 +186,9 @@ function loadSkillEntries(
     merged.set(skill.name, skill);
   }
   for (const skill of managedSkills) {
+    merged.set(skill.name, skill);
+  }
+  for (const skill of hanzoSkills) {
     merged.set(skill.name, skill);
   }
   for (const skill of personalAgentsSkills) {
