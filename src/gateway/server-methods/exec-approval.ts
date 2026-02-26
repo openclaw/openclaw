@@ -3,11 +3,8 @@ import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   type ExecApprovalDecision,
 } from "../../infra/exec-approvals.js";
-import {
-  buildSystemRunApprovalBindingV1,
-  normalizeSystemRunApprovalPlanV2,
-} from "../../infra/system-run-approval-binding.js";
-import { formatExecCommand } from "../../infra/system-run-command.js";
+import { buildSystemRunApprovalBindingV1 } from "../../infra/system-run-approval-binding.js";
+import { resolveSystemRunApprovalRequestContext } from "../../infra/system-run-approval-context.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
   ErrorCodes,
@@ -72,21 +69,20 @@ export function createExecApprovalHandlers(
       const explicitId = typeof p.id === "string" && p.id.trim().length > 0 ? p.id.trim() : null;
       const host = typeof p.host === "string" ? p.host.trim() : "";
       const nodeId = typeof p.nodeId === "string" ? p.nodeId.trim() : "";
-      const commandArgv = Array.isArray(p.commandArgv)
-        ? p.commandArgv.map((entry) => String(entry))
-        : undefined;
-      const systemRunPlanV2 =
-        host === "node" ? normalizeSystemRunApprovalPlanV2(p.systemRunPlanV2) : null;
-      const effectiveCommandArgv = systemRunPlanV2?.argv ?? commandArgv;
-      const effectiveCwd = systemRunPlanV2?.cwd ?? p.cwd;
-      const effectiveAgentId = systemRunPlanV2?.agentId ?? p.agentId;
-      const effectiveSessionKey = systemRunPlanV2?.sessionKey ?? p.sessionKey;
-      const effectiveCommandText = (() => {
-        if (!systemRunPlanV2) {
-          return p.command;
-        }
-        return systemRunPlanV2.rawCommand ?? formatExecCommand(systemRunPlanV2.argv);
-      })();
+      const approvalContext = resolveSystemRunApprovalRequestContext({
+        host,
+        command: p.command,
+        commandArgv: p.commandArgv,
+        systemRunPlanV2: p.systemRunPlanV2,
+        cwd: p.cwd,
+        agentId: p.agentId,
+        sessionKey: p.sessionKey,
+      });
+      const effectiveCommandArgv = approvalContext.commandArgv;
+      const effectiveCwd = approvalContext.cwd;
+      const effectiveAgentId = approvalContext.agentId;
+      const effectiveSessionKey = approvalContext.sessionKey;
+      const effectiveCommandText = approvalContext.commandText;
       if (host === "node" && !nodeId) {
         respond(
           false,
@@ -129,7 +125,7 @@ export function createExecApprovalHandlers(
         commandArgv: effectiveCommandArgv,
         envKeys: systemRunBindingV1?.envKeys?.length ? systemRunBindingV1.envKeys : undefined,
         systemRunBindingV1: systemRunBindingV1?.binding ?? null,
-        systemRunPlanV2: systemRunPlanV2,
+        systemRunPlanV2: approvalContext.planV2,
         cwd: effectiveCwd ?? null,
         nodeId: host === "node" ? nodeId : null,
         host: host || null,
