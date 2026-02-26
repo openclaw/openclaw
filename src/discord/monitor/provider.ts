@@ -414,9 +414,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
 
   const maxDiscordCommands = 100;
   let skillCommands =
-    nativeEnabled && nativeSkillsEnabled
-      ? listSkillCommandsForAgents({ cfg })
-      : [];
+    nativeEnabled && nativeSkillsEnabled ? listSkillCommandsForAgents({ cfg }) : [];
   let commandSpecs = nativeEnabled
     ? listNativeCommandSpecsForConfig(cfg, { skillCommands, provider: "discord" })
     : [];
