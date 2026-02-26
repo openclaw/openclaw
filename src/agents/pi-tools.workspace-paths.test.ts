@@ -151,6 +151,46 @@ describe("workspace path resolution", () => {
       ).rejects.toThrow(/Path escapes sandbox root/i);
     });
   });
+
+  it("rejects hardlinked file aliases when workspaceOnly is enabled", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withTempDir("openclaw-ws-", async (workspaceDir) => {
+      const cfg: OpenClawConfig = { tools: { fs: { workspaceOnly: true } } };
+      const tools = createOpenClawCodingTools({ workspaceDir, config: cfg });
+      const { readTool, writeTool } = expectReadWriteEditTools(tools);
+      const outsidePath = path.join(
+        path.dirname(workspaceDir),
+        `outside-hardlink-${process.pid}-${Date.now()}.txt`,
+      );
+      const hardlinkPath = path.join(workspaceDir, "linked.txt");
+      await fs.writeFile(outsidePath, "top-secret", "utf8");
+      try {
+        try {
+          await fs.link(outsidePath, hardlinkPath);
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+            return;
+          }
+          throw err;
+        }
+        await expect(readTool.execute("ws-read-hardlink", { path: "linked.txt" })).rejects.toThrow(
+          /hardlink|sandbox/i,
+        );
+        await expect(
+          writeTool.execute("ws-write-hardlink", {
+            path: "linked.txt",
+            content: "pwned",
+          }),
+        ).rejects.toThrow(/hardlink|sandbox/i);
+        expect(await fs.readFile(outsidePath, "utf8")).toBe("top-secret");
+      } finally {
+        await fs.rm(hardlinkPath, { force: true });
+        await fs.rm(outsidePath, { force: true });
+      }
+    });
+  });
 });
 
 describe("sandboxed workspace paths", () => {
