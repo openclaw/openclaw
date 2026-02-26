@@ -1,25 +1,41 @@
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { describe, expect, test, vi } from "vitest";
+import { registerFeishuDocTools } from "./docx.js";
 
-const createFeishuClientMock = vi.fn((creds: any) => ({ __appId: creds?.appId }));
+const createFeishuClientMock = vi.fn((creds: { appId?: string } | undefined) => ({
+  __appId: creds?.appId,
+}));
 
 vi.mock("./client.js", () => {
   return {
-    createFeishuClient: (creds: any) => createFeishuClientMock(creds),
+    createFeishuClient: (creds: { appId?: string } | undefined) => createFeishuClientMock(creds),
   };
 });
 
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
-import { registerFeishuDocTools } from "./docx.js";
-
-// Patch the specific API calls we need so tool execution doesn't hit network.
+// Patch SDK import so tool execution can run without network concerns.
 vi.mock("@larksuiteoapi/node-sdk", () => {
   return {
     default: {},
   };
 });
 
-function fakeApi(cfg: any) {
-  const tools: Array<{ name: string; execute: (id: string, params: any) => any }> = [];
+type ToolLike = {
+  name: string;
+  execute: (toolCallId: string, params: unknown) => Promise<unknown>;
+};
+
+type ToolContextLike = {
+  agentAccountId?: string;
+};
+
+type ToolFactoryLike = (ctx: ToolContextLike) => ToolLike | ToolLike[] | null | undefined;
+
+function createApi(cfg: OpenClawPluginApi["config"]) {
+  const registered: Array<{
+    tool: ToolLike | ToolFactoryLike;
+    opts?: { name?: string };
+  }> = [];
+
   const api: Partial<OpenClawPluginApi> = {
     config: cfg,
     logger: {
@@ -28,16 +44,31 @@ function fakeApi(cfg: any) {
       error: () => {},
       debug: () => {},
     },
-    registerTool: (tool: any) => {
-      tools.push({ name: tool.name, execute: tool.execute });
-      return undefined as any;
+    registerTool: (tool, opts) => {
+      registered.push({ tool, opts });
     },
   };
-  return { api: api as OpenClawPluginApi, tools };
+
+  const resolveTool = (name: string, ctx: ToolContextLike): ToolLike => {
+    const entry = registered.find((item) => item.opts?.name === name);
+    if (!entry) {
+      throw new Error(`Tool not registered: ${name}`);
+    }
+    if (typeof entry.tool === "function") {
+      const built = entry.tool(ctx);
+      if (!built || Array.isArray(built)) {
+        throw new Error(`Unexpected tool factory output for ${name}`);
+      }
+      return built as ToolLike;
+    }
+    return entry.tool as ToolLike;
+  };
+
+  return { api: api as OpenClawPluginApi, resolveTool };
 }
 
 describe("feishu_doc account selection", () => {
-  test("uses accountId param to pick correct account when multiple accounts configured", async () => {
+  test("uses agentAccountId context when params omit accountId", async () => {
     const cfg = {
       channels: {
         feishu: {
@@ -48,44 +79,45 @@ describe("feishu_doc account selection", () => {
           },
         },
       },
-    };
+    } as OpenClawPluginApi["config"];
 
-    const { api, tools } = fakeApi(cfg);
+    const { api, resolveTool } = createApi(cfg);
     registerFeishuDocTools(api);
 
-    const tool = tools.find((t) => t.name === "feishu_doc");
-    expect(tool).toBeTruthy();
+    const docToolA = resolveTool("feishu_doc", { agentAccountId: "a" });
+    const docToolB = resolveTool("feishu_doc", { agentAccountId: "b" });
 
-    // Trigger a lightweight action (list_blocks) that will immediately attempt client creation.
-    // It will still fail later due to missing SDK mocks, but we only care which account's creds were used.
-    await tool!.execute("call-a", { action: "list_blocks", doc_token: "d", accountId: "a" });
-    await tool!.execute("call-b", { action: "list_blocks", doc_token: "d", accountId: "b" });
+    await docToolA.execute("call-a", { action: "list_blocks", doc_token: "d" });
+    await docToolB.execute("call-b", { action: "list_blocks", doc_token: "d" });
 
     expect(createFeishuClientMock).toHaveBeenCalledTimes(2);
     expect(createFeishuClientMock.mock.calls[0]?.[0]?.appId).toBe("app-a");
     expect(createFeishuClientMock.mock.calls[1]?.[0]?.appId).toBe("app-b");
   });
 
-  test("single-account setup still registers tool and uses that account", async () => {
+  test("explicit accountId param overrides agentAccountId context", async () => {
     const cfg = {
       channels: {
         feishu: {
           enabled: true,
           accounts: {
-            default: { appId: "app-d", appSecret: "sec-d", tools: { doc: true } },
+            a: { appId: "app-a", appSecret: "sec-a", tools: { doc: true } },
+            b: { appId: "app-b", appSecret: "sec-b", tools: { doc: true } },
           },
         },
       },
-    };
+    } as OpenClawPluginApi["config"];
 
-    const { api, tools } = fakeApi(cfg);
+    const { api, resolveTool } = createApi(cfg);
     registerFeishuDocTools(api);
 
-    const tool = tools.find((t) => t.name === "feishu_doc");
-    expect(tool).toBeTruthy();
+    const docTool = resolveTool("feishu_doc", { agentAccountId: "b" });
+    await docTool.execute("call-override", {
+      action: "list_blocks",
+      doc_token: "d",
+      accountId: "a",
+    });
 
-    await tool!.execute("call-d", { action: "list_blocks", doc_token: "d" });
-    expect(createFeishuClientMock).toHaveBeenCalled();
-    expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-d");
+    expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-a");
   });
 });
