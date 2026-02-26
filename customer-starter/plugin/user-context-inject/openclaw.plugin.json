@@ -1,0 +1,10 @@
+{
+  "id": "user-context-inject",
+  "name": "User context inject",
+  "description": "Injects per-user preferences from users/<sanitized-session-key>.md into each run via before_agent_start (multi-user context).",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
