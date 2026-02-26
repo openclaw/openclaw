@@ -69,9 +69,10 @@ vi.mock("../agents/skills.js", () => {
 
 let listSkillCommandsForAgents: typeof import("./skill-commands.js").listSkillCommandsForAgents;
 let resolveSkillCommandInvocation: typeof import("./skill-commands.js").resolveSkillCommandInvocation;
+let skillCommandsTesting: typeof import("./skill-commands.js").__testing;
 
 beforeAll(async () => {
-  ({ listSkillCommandsForAgents, resolveSkillCommandInvocation } =
+  ({ listSkillCommandsForAgents, resolveSkillCommandInvocation, __testing: skillCommandsTesting } =
     await import("./skill-commands.js"));
 });
 
@@ -125,7 +126,7 @@ describe("listSkillCommandsForAgents", () => {
     );
   });
 
-  it("lists all agents when agentIds is omitted", async () => {
+  it("deduplicates by skillName across agents, keeping the first registration", async () => {
     const baseDir = await makeTempDir("openclaw-skills-");
     const mainWorkspace = path.join(baseDir, "main");
     const researchWorkspace = path.join(baseDir, "research");
@@ -143,8 +144,10 @@ describe("listSkillCommandsForAgents", () => {
       },
     });
     const names = commands.map((entry) => entry.name);
+    // demo-skill appears in both workspaces; only the first registration (demo_skill) survives.
     expect(names).toContain("demo_skill");
-    expect(names).toContain("demo_skill_2");
+    expect(names).not.toContain("demo_skill_2");
+    // extra-skill is unique to the research workspace and should be present.
     expect(names).toContain("extra_skill");
   });
 
@@ -295,5 +298,40 @@ describe("listSkillCommandsForAgents", () => {
     // The valid agent's skills should still be listed despite the broken one.
     expect(commands.length).toBeGreaterThan(0);
     expect(commands.map((entry) => entry.skillName)).toContain("demo-skill");
+  });
+});
+
+describe("dedupeBySkillName", () => {
+  it("keeps the first entry when multiple commands share a skillName", () => {
+    const input = [
+      { name: "github", skillName: "github", description: "GitHub" },
+      { name: "github_2", skillName: "github", description: "GitHub" },
+      { name: "weather", skillName: "weather", description: "Weather" },
+      { name: "weather_2", skillName: "weather", description: "Weather" },
+    ];
+    const output = skillCommandsTesting.dedupeBySkillName(input);
+    expect(output.map((e) => e.name)).toEqual(["github", "weather"]);
+  });
+
+  it("matches skillName case-insensitively", () => {
+    const input = [
+      { name: "ClawHub", skillName: "ClawHub", description: "ClawHub" },
+      { name: "clawhub_2", skillName: "clawhub", description: "ClawHub" },
+    ];
+    const output = skillCommandsTesting.dedupeBySkillName(input);
+    expect(output).toHaveLength(1);
+    expect(output[0]?.name).toBe("ClawHub");
+  });
+
+  it("passes through commands with an empty skillName", () => {
+    const input = [
+      { name: "a", skillName: "", description: "A" },
+      { name: "b", skillName: "", description: "B" },
+    ];
+    expect(skillCommandsTesting.dedupeBySkillName(input)).toHaveLength(2);
+  });
+
+  it("returns an empty array for empty input", () => {
+    expect(skillCommandsTesting.dedupeBySkillName([])).toEqual([]);
   });
 });
