@@ -355,6 +355,10 @@ openclaw secrets apply --from /tmp/openclaw-secrets-plan.json
 openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --dry-run
 ```
 
+For strict target/path contract details and exact rejection rules, see:
+
+- [Secrets Apply Plan Contract](/gateway/secrets-plan-contract)
+
 ## One-way safety policy
 
 OpenClaw intentionally does **not** write rollback backups that contain pre-migration plaintext secret values.
@@ -376,6 +380,7 @@ For static credentials, OpenClaw runtime no longer depends on plaintext `auth.js
 ## Related docs
 
 - CLI commands: [secrets](/cli/secrets)
+- Plan contract details: [Secrets Apply Plan Contract](/gateway/secrets-plan-contract)
 - Auth setup: [Authentication](/gateway/authentication)
 - Security posture: [Security](/gateway/security)
 - Environment precedence: [Environment Variables](/help/environment)
