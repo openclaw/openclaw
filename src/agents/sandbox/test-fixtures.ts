@@ -34,6 +34,8 @@ export function createSandboxTestContext(params?: {
     workspaceAccess: "rw",
     containerName: "openclaw-sbx-test",
     containerWorkdir: "/workspace",
+    skillsDir: "/tmp/workspace/.sandbox-skills",
+    skillsMount: "/skills",
     tools: { allow: ["*"], deny: [] },
     browserAllowHostControl: false,
     ...sandboxOverrides,

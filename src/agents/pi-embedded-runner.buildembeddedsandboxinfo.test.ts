@@ -11,6 +11,8 @@ function createSandboxContext(overrides?: Partial<SandboxContext>): SandboxConte
     workspaceAccess: "none",
     containerName: "openclaw-sbx-test",
     containerWorkdir: "/workspace",
+    skillsDir: "/tmp/sandbox/.sandbox-skills",
+    skillsMount: "/skills",
     docker: {
       image: "openclaw-sandbox:bookworm-slim",
       containerPrefix: "openclaw-sbx-",

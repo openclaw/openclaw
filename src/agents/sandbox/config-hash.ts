@@ -6,6 +6,7 @@ type SandboxHashInput = {
   workspaceAccess: SandboxWorkspaceAccess;
   workspaceDir: string;
   agentWorkspaceDir: string;
+  skillsDir?: string;
 };
 
 type SandboxBrowserHashInput = {
