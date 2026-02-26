@@ -136,6 +136,7 @@ const SecretsExecProviderSchema = z
       .max(64)
       .optional(),
     allowInsecurePath: z.boolean().optional(),
+    allowSymlinkCommand: z.boolean().optional(),
   })
   .strict();
 
