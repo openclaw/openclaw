@@ -55,6 +55,16 @@ describe("resolveGroupAllowFromSources", () => {
       }),
     ).toEqual(["owner", "owner2"]);
   });
+
+  it("can disable fallback to DM allowlist", () => {
+    expect(
+      resolveGroupAllowFromSources({
+        allowFrom: ["owner", "owner2"],
+        groupAllowFrom: [],
+        fallbackToAllowFrom: false,
+      }),
+    ).toEqual([]);
+  });
 });
 
 describe("firstDefined", () => {
