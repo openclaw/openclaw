@@ -1,4 +1,3 @@
-import { readChannelAllowFromStore } from "../../pairing/pairing-store.js";
 import { readStoreAllowFromForDmPolicy } from "../../security/dm-policy-shared.js";
 import {
   allowListMatches,
@@ -17,8 +16,8 @@ export async function resolveSlackEffectiveAllowFrom(
   const storeAllowFrom = includePairingStore
     ? await readStoreAllowFromForDmPolicy({
         provider: "slack",
+        accountId: ctx.accountId,
         dmPolicy: ctx.dmPolicy,
-        readStore: (provider) => readChannelAllowFromStore(provider),
       })
     : [];
   const allowFrom = normalizeAllowList([...ctx.allowFrom, ...storeAllowFrom]);
