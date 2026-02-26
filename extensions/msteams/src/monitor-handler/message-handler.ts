@@ -533,17 +533,30 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     log.info("dispatching to agent", { sessionKey: route.sessionKey });
     try {
-      const { queuedFinal, counts } = await core.channel.reply.dispatchReplyFromConfig({
-        ctx: ctxPayload,
-        cfg,
-        dispatcher,
-        replyOptions,
-      });
+      try {
+        const { queuedFinal, counts } = await core.channel.reply.dispatchReplyFromConfig({
+          ctx: ctxPayload,
+          cfg,
+          dispatcher,
+          replyOptions,
+        });
 
-      markDispatchIdle();
-      log.info("dispatch complete", { queuedFinal, counts });
+        log.info("dispatch complete", { queuedFinal, counts });
 
-      if (!queuedFinal) {
+        if (!queuedFinal) {
+          if (isRoomish && historyKey) {
+            clearHistoryEntriesIfEnabled({
+              historyMap: conversationHistories,
+              historyKey,
+              limit: historyLimit,
+            });
+          }
+          return;
+        }
+        const finalCount = counts.final;
+        logVerboseMessage(
+          `msteams: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${teamsTo}`,
+        );
         if (isRoomish && historyKey) {
           clearHistoryEntriesIfEnabled({
             historyMap: conversationHistories,
@@ -551,18 +564,13 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             limit: historyLimit,
           });
         }
-        return;
-      }
-      const finalCount = counts.final;
-      logVerboseMessage(
-        `msteams: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${teamsTo}`,
-      );
-      if (isRoomish && historyKey) {
-        clearHistoryEntriesIfEnabled({
-          historyMap: conversationHistories,
-          historyKey,
-          limit: historyLimit,
-        });
+      } finally {
+        dispatcher.markComplete();
+        try {
+          await dispatcher.waitForIdle();
+        } finally {
+          markDispatchIdle();
+        }
       }
     } catch (err) {
       log.error("dispatch failed", { error: String(err) });
