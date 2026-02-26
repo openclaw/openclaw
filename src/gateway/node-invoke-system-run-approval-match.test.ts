@@ -164,4 +164,56 @@ describe("evaluateSystemRunApprovalMatch", () => {
     }
     expect(result.code).toBe("APPROVAL_REQUEST_MISMATCH");
   });
+
+  test("prefers v1 binding over legacy command text fields", () => {
+    const result = evaluateSystemRunApprovalMatch({
+      cmdText: "echo SAFE",
+      argv: ["echo", "SAFE"],
+      request: {
+        host: "node",
+        // Intentionally stale legacy fields; v1 should be authoritative.
+        command: "echo STALE",
+        commandArgv: ["echo STALE"],
+        systemRunBindingV1: buildSystemRunApprovalBindingV1({
+          argv: ["echo", "SAFE"],
+          cwd: null,
+          agentId: null,
+          sessionKey: null,
+        }).binding,
+      },
+      binding: {
+        cwd: null,
+        agentId: null,
+        sessionKey: null,
+      },
+    });
+    expect(result).toEqual({ ok: true });
+  });
+
+  test("rejects v1 mismatch even when legacy command text matches", () => {
+    const result = evaluateSystemRunApprovalMatch({
+      cmdText: "echo SAFE",
+      argv: ["echo", "SAFE"],
+      request: {
+        host: "node",
+        command: "echo SAFE",
+        systemRunBindingV1: buildSystemRunApprovalBindingV1({
+          argv: ["echo SAFE"],
+          cwd: null,
+          agentId: null,
+          sessionKey: null,
+        }).binding,
+      },
+      binding: {
+        cwd: null,
+        agentId: null,
+        sessionKey: null,
+      },
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("unreachable");
+    }
+    expect(result.code).toBe("APPROVAL_REQUEST_MISMATCH");
+  });
 });
