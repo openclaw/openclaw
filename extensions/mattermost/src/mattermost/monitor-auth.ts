@@ -44,7 +44,7 @@ export function isMattermostSenderAllowed(params: {
   allowFrom: string[];
   allowNameMatching?: boolean;
 }): boolean {
-  const allowFrom = params.allowFrom;
+  const allowFrom = normalizeMattermostAllowList(params.allowFrom);
   if (allowFrom.length === 0) {
     return false;
   }
