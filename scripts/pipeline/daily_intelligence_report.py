@@ -1408,7 +1408,7 @@ def build_pest_analysis(mkt: dict, geo: dict, social: dict) -> str:
 
     try:
         content, model, error = llm_chat_with_fallback(
-            messages, MODELS_PREMIUM, max_tokens=800, timeout=45,
+            messages, MODELS_PREMIUM, max_tokens=800, timeout=90,
         )
         log(f"PEST model: {model or 'FAILED'}{f' err={error}' if error else ''}")
         if content:
@@ -1647,7 +1647,7 @@ def build_falsification(mkt: dict, geo: dict,
             {"role": "user", "content": raw_flags},
         ]
         content, model, error = llm_chat_with_fallback(
-            messages, MODELS_PREMIUM, max_tokens=500, timeout=45,
+            messages, MODELS_PREMIUM, max_tokens=500, timeout=90,
         )
         log(f"Falsification model: {model or 'FAILED'}{f' err={error}' if error else ''}")
         if content:
@@ -1691,7 +1691,7 @@ def build_executive_summary(factcheck: str, pest: str,
 
     try:
         content, model, error = llm_chat_with_fallback(
-            messages, MODELS_PREMIUM, max_tokens=400, timeout=45,
+            messages, MODELS_PREMIUM, max_tokens=400, timeout=90,
         )
         log(f"Executive model: {model or 'FAILED'}{f' err={error}' if error else ''}")
         if content:
