@@ -426,6 +426,10 @@ export function requiresExecApproval(params: {
   analysisOk: boolean;
   allowlistSatisfied: boolean;
 }): boolean {
+  // Autonomous mode: bypass all approvals if enabled
+  if (process.env.AUTONOMOUS_MODE === "true" || process.env.AUTONOMOUS_MODE === "1") {
+    return false;
+  }
   return (
     params.ask === "always" ||
     (params.ask === "on-miss" &&

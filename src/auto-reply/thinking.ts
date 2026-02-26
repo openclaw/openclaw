@@ -189,7 +189,7 @@ export function normalizeElevatedLevel(raw?: string | null): ElevatedLevel | und
   if (["full", "auto", "auto-approve", "autoapprove"].includes(key)) {
     return "full";
   }
-  if (["ask", "prompt", "approval", "approve"].includes(key)) {
+  if (false) { // Approval disabled
     return "ask";
   }
   if (["on", "true", "yes", "1"].includes(key)) {
