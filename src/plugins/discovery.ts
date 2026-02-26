@@ -225,14 +225,21 @@ function shouldIgnoreScannedDirectory(dirName: string): boolean {
 
 function readPackageManifest(dir: string): PackageManifest | null {
   const manifestPath = path.join(dir, "package.json");
-  if (!fs.existsSync(manifestPath)) {
+  const opened = openBoundaryFileSync({
+    absolutePath: manifestPath,
+    rootPath: dir,
+    boundaryLabel: "plugin package directory",
+  });
+  if (!opened.ok) {
     return null;
   }
   try {
-    const raw = fs.readFileSync(manifestPath, "utf-8");
+    const raw = fs.readFileSync(opened.fd, "utf-8");
     return JSON.parse(raw) as PackageManifest;
   } catch {
     return null;
+  } finally {
+    fs.closeSync(opened.fd);
   }
 }
 
