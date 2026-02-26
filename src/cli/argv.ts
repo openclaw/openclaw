@@ -172,7 +172,7 @@ export function buildParseArgv(params: {
   return ["node", programName || "openclaw", ...normalizedArgv];
 }
 
-const nodeExecutablePattern = /^node-\d+(?:\.\d+)*(?:\.exe)?$/;
+const nodeExecutablePattern = /^node(?:-\d+|\d+)(?:\.\d+)*(?:\.exe)?$/;
 
 function isNodeExecutable(executable: string): boolean {
   return (
