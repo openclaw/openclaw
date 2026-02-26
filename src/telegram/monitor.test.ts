@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { monitorTelegramProvider } from "./monitor.js";
 
 type MockCtx = {
@@ -160,19 +160,30 @@ vi.mock("../auto-reply/reply.js", () => ({
 }));
 
 describe("monitorTelegramProvider (grammY)", () => {
+  let consoleErrorSpy: { mockRestore: () => void } | undefined;
+
   beforeEach(() => {
     loadConfig.mockReturnValue({
       agents: { defaults: { maxConcurrent: 2 } },
       channels: { telegram: {} },
     });
     initSpy.mockClear();
-    runSpy.mockClear();
+    runSpy.mockReset().mockImplementation(() =>
+      makeRunnerStub({
+        task: () => Promise.reject(new Error("runSpy called without explicit test stub")),
+      }),
+    );
     computeBackoff.mockClear();
     sleepWithAbort.mockClear();
     startTelegramWebhookSpy.mockClear();
     registerUnhandledRejectionHandlerMock.mockClear();
     resetUnhandledRejection();
     createTelegramBotErrors.length = 0;
+    consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    consoleErrorSpy?.mockRestore();
   });
 
   it("processes a DM and sends reply", async () => {
