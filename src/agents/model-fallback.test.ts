@@ -86,7 +86,7 @@ async function expectFallsBackToHaiku(params: {
   expect(result.result).toBe("ok");
   expect(run).toHaveBeenCalledTimes(2);
   expect(run.mock.calls[1]?.[0]).toBe("anthropic");
-  expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
+  expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-4-5");
 }
 
 function createOverrideFailureRun(params: {
@@ -297,14 +297,14 @@ describe("runWithModelFallback", () => {
         defaults: {
           model: {
             primary: "openai/gpt-4.1-mini",
-            fallbacks: ["anthropic/claude-haiku-3-5", "openrouter/deepseek-chat"],
+            fallbacks: ["anthropic/claude-haiku-4-5", "openrouter/deepseek-chat"],
           },
         },
       },
     });
 
     const run = vi.fn().mockImplementation(async (provider: string, model: string) => {
-      if (provider === "anthropic" && model === "claude-haiku-3-5") {
+      if (provider === "anthropic" && model === "claude-haiku-4-5") {
         throw Object.assign(new Error("rate-limited"), { status: 429 });
       }
       if (provider === "openrouter" && model === "openrouter/deepseek-chat") {
@@ -316,7 +316,7 @@ describe("runWithModelFallback", () => {
     const result = await runWithModelFallback({
       cfg,
       provider: "anthropic",
-      model: "claude-haiku-3-5",
+      model: "claude-haiku-4-5",
       run,
     });
 
@@ -324,7 +324,7 @@ describe("runWithModelFallback", () => {
     expect(result.provider).toBe("openrouter");
     expect(result.model).toBe("openrouter/deepseek-chat");
     expect(run.mock.calls).toEqual([
-      ["anthropic", "claude-haiku-3-5"],
+      ["anthropic", "claude-haiku-4-5"],
       ["openrouter", "openrouter/deepseek-chat"],
     ]);
   });
@@ -335,7 +335,7 @@ describe("runWithModelFallback", () => {
         defaults: {
           model: {
             primary: "openai/gpt-4.1-mini",
-            fallbacks: ["anthropic/claude-haiku-3-5"],
+            fallbacks: ["anthropic/claude-haiku-4-5"],
           },
         },
       },
@@ -356,7 +356,7 @@ describe("runWithModelFallback", () => {
     expect(result.result).toBe("ok");
     expect(run.mock.calls).toEqual([
       ["openai", "gpt-4.1-mini"],
-      ["anthropic", "claude-haiku-3-5"],
+      ["anthropic", "claude-haiku-4-5"],
     ]);
   });
 
@@ -574,14 +574,14 @@ describe("runWithModelFallback", () => {
         cfg,
         provider: "anthropic",
         model: "claude-opus-4-5",
-        fallbacksOverride: ["anthropic/claude-haiku-3-5"],
+        fallbacksOverride: ["anthropic/claude-haiku-4-5"],
         run,
       }),
     ).rejects.toThrow("All models failed");
 
     expect(run.mock.calls).toEqual([
       ["anthropic", "claude-opus-4-5"],
-      ["anthropic", "claude-haiku-3-5"],
+      ["anthropic", "claude-haiku-4-5"],
     ]);
   });
 

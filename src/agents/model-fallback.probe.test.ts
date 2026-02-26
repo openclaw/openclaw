@@ -38,7 +38,7 @@ function expectFallbackUsed(
 ) {
   expect(result.result).toBe("ok");
   expect(run).toHaveBeenCalledTimes(1);
-  expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-3-5");
+  expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-4-5");
   expect(result.attempts[0]?.reason).toBe("rate_limit");
 }
 
@@ -135,7 +135,7 @@ describe("runWithModelFallback – probe logic", () => {
 
     expect(result.result).toBe("ok");
     expect(run).toHaveBeenCalledTimes(1);
-    expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-3-5");
+    expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-4-5");
     expect(result.attempts[0]?.reason).toBe("billing");
   });
 
