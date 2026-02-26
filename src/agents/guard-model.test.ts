@@ -270,7 +270,7 @@ describe("guard-model", () => {
       expect(res[0]?.text).toContain("hate");
     });
 
-    it("caps oversized guard input with trailing [truncated] marker and warns on fail-open", async () => {
+    it("caps oversized guard input with trailing [truncated] marker and annotates fail-open output", async () => {
       vi.spyOn(globalThis, "fetch").mockImplementationOnce(async (_url, init) => {
         const request = parseJsonRequestBody(init);
         const userMessage =
@@ -293,10 +293,30 @@ describe("guard-model", () => {
         { cfg: TEST_RUNTIME_CONFIG },
       );
 
+      expect(res).toHaveLength(1);
+      expect(res[0]?.isError).not.toBe(true);
+      expect(res[0]?.text).toContain(oversized);
+      expect(res[0]?.text).toContain("truncated to 64 characters");
+    });
+
+    it("keeps payload order/count stable when adding truncation warning", async () => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(jsonGuardReply('{"safe":true}'));
+      const payloads: ReplyPayload[] = [{ text: "first" }, { text: "second" }];
+
+      const res = await applyGuardToPayloads(
+        payloads,
+        {
+          ...BASE_GUARD_CONFIG,
+          onError: "allow",
+          maxInputChars: 10,
+        },
+        { cfg: TEST_RUNTIME_CONFIG },
+      );
+
       expect(res).toHaveLength(2);
-      expect(res[0]?.text).toBe(oversized);
-      expect(res[1]?.isError).toBe(true);
-      expect(res[1]?.text).toContain("truncated to 64 characters");
+      expect(res[0]?.text).toBe("first");
+      expect(res[1]?.text).toContain("second");
+      expect(res[1]?.text).toContain("truncated to 10 characters");
     });
 
     it("keeps fail-closed blocking behavior for oversized input when onError is block", async () => {

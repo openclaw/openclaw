@@ -438,11 +438,24 @@ function buildGuardErrorPayload(): ReplyPayload[] {
   ];
 }
 
-function buildGuardTruncationWarningPayload(maxChars: number): ReplyPayload {
-  return {
-    text: `${GUARD_TRUNCATED_WARNING_PREFIX}${maxChars} characters before safety screening.`,
-    isError: true,
-  };
+function buildGuardTruncationWarningText(maxChars: number): string {
+  return `${GUARD_TRUNCATED_WARNING_PREFIX}${maxChars} characters before safety screening.`;
+}
+
+function annotateLastTextPayload(payloads: ReplyPayload[], suffix: string): ReplyPayload[] {
+  const nextPayloads = payloads.slice();
+  for (let i = nextPayloads.length - 1; i >= 0; i -= 1) {
+    const payload = nextPayloads[i];
+    if (!payload?.text) {
+      continue;
+    }
+    nextPayloads[i] = {
+      ...payload,
+      text: `${payload.text}\n\n${suffix}`,
+    };
+    return nextPayloads;
+  }
+  return payloads;
 }
 
 /**
@@ -471,12 +484,13 @@ export async function applyGuardToPayloads(
   const maxInputChars =
     resolveGuardMaxInputChars(config.maxInputChars) ?? DEFAULT_GUARD_MAX_INPUT_CHARS;
   const shouldEmitTruncationWarning = Boolean(result.inputTruncated && config.onError === "allow");
+  const truncationWarningText = buildGuardTruncationWarningText(maxInputChars);
 
   if (result.safe) {
     if (!shouldEmitTruncationWarning) {
       return payloads;
     }
-    return [...payloads, buildGuardTruncationWarningPayload(maxInputChars)];
+    return annotateLastTextPayload(payloads, truncationWarningText);
   }
 
   if (result.source === "error") {
@@ -537,7 +551,7 @@ export async function applyGuardToPayloads(
   if (!shouldEmitTruncationWarning) {
     return screenedPayloads;
   }
-  return [...screenedPayloads, buildGuardTruncationWarningPayload(maxInputChars)];
+  return annotateLastTextPayload(screenedPayloads, truncationWarningText);
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
