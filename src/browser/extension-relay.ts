@@ -365,6 +365,38 @@ export async function ensureChromeExtensionRelayServer(opts: {
   const server = createServer((req, res) => {
     const url = new URL(req.url ?? "/", info.baseUrl);
     const path = url.pathname;
+    const origin = getHeader(req, "origin");
+    const isChromeExtensionOrigin =
+      typeof origin === "string" && origin.startsWith("chrome-extension://");
+
+    if (isChromeExtensionOrigin && origin) {
+      // Let extension pages call relay HTTP endpoints cross-origin.
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
+    }
+
+    // Handle CORS preflight requests from the browser extension.
+    if (req.method === "OPTIONS") {
+      if (origin && !isChromeExtensionOrigin) {
+        res.writeHead(403);
+        res.end("Forbidden");
+        return;
+      }
+      const requestedHeaders = (getHeader(req, "access-control-request-headers") ?? "")
+        .split(",")
+        .map((header) => header.trim().toLowerCase())
+        .filter((header) => header.length > 0);
+      const allowedHeaders = new Set(["content-type", RELAY_AUTH_HEADER, ...requestedHeaders]);
+      res.writeHead(204, {
+        "Access-Control-Allow-Origin": origin ?? "*",
+        "Access-Control-Allow-Methods": "GET, PUT, POST, OPTIONS",
+        "Access-Control-Allow-Headers": Array.from(allowedHeaders).join(", "),
+        "Access-Control-Max-Age": "86400",
+        Vary: "Origin, Access-Control-Request-Headers",
+      });
+      res.end();
+      return;
+    }
 
     if (path.startsWith("/json")) {
       const token = getHeader(req, RELAY_AUTH_HEADER)?.trim();
