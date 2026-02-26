@@ -220,6 +220,27 @@ Respond ONLY with a JSON object: {"safe": true} or {"safe": false, "reason": "br
 Do not include any other text.`;
 
 const GUARD_TIMEOUT_MS = 5_000;
+export const GUARD_MAX_INPUT_CHARS = 12_000;
+const GUARD_TRUNCATION_MARKER = "\n\n[Guard input truncated]\n\n";
+
+function truncateGuardInput(content: string): { content: string; truncated: boolean } {
+  if (content.length <= GUARD_MAX_INPUT_CHARS) {
+    return { content, truncated: false };
+  }
+  const budget = Math.max(0, GUARD_MAX_INPUT_CHARS - GUARD_TRUNCATION_MARKER.length);
+  if (budget === 0) {
+    return {
+      content: GUARD_TRUNCATION_MARKER.slice(0, GUARD_MAX_INPUT_CHARS),
+      truncated: true,
+    };
+  }
+  const headChars = Math.ceil(budget * 0.6);
+  const tailChars = Math.max(0, budget - headChars);
+  return {
+    content: `${content.slice(0, headChars)}${GUARD_TRUNCATION_MARKER}${tailChars > 0 ? content.slice(-tailChars) : ""}`,
+    truncated: true,
+  };
+}
 
 /**
  * Call the guard model to evaluate content safety.
@@ -232,6 +253,13 @@ export async function evaluateGuard(
     agentDir?: string;
   },
 ): Promise<GuardResult> {
+  const guardInput = truncateGuardInput(content);
+  if (guardInput.truncated) {
+    log.warn(
+      `guard model input truncated from ${content.length} to ${guardInput.content.length} chars`,
+    );
+  }
+
   if (config.compatibilityError) {
     log.warn(`guard model compatibility error: ${config.compatibilityError}`);
     return handleGuardError({ ...config, onError: "block" }, config.compatibilityError);
@@ -261,7 +289,7 @@ export async function evaluateGuard(
     model: config.modelId,
     messages: [
       { role: "system", content: GUARD_SYSTEM_PROMPT },
-      { role: "user", content: `Evaluate this assistant reply:\n\n${content}` },
+      { role: "user", content: `Evaluate this assistant reply:\n\n${guardInput.content}` },
     ],
     max_tokens: 200,
     temperature: 0,

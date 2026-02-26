@@ -783,6 +783,8 @@ export async function runEmbeddedPiAgent(
 
           const prompt =
             provider === "anthropic" ? scrubAnthropicRefusalMagic(params.prompt) : params.prompt;
+          const guardConfigForRun = resolveGuardModelConfig(params.config);
+          const suppressLiveStreaming = Boolean(guardConfigForRun);
 
           const attempt = await runEmbeddedAttempt({
             sessionId: params.sessionId,
@@ -829,13 +831,13 @@ export async function runEmbeddedPiAgent(
             abortSignal: params.abortSignal,
             shouldEmitToolResult: params.shouldEmitToolResult,
             shouldEmitToolOutput: params.shouldEmitToolOutput,
-            onPartialReply: params.onPartialReply,
+            onPartialReply: suppressLiveStreaming ? undefined : params.onPartialReply,
             onAssistantMessageStart: params.onAssistantMessageStart,
-            onBlockReply: params.onBlockReply,
-            onBlockReplyFlush: params.onBlockReplyFlush,
+            onBlockReply: suppressLiveStreaming ? undefined : params.onBlockReply,
+            onBlockReplyFlush: suppressLiveStreaming ? undefined : params.onBlockReplyFlush,
             blockReplyBreak: params.blockReplyBreak,
             blockReplyChunking: params.blockReplyChunking,
-            onReasoningStream: params.onReasoningStream,
+            onReasoningStream: suppressLiveStreaming ? undefined : params.onReasoningStream,
             onReasoningEnd: params.onReasoningEnd,
             onToolResult: params.onToolResult,
             onAgentEvent: params.onAgentEvent,
@@ -1340,9 +1342,8 @@ export async function runEmbeddedPiAgent(
           });
 
           // Guard model screening — evaluate payloads before delivery
-          const guardConfig = resolveGuardModelConfig(params.config);
-          if (guardConfig && payloads.length > 0) {
-            payloads = await applyGuardToPayloads(payloads, guardConfig, {
+          if (guardConfigForRun && payloads.length > 0) {
+            payloads = await applyGuardToPayloads(payloads, guardConfigForRun, {
               cfg: params.config,
               agentDir: params.agentDir,
             });

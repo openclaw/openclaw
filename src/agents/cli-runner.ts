@@ -35,6 +35,7 @@ import {
 } from "./cli-runner/helpers.js";
 import { resolveOpenClawDocsPath } from "./docs-path.js";
 import { FailoverError, resolveFailoverStatus } from "./failover-error.js";
+import { applyGuardToPayloads, resolveGuardModelConfig } from "./guard-model.js";
 import {
   classifyFailoverReason,
   isFailoverErrorMessage,
@@ -52,6 +53,7 @@ export async function runCliAgent(params: {
   sessionId: string;
   sessionKey?: string;
   agentId?: string;
+  agentDir?: string;
   sessionFile: string;
   workspaceDir: string;
   config?: OpenClawConfig;
@@ -408,7 +410,14 @@ export async function runCliAgent(params: {
   try {
     const output = await executeCliWithSession(params.cliSessionId);
     const text = output.text?.trim();
-    const payloads = text ? [{ text }] : undefined;
+    let payloads: EmbeddedPiRunResult["payloads"] = text ? [{ text }] : undefined;
+    const guardConfig = resolveGuardModelConfig(params.config);
+    if (guardConfig && payloads?.length) {
+      payloads = await applyGuardToPayloads(payloads, guardConfig, {
+        cfg: params.config,
+        agentDir: params.agentDir,
+      });
+    }
 
     return {
       payloads,
@@ -475,6 +484,7 @@ export async function runClaudeCliAgent(params: {
   sessionId: string;
   sessionKey?: string;
   agentId?: string;
+  agentDir?: string;
   sessionFile: string;
   workspaceDir: string;
   config?: OpenClawConfig;
@@ -493,6 +503,7 @@ export async function runClaudeCliAgent(params: {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     agentId: params.agentId,
+    agentDir: params.agentDir,
     sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,
     config: params.config,
