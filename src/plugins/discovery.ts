@@ -193,7 +193,11 @@ function discoverInDirectory(params: {
       addCandidate({
         candidates: params.candidates,
         seen: params.seen,
-        idHint: entry.name,
+        idHint: deriveIdHint({
+          filePath: indexFile,
+          packageName: manifest?.name,
+          hasMultipleExtensions: false,
+        }),
         source: indexFile,
         rootDir: fullPath,
         origin: params.origin,
@@ -280,7 +284,11 @@ function discoverFromPath(params: {
       addCandidate({
         candidates: params.candidates,
         seen: params.seen,
-        idHint: path.basename(resolved),
+        idHint: deriveIdHint({
+          filePath: indexFile,
+          packageName: manifest?.name,
+          hasMultipleExtensions: false,
+        }),
         source: indexFile,
         rootDir: resolved,
         origin: params.origin,
