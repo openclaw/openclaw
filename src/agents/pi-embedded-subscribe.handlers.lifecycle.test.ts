@@ -58,14 +58,16 @@ describe("handleAgentEnd", () => {
     expect(warn.mock.calls[0]?.[1]).toMatchObject({
       event: "embedded_run_agent_end",
       runId: "run-1",
-      error: "connection refused",
+      // "connection refused" is an unrecognized error, so formatAssistantErrorText
+      // replaces it with the generic user-facing message.
+      error: "Something went wrong. Please try again, or use /new to start a fresh session.",
       rawErrorPreview: "connection refused",
     });
     expect(onAgentEvent).toHaveBeenCalledWith({
       stream: "lifecycle",
       data: {
         phase: "error",
-        error: "connection refused",
+        error: "Something went wrong. Please try again, or use /new to start a fresh session.",
       },
     });
   });
@@ -111,14 +113,16 @@ describe("handleAgentEnd", () => {
     const warn = vi.mocked(ctx.log.warn);
     expect(warn.mock.calls[0]?.[1]).toMatchObject({
       event: "embedded_run_agent_end",
-      error: "x-api-key: ***",
+      // "x-api-key: sk-..." is an unrecognized error, so formatAssistantErrorText
+      // replaces it with the generic user-facing message.
+      error: "Something went wrong. Please try again, or use /new to start a fresh session.",
       rawErrorPreview: "x-api-key: ***",
     });
     expect(onAgentEvent).toHaveBeenCalledWith({
       stream: "lifecycle",
       data: {
         phase: "error",
-        error: "x-api-key: ***",
+        error: "Something went wrong. Please try again, or use /new to start a fresh session.",
       },
     });
   });
