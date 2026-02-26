@@ -71,41 +71,45 @@ export function extractGeminiCliCredentials(): { clientId: string; clientSecret:
     }
 
     const resolvedPath = realpathSync(geminiPath);
-    const geminiCliDir = dirname(dirname(resolvedPath));
-
-    const searchPaths = [
-      join(
-        geminiCliDir,
-        "node_modules",
-        "@google",
-        "gemini-cli-core",
-        "dist",
-        "src",
-        "code_assist",
-        "oauth2.js",
-      ),
-      join(
-        geminiCliDir,
-        "node_modules",
-        "@google",
-        "gemini-cli-core",
-        "dist",
-        "code_assist",
-        "oauth2.js",
-      ),
-    ];
+    const geminiCliDirs = resolveGeminiCliDirs(geminiPath, resolvedPath);
 
     let content: string | null = null;
-    for (const p of searchPaths) {
-      if (existsSync(p)) {
-        content = readFileSync(p, "utf8");
+    for (const geminiCliDir of geminiCliDirs) {
+      const searchPaths = [
+        join(
+          geminiCliDir,
+          "node_modules",
+          "@google",
+          "gemini-cli-core",
+          "dist",
+          "src",
+          "code_assist",
+          "oauth2.js",
+        ),
+        join(
+          geminiCliDir,
+          "node_modules",
+          "@google",
+          "gemini-cli-core",
+          "dist",
+          "code_assist",
+          "oauth2.js",
+        ),
+      ];
+
+      for (const p of searchPaths) {
+        if (existsSync(p)) {
+          content = readFileSync(p, "utf8");
+          break;
+        }
+      }
+      if (content) {
         break;
       }
-    }
-    if (!content) {
       const found = findFile(geminiCliDir, "oauth2.js", 10);
       if (found) {
         content = readFileSync(found, "utf8");
+        break;
       }
     }
     if (!content) {
@@ -122,6 +126,30 @@ export function extractGeminiCliCredentials(): { clientId: string; clientSecret:
     // Gemini CLI not installed or extraction failed
   }
   return null;
+}
+
+function resolveGeminiCliDirs(geminiPath: string, resolvedPath: string): string[] {
+  const binDir = dirname(geminiPath);
+  const candidates = [
+    dirname(dirname(resolvedPath)),
+    join(dirname(resolvedPath), "node_modules", "@google", "gemini-cli"),
+    join(binDir, "node_modules", "@google", "gemini-cli"),
+    join(dirname(binDir), "node_modules", "@google", "gemini-cli"),
+    join(dirname(binDir), "lib", "node_modules", "@google", "gemini-cli"),
+  ];
+
+  const deduped: string[] = [];
+  const seen = new Set<string>();
+  for (const candidate of candidates) {
+    const key =
+      process.platform === "win32" ? candidate.replace(/\\/g, "/").toLowerCase() : candidate;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(candidate);
+  }
+  return deduped;
 }
 
 function findInPath(name: string): string | null {
