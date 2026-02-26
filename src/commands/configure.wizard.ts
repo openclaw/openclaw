@@ -1,6 +1,5 @@
 import fsPromises from "node:fs/promises";
 import nodePath from "node:path";
-import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
