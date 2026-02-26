@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
 import { loadAuthProfileStoreForSecretsRuntime } from "../agents/auth-profiles.js";
 import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
@@ -62,36 +63,49 @@ function getByDotPath(root: unknown, pathLabel: string): unknown {
   return cursor;
 }
 
-function setByDotPath(root: OpenClawConfig, pathLabel: string, value: unknown): void {
+function setByDotPath(root: OpenClawConfig, pathLabel: string, value: unknown): boolean {
   const segments = parseDotPath(pathLabel);
   if (segments.length === 0) {
     throw new Error("Target path is empty.");
   }
   let cursor: Record<string, unknown> = root as unknown as Record<string, unknown>;
+  let changed = false;
   for (const segment of segments.slice(0, -1)) {
     const existing = cursor[segment];
     if (!isRecord(existing)) {
       cursor[segment] = {};
+      changed = true;
     }
     cursor = cursor[segment] as Record<string, unknown>;
   }
-  cursor[segments[segments.length - 1]] = value;
+  const leaf = segments[segments.length - 1] ?? "";
+  const previous = cursor[leaf];
+  if (!isDeepStrictEqual(previous, value)) {
+    cursor[leaf] = value;
+    changed = true;
+  }
+  return changed;
 }
 
-function deleteByDotPath(root: OpenClawConfig, pathLabel: string): void {
+function deleteByDotPath(root: OpenClawConfig, pathLabel: string): boolean {
   const segments = parseDotPath(pathLabel);
   if (segments.length === 0) {
-    return;
+    return false;
   }
   let cursor: Record<string, unknown> = root as unknown as Record<string, unknown>;
   for (const segment of segments.slice(0, -1)) {
     const existing = cursor[segment];
     if (!isRecord(existing)) {
-      return;
+      return false;
     }
     cursor = existing;
   }
-  delete cursor[segments[segments.length - 1]];
+  const leaf = segments[segments.length - 1] ?? "";
+  if (!Object.prototype.hasOwnProperty.call(cursor, leaf)) {
+    return false;
+  }
+  delete cursor[leaf];
+  return true;
 }
 
 function parseEnvValue(raw: string): string {
@@ -219,9 +233,11 @@ async function projectPlanState(params: {
         scrubbedValues.add(previous.trim());
       }
       const refPath = resolveGoogleChatRefPath(target.path);
-      setByDotPath(nextConfig, refPath, target.ref);
-      deleteByDotPath(nextConfig, target.path);
-      changedFiles.add(resolveUserPath(snapshot.path));
+      const wroteRef = setByDotPath(nextConfig, refPath, target.ref);
+      const deletedLegacy = deleteByDotPath(nextConfig, target.path);
+      if (wroteRef || deletedLegacy) {
+        changedFiles.add(resolveUserPath(snapshot.path));
+      }
       continue;
     }
 
@@ -229,8 +245,10 @@ async function projectPlanState(params: {
     if (isNonEmptyString(previous)) {
       scrubbedValues.add(previous.trim());
     }
-    setByDotPath(nextConfig, target.path, target.ref);
-    changedFiles.add(resolveUserPath(snapshot.path));
+    const wroteRef = setByDotPath(nextConfig, target.path, target.ref);
+    if (wroteRef) {
+      changedFiles.add(resolveUserPath(snapshot.path));
+    }
     if (target.type === "models.providers.apiKey" && target.providerId) {
       providerTargets.add(normalizeProviderId(target.providerId));
     }
