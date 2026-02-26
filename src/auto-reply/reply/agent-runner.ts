@@ -748,5 +748,12 @@ export async function runReplyAgent(params: {
   } finally {
     blockReplyPipeline?.stop();
     typing.markRunComplete();
+    // Safety net: the dispatcher's onIdle callback normally fires
+    // markDispatchIdle(), but if the dispatcher exits early, errors,
+    // or the reply path doesn't go through it cleanly, the second
+    // signal never fires and the typing keepalive loop runs forever.
+    // Calling this twice is harmless — cleanup() is guarded by the
+    // `active` flag.  Same pattern as the followup runner fix (#26881).
+    typing.markDispatchIdle();
   }
 }
