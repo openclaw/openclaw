@@ -193,9 +193,11 @@ export const TelegramAccountSchemaBase = z
     webhookPort: z
       .number()
       .int()
-      .positive()
+      .nonnegative()
       .optional()
-      .describe("Local bind port for the webhook listener. Defaults to 8787."),
+      .describe(
+        "Local bind port for the webhook listener. Defaults to 8787; set to 0 to let the OS assign an ephemeral port.",
+      ),
     actions: z
       .object({
         reactions: z.boolean().optional(),
