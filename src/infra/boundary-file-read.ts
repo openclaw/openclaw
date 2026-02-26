@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { assertNoPathAliasEscape, type PathAliasPolicy } from "./path-alias-guards.js";
-import { isNotFoundPathError, isPathInside } from "./path-guards.js";
+import { resolveBoundaryPath, resolveBoundaryPathSync } from "./boundary-path.js";
+import type { PathAliasPolicy } from "./path-alias-guards.js";
 import { openVerifiedFileSync, type SafeOpenSyncFailureReason } from "./safe-open-sync.js";
 
 type BoundaryReadFs = Pick<
@@ -36,14 +36,6 @@ export type OpenBoundaryFileParams = OpenBoundaryFileSyncParams & {
   aliasPolicy?: PathAliasPolicy;
 };
 
-function safeRealpathSync(ioFs: Pick<typeof fs, "realpathSync">, value: string): string {
-  try {
-    return path.resolve(ioFs.realpathSync(value));
-  } catch {
-    return path.resolve(value);
-  }
-}
-
 export function canUseBoundaryFileOpen(ioFs: typeof fs): boolean {
   return (
     typeof ioFs.openSync === "function" &&
@@ -60,52 +52,21 @@ export function canUseBoundaryFileOpen(ioFs: typeof fs): boolean {
 export function openBoundaryFileSync(params: OpenBoundaryFileSyncParams): BoundaryFileOpenResult {
   const ioFs = params.ioFs ?? fs;
   const absolutePath = path.resolve(params.absolutePath);
-  const rootPath = path.resolve(params.rootPath);
-  const rootRealPath = params.rootRealPath
-    ? path.resolve(params.rootRealPath)
-    : safeRealpathSync(ioFs, rootPath);
 
-  let resolvedPath = absolutePath;
-  const lexicalInsideRoot = isPathInside(rootPath, absolutePath);
+  let resolvedPath: string;
+  let rootRealPath: string;
   try {
-    const candidateRealPath = path.resolve(ioFs.realpathSync(absolutePath));
-    if (
-      !params.skipLexicalRootCheck &&
-      !lexicalInsideRoot &&
-      !isPathInside(rootRealPath, candidateRealPath)
-    ) {
-      return {
-        ok: false,
-        reason: "validation",
-        error: new Error(
-          `Path escapes ${params.boundaryLabel}: ${absolutePath} (root: ${rootPath})`,
-        ),
-      };
-    }
-    if (!isPathInside(rootRealPath, candidateRealPath)) {
-      return {
-        ok: false,
-        reason: "validation",
-        error: new Error(
-          `Path resolves outside ${params.boundaryLabel}: ${absolutePath} (root: ${rootRealPath})`,
-        ),
-      };
-    }
-    resolvedPath = candidateRealPath;
+    const resolved = resolveBoundaryPathSync({
+      absolutePath,
+      rootPath: params.rootPath,
+      rootCanonicalPath: params.rootRealPath,
+      boundaryLabel: params.boundaryLabel,
+      skipLexicalRootCheck: params.skipLexicalRootCheck,
+    });
+    resolvedPath = resolved.canonicalPath;
+    rootRealPath = resolved.rootCanonicalPath;
   } catch (error) {
-    if (!params.skipLexicalRootCheck && !lexicalInsideRoot) {
-      return {
-        ok: false,
-        reason: "validation",
-        error: new Error(
-          `Path escapes ${params.boundaryLabel}: ${absolutePath} (root: ${rootPath})`,
-        ),
-      };
-    }
-    if (!isNotFoundPathError(error)) {
-      // Keep resolvedPath as lexical path; openVerifiedFileSync below will produce
-      // a canonical error classification for missing/unreadable targets.
-    }
+    return { ok: false, reason: "validation", error };
   }
 
   const opened = openVerifiedFileSync({
@@ -131,11 +92,13 @@ export async function openBoundaryFile(
   params: OpenBoundaryFileParams,
 ): Promise<BoundaryFileOpenResult> {
   try {
-    await assertNoPathAliasEscape({
+    await resolveBoundaryPath({
       absolutePath: params.absolutePath,
       rootPath: params.rootPath,
+      rootCanonicalPath: params.rootRealPath,
       boundaryLabel: params.boundaryLabel,
       policy: params.aliasPolicy,
+      skipLexicalRootCheck: params.skipLexicalRootCheck,
     });
   } catch (error) {
     return { ok: false, reason: "validation", error };
