@@ -4,6 +4,7 @@ import { dispatchReplyWithBufferedBlockDispatcher } from "../auto-reply/reply/pr
 import { createReplyPrefixOptions } from "../channels/reply-prefix.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { danger, logVerbose } from "../globals.js";
+import { waitForAbortSignal } from "../infra/abort-signal.js";
 import { normalizePluginHttpPath } from "../plugins/http-path.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -296,7 +297,12 @@ export async function monitorLineProvider(
   logVerbose(`line: registered webhook handler at ${normalizedPath}`);
 
   // Handle abort signal
+  let stopped = false;
   const stopHandler = () => {
+    if (stopped) {
+      return;
+    }
+    stopped = true;
     logVerbose(`line: stopping provider for account ${resolvedAccountId}`);
     unregisterHttp();
     recordChannelRuntimeState({
@@ -309,7 +315,12 @@ export async function monitorLineProvider(
     });
   };
 
-  abortSignal?.addEventListener("abort", stopHandler);
+  if (abortSignal?.aborted) {
+    stopHandler();
+  } else if (abortSignal) {
+    abortSignal.addEventListener("abort", stopHandler, { once: true });
+    await waitForAbortSignal(abortSignal);
+  }
 
   return {
     account: bot.account,

@@ -2,6 +2,7 @@ import { type RunOptions, run } from "@grammyjs/runner";
 import { resolveAgentMaxConcurrent } from "../config/agent-limits.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
+import { waitForAbortSignal } from "../infra/abort-signal.js";
 import { computeBackoff, sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { formatDurationPrecise } from "../infra/format-time/format-duration.ts";
@@ -172,16 +173,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         abortSignal: opts.abortSignal,
         publicUrl: opts.webhookUrl,
       });
-      const abortSignal = opts.abortSignal;
-      if (abortSignal && !abortSignal.aborted) {
-        await new Promise<void>((resolve) => {
-          const onAbort = () => {
-            abortSignal.removeEventListener("abort", onAbort);
-            resolve();
-          };
-          abortSignal.addEventListener("abort", onAbort, { once: true });
-        });
-      }
+      await waitForAbortSignal(opts.abortSignal);
       return;
     }
 
