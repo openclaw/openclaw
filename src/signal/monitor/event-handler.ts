@@ -36,7 +36,11 @@ import {
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
-import { resolveDmGroupAccessWithLists } from "../../security/dm-policy-shared.js";
+import {
+  DM_GROUP_ACCESS_REASON,
+  readStoreAllowFromForDmPolicy,
+  resolveDmGroupAccessWithLists,
+} from "../../security/dm-policy-shared.js";
 import { normalizeE164 } from "../../utils.js";
 import {
   formatSignalPairingIdLine,
@@ -453,10 +457,11 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const hasBodyContent =
       Boolean(messageText || quoteText) || Boolean(!reaction && dataMessage?.attachments?.length);
     const senderDisplay = formatSignalSenderDisplay(sender);
-    const storeAllowFrom =
-      deps.dmPolicy === "allowlist"
-        ? []
-        : await readChannelAllowFromStore("signal").catch(() => []);
+    const storeAllowFrom = await readStoreAllowFromForDmPolicy({
+      provider: "signal",
+      dmPolicy: deps.dmPolicy,
+      readStore: (provider) => readChannelAllowFromStore(provider),
+    });
     const resolveAccessDecision = (isGroup: boolean) =>
       resolveDmGroupAccessWithLists({
         isGroup,
@@ -543,9 +548,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     if (isGroup) {
       const groupAccess = resolveAccessDecision(true);
       if (groupAccess.decision !== "allow") {
-        if (groupAccess.reason === "groupPolicy=disabled") {
+        if (groupAccess.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_DISABLED) {
           logVerbose("Blocked signal group message (groupPolicy: disabled)");
-        } else if (groupAccess.reason === "groupPolicy=allowlist (empty allowlist)") {
+        } else if (groupAccess.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_EMPTY_ALLOWLIST) {
           logVerbose("Blocked signal group message (groupPolicy: allowlist, no groupAllowFrom)");
         } else {
           logVerbose(`Blocked signal group sender ${senderDisplay} (not in groupAllowFrom)`);
