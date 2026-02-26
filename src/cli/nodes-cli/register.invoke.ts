@@ -7,12 +7,14 @@ import {
   type ExecApprovalsFile,
   type ExecAsk,
   type ExecSecurity,
+  type SystemRunApprovalPlanV2,
   maxAsk,
   minSecurity,
   resolveExecApprovalsFromFile,
 } from "../../infra/exec-approvals.js";
 import { buildNodeShellCommand } from "../../infra/node-shell.js";
 import { applyPathPrepend } from "../../infra/path-prepend.js";
+import { normalizeSystemRunApprovalPlanV2 } from "../../infra/system-run-approval-binding.js";
 import { defaultRuntime } from "../../runtime.js";
 import { parseEnvPairs, parseTimeoutMs } from "../nodes-run.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
@@ -41,6 +43,22 @@ type ExecDefaults = {
   pathPrepend?: string[];
   safeBins?: string[];
 };
+
+function parsePreparedRunPlan(payload: unknown): {
+  cmdText: string;
+  plan: SystemRunApprovalPlanV2;
+} {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("invalid system.run.prepare response");
+  }
+  const raw = payload as { cmdText?: unknown; plan?: unknown };
+  const cmdText = typeof raw.cmdText === "string" ? raw.cmdText.trim() : "";
+  const plan = normalizeSystemRunApprovalPlanV2(raw.plan);
+  if (!cmdText || !plan) {
+    throw new Error("invalid system.run.prepare response");
+  }
+  return { cmdText, plan };
+}
 
 function normalizeExecSecurity(value?: string | null): ExecSecurity | null {
   const normalized = value?.trim().toLowerCase();
@@ -192,6 +210,20 @@ export function registerNodesInvokeCommands(nodes: Command) {
             applyPathPrepend(nodeEnv, execDefaults?.pathPrepend, { requireExisting: true });
           }
 
+          const prepareResponse = (await callGatewayCli("node.invoke", opts, {
+            nodeId,
+            command: "system.run.prepare",
+            params: {
+              command: argv,
+              rawCommand,
+              cwd: opts.cwd,
+              agentId,
+            },
+            idempotencyKey: `prepare-${randomIdempotencyKey()}`,
+          })) as { payload?: unknown } | null;
+          const prepared = parsePreparedRunPlan(prepareResponse?.payload);
+          const approvalPlan = prepared.plan;
+
           let approvedByAsk = false;
           let approvalDecision: "allow-once" | "allow-always" | null = null;
           const configuredSecurity = normalizeExecSecurity(execDefaults?.security) ?? "allowlist";
@@ -251,16 +283,17 @@ export function registerNodesInvokeCommands(nodes: Command) {
               opts,
               {
                 id: approvalId,
-                command: rawCommand ?? argv.join(" "),
-                commandArgv: argv,
-                cwd: opts.cwd,
+                command: prepared.cmdText,
+                commandArgv: approvalPlan.argv,
+                systemRunPlanV2: approvalPlan,
+                cwd: approvalPlan.cwd,
                 nodeId,
                 host: "node",
                 security: hostSecurity,
                 ask: hostAsk,
-                agentId,
+                agentId: approvalPlan.agentId ?? agentId,
                 resolvedPath: undefined,
-                sessionKey: undefined,
+                sessionKey: approvalPlan.sessionKey ?? undefined,
                 timeoutMs: approvalTimeoutMs,
               },
               { transportTimeoutMs },
@@ -296,19 +329,21 @@ export function registerNodesInvokeCommands(nodes: Command) {
             nodeId,
             command: "system.run",
             params: {
-              command: argv,
-              cwd: opts.cwd,
+              command: approvalPlan.argv,
+              rawCommand: approvalPlan.rawCommand,
+              cwd: approvalPlan.cwd,
               env: nodeEnv,
               timeoutMs,
               needsScreenRecording: opts.needsScreenRecording === true,
             },
             idempotencyKey: String(opts.idempotencyKey ?? randomIdempotencyKey()),
           };
-          if (agentId) {
-            (invokeParams.params as Record<string, unknown>).agentId = agentId;
+          if (approvalPlan.agentId ?? agentId) {
+            (invokeParams.params as Record<string, unknown>).agentId =
+              approvalPlan.agentId ?? agentId;
           }
-          if (rawCommand) {
-            (invokeParams.params as Record<string, unknown>).rawCommand = rawCommand;
+          if (approvalPlan.sessionKey) {
+            (invokeParams.params as Record<string, unknown>).sessionKey = approvalPlan.sessionKey;
           }
           (invokeParams.params as Record<string, unknown>).approved = approvedByAsk;
           if (approvalDecision) {
