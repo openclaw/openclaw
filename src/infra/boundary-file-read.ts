@@ -65,17 +65,23 @@ export function openBoundaryFileSync(params: OpenBoundaryFileSyncParams): Bounda
     ? path.resolve(params.rootRealPath)
     : safeRealpathSync(ioFs, rootPath);
 
-  if (!params.skipLexicalRootCheck && !isPathInside(rootPath, absolutePath)) {
-    return {
-      ok: false,
-      reason: "validation",
-      error: new Error(`Path escapes ${params.boundaryLabel}: ${absolutePath} (root: ${rootPath})`),
-    };
-  }
-
   let resolvedPath = absolutePath;
+  const lexicalInsideRoot = isPathInside(rootPath, absolutePath);
   try {
     const candidateRealPath = path.resolve(ioFs.realpathSync(absolutePath));
+    if (
+      !params.skipLexicalRootCheck &&
+      !lexicalInsideRoot &&
+      !isPathInside(rootRealPath, candidateRealPath)
+    ) {
+      return {
+        ok: false,
+        reason: "validation",
+        error: new Error(
+          `Path escapes ${params.boundaryLabel}: ${absolutePath} (root: ${rootPath})`,
+        ),
+      };
+    }
     if (!isPathInside(rootRealPath, candidateRealPath)) {
       return {
         ok: false,
@@ -87,6 +93,15 @@ export function openBoundaryFileSync(params: OpenBoundaryFileSyncParams): Bounda
     }
     resolvedPath = candidateRealPath;
   } catch (error) {
+    if (!params.skipLexicalRootCheck && !lexicalInsideRoot) {
+      return {
+        ok: false,
+        reason: "validation",
+        error: new Error(
+          `Path escapes ${params.boundaryLabel}: ${absolutePath} (root: ${rootPath})`,
+        ),
+      };
+    }
     if (!isNotFoundPathError(error)) {
       // Keep resolvedPath as lexical path; openVerifiedFileSync below will produce
       // a canonical error classification for missing/unreadable targets.
