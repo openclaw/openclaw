@@ -408,7 +408,11 @@ export async function ensureAgentWorkspace(params?: {
       fs.readFile(userPath, "utf-8"),
     ]);
     const hasUserContent = await (async () => {
-      const indicators = [path.join(dir, "memory"), path.join(dir, DEFAULT_MEMORY_FILENAME)];
+      const indicators = [
+        path.join(dir, "memory"),
+        path.join(dir, DEFAULT_MEMORY_FILENAME),
+        path.join(dir, ".git"),
+      ];
       for (const indicator of indicators) {
         try {
           await fs.access(indicator);
