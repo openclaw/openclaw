@@ -1,7 +1,7 @@
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "openclaw/plugin-sdk";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FeishuMessageEvent } from "./bot.js";
-import { handleFeishuMessage } from "./bot.js";
+import { buildFeishuAgentBody, handleFeishuMessage } from "./bot.js";
 import { setFeishuRuntime } from "./runtime.js";
 
 const {
@@ -9,6 +9,7 @@ const {
   mockSendMessageFeishu,
   mockGetMessageFeishu,
   mockDownloadMessageResourceFeishu,
+  mockCreateFeishuClient,
 } = vi.hoisted(() => ({
   mockCreateFeishuReplyDispatcher: vi.fn(() => ({
     dispatcher: vi.fn(),
@@ -22,6 +23,7 @@ const {
     contentType: "video/mp4",
     fileName: "clip.mp4",
   }),
+  mockCreateFeishuClient: vi.fn(),
 }));
 
 vi.mock("./reply-dispatcher.js", () => ({
@@ -35,6 +37,10 @@ vi.mock("./send.js", () => ({
 
 vi.mock("./media.js", () => ({
   downloadMessageResourceFeishu: mockDownloadMessageResourceFeishu,
+}));
+
+vi.mock("./client.js", () => ({
+  createFeishuClient: mockCreateFeishuClient,
 }));
 
 function createRuntimeEnv(): RuntimeEnv {
@@ -55,6 +61,30 @@ async function dispatchMessage(params: { cfg: ClawdbotConfig; event: FeishuMessa
   });
 }
 
+describe("buildFeishuAgentBody", () => {
+  it("builds message id, speaker, quoted content, mentions, and permission notice in order", () => {
+    const body = buildFeishuAgentBody({
+      ctx: {
+        content: "hello world",
+        senderName: "Sender Name",
+        senderOpenId: "ou-sender",
+        messageId: "msg-42",
+        mentionTargets: [{ openId: "ou-target", name: "Target User", key: "@_user_1" }],
+      },
+      quotedContent: "previous message",
+      permissionErrorForAgent: {
+        code: 99991672,
+        message: "permission denied",
+        grantUrl: "https://open.feishu.cn/app/cli_test",
+      },
+    });
+
+    expect(body).toBe(
+      '[message_id: msg-42]\nSender Name: [Replying to: "previous message"]\n\nhello world\n\n[System: Your reply will automatically @mention: Target User. Do not write @xxx yourself.]\n\n[System: The bot encountered a Feishu API permission error. Please inform the user about this issue and provide the permission grant URL for the admin to authorize. Permission grant URL: https://open.feishu.cn/app/cli_test]',
+    );
+  });
+});
+
 describe("handleFeishuMessage command authorization", () => {
   const mockFinalizeInboundContext = vi.fn((ctx: unknown) => ctx);
   const mockDispatchReplyFromConfig = vi
@@ -72,6 +102,13 @@ describe("handleFeishuMessage command authorization", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockCreateFeishuClient.mockReturnValue({
+      contact: {
+        user: {
+          get: vi.fn().mockResolvedValue({ data: { user: { name: "Sender" } } }),
+        },
+      },
+    });
     setFeishuRuntime({
       system: {
         enqueueSystemEvent: vi.fn(),
@@ -380,6 +417,104 @@ describe("handleFeishuMessage command authorization", () => {
       "inbound",
       expect.any(Number),
       "clip.mp4",
+    );
+  });
+
+  it("includes message_id in BodyForAgent on its own line", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-msgid",
+        },
+      },
+      message: {
+        message_id: "msg-message-id-line",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        BodyForAgent: "[message_id: msg-message-id-line]\nou-msgid: hello",
+      }),
+    );
+  });
+
+  it("dispatches once and appends permission notice to the main agent body", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockCreateFeishuClient.mockReturnValue({
+      contact: {
+        user: {
+          get: vi.fn().mockRejectedValue({
+            response: {
+              data: {
+                code: 99991672,
+                msg: "permission denied https://open.feishu.cn/app/cli_test",
+              },
+            },
+          }),
+        },
+      },
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          appId: "cli_test",
+          appSecret: "sec_test",
+          groups: {
+            "oc-group": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-perm",
+        },
+      },
+      message: {
+        message_id: "msg-perm-1",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello group" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        BodyForAgent: expect.stringContaining(
+          "Permission grant URL: https://open.feishu.cn/app/cli_test",
+        ),
+      }),
+    );
+    expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
+      expect.objectContaining({
+        BodyForAgent: expect.stringContaining("ou-perm: hello group"),
+      }),
     );
   });
 });

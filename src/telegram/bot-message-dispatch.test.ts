@@ -381,6 +381,41 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(draftStream.stop).toHaveBeenCalled();
   });
 
+  it("primes stop() with final text when pending partial is below initial threshold", async () => {
+    let answerMessageId: number | undefined;
+    const answerDraftStream = {
+      update: vi.fn(),
+      flush: vi.fn().mockResolvedValue(undefined),
+      messageId: vi.fn().mockImplementation(() => answerMessageId),
+      clear: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockImplementation(async () => {
+        answerMessageId = 777;
+      }),
+      forceNewMessage: vi.fn(),
+    };
+    const reasoningDraftStream = createDraftStream();
+    createTelegramDraftStream
+      .mockImplementationOnce(() => answerDraftStream)
+      .mockImplementationOnce(() => reasoningDraftStream);
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "no" });
+        await dispatcherOptions.deliver({ text: "no problem" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+    editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "777" });
+
+    await dispatchWithContext({ context: createContext() });
+
+    expect(answerDraftStream.update).toHaveBeenCalledWith("no");
+    expect(answerDraftStream.update).toHaveBeenLastCalledWith("no problem");
+    expect(editMessageTelegram).toHaveBeenCalledWith(123, 777, "no problem", expect.any(Object));
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(answerDraftStream.stop).toHaveBeenCalled();
+  });
+
   it("does not overwrite finalized preview when additional final payloads are sent", async () => {
     const draftStream = createDraftStream(999);
     createTelegramDraftStream.mockReturnValue(draftStream);
@@ -690,6 +725,52 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
     expect(deliverReplies).not.toHaveBeenCalled();
   });
+
+  it.each(["partial", "block"] as const)(
+    "keeps finalized text preview when the next assistant message is media-only (%s mode)",
+    async (streamMode) => {
+      let answerMessageId: number | undefined = 1001;
+      const answerDraftStream = {
+        update: vi.fn(),
+        flush: vi.fn().mockResolvedValue(undefined),
+        messageId: vi.fn().mockImplementation(() => answerMessageId),
+        clear: vi.fn().mockResolvedValue(undefined),
+        stop: vi.fn().mockResolvedValue(undefined),
+        forceNewMessage: vi.fn().mockImplementation(() => {
+          answerMessageId = undefined;
+        }),
+      };
+      const reasoningDraftStream = createDraftStream();
+      createTelegramDraftStream
+        .mockImplementationOnce(() => answerDraftStream)
+        .mockImplementationOnce(() => reasoningDraftStream);
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions?.onPartialReply?.({ text: "First message preview" });
+          await dispatcherOptions.deliver({ text: "First message final" }, { kind: "final" });
+          await replyOptions?.onAssistantMessageStart?.();
+          await dispatcherOptions.deliver({ mediaUrl: "file:///tmp/voice.ogg" }, { kind: "final" });
+          return { queuedFinal: true };
+        },
+      );
+      deliverReplies.mockResolvedValue({ delivered: true });
+      editMessageTelegram.mockResolvedValue({ ok: true, chatId: "123", messageId: "1001" });
+      const bot = createBot();
+
+      await dispatchWithContext({ context: createContext(), streamMode, bot });
+
+      expect(editMessageTelegram).toHaveBeenCalledWith(
+        123,
+        1001,
+        "First message final",
+        expect.any(Object),
+      );
+      const deleteMessageCalls = (
+        bot.api as unknown as { deleteMessage: { mock: { calls: unknown[][] } } }
+      ).deleteMessage.mock.calls;
+      expect(deleteMessageCalls).not.toContainEqual([123, 1001]);
+    },
+  );
 
   it("maps finals correctly when archived preview id arrives during final flush", async () => {
     let answerMessageId: number | undefined;
