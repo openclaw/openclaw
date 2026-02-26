@@ -428,3 +428,59 @@ describe("compaction-safeguard extension model fallback", () => {
     expect(getApiKeyMock).not.toHaveBeenCalled();
   });
 });
+
+describe("compaction-safeguard double-compaction guard", () => {
+  it("cancels compaction when there are no real messages to summarize", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const compactionHandler = createCompactionHandler();
+    const mockEvent = {
+      preparation: {
+        messagesToSummarize: [] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1500,
+        fileOps: { read: [], edited: [], written: [] },
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const getApiKeyMock = vi.fn().mockResolvedValue("sk-test");
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock,
+    });
+
+    const result = (await compactionHandler(mockEvent, mockContext)) as {
+      cancel?: boolean;
+    };
+    expect(result).toEqual({ cancel: true });
+    expect(getApiKeyMock).not.toHaveBeenCalled();
+  });
+
+  it("continues when messages include real conversation content", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    const compactionHandler = createCompactionHandler();
+    const mockEvent = createCompactionEvent({
+      messageText: "real message",
+      tokensBefore: 1500,
+    });
+    const getApiKeyMock = vi.fn().mockResolvedValue(null);
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock,
+    });
+
+    const result = (await compactionHandler(mockEvent, mockContext)) as {
+      cancel?: boolean;
+    };
+    expect(result).toEqual({ cancel: true });
+    expect(getApiKeyMock).toHaveBeenCalled();
+  });
+});

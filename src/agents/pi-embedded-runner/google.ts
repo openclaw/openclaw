@@ -133,27 +133,59 @@ function annotateInterSessionUserMessages(messages: AgentMessage[]): AgentMessag
   return touched ? out : messages;
 }
 
-function stripStaleAssistantUsageBeforeLatestCompaction(messages: AgentMessage[]): AgentMessage[] {
-  let latestCompactionSummaryIndex = -1;
-  for (let i = 0; i < messages.length; i += 1) {
-    if (messages[i]?.role === "compactionSummary") {
-      latestCompactionSummaryIndex = i;
+function parseMessageTimestamp(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
     }
   }
-  if (latestCompactionSummaryIndex <= 0) {
+  return null;
+}
+
+function stripStaleAssistantUsageBeforeLatestCompaction(messages: AgentMessage[]): AgentMessage[] {
+  let latestCompactionSummaryIndex = -1;
+  let latestCompactionTimestamp: number | null = null;
+  for (let i = 0; i < messages.length; i += 1) {
+    const entry = messages[i];
+    if (entry?.role !== "compactionSummary") {
+      continue;
+    }
+    latestCompactionSummaryIndex = i;
+    latestCompactionTimestamp = parseMessageTimestamp(
+      (entry as { timestamp?: unknown }).timestamp ?? null,
+    );
+  }
+  if (latestCompactionSummaryIndex === -1) {
     return messages;
   }
 
   const out = [...messages];
   let touched = false;
-  for (let i = 0; i < latestCompactionSummaryIndex; i += 1) {
-    const candidate = out[i] as (AgentMessage & { usage?: unknown }) | undefined;
+  for (let i = 0; i < out.length; i += 1) {
+    const candidate = out[i] as
+      | (AgentMessage & { usage?: unknown; timestamp?: unknown })
+      | undefined;
     if (!candidate || candidate.role !== "assistant") {
       continue;
     }
     if (!candidate.usage || typeof candidate.usage !== "object") {
       continue;
     }
+
+    const messageTimestamp = parseMessageTimestamp(candidate.timestamp);
+    const staleByTimestamp =
+      latestCompactionTimestamp !== null &&
+      messageTimestamp !== null &&
+      messageTimestamp <= latestCompactionTimestamp;
+    const staleByLegacyOrdering = i < latestCompactionSummaryIndex;
+    if (!staleByTimestamp && !staleByLegacyOrdering) {
+      continue;
+    }
+
     const candidateRecord = candidate as unknown as Record<string, unknown>;
     const { usage: _droppedUsage, ...rest } = candidateRecord;
     out[i] = rest as unknown as AgentMessage;
