@@ -7,6 +7,7 @@ import {
   resolveControlCommandGate,
   resolveDefaultGroupPolicy,
   isDangerousNameMatchingEnabled,
+  readStoreAllowFromForDmPolicy,
   resolveMentionGating,
   formatAllowlistMatchMeta,
   resolveEffectiveAllowFromLists,
@@ -128,10 +129,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const senderName = from.name ?? from.id;
     const senderId = from.aadObjectId ?? from.id;
     const dmPolicy = msteamsCfg?.dmPolicy ?? "pairing";
-    const storedAllowFrom =
-      dmPolicy === "allowlist"
-        ? []
-        : await core.channel.pairing.readAllowFromStore("msteams").catch(() => []);
+    const storedAllowFrom = await readStoreAllowFromForDmPolicy({
+      provider: "msteams",
+      dmPolicy,
+      readStore: (provider) => core.channel.pairing.readAllowFromStore(provider),
+    });
     const useAccessGroups = cfg.commands?.useAccessGroups !== false;
 
     // Check DM policy for direct messages.

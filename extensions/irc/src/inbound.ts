@@ -5,6 +5,7 @@ import {
   formatTextWithAttachmentLinks,
   logInboundDrop,
   isDangerousNameMatchingEnabled,
+  readStoreAllowFromForDmPolicy,
   resolveControlCommandGate,
   resolveOutboundMediaUrls,
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -120,10 +121,11 @@ export async function handleIrcInbound(params: {
 
   const configAllowFrom = normalizeIrcAllowlist(account.config.allowFrom);
   const configGroupAllowFrom = normalizeIrcAllowlist(account.config.groupAllowFrom);
-  const storeAllowFrom =
-    dmPolicy === "allowlist"
-      ? []
-      : await core.channel.pairing.readAllowFromStore(CHANNEL_ID).catch(() => []);
+  const storeAllowFrom = await readStoreAllowFromForDmPolicy({
+    provider: CHANNEL_ID,
+    dmPolicy,
+    readStore: (provider) => core.channel.pairing.readAllowFromStore(provider),
+  });
   const storeAllowList = normalizeIrcAllowlist(storeAllowFrom);
 
   const groupMatch = resolveIrcGroupMatch({

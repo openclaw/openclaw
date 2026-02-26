@@ -20,7 +20,10 @@ import {
   resolveChannelGroupRequireMention,
 } from "../../config/group-policy.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
-import { resolveDmGroupAccessWithLists } from "../../security/dm-policy-shared.js";
+import {
+  DM_GROUP_ACCESS_REASON,
+  resolveDmGroupAccessWithLists,
+} from "../../security/dm-policy-shared.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import {
   formatIMessageChatTarget,
@@ -162,24 +165,24 @@ export function resolveIMessageInboundDecision(params: {
 
   if (accessDecision.decision !== "allow") {
     if (isGroup) {
-      if (accessDecision.reason === "groupPolicy=disabled") {
+      if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_DISABLED) {
         params.logVerbose?.("Blocked iMessage group message (groupPolicy: disabled)");
         return { kind: "drop", reason: "groupPolicy disabled" };
       }
-      if (accessDecision.reason === "groupPolicy=allowlist (empty allowlist)") {
+      if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_EMPTY_ALLOWLIST) {
         params.logVerbose?.(
           "Blocked iMessage group message (groupPolicy: allowlist, no groupAllowFrom)",
         );
         return { kind: "drop", reason: "groupPolicy allowlist (empty groupAllowFrom)" };
       }
-      if (accessDecision.reason === "groupPolicy=allowlist (not allowlisted)") {
+      if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_NOT_ALLOWLISTED) {
         params.logVerbose?.(`Blocked iMessage sender ${sender} (not in groupAllowFrom)`);
         return { kind: "drop", reason: "not in groupAllowFrom" };
       }
       params.logVerbose?.(`Blocked iMessage group message (${accessDecision.reason})`);
       return { kind: "drop", reason: accessDecision.reason };
     }
-    if (accessDecision.reason === "dmPolicy=disabled") {
+    if (accessDecision.reasonCode === DM_GROUP_ACCESS_REASON.DM_POLICY_DISABLED) {
       return { kind: "drop", reason: "dmPolicy disabled" };
     }
     if (accessDecision.decision === "pairing") {
