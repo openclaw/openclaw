@@ -415,7 +415,9 @@ export function resolvePathViaExistingAncestorSync(targetPath: string): string {
   }
 
   try {
-    const resolvedAncestor = path.resolve(fs.realpathSync.native(cursor));
+    // Keep sync behavior aligned with async (`fsp.realpath`) to avoid
+    // platform-specific canonical alias drift (notably on Windows).
+    const resolvedAncestor = path.resolve(fs.realpathSync(cursor));
     if (missingSuffix.length === 0) {
       return resolvedAncestor;
     }
@@ -554,7 +556,7 @@ async function resolveSymlinkHopPath(symlinkPath: string): Promise<string> {
 
 function resolveSymlinkHopPathSync(symlinkPath: string): string {
   try {
-    return path.resolve(fs.realpathSync.native(symlinkPath));
+    return path.resolve(fs.realpathSync(symlinkPath));
   } catch (error) {
     if (!isNotFoundPathError(error)) {
       throw error;
