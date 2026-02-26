@@ -102,9 +102,19 @@ describe("feishu_doc image fetch hardening", () => {
       registerTool,
     } as any);
 
+    // registerTool now receives a factory function; invoke it with a mock context
+    const mockCtx = {
+      config: {
+        channels: {
+          feishu: { appId: "app_id", appSecret: "app_secret" },
+        },
+      },
+      agentAccountId: undefined,
+    };
     const feishuDocTool = registerTool.mock.calls
-      .map((call) => call[0])
-      .find((tool) => tool.name === "feishu_doc");
+      .map((call) => (typeof call[0] === "function" ? call[0](mockCtx) : call[0]))
+      .flat()
+      .find((tool: any) => tool?.name === "feishu_doc");
     expect(feishuDocTool).toBeDefined();
 
     const result = await feishuDocTool.execute("tool-call", {

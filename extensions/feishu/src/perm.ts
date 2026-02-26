@@ -1,8 +1,8 @@
 import type * as Lark from "@larksuiteoapi/node-sdk";
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
+import type { OpenClawPluginApi, OpenClawPluginToolFactory } from "openclaw/plugin-sdk";
 import { listEnabledFeishuAccounts } from "./accounts.js";
-import { createFeishuClient } from "./client.js";
 import { FeishuPermSchema, type FeishuPermParams } from "./perm-schema.js";
+import { resolveClientForContext } from "./tool-context.js";
 import { resolveToolsConfig } from "./tools-config.js";
 
 // ============ Helpers ============
@@ -136,36 +136,39 @@ export function registerFeishuPermTools(api: OpenClawPluginApi) {
     return;
   }
 
-  const getClient = () => createFeishuClient(firstAccount);
-
   api.registerTool(
-    {
-      name: "feishu_perm",
-      label: "Feishu Perm",
-      description: "Feishu permission management. Actions: list, add, remove",
-      parameters: FeishuPermSchema,
-      async execute(_toolCallId, params) {
-        const p = params as FeishuPermParams;
-        try {
-          const client = getClient();
-          switch (p.action) {
-            case "list":
-              return json(await listMembers(client, p.token, p.type));
-            case "add":
-              return json(
-                await addMember(client, p.token, p.type, p.member_type, p.member_id, p.perm),
-              );
-            case "remove":
-              return json(await removeMember(client, p.token, p.type, p.member_type, p.member_id));
-            default:
-              // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exhaustive check fallback
-              return json({ error: `Unknown action: ${(p as any).action}` });
+    ((ctx) => {
+      const getClient = () => resolveClientForContext(ctx.config!, ctx.agentAccountId);
+      return {
+        name: "feishu_perm",
+        label: "Feishu Perm",
+        description: "Feishu permission management. Actions: list, add, remove",
+        parameters: FeishuPermSchema,
+        async execute(_toolCallId, params) {
+          const p = params as FeishuPermParams;
+          try {
+            const client = getClient();
+            switch (p.action) {
+              case "list":
+                return json(await listMembers(client, p.token, p.type));
+              case "add":
+                return json(
+                  await addMember(client, p.token, p.type, p.member_type, p.member_id, p.perm),
+                );
+              case "remove":
+                return json(
+                  await removeMember(client, p.token, p.type, p.member_type, p.member_id),
+                );
+              default:
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exhaustive check fallback
+                return json({ error: `Unknown action: ${(p as any).action}` });
+            }
+          } catch (err) {
+            return json({ error: err instanceof Error ? err.message : String(err) });
           }
-        } catch (err) {
-          return json({ error: err instanceof Error ? err.message : String(err) });
-        }
-      },
-    },
+        },
+      };
+    }) as OpenClawPluginToolFactory,
     { name: "feishu_perm" },
   );
 
