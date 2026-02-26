@@ -233,6 +233,7 @@ export async function sendMessage(params: MessageSendParams): Promise<MessageSen
             mediaUrls: mirrorMediaUrls.length ? mirrorMediaUrls : undefined,
           }
         : undefined,
+      sessionKey: params.mirror?.sessionKey,
     });
 
     return {
