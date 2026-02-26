@@ -513,6 +513,13 @@ async function promptExecProvider(
     }),
     "Secrets configure cancelled.",
   );
+  const allowSymlinkCommand = assertNoCancel(
+    await confirm({
+      message: "Allow symlink command path?",
+      initialValue: base?.allowSymlinkCommand ?? false,
+    }),
+    "Secrets configure cancelled.",
+  );
 
   const args = await parseArgsInput(String(argsRaw ?? ""));
   const timeoutMs = parseOptionalPositiveInt(String(timeoutMsRaw ?? ""), 120000);
@@ -535,6 +542,7 @@ async function promptExecProvider(
     ...(passEnv.length > 0 ? { passEnv } : {}),
     ...(trustedDirs.length > 0 ? { trustedDirs } : {}),
     ...(allowInsecurePath ? { allowInsecurePath: true } : {}),
+    ...(allowSymlinkCommand ? { allowSymlinkCommand: true } : {}),
     ...(isRecord(base?.env) ? { env: base.env } : {}),
   };
 }

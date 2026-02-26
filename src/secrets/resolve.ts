@@ -102,45 +102,68 @@ async function assertSecurePath(params: {
   trustedDirs?: string[];
   allowInsecurePath?: boolean;
   allowReadableByOthers?: boolean;
-}): Promise<void> {
+  allowSymlinkPath?: boolean;
+}): Promise<string> {
   if (!isAbsolutePathname(params.targetPath)) {
     throw new Error(`${params.label} must be an absolute path.`);
   }
-  if (params.trustedDirs && params.trustedDirs.length > 0) {
-    const trusted = params.trustedDirs.map((entry) => resolveUserPath(entry));
-    const inTrustedDir = trusted.some((dir) => isPathInside(dir, params.targetPath));
-    if (!inTrustedDir) {
-      throw new Error(`${params.label} is outside trustedDirs: ${params.targetPath}`);
+
+  let effectivePath = params.targetPath;
+  let stat = await safeStat(effectivePath);
+  if (!stat.ok) {
+    throw new Error(`${params.label} is not readable: ${effectivePath}`);
+  }
+  if (stat.isDir) {
+    throw new Error(`${params.label} must be a file: ${effectivePath}`);
+  }
+  if (stat.isSymlink) {
+    if (!params.allowSymlinkPath) {
+      throw new Error(`${params.label} must not be a symlink: ${effectivePath}`);
+    }
+    try {
+      effectivePath = await fs.realpath(effectivePath);
+    } catch {
+      throw new Error(`${params.label} symlink target is not readable: ${params.targetPath}`);
+    }
+    if (!isAbsolutePathname(effectivePath)) {
+      throw new Error(`${params.label} resolved symlink target must be an absolute path.`);
+    }
+    stat = await safeStat(effectivePath);
+    if (!stat.ok) {
+      throw new Error(`${params.label} is not readable: ${effectivePath}`);
+    }
+    if (stat.isDir) {
+      throw new Error(`${params.label} must be a file: ${effectivePath}`);
+    }
+    if (stat.isSymlink) {
+      throw new Error(`${params.label} symlink target must not be a symlink: ${effectivePath}`);
     }
   }
 
-  const stat = await safeStat(params.targetPath);
-  if (!stat.ok) {
-    throw new Error(`${params.label} is not readable: ${params.targetPath}`);
-  }
-  if (stat.isDir) {
-    throw new Error(`${params.label} must be a file: ${params.targetPath}`);
-  }
-  if (stat.isSymlink) {
-    throw new Error(`${params.label} must not be a symlink: ${params.targetPath}`);
+  if (params.trustedDirs && params.trustedDirs.length > 0) {
+    const trusted = params.trustedDirs.map((entry) => resolveUserPath(entry));
+    const inTrustedDir = trusted.some((dir) => isPathInside(dir, effectivePath));
+    if (!inTrustedDir) {
+      throw new Error(`${params.label} is outside trustedDirs: ${effectivePath}`);
+    }
   }
   if (params.allowInsecurePath) {
-    return;
+    return effectivePath;
   }
 
-  const perms = await inspectPathPermissions(params.targetPath);
+  const perms = await inspectPathPermissions(effectivePath);
   if (!perms.ok) {
-    throw new Error(`${params.label} permissions could not be verified: ${params.targetPath}`);
+    throw new Error(`${params.label} permissions could not be verified: ${effectivePath}`);
   }
   const writableByOthers = perms.worldWritable || perms.groupWritable;
   const readableByOthers = perms.worldReadable || perms.groupReadable;
   if (writableByOthers || (!params.allowReadableByOthers && readableByOthers)) {
-    throw new Error(`${params.label} permissions are too open: ${params.targetPath}`);
+    throw new Error(`${params.label} permissions are too open: ${effectivePath}`);
   }
 
   if (process.platform === "win32" && perms.source === "unknown") {
     throw new Error(
-      `${params.label} ACL verification unavailable on Windows for ${params.targetPath}.`,
+      `${params.label} ACL verification unavailable on Windows for ${effectivePath}.`,
     );
   }
 
@@ -148,10 +171,11 @@ async function assertSecurePath(params: {
     const uid = process.getuid();
     if (stat.uid !== uid) {
       throw new Error(
-        `${params.label} must be owned by the current user (uid=${uid}): ${params.targetPath}`,
+        `${params.label} must be owned by the current user (uid=${uid}): ${effectivePath}`,
       );
     }
   }
+  return effectivePath;
 }
 
 async function readFileProviderPayload(params: {
@@ -167,7 +191,7 @@ async function readFileProviderPayload(params: {
 
   const filePath = resolveUserPath(params.providerConfig.path);
   const readPromise = (async () => {
-    await assertSecurePath({
+    const secureFilePath = await assertSecurePath({
       targetPath: filePath,
       label: `secrets.providers.${params.providerName}.path`,
     });
@@ -187,7 +211,7 @@ async function readFileProviderPayload(params: {
     });
     try {
       const payload = await Promise.race([
-        fs.readFile(filePath, { signal: abortController.signal }),
+        fs.readFile(secureFilePath, { signal: abortController.signal }),
         timeoutPromise,
       ]);
       if (payload.byteLength > maxBytes) {
@@ -459,12 +483,13 @@ async function resolveExecRefs(params: {
   }
 
   const commandPath = resolveUserPath(params.providerConfig.command);
-  await assertSecurePath({
+  const secureCommandPath = await assertSecurePath({
     targetPath: commandPath,
     label: `secrets.providers.${params.providerName}.command`,
     trustedDirs: params.providerConfig.trustedDirs,
     allowInsecurePath: params.providerConfig.allowInsecurePath,
     allowReadableByOthers: true,
+    allowSymlinkPath: params.providerConfig.allowSymlinkCommand,
   });
 
   const requestPayload = {
@@ -502,9 +527,9 @@ async function resolveExecRefs(params: {
   const jsonOnly = params.providerConfig.jsonOnly ?? true;
 
   const result = await runExecResolver({
-    command: commandPath,
+    command: secureCommandPath,
     args: params.providerConfig.args ?? [],
-    cwd: path.dirname(commandPath),
+    cwd: path.dirname(secureCommandPath),
     env: childEnv,
     input,
     timeoutMs,
