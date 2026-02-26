@@ -63,7 +63,6 @@ describe("detectImageReferences", () => {
 
     expect(refs).toHaveLength(1);
     expect(refs.some((r) => r.type === "path")).toBe(true);
-    expect(refs.some((r) => r.type === "url")).toBe(false);
   });
 
   it("handles various image extensions", () => {
@@ -81,6 +80,17 @@ describe("detectImageReferences", () => {
     const refs = detectImageReferences(prompt);
 
     expect(refs).toHaveLength(1);
+  });
+
+  it("dedupe casing follows host filesystem conventions", () => {
+    const prompt = "Look at /tmp/Image.png and /tmp/image.png";
+    const refs = detectImageReferences(prompt);
+
+    if (process.platform === "win32") {
+      expect(refs).toHaveLength(1);
+      return;
+    }
+    expect(refs).toHaveLength(2);
   });
 
   it("returns empty array when no images found", () => {
