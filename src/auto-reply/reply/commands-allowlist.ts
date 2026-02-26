@@ -390,7 +390,7 @@ export const handleAllowlistCommand: CommandHandler = async (params, allowTextCo
     const pairingChannels = listPairingChannels();
     const supportsStore = pairingChannels.includes(channelId);
     const storeAllowFrom = supportsStore
-      ? await readChannelAllowFromStore(channelId).catch(() => [])
+      ? await readChannelAllowFromStore(channelId, process.env, accountId).catch(() => [])
       : [];
 
     let dmAllowFrom: string[] = [];
