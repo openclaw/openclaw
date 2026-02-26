@@ -14,6 +14,7 @@ import {
   sanitizeWithOpenAIResponses,
   TEST_SESSION_ID,
 } from "./pi-embedded-runner.sanitize-session-history.test-harness.js";
+import { makeZeroUsageSnapshot } from "./usage.js";
 
 vi.mock("./pi-embedded-helpers.js", async () => ({
   ...(await vi.importActual("./pi-embedded-helpers.js")),
@@ -210,7 +211,7 @@ describe("sanitizeSessionHistory", () => {
       | (AgentMessage & { usage?: unknown })
       | undefined;
     expect(staleAssistant).toBeDefined();
-    expect(staleAssistant?.usage).toBeUndefined();
+    expect(staleAssistant?.usage).toEqual(makeZeroUsageSnapshot());
   });
 
   it("preserves fresh assistant usage snapshots created after latest compaction summary", async () => {
@@ -264,7 +265,7 @@ describe("sanitizeSessionHistory", () => {
       AgentMessage & { usage?: unknown }
     >;
     expect(assistants).toHaveLength(2);
-    expect(assistants[0]?.usage).toBeUndefined();
+    expect(assistants[0]?.usage).toEqual(makeZeroUsageSnapshot());
     expect(assistants[1]?.usage).toBeDefined();
   });
 
@@ -306,7 +307,7 @@ describe("sanitizeSessionHistory", () => {
     const assistant = result.find((message) => message.role === "assistant") as
       | (AgentMessage & { usage?: unknown })
       | undefined;
-    expect(assistant?.usage).toBeUndefined();
+    expect(assistant?.usage).toEqual(makeZeroUsageSnapshot());
   });
 
   it("keeps fresh usage after compaction timestamp in summary-first ordering", async () => {
@@ -368,7 +369,7 @@ describe("sanitizeSessionHistory", () => {
     const freshAssistant = assistants.find((message) =>
       JSON.stringify(message.content).includes("fresh answer"),
     );
-    expect(keptAssistant?.usage).toBeUndefined();
+    expect(keptAssistant?.usage).toEqual(makeZeroUsageSnapshot());
     expect(freshAssistant?.usage).toBeDefined();
   });
 
