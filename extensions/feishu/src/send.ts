@@ -6,6 +6,7 @@ import { buildMentionedMessage, buildMentionedCardContent } from "./mention.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { assertFeishuMessageApiSuccess, toFeishuSendResult } from "./send-result.js";
 import { resolveFeishuSendTarget } from "./send-target.js";
+import type { FeishuSendResult } from "./types.js";
 
 export type FeishuMessageInfo = {
   messageId: string;
