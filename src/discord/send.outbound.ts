@@ -523,6 +523,7 @@ export async function sendVoiceMessageDiscord(
       opts.replyTo,
       request,
       opts.silent,
+      token,
     );
 
     recordChannelActivity({

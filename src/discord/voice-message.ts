@@ -15,12 +15,13 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { RequestClient } from "@buape/carbon";
+import { DiscordError, RateLimitError, type RequestClient } from "@buape/carbon";
 import type { RetryRunner } from "../infra/retry-policy.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 
 const execFileAsync = promisify(execFile);
 
+const DISCORD_API_V10 = "https://discord.com/api/v10";
 const DISCORD_VOICE_MESSAGE_FLAG = 1 << 13;
 const SUPPRESS_NOTIFICATIONS_FLAG = 1 << 12;
 const WAVEFORM_SAMPLES = 256;
@@ -235,26 +236,43 @@ export async function sendDiscordVoiceMessage(
   replyTo: string | undefined,
   request: RetryRunner,
   silent?: boolean,
+  token?: string,
 ): Promise<{ id: string; channel_id: string }> {
   const filename = "voice-message.ogg";
   const fileSize = audioBuffer.byteLength;
 
   // Step 1: Request upload URL from Discord
-  const uploadUrlResponse = await request(
-    () =>
-      rest.post(`/channels/${channelId}/attachments`, {
-        body: {
-          files: [
-            {
-              filename,
-              file_size: fileSize,
-              id: "0",
-            },
-          ],
-        },
-      }) as Promise<UploadUrlResponse>,
-    "voice-upload-url",
-  );
+  // Use raw fetch instead of rest.post because Carbon's RequestClient
+  // intercepts any body containing a `files` key and converts it to FormData,
+  // but the /attachments endpoint expects JSON. (#16103)
+  const uploadUrlResponse = await request(async () => {
+    const res = await fetch(`${DISCORD_API_V10}/channels/${channelId}/attachments`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bot ${token}` } : {}),
+      },
+      body: JSON.stringify({
+        files: [
+          {
+            filename,
+            file_size: fileSize,
+            id: "0",
+          },
+        ],
+      }),
+    });
+    if (!res.ok) {
+      // Preserve Carbon error semantics so the retry runner can handle
+      // 429 rate-limits and buildDiscordSendError can classify error codes.
+      const body = await res.json().catch(() => ({ message: `upload-url failed: ${res.status}` }));
+      if (res.status === 429) {
+        throw new RateLimitError(res, body);
+      }
+      throw new DiscordError(res, body);
+    }
+    return res.json() as Promise<UploadUrlResponse>;
+  }, "voice-upload-url");
 
   if (!uploadUrlResponse.attachments?.[0]) {
     throw new Error("Failed to get upload URL for voice message");
