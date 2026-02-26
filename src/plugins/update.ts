@@ -4,10 +4,9 @@ import type { OpenClawConfig } from "../config/config.js";
 import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { resolveUserPath } from "../utils.js";
-import { discoverOpenClawPlugins } from "./discovery.js";
+import { resolveBundledPluginSources } from "./bundled-sources.js";
 import { installPluginFromNpmSpec, resolvePluginInstallDir } from "./install.js";
 import { buildNpmResolutionInstallFields, recordPluginInstall } from "./installs.js";
-import { loadPluginManifest } from "./manifest.js";
 
 export type PluginUpdateLogger = {
   info?: (message: string) => void;
@@ -54,12 +53,6 @@ export type PluginChannelSyncResult = {
   summary: PluginChannelSyncSummary;
 };
 
-type BundledPluginSource = {
-  pluginId: string;
-  localPath: string;
-  npmSpec?: string;
-};
-
 type InstallIntegrityDrift = {
   spec: string;
   expectedIntegrity: string;
@@ -89,40 +82,6 @@ async function readInstalledPackageVersion(dir: string): Promise<string | undefi
   } finally {
     fsSync.closeSync(opened.fd);
   }
-}
-
-function resolveBundledPluginSources(params: {
-  workspaceDir?: string;
-}): Map<string, BundledPluginSource> {
-  const discovery = discoverOpenClawPlugins({ workspaceDir: params.workspaceDir });
-  const bundled = new Map<string, BundledPluginSource>();
-
-  for (const candidate of discovery.candidates) {
-    if (candidate.origin !== "bundled") {
-      continue;
-    }
-    const manifest = loadPluginManifest(candidate.rootDir);
-    if (!manifest.ok) {
-      continue;
-    }
-    const pluginId = manifest.manifest.id;
-    if (bundled.has(pluginId)) {
-      continue;
-    }
-
-    const npmSpec =
-      candidate.packageManifest?.install?.npmSpec?.trim() ||
-      candidate.packageName?.trim() ||
-      undefined;
-
-    bundled.set(pluginId, {
-      pluginId,
-      localPath: candidate.rootDir,
-      npmSpec,
-    });
-  }
-
-  return bundled;
 }
 
 function pathsEqual(left?: string, right?: string): boolean {
