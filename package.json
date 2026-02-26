@@ -243,7 +243,7 @@
       "request": "npm:@cypress/request@3.0.10",
       "request-promise": "npm:@cypress/request-promise@5.0.0",
       "form-data": "2.5.4",
-      "minimatch": "10.2.1",
+      "minimatch": "10.2.4",
       "qs": "6.14.2",
       "@sinclair/typebox": "0.34.48",
       "tar": "7.5.9",
