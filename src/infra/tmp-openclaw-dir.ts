@@ -75,37 +75,17 @@ export function resolvePreferredOpenClawTmpDir(
     return st.isDirectory() && !st.isSymbolicLink() && isSecureDirForUser(st);
   };
 
-  const resolvePreferredState = (
+  const resolveDirState = (
+    candidatePath: string,
     requireWritableAccess: boolean,
   ): "available" | "missing" | "invalid" => {
     try {
-      const preferred = lstatSync(POSIX_OPENCLAW_TMP_DIR);
-      if (!isTrustedPreferredDir(preferred)) {
-        return "invalid";
-      }
-      if (requireWritableAccess) {
-        accessSync(POSIX_OPENCLAW_TMP_DIR, fs.constants.W_OK | fs.constants.X_OK);
-      }
-      return "available";
-    } catch (err) {
-      if (isNodeErrorWithCode(err, "ENOENT")) {
-        return "missing";
-      }
-      return "invalid";
-    }
-  };
-
-  const resolveFallbackState = (
-    fallbackPath: string,
-    requireWritableAccess: boolean,
-  ): "available" | "missing" | "invalid" => {
-    try {
-      const candidate = lstatSync(fallbackPath);
+      const candidate = lstatSync(candidatePath);
       if (!isTrustedPreferredDir(candidate)) {
         return "invalid";
       }
       if (requireWritableAccess) {
-        accessSync(fallbackPath, fs.constants.W_OK | fs.constants.X_OK);
+        accessSync(candidatePath, fs.constants.W_OK | fs.constants.X_OK);
       }
       return "available";
     } catch (err) {
@@ -118,7 +98,7 @@ export function resolvePreferredOpenClawTmpDir(
 
   const ensureTrustedFallbackDir = (): string => {
     const fallbackPath = fallback();
-    const state = resolveFallbackState(fallbackPath, true);
+    const state = resolveDirState(fallbackPath, true);
     if (state === "available") {
       return fallbackPath;
     }
@@ -130,13 +110,13 @@ export function resolvePreferredOpenClawTmpDir(
     } catch {
       throw new Error(`Unable to create fallback OpenClaw temp dir: ${fallbackPath}`);
     }
-    if (resolveFallbackState(fallbackPath, true) !== "available") {
+    if (resolveDirState(fallbackPath, true) !== "available") {
       throw new Error(`Unsafe fallback OpenClaw temp dir: ${fallbackPath}`);
     }
     return fallbackPath;
   };
 
-  const existingPreferredState = resolvePreferredState(true);
+  const existingPreferredState = resolveDirState(POSIX_OPENCLAW_TMP_DIR, true);
   if (existingPreferredState === "available") {
     return POSIX_OPENCLAW_TMP_DIR;
   }
@@ -148,7 +128,7 @@ export function resolvePreferredOpenClawTmpDir(
     accessSync("/tmp", fs.constants.W_OK | fs.constants.X_OK);
     // Create with a safe default; subsequent callers expect it exists.
     mkdirSync(POSIX_OPENCLAW_TMP_DIR, { recursive: true, mode: 0o700 });
-    if (resolvePreferredState(true) !== "available") {
+    if (resolveDirState(POSIX_OPENCLAW_TMP_DIR, true) !== "available") {
       return ensureTrustedFallbackDir();
     }
     return POSIX_OPENCLAW_TMP_DIR;
