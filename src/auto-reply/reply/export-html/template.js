@@ -752,7 +752,10 @@
               `<span class="tree-role-tool">${escapeHtml(formatToolCall(toolCall.name, toolCall.arguments))}</span>`
             );
           }
-          return labelHtml + `<span class="tree-role-tool">[${escapeHtml(msg.toolName || "tool")}]</span>`;
+          return (
+            labelHtml +
+            `<span class="tree-role-tool">[${escapeHtml(msg.toolName || "tool")}]</span>`
+          );
         }
         if (msg.role === "bashExecution") {
           const cmd = truncate(normalize(msg.command || ""));
@@ -783,7 +786,10 @@
       case "model_change":
         return labelHtml + `<span class="tree-muted">[model: ${escapeHtml(entry.modelId)}]</span>`;
       case "thinking_level_change":
-        return labelHtml + `<span class="tree-muted">[thinking: ${escapeHtml(entry.thinkingLevel)}]</span>`;
+        return (
+          labelHtml +
+          `<span class="tree-muted">[thinking: ${escapeHtml(entry.thinkingLevel)}]</span>`
+        );
       default:
         return labelHtml + `<span class="tree-muted">[${escapeHtml(entry.type)}]</span>`;
     }

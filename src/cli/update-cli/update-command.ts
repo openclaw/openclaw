@@ -547,8 +547,14 @@ async function maybeRestartService(params: {
         defaultRuntime.log("");
         process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
         try {
+          // Require both stdin and stdout to be real TTYs; PM2 assigns a
+          // pseudo-TTY to stdin which would otherwise make doctor block
+          // indefinitely waiting for keyboard input (closes #24178).
           const interactiveDoctor =
-            Boolean(process.stdin.isTTY) && !params.opts.json && params.opts.yes !== true;
+            Boolean(process.stdin.isTTY) &&
+            Boolean(process.stdout.isTTY) &&
+            !params.opts.json &&
+            params.opts.yes !== true;
           await doctorCommand(defaultRuntime, {
             nonInteractive: !interactiveDoctor,
           });

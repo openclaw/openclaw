@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import vm from "node:vm";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import vm from "node:vm";
 import { parseHTML } from "linkedom";
+import { describe, expect, it } from "vitest";
 
 type SessionEntry = {
   id: string;
@@ -37,7 +37,10 @@ const highlightJs = fs.readFileSync(path.join(exportHtmlDir, "vendor", "highligh
 function renderTemplate(sessionData: SessionData) {
   const html = templateHtml
     .replace("{{CSS}}", "")
-    .replace("{{SESSION_DATA}}", Buffer.from(JSON.stringify(sessionData), "utf8").toString("base64"))
+    .replace(
+      "{{SESSION_DATA}}",
+      Buffer.from(JSON.stringify(sessionData), "utf8").toString("base64"),
+    )
     .replace("{{MARKED_JS}}", "")
     .replace("{{HIGHLIGHT_JS}}", "")
     .replace("{{JS}}", "");
