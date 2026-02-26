@@ -8,6 +8,7 @@ services:
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
+      PATH: /usr/local/bin:/home/node/.local/share/pnpm:/usr/bin:/bin:/root/.bun/bin:/usr/local/sbin:/usr/sbin:/sbin:/home/node/.openclaw/bin
     volumes:
       - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
       - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
