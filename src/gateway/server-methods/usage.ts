@@ -844,22 +844,22 @@ export const usageHandlers: GatewayRequestHandlers = {
           .toSorted((a, b) => b.count - a.count),
       },
       byModel: Array.from(byModelMap.values()).toSorted((a, b) => {
-        const costDiff = b.totals.totalCost - a.totals.totalCost;
+        const costDiff = (b.totals?.totalCost ?? 0) - (a.totals?.totalCost ?? 0);
         if (costDiff !== 0) {
           return costDiff;
         }
-        return b.totals.totalTokens - a.totals.totalTokens;
+        return (b.totals?.totalTokens ?? 0) - (a.totals?.totalTokens ?? 0);
       }),
       byProvider: Array.from(byProviderMap.values()).toSorted((a, b) => {
-        const costDiff = b.totals.totalCost - a.totals.totalCost;
+        const costDiff = (b.totals?.totalCost ?? 0) - (a.totals?.totalCost ?? 0);
         if (costDiff !== 0) {
           return costDiff;
         }
-        return b.totals.totalTokens - a.totals.totalTokens;
+        return (b.totals?.totalTokens ?? 0) - (a.totals?.totalTokens ?? 0);
       }),
       byAgent: Array.from(byAgentMap.entries())
         .map(([id, totals]) => ({ agentId: id, totals }))
-        .toSorted((a, b) => b.totals.totalCost - a.totals.totalCost),
+        .toSorted((a, b) => (b.totals?.totalCost ?? 0) - (a.totals?.totalCost ?? 0)),
       ...tail,
     };
 
