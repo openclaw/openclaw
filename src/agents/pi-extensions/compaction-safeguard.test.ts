@@ -38,6 +38,7 @@ const {
   extractOpaqueIdentifiers,
   auditSummaryQuality,
   capCompactionSummary,
+  capCompactionSummaryPreservingSuffix,
   formatFileOperations,
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
@@ -287,6 +288,19 @@ describe("compaction-safeguard summary budgets", () => {
     expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
     expect(capped).toContain(SUMMARY_TRUNCATED_MARKER.trim());
     expect(capped.endsWith(SUMMARY_TRUNCATED_MARKER)).toBe(true);
+  });
+
+  it("preserves workspace critical rules suffix when capping", () => {
+    const suffix =
+      "\n\n<workspace-critical-rules>\n## Session Startup\nRead AGENTS.md\n</workspace-critical-rules>";
+    const body = "x".repeat(MAX_COMPACTION_SUMMARY_CHARS);
+
+    const capped = capCompactionSummaryPreservingSuffix(body, suffix);
+
+    expect(capped.length).toBeLessThanOrEqual(MAX_COMPACTION_SUMMARY_CHARS);
+    expect(capped).toContain("<workspace-critical-rules>");
+    expect(capped).toContain("## Session Startup");
+    expect(capped.endsWith(suffix)).toBe(true);
   });
 });
 
