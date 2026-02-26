@@ -35,6 +35,15 @@
       "title": "Process",
       "detailKeys": ["sessionId"]
     },
+    "app_control": {
+      "emoji": "🖥️",
+      "title": "App Control",
+      "actions": {
+        "open": { "label": "open", "detailKeys": ["app"] },
+        "tail_log": { "label": "tail log", "detailKeys": ["logPath"] },
+        "open_and_tail": { "label": "open + tail", "detailKeys": ["app", "logPath"] }
+      }
+    },
     "read": {
       "emoji": "📖",
       "title": "Read",

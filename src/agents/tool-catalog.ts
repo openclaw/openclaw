@@ -82,6 +82,13 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     profiles: ["coding"],
   },
   {
+    id: "app_control",
+    label: "app_control",
+    description: "Open local apps and tail logs",
+    sectionId: "runtime",
+    profiles: ["coding"],
+  },
+  {
     id: "web_search",
     label: "web_search",
     description: "Search the web",
