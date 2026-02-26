@@ -1,39 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { validateConfigObject } from "./config.js";
 
-describe('dmPolicy="allowlist" requires non-empty allowFrom', () => {
+describe('dmPolicy="allowlist" requires non-empty effective allowFrom', () => {
   it('rejects telegram dmPolicy="allowlist" without allowFrom', () => {
     const res = validateConfigObject({
       channels: { telegram: { dmPolicy: "allowlist", botToken: "fake" } },
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues.some((i) => i.path.includes("allowFrom"))).toBe(true);
+      expect(res.issues.some((i) => i.path.includes("channels.telegram.allowFrom"))).toBe(true);
     }
-  });
-
-  it('rejects telegram dmPolicy="allowlist" with empty allowFrom', () => {
-    const res = validateConfigObject({
-      channels: { telegram: { dmPolicy: "allowlist", allowFrom: [], botToken: "fake" } },
-    });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues.some((i) => i.path.includes("allowFrom"))).toBe(true);
-    }
-  });
-
-  it('accepts telegram dmPolicy="allowlist" with allowFrom entries', () => {
-    const res = validateConfigObject({
-      channels: { telegram: { dmPolicy: "allowlist", allowFrom: ["12345"], botToken: "fake" } },
-    });
-    expect(res.ok).toBe(true);
-  });
-
-  it('accepts telegram dmPolicy="pairing" without allowFrom', () => {
-    const res = validateConfigObject({
-      channels: { telegram: { dmPolicy: "pairing", botToken: "fake" } },
-    });
-    expect(res.ok).toBe(true);
   });
 
   it('rejects signal dmPolicy="allowlist" without allowFrom', () => {
@@ -42,15 +18,8 @@ describe('dmPolicy="allowlist" requires non-empty allowFrom', () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues.some((i) => i.path.includes("allowFrom"))).toBe(true);
+      expect(res.issues.some((i) => i.path.includes("channels.signal.allowFrom"))).toBe(true);
     }
-  });
-
-  it('accepts signal dmPolicy="allowlist" with allowFrom entries', () => {
-    const res = validateConfigObject({
-      channels: { signal: { dmPolicy: "allowlist", allowFrom: ["+1234567890"] } },
-    });
-    expect(res.ok).toBe(true);
   });
 
   it('rejects discord dmPolicy="allowlist" without allowFrom', () => {
@@ -59,15 +28,10 @@ describe('dmPolicy="allowlist" requires non-empty allowFrom', () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues.some((i) => i.path.includes("allowFrom"))).toBe(true);
+      expect(
+        res.issues.some((i) => i.path.includes("channels.discord") && i.path.includes("allowFrom")),
+      ).toBe(true);
     }
-  });
-
-  it('accepts discord dmPolicy="allowlist" with allowFrom entries', () => {
-    const res = validateConfigObject({
-      channels: { discord: { dmPolicy: "allowlist", allowFrom: ["123456789"] } },
-    });
-    expect(res.ok).toBe(true);
   });
 
   it('rejects whatsapp dmPolicy="allowlist" without allowFrom', () => {
@@ -76,25 +40,70 @@ describe('dmPolicy="allowlist" requires non-empty allowFrom', () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expect(res.issues.some((i) => i.path.includes("allowFrom"))).toBe(true);
+      expect(res.issues.some((i) => i.path.includes("channels.whatsapp.allowFrom"))).toBe(true);
     }
   });
 
-  it('accepts whatsapp dmPolicy="allowlist" with allowFrom entries', () => {
+  it('accepts dmPolicy="pairing" without allowFrom', () => {
     const res = validateConfigObject({
-      channels: { whatsapp: { dmPolicy: "allowlist", allowFrom: ["+1234567890"] } },
+      channels: { telegram: { dmPolicy: "pairing", botToken: "fake" } },
+    });
+    expect(res.ok).toBe(true);
+  });
+});
+
+describe('account dmPolicy="allowlist" uses inherited allowFrom', () => {
+  it("accepts telegram account allowlist when parent allowFrom exists", () => {
+    const res = validateConfigObject({
+      channels: {
+        telegram: {
+          allowFrom: ["12345"],
+          accounts: { bot1: { dmPolicy: "allowlist", botToken: "fake" } },
+        },
+      },
     });
     expect(res.ok).toBe(true);
   });
 
-  it('accepts telegram account dmPolicy="allowlist" without own allowFrom (inherits from parent)', () => {
-    // Account-level schemas skip allowFrom validation because accounts inherit
-    // allowFrom from the parent channel config at runtime.
+  it("rejects telegram account allowlist when neither account nor parent has allowFrom", () => {
+    const res = validateConfigObject({
+      channels: { telegram: { accounts: { bot1: { dmPolicy: "allowlist", botToken: "fake" } } } },
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(
+        res.issues.some((i) => i.path.includes("channels.telegram.accounts.bot1.allowFrom")),
+      ).toBe(true);
+    }
+  });
+
+  it("accepts signal account allowlist when parent allowFrom exists", () => {
     const res = validateConfigObject({
       channels: {
-        telegram: {
+        signal: { allowFrom: ["+15550001111"], accounts: { work: { dmPolicy: "allowlist" } } },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts discord account allowlist when parent allowFrom exists", () => {
+    const res = validateConfigObject({
+      channels: {
+        discord: { allowFrom: ["123456789"], accounts: { work: { dmPolicy: "allowlist" } } },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts slack account allowlist when parent allowFrom exists", () => {
+    const res = validateConfigObject({
+      channels: {
+        slack: {
+          allowFrom: ["U123"],
+          botToken: "xoxb-top",
+          appToken: "xapp-top",
           accounts: {
-            bot1: { dmPolicy: "allowlist", botToken: "fake" },
+            work: { dmPolicy: "allowlist", botToken: "xoxb-work", appToken: "xapp-work" },
           },
         },
       },
@@ -102,14 +111,35 @@ describe('dmPolicy="allowlist" requires non-empty allowFrom', () => {
     expect(res.ok).toBe(true);
   });
 
-  it('accepts telegram account dmPolicy="allowlist" with allowFrom entries', () => {
+  it("accepts whatsapp account allowlist when parent allowFrom exists", () => {
     const res = validateConfigObject({
       channels: {
-        telegram: {
-          accounts: {
-            bot1: { dmPolicy: "allowlist", allowFrom: ["12345"], botToken: "fake" },
-          },
-        },
+        whatsapp: { allowFrom: ["+15550001111"], accounts: { work: { dmPolicy: "allowlist" } } },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts imessage account allowlist when parent allowFrom exists", () => {
+    const res = validateConfigObject({
+      channels: {
+        imessage: { allowFrom: ["alice"], accounts: { work: { dmPolicy: "allowlist" } } },
+      },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts irc account allowlist when parent allowFrom exists", () => {
+    const res = validateConfigObject({
+      channels: { irc: { allowFrom: ["nick"], accounts: { work: { dmPolicy: "allowlist" } } } },
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts bluebubbles account allowlist when parent allowFrom exists", () => {
+    const res = validateConfigObject({
+      channels: {
+        bluebubbles: { allowFrom: ["sender"], accounts: { work: { dmPolicy: "allowlist" } } },
       },
     });
     expect(res.ok).toBe(true);
