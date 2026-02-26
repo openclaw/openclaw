@@ -278,6 +278,24 @@ describe("onboard (non-interactive): provider auth", () => {
     });
   });
 
+  it("infers StepFun auth choice from --stepfun-api-key and sets default model", async () => {
+    await withOnboardEnv("openclaw-onboard-stepfun-infer-", async (env) => {
+      const cfg = await runOnboardingAndReadConfig(env, {
+        stepfunApiKey: "stepfun-test-key",
+      });
+
+      expect(cfg.auth?.profiles?.["stepfun:default"]?.provider).toBe("stepfun");
+      expect(cfg.auth?.profiles?.["stepfun:default"]?.mode).toBe("api_key");
+      expect(cfg.models?.providers?.stepfun?.baseUrl).toBe("https://api.stepfun.ai/v1");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("stepfun/step-3.5-flash");
+      await expectApiKeyProfile({
+        profileId: "stepfun:default",
+        provider: "stepfun",
+        key: "stepfun-test-key",
+      });
+    });
+  });
+
   it("stores Volcano Engine API key and sets default model", async () => {
     await withOnboardEnv("openclaw-onboard-volcengine-", async (env) => {
       const cfg = await runOnboardingAndReadConfig(env, {

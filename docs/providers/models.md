@@ -30,6 +30,7 @@ model as `provider/model`.
 - [Vercel AI Gateway](/providers/vercel-ai-gateway)
 - [Cloudflare AI Gateway](/providers/cloudflare-ai-gateway)
 - [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
+- [StepFun](/providers/stepfun)
 - [Mistral](/providers/mistral)
 - [Synthetic](/providers/synthetic)
 - [OpenCode Zen](/providers/opencode)

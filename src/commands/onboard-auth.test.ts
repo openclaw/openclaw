@@ -20,6 +20,8 @@ import {
   applyOpencodeZenProviderConfig,
   applyOpenrouterConfig,
   applyOpenrouterProviderConfig,
+  applyStepfunConfig,
+  applyStepfunProviderConfig,
   applySyntheticConfig,
   applySyntheticProviderConfig,
   applyXaiConfig,
@@ -34,7 +36,10 @@ import {
   SYNTHETIC_DEFAULT_MODEL_REF,
   XAI_DEFAULT_MODEL_REF,
   setMinimaxApiKey,
+  setStepfunApiKey,
   writeOAuthCredentials,
+  STEPFUN_BASE_URL,
+  STEPFUN_DEFAULT_MODEL_REF,
   ZAI_CODING_CN_BASE_URL,
   ZAI_GLOBAL_BASE_URL,
 } from "./onboard-auth.js";
@@ -292,6 +297,38 @@ describe("setMinimaxApiKey", () => {
       type: "api_key",
       provider: "minimax",
       key: "sk-minimax-test",
+    });
+
+    await expect(
+      fs.readFile(path.join(env.stateDir, "agents", "main", "agent", "auth-profiles.json"), "utf8"),
+    ).rejects.toThrow();
+  });
+});
+
+describe("setStepfunApiKey", () => {
+  const lifecycle = createAuthTestLifecycle([
+    "OPENCLAW_STATE_DIR",
+    "OPENCLAW_AGENT_DIR",
+    "PI_CODING_AGENT_DIR",
+  ]);
+
+  afterEach(async () => {
+    await lifecycle.cleanup();
+  });
+
+  it("writes to OPENCLAW_AGENT_DIR when set", async () => {
+    const env = await setupAuthTestEnv("openclaw-stepfun-", { agentSubdir: "custom-agent" });
+    lifecycle.setStateDir(env.stateDir);
+
+    await setStepfunApiKey("sk-stepfun-test");
+
+    const parsed = await readAuthProfilesForAgent<{
+      profiles?: Record<string, { type?: string; provider?: string; key?: string }>;
+    }>(env.agentDir);
+    expect(parsed.profiles?.["stepfun:default"]).toMatchObject({
+      type: "api_key",
+      provider: "stepfun",
+      key: "sk-stepfun-test",
     });
 
     await expect(
@@ -631,9 +668,48 @@ describe("applyMistralProviderConfig", () => {
   });
 });
 
+describe("applyStepfunConfig", () => {
+  it("adds StepFun provider with correct settings", () => {
+    const cfg = applyStepfunConfig({});
+    expect(cfg.models?.providers?.stepfun).toMatchObject({
+      baseUrl: STEPFUN_BASE_URL,
+      api: "openai-completions",
+    });
+    expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(
+      STEPFUN_DEFAULT_MODEL_REF,
+    );
+  });
+});
+
+describe("applyStepfunProviderConfig", () => {
+  it("merges StepFun models and keeps existing provider overrides", () => {
+    const cfg = applyStepfunProviderConfig(
+      createLegacyProviderConfig({
+        providerId: "stepfun",
+        api: "anthropic-messages",
+        modelId: "custom-model",
+        modelName: "Custom",
+      }),
+    );
+
+    expect(cfg.models?.providers?.stepfun?.baseUrl).toBe(STEPFUN_BASE_URL);
+    expect(cfg.models?.providers?.stepfun?.api).toBe("openai-completions");
+    expect(cfg.models?.providers?.stepfun?.apiKey).toBe("old-key");
+    expect(cfg.models?.providers?.stepfun?.models.map((m) => m.id)).toEqual([
+      "custom-model",
+      "step-3.5-flash",
+    ]);
+  });
+});
+
 describe("fallback preservation helpers", () => {
   it("preserves existing model fallbacks", () => {
-    const fallbackCases = [applyMinimaxApiConfig, applyXaiConfig, applyMistralConfig] as const;
+    const fallbackCases = [
+      applyMinimaxApiConfig,
+      applyXaiConfig,
+      applyMistralConfig,
+      applyStepfunConfig,
+    ] as const;
     for (const applyConfig of fallbackCases) {
       const cfg = applyConfig(createConfigWithFallbacks());
       expectFallbacksPreserved(cfg);
@@ -658,6 +734,11 @@ describe("provider alias defaults", () => {
         applyConfig: () => applyMistralProviderConfig({}),
         modelRef: MISTRAL_DEFAULT_MODEL_REF,
         alias: "Mistral",
+      },
+      {
+        applyConfig: () => applyStepfunProviderConfig({}),
+        modelRef: STEPFUN_DEFAULT_MODEL_REF,
+        alias: "Step 3.5 Flash",
       },
     ] as const;
     for (const testCase of aliasCases) {

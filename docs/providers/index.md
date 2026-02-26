@@ -43,6 +43,7 @@ Looking for chat channel docs (WhatsApp/Telegram/Discord/Slack/Mattermost (plugi
 - [OpenRouter](/providers/openrouter)
 - [Qianfan](/providers/qianfan)
 - [Qwen (OAuth)](/providers/qwen)
+- [StepFun](/providers/stepfun)
 - [Together AI](/providers/together)
 - [Vercel AI Gateway](/providers/vercel-ai-gateway)
 - [Venice (Venice AI, privacy-focused)](/providers/venice)

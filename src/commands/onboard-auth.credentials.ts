@@ -265,6 +265,19 @@ export async function setMoonshotApiKey(
   });
 }
 
+export async function setStepfunApiKey(
+  key: SecretInput,
+  agentDir?: string,
+  options?: ApiKeyStorageOptions,
+) {
+  // Write to resolved agent dir so gateway finds credentials on startup.
+  upsertAuthProfile({
+    profileId: "stepfun:default",
+    credential: buildApiKeyCredential("stepfun", key, undefined, options),
+    agentDir: resolveAuthAgentDir(agentDir),
+  });
+}
+
 export async function setKimiCodingApiKey(
   key: SecretInput,
   agentDir?: string,

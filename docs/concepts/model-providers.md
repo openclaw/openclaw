@@ -229,6 +229,18 @@ Kimi Coding uses Moonshot AI's Anthropic-compatible endpoint:
 }
 ```
 
+### StepFun
+
+StepFun uses OpenAI-compatible endpoints and onboarding auto-writes the provider config:
+
+- Provider: `stepfun`
+- Auth: `STEPFUN_API_KEY`
+- CLI: `openclaw onboard --auth-choice stepfun-api-key`
+- Base URL: `https://api.stepfun.ai/v1`
+- Example model: `stepfun/step-3.5-flash`
+
+See [/providers/stepfun](/providers/stepfun) for setup details and config snippets.
+
 ### Qwen OAuth (free tier)
 
 Qwen provides OAuth access to Qwen Coder + Vision via a device-code flow.

@@ -103,6 +103,16 @@ openclaw onboard --non-interactive \
       --gateway-bind loopback
     ```
   </Accordion>
+  <Accordion title="StepFun example">
+    ```bash
+    openclaw onboard --non-interactive \
+      --mode local \
+      --auth-choice stepfun-api-key \
+      --stepfun-api-key "$STEPFUN_API_KEY" \
+      --gateway-port 18789 \
+      --gateway-bind loopback
+    ```
+  </Accordion>
   <Accordion title="Mistral example">
     ```bash
     openclaw onboard --non-interactive \

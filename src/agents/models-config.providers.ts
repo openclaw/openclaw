@@ -119,6 +119,16 @@ const MOONSHOT_DEFAULT_COST = {
   cacheRead: 0,
   cacheWrite: 0,
 };
+const STEPFUN_BASE_URL = "https://api.stepfun.ai/v1";
+const STEPFUN_DEFAULT_MODEL_ID = "step-3.5-flash";
+const STEPFUN_DEFAULT_CONTEXT_WINDOW = 256000;
+const STEPFUN_DEFAULT_MAX_TOKENS = 8192;
+const STEPFUN_DEFAULT_COST = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+};
 
 const KIMI_CODING_BASE_URL = "https://api.kimi.com/coding/";
 const KIMI_CODING_DEFAULT_MODEL_ID = "k2p5";
@@ -653,6 +663,24 @@ function buildMoonshotProvider(): ProviderConfig {
   };
 }
 
+function buildStepfunProvider(): ProviderConfig {
+  return {
+    baseUrl: STEPFUN_BASE_URL,
+    api: "openai-completions",
+    models: [
+      {
+        id: STEPFUN_DEFAULT_MODEL_ID,
+        name: "Step 3.5 Flash",
+        reasoning: true,
+        input: ["text"],
+        cost: STEPFUN_DEFAULT_COST,
+        contextWindow: STEPFUN_DEFAULT_CONTEXT_WINDOW,
+        maxTokens: STEPFUN_DEFAULT_MAX_TOKENS,
+      },
+    ],
+  };
+}
+
 export function buildKimiCodingProvider(): ProviderConfig {
   return {
     baseUrl: KIMI_CODING_BASE_URL,
@@ -949,6 +977,13 @@ export async function resolveImplicitProviders(params: {
     resolveApiKeyFromProfiles({ provider: "moonshot", store: authStore });
   if (moonshotKey) {
     providers.moonshot = { ...buildMoonshotProvider(), apiKey: moonshotKey };
+  }
+
+  const stepfunKey =
+    resolveEnvApiKeyVarName("stepfun") ??
+    resolveApiKeyFromProfiles({ provider: "stepfun", store: authStore });
+  if (stepfunKey) {
+    providers.stepfun = { ...buildStepfunProvider(), apiKey: stepfunKey };
   }
 
   const kimiCodingKey =

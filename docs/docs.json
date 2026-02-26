@@ -1106,6 +1106,7 @@
                   "providers/glm",
                   "providers/minimax",
                   "providers/moonshot",
+                  "providers/stepfun",
                   "providers/mistral",
                   "providers/nvidia",
                   "providers/ollama",

@@ -30,6 +30,7 @@ describe("buildAuthChoiceOptions", () => {
       "moonshot-api-key",
       "moonshot-api-key-cn",
       "kimi-code-api-key",
+      "stepfun-api-key",
       "together-api-key",
       "ai-gateway-api-key",
       "cloudflare-ai-gateway-api-key",
@@ -79,5 +80,16 @@ describe("buildAuthChoiceOptions", () => {
 
     expect(chutesGroup).toBeDefined();
     expect(chutesGroup?.options.some((opt) => opt.value === "chutes")).toBe(true);
+  });
+
+  it("shows StepFun in grouped provider selection", () => {
+    const { groups } = buildAuthChoiceGroups({
+      store: EMPTY_STORE,
+      includeSkip: false,
+    });
+    const stepfunGroup = groups.find((group) => group.value === "stepfun");
+
+    expect(stepfunGroup).toBeDefined();
+    expect(stepfunGroup?.options.some((opt) => opt.value === "stepfun-api-key")).toBe(true);
   });
 });

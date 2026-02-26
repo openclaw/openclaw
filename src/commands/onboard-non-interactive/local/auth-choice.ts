@@ -23,6 +23,7 @@ import {
   applyMoonshotConfigCn,
   applyOpencodeZenConfig,
   applyOpenrouterConfig,
+  applyStepfunConfig,
   applySyntheticConfig,
   applyVeniceConfig,
   applyTogetherConfig,
@@ -47,6 +48,7 @@ import {
   setOpenaiApiKey,
   setOpencodeZenApiKey,
   setOpenrouterApiKey,
+  setStepfunApiKey,
   setSyntheticApiKey,
   setVolcengineApiKey,
   setXaiApiKey,
@@ -715,6 +717,29 @@ export async function applyNonInteractiveAuthChoice(params: {
 
   if (authChoice === "moonshot-api-key-cn") {
     return await applyMoonshotApiKeyChoice(applyMoonshotConfigCn);
+  }
+
+  if (authChoice === "stepfun-api-key") {
+    const resolved = await resolveNonInteractiveApiKey({
+      provider: "stepfun",
+      cfg: baseConfig,
+      flagValue: opts.stepfunApiKey,
+      flagName: "--stepfun-api-key",
+      envVar: "STEPFUN_API_KEY",
+      runtime,
+    });
+    if (!resolved) {
+      return null;
+    }
+    if (resolved.source !== "profile") {
+      await setStepfunApiKey(resolved.key);
+    }
+    nextConfig = applyAuthProfileConfig(nextConfig, {
+      profileId: "stepfun:default",
+      provider: "stepfun",
+      mode: "api_key",
+    });
+    return applyStepfunConfig(nextConfig);
   }
 
   if (authChoice === "kimi-code-api-key") {

@@ -175,6 +175,10 @@ What you set:
     Moonshot (Kimi K2) and Kimi Coding configs are auto-written.
     More detail: [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot).
   </Accordion>
+  <Accordion title="StepFun (Step 3.5 Flash)">
+    Config is auto-written.
+    More detail: [StepFun](/providers/stepfun).
+  </Accordion>
   <Accordion title="Custom provider">
     Works with OpenAI-compatible and Anthropic-compatible endpoints.
 

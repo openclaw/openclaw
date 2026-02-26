@@ -68,6 +68,7 @@ describe("applyAuthChoice", () => {
     "AI_GATEWAY_API_KEY",
     "CLOUDFLARE_AI_GATEWAY_API_KEY",
     "MOONSHOT_API_KEY",
+    "STEPFUN_API_KEY",
     "MISTRAL_API_KEY",
     "KIMI_API_KEY",
     "GEMINI_API_KEY",
@@ -194,6 +195,7 @@ describe("applyAuthChoice", () => {
       authChoice:
         | "minimax-api"
         | "minimax-api-key-cn"
+        | "stepfun-api-key"
         | "synthetic-api-key"
         | "huggingface-api-key";
       promptContains: string;
@@ -217,6 +219,15 @@ describe("applyAuthChoice", () => {
         provider: "minimax-cn",
         token: "sk-minimax-test",
         expectedBaseUrl: MINIMAX_CN_API_BASE_URL,
+      },
+      {
+        authChoice: "stepfun-api-key" as const,
+        promptContains: "Enter StepFun API key",
+        profileId: "stepfun:default",
+        provider: "stepfun",
+        token: "sk-stepfun-test",
+        expectedBaseUrl: "https://api.stepfun.ai/v1",
+        expectedModelPrefix: "stepfun/",
       },
       {
         authChoice: "synthetic-api-key" as const,
@@ -463,6 +474,13 @@ describe("applyAuthChoice", () => {
       profileId: "moonshot:default",
       provider: "moonshot",
       modelPrefix: "moonshot/",
+    },
+    {
+      authChoice: "stepfun-api-key",
+      tokenProvider: "stepfun",
+      profileId: "stepfun:default",
+      provider: "stepfun",
+      modelPrefix: "stepfun/",
     },
     {
       authChoice: "mistral-api-key",
@@ -1320,6 +1338,7 @@ describe("resolvePreferredProviderForAuthChoice", () => {
       { authChoice: "github-copilot" as const, expectedProvider: "github-copilot" },
       { authChoice: "qwen-portal" as const, expectedProvider: "qwen-portal" },
       { authChoice: "mistral-api-key" as const, expectedProvider: "mistral" },
+      { authChoice: "stepfun-api-key" as const, expectedProvider: "stepfun" },
       { authChoice: "unknown" as AuthChoice, expectedProvider: undefined },
     ] as const;
     for (const scenario of scenarios) {

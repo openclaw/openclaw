@@ -154,6 +154,7 @@ export async function modelsStatusCommand(
     "xai",
     "openrouter",
     "zai",
+    "stepfun",
     "mistral",
     "synthetic",
   ];

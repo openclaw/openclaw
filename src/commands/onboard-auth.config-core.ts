@@ -62,6 +62,7 @@ import {
 } from "./onboard-auth.config-shared.js";
 import {
   buildMistralModelDefinition,
+  buildStepfunModelDefinition,
   buildZaiModelDefinition,
   buildMoonshotModelDefinition,
   buildXaiModelDefinition,
@@ -75,6 +76,9 @@ import {
   MOONSHOT_CN_BASE_URL,
   MOONSHOT_DEFAULT_MODEL_ID,
   MOONSHOT_DEFAULT_MODEL_REF,
+  STEPFUN_BASE_URL,
+  STEPFUN_DEFAULT_MODEL_ID,
+  STEPFUN_DEFAULT_MODEL_REF,
   ZAI_DEFAULT_MODEL_ID,
   resolveZaiBaseUrl,
   XAI_BASE_URL,
@@ -209,6 +213,30 @@ export function applyMoonshotConfig(cfg: OpenClawConfig): OpenClawConfig {
 export function applyMoonshotConfigCn(cfg: OpenClawConfig): OpenClawConfig {
   const next = applyMoonshotProviderConfigCn(cfg);
   return applyAgentDefaultModelPrimary(next, MOONSHOT_DEFAULT_MODEL_REF);
+}
+
+export function applyStepfunProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const models = { ...cfg.agents?.defaults?.models };
+  models[STEPFUN_DEFAULT_MODEL_REF] = {
+    ...models[STEPFUN_DEFAULT_MODEL_REF],
+    alias: models[STEPFUN_DEFAULT_MODEL_REF]?.alias ?? "Step 3.5 Flash",
+  };
+
+  const defaultModel = buildStepfunModelDefinition();
+
+  return applyProviderConfigWithDefaultModel(cfg, {
+    agentModels: models,
+    providerId: "stepfun",
+    api: "openai-completions",
+    baseUrl: STEPFUN_BASE_URL,
+    defaultModel,
+    defaultModelId: STEPFUN_DEFAULT_MODEL_ID,
+  });
+}
+
+export function applyStepfunConfig(cfg: OpenClawConfig): OpenClawConfig {
+  const next = applyStepfunProviderConfig(cfg);
+  return applyAgentDefaultModelPrimary(next, STEPFUN_DEFAULT_MODEL_REF);
 }
 
 export function applyKimiCodeProviderConfig(cfg: OpenClawConfig): OpenClawConfig {

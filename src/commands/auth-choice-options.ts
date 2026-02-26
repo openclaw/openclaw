@@ -60,6 +60,11 @@ const AUTH_CHOICE_GROUP_DEFS: {
     choices: ["moonshot-api-key", "moonshot-api-key-cn", "kimi-code-api-key"],
   },
   {
+    value: "stepfun",
+    label: "StepFun (Step 3.5 Flash)",
+    choices: ["stepfun-api-key"],
+  },
+  {
     value: "google",
     label: "Google",
     hint: "Gemini API key + OAuth",
