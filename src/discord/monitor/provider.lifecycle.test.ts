@@ -55,8 +55,15 @@ describe("runDiscordGatewayLifecycle", () => {
     const start = vi.fn(params?.start ?? (async () => undefined));
     const stop = vi.fn(params?.stop ?? (async () => undefined));
     const threadStop = vi.fn();
+    const runtimeLog = vi.fn();
     const runtimeError = vi.fn();
+    const runtimeExit = vi.fn();
     const releaseEarlyGatewayErrorGuard = vi.fn();
+    const runtime: RuntimeEnv = {
+      log: runtimeLog,
+      error: runtimeError,
+      exit: runtimeExit,
+    };
     return {
       start,
       stop,
@@ -66,9 +73,7 @@ describe("runDiscordGatewayLifecycle", () => {
       lifecycleParams: {
         accountId: params?.accountId ?? "default",
         client: { getPlugin: vi.fn(() => undefined) } as unknown as Client,
-        runtime: {
-          error: runtimeError,
-        } as RuntimeEnv,
+        runtime,
         isDisallowedIntentsError: params?.isDisallowedIntentsError ?? (() => false),
         voiceManager: null,
         voiceManagerRef: { current: null },
