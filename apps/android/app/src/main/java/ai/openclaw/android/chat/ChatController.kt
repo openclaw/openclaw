@@ -58,6 +58,10 @@ class ChatController(
   private val _sessions = MutableStateFlow<List<ChatSessionEntry>>(emptyList())
   val sessions: StateFlow<List<ChatSessionEntry>> = _sessions.asStateFlow()
 
+  private val queuedOutbox = mutableListOf<PendingOutbound>()
+  private val _queuedItems = MutableStateFlow<List<ChatQueuedOutbound>>(emptyList())
+  val queuedItems: StateFlow<List<ChatQueuedOutbound>> = _queuedItems.asStateFlow()
+
   private val pendingRuns = mutableSetOf<String>()
   private val pendingRunTimeoutJobs = ConcurrentHashMap<String, Job>()
   private val pendingRunTimeoutMs = 120_000L
@@ -122,24 +126,35 @@ class ChatController(
     message: String,
     thinkingLevel: String,
     attachments: List<OutgoingAttachment>,
+    reEvaluateOnReconnect: Boolean = false,
   ) {
     val trimmed = message.trim()
     if (trimmed.isEmpty() && attachments.isEmpty()) return
-    if (!_healthOk.value) {
-      _errorText.value = "Gateway health not OK; cannot send"
-      return
-    }
-
     val runId = UUID.randomUUID().toString()
     val text = if (trimmed.isEmpty() && attachments.isNotEmpty()) "See attached." else trimmed
     val sessionKey = _sessionKey.value
     val thinking = normalizeThinking(thinkingLevel)
-    lastOutbound = PendingOutbound(text = text, thinkingLevel = thinking, attachments = attachments, sessionKey = sessionKey)
+    lastOutbound =
+      PendingOutbound(
+        id = runId,
+        text = text,
+        thinkingLevel = thinking,
+        attachments = attachments,
+        sessionKey = sessionKey,
+        reEvaluateOnReconnect = reEvaluateOnReconnect,
+        queuedAtMs = System.currentTimeMillis(),
+        queuedReplay = false,
+      )
 
     // Optimistic user message.
     val userContent =
       buildList {
-        add(ChatMessageContent(type = "text", text = text))
+        add(
+          ChatMessageContent(
+            type = "text",
+            text = if (!_healthOk.value) "[Queued offline] $text" else text,
+          ),
+        )
         for (att in attachments) {
           add(
             ChatMessageContent(
@@ -160,6 +175,18 @@ class ChatController(
           timestampMs = System.currentTimeMillis(),
         )
 
+    if (!_healthOk.value) {
+      enqueueOutbound(lastOutbound!!)
+      _errorText.value = "Queued for send when gateway reconnects"
+      return
+    }
+
+    sendOutboundNow(lastOutbound!!)
+  }
+
+  private fun sendOutboundNow(outbound: PendingOutbound) {
+    val runId = outbound.id
+
     armPendingRunTimeout(runId)
     synchronized(pendingRuns) {
       pendingRuns.add(runId)
@@ -177,16 +204,19 @@ class ChatController(
       try {
         val params =
           buildJsonObject {
-            put("sessionKey", JsonPrimitive(sessionKey))
-            put("message", JsonPrimitive(text))
-            put("thinking", JsonPrimitive(thinking))
+            put("sessionKey", JsonPrimitive(outbound.sessionKey))
+            put(
+              "message",
+              JsonPrimitive(buildReplayMessage(outbound)),
+            )
+            put("thinking", JsonPrimitive(outbound.thinkingLevel))
             put("timeoutMs", JsonPrimitive(30_000))
             put("idempotencyKey", JsonPrimitive(runId))
-            if (attachments.isNotEmpty()) {
+            if (outbound.attachments.isNotEmpty()) {
               put(
                 "attachments",
                 JsonArray(
-                  attachments.map { att ->
+                  outbound.attachments.map { att ->
                     buildJsonObject {
                       put("type", JsonPrimitive(att.type))
                       put("mimeType", JsonPrimitive(att.mimeType))
@@ -208,10 +238,43 @@ class ChatController(
             _pendingRunCount.value = pendingRuns.size
           }
         }
-      } catch (err: Throwable) {
+      } catch (_: Throwable) {
         clearPendingRun(runId)
-        _errorText.value = err.message
+        enqueueOutbound(outbound)
+        _errorText.value = "Queued after send failure; will retry on reconnect"
       }
+    }
+  }
+
+  private fun enqueueOutbound(outbound: PendingOutbound) {
+    queuedOutbox.removeAll { it.id == outbound.id }
+    queuedOutbox.add(outbound.copy(queuedReplay = true))
+    publishQueuedItems()
+  }
+
+  private fun publishQueuedItems() {
+    _queuedItems.value =
+      queuedOutbox
+        .sortedBy { it.queuedAtMs }
+        .map {
+          ChatQueuedOutbound(
+            id = it.id,
+            sessionKey = it.sessionKey,
+            text = it.text,
+            attachmentCount = it.attachments.size,
+            queuedAtMs = it.queuedAtMs,
+            reEvaluateOnReconnect = it.reEvaluateOnReconnect,
+          )
+        }
+  }
+
+  private fun flushQueuedOutbox() {
+    if (!_healthOk.value || queuedOutbox.isEmpty()) return
+    val ready = queuedOutbox.toList().sortedBy { it.queuedAtMs }
+    queuedOutbox.clear()
+    publishQueuedItems()
+    for (item in ready) {
+      sendOutboundNow(item.copy(id = UUID.randomUUID().toString()))
     }
   }
 
@@ -246,6 +309,7 @@ class ChatController(
       message = outbound.text,
       thinkingLevel = outbound.thinkingLevel,
       attachments = outbound.attachments,
+      reEvaluateOnReconnect = outbound.reEvaluateOnReconnect,
     )
     return true
   }
@@ -259,6 +323,7 @@ class ChatController(
         // If we receive a health snapshot, the gateway is reachable.
         _healthOk.value = true
         _connectionState.value = ChatConnectionState.Connected
+        flushQueuedOutbox()
       }
       "seqGap" -> {
         _errorText.value = "Event stream interrupted; try refreshing."
@@ -330,6 +395,7 @@ class ChatController(
       session.request("health", null)
       _healthOk.value = true
       _connectionState.value = ChatConnectionState.Connected
+      flushQueuedOutbox()
     } catch (_: Throwable) {
       _healthOk.value = false
       _connectionState.value = ChatConnectionState.Reconnecting
@@ -448,6 +514,29 @@ class ChatController(
     if (next.isNotEmpty()) {
       _streamingAssistantText.value = next
     }
+  }
+
+  private fun buildReplayMessage(outbound: PendingOutbound): String {
+    if (!(outbound.reEvaluateOnReconnect && outbound.queuedReplay)) {
+      return outbound.text
+    }
+
+    val ageMs = (System.currentTimeMillis() - outbound.queuedAtMs).coerceAtLeast(0)
+    val ageMinutes = ageMs / 60_000
+
+    return buildString {
+      appendLine("[Time Capsule v2]")
+      appendLine("Queued while offline $ageMinutes minute(s) ago.")
+      appendLine("Session: ${outbound.sessionKey}")
+      appendLine()
+      appendLine("Original queued user intent:")
+      appendLine(outbound.text)
+      appendLine()
+      appendLine("Instructions:")
+      appendLine("1) Re-evaluate this intent using current context and recency.")
+      appendLine("2) If still valid, proceed with best direct answer/action.")
+      appendLine("3) If likely stale/unsafe/ambiguous now, ask one concise clarification question instead of assuming.")
+    }.trim()
   }
 
   private fun parseAssistantDeltaText(payload: JsonObject): String? {
@@ -591,8 +680,12 @@ private fun JsonElement?.asLongOrNull(): Long? =
   }
 
 private data class PendingOutbound(
+  val id: String,
   val text: String,
   val thinkingLevel: String,
   val attachments: List<OutgoingAttachment>,
   val sessionKey: String,
+  val reEvaluateOnReconnect: Boolean,
+  val queuedAtMs: Long,
+  val queuedReplay: Boolean,
 )

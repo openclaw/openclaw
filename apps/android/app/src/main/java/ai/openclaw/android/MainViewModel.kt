@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import ai.openclaw.android.gateway.GatewayEndpoint
 import ai.openclaw.android.chat.ChatConnectionState
+import ai.openclaw.android.chat.ChatQueuedOutbound
 import ai.openclaw.android.chat.OutgoingAttachment
 import ai.openclaw.android.node.CameraCaptureManager
 import ai.openclaw.android.node.CanvasController
@@ -78,6 +79,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val chatThinkingLevel: StateFlow<String> = runtime.chatThinkingLevel
   val chatStreamingAssistantText: StateFlow<String?> = runtime.chatStreamingAssistantText
   val chatPendingToolCalls = runtime.chatPendingToolCalls
+  val chatQueuedItems: StateFlow<List<ChatQueuedOutbound>> = runtime.chatQueuedItems
   val chatSessions = runtime.chatSessions
   val pendingRunCount: StateFlow<Int> = runtime.pendingRunCount
 
@@ -221,7 +223,17 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     return runtime.retryLastChatMessage()
   }
 
-  fun sendChat(message: String, thinking: String, attachments: List<OutgoingAttachment>) {
-    runtime.sendChat(message = message, thinking = thinking, attachments = attachments)
+  fun sendChat(
+    message: String,
+    thinking: String,
+    attachments: List<OutgoingAttachment>,
+    reEvaluateOnReconnect: Boolean = false,
+  ) {
+    runtime.sendChat(
+      message = message,
+      thinking = thinking,
+      attachments = attachments,
+      reEvaluateOnReconnect = reEvaluateOnReconnect,
+    )
   }
 }

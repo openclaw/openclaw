@@ -8,9 +8,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -19,6 +21,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
@@ -42,6 +45,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -63,6 +67,7 @@ fun ChatComposer(
   healthOk: Boolean,
   thinkingLevel: String,
   pendingRunCount: Int,
+  queuedCount: Int,
   errorText: String?,
   attachments: List<PendingImageAttachment>,
   onPickImages: () -> Unit,
@@ -71,16 +76,24 @@ fun ChatComposer(
   onRefresh: () -> Unit,
   onAbort: () -> Unit,
   onRetryLast: () -> Unit,
-  onSend: (text: String) -> Unit,
+  onSend: (text: String, reEvaluateOnReconnect: Boolean) -> Unit,
 ) {
   var input by rememberSaveable { mutableStateOf("") }
   var showThinkingMenu by remember { mutableStateOf(false) }
+  var reEvaluateOnReconnect by rememberSaveable { mutableStateOf(true) }
+  var showTimeCapsuleDetails by rememberSaveable { mutableStateOf(false) }
 
-  val canSend = pendingRunCount == 0 && (input.trim().isNotEmpty() || attachments.isNotEmpty()) && healthOk
+  val canSend = pendingRunCount == 0 && (input.trim().isNotEmpty() || attachments.isNotEmpty())
   val sendBusy = pendingRunCount > 0
   val canRetryLast = !errorText.isNullOrBlank() && pendingRunCount == 0
+  val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+  val compactMode = imeVisible
+  var showActionsMenu by remember { mutableStateOf(false) }
 
-  Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+  Column(
+    modifier = Modifier.fillMaxWidth(),
+    verticalArrangement = Arrangement.spacedBy(if (compactMode) 6.dp else 8.dp),
+  ) {
     Row(
       modifier = Modifier.fillMaxWidth(),
       verticalAlignment = Alignment.CenterVertically,
@@ -119,6 +132,7 @@ fun ChatComposer(
         label = "Attach",
         icon = Icons.Default.AttachFile,
         enabled = true,
+        compact = compactMode,
         onClick = onPickImages,
       )
     }
@@ -129,19 +143,14 @@ fun ChatComposer(
 
     HorizontalDivider(color = mobileBorder)
 
-    Text(
-      text = "MESSAGE",
-      style = mobileCaption1.copy(fontWeight = FontWeight.Bold, letterSpacing = 0.9.sp),
-      color = mobileTextSecondary,
-    )
 
     OutlinedTextField(
       value = input,
       onValueChange = { input = it },
-      modifier = Modifier.fillMaxWidth().height(92.dp),
+      modifier = Modifier.fillMaxWidth().height(if (compactMode) 68.dp else 82.dp),
       placeholder = { Text("Type a message", style = mobileBodyStyle(), color = mobileTextTertiary) },
-      minLines = 2,
-      maxLines = 5,
+      minLines = if (compactMode) 1 else 2,
+      maxLines = if (compactMode) 4 else 5,
       textStyle = mobileBodyStyle().copy(color = mobileText),
       shape = RoundedCornerShape(14.dp),
       colors = chatTextFieldColors(),
@@ -149,10 +158,62 @@ fun ChatComposer(
 
     if (!healthOk) {
       Text(
-        text = "Gateway is offline. Connect first in the Connect tab.",
+        text = "Dead Zone mode: messages queue locally and auto-send on reconnect.",
         style = mobileCallout,
         color = ai.openclaw.android.ui.mobileWarning,
       )
+    }
+
+    if (queuedCount > 0) {
+      Text(
+        text = "Queued offline: $queuedCount",
+        style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
+        color = ai.openclaw.android.ui.mobileWarning,
+      )
+    }
+
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      verticalAlignment = Alignment.CenterVertically,
+    ) {
+      Surface(
+        shape = RoundedCornerShape(999.dp),
+        color = if (reEvaluateOnReconnect) mobileAccentSoft else Color.White,
+        border = BorderStroke(1.dp, if (reEvaluateOnReconnect) mobileAccent else mobileBorderStrong),
+        onClick = {
+          reEvaluateOnReconnect = !reEvaluateOnReconnect
+          showTimeCapsuleDetails = true
+        },
+      ) {        Text(
+          text = if (reEvaluateOnReconnect) "TC: ON" else "TC: OFF",
+          style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
+          color = if (reEvaluateOnReconnect) mobileAccent else mobileTextSecondary,
+          modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+        )
+      }
+
+      if (!compactMode && showTimeCapsuleDetails) {
+        Surface(
+          modifier = Modifier.weight(1f),
+          shape = RoundedCornerShape(12.dp),
+          color = mobileAccentSoft,
+          border = BorderStroke(1.dp, mobileBorder),
+          onClick = { showTimeCapsuleDetails = false },
+        ) {
+          Text(
+            text =
+              if (reEvaluateOnReconnect) {
+                "Re-evaluate queued messages before send"
+              } else {
+                "Send queued messages as-written"
+              },
+            style = mobileCaption1,
+            color = mobileText,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
+          )
+        }
+      }
     }
 
     Row(
@@ -160,37 +221,74 @@ fun ChatComposer(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        SecondaryActionButton(
-          label = "Refresh",
-          icon = Icons.Default.Refresh,
-          enabled = true,
-          compact = true,
-          onClick = onRefresh,
-        )
+      if (compactMode) {
+        Box {
+          SecondaryActionButton(
+            label = "More",
+            icon = Icons.Default.MoreVert,
+            enabled = true,
+            compact = true,
+            onClick = { showActionsMenu = true },
+          )
+          DropdownMenu(expanded = showActionsMenu, onDismissRequest = { showActionsMenu = false }) {
+            DropdownMenuItem(
+              text = { Text("Refresh") },
+              onClick = {
+                showActionsMenu = false
+                onRefresh()
+              },
+            )
+            DropdownMenuItem(
+              text = { Text("Abort") },
+              enabled = pendingRunCount > 0,
+              onClick = {
+                showActionsMenu = false
+                onAbort()
+              },
+            )
+            DropdownMenuItem(
+              text = { Text("Retry") },
+              enabled = canRetryLast,
+              onClick = {
+                showActionsMenu = false
+                onRetryLast()
+              },
+            )
+          }
+        }
+      } else {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          SecondaryActionButton(
+            label = "Refresh",
+            icon = Icons.Default.Refresh,
+            enabled = true,
+            compact = true,
+            onClick = onRefresh,
+          )
 
-        SecondaryActionButton(
-          label = "Abort",
-          icon = Icons.Default.Stop,
-          enabled = pendingRunCount > 0,
-          compact = true,
-          onClick = onAbort,
-        )
+          SecondaryActionButton(
+            label = "Abort",
+            icon = Icons.Default.Stop,
+            enabled = pendingRunCount > 0,
+            compact = true,
+            onClick = onAbort,
+          )
 
-        SecondaryActionButton(
-          label = "Retry",
-          icon = Icons.Default.Refresh,
-          enabled = canRetryLast,
-          compact = true,
-          onClick = onRetryLast,
-        )
+          SecondaryActionButton(
+            label = "Retry",
+            icon = Icons.Default.Refresh,
+            enabled = canRetryLast,
+            compact = true,
+            onClick = onRetryLast,
+          )
+        }
       }
 
       Button(
         onClick = {
           val text = input
           input = ""
-          onSend(text)
+          onSend(text, reEvaluateOnReconnect)
         },
         enabled = canSend,
         modifier = Modifier.weight(1f).height(48.dp),
@@ -211,7 +309,7 @@ fun ChatComposer(
         }
         Spacer(modifier = Modifier.width(8.dp))
         Text(
-          text = "Send",
+          text = if (healthOk) "Send" else "Queue",
           style = mobileHeadline.copy(fontWeight = FontWeight.Bold),
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,

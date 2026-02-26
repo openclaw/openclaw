@@ -48,3 +48,12 @@ enum class ChatConnectionState {
   Connecting,
   Reconnecting,
 }
+
+data class ChatQueuedOutbound(
+  val id: String,
+  val sessionKey: String,
+  val text: String,
+  val attachmentCount: Int,
+  val queuedAtMs: Long,
+  val reEvaluateOnReconnect: Boolean,
+)

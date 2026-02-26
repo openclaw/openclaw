@@ -13,9 +13,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ContentCopy
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -86,10 +90,17 @@ fun ChatMessageBubble(message: ChatMessage) {
       .filter { it.isNotEmpty() }
       .joinToString("\n\n")
       .trim()
+  val shortUserCompact =
+    role == "user" &&
+      displayableContent.size == 1 &&
+      displayableContent.first().type == "text" &&
+      copyPayload.length in 1..42 &&
+      !copyPayload.contains('\n')
 
   ChatBubbleContainer(
     style = style,
     roleLabel = roleLabel(role),
+    compact = shortUserCompact,
     copyPayload = copyPayload.takeIf { it.isNotEmpty() },
   ) {
     ChatMessageBody(content = displayableContent, textColor = mobileText)
@@ -100,6 +111,7 @@ fun ChatMessageBubble(message: ChatMessage) {
 private fun ChatBubbleContainer(
   style: ChatBubbleStyle,
   roleLabel: String,
+  compact: Boolean = false,
   copyPayload: String? = null,
   modifier: Modifier = Modifier,
   content: @Composable () -> Unit,
@@ -123,35 +135,50 @@ private fun ChatBubbleContainer(
       color = style.containerColor,
       tonalElevation = 0.dp,
       shadowElevation = 0.dp,
-      modifier = Modifier.fillMaxWidth(0.90f),
+      modifier =
+        if (compact) {
+          Modifier.widthIn(max = 220.dp)
+        } else {
+          Modifier.fillMaxWidth(0.86f)
+        },
     ) {
       Column(
-        modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp),
-        verticalArrangement = Arrangement.spacedBy(3.dp),
+        modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(2.dp),
       ) {
-        Row(
-          modifier = Modifier.fillMaxWidth(),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically,
-        ) {
-          Text(
-            text = roleLabel,
-            style = mobileCaption2.copy(fontWeight = FontWeight.SemiBold, letterSpacing = 0.6.sp),
-            color = style.roleColor,
-          )
-          if (!copyPayload.isNullOrBlank()) {
-            TextButton(
-              onClick = {
-                val manager = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                manager?.setPrimaryClip(ClipData.newPlainText("chat-message", copyPayload))
-                copied = true
-              },
-            ) {
-              Text(
-                text = if (copied) "Copied" else "Copy",
-                style = mobileCaption2.copy(fontWeight = FontWeight.SemiBold),
-                color = if (copied) mobileSuccess else mobileAccent,
-              )
+        if (!compact) {
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+          ) {
+            Text(
+              text = roleLabel,
+              style = mobileCaption2.copy(fontWeight = FontWeight.SemiBold, letterSpacing = 0.4.sp),
+              color = style.roleColor,
+            )
+            if (!copyPayload.isNullOrBlank()) {
+              TextButton(
+                onClick = {
+                  val manager = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                  manager?.setPrimaryClip(ClipData.newPlainText("chat-message", copyPayload))
+                  copied = true
+                },
+              ) {
+                if (copied) {
+                  Text(
+                    text = "Copied",
+                    style = mobileCaption2.copy(fontWeight = FontWeight.SemiBold),
+                    color = mobileSuccess,
+                  )
+                } else {
+                  Icon(
+                    imageVector = Icons.Default.ContentCopy,
+                    contentDescription = "Copy message",
+                    tint = mobileTextSecondary,
+                  )
+                }
+              }
             }
           }
         }

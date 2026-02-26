@@ -10,6 +10,7 @@ import ai.openclaw.android.chat.ChatController
 import ai.openclaw.android.chat.ChatConnectionState
 import ai.openclaw.android.chat.ChatMessage
 import ai.openclaw.android.chat.ChatPendingToolCall
+import ai.openclaw.android.chat.ChatQueuedOutbound
 import ai.openclaw.android.chat.ChatSessionEntry
 import ai.openclaw.android.chat.OutgoingAttachment
 import ai.openclaw.android.gateway.DeviceAuthStore
@@ -571,6 +572,7 @@ class NodeRuntime(context: Context) {
   val chatThinkingLevel: StateFlow<String> = chat.thinkingLevel
   val chatStreamingAssistantText: StateFlow<String?> = chat.streamingAssistantText
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = chat.pendingToolCalls
+  val chatQueuedItems: StateFlow<List<ChatQueuedOutbound>> = chat.queuedItems
   val chatSessions: StateFlow<List<ChatSessionEntry>> = chat.sessions
   val pendingRunCount: StateFlow<Int> = chat.pendingRunCount
 
@@ -940,8 +942,18 @@ class NodeRuntime(context: Context) {
     return chat.retryLastMessage()
   }
 
-  fun sendChat(message: String, thinking: String, attachments: List<OutgoingAttachment>) {
-    chat.sendMessage(message = message, thinkingLevel = thinking, attachments = attachments)
+  fun sendChat(
+    message: String,
+    thinking: String,
+    attachments: List<OutgoingAttachment>,
+    reEvaluateOnReconnect: Boolean = false,
+  ) {
+    chat.sendMessage(
+      message = message,
+      thinkingLevel = thinking,
+      attachments = attachments,
+      reEvaluateOnReconnect = reEvaluateOnReconnect,
+    )
   }
 
   fun gatewayDebugSummary(): String {

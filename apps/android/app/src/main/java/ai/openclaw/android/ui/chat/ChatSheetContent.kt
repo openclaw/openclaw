@@ -13,8 +13,10 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -29,10 +31,12 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -72,6 +76,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   val thinkingLevel by viewModel.chatThinkingLevel.collectAsState()
   val streamingAssistantText by viewModel.chatStreamingAssistantText.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
+  val queuedItems by viewModel.chatQueuedItems.collectAsState()
   val sessions by viewModel.chatSessions.collectAsState()
 
   LaunchedEffect(mainSessionKey) {
@@ -84,6 +89,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   val scope = rememberCoroutineScope()
 
   val attachments = remember { mutableStateListOf<PendingImageAttachment>() }
+  var showSurfaceHint by rememberSaveable { mutableStateOf(true) }
 
   val pickImages =
     rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
@@ -103,12 +109,15 @@ fun ChatSheetContent(viewModel: MainViewModel) {
       }
     }
 
+  val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+  val compactMode = imeVisible
+
   Column(
     modifier =
       Modifier
         .fillMaxSize()
-        .padding(horizontal = 20.dp, vertical = 12.dp),
-    verticalArrangement = Arrangement.spacedBy(8.dp),
+        .padding(horizontal = if (compactMode) 16.dp else 20.dp, vertical = if (compactMode) 8.dp else 12.dp),
+    verticalArrangement = Arrangement.spacedBy(if (compactMode) 6.dp else 8.dp),
   ) {
     ChatThreadSelector(
       sessionKey = sessionKey,
@@ -117,8 +126,13 @@ fun ChatSheetContent(viewModel: MainViewModel) {
       mainSessionKey = mainSessionKey,
       healthOk = healthOk,
       connectionState = connectionState,
+      compactMode = compactMode,
       onSelectSession = { key -> viewModel.switchChatSession(key) },
     )
+
+    if (showSurfaceHint) {
+      ChatSurfaceHint(onDismiss = { showSurfaceHint = false })
+    }
 
     if (!errorText.isNullOrBlank()) {
       ChatErrorRail(errorText = errorText!!)
@@ -138,6 +152,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
         healthOk = healthOk,
         thinkingLevel = thinkingLevel,
         pendingRunCount = pendingRunCount,
+        queuedCount = queuedItems.size,
         errorText = errorText,
         attachments = attachments,
         onPickImages = { pickImages.launch("image/*") },
@@ -154,7 +169,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
             viewModel.refreshChat()
           }
         },
-        onSend = { text ->
+        onSend = { text, reEvaluateOnReconnect ->
           val outgoing =
             attachments.map { att ->
               OutgoingAttachment(
@@ -164,7 +179,12 @@ fun ChatSheetContent(viewModel: MainViewModel) {
                 base64 = att.base64,
               )
             }
-          viewModel.sendChat(message = text, thinking = thinkingLevel, attachments = outgoing)
+          viewModel.sendChat(
+            message = text,
+            thinking = thinkingLevel,
+            attachments = outgoing,
+            reEvaluateOnReconnect = reEvaluateOnReconnect,
+          )
           attachments.clear()
         },
       )
@@ -180,6 +200,7 @@ private fun ChatThreadSelector(
   mainSessionKey: String,
   healthOk: Boolean,
   connectionState: ChatConnectionState,
+  compactMode: Boolean,
   onSelectSession: (String) -> Unit,
 ) {
   val sessionOptions = resolveSessionChoices(sessionKey, sessions, mainSessionKey = mainSessionKey)
@@ -257,28 +278,57 @@ private fun ChatThreadSelector(
       }
     }
 
-    Row(
-      modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-      for (entry in sessionOptions) {
-        val active = entry.key == sessionKey
-        Surface(
-          onClick = { onSelectSession(entry.key) },
-          shape = RoundedCornerShape(14.dp),
-          color = if (active) mobileAccent else Color.White,
-          border = BorderStroke(1.dp, if (active) Color(0xFF154CAD) else mobileBorderStrong),
-          tonalElevation = 0.dp,
-          shadowElevation = 0.dp,
+    if (compactMode) {
+      Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = Color.White,
+        border = BorderStroke(1.dp, mobileBorder),
+      ) {
+        Row(
+          modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
         ) {
           Text(
-            text = friendlySessionName(entry.displayName ?: entry.key),
-            style = mobileCaption1.copy(fontWeight = if (active) FontWeight.Bold else FontWeight.SemiBold),
-            color = if (active) Color.White else mobileText,
+            text = "Session: $currentSessionLabel",
+            style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
+            color = mobileText,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            modifier = Modifier.weight(1f),
           )
+          Text(
+            text = "Typing mode",
+            style = mobileCaption2,
+            color = mobileTextSecondary,
+          )
+        }
+      }
+    } else {
+      Row(
+        modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        for (entry in sessionOptions) {
+          val active = entry.key == sessionKey
+          Surface(
+            onClick = { onSelectSession(entry.key) },
+            shape = RoundedCornerShape(14.dp),
+            color = if (active) mobileAccent else Color.White,
+            border = BorderStroke(1.dp, if (active) Color(0xFF154CAD) else mobileBorderStrong),
+            tonalElevation = 0.dp,
+            shadowElevation = 0.dp,
+          ) {
+            Text(
+              text = friendlySessionName(entry.displayName ?: entry.key),
+              style = mobileCaption1.copy(fontWeight = if (active) FontWeight.Bold else FontWeight.SemiBold),
+              color = if (active) Color.White else mobileText,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+              modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+            )
+          }
         }
       }
     }
@@ -308,6 +358,42 @@ private fun ChatConnectionPill(
       color = fg,
       modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
     )
+  }
+}
+
+@Composable
+private fun ChatSurfaceHint(onDismiss: () -> Unit) {
+  Surface(
+    modifier = Modifier.fillMaxWidth(),
+    color = mobileWarningSoft,
+    shape = RoundedCornerShape(12.dp),
+    border = BorderStroke(1.dp, mobileWarning.copy(alpha = 0.35f)),
+  ) {
+    Row(
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 8.dp),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+    ) {
+      Text(
+        text = "Tip: use one primary chat surface at a time (App or Telegram) to avoid overlap.",
+        style = mobileCaption1,
+        color = mobileText,
+        modifier = Modifier.weight(1f),
+      )
+      Surface(
+        onClick = onDismiss,
+        shape = RoundedCornerShape(999.dp),
+        color = Color.White.copy(alpha = 0.65f),
+        border = BorderStroke(1.dp, mobileBorder),
+      ) {
+        Text(
+          text = "Dismiss",
+          style = mobileCaption2.copy(fontWeight = FontWeight.SemiBold),
+          color = mobileTextSecondary,
+          modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+        )
+      }
+    }
   }
 }
 
