@@ -2,7 +2,7 @@
 
 > **Repo:** `iris-2.0` (branch `iris/production`)  
 > **Upstream:** `origin/main` (openclaw/openclaw.git)  
-> **Última atualização:** 25/02/2026
+> **Última atualização:** 26/02/2026
 
 ---
 
@@ -16,6 +16,7 @@ A Iris roda em cima do OpenClaw upstream com duas camadas de customização:
 4. **Config** (`~/.openclaw/openclaw.json`) — configuração local (NÃO versionada aqui)
 
 ### Filosofia
+
 > "Trocar os pneus, não o motor."  
 > Patches mínimos, isolados, com PRs upstream pra cada um.  
 > Quanto mais PRs aceitos, menos patches pra manter.
@@ -26,45 +27,68 @@ A Iris roda em cima do OpenClaw upstream com duas camadas de customização:
 
 ### 🔧 Patches Funcionais (submeter como PRs upstream)
 
-| Arquivo | O que faz | PR Status |
-|---------|-----------|-----------|
-| `src/agents/pi-embedded-runner/run.ts` | Passa senderE164/senderName ao runEmbeddedAttempt | ⏳ Pendente |
-| `src/agents/pi-embedded-runner/run/attempt.ts` | Extrai senderMetadata do envelope e injeta no plugin context | ⏳ Pendente |
-| `src/auto-reply/reply/dispatch-from-config.ts` | Suporte a replyMode tool-only como default | ⏳ Pendente |
-| `src/auto-reply/reply/get-reply.ts` | Hook message_transcribed pra audio transcription | ⏳ Pendente |
-| `src/config/types.agent-defaults.ts` | Tipo replyMode no AgentDefaults | ⏳ Pendente |
-| `src/config/zod-schema.agent-defaults.ts` | Schema Zod pra replyMode default | ⏳ Pendente |
-| `src/infra/outbound/deliver.ts` | normalizeBrazilianMobile (+55 DDD9) nos destinatários | ⏳ Pendente |
-| `src/plugins/hooks.ts` | Hook message_transcribed registration | ⏳ Pendente |
-| `src/plugins/types.ts` | Tipos do hook message_transcribed + senderMetadata | ⏳ Pendente |
-| `src/utils.ts` | Função normalizeBrazilianMobile | ⏳ Pendente |
-| `src/utils.test.ts` | Testes do normalizeBrazilianMobile | ⏳ Pendente |
-| `src/web/auto-reply/monitor/process-message.ts` | Smart-router outbound + message_transcribed dispatch | ⏳ Pendente |
+| Arquivo                                         | O que faz                                                    | PR Status   |
+| ----------------------------------------------- | ------------------------------------------------------------ | ----------- |
+| `src/agents/pi-embedded-runner/run.ts`          | Passa senderE164/senderName ao runEmbeddedAttempt            | ⏳ Pendente |
+| `src/agents/pi-embedded-runner/run/attempt.ts`  | Extrai senderMetadata do envelope e injeta no plugin context | ⏳ Pendente |
+| `src/auto-reply/reply/dispatch-from-config.ts`  | Suporte a replyMode tool-only como default                   | ⏳ Pendente |
+| `src/config/types.agent-defaults.ts`            | Tipo replyMode no AgentDefaults                              | ⏳ Pendente |
+| `src/config/zod-schema.agent-defaults.ts`       | Schema Zod pra replyMode default                             | ⏳ Pendente |
+| `src/infra/outbound/deliver.ts`                 | normalizeBrazilianMobile (+55 DDD9) nos destinatários        | ⏳ Pendente |
+| `src/utils.ts`                                  | Função normalizeBrazilianMobile                              | ⏳ Pendente |
+| `src/utils.test.ts`                             | Testes do normalizeBrazilianMobile                           | ⏳ Pendente |
+| `src/web/auto-reply/monitor/process-message.ts` | Smart-router outbound + message_transcribed dispatch         | ⏳ Pendente |
+
+### 🔒 Patches Permanentes (upstream removeu — Iris mantém em produção)
+
+| Arquivo                             | O que faz                                          | Motivo de manter  |
+| ----------------------------------- | -------------------------------------------------- | ----------------- |
+| `src/auto-reply/reply/get-reply.ts` | Hook message_transcribed pra audio transcription   | Usado em produção |
+| `src/plugins/hooks.ts`              | Hook message_transcribed registration              | Usado em produção |
+| `src/plugins/types.ts`              | Tipos do hook message_transcribed + senderMetadata | Usado em produção |
+
+> ⚠️ **Durante merges:** `git checkout iris/production -- <arquivo>` para esses 3 arquivos caso o upstream os remova novamente.
 
 **Quando o PR for aceito upstream:** remover o patch do branch, o `git pull` já traz.
 
 ### 🎨 Branding (NUNCA vira PR — são customizações nossas)
 
-| Arquivo | O que faz |
-|---------|-----------|
-| `src/cli/banner.ts` | "🌈 Iris" no lugar de "🦞 OpenClaw", ASCII art IRIS |
-| `src/cli/tagline.ts` | Tagline default → "Parceira de pensamento, não de bajulação." |
-| `ui/index.html` | Title "Iris Control 🌈" |
-| `ui/src/styles/base.css` | Cor de acento roxo (#7C3AED) no lugar de vermelho (#ff5c5c) |
-| `ui/src/ui/app-render.ts` | Logo "IRIS by QualiApps 🌈" |
-| `ui/public/favicon.svg` | Favicon SVG com gradiente roxo + "I" |
-| `ui/public/favicon-32.png` | Favicon PNG do mascote Iris |
-| `ui/public/favicon.ico` | Favicon ICO do mascote Iris |
-| `ui/public/apple-touch-icon.png` | Apple touch icon do mascote Iris |
+| Arquivo                          | O que faz                                                     |
+| -------------------------------- | ------------------------------------------------------------- |
+| `src/cli/banner.ts`              | "🌈 Iris" no lugar de "🦞 OpenClaw", ASCII art IRIS           |
+| `src/cli/tagline.ts`             | Tagline default → "Parceira de pensamento, não de bajulação." |
+| `ui/index.html`                  | Title "Iris Control 🌈"                                       |
+| `ui/src/styles/base.css`         | Cor de acento roxo (#7C3AED) no lugar de vermelho (#ff5c5c)   |
+| `ui/src/ui/app-render.ts`        | Logo "IRIS by QualiApps 🌈"                                   |
+| `ui/public/favicon.svg`          | Favicon SVG com gradiente roxo + "I"                          |
+| `ui/public/favicon-32.png`       | Favicon PNG do mascote Iris                                   |
+| `ui/public/favicon.ico`          | Favicon ICO do mascote Iris                                   |
+| `ui/public/apple-touch-icon.png` | Apple touch icon do mascote Iris                              |
 
 ### 🔌 Plugins (pasta separada, sem conflito)
 
-| Plugin | Pasta |
-|--------|-------|
-| handover | `extensions/handover/` |
-| message-logger | `extensions/message-logger/` |
-| pattern-detector | `extensions/pattern-detector/` |
+| Plugin               | Pasta                              |
+| -------------------- | ---------------------------------- |
+| handover             | `extensions/handover/`             |
+| message-logger       | `extensions/message-logger/`       |
+| pattern-detector     | `extensions/pattern-detector/`     |
 | smart-router-inbound | `extensions/smart-router-inbound/` |
+
+---
+
+## 📅 Histórico de Merges
+
+| Data       | Upstream HEAD | Commits incorporados            | Conflitos manuais | Responsável |
+| ---------- | ------------- | ------------------------------- | ----------------- | ----------- |
+| 26/02/2026 | `85b075d0c`   | 192 commits (desde `a898acbd5`) | 0 — auto-merge    | Iris 🌈     |
+
+**Notas do merge 26/02/2026:**
+
+- `dispatch-from-config.ts`: upstream refatorou ACP dispatch (`resolveSessionStoreEntry`, `sendPolicy`, `tryDispatchAcpReply`) — git auto-resolveu preservando patches Iris (`replyMode`, `isToolOnlyMode`, metadata rico)
+- `attempt.ts`: upstream adicionou `acpEnabled` — auto-merge com `senderMetadata` Iris
+- `types.agent-defaults.ts`: upstream adicionou `directPolicy` — auto-merge com `replyMode` Iris
+- `message_transcribed` patches: intactos (upstream removeu, mas Iris usa em produção — patch permanente)
+- Branding: 100% intacta
 
 ---
 
@@ -96,6 +120,7 @@ git merge origin/main --no-edit
 ### 4. Resolver conflitos (se houver)
 
 **Regra de ouro:**
+
 - **Patches funcionais** → manter NOSSO código (é funcionalidade que o upstream não tem)
 - **Branding** → manter NOSSO código (sempre)
 - **Se o PR foi aceito upstream** → aceitar o DELES e remover nosso patch
@@ -140,13 +165,13 @@ Via Task Scheduler: Stop + Start "OpenClaw Gateway"
 
 > Atualizar conforme PRs forem submetidos/aceitos
 
-| # | Título | Status | Data |
-|---|--------|--------|------|
-| - | senderMetadata para plugins | ⏳ Não submetido | - |
-| - | replyMode tool-only default | ⏳ Não submetido | - |
-| - | normalizeBrazilianMobile | ⏳ Não submetido | - |
-| - | hook message_transcribed | ⏳ Não submetido | - |
-| - | smart-router outbound | ⏳ Não submetido | - |
+| #   | Título                      | Status           | Data |
+| --- | --------------------------- | ---------------- | ---- |
+| -   | senderMetadata para plugins | ⏳ Não submetido | -    |
+| -   | replyMode tool-only default | ⏳ Não submetido | -    |
+| -   | normalizeBrazilianMobile    | ⏳ Não submetido | -    |
+| -   | hook message_transcribed    | ⏳ Não submetido | -    |
+| -   | smart-router outbound       | ⏳ Não submetido | -    |
 
 **Meta:** Zero patches funcionais. Tudo aceito upstream. Só branding fica.
 
@@ -164,4 +189,4 @@ Via Task Scheduler: Stop + Start "OpenClaw Gateway"
 
 ---
 
-*Mantido por Iris 🌈 — Atualizar após cada merge ou PR aceito.*
+_Mantido por Iris 🌈 — Atualizar após cada merge ou PR aceito._
