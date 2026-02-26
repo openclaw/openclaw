@@ -140,7 +140,7 @@ const SecretsExecProviderSchema = z
   })
   .strict();
 
-const SecretsProviderSchema = z.discriminatedUnion("source", [
+export const SecretProviderSchema = z.discriminatedUnion("source", [
   SecretsEnvProviderSchema,
   SecretsFileProviderSchema,
   SecretsExecProviderSchema,
@@ -152,7 +152,7 @@ export const SecretsConfigSchema = z
       .object({
         // Keep this as a record so users can define multiple providers per source.
       })
-      .catchall(SecretsProviderSchema)
+      .catchall(SecretProviderSchema)
       .optional(),
     defaults: z
       .object({
