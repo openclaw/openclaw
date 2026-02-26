@@ -319,10 +319,18 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("telegram")).toBe(false);
     expect(names.has("whatsapp")).toBe(false);
   });
-  it("does not expose tts tool for voice message provider", () => {
-    const tools = createOpenClawCodingTools({ messageProvider: "voice" });
+  it.each(["voice", "VOICE", " Voice "])(
+    "does not expose tts tool for normalized voice message provider: %s",
+    (messageProvider) => {
+      const tools = createOpenClawCodingTools({ messageProvider });
+      const names = new Set(tools.map((tool) => tool.name));
+      expect(names.has("tts")).toBe(false);
+    },
+  );
+  it("keeps tts tool for non-voice providers", () => {
+    const tools = createOpenClawCodingTools({ messageProvider: "discord" });
     const names = new Set(tools.map((tool) => tool.name));
-    expect(names.has("tts")).toBe(false);
+    expect(names.has("tts")).toBe(true);
   });
   it("filters session tools for sub-agent sessions by default", () => {
     const tools = createOpenClawCodingTools({
