@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { DEFAULT_BROWSER_EVALUATE_ENABLED } from "../../browser/constants.js";
 import { ensureBrowserControlAuth, resolveBrowserControlAuth } from "../../browser/control-auth.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -10,6 +11,7 @@ import { DEFAULT_AGENT_WORKSPACE_DIR } from "../workspace.js";
 import { requireSandboxBackendFactory } from "./backend.js";
 import { ensureSandboxBrowser } from "./browser.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
+import { SANDBOX_SKILLS_MOUNT } from "./constants.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import { maybePruneSandboxes } from "./prune.js";
 import { updateRegistry } from "./registry.js";
@@ -28,6 +30,7 @@ async function ensureSandboxWorkspaceLayout(params: {
   scopeKey: string;
   sandboxWorkspaceDir: string;
   workspaceDir: string;
+  skillsDir: string;
 }> {
   const { cfg, rawSessionKey } = params;
 
@@ -46,23 +49,27 @@ async function ensureSandboxWorkspaceLayout(params: {
       agentWorkspaceDir,
       params.config?.agents?.defaults?.skipBootstrap,
     );
-    if (cfg.workspaceAccess !== "rw") {
-      try {
-        await syncSkillsToWorkspace({
-          sourceWorkspaceDir: agentWorkspaceDir,
-          targetWorkspaceDir: sandboxWorkspaceDir,
-          config: params.config,
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : JSON.stringify(error);
-        defaultRuntime.error?.(`Sandbox skill sync failed: ${message}`);
-      }
-    }
   } else {
     await fs.mkdir(workspaceDir, { recursive: true });
   }
 
-  return { agentWorkspaceDir, scopeKey, sandboxWorkspaceDir, workspaceDir };
+  // Sync skills into a dedicated directory separate from the workspace.
+  // This directory will be mounted read-only at /skills inside the container,
+  // keeping the workspace clean and skills immutable.
+  const skillsDir = path.join(sandboxWorkspaceDir, ".sandbox-skills");
+  try {
+    await syncSkillsToWorkspace({
+      sourceWorkspaceDir: agentWorkspaceDir,
+      targetWorkspaceDir: skillsDir,
+      config: params.config,
+      flat: true,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : JSON.stringify(error);
+    defaultRuntime.error?.(`Sandbox skill sync failed: ${message}`);
+  }
+
+  return { agentWorkspaceDir, scopeKey, sandboxWorkspaceDir, workspaceDir, skillsDir };
 }
 
 export async function resolveSandboxDockerUser(params: {
@@ -119,12 +126,13 @@ export async function resolveSandboxContext(params: {
 
   await maybePruneSandboxes(cfg);
 
-  const { agentWorkspaceDir, scopeKey, workspaceDir } = await ensureSandboxWorkspaceLayout({
-    cfg,
-    rawSessionKey,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-  });
+  const { agentWorkspaceDir, scopeKey, workspaceDir, skillsDir } =
+    await ensureSandboxWorkspaceLayout({
+      cfg,
+      rawSessionKey,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+    });
 
   const docker = await resolveSandboxDockerUser({
     docker: cfg.docker,
@@ -138,6 +146,7 @@ export async function resolveSandboxContext(params: {
     scopeKey,
     workspaceDir,
     agentWorkspaceDir,
+    skillsDir,
     cfg: resolvedCfg,
   });
   await updateRegistry({
@@ -198,6 +207,8 @@ export async function resolveSandboxContext(params: {
     runtimeLabel: backend.runtimeLabel,
     containerName: backend.runtimeId,
     containerWorkdir: backend.workdir,
+    skillsDir,
+    skillsMount: SANDBOX_SKILLS_MOUNT,
     docker: resolvedCfg.docker,
     tools: resolvedCfg.tools,
     browserAllowHostControl: resolvedCfg.browser.allowHostControl,

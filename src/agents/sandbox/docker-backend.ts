@@ -20,6 +20,7 @@ export async function createDockerSandboxBackend(
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,
     agentWorkspaceDir: params.agentWorkspaceDir,
+    skillsDir: params.skillsDir,
     cfg: params.cfg,
   });
   return createDockerSandboxBackendHandle({

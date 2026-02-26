@@ -77,6 +77,7 @@ export type CreateSandboxBackendParams = {
   scopeKey: string;
   workspaceDir: string;
   agentWorkspaceDir: string;
+  skillsDir?: string;
   cfg: SandboxConfig;
 };
 

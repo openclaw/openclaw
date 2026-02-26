@@ -30,7 +30,7 @@ describe("sandbox skill mirroring", () => {
     envSnapshot.restore();
   });
 
-  const runContext = async (workspaceAccess: "none" | "ro") => {
+  const runContext = async (workspaceAccess: "none" | "ro" | "rw") => {
     const bundledDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-bundled-skills-"));
     await fs.mkdir(bundledDir, { recursive: true });
 
@@ -65,13 +65,13 @@ describe("sandbox skill mirroring", () => {
     return { context, workspaceDir };
   };
 
-  it.each(["ro", "none"] as const)(
+  it.each(["ro", "none", "rw"] as const)(
     "copies skills into the sandbox when workspaceAccess is %s",
     async (workspaceAccess) => {
       const { context } = await runContext(workspaceAccess);
 
       expect(context?.enabled).toBe(true);
-      const skillPath = path.join(context?.workspaceDir ?? "", "skills", "demo-skill", "SKILL.md");
+      const skillPath = path.join(context?.skillsDir ?? "", "demo-skill", "SKILL.md");
       await expect(fs.readFile(skillPath, "utf-8")).resolves.toContain("demo-skill");
     },
     20_000,
