@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { approvalMatchesSystemRunRequest } from "./node-invoke-system-run-approval-match.js";
+import { buildSystemRunApprovalEnvBinding } from "./system-run-approval-env-binding.js";
 
 describe("approvalMatchesSystemRunRequest", () => {
   test("matches legacy command text when binding fields match", () => {
@@ -73,6 +74,49 @@ describe("approvalMatchesSystemRunRequest", () => {
       },
     });
     expect(result).toBe(false);
+  });
+
+  test("rejects env overrides when approval record lacks env hash", () => {
+    const result = approvalMatchesSystemRunRequest({
+      cmdText: "git diff",
+      argv: ["git", "diff"],
+      request: {
+        host: "node",
+        command: "git diff",
+        commandArgv: ["git", "diff"],
+      },
+      binding: {
+        cwd: null,
+        agentId: null,
+        sessionKey: null,
+        env: { GIT_EXTERNAL_DIFF: "/tmp/pwn.sh" },
+      },
+    });
+    expect(result).toBe(false);
+  });
+
+  test("accepts matching env hash with reordered keys", () => {
+    const binding = buildSystemRunApprovalEnvBinding({
+      SAFE_A: "1",
+      SAFE_B: "2",
+    });
+    const result = approvalMatchesSystemRunRequest({
+      cmdText: "git diff",
+      argv: ["git", "diff"],
+      request: {
+        host: "node",
+        command: "git diff",
+        commandArgv: ["git", "diff"],
+        envHash: binding.envHash,
+      },
+      binding: {
+        cwd: null,
+        agentId: null,
+        sessionKey: null,
+        env: { SAFE_B: "2", SAFE_A: "1" },
+      },
+    });
+    expect(result).toBe(true);
   });
 
   test("rejects non-node host requests", () => {

@@ -16,6 +16,7 @@ describe("isDangerousHostEnvVarName", () => {
     expect(isDangerousHostEnvVarName("BASH_ENV")).toBe(true);
     expect(isDangerousHostEnvVarName("bash_env")).toBe(true);
     expect(isDangerousHostEnvVarName("SHELL")).toBe(true);
+    expect(isDangerousHostEnvVarName("GIT_EXTERNAL_DIFF")).toBe(true);
     expect(isDangerousHostEnvVarName("SHELLOPTS")).toBe(true);
     expect(isDangerousHostEnvVarName("ps4")).toBe(true);
     expect(isDangerousHostEnvVarName("DYLD_INSERT_LIBRARIES")).toBe(true);
@@ -32,6 +33,7 @@ describe("sanitizeHostExecEnv", () => {
       baseEnv: {
         PATH: "/usr/bin:/bin",
         BASH_ENV: "/tmp/pwn.sh",
+        GIT_EXTERNAL_DIFF: "/tmp/pwn.sh",
         LD_PRELOAD: "/tmp/pwn.so",
         OK: "1",
       },
