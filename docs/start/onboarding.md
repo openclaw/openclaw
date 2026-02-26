@@ -29,6 +29,11 @@ For a general overview of onboarding paths, see [Onboarding Overview](/start/onb
 <Frame caption="Read the security notice displayed and decide accordingly">
 <img src="/assets/macos-onboarding/03-security-notice.png" alt="" />
 </Frame>
+
+Security trust model:
+
+- By default, OpenClaw is a personal agent: one trusted operator boundary.
+- Shared/multi-user setups require lock-down (split trust boundaries, keep tool access minimal, and follow [Security](/gateway/security)).
 </Step>
 <Step title="Local vs Remote">
 <Frame>
@@ -37,9 +42,9 @@ For a general overview of onboarding paths, see [Onboarding Overview](/start/onb
 
 Where does the **Gateway** run?
 
-- **This Mac (Local only):** onboarding can run OAuth flows and write credentials
+- **This Mac (Local only):** onboarding can configure auth and write credentials
   locally.
-- **Remote (over SSH/Tailnet):** onboarding does **not** run OAuth locally;
+- **Remote (over SSH/Tailnet):** onboarding does **not** configure local auth;
   credentials must exist on the gateway host.
 - **Configure later:** skip setup and leave the app unconfigured.
 

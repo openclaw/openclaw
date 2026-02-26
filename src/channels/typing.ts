@@ -17,8 +17,12 @@ export function createTypingCallbacks(params: {
   const stop = params.stop;
   const keepaliveIntervalMs = params.keepaliveIntervalMs ?? 3_000;
   let stopSent = false;
+  let closed = false;
 
   const fireStart = async () => {
+    if (closed) {
+      return;
+    }
     try {
       await params.start();
     } catch (err) {
@@ -32,6 +36,9 @@ export function createTypingCallbacks(params: {
   });
 
   const onReplyStart = async () => {
+    if (closed) {
+      return;
+    }
     stopSent = false;
     keepaliveLoop.stop();
     await fireStart();
@@ -39,6 +46,7 @@ export function createTypingCallbacks(params: {
   };
 
   const fireStop = () => {
+    closed = true;
     keepaliveLoop.stop();
     if (!stop || stopSent) {
       return;

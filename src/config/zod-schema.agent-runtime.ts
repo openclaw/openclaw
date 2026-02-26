@@ -26,6 +26,7 @@ export const HeartbeatSchema = z
     session: z.string().optional(),
     includeReasoning: z.boolean().optional(),
     target: z.string().optional(),
+    directPolicy: z.union([z.literal("allow"), z.literal("block")]).optional(),
     to: z.string().optional(),
     accountId: z.string().optional(),
     prompt: z.string().optional(),

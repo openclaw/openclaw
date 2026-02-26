@@ -832,6 +832,95 @@ describe("createTelegramBot", () => {
     );
   });
 
+  it.each([
+    {
+      name: "blocks reaction when dmPolicy is disabled",
+      updateId: 510,
+      channelConfig: { dmPolicy: "disabled", reactionNotifications: "all" },
+      reaction: {
+        chat: { id: 1234, type: "private" },
+        message_id: 42,
+        user: { id: 9, first_name: "Ada" },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [{ type: "emoji", emoji: "👍" }],
+      },
+      expectedEnqueueCalls: 0,
+    },
+    {
+      name: "blocks reaction in allowlist mode for unauthorized direct sender",
+      updateId: 511,
+      channelConfig: {
+        dmPolicy: "allowlist",
+        allowFrom: ["12345"],
+        reactionNotifications: "all",
+      },
+      reaction: {
+        chat: { id: 1234, type: "private" },
+        message_id: 42,
+        user: { id: 9, first_name: "Ada" },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [{ type: "emoji", emoji: "👍" }],
+      },
+      expectedEnqueueCalls: 0,
+    },
+    {
+      name: "allows reaction in allowlist mode for authorized direct sender",
+      updateId: 512,
+      channelConfig: { dmPolicy: "allowlist", allowFrom: ["9"], reactionNotifications: "all" },
+      reaction: {
+        chat: { id: 1234, type: "private" },
+        message_id: 42,
+        user: { id: 9, first_name: "Ada" },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [{ type: "emoji", emoji: "👍" }],
+      },
+      expectedEnqueueCalls: 1,
+    },
+    {
+      name: "blocks reaction in group allowlist mode for unauthorized sender",
+      updateId: 513,
+      channelConfig: {
+        dmPolicy: "open",
+        groupPolicy: "allowlist",
+        groupAllowFrom: ["12345"],
+        reactionNotifications: "all",
+      },
+      reaction: {
+        chat: { id: 9999, type: "supergroup" },
+        message_id: 77,
+        user: { id: 9, first_name: "Ada" },
+        date: 1736380800,
+        old_reaction: [],
+        new_reaction: [{ type: "emoji", emoji: "🔥" }],
+      },
+      expectedEnqueueCalls: 0,
+    },
+  ])("$name", async ({ updateId, channelConfig, reaction, expectedEnqueueCalls }) => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: channelConfig,
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message_reaction") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await handler({
+      update: { update_id: updateId },
+      messageReaction: reaction,
+    });
+
+    expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(expectedEnqueueCalls);
+  });
+
   it("skips reaction when reactionNotifications is off", async () => {
     onSpy.mockClear();
     enqueueSystemEventSpy.mockClear();
