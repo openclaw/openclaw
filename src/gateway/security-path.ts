@@ -1,8 +1,11 @@
 export type SecurityPathCanonicalization = {
   path: string;
+  candidates: string[];
   malformedEncoding: boolean;
   rawNormalizedPath: string;
 };
+
+const MAX_PATH_DECODE_PASSES = 3;
 
 function normalizePathSeparators(pathname: string): string {
   const collapsed = pathname.replace(/\/{2,}/g, "/");
@@ -16,6 +19,18 @@ function normalizeProtectedPrefix(prefix: string): string {
   return normalizePathSeparators(prefix.toLowerCase()) || "/";
 }
 
+function resolveDotSegments(pathname: string): string {
+  try {
+    return new URL(pathname, "http://localhost").pathname;
+  } catch {
+    return pathname;
+  }
+}
+
+function normalizePathForSecurity(pathname: string): string {
+  return normalizePathSeparators(resolveDotSegments(pathname).toLowerCase()) || "/";
+}
+
 function prefixMatch(pathname: string, prefix: string): boolean {
   return (
     pathname === prefix ||
@@ -26,15 +41,39 @@ function prefixMatch(pathname: string, prefix: string): boolean {
 }
 
 export function canonicalizePathForSecurity(pathname: string): SecurityPathCanonicalization {
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  const pushCandidate = (value: string) => {
+    const normalized = normalizePathForSecurity(value);
+    if (seen.has(normalized)) {
+      return;
+    }
+    seen.add(normalized);
+    candidates.push(normalized);
+  };
+
+  pushCandidate(pathname);
+
   let decoded = pathname;
   let malformedEncoding = false;
-  try {
-    decoded = decodeURIComponent(pathname);
-  } catch {
-    malformedEncoding = true;
+  for (let pass = 0; pass < MAX_PATH_DECODE_PASSES; pass++) {
+    let nextDecoded = decoded;
+    try {
+      nextDecoded = decodeURIComponent(decoded);
+    } catch {
+      malformedEncoding = true;
+      break;
+    }
+    if (nextDecoded === decoded) {
+      break;
+    }
+    decoded = nextDecoded;
+    pushCandidate(decoded);
   }
+
   return {
-    path: normalizePathSeparators(decoded.toLowerCase()) || "/",
+    path: candidates[candidates.length - 1] ?? "/",
+    candidates,
     malformedEncoding,
     rawNormalizedPath: normalizePathSeparators(pathname.toLowerCase()) || "/",
   };
@@ -43,7 +82,11 @@ export function canonicalizePathForSecurity(pathname: string): SecurityPathCanon
 export function isPathProtectedByPrefixes(pathname: string, prefixes: readonly string[]): boolean {
   const canonical = canonicalizePathForSecurity(pathname);
   const normalizedPrefixes = prefixes.map(normalizeProtectedPrefix);
-  if (normalizedPrefixes.some((prefix) => prefixMatch(canonical.path, prefix))) {
+  if (
+    canonical.candidates.some((candidate) =>
+      normalizedPrefixes.some((prefix) => prefixMatch(candidate, prefix)),
+    )
+  ) {
     return true;
   }
   if (!canonical.malformedEncoding) {
