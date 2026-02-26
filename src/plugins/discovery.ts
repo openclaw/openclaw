@@ -152,7 +152,13 @@ function discoverInDirectory(params: {
       });
     }
     if (!entry.isDirectory()) {
-      continue;
+      // Follow symlinks: Dirent.isDirectory() returns false for symlinks,
+      // so resolve the target and check if it's a directory. Use the
+      // existing safeStatSync helper so broken symlinks are silently
+      // skipped instead of aborting discovery.
+      if (!entry.isSymbolicLink() || !safeStatSync(fullPath)?.isDirectory()) {
+        continue;
+      }
     }
 
     const manifest = readPackageManifest(fullPath);
