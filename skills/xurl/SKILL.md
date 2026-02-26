@@ -111,6 +111,7 @@ Use the OpenClaw browser tool with profile=chrome
 Ensure a Chrome tab is attached with the Browser Relay toolbar badge ON
 Do not replace these cron flows with xurl API calls
 For reply type jobs, verify the new reply is visible in x.com/ma200line/with_replies
+For reply type jobs, the posted text should not end with punctuation
 
 ---
 
