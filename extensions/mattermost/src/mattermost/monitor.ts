@@ -415,8 +415,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       allowTextCommands,
       hasControlCommand,
     });
-    const commandAuthorized =
-      kind === "direct" ? accessDecision.decision === "allow" : commandGate.commandAuthorized;
+    const commandAuthorized = commandGate.commandAuthorized;
 
     if (accessDecision.decision !== "allow") {
       if (kind === "direct") {
