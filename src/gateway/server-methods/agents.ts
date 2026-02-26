@@ -181,6 +181,9 @@ async function resolveAgentWorkspaceFilePath(params: {
       if (!targetStat.isFile()) {
         return { kind: "invalid", requestPath, reason: "symlink target is not a file" };
       }
+      if (targetStat.nlink > 1) {
+        return { kind: "invalid", requestPath, reason: "hardlinked file target not allowed" };
+      }
     } catch (err) {
       if (isNotFoundPathError(err) && params.allowMissing) {
         return { kind: "missing", requestPath, ioPath: targetReal, workspaceReal };
@@ -192,6 +195,9 @@ async function resolveAgentWorkspaceFilePath(params: {
 
   if (!candidateLstat.isFile()) {
     return { kind: "invalid", requestPath, reason: "path is not a regular file" };
+  }
+  if (candidateLstat.nlink > 1) {
+    return { kind: "invalid", requestPath, reason: "hardlinked file path not allowed" };
   }
 
   const candidateReal = await fs.realpath(candidatePath).catch(() => candidatePath);
@@ -205,6 +211,9 @@ async function statFileSafely(filePath: string): Promise<FileMeta | null> {
   try {
     const [stat, lstat] = await Promise.all([fs.stat(filePath), fs.lstat(filePath)]);
     if (lstat.isSymbolicLink() || !stat.isFile()) {
+      return null;
+    }
+    if (stat.nlink > 1) {
       return null;
     }
     if (!sameFileIdentity(stat, lstat)) {
@@ -225,6 +234,9 @@ async function writeFileSafely(filePath: string, content: string): Promise<void>
     const [stat, lstat] = await Promise.all([handle.stat(), fs.lstat(filePath)]);
     if (lstat.isSymbolicLink() || !stat.isFile()) {
       throw new Error("unsafe file path");
+    }
+    if (stat.nlink > 1) {
+      throw new Error("hardlinked file path is not allowed");
     }
     if (!sameFileIdentity(stat, lstat)) {
       throw new Error("path changed during write");
