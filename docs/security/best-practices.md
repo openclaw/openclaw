@@ -50,7 +50,7 @@ openclaw security health
 openclaw security credentials status
 ```
 
-The credential vault stores credentials with HMAC-SHA256 hash verification and a tamper-evident audit log. If audit integrity shows `BROKEN`, run `openclaw security audit --deep` immediately.
+The credential vault stores credentials using AES-256-GCM encryption (`~/.openclaw/vault/credentials.enc`). A tamper-evident audit log uses SHA-256 hash chains to detect unauthorised modifications. If audit integrity shows `BROKEN`, run `openclaw security audit --deep` immediately. The encryption key lives at `~/.openclaw/vault/.vault-key` (mode 0o600) — back it up alongside your vault directory; loss of the key file renders stored credentials permanently unrecoverable.
 
 ---
 
