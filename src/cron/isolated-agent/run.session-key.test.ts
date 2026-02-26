@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveCronAgentSessionKey } from "./run.js";
+import { resolveCronAgentSessionKey } from "./session-key.js";
 
 describe("resolveCronAgentSessionKey", () => {
   it("builds an agent-scoped key for legacy aliases", () => {
