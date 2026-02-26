@@ -77,6 +77,8 @@ export type SandboxContext = {
   workspaceAccess: SandboxWorkspaceAccess;
   containerName: string;
   containerWorkdir: string;
+  skillsDir: string;
+  skillsMount: string;
   docker: SandboxDockerConfig;
   tools: SandboxToolPolicy;
   browserAllowHostControl: boolean;
