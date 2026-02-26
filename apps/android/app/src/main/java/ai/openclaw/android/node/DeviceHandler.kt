@@ -143,10 +143,10 @@ class DeviceHandler(
 
   private fun mapNetworkStatus(caps: NetworkCapabilities?): String {
     if (caps == null) return "unsatisfied"
-    return if (caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
-      "satisfied"
-    } else {
-      "requiresConnection"
+    return when {
+      caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) -> "satisfied"
+      caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) -> "requiresConnection"
+      else -> "unsatisfied"
     }
   }
 
