@@ -581,7 +581,7 @@ export async function runAgentTurnWithFallback(params: {
         // back to an alternate model first would not help. Instead we wait
         // and retry the complete primary→fallback chain.
         defaultRuntime.error(
-          `Transient HTTP provider error before reply (${message}). Retrying once in ${TRANSIENT_HTTP_RETRY_DELAY_MS}ms.`,
+          `Transient HTTP provider error before reply (provider=${fallbackProvider} model=${fallbackModel} error=${message}). Retrying once in ${TRANSIENT_HTTP_RETRY_DELAY_MS}ms.`,
         );
         await new Promise<void>((resolve) => {
           setTimeout(resolve, TRANSIENT_HTTP_RETRY_DELAY_MS);
@@ -589,7 +589,9 @@ export async function runAgentTurnWithFallback(params: {
         continue;
       }
 
-      defaultRuntime.error(`Embedded agent failed before reply: ${message}`);
+      defaultRuntime.error(
+        `Embedded agent failed before reply (provider=${fallbackProvider} model=${fallbackModel}): ${message}`,
+      );
       const safeMessage = isTransientHttp
         ? sanitizeUserFacingText(message, { errorContext: true })
         : message;
