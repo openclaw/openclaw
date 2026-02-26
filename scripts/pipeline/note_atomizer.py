@@ -31,16 +31,17 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from shared.log import make_logger
+from shared.classify import load_classification, classify_by_text, get_sector_label, get_category_label
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Constants & Paths
 # ══════════════════════════════════════════════════════════════════════════════
 
-from shared.vault_paths import VAULT, INBOX, NOTES, STRUCTURE, REPORTS
+from shared.vault_paths import VAULT, INBOX, NOTES, STRUCTURE, REPORTS, LEGACY_NOTES
 
 WORKSPACE = Path(os.path.expanduser("~/.openclaw/workspace"))
 INBOX_DIR = INBOX
-NOTES_DIR = VAULT / "100 지식" / "120 노트"  # v2 legacy
+NOTES_DIR = LEGACY_NOTES
 MOC_DIR = STRUCTURE
 REPORT_DIR = REPORTS
 STATE_FILE = WORKSPACE / "memory" / "note_atomizer_state.json"
@@ -71,6 +72,36 @@ PROMOTE_LLM_RANGE = (40, 59)
 # Cross-link thresholds
 JACCARD_THRESHOLD = 0.15
 MAX_RELATED_PER_NOTE = 10
+
+# ══════════════════════════════════════════════════════════════════════════════
+# v3 classification compatibility
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def _is_v3_classification(classification):
+    """Check if classification dict is v3 format."""
+    return classification and "categories" in classification
+
+
+def _normalize_classify_result(result):
+    """Normalize v3 classify_by_text() result to v2-compatible keys.
+
+    v3 returns {category, subcategory, folder, ...}
+    v2 returns {sector, industry_group, industry, domain, ...}
+    Frontmatter and internal code expects v2 keys.
+    """
+    if "sector" in result:
+        return result  # Already v2
+    return {
+        "sector": result.get("category", "UNCLASSIFIED"),
+        "industry_group": result.get("subcategory", ""),
+        "industry": "",
+        "domain": "general",
+        "matched_tags": result.get("matched_tags", []),
+        "confidence": result.get("confidence", 0.0),
+        "runner_up": result.get("runner_up"),
+    }
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Logging
@@ -558,9 +589,12 @@ def _enrich_via_llm(title, tags, meta, classification):
     sector = meta.get("sector", "UNCLASSIFIED")
     sector_label = ""
     if classification and sector != "UNCLASSIFIED":
-        sector_label = classification.get("sectors", {}).get(
-            sector, {}
-        ).get("label", "")
+        if _is_v3_classification(classification):
+            sector_label = get_category_label(classification, sector)
+        else:
+            sector_label = classification.get("sectors", {}).get(
+                sector, {}
+            ).get("label", "")
 
     tag_str = ", ".join(tags[:10]) if isinstance(tags, list) else str(tags)
 
@@ -817,7 +851,9 @@ def _create_child_note(parent, split_info, classification):
     # If better classification from split, re-classify
     if classification and split_info.get("extra_tags"):
         combined = f"{title} {split_info.get('body', '')}"
-        gics = classify_by_text(combined, classification=classification)
+        gics = _normalize_classify_result(
+            classify_by_text(combined, classification=classification)
+        )
         if gics["sector"] != "UNCLASSIFIED":
             child_meta["sector"] = gics["sector"]
             child_meta["industry_group"] = gics["industry_group"]
@@ -987,7 +1023,7 @@ def _execute_promotion(note, state, new_bucket, new_zk_type, new_maturity):
 
         rewrite_note(old_path, meta, note["body"] or "")
         old_path.rename(new_path)
-        log(f"    승격: {old_path.name} → 120 노트/{new_path.name} ({new_bucket})")
+        log(f"    승격: {old_path.name} → {NOTES_DIR.name}/{new_path.name} ({new_bucket})")
     else:
         # Just update metadata
         rewrite_note(old_path, meta, note["body"] or "")
@@ -1208,37 +1244,50 @@ def phase_moc(notes, state, dry_run, classification):
     # Re-scan
     notes = scan_all_notes()
 
-    # Index notes by sector → industry_group → industry
+    # Index notes by sector/category → subcategory/ig → industry
+    # Notes may have v2 'sector' (S10...) or v3 'category' (기업...) metadata
     index = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
     for n in notes:
-        sector = n["meta"].get("sector", "")
-        ig = n["meta"].get("industry_group", "")
-        ind = n["meta"].get("industry", "")
-        if sector and sector != "UNCLASSIFIED":
-            index[sector][ig][ind].append(n)
+        meta = n["meta"]
+        # v3 category takes precedence, fall back to v2 sector
+        cat = meta.get("category", "")
+        sector = meta.get("sector", "")
+        key = cat if (cat and cat != "UNCLASSIFIED") else sector
+        sub = meta.get("subcategory", "") or meta.get("industry_group", "")
+        ind = meta.get("industry", "")
+        if key and key != "UNCLASSIFIED":
+            index[key][sub][ind].append(n)
 
-    sectors = classification.get("sectors", {})
+    # v3 uses 'categories', v2 uses 'sectors'
+    if _is_v3_classification(classification):
+        category_defs = classification.get("categories", {})
+    else:
+        category_defs = classification.get("sectors", {})
+
     stats = {"mocs_updated": 0, "llm_calls": 0}
 
     # Load previous MOC hashes for incremental skip
     moc_hashes = state.get("moc_hashes", {})
     skipped = 0
 
-    for s_code, sector_def in sectors.items():
-        sector_label = sector_def.get("label", s_code)
-        moc_filename = f"MOC-{s_code}-{_safe_slug(sector_label)}.md"
+    for cat_code, cat_def in category_defs.items():
+        cat_label = cat_def.get("label", cat_code)
+        slug = _safe_slug(cat_label)
+        moc_filename = f"MOC-{cat_code}-{slug}.md" if not _is_v3_classification(classification) else f"MOC-{slug}.md"
         moc_path = MOC_DIR / moc_filename
 
-        # Find existing MOC
-        existing_mocs = list(MOC_DIR.glob(f"MOC-{s_code}-*.md"))
+        # Find existing MOC (match both old and new naming)
+        existing_mocs = list(MOC_DIR.glob(f"MOC-{slug}*.md"))
+        if not existing_mocs and not _is_v3_classification(classification):
+            existing_mocs = list(MOC_DIR.glob(f"MOC-{cat_code}-*.md"))
         if existing_mocs:
             moc_path = existing_mocs[0]
 
-        sector_notes = index.get(s_code, {})
+        cat_notes = index.get(cat_code, {})
         total_notes = sum(
             len(notes_list)
-            for ig_notes in sector_notes.values()
-            for notes_list in ig_notes.values()
+            for sub_notes in cat_notes.values()
+            for notes_list in sub_notes.values()
         )
 
         if total_notes == 0 and not moc_path.exists():
@@ -1247,28 +1296,33 @@ def phase_moc(notes, state, dry_run, classification):
         # Compute note list hash for incremental skip
         note_stems = sorted(
             n["stem"]
-            for ig_notes in sector_notes.values()
-            for notes_list in ig_notes.values()
+            for sub_notes in cat_notes.values()
+            for notes_list in sub_notes.values()
             for n in notes_list
         )
         current_hash = hashlib.md5(
             "|".join(note_stems).encode()
         ).hexdigest()
 
-        if current_hash == moc_hashes.get(s_code) and moc_path.exists():
+        if current_hash == moc_hashes.get(cat_code) and moc_path.exists():
             skipped += 1
             continue
 
-        log(f"  MOC {s_code} {sector_label}: {total_notes}건 노트")
+        log(f"  MOC {cat_code} {cat_label}: {total_notes}건 노트")
 
-        moc_content = _generate_moc(
-            s_code, sector_def, sector_notes, classification, total_notes
-        )
+        if _is_v3_classification(classification):
+            moc_content = _generate_moc_v3(
+                cat_code, cat_def, cat_notes, total_notes
+            )
+        else:
+            moc_content = _generate_moc(
+                cat_code, cat_def, cat_notes, classification, total_notes
+            )
 
         if dry_run:
             log(f"    [DRY] MOC 재생성: {moc_path.name} ({total_notes}건)")
             stats["mocs_updated"] += 1
-            moc_hashes[s_code] = current_hash
+            moc_hashes[cat_code] = current_hash
             continue
 
         MOC_DIR.mkdir(parents=True, exist_ok=True)
@@ -1276,7 +1330,7 @@ def phase_moc(notes, state, dry_run, classification):
         tmp.write_text(moc_content, encoding="utf-8")
         tmp.rename(moc_path)
         stats["mocs_updated"] += 1
-        moc_hashes[s_code] = current_hash
+        moc_hashes[cat_code] = current_hash
 
     # Persist hashes to state
     state["moc_hashes"] = moc_hashes
@@ -1291,6 +1345,75 @@ def _safe_slug(text):
     """한글/영문 슬러그."""
     clean = re.sub(r"[^\w가-힣·-]", "", text)
     return clean[:30] if clean else "unknown"
+
+
+def _generate_moc_v3(cat_code, cat_def, cat_notes, total_notes):
+    """v3 카테고리 기반 2-level MOC 마크다운 생성."""
+    cat_label = cat_def.get("label", cat_code)
+
+    lines = [
+        "---",
+        f'title: "MOC — {cat_label}"',
+        f'tags: ["moc", "category/{cat_code}"]',
+        f'zk_type: "structure"',
+        f'category: "{cat_code}"',
+        f'updated_at: "{datetime.now().strftime("%Y-%m-%d")}"',
+        "llm_synthesized: true",
+        "---",
+        "",
+        f"# {cat_label}",
+        "",
+    ]
+
+    overview = _generate_sector_overview(cat_code, cat_label, total_notes)
+    if overview:
+        lines.append(f"> {overview}")
+        lines.append("")
+
+    # Iterate subcategories
+    sub_defs = cat_def.get("subcategories", {})
+    for sub_code in sorted(sub_defs.keys()):
+        sub_notes_by_ind = cat_notes.get(sub_code, {})
+        # Flatten — v3 has no industry level, all notes are in industry=""
+        all_sub_notes = []
+        for ind_notes in sub_notes_by_ind.values():
+            all_sub_notes.extend(ind_notes)
+
+        if not all_sub_notes:
+            continue
+
+        lines.append(f"## {sub_code} ({len(all_sub_notes)}건)")
+        theme = _generate_ig_theme(sub_code, len(all_sub_notes))
+        if theme:
+            lines.append(f"> {theme}")
+        lines.append("")
+
+        for n in sorted(all_sub_notes, key=lambda x: x["meta"].get("date", ""), reverse=True):
+            title = n["meta"].get("title", n["stem"])
+            insight = _extract_insight_line(n)
+            if insight:
+                lines.append(f"- [[{n['stem']}|{title[:60]}]] — {insight}")
+            else:
+                lines.append(f"- [[{n['stem']}|{title[:60]}]]")
+
+        lines.append("")
+
+    # Uncategorized notes (subcategory="" or not in sub_defs)
+    for sub_key, sub_notes_by_ind in cat_notes.items():
+        if sub_key in sub_defs:
+            continue
+        all_uncategorized = []
+        for ind_notes in sub_notes_by_ind.values():
+            all_uncategorized.extend(ind_notes)
+        if all_uncategorized:
+            lines.append(f"## 미분류 ({len(all_uncategorized)}건)")
+            lines.append("")
+            for n in sorted(all_uncategorized, key=lambda x: x["meta"].get("date", ""), reverse=True):
+                title = n["meta"].get("title", n["stem"])
+                lines.append(f"- [[{n['stem']}|{title[:60]}]]")
+            lines.append("")
+
+    return "\n".join(lines) + "\n"
 
 
 def _generate_moc(s_code, sector_def, sector_notes, classification, total_notes):
