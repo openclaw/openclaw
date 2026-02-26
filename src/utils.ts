@@ -87,10 +87,24 @@ export function withWhatsAppPrefix(number: string): string {
 export function normalizeE164(number: string): string {
   const withoutPrefix = number.replace(/^whatsapp:/, "").trim();
   const digits = withoutPrefix.replace(/[^\d+]/g, "");
-  if (digits.startsWith("+")) {
-    return `+${digits.slice(1)}`;
+  const e164 = digits.startsWith("+") ? `+${digits.slice(1)}` : `+${digits}`;
+  return normalizeBrazilianMobile(e164);
+}
+
+/**
+ * Normalize Brazilian mobile numbers to the canonical 9-digit format.
+ * Brazil added a 9th digit (leading 9) to mobile numbers, so the same
+ * number can appear as +55 XX 9XXXX-XXXX or +55 XX XXXX-XXXX.
+ * Baileys sometimes resolves without the 9th digit; this ensures both
+ * forms map to the canonical 11-digit mobile format.
+ */
+function normalizeBrazilianMobile(e164: string): string {
+  // +55 + 2-digit area code (11–99) + 8-digit mobile starting with [6-9]
+  const match = e164.match(/^\+55(\d{2})([6-9]\d{7})$/);
+  if (match) {
+    return `+55${match[1]}9${match[2]}`;
   }
-  return `+${digits}`;
+  return e164;
 }
 
 /**

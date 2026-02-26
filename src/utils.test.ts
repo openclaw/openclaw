@@ -90,6 +90,21 @@ describe("normalizeE164 & toWhatsappJid", () => {
     expect(toWhatsappJid("whatsapp:123456789-987654321@g.us")).toBe("123456789-987654321@g.us");
     expect(toWhatsappJid("1555123@s.whatsapp.net")).toBe("1555123@s.whatsapp.net");
   });
+
+  it("normalizes Brazilian mobile numbers to 9-digit format (#27565)", () => {
+    // Already canonical 9-digit form — no change
+    expect(normalizeE164("+5511912345678")).toBe("+5511912345678");
+    // 8-digit mobile (without 9th digit) → canonical 9-digit form
+    expect(normalizeE164("+551161234567")).toBe("+5511961234567"); // starts with 6
+    expect(normalizeE164("+551171234567")).toBe("+5511971234567"); // starts with 7
+    expect(normalizeE164("+551181234567")).toBe("+5511981234567"); // starts with 8
+    expect(normalizeE164("+551191234567")).toBe("+5511991234567"); // starts with 9
+    // Landlines should NOT be modified
+    expect(normalizeE164("+551131234567")).toBe("+551131234567"); // landline (starts with 3)
+    expect(normalizeE164("+551121234567")).toBe("+551121234567"); // landline (starts with 2)
+    // Non-Brazilian numbers should NOT be modified
+    expect(normalizeE164("+14155551234")).toBe("+14155551234");
+  });
 });
 
 describe("jidToE164", () => {

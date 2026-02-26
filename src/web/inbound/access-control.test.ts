@@ -158,3 +158,81 @@ describe("WhatsApp dmPolicy precedence", () => {
     expect(sendMessageMock).not.toHaveBeenCalled();
   });
 });
+
+describe("Brazilian phone number normalization (#27565)", () => {
+  it("allows DM when allowFrom has 9-digit BR number but sender resolves without 9th digit", async () => {
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          dmPolicy: "allowlist",
+          allowFrom: ["+5511982345678"], // 9-digit form (with 9th digit)
+        },
+      },
+    });
+
+    // Baileys resolves sender without the 9th digit
+    const result = await checkInboundAccessControl({
+      accountId: "default",
+      from: "+551182345678", // 8-digit form (without 9th digit)
+      selfE164: "+15550009999",
+      senderE164: "+551182345678",
+      group: false,
+      pushName: "Maria",
+      isFromMe: false,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "551182345678@s.whatsapp.net",
+    });
+
+    expect(result.allowed).toBe(true);
+  });
+
+  it("allows DM when allowFrom has 8-digit BR number but sender resolves with 9th digit", async () => {
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          dmPolicy: "allowlist",
+          allowFrom: ["+551181234567"], // 8-digit form (without 9th digit)
+        },
+      },
+    });
+
+    const result = await checkInboundAccessControl({
+      accountId: "default",
+      from: "+5511981234567", // 9-digit form (with 9th digit)
+      selfE164: "+15550009999",
+      senderE164: "+5511981234567",
+      group: false,
+      pushName: "João",
+      isFromMe: false,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "5511981234567@s.whatsapp.net",
+    });
+
+    expect(result.allowed).toBe(true);
+  });
+
+  it("allows group message when BR sender resolves without 9th digit", async () => {
+    setAccessControlTestConfig({
+      channels: {
+        whatsapp: {
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["+5521987654321"], // 9-digit form
+        },
+      },
+    });
+
+    const result = await checkInboundAccessControl({
+      accountId: "default",
+      from: "+5521987654321",
+      selfE164: "+15550009999",
+      senderE164: "+552187654321", // 8-digit form
+      group: true,
+      pushName: "Carlos",
+      isFromMe: false,
+      sock: { sendMessage: sendMessageMock },
+      remoteJid: "120363001234567890@g.us",
+    });
+
+    expect(result.allowed).toBe(true);
+  });
+});
