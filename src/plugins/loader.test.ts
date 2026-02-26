@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import { loadOpenClawPlugins } from "./loader.js";
+import { __testing, loadOpenClawPlugins } from "./loader.js";
 
 type TempPlugin = { dir: string; file: string; id: string };
 
@@ -649,5 +649,41 @@ describe("loadOpenClawPlugins", () => {
     const record = registry.plugins.find((entry) => entry.id === "symlinked");
     expect(record?.status).not.toBe("loaded");
     expect(registry.diagnostics.some((entry) => entry.message.includes("escapes"))).toBe(true);
+  });
+
+  it("prefers dist plugin-sdk alias when loader runs from dist", () => {
+    const root = makeTempDir();
+    const srcFile = path.join(root, "src", "plugin-sdk", "index.ts");
+    const distFile = path.join(root, "dist", "plugin-sdk", "index.js");
+    fs.mkdirSync(path.dirname(srcFile), { recursive: true });
+    fs.mkdirSync(path.dirname(distFile), { recursive: true });
+    fs.writeFileSync(srcFile, "export {};\n", "utf-8");
+    fs.writeFileSync(distFile, "export {};\n", "utf-8");
+
+    const resolved = __testing.resolvePluginSdkAliasFile({
+      srcFile: "index.ts",
+      distFile: "index.js",
+      modulePath: path.join(root, "dist", "plugins", "loader.js"),
+    });
+    expect(resolved).toBe(distFile);
+  });
+
+  it("prefers src plugin-sdk alias when loader runs from src in non-production", () => {
+    const root = makeTempDir();
+    const srcFile = path.join(root, "src", "plugin-sdk", "index.ts");
+    const distFile = path.join(root, "dist", "plugin-sdk", "index.js");
+    fs.mkdirSync(path.dirname(srcFile), { recursive: true });
+    fs.mkdirSync(path.dirname(distFile), { recursive: true });
+    fs.writeFileSync(srcFile, "export {};\n", "utf-8");
+    fs.writeFileSync(distFile, "export {};\n", "utf-8");
+
+    const resolved = withEnv({ NODE_ENV: undefined }, () =>
+      __testing.resolvePluginSdkAliasFile({
+        srcFile: "index.ts",
+        distFile: "index.js",
+        modulePath: path.join(root, "src", "plugins", "loader.ts"),
+      }),
+    );
+    expect(resolved).toBe(srcFile);
   });
 });

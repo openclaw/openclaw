@@ -165,6 +165,23 @@ describe("deliverDiscordReply", () => {
     );
   });
 
+  it("preserves leading whitespace in delivered text chunks", async () => {
+    await deliverDiscordReply({
+      replies: [{ text: "  leading text" }],
+      target: "channel:789",
+      token: "token",
+      runtime,
+      textLimit: 2000,
+    });
+
+    expect(sendMessageDiscordMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageDiscordMock).toHaveBeenCalledWith(
+      "channel:789",
+      "  leading text",
+      expect.objectContaining({ token: "token" }),
+    );
+  });
+
   it("sends bound-session text replies through webhook delivery", async () => {
     const threadBindings = await createBoundThreadBindings({ label: "codex-refactor" });
 
