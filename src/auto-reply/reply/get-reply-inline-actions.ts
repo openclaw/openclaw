@@ -14,7 +14,13 @@ import {
   resolveSkillCommandInvocation,
 } from "../skill-commands.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
+import type {
+  EffortLevel,
+  ElevatedLevel,
+  ReasoningLevel,
+  ThinkLevel,
+  VerboseLevel,
+} from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import {
   clearAbortCutoffInSession,
@@ -33,6 +39,7 @@ import type { TypingController } from "./typing.js";
 const builtinSlashCommands = (() => {
   return listReservedChatSlashCommandNames([
     "think",
+    "effort",
     "verbose",
     "reasoning",
     "elevated",
@@ -104,6 +111,7 @@ export async function handleInlineActions(params: {
   elevatedFailures: Array<{ gate: string; key: string }>;
   defaultActivation: Parameters<typeof buildStatusReply>[0]["defaultGroupActivation"];
   resolvedThinkLevel: ThinkLevel | undefined;
+  resolvedEffortLevel?: EffortLevel;
   resolvedVerboseLevel: VerboseLevel | undefined;
   resolvedReasoningLevel: ReasoningLevel;
   resolvedElevatedLevel: ElevatedLevel;
@@ -143,6 +151,7 @@ export async function handleInlineActions(params: {
     elevatedFailures,
     defaultActivation,
     resolvedThinkLevel,
+    resolvedEffortLevel,
     resolvedVerboseLevel,
     resolvedReasoningLevel,
     resolvedElevatedLevel,
@@ -316,6 +325,7 @@ export async function handleInlineActions(params: {
       model,
       contextTokens,
       resolvedThinkLevel,
+      resolvedEffortLevel,
       resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
       resolvedReasoningLevel,
       resolvedElevatedLevel,
@@ -353,6 +363,7 @@ export async function handleInlineActions(params: {
       workspaceDir,
       defaultGroupActivation: defaultActivation,
       resolvedThinkLevel,
+      resolvedEffortLevel,
       resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
       resolvedReasoningLevel,
       resolvedElevatedLevel,

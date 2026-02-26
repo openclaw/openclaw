@@ -15,6 +15,7 @@ export type SessionDisplayRow = {
   systemSent?: boolean;
   abortedLastRun?: boolean;
   thinkingLevel?: string;
+  effortLevel?: string;
   verboseLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
@@ -51,6 +52,7 @@ export function toSessionDisplayRows(store: Record<string, SessionEntry>): Sessi
         systemSent: entry?.systemSent,
         abortedLastRun: entry?.abortedLastRun,
         thinkingLevel: entry?.thinkingLevel,
+        effortLevel: entry?.effortLevel,
         verboseLevel: entry?.verboseLevel,
         reasoningLevel: entry?.reasoningLevel,
         elevatedLevel: entry?.elevatedLevel,
@@ -121,6 +123,7 @@ export function formatSessionFlagsCell(
   row: Pick<
     SessionDisplayRow,
     | "thinkingLevel"
+    | "effortLevel"
     | "verboseLevel"
     | "reasoningLevel"
     | "elevatedLevel"
@@ -134,6 +137,7 @@ export function formatSessionFlagsCell(
 ): string {
   const flags = [
     row.thinkingLevel ? `think:${row.thinkingLevel}` : null,
+    row.effortLevel && row.effortLevel !== "off" ? `effort:${row.effortLevel}` : null,
     row.verboseLevel ? `verbose:${row.verboseLevel}` : null,
     row.reasoningLevel ? `reasoning:${row.reasoningLevel}` : null,
     row.elevatedLevel ? `elev:${row.elevatedLevel}` : null,
