@@ -651,15 +651,19 @@ Minimal allowlist example (IPv4):
 -A DOCKER-USER -s 172.16.0.0/12 -j RETURN
 -A DOCKER-USER -s 192.168.0.0/16 -j RETURN
 -A DOCKER-USER -s 100.64.0.0/10 -j RETURN
--A DOCKER-USER -i eth0 -p tcp --dport 80 -j RETURN
--A DOCKER-USER -i eth0 -p tcp --dport 443 -j RETURN
--A DOCKER-USER -i eth0 -j DROP
+-A DOCKER-USER -p tcp --dport 80 -j RETURN
+-A DOCKER-USER -p tcp --dport 443 -j RETURN
+-A DOCKER-USER -m conntrack --ctstate NEW -j DROP
 -A DOCKER-USER -j RETURN
 COMMIT
 ```
 
 IPv6 has separate tables. Add a matching policy in `/etc/ufw/after6.rules` if
 Docker IPv6 is enabled.
+
+Avoid hardcoding interface names like `eth0` in docs snippets. Interface names
+vary across VPS images (`ens3`, `enp*`, etc.) and mismatches can accidentally
+skip your deny rule.
 
 Quick validation after reload:
 
