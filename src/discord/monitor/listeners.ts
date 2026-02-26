@@ -11,7 +11,6 @@ import { danger, logVerbose } from "../../globals.js";
 import { formatDurationSeconds } from "../../infra/format-time/format-duration.ts";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { readChannelAllowFromStore } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import {
   readStoreAllowFromForDmPolicy,
@@ -208,6 +207,7 @@ async function runDiscordReactionHandler(params: {
 }
 
 type DiscordReactionIngressAuthorizationParams = {
+  accountId: string;
   user: User;
   isDirectMessage: boolean;
   isGroupDm: boolean;
@@ -238,8 +238,8 @@ async function authorizeDiscordReactionIngress(
   if (params.isDirectMessage) {
     const storeAllowFrom = await readStoreAllowFromForDmPolicy({
       provider: "discord",
+      accountId: params.accountId,
       dmPolicy: params.dmPolicy,
-      readStore: (provider) => readChannelAllowFromStore(provider),
     });
     const access = resolveDmGroupAccessWithLists({
       isGroup: false,
@@ -358,6 +358,7 @@ async function handleDiscordReactionEvent(params: {
       channelType === ChannelType.PrivateThread ||
       channelType === ChannelType.AnnouncementThread;
     const ingressAccess = await authorizeDiscordReactionIngress({
+      accountId: params.accountId,
       user,
       isDirectMessage,
       isGroupDm,
@@ -486,6 +487,7 @@ async function handleDiscordReactionEvent(params: {
 
         const channelConfig = resolveThreadChannelConfig();
         const threadAccess = await authorizeDiscordReactionIngress({
+          accountId: params.accountId,
           user,
           isDirectMessage,
           isGroupDm,
@@ -528,6 +530,7 @@ async function handleDiscordReactionEvent(params: {
 
       const channelConfig = resolveThreadChannelConfig();
       const threadAccess = await authorizeDiscordReactionIngress({
+        accountId: params.accountId,
         user,
         isDirectMessage,
         isGroupDm,
@@ -571,6 +574,7 @@ async function handleDiscordReactionEvent(params: {
     });
     if (isGuildMessage) {
       const channelAccess = await authorizeDiscordReactionIngress({
+        accountId: params.accountId,
         user,
         isDirectMessage,
         isGroupDm,

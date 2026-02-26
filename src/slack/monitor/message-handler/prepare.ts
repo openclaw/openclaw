@@ -155,6 +155,7 @@ export async function prepareSlackMessage(params: {
           const { code, created } = await upsertChannelPairingRequest({
             channel: "slack",
             id: directUserId,
+            accountId: account.accountId,
             meta: { name: senderName },
           });
           if (created) {

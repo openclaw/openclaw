@@ -25,7 +25,6 @@ import {
 import { logVerbose, shouldLogVerbose } from "../../../globals.js";
 import type { getChildLogger } from "../../../logging.js";
 import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
-import { readChannelAllowFromStore } from "../../../pairing/pairing-store.js";
 import type { resolveAgentRoute } from "../../../routing/resolve-route.js";
 import {
   readStoreAllowFromForDmPolicy,
@@ -80,9 +79,8 @@ async function resolveWhatsAppCommandAuthorized(params: {
     ? []
     : await readStoreAllowFromForDmPolicy({
         provider: "whatsapp",
+        accountId: params.msg.accountId,
         dmPolicy,
-        readStore: (provider) =>
-          readChannelAllowFromStore(provider, process.env, params.msg.accountId),
       });
   const dmAllowFrom =
     configuredAllowFrom.length > 0

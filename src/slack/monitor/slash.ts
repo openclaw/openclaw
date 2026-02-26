@@ -6,10 +6,7 @@ import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-
 import { resolveNativeCommandsEnabled, resolveNativeSkillsEnabled } from "../../config/commands.js";
 import { danger, logVerbose } from "../../globals.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
-import {
-  readChannelAllowFromStore,
-  upsertChannelPairingRequest,
-} from "../../pairing/pairing-store.js";
+import { upsertChannelPairingRequest } from "../../pairing/pairing-store.js";
 import { readStoreAllowFromForDmPolicy } from "../../security/dm-policy-shared.js";
 import { chunkItems } from "../../utils/chunk-items.js";
 import type { ResolvedSlackAccount } from "../accounts.js";
@@ -339,8 +336,8 @@ export async function registerSlackMonitorSlashCommands(params: {
       const storeAllowFrom = isDirectMessage
         ? await readStoreAllowFromForDmPolicy({
             provider: "slack",
+            accountId: ctx.accountId,
             dmPolicy: ctx.dmPolicy,
-            readStore: (provider) => readChannelAllowFromStore(provider),
           })
         : [];
       const effectiveAllowFrom = normalizeAllowList([...ctx.allowFrom, ...storeAllowFrom]);
@@ -373,6 +370,7 @@ export async function registerSlackMonitorSlashCommands(params: {
               const { code, created } = await upsertChannelPairingRequest({
                 channel: "slack",
                 id: command.user_id,
+                accountId: ctx.accountId,
                 meta: { name: senderName },
               });
               if (created) {

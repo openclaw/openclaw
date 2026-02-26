@@ -3,6 +3,7 @@ import { formatLocationText, type NormalizedLocation } from "../../channels/loca
 import { resolveTelegramPreviewStreamMode } from "../../config/discord-preview-streaming.js";
 import type { TelegramGroupConfig, TelegramTopicConfig } from "../../config/types.js";
 import { readChannelAllowFromStore } from "../../pairing/pairing-store.js";
+import { normalizeAccountId } from "../../routing/session-key.js";
 import { firstDefined, normalizeAllowFrom, type NormalizedAllowFrom } from "../bot-access.js";
 import type { TelegramStreamMode } from "./types.js";
 
@@ -32,15 +33,14 @@ export async function resolveTelegramGroupAllowFromContext(params: {
   effectiveGroupAllow: NormalizedAllowFrom;
   hasGroupAllowOverride: boolean;
 }> {
+  const accountId = normalizeAccountId(params.accountId);
   const resolvedThreadId = resolveTelegramForumThreadId({
     isForum: params.isForum,
     messageThreadId: params.messageThreadId,
   });
-  const storeAllowFrom = await readChannelAllowFromStore(
-    "telegram",
-    process.env,
-    params.accountId,
-  ).catch(() => []);
+  const storeAllowFrom = await readChannelAllowFromStore("telegram", process.env, accountId).catch(
+    () => [],
+  );
   const { groupConfig, topicConfig } = params.resolveTelegramGroupConfig(
     params.chatId,
     resolvedThreadId,
