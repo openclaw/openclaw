@@ -125,7 +125,7 @@ export async function agentsAddCommand(
     const bindingResult =
       bindingParse.bindings.length > 0
         ? applyAgentBindings(nextConfig, bindingParse.bindings)
-        : { config: nextConfig, added: [], skipped: [], conflicts: [] };
+        : { config: nextConfig, added: [], updated: [], skipped: [], conflicts: [] };
 
     await writeConfigFile(bindingResult.config);
     if (!opts.json) {
@@ -145,6 +145,7 @@ export async function agentsAddCommand(
       model,
       bindings: {
         added: bindingResult.added.map(describeBinding),
+        updated: bindingResult.updated.map(describeBinding),
         skipped: bindingResult.skipped.map(describeBinding),
         conflicts: bindingResult.conflicts.map(
           (conflict) => `${describeBinding(conflict.binding)} (agent=${conflict.existingAgentId})`,

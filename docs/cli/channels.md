@@ -35,6 +35,16 @@ openclaw channels remove --channel telegram --delete
 
 Tip: `openclaw channels add --help` shows per-channel flags (token, app token, signal-cli paths, etc).
 
+When you run `openclaw channels add` without flags, the interactive wizard can prompt:
+
+- account ids per selected channel
+- optional display names for those accounts
+- `Bind configured channel accounts to agents now?`
+
+If you confirm bind now, the wizard asks which agent should own each configured channel account and writes account-scoped routing bindings.
+
+You can also manage the same routing rules later with `openclaw agents bindings`, `openclaw agents bind`, and `openclaw agents unbind` (see [agents](/cli/agents)).
+
 ## Login / logout (interactive)
 
 ```bash

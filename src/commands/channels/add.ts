@@ -8,6 +8,8 @@ import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { resolveTelegramAccount } from "../../telegram/accounts.js";
 import { deleteTelegramUpdateOffset } from "../../telegram/update-offset-store.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
+import { applyAgentBindings, describeBinding } from "../agents.bindings.js";
+import { buildAgentSummaries } from "../agents.config.js";
 import { setupChannels } from "../onboard-channels.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import {
@@ -111,6 +113,68 @@ export async function channelsAddCommand(
       }
     }
 
+    const bindTargets = selection
+      .map((channel) => ({
+        channel,
+        accountId: accountIds[channel]?.trim(),
+      }))
+      .filter(
+        (
+          value,
+        ): value is {
+          channel: ChannelChoice;
+          accountId: string;
+        } => Boolean(value.accountId),
+      );
+    if (bindTargets.length > 0) {
+      const bindNow = await prompter.confirm({
+        message: "Bind configured channel accounts to agents now?",
+        initialValue: true,
+      });
+      if (bindNow) {
+        const agentSummaries = buildAgentSummaries(nextConfig);
+        const defaultAgentId = resolveDefaultAgentId(nextConfig);
+        for (const target of bindTargets) {
+          const targetAgentId = await prompter.select({
+            message: `Route ${target.channel} account "${target.accountId}" to agent`,
+            options: agentSummaries.map((agent) => ({
+              value: agent.id,
+              label: agent.isDefault ? `${agent.id} (default)` : agent.id,
+            })),
+            initialValue: defaultAgentId,
+          });
+          const bindingResult = applyAgentBindings(nextConfig, [
+            {
+              agentId: targetAgentId,
+              match: { channel: target.channel, accountId: target.accountId },
+            },
+          ]);
+          nextConfig = bindingResult.config;
+          if (bindingResult.added.length > 0 || bindingResult.updated.length > 0) {
+            await prompter.note(
+              [
+                ...bindingResult.added.map((binding) => `Added: ${describeBinding(binding)}`),
+                ...bindingResult.updated.map((binding) => `Updated: ${describeBinding(binding)}`),
+              ].join("\n"),
+              "Routing bindings",
+            );
+          }
+          if (bindingResult.conflicts.length > 0) {
+            await prompter.note(
+              [
+                "Skipped bindings already claimed by another agent:",
+                ...bindingResult.conflicts.map(
+                  (conflict) =>
+                    `- ${describeBinding(conflict.binding)} (agent=${conflict.existingAgentId})`,
+                ),
+              ].join("\n"),
+              "Routing bindings",
+            );
+          }
+        }
+      }
+    }
+
     await writeConfigFile(nextConfig);
     await prompter.outro("Channels updated.");
     return;
@@ -153,9 +217,6 @@ export async function channelsAddCommand(
     runtime.exit(1);
     return;
   }
-  const accountId =
-    plugin.setup.resolveAccountId?.({ cfg: nextConfig, accountId: opts.account }) ??
-    normalizeAccountId(opts.account);
   const useEnv = opts.useEnv === true;
   const initialSyncLimit =
     typeof opts.initialSyncLimit === "number"
@@ -199,6 +260,12 @@ export async function channelsAddCommand(
     dmAllowlist,
     autoDiscoverChannels: opts.autoDiscoverChannels,
   };
+  const accountId =
+    plugin.setup.resolveAccountId?.({
+      cfg: nextConfig,
+      accountId: opts.account,
+      input,
+    }) ?? normalizeAccountId(opts.account);
 
   const validationError = plugin.setup.validateInput?.({
     cfg: nextConfig,
