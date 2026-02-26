@@ -62,7 +62,7 @@ async function requireRiskAcknowledgement(params: {
 
   const ok = await params.prompter.confirm({
     message:
-      "I understand this is personal-by-default and shared/multi-user use requires lock-down. Continue?",
+      "I understand this is personal-by-default, and that shared/multi-user use will require lock-down. Continue?",
     initialValue: false,
   });
   if (!ok) {
