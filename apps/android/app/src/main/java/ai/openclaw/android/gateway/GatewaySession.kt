@@ -55,7 +55,7 @@ data class GatewayConnectOptions(
 class GatewaySession(
   private val scope: CoroutineScope,
   private val identityStore: DeviceIdentityStore,
-  private val deviceAuthStore: DeviceAuthStore,
+  private val deviceAuthStore: DeviceAuthStore? = null,
   private val onConnected: (serverName: String?, remoteAddress: String?, mainSessionKey: String?) -> Unit,
   private val onDisconnected: (message: String) -> Unit,
   private val onEvent: (event: String, payloadJson: String?) -> Unit,
@@ -305,7 +305,7 @@ class GatewaySession(
 
     private suspend fun sendConnect(connectNonce: String) {
       val identity = identityStore.loadOrCreate()
-      val storedToken = deviceAuthStore.loadToken(identity.deviceId, options.role)
+      val storedToken = deviceAuthStore?.loadToken(identity.deviceId, options.role)
       val trimmedToken = token?.trim().orEmpty()
       // QR/setup/manual shared token must take precedence; stale role tokens can survive re-onboarding.
       val authToken = if (trimmedToken.isNotBlank()) trimmedToken else storedToken.orEmpty()
@@ -327,7 +327,7 @@ class GatewaySession(
       val deviceToken = authObj?.get("deviceToken").asStringOrNull()
       val authRole = authObj?.get("role").asStringOrNull() ?: options.role
       if (!deviceToken.isNullOrBlank()) {
-        deviceAuthStore.saveToken(deviceId, authRole, deviceToken)
+        deviceAuthStore?.saveToken(deviceId, authRole, deviceToken)
       }
       val rawCanvas = obj["canvasHostUrl"].asStringOrNull()
       canvasHostUrl = normalizeCanvasHostUrl(rawCanvas, endpoint, isTlsConnection = tls != null)
