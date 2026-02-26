@@ -10,6 +10,11 @@ import android.service.notification.StatusBarNotification
 
 private const val MAX_NOTIFICATION_TEXT_CHARS = 512
 
+internal fun sanitizeNotificationText(value: CharSequence?): String? {
+  val normalized = value?.toString()?.trim().orEmpty()
+  return normalized.take(MAX_NOTIFICATION_TEXT_CHARS).ifEmpty { null }
+}
+
 data class DeviceNotificationEntry(
   val key: String,
   val packageName: String,
@@ -114,11 +119,11 @@ class DeviceNotificationListenerService : NotificationListenerService() {
   private fun StatusBarNotification.toEntry(): DeviceNotificationEntry {
     val extras = notification.extras
     val keyValue = key.takeIf { it.isNotBlank() } ?: "$packageName:$id:$postTime"
-    val title = sanitizeText(extras?.getCharSequence(Notification.EXTRA_TITLE))
+    val title = sanitizeNotificationText(extras?.getCharSequence(Notification.EXTRA_TITLE))
     val body =
-      sanitizeText(extras?.getCharSequence(Notification.EXTRA_BIG_TEXT))
-        ?: sanitizeText(extras?.getCharSequence(Notification.EXTRA_TEXT))
-    val subText = sanitizeText(extras?.getCharSequence(Notification.EXTRA_SUB_TEXT))
+      sanitizeNotificationText(extras?.getCharSequence(Notification.EXTRA_BIG_TEXT))
+        ?: sanitizeNotificationText(extras?.getCharSequence(Notification.EXTRA_TEXT))
+    val subText = sanitizeNotificationText(extras?.getCharSequence(Notification.EXTRA_SUB_TEXT))
     return DeviceNotificationEntry(
       key = keyValue,
       packageName = packageName,
@@ -133,18 +138,6 @@ class DeviceNotificationListenerService : NotificationListenerService() {
     )
   }
 
-  private fun sanitizeText(value: CharSequence?): String? {
-    val normalized = value?.toString()?.trim().orEmpty()
-    if (normalized.isEmpty()) {
-      return null
-    }
-    return if (normalized.length <= MAX_NOTIFICATION_TEXT_CHARS) {
-      normalized
-    } else {
-      normalized.take(MAX_NOTIFICATION_TEXT_CHARS)
-    }
-  }
-
   companion object {
     private fun serviceComponent(context: Context): ComponentName {
       return ComponentName(context, DeviceNotificationListenerService::class.java)
@@ -155,8 +148,8 @@ class DeviceNotificationListenerService : NotificationListenerService() {
       return manager.isNotificationListenerAccessGranted(serviceComponent(context))
     }
 
-    fun snapshot(context: Context): DeviceNotificationSnapshot {
-      return DeviceNotificationStore.snapshot(enabled = isAccessEnabled(context))
+    fun snapshot(context: Context, enabled: Boolean = isAccessEnabled(context)): DeviceNotificationSnapshot {
+      return DeviceNotificationStore.snapshot(enabled = enabled)
     }
 
     fun requestServiceRebind(context: Context) {
