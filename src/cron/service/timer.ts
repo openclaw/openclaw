@@ -715,6 +715,37 @@ export async function executeJobCore(
     }
   }
 
+  // Targeted session: route systemEvent to a specific session by key.
+  // Falls back to main session if the key is not found (handled by enqueueSystemEvent).
+  if (job.sessionTarget === "session") {
+    const text = resolveJobPayloadTextForMain(job);
+    if (!text) {
+      return {
+        status: "skipped",
+        error: "targeted session job requires non-empty systemEvent text",
+      };
+    }
+    if (!job.sessionKey) {
+      return {
+        status: "skipped",
+        error: "targeted session job requires a sessionKey",
+      };
+    }
+    state.deps.enqueueSystemEvent(text, {
+      agentId: job.agentId,
+      sessionKey: job.sessionKey,
+      contextKey: `cron:${job.id}`,
+    });
+    if (state.deps.runHeartbeatOnce) {
+      await state.deps.runHeartbeatOnce({
+        reason: `cron:${job.id}`,
+        agentId: job.agentId,
+        sessionKey: job.sessionKey,
+      });
+    }
+    return { status: "ok", summary: text };
+  }
+
   if (job.payload.kind !== "agentTurn") {
     return { status: "skipped", error: "isolated job requires payload.kind=agentTurn" };
   }

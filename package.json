@@ -185,6 +185,7 @@
     "opusscript": "^0.1.1",
     "osc-progress": "^0.3.0",
     "pdfjs-dist": "^5.4.624",
+    "playwright": "^1.58.2",
     "playwright-core": "1.58.2",
     "qrcode-terminal": "^0.12.0",
     "sharp": "^0.34.5",
