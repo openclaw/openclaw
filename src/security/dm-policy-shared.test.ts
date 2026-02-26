@@ -195,6 +195,26 @@ describe("security/dm-policy-shared", () => {
     expect(resolved.shouldBlockControlCommand).toBe(false);
   });
 
+  it("does not auto-authorize dm commands in open mode without explicit allowlists", () => {
+    const resolved = resolveDmGroupAccessWithCommandGate({
+      isGroup: false,
+      dmPolicy: "open",
+      groupPolicy: "allowlist",
+      allowFrom: [],
+      groupAllowFrom: [],
+      storeAllowFrom: [],
+      isSenderAllowed: () => false,
+      command: {
+        useAccessGroups: true,
+        allowTextCommands: true,
+        hasControlCommand: true,
+      },
+    });
+    expect(resolved.decision).toBe("allow");
+    expect(resolved.commandAuthorized).toBe(false);
+    expect(resolved.shouldBlockControlCommand).toBe(false);
+  });
+
   it("keeps allowlist mode strict in shared resolver (no pairing-store fallback)", () => {
     const resolved = resolveDmGroupAccessWithLists({
       isGroup: false,
