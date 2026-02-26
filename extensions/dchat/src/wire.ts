@@ -69,6 +69,7 @@ export function nknToInbound(
   src: string,
   msg: MessageData,
   selfAddress: string,
+  opts?: { accountId?: string },
 ): InboundMessageResult | null {
   if (isControlMessage(msg.contentType)) {
     return null;
@@ -92,7 +93,9 @@ export function nknToInbound(
     sessionKey = `dchat:group:${msg.groupId}`;
     groupSubject = msg.groupId;
   } else {
-    sessionKey = `dchat:dm:${src}`;
+    // Include account identity to prevent session key collisions in multi-account setups
+    const acct = opts?.accountId;
+    sessionKey = acct && acct !== "default" ? `dchat:${acct}:dm:${src}` : `dchat:dm:${src}`;
   }
 
   // Extract body text
@@ -219,8 +222,9 @@ export function extractGroupIdFromSessionKey(sessionKey: string): string | undef
 /**
  * Extract a direct message address from a session key.
  * dchat:dm:addr -> "addr"
+ * dchat:<accountId>:dm:addr -> "addr"
  */
 export function extractDmAddressFromSessionKey(sessionKey: string): string | undefined {
-  const match = sessionKey.match(/^dchat:dm:(.+)$/);
+  const match = sessionKey.match(/^dchat:(?:[^:]+:)?dm:(.+)$/);
   return match?.[1];
 }

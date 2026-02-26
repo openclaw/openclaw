@@ -214,11 +214,12 @@ export const dchatPlugin: ChannelPlugin<ResolvedDchatAccount> = {
       }
       return null;
     },
-    applyAccountConfig: ({ cfg, input }) => {
+    applyAccountConfig: ({ cfg, input, accountId }) => {
+      const resolvedAccountId = accountId ?? DEFAULT_ACCOUNT_ID;
       const namedConfig = applyAccountNameToChannelSection({
         cfg: cfg as CoreConfig,
         channelKey: "dchat",
-        accountId: DEFAULT_ACCOUNT_ID,
+        accountId: resolvedAccountId,
         name: input.name,
       });
       const seed = input.accessToken?.trim();
@@ -330,7 +331,9 @@ export const dchatPlugin: ChannelPlugin<ResolvedDchatAccount> = {
               const selfAddress = bus.getAddress();
               if (!selfAddress) return;
 
-              const inbound = nknToInbound(src, msg, selfAddress);
+              const inbound = nknToInbound(src, msg, selfAddress, {
+                accountId: account.accountId,
+              });
               if (!inbound) {
                 // Control message (receipt, read, topic:subscribe, etc.) — skip
                 return;
@@ -426,7 +429,7 @@ export const dchatPlugin: ChannelPlugin<ResolvedDchatAccount> = {
                 return;
               }
 
-              const storePath = core.channel.session.resolveStorePath(undefined, {});
+              const storePath = core.channel.session.resolveStorePath(cfg.session?.store, {});
 
               const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
               const previousTimestamp = core.channel.session.readSessionUpdatedAt({

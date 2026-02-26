@@ -101,6 +101,25 @@ describe("nknToInbound", () => {
     expect(result!.senderId).toBe("sender-addr-xyz789");
   });
 
+  it("scopes DM session key to account identity", () => {
+    const msg: MessageData = {
+      id: "msg-acct",
+      contentType: "text",
+      content: "multi-account test",
+      timestamp: Date.now(),
+    };
+    const result = nknToInbound("sender-addr", msg, selfAddr, { accountId: "work" });
+    expect(result!.sessionKey).toBe("dchat:work:dm:sender-addr");
+
+    // default account omits the account prefix for backwards compat
+    const resultDefault = nknToInbound("sender-addr", msg, selfAddr, { accountId: "default" });
+    expect(resultDefault!.sessionKey).toBe("dchat:dm:sender-addr");
+
+    // no accountId also omits prefix
+    const resultNone = nknToInbound("sender-addr", msg, selfAddr);
+    expect(resultNone!.sessionKey).toBe("dchat:dm:sender-addr");
+  });
+
   it("translates topic message", () => {
     const msg: MessageData = {
       id: "msg-2",
@@ -227,6 +246,10 @@ describe("session key extractors", () => {
   it("extracts DM address from session key", () => {
     expect(extractDmAddressFromSessionKey("dchat:dm:some-nkn-addr")).toBe("some-nkn-addr");
     expect(extractDmAddressFromSessionKey("dchat:topic:general")).toBeUndefined();
+  });
+
+  it("extracts DM address from account-scoped session key", () => {
+    expect(extractDmAddressFromSessionKey("dchat:work:dm:some-nkn-addr")).toBe("some-nkn-addr");
   });
 });
 
