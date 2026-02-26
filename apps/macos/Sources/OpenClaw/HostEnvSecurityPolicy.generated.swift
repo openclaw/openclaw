@@ -1,6 +1,6 @@
 // Generated file. Do not edit directly.
 // Source: src/infra/host-env-security-policy.json
-// Regenerate: node scripts/generate-host-env-security-policy-swift.mjs
+// Regenerate: node scripts/generate-host-env-security-policy-swift.mjs --write
 
 import Foundation
 

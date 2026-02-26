@@ -5,7 +5,7 @@ import {
   matchSystemRunApprovalBindingV1,
   matchSystemRunApprovalEnvHash,
   toSystemRunApprovalMismatchError,
-} from "./system-run-approval-binding.js";
+} from "../infra/system-run-approval-binding.js";
 
 describe("buildSystemRunApprovalEnvBinding", () => {
   test("normalizes keys and produces stable hash regardless of input order", () => {
