@@ -118,6 +118,33 @@ export function inspectTextContent(
   return { inspection, warnings };
 }
 
+/** Fire-and-forget security event emission. Errors are swallowed so that event
+ * infrastructure failures never interrupt the caller's read path. */
+async function emitInjectionEventAsync(
+  filePath: string,
+  inspection: InjectionInspectionResult,
+): Promise<void> {
+  try {
+    const { emitSecurityEvent } = await import("./security-events.js");
+    emitSecurityEvent({
+      type: "injection_detected",
+      severity: inspection.riskLevel === "critical" ? "critical" : "warn",
+      source: "safe-file-read",
+      message: `Injection patterns detected in file: ${filePath}`,
+      details: {
+        filePath,
+        riskLevel: inspection.riskLevel,
+        patterns: inspection.patterns.slice(0, 5),
+        classesMatched: inspection.classesMatched,
+        score: inspection.score,
+      },
+      remediation: "Review the file for prompt injection patterns before processing.",
+    });
+  } catch {
+    // Event emission must never interrupt the read.
+  }
+}
+
 export async function safeReadTextFile(
   filePath: string,
   options: Omit<InspectTextContentOptions, "filePath"> = {},
@@ -138,27 +165,7 @@ export async function safeReadTextFile(
   });
 
   if (inspected.inspection.riskLevel === "high" || inspected.inspection.riskLevel === "critical") {
-    void (async () => {
-      try {
-        const { emitSecurityEvent } = await import("./security-events.js");
-        emitSecurityEvent({
-          type: "injection_detected",
-          severity: inspected.inspection.riskLevel === "critical" ? "critical" : "warn",
-          source: "safe-file-read",
-          message: `Injection patterns detected in file: ${filePath}`,
-          details: {
-            filePath,
-            riskLevel: inspected.inspection.riskLevel,
-            patterns: inspected.inspection.patterns.slice(0, 5),
-            classesMatched: inspected.inspection.classesMatched,
-            score: inspected.inspection.score,
-          },
-          remediation: "Review the file for prompt injection patterns before processing.",
-        });
-      } catch {
-        // Event emission must never interrupt the read.
-      }
-    })();
+    void emitInjectionEventAsync(filePath, inspected.inspection);
   }
 
   return {

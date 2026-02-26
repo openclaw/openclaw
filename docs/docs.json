@@ -1182,7 +1182,11 @@
               },
               {
                 "group": "Security",
-                "pages": ["security/formal-verification"]
+                "pages": [
+                  "security/best-practices",
+                  "security/checklist",
+                  "security/formal-verification"
+                ]
               },
               {
                 "group": "Web interfaces",

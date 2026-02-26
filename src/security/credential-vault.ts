@@ -83,8 +83,8 @@ const CREDENTIALS_JSON_FILENAME = "credentials.json";
 const CREDENTIAL_VALIDATORS: Record<string, RegExp> = {
   // Anthropic API keys
   anthropic: /^sk-ant-(?:api|admin)\d+-[A-Za-z0-9_-]{20,}$/,
-  // OpenAI API keys
-  openai: /^sk-[A-Za-z0-9_-]{20,}$/,
+  // OpenAI API keys (negative lookahead excludes Anthropic sk-ant- prefix)
+  openai: /^sk-(?!ant-)[A-Za-z0-9_-]{20,}$/,
   // Google/Firebase
   google: /^AIza[A-Za-z0-9_-]{35}$/,
   // AWS Access Key ID

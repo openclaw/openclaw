@@ -84,7 +84,7 @@ class NumericRingBuffer {
     if (this._size < this.capacity) {
       return Array.from(this.buf.subarray(0, this._size));
     }
-    return Array.from<number>(
+    return Array.from<unknown, number>(
       { length: this.capacity },
       (_, i) => this.buf[(this.head + i) % this.capacity],
     );
