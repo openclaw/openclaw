@@ -43,6 +43,41 @@ beforeEach(() => {
 });
 
 describe("nodes camera_snap", () => {
+  it("uses front/high-quality defaults when params are omitted", async () => {
+    callGateway.mockImplementation(async ({ method, params }) => {
+      if (method === "node.list") {
+        return mockNodeList();
+      }
+      if (method === "node.invoke") {
+        expect(params).toMatchObject({
+          command: "camera.snap",
+          params: {
+            facing: "front",
+            maxWidth: 1600,
+            quality: 0.95,
+          },
+        });
+        return {
+          payload: {
+            format: "jpg",
+            base64: "aGVsbG8=",
+            width: 1,
+            height: 1,
+          },
+        };
+      }
+      return unexpectedGatewayMethod(method);
+    });
+
+    const result = await executeNodes({
+      action: "camera_snap",
+      node: NODE_ID,
+    });
+
+    const images = (result.content ?? []).filter((block) => block.type === "image");
+    expect(images).toHaveLength(1);
+  });
+
   it("maps jpg payloads to image/jpeg", async () => {
     callGateway.mockImplementation(async ({ method }) => {
       if (method === "node.list") {
