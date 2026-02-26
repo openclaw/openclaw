@@ -182,8 +182,10 @@ describe("guard-model", () => {
 
       expect(res).toHaveLength(1);
       expect(res[0]?.isError).toBe(true);
-      expect(res[0]?.text).toContain("blocked by the content safety guard");
-      expect(res[0]?.text).toContain("Guard model error: HTTP 500");
+      expect(res[0]?.text).toContain("blocked because the content safety guard is unavailable");
+      expect(res[0]?.text).toContain("content safety guard is unavailable");
+      expect(res[0]?.text).not.toContain("Guard model error");
+      expect(res[0]?.text).not.toContain("HTTP 500");
     });
 
     it("retries configured fallback models when the primary guard errors", async () => {

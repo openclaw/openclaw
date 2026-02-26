@@ -259,11 +259,22 @@ function handleGuardError(config: GuardModelConfig, detail: string): GuardResult
 
 const BLOCKED_MESSAGE = "⚠️ This response was blocked by the content safety guard.";
 const REDACTED_MESSAGE = "⚠️ This response was redacted by the content safety guard.";
+const GUARD_UNAVAILABLE_BLOCKED_MESSAGE =
+  "⚠️ This response was blocked because the content safety guard is unavailable.";
 
 function buildBlockedPayload(reason?: string): ReplyPayload[] {
   return [
     {
       text: BLOCKED_MESSAGE + (reason ? `\nReason: ${reason}` : ""),
+      isError: true,
+    },
+  ];
+}
+
+function buildGuardErrorPayload(): ReplyPayload[] {
+  return [
+    {
+      text: GUARD_UNAVAILABLE_BLOCKED_MESSAGE,
       isError: true,
     },
   ];
@@ -299,7 +310,7 @@ export async function applyGuardToPayloads(
 
   if (result.source === "error") {
     log.warn(`guard model error blocked response: ${result.reason ?? "unknown error"}`);
-    return buildBlockedPayload(result.reason);
+    return buildGuardErrorPayload();
   }
 
   log.info(
