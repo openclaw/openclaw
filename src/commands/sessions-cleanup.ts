@@ -172,11 +172,12 @@ function pruneMissingTranscriptEntries(params: {
     } catch {
       continue;
     }
-    if (classifyTranscriptFile(transcriptPath) === "missing") {
-      delete params.store[key];
-      removed += 1;
-      params.onPruned?.(key);
+    if (classifyTranscriptFile(transcriptPath) !== "missing") {
+      continue;
     }
+    delete params.store[key];
+    removed += 1;
+    params.onPruned?.(key);
   }
   return removed;
 }
