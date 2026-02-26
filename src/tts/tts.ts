@@ -804,10 +804,14 @@ export async function textToSpeech(params: {
 
       const latencyMs = Date.now() - providerStart;
 
+      // MiniMax always produces MP3 regardless of channel, so use .mp3
+      // to avoid extension/codec mismatch (e.g. MP3 bytes in a .opus file).
+      const fileExtension = provider === "minimax" ? ".mp3" : output.extension;
+
       const tempRoot = resolvePreferredOpenClawTmpDir();
       mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
       const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
-      const audioPath = path.join(tempDir, `voice-${Date.now()}${output.extension}`);
+      const audioPath = path.join(tempDir, `voice-${Date.now()}${fileExtension}`);
       writeFileSync(audioPath, audioBuffer);
       scheduleCleanup(tempDir);
 
@@ -822,7 +826,7 @@ export async function textToSpeech(params: {
             : provider === "minimax"
               ? "mp3"
               : output.elevenlabs,
-        voiceCompatible: output.voiceCompatible,
+        voiceCompatible: provider === "minimax" ? false : output.voiceCompatible,
       };
     } catch (err) {
       errors.push(formatTtsProviderError(provider, err));
