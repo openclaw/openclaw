@@ -13,11 +13,16 @@ import {
 import { applyLegacyMigrations } from "../../config/legacy.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import {
+  detectPlaceholderSecrets,
   redactConfigObject,
   redactConfigSnapshot,
   restoreRedactedValues,
 } from "../../config/redact-snapshot.js";
-import { buildConfigSchema, type ConfigSchemaResponse } from "../../config/schema.js";
+import {
+  buildConfigSchema,
+  type ConfigSchemaResponse,
+  type ConfigUiHints,
+} from "../../config/schema.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -113,6 +118,26 @@ function parseRawConfigOrRespond(
   return rawValue;
 }
 
+function rejectPlaceholderSecretsOrRespond(
+  config: unknown,
+  hints: ConfigUiHints | undefined,
+  respond: RespondFn,
+): boolean {
+  const detection = detectPlaceholderSecrets(config, hints);
+  if (!detection.ok) {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `placeholder secret values detected on sensitive paths: ${detection.paths.join(", ")}; replace with real credentials or remove`,
+      ),
+    );
+    return false;
+  }
+  return true;
+}
+
 function parseValidateConfigFromRawOrRespond(
   params: unknown,
   requestName: string,
@@ -136,6 +161,9 @@ function parseValidateConfigFromRawOrRespond(
       undefined,
       errorShape(ErrorCodes.INVALID_REQUEST, restored.humanReadableMessage ?? "invalid config"),
     );
+    return null;
+  }
+  if (!rejectPlaceholderSecretsOrRespond(restored.result, schema.uiHints, respond)) {
     return null;
   }
   const validated = validateConfigObjectWithPlugins(restored.result);
@@ -344,6 +372,9 @@ export const configHandlers: GatewayRequestHandlers = {
     }
     const migrated = applyLegacyMigrations(restoredMerge.result);
     const resolved = migrated.next ?? restoredMerge.result;
+    if (!rejectPlaceholderSecretsOrRespond(resolved, schemaPatch.uiHints, respond)) {
+      return;
+    }
     const validated = validateConfigObjectWithPlugins(resolved);
     if (!validated.ok) {
       respond(

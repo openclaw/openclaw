@@ -408,6 +408,166 @@ export type RedactionResult = {
   humanReadableMessage?: string;
 };
 
+export type PlaceholderDetectionResult = {
+  ok: boolean;
+  /** Paths where placeholder values were found. Empty when ok=true. */
+  paths: string[];
+};
+
+/**
+ * Common placeholder patterns that should never be written as real credentials.
+ * Catches values like "REDACTED", "xoxb-REDACTED", "your-token-here", etc.
+ */
+const PLACEHOLDER_PATTERNS = [
+  /^redacted$/i,
+  /^placeholder$/i,
+  /^your[_-]?\w*[_-]?here$/i,
+  /^(change|replace|insert|enter|add|put|set)[_-]?me$/i,
+  /^xxx+$/i,
+  /^todo$/i,
+  /^n\/?a$/i,
+  // Catches "xoxb-REDACTED", "sk-proj-REDACTED", "xapp-redacted" etc.
+  // Allows any number of prefix segments before the terminal "redacted".
+  // Does NOT match "my-redacted-token-v2" (legitimate value with "redacted" mid-string)
+  /^[\w]+(-[\w]+)*-redacted$/i,
+  // Catches prefixed placeholder forms like "xoxb-REPLACE_ME", "sk-proj-PLACEHOLDER"
+  /^[\w]+(-[\w]+)*-(placeholder|changeme|replace[_-]?me|todo|your[_-]?\w*[_-]?here|xxx+)$/i,
+];
+
+function isPlaceholderSecret(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed || trimmed === REDACTED_SENTINEL) {
+    return false;
+  }
+  return PLACEHOLDER_PATTERNS.some((p) => p.test(trimmed));
+}
+
+/**
+ * Walk a config object and detect placeholder values at sensitive paths.
+ * Called after restoreRedactedValues() to catch non-sentinel placeholders
+ * (e.g. "xoxb-REDACTED") that would silently corrupt credentials.
+ */
+export function detectPlaceholderSecrets(
+  config: unknown,
+  hints?: ConfigUiHints,
+): PlaceholderDetectionResult {
+  const paths: string[] = [];
+  if (config === null || config === undefined || typeof config !== "object") {
+    return { ok: true, paths };
+  }
+  if (hints) {
+    const lookup = buildRedactionLookup(hints);
+    if (lookup.has("")) {
+      detectPlaceholdersWithLookup(config, lookup, "", paths, hints);
+    } else {
+      detectPlaceholdersGuessing(config, "", paths, hints);
+    }
+  } else {
+    detectPlaceholdersGuessing(config, "", paths);
+  }
+  return { ok: paths.length === 0, paths };
+}
+
+function detectPlaceholdersWithLookup(
+  obj: unknown,
+  lookup: Set<string>,
+  prefix: string,
+  found: string[],
+  hints: ConfigUiHints,
+): void {
+  if (obj === null || obj === undefined) {
+    return;
+  }
+  if (Array.isArray(obj)) {
+    const path = `${prefix}[]`;
+    if (!lookup.has(path)) {
+      detectPlaceholdersGuessing(obj, prefix, found, hints);
+      return;
+    }
+    for (const item of obj) {
+      if (typeof item === "string" && isPlaceholderSecret(item)) {
+        found.push(path);
+      } else {
+        detectPlaceholdersWithLookup(item, lookup, path, found, hints);
+      }
+    }
+    return;
+  }
+  if (typeof obj === "object") {
+    for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
+      const path = prefix ? `${prefix}.${key}` : key;
+      const wildcardPath = prefix ? `${prefix}.*` : "*";
+      let matched = false;
+      for (const candidate of [path, wildcardPath]) {
+        if (lookup.has(candidate)) {
+          matched = true;
+          if (typeof value === "string" && isPlaceholderSecret(value)) {
+            // Always report the concrete path, not the wildcard hint
+            found.push(path);
+          } else if (typeof value === "object" && value !== null) {
+            detectPlaceholdersWithLookup(value, lookup, candidate, found, hints);
+          }
+          break;
+        }
+      }
+      if (!matched) {
+        const markedNonSensitive = isExplicitlyNonSensitivePath(hints, [path, wildcardPath]);
+        if (typeof value === "string" && !markedNonSensitive && isSensitivePath(path)) {
+          if (isPlaceholderSecret(value)) {
+            found.push(path);
+          }
+        } else if (typeof value === "object" && value !== null) {
+          detectPlaceholdersGuessing(value, path, found, hints);
+        }
+      }
+    }
+  }
+}
+
+function detectPlaceholdersGuessing(
+  obj: unknown,
+  prefix: string,
+  found: string[],
+  hints?: ConfigUiHints,
+): void {
+  if (obj === null || obj === undefined) {
+    return;
+  }
+  if (Array.isArray(obj)) {
+    const path = `${prefix}[]`;
+    for (const item of obj) {
+      if (
+        !isExplicitlyNonSensitivePath(hints, [path]) &&
+        isSensitivePath(path) &&
+        typeof item === "string" &&
+        isPlaceholderSecret(item)
+      ) {
+        found.push(path);
+      } else {
+        detectPlaceholdersGuessing(item, path, found, hints);
+      }
+    }
+    return;
+  }
+  if (typeof obj === "object") {
+    for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
+      const dotPath = prefix ? `${prefix}.${key}` : key;
+      const wildcardPath = prefix ? `${prefix}.*` : "*";
+      if (
+        !isExplicitlyNonSensitivePath(hints, [dotPath, wildcardPath]) &&
+        isSensitivePath(dotPath) &&
+        typeof value === "string"
+      ) {
+        if (isPlaceholderSecret(value)) {
+          found.push(dotPath);
+        }
+      } else if (typeof value === "object" && value !== null) {
+        detectPlaceholdersGuessing(value, dotPath, found, hints);
+      }
+    }
+  }
+}
+
 /**
  * Deep-walk `incoming` and replace any {@link REDACTED_SENTINEL} values
  * (on sensitive paths) with the corresponding value from `original`.
