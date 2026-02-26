@@ -287,6 +287,12 @@ export async function evaluateGuard(
   const baseUrl =
     getCustomProviderBaseUrl(params?.cfg, config.provider) ??
     KNOWN_BASE_URLS[config.provider] ??
+    resolveProviderBaseUrlFromRegistry(
+      config.provider,
+      config.modelId,
+      params?.agentDir,
+      params?.cfg,
+    ) ??
     `https://api.${config.provider}.com/v1`;
 
   const maxInputChars =
@@ -673,10 +679,29 @@ function getCustomProviderBaseUrl(
   cfg: OpenClawConfig | undefined,
   provider: string,
 ): string | undefined {
-  const providers = cfg?.models?.providers ?? {};
-  const entry = providers[provider];
+  const entry = findNormalizedProviderValue(cfg?.models?.providers, provider);
   if (entry && typeof entry === "object" && "baseUrl" in entry) {
-    return (entry as { baseUrl?: string }).baseUrl;
+    const url = (entry as { baseUrl?: string }).baseUrl;
+    return typeof url === "string" && url.trim() ? url.trim() : undefined;
   }
   return undefined;
+}
+
+/**
+ * Resolve the base URL for a provider from the model registry.
+ * Falls back gracefully if the model isn't found or the registry can't be read.
+ */
+function resolveProviderBaseUrlFromRegistry(
+  provider: string,
+  modelId: string,
+  agentDir?: string,
+  cfg?: OpenClawConfig,
+): string | undefined {
+  try {
+    const resolved = resolveModel(provider, modelId, agentDir, cfg);
+    const url = resolved.model?.baseUrl;
+    return typeof url === "string" && url.trim() ? url.trim() : undefined;
+  } catch {
+    return undefined;
+  }
 }

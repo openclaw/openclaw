@@ -342,6 +342,68 @@ describe("guard-model", () => {
     });
   });
 
+  describe("base URL resolution", () => {
+    it("uses base URL from explicit provider config for providers not in KNOWN_BASE_URLS", async () => {
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementationOnce(async (url) => {
+        const requestUrl = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+        expect(requestUrl).toContain("https://api.moonshot.ai/v1/chat/completions");
+        return jsonGuardReply('{"safe":true}');
+      });
+
+      const cfg: OpenClawConfig = {
+        models: {
+          providers: {
+            moonshot: {
+              baseUrl: "https://api.moonshot.ai/v1",
+              apiKey: "test-key",
+              models: [],
+            },
+          },
+        },
+      };
+
+      const res = await applyGuardToPayloads(
+        [{ text: "assistant reply" }],
+        { provider: "moonshot", modelId: "kimi-k2.5", action: "block", onError: "allow" },
+        { cfg },
+      );
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(res).toHaveLength(1);
+      expect(res[0]?.isError).not.toBe(true);
+    });
+
+    it("matches provider key case-insensitively when resolving base URL", async () => {
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementationOnce(async (url) => {
+        const requestUrl = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
+        expect(requestUrl).toContain("https://api.moonshot.ai/v1/chat/completions");
+        return jsonGuardReply('{"safe":true}');
+      });
+
+      // Provider stored with mixed case; guard config uses lowercase
+      const cfg: OpenClawConfig = {
+        models: {
+          providers: {
+            Moonshot: {
+              baseUrl: "https://api.moonshot.ai/v1",
+              apiKey: "test-key",
+              models: [],
+            },
+          },
+        },
+      };
+
+      const res = await applyGuardToPayloads(
+        [{ text: "assistant reply" }],
+        { provider: "moonshot", modelId: "kimi-k2.5", action: "block", onError: "allow" },
+        { cfg },
+      );
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(res[0]?.isError).not.toBe(true);
+    });
+  });
+
   describe("evaluateGuard", () => {
     it("short-circuits as fail-closed for incompatible guard model config", async () => {
       const fetchSpy = vi.spyOn(globalThis, "fetch");
