@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   CircularIncludeError,
   ConfigIncludeError,
+  MAX_INCLUDE_FILE_BYTES,
   deepMerge,
   type IncludeResolver,
   resolveConfigIncludes,
@@ -636,6 +637,56 @@ describe("security: path traversal protection (CWE-22)", () => {
           path.join(linkRoot, "openclaw.json"),
         );
         expect(result).toEqual({ logging: { redactSensitive: "tools" } });
+      } finally {
+        await fs.rm(tempRoot, { recursive: true, force: true });
+      }
+    });
+
+    it("rejects include files that are hardlinked aliases", async () => {
+      if (process.platform === "win32") {
+        return;
+      }
+      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-includes-hardlink-"));
+      try {
+        const configDir = path.join(tempRoot, "config");
+        const outsideDir = path.join(tempRoot, "outside");
+        await fs.mkdir(configDir, { recursive: true });
+        await fs.mkdir(outsideDir, { recursive: true });
+        const includePath = path.join(configDir, "extra.json5");
+        const outsidePath = path.join(outsideDir, "secret.json5");
+        await fs.writeFile(outsidePath, '{"logging":{"redactSensitive":"tools"}}\n', "utf-8");
+        try {
+          await fs.link(outsidePath, includePath);
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+            return;
+          }
+          throw err;
+        }
+
+        expect(() =>
+          resolveConfigIncludes(
+            { $include: "./extra.json5" },
+            path.join(configDir, "openclaw.json"),
+          ),
+        ).toThrow(/security checks|hardlink/i);
+      } finally {
+        await fs.rm(tempRoot, { recursive: true, force: true });
+      }
+    });
+
+    it("rejects oversized include files", async () => {
+      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-includes-big-"));
+      try {
+        const configDir = path.join(tempRoot, "config");
+        await fs.mkdir(configDir, { recursive: true });
+        const includePath = path.join(configDir, "big.json5");
+        const payload = "a".repeat(MAX_INCLUDE_FILE_BYTES + 1);
+        await fs.writeFile(includePath, `{"blob":"${payload}"}`, "utf-8");
+
+        expect(() =>
+          resolveConfigIncludes({ $include: "./big.json5" }, path.join(configDir, "openclaw.json")),
+        ).toThrow(/security checks|max/i);
       } finally {
         await fs.rm(tempRoot, { recursive: true, force: true });
       }
