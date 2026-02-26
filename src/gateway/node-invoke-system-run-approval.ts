@@ -1,3 +1,4 @@
+import { normalizeSystemRunApprovalPlanV2 } from "../infra/system-run-approval-binding.js";
 import { resolveSystemRunCommand } from "../infra/system-run-command.js";
 import type { ExecApprovalRecord } from "./exec-approval-manager.js";
 import {
@@ -99,18 +100,6 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
   }
 
   const p = obj as SystemRunParamsLike;
-  const cmdTextResolution = resolveSystemRunCommand({
-    command: p.command,
-    rawCommand: p.rawCommand,
-  });
-  if (!cmdTextResolution.ok) {
-    return {
-      ok: false,
-      message: cmdTextResolution.message,
-      details: cmdTextResolution.details,
-    };
-  }
-
   const approved = p.approved === true;
   const requestedDecision = normalizeApprovalDecision(p.approvalDecision);
   const wantsApprovalOverride = approved || requestedDecision !== null;
@@ -120,6 +109,17 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
   const next: Record<string, unknown> = pickSystemRunParams(obj);
 
   if (!wantsApprovalOverride) {
+    const cmdTextResolution = resolveSystemRunCommand({
+      command: p.command,
+      rawCommand: p.rawCommand,
+    });
+    if (!cmdTextResolution.ok) {
+      return {
+        ok: false,
+        message: cmdTextResolution.message,
+        details: cmdTextResolution.details,
+      };
+    }
     return { ok: true, params: next };
   }
 
@@ -206,13 +206,62 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
     };
   }
 
+  const planV2 = normalizeSystemRunApprovalPlanV2(snapshot.request.systemRunPlanV2 ?? null);
+  let approvalArgv: string[];
+  let approvalCwd: string | null;
+  let approvalAgentId: string | null;
+  let approvalSessionKey: string | null;
+  if (planV2) {
+    approvalArgv = [...planV2.argv];
+    approvalCwd = planV2.cwd;
+    approvalAgentId = planV2.agentId;
+    approvalSessionKey = planV2.sessionKey;
+    next.command = [...planV2.argv];
+    if (planV2.rawCommand) {
+      next.rawCommand = planV2.rawCommand;
+    } else {
+      delete next.rawCommand;
+    }
+    if (planV2.cwd) {
+      next.cwd = planV2.cwd;
+    } else {
+      delete next.cwd;
+    }
+    if (planV2.agentId) {
+      next.agentId = planV2.agentId;
+    } else {
+      delete next.agentId;
+    }
+    if (planV2.sessionKey) {
+      next.sessionKey = planV2.sessionKey;
+    } else {
+      delete next.sessionKey;
+    }
+  } else {
+    const cmdTextResolution = resolveSystemRunCommand({
+      command: p.command,
+      rawCommand: p.rawCommand,
+    });
+    if (!cmdTextResolution.ok) {
+      return {
+        ok: false,
+        message: cmdTextResolution.message,
+        details: cmdTextResolution.details,
+      };
+    }
+    approvalArgv = cmdTextResolution.argv;
+    approvalCwd = normalizeString(p.cwd) ?? null;
+    approvalAgentId = normalizeString(p.agentId) ?? null;
+    approvalSessionKey = normalizeString(p.sessionKey) ?? null;
+  }
+
   const approvalMatch = evaluateSystemRunApprovalMatch({
-    argv: cmdTextResolution.argv,
+    argv: approvalArgv,
     request: snapshot.request,
     binding: {
-      cwd: normalizeString(p.cwd) ?? null,
-      agentId: normalizeString(p.agentId) ?? null,
-      sessionKey: normalizeString(p.sessionKey) ?? null,
+      cwd: approvalCwd,
+      agentId: approvalAgentId,
+      sessionKey: approvalSessionKey,
       env: p.env,
     },
   });
