@@ -11,14 +11,14 @@ concurrency:
 
 jobs:
   no-tabs:
-    runs-on: ubuntu-latest
+    runs-on: hanzo-k8s
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
       - name: Fail on tabs in workflow files
         run: |
-          python - <<'PY'
+          python3 - <<'PY'
           from __future__ import annotations
 
           import pathlib

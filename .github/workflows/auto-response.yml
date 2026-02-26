@@ -13,7 +13,7 @@ jobs:
     permissions:
       issues: write
       pull-requests: write
-    runs-on: ubuntu-latest
+    runs-on: hanzo-k8s
     steps:
       - name: Handle labeled items
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7

@@ -9,7 +9,7 @@ concurrency:
 
 jobs:
   formal_conformance:
-    runs-on: ubuntu-latest
+    runs-on: hanzo-k8s
     continue-on-error: true
     timeout-minutes: 20
     permissions:

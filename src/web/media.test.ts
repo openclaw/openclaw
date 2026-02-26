@@ -305,7 +305,9 @@ describe("web media loading", () => {
 
 describe("Discord voice message input hardening", () => {
   it("rejects local paths outside allowed media roots", async () => {
-    const candidate = path.join(process.cwd(), "package.json");
+    // Use /usr/share (not /tmp) so the path is outside os.tmpdir() even when
+    // the runner workspace lives under /tmp (self-hosted CI runners).
+    const candidate = "/usr/share/not-a-real-file.json";
     await expect(sendVoiceMessageDiscord("channel:123", candidate)).rejects.toThrow(
       /Local media path is not under an allowed directory/i,
     );
