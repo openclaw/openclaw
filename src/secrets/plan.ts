@@ -90,6 +90,12 @@ function isSecretProviderConfigShape(value: unknown): value is SecretProviderCon
     ) {
       return false;
     }
+    if (value.allowInsecurePath !== undefined && typeof value.allowInsecurePath !== "boolean") {
+      return false;
+    }
+    if (value.allowSymlinkCommand !== undefined && typeof value.allowSymlinkCommand !== "boolean") {
+      return false;
+    }
     if (value.env !== undefined) {
       if (!isObjectRecord(value.env)) {
         return false;
