@@ -1,7 +1,9 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { createEditTool, createReadTool, createWriteTool } from "@mariozechner/pi-coding-agent";
+import { SafeOpenError, openFileWithinRoot, writeFileWithinRoot } from "../infra/fs-safe.js";
 import { detectMime } from "../media/mime.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
@@ -665,6 +667,20 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
   return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
 }
 
+export function createHostWorkspaceWriteTool(root: string) {
+  const base = createWriteTool(root, {
+    operations: createHostWriteOperations(root),
+  }) as unknown as AnyAgentTool;
+  return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.write);
+}
+
+export function createHostWorkspaceEditTool(root: string) {
+  const base = createEditTool(root, {
+    operations: createHostEditOperations(root),
+  }) as unknown as AnyAgentTool;
+  return wrapToolParamNormalization(base, CLAUDE_PARAM_GROUPS.edit);
+}
+
 export function createOpenClawReadTool(
   base: AnyAgentTool,
   options?: OpenClawReadToolOptions,
@@ -739,6 +755,87 @@ function createSandboxEditOperations(params: SandboxToolParams) {
       }
     },
   } as const;
+}
+
+function createHostWriteOperations(root: string) {
+  return {
+    mkdir: async (dir: string) => {
+      const relative = toRelativePathInRoot(root, dir, { allowRoot: true });
+      const resolved = relative ? path.resolve(root, relative) : path.resolve(root);
+      await assertSandboxPath({ filePath: resolved, cwd: root, root });
+      await fs.mkdir(resolved, { recursive: true });
+    },
+    writeFile: async (absolutePath: string, content: string) => {
+      const relative = toRelativePathInRoot(root, absolutePath);
+      await writeFileWithinRoot({
+        rootDir: root,
+        relativePath: relative,
+        data: content,
+        mkdir: true,
+      });
+    },
+  } as const;
+}
+
+function createHostEditOperations(root: string) {
+  return {
+    readFile: async (absolutePath: string) => {
+      const relative = toRelativePathInRoot(root, absolutePath);
+      const opened = await openFileWithinRoot({
+        rootDir: root,
+        relativePath: relative,
+      });
+      try {
+        return await opened.handle.readFile();
+      } finally {
+        await opened.handle.close().catch(() => {});
+      }
+    },
+    writeFile: async (absolutePath: string, content: string) => {
+      const relative = toRelativePathInRoot(root, absolutePath);
+      await writeFileWithinRoot({
+        rootDir: root,
+        relativePath: relative,
+        data: content,
+        mkdir: true,
+      });
+    },
+    access: async (absolutePath: string) => {
+      const relative = toRelativePathInRoot(root, absolutePath);
+      try {
+        const opened = await openFileWithinRoot({
+          rootDir: root,
+          relativePath: relative,
+        });
+        await opened.handle.close().catch(() => {});
+      } catch (error) {
+        if (error instanceof SafeOpenError && error.code === "not-found") {
+          throw createFsAccessError("ENOENT", absolutePath);
+        }
+        throw error;
+      }
+    },
+  } as const;
+}
+
+function toRelativePathInRoot(
+  root: string,
+  candidate: string,
+  options?: { allowRoot?: boolean },
+): string {
+  const rootResolved = path.resolve(root);
+  const resolved = path.resolve(candidate);
+  const relative = path.relative(rootResolved, resolved);
+  if (relative === "" || relative === ".") {
+    if (options?.allowRoot) {
+      return "";
+    }
+    throw new Error(`Path escapes workspace root: ${candidate}`);
+  }
+  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(`Path escapes workspace root: ${candidate}`);
+  }
+  return relative;
 }
 
 function createFsAccessError(code: string, filePath: string): NodeJS.ErrnoException {
