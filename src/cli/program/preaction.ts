@@ -25,6 +25,7 @@ const PLUGIN_REQUIRED_COMMANDS = new Set([
   "message",
   "channels",
   "directory",
+  "agents",
   "configure",
   "onboard",
 ]);
