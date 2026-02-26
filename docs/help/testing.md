@@ -336,6 +336,11 @@ These run `pnpm test:live` inside the repo Docker image, mounting your local con
 - Gateway networking (two containers, WS auth + health): `pnpm test:docker:gateway-network` (script: `scripts/e2e/gateway-network-docker.sh`)
 - Plugins (custom extension load + registry smoke): `pnpm test:docker:plugins` (script: `scripts/e2e/plugins-docker.sh`)
 
+Manual ACP plain-language thread smoke (not CI):
+
+- `bun scripts/dev/discord-acp-plain-language-smoke.ts --channel <discord-channel-id> ...`
+- Keep this script for regression/debug workflows. It may be needed again for ACP thread routing validation, so do not delete it.
+
 Useful env vars:
 
 - `OPENCLAW_CONFIG_DIR=...` (default: `~/.openclaw`) mounted to `/home/node/.openclaw`

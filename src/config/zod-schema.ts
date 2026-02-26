@@ -316,6 +316,36 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    acp: z
+      .object({
+        enabled: z.boolean().optional(),
+        dispatch: z
+          .object({
+            enabled: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
+        backend: z.string().optional(),
+        defaultAgent: z.string().optional(),
+        allowedAgents: z.array(z.string()).optional(),
+        maxConcurrentSessions: z.number().int().positive().optional(),
+        stream: z
+          .object({
+            coalesceIdleMs: z.number().int().nonnegative().optional(),
+            maxChunkChars: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
+        runtime: z
+          .object({
+            ttlMinutes: z.number().int().positive().optional(),
+            installCommand: z.string().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
     models: ModelsConfigSchema,
     nodeHost: NodeHostSchema,
     agents: AgentsSchema,

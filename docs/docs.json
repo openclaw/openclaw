@@ -1002,7 +1002,12 @@
               },
               {
                 "group": "Agent coordination",
-                "pages": ["tools/agent-send", "tools/subagents", "tools/multi-agent-sandbox-tools"]
+                "pages": [
+                  "tools/agent-send",
+                  "tools/subagents",
+                  "tools/acp-agents",
+                  "tools/multi-agent-sandbox-tools"
+                ]
               },
               {
                 "group": "Skills",

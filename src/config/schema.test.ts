@@ -7,9 +7,11 @@ describe("config schema", () => {
     const schema = res.schema as { properties?: Record<string, unknown> };
     expect(schema.properties?.gateway).toBeTruthy();
     expect(schema.properties?.agents).toBeTruthy();
+    expect(schema.properties?.acp).toBeTruthy();
     expect(schema.properties?.$schema).toBeUndefined();
     expect(res.uiHints.gateway?.label).toBe("Gateway");
     expect(res.uiHints["gateway.auth.token"]?.sensitive).toBe(true);
+    expect(res.uiHints["channels.discord.threadBindings.spawnAcpSessions"]?.label).toBeTruthy();
     expect(res.version).toBeTruthy();
     expect(res.generatedAt).toBeTruthy();
   });

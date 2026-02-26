@@ -3,7 +3,7 @@ import { logVerbose } from "../../globals.js";
 import { createDiscordRestClient } from "../client.js";
 import { sendMessageDiscord, sendWebhookMessageDiscord } from "../send.js";
 import { createThreadDiscord } from "../send.messages.js";
-import { summarizeBindingPersona } from "./thread-bindings.messages.js";
+import { resolveThreadBindingPersonaFromRecord } from "./thread-bindings.persona.js";
 import {
   BINDINGS_BY_THREAD_ID,
   REUSABLE_WEBHOOKS_BY_ACCOUNT_CHANNEL,
@@ -138,7 +138,7 @@ export async function maybeSendBindingMessage(params: {
         webhookToken: record.webhookToken,
         accountId: record.accountId,
         threadId: record.threadId,
-        username: summarizeBindingPersona(record),
+        username: resolveThreadBindingPersonaFromRecord(record),
       });
       return;
     } catch (err) {

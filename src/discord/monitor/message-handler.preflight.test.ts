@@ -1,31 +1,45 @@
 import { ChannelType } from "@buape/carbon";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  __testing as sessionBindingTesting,
+  registerSessionBindingAdapter,
+} from "../../infra/outbound/session-binding-service.js";
+import {
   preflightDiscordMessage,
   resolvePreflightMentionRequirement,
   shouldIgnoreBoundThreadWebhookMessage,
 } from "./message-handler.preflight.js";
 import {
   __testing as threadBindingTesting,
+  createNoopThreadBindingManager,
   createThreadBindingManager,
 } from "./thread-bindings.js";
 
 function createThreadBinding(
-  overrides?: Partial<import("./thread-bindings.js").ThreadBindingRecord>,
+  overrides?: Partial<
+    import("../../infra/outbound/session-binding-service.js").SessionBindingRecord
+  >,
 ) {
   return {
-    accountId: "default",
-    channelId: "parent-1",
-    threadId: "thread-1",
-    targetKind: "subagent",
+    bindingId: "default:thread-1",
     targetSessionKey: "agent:main:subagent:child-1",
-    agentId: "main",
-    boundBy: "test",
+    targetKind: "subagent",
+    conversation: {
+      channel: "discord",
+      accountId: "default",
+      conversationId: "thread-1",
+      parentConversationId: "parent-1",
+    },
+    status: "active",
     boundAt: 1,
-    webhookId: "wh-1",
-    webhookToken: "tok-1",
+    metadata: {
+      agentId: "main",
+      boundBy: "test",
+      webhookId: "wh-1",
+      webhookToken: "tok-1",
+    },
     ...overrides,
-  } satisfies import("./thread-bindings.js").ThreadBindingRecord;
+  } satisfies import("../../infra/outbound/session-binding-service.js").SessionBindingRecord;
 }
 
 describe("resolvePreflightMentionRequirement", () => {
@@ -58,6 +72,10 @@ describe("resolvePreflightMentionRequirement", () => {
 });
 
 describe("preflightDiscordMessage", () => {
+  beforeEach(() => {
+    sessionBindingTesting.resetSessionBindingAdaptersForTests();
+  });
+
   it("bypasses mention gating in bound threads for allowed bot senders", async () => {
     const threadBinding = createThreadBinding();
     const threadId = "thread-bot-focus";
@@ -99,6 +117,13 @@ describe("preflightDiscordMessage", () => {
       },
     } as unknown as import("@buape/carbon").Message;
 
+    registerSessionBindingAdapter({
+      channel: "discord",
+      accountId: "default",
+      listBySession: () => [],
+      resolveByConversation: (ref) => (ref.conversationId === threadId ? threadBinding : null),
+    });
+
     const result = await preflightDiscordMessage({
       cfg: {
         session: {
@@ -122,9 +147,7 @@ describe("preflightDiscordMessage", () => {
       groupDmEnabled: true,
       ackReactionScope: "direct",
       groupPolicy: "open",
-      threadBindings: {
-        getByThreadId: (id: string) => (id === threadId ? threadBinding : undefined),
-      } as import("./thread-bindings.js").ThreadBindingManager,
+      threadBindings: createNoopThreadBindingManager("default"),
       data: {
         channel_id: threadId,
         guild_id: "guild-1",
@@ -146,6 +169,7 @@ describe("preflightDiscordMessage", () => {
 
 describe("shouldIgnoreBoundThreadWebhookMessage", () => {
   beforeEach(() => {
+    sessionBindingTesting.resetSessionBindingAdaptersForTests();
     threadBindingTesting.resetThreadBindingsForTests();
   });
 
@@ -171,7 +195,11 @@ describe("shouldIgnoreBoundThreadWebhookMessage", () => {
     expect(
       shouldIgnoreBoundThreadWebhookMessage({
         webhookId: "wh-1",
-        threadBinding: createThreadBinding({ webhookId: undefined }),
+        threadBinding: createThreadBinding({
+          metadata: {
+            webhookId: undefined,
+          },
+        }),
       }),
     ).toBe(false);
   });

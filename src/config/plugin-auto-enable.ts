@@ -354,6 +354,16 @@ function resolveConfiguredPlugins(
       });
     }
   }
+  const backendRaw =
+    typeof cfg.acp?.backend === "string" ? cfg.acp.backend.trim().toLowerCase() : "";
+  const acpConfigured =
+    cfg.acp?.enabled === true || cfg.acp?.dispatch?.enabled === true || backendRaw === "acpx";
+  if (acpConfigured && (!backendRaw || backendRaw === "acpx")) {
+    changes.push({
+      pluginId: "acpx",
+      reason: "ACP runtime configured",
+    });
+  }
   return changes;
 }
 
