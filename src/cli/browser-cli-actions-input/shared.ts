@@ -70,18 +70,19 @@ export async function readFields(opts: {
     const rec = entry as Record<string, unknown>;
     const ref = typeof rec.ref === "string" ? rec.ref.trim() : "";
     const type = typeof rec.type === "string" ? rec.type.trim() : "";
-    if (!ref || !type) {
-      throw new Error(`fields[${index}] must include ref and type`);
+    if (!ref) {
+      throw new Error(`fields[${index}] must include ref`);
     }
+    const resolvedType = type || "text";
     if (
       typeof rec.value === "string" ||
       typeof rec.value === "number" ||
       typeof rec.value === "boolean"
     ) {
-      return { ref, type, value: rec.value };
+      return { ref, type: resolvedType, value: rec.value };
     }
     if (rec.value === undefined || rec.value === null) {
-      return { ref, type };
+      return { ref, type: resolvedType };
     }
     throw new Error(`fields[${index}].value must be string, number, boolean, or null`);
   });
