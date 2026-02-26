@@ -488,3 +488,116 @@ describe("stripToolResultDetails", () => {
     expect(out).toBe(input);
   });
 });
+
+describe("repairToolUseResultPairing — delivery-mirror interleave", () => {
+  it("does not break tool_call pairing when delivery-mirror assistant is interleaved", () => {
+    // Simulates the pattern from #27150: assistant tool_call → delivery-mirror assistant → toolResult
+    // The delivery-mirror assistant (no tool_calls) should NOT sever the scan.
+    const input = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "toolu_01Gp6", name: "message", arguments: {} }],
+        stopReason: "toolUse",
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Good morning! Here is your briefing." }],
+        stopReason: "stop",
+        provider: "openclaw",
+        model: "delivery-mirror",
+      },
+      {
+        role: "toolResult",
+        toolCallId: "toolu_01Gp6",
+        toolName: "message",
+        content: [{ type: "text", text: "sent" }],
+        isError: false,
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = repairToolUseResultPairing(input);
+
+    // The real tool result should be matched, NOT replaced by a synthetic one
+    expect(result.added).toHaveLength(0);
+    // Order: assistant(tool_call) → toolResult → assistant(delivery-mirror)
+    expect(result.messages).toHaveLength(3);
+    expect(result.messages[0]?.role).toBe("assistant");
+    expect(result.messages[1]?.role).toBe("toolResult");
+    expect((result.messages[1] as { toolCallId?: string }).toolCallId).toBe("toolu_01Gp6");
+    expect(result.messages[2]?.role).toBe("assistant");
+    expect((result.messages[2] as { model?: string }).model).toBe("delivery-mirror");
+  });
+
+  it("still breaks scan on a real assistant message with tool_calls", () => {
+    // A real assistant message with tool_calls should still break the scan
+    const input = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+        stopReason: "toolUse",
+      },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_2", name: "write", arguments: {} }],
+        stopReason: "toolUse",
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "file content" }],
+        isError: false,
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = repairToolUseResultPairing(input);
+
+    // call_1's real tool result is after the second assistant (which has tool_calls),
+    // so the scan breaks and both get synthetic results
+    expect(result.added).toHaveLength(2);
+    expect(result.added[0]?.toolCallId).toBe("call_1");
+    expect(result.added[1]?.toolCallId).toBe("call_2");
+  });
+
+  it("handles multiple delivery-mirror messages interleaved between tool_call and result", () => {
+    const input = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_a", name: "exec", arguments: {} }],
+        stopReason: "toolUse",
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "mirror 1" }],
+        stopReason: "stop",
+        provider: "openclaw",
+        model: "delivery-mirror",
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "mirror 2" }],
+        stopReason: "stop",
+        provider: "openclaw",
+        model: "delivery-mirror",
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_a",
+        toolName: "exec",
+        content: [{ type: "text", text: "done" }],
+        isError: false,
+      },
+    ] as unknown as AgentMessage[];
+
+    const result = repairToolUseResultPairing(input);
+
+    expect(result.added).toHaveLength(0);
+    expect(result.messages).toHaveLength(4);
+    // tool result should be right after the tool_call assistant
+    expect(result.messages[0]?.role).toBe("assistant");
+    expect(result.messages[1]?.role).toBe("toolResult");
+    expect((result.messages[1] as { toolCallId?: string }).toolCallId).toBe("call_a");
+  });
+});

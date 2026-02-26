@@ -424,6 +424,20 @@ export function repairToolUseResultPairing(messages: AgentMessage[]): ToolUseRep
 
       const nextRole = (next as { role?: unknown }).role;
       if (nextRole === "assistant") {
+        // If this assistant message has no tool calls (e.g. delivery-mirror),
+        // treat it as a non-tool message and defer it to remainder instead of
+        // breaking the scan. This prevents delivery-mirror messages from
+        // severing the tool_call → tool_result pairing, which causes
+        // "tool_call_id not found" errors on cross-provider replay.
+        const nextStopReason = (next as { stopReason?: string }).stopReason;
+        const nextToolCalls =
+          nextStopReason !== "error" && nextStopReason !== "aborted"
+            ? extractToolCallsFromAssistant(next as Extract<AgentMessage, { role: "assistant" }>)
+            : [];
+        if (nextToolCalls.length === 0) {
+          remainder.push(next);
+          continue;
+        }
         break;
       }
 
