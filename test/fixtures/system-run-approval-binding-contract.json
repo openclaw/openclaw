@@ -14,7 +14,6 @@
         }
       },
       "invoke": {
-        "cmdText": "git diff",
         "argv": ["git", "diff"],
         "binding": {
           "cwd": null,
@@ -39,7 +38,6 @@
         }
       },
       "invoke": {
-        "cmdText": "git diff",
         "argv": ["git", "diff"],
         "binding": {
           "cwd": null,
@@ -63,7 +61,6 @@
         }
       },
       "invoke": {
-        "cmdText": "git diff",
         "argv": ["git", "diff"],
         "binding": {
           "cwd": null,
@@ -75,14 +72,13 @@
       "expected": { "ok": false, "code": "APPROVAL_ENV_BINDING_MISSING" }
     },
     {
-      "name": "legacy rejects argv mismatch",
+      "name": "missing binding rejects requests even with matching argv",
       "request": {
         "host": "node",
         "command": "echo SAFE",
-        "commandArgv": ["echo SAFE"]
+        "commandArgv": ["echo", "SAFE"]
       },
       "invoke": {
-        "cmdText": "echo SAFE",
         "argv": ["echo", "SAFE"],
         "binding": {
           "cwd": null,
@@ -93,21 +89,24 @@
       "expected": { "ok": false, "code": "APPROVAL_REQUEST_MISMATCH" }
     },
     {
-      "name": "legacy accepts matching env hash",
+      "name": "v1 stays authoritative when legacy command text diverges",
       "request": {
         "host": "node",
-        "command": "git diff",
-        "commandArgv": ["git", "diff"],
-        "envHashFrom": { "SAFE_A": "1", "SAFE_B": "2" }
+        "command": "echo STALE",
+        "commandArgv": ["echo", "STALE"],
+        "bindingV1": {
+          "argv": ["echo", "SAFE"],
+          "cwd": null,
+          "agentId": null,
+          "sessionKey": null
+        }
       },
       "invoke": {
-        "cmdText": "git diff",
-        "argv": ["git", "diff"],
+        "argv": ["echo", "SAFE"],
         "binding": {
           "cwd": null,
           "agentId": null,
-          "sessionKey": null,
-          "env": { "SAFE_B": "2", "SAFE_A": "1" }
+          "sessionKey": null
         }
       },
       "expected": { "ok": true }
