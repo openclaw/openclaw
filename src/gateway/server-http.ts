@@ -88,17 +88,50 @@ function isCanvasPath(pathname: string): boolean {
   );
 }
 
-function decodePathnameOnce(pathname: string): string {
-  try {
-    return decodeURIComponent(pathname);
-  } catch {
-    return pathname;
+function normalizeSecurityPath(pathname: string): string {
+  const collapsed = pathname.replace(/\/{2,}/g, "/");
+  if (collapsed.length <= 1) {
+    return collapsed;
   }
+  return collapsed.replace(/\/+$/, "");
+}
+
+function canonicalizePathForSecurity(pathname: string): {
+  path: string;
+  malformedEncoding: boolean;
+} {
+  let decoded = pathname;
+  let malformedEncoding = false;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    malformedEncoding = true;
+  }
+  return {
+    path: normalizeSecurityPath(decoded.toLowerCase()) || "/",
+    malformedEncoding,
+  };
+}
+
+function hasProtectedPluginChannelPrefix(pathname: string): boolean {
+  return (
+    pathname === "/api/channels" ||
+    pathname.startsWith("/api/channels/") ||
+    pathname.startsWith("/api/channels%")
+  );
 }
 
 function isProtectedPluginChannelPath(pathname: string): boolean {
-  const normalized = decodePathnameOnce(pathname).toLowerCase();
-  return normalized === "/api/channels" || normalized.startsWith("/api/channels/");
+  const canonicalPath = canonicalizePathForSecurity(pathname);
+  if (hasProtectedPluginChannelPrefix(canonicalPath.path)) {
+    return true;
+  }
+  if (!canonicalPath.malformedEncoding) {
+    return false;
+  }
+  // Fail closed on bad %-encoding. Keep channel-prefix paths protected even
+  // when URL decoding fails.
+  return hasProtectedPluginChannelPrefix(normalizeSecurityPath(pathname.toLowerCase()));
 }
 
 function isNodeWsClient(client: GatewayWsClient): boolean {
