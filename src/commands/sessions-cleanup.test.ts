@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 import type { RuntimeEnv } from "../runtime.js";
 
@@ -49,8 +52,11 @@ function makeRuntime(): { runtime: RuntimeEnv; logs: string[] } {
 }
 
 describe("sessionsCleanupCommand", () => {
+  let tempDir = "";
+
   beforeEach(() => {
     vi.clearAllMocks();
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sessions-cleanup-test-"));
     mocks.loadConfig.mockReturnValue({ session: { store: "/cfg/sessions.json" } });
     mocks.resolveSessionStoreTargets.mockReturnValue([
       { agentId: "main", storePath: "/resolved/sessions.json" },
@@ -83,7 +89,14 @@ describe("sessionsCleanupCommand", () => {
       (sessionId: string) => `/missing/${sessionId}.jsonl`,
     );
     mocks.capEntryCount.mockImplementation(() => 0);
-    mocks.updateSessionStore.mockResolvedValue(0);
+    mocks.updateSessionStore.mockResolvedValue(undefined);
+    mocks.resolveSessionFilePathOptions.mockReturnValue({
+      sessionsDir: "/resolved",
+      agentId: "main",
+    });
+    mocks.resolveSessionFilePath.mockImplementation((sessionId: string) =>
+      path.join("/resolved", `${sessionId}.jsonl`),
+    );
     mocks.enforceSessionDiskBudget.mockResolvedValue({
       totalBytesBefore: 1000,
       totalBytesAfter: 700,
@@ -94,6 +107,10 @@ describe("sessionsCleanupCommand", () => {
       highWaterBytes: 700,
       overBudget: true,
     });
+  });
+
+  afterEach(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   it("emits a single JSON object for non-dry runs and applies maintenance", async () => {
@@ -274,5 +291,118 @@ describe("sessionsCleanupCommand", () => {
     expect(payload.allAgents).toBe(true);
     expect(Array.isArray(payload.stores)).toBe(true);
     expect((payload.stores as unknown[]).length).toBe(2);
+  });
+
+  it("marks and counts missing transcript entries in dry-run when --fix-missing is enabled", async () => {
+    const existingTranscript = path.join(tempDir, "fresh.jsonl");
+    fs.writeFileSync(existingTranscript, '{"type":"session"}\n', "utf-8");
+    mocks.enforceSessionDiskBudget.mockResolvedValue(null);
+    mocks.loadSessionStore.mockReturnValue({
+      missing: { sessionId: "missing", updatedAt: 2 },
+      fresh: { sessionId: "fresh", updatedAt: 3 },
+    });
+    mocks.resolveSessionFilePath.mockImplementation((sessionId: string) =>
+      path.join(tempDir, `${sessionId}.jsonl`),
+    );
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCleanupCommand(
+      {
+        dryRun: true,
+        fixMissing: true,
+      },
+      runtime,
+    );
+
+    expect(logs.some((line) => line.includes("Would prune missing transcripts: 1"))).toBe(true);
+    expect(logs.some((line) => line.includes("missing") && line.includes("prune-missing"))).toBe(
+      true,
+    );
+  });
+
+  it("keeps entries when transcript stat fails with non-missing errors", async () => {
+    const blockedTranscript = path.join(tempDir, "blocked.jsonl");
+    const freshTranscript = path.join(tempDir, "fresh.jsonl");
+    fs.writeFileSync(blockedTranscript, '{"type":"session"}\n', "utf-8");
+    fs.writeFileSync(freshTranscript, '{"type":"session"}\n', "utf-8");
+    mocks.enforceSessionDiskBudget.mockResolvedValue(null);
+    mocks.loadSessionStore.mockReturnValue({
+      blocked: { sessionId: "blocked", updatedAt: 2 },
+      fresh: { sessionId: "fresh", updatedAt: 3 },
+    });
+    mocks.resolveSessionFilePath.mockImplementation((sessionId: string) =>
+      path.join(tempDir, `${sessionId}.jsonl`),
+    );
+
+    const originalStatSync = fs.statSync;
+    const statSpy = vi.spyOn(fs, "statSync").mockImplementation(((targetPath: fs.PathLike) => {
+      if (String(targetPath) === blockedTranscript) {
+        const error = new Error("permission denied") as NodeJS.ErrnoException;
+        error.code = "EACCES";
+        throw error;
+      }
+      return originalStatSync(targetPath);
+    }) as typeof fs.statSync);
+
+    try {
+      const { runtime, logs } = makeRuntime();
+      await sessionsCleanupCommand(
+        {
+          dryRun: true,
+          fixMissing: true,
+        },
+        runtime,
+      );
+
+      expect(logs.some((line) => line.includes("Would prune missing transcripts: 0"))).toBe(true);
+      expect(logs.some((line) => line.includes("blocked") && line.includes("prune-missing"))).toBe(
+        false,
+      );
+      expect(logs.some((line) => line.includes("blocked") && line.includes("keep"))).toBe(true);
+    } finally {
+      statSpy.mockRestore();
+    }
+  });
+
+  it("reports missing transcript prune count in applied JSON output", async () => {
+    const existingTranscript = path.join(tempDir, "fresh.jsonl");
+    fs.writeFileSync(existingTranscript, '{"type":"session"}\n', "utf-8");
+    mocks.enforceSessionDiskBudget.mockResolvedValue(null);
+    mocks.loadSessionStore
+      .mockReturnValueOnce({
+        missing: { sessionId: "missing", updatedAt: 2 },
+        fresh: { sessionId: "fresh", updatedAt: 3 },
+      })
+      .mockReturnValueOnce({
+        fresh: { sessionId: "fresh", updatedAt: 3 },
+      });
+    mocks.resolveSessionFilePath.mockImplementation((sessionId: string) =>
+      path.join(tempDir, `${sessionId}.jsonl`),
+    );
+    mocks.updateSessionStore.mockImplementation(
+      async (
+        _storePath: string,
+        mutator: (store: Record<string, SessionEntry>) => Promise<void> | void,
+      ) => {
+        await mutator({
+          missing: { sessionId: "missing", updatedAt: 2 },
+          fresh: { sessionId: "fresh", updatedAt: 3 },
+        });
+      },
+    );
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCleanupCommand(
+      {
+        json: true,
+        fixMissing: true,
+      },
+      runtime,
+    );
+
+    expect(logs).toHaveLength(1);
+    const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
+    expect(payload.applied).toBe(true);
+    expect(payload.missing).toBe(1);
   });
 });
