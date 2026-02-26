@@ -13,6 +13,7 @@ import { loadJsonFile, saveJsonFile } from "../infra/json-file.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveUserPath } from "../utils.js";
 import { logCredentialAccess, type AuditOptions } from "./credential-audit.js";
+import { decryptCredentials, encryptCredentials, isEncryptedVault } from "./vault-crypto.js";
 
 const log = createSubsystemLogger("security/credential-vault");
 
@@ -70,6 +71,10 @@ export type VaultOptions = {
 const VAULT_SERVICE_NAME = "OpenClaw-vault";
 const DEFAULT_VAULT_DIR = "~/.openclaw/vault";
 const REGISTRY_FILENAME = "registry.json";
+/** AES-256-GCM encrypted credential store (current format). */
+const CREDENTIALS_ENC_FILENAME = "credentials.enc";
+/** Legacy plaintext JSON store — only kept for migration detection. */
+const CREDENTIALS_JSON_FILENAME = "credentials.json";
 
 // Credential format validators
 const CREDENTIAL_VALIDATORS: Record<string, RegExp> = {
@@ -246,27 +251,72 @@ function deleteFromKeychain(account: string, options?: VaultOptions): boolean {
 }
 
 // -----------------------------------------------------------------------------
-// File-Based Fallback (Linux/Windows)
+// File-Based Fallback (Linux/Windows) — AES-256-GCM encrypted
 // -----------------------------------------------------------------------------
-
-function resolveCredentialsFilePath(options?: VaultOptions): string {
-  return path.join(resolveCredentialVaultDir(options), "credentials.json");
-}
 
 type FileCredentialsStore = Record<string, string>;
 
 function loadFileCredentials(options?: VaultOptions): FileCredentialsStore {
-  const filePath = resolveCredentialsFilePath(options);
-  const raw = loadJsonFile(filePath);
-  if (!raw || typeof raw !== "object") {
-    return {};
+  const vaultDir = resolveCredentialVaultDir(options);
+  const encPath = path.join(vaultDir, CREDENTIALS_ENC_FILENAME);
+
+  // Encrypted store (current format)
+  if (fs.existsSync(encPath)) {
+    try {
+      const data = fs.readFileSync(encPath);
+      if (!isEncryptedVault(data)) {
+        log.warn("vault file has unexpected format, treating as empty store");
+        return {};
+      }
+      const json = decryptCredentials(data, vaultDir);
+      const raw = JSON.parse(json) as unknown;
+      if (!raw || typeof raw !== "object") {
+        return {};
+      }
+      return raw as FileCredentialsStore;
+    } catch (error) {
+      log.warn("failed to decrypt vault file, treating as empty store", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return {};
+    }
   }
-  return raw as FileCredentialsStore;
+
+  // Migration: plaintext JSON from pre-encryption versions
+  const legacyPath = path.join(vaultDir, CREDENTIALS_JSON_FILENAME);
+  if (fs.existsSync(legacyPath)) {
+    const raw = loadJsonFile(legacyPath);
+    const store: FileCredentialsStore =
+      raw && typeof raw === "object" ? (raw as FileCredentialsStore) : {};
+    try {
+      const encrypted = encryptCredentials(JSON.stringify(store), vaultDir);
+      if (!fs.existsSync(vaultDir)) {
+        fs.mkdirSync(vaultDir, { recursive: true, mode: 0o700 });
+      }
+      fs.writeFileSync(encPath, encrypted, { mode: 0o600 });
+      fs.chmodSync(encPath, 0o600);
+      fs.unlinkSync(legacyPath);
+      log.info("migrated vault credentials from plaintext JSON to AES-256-GCM encrypted storage");
+    } catch (error) {
+      log.warn("failed to migrate vault credentials to encrypted storage", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+    return store;
+  }
+
+  return {};
 }
 
 function saveFileCredentials(store: FileCredentialsStore, options?: VaultOptions): void {
-  const filePath = resolveCredentialsFilePath(options);
-  saveJsonFile(filePath, store);
+  const vaultDir = resolveCredentialVaultDir(options);
+  const encPath = path.join(vaultDir, CREDENTIALS_ENC_FILENAME);
+  if (!fs.existsSync(vaultDir)) {
+    fs.mkdirSync(vaultDir, { recursive: true, mode: 0o700 });
+  }
+  const encrypted = encryptCredentials(JSON.stringify(store), vaultDir);
+  fs.writeFileSync(encPath, encrypted, { mode: 0o600 });
+  fs.chmodSync(encPath, 0o600);
 }
 
 function readFromFile(account: string, options?: VaultOptions): string | null {

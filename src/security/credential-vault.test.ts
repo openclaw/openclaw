@@ -381,7 +381,7 @@ describe("credential-vault", () => {
     it("should create credentials file with secure permissions", () => {
       storeCredential("perm-test", "value-12345678901234567890", "provider", vaultOptions);
 
-      const credPath = path.join(testVaultDir, "credentials.json");
+      const credPath = path.join(testVaultDir, "credentials.enc");
       const stat = fs.statSync(credPath);
 
       const mode = stat.mode & 0o777;
