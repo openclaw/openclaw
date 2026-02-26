@@ -462,4 +462,97 @@ describe("credential-audit", () => {
       expect(mode).toBe(0o600);
     });
   });
+
+  describe("malformed JSONL resilience (H-04 / TC-2)", () => {
+    const auditPath = () => path.join(testAuditDir, "audit.jsonl");
+
+    function writeLines(lines: string[]): void {
+      fs.writeFileSync(auditPath(), lines.join("\n") + "\n", { mode: 0o600 });
+    }
+
+    it("returns valid entries when one line is corrupted", () => {
+      // Write two valid entries then inject a corrupt line in the middle
+      logCredentialAccess({
+        action: "write",
+        credentialName: "key-a",
+        scope: "provider",
+        requestor: "test",
+        success: true,
+        options: auditOptions,
+      });
+      logCredentialAccess({
+        action: "read",
+        credentialName: "key-b",
+        scope: "channel",
+        requestor: "test",
+        success: true,
+        options: auditOptions,
+      });
+
+      const content = fs.readFileSync(auditPath(), "utf8");
+      const lines = content.trim().split("\n");
+      // Insert a malformed line between the two valid entries
+      lines.splice(1, 0, "NOT VALID JSON {{{{");
+      writeLines(lines);
+
+      // queryAuditLog should still return 2 valid entries (not 0 and not throw)
+      const entries = queryAuditLog(undefined, auditOptions);
+      expect(entries).toHaveLength(2);
+      expect(entries[0].credentialName).toBe("key-a");
+      expect(entries[1].credentialName).toBe("key-b");
+    });
+
+    it("returns all valid entries when the last line is truncated", () => {
+      for (let i = 0; i < 3; i++) {
+        logCredentialAccess({
+          action: "read",
+          credentialName: `cred-${i}`,
+          scope: "provider",
+          requestor: "test",
+          success: true,
+          options: auditOptions,
+        });
+      }
+
+      const content = fs.readFileSync(auditPath(), "utf8");
+      const lines = content.trim().split("\n");
+      // Truncate the last line to simulate a torn write
+      lines[lines.length - 1] = lines[lines.length - 1].slice(0, 10);
+      writeLines(lines);
+
+      const entries = queryAuditLog(undefined, auditOptions);
+      expect(entries).toHaveLength(2); // first two survive; third is malformed
+    });
+
+    it("returns empty array when every line is malformed", () => {
+      writeLines(["garbage", "also garbage", "{"]);
+
+      const entries = queryAuditLog(undefined, auditOptions);
+      expect(entries).toHaveLength(0);
+    });
+
+    it("verifyAuditLogIntegrity skips malformed lines and reports invalid chain", () => {
+      // 3 valid chained entries
+      for (let i = 0; i < 3; i++) {
+        logCredentialAccess({
+          action: "read",
+          credentialName: "chain-key",
+          scope: "provider",
+          requestor: "test",
+          success: true,
+          options: auditOptions,
+        });
+      }
+
+      const content = fs.readFileSync(auditPath(), "utf8");
+      const lines = content.trim().split("\n");
+      // Replace the middle entry with garbage — chain is now broken
+      lines[1] = "INVALID";
+      writeLines(lines);
+
+      // Integrity check should detect the broken chain (entries 0 and 2 are not linked)
+      const integrity = verifyAuditLogIntegrity(auditOptions);
+      expect(integrity.valid).toBe(false);
+    });
+  });
 });

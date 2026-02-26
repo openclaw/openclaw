@@ -23,6 +23,10 @@ export interface SessionMonitoringConfig {
   sessionExpiryMs?: number;
   /** Risk decay rate per minute (default: 1) */
   decayPerMinute?: number;
+  /** Maximum number of sessions held in memory (default: 10 000). When the cap is
+   *  reached the oldest low-risk sessions are evicted first, then oldest high-risk
+   *  sessions, preventing unbounded heap growth from session-key flooding. */
+  maxSessions?: number;
 }
 
 export interface RiskFactor {
@@ -89,6 +93,8 @@ export type RiskFactorName = keyof typeof RISK_FACTORS;
 
 /** Critical score multiplier: sessions exceeding threshold*CRITICAL_MULTIPLIER are auto-isolated */
 const CRITICAL_MULTIPLIER = 1.5;
+/** Default session cap; prevents unbounded heap growth from unique-key floods */
+const MAX_SESSIONS_DEFAULT = 10_000;
 
 export class SessionRiskMonitor {
   private config: Required<SessionMonitoringConfig>;
@@ -103,6 +109,7 @@ export class SessionRiskMonitor {
       threshold: config?.threshold ?? 70,
       sessionExpiryMs: config?.sessionExpiryMs ?? 60 * 60 * 1000, // 1 hour
       decayPerMinute: config?.decayPerMinute ?? 1,
+      maxSessions: config?.maxSessions ?? MAX_SESSIONS_DEFAULT,
     };
   }
 
@@ -307,6 +314,11 @@ export class SessionRiskMonitor {
   private getOrCreateSession(sessionKey: string, agentId?: string): SessionRiskProfile {
     let session = this.sessions.get(sessionKey);
     if (!session) {
+      // Evict oldest low-risk session if at capacity to prevent memory DoS (H-03)
+      if (this.sessions.size >= this.config.maxSessions) {
+        this.evictOldestLowRiskSession();
+      }
+
       const now = Date.now();
       session = {
         sessionKey,
@@ -320,6 +332,42 @@ export class SessionRiskMonitor {
       this.sessions.set(sessionKey, session);
     }
     return session;
+  }
+
+  /**
+   * Evict the oldest low-risk session (score < threshold) to make room.
+   * Falls back to oldest high-risk session if every session is high-risk.
+   */
+  private evictOldestLowRiskSession(): void {
+    let evictKey: string | undefined;
+    let evictTime = Infinity;
+
+    for (const [key, s] of this.sessions) {
+      if (s.totalScore < this.config.threshold && s.lastActivityAt < evictTime) {
+        evictKey = key;
+        evictTime = s.lastActivityAt;
+      }
+    }
+
+    if (evictKey === undefined) {
+      // All sessions are high-risk — evict the oldest one instead
+      for (const [key, s] of this.sessions) {
+        if (s.lastActivityAt < evictTime) {
+          evictKey = key;
+          evictTime = s.lastActivityAt;
+        }
+      }
+    }
+
+    if (evictKey !== undefined) {
+      this.sessions.delete(evictKey);
+      this.isolatedSessions.delete(evictKey);
+      log.warn("session map at capacity, evicted oldest low-risk session", {
+        evictKey,
+        mapSize: this.sessions.size,
+        cap: this.config.maxSessions,
+      });
+    }
   }
 
   private toSummary(session: SessionRiskProfile): SessionRiskSummary {

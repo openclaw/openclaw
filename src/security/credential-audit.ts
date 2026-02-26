@@ -120,16 +120,34 @@ function readAuditEntries(options?: AuditOptions): CredentialAuditEntry[] {
     return [];
   }
 
+  let content: string;
   try {
-    const content = fs.readFileSync(auditPath, "utf8");
-    const lines = content.split("\n").filter((line) => line.trim());
-    return lines.map((line) => JSON.parse(line) as CredentialAuditEntry);
+    content = fs.readFileSync(auditPath, "utf8");
   } catch (error) {
     log.warn("failed to read audit log", {
       error: error instanceof Error ? error.message : String(error),
     });
     return [];
   }
+
+  const lines = content.split("\n").filter((line) => line.trim());
+  const entries: CredentialAuditEntry[] = [];
+  let skipped = 0;
+
+  for (const line of lines) {
+    try {
+      entries.push(JSON.parse(line) as CredentialAuditEntry);
+    } catch {
+      skipped++;
+      log.warn("skipping malformed audit log line", { line: line.slice(0, 80) });
+    }
+  }
+
+  if (skipped > 0) {
+    log.warn("audit log contained malformed lines", { skipped, total: lines.length });
+  }
+
+  return entries;
 }
 
 function getLastEntryHash(options?: AuditOptions): string {
