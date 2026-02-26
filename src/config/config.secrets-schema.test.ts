@@ -65,6 +65,31 @@ describe("config secret refs schema", () => {
     expect(result.ok).toBe(true);
   });
 
+  it('accepts file refs with id "value" for raw mode providers', () => {
+    const result = validateConfigObjectRaw({
+      secrets: {
+        providers: {
+          rawfile: {
+            source: "file",
+            path: "~/.openclaw/token.txt",
+            mode: "raw",
+          },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            apiKey: { source: "file", provider: "rawfile", id: "value" },
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
   it("rejects invalid secret ref id", () => {
     const result = validateConfigObjectRaw({
       models: {
