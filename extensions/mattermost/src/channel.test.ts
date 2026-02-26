@@ -242,6 +242,32 @@ describe("mattermostPlugin", () => {
     });
   });
 
+  describe("threading", () => {
+    it("resolves replyToMode from config", () => {
+      const resolve = mattermostPlugin.threading?.resolveReplyToMode;
+      expect(resolve).toBeTruthy();
+
+      expect(
+        resolve?.({
+          cfg: { channels: { mattermost: { replyToMode: "all" } } },
+          accountId: "default",
+          chatType: "direct",
+        }),
+      ).toBe("all");
+    });
+
+    it("defaults replyToMode to off", () => {
+      const resolve = mattermostPlugin.threading?.resolveReplyToMode;
+      expect(
+        resolve?.({
+          cfg: { channels: { mattermost: {} } },
+          accountId: "default",
+          chatType: "direct",
+        }),
+      ).toBe("off");
+    });
+  });
+
   describe("config", () => {
     it("formats allowFrom entries", () => {
       const formatAllowFrom = mattermostPlugin.config.formatAllowFrom!;

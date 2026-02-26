@@ -247,6 +247,9 @@ export const mattermostPlugin: ChannelPlugin<ResolvedMattermostAccount> = {
   groups: {
     resolveRequireMention: resolveMattermostGroupRequireMention,
   },
+  threading: {
+    resolveReplyToMode: ({ cfg }) => cfg.channels?.mattermost?.replyToMode ?? "off",
+  },
   actions: mattermostMessageActions,
   messaging: {
     normalizeTarget: normalizeMattermostMessagingTarget,
