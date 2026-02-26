@@ -266,6 +266,7 @@ async function resolvePatchPath(
         cwd: options.cwd,
         root: options.cwd,
         allowFinalSymlink: purpose === "unlink",
+        allowFinalHardlink: purpose === "unlink",
       });
     }
     return {
@@ -282,6 +283,7 @@ async function resolvePatchPath(
           cwd: options.cwd,
           root: options.cwd,
           allowFinalSymlink: purpose === "unlink",
+          allowFinalHardlink: purpose === "unlink",
         })
       ).resolved
     : resolvePathFromCwd(filePath, options.cwd);
