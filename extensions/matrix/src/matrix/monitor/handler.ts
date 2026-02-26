@@ -215,14 +215,13 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       }
 
       const senderName = await getMemberDisplayName(roomId, senderId);
-      const storeAllowFrom =
-        isDirectMessage
-          ? await readStoreAllowFromForDmPolicy({
-              provider: "matrix",
-              dmPolicy,
-              readStore: (provider) => core.channel.pairing.readAllowFromStore(provider),
-            })
-          : [];
+      const storeAllowFrom = isDirectMessage
+        ? await readStoreAllowFromForDmPolicy({
+            provider: "matrix",
+            dmPolicy,
+            readStore: (provider) => core.channel.pairing.readAllowFromStore(provider),
+          })
+        : [];
       const groupAllowFrom = cfg.channels?.matrix?.groupAllowFrom ?? [];
       const normalizedGroupAllowFrom = normalizeMatrixAllowList(groupAllowFrom);
       const senderGroupPolicy =
