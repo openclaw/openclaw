@@ -1,0 +1,8 @@
+{
+  "name": "iris-handover",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0"
+  }
+}

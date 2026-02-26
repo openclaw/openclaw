@@ -1,0 +1,85 @@
+{
+  "id": "iris-handover",
+  "name": "Iris Handover",
+  "description": "Gera memory/handover.md estruturado a cada compaction — carta para a próxima sessão de Iris, preservando contexto emocional, pendências e continuidade.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "anthropicApiKey": {
+        "type": "string",
+        "description": "Anthropic API key para chamadas LLM diretas. Opcional se ANTHROPIC_API_KEY estiver no ambiente."
+      },
+      "model": {
+        "type": "string",
+        "description": "Modelo Anthropic a usar. Default: claude-sonnet-4-20250514"
+      },
+      "ownerName": {
+        "type": "string",
+        "description": "Nome do dono/usuário (usado no prompt). Default: Lucas"
+      },
+      "aiName": {
+        "type": "string",
+        "description": "Nome da IA (usado no prompt). Default: Iris"
+      },
+      "language": {
+        "type": "string",
+        "description": "Idioma do handover. Default: pt-BR"
+      },
+      "maxLines": {
+        "type": "number",
+        "description": "Máximo de linhas no handover. Default: 150"
+      },
+      "contactsFile": {
+        "type": "string",
+        "description": "Caminho relativo ao workspace para o mapa de contatos (phone→name). Default: contacts-briefing.json"
+      },
+      "soulFile": {
+        "type": "string",
+        "description": "Caminho relativo ao workspace para o SOUL.md. Default: SOUL.md"
+      },
+      "outputFile": {
+        "type": "string",
+        "description": "Caminho relativo ao workspace para salvar o handover. Default: memory/handover.md"
+      }
+    },
+    "uiHints": {
+      "anthropicApiKey": {
+        "label": "Anthropic API Key",
+        "sensitive": true
+      },
+      "model": {
+        "label": "Modelo",
+        "placeholder": "claude-sonnet-4-20250514"
+      },
+      "ownerName": {
+        "label": "Nome do Dono",
+        "placeholder": "Lucas"
+      },
+      "aiName": {
+        "label": "Nome da IA",
+        "placeholder": "Iris"
+      },
+      "language": {
+        "label": "Idioma",
+        "placeholder": "pt-BR"
+      },
+      "maxLines": {
+        "label": "Máximo de Linhas",
+        "placeholder": "150"
+      },
+      "contactsFile": {
+        "label": "Arquivo de Contatos",
+        "placeholder": "contacts-briefing.json"
+      },
+      "soulFile": {
+        "label": "SOUL.md Path",
+        "placeholder": "SOUL.md"
+      },
+      "outputFile": {
+        "label": "Output Handover",
+        "placeholder": "memory/handover.md"
+      }
+    }
+  }
+}
