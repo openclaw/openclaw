@@ -199,6 +199,7 @@ export async function executeNodeHostCommand(
         approvalId,
         command: params.command,
         commandArgv: argv,
+        env: nodeEnv,
         workdir: params.workdir,
         host: "node",
         nodeId,
