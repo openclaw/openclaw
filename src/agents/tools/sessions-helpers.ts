@@ -29,6 +29,7 @@ export {
 import { extractTextFromChatContent } from "../../shared/chat-content.js";
 import { sanitizeUserFacingText } from "../pi-embedded-helpers.js";
 import {
+  stripAnthropicToolCallXml,
   stripDowngradedToolCallText,
   stripMinimaxToolCallXml,
   stripThinkingTagsFromText,
@@ -141,7 +142,9 @@ export function sanitizeTextContent(text: string): string {
   if (!text) {
     return text;
   }
-  return stripThinkingTagsFromText(stripDowngradedToolCallText(stripMinimaxToolCallXml(text)));
+  return stripThinkingTagsFromText(
+    stripDowngradedToolCallText(stripAnthropicToolCallXml(stripMinimaxToolCallXml(text))),
+  );
 }
 
 export function extractAssistantText(message: unknown): string | undefined {

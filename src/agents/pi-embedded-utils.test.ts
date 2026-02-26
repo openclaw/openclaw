@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   extractAssistantText,
   formatReasoningMessage,
+  stripAnthropicToolCallXml,
   stripDowngradedToolCallText,
 } from "./pi-embedded-utils.js";
 
@@ -549,9 +550,59 @@ describe("stripDowngradedToolCallText", () => {
   });
 });
 
+describe("stripAnthropicToolCallXml", () => {
+  it("strips antml_function_calls blocks", () => {
+    const input = `Here is my response.\n\n<antml_function_calls>\n<antml_invoke name="memory_search">\n<antml_parameter name="query">octarine project</antml_parameter>\n</antml_invoke>\n</antml_function_calls>\n\nMore text after.`;
+    expect(stripAnthropicToolCallXml(input)).toBe("Here is my response.\n\n\n\nMore text after.");
+  });
+
+  it("strips tool_call and tool_result blocks", () => {
+    const input = `Some text\n<tool_call>\n{"name": "read", "arguments": {"path": "/tmp/foo"}}\n</tool_call>\n<tool_result>\nfile contents here\n</tool_result>\nFinal text`;
+    expect(stripAnthropicToolCallXml(input)).toBe("Some text\n\n\nFinal text");
+  });
+
+  it("strips multiple tool blocks", () => {
+    const input = `Text\n<tool_call>\nfirst\n</tool_call>\n<tool_result>\nresult1\n</tool_result>\n<tool_call>\nsecond\n</tool_call>\n<tool_result>\nresult2\n</tool_result>\nEnd`;
+    expect(stripAnthropicToolCallXml(input)).toBe("Text\n\n\n\n\nEnd");
+  });
+
+  it("returns text unchanged when no tool XML present", () => {
+    const input = "Just a normal response with no tool calls.";
+    expect(stripAnthropicToolCallXml(input)).toBe(input);
+  });
+
+  it("returns empty string unchanged", () => {
+    expect(stripAnthropicToolCallXml("")).toBe("");
+  });
+
+  it("handles stray antml_invoke blocks outside function_calls", () => {
+    const input = `Response\n<antml_invoke name="exec">\n<antml_parameter name="command">ls</antml_parameter>\n</antml_invoke>\nDone`;
+    expect(stripAnthropicToolCallXml(input)).toBe("Response\n\nDone");
+  });
+});
+
+describe("extractAssistantText strips Anthropic tool XML", () => {
+  it("strips tool_call XML from text content blocks", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `Let me check that.\n\n<tool_call>\n{"name": "memory_search", "arguments": {"query": "test"}}\n</tool_call>`,
+        },
+      ],
+    });
+    expect(extractAssistantText(msg)).toBe("Let me check that.");
+  });
+});
+
 describe("empty input handling", () => {
   it("returns empty string", () => {
-    const helpers = [formatReasoningMessage, stripDowngradedToolCallText];
+    const helpers = [
+      formatReasoningMessage,
+      stripDowngradedToolCallText,
+      stripAnthropicToolCallXml,
+    ];
     for (const helper of helpers) {
       expect(helper("")).toBe("");
     }
