@@ -1248,13 +1248,18 @@ async function runWebSearch(params: {
     url.searchParams.set("freshness", params.freshness);
   }
 
-  const res = await fetch(url.toString(), {
+  // Resolve proxy from environment variables
+  const proxyUrl = resolveProxyUrl();
+  const dispatcher = proxyUrl ? new ProxyAgent(proxyUrl) : undefined;
+
+  const res = await undiciFetch(url.toString(), {
     method: "GET",
     headers: {
       Accept: "application/json",
       "X-Subscription-Token": params.apiKey,
     },
     signal: withTimeout(undefined, params.timeoutSeconds * 1000),
+    ...(dispatcher ? { dispatcher } : {}),
   });
 
   if (!res.ok) {
