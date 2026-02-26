@@ -11,7 +11,11 @@ import type { ConfigWriteOptions } from "../config/io.js";
 import type { SecretProviderConfig } from "../config/types.secrets.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { createSecretsConfigIO } from "./config-io.js";
-import { type SecretsApplyPlan, normalizeSecretsPlanOptions } from "./plan.js";
+import {
+  type SecretsApplyPlan,
+  type SecretsPlanTarget,
+  normalizeSecretsPlanOptions,
+} from "./plan.js";
 import { listKnownSecretEnvVarNames } from "./provider-env-vars.js";
 import { resolveSecretRefValue } from "./resolve.js";
 import { prepareSecretsRuntimeSnapshot } from "./runtime.js";
@@ -52,8 +56,10 @@ function parseDotPath(pathname: string): string[] {
   return pathname.split(".").filter(Boolean);
 }
 
-function getByDotPath(root: unknown, pathLabel: string): unknown {
-  const segments = parseDotPath(pathLabel);
+function getByPathSegments(root: unknown, segments: string[]): unknown {
+  if (segments.length === 0) {
+    return undefined;
+  }
   let cursor: unknown = root;
   for (const segment of segments) {
     if (!isRecord(cursor)) {
@@ -64,8 +70,7 @@ function getByDotPath(root: unknown, pathLabel: string): unknown {
   return cursor;
 }
 
-function setByDotPath(root: OpenClawConfig, pathLabel: string, value: unknown): boolean {
-  const segments = parseDotPath(pathLabel);
+function setByPathSegments(root: OpenClawConfig, segments: string[], value: unknown): boolean {
   if (segments.length === 0) {
     throw new Error("Target path is empty.");
   }
@@ -88,8 +93,7 @@ function setByDotPath(root: OpenClawConfig, pathLabel: string, value: unknown): 
   return changed;
 }
 
-function deleteByDotPath(root: OpenClawConfig, pathLabel: string): boolean {
-  const segments = parseDotPath(pathLabel);
+function deleteByPathSegments(root: OpenClawConfig, segments: string[]): boolean {
   if (segments.length === 0) {
     return false;
   }
@@ -107,6 +111,18 @@ function deleteByDotPath(root: OpenClawConfig, pathLabel: string): boolean {
   }
   delete cursor[leaf];
   return true;
+}
+
+function resolveTargetPathSegments(target: SecretsPlanTarget): string[] {
+  const explicit = target.pathSegments;
+  if (
+    Array.isArray(explicit) &&
+    explicit.length > 0 &&
+    explicit.every((segment) => typeof segment === "string" && segment.trim().length > 0)
+  ) {
+    return [...explicit];
+  }
+  return parseDotPath(target.path);
 }
 
 function parseEnvValue(raw: string): string {
@@ -203,11 +219,13 @@ function collectAuthJsonPaths(stateDir: string): string[] {
   return out;
 }
 
-function resolveGoogleChatRefPath(pathLabel: string): string {
-  if (pathLabel.endsWith(".serviceAccount")) {
-    return `${pathLabel}Ref`;
+function resolveGoogleChatRefPathSegments(pathSegments: string[]): string[] {
+  if (pathSegments.at(-1) === "serviceAccount") {
+    return [...pathSegments.slice(0, -1), "serviceAccountRef"];
   }
-  throw new Error(`Google Chat target path must end with ".serviceAccount": ${pathLabel}`);
+  throw new Error(
+    `Google Chat target path must end with "serviceAccount": ${pathSegments.join(".")}`,
+  );
 }
 
 function applyProviderPlanMutations(params: {
@@ -280,25 +298,26 @@ async function projectPlanState(params: {
   }
 
   for (const target of params.plan.targets) {
+    const targetPathSegments = resolveTargetPathSegments(target);
     if (target.type === "channels.googlechat.serviceAccount") {
-      const previous = getByDotPath(nextConfig, target.path);
+      const previous = getByPathSegments(nextConfig, targetPathSegments);
       if (isNonEmptyString(previous)) {
         scrubbedValues.add(previous.trim());
       }
-      const refPath = resolveGoogleChatRefPath(target.path);
-      const wroteRef = setByDotPath(nextConfig, refPath, target.ref);
-      const deletedLegacy = deleteByDotPath(nextConfig, target.path);
+      const refPathSegments = resolveGoogleChatRefPathSegments(targetPathSegments);
+      const wroteRef = setByPathSegments(nextConfig, refPathSegments, target.ref);
+      const deletedLegacy = deleteByPathSegments(nextConfig, targetPathSegments);
       if (wroteRef || deletedLegacy) {
         changedFiles.add(configPath);
       }
       continue;
     }
 
-    const previous = getByDotPath(nextConfig, target.path);
+    const previous = getByPathSegments(nextConfig, targetPathSegments);
     if (isNonEmptyString(previous)) {
       scrubbedValues.add(previous.trim());
     }
-    const wroteRef = setByDotPath(nextConfig, target.path, target.ref);
+    const wroteRef = setByPathSegments(nextConfig, targetPathSegments, target.ref);
     if (wroteRef) {
       changedFiles.add(configPath);
     }
@@ -506,6 +525,15 @@ export async function runSecretsApply(params: {
       mode: "dry-run",
       changed: changedFiles.length > 0,
       changedFiles,
+      warningCount: projected.warnings.length,
+      warnings: projected.warnings,
+    };
+  }
+  if (changedFiles.length === 0) {
+    return {
+      mode: "write",
+      changed: false,
+      changedFiles: [],
       warningCount: projected.warnings.length,
       warnings: projected.warnings,
     };

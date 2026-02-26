@@ -9,7 +9,12 @@ import { coerceSecretRef, type SecretRef } from "../config/types.secrets.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { createSecretsConfigIO } from "./config-io.js";
 import { listKnownSecretEnvVarNames } from "./provider-env-vars.js";
-import { resolveSecretRefValue, type SecretRefResolveCache } from "./resolve.js";
+import { secretRefKey } from "./ref-contract.js";
+import {
+  resolveSecretRefValue,
+  resolveSecretRefValues,
+  type SecretRefResolveCache,
+} from "./resolve.js";
 import { isNonEmptyString, isRecord } from "./shared.js";
 
 export type SecretsAuditCode =
@@ -154,16 +159,26 @@ function collectEnvPlaintext(params: { envPath: string; collector: AuditCollecto
   }
 }
 
-function readJsonObject(filePath: string): Record<string, unknown> | null {
+function readJsonObject(filePath: string): {
+  value: Record<string, unknown> | null;
+  error?: string;
+} {
   if (!fs.existsSync(filePath)) {
-    return null;
+    return { value: null };
   }
-  const raw = fs.readFileSync(filePath, "utf8");
-  const parsed = JSON.parse(raw) as unknown;
-  if (!isRecord(parsed)) {
-    return null;
+  try {
+    const raw = fs.readFileSync(filePath, "utf8");
+    const parsed = JSON.parse(raw) as unknown;
+    if (!isRecord(parsed)) {
+      return { value: null };
+    }
+    return { value: parsed };
+  } catch (err) {
+    return {
+      value: null,
+      error: err instanceof Error ? err.message : String(err),
+    };
   }
-  return parsed;
 }
 
 function collectConfigSecrets(params: {
@@ -322,7 +337,18 @@ function collectAuthStoreSecrets(params: {
     return;
   }
   params.collector.filesScanned.add(params.authStorePath);
-  const parsed = readJsonObject(params.authStorePath);
+  const parsedResult = readJsonObject(params.authStorePath);
+  if (parsedResult.error) {
+    addFinding(params.collector, {
+      code: "REF_UNRESOLVED",
+      severity: "error",
+      file: params.authStorePath,
+      jsonPath: "<root>",
+      message: `Invalid JSON in auth-profiles store: ${parsedResult.error}`,
+    });
+    return;
+  }
+  const parsed = parsedResult.value;
   if (!parsed || !isRecord(parsed.profiles)) {
     return;
   }
@@ -420,7 +446,18 @@ function collectAuthJsonResidue(params: { stateDir: string; collector: AuditColl
       continue;
     }
     params.collector.filesScanned.add(authJsonPath);
-    const parsed = readJsonObject(authJsonPath);
+    const parsedResult = readJsonObject(authJsonPath);
+    if (parsedResult.error) {
+      addFinding(params.collector, {
+        code: "REF_UNRESOLVED",
+        severity: "error",
+        file: authJsonPath,
+        jsonPath: "<root>",
+        message: `Invalid JSON in legacy auth.json: ${parsedResult.error}`,
+      });
+      continue;
+    }
+    const parsed = parsedResult.value;
     if (!parsed) {
       continue;
     }
@@ -448,27 +485,99 @@ async function collectUnresolvedRefFindings(params: {
   env: NodeJS.ProcessEnv;
 }): Promise<void> {
   const cache: SecretRefResolveCache = {};
+  const refsByProvider = new Map<string, Map<string, SecretRef>>();
   for (const assignment of params.collector.refAssignments) {
+    const providerKey = `${assignment.ref.source}:${assignment.ref.provider}`;
+    let refsForProvider = refsByProvider.get(providerKey);
+    if (!refsForProvider) {
+      refsForProvider = new Map<string, SecretRef>();
+      refsByProvider.set(providerKey, refsForProvider);
+    }
+    refsForProvider.set(secretRefKey(assignment.ref), assignment.ref);
+  }
+
+  const resolvedByRefKey = new Map<string, unknown>();
+  const errorsByRefKey = new Map<string, unknown>();
+
+  for (const refsForProvider of refsByProvider.values()) {
+    const refs = [...refsForProvider.values()];
     try {
-      const resolved = await resolveSecretRefValue(assignment.ref, {
+      const resolved = await resolveSecretRefValues(refs, {
         config: params.config,
         env: params.env,
         cache,
       });
-      if (assignment.expected === "string") {
-        if (!isNonEmptyString(resolved)) {
-          throw new Error("resolved value is not a non-empty string");
-        }
-      } else if (!(isNonEmptyString(resolved) || isRecord(resolved))) {
-        throw new Error("resolved value is not a string/object");
+      for (const [key, value] of resolved.entries()) {
+        resolvedByRefKey.set(key, value);
       }
-    } catch (err) {
+      continue;
+    } catch {
+      // Fall back to per-ref resolution for provider-specific pinpoint errors.
+    }
+
+    for (const ref of refs) {
+      const key = secretRefKey(ref);
+      try {
+        const resolved = await resolveSecretRefValue(ref, {
+          config: params.config,
+          env: params.env,
+          cache,
+        });
+        resolvedByRefKey.set(key, resolved);
+      } catch (err) {
+        errorsByRefKey.set(key, err);
+      }
+    }
+  }
+
+  for (const assignment of params.collector.refAssignments) {
+    const key = secretRefKey(assignment.ref);
+    const resolveErr = errorsByRefKey.get(key);
+    if (resolveErr) {
       addFinding(params.collector, {
         code: "REF_UNRESOLVED",
         severity: "error",
         file: assignment.file,
         jsonPath: assignment.path,
-        message: `Failed to resolve ${assignment.ref.source}:${assignment.ref.provider}:${assignment.ref.id} (${String(err)}).`,
+        message: `Failed to resolve ${assignment.ref.source}:${assignment.ref.provider}:${assignment.ref.id} (${describeUnknownError(resolveErr)}).`,
+        provider: assignment.provider,
+      });
+      continue;
+    }
+
+    if (!resolvedByRefKey.has(key)) {
+      addFinding(params.collector, {
+        code: "REF_UNRESOLVED",
+        severity: "error",
+        file: assignment.file,
+        jsonPath: assignment.path,
+        message: `Failed to resolve ${assignment.ref.source}:${assignment.ref.provider}:${assignment.ref.id} (resolved value is missing).`,
+        provider: assignment.provider,
+      });
+      continue;
+    }
+
+    const resolved = resolvedByRefKey.get(key);
+    if (assignment.expected === "string") {
+      if (!isNonEmptyString(resolved)) {
+        addFinding(params.collector, {
+          code: "REF_UNRESOLVED",
+          severity: "error",
+          file: assignment.file,
+          jsonPath: assignment.path,
+          message: `Failed to resolve ${assignment.ref.source}:${assignment.ref.provider}:${assignment.ref.id} (resolved value is not a non-empty string).`,
+          provider: assignment.provider,
+        });
+      }
+      continue;
+    }
+    if (!(isNonEmptyString(resolved) || isRecord(resolved))) {
+      addFinding(params.collector, {
+        code: "REF_UNRESOLVED",
+        severity: "error",
+        file: assignment.file,
+        jsonPath: assignment.path,
+        message: `Failed to resolve ${assignment.ref.source}:${assignment.ref.provider}:${assignment.ref.id} (resolved value is not a string/object).`,
         provider: assignment.provider,
       });
     }
@@ -492,6 +601,21 @@ function collectShadowingFindings(collector: AuditCollector): void {
         provider,
       });
     }
+  }
+}
+
+function describeUnknownError(err: unknown): string {
+  if (err instanceof Error && err.message.trim().length > 0) {
+    return err.message;
+  }
+  if (typeof err === "string" && err.trim().length > 0) {
+    return err;
+  }
+  try {
+    const serialized = JSON.stringify(err);
+    return serialized ?? "unknown error";
+  } catch {
+    return "unknown error";
   }
 }
 

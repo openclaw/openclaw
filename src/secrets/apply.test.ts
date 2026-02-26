@@ -171,10 +171,73 @@ describe("secrets apply", () => {
     const first = await runSecretsApply({ plan, env, write: true });
     expect(first.changed).toBe(true);
 
+    // Second apply should be a true no-op and avoid file writes entirely.
+    await fs.chmod(configPath, 0o400);
+    await fs.chmod(authStorePath, 0o400);
+
     const second = await runSecretsApply({ plan, env, write: true });
     expect(second.mode).toBe("write");
     expect(second.changed).toBe(false);
     expect(second.changedFiles).toEqual([]);
+  });
+
+  it("applies targets safely when map keys contain dots", async () => {
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          models: {
+            providers: {
+              "openai.dev": {
+                baseUrl: "https://api.openai.com/v1",
+                api: "openai-completions",
+                apiKey: "sk-openai-plaintext",
+                models: [{ id: "gpt-5", name: "gpt-5" }],
+              },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const plan: SecretsApplyPlan = {
+      version: 1,
+      protocolVersion: 1,
+      generatedAt: new Date().toISOString(),
+      generatedBy: "manual",
+      targets: [
+        {
+          type: "models.providers.apiKey",
+          path: "models.providers.openai.dev.apiKey",
+          pathSegments: ["models", "providers", "openai.dev", "apiKey"],
+          providerId: "openai.dev",
+          ref: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        },
+      ],
+      options: {
+        scrubEnv: false,
+        scrubAuthProfilesForProviderTargets: false,
+        scrubLegacyAuthJson: false,
+      },
+    };
+
+    const result = await runSecretsApply({ plan, env, write: true });
+    expect(result.changed).toBe(true);
+
+    const nextConfig = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+      models?: {
+        providers?: Record<string, { apiKey?: unknown }>;
+      };
+    };
+    expect(nextConfig.models?.providers?.["openai.dev"]?.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "OPENAI_API_KEY",
+    });
+    expect(nextConfig.models?.providers?.openai).toBeUndefined();
   });
 
   it("applies provider upserts and deletes from plan", async () => {

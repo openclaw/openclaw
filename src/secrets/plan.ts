@@ -1,4 +1,5 @@
 import type { SecretProviderConfig, SecretRef } from "../config/types.secrets.js";
+import { SecretProviderSchema } from "../config/zod-schema.core.js";
 
 export type SecretsPlanTargetType =
   | "models.providers.apiKey"
@@ -12,6 +13,11 @@ export type SecretsPlanTarget = {
    * Example: "models.providers.openai.apiKey"
    */
   path: string;
+  /**
+   * Canonical path segments used for safe mutation.
+   * Example: ["models", "providers", "openai", "apiKey"]
+   */
+  pathSegments?: string[];
   ref: SecretRef;
   /**
    * For provider targets, used to scrub auth-profile/static residues.
@@ -44,70 +50,8 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
-}
-
 function isSecretProviderConfigShape(value: unknown): value is SecretProviderConfig {
-  if (!isObjectRecord(value) || typeof value.source !== "string") {
-    return false;
-  }
-
-  if (value.source === "env") {
-    if (value.allowlist !== undefined && !isStringArray(value.allowlist)) {
-      return false;
-    }
-    return true;
-  }
-
-  if (value.source === "file") {
-    if (typeof value.path !== "string" || value.path.trim().length === 0) {
-      return false;
-    }
-    if (value.mode !== undefined && value.mode !== "json" && value.mode !== "singleValue") {
-      return false;
-    }
-    return true;
-  }
-
-  if (value.source === "exec") {
-    if (typeof value.command !== "string" || value.command.trim().length === 0) {
-      return false;
-    }
-    if (value.args !== undefined && !isStringArray(value.args)) {
-      return false;
-    }
-    if (
-      value.passEnv !== undefined &&
-      (!Array.isArray(value.passEnv) || !value.passEnv.every((entry) => typeof entry === "string"))
-    ) {
-      return false;
-    }
-    if (
-      value.trustedDirs !== undefined &&
-      (!Array.isArray(value.trustedDirs) ||
-        !value.trustedDirs.every((entry) => typeof entry === "string"))
-    ) {
-      return false;
-    }
-    if (value.allowInsecurePath !== undefined && typeof value.allowInsecurePath !== "boolean") {
-      return false;
-    }
-    if (value.allowSymlinkCommand !== undefined && typeof value.allowSymlinkCommand !== "boolean") {
-      return false;
-    }
-    if (value.env !== undefined) {
-      if (!isObjectRecord(value.env)) {
-        return false;
-      }
-      if (!Object.values(value.env).every((entry) => typeof entry === "string")) {
-        return false;
-      }
-    }
-    return true;
-  }
-
-  return false;
+  return SecretProviderSchema.safeParse(value).success;
 }
 
 export function isSecretsApplyPlan(value: unknown): value is SecretsApplyPlan {
@@ -130,6 +74,12 @@ export function isSecretsApplyPlan(value: unknown): value is SecretsApplyPlan {
         candidate.type !== "channels.googlechat.serviceAccount") ||
       typeof candidate.path !== "string" ||
       !candidate.path.trim() ||
+      (candidate.pathSegments !== undefined &&
+        (!Array.isArray(candidate.pathSegments) ||
+          candidate.pathSegments.length === 0 ||
+          candidate.pathSegments.some(
+            (segment) => typeof segment !== "string" || segment.trim().length === 0,
+          ))) ||
       !ref ||
       typeof ref !== "object" ||
       (ref.source !== "env" && ref.source !== "file" && ref.source !== "exec") ||
