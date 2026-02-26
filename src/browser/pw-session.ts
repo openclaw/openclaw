@@ -452,6 +452,26 @@ async function findPageByTargetId(
   return null;
 }
 
+/**
+ * Check whether the relay (or browser) knows about a target that Playwright
+ * hasn't discovered yet (e.g. a tab created via Target.createTarget after
+ * the initial connectOverCDP handshake).
+ */
+async function relayKnowsTarget(cdpUrl: string, targetId: string): Promise<boolean> {
+  try {
+    const baseUrl = normalizeCdpHttpBaseForJsonEndpoints(cdpUrl);
+    const listUrl = appendCdpPath(baseUrl, "/json/list");
+    const response = await fetch(listUrl, { headers: getHeadersWithAuth(listUrl) });
+    if (!response.ok) {
+      return false;
+    }
+    const targets = (await response.json()) as Array<{ id?: string }>;
+    return targets.some((t) => String(t.id ?? "").trim() === targetId);
+  } catch {
+    return false;
+  }
+}
+
 export async function getPageForTargetId(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -466,16 +486,38 @@ export async function getPageForTargetId(opts: {
     return first;
   }
   const found = await findPageByTargetId(browser, opts.targetId, opts.cdpUrl);
-  if (!found) {
+  if (found) {
+    return found;
+  }
+
+  // The target wasn't found in Playwright's current page list. This can happen
+  // when a new tab was created (e.g. via Target.createTarget through the
+  // extension relay) after Playwright's initial connectOverCDP handshake.
+  // If the relay/browser knows about the target, force a reconnect so
+  // Playwright re-discovers all targets, then retry once.
+  if (await relayKnowsTarget(opts.cdpUrl, opts.targetId)) {
+    await closePlaywrightBrowserConnection();
+    const { browser: freshBrowser } = await connectBrowser(opts.cdpUrl);
+    const freshPages = await getAllPages(freshBrowser);
+    const retryFound = await findPageByTargetId(freshBrowser, opts.targetId, opts.cdpUrl);
+    if (retryFound) {
+      return retryFound;
+    }
+    // Still not found after reconnect — fall through to single-page fallback
+    if (freshPages.length === 1 && freshPages[0]) {
+      return freshPages[0];
+    }
+  } else {
+    // Relay doesn't know about this target either.
     // Extension relays can block CDP attachment APIs (e.g. Target.attachToBrowserTarget),
     // which prevents us from resolving a page's targetId via newCDPSession(). If Playwright
     // only exposes a single Page, use it as a best-effort fallback.
     if (pages.length === 1) {
       return first;
     }
-    throw new Error("tab not found");
   }
-  return found;
+
+  throw new Error("tab not found");
 }
 
 export function refLocator(page: Page, ref: string) {
