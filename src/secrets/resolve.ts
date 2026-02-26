@@ -15,7 +15,7 @@ import { resolveUserPath } from "../utils.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { readJsonPointer } from "./json-pointer.js";
 import {
-  RAW_FILE_REF_ID,
+  SINGLE_VALUE_FILE_REF_ID,
   resolveDefaultSecretProviderAlias,
   secretRefKey,
 } from "./ref-contract.js";
@@ -194,7 +194,7 @@ async function readFileProviderPayload(params: {
         throw new Error(`File provider "${params.providerName}" exceeded maxBytes (${maxBytes}).`);
       }
       const text = payload.toString("utf8");
-      if (params.providerConfig.mode === "raw") {
+      if (params.providerConfig.mode === "singleValue") {
         return text.replace(/\r?\n$/, "");
       }
       const parsed = JSON.parse(text) as unknown;
@@ -257,13 +257,13 @@ async function resolveFileRefs(params: {
     providerConfig: params.providerConfig,
     cache: params.cache,
   });
-  const mode = params.providerConfig.mode ?? "jsonPointer";
+  const mode = params.providerConfig.mode ?? "json";
   const resolved = new Map<string, unknown>();
-  if (mode === "raw") {
+  if (mode === "singleValue") {
     for (const ref of params.refs) {
-      if (ref.id !== RAW_FILE_REF_ID) {
+      if (ref.id !== SINGLE_VALUE_FILE_REF_ID) {
         throw new Error(
-          `Raw file provider "${params.providerName}" expects ref id "${RAW_FILE_REF_ID}".`,
+          `singleValue file provider "${params.providerName}" expects ref id "${SINGLE_VALUE_FILE_REF_ID}".`,
         );
       }
       resolved.set(ref.id, payload);
