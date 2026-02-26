@@ -1,9 +1,13 @@
 ---
 name: coding-agent
-description: 'Delegate coding tasks to Codex, Claude Code, or Pi agents via background process. Use when: (1) building/creating new features or apps, (2) reviewing PRs (spawn in temp dir), (3) refactoring large codebases, (4) iterative coding that needs file exploration. NOT for: simple one-liner fixes (just edit), reading code (use read tool), thread-bound ACP harness requests in chat (for example spawn/run Codex or Claude Code in a Discord thread; use sessions_spawn with runtime:"acp"), or any work in ~/clawd workspace (never spawn agents here). Requires a bash tool that supports pty:true.'
+description: 'Delegate coding tasks to Codex, Claude Code, Cursor Agent, or Pi agents via background process. Use when: (1) building/creating new features or apps, (2) reviewing PRs (spawn in temp dir), (3) refactoring large codebases, (4) iterative coding that needs file exploration. NOT for: simple one-liner fixes (just edit), reading code (use read tool), thread-bound ACP harness requests in chat (for example spawn/run Codex or Claude Code in a Discord thread; use sessions_spawn with runtime:"acp"), or any work in ~/clawd workspace (never spawn agents here). Requires a bash tool that supports pty:true.'
 metadata:
   {
-    "openclaw": { "emoji": "🧩", "requires": { "anyBins": ["claude", "codex", "opencode", "pi"] } },
+    "openclaw":
+      {
+        "emoji": "🧩",
+        "requires": { "anyBins": ["claude", "codex", "opencode", "pi", "cursor-agent"] },
+      },
   }
 ---
 
@@ -13,7 +17,7 @@ Use **bash** (with optional background mode) for all coding agent work. Simple a
 
 ## ⚠️ PTY Mode Required!
 
-Coding agents (Codex, Claude Code, Pi) are **interactive terminal applications** that need a pseudo-terminal (PTY) to work correctly. Without PTY, you'll get broken output, missing colors, or the agent may hang.
+Coding agents (Codex, Claude Code, Cursor Agent, Pi) are **interactive terminal applications** that need a pseudo-terminal (PTY) to work correctly. Without PTY, you'll get broken output, missing colors, or the agent may hang.
 
 **Always use `pty:true`** when running coding agents:
 
@@ -172,6 +176,26 @@ bash pty:true workdir:~/project background:true command:"claude 'Your task'"
 ```bash
 bash pty:true workdir:~/project command:"opencode run 'Your task'"
 ```
+
+---
+
+## Cursor Agent CLI
+
+```bash
+# Note: the local binary is usually `cursor-agent` (not `cursor`)
+
+# One-shot headless run
+bash pty:true workdir:~/project command:"cursor-agent --print --output-format text 'Implement retry logic for API calls'"
+
+# Background run for longer tasks
+bash pty:true workdir:~/project background:true command:"cursor-agent --print --output-format stream-json 'Refactor auth module and summarize file-by-file changes'"
+```
+
+Helpful flags:
+
+- `--workspace <path>` to pin workspace explicitly
+- `--mode plan|ask` for planning/Q&A only
+- `--model <model>` to select a specific Cursor model
 
 ---
 
