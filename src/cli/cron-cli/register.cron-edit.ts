@@ -34,7 +34,11 @@ export function registerCronEditCommand(cron: Command) {
       .option("--disable", "Disable job", false)
       .option("--delete-after-run", "Delete one-shot job after it succeeds", false)
       .option("--keep-after-run", "Keep one-shot job after it succeeds", false)
-      .option("--session <target>", "Session target (main|isolated)")
+      .option("--session <target>", "Session target (main|isolated|session)")
+      .option(
+        "--session-key <key>",
+        "Session key for targeted session jobs (implies --session session)",
+      )
       .option("--agent <id>", "Set agent id")
       .option("--clear-agent", "Unset agent and use default", false)
       .option("--wake <mode>", "Wake mode (now|next-heartbeat)")
@@ -120,6 +124,10 @@ export function registerCronEditCommand(cron: Command) {
           }
           if (typeof opts.session === "string") {
             patch.sessionTarget = opts.session;
+          }
+          if (typeof opts.sessionKey === "string" && opts.sessionKey.trim()) {
+            patch.sessionTarget = "session";
+            patch.sessionKey = opts.sessionKey.trim();
           }
           if (typeof opts.wake === "string") {
             patch.wakeMode = opts.wake;

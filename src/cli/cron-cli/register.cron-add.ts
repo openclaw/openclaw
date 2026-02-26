@@ -70,7 +70,11 @@ export function registerCronAddCommand(cron: Command) {
       .option("--delete-after-run", "Delete one-shot job after it succeeds", false)
       .option("--keep-after-run", "Keep one-shot job after it succeeds", false)
       .option("--agent <id>", "Agent id for this job")
-      .option("--session <target>", "Session target (main|isolated)")
+      .option("--session <target>", "Session target (main|isolated|session)")
+      .option(
+        "--session-key <key>",
+        "Session key for targeted session jobs (implies --session session)",
+      )
       .option("--wake <mode>", "Wake mode (now|next-heartbeat)", "now")
       .option("--at <when>", "Run once at time (ISO) or +duration (e.g. 20m)")
       .option("--every <duration>", "Run every duration (e.g. 10m, 1h)")
@@ -195,12 +199,20 @@ export function registerCronAddCommand(cron: Command) {
               ? (name: string) => cmd.getOptionValueSource(name)
               : () => undefined;
           const sessionSource = optionSource("session");
+          const sessionKeyRaw = typeof opts.sessionKey === "string" ? opts.sessionKey.trim() : "";
           const sessionTargetRaw = typeof opts.session === "string" ? opts.session.trim() : "";
           const inferredSessionTarget = payload.kind === "agentTurn" ? "isolated" : "main";
-          const sessionTarget =
-            sessionSource === "cli" ? sessionTargetRaw || "" : inferredSessionTarget;
-          if (sessionTarget !== "main" && sessionTarget !== "isolated") {
-            throw new Error("--session must be main or isolated");
+          const sessionTarget = sessionKeyRaw
+            ? "session"
+            : sessionSource === "cli"
+              ? sessionTargetRaw || ""
+              : inferredSessionTarget;
+          if (
+            sessionTarget !== "main" &&
+            sessionTarget !== "isolated" &&
+            sessionTarget !== "session"
+          ) {
+            throw new Error("--session must be main, isolated, or session");
           }
 
           if (opts.deleteAfterRun && opts.keepAfterRun) {
@@ -209,6 +221,12 @@ export function registerCronAddCommand(cron: Command) {
 
           if (sessionTarget === "main" && payload.kind !== "systemEvent") {
             throw new Error("Main jobs require --system-event (systemEvent).");
+          }
+          if (sessionTarget === "session" && payload.kind !== "systemEvent") {
+            throw new Error("Session key jobs require --system-event (systemEvent).");
+          }
+          if (sessionTarget === "session" && !sessionKeyRaw) {
+            throw new Error("--session session requires --session-key <key>.");
           }
           if (sessionTarget === "isolated" && payload.kind !== "agentTurn") {
             throw new Error("Isolated jobs require --message (agentTurn).");
@@ -248,6 +266,7 @@ export function registerCronAddCommand(cron: Command) {
             agentId,
             schedule,
             sessionTarget,
+            sessionKey: sessionKeyRaw || undefined,
             wakeMode,
             payload,
             delivery: deliveryMode
