@@ -1,8 +1,10 @@
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
+import type { ExecElevatedDefaults } from "../../agents/bash-tools.exec-types.js";
 import { getChannelDock } from "../../channels/dock.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import type { AgentElevatedAllowFromConfig, OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
+import type { ElevatedLevel } from "../thinking.js";
 import {
   type AllowFromFormatter,
   type ExplicitElevatedAllowField,
@@ -232,4 +234,22 @@ export function resolveElevatedPermissions(params: {
     });
   }
   return { enabled, allowed: globalAllowed && agentAllowed, failures };
+}
+
+/**
+ * Resolve elevated exec defaults for system-initiated contexts (cron, agent
+ * command, sessions_send) where there is no sender to verify against
+ * `allowFrom`. Only the global and per-agent `enabled` gates apply.
+ */
+export function resolveSystemElevatedDefaults(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  elevatedDefault?: ElevatedLevel;
+}): ExecElevatedDefaults {
+  const globalEnabled = params.cfg.tools?.elevated?.enabled !== false;
+  const agentEnabled =
+    resolveAgentConfig(params.cfg, params.agentId)?.tools?.elevated?.enabled !== false;
+  const enabled = globalEnabled && agentEnabled;
+  const defaultLevel: ElevatedLevel = enabled ? (params.elevatedDefault ?? "on") : "off";
+  return { enabled, allowed: enabled, defaultLevel };
 }
