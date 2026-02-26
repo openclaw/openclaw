@@ -561,7 +561,9 @@ async function runWebFetch(params: WebFetchRuntimeParams): Promise<Record<string
     if (payload) {
       return payload;
     }
-    throw error;
+    // Enhance error with URL context before rethrowing
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    throw new Error(`web_fetch failed for ${finalUrl}: ${errorMessage}`, { cause: error });
   }
 
   try {
