@@ -328,6 +328,7 @@ describe("buildServiceEnvironment", () => {
     expect(env.NO_PROXY).toBe("localhost,127.0.0.1");
     expect(env.http_proxy).toBe("http://proxy.local:7890");
     expect(env.all_proxy).toBe("socks5://proxy.local:1080");
+  });
   it("defaults NODE_EXTRA_CA_CERTS to system cert bundle on macOS", () => {
     const env = buildServiceEnvironment({
       env: { HOME: "/home/user" },
