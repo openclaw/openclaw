@@ -330,12 +330,15 @@ def generate_credit_chart(mkt: dict) -> Path | None:
 
         fig, (ax_top, ax_bot) = plt.subplots(
             2, 1, figsize=(10, 6.5), height_ratios=[3, 2], sharex=True)
-        fig.suptitle(f"Credit Ratio ({date_str})", fontsize=13, fontweight="bold")
+        fig.suptitle(
+            f"신용비율 (신용잔고 / (신용잔고+예수금) x 100)  {date_str}",
+            fontsize=12, fontweight="bold",
+        )
 
         # 상단: 비율 + 시그널존
         ax_top.plot(df.index, df["ratio"], color="#d62728", linewidth=2,
-                    marker="o", markersize=2, label="Credit Ratio (%)", zorder=5)
-        ax_top.set_ylabel("Ratio (%)", color="#d62728", fontsize=10)
+                    marker="o", markersize=2, label="신용비율 (%)", zorder=5)
+        ax_top.set_ylabel("비율 (%)", color="#d62728", fontsize=10)
         ax_top.axhline(y=30, color="green", linestyle="--", alpha=0.4)
         ax_top.axhline(y=35, color="orange", linestyle="--", alpha=0.4)
         ax_top.axhline(y=40, color="red", linestyle="--", alpha=0.4)
@@ -346,10 +349,10 @@ def generate_credit_chart(mkt: dict) -> Path | None:
 
         from datetime import timedelta
         x_right = df.index[-1] + timedelta(days=1)
-        ax_top.text(x_right, 28, "Buy", fontsize=7, color="green", va="center")
-        ax_top.text(x_right, 32.5, "Neutral", fontsize=7, color="#b8860b", va="center")
-        ax_top.text(x_right, 37.5, "Caution", fontsize=7, color="orange", va="center")
-        ax_top.text(x_right, 42, "Sell", fontsize=7, color="red", va="center")
+        ax_top.text(x_right, 28, "매수고려", fontsize=7, color="green", va="center")
+        ax_top.text(x_right, 32.5, "중립", fontsize=7, color="#b8860b", va="center")
+        ax_top.text(x_right, 37.5, "주의", fontsize=7, color="orange", va="center")
+        ax_top.text(x_right, 42, "매도경고", fontsize=7, color="red", va="center")
 
         last_ratio = df["ratio"].iloc[-1]
         signal = credit.get("signal", "") if credit else ""
@@ -367,22 +370,22 @@ def generate_credit_chart(mkt: dict) -> Path | None:
         ax_top.legend(loc="upper left", fontsize=7)
         ax_top.grid(True, alpha=0.2)
 
-        # 하단: 잔고 + 예수금
+        # 하단: 신용잔고 + 예수금
         if "credit_balance" in df.columns and "deposit" in df.columns:
             ax_bot.plot(df.index, df["credit_balance"], color="#1f77b4",
-                        linewidth=1.8, marker="s", markersize=2, label="Credit Bal (T)")
-            ax_bot.set_ylabel("Credit (T KRW)", color="#1f77b4", fontsize=9)
+                        linewidth=1.8, marker="s", markersize=2, label="신용잔고 (조)")
+            ax_bot.set_ylabel("신용잔고 (조원)", color="#1f77b4", fontsize=9)
             last_c = df["credit_balance"].iloc[-1]
-            ax_bot.annotate(f"{last_c:.1f}T", xy=(df.index[-1], last_c),
+            ax_bot.annotate(f"{last_c:.1f}조", xy=(df.index[-1], last_c),
                             xytext=(5, 8), textcoords="offset points",
                             fontsize=8, color="#1f77b4", fontweight="bold")
 
             ax_dep = ax_bot.twinx()
             ax_dep.plot(df.index, df["deposit"], color="#ff7f0e",
-                        linewidth=1.8, marker="^", markersize=2, label="Deposit (T)")
-            ax_dep.set_ylabel("Deposit (T KRW)", color="#ff7f0e", fontsize=9)
+                        linewidth=1.8, marker="^", markersize=2, label="예수금 (조)")
+            ax_dep.set_ylabel("예수금 (조원)", color="#ff7f0e", fontsize=9)
             last_d = df["deposit"].iloc[-1]
-            ax_dep.annotate(f"{last_d:.1f}T", xy=(df.index[-1], last_d),
+            ax_dep.annotate(f"{last_d:.1f}조", xy=(df.index[-1], last_d),
                             xytext=(5, -12), textcoords="offset points",
                             fontsize=8, color="#ff7f0e", fontweight="bold")
 
@@ -2158,29 +2161,26 @@ def main() -> int:
         log("Building daily report...")
         report = build_daily_report(db_path)
 
-        # 차트 생성
+        # 차트 생성 (신용비율만)
         mkt = _load_market_data()
-        chart_path = generate_daily_chart(mkt)
         credit_path = generate_credit_chart(mkt)
 
         if args.dry_run:
             print(report)
-            if chart_path:
-                print(f"\n[차트: {chart_path}]")
             if credit_path:
-                print(f"[신용차트: {credit_path}]")
+                print(f"\n[신용차트: {credit_path}]")
             log("Dry-run: daily report generated, not sent")
             return 0
 
         if _send_telegram_text(report, chat_id=DM_CHAT_ID):
             log("Daily report sent to DM")
-            if chart_path:
-                if _send_telegram_photo(chart_path, "Daily Market Overview"):
-                    log("Daily chart sent to DM")
-                else:
-                    log("Chart send failed", level="WARN")
             if credit_path:
-                if _send_telegram_photo(credit_path, "Credit Ratio"):
+                if _send_telegram_photo(
+                    credit_path,
+                    "신용비율 = 신용잔고 ÷ (신용잔고+예수금) × 100\n"
+                    "상단: 비율 추이 (30%↓매수·35%↑주의·40%↑매도경고)\n"
+                    "하단: 신용잔고(조) / 예수금(조)",
+                ):
                     log("Credit chart sent to DM")
                 else:
                     log("Credit chart send failed", level="WARN")
