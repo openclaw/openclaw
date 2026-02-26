@@ -23,8 +23,6 @@ export type SystemRunApprovalBindingV1 = {
 export type ExecApprovalRequestPayload = {
   command: string;
   commandArgv?: string[];
-  // Legacy env binding field (used for backward compatibility with old approvals).
-  envHash?: string | null;
   // Optional UI-safe env key preview for approval prompts.
   envKeys?: string[];
   systemRunBindingV1?: SystemRunApprovalBindingV1 | null;

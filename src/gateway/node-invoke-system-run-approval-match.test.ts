@@ -1,35 +1,11 @@
 import { describe, expect, test } from "vitest";
+import { buildSystemRunApprovalBindingV1 } from "../infra/system-run-approval-binding.js";
 import { evaluateSystemRunApprovalMatch } from "./node-invoke-system-run-approval-match.js";
-import {
-  buildSystemRunApprovalBindingV1,
-  buildSystemRunApprovalEnvBinding,
-} from "./system-run-approval-binding.js";
 
 describe("evaluateSystemRunApprovalMatch", () => {
-  test("matches legacy command text when binding fields match", () => {
+  test("rejects approvals that do not carry v1 binding", () => {
     const result = evaluateSystemRunApprovalMatch({
-      cmdText: "echo SAFE",
       argv: ["echo", "SAFE"],
-      request: {
-        host: "node",
-        command: "echo SAFE",
-        cwd: "/tmp",
-        agentId: "agent-1",
-        sessionKey: "session-1",
-      },
-      binding: {
-        cwd: "/tmp",
-        agentId: "agent-1",
-        sessionKey: "session-1",
-      },
-    });
-    expect(result).toEqual({ ok: true });
-  });
-
-  test("rejects legacy command mismatch", () => {
-    const result = evaluateSystemRunApprovalMatch({
-      cmdText: "echo PWNED",
-      argv: ["echo", "PWNED"],
       request: {
         host: "node",
         command: "echo SAFE",
@@ -49,7 +25,6 @@ describe("evaluateSystemRunApprovalMatch", () => {
 
   test("enforces exact argv binding in v1 object", () => {
     const result = evaluateSystemRunApprovalMatch({
-      cmdText: "echo SAFE",
       argv: ["echo", "SAFE"],
       request: {
         host: "node",
@@ -72,7 +47,6 @@ describe("evaluateSystemRunApprovalMatch", () => {
 
   test("rejects argv mismatch in v1 object", () => {
     const result = evaluateSystemRunApprovalMatch({
-      cmdText: "echo SAFE",
       argv: ["echo", "SAFE"],
       request: {
         host: "node",
@@ -97,14 +71,18 @@ describe("evaluateSystemRunApprovalMatch", () => {
     expect(result.code).toBe("APPROVAL_REQUEST_MISMATCH");
   });
 
-  test("rejects env overrides when approval record lacks env binding", () => {
+  test("rejects env overrides when v1 binding has no env hash", () => {
     const result = evaluateSystemRunApprovalMatch({
-      cmdText: "git diff",
       argv: ["git", "diff"],
       request: {
         host: "node",
         command: "git diff",
-        commandArgv: ["git", "diff"],
+        systemRunBindingV1: buildSystemRunApprovalBindingV1({
+          argv: ["git", "diff"],
+          cwd: null,
+          agentId: null,
+          sessionKey: null,
+        }).binding,
       },
       binding: {
         cwd: null,
@@ -121,18 +99,18 @@ describe("evaluateSystemRunApprovalMatch", () => {
   });
 
   test("accepts matching env hash with reordered keys", () => {
-    const envBinding = buildSystemRunApprovalEnvBinding({
-      SAFE_A: "1",
-      SAFE_B: "2",
-    });
     const result = evaluateSystemRunApprovalMatch({
-      cmdText: "git diff",
       argv: ["git", "diff"],
       request: {
         host: "node",
         command: "git diff",
-        commandArgv: ["git", "diff"],
-        envHash: envBinding.envHash,
+        systemRunBindingV1: buildSystemRunApprovalBindingV1({
+          argv: ["git", "diff"],
+          cwd: null,
+          agentId: null,
+          sessionKey: null,
+          env: { SAFE_A: "1", SAFE_B: "2" },
+        }).binding,
       },
       binding: {
         cwd: null,
@@ -146,7 +124,6 @@ describe("evaluateSystemRunApprovalMatch", () => {
 
   test("rejects non-node host requests", () => {
     const result = evaluateSystemRunApprovalMatch({
-      cmdText: "echo SAFE",
       argv: ["echo", "SAFE"],
       request: {
         host: "gateway",
@@ -165,13 +142,11 @@ describe("evaluateSystemRunApprovalMatch", () => {
     expect(result.code).toBe("APPROVAL_REQUEST_MISMATCH");
   });
 
-  test("prefers v1 binding over legacy command text fields", () => {
+  test("uses v1 binding even when legacy command text diverges", () => {
     const result = evaluateSystemRunApprovalMatch({
-      cmdText: "echo SAFE",
       argv: ["echo", "SAFE"],
       request: {
         host: "node",
-        // Intentionally stale legacy fields; v1 should be authoritative.
         command: "echo STALE",
         commandArgv: ["echo STALE"],
         systemRunBindingV1: buildSystemRunApprovalBindingV1({
@@ -188,32 +163,5 @@ describe("evaluateSystemRunApprovalMatch", () => {
       },
     });
     expect(result).toEqual({ ok: true });
-  });
-
-  test("rejects v1 mismatch even when legacy command text matches", () => {
-    const result = evaluateSystemRunApprovalMatch({
-      cmdText: "echo SAFE",
-      argv: ["echo", "SAFE"],
-      request: {
-        host: "node",
-        command: "echo SAFE",
-        systemRunBindingV1: buildSystemRunApprovalBindingV1({
-          argv: ["echo SAFE"],
-          cwd: null,
-          agentId: null,
-          sessionKey: null,
-        }).binding,
-      },
-      binding: {
-        cwd: null,
-        agentId: null,
-        sessionKey: null,
-      },
-    });
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      throw new Error("unreachable");
-    }
-    expect(result.code).toBe("APPROVAL_REQUEST_MISMATCH");
   });
 });
