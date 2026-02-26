@@ -75,6 +75,7 @@ export function createGatewayHooksRequestHandler(params: {
           job,
           message: value.message,
           sessionKey,
+          sessionMode: value.sessionMode,
           lane: "cron",
         });
         const summary = result.summary?.trim() || result.error?.trim() || result.status;

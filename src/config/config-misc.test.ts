@@ -195,6 +195,57 @@ describe("cron webhook schema", () => {
   });
 });
 
+describe("hook mapping sessionMode", () => {
+  it("accepts sessionMode: persistent on hook mappings", () => {
+    const res = OpenClawSchema.safeParse({
+      hooks: {
+        enabled: true,
+        mappings: [
+          {
+            match: { path: "fizzy" },
+            messageTemplate: "card update",
+            sessionKey: "hook:fizzy:card-1",
+            sessionMode: "persistent",
+          },
+        ],
+      },
+    });
+    expect(res.success).toBe(true);
+  });
+
+  it("accepts sessionMode: isolated on hook mappings", () => {
+    const res = OpenClawSchema.safeParse({
+      hooks: {
+        enabled: true,
+        mappings: [
+          {
+            match: { path: "test" },
+            messageTemplate: "test",
+            sessionMode: "isolated",
+          },
+        ],
+      },
+    });
+    expect(res.success).toBe(true);
+  });
+
+  it("rejects invalid sessionMode value", () => {
+    const res = OpenClawSchema.safeParse({
+      hooks: {
+        enabled: true,
+        mappings: [
+          {
+            match: { path: "test" },
+            messageTemplate: "test",
+            sessionMode: "invalid",
+          },
+        ],
+      },
+    });
+    expect(res.success).toBe(false);
+  });
+});
+
 describe("broadcast", () => {
   it("accepts a broadcast peer map with strategy", () => {
     const res = validateConfigObject({
