@@ -10,12 +10,14 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -25,6 +27,7 @@ import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.RecordVoiceOver
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.animation.core.tween
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -244,7 +247,7 @@ private fun TopStatusBar(
           mobileSuccessSoft,
           mobileSuccess,
           mobileSuccess,
-          Color(0xFFCFEBD8),
+          mobileSuccess.copy(alpha = 0.72f),
         )
       StatusVisual.Connecting ->
         listOf(
@@ -282,22 +285,17 @@ private fun TopStatusBar(
     shadowElevation = 0.dp,
   ) {
     Row(
-      modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 12.dp),
+      modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 6.dp),
       verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.SpaceBetween,
+      horizontalArrangement = Arrangement.End,
     ) {
-      Text(
-        text = "OpenClaw",
-        style = mobileTitle2,
-        color = mobileText,
-      )
       Surface(
         shape = RoundedCornerShape(999.dp),
         color = chipBg,
         border = androidx.compose.foundation.BorderStroke(1.dp, chipBorder),
       ) {
         Row(
-          modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+          modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
           horizontalArrangement = Arrangement.spacedBy(6.dp),
           verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -334,7 +332,7 @@ private fun BottomTabBar(
   ) {
     Surface(
       modifier = Modifier.fillMaxWidth(),
-      color = Color.White.copy(alpha = 0.97f),
+      color = mobileSurface.copy(alpha = 0.96f),
       shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
       border = BorderStroke(1.dp, mobileBorder),
       shadowElevation = 6.dp,
@@ -355,14 +353,19 @@ private fun BottomTabBar(
             modifier = Modifier.weight(1f).heightIn(min = 58.dp),
             shape = RoundedCornerShape(16.dp),
             color = if (active) mobileAccentSoft else Color.Transparent,
-            border = if (active) BorderStroke(1.dp, Color(0xFFD5E2FA)) else null,
-            shadowElevation = 0.dp,
+            border = if (active) BorderStroke(1.dp, mobileAccent.copy(alpha = 0.55f)) else null,
+            shadowElevation = if (active) 3.dp else 0.dp,
           ) {
             Column(
               modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 7.dp),
               horizontalAlignment = Alignment.CenterHorizontally,
               verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
+              if (active) {
+                Box(
+                  modifier = Modifier.width(18.dp).height(2.dp).background(mobileAccent.copy(alpha = 0.75f), RoundedCornerShape(999.dp)),
+                )
+              }
               Icon(
                 imageVector = tab.icon,
                 contentDescription = tab.label,

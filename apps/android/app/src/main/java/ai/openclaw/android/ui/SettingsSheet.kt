@@ -102,7 +102,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
     }
   val listItemColors =
     ListItemDefaults.colors(
-      containerColor = Color.Transparent,
+      containerColor = mobileSurfaceStrong.copy(alpha = 0.35f),
       headlineColor = mobileText,
       supportingColor = mobileTextSecondary,
       trailingIconColor = mobileTextSecondary,
@@ -389,7 +389,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
           )
         }
       }
-      item { HorizontalDivider(color = mobileBorder) }
+      item { HorizontalDivider(color = mobileBorder.copy(alpha = 0.78f)) }
 
     // Order parity: Node → Voice → Camera → Messaging → Location → Screen.
       item {
@@ -413,7 +413,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
       item { Text("Device: $deviceModel", style = mobileCallout, color = mobileTextSecondary) }
       item { Text("Version: $appVersion", style = mobileCallout, color = mobileTextSecondary) }
 
-      item { HorizontalDivider(color = mobileBorder) }
+      item { HorizontalDivider(color = mobileBorder.copy(alpha = 0.78f)) }
 
       // Voice
       item {
@@ -466,7 +466,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
         )
       }
 
-      item { HorizontalDivider(color = mobileBorder) }
+      item { HorizontalDivider(color = mobileBorder.copy(alpha = 0.78f)) }
 
     // Camera
       item {
@@ -493,7 +493,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
       )
     }
 
-      item { HorizontalDivider(color = mobileBorder) }
+      item { HorizontalDivider(color = mobileBorder.copy(alpha = 0.78f)) }
 
     // Messaging
       item {
@@ -544,7 +544,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
       )
     }
 
-      item { HorizontalDivider(color = mobileBorder) }
+      item { HorizontalDivider(color = mobileBorder.copy(alpha = 0.78f)) }
 
     // Notifications
       item {
@@ -816,7 +816,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
               )
             },
           )
-          HorizontalDivider(color = mobileBorder)
+          HorizontalDivider(color = mobileBorder.copy(alpha = 0.78f))
           ListItem(
             modifier = Modifier.fillMaxWidth(),
             colors = listItemColors,
@@ -829,7 +829,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
               )
             },
           )
-          HorizontalDivider(color = mobileBorder)
+          HorizontalDivider(color = mobileBorder.copy(alpha = 0.78f))
           ListItem(
             modifier = Modifier.fillMaxWidth(),
             colors = listItemColors,
@@ -842,7 +842,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
               )
             },
           )
-          HorizontalDivider(color = mobileBorder)
+          HorizontalDivider(color = mobileBorder.copy(alpha = 0.78f))
           ListItem(
             modifier = Modifier.fillMaxWidth(),
             colors = listItemColors,
@@ -866,7 +866,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
       )
     }
 
-      item { HorizontalDivider(color = mobileBorder) }
+      item { HorizontalDivider(color = mobileBorder.copy(alpha = 0.78f)) }
 
     // Screen
       item {
@@ -886,7 +886,7 @@ fun SettingsSheet(viewModel: MainViewModel) {
       )
     }
 
-      item { HorizontalDivider(color = mobileBorder) }
+      item { HorizontalDivider(color = mobileBorder.copy(alpha = 0.78f)) }
 
     // Debug
       item {
@@ -919,10 +919,10 @@ fun SettingsSheet(viewModel: MainViewModel) {
 @Composable
 private fun settingsTextFieldColors() =
   OutlinedTextFieldDefaults.colors(
-    focusedContainerColor = mobileSurface,
-    unfocusedContainerColor = mobileSurface,
+    focusedContainerColor = mobileSurfaceStrong,
+    unfocusedContainerColor = mobileSurfaceStrong,
     focusedBorderColor = mobileAccent,
-    unfocusedBorderColor = mobileBorder,
+    unfocusedBorderColor = mobileBorderStrong,
     focusedTextColor = mobileText,
     unfocusedTextColor = mobileText,
     cursorColor = mobileAccent,
@@ -931,8 +931,8 @@ private fun settingsTextFieldColors() =
 private fun Modifier.settingsRowModifier() =
   this
     .fillMaxWidth()
-    .border(width = 1.dp, color = mobileBorder, shape = RoundedCornerShape(14.dp))
-    .background(Color.White, RoundedCornerShape(14.dp))
+    .border(width = 1.dp, color = mobileBorderStrong, shape = RoundedCornerShape(14.dp))
+    .background(mobileSurfaceStrong, RoundedCornerShape(14.dp))
 
 @Composable
 private fun settingsPrimaryButtonColors() =

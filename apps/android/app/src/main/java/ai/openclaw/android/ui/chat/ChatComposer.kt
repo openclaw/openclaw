@@ -1,6 +1,11 @@
 package ai.openclaw.android.ui.chat
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -9,12 +14,14 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -22,8 +29,6 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Refresh
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -46,8 +51,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ai.openclaw.android.ui.mobileAccent
@@ -58,6 +65,7 @@ import ai.openclaw.android.ui.mobileCallout
 import ai.openclaw.android.ui.mobileCaption1
 import ai.openclaw.android.ui.mobileHeadline
 import ai.openclaw.android.ui.mobileSurface
+import ai.openclaw.android.ui.mobileSurfaceStrong
 import ai.openclaw.android.ui.mobileText
 import ai.openclaw.android.ui.mobileTextSecondary
 import ai.openclaw.android.ui.mobileTextTertiary
@@ -87,11 +95,16 @@ fun ChatComposer(
   val sendBusy = pendingRunCount > 0
   val canRetryLast = !errorText.isNullOrBlank() && pendingRunCount == 0
   val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
-  val compactMode = imeVisible
   var showActionsMenu by remember { mutableStateOf(false) }
+  val compactMode = imeVisible || showActionsMenu
+  val sendAlpha by animateFloatAsState(
+    targetValue = if (canSend) 1f else 0.75f,
+    animationSpec = tween(durationMillis = 100),
+    label = "sendAlpha",
+  )
 
   Column(
-    modifier = Modifier.fillMaxWidth(),
+    modifier = Modifier.fillMaxWidth().animateContentSize(),
     verticalArrangement = Arrangement.spacedBy(if (compactMode) 6.dp else 8.dp),
   ) {
     Row(
@@ -102,7 +115,7 @@ fun ChatComposer(
       Box(modifier = Modifier.weight(1f)) {
         Surface(
           onClick = { showThinkingMenu = true },
-          shape = RoundedCornerShape(14.dp),
+          shape = RoundedCornerShape(16.dp),
           color = mobileAccentSoft,
           border = BorderStroke(1.dp, mobileBorderStrong),
         ) {
@@ -120,7 +133,11 @@ fun ChatComposer(
           }
         }
 
-        DropdownMenu(expanded = showThinkingMenu, onDismissRequest = { showThinkingMenu = false }) {
+        DropdownMenu(
+          expanded = showThinkingMenu,
+          onDismissRequest = { showThinkingMenu = false },
+          containerColor = mobileSurfaceStrong,
+        ) {
           ThinkingMenuItem("off", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
           ThinkingMenuItem("low", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
           ThinkingMenuItem("medium", thinkingLevel, onSetThinkingLevel) { showThinkingMenu = false }
@@ -133,11 +150,18 @@ fun ChatComposer(
         icon = Icons.Default.AttachFile,
         enabled = true,
         compact = compactMode,
+        containerColor = mobileSurfaceStrong,
+        borderColor = mobileBorderStrong,
+        textColor = mobileText,
         onClick = onPickImages,
       )
     }
 
-    if (attachments.isNotEmpty()) {
+    AnimatedVisibility(
+      visible = attachments.isNotEmpty(),
+      enter = fadeIn(animationSpec = tween(90)),
+      exit = fadeOut(animationSpec = tween(90)),
+    ) {
       AttachmentsStrip(attachments = attachments, onRemoveAttachment = onRemoveAttachment)
     }
 
@@ -152,11 +176,15 @@ fun ChatComposer(
       minLines = if (compactMode) 1 else 2,
       maxLines = if (compactMode) 4 else 5,
       textStyle = mobileBodyStyle().copy(color = mobileText),
-      shape = RoundedCornerShape(14.dp),
+      shape = RoundedCornerShape(16.dp),
       colors = chatTextFieldColors(),
     )
 
-    if (!healthOk) {
+    AnimatedVisibility(
+      visible = !healthOk,
+      enter = fadeIn(animationSpec = tween(90)),
+      exit = fadeOut(animationSpec = tween(90)),
+    ) {
       Text(
         text = "Dead Zone mode: messages queue locally and auto-send on reconnect.",
         style = mobileCallout,
@@ -164,7 +192,11 @@ fun ChatComposer(
       )
     }
 
-    if (queuedCount > 0) {
+    AnimatedVisibility(
+      visible = queuedCount > 0,
+      enter = fadeIn(animationSpec = tween(90)),
+      exit = fadeOut(animationSpec = tween(90)),
+    ) {
       Text(
         text = "Queued offline: $queuedCount",
         style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
@@ -172,47 +204,25 @@ fun ChatComposer(
       )
     }
 
-    Row(
-      modifier = Modifier.fillMaxWidth(),
-      horizontalArrangement = Arrangement.spacedBy(8.dp),
-      verticalAlignment = Alignment.CenterVertically,
-    ) {
+    if (!compactMode && showTimeCapsuleDetails) {
       Surface(
-        shape = RoundedCornerShape(999.dp),
-        color = if (reEvaluateOnReconnect) mobileAccentSoft else Color.White,
-        border = BorderStroke(1.dp, if (reEvaluateOnReconnect) mobileAccent else mobileBorderStrong),
-        onClick = {
-          reEvaluateOnReconnect = !reEvaluateOnReconnect
-          showTimeCapsuleDetails = true
-        },
-      ) {        Text(
-          text = if (reEvaluateOnReconnect) "TC: ON" else "TC: OFF",
-          style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
-          color = if (reEvaluateOnReconnect) mobileAccent else mobileTextSecondary,
-          modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = mobileAccentSoft,
+        border = BorderStroke(1.dp, mobileBorder),
+        onClick = { showTimeCapsuleDetails = false },
+      ) {
+        Text(
+          text =
+            if (reEvaluateOnReconnect) {
+              "Re-evaluate queued messages before send"
+            } else {
+              "Send queued messages as-written"
+            },
+          style = mobileCaption1,
+          color = mobileText,
+          modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
         )
-      }
-
-      if (!compactMode && showTimeCapsuleDetails) {
-        Surface(
-          modifier = Modifier.weight(1f),
-          shape = RoundedCornerShape(12.dp),
-          color = mobileAccentSoft,
-          border = BorderStroke(1.dp, mobileBorder),
-          onClick = { showTimeCapsuleDetails = false },
-        ) {
-          Text(
-            text =
-              if (reEvaluateOnReconnect) {
-                "Re-evaluate queued messages before send"
-              } else {
-                "Send queued messages as-written"
-              },
-            style = mobileCaption1,
-            color = mobileText,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
-          )
-        }
       }
     }
 
@@ -221,65 +231,63 @@ fun ChatComposer(
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-      if (compactMode) {
-        Box {
-          SecondaryActionButton(
-            label = "More",
-            icon = Icons.Default.MoreVert,
-            enabled = true,
-            compact = true,
-            onClick = { showActionsMenu = true },
+      Surface(
+        onClick = {
+          reEvaluateOnReconnect = !reEvaluateOnReconnect
+          showTimeCapsuleDetails = !compactMode
+        },
+        modifier = Modifier.size(44.dp),
+        shape = RoundedCornerShape(16.dp),
+        color = if (reEvaluateOnReconnect) mobileAccentSoft else mobileSurfaceStrong,
+        border = BorderStroke(1.dp, if (reEvaluateOnReconnect) mobileAccent else mobileBorderStrong),
+      ) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+          Text(
+            text = "TC",
+            style = mobileCaption1.copy(fontWeight = FontWeight.Bold),
+            color = if (reEvaluateOnReconnect) mobileAccent else mobileTextSecondary,
           )
-          DropdownMenu(expanded = showActionsMenu, onDismissRequest = { showActionsMenu = false }) {
-            DropdownMenuItem(
-              text = { Text("Refresh") },
-              onClick = {
-                showActionsMenu = false
-                onRefresh()
-              },
-            )
-            DropdownMenuItem(
-              text = { Text("Abort") },
-              enabled = pendingRunCount > 0,
-              onClick = {
-                showActionsMenu = false
-                onAbort()
-              },
-            )
-            DropdownMenuItem(
-              text = { Text("Retry") },
-              enabled = canRetryLast,
-              onClick = {
-                showActionsMenu = false
-                onRetryLast()
-              },
-            )
-          }
         }
-      } else {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-          SecondaryActionButton(
-            label = "Refresh",
-            icon = Icons.Default.Refresh,
-            enabled = true,
-            compact = true,
-            onClick = onRefresh,
-          )
+      }
 
-          SecondaryActionButton(
-            label = "Abort",
-            icon = Icons.Default.Stop,
+      Box {
+        SecondaryActionButton(
+          label = "Actions",
+          icon = Icons.Default.MoreVert,
+          enabled = true,
+          compact = true,
+          containerColor = mobileSurfaceStrong,
+          borderColor = mobileBorderStrong,
+          textColor = mobileText,
+          onClick = { showActionsMenu = true },
+        )
+        DropdownMenu(
+          expanded = showActionsMenu,
+          onDismissRequest = { showActionsMenu = false },
+          properties = PopupProperties(focusable = false),
+        ) {
+          DropdownMenuItem(
+            text = { Text("Refresh") },
+            onClick = {
+              showActionsMenu = false
+              onRefresh()
+            },
+          )
+          DropdownMenuItem(
+            text = { Text("Abort") },
             enabled = pendingRunCount > 0,
-            compact = true,
-            onClick = onAbort,
+            onClick = {
+              showActionsMenu = false
+              onAbort()
+            },
           )
-
-          SecondaryActionButton(
-            label = "Retry",
-            icon = Icons.Default.Refresh,
+          DropdownMenuItem(
+            text = { Text("Retry") },
             enabled = canRetryLast,
-            compact = true,
-            onClick = onRetryLast,
+            onClick = {
+              showActionsMenu = false
+              onRetryLast()
+            },
           )
         }
       }
@@ -291,8 +299,8 @@ fun ChatComposer(
           onSend(text, reEvaluateOnReconnect)
         },
         enabled = canSend,
-        modifier = Modifier.weight(1f).height(48.dp),
-        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier.weight(1f).height(48.dp).graphicsLayer { alpha = sendAlpha },
+        shape = RoundedCornerShape(16.dp),
         colors =
           ButtonDefaults.buttonColors(
             containerColor = mobileAccent,
@@ -325,21 +333,24 @@ private fun SecondaryActionButton(
   icon: androidx.compose.ui.graphics.vector.ImageVector,
   enabled: Boolean,
   compact: Boolean = false,
+  containerColor: Color = Color.White,
+  borderColor: Color = mobileBorderStrong,
+  textColor: Color = mobileTextSecondary,
   onClick: () -> Unit,
 ) {
   Button(
     onClick = onClick,
     enabled = enabled,
     modifier = if (compact) Modifier.size(44.dp) else Modifier.height(44.dp),
-    shape = RoundedCornerShape(14.dp),
+    shape = RoundedCornerShape(16.dp),
     colors =
       ButtonDefaults.buttonColors(
-        containerColor = Color.White,
-        contentColor = mobileTextSecondary,
-        disabledContainerColor = Color.White,
+        containerColor = containerColor,
+        contentColor = textColor,
+        disabledContainerColor = containerColor,
         disabledContentColor = mobileTextTertiary,
       ),
-    border = BorderStroke(1.dp, mobileBorderStrong),
+    border = BorderStroke(1.dp, borderColor),
     contentPadding = if (compact) PaddingValues(0.dp) else ButtonDefaults.ContentPadding,
   ) {
     Icon(icon, contentDescription = label, modifier = Modifier.size(14.dp))
@@ -362,6 +373,12 @@ private fun ThinkingMenuItem(
   onDismiss: () -> Unit,
 ) {
   DropdownMenuItem(
+    colors =
+      androidx.compose.material3.MenuDefaults.itemColors(
+        textColor = mobileText,
+        leadingIconColor = mobileText,
+        trailingIconColor = mobileAccent,
+      ),
     text = { Text(thinkingLabel(value), style = mobileCallout, color = mobileText) },
     onClick = {
       onSet(value)
@@ -446,7 +463,7 @@ private fun chatTextFieldColors() =
     focusedContainerColor = mobileSurface,
     unfocusedContainerColor = mobileSurface,
     focusedBorderColor = mobileAccent,
-    unfocusedBorderColor = mobileBorder,
+    unfocusedBorderColor = mobileBorder.copy(alpha = 0.78f),
     focusedTextColor = mobileText,
     unfocusedTextColor = mobileText,
     cursorColor = mobileAccent,

@@ -50,6 +50,7 @@ import ai.openclaw.android.ui.mobileCodeBg
 import ai.openclaw.android.ui.mobileCodeText
 import ai.openclaw.android.ui.mobileHeadline
 import ai.openclaw.android.ui.mobileSuccess
+import ai.openclaw.android.ui.mobileSurfaceStrong
 import ai.openclaw.android.ui.mobileText
 import ai.openclaw.android.ui.mobileTextSecondary
 import ai.openclaw.android.ui.mobileWarning
@@ -315,7 +316,7 @@ private fun bubbleStyle(role: String): ChatBubbleStyle {
     else ->
       ChatBubbleStyle(
         alignEnd = false,
-        containerColor = Color.White,
+        containerColor = mobileSurfaceStrong,
         borderColor = mobileBorderStrong,
         roleColor = mobileTextSecondary,
       )
@@ -339,7 +340,7 @@ private fun ChatBase64Image(base64: String, mimeType: String?) {
     Surface(
       shape = RoundedCornerShape(10.dp),
       border = BorderStroke(1.dp, mobileBorder),
-      color = Color.White,
+      color = mobileSurfaceStrong,
       modifier = Modifier.fillMaxWidth(),
     ) {
       Image(

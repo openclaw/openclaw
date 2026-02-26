@@ -3,6 +3,7 @@ package ai.openclaw.android.chat
 import ai.openclaw.android.gateway.GatewaySession
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.min
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -61,6 +62,8 @@ class ChatController(
   private val queuedOutbox = mutableListOf<PendingOutbound>()
   private val _queuedItems = MutableStateFlow<List<ChatQueuedOutbound>>(emptyList())
   val queuedItems: StateFlow<List<ChatQueuedOutbound>> = _queuedItems.asStateFlow()
+  private val recentReplaySends = mutableMapOf<String, Long>()
+  private val replayDedupeWindowMs = 10_000L
 
   private val pendingRuns = mutableSetOf<String>()
   private val pendingRunTimeoutJobs = ConcurrentHashMap<String, Job>()
@@ -144,6 +147,8 @@ class ChatController(
         reEvaluateOnReconnect = reEvaluateOnReconnect,
         queuedAtMs = System.currentTimeMillis(),
         queuedReplay = false,
+        retryCount = 0,
+        nextAttemptAtMs = 0L,
       )
 
     // Optimistic user message.
@@ -176,7 +181,7 @@ class ChatController(
         )
 
     if (!_healthOk.value) {
-      enqueueOutbound(lastOutbound!!)
+      enqueueOutbound(lastOutbound!!.copy(queuedReplay = true, nextAttemptAtMs = 0L))
       _errorText.value = "Queued for send when gateway reconnects"
       return
     }
@@ -240,15 +245,38 @@ class ChatController(
         }
       } catch (_: Throwable) {
         clearPendingRun(runId)
-        enqueueOutbound(outbound)
-        _errorText.value = "Queued after send failure; will retry on reconnect"
+        enqueueForRetry(outbound)
+        _errorText.value = "Queued after send failure; will retry automatically"
       }
     }
   }
 
+  private fun enqueueForRetry(outbound: PendingOutbound) {
+    val retryCount = outbound.retryCount + 1
+    val delayMs = min(30_000L, 2_000L * (1L shl min(4, retryCount - 1)))
+    val nextAttempt = System.currentTimeMillis() + delayMs
+    enqueueOutbound(
+      outbound.copy(
+        queuedReplay = true,
+        retryCount = retryCount,
+        nextAttemptAtMs = nextAttempt,
+      ),
+    )
+
+    scope.launch {
+      delay(delayMs)
+      flushQueuedOutbox()
+    }
+  }
+
   private fun enqueueOutbound(outbound: PendingOutbound) {
-    queuedOutbox.removeAll { it.id == outbound.id }
-    queuedOutbox.add(outbound.copy(queuedReplay = true))
+    val fingerprint = outbound.fingerprint()
+    val exists = queuedOutbox.any { it.fingerprint() == fingerprint }
+    if (exists) {
+      _errorText.value = "Already queued; waiting to resend"
+      return
+    }
+    queuedOutbox.add(outbound)
     publishQueuedItems()
   }
 
@@ -270,11 +298,21 @@ class ChatController(
 
   private fun flushQueuedOutbox() {
     if (!_healthOk.value || queuedOutbox.isEmpty()) return
-    val ready = queuedOutbox.toList().sortedBy { it.queuedAtMs }
+
+    val now = System.currentTimeMillis()
+    recentReplaySends.entries.removeAll { now - it.value > replayDedupeWindowMs }
+
+    val (ready, waiting) = queuedOutbox.partition { it.nextAttemptAtMs <= now }
     queuedOutbox.clear()
+    queuedOutbox.addAll(waiting)
     publishQueuedItems()
-    for (item in ready) {
-      sendOutboundNow(item.copy(id = UUID.randomUUID().toString()))
+
+    for (item in ready.sortedBy { it.queuedAtMs }) {
+      val fp = item.fingerprint()
+      val lastSentAt = recentReplaySends[fp]
+      if (lastSentAt != null && now - lastSentAt < replayDedupeWindowMs) continue
+      recentReplaySends[fp] = now
+      sendOutboundNow(item.copy(id = UUID.randomUUID().toString(), queuedReplay = true))
     }
   }
 
@@ -688,4 +726,11 @@ private data class PendingOutbound(
   val reEvaluateOnReconnect: Boolean,
   val queuedAtMs: Long,
   val queuedReplay: Boolean,
-)
+  val retryCount: Int,
+  val nextAttemptAtMs: Long,
+) {
+  fun fingerprint(): String {
+    val attachmentSig = attachments.joinToString("|") { "${it.type}:${it.mimeType}:${it.fileName}:${it.base64.length}" }
+    return "${sessionKey}::${thinkingLevel}::${reEvaluateOnReconnect}::${text.trim()}::${attachmentSig}"
+  }
+}

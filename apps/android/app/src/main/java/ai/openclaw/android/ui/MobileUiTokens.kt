@@ -12,29 +12,29 @@ import ai.openclaw.android.R
 internal val mobileBackgroundGradient =
   Brush.verticalGradient(
     listOf(
-      Color(0xFFFFFFFF),
-      Color(0xFFF7F8FA),
-      Color(0xFFEFF1F5),
+      Color(0xFF0F1115),
+      Color(0xFF151821),
+      Color(0xFF1B1F29),
     ),
   )
 
-internal val mobileSurface = Color(0xFFF6F7FA)
-internal val mobileSurfaceStrong = Color(0xFFECEEF3)
-internal val mobileBorder = Color(0xFFE5E7EC)
-internal val mobileBorderStrong = Color(0xFFD6DAE2)
-internal val mobileText = Color(0xFF17181C)
-internal val mobileTextSecondary = Color(0xFF5D6472)
-internal val mobileTextTertiary = Color(0xFF99A0AE)
-internal val mobileAccent = Color(0xFF1D5DD8)
-internal val mobileAccentSoft = Color(0xFFECF3FF)
-internal val mobileSuccess = Color(0xFF2F8C5A)
-internal val mobileSuccessSoft = Color(0xFFEEF9F3)
-internal val mobileWarning = Color(0xFFC8841A)
-internal val mobileWarningSoft = Color(0xFFFFF8EC)
-internal val mobileDanger = Color(0xFFD04B4B)
-internal val mobileDangerSoft = Color(0xFFFFF2F2)
-internal val mobileCodeBg = Color(0xFF15171B)
-internal val mobileCodeText = Color(0xFFE8EAEE)
+internal val mobileSurface = Color(0xFF1E222B)
+internal val mobileSurfaceStrong = Color(0xFF272C37)
+internal val mobileBorder = Color(0xFF323847)
+internal val mobileBorderStrong = Color(0xFF41495D)
+internal val mobileText = Color(0xFFE6EBF5)
+internal val mobileTextSecondary = Color(0xFFB8C0D1)
+internal val mobileTextTertiary = Color(0xFF8C95A8)
+internal val mobileAccent = Color(0xFF5A8FFF)
+internal val mobileAccentSoft = Color(0xFF25395F)
+internal val mobileSuccess = Color(0xFF37B26C)
+internal val mobileSuccessSoft = Color(0xFF1F3A2B)
+internal val mobileWarning = Color(0xFFE3A23E)
+internal val mobileWarningSoft = Color(0xFF3A2D1A)
+internal val mobileDanger = Color(0xFFF06A6A)
+internal val mobileDangerSoft = Color(0xFF3F2528)
+internal val mobileCodeBg = Color(0xFF11141B)
+internal val mobileCodeText = Color(0xFFE7ECF8)
 
 internal val mobileFontFamily =
   FontFamily(
@@ -76,7 +76,7 @@ internal val mobileBody =
     fontFamily = mobileFontFamily,
     fontWeight = FontWeight.Medium,
     fontSize = 15.sp,
-    lineHeight = 22.sp,
+    lineHeight = 23.sp,
   )
 
 internal val mobileCallout =
@@ -93,7 +93,7 @@ internal val mobileCaption1 =
     fontWeight = FontWeight.Medium,
     fontSize = 12.sp,
     lineHeight = 16.sp,
-    letterSpacing = 0.2.sp,
+    letterSpacing = 0.1.sp,
   )
 
 internal val mobileCaption2 =
@@ -102,5 +102,5 @@ internal val mobileCaption2 =
     fontWeight = FontWeight.Medium,
     fontSize = 11.sp,
     lineHeight = 14.sp,
-    letterSpacing = 0.4.sp,
+    letterSpacing = 0.25.sp,
   )

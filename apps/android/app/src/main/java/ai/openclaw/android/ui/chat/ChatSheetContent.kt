@@ -55,6 +55,7 @@ import ai.openclaw.android.ui.mobileCaption2
 import ai.openclaw.android.ui.mobileDanger
 import ai.openclaw.android.ui.mobileSuccess
 import ai.openclaw.android.ui.mobileSuccessSoft
+import ai.openclaw.android.ui.mobileSurfaceStrong
 import ai.openclaw.android.ui.mobileText
 import ai.openclaw.android.ui.mobileTextSecondary
 import ai.openclaw.android.ui.mobileWarning
@@ -234,47 +235,49 @@ private fun ChatThreadSelector(
     }
 
   Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-    Row(
-      modifier = Modifier.fillMaxWidth(),
-      horizontalArrangement = Arrangement.SpaceBetween,
-      verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
-    ) {
-      Text(
-        text = "SESSION",
-        style = mobileCaption1.copy(fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp),
-        color = mobileTextSecondary,
-      )
-      Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+    if (!compactMode) {
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+      ) {
         Text(
-          text = currentSessionLabel,
-          style = mobileCallout.copy(fontWeight = FontWeight.SemiBold),
-          color = mobileText,
-          maxLines = 1,
-          overflow = TextOverflow.Ellipsis,
+          text = "SESSION",
+          style = mobileCaption1.copy(fontWeight = FontWeight.Bold, letterSpacing = 0.8.sp),
+          color = mobileTextSecondary,
         )
-        if (threadTranscript.isNotBlank()) {
-          Surface(
-            shape = RoundedCornerShape(999.dp),
-            color = if (copiedAll) mobileSuccessSoft else Color.White,
-            border = BorderStroke(1.dp, if (copiedAll) mobileSuccess.copy(alpha = 0.4f) else mobileBorder),
-            onClick = {
-              val manager = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-              manager?.setPrimaryClip(ClipData.newPlainText("chat-thread", threadTranscript))
-              copiedAll = true
-            },
-          ) {
-            Text(
-              text = if (copiedAll) "Copied all" else "Copy all",
-              style = mobileCaption2.copy(fontWeight = FontWeight.SemiBold),
-              color = if (copiedAll) mobileSuccess else mobileTextSecondary,
-              modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-            )
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+          Text(
+            text = currentSessionLabel,
+            style = mobileCallout.copy(fontWeight = FontWeight.SemiBold),
+            color = mobileText,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+          )
+          if (threadTranscript.isNotBlank()) {
+            Surface(
+              shape = RoundedCornerShape(999.dp),
+              color = if (copiedAll) mobileSuccessSoft else mobileSurfaceStrong,
+              border = BorderStroke(1.dp, if (copiedAll) mobileSuccess.copy(alpha = 0.4f) else mobileBorder),
+              onClick = {
+                val manager = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                manager?.setPrimaryClip(ClipData.newPlainText("chat-thread", threadTranscript))
+                copiedAll = true
+              },
+            ) {
+              Text(
+                text = if (copiedAll) "Copied all" else "Copy all",
+                style = mobileCaption2.copy(fontWeight = FontWeight.SemiBold),
+                color = if (copiedAll) mobileSuccess else mobileTextSecondary,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+              )
+            }
           }
+          ChatConnectionPill(
+            healthOk = healthOk,
+            connectionState = connectionState,
+          )
         }
-        ChatConnectionPill(
-          healthOk = healthOk,
-          connectionState = connectionState,
-        )
       }
     }
 
@@ -282,7 +285,7 @@ private fun ChatThreadSelector(
       Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(12.dp),
-        color = Color.White,
+        color = mobileSurfaceStrong,
         border = BorderStroke(1.dp, mobileBorder),
       ) {
         Row(
@@ -315,7 +318,7 @@ private fun ChatThreadSelector(
           Surface(
             onClick = { onSelectSession(entry.key) },
             shape = RoundedCornerShape(14.dp),
-            color = if (active) mobileAccent else Color.White,
+            color = if (active) mobileAccent else mobileSurfaceStrong,
             border = BorderStroke(1.dp, if (active) Color(0xFF154CAD) else mobileBorderStrong),
             tonalElevation = 0.dp,
             shadowElevation = 0.dp,
@@ -383,13 +386,13 @@ private fun ChatSurfaceHint(onDismiss: () -> Unit) {
       Surface(
         onClick = onDismiss,
         shape = RoundedCornerShape(999.dp),
-        color = Color.White.copy(alpha = 0.65f),
-        border = BorderStroke(1.dp, mobileBorder),
+        color = mobileSurfaceStrong,
+        border = BorderStroke(1.dp, mobileBorderStrong),
       ) {
         Text(
           text = "Dismiss",
           style = mobileCaption2.copy(fontWeight = FontWeight.SemiBold),
-          color = mobileTextSecondary,
+          color = mobileText,
           modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
         )
       }

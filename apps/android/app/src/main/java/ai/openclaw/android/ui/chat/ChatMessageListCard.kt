@@ -20,6 +20,7 @@ import ai.openclaw.android.chat.ChatPendingToolCall
 import ai.openclaw.android.ui.mobileBorder
 import ai.openclaw.android.ui.mobileCallout
 import ai.openclaw.android.ui.mobileHeadline
+import ai.openclaw.android.ui.mobileSurface
 import ai.openclaw.android.ui.mobileText
 import ai.openclaw.android.ui.mobileTextSecondary
 
@@ -85,7 +86,7 @@ private fun EmptyChatHint(modifier: Modifier = Modifier, healthOk: Boolean) {
   Surface(
     modifier = modifier.fillMaxWidth(),
     shape = RoundedCornerShape(14.dp),
-    color = androidx.compose.ui.graphics.Color.White.copy(alpha = 0.9f),
+    color = mobileSurface.copy(alpha = 0.92f),
     border = androidx.compose.foundation.BorderStroke(1.dp, mobileBorder),
   ) {
     androidx.compose.foundation.layout.Column(
