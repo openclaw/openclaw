@@ -5,10 +5,11 @@
  * and from directory-based discovery (bundled, managed, workspace)
  */
 
+import fs from "node:fs";
 import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
+import { openBoundaryFile } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { resolveHookConfig } from "./config.js";
 import { shouldIncludeHook } from "./config.js";
 import { buildImportUrl } from "./import-url.js";
@@ -73,18 +74,23 @@ export async function loadInternalHooks(
       }
 
       try {
-        if (
-          !isPathInsideWithRealpath(entry.hook.baseDir, entry.hook.handlerPath, {
-            requireRealpath: true,
-          })
-        ) {
+        const hookBaseDir = safeRealpathOrResolve(entry.hook.baseDir);
+        const opened = await openBoundaryFile({
+          absolutePath: entry.hook.handlerPath,
+          rootPath: hookBaseDir,
+          boundaryLabel: "hook directory",
+        });
+        if (!opened.ok) {
           log.error(
-            `Hook '${entry.hook.name}' handler path resolves outside hook directory: ${entry.hook.handlerPath}`,
+            `Hook '${entry.hook.name}' handler path fails boundary checks: ${entry.hook.handlerPath}`,
           );
           continue;
         }
+        const safeHandlerPath = opened.path;
+        fs.closeSync(opened.fd);
+
         // Import handler module — only cache-bust mutable (workspace/managed) hooks
-        const importUrl = buildImportUrl(entry.hook.handlerPath, entry.hook.source);
+        const importUrl = buildImportUrl(safeHandlerPath, entry.hook.source);
         const mod = (await import(importUrl)) as Record<string, unknown>;
 
         // Get handler function (default or named export)
@@ -144,24 +150,27 @@ export async function loadInternalHooks(
       }
       const baseDir = path.resolve(workspaceDir);
       const modulePath = path.resolve(baseDir, rawModule);
+      const baseDirReal = safeRealpathOrResolve(baseDir);
+      const modulePathSafe = safeRealpathOrResolve(modulePath);
       const rel = path.relative(baseDir, modulePath);
       if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
         log.error(`Handler module path must stay within workspaceDir: ${rawModule}`);
         continue;
       }
-      if (
-        !isPathInsideWithRealpath(baseDir, modulePath, {
-          requireRealpath: true,
-        })
-      ) {
-        log.error(
-          `Handler module path resolves outside workspaceDir after symlink resolution: ${rawModule}`,
-        );
+      const opened = await openBoundaryFile({
+        absolutePath: modulePathSafe,
+        rootPath: baseDirReal,
+        boundaryLabel: "workspace directory",
+      });
+      if (!opened.ok) {
+        log.error(`Handler module path fails boundary checks under workspaceDir: ${rawModule}`);
         continue;
       }
+      const safeModulePath = opened.path;
+      fs.closeSync(opened.fd);
 
       // Legacy handlers are always workspace-relative, so use mtime-based cache busting
-      const importUrl = buildImportUrl(modulePath, "openclaw-workspace");
+      const importUrl = buildImportUrl(safeModulePath, "openclaw-workspace");
       const mod = (await import(importUrl)) as Record<string, unknown>;
 
       // Get the handler function
@@ -189,4 +198,12 @@ export async function loadInternalHooks(
   }
 
   return loadedCount;
+}
+
+function safeRealpathOrResolve(value: string): string {
+  try {
+    return fs.realpathSync(value);
+  } catch {
+    return path.resolve(value);
+  }
 }

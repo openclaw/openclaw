@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
@@ -36,11 +37,15 @@ function filterHookEntries(
 
 function readHookPackageManifest(dir: string): HookPackageManifest | null {
   const manifestPath = path.join(dir, "package.json");
-  if (!fs.existsSync(manifestPath)) {
+  const raw = readBoundaryFileUtf8({
+    absolutePath: manifestPath,
+    rootPath: dir,
+    boundaryLabel: "hook package directory",
+  });
+  if (raw === null) {
     return null;
   }
   try {
-    const raw = fs.readFileSync(manifestPath, "utf-8");
     return JSON.parse(raw) as HookPackageManifest;
   } catch {
     return null;
@@ -75,12 +80,15 @@ function loadHookFromDir(params: {
   nameHint?: string;
 }): Hook | null {
   const hookMdPath = path.join(params.hookDir, "HOOK.md");
-  if (!fs.existsSync(hookMdPath)) {
+  const content = readBoundaryFileUtf8({
+    absolutePath: hookMdPath,
+    rootPath: params.hookDir,
+    boundaryLabel: "hook directory",
+  });
+  if (content === null) {
     return null;
   }
-
   try {
-    const content = fs.readFileSync(hookMdPath, "utf-8");
     const frontmatter = parseFrontmatter(content);
 
     const name = frontmatter.name || params.nameHint || path.basename(params.hookDir);
@@ -90,8 +98,13 @@ function loadHookFromDir(params: {
     let handlerPath: string | undefined;
     for (const candidate of handlerCandidates) {
       const candidatePath = path.join(params.hookDir, candidate);
-      if (fs.existsSync(candidatePath)) {
-        handlerPath = candidatePath;
+      const safeCandidatePath = resolveBoundaryFilePath({
+        absolutePath: candidatePath,
+        rootPath: params.hookDir,
+        boundaryLabel: "hook directory",
+      });
+      if (safeCandidatePath) {
+        handlerPath = safeCandidatePath;
         break;
       }
     }
@@ -192,11 +205,13 @@ export function loadHookEntriesFromDir(params: {
   });
   return hooks.map((hook) => {
     let frontmatter: ParsedHookFrontmatter = {};
-    try {
-      const raw = fs.readFileSync(hook.filePath, "utf-8");
+    const raw = readBoundaryFileUtf8({
+      absolutePath: hook.filePath,
+      rootPath: hook.baseDir,
+      boundaryLabel: "hook directory",
+    });
+    if (raw !== null) {
       frontmatter = parseFrontmatter(raw);
-    } catch {
-      // ignore malformed hooks
     }
     const entry: HookEntry = {
       hook: {
@@ -267,11 +282,13 @@ function loadHookEntries(
 
   return Array.from(merged.values()).map((hook) => {
     let frontmatter: ParsedHookFrontmatter = {};
-    try {
-      const raw = fs.readFileSync(hook.filePath, "utf-8");
+    const raw = readBoundaryFileUtf8({
+      absolutePath: hook.filePath,
+      rootPath: hook.baseDir,
+      boundaryLabel: "hook directory",
+    });
+    if (raw !== null) {
       frontmatter = parseFrontmatter(raw);
-    } catch {
-      // ignore malformed hooks
     }
     return {
       hook,
@@ -315,4 +332,44 @@ export function loadWorkspaceHookEntries(
   },
 ): HookEntry[] {
   return loadHookEntries(workspaceDir, opts);
+}
+
+function readBoundaryFileUtf8(params: {
+  absolutePath: string;
+  rootPath: string;
+  boundaryLabel: string;
+}): string | null {
+  const opened = openBoundaryFileSync({
+    absolutePath: params.absolutePath,
+    rootPath: params.rootPath,
+    boundaryLabel: params.boundaryLabel,
+  });
+  if (!opened.ok) {
+    return null;
+  }
+  try {
+    return fs.readFileSync(opened.fd, "utf-8");
+  } catch {
+    return null;
+  } finally {
+    fs.closeSync(opened.fd);
+  }
+}
+
+function resolveBoundaryFilePath(params: {
+  absolutePath: string;
+  rootPath: string;
+  boundaryLabel: string;
+}): string | null {
+  const opened = openBoundaryFileSync({
+    absolutePath: params.absolutePath,
+    rootPath: params.rootPath,
+    boundaryLabel: params.boundaryLabel,
+  });
+  if (!opened.ok) {
+    return null;
+  }
+  const safePath = opened.path;
+  fs.closeSync(opened.fd);
+  return safePath;
 }
