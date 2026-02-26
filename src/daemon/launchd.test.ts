@@ -185,7 +185,7 @@ describe("launchd install", () => {
     expect(plist).toContain(`<string>${tmpDir}</string>`);
   });
 
-  it("writes crash-only KeepAlive policy with throttle interval", async () => {
+  it("writes KeepAlive=true policy", async () => {
     const env = createDefaultLaunchdEnv();
     await installLaunchAgent({
       env,
@@ -196,10 +196,9 @@ describe("launchd install", () => {
     const plistPath = resolveLaunchAgentPlistPath(env);
     const plist = state.files.get(plistPath) ?? "";
     expect(plist).toContain("<key>KeepAlive</key>");
-    expect(plist).toContain("<key>SuccessfulExit</key>");
-    expect(plist).toContain("<false/>");
-    expect(plist).toContain("<key>ThrottleInterval</key>");
-    expect(plist).toContain("<integer>5</integer>");
+    expect(plist).toContain("<true/>");
+    expect(plist).not.toContain("<key>SuccessfulExit</key>");
+    expect(plist).not.toContain("<key>ThrottleInterval</key>");
   });
 
   it("restarts LaunchAgent with bootout-bootstrap-kickstart order", async () => {
