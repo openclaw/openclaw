@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { blockedIpv6MulticastLiterals } from "./ip-test-fixtures.js";
 import {
   extractEmbeddedIpv4FromIpv6,
   isCanonicalDottedDecimalIPv4,
@@ -47,8 +48,9 @@ describe("shared ip helpers", () => {
 
   it("treats blocked IPv6 classes as private/internal", () => {
     expect(isPrivateOrLoopbackIpAddress("fec0::1")).toBe(true);
-    expect(isPrivateOrLoopbackIpAddress("ff02::1")).toBe(true);
-    expect(isPrivateOrLoopbackIpAddress("[ff05::1:3]")).toBe(true);
+    for (const literal of blockedIpv6MulticastLiterals) {
+      expect(isPrivateOrLoopbackIpAddress(literal)).toBe(true);
+    }
     expect(isPrivateOrLoopbackIpAddress("2001:4860:4860::8888")).toBe(false);
   });
 });
