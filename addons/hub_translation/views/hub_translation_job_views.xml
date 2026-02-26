@@ -1,0 +1,120 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+  <record id="view_hub_translation_job_kanban" model="ir.ui.view">
+    <field name="name">hub.translation.job.kanban</field>
+    <field name="model">hub.translation.job</field>
+    <field name="arch" type="xml">
+      <kanban default_group_by="stage" class="o_kanban_small_column">
+        <templates>
+          <t t-name="kanban-box">
+            <div class="oe_kanban_global_click">
+              <strong><field name="name"/></strong>
+              <div><field name="client_id"/></div>
+              <div><field name="language_pair"/></div>
+              <div><field name="delivery_deadline"/></div>
+              <div><field name="pm_id"/></div>
+            </div>
+          </t>
+        </templates>
+      </kanban>
+    </field>
+  </record>
+
+  <record id="view_hub_translation_job_tree" model="ir.ui.view">
+    <field name="name">hub.translation.job.tree</field>
+    <field name="model">hub.translation.job</field>
+    <field name="arch" type="xml">
+      <tree string="Translation Jobs">
+        <field name="name"/>
+        <field name="client_id"/>
+        <field name="source_title"/>
+        <field name="stage"/>
+        <field name="pm_id"/>
+        <field name="translator_id"/>
+        <field name="delivery_deadline"/>
+      </tree>
+    </field>
+  </record>
+
+  <record id="view_hub_translation_job_form" model="ir.ui.view">
+    <field name="name">hub.translation.job.form</field>
+    <field name="model">hub.translation.job</field>
+    <field name="arch" type="xml">
+      <form string="Translation Job">
+        <sheet>
+          <group>
+            <group>
+              <field name="name"/>
+              <field name="client_id"/>
+              <field name="requester_id"/>
+              <field name="source_title"/>
+              <field name="arabic_title"/>
+              <field name="document_type"/>
+              <field name="language_pair"/>
+              <field name="country_id"/>
+              <field name="intake_date"/>
+            </group>
+            <group>
+              <field name="stage" widget="statusbar"/>
+              <field name="pm_id"/>
+              <field name="translator_id"/>
+              <field name="reviewer_id"/>
+              <field name="qa_owner_id"/>
+              <field name="is_legal"/>
+              <field name="billing_ready"/>
+              <field name="delivery_deadline"/>
+              <field name="invoice_id"/>
+            </group>
+          </group>
+
+          <notebook>
+            <page string="Documents">
+              <field name="document_ids" context="{'default_job_id': active_id}">
+                <tree editable="bottom">
+                  <field name="name"/>
+                  <field name="is_legal"/>
+                  <field name="language_pair"/>
+                  <field name="status"/>
+                  <field name="metadata_profile_id" attrs="{'invisible': [('is_legal', '=', False)]}"/>
+                </tree>
+                <form string="Document">
+                  <group>
+                    <field name="name"/>
+                    <field name="is_legal"/>
+                    <field name="language_pair"/>
+                    <field name="status"/>
+                    <field name="metadata_profile_id" attrs="{'invisible': [('is_legal', '=', False)]}"/>
+                  </group>
+                </form>
+              </field>
+            </page>
+
+            <page string="Audit Trail">
+              <field name="stage_event_ids" readonly="1">
+                <tree>
+                  <field name="timestamp"/>
+                  <field name="from_stage"/>
+                  <field name="to_stage"/>
+                  <field name="actor_id"/>
+                  <field name="method"/>
+                  <field name="reason"/>
+                  <field name="success"/>
+                </tree>
+              </field>
+            </page>
+          </notebook>
+        </sheet>
+      </form>
+    </field>
+  </record>
+
+  <record id="action_hub_translation_jobs" model="ir.actions.act_window">
+    <field name="name">Translation Jobs</field>
+    <field name="res_model">hub.translation.job</field>
+    <field name="view_mode">kanban,tree,form</field>
+  </record>
+
+  <menuitem id="menu_hub_translation_root" name="Translation" sequence="10"/>
+  <menuitem id="menu_hub_translation_jobs" name="Jobs" parent="menu_hub_translation_root" action="action_hub_translation_jobs" sequence="20"/>
+</odoo>
+

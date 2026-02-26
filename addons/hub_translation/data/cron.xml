@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+  <data noupdate="1">
+    <record id="ir_cron_hub_translation_escalations" model="ir.cron">
+      <field name="name">Hub Translation Escalation &amp; Reminders</field>
+      <field name="model_id" ref="model_hub_translation_job"/>
+      <field name="state">code</field>
+      <field name="code">model._cron_send_escalations()</field>
+      <field name="user_id" ref="base.user_admin"/>
+      <field name="interval_number">1</field>
+      <field name="interval_type">days</field>
+      <field name="numbercall">-1</field>
+      <field name="active">True</field>
+    </record>
+  </data>
+</odoo>
+

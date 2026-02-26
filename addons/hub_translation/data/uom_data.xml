@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+  <data noupdate="1">
+    <record id="uom_categ_translation_services" model="uom.category">
+      <field name="name">Translation Services</field>
+    </record>
+
+    <record id="uom_word" model="uom.uom">
+      <field name="name">word</field>
+      <field name="category_id" ref="hub_translation.uom_categ_translation_services"/>
+      <field name="uom_type">reference</field>
+      <field name="rounding">1.0</field>
+      <field name="factor">1.0</field>
+      <field name="factor_inv">1.0</field>
+    </record>
+
+    <record id="uom_page" model="uom.uom">
+      <field name="name">page</field>
+      <field name="category_id" ref="hub_translation.uom_categ_translation_services"/>
+      <field name="uom_type">bigger</field>
+      <field name="rounding">1.0</field>
+      <field name="factor">250.0</field>
+      <field name="factor_inv">0.004</field>
+    </record>
+  </data>
+</odoo>

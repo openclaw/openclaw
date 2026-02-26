@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+  <record id="view_hub_sync_event_tree" model="ir.ui.view">
+    <field name="name">hub.sync.event.tree</field>
+    <field name="model">hub.sync.event</field>
+    <field name="arch" type="xml">
+      <tree string="Sync Events">
+        <field name="model"/>
+        <field name="record_id"/>
+        <field name="event_type"/>
+        <field name="status"/>
+        <field name="retry_count"/>
+        <field name="last_attempt"/>
+        <field name="error_detail"/>
+      </tree>
+    </field>
+  </record>
+
+  <record id="view_hub_sync_event_form" model="ir.ui.view">
+    <field name="name">hub.sync.event.form</field>
+    <field name="model">hub.sync.event</field>
+    <field name="arch" type="xml">
+      <form string="Sync Event">
+        <sheet>
+          <group>
+            <group>
+              <field name="model"/>
+              <field name="record_id"/>
+              <field name="event_type"/>
+              <field name="status"/>
+            </group>
+            <group>
+              <field name="retry_count"/>
+              <field name="last_attempt"/>
+              <field name="error_detail"/>
+            </group>
+          </group>
+          <notebook>
+            <page string="Payload">
+              <field name="payload" widget="text"/>
+            </page>
+          </notebook>
+        </sheet>
+      </form>
+    </field>
+  </record>
+
+  <record id="view_hub_reconciliation_case_tree" model="ir.ui.view">
+    <field name="name">hub.reconciliation.case.tree</field>
+    <field name="model">hub.reconciliation.case</field>
+    <field name="arch" type="xml">
+      <tree string="Reconciliation Cases">
+        <field name="sync_event_id"/>
+        <field name="job_id"/>
+        <field name="status"/>
+        <field name="opened_at"/>
+        <field name="resolved_at"/>
+      </tree>
+    </field>
+  </record>
+
+  <record id="view_hub_reconciliation_case_form" model="ir.ui.view">
+    <field name="name">hub.reconciliation.case.form</field>
+    <field name="model">hub.reconciliation.case</field>
+    <field name="arch" type="xml">
+      <form string="Reconciliation Case">
+        <sheet>
+          <group>
+            <group>
+              <field name="sync_event_id"/>
+              <field name="job_id"/>
+              <field name="status"/>
+            </group>
+            <group>
+              <field name="opened_at"/>
+              <field name="resolved_at"/>
+            </group>
+          </group>
+          <group>
+            <field name="resolution_notes" widget="text"/>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+
+  <record id="action_hub_sync_events" model="ir.actions.act_window">
+    <field name="name">Sync Events</field>
+    <field name="res_model">hub.sync.event</field>
+    <field name="view_mode">tree,form</field>
+  </record>
+
+  <record id="action_hub_reconciliation_cases" model="ir.actions.act_window">
+    <field name="name">Reconciliation Cases</field>
+    <field name="res_model">hub.reconciliation.case</field>
+    <field name="view_mode">tree,form</field>
+  </record>
+
+  <menuitem id="menu_hub_sync_health" name="Sync Health" parent="menu_hub_translation_root" sequence="30"/>
+  <menuitem id="menu_hub_sync_events" name="Sync Events" parent="menu_hub_sync_health" action="action_hub_sync_events"/>
+  <menuitem id="menu_hub_reconciliation_cases" name="Reconciliation Cases" parent="menu_hub_sync_health" action="action_hub_reconciliation_cases"/>
+</odoo>
+

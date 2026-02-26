@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+  <data noupdate="1">
+    <record id="hub_cat_discount_exact_match_default" model="hub.cat.discount">
+      <field name="match_type">exact_match</field>
+      <field name="discount_pct">5.0</field>
+    </record>
+    <record id="hub_cat_discount_fuzzy_95_99_default" model="hub.cat.discount">
+      <field name="match_type">fuzzy_95_99</field>
+      <field name="discount_pct">30.0</field>
+    </record>
+    <record id="hub_cat_discount_fuzzy_75_94_default" model="hub.cat.discount">
+      <field name="match_type">fuzzy_75_94</field>
+      <field name="discount_pct">60.0</field>
+    </record>
+    <record id="hub_cat_discount_new_words_default" model="hub.cat.discount">
+      <field name="match_type">new_words</field>
+      <field name="discount_pct">100.0</field>
+    </record>
+  </data>
+</odoo>

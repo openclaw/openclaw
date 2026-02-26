@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+  <data noupdate="1">
+    <record id="action_server_hub_translation_job_webhook" model="ir.actions.server">
+      <field name="name">Webhook: Hub Translation Job Change</field>
+      <field name="state">webhook</field>
+      <field name="model_id" ref="model_hub_translation_job"/>
+      <field name="binding_model_id" ref="model_hub_translation_job"/>
+      <field name="webhook_url">/webhook/odoo/translation-job</field>
+    </record>
+
+    <record id="automation_hub_translation_job_on_write" model="base.automation">
+      <field name="name">Hub Translation Job: On Write Sync</field>
+      <field name="model_id" ref="model_hub_translation_job"/>
+      <field name="trigger">on_write</field>
+      <field name="trigger_field_ids" eval="[(6, 0, [
+        ref('hub_translation.field_hub_translation_job__stage'),
+        ref('hub_translation.field_hub_translation_job__pm_id'),
+        ref('hub_translation.field_hub_translation_job__translator_id'),
+        ref('hub_translation.field_hub_translation_job__reviewer_id'),
+        ref('hub_translation.field_hub_translation_job__qa_owner_id'),
+        ref('hub_translation.field_hub_translation_job__billing_ready'),
+      ])]"/>
+      <field name="action_server_ids" eval="[(6, 0, [ref('action_server_hub_translation_job_webhook')])]"/>
+    </record>
+
+    <record id="automation_hub_translation_job_full_record" model="base.automation">
+      <field name="name">Hub Translation Job: Full Record Sync</field>
+      <field name="model_id" ref="model_hub_translation_job"/>
+      <field name="trigger">on_create_or_write</field>
+      <field name="action_server_ids" eval="[(6, 0, [ref('action_server_hub_translation_job_webhook')])]"/>
+      <field name="description">Sends entire record snapshot on create or write events.</field>
+    </record>
+
+    <!-- ODOO 16 FALLBACK: uncomment and remove webhook action above when running Odoo 16 -->
+    <!--
+    <record id="automation_hub_translation_job_on_write_odoo16" model="base.automation">
+      <field name="name">Hub Translation Job: On Write Sync (Odoo 16)</field>
+      <field name="model_id" ref="model_hub_translation_job"/>
+      <field name="trigger">on_write</field>
+      <field name="action_server_ids" eval="[(0, 0, {
+        'name': 'Hub Translation Job: On Write Sync (Code)',
+        'state': 'code',
+        'model_id': ref('model_hub_translation_job'),
+        'code': \"import requests\nbase_url = env['ir.config_parameter'].sudo().get_param('web.base.url')\npayload = {'model': {'name': 'hub.translation.job'}, 'records': record.read()[0:1]}\nrequests.post(base_url + '/webhook/odoo/translation-job', json=payload, timeout=5)\"
+      })]"/>
+    </record>
+    -->
+  </data>
+</odoo>
+

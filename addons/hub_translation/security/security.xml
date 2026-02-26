@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+  <data noupdate="1">
+    <record id="module_category_hub_translation" model="ir.module.category">
+      <field name="name">Translation</field>
+      <field name="description">Translation workflow and operations</field>
+      <field name="sequence">45</field>
+    </record>
+
+    <record id="group_pm" model="res.groups">
+      <field name="name">Translation PM</field>
+      <field name="category_id" ref="module_category_hub_translation"/>
+    </record>
+
+    <record id="group_translator" model="res.groups">
+      <field name="name">Translator</field>
+      <field name="category_id" ref="module_category_hub_translation"/>
+    </record>
+
+    <record id="group_reviewer" model="res.groups">
+      <field name="name">Reviewer</field>
+      <field name="category_id" ref="module_category_hub_translation"/>
+    </record>
+
+    <record id="group_qa" model="res.groups">
+      <field name="name">QA Owner</field>
+      <field name="category_id" ref="module_category_hub_translation"/>
+    </record>
+
+    <record id="group_finance" model="res.groups">
+      <field name="name">Finance</field>
+      <field name="category_id" ref="module_category_hub_translation"/>
+    </record>
+
+    <record id="group_manager" model="res.groups">
+      <field name="name">Translation Manager</field>
+      <field name="category_id" ref="module_category_hub_translation"/>
+      <field name="implied_ids" eval="[
+        (4, ref('hub_translation.group_pm')),
+        (4, ref('hub_translation.group_translator')),
+        (4, ref('hub_translation.group_reviewer')),
+        (4, ref('hub_translation.group_qa')),
+        (4, ref('hub_translation.group_finance'))
+      ]"/>
+    </record>
+  </data>
+</odoo>

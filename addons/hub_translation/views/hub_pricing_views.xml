@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<odoo>
+  <record id="view_hub_language_pair_rate_tree" model="ir.ui.view">
+    <field name="name">hub.language.pair.rate.tree</field>
+    <field name="model">hub.language.pair.rate</field>
+    <field name="arch" type="xml">
+      <tree string="Language Pair Rates">
+        <field name="source_language"/>
+        <field name="target_language"/>
+        <field name="client_id"/>
+        <field name="client_tier"/>
+        <field name="rate_per_word"/>
+        <field name="rate_per_page"/>
+        <field name="rate_per_hour"/>
+        <field name="currency_id"/>
+      </tree>
+    </field>
+  </record>
+
+  <record id="view_hub_language_pair_rate_form" model="ir.ui.view">
+    <field name="name">hub.language.pair.rate.form</field>
+    <field name="model">hub.language.pair.rate</field>
+    <field name="arch" type="xml">
+      <form string="Language Pair Rate">
+        <sheet>
+          <group>
+            <group>
+              <field name="source_language"/>
+              <field name="target_language"/>
+              <field name="client_id"/>
+              <field name="client_tier"/>
+            </group>
+            <group>
+              <field name="rate_per_word"/>
+              <field name="rate_per_page"/>
+              <field name="rate_per_hour"/>
+              <field name="currency_id"/>
+            </group>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+
+  <record id="action_hub_language_pair_rate" model="ir.actions.act_window">
+    <field name="name">Language Pair Rates</field>
+    <field name="res_model">hub.language.pair.rate</field>
+    <field name="view_mode">tree,form</field>
+  </record>
+
+  <record id="view_hub_cat_discount_tree" model="ir.ui.view">
+    <field name="name">hub.cat.discount.tree</field>
+    <field name="model">hub.cat.discount</field>
+    <field name="arch" type="xml">
+      <tree string="CAT Discount Schedule">
+        <field name="match_type"/>
+        <field name="client_id"/>
+        <field name="discount_pct"/>
+      </tree>
+    </field>
+  </record>
+
+  <record id="view_hub_cat_discount_form" model="ir.ui.view">
+    <field name="name">hub.cat.discount.form</field>
+    <field name="model">hub.cat.discount</field>
+    <field name="arch" type="xml">
+      <form string="CAT Discount">
+        <sheet>
+          <group>
+            <field name="match_type"/>
+            <field name="client_id"/>
+            <field name="discount_pct"/>
+          </group>
+        </sheet>
+      </form>
+    </field>
+  </record>
+
+  <record id="action_hub_cat_discount" model="ir.actions.act_window">
+    <field name="name">CAT Discount Schedule</field>
+    <field name="res_model">hub.cat.discount</field>
+    <field name="view_mode">tree,form</field>
+  </record>
+
+  <menuitem id="menu_hub_translation_configuration" name="Configuration" parent="menu_hub_translation_root" sequence="60"/>
+  <menuitem id="menu_hub_language_pair_rates" name="Language Pair Rates" parent="menu_hub_translation_configuration" action="action_hub_language_pair_rate" sequence="10"/>
+  <menuitem id="menu_hub_cat_discounts" name="CAT Discount Schedule" parent="menu_hub_translation_configuration" action="action_hub_cat_discount" sequence="20"/>
+</odoo>
+
