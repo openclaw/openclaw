@@ -24,31 +24,25 @@ class InvokeDispatcher(
   private val onCanvasA2uiReset: () -> Unit,
 ) {
   suspend fun handleInvoke(command: String, paramsJson: String?): GatewaySession.InvokeResult {
-    // Check foreground requirement for canvas/camera/screen commands
-    if (
-      command.startsWith(OpenClawCanvasCommand.NamespacePrefix) ||
-        command.startsWith(OpenClawCanvasA2UICommand.NamespacePrefix) ||
-        command.startsWith(OpenClawCameraCommand.NamespacePrefix) ||
-        command.startsWith(OpenClawScreenCommand.NamespacePrefix)
-    ) {
-      if (!isForeground()) {
-        return GatewaySession.InvokeResult.error(
-          code = "NODE_BACKGROUND_UNAVAILABLE",
-          message = "NODE_BACKGROUND_UNAVAILABLE: canvas/camera/screen commands require foreground",
+    val spec =
+      InvokeCommandRegistry.find(command)
+        ?: return GatewaySession.InvokeResult.error(
+          code = "INVALID_REQUEST",
+          message = "INVALID_REQUEST: unknown command",
         )
-      }
+    if (spec.requiresForeground && !isForeground()) {
+      return GatewaySession.InvokeResult.error(
+        code = "NODE_BACKGROUND_UNAVAILABLE",
+        message = "NODE_BACKGROUND_UNAVAILABLE: canvas/camera/screen commands require foreground",
+      )
     }
-
-    // Check camera enabled
-    if (command.startsWith(OpenClawCameraCommand.NamespacePrefix) && !cameraEnabled()) {
+    if (spec.availability == InvokeCommandAvailability.CameraEnabled && !cameraEnabled()) {
       return GatewaySession.InvokeResult.error(
         code = "CAMERA_DISABLED",
         message = "CAMERA_DISABLED: enable Camera in Settings",
       )
     }
-
-    // Check location enabled
-    if (command.startsWith(OpenClawLocationCommand.NamespacePrefix) && !locationEnabled()) {
+    if (spec.availability == InvokeCommandAvailability.LocationEnabled && !locationEnabled()) {
       return GatewaySession.InvokeResult.error(
         code = "LOCATION_DISABLED",
         message = "LOCATION_DISABLED: enable Location in Settings",
@@ -75,53 +69,33 @@ class InvokeDispatcher(
               code = "INVALID_REQUEST",
               message = "INVALID_REQUEST: javaScript required",
             )
-        val result =
-          try {
-            canvas.eval(js)
-          } catch (err: Throwable) {
-            return GatewaySession.InvokeResult.error(
-              code = "NODE_BACKGROUND_UNAVAILABLE",
-              message = "NODE_BACKGROUND_UNAVAILABLE: canvas unavailable",
-            )
-          }
-        GatewaySession.InvokeResult.ok("""{"result":${result.toJsonString()}}""")
+        withCanvasAvailable {
+          val result = canvas.eval(js)
+          GatewaySession.InvokeResult.ok("""{"result":${result.toJsonString()}}""")
+        }
       }
       OpenClawCanvasCommand.Snapshot.rawValue -> {
         val snapshotParams = CanvasController.parseSnapshotParams(paramsJson)
-        val base64 =
-          try {
+        withCanvasAvailable {
+          val base64 =
             canvas.snapshotBase64(
               format = snapshotParams.format,
               quality = snapshotParams.quality,
               maxWidth = snapshotParams.maxWidth,
             )
-          } catch (err: Throwable) {
-            return GatewaySession.InvokeResult.error(
-              code = "NODE_BACKGROUND_UNAVAILABLE",
-              message = "NODE_BACKGROUND_UNAVAILABLE: canvas unavailable",
-            )
-          }
-        GatewaySession.InvokeResult.ok("""{"format":"${snapshotParams.format.rawValue}","base64":"$base64"}""")
+          GatewaySession.InvokeResult.ok("""{"format":"${snapshotParams.format.rawValue}","base64":"$base64"}""")
+        }
       }
 
       // A2UI commands
-      OpenClawCanvasA2UICommand.Reset.rawValue -> {
-        val a2uiUrl = a2uiHandler.resolveA2uiHostUrl()
-          ?: return GatewaySession.InvokeResult.error(
-            code = "A2UI_HOST_NOT_CONFIGURED",
-            message = "A2UI_HOST_NOT_CONFIGURED: gateway did not advertise canvas host",
-          )
-        val ready = a2uiHandler.ensureA2uiReady(a2uiUrl)
-        if (!ready) {
-          return GatewaySession.InvokeResult.error(
-            code = "A2UI_HOST_UNAVAILABLE",
-            message = "A2UI host not reachable",
-          )
+      OpenClawCanvasA2UICommand.Reset.rawValue ->
+        withReadyA2ui {
+          withCanvasAvailable {
+            val res = canvas.eval(A2UIHandler.a2uiResetJS)
+            onCanvasA2uiReset()
+            GatewaySession.InvokeResult.ok(res)
+          }
         }
-        val res = canvas.eval(A2UIHandler.a2uiResetJS)
-        onCanvasA2uiReset()
-        GatewaySession.InvokeResult.ok(res)
-      }
       OpenClawCanvasA2UICommand.Push.rawValue, OpenClawCanvasA2UICommand.PushJSONL.rawValue -> {
         val messages =
           try {
@@ -132,22 +106,14 @@ class InvokeDispatcher(
               message = err.message ?: "invalid A2UI payload"
             )
           }
-        val a2uiUrl = a2uiHandler.resolveA2uiHostUrl()
-          ?: return GatewaySession.InvokeResult.error(
-            code = "A2UI_HOST_NOT_CONFIGURED",
-            message = "A2UI_HOST_NOT_CONFIGURED: gateway did not advertise canvas host",
-          )
-        val ready = a2uiHandler.ensureA2uiReady(a2uiUrl)
-        if (!ready) {
-          return GatewaySession.InvokeResult.error(
-            code = "A2UI_HOST_UNAVAILABLE",
-            message = "A2UI host not reachable",
-          )
+        withReadyA2ui {
+          withCanvasAvailable {
+            val js = A2UIHandler.a2uiApplyMessagesJS(messages)
+            val res = canvas.eval(js)
+            onCanvasA2uiPush()
+            GatewaySession.InvokeResult.ok(res)
+          }
         }
-        val js = A2UIHandler.a2uiApplyMessagesJS(messages)
-        val res = canvas.eval(js)
-        onCanvasA2uiPush()
-        GatewaySession.InvokeResult.ok(res)
       }
 
       // Camera commands
@@ -170,11 +136,38 @@ class InvokeDispatcher(
       // App update
       "app.update" -> appUpdateHandler.handleUpdate(paramsJson)
 
-      else ->
-        GatewaySession.InvokeResult.error(
-          code = "INVALID_REQUEST",
-          message = "INVALID_REQUEST: unknown command",
-        )
+      else -> GatewaySession.InvokeResult.error(code = "INVALID_REQUEST", message = "INVALID_REQUEST: unknown command")
+    }
+  }
+
+  private suspend fun withReadyA2ui(
+    block: suspend () -> GatewaySession.InvokeResult,
+  ): GatewaySession.InvokeResult {
+    val a2uiUrl = a2uiHandler.resolveA2uiHostUrl()
+      ?: return GatewaySession.InvokeResult.error(
+        code = "A2UI_HOST_NOT_CONFIGURED",
+        message = "A2UI_HOST_NOT_CONFIGURED: gateway did not advertise canvas host",
+      )
+    val ready = a2uiHandler.ensureA2uiReady(a2uiUrl)
+    if (!ready) {
+      return GatewaySession.InvokeResult.error(
+        code = "A2UI_HOST_UNAVAILABLE",
+        message = "A2UI host not reachable",
+      )
+    }
+    return block()
+  }
+
+  private suspend fun withCanvasAvailable(
+    block: suspend () -> GatewaySession.InvokeResult,
+  ): GatewaySession.InvokeResult {
+    return try {
+      block()
+    } catch (_: Throwable) {
+      GatewaySession.InvokeResult.error(
+        code = "NODE_BACKGROUND_UNAVAILABLE",
+        message = "NODE_BACKGROUND_UNAVAILABLE: canvas unavailable",
+      )
     }
   }
 }
