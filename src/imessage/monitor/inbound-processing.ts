@@ -20,6 +20,7 @@ import {
   resolveChannelGroupRequireMention,
 } from "../../config/group-policy.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
+import { resolveEffectiveAllowFromLists } from "../../security/dm-policy-shared.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import {
   formatIMessageChatTarget,
@@ -138,14 +139,14 @@ export function resolveIMessageInboundDecision(params: {
   }
 
   const groupId = isGroup ? groupIdCandidate : undefined;
-  const storeAllowFrom = params.dmPolicy === "allowlist" ? [] : params.storeAllowFrom;
-  const effectiveDmAllowFrom = Array.from(new Set([...params.allowFrom, ...storeAllowFrom]))
-    .map((v) => String(v).trim())
-    .filter(Boolean);
-  // Keep DM pairing-store authorization scoped to DMs; group access must come from explicit group allowlist config.
-  const effectiveGroupAllowFrom = Array.from(new Set(params.groupAllowFrom))
-    .map((v) => String(v).trim())
-    .filter(Boolean);
+  const { effectiveAllowFrom: effectiveDmAllowFrom, effectiveGroupAllowFrom } =
+    resolveEffectiveAllowFromLists({
+      allowFrom: params.allowFrom,
+      groupAllowFrom: params.groupAllowFrom,
+      storeAllowFrom: params.storeAllowFrom,
+      dmPolicy: params.dmPolicy,
+      groupAllowFromFallbackToAllowFrom: false,
+    });
 
   if (isGroup) {
     if (params.groupPolicy === "disabled") {
