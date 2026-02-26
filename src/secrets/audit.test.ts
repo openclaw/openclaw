@@ -9,6 +9,7 @@ describe("secrets audit", () => {
   let stateDir = "";
   let configPath = "";
   let authStorePath = "";
+  let authJsonPath = "";
   let envPath = "";
   let env: NodeJS.ProcessEnv;
 
@@ -17,6 +18,7 @@ describe("secrets audit", () => {
     stateDir = path.join(rootDir, ".openclaw");
     configPath = path.join(stateDir, "openclaw.json");
     authStorePath = path.join(stateDir, "agents", "main", "agent", "auth-profiles.json");
+    authJsonPath = path.join(stateDir, "agents", "main", "agent", "auth.json");
     envPath = path.join(stateDir, ".env");
     env = {
       ...process.env,
@@ -79,5 +81,28 @@ describe("secrets audit", () => {
     expect(report.summary.shadowedRefCount).toBeGreaterThan(0);
     expect(report.findings.some((entry) => entry.code === "REF_SHADOWED")).toBe(true);
     expect(report.findings.some((entry) => entry.code === "PLAINTEXT_FOUND")).toBe(true);
+  });
+
+  it("does not mutate legacy auth.json during audit", async () => {
+    await fs.rm(authStorePath, { force: true });
+    await fs.writeFile(
+      authJsonPath,
+      `${JSON.stringify(
+        {
+          openai: {
+            type: "api_key",
+            key: "sk-legacy-auth-json",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const report = await runSecretsAudit({ env });
+    expect(report.findings.some((entry) => entry.code === "LEGACY_RESIDUE")).toBe(true);
+    await expect(fs.stat(authJsonPath)).resolves.toBeTruthy();
+    await expect(fs.stat(authStorePath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 });
