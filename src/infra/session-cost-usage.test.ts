@@ -16,6 +16,109 @@ describe("session cost usage", () => {
   const withStateDir = async <T>(stateDir: string, fn: () => Promise<T>): Promise<T> =>
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, fn);
 
+  it("includes reset transcript archives in loadCostUsageSummary", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-reset-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const activeFile = path.join(sessionsDir, "sess-active.jsonl");
+    const resetFile = path.join(sessionsDir, "sess-archived.jsonl.reset.2026-02-25T15-40-51.673Z");
+
+    const now = new Date();
+    const activeEntry = {
+      type: "message",
+      timestamp: now.toISOString(),
+      message: {
+        role: "assistant",
+        provider: "google",
+        model: "gemini-3-pro-preview",
+        usage: {
+          input: 100,
+          output: 50,
+          totalTokens: 150,
+          cost: { total: 1.25 },
+        },
+      },
+    };
+    const resetEntry = {
+      type: "message",
+      timestamp: now.toISOString(),
+      message: {
+        role: "assistant",
+        provider: "google",
+        model: "gemini-3-pro-preview",
+        usage: {
+          input: 200,
+          output: 100,
+          totalTokens: 300,
+          cost: { total: 2.5 },
+        },
+      },
+    };
+
+    await fs.writeFile(activeFile, JSON.stringify(activeEntry) + "\n", "utf-8");
+    await fs.writeFile(resetFile, JSON.stringify(resetEntry) + "\n", "utf-8");
+
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({ days: 30 });
+      expect(summary.totals.totalTokens).toBe(450);
+      expect(summary.totals.totalCost).toBeCloseTo(3.75, 8);
+    });
+  });
+
+  it("includes reset-only transcripts when loading per-session summaries", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-reset-only-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const resetFile = path.join(
+      sessionsDir,
+      "sess-reset-only.jsonl.reset.2026-02-25T15-40-51.673Z",
+    );
+    const now = new Date();
+
+    await fs.writeFile(
+      resetFile,
+      JSON.stringify({
+        type: "message",
+        timestamp: now.toISOString(),
+        message: {
+          role: "assistant",
+          provider: "google",
+          model: "gemini-3-pro-preview",
+          usage: {
+            input: 120,
+            output: 30,
+            totalTokens: 150,
+            cost: { total: 1.8 },
+          },
+        },
+      }) + "\n",
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const summary = await loadSessionCostSummary({ sessionId: "sess-reset-only" });
+      expect(summary).toBeTruthy();
+      expect(summary?.totalTokens).toBe(150);
+      expect(summary?.totalCost).toBeCloseTo(1.8, 8);
+    });
+  });
+
+  it("discovers reset transcript archives by base session id", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-discover-reset-"));
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const resetFile = path.join(
+      sessionsDir,
+      "sess-reset-discover.jsonl.reset.2026-02-25T15-40-51.673Z",
+    );
+    await fs.writeFile(resetFile, "", "utf-8");
+
+    await withStateDir(root, async () => {
+      const sessions = await discoverAllSessions();
+      expect(sessions.some((session) => session.sessionId === "sess-reset-discover")).toBe(true);
+    });
+  });
+
   it("aggregates daily totals with log cost and pricing fallback", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cost-"));
     const sessionsDir = path.join(root, "agents", "main", "sessions");

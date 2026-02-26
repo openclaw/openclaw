@@ -86,6 +86,122 @@ function renderCostUsageSummary(summary: CostUsageSummary, days: number, rich: b
   return lines;
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+const MAX_USAGE_SESSIONS_LIMIT = 10_000;
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+type UsageSessionsCliEntry = {
+  key: string;
+  sessionId?: string;
+  updatedAt?: number;
+  usage: {
+    totalTokens: number;
+    totalCost: number;
+  } | null;
+};
+
+type UsageSessionsCliResult = {
+  sessions: UsageSessionsCliEntry[];
+};
+
+function formatUtcDate(date: Date): string {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}-${String(
+    date.getUTCDate(),
+  ).padStart(2, "0")}`;
+}
+
+function parseUsageDate(raw: string, label: string): number {
+  if (!ISO_DATE_RE.test(raw)) {
+    throw new Error(`${label} must be YYYY-MM-DD`);
+  }
+  const parsed = Date.parse(`${raw}T00:00:00.000Z`);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`${label} must be a valid date`);
+  }
+  return parsed;
+}
+
+function parseLimitOption(raw: unknown, fallback = 200): number {
+  return Math.min(MAX_USAGE_SESSIONS_LIMIT, parseDaysOption(raw, fallback));
+}
+
+function resolveUsageDateRange(opts: { days?: unknown; startDate?: unknown; endDate?: unknown }): {
+  startDate: string;
+  endDate: string;
+  days: number;
+} {
+  const startRaw = typeof opts.startDate === "string" ? opts.startDate.trim() : "";
+  const endRaw = typeof opts.endDate === "string" ? opts.endDate.trim() : "";
+
+  if ((startRaw && !endRaw) || (!startRaw && endRaw)) {
+    throw new Error("start-date and end-date must be provided together");
+  }
+
+  if (startRaw && endRaw) {
+    const startMs = parseUsageDate(startRaw, "start-date");
+    const endMs = parseUsageDate(endRaw, "end-date");
+    if (endMs < startMs) {
+      throw new Error("end-date must be on or after start-date");
+    }
+    return {
+      startDate: startRaw,
+      endDate: endRaw,
+      days: Math.floor((endMs - startMs) / DAY_MS) + 1,
+    };
+  }
+
+  const days = parseDaysOption(opts.days, 30);
+  const end = new Date();
+  const endStartMs = Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate());
+  const startStartMs = endStartMs - (days - 1) * DAY_MS;
+
+  return {
+    startDate: formatUtcDate(new Date(startStartMs)),
+    endDate: formatUtcDate(new Date(endStartMs)),
+    days,
+  };
+}
+
+function renderUsageSessionsSummary(params: {
+  sessionsResult: UsageSessionsCliResult;
+  costSummary: CostUsageSummary;
+  startDate: string;
+  endDate: string;
+  limit: number;
+  rich: boolean;
+}): string[] {
+  const totalCost = formatUsd(params.costSummary.totals.totalCost) ?? "$0.00";
+  const totalTokens = formatTokenCount(params.costSummary.totals.totalTokens) ?? "0";
+  const sessions = Array.isArray(params.sessionsResult.sessions)
+    ? params.sessionsResult.sessions
+    : [];
+
+  const lines = [
+    colorize(
+      params.rich,
+      theme.heading,
+      `Usage sessions (${params.startDate} -> ${params.endDate})`,
+    ),
+    `${colorize(params.rich, theme.muted, "Total:")} ${totalCost} · ${totalTokens} tokens`,
+    `${colorize(params.rich, theme.muted, "Sessions:")} ${sessions.length}${sessions.length >= params.limit ? ` (limit ${params.limit})` : ""}`,
+  ];
+
+  for (const [index, session] of sessions.entries()) {
+    const tokens = formatTokenCount(session.usage?.totalTokens ?? 0) ?? "0";
+    const cost = formatUsd(session.usage?.totalCost ?? 0) ?? "$0.00";
+    const updatedAt =
+      typeof session.updatedAt === "number" && Number.isFinite(session.updatedAt)
+        ? formatUtcDate(new Date(session.updatedAt))
+        : undefined;
+    const key = session.key || session.sessionId || `session-${index + 1}`;
+    lines.push(
+      `${index + 1}. ${key} · ${cost} · ${tokens} tokens${updatedAt ? ` · ${updatedAt}` : ""}`,
+    );
+  }
+
+  return lines;
+}
+
 export function registerGatewayCli(program: Command) {
   const gateway = addGatewayRunCommand(
     program
@@ -155,6 +271,72 @@ export function registerGatewayCli(program: Command) {
             defaultRuntime.log(line);
           }
         }, "Gateway usage cost failed");
+      }),
+  );
+
+  gatewayCallOpts(
+    gateway
+      .command("usage-sessions")
+      .description("Fetch per-session usage summary for a date range")
+      .option("--days <days>", "Number of days to include when dates are omitted", "30")
+      .option("--start-date <YYYY-MM-DD>", "Inclusive start date")
+      .option("--end-date <YYYY-MM-DD>", "Inclusive end date")
+      .option("--limit <n>", "Maximum sessions to include", "200")
+      .option("--all", "Set limit to 10000 sessions", false)
+      .action(async (opts, command) => {
+        await runGatewayCommand(async () => {
+          const rpcOpts = resolveGatewayRpcOptions(opts, command);
+          const range = resolveUsageDateRange({
+            days: opts.days,
+            startDate: opts.startDate,
+            endDate: opts.endDate,
+          });
+          const limit =
+            opts.all === true ? MAX_USAGE_SESSIONS_LIMIT : parseLimitOption(opts.limit, 200);
+
+          const [sessionsResultRaw, costSummaryRaw] = await Promise.all([
+            callGatewayCli("sessions.usage", rpcOpts, {
+              startDate: range.startDate,
+              endDate: range.endDate,
+              limit,
+              includeContextWeight: false,
+            }),
+            callGatewayCli("usage.cost", rpcOpts, {
+              startDate: range.startDate,
+              endDate: range.endDate,
+            }),
+          ]);
+
+          if (rpcOpts.json) {
+            defaultRuntime.log(
+              JSON.stringify(
+                {
+                  range,
+                  limit,
+                  sessions: sessionsResultRaw,
+                  cost: costSummaryRaw,
+                },
+                null,
+                2,
+              ),
+            );
+            return;
+          }
+
+          const rich = isRich();
+          const sessionsResult = sessionsResultRaw as UsageSessionsCliResult;
+          const costSummary = costSummaryRaw as CostUsageSummary;
+          for (const line of renderUsageSessionsSummary({
+            sessionsResult,
+            costSummary,
+            startDate: range.startDate,
+            endDate: range.endDate,
+            limit,
+            rich,
+          })) {
+            defaultRuntime.log(line);
+          }
+        }, "Gateway usage sessions failed");
       }),
   );
 

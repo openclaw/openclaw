@@ -42,51 +42,60 @@ import {
 
 export type { UsageColumnId, SessionLogEntry, SessionLogRole };
 
-function createEmptyUsageTotals(): UsageTotals {
-  return {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    totalCost: 0,
-    inputCost: 0,
-    outputCost: 0,
-    cacheReadCost: 0,
-    cacheWriteCost: 0,
-    missingCostEntries: 0,
-  };
-}
+const emptyUsageTotals = (): UsageTotals => ({
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  totalCost: 0,
+  inputCost: 0,
+  outputCost: 0,
+  cacheReadCost: 0,
+  cacheWriteCost: 0,
+  missingCostEntries: 0,
+});
 
-function addUsageTotals(
-  acc: UsageTotals,
-  usage: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    totalTokens: number;
-    totalCost: number;
-    inputCost?: number;
-    outputCost?: number;
-    cacheReadCost?: number;
-    cacheWriteCost?: number;
-    missingCostEntries?: number;
-  },
-): UsageTotals {
-  acc.input += usage.input;
-  acc.output += usage.output;
-  acc.cacheRead += usage.cacheRead;
-  acc.cacheWrite += usage.cacheWrite;
-  acc.totalTokens += usage.totalTokens;
-  acc.totalCost += usage.totalCost;
-  acc.inputCost += usage.inputCost ?? 0;
-  acc.outputCost += usage.outputCost ?? 0;
-  acc.cacheReadCost += usage.cacheReadCost ?? 0;
-  acc.cacheWriteCost += usage.cacheWriteCost ?? 0;
-  acc.missingCostEntries += usage.missingCostEntries ?? 0;
-  return acc;
-}
+const sumDailyTotals = (entries: UsageProps["costDaily"]): UsageTotals =>
+  entries.reduce((acc, entry) => {
+    acc.input += entry.input;
+    acc.output += entry.output;
+    acc.cacheRead += entry.cacheRead;
+    acc.cacheWrite += entry.cacheWrite;
+    acc.totalTokens += entry.totalTokens;
+    acc.totalCost += entry.totalCost;
+    acc.inputCost += entry.inputCost ?? 0;
+    acc.outputCost += entry.outputCost ?? 0;
+    acc.cacheReadCost += entry.cacheReadCost ?? 0;
+    acc.cacheWriteCost += entry.cacheWriteCost ?? 0;
+    acc.missingCostEntries += entry.missingCostEntries ?? 0;
+    return acc;
+  }, emptyUsageTotals());
+
+const resolveBaseTotals = (params: {
+  sessionTotals: UsageTotals | null;
+  costDaily: UsageProps["costDaily"];
+}): UsageTotals | null => {
+  // `usage.cost` is not capped by the session list limit, so prefer it when available.
+  if (params.costDaily.length > 0) {
+    return sumDailyTotals(params.costDaily);
+  }
+  return params.sessionTotals;
+};
+
+const resolvePresetRange = (
+  preset: { days?: number; lifetime?: true },
+  now = new Date(),
+): { startDate: string; endDate: string } => {
+  const endDate = formatIsoDate(now);
+  if (preset.lifetime) {
+    return { startDate: "1970-01-01", endDate };
+  }
+  const start = new Date(now);
+  const days = Math.max(1, preset.days ?? 1);
+  start.setDate(start.getDate() - (days - 1));
+  return { startDate: formatIsoDate(start), endDate };
+};
 
 export function renderUsage(props: UsageProps) {
   // Show loading skeleton if loading and no data yet
@@ -252,21 +261,37 @@ export function renderUsage(props: UsageProps) {
   // Compute totals from sessions
   const computeSessionTotals = (sessions: UsageSessionEntry[]): UsageTotals => {
     return sessions.reduce(
-      (acc, s) => (s.usage ? addUsageTotals(acc, s.usage) : acc),
-      createEmptyUsageTotals(),
+      (acc, s) => {
+        if (!s.usage) return acc;
+        acc.input += s.usage.input;
+        acc.output += s.usage.output;
+        acc.cacheRead += s.usage.cacheRead;
+        acc.cacheWrite += s.usage.cacheWrite;
+        acc.totalTokens += s.usage.totalTokens;
+        acc.totalCost += s.usage.totalCost;
+        acc.inputCost += s.usage.inputCost ?? 0;
+        acc.outputCost += s.usage.outputCost ?? 0;
+        acc.cacheReadCost += s.usage.cacheReadCost ?? 0;
+        acc.cacheWriteCost += s.usage.cacheWriteCost ?? 0;
+        acc.missingCostEntries += s.usage.missingCostEntries ?? 0;
+        return acc;
+      },
+      emptyUsageTotals(),
     );
   };
 
   // Compute totals from daily data for selected days (more accurate than session totals)
-  const computeDailyTotals = (days: string[]): UsageTotals => {
-    const matchingDays = props.costDaily.filter((d) => days.includes(d.date));
-    return matchingDays.reduce((acc, day) => addUsageTotals(acc, day), createEmptyUsageTotals());
-  };
+  const computeDailyTotals = (days: string[]): UsageTotals =>
+    sumDailyTotals(props.costDaily.filter((d) => days.includes(d.date)));
 
   // Compute display totals and count based on filters
   let displayTotals: UsageTotals | null;
   let displaySessionCount: number;
   const totalSessions = sortedSessions.length;
+  const baseTotals = resolveBaseTotals({
+    sessionTotals: props.totals,
+    costDaily: props.costDaily,
+  });
 
   if (props.selectedSessions.length > 0) {
     // Sessions selected - compute totals from selected sessions
@@ -287,7 +312,7 @@ export function renderUsage(props: UsageProps) {
     displaySessionCount = filteredSessions.length;
   } else {
     // No filters - show all
-    displayTotals = props.totals;
+    displayTotals = baseTotals;
     displaySessionCount = totalSessions;
   }
 
@@ -337,13 +362,12 @@ export function renderUsage(props: UsageProps) {
     { label: "Today", days: 1 },
     { label: "7d", days: 7 },
     { label: "30d", days: 30 },
+    { label: "Lifetime", lifetime: true as const },
   ];
-  const applyPreset = (days: number) => {
-    const end = new Date();
-    const start = new Date();
-    start.setDate(start.getDate() - (days - 1));
-    props.onStartDateChange(formatIsoDate(start));
-    props.onEndDateChange(formatIsoDate(end));
+  const applyPreset = (preset: { days?: number; lifetime?: true }) => {
+    const range = resolvePresetRange(preset);
+    props.onStartDateChange(range.startDate);
+    props.onEndDateChange(range.endDate);
   };
   const renderFilterSelect = (key: string, label: string, options: string[]) => {
     if (options.length === 0) {
@@ -572,7 +596,7 @@ export function renderUsage(props: UsageProps) {
           <div class="usage-presets">
             ${datePresets.map(
               (preset) => html`
-                <button class="btn btn-sm" @click=${() => applyPreset(preset.days)}>
+                <button class="btn btn-sm" @click=${() => applyPreset(preset)}>
                   ${preset.label}
                 </button>
               `,
@@ -737,7 +761,8 @@ export function renderUsage(props: UsageProps) {
         props.sessionsLimitReached
           ? html`
               <div class="callout warning" style="margin-top: 12px">
-                Showing first 1,000 sessions. Narrow date range for complete results.
+                Showing first 1,000 sessions in the table. Overview totals still use full daily aggregates for
+                this date range.
               </div>
             `
           : nothing
@@ -834,3 +859,7 @@ export function renderUsage(props: UsageProps) {
 }
 
 // Exposed for Playwright/Vitest browser unit tests.
+export const __test = {
+  resolveBaseTotals,
+  resolvePresetRange,
+};
