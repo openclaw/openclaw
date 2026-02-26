@@ -190,6 +190,7 @@ export const TelegramAccountSchemaBase = z
       .strict()
       .optional(),
     proxy: z.string().optional(),
+    apiRoot: z.string().url().optional().describe("The root URL of the Telegram API. Defaults to https://api.telegram.org."),
     webhookUrl: z
       .string()
       .optional()
