@@ -554,7 +554,6 @@ export const registerTelegramHandlers = ({
       (await resolveTelegramGroupAllowFromContext({
         chatId: params.chatId,
         accountId,
-        dmPolicy,
         isForum: params.isForum,
         messageThreadId: params.messageThreadId,
         groupAllowFrom,
