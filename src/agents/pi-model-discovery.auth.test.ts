@@ -113,4 +113,49 @@ describe("discoverAuthStorage", () => {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
   });
+
+  it("preserves legacy auth.json when auth store is forced read-only", async () => {
+    const agentDir = await createAgentDir();
+    const previous = process.env.OPENCLAW_AUTH_STORE_READONLY;
+    process.env.OPENCLAW_AUTH_STORE_READONLY = "1";
+    try {
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            "openrouter:default": {
+              type: "api_key",
+              provider: "openrouter",
+              key: "sk-or-v1-runtime",
+            },
+          },
+        },
+        agentDir,
+      );
+      await fs.writeFile(
+        path.join(agentDir, "auth.json"),
+        JSON.stringify(
+          {
+            openrouter: { type: "api_key", key: "legacy-static-key" },
+          },
+          null,
+          2,
+        ),
+      );
+
+      discoverAuthStorage(agentDir);
+
+      const parsed = JSON.parse(await fs.readFile(path.join(agentDir, "auth.json"), "utf8")) as {
+        [key: string]: unknown;
+      };
+      expect(parsed.openrouter).toMatchObject({ type: "api_key", key: "legacy-static-key" });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OPENCLAW_AUTH_STORE_READONLY;
+      } else {
+        process.env.OPENCLAW_AUTH_STORE_READONLY = previous;
+      }
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
 });

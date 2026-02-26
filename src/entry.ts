@@ -15,6 +15,16 @@ const ENTRY_WRAPPER_PAIRS = [
   { wrapperBasename: "openclaw.js", entryBasename: "entry.js" },
 ] as const;
 
+function shouldForceReadOnlyAuthStore(argv: string[]): boolean {
+  const tokens = argv.slice(2).filter((token) => token.length > 0 && !token.startsWith("-"));
+  for (let index = 0; index < tokens.length - 1; index += 1) {
+    if (tokens[index] === "secrets" && tokens[index + 1] === "audit") {
+      return true;
+    }
+  }
+  return false;
+}
+
 // Guard: only run entry-point logic when this file is the main module.
 // The bundler may import entry.js as a shared dependency when dist/index.js
 // is the actual entry point; without this guard the top-level code below
@@ -31,6 +41,10 @@ if (
   process.title = "openclaw";
   installProcessWarningFilter();
   normalizeEnv();
+
+  if (shouldForceReadOnlyAuthStore(process.argv)) {
+    process.env.OPENCLAW_AUTH_STORE_READONLY = "1";
+  }
 
   if (process.argv.includes("--no-color")) {
     process.env.NO_COLOR = "1";

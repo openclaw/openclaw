@@ -146,4 +146,34 @@ describe("secrets apply", () => {
     expect(nextEnv).not.toContain("sk-openai-plaintext");
     expect(nextEnv).toContain("UNRELATED=value");
   });
+
+  it("is idempotent on repeated write applies", async () => {
+    const plan: SecretsApplyPlan = {
+      version: 1,
+      protocolVersion: 1,
+      generatedAt: new Date().toISOString(),
+      generatedBy: "manual",
+      targets: [
+        {
+          type: "models.providers.apiKey",
+          path: "models.providers.openai.apiKey",
+          providerId: "openai",
+          ref: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        },
+      ],
+      options: {
+        scrubEnv: true,
+        scrubAuthProfilesForProviderTargets: true,
+        scrubLegacyAuthJson: true,
+      },
+    };
+
+    const first = await runSecretsApply({ plan, env, write: true });
+    expect(first.changed).toBe(true);
+
+    const second = await runSecretsApply({ plan, env, write: true });
+    expect(second.mode).toBe("write");
+    expect(second.changed).toBe(false);
+    expect(second.changedFiles).toEqual([]);
+  });
 });
