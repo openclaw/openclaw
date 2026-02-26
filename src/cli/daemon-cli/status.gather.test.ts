@@ -147,4 +147,34 @@ describe("gatherDaemonStatus", () => {
     expect(status.rpc?.url).toBe("wss://127.0.0.1:19001");
     expect(status.rpc?.ok).toBe(true);
   });
+
+  it("does not force local TLS fingerprint when probe URL is explicitly overridden", async () => {
+    const status = await gatherDaemonStatus({
+      rpc: { url: "wss://override.example:18790" },
+      probe: true,
+      deep: false,
+    });
+
+    expect(loadGatewayTlsRuntime).not.toHaveBeenCalled();
+    expect(callGatewayStatusProbe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "wss://override.example:18790",
+        tlsFingerprint: undefined,
+      }),
+    );
+    expect(status.gateway?.probeUrl).toBe("wss://override.example:18790");
+    expect(status.rpc?.url).toBe("wss://override.example:18790");
+  });
+
+  it("skips TLS runtime loading when probe is disabled", async () => {
+    const status = await gatherDaemonStatus({
+      rpc: {},
+      probe: false,
+      deep: false,
+    });
+
+    expect(loadGatewayTlsRuntime).not.toHaveBeenCalled();
+    expect(callGatewayStatusProbe).not.toHaveBeenCalled();
+    expect(status.rpc).toBeUndefined();
+  });
 });
