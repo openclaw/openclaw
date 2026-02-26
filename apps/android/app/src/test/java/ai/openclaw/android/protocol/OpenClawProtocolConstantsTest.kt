@@ -32,4 +32,9 @@ class OpenClawProtocolConstantsTest {
   fun screenCommandsUseStableStrings() {
     assertEquals("screen.record", OpenClawScreenCommand.Record.rawValue)
   }
+
+  @Test
+  fun notificationsCommandsUseStableStrings() {
+    assertEquals("notifications.list", OpenClawNotificationsCommand.List.rawValue)
+  }
 }
