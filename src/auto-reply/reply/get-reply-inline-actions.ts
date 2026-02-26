@@ -5,6 +5,7 @@ import { applyOwnerOnlyToolPolicy } from "../../agents/tool-policy.js";
 import { getChannelDock } from "../../channels/dock.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { updateSessionStore } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { resolveGatewayMessageChannel } from "../../utils/message-channel.js";
@@ -16,7 +17,7 @@ import {
 import type { MsgContext, TemplateContext } from "../templating.js";
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
-import { getAbortMemory } from "./abort.js";
+import { getAbortMemory, isAbortRequestText, shouldSkipMessageByAbortCutoff } from "./abort.js";
 import { buildStatusReply, handleCommands } from "./commands.js";
 import type { InlineDirectives } from "./directive-handling.js";
 import { isDirectiveOnly } from "./directive-handling.js";
@@ -251,6 +252,57 @@ export async function handleInlineActions(params: {
     }
     await opts.onBlockReply(reply);
   };
+
+  const clearAbortCutoff = async () => {
+    if (!sessionEntry || !sessionStore || !sessionKey) {
+      return;
+    }
+    if (
+      sessionEntry.abortCutoffMessageSid === undefined &&
+      sessionEntry.abortCutoffTimestamp === undefined
+    ) {
+      return;
+    }
+    sessionEntry.abortCutoffMessageSid = undefined;
+    sessionEntry.abortCutoffTimestamp = undefined;
+    sessionEntry.updatedAt = Date.now();
+    sessionStore[sessionKey] = sessionEntry;
+    if (storePath) {
+      await updateSessionStore(storePath, (store) => {
+        const existing = store[sessionKey] ?? sessionEntry;
+        if (!existing) {
+          return;
+        }
+        existing.abortCutoffMessageSid = undefined;
+        existing.abortCutoffTimestamp = undefined;
+        existing.updatedAt = Date.now();
+        store[sessionKey] = existing;
+      });
+    }
+  };
+
+  const isStopLikeInbound = isAbortRequestText(command.rawBodyNormalized);
+  if (!isStopLikeInbound && sessionEntry) {
+    const shouldSkip = shouldSkipMessageByAbortCutoff({
+      cutoffMessageSid: sessionEntry.abortCutoffMessageSid,
+      cutoffTimestamp: sessionEntry.abortCutoffTimestamp,
+      messageSid:
+        (typeof ctx.MessageSidFull === "string" && ctx.MessageSidFull.trim()) ||
+        (typeof ctx.MessageSid === "string" && ctx.MessageSid.trim()) ||
+        undefined,
+      timestamp: typeof ctx.Timestamp === "number" ? ctx.Timestamp : undefined,
+    });
+    if (shouldSkip) {
+      typing.cleanup();
+      return { kind: "reply", reply: undefined };
+    }
+    if (
+      sessionEntry.abortCutoffMessageSid !== undefined ||
+      sessionEntry.abortCutoffTimestamp !== undefined
+    ) {
+      await clearAbortCutoff();
+    }
+  }
 
   const inlineCommand =
     allowTextCommands && command.isAuthorizedSender
