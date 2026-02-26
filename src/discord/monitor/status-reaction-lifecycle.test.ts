@@ -51,6 +51,29 @@ describe("status-reaction-lifecycle", () => {
     expect(onError).toHaveBeenCalledTimes(1);
   });
 
+  it("falls back to error when active transition fails", async () => {
+    let activeFailed = false;
+    const setReaction = vi.fn(async (emoji: string) => {
+      if (emoji === "🤔" && !activeFailed) {
+        activeFailed = true;
+        throw new Error("active failed");
+      }
+    });
+    const lifecycle = createDiscordStatusReactionLifecycle({
+      enabled: true,
+      messageId: "m2b",
+      adapter: { setReaction },
+      projection: resolveDiscordStatusReactionProjection(undefined, "👀"),
+    });
+
+    await lifecycle.enterWaiting(false);
+    await lifecycle.enterActive();
+    await lifecycle.complete(false);
+
+    const emojis = setReaction.mock.calls.map((call) => call[0]);
+    expect(emojis).toEqual(["👀", "🤔", "❌"]);
+  });
+
   it("keeps waiting until an active interruption is requested", async () => {
     const setReaction = vi.fn(async (_emoji: string) => {});
     const lifecycle = createDiscordStatusReactionLifecycle({
@@ -90,39 +113,39 @@ describe("status-reaction-lifecycle", () => {
       .map((entry) => entry.state);
     expect(failed).toContain("active");
   });
-});
 
-it("requires a completed active transition before terminal transition", async () => {
-  __testing.resetTraceEntriesForTests();
-  const releaseActiveRef: { current?: () => void } = {};
-  const setReaction = vi.fn((emoji: string) => {
-    if (emoji === "🤔") {
-      return new Promise<void>((resolve) => {
-        releaseActiveRef.current = resolve;
-      });
-    }
-    return Promise.resolve();
+  it("requires a completed active transition before terminal transition", async () => {
+    __testing.resetTraceEntriesForTests();
+    const releaseActiveRef: { current?: () => void } = {};
+    const setReaction = vi.fn((emoji: string) => {
+      if (emoji === "🤔") {
+        return new Promise<void>((resolve) => {
+          releaseActiveRef.current = resolve;
+        });
+      }
+      return Promise.resolve();
+    });
+    const lifecycle = createDiscordStatusReactionLifecycle({
+      enabled: true,
+      messageId: "m5",
+      adapter: { setReaction },
+      projection: resolveDiscordStatusReactionProjection(undefined, "👀"),
+    });
+
+    await lifecycle.enterWaiting(false);
+    const activePromise = lifecycle.enterActive();
+    await Promise.resolve();
+    expect(setReaction.mock.calls.map((call) => call[0])).toEqual(["👀", "🤔"]);
+
+    const blockedComplete = lifecycle.complete(true);
+    await Promise.resolve();
+    expect(setReaction.mock.calls.map((call) => call[0])).toEqual(["👀", "🤔"]);
+
+    releaseActiveRef.current?.();
+    await activePromise;
+    await blockedComplete;
+    await lifecycle.complete(true);
+
+    expect(setReaction.mock.calls.map((call) => call[0])).toEqual(["👀", "🤔", "✅"]);
   });
-  const lifecycle = createDiscordStatusReactionLifecycle({
-    enabled: true,
-    messageId: "m5",
-    adapter: { setReaction },
-    projection: resolveDiscordStatusReactionProjection(undefined, "👀"),
-  });
-
-  await lifecycle.enterWaiting(false);
-  const activePromise = lifecycle.enterActive();
-  await Promise.resolve();
-  expect(setReaction.mock.calls.map((call) => call[0])).toEqual(["👀", "🤔"]);
-
-  const blockedComplete = lifecycle.complete(true);
-  await Promise.resolve();
-  expect(setReaction.mock.calls.map((call) => call[0])).toEqual(["👀", "🤔"]);
-
-  releaseActiveRef.current?.();
-  await activePromise;
-  await blockedComplete;
-  await lifecycle.complete(true);
-
-  expect(setReaction.mock.calls.map((call) => call[0])).toEqual(["👀", "🤔", "✅"]);
 });
