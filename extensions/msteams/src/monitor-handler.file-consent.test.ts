@@ -148,18 +148,24 @@ describe("msteams file consent invoke authz", () => {
 
     await handler.run?.(context);
 
-    expect(fileConsentMockState.uploadToConsentUrl).toHaveBeenCalledTimes(1);
+    // invokeResponse should be sent immediately
+    expect(sendActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "invokeResponse",
+      }),
+    );
+
+    // Wait for async upload to complete
+    await vi.waitFor(() => {
+      expect(fileConsentMockState.uploadToConsentUrl).toHaveBeenCalledTimes(1);
+    });
+    
     expect(fileConsentMockState.uploadToConsentUrl).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "https://upload.example.com/put",
       }),
     );
     expect(getPendingUpload(uploadId)).toBeUndefined();
-    expect(sendActivity).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "invokeResponse",
-      }),
-    );
   });
 
   it("rejects cross-conversation accept invoke and keeps pending upload", async () => {
