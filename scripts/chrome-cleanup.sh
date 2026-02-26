@@ -159,19 +159,6 @@ get_elapsed_secs() {
     fi
 }
 
-get_rss_kb() {
-    # FIX: Platform-aware RSS detection
-    if [[ "$PLATFORM" == "macos" ]]; then
-        # macOS: rss is in pages (typically 4096 bytes), convert to KB
-        local rss_pages
-        rss_pages=$(ps -p "$1" -o rss= 2>/dev/null | tr -d ' ')
-        [[ -n "$rss_pages" ]] && echo $(( rss_pages * 4 )) || echo ""
-    else
-        # Linux: rss is already in KB
-        ps -p "$1" -o rss= 2>/dev/null | tr -d ' '
-    fi
-}
-
 # Platform-aware command line reading
 read_proc_cmdline() {
     local pid="$1"
