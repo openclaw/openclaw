@@ -15,6 +15,7 @@ import {
   type SecretsApplyPlan,
   type SecretsPlanTarget,
   normalizeSecretsPlanOptions,
+  resolveValidatedTargetPathSegments,
 } from "./plan.js";
 import { listKnownSecretEnvVarNames } from "./provider-env-vars.js";
 import { resolveSecretRefValue } from "./resolve.js";
@@ -51,10 +52,6 @@ export type SecretsApplyResult = {
   warningCount: number;
   warnings: string[];
 };
-
-function parseDotPath(pathname: string): string[] {
-  return pathname.split(".").filter(Boolean);
-}
 
 function getByPathSegments(root: unknown, segments: string[]): unknown {
   if (segments.length === 0) {
@@ -114,15 +111,11 @@ function deleteByPathSegments(root: OpenClawConfig, segments: string[]): boolean
 }
 
 function resolveTargetPathSegments(target: SecretsPlanTarget): string[] {
-  const explicit = target.pathSegments;
-  if (
-    Array.isArray(explicit) &&
-    explicit.length > 0 &&
-    explicit.every((segment) => typeof segment === "string" && segment.trim().length > 0)
-  ) {
-    return [...explicit];
+  const resolved = resolveValidatedTargetPathSegments(target);
+  if (!resolved) {
+    throw new Error(`Invalid plan target path for ${target.type}: ${target.path}`);
   }
-  return parseDotPath(target.path);
+  return resolved;
 }
 
 function parseEnvValue(raw: string): string {
