@@ -15,6 +15,7 @@ import { shouldAckReaction as shouldAckReactionGate } from "../../channels/ack-r
 import { logTypingFailure, logAckFailure } from "../../channels/logging.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
+import { DEFAULT_TIMING } from "../../channels/status-reactions.js";
 import { createTypingCallbacks } from "../../channels/typing.js";
 import { isDangerousNameMatchingEnabled } from "../../config/dangerous-name-matching.js";
 import { resolveDiscordPreviewStreamMode } from "../../config/discord-preview-streaming.js";
@@ -119,6 +120,7 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     accountId,
   });
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
+  const statusReactionTiming = cfg.messages?.statusReactions?.timing;
   const shouldAckReaction = () =>
     Boolean(
       ackReaction &&
@@ -182,7 +184,16 @@ export async function processDiscordMessage(ctx: DiscordMessagePreflightContext)
     statusLifecycleSettled = true;
     await statusReactions.complete(succeeded);
     if (removeAckAfterReply) {
-      statusReactions.clearAfterHold(DISCORD_STATUS_CLEAR_HOLD_MS);
+      const configuredHoldMs = succeeded
+        ? statusReactionTiming?.doneHoldMs
+        : statusReactionTiming?.errorHoldMs;
+      const holdMs =
+        typeof configuredHoldMs === "number" && configuredHoldMs >= 0
+          ? configuredHoldMs
+          : succeeded
+            ? DEFAULT_TIMING.doneHoldMs
+            : DEFAULT_TIMING.errorHoldMs;
+      statusReactions.clearAfterHold(holdMs ?? DISCORD_STATUS_CLEAR_HOLD_MS);
     }
   };
 
