@@ -51,7 +51,11 @@ struct StatusPill: View {
                     Circle()
                         .fill(self.gateway.color)
                         .frame(width: 9, height: 9)
-                        .scaleEffect(self.gateway == .connecting && !self.reduceMotion ? (self.pulse ? 1.15 : 0.85) : 1.0)
+                        .scaleEffect(
+                            self.gateway == .connecting && !self.reduceMotion
+                                ? (self.pulse ? 1.15 : 0.85)
+                                : 1.0
+                        )
                         .opacity(self.gateway == .connecting && !self.reduceMotion ? (self.pulse ? 1.0 : 0.6) : 1.0)
 
                     Text(self.gateway.title)

@@ -26,9 +26,9 @@ enum ExecHostRequestEvaluator {
             command: command,
             rawCommand: request.rawCommand)
         switch validatedCommand {
-        case .ok(let resolved):
+        case let .ok(resolved):
             return .success(ExecHostValidatedRequest(command: command, displayCommand: resolved.displayCommand))
-        case .invalid(let message):
+        case let .invalid(message):
             return .failure(
                 ExecHostError(
                     code: "INVALID_REQUEST",

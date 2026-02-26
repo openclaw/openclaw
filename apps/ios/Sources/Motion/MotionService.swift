@@ -20,7 +20,7 @@ final class MotionService: MotionServicing {
         let limit = max(1, min(params.limit ?? 200, 1000))
 
         let manager = CMMotionActivityManager()
-        let mapped = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[OpenClawMotionActivityEntry], Error>) in
+        let mapped: [OpenClawMotionActivityEntry] = try await withCheckedThrowingContinuation { cont in
             manager.queryActivityStarting(from: start, to: end, to: OperationQueue()) { activity, error in
                 if let error {
                     cont.resume(throwing: error)
@@ -62,7 +62,7 @@ final class MotionService: MotionServicing {
 
         let (start, end) = Self.resolveRange(startISO: params.startISO, endISO: params.endISO)
         let pedometer = CMPedometer()
-        let payload = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<OpenClawPedometerPayload, Error>) in
+        let payload: OpenClawPedometerPayload = try await withCheckedThrowingContinuation { cont in
             pedometer.queryPedometerData(from: start, to: end) { data, error in
                 if let error {
                     cont.resume(throwing: error)
