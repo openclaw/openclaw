@@ -12,7 +12,7 @@ export function isSilentReplyText(
   }
   const escaped = escapeRegExp(token);
   // Only match when the entire response (trimmed) is the silent token,
-  // optionally surrounded by whitespace/punctuation. This prevents
+  // optionally surrounded by whitespace. This prevents
   // substantive replies ending with NO_REPLY from being suppressed (#19537).
   return new RegExp(`^\\s*${escaped}\\s*$`).test(text);
 }
