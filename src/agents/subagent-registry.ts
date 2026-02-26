@@ -331,9 +331,16 @@ function startSubagentAnnounceCleanupFlow(runId: string, entry: SubagentRunRecor
     outcome: entry.outcome,
     spawnMode: entry.spawnMode,
     expectsCompletionMessage: entry.expectsCompletionMessage,
-  }).then((didAnnounce) => {
-    void finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce);
-  });
+  })
+    .then((didAnnounce) => {
+      void finalizeSubagentCleanup(runId, entry.cleanup, didAnnounce);
+    })
+    .catch((error) => {
+      defaultRuntime.log(
+        `[warn] Subagent announce flow failed during cleanup for run ${runId}: ${String(error)}`,
+      );
+      void finalizeSubagentCleanup(runId, entry.cleanup, false);
+    });
   return true;
 }
 

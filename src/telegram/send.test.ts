@@ -196,6 +196,10 @@ describe("sendMessageTelegram", () => {
     for (const testCase of cases) {
       botCtorSpy.mockClear();
       loadConfig.mockReturnValue(testCase.cfg);
+      botApi.sendMessage.mockResolvedValue({
+        message_id: 1,
+        chat: { id: "123" },
+      });
       await sendMessageTelegram("123", "hi", testCase.opts);
       expect(botCtorSpy, testCase.name).toHaveBeenCalledWith(
         "tok",
@@ -323,6 +327,40 @@ describe("sendMessageTelegram", () => {
       await sendMessageTelegram("123", testCase.text, { token: "tok", api });
       expect(testCase.sendMessage.mock.calls, testCase.name).toEqual(testCase.expectedCalls);
     }
+  });
+
+  it("fails when Telegram text send returns no message_id", async () => {
+    const sendMessage = vi.fn().mockResolvedValue({
+      chat: { id: "123" },
+    });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await expect(
+      sendMessageTelegram("123", "hi", {
+        token: "tok",
+        api,
+      }),
+    ).rejects.toThrow(/returned no message_id/i);
+  });
+
+  it("fails when Telegram media send returns no message_id", async () => {
+    mockLoadedMedia({ contentType: "image/png", fileName: "photo.png" });
+    const sendPhoto = vi.fn().mockResolvedValue({
+      chat: { id: "123" },
+    });
+    const api = { sendPhoto } as unknown as {
+      sendPhoto: typeof sendPhoto;
+    };
+
+    await expect(
+      sendMessageTelegram("123", "caption", {
+        token: "tok",
+        api,
+        mediaUrl: "https://example.com/photo.png",
+      }),
+    ).rejects.toThrow(/returned no message_id/i);
   });
 
   it("uses native fetch for BAN compatibility when api is omitted", async () => {
