@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk";
 import type { PlivoConfig, WebhookSecurityConfig } from "../config.js";
+import { getHeader } from "../http-headers.js";
 import type {
   HangupCallInput,
   InitiateCallInput,
@@ -17,6 +17,7 @@ import type {
 import { escapeXml } from "../voice-mapping.js";
 import { reconstructWebhookUrl, verifyPlivoWebhook } from "../webhook-security.js";
 import type { VoiceCallProvider } from "./base.js";
+import { guardedJsonApiRequest } from "./shared/guarded-json-api.js";
 
 export interface PlivoProviderOptions {
   /** Override public URL origin for signature verification */
@@ -31,17 +32,6 @@ export interface PlivoProviderOptions {
 
 type PendingSpeak = { text: string; locale?: string };
 type PendingListen = { language?: string };
-
-function getHeader(
-  headers: Record<string, string | string[] | undefined>,
-  name: string,
-): string | undefined {
-  const value = headers[name.toLowerCase()];
-  if (Array.isArray(value)) {
-    return value[0];
-  }
-  return value;
-}
 
 function createPlivoRequestDedupeKey(ctx: WebhookContext): string {
   const nonceV3 = getHeader(ctx.headers, "x-plivo-signature-v3-nonce");
@@ -96,33 +86,19 @@ export class PlivoProvider implements VoiceCallProvider {
     allowNotFound?: boolean;
   }): Promise<T> {
     const { method, endpoint, body, allowNotFound } = params;
-    const { response, release } = await fetchWithSsrFGuard({
+    return await guardedJsonApiRequest<T>({
       url: `${this.baseUrl}${endpoint}`,
-      init: {
-        method,
-        headers: {
-          Authorization: `Basic ${Buffer.from(`${this.authId}:${this.authToken}`).toString("base64")}`,
-          "Content-Type": "application/json",
-        },
-        body: body ? JSON.stringify(body) : undefined,
+      method,
+      headers: {
+        Authorization: `Basic ${Buffer.from(`${this.authId}:${this.authToken}`).toString("base64")}`,
+        "Content-Type": "application/json",
       },
-      policy: { allowedHostnames: [this.apiHost] },
+      body,
+      allowNotFound,
+      allowedHostnames: [this.apiHost],
       auditContext: "voice-call.plivo.api",
+      errorPrefix: "Plivo API error",
     });
-    try {
-      if (!response.ok) {
-        if (allowNotFound && response.status === 404) {
-          return undefined as T;
-        }
-        const errorText = await response.text();
-        throw new Error(`Plivo API error: ${response.status} ${errorText}`);
-      }
-
-      const text = await response.text();
-      return text ? (JSON.parse(text) as T) : (undefined as T);
-    } finally {
-      await release();
-    }
   }
 
   verifyWebhook(ctx: WebhookContext): WebhookVerificationResult {
