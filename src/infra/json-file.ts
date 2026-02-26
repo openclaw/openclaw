@@ -77,8 +77,20 @@ export function saveJsonFile(pathname: string, data: unknown) {
     // Non-critical: if backup fails we still proceed with the atomic write.
   }
 
-  // 2. Write to temp file.
-  fs.writeFileSync(tmpPath, content, "utf8");
+  // 2. Write to temp file and flush to disk.
+  const fd = fs.openSync(tmpPath, "w");
+  try {
+    fs.writeSync(fd, content, 0, "utf8");
+    // Flush data to disk before rename so content survives power loss, not
+    // just SIGTERM.  See nikolasdehor's review on #23980.
+    try {
+      fs.fdatasyncSync(fd);
+    } catch {
+      // fdatasync may not be supported everywhere; best-effort.
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
   try {
     fs.chmodSync(tmpPath, 0o600);
   } catch {
@@ -86,5 +98,15 @@ export function saveJsonFile(pathname: string, data: unknown) {
   }
 
   // 3. Atomic rename over the target.
-  fs.renameSync(tmpPath, pathname);
+  try {
+    fs.renameSync(tmpPath, pathname);
+  } catch (err) {
+    // Clean up orphaned .tmp file on failed rename (e.g. cross-filesystem).
+    try {
+      fs.unlinkSync(tmpPath);
+    } catch {
+      /* ignore */
+    }
+    throw err;
+  }
 }
