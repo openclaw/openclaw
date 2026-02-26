@@ -2305,6 +2305,51 @@ describe("BlueBubbles webhook monitor", () => {
 
       expect(mockDispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     });
+
+    it("does not auto-authorize DM control commands in open mode without allowlists", async () => {
+      mockHasControlCommand.mockReturnValue(true);
+
+      const account = createMockAccount({
+        dmPolicy: "open",
+        allowFrom: [],
+      });
+      const config: OpenClawConfig = {};
+      const core = createMockRuntime();
+      setBlueBubblesRuntime(core);
+
+      unregister = registerBlueBubblesWebhookTarget({
+        account,
+        config,
+        runtime: { log: vi.fn(), error: vi.fn() },
+        core,
+        path: "/bluebubbles-webhook",
+      });
+
+      const payload = {
+        type: "new-message",
+        data: {
+          text: "/status",
+          handle: { address: "+15559999999" },
+          isGroup: false,
+          isFromMe: false,
+          guid: "msg-dm-open-unauthorized",
+          date: Date.now(),
+        },
+      };
+
+      const req = createMockRequest("POST", "/bluebubbles-webhook", payload);
+      const res = createMockResponse();
+
+      await handleBlueBubblesWebhookRequest(req, res);
+      await flushAsync();
+
+      expect(mockDispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalled();
+      const latestDispatch =
+        mockDispatchReplyWithBufferedBlockDispatcher.mock.calls[
+          mockDispatchReplyWithBufferedBlockDispatcher.mock.calls.length - 1
+        ]?.[0];
+      expect(latestDispatch?.ctx?.CommandAuthorized).toBe(false);
+    });
   });
 
   describe("typing/read receipt toggles", () => {
