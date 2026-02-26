@@ -3,12 +3,17 @@ import { parseActivationCommand } from "../../../auto-reply/group-activation.js"
 import { recordPendingHistoryEntryIfEnabled } from "../../../auto-reply/reply/history.js";
 import { resolveMentionGating } from "../../../channels/mention-gating.js";
 import type { loadConfig } from "../../../config/config.js";
+import { triggerInternalHook, createInternalHookEvent } from "../../../hooks/internal-hooks.js";
 import { normalizeE164 } from "../../../utils.js";
 import type { MentionConfig } from "../mentions.js";
 import { buildMentionConfig, debugMention, resolveOwnerList } from "../mentions.js";
 import type { WebInboundMsg } from "../types.js";
 import { stripMentionsForCommand } from "./commands.js";
-import { resolveGroupActivationFor, resolveGroupPolicyFor } from "./group-activation.js";
+import {
+  resolveGroupActivationFor,
+  resolveGroupPolicyFor,
+  resolveGroupRequireMentionFor,
+} from "./group-activation.js";
 import { noteGroupMember } from "./group-members.js";
 
 export type GroupHistoryEntry = {
@@ -76,14 +81,43 @@ function skipGroupMessageAndStoreHistory(params: ApplyGroupGatingParams, verbose
     groupHistoryKey: params.groupHistoryKey,
     groupHistoryLimit: params.groupHistoryLimit,
   });
+
+  // Fire internal hooks even for skipped group messages (e.g. cervinia-logger)
+  void triggerInternalHook(
+    createInternalHookEvent("message", "received", params.sessionKey || "", {
+      from: params.msg.senderE164 ?? params.msg.senderJid ?? "",
+      content: params.msg.body ?? "",
+      timestamp: params.msg.timestamp ?? Math.floor(Date.now() / 1000),
+      channelId: "whatsapp",
+      accountId: "default",
+      conversationId: params.conversationId,
+      messageId: params.msg.id ?? "",
+      metadata: {
+        senderName: params.msg.senderName ?? undefined,
+        senderE164: params.msg.senderE164 ?? undefined,
+      },
+    }),
+  ).catch(() => {});
+
   return { shouldProcess: false } as const;
 }
 
 export function applyGroupGating(params: ApplyGroupGatingParams) {
   const groupPolicy = resolveGroupPolicyFor(params.cfg, params.conversationId);
   if (groupPolicy.allowlistEnabled && !groupPolicy.allowed) {
-    params.logVerbose(`Skipping group message ${params.conversationId} (not in allowlist)`);
-    return { shouldProcess: false };
+    return skipGroupMessageAndStoreHistory(
+      params,
+      `Skipping group message ${params.conversationId} (not in allowlist)`,
+    );
+  }
+
+  // Monitor-only groups: fire hooks but never process (requireMention: "monitor")
+  const rawRequireMention = resolveGroupRequireMentionFor(params.cfg, params.conversationId);
+  if (rawRequireMention === "monitor") {
+    return skipGroupMessageAndStoreHistory(
+      params,
+      `Monitor-only group ${params.conversationId} (requireMention=monitor) — hooks fired, not processing`,
+    );
   }
 
   noteGroupMember(

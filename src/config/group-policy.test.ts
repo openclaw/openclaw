@@ -129,6 +129,48 @@ describe("resolveChannelGroupPolicy", () => {
     expect(policy.allowlistEnabled).toBe(true);
     expect(policy.allowed).toBe(false);
   });
+
+  it("returns requireMention=monitor in groupConfig when group is configured for monitoring", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          groups: {
+            "120363098795789378@g.us": { requireMention: "monitor" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const policy = resolveChannelGroupPolicy({
+      cfg,
+      channel: "whatsapp",
+      groupId: "120363098795789378@g.us",
+    });
+
+    expect(policy.allowed).toBe(true);
+    expect(policy.groupConfig?.requireMention).toBe("monitor");
+  });
+
+  it("boolean requireMention values still work unchanged", () => {
+    const cfg = {
+      channels: {
+        whatsapp: {
+          groups: {
+            "123@g.us": { requireMention: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const policy = resolveChannelGroupPolicy({
+      cfg,
+      channel: "whatsapp",
+      groupId: "123@g.us",
+    });
+
+    expect(policy.allowed).toBe(true);
+    expect(policy.groupConfig?.requireMention).toBe(true);
+  });
 });
 
 describe("resolveToolsBySender", () => {
