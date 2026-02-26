@@ -1,7 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { resolveMatrixBodyForAgent, resolveMatrixInboundSenderLabel } from "./inbound-body.js";
+import {
+  resolveMatrixBodyForAgent,
+  resolveMatrixInboundSenderLabel,
+  resolveMatrixSenderUsername,
+} from "./inbound-body.js";
+
+describe("resolveMatrixSenderUsername", () => {
+  it("extracts localpart without leading @", () => {
+    expect(resolveMatrixSenderUsername("@bu:matrix.example.org")).toBe("bu");
+  });
+});
 
 describe("resolveMatrixInboundSenderLabel", () => {
+  it("uses provided senderUsername when present", () => {
+    expect(
+      resolveMatrixInboundSenderLabel({
+        senderName: "Bu",
+        senderId: "@bu:matrix.example.org",
+        senderUsername: "BU_CUSTOM",
+      }),
+    ).toBe("Bu (BU_CUSTOM)");
+  });
+
   it("includes sender username when it differs from display name", () => {
     expect(
       resolveMatrixInboundSenderLabel({
@@ -36,8 +56,7 @@ describe("resolveMatrixBodyForAgent", () => {
       resolveMatrixBodyForAgent({
         isDirectMessage: true,
         bodyText: "show me my commits",
-        senderName: "Bu",
-        senderId: "@bu:matrix.example.org",
+        senderLabel: "Bu (bu)",
       }),
     ).toBe("show me my commits");
   });
@@ -47,8 +66,7 @@ describe("resolveMatrixBodyForAgent", () => {
       resolveMatrixBodyForAgent({
         isDirectMessage: false,
         bodyText: "show me my commits",
-        senderName: "Bu",
-        senderId: "@bu:matrix.example.org",
+        senderLabel: "Bu (bu)",
       }),
     ).toBe("Bu (bu): show me my commits");
   });
