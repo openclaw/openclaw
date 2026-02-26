@@ -1913,6 +1913,10 @@ private extension NodeAppModel {
                     self.gatewayStatusText = (attempt == 0) ? "Connecting…" : "Reconnecting…"
                     self.gatewayServerName = nil
                     self.gatewayRemoteAddress = nil
+                    // Show "Connecting" in Live Activity / Dynamic Island.
+                    let la = LiveActivityManager.shared
+                    if la.isActive { la.handleConnecting() }
+                    else { la.startActivity(agentName: self.selectedAgentId ?? "main", sessionKey: self.mainSessionKey) }
                 }
 
                 do {

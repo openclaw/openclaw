@@ -31,6 +31,8 @@ struct OpenClawActivityAttributes: ActivityAttributes {
         var isIdle: Bool
         /// Whether the gateway is disconnected.
         var isDisconnected: Bool
+        /// Whether the gateway is currently connecting.
+        var isConnecting: Bool
         /// When the activity started (drives the live timer).
         var startedAt: Date
         /// When the last run ended (nil while running or idle).
@@ -46,54 +48,63 @@ extension OpenClawActivityAttributes {
 }
 
 extension OpenClawActivityAttributes.ContentState {
+    static let connecting = OpenClawActivityAttributes.ContentState(
+        subject: nil, statusText: "Connecting...",
+        currentToolLabel: nil, currentToolIcon: nil, previousToolLabel: nil,
+        toolStepCount: 0, streamingText: nil,
+        isFinished: false, isError: false, isIdle: false, isDisconnected: false, isConnecting: true, startedAt: .now)
+
     static let idle = OpenClawActivityAttributes.ContentState(
         subject: nil, statusText: "Idle",
         currentToolLabel: nil, currentToolIcon: nil, previousToolLabel: nil,
         toolStepCount: 0, streamingText: nil,
-        isFinished: false, isError: false, isIdle: true, isDisconnected: false, startedAt: .now)
+        isFinished: false, isError: false, isIdle: true, isDisconnected: false, isConnecting: false, startedAt: .now)
 
     static let disconnected = OpenClawActivityAttributes.ContentState(
         subject: nil, statusText: "Disconnected",
         currentToolLabel: nil, currentToolIcon: nil, previousToolLabel: nil,
         toolStepCount: 0, streamingText: nil,
-        isFinished: false, isError: false, isIdle: false, isDisconnected: true, startedAt: .now)
+        isFinished: false, isError: false, isIdle: false, isDisconnected: true, isConnecting: false, startedAt: .now)
 
     static let thinking = OpenClawActivityAttributes.ContentState(
         subject: nil, statusText: "Thinking...",
         currentToolLabel: nil, currentToolIcon: nil, previousToolLabel: nil,
         toolStepCount: 0, streamingText: nil,
-        isFinished: false, isError: false, isIdle: false, isDisconnected: false, startedAt: .now)
+        isFinished: false, isError: false, isIdle: false, isDisconnected: false, isConnecting: false, startedAt: .now)
 
     static let toolRunning = OpenClawActivityAttributes.ContentState(
         subject: nil, statusText: "Searching the web...",
         currentToolLabel: "Searching the web...", currentToolIcon: "globe", previousToolLabel: nil,
         toolStepCount: 1, streamingText: nil,
-        isFinished: false, isError: false, isIdle: false, isDisconnected: false, startedAt: .now.addingTimeInterval(-5))
+        isFinished: false, isError: false, isIdle: false, isDisconnected: false, isConnecting: false,
+        startedAt: .now.addingTimeInterval(-5))
 
     static let multiTool = OpenClawActivityAttributes.ContentState(
         subject: "Updating auth module", statusText: "Editing auth.swift...",
         currentToolLabel: "Editing auth.swift...", currentToolIcon: "doc", previousToolLabel: "Searched the web",
         toolStepCount: 3, streamingText: nil,
-        isFinished: false, isError: false, isIdle: false, isDisconnected: false, startedAt: .now.addingTimeInterval(-18))
+        isFinished: false, isError: false, isIdle: false, isDisconnected: false, isConnecting: false,
+        startedAt: .now.addingTimeInterval(-18))
 
     static let streaming = OpenClawActivityAttributes.ContentState(
         subject: "Updating auth module", statusText: "Responding...",
         currentToolLabel: nil, currentToolIcon: nil, previousToolLabel: "Edited auth.swift",
         toolStepCount: 3, streamingText: "Here are the changes I made to the authentication module...",
-        isFinished: false, isError: false, isIdle: false, isDisconnected: false, startedAt: .now.addingTimeInterval(-25))
+        isFinished: false, isError: false, isIdle: false, isDisconnected: false, isConnecting: false,
+        startedAt: .now.addingTimeInterval(-25))
 
     static let finished = OpenClawActivityAttributes.ContentState(
         subject: "Updated auth module", statusText: "Done",
         currentToolLabel: nil, currentToolIcon: nil, previousToolLabel: "Edited auth.swift",
         toolStepCount: 3, streamingText: nil,
-        isFinished: true, isError: false, isIdle: false, isDisconnected: false,
+        isFinished: true, isError: false, isIdle: false, isDisconnected: false, isConnecting: false,
         startedAt: .now.addingTimeInterval(-32), endedAt: .now)
 
     static let error = OpenClawActivityAttributes.ContentState(
         subject: nil, statusText: "Error",
         currentToolLabel: nil, currentToolIcon: nil, previousToolLabel: nil,
         toolStepCount: 1, streamingText: nil,
-        isFinished: false, isError: true, isIdle: false, isDisconnected: false,
+        isFinished: false, isError: true, isIdle: false, isDisconnected: false, isConnecting: false,
         startedAt: .now.addingTimeInterval(-10), endedAt: .now)
 }
 #endif
