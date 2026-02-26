@@ -169,23 +169,24 @@ function orderAttachments(
   attachments: MediaAttachment[],
   prefer?: MediaUnderstandingAttachmentsConfig["prefer"],
 ): MediaAttachment[] {
+  const list = Array.isArray(attachments) ? attachments : [];
   if (!prefer || prefer === "first") {
-    return attachments;
+    return list;
   }
   if (prefer === "last") {
-    return [...attachments].toReversed();
+    return [...list].toReversed();
   }
   if (prefer === "path") {
-    const withPath = attachments.filter((item) => item.path);
-    const withoutPath = attachments.filter((item) => !item.path);
+    const withPath = list.filter((item) => item.path);
+    const withoutPath = list.filter((item) => !item.path);
     return [...withPath, ...withoutPath];
   }
   if (prefer === "url") {
-    const withUrl = attachments.filter((item) => item.url);
-    const withoutUrl = attachments.filter((item) => !item.url);
+    const withUrl = list.filter((item) => item.url);
+    const withoutUrl = list.filter((item) => !item.url);
     return [...withUrl, ...withoutUrl];
   }
-  return attachments;
+  return list;
 }
 
 export function selectAttachments(params: {
@@ -194,7 +195,8 @@ export function selectAttachments(params: {
   policy?: MediaUnderstandingAttachmentsConfig;
 }): MediaAttachment[] {
   const { capability, attachments, policy } = params;
-  const matches = attachments.filter((item) => {
+  const input = Array.isArray(attachments) ? attachments : [];
+  const matches = input.filter((item) => {
     // Skip already-transcribed audio attachments from preflight
     if (capability === "audio" && item.alreadyTranscribed) {
       return false;

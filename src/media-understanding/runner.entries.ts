@@ -345,16 +345,18 @@ async function resolveProviderExecutionContext(params: {
 }
 
 export function formatDecisionSummary(decision: MediaUnderstandingDecision): string {
-  const total = decision.attachments.length;
-  const success = decision.attachments.filter(
-    (entry) => entry.chosen?.outcome === "success",
-  ).length;
-  const chosen = decision.attachments.find((entry) => entry.chosen)?.chosen;
+  const attachments = Array.isArray(decision.attachments) ? decision.attachments : [];
+  const total = attachments.length;
+  const success = attachments.filter((entry) => entry?.chosen?.outcome === "success").length;
+  const chosen = attachments.find((entry) => entry?.chosen)?.chosen;
   const provider = chosen?.provider?.trim();
   const model = chosen?.model?.trim();
   const modelLabel = provider ? (model ? `${provider}/${model}` : provider) : undefined;
-  const reason = decision.attachments
-    .flatMap((entry) => entry.attempts.map((attempt) => attempt.reason).filter(Boolean))
+  const reason = attachments
+    .flatMap((entry) => {
+      const attempts = Array.isArray(entry?.attempts) ? entry.attempts : [];
+      return attempts.map((attempt) => attempt?.reason).filter(Boolean);
+    })
     .find(Boolean);
   const shortReason = reason ? reason.split(":")[0]?.trim() : undefined;
   const countLabel = total > 0 ? ` (${success}/${total})` : "";
