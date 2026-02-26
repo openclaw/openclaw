@@ -41,7 +41,7 @@ From repo root:
 
 This script:
 
-- builds the gateway image
+- builds the gateway image locally (or pulls a remote image if `OPENCLAW_IMAGE` is set)
 - runs the onboarding wizard
 - prints optional provider setup hints
 - starts the gateway via Docker Compose
@@ -49,6 +49,7 @@ This script:
 
 Optional env vars:
 
+- `OPENCLAW_IMAGE` — use a remote image instead of building locally (e.g. `ghcr.io/openclaw/openclaw:latest`)
 - `OPENCLAW_DOCKER_APT_PACKAGES` — install extra apt packages during build
 - `OPENCLAW_EXTRA_MOUNTS` — add extra host bind mounts
 - `OPENCLAW_HOME_VOLUME` — persist `/home/node` in a named volume
@@ -90,6 +91,23 @@ It writes config/workspace on the host:
 - `~/.openclaw/workspace`
 
 Running on a VPS? See [Hetzner (Docker VPS)](/install/hetzner).
+
+### Use a remote image (skip local build)
+
+By default the setup script builds the image from source. To pull a pre-built
+image instead, set `OPENCLAW_IMAGE` before running the script:
+
+```bash
+export OPENCLAW_IMAGE="ghcr.io/openclaw/openclaw:latest"
+./docker-setup.sh
+```
+
+The script detects that `OPENCLAW_IMAGE` is not the default `openclaw:local` and
+runs `docker pull` instead of `docker build`. Everything else (onboarding,
+gateway start, token generation) works the same way.
+
+This is useful when you want to skip cloning the repo or avoid a local build
+entirely.
 
 ### Shell Helpers (optional)
 
