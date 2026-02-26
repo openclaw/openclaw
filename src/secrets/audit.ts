@@ -510,76 +510,86 @@ export async function runSecretsAudit(
   } = {},
 ): Promise<SecretsAuditReport> {
   const env = params.env ?? process.env;
-  const io = createSecretsConfigIO({ env });
-  const { snapshot } = await io.readConfigFileSnapshotForWrite();
-  const configPath = resolveUserPath(snapshot.path);
-  const defaults = snapshot.valid ? snapshot.config.secrets?.defaults : undefined;
+  const previousAuthStoreReadOnly = process.env.OPENCLAW_AUTH_STORE_READONLY;
+  process.env.OPENCLAW_AUTH_STORE_READONLY = "1";
+  try {
+    const io = createSecretsConfigIO({ env });
+    const snapshot = await io.readConfigFileSnapshot();
+    const configPath = resolveUserPath(snapshot.path);
+    const defaults = snapshot.valid ? snapshot.config.secrets?.defaults : undefined;
 
-  const collector: AuditCollector = {
-    findings: [],
-    refAssignments: [],
-    configProviderRefPaths: new Map(),
-    authProviderState: new Map(),
-    filesScanned: new Set([configPath]),
-  };
+    const collector: AuditCollector = {
+      findings: [],
+      refAssignments: [],
+      configProviderRefPaths: new Map(),
+      authProviderState: new Map(),
+      filesScanned: new Set([configPath]),
+    };
 
-  const stateDir = resolveStateDir(env, os.homedir);
-  const envPath = path.join(resolveConfigDir(env, os.homedir), ".env");
-  const config = snapshot.valid ? snapshot.config : ({} as OpenClawConfig);
+    const stateDir = resolveStateDir(env, os.homedir);
+    const envPath = path.join(resolveConfigDir(env, os.homedir), ".env");
+    const config = snapshot.valid ? snapshot.config : ({} as OpenClawConfig);
 
-  if (snapshot.valid) {
-    collectConfigSecrets({
-      config,
-      configPath,
-      collector,
-    });
-    for (const authStorePath of collectAuthStorePaths(config, stateDir)) {
-      collectAuthStoreSecrets({
-        authStorePath,
+    if (snapshot.valid) {
+      collectConfigSecrets({
+        config,
+        configPath,
         collector,
-        defaults,
+      });
+      for (const authStorePath of collectAuthStorePaths(config, stateDir)) {
+        collectAuthStoreSecrets({
+          authStorePath,
+          collector,
+          defaults,
+        });
+      }
+      await collectUnresolvedRefFindings({
+        collector,
+        config,
+        env,
+      });
+      collectShadowingFindings(collector);
+    } else {
+      addFinding(collector, {
+        code: "REF_UNRESOLVED",
+        severity: "error",
+        file: configPath,
+        jsonPath: "<root>",
+        message: "Config is invalid; cannot validate secret references reliably.",
       });
     }
-    await collectUnresolvedRefFindings({
+
+    collectEnvPlaintext({
+      envPath,
       collector,
-      config,
-      env,
     });
-    collectShadowingFindings(collector);
-  } else {
-    addFinding(collector, {
-      code: "REF_UNRESOLVED",
-      severity: "error",
-      file: configPath,
-      jsonPath: "<root>",
-      message: "Config is invalid; cannot validate secret references reliably.",
+    collectAuthJsonResidue({
+      stateDir,
+      collector,
     });
+
+    const summary = summarizeFindings(collector.findings);
+    const status: SecretsAuditStatus =
+      summary.unresolvedRefCount > 0
+        ? "unresolved"
+        : collector.findings.length > 0
+          ? "findings"
+          : "clean";
+
+    return {
+      version: 1,
+      status,
+      filesScanned: [...collector.filesScanned].toSorted(),
+      summary,
+      findings: collector.findings,
+    };
+  } finally {
+    if (previousAuthStoreReadOnly === undefined) {
+      delete process.env.OPENCLAW_AUTH_STORE_READONLY;
+    } else {
+      process.env.OPENCLAW_AUTH_STORE_READONLY = previousAuthStoreReadOnly;
+    }
   }
-
-  collectEnvPlaintext({
-    envPath,
-    collector,
-  });
-  collectAuthJsonResidue({
-    stateDir,
-    collector,
-  });
-
-  const summary = summarizeFindings(collector.findings);
-  const status: SecretsAuditStatus =
-    summary.unresolvedRefCount > 0
-      ? "unresolved"
-      : collector.findings.length > 0
-        ? "findings"
-        : "clean";
-
-  return {
-    version: 1,
-    status,
-    filesScanned: [...collector.filesScanned].toSorted(),
-    summary,
-    findings: collector.findings,
-  };
 }
 
 export function resolveSecretsAuditExitCode(report: SecretsAuditReport, check: boolean): number {
