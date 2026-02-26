@@ -1,3 +1,4 @@
+import { mergeDmAllowFromSources, resolveGroupAllowFromSources } from "../channels/allow-from.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { normalizeStringEntries } from "../shared/string-normalization.js";
@@ -11,21 +12,23 @@ export function resolveEffectiveAllowFromLists(params: {
   effectiveAllowFrom: string[];
   effectiveGroupAllowFrom: string[];
 } {
-  const configAllowFrom = normalizeStringEntries(
-    Array.isArray(params.allowFrom) ? params.allowFrom : undefined,
+  const allowFrom = Array.isArray(params.allowFrom) ? params.allowFrom : undefined;
+  const groupAllowFrom = Array.isArray(params.groupAllowFrom) ? params.groupAllowFrom : undefined;
+  const storeAllowFrom = Array.isArray(params.storeAllowFrom) ? params.storeAllowFrom : undefined;
+  const effectiveAllowFrom = normalizeStringEntries(
+    mergeDmAllowFromSources({
+      allowFrom,
+      storeAllowFrom,
+      dmPolicy: params.dmPolicy ?? undefined,
+    }),
   );
-  const configGroupAllowFrom = normalizeStringEntries(
-    Array.isArray(params.groupAllowFrom) ? params.groupAllowFrom : undefined,
+  // Group auth is explicit (groupAllowFrom fallback allowFrom). Pairing store is DM-only.
+  const effectiveGroupAllowFrom = normalizeStringEntries(
+    resolveGroupAllowFromSources({
+      allowFrom,
+      groupAllowFrom,
+    }),
   );
-  const storeAllowFrom =
-    params.dmPolicy === "allowlist"
-      ? []
-      : normalizeStringEntries(
-          Array.isArray(params.storeAllowFrom) ? params.storeAllowFrom : undefined,
-        );
-  const effectiveAllowFrom = normalizeStringEntries([...configAllowFrom, ...storeAllowFrom]);
-  const groupBase = configGroupAllowFrom.length > 0 ? configGroupAllowFrom : configAllowFrom;
-  const effectiveGroupAllowFrom = normalizeStringEntries([...groupBase, ...storeAllowFrom]);
   return { effectiveAllowFrom, effectiveGroupAllowFrom };
 }
 
