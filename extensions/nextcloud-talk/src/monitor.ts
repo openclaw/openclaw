@@ -276,12 +276,25 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
     });
   };
 
+  let stopped = false;
   const stop = () => {
-    server.close();
+    if (stopped) {
+      return;
+    }
+    stopped = true;
+    try {
+      server.close();
+    } catch {
+      // ignore close races while shutting down
+    }
   };
 
   if (abortSignal) {
-    abortSignal.addEventListener("abort", stop, { once: true });
+    if (abortSignal.aborted) {
+      stop();
+    } else {
+      abortSignal.addEventListener("abort", stop, { once: true });
+    }
   }
 
   return { server, start, stop };
@@ -384,7 +397,14 @@ export async function monitorNextcloudTalkProvider(
     abortSignal: opts.abortSignal,
   });
 
+  if (opts.abortSignal?.aborted) {
+    return { stop };
+  }
   await start();
+  if (opts.abortSignal?.aborted) {
+    stop();
+    return { stop };
+  }
 
   const publicUrl =
     account.config.webhookPublicUrl ??
