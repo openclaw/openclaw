@@ -40,6 +40,7 @@ const NODES_TOOL_ACTIONS = [
   "camera_clip",
   "screen_record",
   "location_get",
+  "notifications_list",
   "run",
   "invoke",
 ] as const;
@@ -122,7 +123,7 @@ export function createNodesTool(options?: {
     label: "Nodes",
     name: "nodes",
     description:
-      "Discover and control paired nodes (status/describe/pairing/notify/camera/screen/location/run/invoke).",
+      "Discover and control paired nodes (status/describe/pairing/notify/camera/screen/location/notifications/run/invoke).",
     parameters: NodesToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
@@ -402,6 +403,17 @@ export function createNodesTool(options?: {
                 desiredAccuracy,
                 timeoutMs: locationTimeoutMs,
               },
+              idempotencyKey: crypto.randomUUID(),
+            });
+            return jsonResult(raw?.payload ?? {});
+          }
+          case "notifications_list": {
+            const node = readStringParam(params, "node", { required: true });
+            const nodeId = await resolveNodeId(gatewayOpts, node);
+            const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
+              nodeId,
+              command: "notifications.list",
+              params: {},
               idempotencyKey: crypto.randomUUID(),
             });
             return jsonResult(raw?.payload ?? {});
