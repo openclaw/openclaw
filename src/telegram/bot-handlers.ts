@@ -536,7 +536,9 @@ export const registerTelegramHandlers = ({
     },
     "callback-allowlist": {
       enforceDirectAuthorization: true,
-      enforceGroupAllowlistAuthorization: true,
+      // Group auth is already enforced by shouldSkipGroupMessage (group policy + allowlist).
+      // An extra allowlist gate here would block users whose original command was authorized.
+      enforceGroupAllowlistAuthorization: false,
       deniedDmReason: "callback unauthorized by inlineButtonsScope allowlist",
       deniedGroupReason: "callback unauthorized by inlineButtonsScope allowlist",
     },
