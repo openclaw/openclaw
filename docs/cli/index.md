@@ -574,7 +574,37 @@ Options:
 - `--non-interactive`
 - `--json`
 
-Binding specs use `channel[:accountId]`. When `accountId` is omitted for WhatsApp, the default account id is used.
+Binding specs use `channel[:accountId]`. When `accountId` is omitted, OpenClaw may resolve account scope via channel defaults/plugin hooks; otherwise it is a channel binding without explicit account scope.
+
+#### `agents bindings`
+
+List routing bindings.
+
+Options:
+
+- `--agent <id>`
+- `--json`
+
+#### `agents bind`
+
+Add routing bindings for an agent.
+
+Options:
+
+- `--agent <id>`
+- `--bind <channel[:accountId]>` (repeatable)
+- `--json`
+
+#### `agents unbind`
+
+Remove routing bindings for an agent.
+
+Options:
+
+- `--agent <id>`
+- `--bind <channel[:accountId]>` (repeatable)
+- `--all`
+- `--json`
 
 #### `agents delete <id>`
 
