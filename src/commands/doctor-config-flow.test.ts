@@ -70,6 +70,46 @@ describe("doctor config flow", () => {
     });
   });
 
+  it("migrates plugins.allow when extension artifacts exist and allowlist is unset", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(path.join(configDir, "extensions", "zalo"), { recursive: true });
+      await fs.mkdir(path.join(configDir, "extensions", "matrix"), { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "openclaw.json"),
+        JSON.stringify({}, null, 2),
+        "utf-8",
+      );
+
+      const result = await loadAndMaybeMigrateDoctorConfig({
+        options: { nonInteractive: true, repair: true },
+        confirm: async () => false,
+      });
+
+      expect(result.shouldWriteConfig).toBe(true);
+      expect(result.cfg.plugins?.allow).toEqual(["matrix", "zalo"]);
+    });
+  });
+
+  it("does not alter explicit plugins.allow when extension artifacts exist", async () => {
+    await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      await fs.mkdir(path.join(configDir, "extensions", "zalo"), { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "openclaw.json"),
+        JSON.stringify({ plugins: { allow: ["voice-call"] } }, null, 2),
+        "utf-8",
+      );
+
+      const result = await loadAndMaybeMigrateDoctorConfig({
+        options: { nonInteractive: true, repair: true },
+        confirm: async () => false,
+      });
+
+      expect(result.cfg.plugins?.allow).toEqual(["voice-call"]);
+    });
+  });
+
   it("does not warn on mutable account allowlists when dangerous name matching is inherited", async () => {
     const doctorWarnings = await collectDoctorWarnings({
       channels: {

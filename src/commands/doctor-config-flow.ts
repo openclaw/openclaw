@@ -15,6 +15,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { CONFIG_PATH, migrateLegacyConfig, readConfigFileSnapshot } from "../config/config.js";
 import { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import { resolveStateDir } from "../config/paths.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { parseToolsBySenderTypedKey } from "../config/types.tools.js";
 import { OpenClawSchema } from "../config/zod-schema.js";
@@ -29,6 +30,7 @@ import {
   normalizeTrustedSafeBinDirs,
 } from "../infra/exec-safe-bin-trust.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
 import {
   formatChannelAccountsDefaultPath,
   formatSetExplicitDefaultInstruction,
@@ -218,6 +220,63 @@ function asObjectRecord(value: unknown): Record<string, unknown> | null {
     return null;
   }
   return value as Record<string, unknown>;
+}
+
+function hasExplicitPluginsAllow(cfg: OpenClawConfig): boolean {
+  return Boolean(cfg.plugins && Object.prototype.hasOwnProperty.call(cfg.plugins, "allow"));
+}
+
+async function maybeMigratePluginsAllowForExtensions(cfg: OpenClawConfig): Promise<{
+  config: OpenClawConfig;
+  changes: string[];
+}> {
+  if (hasExplicitPluginsAllow(cfg)) {
+    return { config: cfg, changes: [] };
+  }
+
+  const stateDir = resolveStateDir(process.env);
+  const extensionsDir = path.join(stateDir, "extensions");
+  const entries = await fs.readdir(extensionsDir, { withFileTypes: true }).catch(() => []);
+  const extensionPluginIds = entries
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name.trim().toLowerCase())
+    .filter(Boolean);
+  if (extensionPluginIds.length === 0) {
+    return { config: cfg, changes: [] };
+  }
+
+  const normalizedPlugins = normalizePluginsConfig(cfg.plugins);
+  if (!normalizedPlugins.enabled) {
+    return { config: cfg, changes: [] };
+  }
+  const denySet = new Set(normalizedPlugins.deny.map((id) => id.toLowerCase()));
+  const entryById = new Map(
+    Object.entries(normalizedPlugins.entries).map(([id, entry]) => [
+      id.trim().toLowerCase(),
+      entry,
+    ]),
+  );
+  const allow = Array.from(new Set(extensionPluginIds))
+    .filter((id) => !denySet.has(id))
+    .filter((id) => entryById.get(id)?.enabled !== false)
+    .toSorted();
+  if (allow.length === 0) {
+    return { config: cfg, changes: [] };
+  }
+
+  return {
+    config: {
+      ...cfg,
+      plugins: {
+        ...cfg.plugins,
+        allow,
+      },
+    },
+    changes: [
+      `Migrated plugins.allow from installed extension artifacts (${allow.join(", ")}).`,
+      "Set plugins.allow explicitly to keep extension trust pinned after upgrade.",
+    ],
+  };
 }
 
 function normalizeBindingChannelKey(raw?: string | null): string {
@@ -1875,6 +1934,20 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       cfg = autoEnable.config;
     } else {
       fixHints.push(`Run "${formatCliCommand("openclaw doctor --fix")}" to apply these changes.`);
+    }
+  }
+
+  const pluginsAllowMigration = await maybeMigratePluginsAllowForExtensions(candidate);
+  if (pluginsAllowMigration.changes.length > 0) {
+    note(pluginsAllowMigration.changes.join("\n"), "Doctor changes");
+    candidate = pluginsAllowMigration.config;
+    pendingChanges = true;
+    if (shouldRepair) {
+      cfg = pluginsAllowMigration.config;
+    } else {
+      fixHints.push(
+        `Run "${formatCliCommand("openclaw doctor --fix")}" to migrate plugins.allow for discovered extensions.`,
+      );
     }
   }
 
