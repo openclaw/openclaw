@@ -83,6 +83,52 @@ import { isUnauthorizedRoleError, UnauthorizedFloodGuard } from "./unauthorized-
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
 const DEVICE_SIGNATURE_SKEW_MS = 2 * 60 * 1000;
+const BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP = "198.18.0.1";
+
+type HandshakeBrowserSecurityContext = {
+  hasBrowserOriginHeader: boolean;
+  enforceOriginCheckForAnyClient: boolean;
+  rateLimitClientIp: string | undefined;
+  authRateLimiter?: AuthRateLimiter;
+};
+
+function resolveHandshakeBrowserSecurityContext(params: {
+  requestOrigin?: string;
+  hasProxyHeaders: boolean;
+  clientIp: string | undefined;
+  rateLimiter?: AuthRateLimiter;
+  browserRateLimiter?: AuthRateLimiter;
+}): HandshakeBrowserSecurityContext {
+  const hasBrowserOriginHeader = Boolean(
+    params.requestOrigin && params.requestOrigin.trim() !== "",
+  );
+  return {
+    hasBrowserOriginHeader,
+    enforceOriginCheckForAnyClient: hasBrowserOriginHeader && !params.hasProxyHeaders,
+    rateLimitClientIp:
+      hasBrowserOriginHeader && isLoopbackAddress(params.clientIp)
+        ? BROWSER_ORIGIN_LOOPBACK_RATE_LIMIT_IP
+        : params.clientIp,
+    authRateLimiter:
+      hasBrowserOriginHeader && params.browserRateLimiter
+        ? params.browserRateLimiter
+        : params.rateLimiter,
+  };
+}
+
+function shouldAllowSilentLocalPairing(params: {
+  isLocalClient: boolean;
+  hasBrowserOriginHeader: boolean;
+  isControlUi: boolean;
+  isWebchat: boolean;
+  reason: "not-paired" | "role-upgrade" | "scope-upgrade";
+}): boolean {
+  return (
+    params.isLocalClient &&
+    (!params.hasBrowserOriginHeader || params.isControlUi || params.isWebchat) &&
+    (params.reason === "not-paired" || params.reason === "scope-upgrade")
+  );
+}
 
 export function attachGatewayWsMessageHandler(params: {
   socket: WebSocket;
@@ -195,12 +241,19 @@ export function attachGatewayWsMessageHandler(params: {
 
   const isWebchatConnect = (p: ConnectParams | null | undefined) => isWebchatClient(p?.client);
   const unauthorizedFloodGuard = new UnauthorizedFloodGuard();
-  const hasBrowserOriginHeader = Boolean(requestOrigin && requestOrigin.trim() !== "");
-  const enforceBrowserOriginForAnyClient = hasBrowserOriginHeader && !hasProxyHeaders;
-  const browserRateLimitClientIp =
-    hasBrowserOriginHeader && isLoopbackAddress(clientIp) ? "198.18.0.1" : clientIp;
-  const authRateLimiter =
-    hasBrowserOriginHeader && browserRateLimiter ? browserRateLimiter : rateLimiter;
+  const browserSecurity = resolveHandshakeBrowserSecurityContext({
+    requestOrigin,
+    hasProxyHeaders,
+    clientIp,
+    rateLimiter,
+    browserRateLimiter,
+  });
+  const {
+    hasBrowserOriginHeader,
+    enforceOriginCheckForAnyClient,
+    rateLimitClientIp: browserRateLimitClientIp,
+    authRateLimiter,
+  } = browserSecurity;
 
   socket.on("message", async (data) => {
     if (isClosed()) {
@@ -338,7 +391,7 @@ export function attachGatewayWsMessageHandler(params: {
 
         const isControlUi = connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
         const isWebchat = isWebchatConnect(connectParams);
-        if (enforceBrowserOriginForAnyClient || isControlUi || isWebchat) {
+        if (enforceOriginCheckForAnyClient || isControlUi || isWebchat) {
           const originCheck = checkBrowserOrigin({
             requestHost,
             origin: requestOrigin,
@@ -622,10 +675,13 @@ export function attachGatewayWsMessageHandler(params: {
           const requirePairing = async (
             reason: "not-paired" | "role-upgrade" | "scope-upgrade",
           ) => {
-            const allowSilentLocalPairing =
-              isLocalClient &&
-              (!hasBrowserOriginHeader || isControlUi || isWebchat) &&
-              (reason === "not-paired" || reason === "scope-upgrade");
+            const allowSilentLocalPairing = shouldAllowSilentLocalPairing({
+              isLocalClient,
+              hasBrowserOriginHeader,
+              isControlUi,
+              isWebchat,
+              reason,
+            });
             const pairing = await requestDevicePairing({
               deviceId: device.id,
               publicKey: devicePublicKey,
