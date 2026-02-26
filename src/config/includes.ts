@@ -13,7 +13,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
-import { openVerifiedFileSync } from "../infra/safe-open-sync.js";
+import { canUseBoundaryFileOpen, openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isPlainObject } from "../utils.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
@@ -286,46 +286,19 @@ function safeRealpath(target: string): string {
   }
 }
 
-function canUseVerifiedFileOpen(ioFs: typeof fs): boolean {
-  return (
-    typeof ioFs.openSync === "function" &&
-    typeof ioFs.closeSync === "function" &&
-    typeof ioFs.fstatSync === "function" &&
-    typeof ioFs.lstatSync === "function" &&
-    typeof ioFs.realpathSync === "function" &&
-    typeof ioFs.readFileSync === "function" &&
-    typeof ioFs.constants === "object" &&
-    ioFs.constants !== null
-  );
-}
-
 export function readConfigIncludeFileWithGuards(params: IncludeFileReadParams): string {
   const ioFs = params.ioFs ?? fs;
   const maxBytes = params.maxBytes ?? MAX_INCLUDE_FILE_BYTES;
-  let realPath = params.resolvedPath;
-  try {
-    realPath = ioFs.realpathSync(params.resolvedPath);
-    if (!isPathInside(params.rootRealDir, realPath)) {
-      throw new ConfigIncludeError(
-        `Include path resolves outside config directory (symlink): ${params.includePath}`,
-        params.includePath,
-      );
-    }
-  } catch (err) {
-    if (err instanceof ConfigIncludeError) {
-      throw err;
-    }
-    // File may not exist yet; read path will report a precise error below.
-  }
-
-  if (!canUseVerifiedFileOpen(ioFs)) {
+  if (!canUseBoundaryFileOpen(ioFs)) {
     return ioFs.readFileSync(params.resolvedPath, "utf-8");
   }
 
-  const opened = openVerifiedFileSync({
-    filePath: params.resolvedPath,
-    resolvedPath: realPath,
-    rejectHardlinks: true,
+  const opened = openBoundaryFileSync({
+    absolutePath: params.resolvedPath,
+    rootPath: params.rootRealDir,
+    rootRealPath: params.rootRealDir,
+    boundaryLabel: "config directory",
+    skipLexicalRootCheck: true,
     maxBytes,
     ioFs,
   });
