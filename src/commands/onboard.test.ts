@@ -76,6 +76,34 @@ describe("onboardCommand", () => {
     );
   });
 
+  it("uses configured default workspace for --reset when --workspace is not provided", async () => {
+    const runtime = makeRuntime();
+    mocks.readConfigFileSnapshot.mockResolvedValue({
+      exists: true,
+      valid: true,
+      config: {
+        agents: {
+          defaults: {
+            workspace: "/tmp/openclaw-custom-workspace",
+          },
+        },
+      },
+    });
+
+    await onboardCommand(
+      {
+        reset: true,
+      },
+      runtime,
+    );
+
+    expect(mocks.handleReset).toHaveBeenCalledWith(
+      "config+creds+sessions",
+      "/tmp/openclaw-custom-workspace",
+      runtime,
+    );
+  });
+
   it("accepts explicit --reset-scope full", async () => {
     const runtime = makeRuntime();
 
