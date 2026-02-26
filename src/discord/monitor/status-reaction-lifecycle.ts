@@ -40,7 +40,7 @@ export const DISCORD_STATUS_DEFAULT_PROJECTION: DiscordStatusReactionProjection 
   error: "❌",
 };
 
-export const DISCORD_STATUS_CLEAR_HOLD_MS = 1500;
+export const DISCORD_STATUS_CLEAR_HOLD_MS = 2000;
 
 const MAX_TRACE_ENTRIES = 2000;
 const traceEntries: DiscordStatusTraceEntry[] = [];
