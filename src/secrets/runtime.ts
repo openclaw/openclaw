@@ -13,6 +13,7 @@ import {
 } from "../config/config.js";
 import { coerceSecretRef, type SecretRef } from "../config/types.secrets.js";
 import { resolveUserPath } from "../utils.js";
+import { secretRefKey } from "./ref-contract.js";
 import { resolveSecretRefValues, type SecretRefResolveCache } from "./resolve.js";
 import { isNonEmptyString, isRecord } from "./shared.js";
 
@@ -72,11 +73,9 @@ type ResolverContext = {
   assignments: SecretAssignment[];
 };
 
-let activeSnapshot: PreparedSecretsRuntimeSnapshot | null = null;
+type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
 
-function toRefKey(ref: SecretRef): string {
-  return `${ref.source}:${ref.provider}:${ref.id}`;
-}
+let activeSnapshot: PreparedSecretsRuntimeSnapshot | null = null;
 
 function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecretsRuntimeSnapshot {
   return {
@@ -90,6 +89,112 @@ function cloneSnapshot(snapshot: PreparedSecretsRuntimeSnapshot): PreparedSecret
   };
 }
 
+function pushAssignment(context: ResolverContext, assignment: SecretAssignment): void {
+  context.assignments.push(assignment);
+}
+
+function collectModelProviderAssignments(params: {
+  providers: Record<string, ProviderLike>;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+}): void {
+  for (const [providerId, provider] of Object.entries(params.providers)) {
+    const ref = coerceSecretRef(provider.apiKey, params.defaults);
+    if (!ref) {
+      continue;
+    }
+    pushAssignment(params.context, {
+      ref,
+      path: `models.providers.${providerId}.apiKey`,
+      expected: "string",
+      apply: (value) => {
+        provider.apiKey = value;
+      },
+    });
+  }
+}
+
+function collectSkillAssignments(params: {
+  entries: Record<string, SkillEntryLike>;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+}): void {
+  for (const [skillKey, entry] of Object.entries(params.entries)) {
+    const ref = coerceSecretRef(entry.apiKey, params.defaults);
+    if (!ref) {
+      continue;
+    }
+    pushAssignment(params.context, {
+      ref,
+      path: `skills.entries.${skillKey}.apiKey`,
+      expected: "string",
+      apply: (value) => {
+        entry.apiKey = value;
+      },
+    });
+  }
+}
+
+function collectGoogleChatAccountAssignment(params: {
+  target: GoogleChatAccountLike;
+  path: string;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+}): void {
+  const explicitRef = coerceSecretRef(params.target.serviceAccountRef, params.defaults);
+  const inlineRef = coerceSecretRef(params.target.serviceAccount, params.defaults);
+  const ref = explicitRef ?? inlineRef;
+  if (!ref) {
+    return;
+  }
+  if (
+    explicitRef &&
+    params.target.serviceAccount !== undefined &&
+    !coerceSecretRef(params.target.serviceAccount, params.defaults)
+  ) {
+    params.context.warnings.push({
+      code: "SECRETS_REF_OVERRIDES_PLAINTEXT",
+      path: params.path,
+      message: `${params.path}: serviceAccountRef is set; runtime will ignore plaintext serviceAccount.`,
+    });
+  }
+  pushAssignment(params.context, {
+    ref,
+    path: `${params.path}.serviceAccount`,
+    expected: "string-or-object",
+    apply: (value) => {
+      params.target.serviceAccount = value;
+    },
+  });
+}
+
+function collectGoogleChatAssignments(params: {
+  googleChat: GoogleChatAccountLike;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+}): void {
+  collectGoogleChatAccountAssignment({
+    target: params.googleChat,
+    path: "channels.googlechat",
+    defaults: params.defaults,
+    context: params.context,
+  });
+  if (!isRecord(params.googleChat.accounts)) {
+    return;
+  }
+  for (const [accountId, account] of Object.entries(params.googleChat.accounts)) {
+    if (!isRecord(account)) {
+      continue;
+    }
+    collectGoogleChatAccountAssignment({
+      target: account as GoogleChatAccountLike,
+      path: `channels.googlechat.accounts.${accountId}`,
+      defaults: params.defaults,
+      context: params.context,
+    });
+  }
+}
+
 function collectConfigAssignments(params: {
   config: OpenClawConfig;
   context: ResolverContext;
@@ -97,83 +202,90 @@ function collectConfigAssignments(params: {
   const defaults = params.context.sourceConfig.secrets?.defaults;
   const providers = params.config.models?.providers as Record<string, ProviderLike> | undefined;
   if (providers) {
-    for (const [providerId, provider] of Object.entries(providers)) {
-      const ref = coerceSecretRef(provider.apiKey, defaults);
-      if (!ref) {
-        continue;
-      }
-      params.context.assignments.push({
-        ref,
-        path: `models.providers.${providerId}.apiKey`,
-        expected: "string",
-        apply: (value) => {
-          provider.apiKey = value;
-        },
-      });
-    }
+    collectModelProviderAssignments({
+      providers,
+      defaults,
+      context: params.context,
+    });
   }
 
   const skillEntries = params.config.skills?.entries as Record<string, SkillEntryLike> | undefined;
   if (skillEntries) {
-    for (const [skillKey, entry] of Object.entries(skillEntries)) {
-      const ref = coerceSecretRef(entry.apiKey, defaults);
-      if (!ref) {
-        continue;
-      }
-      params.context.assignments.push({
-        ref,
-        path: `skills.entries.${skillKey}.apiKey`,
-        expected: "string",
-        apply: (value) => {
-          entry.apiKey = value;
-        },
-      });
-    }
-  }
-
-  const collectGoogleChatAssignments = (target: GoogleChatAccountLike, path: string) => {
-    const explicitRef = coerceSecretRef(target.serviceAccountRef, defaults);
-    const inlineRef = coerceSecretRef(target.serviceAccount, defaults);
-    const ref = explicitRef ?? inlineRef;
-    if (!ref) {
-      return;
-    }
-    if (
-      explicitRef &&
-      target.serviceAccount !== undefined &&
-      !coerceSecretRef(target.serviceAccount, defaults)
-    ) {
-      params.context.warnings.push({
-        code: "SECRETS_REF_OVERRIDES_PLAINTEXT",
-        path,
-        message: `${path}: serviceAccountRef is set; runtime will ignore plaintext serviceAccount.`,
-      });
-    }
-    params.context.assignments.push({
-      ref,
-      path: `${path}.serviceAccount`,
-      expected: "string-or-object",
-      apply: (value) => {
-        target.serviceAccount = value;
-      },
+    collectSkillAssignments({
+      entries: skillEntries,
+      defaults,
+      context: params.context,
     });
-  };
+  }
 
   const googleChat = params.config.channels?.googlechat as GoogleChatAccountLike | undefined;
   if (googleChat) {
-    collectGoogleChatAssignments(googleChat, "channels.googlechat");
-    if (isRecord(googleChat.accounts)) {
-      for (const [accountId, account] of Object.entries(googleChat.accounts)) {
-        if (!isRecord(account)) {
-          continue;
-        }
-        collectGoogleChatAssignments(
-          account as GoogleChatAccountLike,
-          `channels.googlechat.accounts.${accountId}`,
-        );
-      }
-    }
+    collectGoogleChatAssignments({
+      googleChat,
+      defaults,
+      context: params.context,
+    });
   }
+}
+
+function collectApiKeyProfileAssignment(params: {
+  profile: ApiKeyCredentialLike;
+  profileId: string;
+  agentDir: string;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+}): void {
+  const keyRef = coerceSecretRef(params.profile.keyRef, params.defaults);
+  const inlineKeyRef = keyRef ? null : coerceSecretRef(params.profile.key, params.defaults);
+  const resolvedKeyRef = keyRef ?? inlineKeyRef;
+  if (!resolvedKeyRef) {
+    return;
+  }
+  if (keyRef && isNonEmptyString(params.profile.key)) {
+    params.context.warnings.push({
+      code: "SECRETS_REF_OVERRIDES_PLAINTEXT",
+      path: `${params.agentDir}.auth-profiles.${params.profileId}.key`,
+      message: `auth-profiles ${params.profileId}: keyRef is set; runtime will ignore plaintext key.`,
+    });
+  }
+  pushAssignment(params.context, {
+    ref: resolvedKeyRef,
+    path: `${params.agentDir}.auth-profiles.${params.profileId}.key`,
+    expected: "string",
+    apply: (value) => {
+      params.profile.key = String(value);
+    },
+  });
+}
+
+function collectTokenProfileAssignment(params: {
+  profile: TokenCredentialLike;
+  profileId: string;
+  agentDir: string;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+}): void {
+  const tokenRef = coerceSecretRef(params.profile.tokenRef, params.defaults);
+  const inlineTokenRef = tokenRef ? null : coerceSecretRef(params.profile.token, params.defaults);
+  const resolvedTokenRef = tokenRef ?? inlineTokenRef;
+  if (!resolvedTokenRef) {
+    return;
+  }
+  if (tokenRef && isNonEmptyString(params.profile.token)) {
+    params.context.warnings.push({
+      code: "SECRETS_REF_OVERRIDES_PLAINTEXT",
+      path: `${params.agentDir}.auth-profiles.${params.profileId}.token`,
+      message: `auth-profiles ${params.profileId}: tokenRef is set; runtime will ignore plaintext token.`,
+    });
+  }
+  pushAssignment(params.context, {
+    ref: resolvedTokenRef,
+    path: `${params.agentDir}.auth-profiles.${params.profileId}.token`,
+    expected: "string",
+    apply: (value) => {
+      params.profile.token = String(value);
+    },
+  });
 }
 
 function collectAuthStoreAssignments(params: {
@@ -184,53 +296,22 @@ function collectAuthStoreAssignments(params: {
   const defaults = params.context.sourceConfig.secrets?.defaults;
   for (const [profileId, profile] of Object.entries(params.store.profiles)) {
     if (profile.type === "api_key") {
-      const apiProfile = profile as ApiKeyCredentialLike;
-      const keyRef = coerceSecretRef(apiProfile.keyRef, defaults);
-      const inlineKeyRef = keyRef ? null : coerceSecretRef(apiProfile.key, defaults);
-      const resolvedKeyRef = keyRef ?? inlineKeyRef;
-      if (!resolvedKeyRef) {
-        continue;
-      }
-      if (keyRef && isNonEmptyString(apiProfile.key)) {
-        params.context.warnings.push({
-          code: "SECRETS_REF_OVERRIDES_PLAINTEXT",
-          path: `${params.agentDir}.auth-profiles.${profileId}.key`,
-          message: `auth-profiles ${profileId}: keyRef is set; runtime will ignore plaintext key.`,
-        });
-      }
-      params.context.assignments.push({
-        ref: resolvedKeyRef,
-        path: `${params.agentDir}.auth-profiles.${profileId}.key`,
-        expected: "string",
-        apply: (value) => {
-          apiProfile.key = String(value);
-        },
+      collectApiKeyProfileAssignment({
+        profile: profile as ApiKeyCredentialLike,
+        profileId,
+        agentDir: params.agentDir,
+        defaults,
+        context: params.context,
       });
       continue;
     }
-
     if (profile.type === "token") {
-      const tokenProfile = profile as TokenCredentialLike;
-      const tokenRef = coerceSecretRef(tokenProfile.tokenRef, defaults);
-      const inlineTokenRef = tokenRef ? null : coerceSecretRef(tokenProfile.token, defaults);
-      const resolvedTokenRef = tokenRef ?? inlineTokenRef;
-      if (!resolvedTokenRef) {
-        continue;
-      }
-      if (tokenRef && isNonEmptyString(tokenProfile.token)) {
-        params.context.warnings.push({
-          code: "SECRETS_REF_OVERRIDES_PLAINTEXT",
-          path: `${params.agentDir}.auth-profiles.${profileId}.token`,
-          message: `auth-profiles ${profileId}: tokenRef is set; runtime will ignore plaintext token.`,
-        });
-      }
-      params.context.assignments.push({
-        ref: resolvedTokenRef,
-        path: `${params.agentDir}.auth-profiles.${profileId}.token`,
-        expected: "string",
-        apply: (value) => {
-          tokenProfile.token = String(value);
-        },
+      collectTokenProfileAssignment({
+        profile: profile as TokenCredentialLike,
+        profileId,
+        agentDir: params.agentDir,
+        defaults,
+        context: params.context,
       });
     }
   }
@@ -241,7 +322,7 @@ function applyAssignments(params: {
   resolved: Map<string, unknown>;
 }): void {
   for (const assignment of params.assignments) {
-    const key = toRefKey(assignment.ref);
+    const key = secretRefKey(assignment.ref);
     if (!params.resolved.has(key)) {
       throw new Error(`Secret reference "${key}" resolved to no value.`);
     }
