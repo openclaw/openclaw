@@ -205,24 +205,42 @@ describe("resolvePreferredOpenClawTmpDir", () => {
   });
 
   it("returns primary fallback path when all fallback candidates are unsafe", () => {
+    const uid = 501;
+    const primaryFallbackPath = fallbackTmp(uid);
+    const safeFallbackPath = fallbackTmpSafe(uid);
+    const unsafeDirStat = {
+      isDirectory: () => true,
+      isSymbolicLink: () => true,
+      uid,
+      mode: 0o120777,
+    };
     const lstatSync: NonNullable<TmpDirOptions["lstatSync"]> = vi.fn((target: string) => {
       if (
         target === POSIX_OPENCLAW_TMP_DIR ||
-        target === fallbackTmp() ||
-        target === fallbackTmpSafe()
+        target === primaryFallbackPath ||
+        target === safeFallbackPath
       ) {
-        return {
-          isDirectory: () => true,
-          isSymbolicLink: () => true,
-          uid: 501,
-          mode: 0o120777,
-        };
+        return unsafeDirStat;
       }
-      return secureDirStat(501);
+      return secureDirStat(uid);
+    });
+    const accessSync: NonNullable<TmpDirOptions["accessSync"]> = vi.fn();
+    const mkdirSync: NonNullable<TmpDirOptions["mkdirSync"]> = vi.fn();
+    const getuid: NonNullable<TmpDirOptions["getuid"]> = vi.fn(() => uid);
+    const tmpdir: NonNullable<TmpDirOptions["tmpdir"]> = vi.fn(() => "/var/fallback");
+
+    const resolved = resolvePreferredOpenClawTmpDir({
+      accessSync,
+      lstatSync,
+      mkdirSync,
+      getuid,
+      tmpdir,
     });
 
-    const { resolved } = resolveWithMocks({ lstatSync });
-
-    expect(resolved).toBe(fallbackTmp());
+    expect(resolved).toBe(primaryFallbackPath);
+    expect(lstatSync).toHaveBeenCalledWith(POSIX_OPENCLAW_TMP_DIR);
+    expect(lstatSync).toHaveBeenCalledWith(primaryFallbackPath);
+    expect(lstatSync).toHaveBeenCalledWith(safeFallbackPath);
+    expect(mkdirSync).not.toHaveBeenCalled();
   });
 });
