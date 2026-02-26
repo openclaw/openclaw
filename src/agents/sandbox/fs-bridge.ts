@@ -1,7 +1,8 @@
-import fs from "node:fs/promises";
-import path from "node:path";
-import { assertNoHardlinkedFinalPath } from "../../infra/hardlink-guards.js";
-import { isNotFoundPathError, isPathInside } from "../../infra/path-guards.js";
+import {
+  assertNoPathAliasEscape,
+  PATH_ALIAS_POLICIES,
+  type PathAliasPolicy,
+} from "../../infra/path-alias-guards.js";
 import { execDockerRaw, type ExecDockerRawResult } from "./docker.js";
 import {
   buildSandboxFsMounts,
@@ -21,8 +22,7 @@ type RunCommandOptions = {
 
 type PathSafetyOptions = {
   action: string;
-  allowFinalSymlink?: boolean;
-  allowFinalHardlink?: boolean;
+  aliasPolicy?: PathAliasPolicy;
   requireWritable?: boolean;
 };
 
@@ -152,8 +152,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     await this.assertPathSafety(target, {
       action: "remove files",
       requireWritable: true,
-      allowFinalSymlink: true,
-      allowFinalHardlink: true,
+      aliasPolicy: PATH_ALIAS_POLICIES.unlinkTarget,
     });
     const flags = [params.force === false ? "" : "-f", params.recursive ? "-r" : ""].filter(
       Boolean,
@@ -178,8 +177,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     await this.assertPathSafety(from, {
       action: "rename files",
       requireWritable: true,
-      allowFinalSymlink: true,
-      allowFinalHardlink: true,
+      aliasPolicy: PATH_ALIAS_POLICIES.unlinkTarget,
     });
     await this.assertPathSafety(to, {
       action: "rename files",
@@ -256,21 +254,16 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       );
     }
 
-    await assertNoHostSymlinkEscape({
+    await assertNoPathAliasEscape({
       absolutePath: target.hostPath,
       rootPath: lexicalMount.hostRoot,
-      allowFinalSymlink: options.allowFinalSymlink === true,
-    });
-    await assertNoHardlinkedFinalPath({
-      filePath: target.hostPath,
-      root: lexicalMount.hostRoot,
       boundaryLabel: "sandbox mount root",
-      allowFinalHardlink: options.allowFinalHardlink === true,
+      policy: options.aliasPolicy,
     });
 
     const canonicalContainerPath = await this.resolveCanonicalContainerPath({
       containerPath: target.containerPath,
-      allowFinalSymlink: options.allowFinalSymlink === true,
+      allowFinalSymlinkForUnlink: options.aliasPolicy?.allowFinalSymlinkForUnlink === true,
     });
     const canonicalMount = this.resolveMountByContainerPath(canonicalContainerPath);
     if (!canonicalMount) {
@@ -297,7 +290,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
 
   private async resolveCanonicalContainerPath(params: {
     containerPath: string;
-    allowFinalSymlink: boolean;
+    allowFinalSymlinkForUnlink: boolean;
   }): Promise<string> {
     const script = [
       "set -eu",
@@ -318,7 +311,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       'printf "%s%s\\n" "$canonical" "$suffix"',
     ].join("\n");
     const result = await this.runCommand(script, {
-      args: [params.containerPath, params.allowFinalSymlink ? "1" : "0"],
+      args: [params.containerPath, params.allowFinalSymlinkForUnlink ? "1" : "0"],
     });
     const canonical = result.stdout.toString("utf8").trim();
     if (!canonical.startsWith("/")) {
@@ -360,54 +353,4 @@ function coerceStatType(typeRaw?: string): "file" | "directory" | "other" {
     return "file";
   }
   return "other";
-}
-
-async function assertNoHostSymlinkEscape(params: {
-  absolutePath: string;
-  rootPath: string;
-  allowFinalSymlink: boolean;
-}): Promise<void> {
-  const root = path.resolve(params.rootPath);
-  const target = path.resolve(params.absolutePath);
-  if (!isPathInside(root, target)) {
-    throw new Error(`Sandbox path escapes mount root (${root}): ${params.absolutePath}`);
-  }
-  const relative = path.relative(root, target);
-  if (!relative) {
-    return;
-  }
-  const rootReal = await tryRealpath(root);
-  const parts = relative.split(path.sep).filter(Boolean);
-  let current = root;
-  for (let idx = 0; idx < parts.length; idx += 1) {
-    current = path.join(current, parts[idx] ?? "");
-    const isLast = idx === parts.length - 1;
-    try {
-      const stat = await fs.lstat(current);
-      if (!stat.isSymbolicLink()) {
-        continue;
-      }
-      if (params.allowFinalSymlink && isLast) {
-        return;
-      }
-      const symlinkTarget = await tryRealpath(current);
-      if (!isPathInside(rootReal, symlinkTarget)) {
-        throw new Error(`Symlink escapes sandbox mount root (${rootReal}): ${current}`);
-      }
-      current = symlinkTarget;
-    } catch (error) {
-      if (isNotFoundPathError(error)) {
-        return;
-      }
-      throw error;
-    }
-  }
-}
-
-async function tryRealpath(value: string): Promise<string> {
-  try {
-    return await fs.realpath(value);
-  } catch {
-    return path.resolve(value);
-  }
 }

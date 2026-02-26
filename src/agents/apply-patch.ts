@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool } from "@mariozechner/pi-agent-core";
 import { Type } from "@sinclair/typebox";
+import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
 import { assertSandboxPath, resolveSandboxInputPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
@@ -154,7 +155,7 @@ export async function applyPatch(
     }
 
     if (hunk.kind === "delete") {
-      const target = await resolvePatchPath(hunk.path, options, "unlink");
+      const target = await resolvePatchPath(hunk.path, options, PATH_ALIAS_POLICIES.unlinkTarget);
       await fileOps.remove(target.resolved);
       recordSummary(summary, seen, "deleted", target.display);
       continue;
@@ -253,7 +254,7 @@ async function ensureDir(filePath: string, ops: PatchFileOps) {
 async function resolvePatchPath(
   filePath: string,
   options: ApplyPatchOptions,
-  purpose: "readWrite" | "unlink" = "readWrite",
+  aliasPolicy: PathAliasPolicy = PATH_ALIAS_POLICIES.strict,
 ): Promise<{ resolved: string; display: string }> {
   if (options.sandbox) {
     const resolved = options.sandbox.bridge.resolvePath({
@@ -265,8 +266,8 @@ async function resolvePatchPath(
         filePath: resolved.hostPath,
         cwd: options.cwd,
         root: options.cwd,
-        allowFinalSymlink: purpose === "unlink",
-        allowFinalHardlink: purpose === "unlink",
+        allowFinalSymlinkForUnlink: aliasPolicy.allowFinalSymlinkForUnlink,
+        allowFinalHardlinkForUnlink: aliasPolicy.allowFinalHardlinkForUnlink,
       });
     }
     return {
@@ -282,8 +283,8 @@ async function resolvePatchPath(
           filePath,
           cwd: options.cwd,
           root: options.cwd,
-          allowFinalSymlink: purpose === "unlink",
-          allowFinalHardlink: purpose === "unlink",
+          allowFinalSymlinkForUnlink: aliasPolicy.allowFinalSymlinkForUnlink,
+          allowFinalHardlinkForUnlink: aliasPolicy.allowFinalHardlinkForUnlink,
         })
       ).resolved
     : resolvePathFromCwd(filePath, options.cwd);
