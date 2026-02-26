@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import type { BrowserFormField } from "../client-actions-core.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import {
@@ -15,14 +16,17 @@ import {
 import {
   DEFAULT_DOWNLOAD_DIR,
   DEFAULT_UPLOAD_DIR,
-  resolvePathWithinRoot,
+  resolveWritablePathWithinRoot,
   resolveExistingPathsWithinRoot,
 } from "./path-output.js";
 import type { BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { jsonError, toBoolean, toNumber, toStringArray, toStringOrEmpty } from "./utils.js";
 
-function resolveDownloadPathOrRespond(res: BrowserResponse, requestedPath: string): string | null {
-  const downloadPathResult = resolvePathWithinRoot({
+async function resolveDownloadPathOrRespond(
+  res: BrowserResponse,
+  requestedPath: string,
+): Promise<string | null> {
+  const downloadPathResult = await resolveWritablePathWithinRoot({
     rootDir: DEFAULT_DOWNLOAD_DIR,
     requestedPath,
     scopeLabel: "downloads directory",
@@ -466,9 +470,10 @@ export function registerBrowserAgentActRoutes(
       targetId,
       feature: "wait for download",
       run: async ({ cdpUrl, tab, pw }) => {
+        await fs.mkdir(DEFAULT_DOWNLOAD_DIR, { recursive: true });
         let downloadPath: string | undefined;
         if (out.trim()) {
-          const resolvedDownloadPath = resolveDownloadPathOrRespond(res, out);
+          const resolvedDownloadPath = await resolveDownloadPathOrRespond(res, out);
           if (!resolvedDownloadPath) {
             return;
           }
@@ -504,7 +509,8 @@ export function registerBrowserAgentActRoutes(
       targetId,
       feature: "download",
       run: async ({ cdpUrl, tab, pw }) => {
-        const downloadPath = resolveDownloadPathOrRespond(res, out);
+        await fs.mkdir(DEFAULT_DOWNLOAD_DIR, { recursive: true });
+        const downloadPath = await resolveDownloadPathOrRespond(res, out);
         if (!downloadPath) {
           return;
         }
