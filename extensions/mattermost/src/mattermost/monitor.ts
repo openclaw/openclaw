@@ -814,7 +814,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       oncharTriggered,
       canDetectMention,
     });
-    const { shouldRequireMention, shouldBypassMention, effectiveWasMentioned } = mentionDecision;
+    const { shouldRequireMention, shouldBypassMention } = mentionDecision;
 
     if (mentionDecision.dropReason === "onchar-not-triggered") {
       logVerboseMessage(
@@ -943,7 +943,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       ReplyToId: threadRootId,
       MessageThreadId: threadRootId,
       Timestamp: typeof post.create_at === "number" ? post.create_at : undefined,
-      WasMentioned: kind !== "direct" ? effectiveWasMentioned : undefined,
+      WasMentioned: kind !== "direct" ? mentionDecision.effectiveWasMentioned : undefined,
       CommandAuthorized: commandAuthorized,
       OriginatingChannel: "mattermost" as const,
       OriginatingTo: to,
