@@ -3,6 +3,7 @@ import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   type ExecApprovalDecision,
 } from "../../infra/exec-approvals.js";
+import { buildSystemRunApprovalBindingV1 } from "../../infra/system-run-approval-binding.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
   ErrorCodes,
@@ -11,7 +12,6 @@ import {
   validateExecApprovalRequestParams,
   validateExecApprovalResolveParams,
 } from "../protocol/index.js";
-import { buildSystemRunApprovalBindingV1 } from "../system-run-approval-binding.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export function createExecApprovalHandlers(
@@ -70,16 +70,6 @@ export function createExecApprovalHandlers(
       const commandArgv = Array.isArray(p.commandArgv)
         ? p.commandArgv.map((entry) => String(entry))
         : undefined;
-      const systemRunBindingV1 =
-        host === "node" && Array.isArray(commandArgv) && commandArgv.length > 0
-          ? buildSystemRunApprovalBindingV1({
-              argv: commandArgv,
-              cwd: p.cwd,
-              agentId: p.agentId,
-              sessionKey: p.sessionKey,
-              env: p.env,
-            })
-          : null;
       if (host === "node" && !nodeId) {
         respond(
           false,
@@ -88,6 +78,24 @@ export function createExecApprovalHandlers(
         );
         return;
       }
+      if (host === "node" && (!Array.isArray(commandArgv) || commandArgv.length === 0)) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "commandArgv is required for host=node"),
+        );
+        return;
+      }
+      const systemRunBindingV1 =
+        host === "node"
+          ? buildSystemRunApprovalBindingV1({
+              argv: commandArgv,
+              cwd: p.cwd,
+              agentId: p.agentId,
+              sessionKey: p.sessionKey,
+              env: p.env,
+            })
+          : null;
       if (explicitId && manager.getSnapshot(explicitId)) {
         respond(
           false,
