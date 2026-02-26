@@ -12,6 +12,7 @@ import {
   getStatusCode,
   logoutWeb,
   readWebSelfId,
+  waitForCredsSaveQueue,
   waitForWaConnection,
   webAuthExists,
 } from "./session.js";
@@ -85,9 +86,12 @@ async function restartLoginSocket(login: ActiveLogin, runtime: RuntimeEnv) {
   }
   login.restartAttempted = true;
   runtime.log(
-    info("WhatsApp asked for a restart after pairing (code 515); retrying connection once…"),
+    info("WhatsApp asked for a restart after pairing (code 515); waiting for creds to save…"),
   );
   closeSocket(login.sock);
+  // Wait for any pending creds.update writes to flush to disk before creating
+  // a new socket — otherwise useMultiFileAuthState reads stale/empty creds.
+  await waitForCredsSaveQueue();
   try {
     const sock = await createWaSocket(false, login.verbose, {
       authDir: login.authDir,
