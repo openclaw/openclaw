@@ -1,5 +1,7 @@
 import type { LocationMessageEventContent, MatrixClient } from "@vector-im/matrix-bot-sdk";
 import {
+  DEFAULT_ACCOUNT_ID,
+  createScopedPairingAccess,
   createReplyPrefixOptions,
   createTypingCallbacks,
   formatAllowlistMatchMeta,
@@ -98,6 +100,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     getMemberDisplayName,
     accountId,
   } = params;
+  const resolvedAccountId = accountId?.trim() || DEFAULT_ACCOUNT_ID;
+  const pairing = createScopedPairingAccess({
+    core,
+    channel: "matrix",
+    accountId: resolvedAccountId,
+  });
 
   return async (roomId: string, event: MatrixRawEvent) => {
     try {
@@ -229,8 +237,9 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       const storeAllowFrom = isDirectMessage
         ? await readStoreAllowFromForDmPolicy({
             provider: "matrix",
+            accountId: resolvedAccountId,
             dmPolicy,
-            readStore: (provider) => core.channel.pairing.readAllowFromStore(provider),
+            readStore: pairing.readStoreForDmPolicy,
           })
         : [];
       const groupAllowFrom = cfg.channels?.matrix?.groupAllowFrom ?? [];
@@ -270,8 +279,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           });
           const allowMatchMeta = formatAllowlistMatchMeta(allowMatch);
           if (access.decision === "pairing") {
-            const { code, created } = await core.channel.pairing.upsertPairingRequest({
-              channel: "matrix",
+            const { code, created } = await pairing.upsertPairingRequest({
               id: senderId,
               meta: { name: senderName },
             });
