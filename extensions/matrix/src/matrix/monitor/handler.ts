@@ -7,6 +7,7 @@ import {
   logTypingFailure,
   readStoreAllowFromForDmPolicy,
   resolveControlCommandGate,
+  resolveDmGroupAccessWithLists,
   type PluginRuntime,
   type RuntimeEnv,
   type RuntimeLogger,
@@ -214,62 +215,83 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       }
 
       const senderName = await getMemberDisplayName(roomId, senderId);
-      const storeAllowFrom = await readStoreAllowFromForDmPolicy({
-        provider: "matrix",
-        dmPolicy,
-        readStore: (provider) => core.channel.pairing.readAllowFromStore(provider),
-      });
-      const effectiveAllowFrom = normalizeMatrixAllowList([...allowFrom, ...storeAllowFrom]);
+      const storeAllowFrom =
+        isDirectMessage
+          ? await readStoreAllowFromForDmPolicy({
+              provider: "matrix",
+              dmPolicy,
+              readStore: (provider) => core.channel.pairing.readAllowFromStore(provider),
+            })
+          : [];
       const groupAllowFrom = cfg.channels?.matrix?.groupAllowFrom ?? [];
-      const effectiveGroupAllowFrom = normalizeMatrixAllowList(groupAllowFrom);
+      const normalizedGroupAllowFrom = normalizeMatrixAllowList(groupAllowFrom);
+      const senderGroupPolicy =
+        groupPolicy === "disabled"
+          ? "disabled"
+          : normalizedGroupAllowFrom.length > 0
+            ? "allowlist"
+            : "open";
+      const access = resolveDmGroupAccessWithLists({
+        isGroup: isRoom,
+        dmPolicy,
+        groupPolicy: senderGroupPolicy,
+        allowFrom,
+        groupAllowFrom: normalizedGroupAllowFrom,
+        storeAllowFrom,
+        groupAllowFromFallbackToAllowFrom: false,
+        isSenderAllowed: (allowFrom) =>
+          resolveMatrixAllowListMatches({
+            allowList: normalizeMatrixAllowList(allowFrom),
+            userId: senderId,
+          }),
+      });
+      const effectiveAllowFrom = normalizeMatrixAllowList(access.effectiveAllowFrom);
+      const effectiveGroupAllowFrom = normalizeMatrixAllowList(access.effectiveGroupAllowFrom);
       const groupAllowConfigured = effectiveGroupAllowFrom.length > 0;
 
       if (isDirectMessage) {
-        if (!dmEnabled || dmPolicy === "disabled") {
+        if (!dmEnabled) {
           return;
         }
-        if (dmPolicy !== "open") {
+        if (access.decision !== "allow") {
           const allowMatch = resolveMatrixAllowListMatch({
             allowList: effectiveAllowFrom,
             userId: senderId,
           });
           const allowMatchMeta = formatAllowlistMatchMeta(allowMatch);
-          if (!allowMatch.allowed) {
-            if (dmPolicy === "pairing") {
-              const { code, created } = await core.channel.pairing.upsertPairingRequest({
-                channel: "matrix",
-                id: senderId,
-                meta: { name: senderName },
-              });
-              if (created) {
-                logVerboseMessage(
-                  `matrix pairing request sender=${senderId} name=${senderName ?? "unknown"} (${allowMatchMeta})`,
+          if (access.decision === "pairing") {
+            const { code, created } = await core.channel.pairing.upsertPairingRequest({
+              channel: "matrix",
+              id: senderId,
+              meta: { name: senderName },
+            });
+            if (created) {
+              logVerboseMessage(
+                `matrix pairing request sender=${senderId} name=${senderName ?? "unknown"} (${allowMatchMeta})`,
+              );
+              try {
+                await sendMessageMatrix(
+                  `room:${roomId}`,
+                  [
+                    "OpenClaw: access not configured.",
+                    "",
+                    `Pairing code: ${code}`,
+                    "",
+                    "Ask the bot owner to approve with:",
+                    "openclaw pairing approve matrix <code>",
+                  ].join("\n"),
+                  { client },
                 );
-                try {
-                  await sendMessageMatrix(
-                    `room:${roomId}`,
-                    [
-                      "OpenClaw: access not configured.",
-                      "",
-                      `Pairing code: ${code}`,
-                      "",
-                      "Ask the bot owner to approve with:",
-                      "openclaw pairing approve matrix <code>",
-                    ].join("\n"),
-                    { client },
-                  );
-                } catch (err) {
-                  logVerboseMessage(`matrix pairing reply failed for ${senderId}: ${String(err)}`);
-                }
+              } catch (err) {
+                logVerboseMessage(`matrix pairing reply failed for ${senderId}: ${String(err)}`);
               }
             }
-            if (dmPolicy !== "pairing") {
-              logVerboseMessage(
-                `matrix: blocked dm sender ${senderId} (dmPolicy=${dmPolicy}, ${allowMatchMeta})`,
-              );
-            }
-            return;
+          } else {
+            logVerboseMessage(
+              `matrix: blocked dm sender ${senderId} (dmPolicy=${dmPolicy}, ${allowMatchMeta})`,
+            );
           }
+          return;
         }
       }
 
@@ -288,7 +310,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           return;
         }
       }
-      if (isRoom && groupPolicy === "allowlist" && roomUsers.length === 0 && groupAllowConfigured) {
+      if (isRoom && roomUsers.length === 0 && groupAllowConfigured && access.decision !== "allow") {
         const groupAllowMatch = resolveMatrixAllowListMatch({
           allowList: effectiveGroupAllowFrom,
           userId: senderId,
