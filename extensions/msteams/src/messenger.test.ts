@@ -291,6 +291,38 @@ describe("msteams messenger", () => {
       ).rejects.toMatchObject({ statusCode: 400 });
     });
 
+    it("falls back to proactive messaging when thread context is revoked", async () => {
+      const proactiveSent: string[] = [];
+
+      const ctx = {
+        sendActivity: async () => {
+          throw new TypeError("Cannot perform 'set' on a proxy that has been revoked");
+        },
+      };
+
+      const adapter: MSTeamsAdapter = {
+        continueConversation: async (_appId, _reference, logic) => {
+          await logic({
+            sendActivity: createRecordedSendActivity(proactiveSent),
+          });
+        },
+        process: async () => {},
+      };
+
+      const ids = await sendMSTeamsMessages({
+        replyStyle: "thread",
+        adapter,
+        appId: "app123",
+        conversationRef: baseRef,
+        context: ctx,
+        messages: [{ text: "hello" }],
+      });
+
+      // Should have fallen back to proactive messaging
+      expect(proactiveSent).toEqual(["hello"]);
+      expect(ids).toEqual(["id:hello"]);
+    });
+
     it("retries top-level sends on transient (5xx)", async () => {
       const attempts: string[] = [];
 
