@@ -143,9 +143,18 @@ export async function runAgentTurnWithFallback(params: {
           }
           text = stripped.text;
         }
+        // Full silent reply tokens (NO_REPLY, HEARTBEAT_OK) are passed through
+        // so server-chat.ts can buffer them for watchdog sign-off detection.
+        // server-chat.ts has its own suppression layer (isSilentReplyText)
+        // that prevents them from being broadcast to clients.
         if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
-          return { skip: true };
+          return { text, skip: false };
         }
+        if (isSilentReplyText(text, HEARTBEAT_TOKEN)) {
+          return { text, skip: false };
+        }
+        // Partial prefixes (NO_, NO_RE, HEARTBEAT_) are still suppressed here
+        // because server-chat.ts only catches full tokens, not partials.
         if (
           isSilentReplyPrefixText(text, SILENT_REPLY_TOKEN) ||
           isSilentReplyPrefixText(text, HEARTBEAT_TOKEN)
