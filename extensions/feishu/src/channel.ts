@@ -214,7 +214,9 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount> = {
     }),
     resolveAllowFrom: ({ cfg, accountId }) => {
       const account = resolveFeishuAccount({ cfg, accountId });
-      return (account.config?.allowFrom ?? []).map((entry) => String(entry));
+      const raw = account.config?.allowFrom;
+      if (raw === "*") return ["*"];
+      return (Array.isArray(raw) ? raw : []).map((entry) => String(entry));
     },
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom
