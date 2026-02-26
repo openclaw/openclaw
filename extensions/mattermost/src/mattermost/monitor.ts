@@ -798,6 +798,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       ? stripOncharPrefix(rawText, oncharPrefixes)
       : { triggered: false, stripped: rawText };
     const oncharTriggered = oncharResult.triggered;
+    const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
     const mentionDecision = evaluateMattermostMentionGate({
       kind,
       cfg,
@@ -811,10 +812,9 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       commandAuthorized,
       oncharEnabled,
       oncharTriggered,
-      canDetectMention: Boolean(botUsername) || mentionRegexes.length > 0,
+      canDetectMention,
     });
     const { shouldRequireMention, shouldBypassMention, effectiveWasMentioned } = mentionDecision;
-    const canDetectMention = Boolean(botUsername) || mentionRegexes.length > 0;
 
     if (mentionDecision.dropReason === "onchar-not-triggered") {
       logVerboseMessage(
