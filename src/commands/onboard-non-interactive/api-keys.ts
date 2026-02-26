@@ -11,6 +11,14 @@ import type { SecretInputMode } from "../onboard-types.js";
 
 export type NonInteractiveApiKeySource = "flag" | "env" | "profile";
 
+function parseEnvVarNameFromSourceLabel(source: string | undefined): string | undefined {
+  if (!source) {
+    return undefined;
+  }
+  const match = /^(?:shell env: |env: )([A-Z][A-Z0-9_]*)$/.exec(source.trim());
+  return match?.[1];
+}
+
 async function resolveApiKeyFromProfiles(params: {
   provider: string;
   cfg: OpenClawConfig;
@@ -52,7 +60,7 @@ export async function resolveNonInteractiveApiKey(params: {
   allowProfile?: boolean;
   required?: boolean;
   secretInputMode?: SecretInputMode;
-}): Promise<{ key: string; source: NonInteractiveApiKeySource } | null> {
+}): Promise<{ key: string; source: NonInteractiveApiKeySource; envVarName?: string } | null> {
   const flagKey = normalizeOptionalSecretInput(params.flagValue);
   const envResolved = resolveEnvApiKey(params.provider);
   const explicitEnvVar = params.envVarName?.trim();
@@ -60,6 +68,7 @@ export async function resolveNonInteractiveApiKey(params: {
     ? normalizeOptionalSecretInput(process.env[explicitEnvVar])
     : undefined;
   const resolvedEnvKey = envResolved?.apiKey ?? explicitEnvKey;
+  const resolvedEnvVarName = parseEnvVarNameFromSourceLabel(envResolved?.source) ?? explicitEnvVar;
 
   if (params.secretInputMode === "ref") {
     if (!resolvedEnvKey && flagKey) {
@@ -73,7 +82,17 @@ export async function resolveNonInteractiveApiKey(params: {
       return null;
     }
     if (resolvedEnvKey) {
-      return { key: resolvedEnvKey, source: "env" };
+      if (!resolvedEnvVarName) {
+        params.runtime.error(
+          [
+            `--secret-input-mode ref requires an explicit environment variable for provider "${params.provider}".`,
+            `Set ${params.envVar} in env and retry, or use --secret-input-mode plaintext.`,
+          ].join("\n"),
+        );
+        params.runtime.exit(1);
+        return null;
+      }
+      return { key: resolvedEnvKey, source: "env", envVarName: resolvedEnvVarName };
     }
   }
 
@@ -82,7 +101,7 @@ export async function resolveNonInteractiveApiKey(params: {
   }
 
   if (resolvedEnvKey) {
-    return { key: resolvedEnvKey, source: "env" };
+    return { key: resolvedEnvKey, source: "env", envVarName: resolvedEnvVarName };
   }
 
   if (params.allowProfile ?? true) {
