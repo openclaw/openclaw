@@ -42,10 +42,10 @@ DM_CHAT_ID = "492860021"
 GROUP_CHAT_ID = "-1003076685086"
 RON_TOPIC_ID = 30413
 
-MODELS = ["github-copilot/gpt-5-mini", "qwen3:8b"]
+MODELS = ["github-copilot/gpt-5-mini", "qwen2.5:7b"]
 # 데일리 리포트 PEST/총괄 전용 — 하루 1회, 상위 모델 우선
 MODELS_PREMIUM = ["github-copilot/claude-sonnet-4-6",
-                  "github-copilot/gpt-5-mini", "qwen3:8b"]
+                  "github-copilot/gpt-5-mini", "qwen2.5:7b"]
 
 # ── v2.0 섹터 맵 ──────────────────────────────────────────────────
 
@@ -1410,7 +1410,7 @@ def build_pest_analysis(mkt: dict, geo: dict, social: dict) -> str:
         content, model, error = llm_chat_with_fallback(
             messages, MODELS_PREMIUM, max_tokens=800, timeout=45,
         )
-        log(f"PEST model: {model}")
+        log(f"PEST model: {model or 'FAILED'}{f' err={error}' if error else ''}")
         if content:
             cleaned = _clean_llm_text(content)
             # Merge multi-line per axis: join lines until next P:/E:/S:/T:
@@ -1663,6 +1663,7 @@ def build_executive_summary(factcheck: str, pest: str,
         content, model, error = llm_chat_with_fallback(
             messages, MODELS_PREMIUM, max_tokens=400, timeout=45,
         )
+        log(f"Executive model: {model or 'FAILED'}{f' err={error}' if error else ''}")
         if content:
             cleaned = _clean_llm_text(content)
             # Merge broken lines per prefix
