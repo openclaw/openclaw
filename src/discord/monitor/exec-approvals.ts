@@ -213,6 +213,9 @@ function buildExecApprovalMetadataLines(request: ExecApprovalRequest): string[] 
   if (request.request.host) {
     lines.push(`- Host: ${request.request.host}`);
   }
+  if (Array.isArray(request.request.envKeys) && request.request.envKeys.length > 0) {
+    lines.push(`- Env Overrides: ${request.request.envKeys.join(", ")}`);
+  }
   if (request.request.agentId) {
     lines.push(`- Agent: ${request.request.agentId}`);
   }
