@@ -1,5 +1,7 @@
-import fs from "node:fs/promises";
+import fsSync from "node:fs";
+import path from "node:path";
 import type { OpenClawConfig } from "../config/config.js";
+import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { resolveUserPath } from "../utils.js";
 import { discoverOpenClawPlugins } from "./discovery.js";
@@ -69,12 +71,23 @@ type InstallIntegrityDrift = {
 };
 
 async function readInstalledPackageVersion(dir: string): Promise<string | undefined> {
+  const manifestPath = path.join(dir, "package.json");
+  const opened = openBoundaryFileSync({
+    absolutePath: manifestPath,
+    rootPath: dir,
+    boundaryLabel: "installed plugin directory",
+  });
+  if (!opened.ok) {
+    return undefined;
+  }
   try {
-    const raw = await fs.readFile(`${dir}/package.json`, "utf-8");
+    const raw = fsSync.readFileSync(opened.fd, "utf-8");
     const parsed = JSON.parse(raw) as { version?: unknown };
     return typeof parsed.version === "string" ? parsed.version : undefined;
   } catch {
     return undefined;
+  } finally {
+    fsSync.closeSync(opened.fd);
   }
 }
 
