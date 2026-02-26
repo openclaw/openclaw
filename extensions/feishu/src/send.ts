@@ -265,7 +265,7 @@ export function buildCaptionCard(text: string): Record<string, unknown> {
       elements: [
         {
           tag: "markdown",
-          content: `<font color="grey">${text.replaceAll("<", "&lt;").replaceAll(">", "&gt;")}</font>`,
+          content: `<font color="grey">${text}</font>`,
         },
       ],
     },
@@ -285,9 +285,11 @@ export async function sendCaptionCardFeishu(params: {
   accountId?: string;
 }): Promise<FeishuSendResult> {
   const { cfg, to, text, replyToMessageId, mentions, accountId } = params;
-  let cardText = text;
+  // Escape HTML in user text first to prevent markup injection,
+  // then add mention tags (which must remain unescaped for Feishu to parse).
+  let cardText = text.replaceAll("<", "&lt;").replaceAll(">", "&gt;");
   if (mentions && mentions.length > 0) {
-    cardText = buildMentionedCardContent(mentions, text);
+    cardText = buildMentionedCardContent(mentions, cardText);
   }
   const card = buildCaptionCard(cardText);
   return sendCardFeishu({ cfg, to, card, replyToMessageId, accountId });
