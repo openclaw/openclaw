@@ -10,6 +10,8 @@ const execFile = promisify(execFileCb);
 
 type SourceExtractionMode = "native" | "llm_ocr_fallback";
 
+const LEGAL_PROOFREADER_OCR_MODEL = "openai-codex/gpt-5.2";
+
 export type SourceExtractionResult = {
   pages: string[];
   articleTexts: Record<string, string>;
@@ -137,10 +139,8 @@ async function runOcrOnImagePage(params: {
     }) => Promise<{ payloads?: Array<{ text?: string; isError?: boolean }> }>;
   };
 
-  const modelPrimary = config.agents?.defaults?.model?.primary;
-  const provider = typeof modelPrimary === "string" ? modelPrimary.split("/")[0] : undefined;
-  const model =
-    typeof modelPrimary === "string" ? modelPrimary.split("/").slice(1).join("/") : undefined;
+  const [provider, ...modelParts] = LEGAL_PROOFREADER_OCR_MODEL.split("/");
+  const model = modelParts.join("/") || undefined;
 
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-legal-ocr-"));
   try {

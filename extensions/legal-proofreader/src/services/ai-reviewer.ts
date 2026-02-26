@@ -298,6 +298,8 @@ async function runWithConcurrency<T>(
   await Promise.all(workers);
 }
 
+const LEGAL_PROOFREADER_REVIEW_MODEL = "openai-codex/gpt-5.2";
+
 async function defaultReviewWithModel(_params: {
   prompt: string;
   config: OpenClawConfig;
@@ -326,10 +328,8 @@ async function defaultReviewWithModel(_params: {
       }>;
     };
 
-    const modelPrimary = params.config.agents?.defaults?.model?.primary;
-    const provider = typeof modelPrimary === "string" ? modelPrimary.split("/")[0] : undefined;
-    const model =
-      typeof modelPrimary === "string" ? modelPrimary.split("/").slice(1).join("/") : undefined;
+    const [provider, ...modelParts] = LEGAL_PROOFREADER_REVIEW_MODEL.split("/");
+    const model = modelParts.join("/") || undefined;
 
     const result = await mod.runEmbeddedPiAgent({
       sessionId: `legal-proofreader-${params.runId}`,
