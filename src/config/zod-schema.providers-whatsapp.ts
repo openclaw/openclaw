@@ -80,6 +80,28 @@ function enforceOpenDmPolicyAllowFromStar(params: {
   });
 }
 
+function enforceAllowlistDmPolicyAllowFrom(params: {
+  dmPolicy: unknown;
+  allowFrom: unknown;
+  ctx: z.RefinementCtx;
+  message: string;
+}) {
+  if (params.dmPolicy !== "allowlist") {
+    return;
+  }
+  const allow = (Array.isArray(params.allowFrom) ? params.allowFrom : [])
+    .map((v) => String(v).trim())
+    .filter(Boolean);
+  if (allow.length > 0) {
+    return;
+  }
+  params.ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    path: ["allowFrom"],
+    message: params.message,
+  });
+}
+
 export const WhatsAppAccountSchema = WhatsAppSharedSchema.extend({
   name: z.string().optional(),
   enabled: z.boolean().optional(),
@@ -94,6 +116,13 @@ export const WhatsAppAccountSchema = WhatsAppSharedSchema.extend({
       allowFrom: value.allowFrom,
       ctx,
       message: 'channels.whatsapp.accounts.*.dmPolicy="open" requires allowFrom to include "*"',
+    });
+    enforceAllowlistDmPolicyAllowFrom({
+      dmPolicy: value.dmPolicy,
+      allowFrom: value.allowFrom,
+      ctx,
+      message:
+        'channels.whatsapp.accounts.*.dmPolicy="allowlist" requires allowFrom to contain at least one sender ID',
     });
   });
 
@@ -117,5 +146,12 @@ export const WhatsAppConfigSchema = WhatsAppSharedSchema.extend({
       ctx,
       message:
         'channels.whatsapp.dmPolicy="open" requires channels.whatsapp.allowFrom to include "*"',
+    });
+    enforceAllowlistDmPolicyAllowFrom({
+      dmPolicy: value.dmPolicy,
+      allowFrom: value.allowFrom,
+      ctx,
+      message:
+        'channels.whatsapp.dmPolicy="allowlist" requires channels.whatsapp.allowFrom to contain at least one sender ID',
     });
   });
