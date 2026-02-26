@@ -19,6 +19,7 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -35,12 +36,14 @@ class GatewaySessionInvokeTest {
     val connected = CompletableDeferred<Unit>()
     val invokeRequest = CompletableDeferred<GatewaySession.InvokeRequest>()
     val invokeResultParams = CompletableDeferred<String>()
+    val handshakeOrigin = AtomicReference<String?>(null)
     val lastDisconnect = AtomicReference("")
     val server =
       MockWebServer().apply {
         dispatcher =
           object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
+              handshakeOrigin.compareAndSet(null, request.getHeader("Origin"))
               return MockResponse().withWebSocketUpgrade(
                 object : WebSocketListener() {
                   override fun onOpen(webSocket: WebSocket, response: Response) {
@@ -148,6 +151,7 @@ class GatewaySessionInvokeTest {
       assertEquals("node-1", req.nodeId)
       assertEquals("debug.ping", req.command)
       assertEquals("""{"ping":"pong"}""", req.paramsJson)
+      assertNull(handshakeOrigin.get())
       assertEquals("invoke-1", resultParams["id"]?.jsonPrimitive?.content)
       assertEquals("node-1", resultParams["nodeId"]?.jsonPrimitive?.content)
       assertEquals(true, resultParams["ok"]?.jsonPrimitive?.content?.toBooleanStrict())
