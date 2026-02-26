@@ -6,6 +6,9 @@ import { telegramPlugin } from "../../extensions/telegram/src/channel.js";
 import { whatsappPlugin } from "../../extensions/whatsapp/src/channel.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import type { ChannelChoice } from "./onboard-types.js";
+import { getChannelOnboardingAdapter } from "./onboarding/registry.js";
+import type { ChannelOnboardingAdapter } from "./onboarding/types.js";
 
 export function setDefaultChannelPluginRegistryForTests(): void {
   const channels = [
@@ -17,4 +20,25 @@ export function setDefaultChannelPluginRegistryForTests(): void {
     { pluginId: "imessage", plugin: imessagePlugin, source: "test" },
   ] as unknown as Parameters<typeof createTestRegistry>[0];
   setActivePluginRegistry(createTestRegistry(channels));
+}
+
+export function patchChannelOnboardingAdapter<K extends keyof ChannelOnboardingAdapter>(
+  channel: ChannelChoice,
+  patch: Pick<ChannelOnboardingAdapter, K>,
+): () => void {
+  const adapter = getChannelOnboardingAdapter(channel);
+  if (!adapter) {
+    throw new Error(`missing onboarding adapter for ${channel}`);
+  }
+  const keys = Object.keys(patch) as K[];
+  const previous = {} as Pick<ChannelOnboardingAdapter, K>;
+  for (const key of keys) {
+    previous[key] = adapter[key];
+    adapter[key] = patch[key];
+  }
+  return () => {
+    for (const key of keys) {
+      adapter[key] = previous[key];
+    }
+  };
 }
