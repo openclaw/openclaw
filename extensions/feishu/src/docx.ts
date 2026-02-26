@@ -3,6 +3,7 @@ import type * as Lark from "@larksuiteoapi/node-sdk";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { listEnabledFeishuAccounts } from "./accounts.js";
+import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { FeishuDocSchema, type FeishuDocParams } from "./doc-schema.js";
 import { getFeishuRuntime } from "./runtime.js";
@@ -454,14 +455,19 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
     return;
   }
 
-  // Use first account's config for tools configuration
+  // Use first account's config for tools configuration (registration-time defaults only)
   const firstAccount = accounts[0];
   const toolsCfg = resolveToolsConfig(firstAccount.config.tools);
-  const mediaMaxBytes = (firstAccount.config?.mediaMaxMb ?? 30) * 1024 * 1024;
 
-  // Helper to get client for the default account
-  const getClient = () => createFeishuClient(firstAccount);
   const registered: string[] = [];
+
+  const resolveAccount = (params: FeishuDocParams) =>
+    resolveFeishuAccount({ cfg: api.config!, accountId: (params as any).accountId });
+
+  const getClient = (params: FeishuDocParams) => createFeishuClient(resolveAccount(params));
+
+  const getMediaMaxBytes = (params: FeishuDocParams) =>
+    (resolveAccount(params).config?.mediaMaxMb ?? 30) * 1024 * 1024;
 
   // Main document tool with action-based dispatch
   if (toolsCfg.doc) {
@@ -475,14 +481,14 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
         async execute(_toolCallId, params) {
           const p = params as FeishuDocParams;
           try {
-            const client = getClient();
+            const client = getClient(p);
             switch (p.action) {
               case "read":
                 return json(await readDoc(client, p.doc_token));
               case "write":
-                return json(await writeDoc(client, p.doc_token, p.content, mediaMaxBytes));
+                return json(await writeDoc(client, p.doc_token, p.content, getMediaMaxBytes(p)));
               case "append":
-                return json(await appendDoc(client, p.doc_token, p.content, mediaMaxBytes));
+                return json(await appendDoc(client, p.doc_token, p.content, getMediaMaxBytes(p)));
               case "create":
                 return json(await createDoc(client, p.title, p.folder_token));
               case "list_blocks":
