@@ -18,6 +18,7 @@ import {
   isDangerousNameMatchingEnabled,
   resolveControlCommandGate,
   resolveDmGroupAccessWithLists,
+  resolveEffectiveAllowFromLists,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveChannelMediaMaxBytes,
@@ -148,6 +149,23 @@ function normalizeAllowEntry(entry: string): string {
 function normalizeAllowList(entries: Array<string | number>): string[] {
   const normalized = entries.map((entry) => normalizeAllowEntry(String(entry))).filter(Boolean);
   return Array.from(new Set(normalized));
+}
+
+export function resolveMattermostEffectiveAllowFromLists(params: {
+  allowFrom?: Array<string | number> | null;
+  groupAllowFrom?: Array<string | number> | null;
+  storeAllowFrom?: Array<string | number> | null;
+  dmPolicy?: string | null;
+}): {
+  effectiveAllowFrom: string[];
+  effectiveGroupAllowFrom: string[];
+} {
+  return resolveEffectiveAllowFromLists({
+    allowFrom: normalizeAllowList(params.allowFrom ?? []),
+    groupAllowFrom: normalizeAllowList(params.groupAllowFrom ?? []),
+    storeAllowFrom: normalizeAllowList(params.storeAllowFrom ?? []),
+    dmPolicy: params.dmPolicy,
+  });
 }
 
 function isSenderAllowed(params: {
@@ -400,20 +418,18 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       senderId;
     const rawText = post.message?.trim() || "";
     const dmPolicy = account.config.dmPolicy ?? "pairing";
-    const configAllowFrom = normalizeAllowList(account.config.allowFrom ?? []);
-    const configGroupAllowFrom = normalizeAllowList(account.config.groupAllowFrom ?? []);
     const storeAllowFrom = normalizeAllowList(
       dmPolicy === "allowlist"
         ? []
         : await core.channel.pairing.readAllowFromStore("mattermost").catch(() => []),
     );
-    const effectiveAllowFrom = Array.from(new Set([...configAllowFrom, ...storeAllowFrom]));
-    const effectiveGroupAllowFrom = Array.from(
-      new Set([
-        ...(configGroupAllowFrom.length > 0 ? configGroupAllowFrom : configAllowFrom),
-        ...storeAllowFrom,
-      ]),
-    );
+    const { effectiveAllowFrom, effectiveGroupAllowFrom } =
+      resolveMattermostEffectiveAllowFromLists({
+        dmPolicy,
+        allowFrom: account.config.allowFrom,
+        groupAllowFrom: account.config.groupAllowFrom,
+        storeAllowFrom,
+      });
     const allowTextCommands = core.channel.commands.shouldHandleTextCommands({
       cfg,
       surface: "mattermost",
