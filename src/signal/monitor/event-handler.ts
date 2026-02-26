@@ -36,10 +36,7 @@ import {
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
-import {
-  resolveDmGroupAccessDecision,
-  resolveEffectiveAllowFromLists,
-} from "../../security/dm-policy-shared.js";
+import { resolveDmGroupAccessWithLists } from "../../security/dm-policy-shared.js";
 import { normalizeE164 } from "../../utils.js";
 import {
   formatSignalPairingIdLine,
@@ -460,23 +457,19 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       deps.dmPolicy === "allowlist"
         ? []
         : await readChannelAllowFromStore("signal").catch(() => []);
-    const { effectiveAllowFrom: effectiveDmAllow, effectiveGroupAllowFrom: effectiveGroupAllow } =
-      resolveEffectiveAllowFromLists({
-        allowFrom: deps.allowFrom,
-        groupAllowFrom: deps.groupAllowFrom,
-        storeAllowFrom,
-        dmPolicy: deps.dmPolicy,
-      });
     const resolveAccessDecision = (isGroup: boolean) =>
-      resolveDmGroupAccessDecision({
+      resolveDmGroupAccessWithLists({
         isGroup,
         dmPolicy: deps.dmPolicy,
         groupPolicy: deps.groupPolicy,
-        effectiveAllowFrom: effectiveDmAllow,
-        effectiveGroupAllowFrom: effectiveGroupAllow,
-        isSenderAllowed: (allowFrom) => isSignalSenderAllowed(sender, allowFrom),
+        allowFrom: deps.allowFrom,
+        groupAllowFrom: deps.groupAllowFrom,
+        storeAllowFrom,
+        isSenderAllowed: (allowEntries) => isSignalSenderAllowed(sender, allowEntries),
       });
     const dmAccess = resolveAccessDecision(false);
+    const effectiveDmAllow = dmAccess.effectiveAllowFrom;
+    const effectiveGroupAllow = dmAccess.effectiveGroupAllowFrom;
     const dmAllowed = dmAccess.decision === "allow";
 
     if (
