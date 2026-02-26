@@ -165,4 +165,56 @@ describe("VoiceCallWebhookServer replay handling", () => {
       await server.stop();
     }
   });
+
+  it("passes verified request key from verifyWebhook into parseWebhookEvent", async () => {
+    const parseWebhookEvent = vi.fn((_ctx: unknown, options?: { verifiedRequestKey?: string }) => ({
+      events: [
+        {
+          id: "evt-verified",
+          dedupeKey: options?.verifiedRequestKey,
+          type: "call.speech" as const,
+          callId: "call-1",
+          providerCallId: "provider-call-1",
+          timestamp: Date.now(),
+          transcript: "hello",
+          isFinal: true,
+        },
+      ],
+      statusCode: 200,
+    }));
+    const verifiedProvider: VoiceCallProvider = {
+      ...provider,
+      verifyWebhook: () => ({ ok: true, verifiedRequestKey: "verified:req:123" }),
+      parseWebhookEvent,
+    };
+    const { manager, processEvent } = createManager([]);
+    const config = createConfig({ serve: { port: 0, bind: "127.0.0.1", path: "/voice/webhook" } });
+    const server = new VoiceCallWebhookServer(config, manager, verifiedProvider);
+
+    try {
+      const baseUrl = await server.start();
+      const address = (
+        server as unknown as { server?: { address?: () => unknown } }
+      ).server?.address?.();
+      const requestUrl = new URL(baseUrl);
+      if (address && typeof address === "object" && "port" in address && address.port) {
+        requestUrl.port = String(address.port);
+      }
+      const response = await fetch(requestUrl.toString(), {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: "CallSid=CA123&SpeechResult=hello",
+      });
+
+      expect(response.status).toBe(200);
+      expect(parseWebhookEvent).toHaveBeenCalledTimes(1);
+      expect(parseWebhookEvent.mock.calls[0]?.[1]).toEqual({
+        verifiedRequestKey: "verified:req:123",
+      });
+      expect(processEvent).toHaveBeenCalledTimes(1);
+      expect(processEvent.mock.calls[0]?.[0]?.dedupeKey).toBe("verified:req:123");
+    } finally {
+      await server.stop();
+    }
+  });
 });

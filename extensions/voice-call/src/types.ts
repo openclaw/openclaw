@@ -177,6 +177,13 @@ export type WebhookVerificationResult = {
   reason?: string;
   /** Signature is valid, but request was seen before within replay window. */
   isReplay?: boolean;
+  /** Stable key derived from authenticated request material. */
+  verifiedRequestKey?: string;
+};
+
+export type WebhookParseOptions = {
+  /** Stable request key from verifyWebhook. */
+  verifiedRequestKey?: string;
 };
 
 export type WebhookContext = {
