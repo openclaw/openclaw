@@ -943,33 +943,31 @@ export async function handleFeishuMessage(params: {
     });
 
     log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
-    try {
-      const { queuedFinal, counts } = await core.channel.reply.dispatchReplyFromConfig({
-        ctx: ctxPayload,
-        cfg,
-        dispatcher,
-        replyOptions,
-      });
-
-      if (isGroup && historyKey && chatHistories) {
-        clearHistoryEntriesIfEnabled({
-          historyMap: chatHistories,
-          historyKey,
-          limit: historyLimit,
-        });
-      }
-
-      log(
-        `feishu[${account.accountId}]: dispatch complete (queuedFinal=${queuedFinal}, replies=${counts.final})`,
-      );
-    } finally {
-      dispatcher.markComplete();
-      try {
-        await dispatcher.waitForIdle();
-      } finally {
+    const { queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
+      dispatcher,
+      onSettled: () => {
         markDispatchIdle();
-      }
+      },
+      run: () =>
+        core.channel.reply.dispatchReplyFromConfig({
+          ctx: ctxPayload,
+          cfg,
+          dispatcher,
+          replyOptions,
+        }),
+    });
+
+    if (isGroup && historyKey && chatHistories) {
+      clearHistoryEntriesIfEnabled({
+        historyMap: chatHistories,
+        historyKey,
+        limit: historyLimit,
+      });
     }
+
+    log(
+      `feishu[${account.accountId}]: dispatch complete (queuedFinal=${queuedFinal}, replies=${counts.final})`,
+    );
   } catch (err) {
     error(`feishu[${account.accountId}]: failed to dispatch message: ${String(err)}`);
   }
