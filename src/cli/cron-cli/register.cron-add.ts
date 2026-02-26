@@ -71,6 +71,7 @@ export function registerCronAddCommand(cron: Command) {
       .option("--keep-after-run", "Keep one-shot job after it succeeds", false)
       .option("--agent <id>", "Agent id for this job")
       .option("--session <target>", "Session target (main|isolated)")
+      .option("--session-key <key>", "Session key for job routing (e.g. agent:my-agent:my-session)")
       .option("--wake <mode>", "Wake mode (now|next-heartbeat)", "now")
       .option("--at <when>", "Run once at time (ISO) or +duration (e.g. 20m)")
       .option("--every <duration>", "Run every duration (e.g. 10m, 1h)")
@@ -240,12 +241,18 @@ export function registerCronAddCommand(cron: Command) {
               ? opts.description.trim()
               : undefined;
 
+          const sessionKey =
+            typeof opts.sessionKey === "string" && opts.sessionKey.trim()
+              ? opts.sessionKey.trim()
+              : undefined;
+
           const params = {
             name,
             description,
             enabled: !opts.disabled,
             deleteAfterRun: opts.deleteAfterRun ? true : opts.keepAfterRun ? false : undefined,
             agentId,
+            sessionKey,
             schedule,
             sessionTarget,
             wakeMode,
