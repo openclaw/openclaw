@@ -18,6 +18,7 @@ describe("fetchWithSsrFGuard hardening", () => {
   it("blocks private and legacy loopback literals before fetch", async () => {
     const blockedUrls = [
       "http://127.0.0.1:8080/internal",
+      "http://[ff02::1]/internal",
       "http://0177.0.0.1:8080/internal",
       "http://0x7f000001/internal",
     ];
