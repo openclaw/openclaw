@@ -9,6 +9,7 @@ const {
   createDiscordNativeCommandMock,
   createNoopThreadBindingManagerMock,
   createThreadBindingManagerMock,
+  reconcileAcpThreadBindingsOnStartupMock,
   createdBindingManagers,
   listNativeCommandSpecsForConfigMock,
   listSkillCommandsForAgentsMock,
@@ -17,6 +18,8 @@ const {
   resolveDiscordAllowlistConfigMock,
   resolveNativeCommandsEnabledMock,
   resolveNativeSkillsEnabledMock,
+  resolveThreadBindingSessionTtlMsMock,
+  resolveThreadBindingsEnabledMock,
 } = vi.hoisted(() => {
   const createdBindingManagers: Array<{ stop: ReturnType<typeof vi.fn> }> = [];
   return {
@@ -33,6 +36,11 @@ const {
       createdBindingManagers.push(manager);
       return manager;
     }),
+    reconcileAcpThreadBindingsOnStartupMock: vi.fn(() => ({
+      checked: 0,
+      removed: 0,
+      staleSessionKeys: [],
+    })),
     createdBindingManagers,
     listNativeCommandSpecsForConfigMock: vi.fn(() => [{ name: "cmd" }]),
     listSkillCommandsForAgentsMock: vi.fn(() => []),
@@ -55,6 +63,8 @@ const {
     })),
     resolveNativeCommandsEnabledMock: vi.fn(() => true),
     resolveNativeSkillsEnabledMock: vi.fn(() => false),
+    resolveThreadBindingSessionTtlMsMock: vi.fn(() => undefined),
+    resolveThreadBindingsEnabledMock: vi.fn(() => true),
   };
 });
 
@@ -224,6 +234,9 @@ vi.mock("./rest-fetch.js", () => ({
 vi.mock("./thread-bindings.js", () => ({
   createNoopThreadBindingManager: createNoopThreadBindingManagerMock,
   createThreadBindingManager: createThreadBindingManagerMock,
+  reconcileAcpThreadBindingsOnStartup: reconcileAcpThreadBindingsOnStartupMock,
+  resolveThreadBindingSessionTtlMs: resolveThreadBindingSessionTtlMsMock,
+  resolveThreadBindingsEnabled: resolveThreadBindingsEnabledMock,
 }));
 
 describe("monitorDiscordProvider", () => {
@@ -252,6 +265,11 @@ describe("monitorDiscordProvider", () => {
     createDiscordNativeCommandMock.mockClear().mockReturnValue({ name: "mock-command" });
     createNoopThreadBindingManagerMock.mockClear();
     createThreadBindingManagerMock.mockClear();
+    reconcileAcpThreadBindingsOnStartupMock.mockClear().mockReturnValue({
+      checked: 0,
+      removed: 0,
+      staleSessionKeys: [],
+    });
     createdBindingManagers.length = 0;
     listNativeCommandSpecsForConfigMock.mockClear().mockReturnValue([{ name: "cmd" }]);
     listSkillCommandsForAgentsMock.mockClear().mockReturnValue([]);
@@ -265,6 +283,8 @@ describe("monitorDiscordProvider", () => {
     });
     resolveNativeCommandsEnabledMock.mockClear().mockReturnValue(true);
     resolveNativeSkillsEnabledMock.mockClear().mockReturnValue(false);
+    resolveThreadBindingSessionTtlMsMock.mockClear().mockReturnValue(undefined);
+    resolveThreadBindingsEnabledMock.mockClear().mockReturnValue(true);
   });
 
   it("stops thread bindings when startup fails before lifecycle begins", async () => {
@@ -296,6 +316,7 @@ describe("monitorDiscordProvider", () => {
     expect(monitorLifecycleMock).toHaveBeenCalledTimes(1);
     expect(createdBindingManagers).toHaveLength(1);
     expect(createdBindingManagers[0]?.stop).toHaveBeenCalledTimes(1);
+    expect(reconcileAcpThreadBindingsOnStartupMock).toHaveBeenCalledTimes(1);
   });
 
   it("captures gateway errors emitted before lifecycle wait starts", async () => {
