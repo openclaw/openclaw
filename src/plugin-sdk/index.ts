@@ -375,6 +375,7 @@ export { formatDocsLink } from "../terminal/links.js";
 export {
   resolveDmAllowState,
   resolveDmGroupAccessDecision,
+  resolveDmGroupAccessWithLists,
   resolveEffectiveAllowFromLists,
 } from "../security/dm-policy-shared.js";
 export type { HookEntry } from "../hooks/types.js";

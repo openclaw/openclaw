@@ -118,6 +118,70 @@ describe("security/dm-policy-shared", () => {
     "zalo",
   ] as const;
 
+  it("keeps message/reaction policy parity table across channels", () => {
+    const cases = [
+      {
+        name: "dmPolicy=open",
+        dmPolicy: "open" as const,
+        allowFrom: [] as string[],
+        senderAllowed: false,
+        expectedDecision: "allow" as const,
+        expectedReactionAllowed: true,
+      },
+      {
+        name: "dmPolicy=disabled",
+        dmPolicy: "disabled" as const,
+        allowFrom: [] as string[],
+        senderAllowed: false,
+        expectedDecision: "block" as const,
+        expectedReactionAllowed: false,
+      },
+      {
+        name: "dmPolicy=allowlist unauthorized",
+        dmPolicy: "allowlist" as const,
+        allowFrom: ["owner"],
+        senderAllowed: false,
+        expectedDecision: "block" as const,
+        expectedReactionAllowed: false,
+      },
+      {
+        name: "dmPolicy=allowlist authorized",
+        dmPolicy: "allowlist" as const,
+        allowFrom: ["owner"],
+        senderAllowed: true,
+        expectedDecision: "allow" as const,
+        expectedReactionAllowed: true,
+      },
+      {
+        name: "dmPolicy=pairing unauthorized",
+        dmPolicy: "pairing" as const,
+        allowFrom: [] as string[],
+        senderAllowed: false,
+        expectedDecision: "pairing" as const,
+        expectedReactionAllowed: false,
+      },
+    ];
+
+    for (const channel of channels) {
+      for (const testCase of cases) {
+        const access = resolveDmGroupAccessWithLists({
+          isGroup: false,
+          dmPolicy: testCase.dmPolicy,
+          groupPolicy: "allowlist",
+          allowFrom: testCase.allowFrom,
+          groupAllowFrom: [],
+          storeAllowFrom: [],
+          isSenderAllowed: () => testCase.senderAllowed,
+        });
+        const reactionAllowed = access.decision === "allow";
+        expect(access.decision, `[${channel}] ${testCase.name}`).toBe(testCase.expectedDecision);
+        expect(reactionAllowed, `[${channel}] ${testCase.name} reaction`).toBe(
+          testCase.expectedReactionAllowed,
+        );
+      }
+    }
+  });
+
   for (const channel of channels) {
     it(`[${channel}] blocks DM allowlist mode when allowlist is empty`, () => {
       const decision = resolveDmGroupAccessDecision({
