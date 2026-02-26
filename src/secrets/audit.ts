@@ -308,7 +308,9 @@ function collectConfigSecrets(params: {
 
 function collectAuthStorePaths(config: OpenClawConfig, stateDir: string): string[] {
   const paths = new Set<string>();
-  paths.add(resolveUserPath(resolveAuthStorePath()));
+  // Scope default auth store discovery to the provided stateDir instead of
+  // ambient process env, so audits do not include unrelated host-global stores.
+  paths.add(path.join(resolveUserPath(stateDir), "agents", "main", "agent", "auth-profiles.json"));
 
   const agentsRoot = path.join(resolveUserPath(stateDir), "agents");
   if (fs.existsSync(agentsRoot)) {
@@ -321,6 +323,12 @@ function collectAuthStorePaths(config: OpenClawConfig, stateDir: string): string
   }
 
   for (const agentId of listAgentIds(config)) {
+    if (agentId === "main") {
+      paths.add(
+        path.join(resolveUserPath(stateDir), "agents", "main", "agent", "auth-profiles.json"),
+      );
+      continue;
+    }
     const agentDir = resolveAgentDir(config, agentId);
     paths.add(resolveUserPath(resolveAuthStorePath(agentDir)));
   }

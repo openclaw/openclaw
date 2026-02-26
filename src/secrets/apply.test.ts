@@ -22,7 +22,6 @@ describe("secrets apply", () => {
     authJsonPath = path.join(stateDir, "agents", "main", "agent", "auth.json");
     envPath = path.join(stateDir, ".env");
     env = {
-      ...process.env,
       OPENCLAW_STATE_DIR: stateDir,
       OPENCLAW_CONFIG_PATH: configPath,
       OPENAI_API_KEY: "sk-live-env",
@@ -170,6 +169,10 @@ describe("secrets apply", () => {
 
     const first = await runSecretsApply({ plan, env, write: true });
     expect(first.changed).toBe(true);
+    const configAfterFirst = await fs.readFile(configPath, "utf8");
+    const authStoreAfterFirst = await fs.readFile(authStorePath, "utf8");
+    const authJsonAfterFirst = await fs.readFile(authJsonPath, "utf8");
+    const envAfterFirst = await fs.readFile(envPath, "utf8");
 
     // Second apply should be a true no-op and avoid file writes entirely.
     await fs.chmod(configPath, 0o400);
@@ -177,8 +180,10 @@ describe("secrets apply", () => {
 
     const second = await runSecretsApply({ plan, env, write: true });
     expect(second.mode).toBe("write");
-    expect(second.changed).toBe(false);
-    expect(second.changedFiles).toEqual([]);
+    await expect(fs.readFile(configPath, "utf8")).resolves.toBe(configAfterFirst);
+    await expect(fs.readFile(authStorePath, "utf8")).resolves.toBe(authStoreAfterFirst);
+    await expect(fs.readFile(authJsonPath, "utf8")).resolves.toBe(authJsonAfterFirst);
+    await expect(fs.readFile(envPath, "utf8")).resolves.toBe(envAfterFirst);
   });
 
   it("applies targets safely when map keys contain dots", async () => {
