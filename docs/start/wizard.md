@@ -77,6 +77,7 @@ The wizard starts with **QuickStart** (defaults) vs **Advanced** (full control).
 
 <Note>
 Re-running the wizard does **not** wipe anything unless you explicitly choose **Reset** (or pass `--reset`).
+CLI `--reset` defaults to config, credentials, and sessions; use `--reset-scope full` to include workspace.
 If the config is invalid or contains legacy keys, the wizard asks you to run `openclaw doctor` first.
 </Note>
 
