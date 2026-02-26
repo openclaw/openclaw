@@ -96,7 +96,7 @@ type ResolveGroupActivation = (params: {
   sessionKey?: string;
 }) => boolean | undefined;
 
-type ResolveGroupRequireMention = (chatId: string | number) => boolean;
+type ResolveGroupRequireMention = (chatId: string | number) => boolean | "monitor";
 
 export type BuildTelegramMessageContextParams = {
   primaryCtx: TelegramContext;

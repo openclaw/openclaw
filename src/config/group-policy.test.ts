@@ -135,7 +135,7 @@ describe("resolveChannelGroupPolicy", () => {
       channels: {
         whatsapp: {
           groups: {
-            "120363098795789378@g.us": { requireMention: "monitor" },
+            "120363098795789378@g.us": { requireMention: "monitor" as const },
           },
         },
       },
