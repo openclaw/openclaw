@@ -263,7 +263,10 @@ describe("compaction-safeguard tool failures", () => {
 
 describe("compaction-safeguard summary budgets", () => {
   it("caps file operations summary and reports omitted entries", () => {
-    const readFiles = Array.from({ length: 200 }, (_, i) => `docs/very/long/path/${i}-read-file.md`);
+    const readFiles = Array.from(
+      { length: 200 },
+      (_, i) => `docs/very/long/path/${i}-read-file.md`,
+    );
     const modifiedFiles = Array.from(
       { length: 200 },
       (_, i) => `src/features/${i}/nested/component/file-${i}.ts`,
