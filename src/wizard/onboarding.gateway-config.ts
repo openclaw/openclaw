@@ -49,6 +49,21 @@ type ConfigureGatewayResult = {
   settings: GatewayWizardSettings;
 };
 
+function buildDefaultControlUiAllowedOrigins(params: {
+  port: number;
+  bind: GatewayWizardSettings["bind"];
+  customBindHost?: string;
+}): string[] {
+  const origins = new Set<string>([
+    `http://localhost:${params.port}`,
+    `http://127.0.0.1:${params.port}`,
+  ]);
+  if (params.bind === "custom" && params.customBindHost) {
+    origins.add(`http://${params.customBindHost}:${params.port}`);
+  }
+  return [...origins];
+}
+
 export async function configureGatewayForOnboarding(
   opts: ConfigureGatewayOptions,
 ): Promise<ConfigureGatewayResult> {
@@ -215,6 +230,28 @@ export async function configureGatewayForOnboarding(
       },
     },
   };
+
+  const controlUiEnabled = nextConfig.gateway?.controlUi?.enabled ?? true;
+  const hasExplicitControlUiAllowedOrigins =
+    (nextConfig.gateway?.controlUi?.allowedOrigins ?? []).some(
+      (origin) => origin.trim().length > 0,
+    ) || nextConfig.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true;
+  if (controlUiEnabled && bind !== "loopback" && !hasExplicitControlUiAllowedOrigins) {
+    nextConfig = {
+      ...nextConfig,
+      gateway: {
+        ...nextConfig.gateway,
+        controlUi: {
+          ...nextConfig.gateway?.controlUi,
+          allowedOrigins: buildDefaultControlUiAllowedOrigins({
+            port,
+            bind,
+            customBindHost,
+          }),
+        },
+      },
+    };
+  }
 
   // If this is a new gateway setup (no existing gateway settings), start with a
   // denylist for high-risk node commands. Users can arm these temporarily via
