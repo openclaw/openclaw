@@ -83,6 +83,11 @@ describe("nodes-cli coverage", () => {
   const getNodeInvokeCall = () =>
     callGateway.mock.calls.find((call) => call[0]?.method === "node.invoke")?.[0] as NodeInvokeCall;
 
+  const getApprovalRequestCall = () =>
+    callGateway.mock.calls.find((call) => call[0]?.method === "exec.approval.request")?.[0] as {
+      params?: Record<string, unknown>;
+    };
+
   const createNodesProgram = () => {
     const program = new Command();
     program.exitOverride();
@@ -140,6 +145,8 @@ describe("nodes-cli coverage", () => {
       runId: expect.any(String),
     });
     expect(invoke?.params?.timeoutMs).toBe(5000);
+    const approval = getApprovalRequestCall();
+    expect(approval?.params?.["commandArgv"]).toEqual(["echo", "hi"]);
   });
 
   it("invokes system.run with raw command", async () => {
@@ -165,6 +172,8 @@ describe("nodes-cli coverage", () => {
       approvalDecision: "allow-once",
       runId: expect.any(String),
     });
+    const approval = getApprovalRequestCall();
+    expect(approval?.params?.["commandArgv"]).toEqual(["/bin/sh", "-lc", "echo hi"]);
   });
 
   it("invokes system.notify with provided fields", async () => {
