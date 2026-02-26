@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import type { SlackMonitorContext } from "../context.js";
 import { registerSlackPinEvents } from "./pins.js";
+import {
+  createSlackSystemEventTestHarness,
+  type SlackSystemEventTestOverrides,
+} from "./system-event-test-harness.js";
 
 const enqueueSystemEventMock = vi.fn();
 const readAllowFromStoreMock = vi.fn();
@@ -15,55 +18,12 @@ vi.mock("../../../pairing/pairing-store.js", () => ({
 
 type SlackPinHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
 
-function createPinContext(overrides?: {
-  dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
-  allowFrom?: string[];
-  channelType?: "im" | "channel";
-  channelUsers?: string[];
-}) {
-  let addedHandler: SlackPinHandler | null = null;
-  let removedHandler: SlackPinHandler | null = null;
-  const channelType = overrides?.channelType ?? "im";
-  const app = {
-    event: vi.fn((name: string, handler: SlackPinHandler) => {
-      if (name === "pin_added") {
-        addedHandler = handler;
-      } else if (name === "pin_removed") {
-        removedHandler = handler;
-      }
-    }),
-  };
-  const ctx = {
-    app,
-    runtime: { error: vi.fn() },
-    dmEnabled: true,
-    dmPolicy: overrides?.dmPolicy ?? "open",
-    defaultRequireMention: true,
-    channelsConfig: overrides?.channelUsers
-      ? {
-          C1: {
-            users: overrides.channelUsers,
-            allow: true,
-          },
-        }
-      : undefined,
-    groupPolicy: "open",
-    allowFrom: overrides?.allowFrom ?? [],
-    allowNameMatching: false,
-    shouldDropMismatchedSlackEvent: vi.fn().mockReturnValue(false),
-    isChannelAllowed: vi.fn().mockReturnValue(true),
-    resolveChannelName: vi.fn().mockResolvedValue({
-      name: channelType === "im" ? "direct" : "general",
-      type: channelType,
-    }),
-    resolveUserName: vi.fn().mockResolvedValue({ name: "alice" }),
-    resolveSlackSystemEventSessionKey: vi.fn().mockReturnValue("agent:main:main"),
-  } as unknown as SlackMonitorContext;
-  registerSlackPinEvents({ ctx });
+function createPinContext(overrides?: SlackSystemEventTestOverrides) {
+  const harness = createSlackSystemEventTestHarness(overrides);
+  registerSlackPinEvents({ ctx: harness.ctx });
   return {
-    ctx,
-    getAddedHandler: () => addedHandler,
-    getRemovedHandler: () => removedHandler,
+    getAddedHandler: () => harness.getHandler("pin_added") as SlackPinHandler | null,
+    getRemovedHandler: () => harness.getHandler("pin_removed") as SlackPinHandler | null,
   };
 }
 
