@@ -131,11 +131,45 @@ find_main_chrome_pids() {
 
 # ── Process info helpers ─────────────────────────────────────────────────────
 get_elapsed_secs() {
-    ps -p "$1" -o etimes= 2>/dev/null | tr -d ' '
+    # FIX: Platform-aware elapsed time detection
+    if [[ "$PLATFORM" == "macos" ]]; then
+        # macOS: use etime (format: dd-hh:mm:ss) and convert to seconds
+        local etime
+        etime=$(ps -p "$1" -o etime= 2>/dev/null | tr -d ' ')
+        [[ -z "$etime" ]] && return 1
+        
+        # Parse etime format and convert to seconds
+        # Format can be: ss, mm:ss, hh:mm:ss, or dd-hh:mm:ss
+        if [[ "$etime" =~ ^([0-9]+)-([0-9]{2}):([0-9]{2}):([0-9]{2})$ ]]; then
+            # dd-hh:mm:ss
+            echo $(( ${BASH_REMATCH[1]} * 86400 + ${BASH_REMATCH[2]} * 3600 + ${BASH_REMATCH[3]} * 60 + ${BASH_REMATCH[4]} ))
+        elif [[ "$etime" =~ ^([0-9]{2}):([0-9]{2}):([0-9]{2})$ ]]; then
+            # hh:mm:ss
+            echo $(( ${BASH_REMATCH[1]} * 3600 + ${BASH_REMATCH[2]} * 60 + ${BASH_REMATCH[3]} ))
+        elif [[ "$etime" =~ ^([0-9]{2}):([0-9]{2})$ ]]; then
+            # mm:ss
+            echo $(( ${BASH_REMATCH[1]} * 60 + ${BASH_REMATCH[2]} ))
+        else
+            # ss
+            echo "$etime"
+        fi
+    else
+        # Linux: etimes gives seconds directly
+        ps -p "$1" -o etimes= 2>/dev/null | tr -d ' '
+    fi
 }
 
 get_rss_kb() {
-    ps -p "$1" -o rss= 2>/dev/null | tr -d ' '
+    # FIX: Platform-aware RSS detection
+    if [[ "$PLATFORM" == "macos" ]]; then
+        # macOS: rss is in pages (typically 4096 bytes), convert to KB
+        local rss_pages
+        rss_pages=$(ps -p "$1" -o rss= 2>/dev/null | tr -d ' ')
+        [[ -n "$rss_pages" ]] && echo $(( rss_pages * 4 )) || echo ""
+    else
+        # Linux: rss is already in KB
+        ps -p "$1" -o rss= 2>/dev/null | tr -d ' '
+    fi
 }
 
 # Platform-aware command line reading
@@ -324,11 +358,13 @@ kill_all_chrome() {
     sleep 2
     
     # Check if any survived
-    local remaining
-    remaining="$(find_main_chrome_pids)"
-    if [[ -n "$remaining" ]]; then
+    local remaining_str
+    remaining_str="$(find_main_chrome_pids)"
+    if [[ -n "$remaining_str" ]]; then
         echo "  Some processes survived, using SIGKILL..."
-        for pid in "${remaining[@]}"; do
+        # FIX: Properly initialize array from space-separated PIDs
+        read -ra remaining_pids <<< "$remaining_str"
+        for pid in "${remaining_pids[@]}"; do
             kill -KILL "$pid" 2>/dev/null || true
         done
     fi
