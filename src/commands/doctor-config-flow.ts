@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ZodIssue } from "zod";
+import { normalizeChatChannelId } from "../channels/registry.js";
 import {
   isNumericTelegramUserId,
   normalizeTelegramAllowFromEntry,
@@ -17,10 +18,17 @@ import {
 import { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { parseToolsBySenderTypedKey } from "../config/types.tools.js";
+import { resolveCommandResolutionFromArgv } from "../infra/exec-command-resolution.js";
 import {
   listInterpreterLikeSafeBins,
   resolveMergedSafeBinProfileFixtures,
 } from "../infra/exec-safe-bin-runtime-policy.js";
+import {
+  getTrustedSafeBinDirs,
+  isTrustedSafeBinPath,
+  normalizeTrustedSafeBinDirs,
+} from "../infra/exec-safe-bin-trust.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import {
   isDiscordMutableAllowEntry,
   isGoogleChatMutableAllowEntry,
@@ -32,7 +40,7 @@ import {
 import { listTelegramAccountIds, resolveTelegramAccount } from "../telegram/accounts.js";
 import { note } from "../terminal/note.js";
 import { isRecord, resolveHomeDir } from "../utils.js";
-import { normalizeLegacyConfigValues } from "./doctor-legacy-config.js";
+import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 import { autoMigrateLegacyStateDir } from "./doctor-state-migrations.js";
 
@@ -199,6 +207,103 @@ function asObjectRecord(value: unknown): Record<string, unknown> | null {
     return null;
   }
   return value as Record<string, unknown>;
+}
+
+function normalizeBindingChannelKey(raw?: string | null): string {
+  const normalized = normalizeChatChannelId(raw);
+  if (normalized) {
+    return normalized;
+  }
+  return (raw ?? "").trim().toLowerCase();
+}
+
+export function collectMissingDefaultAccountBindingWarnings(cfg: OpenClawConfig): string[] {
+  const channels = asObjectRecord(cfg.channels);
+  if (!channels) {
+    return [];
+  }
+
+  const bindings = Array.isArray(cfg.bindings) ? cfg.bindings : [];
+  const warnings: string[] = [];
+
+  for (const [channelKey, rawChannel] of Object.entries(channels)) {
+    const channel = asObjectRecord(rawChannel);
+    if (!channel) {
+      continue;
+    }
+    const accounts = asObjectRecord(channel.accounts);
+    if (!accounts) {
+      continue;
+    }
+
+    const normalizedAccountIds = Array.from(
+      new Set(
+        Object.keys(accounts)
+          .map((accountId) => normalizeAccountId(accountId))
+          .filter(Boolean),
+      ),
+    );
+    if (normalizedAccountIds.length === 0 || normalizedAccountIds.includes(DEFAULT_ACCOUNT_ID)) {
+      continue;
+    }
+    const accountIdSet = new Set(normalizedAccountIds);
+    const channelPattern = normalizeBindingChannelKey(channelKey);
+
+    let hasWildcardBinding = false;
+    const coveredAccountIds = new Set<string>();
+    for (const binding of bindings) {
+      const bindingRecord = asObjectRecord(binding);
+      if (!bindingRecord) {
+        continue;
+      }
+      const match = asObjectRecord(bindingRecord.match);
+      if (!match) {
+        continue;
+      }
+
+      const matchChannel =
+        typeof match.channel === "string" ? normalizeBindingChannelKey(match.channel) : "";
+      if (!matchChannel || matchChannel !== channelPattern) {
+        continue;
+      }
+
+      const rawAccountId = typeof match.accountId === "string" ? match.accountId.trim() : "";
+      if (!rawAccountId) {
+        continue;
+      }
+      if (rawAccountId === "*") {
+        hasWildcardBinding = true;
+        continue;
+      }
+      const normalizedBindingAccountId = normalizeAccountId(rawAccountId);
+      if (accountIdSet.has(normalizedBindingAccountId)) {
+        coveredAccountIds.add(normalizedBindingAccountId);
+      }
+    }
+
+    if (hasWildcardBinding) {
+      continue;
+    }
+
+    const uncoveredAccountIds = normalizedAccountIds.filter(
+      (accountId) => !coveredAccountIds.has(accountId),
+    );
+    if (uncoveredAccountIds.length === 0) {
+      continue;
+    }
+    if (coveredAccountIds.size > 0) {
+      warnings.push(
+        `- channels.${channelKey}: accounts.default is missing and account bindings only cover a subset of configured accounts. Uncovered accounts: ${uncoveredAccountIds.join(", ")}. Add bindings[].match.accountId for uncovered accounts (or "*"), or add channels.${channelKey}.accounts.default.`,
+      );
+      continue;
+    }
+
+    warnings.push(
+      `- channels.${channelKey}: accounts.default is missing and no valid account-scoped binding exists for configured accounts (${normalizedAccountIds.join(", ")}). Channel-only bindings (no accountId) match only default. Add bindings[].match.accountId for one of these accounts (or "*"), or add channels.${channelKey}.accounts.default.`,
+    );
+  }
+
+  return warnings;
 }
 
 function collectTelegramAccountScopes(
@@ -1001,6 +1106,13 @@ type ExecSafeBinScopeRef = {
   safeBins: string[];
   exec: Record<string, unknown>;
   mergedProfiles: Record<string, unknown>;
+  trustedSafeBinDirs: ReadonlySet<string>;
+};
+
+type ExecSafeBinTrustedDirHintHit = {
+  scopePath: string;
+  bin: string;
+  resolvedPath: string;
 };
 
 function normalizeConfiguredSafeBins(entries: unknown): string[] {
@@ -1016,9 +1128,19 @@ function normalizeConfiguredSafeBins(entries: unknown): string[] {
   ).toSorted();
 }
 
+function normalizeConfiguredTrustedSafeBinDirs(entries: unknown): string[] {
+  if (!Array.isArray(entries)) {
+    return [];
+  }
+  return normalizeTrustedSafeBinDirs(
+    entries.filter((entry): entry is string => typeof entry === "string"),
+  );
+}
+
 function collectExecSafeBinScopes(cfg: OpenClawConfig): ExecSafeBinScopeRef[] {
   const scopes: ExecSafeBinScopeRef[] = [];
   const globalExec = asObjectRecord(cfg.tools?.exec);
+  const globalTrustedDirs = normalizeConfiguredTrustedSafeBinDirs(globalExec?.safeBinTrustedDirs);
   if (globalExec) {
     const safeBins = normalizeConfiguredSafeBins(globalExec.safeBins);
     if (safeBins.length > 0) {
@@ -1030,6 +1152,9 @@ function collectExecSafeBinScopes(cfg: OpenClawConfig): ExecSafeBinScopeRef[] {
           resolveMergedSafeBinProfileFixtures({
             global: globalExec,
           }) ?? {},
+        trustedSafeBinDirs: getTrustedSafeBinDirs({
+          extraDirs: globalTrustedDirs,
+        }),
       });
     }
   }
@@ -1055,6 +1180,12 @@ function collectExecSafeBinScopes(cfg: OpenClawConfig): ExecSafeBinScopeRef[] {
           global: globalExec,
           local: agentExec,
         }) ?? {},
+      trustedSafeBinDirs: getTrustedSafeBinDirs({
+        extraDirs: [
+          ...globalTrustedDirs,
+          ...normalizeConfiguredTrustedSafeBinDirs(agentExec.safeBinTrustedDirs),
+        ],
+      }),
     });
   }
   return scopes;
@@ -1072,6 +1203,32 @@ function scanExecSafeBinCoverage(cfg: OpenClawConfig): ExecSafeBinCoverageHit[] 
         scopePath: scope.scopePath,
         bin,
         isInterpreter: interpreterBins.has(bin),
+      });
+    }
+  }
+  return hits;
+}
+
+function scanExecSafeBinTrustedDirHints(cfg: OpenClawConfig): ExecSafeBinTrustedDirHintHit[] {
+  const hits: ExecSafeBinTrustedDirHintHit[] = [];
+  for (const scope of collectExecSafeBinScopes(cfg)) {
+    for (const bin of scope.safeBins) {
+      const resolution = resolveCommandResolutionFromArgv([bin]);
+      if (!resolution?.resolvedPath) {
+        continue;
+      }
+      if (
+        isTrustedSafeBinPath({
+          resolvedPath: resolution.resolvedPath,
+          trustedDirs: scope.trustedSafeBinDirs,
+        })
+      ) {
+        continue;
+      }
+      hits.push({
+        scopePath: scope.scopePath,
+        bin,
+        resolvedPath: resolution.resolvedPath,
       });
     }
   }
@@ -1317,7 +1474,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   if (snapshot.legacyIssues.length > 0) {
     note(
       snapshot.legacyIssues.map((issue) => `- ${issue.path}: ${issue.message}`).join("\n"),
-      "Legacy config keys detected",
+      "Compatibility config keys detected",
     );
     const { config: migrated, changes } = migrateLegacyConfig(snapshot.parsed);
     if (changes.length > 0) {
@@ -1328,18 +1485,18 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       pendingChanges = pendingChanges || changes.length > 0;
     }
     if (shouldRepair) {
-      // Legacy migration (2026-01-02, commit: 16420e5b) — normalize per-provider allowlists; move WhatsApp gating into channels.whatsapp.allowFrom.
+      // Compatibility migration (2026-01-02, commit: 16420e5b) — normalize per-provider allowlists; move WhatsApp gating into channels.whatsapp.allowFrom.
       if (migrated) {
         cfg = migrated;
       }
     } else {
       fixHints.push(
-        `Run "${formatCliCommand("openclaw doctor --fix")}" to apply legacy migrations.`,
+        `Run "${formatCliCommand("openclaw doctor --fix")}" to apply compatibility migrations.`,
       );
     }
   }
 
-  const normalized = normalizeLegacyConfigValues(candidate);
+  const normalized = normalizeCompatibilityConfigValues(candidate);
   if (normalized.changes.length > 0) {
     note(normalized.changes.join("\n"), "Doctor changes");
     candidate = normalized.config;
@@ -1361,6 +1518,12 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     } else {
       fixHints.push(`Run "${formatCliCommand("openclaw doctor --fix")}" to apply these changes.`);
     }
+  }
+
+  const missingDefaultAccountBindingWarnings =
+    collectMissingDefaultAccountBindingWarnings(candidate);
+  if (missingDefaultAccountBindingWarnings.length > 0) {
+    note(missingDefaultAccountBindingWarnings.join("\n"), "Doctor warnings");
   }
 
   if (shouldRepair) {
@@ -1485,6 +1648,25 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       }
       lines.push(
         `- Run "${formatCliCommand("openclaw doctor --fix")}" to scaffold missing custom safeBinProfiles entries.`,
+      );
+      note(lines.join("\n"), "Doctor warnings");
+    }
+
+    const safeBinTrustedDirHints = scanExecSafeBinTrustedDirHints(candidate);
+    if (safeBinTrustedDirHints.length > 0) {
+      const lines = safeBinTrustedDirHints
+        .slice(0, 5)
+        .map(
+          (hit) =>
+            `- ${hit.scopePath}.safeBins entry '${hit.bin}' resolves to '${hit.resolvedPath}' outside trusted safe-bin dirs.`,
+        );
+      if (safeBinTrustedDirHints.length > 5) {
+        lines.push(
+          `- ${safeBinTrustedDirHints.length - 5} more safeBins entries resolve outside trusted safe-bin dirs.`,
+        );
+      }
+      lines.push(
+        "- If intentional, add the binary directory to tools.exec.safeBinTrustedDirs (global or agent scope).",
       );
       note(lines.join("\n"), "Doctor warnings");
     }

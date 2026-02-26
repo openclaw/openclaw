@@ -2,12 +2,15 @@ import { describe, it, expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import {
+  buildAllowedModelSet,
+  inferUniqueProviderFromConfiguredModels,
   parseModelRef,
-  resolveModelRefFromString,
-  resolveConfiguredModelRef,
   buildModelAliasIndex,
-  normalizeProviderId,
   modelKey,
+  normalizeProviderId,
+  resolveAllowedModelRef,
+  resolveConfiguredModelRef,
+  resolveModelRefFromString,
 } from "./model-selection.js";
 
 describe("model-selection", () => {
@@ -19,6 +22,9 @@ describe("model-selection", () => {
       expect(normalizeProviderId("OpenCode-Zen")).toBe("opencode");
       expect(normalizeProviderId("qwen")).toBe("qwen-portal");
       expect(normalizeProviderId("kimi-code")).toBe("kimi-coding");
+      expect(normalizeProviderId("bedrock")).toBe("amazon-bedrock");
+      expect(normalizeProviderId("aws-bedrock")).toBe("amazon-bedrock");
+      expect(normalizeProviderId("amazon-bedrock")).toBe("amazon-bedrock");
     });
   });
 
@@ -129,6 +135,85 @@ describe("model-selection", () => {
     });
   });
 
+  describe("inferUniqueProviderFromConfiguredModels", () => {
+    it("infers provider when configured model match is unique", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-6": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        inferUniqueProviderFromConfiguredModels({
+          cfg,
+          model: "claude-sonnet-4-6",
+        }),
+      ).toBe("anthropic");
+    });
+
+    it("returns undefined when configured matches are ambiguous", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-6": {},
+              "minimax/claude-sonnet-4-6": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        inferUniqueProviderFromConfiguredModels({
+          cfg,
+          model: "claude-sonnet-4-6",
+        }),
+      ).toBeUndefined();
+    });
+
+    it("returns undefined for provider-prefixed model ids", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-6": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        inferUniqueProviderFromConfiguredModels({
+          cfg,
+          model: "anthropic/claude-sonnet-4-6",
+        }),
+      ).toBeUndefined();
+    });
+
+    it("infers provider for slash-containing model id when allowlist match is unique", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "vercel-ai-gateway/anthropic/claude-sonnet-4-6": {},
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        inferUniqueProviderFromConfiguredModels({
+          cfg,
+          model: "anthropic/claude-sonnet-4-6",
+        }),
+      ).toBe("vercel-ai-gateway");
+    });
+  });
+
   describe("buildModelAliasIndex", () => {
     it("should build alias index from config", () => {
       const cfg: Partial<OpenClawConfig> = {
@@ -153,6 +238,71 @@ describe("model-selection", () => {
       });
       expect(index.byAlias.get("smart")?.ref).toEqual({ provider: "openai", model: "gpt-4o" });
       expect(index.byKey.get(modelKey("anthropic", "claude-3-5-sonnet"))).toEqual(["fast"]);
+    });
+  });
+
+  describe("buildAllowedModelSet", () => {
+    it("keeps explicitly allowlisted models even when missing from bundled catalog", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.2" },
+            models: {
+              "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const catalog = [
+        { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
+        { provider: "openai", id: "gpt-5.2", name: "gpt-5.2" },
+      ];
+
+      const result = buildAllowedModelSet({
+        cfg,
+        catalog,
+        defaultProvider: "anthropic",
+      });
+
+      expect(result.allowAny).toBe(false);
+      expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(true);
+      expect(result.allowedCatalog).toEqual([
+        { provider: "anthropic", id: "claude-sonnet-4-6", name: "claude-sonnet-4-6" },
+      ]);
+    });
+  });
+
+  describe("resolveAllowedModelRef", () => {
+    it("accepts explicit allowlist refs absent from bundled catalog", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.2" },
+            models: {
+              "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      const catalog = [
+        { provider: "anthropic", id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5" },
+        { provider: "openai", id: "gpt-5.2", name: "gpt-5.2" },
+      ];
+
+      const result = resolveAllowedModelRef({
+        cfg,
+        catalog,
+        raw: "anthropic/claude-sonnet-4-6",
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.2",
+      });
+
+      expect(result).toEqual({
+        key: "anthropic/claude-sonnet-4-6",
+        ref: { provider: "anthropic", model: "claude-sonnet-4-6" },
+      });
     });
   });
 

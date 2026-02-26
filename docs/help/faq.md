@@ -2475,7 +2475,7 @@ Quick setup (recommended):
 - Set a unique `gateway.port` in each profile config (or pass `--port` for manual runs).
 - Install a per-profile service: `openclaw --profile <name> gateway install`.
 
-Profiles also suffix service names (`bot.molt.<profile>`; legacy `com.openclaw.*`, `openclaw-gateway-<profile>.service`, `OpenClaw Gateway (<profile>)`).
+Profiles also suffix service names (`ai.openclaw.<profile>`; legacy `com.openclaw.*`, `openclaw-gateway-<profile>.service`, `OpenClaw Gateway (<profile>)`).
 Full guide: [Multiple gateways](/gateway/multiple-gateways).
 
 ### What does invalid handshake code 1008 mean
@@ -2705,8 +2705,8 @@ Treat inbound DMs as untrusted input. Defaults are designed to reduce risk:
 
 - Default behavior on DM-capable channels is **pairing**:
   - Unknown senders receive a pairing code; the bot does not process their message.
-  - Approve with: `openclaw pairing approve <channel> <code>`
-  - Pending requests are capped at **3 per channel**; check `openclaw pairing list <channel>` if a code didn't arrive.
+  - Approve with: `openclaw pairing approve --channel <channel> [--account <id>] <code>`
+  - Pending requests are capped at **3 per channel**; check `openclaw pairing list --channel <channel> [--account <id>]` if a code didn't arrive.
 - Opening DMs publicly requires explicit opt-in (`dmPolicy: "open"` and allowlist `"*"`).
 
 Run `openclaw doctor` to surface risky DM policies.

@@ -1,6 +1,6 @@
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { SessionKey } from "../sessions/session-key.js";
+type SessionKey = string;
 
 type EnforcerState = {
   status: "armed" | "disarmed";

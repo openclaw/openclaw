@@ -46,7 +46,9 @@ import { getTotalQueueSize } from "../process/command-queue.js";
 import type { RuntimeEnv } from "../runtime.js";
 // -- Watchdog Imports --
 import { runOnboardingWizard } from "../wizard/onboarding.js";
+import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import { callGateway } from "./call.js";
+import { startChannelHealthMonitor } from "./channel-health-monitor.js";
 import { startGatewayConfigReloader } from "./config-reload.js";
 import type { ControlUiRootState } from "./control-ui.js";
 import {
@@ -108,6 +110,21 @@ const logPlugins = log.child("plugins");
 const logWsControl = log.child("ws");
 const gatewayRuntime = runtimeForLogger(log);
 const canvasRuntime = runtimeForLogger(logCanvas);
+
+type AuthRateLimitConfig = Parameters<typeof createAuthRateLimiter>[0];
+
+function createGatewayAuthRateLimiters(rateLimitConfig: AuthRateLimitConfig | undefined): {
+  rateLimiter?: AuthRateLimiter;
+  browserRateLimiter: AuthRateLimiter;
+} {
+  const rateLimiter = rateLimitConfig ? createAuthRateLimiter(rateLimitConfig) : undefined;
+  // Browser-origin WS auth attempts always use loopback-non-exempt throttling.
+  const browserRateLimiter = createAuthRateLimiter({
+    ...rateLimitConfig,
+    exemptLoopback: false,
+  });
+  return { rateLimiter, browserRateLimiter };
+}
 
 export type GatewayServer = {
   close: (opts?: { reason?: string; restartExpectedMs?: number | null }) => Promise<void>;
@@ -270,6 +287,11 @@ export async function startGatewayServer(
   } = runtimeConfig;
   let hooksConfig = runtimeConfig.hooksConfig;
   const canvasHostEnabled = runtimeConfig.canvasHostEnabled;
+
+  // Create auth rate limiters used by connect/auth flows.
+  const rateLimitConfig = cfgAtStart.gateway?.auth?.rateLimit;
+  const { rateLimiter: authRateLimiter, browserRateLimiter: browserAuthRateLimiter } =
+    createGatewayAuthRateLimiters(rateLimitConfig);
 
   let controlUiRootState: ControlUiRootState | undefined;
   if (controlUiRootOverride) {
@@ -519,6 +541,15 @@ export async function startGatewayServer(
 
   let heartbeatRunner = startHeartbeatRunner({ cfg: cfgAtStart });
 
+  const healthCheckMinutes = cfgAtStart.gateway?.channelHealthCheckMinutes;
+  const healthCheckDisabled = healthCheckMinutes === 0;
+  const channelHealthMonitor = healthCheckDisabled
+    ? null
+    : startChannelHealthMonitor({
+        channelManager,
+        checkIntervalMs: (healthCheckMinutes ?? 5) * 60_000,
+      });
+
   void cron.start().catch((err) => logCron.error(`failed to start: ${String(err)}`));
 
   const execApprovalManager = new ExecApprovalManager();
@@ -537,6 +568,8 @@ export async function startGatewayServer(
     canvasHostEnabled: Boolean(canvasHost),
     canvasHostServerPort,
     resolvedAuth,
+    rateLimiter: authRateLimiter,
+    browserRateLimiter: browserAuthRateLimiter,
     gatewayMethods,
     events: GATEWAY_EVENTS,
     logGateway: log,
@@ -728,6 +761,9 @@ export async function startGatewayServer(
       skillsChangeUnsub();
       stallAgentErrorUnsub();
       replyEnforcer.stopAll();
+      authRateLimiter?.dispose();
+      browserAuthRateLimiter.dispose();
+      channelHealthMonitor?.stop();
       await close(opts);
     },
   };

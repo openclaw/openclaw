@@ -188,7 +188,7 @@ If more than one person can DM your bot:
 - **Browser control exposure** (remote nodes, relay ports, remote CDP endpoints).
 - **Local disk hygiene** (permissions, symlinks, config includes, “synced folder” paths).
 - **Plugins** (extensions exist without an explicit allowlist).
-- **Policy drift/misconfig** (sandbox docker settings configured but sandbox mode off; ineffective `gateway.nodes.denyCommands` patterns; dangerous `gateway.nodes.allowCommands` entries; global `tools.profile="minimal"` overridden by per-agent profiles; extension plugin tools reachable under permissive tool policy).
+- **Policy drift/misconfig** (sandbox docker settings configured but sandbox mode off; ineffective `gateway.nodes.denyCommands` patterns because matching is exact command-name only (for example `system.run`) and does not inspect shell text; dangerous `gateway.nodes.allowCommands` entries; global `tools.profile="minimal"` overridden by per-agent profiles; extension plugin tools reachable under permissive tool policy).
 - **Runtime expectation drift** (for example `tools.exec.host="sandbox"` while sandbox mode is off, which runs directly on the gateway host).
 - **Model hygiene** (warn when configured models look legacy; not a hard block).
 
@@ -202,7 +202,9 @@ Use this when auditing access or deciding what to back up:
 - **Telegram bot token**: config/env or `channels.telegram.tokenFile`
 - **Discord bot token**: config/env (token file not yet supported)
 - **Slack tokens**: config/env (`channels.slack.*`)
-- **Pairing allowlists**: `~/.openclaw/credentials/<channel>-allowFrom.json`
+- **Pairing allowlists**:
+  - `~/.openclaw/credentials/<channel>-allowFrom.json` (default account)
+  - `~/.openclaw/credentials/<channel>-<accountId>-allowFrom.json` (non-default accounts)
 - **Model auth profiles**: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
 - **Legacy OAuth import**: `~/.openclaw/credentials/oauth.json`
 
@@ -244,6 +246,7 @@ High-signal `checkId` values you will most likely see in real deployments (not e
 | `hooks.request_session_key_prefixes_missing`       | warn/critical | No bound on external session key shapes                                            | `hooks.allowedSessionKeyPrefixes`                                                                 | no       |
 | `logging.redact_off`                               | warn          | Sensitive values leak to logs/status                                               | `logging.redactSensitive`                                                                         | yes      |
 | `sandbox.docker_config_mode_off`                   | warn          | Sandbox Docker config present but inactive                                         | `agents.*.sandbox.mode`                                                                           | no       |
+| `sandbox.dangerous_network_mode`                   | critical      | Sandbox Docker network uses `host` or `container:*` namespace-join mode            | `agents.*.sandbox.docker.network`                                                                 | no       |
 | `tools.exec.host_sandbox_no_sandbox_defaults`      | warn          | `exec host=sandbox` resolves to host exec when sandbox is off                      | `tools.exec.host`, `agents.defaults.sandbox.mode`                                                 | no       |
 | `tools.exec.host_sandbox_no_sandbox_agents`        | warn          | Per-agent `exec host=sandbox` resolves to host exec when sandbox is off            | `agents.list[].tools.exec.host`, `agents.list[].sandbox.mode`                                     | no       |
 | `tools.exec.safe_bins_interpreter_unprofiled`      | warn          | Interpreter/runtime bins in `safeBins` without explicit profiles broaden exec risk | `tools.exec.safeBins`, `tools.exec.safeBinProfiles`, `agents.list[].tools.exec.*`                 | no       |
@@ -299,8 +302,10 @@ schema:
 - `channels.mattermost.accounts.<accountId>.dangerouslyAllowNameMatching` (extension channel)
 - `agents.defaults.sandbox.docker.dangerouslyAllowReservedContainerTargets`
 - `agents.defaults.sandbox.docker.dangerouslyAllowExternalBindSources`
+- `agents.defaults.sandbox.docker.dangerouslyAllowContainerNamespaceJoin`
 - `agents.list[<index>].sandbox.docker.dangerouslyAllowReservedContainerTargets`
 - `agents.list[<index>].sandbox.docker.dangerouslyAllowExternalBindSources`
+- `agents.list[<index>].sandbox.docker.dangerouslyAllowContainerNamespaceJoin`
 
 ## Reverse Proxy Configuration
 
@@ -485,7 +490,7 @@ If you run multiple accounts on the same channel, use `per-account-channel-peer`
 OpenClaw has two separate “who can trigger me?” layers:
 
 - **DM allowlist** (`allowFrom` / `channels.discord.allowFrom` / `channels.slack.allowFrom`; legacy: `channels.discord.dm.allowFrom`, `channels.slack.dm.allowFrom`): who is allowed to talk to the bot in direct messages.
-  - When `dmPolicy="pairing"`, approvals are written to `~/.openclaw/credentials/<channel>-allowFrom.json` (merged with config allowlists).
+  - When `dmPolicy="pairing"`, approvals are written to the account-scoped pairing allowlist store under `~/.openclaw/credentials/` (`<channel>-allowFrom.json` for default account, `<channel>-<accountId>-allowFrom.json` for non-default accounts), merged with config allowlists.
 - **Group allowlist** (channel-specific): which groups/channels/guilds the bot will accept messages from at all.
   - Common patterns:
     - `channels.whatsapp.groups`, `channels.telegram.groups`, `channels.imessage.groups`: per-group defaults like `requireMention`; when set, it also acts as a group allowlist (include `"*"` to keep allow-all behavior).
@@ -834,6 +839,7 @@ Additional hardening options:
 
 - `tools.exec.applyPatch.workspaceOnly: true` (default): ensures `apply_patch` cannot write/delete outside the workspace directory even when sandboxing is off. Set to `false` only if you intentionally want `apply_patch` to touch files outside the workspace.
 - `tools.fs.workspaceOnly: true` (optional): restricts `read`/`write`/`edit`/`apply_patch` paths and native prompt image auto-load paths to the workspace directory (useful if you allow absolute paths today and want a single guardrail).
+- Keep filesystem roots narrow: avoid broad roots like your home directory for agent workspaces/sandbox workspaces. Broad roots can expose sensitive local files (for example state/config under `~/.openclaw`) to filesystem tools.
 
 ### 5) Secure baseline (copy/paste)
 

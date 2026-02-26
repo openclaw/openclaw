@@ -36,14 +36,14 @@ import {
   finalizeWithFollowup,
   isAudioPayload,
   signalTypingIfNeeded,
-  filterInternalChannel,
 } from "./agent-runner-helpers.js";
 import { runMemoryFlushIfNeeded } from "./agent-runner-memory.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-utils.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
-import { resolveBlockStreamingCoalescing } from "./block-streaming.js";
+import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import { createFollowupRunner } from "./followup-runner.js";
+import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import {
   auditPostCompactionReads,
   extractReadPaths,
@@ -51,6 +51,7 @@ import {
   readSessionMessages,
 } from "./post-compaction-audit.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
+import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { enqueueFollowupRun, type FollowupRun, type QueueSettings } from "./queue.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
@@ -180,16 +181,10 @@ export async function runReplyAgent(params: {
   const pendingToolTasks = new Set<Promise<void>>();
   const blockReplyTimeoutMs = opts?.blockReplyTimeoutMs ?? BLOCK_REPLY_SEND_TIMEOUT_MS;
 
-  // Internal synthetic providers (heartbeat, cron-event, exec-event, etc.) must not
-  // bleed into the reply routing channel.  Only real deliverable channel names should
-  // reach replyToChannel; everything else falls back to undefined so the downstream
-  // router uses the session's persisted lastChannel instead.
-  const replyToChannel = filterInternalChannel(
-    sessionCtx.OriginatingChannel ??
-      ((sessionCtx.Surface ?? sessionCtx.Provider)?.toLowerCase() as
-        | OriginatingChannelType
-        | undefined),
-  );
+  const replyToChannel = resolveOriginMessageProvider({
+    originatingChannel: sessionCtx.OriginatingChannel,
+    provider: sessionCtx.Surface ?? sessionCtx.Provider,
+  }) as OriginatingChannelType | undefined;
   const replyToMode = resolveReplyToMode(
     followupRun.run.config,
     replyToChannel,
@@ -200,12 +195,12 @@ export async function runReplyAgent(params: {
   const cfg = followupRun.run.config;
   const blockReplyCoalescing =
     blockStreamingEnabled && opts?.onBlockReply
-      ? resolveBlockStreamingCoalescing(
+      ? resolveEffectiveBlockStreamingConfig({
           cfg,
-          sessionCtx.Provider,
-          sessionCtx.AccountId,
-          blockReplyChunking,
-        )
+          provider: sessionCtx.Provider,
+          accountId: sessionCtx.AccountId,
+          chunking: blockReplyChunking,
+        }).coalescing
       : undefined;
   const blockReplyPipeline =
     blockStreamingEnabled && opts?.onBlockReply
@@ -241,7 +236,19 @@ export async function runReplyAgent(params: {
     }
   }
 
-  if (isActive && (shouldFollowup || resolvedQueue.mode === "steer")) {
+  const activeRunQueueAction = resolveActiveRunQueueAction({
+    isActive,
+    isHeartbeat,
+    shouldFollowup,
+    queueMode: resolvedQueue.mode,
+  });
+
+  if (activeRunQueueAction === "drop") {
+    typing.cleanup();
+    return undefined;
+  }
+
+  if (activeRunQueueAction === "enqueue-followup") {
     enqueueFollowupRun(queueKey, followupRun, resolvedQueue);
     await touchActiveSessionEntry();
     typing.cleanup();
@@ -520,7 +527,11 @@ export async function runReplyAgent(params: {
       messagingToolSentTexts: runResult.messagingToolSentTexts,
       messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
       messagingToolSentTargets: runResult.messagingToolSentTargets,
-      originatingTo: sessionCtx.OriginatingTo ?? sessionCtx.To,
+      originatingChannel: sessionCtx.OriginatingChannel,
+      originatingTo: resolveOriginMessageTo({
+        originatingTo: sessionCtx.OriginatingTo,
+        to: sessionCtx.To,
+      }),
       accountId: sessionCtx.AccountId,
     });
     const { replyPayloads } = payloadResult;

@@ -35,11 +35,17 @@ async function withTempStateDir<T>(fn: (stateDir: string) => Promise<T>) {
 }
 
 async function writeJsonFixture(filePath: string, value: unknown) {
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
 function resolvePairingFilePath(stateDir: string, channel: string) {
   return path.join(resolveOAuthDir(process.env, stateDir), `${channel}-pairing.json`);
+}
+
+function resolveAllowFromFilePath(stateDir: string, channel: string, accountId?: string) {
+  const suffix = accountId ? `-${accountId}` : "";
+  return path.join(resolveOAuthDir(process.env, stateDir), `${channel}${suffix}-allowFrom.json`);
 }
 
 async function writeAllowFromFixture(params: {
@@ -257,7 +263,7 @@ describe("pairing store", () => {
     });
   });
 
-  it("reads sync allowFrom with scoped + legacy dedupe and wildcard filtering", async () => {
+  it("reads sync allowFrom with account-scoped isolation and wildcard filtering", async () => {
     await withTempStateDir(async (stateDir) => {
       await writeAllowFromFixture({
         stateDir,
@@ -274,7 +280,93 @@ describe("pairing store", () => {
       const scoped = readChannelAllowFromStoreSync("telegram", process.env, "yy");
       const channelScoped = readChannelAllowFromStoreSync("telegram");
       expect(scoped).toEqual(["1002", "1001"]);
-      expect(channelScoped).toEqual(["1001", "1001"]);
+      expect(channelScoped).toEqual(["1001"]);
+    });
+  });
+
+  it("does not read legacy channel-scoped allowFrom for non-default account ids", async () => {
+    await withTempStateDir(async (stateDir) => {
+      await writeAllowFromFixture({
+        stateDir,
+        channel: "telegram",
+        allowFrom: ["1001", "*", "1002", "1001"],
+      });
+      await writeAllowFromFixture({
+        stateDir,
+        channel: "telegram",
+        accountId: "yy",
+        allowFrom: ["1003"],
+      });
+
+      const asyncScoped = await readChannelAllowFromStore("telegram", process.env, "yy");
+      const syncScoped = readChannelAllowFromStoreSync("telegram", process.env, "yy");
+      expect(asyncScoped).toEqual(["1003"]);
+      expect(syncScoped).toEqual(["1003"]);
+    });
+  });
+
+  it("does not fall back to legacy allowFrom when scoped file exists but is empty", async () => {
+    await withTempStateDir(async (stateDir) => {
+      await writeAllowFromFixture({
+        stateDir,
+        channel: "telegram",
+        allowFrom: ["1001"],
+      });
+      await writeAllowFromFixture({
+        stateDir,
+        channel: "telegram",
+        accountId: "yy",
+        allowFrom: [],
+      });
+
+      const asyncScoped = await readChannelAllowFromStore("telegram", process.env, "yy");
+      const syncScoped = readChannelAllowFromStoreSync("telegram", process.env, "yy");
+      expect(asyncScoped).toEqual([]);
+      expect(syncScoped).toEqual([]);
+    });
+  });
+
+  it("keeps async and sync reads aligned for malformed scoped allowFrom files", async () => {
+    await withTempStateDir(async (stateDir) => {
+      await writeAllowFromFixture({
+        stateDir,
+        channel: "telegram",
+        allowFrom: ["1001"],
+      });
+      const malformedScopedPath = resolveAllowFromFilePath(stateDir, "telegram", "yy");
+      await fs.mkdir(path.dirname(malformedScopedPath), { recursive: true });
+      await fs.writeFile(malformedScopedPath, "{ this is not json\n", "utf8");
+
+      const asyncScoped = await readChannelAllowFromStore("telegram", process.env, "yy");
+      const syncScoped = readChannelAllowFromStoreSync("telegram", process.env, "yy");
+      expect(asyncScoped).toEqual([]);
+      expect(syncScoped).toEqual([]);
+    });
+  });
+
+  it("does not reuse pairing requests across accounts for the same sender id", async () => {
+    await withTempStateDir(async () => {
+      const first = await upsertChannelPairingRequest({
+        channel: "telegram",
+        accountId: "alpha",
+        id: "12345",
+      });
+      const second = await upsertChannelPairingRequest({
+        channel: "telegram",
+        accountId: "beta",
+        id: "12345",
+      });
+
+      expect(first.created).toBe(true);
+      expect(second.created).toBe(true);
+      expect(second.code).not.toBe(first.code);
+
+      const alpha = await listChannelPairingRequests("telegram", process.env, "alpha");
+      const beta = await listChannelPairingRequests("telegram", process.env, "beta");
+      expect(alpha).toHaveLength(1);
+      expect(beta).toHaveLength(1);
+      expect(alpha[0]?.code).toBe(first.code);
+      expect(beta[0]?.code).toBe(second.code);
     });
   });
 

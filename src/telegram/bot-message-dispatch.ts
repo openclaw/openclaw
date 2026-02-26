@@ -418,12 +418,25 @@ export const dispatchTelegramMessage = async ({
     void statusReactionController.setThinking();
   }
 
+  const typingCallbacks = createTypingCallbacks({
+    start: sendTyping,
+    onStartError: (err) => {
+      logTypingFailure({
+        log: logVerbose,
+        channel: "telegram",
+        target: String(chatId),
+        error: err,
+      });
+    },
+  });
+
   try {
     ({ queuedFinal } = await dispatchReplyWithBufferedBlockDispatcher({
       ctx: ctxPayload,
       cfg,
       dispatcherOptions: {
         ...prefixOptions,
+        typingCallbacks,
         deliver: async (payload, info) => {
           const previewButtons = (
             payload.channelData?.telegram as { buttons?: TelegramInlineButtons } | undefined
@@ -528,17 +541,6 @@ export const dispatchTelegramMessage = async ({
           deliveryState.markNonSilentFailure();
           runtime.error?.(danger(`telegram ${info.kind} reply failed: ${String(err)}`));
         },
-        onReplyStart: createTypingCallbacks({
-          start: sendTyping,
-          onStartError: (err) => {
-            logTypingFailure({
-              log: logVerbose,
-              channel: "telegram",
-              target: String(chatId),
-              error: err,
-            });
-          },
-        }).onReplyStart,
       },
       replyOptions: {
         skillFilter,
@@ -565,7 +567,10 @@ export const dispatchTelegramMessage = async ({
               reasoningStepState.resetForNextStep();
               if (answerLane.hasStreamedMessage) {
                 const previewMessageId = answerLane.stream?.messageId();
-                if (typeof previewMessageId === "number") {
+                // Only archive previews that still need a matching final text update.
+                // Once a preview has already been finalized, archiving it here causes
+                // cleanup to delete a user-visible final message on later media-only turns.
+                if (typeof previewMessageId === "number" && !finalizedPreviewByLane.answer) {
                   archivedAnswerPreviews.push({
                     messageId: previewMessageId,
                     textSnapshot: answerLane.lastPartialText,
@@ -574,6 +579,8 @@ export const dispatchTelegramMessage = async ({
                 answerLane.stream?.forceNewMessage();
               }
               resetDraftLaneState(answerLane);
+              // New assistant message boundary: this lane now tracks a fresh preview lifecycle.
+              finalizedPreviewByLane.answer = false;
             }
           : undefined,
         onReasoningEnd: reasoningLane.stream

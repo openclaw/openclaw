@@ -50,6 +50,9 @@ export function normalizeProviderId(provider: string): string {
   if (normalized === "kimi-code") {
     return "kimi-coding";
   }
+  if (normalized === "bedrock" || normalized === "aws-bedrock") {
+    return "amazon-bedrock";
+  }
   // Backward compatibility for older provider naming.
   if (normalized === "bytedance" || normalized === "doubao") {
     return "volcengine";
@@ -166,6 +169,42 @@ export function parseModelRef(raw: string, defaultProvider: string): ModelRef | 
     return null;
   }
   return normalizeModelRef(providerRaw, model);
+}
+
+export function inferUniqueProviderFromConfiguredModels(params: {
+  cfg: OpenClawConfig;
+  model: string;
+}): string | undefined {
+  const model = params.model.trim();
+  if (!model) {
+    return undefined;
+  }
+  const configuredModels = params.cfg.agents?.defaults?.models;
+  if (!configuredModels) {
+    return undefined;
+  }
+  const normalized = model.toLowerCase();
+  const providers = new Set<string>();
+  for (const key of Object.keys(configuredModels)) {
+    const ref = key.trim();
+    if (!ref || !ref.includes("/")) {
+      continue;
+    }
+    const parsed = parseModelRef(ref, DEFAULT_PROVIDER);
+    if (!parsed) {
+      continue;
+    }
+    if (parsed.model === model || parsed.model.toLowerCase() === normalized) {
+      providers.add(parsed.provider);
+      if (providers.size > 1) {
+        return undefined;
+      }
+    }
+  }
+  if (providers.size !== 1) {
+    return undefined;
+  }
+  return providers.values().next().value;
 }
 
 export function normalizeModelSelection(value: unknown): string | undefined {
@@ -397,22 +436,23 @@ export function buildAllowedModelSet(params: {
   }
 
   const allowedKeys = new Set<string>();
-  const configuredProviders = (params.cfg.models?.providers ?? {}) as Record<string, unknown>;
+  const syntheticCatalogEntries = new Map<string, ModelCatalogEntry>();
   for (const raw of rawAllowlist) {
     const parsed = parseModelRef(String(raw), params.defaultProvider);
     if (!parsed) {
       continue;
     }
     const key = modelKey(parsed.provider, parsed.model);
-    const providerKey = normalizeProviderId(parsed.provider);
-    if (isCliProvider(parsed.provider, params.cfg)) {
-      allowedKeys.add(key);
-    } else if (catalogKeys.has(key)) {
-      allowedKeys.add(key);
-    } else if (configuredProviders[providerKey] != null) {
-      // Explicitly configured providers should be allowlist-able even when
-      // they don't exist in the curated model catalog.
-      allowedKeys.add(key);
+    // Explicit allowlist entries are always trusted, even when bundled catalog
+    // data is stale and does not include the configured model yet.
+    allowedKeys.add(key);
+
+    if (!catalogKeys.has(key) && !syntheticCatalogEntries.has(key)) {
+      syntheticCatalogEntries.set(key, {
+        id: parsed.model,
+        name: parsed.model,
+        provider: parsed.provider,
+      });
     }
   }
 
@@ -420,9 +460,10 @@ export function buildAllowedModelSet(params: {
     allowedKeys.add(defaultKey);
   }
 
-  const allowedCatalog = params.catalog.filter((entry) =>
-    allowedKeys.has(modelKey(entry.provider, entry.id)),
-  );
+  const allowedCatalog = [
+    ...params.catalog.filter((entry) => allowedKeys.has(modelKey(entry.provider, entry.id))),
+    ...syntheticCatalogEntries.values(),
+  ];
 
   if (allowedCatalog.length === 0 && allowedKeys.size === 0) {
     if (defaultKey) {

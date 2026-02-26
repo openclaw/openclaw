@@ -141,6 +141,34 @@ describe("applyPluginAutoEnable", () => {
     expect(result.config.plugins?.entries?.["google-gemini-cli-auth"]?.enabled).toBe(true);
   });
 
+  it("auto-enables acpx plugin when ACP is configured", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        acp: {
+          enabled: true,
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.entries?.acpx?.enabled).toBe(true);
+    expect(result.changes.join("\n")).toContain("ACP runtime configured, enabled automatically.");
+  });
+
+  it("does not auto-enable acpx when a different ACP backend is configured", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        acp: {
+          enabled: true,
+          backend: "custom-runtime",
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.plugins?.entries?.acpx?.enabled).toBeUndefined();
+  });
+
   it("skips when plugins are globally disabled", () => {
     const result = applyPluginAutoEnable({
       config: {

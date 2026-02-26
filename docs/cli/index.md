@@ -281,7 +281,7 @@ Vector search over `MEMORY.md` + `memory/*.md`:
 
 - `openclaw memory status` — show index stats.
 - `openclaw memory index` — reindex memory files.
-- `openclaw memory search "<query>"` — semantic search over memory.
+- `openclaw memory search "<query>"` (or `--query "<query>"`) — semantic search over memory.
 
 ## Chat slash commands
 
@@ -400,6 +400,8 @@ Subcommands:
 - Tip: `channels status` prints warnings with suggested fixes when it can detect common misconfigurations (then points you to `openclaw doctor`).
 - `channels logs`: show recent channel logs from the gateway log file.
 - `channels add`: wizard-style setup when no flags are passed; flags switch to non-interactive mode.
+  - When adding a non-default account to a channel still using single-account top-level config, OpenClaw moves account-scoped values into `channels.<channel>.accounts.default` before writing the new account.
+  - Non-interactive `channels add` does not auto-create/upgrade bindings; channel-only bindings continue to match the default account.
 - `channels remove`: disable by default; pass `--delete` to remove config entries without prompts.
 - `channels login`: interactive channel login (WhatsApp Web only).
 - `channels logout`: log out of a channel session (if supported).
@@ -468,8 +470,23 @@ Approve DM pairing requests across channels.
 
 Subcommands:
 
-- `pairing list <channel> [--json]`
-- `pairing approve <channel> <code> [--notify]`
+- `pairing list [channel] [--channel <channel>] [--account <id>] [--json]`
+- `pairing approve <channel> <code> [--account <id>] [--notify]`
+- `pairing approve --channel <channel> [--account <id>] <code> [--notify]`
+
+### `devices`
+
+Manage gateway device pairing entries and per-role device tokens.
+
+Subcommands:
+
+- `devices list [--json]`
+- `devices approve [requestId] [--latest]`
+- `devices reject <requestId>`
+- `devices remove <deviceId>`
+- `devices clear --yes [--pending]`
+- `devices rotate --device <id> --role <role> [--scope <scope...>]`
+- `devices revoke --device <id> --role <role>`
 
 ### `webhooks gmail`
 
@@ -559,7 +576,37 @@ Options:
 - `--non-interactive`
 - `--json`
 
-Binding specs use `channel[:accountId]`. When `accountId` is omitted for WhatsApp, the default account id is used.
+Binding specs use `channel[:accountId]`. When `accountId` is omitted, OpenClaw may resolve account scope via channel defaults/plugin hooks; otherwise it is a channel binding without explicit account scope.
+
+#### `agents bindings`
+
+List routing bindings.
+
+Options:
+
+- `--agent <id>`
+- `--json`
+
+#### `agents bind`
+
+Add routing bindings for an agent.
+
+Options:
+
+- `--agent <id>`
+- `--bind <channel[:accountId]>` (repeatable)
+- `--json`
+
+#### `agents unbind`
+
+Remove routing bindings for an agent.
+
+Options:
+
+- `--agent <id>`
+- `--bind <channel[:accountId]>` (repeatable)
+- `--all`
+- `--json`
 
 #### `agents delete <id>`
 

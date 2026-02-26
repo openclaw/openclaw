@@ -1,7 +1,8 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
+import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
 import { loadConfig } from "../../config/config.js";
+import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import {
@@ -106,6 +107,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       gifPlayback?: boolean;
       channel?: string;
       accountId?: string;
+      agentId?: string;
       threadId?: string;
       sessionKey?: string;
       idempotencyKey: string;
@@ -165,7 +167,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         ? request.threadId.trim()
         : undefined;
     const outboundChannel = channel;
-    const plugin = getChannelPlugin(channel);
+    const plugin = resolveOutboundChannelPlugin({ channel, cfg });
     if (!plugin) {
       respond(
         false,
@@ -206,13 +208,21 @@ export const sendHandlers: GatewayRequestHandlers = {
           typeof request.sessionKey === "string" && request.sessionKey.trim()
             ? request.sessionKey.trim().toLowerCase()
             : undefined;
-        const derivedAgentId = resolveSessionAgentId({ config: cfg });
+        const explicitAgentId =
+          typeof request.agentId === "string" && request.agentId.trim()
+            ? request.agentId.trim()
+            : undefined;
+        const sessionAgentId = providedSessionKey
+          ? resolveSessionAgentId({ sessionKey: providedSessionKey, config: cfg })
+          : undefined;
+        const defaultAgentId = resolveSessionAgentId({ config: cfg });
+        const effectiveAgentId = explicitAgentId ?? sessionAgentId ?? defaultAgentId;
         // If callers omit sessionKey, derive a target session key from the outbound route.
         const derivedRoute = !providedSessionKey
           ? await resolveOutboundSessionRoute({
               cfg,
               channel,
-              agentId: derivedAgentId,
+              agentId: effectiveAgentId,
               accountId,
               target: resolved.to,
               threadId,
@@ -221,7 +231,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         if (derivedRoute) {
           await ensureOutboundSessionEntry({
             cfg,
-            agentId: derivedAgentId,
+            agentId: effectiveAgentId,
             channel,
             accountId,
             route: derivedRoute,
@@ -233,23 +243,21 @@ export const sendHandlers: GatewayRequestHandlers = {
           to: resolved.to,
           accountId,
           payloads: [{ text: message, mediaUrl, mediaUrls }],
-          agentId: providedSessionKey
-            ? resolveSessionAgentId({ sessionKey: providedSessionKey, config: cfg })
-            : derivedAgentId,
+          agentId: effectiveAgentId,
           gifPlayback: request.gifPlayback,
           threadId: threadId ?? null,
           deps: outboundDeps,
           mirror: providedSessionKey
             ? {
                 sessionKey: providedSessionKey,
-                agentId: resolveSessionAgentId({ sessionKey: providedSessionKey, config: cfg }),
+                agentId: effectiveAgentId,
                 text: mirrorText || message,
                 mediaUrls: mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
               }
             : derivedRoute
               ? {
                   sessionKey: derivedRoute.sessionKey,
-                  agentId: derivedAgentId,
+                  agentId: effectiveAgentId,
                   text: mirrorText || message,
                   mediaUrls: mirrorMediaUrls.length > 0 ? mirrorMediaUrls : undefined,
                 }
@@ -386,7 +394,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         ? request.accountId.trim()
         : undefined;
     try {
-      const plugin = getChannelPlugin(channel);
+      const plugin = resolveOutboundChannelPlugin({ channel, cfg });
       const outbound = plugin?.outbound;
       if (!outbound?.sendPoll) {
         respond(

@@ -296,13 +296,8 @@ export function createAgentEventHandler({
     if (!cleaned) {
       return;
     }
-    // Suppress full and partial silent tokens (e.g. "NO" before "_REPLY" arrives)
-    if (
-      isSilentReplyText(cleaned, SILENT_REPLY_TOKEN) ||
-      (cleaned.trim().length >= 2 &&
-        SILENT_REPLY_TOKEN.startsWith(cleaned.trim().toUpperCase()) &&
-        /^[A-Z_]+$/i.test(cleaned.trim()))
-    ) {
+    // Suppress full silent tokens (partial prefix handled upstream in agent-runner-execution)
+    if (isSilentReplyText(cleaned, SILENT_REPLY_TOKEN)) {
       return;
     }
     if (shouldHideHeartbeatChatOutput(clientRunId, sourceRunId)) {
@@ -348,13 +343,7 @@ export function createAgentEventHandler({
     });
     const text = normalizedHeartbeatText.text.trim();
     const shouldSuppressSilent =
-      normalizedHeartbeatText.suppress ||
-      isSilentReplyText(text, SILENT_REPLY_TOKEN) ||
-      // Suppress partial silent tokens: if text is a prefix of NO_REPLY and has no spaces/punctuation,
-      // it's almost certainly a mid-stream truncation, not a real message.
-      (text.length >= 2 &&
-        SILENT_REPLY_TOKEN.startsWith(text.toUpperCase()) &&
-        /^[A-Z_]+$/i.test(text));
+      normalizedHeartbeatText.suppress || isSilentReplyText(text, SILENT_REPLY_TOKEN);
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
     if (jobState === "done") {

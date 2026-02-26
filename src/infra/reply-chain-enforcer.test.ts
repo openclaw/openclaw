@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import type { SessionKey } from "../sessions/session-key.js";
+type SessionKey = string;
 import { ReplyChainEnforcer } from "./reply-chain-enforcer.js";
 
 describe("ReplyChainEnforcer", () => {

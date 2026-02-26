@@ -51,6 +51,7 @@ These are frequently reported but are typically closed with no code change:
 - Prompt-injection-only chains without a boundary bypass (prompt injection is out of scope).
 - Operator-intended local features (for example TUI local `!` shell) presented as remote injection.
 - Authorized user-triggered local actions presented as privilege escalation. Example: an allowlisted/owner sender running `/export-session /absolute/path.html` to write on the host. In this trust model, authorized user actions are trusted host actions unless you demonstrate an auth/sandbox/boundary bypass.
+- Reports that only show a malicious plugin executing privileged actions after a trusted operator installs/enables it.
 - Reports that assume per-user multi-tenant authorization on a shared gateway host/config.
 - ReDoS/DoS claims that require trusted operator configuration input (for example catastrophic regex in `sessionFilter` or `logging.redactPatterns`) without a trust-boundary bypass.
 - Missing HSTS findings on default local/loopback deployments.
@@ -93,6 +94,14 @@ OpenClaw does **not** model one gateway as a multi-tenant, adversarial user boun
 - Implicit exec calls (no explicit host in the tool call) follow the same behavior.
 - This is expected in OpenClaw's one-user trusted-operator model. If you need isolation, enable sandbox mode (`non-main`/`all`) and keep strict tool policy.
 
+## Trusted Plugin Concept (Core)
+
+Plugins/extensions are part of OpenClaw's trusted computing base for a gateway.
+
+- Installing or enabling a plugin grants it the same trust level as local code running on that gateway host.
+- Plugin behavior such as reading env/files or running host commands is expected inside this trust boundary.
+- Security reports must show a boundary bypass (for example unauthenticated plugin load, allowlist/policy bypass, or sandbox/path-safety bypass), not only malicious behavior from a trusted-installed plugin.
+
 ## Out of Scope
 
 - Public Internet Exposure
@@ -101,6 +110,7 @@ OpenClaw does **not** model one gateway as a multi-tenant, adversarial user boun
 - Prompt-injection-only attacks (without a policy/auth/sandbox boundary bypass)
 - Reports that require write access to trusted local state (`~/.openclaw`, workspace files like `MEMORY.md` / `memory/*.md`)
 - Reports where the only demonstrated impact is an already-authorized sender intentionally invoking a local-action command (for example `/export-session` writing to an absolute host path) without bypassing auth, sandbox, or another documented boundary
+- Reports where the only claim is that a trusted-installed/enabled plugin can execute with gateway/host privileges (documented trust model behavior).
 - Any report whose only claim is that an operator-enabled `dangerous*`/`dangerously*` config option weakens defaults (these are explicit break-glass tradeoffs by design)
 - Reports that depend on trusted operator-supplied configuration values to trigger availability impact (for example custom regex patterns). These may still be fixed as defense-in-depth hardening, but are not security-boundary bypasses.
 - Exposed secrets that are third-party/user-controlled credentials (not OpenClaw-owned and not granting access to OpenClaw-operated infrastructure/services) without demonstrated OpenClaw impact
@@ -158,6 +168,23 @@ Plugins/extensions are loaded **in-process** with the Gateway and are treated as
 - Plugins can execute with the same OS privileges as the OpenClaw process.
 - Runtime helpers (for example `runtime.system.runCommandWithTimeout`) are convenience APIs, not a sandbox boundary.
 - Only install plugins you trust, and prefer `plugins.allow` to pin explicit trusted plugin ids.
+
+## Temp Folder Boundary (Media/Sandbox)
+
+OpenClaw uses a dedicated temp root for local media handoff and sandbox-adjacent temp artifacts:
+
+- Preferred temp root: `/tmp/openclaw` (when available and safe on the host).
+- Fallback temp root: `os.tmpdir()/openclaw` (or `openclaw-<uid>` on multi-user hosts).
+
+Security boundary notes:
+
+- Sandbox media validation allows absolute temp paths only under the OpenClaw-managed temp root.
+- Arbitrary host tmp paths are not treated as trusted media roots.
+- Plugin/extension code should use OpenClaw temp helpers (`resolvePreferredOpenClawTmpDir`, `buildRandomTempFilePath`, `withTempDownloadPath`) rather than raw `os.tmpdir()` defaults when handling media files.
+- Enforcement reference points:
+  - temp root resolver: `src/infra/tmp-openclaw-dir.ts`
+  - SDK temp helpers: `src/plugin-sdk/temp-path.ts`
+  - messaging/channel tmp guardrail: `scripts/check-no-random-messaging-tmp.mjs`
 
 ## Operational Guidance
 

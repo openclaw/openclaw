@@ -408,6 +408,7 @@ public struct SendParams: Codable, Sendable {
     public let gifplayback: Bool?
     public let channel: String?
     public let accountid: String?
+    public let agentid: String?
     public let threadid: String?
     public let sessionkey: String?
     public let idempotencykey: String
@@ -420,6 +421,7 @@ public struct SendParams: Codable, Sendable {
         gifplayback: Bool?,
         channel: String?,
         accountid: String?,
+        agentid: String?,
         threadid: String?,
         sessionkey: String?,
         idempotencykey: String)
@@ -431,6 +433,7 @@ public struct SendParams: Codable, Sendable {
         self.gifplayback = gifplayback
         self.channel = channel
         self.accountid = accountid
+        self.agentid = agentid
         self.threadid = threadid
         self.sessionkey = sessionkey
         self.idempotencykey = idempotencykey
@@ -444,6 +447,7 @@ public struct SendParams: Codable, Sendable {
         case gifplayback = "gifPlayback"
         case channel
         case accountid = "accountId"
+        case agentid = "agentId"
         case threadid = "threadId"
         case sessionkey = "sessionKey"
         case idempotencykey = "idempotencyKey"
@@ -2805,6 +2809,7 @@ public struct ExecApprovalsSnapshot: Codable, Sendable {
 public struct ExecApprovalRequestParams: Codable, Sendable {
     public let id: String?
     public let command: String
+    public let commandargv: [String]?
     public let cwd: AnyCodable?
     public let nodeid: AnyCodable?
     public let host: AnyCodable?
@@ -2819,6 +2824,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
     public init(
         id: String?,
         command: String,
+        commandargv: [String]?,
         cwd: AnyCodable?,
         nodeid: AnyCodable?,
         host: AnyCodable?,
@@ -2832,6 +2838,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
     {
         self.id = id
         self.command = command
+        self.commandargv = commandargv
         self.cwd = cwd
         self.nodeid = nodeid
         self.host = host
@@ -2847,6 +2854,7 @@ public struct ExecApprovalRequestParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case id
         case command
+        case commandargv = "commandArgv"
         case cwd
         case nodeid = "nodeId"
         case host
