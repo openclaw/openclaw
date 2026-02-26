@@ -112,6 +112,7 @@ import {
   selectCompactionTimeoutSnapshot,
   shouldFlagCompactionTimeout,
 } from "./compaction-timeout.js";
+import { pruneProcessedHistoryImages } from "./history-image-prune.js";
 import { detectAndLoadPromptImages } from "./images.js";
 import type { EmbeddedRunAttemptParams, EmbeddedRunAttemptResult } from "./types.js";
 
@@ -126,48 +127,6 @@ type PromptBuildHookRunner = {
     ctx: PluginHookAgentContext,
   ) => Promise<PluginHookBeforeAgentStartResult | undefined>;
 };
-
-export const PRUNED_HISTORY_IMAGE_MARKER = "[image data removed - already processed by model]";
-
-/**
- * Prunes image blocks from user messages that already have an assistant response after them.
- * This is a one-way cleanup for previously persisted history image data.
- */
-export function pruneProcessedHistoryImages(messages: AgentMessage[]): boolean {
-  let lastAssistantIndex = -1;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i]?.role === "assistant") {
-      lastAssistantIndex = i;
-      break;
-    }
-  }
-  if (lastAssistantIndex < 0) {
-    return false;
-  }
-
-  let didMutate = false;
-  for (let i = 0; i < lastAssistantIndex; i++) {
-    const message = messages[i];
-    if (!message || message.role !== "user" || !Array.isArray(message.content)) {
-      continue;
-    }
-    for (let j = 0; j < message.content.length; j++) {
-      const block = message.content[j];
-      if (!block || typeof block !== "object") {
-        continue;
-      }
-      if ((block as { type?: string }).type !== "image") {
-        continue;
-      }
-      message.content[j] = {
-        type: "text",
-        text: PRUNED_HISTORY_IMAGE_MARKER,
-      } as (typeof message.content)[number];
-      didMutate = true;
-    }
-  }
-  return didMutate;
-}
 
 export async function resolvePromptBuildHookResult(params: {
   prompt: string;
@@ -1085,8 +1044,8 @@ export async function runEmbeddedAttempt(
         }
 
         try {
-          // One-time migration: prune image blocks from already-processed user turns.
-          // This prevents old persisted base64 payloads from bloating subsequent prompts.
+          // Idempotent cleanup for legacy sessions with persisted image payloads.
+          // Called each run; only mutates already-answered user turns that still carry image blocks.
           const didPruneImages = pruneProcessedHistoryImages(activeSession.messages);
           if (didPruneImages) {
             activeSession.agent.replaceMessages(activeSession.messages);

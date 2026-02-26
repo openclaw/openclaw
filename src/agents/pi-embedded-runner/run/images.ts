@@ -13,18 +13,36 @@ import { log } from "../logger.js";
 /**
  * Common image file extensions for detection.
  */
-const IMAGE_EXTENSIONS = new Set([
-  ".png",
-  ".jpg",
-  ".jpeg",
-  ".gif",
-  ".webp",
-  ".bmp",
-  ".tiff",
-  ".tif",
-  ".heic",
-  ".heif",
-]);
+const IMAGE_EXTENSION_NAMES = [
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "webp",
+  "bmp",
+  "tiff",
+  "tif",
+  "heic",
+  "heif",
+] as const;
+const IMAGE_EXTENSIONS = new Set(IMAGE_EXTENSION_NAMES.map((ext) => `.${ext}`));
+const IMAGE_EXTENSION_PATTERN = IMAGE_EXTENSION_NAMES.join("|");
+const MEDIA_ATTACHED_PATH_PATTERN = new RegExp(
+  `^\\s*(.+?\\.(?:${IMAGE_EXTENSION_PATTERN}))\\s*(?:\\(|$|\\|)`,
+  "i",
+);
+const MESSAGE_IMAGE_PATTERN = new RegExp(
+  `\\[Image:\\s*source:\\s*([^\\]]+\\.(?:${IMAGE_EXTENSION_PATTERN}))\\]`,
+  "gi",
+);
+const FILE_URL_PATTERN = new RegExp(
+  `file://[^\\s<>"'\\\`\\]]+\\.(?:${IMAGE_EXTENSION_PATTERN})`,
+  "gi",
+);
+const PATH_PATTERN = new RegExp(
+  `(?:^|\\s|["'\\\`(])((\\.\\.?/|[~/])[^\\s"'\\\`()\\[\\]]*\\.(?:${IMAGE_EXTENSION_PATTERN}))`,
+  "gi",
+);
 
 /**
  * Result of detecting an image reference in text.
@@ -113,18 +131,15 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
     // Format is: path (type) | url  OR  just: path (type)
     // Path may contain spaces (e.g., "ChatGPT Image Apr 21.png")
     // Use non-greedy .+? to stop at first image extension
-    const pathMatch = content.match(
-      /^\s*(.+?\.(?:png|jpe?g|gif|webp|bmp|tiff?|heic|heif))\s*(?:\(|$|\|)/i,
-    );
+    const pathMatch = content.match(MEDIA_ATTACHED_PATH_PATTERN);
     if (pathMatch?.[1]) {
       addPathRef(pathMatch[1].trim());
     }
   }
 
   // Pattern for [Image: source: /path/...] format from messaging systems
-  const messageImagePattern =
-    /\[Image:\s*source:\s*([^\]]+\.(?:png|jpe?g|gif|webp|bmp|tiff?|heic|heif))\]/gi;
-  while ((match = messageImagePattern.exec(prompt)) !== null) {
+  MESSAGE_IMAGE_PATTERN.lastIndex = 0;
+  while ((match = MESSAGE_IMAGE_PATTERN.exec(prompt)) !== null) {
     const raw = match[1]?.trim();
     if (raw) {
       addPathRef(raw);
@@ -134,8 +149,8 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
   // Remote HTTP(S) URLs are intentionally ignored. Native image injection is local-only.
 
   // Pattern for file:// URLs - treat as paths since loadWebMedia handles them
-  const fileUrlPattern = /file:\/\/[^\s<>"'`\]]+\.(?:png|jpe?g|gif|webp|bmp|tiff?|heic|heif)/gi;
-  while ((match = fileUrlPattern.exec(prompt)) !== null) {
+  FILE_URL_PATTERN.lastIndex = 0;
+  while ((match = FILE_URL_PATTERN.exec(prompt)) !== null) {
     const raw = match[0];
     if (seen.has(raw.toLowerCase())) {
       continue;
@@ -156,9 +171,8 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
   // - ./relative/path.ext
   // - ../parent/path.ext
   // - ~/home/path.ext
-  const pathPattern =
-    /(?:^|\s|["'`(])((\.\.?\/|[~/])[^\s"'`()[\]]*\.(?:png|jpe?g|gif|webp|bmp|tiff?|heic|heif))/gi;
-  while ((match = pathPattern.exec(prompt)) !== null) {
+  PATH_PATTERN.lastIndex = 0;
+  while ((match = PATH_PATTERN.exec(prompt)) !== null) {
     // Use capture group 1 (the path without delimiter prefix); skip if undefined
     if (match[1]) {
       addPathRef(match[1]);
