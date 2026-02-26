@@ -14,6 +14,8 @@ export type ExecAsk = "off" | "on-miss" | "always";
 export type ExecApprovalRequestPayload = {
   command: string;
   commandArgv?: string[];
+  envHash?: string | null;
+  envKeys?: string[];
   cwd?: string | null;
   nodeId?: string | null;
   host?: string | null;
