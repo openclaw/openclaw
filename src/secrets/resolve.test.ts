@@ -37,6 +37,9 @@ describe("secret ref resolver", () => {
   });
 
   it("resolves file refs in jsonPointer mode", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-file-"));
     cleanupRoots.push(root);
     const filePath = path.join(root, "secrets.json");
@@ -250,6 +253,9 @@ describe("secret ref resolver", () => {
   });
 
   it("supports file raw mode with id=value", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-raw-"));
     cleanupRoots.push(root);
     const filePath = path.join(root, "token.txt");
