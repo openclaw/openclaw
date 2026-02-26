@@ -9,23 +9,24 @@ import {
 describe("security-path canonicalization", () => {
   it("canonicalizes decoded case/slash variants", () => {
     expect(canonicalizePathForSecurity("/API/channels//nostr/default/profile/")).toEqual({
-      path: "/api/channels/nostr/default/profile",
+      canonicalPath: "/api/channels/nostr/default/profile",
       candidates: ["/api/channels/nostr/default/profile"],
       malformedEncoding: false,
       rawNormalizedPath: "/api/channels/nostr/default/profile",
     });
     const encoded = canonicalizePathForSecurity("/api/%63hannels%2Fnostr%2Fdefault%2Fprofile");
-    expect(encoded.path).toBe("/api/channels/nostr/default/profile");
+    expect(encoded.canonicalPath).toBe("/api/channels/nostr/default/profile");
     expect(encoded.candidates).toContain("/api/%63hannels%2fnostr%2fdefault%2fprofile");
     expect(encoded.candidates).toContain("/api/channels/nostr/default/profile");
   });
 
   it("resolves traversal after repeated decoding", () => {
-    expect(canonicalizePathForSecurity("/api/foo/..%2fchannels/nostr/default/profile").path).toBe(
-      "/api/channels/nostr/default/profile",
-    );
     expect(
-      canonicalizePathForSecurity("/api/foo/%252e%252e%252fchannels/nostr/default/profile").path,
+      canonicalizePathForSecurity("/api/foo/..%2fchannels/nostr/default/profile").canonicalPath,
+    ).toBe("/api/channels/nostr/default/profile");
+    expect(
+      canonicalizePathForSecurity("/api/foo/%252e%252e%252fchannels/nostr/default/profile")
+        .canonicalPath,
     ).toBe("/api/channels/nostr/default/profile");
   });
 
