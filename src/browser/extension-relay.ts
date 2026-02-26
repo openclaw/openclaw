@@ -476,7 +476,14 @@ export async function ensureChromeExtensionRelayServer(opts: {
         if (!match || (req.method !== "GET" && req.method !== "PUT")) {
           return false;
         }
-        const targetId = decodeURIComponent(match[1] ?? "").trim();
+        let targetId = "";
+        try {
+          targetId = decodeURIComponent(match[1] ?? "").trim();
+        } catch {
+          res.writeHead(400);
+          res.end("invalid targetId encoding");
+          return true;
+        }
         if (!targetId) {
           res.writeHead(400);
           res.end("targetId required");
