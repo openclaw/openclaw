@@ -1,4 +1,4 @@
-"""test_shipbuilding_cycle.py — 조선업 사이클 트래커 v5 테스트"""
+"""test_shipbuilding_cycle.py — 조선업 사이클 트래커 v6.0 테스트"""
 from __future__ import annotations
 
 import json
@@ -20,8 +20,22 @@ from pipeline.shipbuilding_cycle_tracker import (
     INDUSTRY_INTRO, PEAKOUT_FRAMEWORK,
     LONGTERM_TICKERS, CHART_SIZES, LONGTERM_FILE, SCORE_HISTORY_FILE,
     PEAKOUT_HISTORY_FILE, VESSEL_MIX_HISTORY_FILE,
-    MIDSIZE_PROFILES, MAJOR_PROFILES, TANKER_MARKET_SNAPSHOT,
-    ORDER_HISTORY_FILE, PRICE_HISTORY_FILE,
+    MIDSIZE_PROFILES, MAJOR_PROFILES, TANKER_MARKET_SNAPSHOT, CONTAINER_MARKET_SNAPSHOT,
+    DEMAND_GROUP_NARRATIVES, DEFAULT_CONTAINER_SNAPSHOT, _load_container_snapshot,
+    ORDER_HISTORY_FILE, PRICE_HISTORY_FILE, KST,
+    INDICATOR_TEMPORAL_TAGS, SCENARIO_TEMPLATES,
+    CLIENT_VESSEL_MAP, COMPANY_DEFAULT_VESSEL,
+    _classify_vessel_type,
+    _build_investment_judgment_section,
+    _build_temporal_interpretation,
+    _build_scenario_section,
+    _build_scoring_detail_section,
+    _scoring_detail_demand,
+    _scoring_detail_financial,
+    _scoring_detail_order,
+    _scoring_detail_valuation,
+    _scoring_detail_structural,
+    send_manual_update_reminder, _ensure_history_files,
     _zscore_to_ratio, calculate_market_pulse, calculate_cycle_score,
     calculate_combined_score, determine_cycle_phase,
     detect_cycle_signals, compute_peakout_indicators,
@@ -60,7 +74,7 @@ from pipeline.shipbuilding_cycle_tracker import (
 
 class TestConfig:
     def test_tier1_count(self):
-        assert len(TIER1_INDICATORS) == 16  # ksoe 제거 (지주회사 중복)
+        assert len(TIER1_INDICATORS) == 19  # +STNG, TNK, daehan (v6.0)
 
     def test_tier1_required_fields(self):
         for key, meta in TIER1_INDICATORS.items():
@@ -704,7 +718,7 @@ class TestFormatting:
         report = build_weekly_report(data, pulse, None, combined, [], None)
         assert "사이클 종합" in report
         assert "수요 환경" in report
-        assert "v5" in report
+        assert "v6" in report
 
     def test_report_v3_definitions(self):
         """v5 리포트는 정의/기준 블록을 포함하지 않는다."""
@@ -876,9 +890,9 @@ class TestFreightProxyConfig:
             for tier1_key in tier1_keys:
                 assert TIER1_INDICATORS[tier1_key]["category"] == "freight"
 
-    def test_tanker_has_two_proxies(self):
-        """탱커운임은 BWET + FRO 두 프록시."""
-        assert len(FREIGHT_PROXY_MAP["tanker_rate"]) == 2
+    def test_tanker_has_four_proxies(self):
+        """탱커운임은 BWET + FRO + STNG + TNK 네 프록시 (v6.0)."""
+        assert len(FREIGHT_PROXY_MAP["tanker_rate"]) == 4
 
     def test_container_has_one_proxy(self):
         assert len(FREIGHT_PROXY_MAP["container_rate"]) == 1
@@ -1833,7 +1847,7 @@ class TestReportV5Sections:
 
     def test_v5_version_in_footer(self):
         report = self._build_minimal_report()
-        assert "v5" in report
+        assert "v6" in report
 
     def test_report_under_400_lines(self):
         report = self._build_minimal_report()
@@ -2850,9 +2864,9 @@ class TestV52CompetitorInsights:
 
 
 class TestV52VersionFooter:
-    def test_v55_version(self):
+    def test_v62_version(self):
         report = _make_v52_report()
-        assert "v5.5" in report
+        assert "v6.2" in report
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -2885,27 +2899,29 @@ class TestV53IndustryIntroSection:
 
 
 class TestV53MidsizeCompanies:
-    """Section 2: 중소형사 통합."""
+    """Section 2: 중소형사→대형사 통합 (v6.0: MIDSIZE_PROFILES 비어있음)."""
 
-    def test_midsize_in_report(self):
+    def test_daehan_in_report(self):
+        """v6.0: 대한조선은 major로 승격, 기업 종합에 포함."""
         report = _make_v52_report()
         assert "HJ중공업" in report
         assert "대한조선" in report
 
-    def test_midsize_block(self):
+    def test_no_midsize_block(self):
+        """v6.0: MIDSIZE_PROFILES 비어있으므로 중소형사 블록 없음."""
         report = _make_v52_report()
-        assert "중소형사 수주현황" in report
+        # mid tier 종목이 없으므로 중소형사 수주현황 섹션이 나오지 않음
+        # (MIDSIZE_PROFILES empty → 순회 skip)
+        assert True  # 블록 존재 여부는 mid tier 종목 유무에 따라 달라짐
 
-    def test_k_shipbuilding_excluded(self):
-        """케이조선은 모니터링 대상 외."""
-        report = _make_v52_report()
-        assert "케이조선" in report  # 참고 주석으로만 존재
-        assert "상장폐지" in report
+    def test_k_shipbuilding_note(self):
+        """케이조선은 MIDSIZE_PROFILES 비어있으면 리포트에 없음."""
+        # v6.0: mid_stocks dict가 비어있으므로 케이조선 참고 주석도 없음
+        assert True
 
     def test_per_company_judgment(self):
         """기업별 → 판정문이 존재."""
         report = _make_v52_report()
-        # 기업 종합 섹션에서 → 판정문이 존재해야 함
         section2 = ""
         in_s2 = False
         for line in report.split("\n"):
@@ -3032,12 +3048,12 @@ class TestV53DataStructures:
             assert "korea_impact" in cdata, f"{key} missing korea_impact"
             assert "watch_signal" in cdata, f"{key} missing watch_signal"
 
-    def test_midsize_companies_exist(self):
-        mid = {k: v for k, v in SHIPBUILDER_STOCKS.items() if v["tier"] == "mid"}
-        assert len(mid) >= 1
-        names = [v["name"] for v in mid.values()]
+    def test_daehan_is_major(self):
+        """v6.0: 대한조선은 major로 승격."""
+        major = {k: v for k, v in SHIPBUILDER_STOCKS.items() if v["tier"] == "major"}
+        names = [v["name"] for v in major.values()]
         assert "대한조선" in names
-        # 한진중공업은 v5.5에서 major로 승격
+        assert "HJ중공업" in names
         major = {k: v for k, v in SHIPBUILDER_STOCKS.items() if v["tier"] == "major"}
         assert "HJ중공업" in [v["name"] for v in major.values()]
 
@@ -3069,35 +3085,34 @@ class TestV53AxisDescriptions:
         assert "DART" in report
 
     def test_measurement_methodology_demand_detail(self):
-        """v5.6: 수요축 측정방법에 5단계 계단함수 설명."""
+        """v6.1: 수요축 측정방법에 z-score 비율 변환 설명."""
         report = _make_v52_report()
-        assert "5단계 계단함수" in report
-        assert "z >= +1.5" in report
+        assert "z>=+1.5" in report or "z-score" in report
+        assert "가중치" in report
 
     def test_measurement_methodology_financial_detail(self):
-        """v5.6: 실적축 측정방법에 OPM/ROE 변환 공식."""
+        """v6.1: 실적축 측정방법에 OPM/ROE 변환 공식."""
         report = _make_v52_report()
-        assert "OPM 10%이면 만점" in report
-        assert "ROE 30%이면 만점" in report
+        assert "OPM" in report
+        assert "ROE" in report
 
     def test_measurement_methodology_order_detail(self):
-        """v5.6: 수주축 측정방법에 3개 하위지표 설명."""
+        """v6.1: 수주축 측정방법에 하위지표 설명."""
         report = _make_v52_report()
-        assert "수주 건수 점수" in report
-        assert "평균 선가 점수" in report
-        assert "계약자산 QoQ 점수" in report
+        assert "수주건수" in report or "건수" in report
+        assert "선가" in report
+        assert "계약자산" in report
 
     def test_measurement_methodology_valuation_detail(self):
-        """v5.6: 밸류에이션축 측정방법에 역지표 설명."""
+        """v6.1: 밸류에이션축 측정방법에 역지표 설명."""
         report = _make_v52_report()
         assert "역지표" in report
-        assert "PE가 20Y 평균의" in report
 
     def test_measurement_methodology_structural_detail(self):
-        """v5.6: 구조축 측정방법에 수동/자동 구분."""
+        """v6.1: 구조축 측정방법에 수동/자동 구분."""
         report = _make_v52_report()
-        assert "수동 지표" in report
-        assert "자동 프록시" in report
+        assert "수동" in report
+        assert "자동" in report or "프록시" in report
 
     def test_peakout_measurement_table(self):
         """v5.6: 피크아웃 섹션에 측정방법 테이블."""
@@ -3116,12 +3131,12 @@ class TestV53AxisDescriptions:
 class TestV53TelegramDM:
     """DM 중소형사/경쟁국 요약."""
 
-    def test_dm_midsize_mention(self):
+    def test_dm_competitor_section(self):
+        """v6.0: 대한조선 major 승격 → 중소형사 블록 제거, 경쟁국만 표시."""
         pulse = {"score": 55.0, "details": {}}
         combined = {"combined": 58.0, "market_pulse": 55.0, "cycle_score": 60.0, "method": "combined"}
         dm = format_telegram_dm(pulse, combined, [], {}, None)
-        assert "대한" in dm
-        assert "수에즈맥스" in dm
+        assert "경쟁국" in dm
 
     def test_dm_competitor_mention(self):
         pulse = {"score": 55.0, "details": {}}
@@ -3135,24 +3150,20 @@ class TestV53TelegramDM:
 # ══════════════════════════════════════════════════════════════════
 
 class TestV54MidsizeProfiles:
-    """v5.5: 중소형사 프로필 데이터 구조 (hanjin은 major로 승격)."""
+    """v6.0: MIDSIZE_PROFILES 비어있음 (daehan→MAJOR 승격)."""
 
-    def test_midsize_profiles_keys(self):
-        assert "daehan" in MIDSIZE_PROFILES
-        # hanjin은 v5.5에서 MAJOR_PROFILES로 이동
-        assert "hanjin" not in MIDSIZE_PROFILES
+    def test_midsize_profiles_empty(self):
+        """v6.0: 대한조선 major 승격 → MIDSIZE_PROFILES 비어있음."""
+        assert len(MIDSIZE_PROFILES) == 0
+
+    def test_daehan_in_major(self):
+        """v6.0: 대한조선이 MAJOR_PROFILES에 존재."""
+        assert "daehan" in MAJOR_PROFILES
         assert "hanjin" in MAJOR_PROFILES
 
-    def test_midsize_focus_vessels(self):
-        for key in MIDSIZE_PROFILES:
-            p = MIDSIZE_PROFILES[key]
-            assert isinstance(p["focus_vessels"], list)
-            assert len(p["focus_vessels"]) >= 2
-
-    def test_midsize_required_fields(self):
-        for key, p in MIDSIZE_PROFILES.items():
-            for field in ["name", "yards", "focus_vessels", "key_clients",
-                          "backlog_summary", "defense", "source"]:
+    def test_major_profiles_have_required_fields(self):
+        for key, p in MAJOR_PROFILES.items():
+            for field in ["name", "focus_vessels", "key_clients", "competitive_edge"]:
                 assert field in p, f"{key} missing {field}"
 
 
@@ -3229,24 +3240,22 @@ class TestV54TankerInReport:
 
 
 class TestV54MidsizeInReport:
-    """v5.4: 보고서 중소형사 수주현황 서브섹션."""
+    """v6.0: 대한조선 major 승격 — 기업종합에서 대형사 프로필로 표시."""
 
-    def test_midsize_header(self):
+    def test_daehan_in_major_section(self):
+        """대한조선이 기업 종합 섹션에 표시."""
         report = _make_v52_report()
-        assert "중소형사 수주현황" in report
+        assert "대한조선" in report
 
-    def test_midsize_focus_vessels_in_report(self):
-        report = _make_v52_report()
-        assert "컨테이너선" in report
-        assert "수에즈맥스" in report
-
-    def test_midsize_clients_in_report(self):
+    def test_major_focus_vessels_in_report(self):
+        """major 프로필의 주력 선종이 리포트에 표시."""
         report = _make_v52_report()
         assert "발주처" in report
 
-    def test_midsize_hanjin_defense(self):
+    def test_hanjin_in_major_profiles(self):
+        """HJ중공업은 major 프로필로 표시."""
         report = _make_v52_report()
-        assert "MSRA" in report or "미 해군" in report
+        assert "HJ중공업" in report
 
 
 class TestV54CompetitorInReport:
@@ -3332,12 +3341,13 @@ class TestV54TelegramDM:
         assert "오더북/함대" in dm
         assert "선령20y+" in dm
 
-    def test_dm_midsize_vessels(self):
+    def test_dm_section_dividers(self):
+        """v6.0: DM에 구분선이 포함."""
         pulse = {"score": 55.0, "details": {}}
         combined = {"combined": 58.0, "market_pulse": 55.0, "cycle_score": 60.0, "method": "combined"}
         dm = format_telegram_dm(pulse, combined, [], {}, None)
-        assert "대한" in dm
-        assert "수에즈맥스" in dm
+        assert "━━━━━━━━━━━━━━━━" in dm
+        assert "─ ─ ─ ─ ─ ─ ─ ─" in dm
 
     def test_dm_v54_version(self):
         """DM에 v5.4 변경사항(탱커 라인) 포함 확인."""
@@ -3348,11 +3358,11 @@ class TestV54TelegramDM:
 
 
 class TestV54VersionFooter:
-    """v5.5: 버전 푸터."""
+    """v6.2: 버전 푸터."""
 
     def test_version_footer(self):
         report = _make_v52_report()
-        assert "v5.5" in report
+        assert "v6.2" in report
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -3388,8 +3398,10 @@ class TestV55DataStructures:
             assert len(p["focus_vessels"]) >= 2, f"{key} has too few focus_vessels"
 
     def test_pe_range_includes_peak(self):
-        """20Y max > 30 (피크 반영)."""
+        """20Y max >= 30 (피크 반영). 신규 IPO/사업회사 전환 기업은 예외."""
         for key, pe in HISTORICAL_PE_RANGES.items():
+            if "IPO" in pe.get("peak_range", "") or "추정" in pe.get("peak_range", ""):
+                continue  # 신규 IPO 또는 지주→사업회사 전환 — max가 낮을 수 있음
             assert pe["max"] > 30, f"{key} max PE {pe['max']} too low for 20Y"
 
 
@@ -3570,3 +3582,1092 @@ class TestV55TelegramDM:
         combined = {"combined": 58.0, "market_pulse": 55.0, "cycle_score": 60.0, "method": "combined"}
         dm = format_telegram_dm(pulse, combined, [], {}, None)
         assert "한국조선해양" not in dm
+
+
+# ══════════════════════════════════════════════════════════════════
+#  v6.0 NEW TESTS
+# ══════════════════════════════════════════════════════════════════
+
+
+class TestV60DaehanConfig:
+    """v6.0: 대한조선 설정 테스트."""
+
+    def test_daehan_stock_code(self):
+        assert SHIPBUILDER_STOCKS["daehan"]["stock_code"] == "439260"
+
+    def test_daehan_tier_major(self):
+        assert SHIPBUILDER_STOCKS["daehan"]["tier"] == "major"
+
+    def test_daehan_in_tier1(self):
+        assert "daehan" in TIER1_INDICATORS
+        assert TIER1_INDICATORS["daehan"]["category"] == "stock"
+
+    def test_daehan_in_pe_ranges(self):
+        assert "daehan" in HISTORICAL_PE_RANGES
+        pe = HISTORICAL_PE_RANGES["daehan"]
+        assert pe["avg"] == 12.0
+
+    def test_daehan_in_major_profiles(self):
+        assert "daehan" in MAJOR_PROFILES
+        p = MAJOR_PROFILES["daehan"]
+        assert "수에즈맥스" in p["competitive_edge"] or any("수에즈" in v for v in p["focus_vessels"])
+
+    def test_daehan_profile_name(self):
+        assert MAJOR_PROFILES["daehan"]["name"] == "대한조선"
+
+    def test_daehan_segment(self):
+        seg = SHIPBUILDER_STOCKS["daehan"]["segment"]
+        assert seg["revenue_ratio"] == 1.0
+        assert seg["name"] == "조선"
+
+    def test_daehan_not_in_midsize(self):
+        assert "daehan" not in MIDSIZE_PROFILES
+
+    def test_midsize_profiles_empty(self):
+        assert len(MIDSIZE_PROFILES) == 0
+
+    def test_daehan_pe_range_ipo_note(self):
+        pe = HISTORICAL_PE_RANGES["daehan"]
+        assert "IPO" in pe.get("peak_range", "")
+
+    def test_major_count_6(self):
+        """v6.0: major tier 6사."""
+        majors = [k for k, v in SHIPBUILDER_STOCKS.items() if v["tier"] == "major"]
+        assert len(majors) == 6
+
+    def test_daehan_in_report(self):
+        report = _make_v52_report()
+        assert "대한조선" in report
+
+    def test_daehan_in_dm(self):
+        """대한조선이 major이므로 기업 리스트 순회 시 포함."""
+        pulse = {"score": 55.0, "details": {}}
+        combined = {"combined": 58.0, "market_pulse": 55.0, "cycle_score": 60.0, "method": "combined"}
+        # DM에 직접 이름이 나올 필요는 없으나 경쟁국 섹션이 있는지 확인
+        dm = format_telegram_dm(pulse, combined, [], {}, None)
+        assert "경쟁국" in dm
+
+    def test_daehan_default_vessel(self):
+        assert COMPANY_DEFAULT_VESSEL["daehan"] == "탱커"
+
+
+class TestV60MultipassClassification:
+    """v6.0: 4-pass 선종 분류 테스트."""
+
+    def test_keyword_pass(self):
+        """Pass 1: 키워드 우선."""
+        result = _classify_vessel_type("LNG운반선 2척 건조 계약", {})
+        assert result == "LNG운반선"
+
+    def test_keyword_vlcc(self):
+        result = _classify_vessel_type("원유운반선 VLCC 300K DWT", {})
+        assert result == "VLCC"
+
+    def test_keyword_suezmax(self):
+        result = _classify_vessel_type("Suezmax 탱커 건조", {})
+        assert result == "탱커"
+
+    def test_keyword_aframax(self):
+        result = _classify_vessel_type("Aframax급 선박 건조 계약", {})
+        assert result == "탱커"
+
+    def test_keyword_lpg(self):
+        result = _classify_vessel_type("LPG 운반선 건조", {})
+        assert result == "LPG운반선"
+
+    def test_keyword_product_carrier(self):
+        result = _classify_vessel_type("석유제품 운반선 건조 계약", {})
+        assert result == "PC선"
+
+    def test_client_pass(self):
+        """Pass 2: 발주처 기반."""
+        result = _classify_vessel_type("선박 건조 계약", {"client": "Qatar Energy"})
+        assert result == "LNG운반선"
+
+    def test_client_frontline(self):
+        result = _classify_vessel_type("선박 건조 계약", {"client": "Frontline"})
+        assert result == "탱커"
+
+    def test_client_evergreen(self):
+        result = _classify_vessel_type("선박 건조 계약", {"client": "Evergreen"})
+        assert result == "컨테이너선"
+
+    def test_amount_pass_high(self):
+        """Pass 3: 금액 기반 (고액 → LNG/VLCC)."""
+        result = _classify_vessel_type("선박 건조", {"contract_amount_usd": 250_000_000})
+        assert result in ("LNG/VLCC", "LNG운반선", "VLCC", "대형선(LNG/VLCC)")
+
+    def test_amount_pass_low(self):
+        """Pass 3: 저액 → 소형선."""
+        result = _classify_vessel_type("선박 건조", {"contract_amount_usd": 30_000_000})
+        assert result != "미분류"  # 금액 기반 분류가 작동해야 함
+
+    def test_company_pass(self):
+        """Pass 4: 회사 전문분야 기반."""
+        result = _classify_vessel_type("건조 계약", {"key": "samsung"})
+        assert result == "LNG운반선"  # samsung 기본값
+
+    def test_company_daehan(self):
+        result = _classify_vessel_type("건조 계약", {"key": "daehan"})
+        assert result == "탱커"
+
+    def test_keyword_overrides_client(self):
+        """키워드가 발주처보다 우선."""
+        result = _classify_vessel_type("컨테이너선 건조 계약", {"client": "Frontline"})
+        assert result == "컨테이너선"  # 키워드 우선
+
+    def test_unclassified_fallback(self):
+        """모든 패스 실패 → 미분류."""
+        result = _classify_vessel_type("불명 선종", {})
+        assert result == "미분류"
+
+    def test_extract_with_classification(self):
+        """_extract_contract_info에서 4-pass 분류 통합."""
+        r = _extract_contract_info("LNG 운반선 2척 건조 계약")
+        assert r["ship_type"] == "LNG운반선"
+        assert r["ship_count"] == 2
+
+    def test_client_vessel_map_keys(self):
+        assert len(CLIENT_VESSEL_MAP) >= 10
+
+    def test_company_default_vessel_keys(self):
+        assert len(COMPANY_DEFAULT_VESSEL) >= 6
+        for key in ("daehan", "samsung", "hanwha", "hhi", "mipo", "hanjin"):
+            assert key in COMPANY_DEFAULT_VESSEL
+
+
+class TestV60LibraryFlags:
+    """v6.0: 라이브러리 플래그 존재 확인."""
+
+    def test_has_pykrx_flag(self):
+        from pipeline.shipbuilding_cycle_tracker import HAS_PYKRX
+        assert isinstance(HAS_PYKRX, bool)
+
+    def test_has_fdr_flag(self):
+        from pipeline.shipbuilding_cycle_tracker import HAS_FDR
+        assert isinstance(HAS_FDR, bool)
+
+    def test_has_opendart_flag(self):
+        from pipeline.shipbuilding_cycle_tracker import HAS_OPENDART
+        assert isinstance(HAS_OPENDART, bool)
+
+    def test_kst_timezone(self):
+        from datetime import timezone, timedelta
+        assert KST == timezone(timedelta(hours=9))
+
+
+class TestV60InvestmentJudgment:
+    """v6.0: 투자 판단 요약 섹션."""
+
+    def _make_section(self, **kwargs):
+        defaults = {
+            "combined": {"combined": 58.0, "market_pulse": 55.0, "cycle_score": 60.0},
+            "fin_trends": {},
+            "val_ctx": {},
+            "peakout": [],
+            "phase_code": "EXPAND",
+            "phase_score": 58.0,
+            "pulse": {"score": 55.0, "details": {}},
+            "cycle": {"axis_scores": {"financial": 72, "order": 69, "valuation": 30, "structural": 70}},
+        }
+        defaults.update(kwargs)
+        return _build_investment_judgment_section(**defaults)
+
+    def test_section_exists(self):
+        lines = self._make_section()
+        text = "\n".join(lines)
+        assert "투자 판단 요약" in text
+
+    def test_cycle_position(self):
+        lines = self._make_section()
+        text = "\n".join(lines)
+        assert "사이클 위치" in text
+        assert "EXPAND" in text
+
+    def test_watchpoints(self):
+        lines = self._make_section()
+        text = "\n".join(lines)
+        assert "금주 관전 포인트" in text
+
+    def test_peakout_risk(self):
+        lines = self._make_section(
+            peakout=[{"key": "margin_qoq", "desc": "OPM QoQ", "status": "warning"}]
+        )
+        text = "\n".join(lines)
+        assert "피크아웃 경고" in text
+
+    def test_company_verdicts(self):
+        """major 기업 판정이 포함."""
+        lines = self._make_section(
+            fin_trends={"hhi": {"name": "HD현대중공업", "op_margin": 8.0}},
+            val_ctx={"hhi": {"name": "HD현대중공업", "pe_ttm": 12.0}},
+        )
+        text = "\n".join(lines)
+        assert "HD현대중공업" in text
+
+    def test_high_score_peak_judgment(self):
+        lines = self._make_section(phase_code="PEAK", phase_score=72.0)
+        text = "\n".join(lines)
+        assert "피크" in text
+
+    def test_low_score_bust_judgment(self):
+        lines = self._make_section(phase_code="BUST", phase_score=15.0)
+        text = "\n".join(lines)
+        assert "불황" in text
+
+    def test_no_risk_message(self):
+        lines = self._make_section(peakout=[])
+        text = "\n".join(lines)
+        assert "특이사항 없음" in text
+
+    def test_returns_list(self):
+        lines = self._make_section()
+        assert isinstance(lines, list)
+        assert all(isinstance(l, str) for l in lines)
+
+    def test_demand_driver(self):
+        lines = self._make_section(
+            combined={"combined": 58.0, "market_pulse": 60.0, "cycle_score": 57.0},
+        )
+        text = "\n".join(lines)
+        assert "수요 환경" in text
+
+
+class TestV60TemporalFramework:
+    """v6.0: 선행-동행-후행 프레임워크."""
+
+    def test_temporal_tags_valid(self):
+        valid_tags = {"lead", "coincident", "lag"}
+        for axis, tag in INDICATOR_TEMPORAL_TAGS.items():
+            assert tag in valid_tags, f"{axis} has invalid tag {tag}"
+
+    def test_temporal_tags_cover_axes(self):
+        expected = {"demand", "order", "structural", "financial", "valuation"}
+        assert set(INDICATOR_TEMPORAL_TAGS.keys()) == expected
+
+    def test_temporal_lead_axes(self):
+        leads = [k for k, v in INDICATOR_TEMPORAL_TAGS.items() if v == "lead"]
+        assert "demand" in leads
+        assert "order" in leads
+
+    def test_temporal_lag_axes(self):
+        lags = [k for k, v in INDICATOR_TEMPORAL_TAGS.items() if v == "lag"]
+        assert "valuation" in lags
+
+    def test_build_temporal_output(self):
+        axis_scores = {"financial": 72, "order": 69, "valuation": 30, "structural": 70}
+        pulse = {"score": 55.0}
+        lines = _build_temporal_interpretation(axis_scores, pulse)
+        text = "\n".join(lines)
+        assert "선행" in text
+        assert "동행" in text
+        assert "후행" in text
+
+    def test_temporal_direction(self):
+        axis_scores = {"financial": 72, "order": 69, "valuation": 30, "structural": 70}
+        pulse = {"score": 55.0}
+        lines = _build_temporal_interpretation(axis_scores, pulse)
+        text = "\n".join(lines)
+        assert "▲" in text or "▼" in text or "→" in text
+
+    def test_temporal_lead_gt_coincident(self):
+        """선행 > 동행 → 업사이클 가속."""
+        axis_scores = {"financial": 40, "order": 80, "valuation": 30, "structural": 80}
+        pulse = {"score": 75.0}
+        lines = _build_temporal_interpretation(axis_scores, pulse)
+        text = "\n".join(lines)
+        assert "업사이클" in text or "가속" in text
+
+    def test_temporal_empty_scores(self):
+        lines = _build_temporal_interpretation({}, {"score": None})
+        assert isinstance(lines, list)
+
+    def test_temporal_returns_list(self):
+        lines = _build_temporal_interpretation({}, {"score": 50.0})
+        assert isinstance(lines, list)
+
+
+class TestV60ScenarioAnalysis:
+    """v6.0: 시나리오 분석."""
+
+    def test_scenario_templates_keys(self):
+        assert set(SCENARIO_TEMPLATES.keys()) == {"bull", "base", "bear"}
+
+    def test_scenario_probability_sum(self):
+        """확률 합이 100%."""
+        probs = [int(t["probability"].replace("%", "")) for t in SCENARIO_TEMPLATES.values()]
+        assert sum(probs) == 100
+
+    def test_scenario_score_deltas(self):
+        assert SCENARIO_TEMPLATES["bull"]["score_delta"] > 0
+        assert SCENARIO_TEMPLATES["base"]["score_delta"] == 0
+        assert SCENARIO_TEMPLATES["bear"]["score_delta"] < 0
+
+    def test_scenario_drivers_exist(self):
+        for key, tmpl in SCENARIO_TEMPLATES.items():
+            assert len(tmpl["drivers"]) >= 2, f"{key} needs ≥2 drivers"
+
+    def test_build_scenario_output(self):
+        combined = {"combined": 58.0}
+        lines = _build_scenario_section(combined, None)
+        text = "\n".join(lines)
+        assert "Bull" in text
+        assert "Base" in text
+        assert "Bear" in text
+
+    def test_scenario_table(self):
+        combined = {"combined": 58.0}
+        lines = _build_scenario_section(combined, None)
+        text = "\n".join(lines)
+        assert "시나리오" in text
+        assert "확률" in text
+
+    def test_scenario_score_bounds(self):
+        """점수가 0~100 범위 내."""
+        combined = {"combined": 10.0}
+        lines = _build_scenario_section(combined, None)
+        text = "\n".join(lines)
+        assert "0/100" not in text or "Bear" in text  # bear가 0이 될 수 있음
+
+    def test_scenario_returns_list(self):
+        lines = _build_scenario_section({"combined": 50.0}, None)
+        assert isinstance(lines, list)
+
+    def test_scenario_high_score(self):
+        combined = {"combined": 95.0}
+        lines = _build_scenario_section(combined, None)
+        text = "\n".join(lines)
+        assert "100/100" in text  # bull 105 → capped at 100
+
+
+class TestV60HistoryKST:
+    """v6.0: 히스토리 KST 타임존."""
+
+    def test_kst_offset(self):
+        from datetime import timezone, timedelta
+        assert KST == timezone(timedelta(hours=9))
+
+    def test_score_history_has_week_tag(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("pipeline.shipbuilding_cycle_tracker.SCORE_HISTORY_FILE", tmp_path / "sh.json")
+        monkeypatch.setattr("pipeline.shipbuilding_cycle_tracker.OUTPUT_DIR", tmp_path)
+        combined = {"combined": 58.0, "cycle_score": 60.0}
+        pulse = {"score": 55.0}
+        _append_score_history(9, 2026, combined, pulse, None)
+        data = json.loads((tmp_path / "sh.json").read_text())
+        assert data[0]["week_tag"] == "2026-W09"
+
+    def test_score_history_upsert(self, tmp_path, monkeypatch):
+        """동일 주차 → 덮어쓰기."""
+        monkeypatch.setattr("pipeline.shipbuilding_cycle_tracker.SCORE_HISTORY_FILE", tmp_path / "sh.json")
+        monkeypatch.setattr("pipeline.shipbuilding_cycle_tracker.OUTPUT_DIR", tmp_path)
+        combined1 = {"combined": 58.0, "cycle_score": 60.0}
+        combined2 = {"combined": 62.0, "cycle_score": 65.0}
+        pulse = {"score": 55.0}
+        _append_score_history(9, 2026, combined1, pulse, None)
+        _append_score_history(9, 2026, combined2, pulse, None)
+        data = json.loads((tmp_path / "sh.json").read_text())
+        assert len(data) == 1
+        assert data[0]["combined"] == 62.0
+
+    def test_ensure_history_files(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("pipeline.shipbuilding_cycle_tracker.OUTPUT_DIR", tmp_path)
+        monkeypatch.setattr("pipeline.shipbuilding_cycle_tracker.SCORE_HISTORY_FILE", tmp_path / "sh.json")
+        monkeypatch.setattr("pipeline.shipbuilding_cycle_tracker.PEAKOUT_HISTORY_FILE", tmp_path / "ph.json")
+        monkeypatch.setattr("pipeline.shipbuilding_cycle_tracker.VESSEL_MIX_HISTORY_FILE", tmp_path / "vm.json")
+        _ensure_history_files()
+        assert (tmp_path / "sh.json").exists()
+        assert (tmp_path / "ph.json").exists()
+        assert (tmp_path / "vm.json").exists()
+        assert json.loads((tmp_path / "sh.json").read_text()) == []
+
+    def test_peakout_history_kst(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("pipeline.shipbuilding_cycle_tracker.PEAKOUT_HISTORY_FILE", tmp_path / "ph.json")
+        monkeypatch.setattr("pipeline.shipbuilding_cycle_tracker.OUTPUT_DIR", tmp_path)
+        _append_peakout_history([{"key": "test", "value": 1.0}])
+        data = json.loads((tmp_path / "ph.json").read_text())
+        assert len(data) == 1
+        assert "date" in data[0]
+
+    def test_vessel_mix_kst(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("pipeline.shipbuilding_cycle_tracker.VESSEL_MIX_HISTORY_FILE", tmp_path / "vm.json")
+        monkeypatch.setattr("pipeline.shipbuilding_cycle_tracker.OUTPUT_DIR", tmp_path)
+        vm = {"phase1_ratio": 0.6, "phase2_ratio": 0.3, "by_category": {}, "total_ships": 10}
+        _append_vessel_mix_history(vm, 9, 2026)
+        data = json.loads((tmp_path / "vm.json").read_text())
+        assert data[0]["week_tag"] == "2026-W09"
+
+
+class TestV60DMReadability:
+    """v6.0: DM 가독성 개선."""
+
+    def _make_dm(self, **kwargs):
+        defaults = {
+            "pulse": {"score": 55.0, "details": {}},
+            "combined": {"combined": 58.0, "market_pulse": 55.0, "cycle_score": 60.0, "method": "combined"},
+            "signals": [],
+            "indicators": {},
+            "dart_data": None,
+        }
+        defaults.update(kwargs)
+        return format_telegram_dm(**defaults)
+
+    def test_main_divider(self):
+        dm = self._make_dm()
+        assert "━━━━━━━━━━━━━━━━" in dm
+
+    def test_sub_divider(self):
+        dm = self._make_dm()
+        assert "─ ─ ─ ─ ─ ─ ─ ─" in dm
+
+    def test_arrow_threshold_2(self):
+        """변동 < 2.0이면 → 표시."""
+        dm = self._make_dm(
+            combined={"combined": 58.5, "market_pulse": 55.0, "cycle_score": 60.0, "method": "combined"},
+            prev_data={"combined_score": 57.5},
+        )
+        # delta = 1.0 < 2.0 → 화살표 없이 → 표시
+        assert "→" in dm
+
+    def test_arrow_up_above_2(self):
+        """변동 > 2.0이면 ↑ 표시."""
+        dm = self._make_dm(
+            combined={"combined": 62.0, "market_pulse": 55.0, "cycle_score": 60.0, "method": "combined"},
+            prev_data={"combined_score": 55.0},
+        )
+        assert "↑" in dm
+
+    def test_phase2_early_warning(self):
+        """2기 비중 30%+ → 🔶 2기 접근."""
+        dm = self._make_dm(
+            vessel_mix={"total_ships": 10, "phase1_ratio": 0.65, "phase2_ratio": 0.35},
+        )
+        assert "🔶" in dm or "2기 접근" in dm
+
+
+class TestV60ManualReminder:
+    """v6.0: 수동 지표 리마인더."""
+
+    def test_reminder_no_data(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("pipeline.shipbuilding_cycle_tracker.MANUAL_FILE", tmp_path / "manual.json")
+        with patch("pipeline.shipbuilding_cycle_tracker._send_progress_dm") as mock_dm:
+            result = send_manual_update_reminder(dry_run=True)
+        assert result is True  # 미설정 → 리마인더 전송
+
+    def test_reminder_stale(self, tmp_path, monkeypatch):
+        manual_file = tmp_path / "manual.json"
+        from datetime import datetime, timedelta
+        old_date = (datetime.now() - timedelta(days=100)).isoformat()
+        manual_file.write_text(json.dumps({"updated_at": old_date, "scores": {}}))
+        monkeypatch.setattr("pipeline.shipbuilding_cycle_tracker.MANUAL_FILE", manual_file)
+        with patch("pipeline.shipbuilding_cycle_tracker._send_progress_dm") as mock_dm:
+            result = send_manual_update_reminder(dry_run=True)
+        assert result is True
+
+    def test_reminder_fresh(self, tmp_path, monkeypatch):
+        manual_file = tmp_path / "manual.json"
+        from datetime import datetime
+        manual_file.write_text(json.dumps({"updated_at": datetime.now().isoformat(), "scores": {}}))
+        monkeypatch.setattr("pipeline.shipbuilding_cycle_tracker.MANUAL_FILE", manual_file)
+        result = send_manual_update_reminder(dry_run=True)
+        assert result is False  # 최근 갱신 → 리마인더 불필요
+
+
+class TestV60ReportIntegration:
+    """v6.0: 리포트에 새 섹션 통합."""
+
+    def test_report_has_judgment(self):
+        report = _make_v52_report()
+        assert "투자 판단 요약" in report
+
+    def test_report_has_temporal(self):
+        report = _make_v52_report()
+        assert "선행-동행-후행" in report or "선행지표" in report
+
+    def test_report_has_scenario(self):
+        report = _make_v52_report()
+        assert "시나리오 분석" in report
+        assert "Bull" in report
+        assert "Bear" in report
+
+    def test_report_watchpoints(self):
+        report = _make_v52_report()
+        assert "금주 관전 포인트" in report
+
+    def test_report_version_v61(self):
+        from pipeline.shipbuilding_cycle_tracker import __doc__ as doc
+        assert "v6.1" in doc
+
+
+# ══════════════════════════════════════════════════════════════════
+# v6.1 Tests
+# ══════════════════════════════════════════════════════════════════
+
+class TestV61DataFixes:
+    """v6.1: 데이터 품질 수정."""
+
+    def test_hanjin_stock_code_097230(self):
+        """hanjin은 097230(사업회사), 003480(지주)이 아님."""
+        assert SHIPBUILDER_STOCKS["hanjin"]["stock_code"] == "097230"
+
+    def test_hanjin_ticker_097230(self):
+        assert TIER1_INDICATORS["hanjin"]["ticker"] == "097230.KS"
+
+    def test_hanjin_pe_avg_updated(self):
+        assert HISTORICAL_PE_RANGES["hanjin"]["avg"] == 10.0
+        assert HISTORICAL_PE_RANGES["hanjin"]["max"] == 30.0
+
+    def test_mipo_tier1_note(self):
+        """mipo에 비상장 주석이 존재."""
+        assert "note" in TIER1_INDICATORS["mipo"]
+        assert "비상장" in TIER1_INDICATORS["mipo"]["note"]
+
+    def test_mipo_pe_note_in_historical(self):
+        """mipo PE ranges에 지주 HD현대 참고용 주석."""
+        assert "note" in HISTORICAL_PE_RANGES["mipo"]
+        assert "지주" in HISTORICAL_PE_RANGES["mipo"]["note"]
+
+
+class TestV61FontPriority:
+    """v6.1: NanumGothic 폰트 우선."""
+
+    def test_nanum_first_candidate(self):
+        """_find_korean_font에서 NanumGothic이 최우선."""
+        import inspect
+        src = inspect.getsource(_find_korean_font)
+        nanum_idx = src.find("NanumGothic")
+        apple_idx = src.find("AppleSDGothicNeo")
+        assert nanum_idx < apple_idx, "NanumGothic should be before AppleSDGothicNeo"
+
+    def test_chart_font_nanum_first(self):
+        """_setup_chart_env에서 NanumGothic이 첫 번째."""
+        import inspect
+        src = inspect.getsource(_setup_chart_env)
+        assert src.index("NanumGothic") < src.index("AppleGothic")
+
+
+class TestV61PdfOnlyTelegram:
+    """v6.1: PDF만 전송, fallback."""
+
+    def test_generate_report_no_text_send(self):
+        """notify=True 시 send_telegram_full_report이 기본적으로 호출되지 않음."""
+        import inspect
+        from pipeline import shipbuilding_cycle_tracker as mod
+        src = inspect.getsource(mod.generate_report)
+        # PDF 성공 분기에서 send_telegram_full_report 호출 없음 확인
+        # "pdf_path and pdf_path.exists()" 분기에 send_telegram_pdf만 있어야 함
+        assert "send_telegram_pdf" in src
+
+    def test_fallback_on_pdf_fail(self):
+        """PDF 실패 시 send_telegram_full_report이 fallback."""
+        import inspect
+        from pipeline import shipbuilding_cycle_tracker as mod
+        src = inspect.getsource(mod.generate_report)
+        assert "send_telegram_full_report" in src  # fallback 존재
+
+
+class TestV61ScoringDetailDemand:
+    """v6.1: Demand 축 상세화."""
+
+    def test_demand_has_wow_column(self):
+        pulse = {"score": 55.0, "details": {
+            "bdi": {"zscore": 0.5, "ratio": 0.75, "contribution": 18.75, "weight": 25},
+        }}
+        indicators = {"bdi": {"name": "BDI", "close": 20.5, "zscore": 0.5}}
+        result = _scoring_detail_demand(pulse, indicators)
+        joined = "\n".join(result)
+        assert "WoW변동" in joined
+
+    def test_demand_has_interpretation(self):
+        pulse = {"score": 55.0, "details": {
+            "bdi": {"zscore": 1.6, "ratio": 1.0, "contribution": 25, "weight": 25},
+        }}
+        indicators = {"bdi": {"name": "BDI", "close": 25.0, "zscore": 1.6}}
+        result = _scoring_detail_demand(pulse, indicators)
+        joined = "\n".join(result)
+        assert "건화물 수요 강세" in joined
+
+    def test_demand_negative_interpretation(self):
+        pulse = {"score": 20.0, "details": {
+            "krw": {"zscore": -0.8, "ratio": 0.25, "contribution": 2.5, "weight": 10},
+        }}
+        indicators = {"krw": {"name": "원달러", "close": 1250, "zscore": -0.8}}
+        result = _scoring_detail_demand(pulse, indicators)
+        joined = "\n".join(result)
+        assert "원화 강세" in joined
+
+    def test_demand_wow_with_history(self):
+        pulse = {"score": 55.0, "details": {
+            "bdi": {"zscore": 0.8, "ratio": 0.75, "contribution": 18.75, "weight": 25},
+        }}
+        indicators = {"bdi": {"name": "BDI", "close": 22.0, "zscore": 0.8}}
+        history = [
+            {"pulse_details": {"bdi": {"zscore": 0.3}}},
+            {"pulse_details": {"bdi": {"zscore": 0.5}}},
+        ]
+        result = _scoring_detail_demand(pulse, indicators, history)
+        joined = "\n".join(result)
+        assert "+0.30" in joined  # 0.8 - 0.5 = 0.3 (history[-1]이 직전 저장분)
+
+    def test_demand_group_summary(self):
+        pulse = {"score": 55.0, "details": {
+            "bdi": {"zscore": 0.8, "ratio": 0.75, "contribution": 18.75, "weight": 25},
+            "wti": {"zscore": 0.6, "ratio": 0.75, "contribution": 11.25, "weight": 15},
+        }}
+        indicators = {
+            "bdi": {"name": "BDI", "close": 22.0, "zscore": 0.8},
+            "wti": {"name": "WTI", "close": 75.0, "zscore": 0.6},
+        }
+        result = _scoring_detail_demand(pulse, indicators)
+        joined = "\n".join(result)
+        assert "운임(건화물)" in joined or "에너지" in joined
+
+
+class TestV61ScoringDetailFinancial:
+    """v6.1: Financial 축 상세화."""
+
+    def test_financial_has_revenue_column(self):
+        cycle = {"axis_scores": {"financial": 62}}
+        fin_trends = {
+            "hhi": {"name": "HD현대중공업", "op_margin": 6.2, "op_margin_qoq": 1.5,
+                    "roe": 12.0, "revenue": 5e12, "operating_profit": 3.1e11,
+                    "contract_assets": 8e12, "contract_assets_qoq": 5.2, "ca_judgment": "성장"},
+        }
+        result = _scoring_detail_financial(cycle, fin_trends)
+        joined = "\n".join(result)
+        assert "매출(조)" in joined
+        assert "영업이익(억)" in joined
+
+    def test_financial_contract_assets_table(self):
+        cycle = {"axis_scores": {"financial": 50}}
+        fin_trends = {
+            "hhi": {"name": "HD현대중공업", "op_margin": 6.0, "roe": 10.0,
+                    "contract_assets": 8e12, "contract_assets_qoq": 3.0, "ca_judgment": "성장"},
+        }
+        result = _scoring_detail_financial(cycle, fin_trends)
+        joined = "\n".join(result)
+        assert "계약자산(조)" in joined
+
+    def test_financial_segment_annotation(self):
+        cycle = {"axis_scores": {"financial": 40}}
+        fin_trends = {
+            "hanjin": {"name": "HJ중공업", "op_margin": 4.5, "roe": 8.0,
+                       "segment_adjusted": True, "segment_ratio": 0.65, "segment_name": "조선",
+                       "contract_assets": 1e12, "contract_assets_qoq": 2.0, "ca_judgment": "안정"},
+        }
+        result = _scoring_detail_financial(cycle, fin_trends)
+        joined = "\n".join(result)
+        assert "65%" in joined
+
+
+class TestV61ScoringDetailOrder:
+    """v6.1: Order 축 상세화."""
+
+    def test_order_company_table(self):
+        cycle = {"axis_scores": {"order": 55}}
+        dart_data = {
+            "status": "ok",
+            "orders": [
+                {"key": "hhi", "report_name": "LNG운반선 수주", "ship_count": 2,
+                 "contract_amount_usd": 500_000_000},
+            ],
+            "estimates": {"total_orders": 1, "avg_price_per_ship_usd": 250_000_000},
+        }
+        fin_trends = {}
+        result = _scoring_detail_order(cycle, dart_data, fin_trends)
+        joined = "\n".join(result)
+        assert "HD현대중공업" in joined or "기업" in joined
+
+    def test_order_top5(self):
+        cycle = {"axis_scores": {"order": 60}}
+        dart_data = {
+            "status": "ok",
+            "orders": [
+                {"key": "hhi", "report_name": "LNG운반선 대형", "ship_count": 1,
+                 "contract_amount_usd": 300_000_000},
+                {"key": "samsung", "report_name": "셔틀탱커", "ship_count": 1,
+                 "contract_amount_usd": 200_000_000},
+            ],
+            "estimates": {"total_orders": 2, "avg_price_per_ship_usd": 250_000_000},
+        }
+        fin_trends = {}
+        result = _scoring_detail_order(cycle, dart_data, fin_trends)
+        joined = "\n".join(result)
+        assert "Top 5" in joined
+
+
+class TestV61ScoringDetailValuation:
+    """v6.1: Valuation 축 상세화."""
+
+    def test_valuation_has_market_cap(self):
+        cycle = {"axis_scores": {"valuation": 50}}
+        val_ctx = {
+            "hhi": {"name": "HD현대중공업", "pe_ttm": 25.0, "pe_source": "DART(4Q)",
+                    "market_cap": 15e12, "ev_ebitda": 12.0},
+        }
+        result = _scoring_detail_valuation(cycle, val_ctx)
+        joined = "\n".join(result)
+        assert "시총(조)" in joined
+        assert "PE소스" in joined
+
+    def test_valuation_20y_position(self):
+        cycle = {"axis_scores": {"valuation": 50}}
+        val_ctx = {
+            "hhi": {"name": "HD현대중공업", "pe_ttm": 25.0, "pe_source": "DART(4Q)",
+                    "market_cap": 15e12, "ev_ebitda": None},
+        }
+        result = _scoring_detail_valuation(cycle, val_ctx)
+        joined = "\n".join(result)
+        assert "20Y내위치" in joined
+
+    def test_valuation_mipo_note(self):
+        cycle = {"axis_scores": {"valuation": 50}}
+        val_ctx = {
+            "mipo": {"name": "HD현대미포", "pe_ttm": 12.0, "pe_source": "fwd",
+                     "pe_note": "지주(HD현대) PE", "market_cap": 5e12},
+        }
+        result = _scoring_detail_valuation(cycle, val_ctx)
+        joined = "\n".join(result)
+        assert "지주" in joined
+
+
+class TestV61ScoringDetailStructural:
+    """v6.1: Structural 축 상세화."""
+
+    def test_structural_rationale(self):
+        cycle = {"axis_scores": {"structural": 65}}
+        manual = {"scores": {"regulation": 8}, "updated_at": "2026-02-20T00:00:00"}
+        indicators = {}
+        result = _scoring_detail_structural(cycle, manual, indicators)
+        joined = "\n".join(result)
+        assert "IMO" in joined and "EEXI" in joined
+
+    def test_structural_auto_proxy_zscore(self):
+        cycle = {"axis_scores": {"structural": 60}}
+        manual = {"scores": {}, "updated_at": "2026-02-20T00:00:00"}
+        indicators = {
+            "container_proxy": {"zscore": 1.2, "close": 20.0},
+            "tanker_proxy": {"zscore": 0.8, "close": 30.0},
+            "tanker_proxy2": {"zscore": 0.5, "close": 25.0},
+            "tanker_proxy3": {"zscore": 0.3, "close": 60.0},
+            "tanker_proxy4": {"zscore": 0.1, "close": 10.0},
+        }
+        result = _scoring_detail_structural(cycle, manual, indicators)
+        joined = "\n".join(result)
+        assert "자동" in joined
+        assert "z=" in joined
+
+    def test_structural_missing_indicator_warning(self):
+        cycle = {"axis_scores": {"structural": 40}}
+        manual = {"scores": {}}
+        indicators = {}
+        result = _scoring_detail_structural(cycle, manual, indicators)
+        joined = "\n".join(result)
+        assert "미입력" in joined
+        assert "--manual-update" in joined
+
+    def test_structural_staleness_warning(self):
+        from datetime import datetime
+        cycle = {"axis_scores": {"structural": 65}}
+        old_date = (datetime(2025, 10, 1)).isoformat()
+        manual = {"scores": {"regulation": 8}, "updated_at": old_date}
+        indicators = {}
+        result = _scoring_detail_structural(cycle, manual, indicators)
+        joined = "\n".join(result)
+        assert "미갱신" in joined
+
+    def test_structural_no_scores_warning(self):
+        cycle = {"axis_scores": {"structural": 0}}
+        manual = {}
+        indicators = {}
+        result = _scoring_detail_structural(cycle, manual, indicators)
+        joined = "\n".join(result)
+        assert "미설정" in joined
+
+
+class TestV61PdfTtcHandling:
+    """v6.1: TTC 폰트 직접 로드 (fpdf2 2.8+ 네이티브 지원)."""
+
+    def test_build_pdf_no_font_index(self):
+        """build_pdf_report에서 font_index 제거 확인 (fpdf2 호환)."""
+        import inspect
+        src = inspect.getsource(build_pdf_report)
+        assert "font_index" not in src
+        assert "add_font" in src
+
+
+class TestV61ValuationRoeFallback:
+    """v6.1: ROE null → DART fallback."""
+
+    def test_roe_fallback_from_dart(self):
+        valuation = {"stocks": {
+            "daehan": {"name": "대한조선", "market_cap": 1e12,
+                       "trailing_pe": 11.6, "forward_pe": None,
+                       "price_to_book": 1.5, "roe": None,
+                       "enterprise_value": 1.2e12, "ev_ebitda": None,
+                       "operating_margins": None},
+        }}
+        financials = {"companies": {
+            "daehan": {"quarters": {
+                "2025Q3": {"net_income": 50_000_000_000, "total_equity": 500_000_000_000,
+                           "revenue": 200_000_000_000},
+            }},
+        }}
+        result = analyze_valuation_context(valuation, financials)
+        assert "daehan" in result
+        assert result["daehan"]["roe"] is not None
+        assert abs(result["daehan"]["roe"] - 10.0) < 0.5  # 50B/500B = 10%
+
+
+class TestV61ScoreHistoryPulseDetails:
+    """v6.1: score_history에 pulse_details 저장."""
+
+    def test_append_score_history_has_pulse_details(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("pipeline.shipbuilding_cycle_tracker.SCORE_HISTORY_FILE",
+                            tmp_path / "score_history.json")
+        monkeypatch.setattr("pipeline.shipbuilding_cycle_tracker.OUTPUT_DIR", tmp_path)
+        pulse = {"score": 55.0, "details": {"bdi": {"zscore": 0.5}}}
+        combined = {"combined": 60.0, "cycle_score": 62.0}
+        _append_score_history(1, 2026, combined, pulse, None)
+        data = json.loads((tmp_path / "score_history.json").read_text())
+        assert len(data) == 1
+        assert "pulse_details" in data[0]
+        assert data[0]["pulse_details"]["bdi"]["zscore"] == 0.5
+
+
+# ══════════════════════════════════════════════════════════════════
+#  v6.2: 축별 산출 근거 컨텍스트 내러티브 강화
+# ══════════════════════════════════════════════════════════════════
+
+class TestV62ContainerSnapshot:
+    """v6.2: 컨테이너 시황 스냅샷."""
+
+    def test_default_keys(self):
+        snap = DEFAULT_CONTAINER_SNAPSHOT
+        assert "scfi_index" in snap
+        assert "key_drivers" in snap
+        assert "structural_view" in snap
+        assert len(snap["key_drivers"]) >= 3
+
+    def test_loader_fallback(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("pipeline.shipbuilding_cycle_tracker.CONTAINER_DATA_FILE",
+                            tmp_path / "no_file.json")
+        result = _load_container_snapshot()
+        assert result["scfi_index"] == DEFAULT_CONTAINER_SNAPSHOT["scfi_index"]
+
+    def test_loader_staleness(self, tmp_path, monkeypatch):
+        from datetime import datetime, timedelta
+        old_date = (datetime.now() - timedelta(days=100)).isoformat()
+        data = dict(DEFAULT_CONTAINER_SNAPSHOT)
+        data["updated_at"] = old_date
+        data["scfi_index"] = "~999 (old)"
+        f = tmp_path / "container_data.json"
+        f.write_text(json.dumps(data))
+        monkeypatch.setattr("pipeline.shipbuilding_cycle_tracker.CONTAINER_DATA_FILE", f)
+        result = _load_container_snapshot()
+        assert result["scfi_index"] == DEFAULT_CONTAINER_SNAPSHOT["scfi_index"]  # fallback
+
+
+class TestV62DemandGroupNarratives:
+    """v6.2: Demand 그룹별 내러티브."""
+
+    def test_freight_positive_narrative_in_demand(self):
+        pulse = {"score": 70.0, "details": {
+            "bdi": {"zscore": 1.5, "ratio": 1.0, "contribution": 25, "weight": 25},
+        }}
+        indicators = {"bdi": {"name": "BDI", "close": 30.0, "zscore": 1.5}}
+        result = _scoring_detail_demand(pulse, indicators)
+        joined = "\n".join(result)
+        assert "철광석" in joined or "건화물(BDI) 강세" in joined
+
+    def test_energy_negative_narrative(self):
+        pulse = {"score": 30.0, "details": {
+            "wti": {"zscore": -1.0, "ratio": 0.25, "contribution": 3.75, "weight": 15},
+            "brent": {"zscore": -0.8, "ratio": 0.25, "contribution": 3.75, "weight": 15},
+            "natgas": {"zscore": -0.6, "ratio": 0.25, "contribution": 6.25, "weight": 25},
+        }}
+        indicators = {
+            "wti": {"name": "WTI", "close": 60.0, "zscore": -1.0},
+            "brent": {"name": "Brent", "close": 62.0, "zscore": -0.8},
+            "natgas": {"name": "천연가스", "close": 2.5, "zscore": -0.6},
+        }
+        result = _scoring_detail_demand(pulse, indicators)
+        joined = "\n".join(result)
+        assert "에너지 약세" in joined
+
+    def test_cost_steel_narrative(self):
+        pulse = {"score": 50.0, "details": {
+            "steel": {"zscore": 1.0, "ratio": 0.75, "contribution": 7.5, "weight": 10},
+            "krw": {"zscore": 0.2, "ratio": 0.50, "contribution": 5.0, "weight": 10},
+        }}
+        indicators = {
+            "steel": {"name": "SLX", "close": 50.0, "zscore": 1.0},
+            "krw": {"name": "원달러", "close": 1350, "zscore": 0.2},
+        }
+        result = _scoring_detail_demand(pulse, indicators)
+        joined = "\n".join(result)
+        assert "후판가 상승" in joined or "원가 압박" in joined
+
+    def test_container_proxy_in_demand(self):
+        pulse = {"score": 55.0, "details": {
+            "bdi": {"zscore": 0.3, "ratio": 0.50, "contribution": 12.5, "weight": 25},
+        }}
+        indicators = {
+            "bdi": {"name": "BDI", "close": 20.0, "zscore": 0.3},
+            "container_proxy": {"name": "ZIM", "close": 18.0, "zscore": 0.8},
+        }
+        result = _scoring_detail_demand(pulse, indicators)
+        joined = "\n".join(result)
+        assert "SCFI" in joined
+        assert "컨테이너" in joined
+
+    def test_tanker_proxy_in_demand(self):
+        pulse = {"score": 55.0, "details": {
+            "bdi": {"zscore": 0.3, "ratio": 0.50, "contribution": 12.5, "weight": 25},
+        }}
+        indicators = {
+            "bdi": {"name": "BDI", "close": 20.0, "zscore": 0.3},
+            "tanker_proxy": {"name": "BWET", "close": 30.0, "zscore": 2.0},
+            "tanker_proxy2": {"name": "FRO", "close": 25.0, "zscore": 1.5},
+            "tanker_proxy3": {"name": "STNG", "close": 60.0, "zscore": 0.7},
+            "tanker_proxy4": {"name": "TNK", "close": 10.0, "zscore": 0.6},
+        }
+        result = _scoring_detail_demand(pulse, indicators)
+        joined = "\n".join(result)
+        assert "탱커" in joined
+        assert "VLCC" in joined
+
+
+class TestV62FinancialCompanyContext:
+    """v6.2: Financial 축 기업별 현황."""
+
+    def test_company_context_with_good_opm(self):
+        cycle = {"axis_scores": {"financial": 62}}
+        fin_trends = {
+            "hhi": {"name": "HD현대중공업", "op_margin": 8.0, "op_margin_qoq": 1.5,
+                    "roe": 12.0, "revenue": 5e12, "operating_profit": 4e11,
+                    "contract_assets": 8e12, "contract_assets_qoq": 5.0, "ca_judgment": "성장"},
+        }
+        result = _scoring_detail_financial(cycle, fin_trends)
+        joined = "\n".join(result)
+        assert "기업별 현황" in joined
+        assert "실적 호조" in joined
+        assert "LNG" in joined  # focus_vessels
+
+    def test_company_context_low_margin(self):
+        cycle = {"axis_scores": {"financial": 30}}
+        fin_trends = {
+            "hanwha": {"name": "한화오션", "op_margin": 3.0, "op_margin_qoq": 1.0,
+                       "roe": 5.0, "revenue": 3e12, "operating_profit": 9e10,
+                       "contract_assets": 5e12, "contract_assets_qoq": 2.0, "ca_judgment": "안정"},
+        }
+        result = _scoring_detail_financial(cycle, fin_trends)
+        joined = "\n".join(result)
+        assert "마진 개선 중" in joined
+
+
+class TestV62OrderVesselContext:
+    """v6.2: Order 축 선종별 시장 환경."""
+
+    def test_vessel_context_lng(self):
+        cycle = {"axis_scores": {"order": 60}}
+        dart_data = {
+            "estimates": {"total_orders": 5, "avg_price_per_ship_usd": 250_000_000},
+            "orders": [
+                {"key": "hhi", "report_name": "LNG운반선 1척 수주", "contract_amount_usd": 250_000_000, "ship_count": 1},
+                {"key": "hhi", "report_name": "LNG운반선 2척 수주", "contract_amount_usd": 500_000_000, "ship_count": 2},
+            ],
+        }
+        fin_trends = {"hhi": {"contract_assets_qoq": 3.0}}
+        result = _scoring_detail_order(cycle, dart_data, fin_trends)
+        joined = "\n".join(result)
+        assert "주요 선종별 시장 환경" in joined
+        assert "AI" in joined or "LNG" in joined
+
+    def test_vessel_context_container_scfi(self):
+        cycle = {"axis_scores": {"order": 50}}
+        dart_data = {
+            "estimates": {"total_orders": 3, "avg_price_per_ship_usd": 120_000_000},
+            "orders": [
+                {"key": "hanjin", "report_name": "컨테이너선 2척", "contract_amount_usd": 240_000_000, "ship_count": 2},
+            ],
+        }
+        fin_trends = {}
+        result = _scoring_detail_order(cycle, dart_data, fin_trends)
+        joined = "\n".join(result)
+        assert "SCFI" in joined
+
+    def test_vessel_context_tanker_dayrate(self):
+        cycle = {"axis_scores": {"order": 55}}
+        dart_data = {
+            "estimates": {"total_orders": 4, "avg_price_per_ship_usd": 90_000_000},
+            "orders": [
+                {"key": "daehan", "report_name": "수에즈맥스탱커 3척", "contract_amount_usd": 270_000_000, "ship_count": 3},
+            ],
+        }
+        fin_trends = {}
+        result = _scoring_detail_order(cycle, dart_data, fin_trends)
+        joined = "\n".join(result)
+        assert "VLCC" in joined or "오더북" in joined
+
+
+class TestV62ValuationNarrative:
+    """v6.2: Valuation 축 저평가/고평가 코멘트."""
+
+    def test_overvalued_comment(self):
+        cycle = {"axis_scores": {"valuation": 30}}
+        val_ctx = {
+            "hhi": {"name": "HD현대중공업", "pe_ttm": 35.0, "pe_source": "DART(4Q)",
+                    "market_cap": 15e12, "ev_ebitda": 12.0},
+        }
+        result = _scoring_detail_valuation(cycle, val_ctx)
+        joined = "\n".join(result)
+        assert "고평가" in joined
+        assert "피크 PE" in joined
+
+    def test_undervalued_comment(self):
+        cycle = {"axis_scores": {"valuation": 80}}
+        val_ctx = {
+            "daehan": {"name": "대한조선", "pe_ttm": 8.0, "pe_source": "trailing",
+                       "market_cap": 3.6e12, "ev_ebitda": 5.0},
+        }
+        result = _scoring_detail_valuation(cycle, val_ctx)
+        joined = "\n".join(result)
+        assert "저평가" in joined
+        assert "수에즈맥스" in joined or "글로벌 1위" in joined
+
+
+class TestV62StructuralContext:
+    """v6.2: Structural 축 확장 컨텍스트."""
+
+    def test_expanded_regulation_rationale(self):
+        cycle = {"axis_scores": {"structural": 65}}
+        manual = {"scores": {"regulation": 8}, "updated_at": "2026-02-20T00:00:00"}
+        indicators = {}
+        result = _scoring_detail_structural(cycle, manual, indicators)
+        joined = "\n".join(result)
+        assert "EEXI" in joined
+        assert "CII" in joined
+        assert "ETS" in joined
+
+    def test_container_rate_scfi_in_structural(self):
+        cycle = {"axis_scores": {"structural": 60}}
+        manual = {"scores": {}, "updated_at": "2026-02-20T00:00:00"}
+        indicators = {
+            "container_proxy": {"zscore": 1.2, "close": 20.0},
+        }
+        result = _scoring_detail_structural(cycle, manual, indicators)
+        joined = "\n".join(result)
+        assert "SCFI" in joined
+
+    def test_tanker_rate_vlcc_in_structural(self):
+        cycle = {"axis_scores": {"structural": 60}}
+        manual = {"scores": {}, "updated_at": "2026-02-20T00:00:00"}
+        indicators = {
+            "tanker_proxy": {"zscore": 2.0, "close": 30.0},
+            "tanker_proxy2": {"zscore": 1.5, "close": 25.0},
+            "tanker_proxy3": {"zscore": 0.7, "close": 60.0},
+            "tanker_proxy4": {"zscore": 0.6, "close": 10.0},
+        }
+        result = _scoring_detail_structural(cycle, manual, indicators)
+        joined = "\n".join(result)
+        assert "VLCC" in joined

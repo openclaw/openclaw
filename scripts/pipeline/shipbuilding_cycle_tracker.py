@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
-"""shipbuilding_cycle_tracker.py — 조선업 사이클 분석 파이프라인 v5.5
+"""shipbuilding_cycle_tracker.py — 조선업 사이클 분석 파이프라인 v6.2
 
 3단계 슈퍼사이클 + 피크아웃 3축 + 다올 방법론 기반.
-v5.5: 스코어링 투명화, KSOE→한진 교체, 20Y PE, 수주 시계열.
+v6.2: 축별 산출 근거 컨텍스트 내러티브 강화 — 숫자→"왜(Why)" 해설 추가.
+      컨테이너 시황 스냅샷, 수요 그룹별 내러티브, 기업/선종/밸류에이션 코멘트.
+v6.1: 텔레그램 PDF-only 전송, NanumGothic 폰트, HJ중공업 종목코드 수정(097230),
+      축별 산출 근거 5축 상세 강화, ROE DART fallback.
+v6.0: pykrx/FDR/OpenDartReader 데이터계층, 대한조선 추가, 4-pass 선종분류,
+      투자판단 요약/시나리오/선행-후행 프레임워크, DM 개선.
 5축 스코어링: Demand 15% + Financial/Order/Valuation/Structural 85%.
 
 Usage:
@@ -11,6 +16,7 @@ Usage:
     python3 pipeline/shipbuilding_cycle_tracker.py --manual-update regulation=8 vessel_age=7
     python3 pipeline/shipbuilding_cycle_tracker.py --status
     python3 pipeline/shipbuilding_cycle_tracker.py --setup
+    python3 pipeline/shipbuilding_cycle_tracker.py --remind
 """
 from __future__ import annotations
 
@@ -22,7 +28,7 @@ import re
 import sys
 import time
 import zipfile
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +38,30 @@ SCRIPTS_DIR = SCRIPT_DIR.parent
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 from shared.log import make_logger  # noqa: E402
+
+# ── 선택적 라이브러리 (graceful degradation) ──────────────────────
+try:
+    from pykrx import stock as krx_stock
+    HAS_PYKRX = True
+except ImportError:
+    HAS_PYKRX = False
+
+try:
+    import FinanceDataReader as fdr
+    HAS_FDR = True
+except ImportError:
+    HAS_FDR = False
+
+try:
+    import OpenDartReader as _OpenDartReader
+    HAS_OPENDART = True
+except ImportError:
+    HAS_OPENDART = False
+
+# KR 종목 6자리 코드 (pykrx/FDR용, .KS suffix 불필요)
+_KR_TICKERS = {"hhi", "mipo", "engine", "hanwha", "samsung", "etf", "hanjin", "daehan"}
+
+KST = timezone(timedelta(hours=9))
 
 # ── 디렉토리 & 상수 ─────────────────────────────────────────────
 OUTPUT_DIR = SCRIPTS_DIR.parent / "memory" / "shipbuilding-indicators"
@@ -67,6 +97,7 @@ ORDER_HISTORY_FILE = OUTPUT_DIR / "order_history.json"
 PRICE_HISTORY_FILE = OUTPUT_DIR / "price_history.json"
 
 DART_API_KEY_FILE = Path.home() / ".openclaw" / "dart_api_key"
+TANKER_DATA_FILE = OUTPUT_DIR / "tanker_data.json"
 BOT_TOKEN = "8554125313:AAGC5Zzb9nCbPYgmOVqs3pVn-qzIA2oOtkI"
 GROUP_CHAT_ID = "-1003076685086"
 RON_TOPIC_ID = 30413
@@ -87,14 +118,18 @@ TIER1_INDICATORS = {
     "container_proxy": {"ticker": "ZIM",  "name": "ZIM (컨테이너운임)",   "category": "freight"},
     "tanker_proxy":    {"ticker": "BWET", "name": "BWET (탱커운임ETF)",   "category": "freight"},
     "tanker_proxy2":   {"ticker": "FRO",  "name": "FRO (탱커운임주)",     "category": "freight"},
+    "tanker_proxy3":   {"ticker": "STNG", "name": "STNG (탱커운임주2)",   "category": "freight"},
+    "tanker_proxy4":   {"ticker": "TNK",  "name": "TNK (탱커운임주3)",    "category": "freight"},
     # 참고용 (score 미반영 — 주가는 결과물). ksoe 제거 (지주회사 — HHI+Mipo 연결 중복)
     "hhi":      {"ticker": "329180.KS", "name": "HD현대중공업",          "category": "stock"},
-    "mipo":     {"ticker": "267250.KS", "name": "HD현대미포",            "category": "stock"},
+    "mipo":     {"ticker": "267250.KS", "name": "HD현대미포",            "category": "stock",
+                  "note": "비상장(2023 완전자회사). 267250=지주 HD현대. DART 재무는 010620(사업회사)으로 수집"},
     "engine":   {"ticker": "071970.KS", "name": "HD현대마린엔진",        "category": "stock"},
     "hanwha":   {"ticker": "042660.KS", "name": "한화오션",              "category": "stock"},
     "samsung":  {"ticker": "010140.KS", "name": "삼성중공업",            "category": "stock"},
     "etf":      {"ticker": "466920.KS", "name": "조선Top3+ ETF",        "category": "stock"},
-    "hanjin":   {"ticker": "003480.KS", "name": "HJ중공업",              "category": "stock"},
+    "hanjin":   {"ticker": "097230.KS", "name": "HJ중공업",              "category": "stock"},
+    "daehan":   {"ticker": "439260.KS", "name": "대한조선",              "category": "stock"},
 }
 
 # ── 장기 시계열 (월 1회, period="max") ────────────────────────────
@@ -119,10 +154,10 @@ SHIPBUILDER_STOCKS = {
     "mipo":    {"stock_code": "010620", "name": "HD현대미포", "tier": "major"},
     "hanwha":  {"stock_code": "042660", "name": "한화오션", "tier": "major"},
     "samsung": {"stock_code": "010140", "name": "삼성중공업", "tier": "major"},
-    "hanjin":  {"stock_code": "003480", "name": "HJ중공업", "tier": "major",
-                "segment": {"name": "조선", "revenue_ratio": 0.65, "note": "건설 겸업. 2024 사업보고서 기준 조선 ~65%, 건설 ~35%"}},
-    # 중소형사
-    "daehan":  {"stock_code": "", "name": "대한조선", "tier": "mid"},  # 2025 IPO 예정, 비상장
+    "hanjin":  {"stock_code": "097230", "name": "HJ중공업", "tier": "major",
+                "segment": {"name": "조선", "revenue_ratio": 0.65, "note": "097230=사업회사(舊한진중공업). 건설 겸업. 2024 사업보고서 기준 조선 ~65%, 건설 ~35%"}},
+    "daehan":  {"stock_code": "439260", "name": "대한조선", "tier": "major",
+                "segment": {"name": "조선", "revenue_ratio": 1.0, "note": "조선 전문. 방산 없음"}},  # 2025.08 KOSPI 상장
     # ksoe(HD한국조선해양, 009540) 제거 — 지주회사로 HHI+Mipo와 연결실적 중복
     # 케이조선 (067250): 2014 상장폐지, 비상장 사기업 → DART 데이터 접근 불가 → 제외
 }
@@ -133,7 +168,68 @@ SHIP_TYPE_KEYWORDS: dict[str, str] = {
     "FPSO": "FPSO", "해양": "해양플랜트", "잠수함": "잠수함",
     "호위함": "호위함", "구축함": "구축함", "상륙함": "상륙함",
     "PC선": "PC선", "암모니아": "암모니아운반선", "메탄올": "메탄올운반선",
+    # v6.0 확장 (미분류 39% → ~10% 해소)
+    "원유운반선": "VLCC", "crude": "VLCC", "crude oil": "VLCC",
+    "석유제품": "PC선", "product carrier": "PC선", "product tanker": "PC선",
+    "가스운반선": "LNG운반선",
+    "Suezmax": "탱커", "수에즈맥스": "탱커", "suezmax": "탱커",
+    "Aframax": "탱커", "아프라막스": "탱커", "aframax": "탱커",
+    "MR탱커": "탱커", "MR Tanker": "탱커", "셔틀탱커": "탱커", "shuttle tanker": "탱커",
+    "LPG": "LPG운반선",
 }
+
+# ── 다단계 선종 분류 보조 딕셔너리 ─────────────────────────────────
+CLIENT_VESSEL_MAP: dict[str, str] = {
+    "Qatar Energy": "LNG운반선", "QatarEnergy": "LNG운반선",
+    "Frontline": "탱커", "International Seaways": "탱커",
+    "Nordic American": "탱커", "NAT": "탱커",
+    "Scorpio": "탱커", "Scorpio Tankers": "탱커",
+    "Shell": "LNG운반선", "TotalEnergies": "LNG운반선",
+    "Evergreen": "컨테이너선", "CMA CGM": "컨테이너선",
+    "Maersk": "컨테이너선", "MSC": "컨테이너선",
+    "Maran Gas": "LNG운반선", "Knutsen": "셔틀탱커",
+    "Petrobras": "FPSO", "PIL": "컨테이너선",
+    "Stena Bulk": "탱커",
+}
+
+COMPANY_DEFAULT_VESSEL: dict[str, str] = {
+    "daehan": "탱커", "samsung": "LNG운반선",
+    "hanwha": "LNG운반선", "hhi": "LNG운반선",
+    "mipo": "PC선", "hanjin": "컨테이너선",
+}
+
+
+def _classify_vessel_type(text: str, order: dict) -> str:
+    """4-pass 선종 분류: 키워드 → 발주처 → 금액 → 회사 전문분야."""
+    # Pass 1: 키워드 매칭 (확장된 SHIP_TYPE_KEYWORDS)
+    for keyword, ship_type in SHIP_TYPE_KEYWORDS.items():
+        if keyword in text:
+            return ship_type
+
+    # Pass 2: 발주처(client) 기반 — 텍스트 또는 order dict의 client 필드
+    order_client = (order.get("client") or "").lower()
+    for client_pattern, ship_type in CLIENT_VESSEL_MAP.items():
+        cp_lower = client_pattern.lower()
+        if cp_lower in text.lower() or cp_lower in order_client:
+            return ship_type
+
+    # Pass 3: 금액 기반 추정
+    usd = order.get("contract_amount_usd", 0)
+    if usd > 0:
+        if usd >= 200_000_000:  # $200M+ → LNG 또는 VLCC
+            company_key = order.get("key", "")
+            default = COMPANY_DEFAULT_VESSEL.get(company_key, "")
+            if default in ("LNG운반선", "VLCC"):
+                return default
+            return "LNG운반선"  # 고가는 대부분 LNG
+        if 100_000_000 <= usd < 200_000_000:  # $100-200M → 탱커/컨
+            return "탱커"
+        if usd < 50_000_000:  # <$50M → MR/벌크
+            return "벌크선"
+
+    # Pass 4: 회사 주력 선종 fallback
+    company_key = order.get("key", "")
+    return COMPANY_DEFAULT_VESSEL.get(company_key, "미분류")
 
 # ── v2 Scoring (5축) ──────────────────────────────────────────────
 CYCLE_SCORE_WEIGHTS: dict[str, int] = {
@@ -171,10 +267,13 @@ HISTORICAL_PE_RANGES: dict[str, dict[str, Any]] = {
     # 20Y 기준 (2005~2025). 조선업 특성상 적자 전환 빈번→유효 PE 기간만 사용
     # 피크(2007-08): PE 25~60x, 저점(2015-17): 적자 또는 200x+
     "hhi":     {"avg": 18.0, "min": 7.0, "max": 55.0, "peak_range": "25~55 (2007-08)", "trough": "적자 (2015-16)"},
-    "mipo":    {"avg": 15.0, "min": 5.0, "max": 40.0, "peak_range": "20~40 (2007-08)", "trough": "적자 (2014-16)"},
+    "mipo":    {"avg": 15.0, "min": 5.0, "max": 40.0, "peak_range": "20~40 (2007-08)", "trough": "적자 (2014-16)",
+                "note": "PE는 HD현대(지주) 267250 기준. 미포(010620)는 비상장 — 참고용"},
     "hanwha":  {"avg": 17.0, "min": 6.0, "max": 50.0, "peak_range": "25~50 (2007-08)", "trough": "적자 (2015-19)"},
     "samsung": {"avg": 14.0, "min": 5.0, "max": 45.0, "peak_range": "20~45 (2007-08)", "trough": "적자 (2015-19)"},
-    "hanjin":  {"avg": 12.0, "min": 4.0, "max": 35.0, "peak_range": "15~35 (2007-08)", "trough": "적자 (2016-19)"},  # 건설 겸업 — 연결 PE 참고용
+    "hanjin":  {"avg": 10.0, "min": 4.0, "max": 30.0, "peak_range": "12~30 (추정, 지주→사업회사 전환)", "trough": "적자 (2016-19)"},  # 097230 사업회사 기준
+    "daehan":  {"avg": 12.0, "min": 5.0, "max": 30.0, "peak_range": "N/A (IPO 2025.08)", "trough": "N/A (신규 상장)",
+                "note": "IPO 후 6개월. 현재 PE ~11.6x. 중소형 조선 평균 기반"},
 }
 
 PEAKOUT_THRESHOLDS: dict[str, dict[str, Any]] = {
@@ -205,17 +304,27 @@ SUPERCYCLE_LABELS = {
 VESSEL_DRIVERS: dict[str, dict[str, Any]] = {
     "LNG운반선": {
         "drivers": ["AI→데이터센터→전력수요→LNG", "탄소중립 전환 연료", "카타르 NFE 확장",
-                     "북미 LNG 프로젝트 FID 가속 (최광식: 2026년 ~100척 발주 전망)"],
+                     "북미 LNG 프로젝트 FID 가속 (최광식: 2026년 ~100척 발주 전망)",
+                     "엑슨모빌 모잠비크/Golden Pass/PNG 20-30척 발주 예정(Q3 2026 협의, 승도리 #2693)"],
+        "pipeline": {
+            "qatar_nfe": {"ships": "60+척", "period": "2025-2028", "note": "카타르 NFE 확장분"},
+            "exxon_multi": {"ships": "20-30척", "period": "Q3 2026 협의 시작", "note": "모잠비크 Rovuma + Golden Pass + PNG"},
+            "us_lng_misc": {"ships": "~40척", "period": "2026-2027 FID", "note": "Calcasieu Pass, Driftwood 등"},
+            "total": "~130척 (확정 미발주 파이프라인)",
+            "source": "승도리 #2693, 최광식(다올), 업계 추정",
+        },
         "indicators": ["natgas"],
         "cycle_stage": "1기 (Pre-Supercycle)",
-        "source": "t.me/deferred_gratification/1540",
+        "source": "t.me/deferred_gratification/1540, #2693",
     },
     "탱커": {
         "drivers": ["EEXI/CII 규제→노후 탱커 교체", "선령 15년↑ 51%", "톤마일 증가(우회항로)",
-                     "구조적 국면 진입 (최광식: 운임 상승은 사이클이 아닌 구조적 변화)"],
+                     "구조적 국면 진입 (최광식: 운임 상승은 사이클이 아닌 구조적 변화)",
+                     "섀도우 플릿 1,100+척(20%) 제재→실질 선복 감소",
+                     "중고선=신조선 가격→발주 경제성 극대화 (승도리 #2777)"],
         "indicators": ["wti", "brent", "tanker_proxy", "tanker_proxy2"],
         "cycle_stage": "2기 전환 신호 (Real Supercycle)",
-        "source": "t.me/deferred_gratification/959",
+        "source": "t.me/deferred_gratification/959, #2754, #2777",
     },
     "컨테이너선": {
         "drivers": ["친환경 엔진 교체", "홍해 우회→선복 부족", "얼라이언스 재편"],
@@ -237,11 +346,49 @@ VESSEL_DRIVERS: dict[str, dict[str, Any]] = {
     },
     "방산(해군)": {
         "drivers": ["미-중 해양패권 경쟁", "민주진영 건조=한국+일본만",
-                     "K-방산 수출", "MASGA (Make American Shipbuilding Great Again) — 한미 조선 협력"],
+                     "K-방산 수출", "MASGA (Make American Shipbuilding Great Again) — 한미 조선 협력",
+                     "미국 Bridge Strategy→한국 야드 초기 건조 위탁 가능 (승도리 #2692)",
+                     "미국 관세 면제 전략재: 조선업=전략적 필수재·대체 불가 (승도리 #2779)"],
         "indicators": [],
         "cycle_stage": "구조적 (지정학)",
-        "source": "t.me/deferred_gratification/1540",
+        "source": "t.me/deferred_gratification/1540, #2692, #2779",
     },
+}
+
+# ── 수요 그룹별 내러티브 (z-score 방향에 따라 선택) ──────────────
+DEMAND_GROUP_NARRATIVES: dict[str, dict[str, str]] = {
+    "Freight.pos": (
+        "건화물(BDI) 강세: 철광석·곡물 해상운송 수요 확대. "
+        "중국 인프라 투자 기대 + 계절적 수요 증가. 벌크선 발주 자극 요인."
+    ),
+    "Freight.neg": (
+        "건화물(BDI) 약세: 중국 부동산 둔화→철광석 수요 감소, 곡물 비수기. "
+        "선복 과잉 우려 시 벌크선 발주 이연 가능."
+    ),
+    "Energy.pos": (
+        "에너지 강세: OPEC+ 감산·중동 지정학 리스크→유가 지지. "
+        "AI→데이터센터→전력수요→LNG 구조적 확대. 에너지선(탱커·LNG) 발주 촉진."
+    ),
+    "Energy.neg": (
+        "에너지 약세: 글로벌 경기 둔화 우려, OPEC+ 증산 가능성, 재고 확대. "
+        "유가 하락 장기화 시 해양플랜트·탱커 발주 지연 가능."
+    ),
+    "Cost.steel.pos": (
+        "후판가 상승: 중국 조강 감산→공급 감소, 인프라 투자 기대, 원재료비↑. "
+        "**조선사 원가 압박** — 마진 축소 요인이나 선가 전가 가능 시 중립."
+    ),
+    "Cost.steel.neg": (
+        "후판가 하락: 부동산 침체→철강 수요↓, 조강 과잉, 재고↑. "
+        "**마진 개선 요인** — 원재료비 절감이 조선사 수익성에 긍정적."
+    ),
+    "Cost.krw.pos": (
+        "원화 약세: 연준 긴축·금리차 확대→자본 유출. "
+        "**수출 경쟁력↑** — 달러 수주 조선사의 원화 환산 매출·이익 증가."
+    ),
+    "Cost.krw.neg": (
+        "원화 강세: 연준 인하 기대·외국인 투자 유입. "
+        "**마진 축소 요인** — 달러 수주 → 원화 환산 시 매출 감소."
+    ),
 }
 
 # ── 경쟁국 분석 데이터 ─────────────────────────────────────────
@@ -440,6 +587,42 @@ INDUSTRY_INTRO: dict[str, Any] = {
         {"stage": "3기 Commodity Supercycle", "period": "2기+원자재", "driver": "원자재 수요 폭발 + 선박 교체"},
     ],
     "historical_ref": "2003-2007 슈퍼사이클: 현대미포 4년간 50배 수익",
+    "historical_pattern": {
+        "title": "2003-07 슈퍼사이클 vs 현재: 선종 전환 패턴",
+        "then": (
+            "2003-07: 초기 LNG·컨테이너 선도 → 중기 탱커·벌커 주인공 전환. "
+            "중국 WTO 가입(2001)→ 원자재 해상운송 폭증 → 탱커·벌커가 사이클의 정점을 만듦. "
+            "현대미포(탱커/벌커 특화) 4년간 주가 50배."
+        ),
+        "now": (
+            "2021-현재: 1기 LNG·컨테이너 선도(친환경 교체) → 2기 탱커·벌커 전환 시작. "
+            "탱커 선령 15년↑ 51%, 오더북/함대비 15.7%(역사적 저점). "
+            "EEXI/CII 2027 본격 시행 시 강제 교체 → 탱커가 2기 주인공. "
+            "대한조선(수에즈맥스 1위)+HD현대미포(MR탱커)가 주요 수혜."
+        ),
+        "implication": (
+            "핵심: LNG→탱커 순서는 두 사이클 모두 동일. "
+            "1기에서 2기로 넘어가는 전환점(탱커/벌커 비중 역전)이 진정한 슈퍼사이클의 시작. "
+            "현재 1기 후반~2기 초입으로, 탱커 비중 증가 모니터링이 사이클 판단의 핵심."
+        ),
+    },
+    "supply_shortage_signals": {
+        "secondhand_parity": (
+            "5년차 중고 탱커 가격 = 신조 가격 (승도리 #2777). "
+            "중고선 프리미엄은 극심한 공급 부족의 가장 직접적 신호. "
+            "발주 안 하면 비합리적인 가격 구간 진입."
+        ),
+        "orderbook_to_fleet": (
+            "탱커 오더북/함대비 15.7% — 역사적 저점 (과거 평균 30~40%). "
+            "컨테이너 22.5%는 높으나 환경규제 교체분 고려 시 적정."
+        ),
+        "yard_capacity_vs_demand": (
+            "\"전세계 조선 캐파는 필요한 수요의 1/3도 되지 않는다\" (김봉수 교수). "
+            "글로벌 캐파 ~45M CGT 대비 연간 교체 필요량 ~80M CGT. "
+            "수주잔고/캐파 비율 2.5~3년분 = 풀 가동 상태."
+        ),
+        "source": "승도리 #2777, #2787, 김봉수 교수(KAIST)",
+    },
     "source": "김봉수 교수(KAIST) + 승도리(@deferred_gratification)",
 }
 
@@ -457,7 +640,11 @@ PEAKOUT_FRAMEWORK: dict[str, dict[str, str]] = {
         "description": "수주잔고 유지 여부가 핵심 (절대 수주량이 아닌 잔고)",
         "key_variable": "EEXI/CII/ETS 규제 존속 확인",
         "risk": "최대 리스크: 중국 캐파 급속 증설",
-        "source": "승도리 #959",
+        "leading_indicator": (
+            "부품사 백로그: 한국카본(LNG 화물창 단열재) 등 핵심 부품사 백로그 1년 연장 "
+            "= 조선소 수주 호황 연장 신호. 부품사 백로그는 조선소 수주의 6~12개월 선행지표"
+        ),
+        "source": "승도리 #959, #2772",
     },
     "선가": {
         "title": "선가 피크아웃",
@@ -500,24 +687,21 @@ MAJOR_PROFILES: dict[str, dict[str, Any]] = {
         "key_clients": "PIL, Evergreen, 미 해군",
         "competitive_edge": "영도(부산)+수빅(필리핀) 2개 야드. 미 해군 MSRA 5년 MRO 계약(2025.12) — K-방산 수혜. 건설 겸업(HJ중공업 = 舊 한진중공업) — 조선 부문만 분리 분석 필요",
     },
-}
-
-# ── 중소형사 프로필 (정적) ─────────────────────────────────────────
-MIDSIZE_PROFILES: dict[str, dict[str, Any]] = {
     "daehan": {
         "name": "대한조선",
-        "yards": "옥포(거제)",
-        "focus_vessels": ["수에즈맥스(158K DWT)", "Aframax", "PC선"],
-        "key_clients": "Frontline, International Seaways, 대형 그리스 선주",
-        "backlog_summary": "~30척 잔고(~3년분). 2025.1월 글로벌 수에즈맥스 11척 중 6척 수주(62% 점유)",
-        "financials_note": "OPM 20%대 4분기 연속. 2025 IPO 예정(KOSPI)",
-        "defense": "상선 전문 — 방산 없음",
-        "source": "DART 비상장기업 공시, Clarkson Research",
+        "focus_vessels": ["수에즈맥스(158K DWT)", "Aframax", "PC선", "셔틀탱커"],
+        "key_clients": "Frontline, International Seaways, Nordic American Tankers (NAT), 대형 그리스 선주",
+        "competitive_edge": "수에즈맥스 글로벌 1위(2025.1월 11척 중 6척 수주, 62% 점유). "
+                            "탱커 전문 — OPM 24%, 2025.08 KOSPI 상장, 시총 ~3.6조. "
+                            "해남(전남) 야드. 방산 없이 순수 상선 조선소.",
     },
 }
 
-# ── 탱커 시황 스냅샷 (수동 갱신) ───────────────────────────────────
-TANKER_MARKET_SNAPSHOT: dict[str, Any] = {
+# ── 중소형사 프로필 (정적) — 향후 추가 시 사용 ─────────────────────
+MIDSIZE_PROFILES: dict[str, dict[str, Any]] = {}  # daehan → MAJOR 승격 (v6.0)
+
+# ── 탱커 시황 스냅샷 (외부 파일 우선, fallback 내장) ────────────────
+DEFAULT_TANKER_SNAPSHOT: dict[str, Any] = {
     "vlcc_dayrate_usd": "120,000~167,000 (2025.Q1 spot)",
     "suezmax_dayrate_usd": "~65,000 (2025.Q1)",
     "fleet_age": {
@@ -528,19 +712,95 @@ TANKER_MARKET_SNAPSHOT: dict[str, Any] = {
     "orderbook_to_fleet": "15.7% (tanker, 2025)",
     "newbuild_vlcc_usd_m": "~130M (2025)",
     "newbuild_suezmax_usd_m": "~85M (2025)",
+    "shadow_fleet": {
+        "sanctioned_vessels": "1,100+척",
+        "pct_of_global_tanker": 20,
+        "trend": "제재 강화→가용 선복 추가 감소. 카메룬 등 편의치적 퇴출 가속",
+        "source": "승도리 #2754, Windward",
+    },
+    "secondhand_parity": (
+        "5년 중고 탱커 가격 ≈ 신조선 가격 — 극심한 공급 부족 신호. "
+        "발주 후 5년 운항→동일 가격 매각 가능 = 발주 안 하면 비합리적 (승도리 #2777)"
+    ),
     "key_drivers": [
         "EEXI/CII 규제→노후 탱커 강제 퇴출(2025.1 CII 등급 재평가)",
         "선령 15년↑ 51% — 2기 슈퍼사이클 핵심 교체 수요",
         "톤마일 증가(수에즈→희망봉 우회)",
         "미국 LNG/원유 수출 증가→톤마일 추가 확대",
+        "섀도우 플릿 제재 강화→실질 가용 선복 축소 (1,100+척, 글로벌 탱커 20%)",
+        "중고선=신조선 가격 패리티→신조 발주 경제성 극대화",
     ],
     "structural_view": (
         "탱커는 사이클이 아닌 구조적 국면. "
         "운임 상승은 CII 규제·톤마일·선령의 동시 작용. "
-        "VLCC 오더북/함대비 15.7%는 역사적 저점 수준 — 공급 부족 장기화."
+        "VLCC 오더북/함대비 15.7%는 역사적 저점 수준 — 공급 부족 장기화. "
+        "섀도우 플릿 1,100+척(20%) 제재 강화로 실질 가용 선복 추가 감소. "
+        "5년 중고선=신조선 가격 — 발주 경제성 역대 최고 (승도리 #2777)."
     ),
-    "source": "승도리 #959, Clarkson Research, 최광식(다올투자증권)",
+    "source": "승도리 #959/#2754/#2777, Clarkson Research, 최광식(다올투자증권)",
 }
+
+
+def _load_tanker_snapshot() -> dict[str, Any]:
+    """tanker_data.json 로드 (90일 staleness). 미존재/stale → DEFAULT_TANKER_SNAPSHOT."""
+    if TANKER_DATA_FILE.exists():
+        try:
+            data = json.loads(TANKER_DATA_FILE.read_text())
+            updated = data.get("updated_at", "")
+            if updated:
+                days_old = (datetime.now() - datetime.fromisoformat(updated)).days
+                if days_old <= 90:
+                    return data
+                log(f"WARN: tanker_data.json {days_old}일 미갱신 — DEFAULT 사용")
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return dict(DEFAULT_TANKER_SNAPSHOT)
+
+
+TANKER_MARKET_SNAPSHOT: dict[str, Any] = _load_tanker_snapshot()
+
+# ── 컨테이너 시황 스냅샷 (외부 파일 우선, fallback 내장) ────────────
+DEFAULT_CONTAINER_SNAPSHOT: dict[str, Any] = {
+    "scfi_index": "~1,050 (2025.Q1)",
+    "scfi_yoy_change": "+15% YoY",
+    "ccfi_index": "~1,080 (2025.Q1)",
+    "fleet_age": {"15y_plus_pct": 18, "20y_plus_pct": 8},
+    "orderbook_to_fleet": "22.5% (container, 2025)",
+    "newbuild_14k_teu_usd_m": "~175M",
+    "newbuild_8k_teu_usd_m": "~110M",
+    "key_drivers": [
+        "홍해 위기→수에즈 우회→실질 선복 10-15% 감소",
+        "얼라이언스 재편(Gemini 2025.02 출범)→선복 재배치",
+        "친환경 규제(EEXI/CII)→듀얼퓨얼 신조 주문 가속",
+        "글로벌 무역량 회복(+3.5% YoY 전망)",
+    ],
+    "structural_view": (
+        "컨테이너 운임은 홍해 우회로 구조적 상승. "
+        "SCFI 1,000↑ 유지 시 선주 발주 의향 증가. "
+        "오더북/함대비 22.5%는 높으나 환경규제 교체분 고려 시 적정."
+    ),
+    "source": "Alphaliner, Drewry, Clarksons Research",
+}
+CONTAINER_DATA_FILE = OUTPUT_DIR / "container_data.json"
+
+
+def _load_container_snapshot() -> dict[str, Any]:
+    """container_data.json 로드 (90일 staleness). 미존재/stale → DEFAULT_CONTAINER_SNAPSHOT."""
+    if CONTAINER_DATA_FILE.exists():
+        try:
+            data = json.loads(CONTAINER_DATA_FILE.read_text())
+            updated = data.get("updated_at", "")
+            if updated:
+                days_old = (datetime.now() - datetime.fromisoformat(updated)).days
+                if days_old <= 90:
+                    return data
+                log(f"WARN: container_data.json {days_old}일 미갱신 — DEFAULT 사용")
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return dict(DEFAULT_CONTAINER_SNAPSHOT)
+
+
+CONTAINER_MARKET_SNAPSHOT: dict[str, Any] = _load_container_snapshot()
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -556,8 +816,46 @@ def _get_dart_api_key() -> str | None:
     return None
 
 
+_dart_reader_cache: Any = None
+
+
+def _get_dart_reader() -> Any:
+    """OpenDartReader 인스턴스 (싱글톤). 미설치/키 없으면 None."""
+    global _dart_reader_cache
+    if _dart_reader_cache is not None:
+        return _dart_reader_cache
+    if not HAS_OPENDART:
+        return None
+    api_key = _get_dart_api_key()
+    if not api_key:
+        return None
+    try:
+        _dart_reader_cache = _OpenDartReader(api_key)
+        return _dart_reader_cache
+    except Exception as e:
+        log(f"OpenDartReader init error: {e}")
+        return None
+
+
 def _resolve_corp_codes(api_key: str) -> dict[str, str]:
-    """stock_code → corp_code 매핑. 90일 캐시."""
+    """stock_code → corp_code 매핑. OpenDartReader 우선, raw urllib fallback."""
+    # 1차: OpenDartReader (내부적으로 corpCode.xml 캐시)
+    dart = _get_dart_reader()
+    if dart is not None:
+        target_stocks = {v["stock_code"] for v in SHIPBUILDER_STOCKS.values() if v["stock_code"]}
+        mapping: dict[str, str] = {}
+        for stock_code in target_stocks:
+            try:
+                corp_code = dart.find_corp_code(stock_code)
+                if corp_code:
+                    mapping[stock_code] = corp_code
+            except Exception:
+                pass
+        if mapping:
+            log(f"DART corp codes (ODR): {len(mapping)}/{len(target_stocks)}")
+            return mapping
+
+    # 2차: raw urllib fallback (기존 로직)
     import urllib.request
     import xml.etree.ElementTree as ET
 
@@ -570,14 +868,14 @@ def _resolve_corp_codes(api_key: str) -> dict[str, str]:
         except (json.JSONDecodeError, ValueError):
             pass
 
-    log("Downloading DART corpCode.xml...")
+    log("Downloading DART corpCode.xml (fallback)...")
     url = f"https://opendart.fss.or.kr/api/corpCode.xml?crtfc_key={api_key}"
     req = urllib.request.Request(url)
     with urllib.request.urlopen(req, timeout=60) as resp:
         zip_data = resp.read()
 
     target_stocks = {v["stock_code"] for v in SHIPBUILDER_STOCKS.values() if v["stock_code"]}
-    mapping: dict[str, str] = {}
+    mapping = {}
 
     with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
         xml_names = [n for n in zf.namelist() if n.lower().endswith(".xml")]
@@ -598,55 +896,42 @@ def _resolve_corp_codes(api_key: str) -> dict[str, str]:
 
 
 def collect_dart_orders(days: int = 90, dry_run: bool = False) -> dict[str, Any]:
-    """DART 수주공시 수집 및 파싱."""
-    import urllib.request
-    import urllib.parse
-
+    """DART 수주공시 수집: OpenDartReader 우선 + raw urllib fallback."""
     api_key = _get_dart_api_key()
     if not api_key:
         log("DART API key not configured. Set DART_API_KEY env or ~/.openclaw/dart_api_key")
         return {"status": "skipped", "reason": "no_api_key"}
 
-    try:
-        corp_codes = _resolve_corp_codes(api_key)
-    except Exception as e:
-        log(f"ERROR resolving DART corp codes: {e}")
-        return {"status": "error", "reason": str(e)}
-
     end_de = datetime.now().strftime("%Y%m%d")
     bgn_de = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
     all_orders: list[dict] = []
 
+    dart = _get_dart_reader()
+
     for key, meta in SHIPBUILDER_STOCKS.items():
         if not meta.get("stock_code"):
-            continue  # 비상장사 — stock_code 없으면 DART 조회 불가
-        corp_code = corp_codes.get(meta["stock_code"])
-        if not corp_code:
-            log(f"  SKIP {meta['name']}: corp_code not found")
             continue
         try:
-            params = urllib.parse.urlencode({
-                "crtfc_key": api_key, "corp_code": corp_code,
-                "bgn_de": bgn_de, "end_de": end_de,
-                "page_count": 100,
-            })
-            url = f"https://opendart.fss.or.kr/api/list.json?{params}"
-            with urllib.request.urlopen(urllib.request.Request(url), timeout=15) as resp:
-                data = json.loads(resp.read())
+            items: list[dict] = []
+            if dart is not None:
+                # OpenDartReader: stock_code로 직접 공시 목록 조회
+                try:
+                    df = dart.list(meta["stock_code"], start=bgn_de, end=end_de, kind='B')
+                    if df is not None and not df.empty:
+                        items = df.to_dict("records")
+                except Exception as e:
+                    log(f"  ODR list {meta['name']}: {e}")
 
-            if data.get("status") == "013":
-                log(f"  {meta['name']}: 0 disclosures")
-                continue
-            if data.get("status") != "000":
-                log(f"  {meta['name']}: DART error {data.get('message', '')}")
-                continue
+            # fallback: raw urllib
+            if not items:
+                items = _dart_list_raw(api_key, meta["stock_code"], bgn_de, end_de)
 
-            for item in data.get("list", []):
+            for item in items:
                 report_nm = item.get("report_nm", "")
                 if not any(kw in report_nm for kw in ["판매", "공급계약", "수주", "계약체결"]):
                     continue
                 if "기재정정" in report_nm:
-                    continue  # 정정공시는 원본만 사용
+                    continue
                 order: dict[str, Any] = {
                     "company": meta["name"], "key": key,
                     "rcept_no": item.get("rcept_no"),
@@ -681,12 +966,52 @@ def collect_dart_orders(days: int = 90, dry_run: bool = False) -> dict[str, Any]
     return result
 
 
-def _parse_order_document(api_key: str, rcept_no: str) -> dict | None:
-    """DART 공시 원문에서 계약 정보 추출."""
+def _dart_list_raw(api_key: str, stock_code: str, bgn_de: str, end_de: str) -> list[dict]:
+    """raw urllib DART 공시 목록 조회 (ODR fallback)."""
     import urllib.request
+    import urllib.parse
+    try:
+        corp_codes = _resolve_corp_codes(api_key)
+    except Exception:
+        return []
+    corp_code = corp_codes.get(stock_code)
+    if not corp_code:
+        return []
+    try:
+        params = urllib.parse.urlencode({
+            "crtfc_key": api_key, "corp_code": corp_code,
+            "bgn_de": bgn_de, "end_de": end_de, "page_count": 100,
+        })
+        url = f"https://opendart.fss.or.kr/api/list.json?{params}"
+        with urllib.request.urlopen(urllib.request.Request(url), timeout=15) as resp:
+            data = json.loads(resp.read())
+        if data.get("status") not in ("000",):
+            return []
+        return data.get("list", [])
+    except Exception:
+        return []
 
+
+def _parse_order_document(api_key: str, rcept_no: str) -> dict | None:
+    """DART 공시 원문에서 계약 정보 추출. ODR 우선 + raw urllib fallback."""
     if not rcept_no:
         return None
+
+    # 1차: OpenDartReader .sub_docs()
+    dart = _get_dart_reader()
+    if dart is not None:
+        try:
+            doc = dart.sub_docs(rcept_no)
+            if doc is not None and not (hasattr(doc, 'empty') and doc.empty):
+                # sub_docs는 DataFrame → 본문 URL 목록. document()로 직접 가져오기
+                text = dart.document(rcept_no)
+                if text:
+                    return _extract_contract_info(text)
+        except Exception:
+            pass
+
+    # 2차: raw urllib fallback
+    import urllib.request
     url = f"https://opendart.fss.or.kr/api/document.xml?crtfc_key={api_key}&rcept_no={rcept_no}"
     try:
         with urllib.request.urlopen(urllib.request.Request(url), timeout=20) as resp:
@@ -747,12 +1072,6 @@ def _extract_contract_info(content: str) -> dict[str, Any]:
         rate = float(rate_m.group(1).replace(",", "")) if rate_m else 1450.0
         result["contract_amount_usd"] = result["contract_amount_krw"] / rate
 
-    # 선종
-    for keyword, ship_type in SHIP_TYPE_KEYWORDS.items():
-        if keyword in text:
-            result["ship_type"] = ship_type
-            break
-
     # 척수
     m = re.search(r"(\d+)\s*척", text)
     if m:
@@ -767,6 +1086,12 @@ def _extract_contract_info(content: str) -> dict[str, Any]:
         )
     if m:
         result["delivery_date"] = f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+
+    # 선종 — 4-pass 분류 (v6.0: 키워드 → 발주처 → 금액 → 회사 전문분야)
+    ship_type = _classify_vessel_type(text, result)
+    # 키워드로 실제 선종이 잡힌 경우 항상 포함, "미분류"는 다른 정보가 있을 때만
+    if ship_type != "미분류" or result:
+        result["ship_type"] = ship_type
 
     return result
 
@@ -813,51 +1138,114 @@ def _estimate_from_orders(orders: list[dict]) -> dict[str, Any]:
 
 
 # ══════════════════════════════════════════════════════════════════
-#  yfinance Tier 1 수집
+#  Tier 1 수집 (pykrx + FDR + yfinance fallback)
 # ══════════════════════════════════════════════════════════════════
 
-def collect_tier1(dry_run: bool = False) -> dict[str, Any]:
-    """yfinance 배치 수집 + zscore 계산."""
-    try:
-        import yfinance as yf
-    except ImportError:
-        log("ERROR: yfinance not installed")
-        return {"error": "yfinance not installed"}
+def _compute_zscore_entry(series, meta: dict) -> dict[str, Any] | None:
+    """Close 시계열 → z-score 엔트리. 5개 미만이면 None."""
+    import pandas as pd
+    if isinstance(series, pd.DataFrame):
+        series = series.squeeze()
+    series = series.dropna()
+    if len(series) < 5:
+        return None
+    close = float(series.iloc[-1])
+    prev = float(series.iloc[-2]) if len(series) >= 2 else close
+    change_pct = ((close - prev) / prev * 100) if prev else 0.0
+    window = min(20, len(series))
+    ma = float(series.tail(window).mean())
+    std = float(series.tail(window).std())
+    zscore = (close - ma) / std if std > 0 else 0.0
+    return {
+        "ticker": meta["ticker"], "name": meta["name"], "category": meta["category"],
+        "close": round(close, 2), "prev": round(prev, 2),
+        "change_pct": round(change_pct, 2), "ma20": round(ma, 2),
+        "std20": round(std, 4), "zscore": round(zscore, 2),
+        "data_points": len(series), "data_date": str(series.index[-1].date()),
+    }
 
-    tickers = [v["ticker"] for v in TIER1_INDICATORS.values()]
-    log(f"Fetching {len(tickers)} tickers...")
+
+def _fetch_kr_ohlcv(ticker_6: str, days: int = 520) -> "pd.DataFrame | None":
+    """pykrx로 KR 종목 OHLCV 수집. 실패 시 None."""
+    if not HAS_PYKRX:
+        return None
     try:
-        data = yf.download(tickers, period="2y", progress=False, threads=True)
+        end = datetime.now().strftime("%Y%m%d")
+        start = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
+        df = krx_stock.get_market_ohlcv_by_date(start, end, ticker_6)
+        if df is not None and not df.empty:
+            # 표준 컬럼명으로 변환 (pykrx: 시가/고가/저가/종가)
+            df = df.rename(columns={"종가": "Close", "시가": "Open", "고가": "High",
+                                     "저가": "Low", "거래량": "Volume"})
+            return df
     except Exception as e:
-        log(f"ERROR yfinance: {e}")
-        return {"error": str(e)}
+        log(f"  pykrx error {ticker_6}: {e}")
+    return None
 
+
+def _fetch_global_ohlcv(ticker: str, days: int = 520) -> "pd.DataFrame | None":
+    """FDR로 글로벌 종목 OHLCV 수집. 실패 시 None."""
+    if not HAS_FDR:
+        return None
+    try:
+        start = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+        end = datetime.now().strftime("%Y-%m-%d")
+        df = fdr.DataReader(ticker, start, end)
+        if df is not None and not df.empty:
+            return df
+    except Exception as e:
+        log(f"  FDR error {ticker}: {e}")
+    return None
+
+
+def collect_tier1(dry_run: bool = False) -> dict[str, Any]:
+    """Tier 1 수집: pykrx(KR) + FDR(글로벌) + yfinance(fallback) + zscore 계산."""
     today = datetime.now().strftime("%Y-%m-%d")
     result: dict[str, Any] = {"date": today, "collected_at": datetime.now().isoformat(), "indicators": {}}
-    close_data = data.get("Close", data)
 
+    # 1단계: pykrx (KR) + FDR (글로벌) — 개별 수집
+    fetched_keys: set[str] = set()
     for key, meta in TIER1_INDICATORS.items():
+        ticker = meta["ticker"]
+        df = None
+        if key in _KR_TICKERS:
+            # KR: pykrx (6자리 코드) → FDR fallback
+            ticker_6 = ticker.replace(".KS", "")
+            df = _fetch_kr_ohlcv(ticker_6)
+            if df is None:
+                df = _fetch_global_ohlcv(ticker_6)
+        else:
+            # 글로벌: FDR
+            df = _fetch_global_ohlcv(ticker)
+        if df is not None and "Close" in df.columns:
+            entry = _compute_zscore_entry(df["Close"], meta)
+            if entry:
+                result["indicators"][key] = entry
+                fetched_keys.add(key)
+                log(f"  {key}: {entry['close']:.2f} (z={entry['zscore']:.2f})")
+
+    # 2단계: yfinance fallback (미수집 종목)
+    missing = set(TIER1_INDICATORS.keys()) - fetched_keys
+    if missing:
+        log(f"Fallback yfinance for {len(missing)} tickers: {missing}")
         try:
-            series = close_data[meta["ticker"]].dropna()
-            if len(series) < 5:
-                continue
-            close = float(series.iloc[-1])
-            prev = float(series.iloc[-2]) if len(series) >= 2 else close
-            change_pct = ((close - prev) / prev * 100) if prev else 0.0
-            window = min(20, len(series))
-            ma = float(series.tail(window).mean())
-            std = float(series.tail(window).std())
-            zscore = (close - ma) / std if std > 0 else 0.0
-            result["indicators"][key] = {
-                "ticker": meta["ticker"], "name": meta["name"], "category": meta["category"],
-                "close": round(close, 2), "prev": round(prev, 2),
-                "change_pct": round(change_pct, 2), "ma20": round(ma, 2),
-                "std20": round(std, 4), "zscore": round(zscore, 2),
-                "data_points": len(series), "data_date": str(series.index[-1].date()),
-            }
-            log(f"  {key}: {close:.2f} (z={zscore:.2f})")
-        except Exception as e:
-            log(f"  ERROR {key}: {e}")
+            import yfinance as yf
+            tickers_yf = [TIER1_INDICATORS[k]["ticker"] for k in missing]
+            data = yf.download(tickers_yf, period="2y", progress=False, threads=True)
+            close_data = data.get("Close", data) if hasattr(data, "get") else data
+            for key in missing:
+                meta = TIER1_INDICATORS[key]
+                try:
+                    series = close_data[meta["ticker"]].dropna() if meta["ticker"] in close_data.columns else None
+                    if series is not None:
+                        entry = _compute_zscore_entry(series, meta)
+                        if entry:
+                            result["indicators"][key] = entry
+                            log(f"  {key} (yf): {entry['close']:.2f} (z={entry['zscore']:.2f})")
+                except Exception as e:
+                    log(f"  ERROR {key}: {e}")
+        except ImportError:
+            log("WARN: yfinance not installed, some tickers skipped")
 
     if not dry_run:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -867,7 +1255,7 @@ def collect_tier1(dry_run: bool = False) -> dict[str, Any]:
 
 
 def collect_longterm_proxies(dry_run: bool = False) -> dict[str, Any]:
-    """장기 시계열 수집 (월말 리샘플). 30일 캐시."""
+    """장기 시계열 수집 (월말 리샘플). 30일 캐시. FDR 우선 + yfinance fallback."""
     if LONGTERM_FILE.exists():
         try:
             cache = json.loads(LONGTERM_FILE.read_text())
@@ -878,36 +1266,49 @@ def collect_longterm_proxies(dry_run: bool = False) -> dict[str, Any]:
         except (json.JSONDecodeError, ValueError):
             pass
 
-    try:
-        import yfinance as yf
-    except ImportError:
-        log("ERROR: yfinance not installed")
-        return {"error": "yfinance not installed"}
-
     result: dict[str, Any] = {"collected_at": datetime.now().isoformat(), "proxies": {}}
 
     for key, meta in LONGTERM_TICKERS.items():
-        try:
-            t = yf.Ticker(meta["ticker"])
-            hist = t.history(period=meta["period"])
-            if hist.empty:
+        df = None
+        # 1차: FDR (최대 기간 — 시작일을 충분히 과거로)
+        if HAS_FDR:
+            try:
+                df = fdr.DataReader(meta["ticker"], "2000-01-01")
+                if df is not None and not df.empty and "Close" in df.columns:
+                    log(f"  Longterm {key}: FDR OK ({len(df)} rows)")
+            except Exception as e:
+                log(f"  FDR longterm {key}: {e}")
+                df = None
+
+        # 2차: yfinance fallback
+        if df is None or df.empty:
+            try:
+                import yfinance as yf
+                t = yf.Ticker(meta["ticker"])
+                df = t.history(period=meta["period"])
+                if df is not None and not df.empty:
+                    log(f"  Longterm {key}: yfinance OK ({len(df)} rows)")
+            except Exception as e:
+                log(f"  ERROR longterm {key}: {e}")
                 continue
-            # 월말 리샘플
-            monthly = hist["Close"].resample("ME").last().dropna()
-            data_points = []
-            for dt, val in monthly.items():
-                data_points.append({"date": dt.strftime("%Y-%m"), "close": round(float(val), 2)})
-            result["proxies"][key] = {
-                "ticker": meta["ticker"], "name": meta["name"],
-                "months": len(data_points),
-                "start": data_points[0]["date"] if data_points else None,
-                "end": data_points[-1]["date"] if data_points else None,
-                "data": data_points,
-            }
-            log(f"  Longterm {key}: {len(data_points)} months")
-        except Exception as e:
-            log(f"  ERROR longterm {key}: {e}")
-        time.sleep(1)
+
+        if df is None or df.empty or "Close" not in df.columns:
+            continue
+
+        # 월말 리샘플
+        monthly = df["Close"].resample("ME").last().dropna()
+        data_points = []
+        for dt, val in monthly.items():
+            data_points.append({"date": dt.strftime("%Y-%m"), "close": round(float(val), 2)})
+        result["proxies"][key] = {
+            "ticker": meta["ticker"], "name": meta["name"],
+            "months": len(data_points),
+            "start": data_points[0]["date"] if data_points else None,
+            "end": data_points[-1]["date"] if data_points else None,
+            "data": data_points,
+        }
+        log(f"  Longterm {key}: {len(data_points)} months")
+        time.sleep(0.5)
 
     if not dry_run and result["proxies"]:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -975,66 +1376,51 @@ def _parse_dart_amount(val: str | None) -> int | None:
 
 
 def collect_dart_financials(dry_run: bool = False) -> dict[str, Any]:
-    """DART fnlttSinglAcntAll → 최근 12분기 재무제표 (3년)."""
-    import urllib.request
-    import urllib.parse
-
+    """DART 재무제표: OpenDartReader 우선 + raw urllib fallback. 최근 12분기."""
     api_key = _get_dart_api_key()
     if not api_key:
         return {"status": "skipped", "reason": "no_api_key"}
-    try:
-        corp_codes = _resolve_corp_codes(api_key)
-    except Exception as e:
-        return {"status": "error", "reason": str(e)}
 
     now = datetime.now()
-    # 최근 12분기 = 현재년도 + 3년치
     quarters: list[tuple[int, str, str]] = []
     for year in [now.year, now.year - 1, now.year - 2, now.year - 3]:
         for code, label in DART_REPRT_CODES.items():
             quarters.append((year, code, label))
-    # 최근 순으로 정렬, 최대 12개
     quarters.sort(key=lambda x: (x[0], x[1]), reverse=True)
     quarters = quarters[:12]
 
     result: dict[str, Any] = {"collected_at": now.isoformat(), "companies": {}}
+    dart = _get_dart_reader()
 
     for key, meta in SHIPBUILDER_STOCKS.items():
         if not meta.get("stock_code"):
-            continue  # 비상장사 — stock_code 없으면 DART 조회 불가
-        corp_code = corp_codes.get(meta["stock_code"])
-        if not corp_code:
             continue
         company_data: dict[str, Any] = {"name": meta["name"], "quarters": {}}
 
         for year, reprt_code, q_label in quarters:
             q_key = f"{year}-{q_label}"
-            try:
-                params = urllib.parse.urlencode({
-                    "crtfc_key": api_key, "corp_code": corp_code,
-                    "bsns_year": str(year), "reprt_code": reprt_code, "fs_div": "CFS",
-                })
-                url = f"https://opendart.fss.or.kr/api/fnlttSinglAcntAll.json?{params}"
-                with urllib.request.urlopen(urllib.request.Request(url), timeout=15) as resp:
-                    data = json.loads(resp.read())
+            accounts: dict[str, int | None] = {}
 
-                if data.get("status") != "000":
-                    continue  # 해당 분기 데이터 없음
+            # 1차: OpenDartReader
+            if dart is not None:
+                try:
+                    df = dart.finstate_all(meta["stock_code"], year, reprt_code, fs_div='CFS')
+                    if df is not None and not df.empty:
+                        for _, row in df.iterrows():
+                            acct_nm = (row.get("account_nm") or "").strip()
+                            for acct_key, patterns in DART_ACCOUNT_PATTERNS.items():
+                                if acct_nm in patterns and acct_key not in accounts:
+                                    accounts[acct_key] = _parse_dart_amount(str(row.get("thstrm_amount", "")))
+                except Exception:
+                    pass
 
-                accounts: dict[str, int | None] = {}
-                for item in data.get("list", []):
-                    acct_nm = (item.get("account_nm") or "").strip()
-                    for acct_key, patterns in DART_ACCOUNT_PATTERNS.items():
-                        if acct_nm in patterns and acct_key not in accounts:
-                            accounts[acct_key] = _parse_dart_amount(item.get("thstrm_amount"))
+            # 2차: raw urllib fallback
+            if not accounts:
+                accounts = _dart_finstate_raw(api_key, meta["stock_code"], year, reprt_code)
 
-                if accounts:
-                    company_data["quarters"][q_key] = {
-                        "year": year, "quarter": q_label, **accounts,
-                    }
-            except Exception as e:
-                log(f"  ERROR {meta['name']} {q_key}: {e}")
-            time.sleep(0.5)
+            if accounts:
+                company_data["quarters"][q_key] = {"year": year, "quarter": q_label, **accounts}
+            time.sleep(0.3)
 
         if company_data["quarters"]:
             result["companies"][key] = company_data
@@ -1047,11 +1433,40 @@ def collect_dart_financials(dry_run: bool = False) -> dict[str, Any]:
     return result
 
 
-def collect_dart_supplementary(dry_run: bool = False) -> dict[str, Any]:
-    """DART 직원수 + 배당 (연 1회, 90일 캐시)."""
+def _dart_finstate_raw(api_key: str, stock_code: str, year: int, reprt_code: str) -> dict[str, int | None]:
+    """raw urllib DART 재무제표 조회 (ODR fallback)."""
     import urllib.request
     import urllib.parse
+    try:
+        corp_codes = _resolve_corp_codes(api_key)
+    except Exception:
+        return {}
+    corp_code = corp_codes.get(stock_code)
+    if not corp_code:
+        return {}
+    try:
+        params = urllib.parse.urlencode({
+            "crtfc_key": api_key, "corp_code": corp_code,
+            "bsns_year": str(year), "reprt_code": reprt_code, "fs_div": "CFS",
+        })
+        url = f"https://opendart.fss.or.kr/api/fnlttSinglAcntAll.json?{params}"
+        with urllib.request.urlopen(urllib.request.Request(url), timeout=15) as resp:
+            data = json.loads(resp.read())
+        if data.get("status") != "000":
+            return {}
+        accounts: dict[str, int | None] = {}
+        for item in data.get("list", []):
+            acct_nm = (item.get("account_nm") or "").strip()
+            for acct_key, patterns in DART_ACCOUNT_PATTERNS.items():
+                if acct_nm in patterns and acct_key not in accounts:
+                    accounts[acct_key] = _parse_dart_amount(item.get("thstrm_amount"))
+        return accounts
+    except Exception:
+        return {}
 
+
+def collect_dart_supplementary(dry_run: bool = False) -> dict[str, Any]:
+    """DART 직원수 + 배당 (연 1회, 90일 캐시). ODR 우선 + raw urllib fallback."""
     if DART_SUPPLEMENTARY_FILE.exists():
         try:
             cache = json.loads(DART_SUPPLEMENTARY_FILE.read_text())
@@ -1065,53 +1480,93 @@ def collect_dart_supplementary(dry_run: bool = False) -> dict[str, Any]:
     api_key = _get_dart_api_key()
     if not api_key:
         return {"status": "skipped", "reason": "no_api_key"}
-    try:
-        corp_codes = _resolve_corp_codes(api_key)
-    except Exception as e:
-        return {"status": "error", "reason": str(e)}
 
+    dart = _get_dart_reader()
     result: dict[str, Any] = {"collected_at": datetime.now().isoformat(), "status": "ok", "companies": {}}
-    year = str(datetime.now().year - 1)  # 직전 사업연도
+    year = str(datetime.now().year - 1)
 
     for key, meta in SHIPBUILDER_STOCKS.items():
-        corp_code = corp_codes.get(meta["stock_code"])
-        if not corp_code:
+        if not meta.get("stock_code"):
             continue
         comp: dict[str, Any] = {"name": meta["name"]}
-        # 직원수
-        try:
-            params = urllib.parse.urlencode({"crtfc_key": api_key, "corp_code": corp_code, "bsns_year": year, "reprt_code": "11011"})
-            url = f"https://opendart.fss.or.kr/api/empSttus.json?{params}"
-            with urllib.request.urlopen(urllib.request.Request(url), timeout=15) as resp:
-                data = json.loads(resp.read())
-            if data.get("status") == "000":
-                total = sum(int((it.get("rgllbr_co") or "0").replace(",", "")) for it in data.get("list", []))
-                comp["employees"] = total
-        except Exception as e:
-            log(f"  ERROR emp {meta['name']}: {e}")
-        # 배당
-        try:
-            params = urllib.parse.urlencode({"crtfc_key": api_key, "corp_code": corp_code, "bsns_year": year, "reprt_code": "11011"})
-            url = f"https://opendart.fss.or.kr/api/alotMatter.json?{params}"
-            with urllib.request.urlopen(urllib.request.Request(url), timeout=15) as resp:
-                data = json.loads(resp.read())
-            if data.get("status") == "000":
-                for it in data.get("list", []):
-                    if "주당" in (it.get("se") or ""):
-                        comp["dividend_per_share"] = it.get("thstrm", "0").replace(",", "")
-                        break
-        except Exception as e:
-            log(f"  ERROR div {meta['name']}: {e}")
+
+        # 직원수 — ODR report() 우선
+        if dart is not None:
+            try:
+                df = dart.report(meta["stock_code"], "직원현황", year, "11011")
+                if df is not None and not df.empty and "rgllbr_co" in df.columns:
+                    total = sum(int(str(v).replace(",", "") or "0") for v in df["rgllbr_co"])
+                    comp["employees"] = total
+            except Exception:
+                pass
+        if "employees" not in comp:
+            _dart_supplementary_raw_emp(api_key, meta["stock_code"], year, comp)
+
+        # 배당 — ODR report() 우선
+        if dart is not None:
+            try:
+                df = dart.report(meta["stock_code"], "배당", year, "11011")
+                if df is not None and not df.empty:
+                    for _, row in df.iterrows():
+                        if "주당" in str(row.get("se", "")):
+                            comp["dividend_per_share"] = str(row.get("thstrm", "0")).replace(",", "")
+                            break
+            except Exception:
+                pass
+        if "dividend_per_share" not in comp:
+            _dart_supplementary_raw_div(api_key, meta["stock_code"], year, comp)
 
         if len(comp) > 1:
             result["companies"][key] = comp
-        time.sleep(1)
+        time.sleep(0.5)
 
     if not dry_run and result["companies"]:
         OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
         DART_SUPPLEMENTARY_FILE.write_text(json.dumps(result, ensure_ascii=False, indent=2))
         log(f"DART supplementary saved ({len(result['companies'])} companies)")
     return result
+
+
+def _dart_supplementary_raw_emp(api_key: str, stock_code: str, year: str, comp: dict) -> None:
+    """raw urllib DART 직원수 조회 (ODR fallback)."""
+    import urllib.request
+    import urllib.parse
+    try:
+        corp_codes = _resolve_corp_codes(api_key)
+        corp_code = corp_codes.get(stock_code)
+        if not corp_code:
+            return
+        params = urllib.parse.urlencode({"crtfc_key": api_key, "corp_code": corp_code, "bsns_year": year, "reprt_code": "11011"})
+        url = f"https://opendart.fss.or.kr/api/empSttus.json?{params}"
+        with urllib.request.urlopen(urllib.request.Request(url), timeout=15) as resp:
+            data = json.loads(resp.read())
+        if data.get("status") == "000":
+            total = sum(int((it.get("rgllbr_co") or "0").replace(",", "")) for it in data.get("list", []))
+            comp["employees"] = total
+    except Exception as e:
+        log(f"  ERROR emp {stock_code}: {e}")
+
+
+def _dart_supplementary_raw_div(api_key: str, stock_code: str, year: str, comp: dict) -> None:
+    """raw urllib DART 배당 조회 (ODR fallback)."""
+    import urllib.request
+    import urllib.parse
+    try:
+        corp_codes = _resolve_corp_codes(api_key)
+        corp_code = corp_codes.get(stock_code)
+        if not corp_code:
+            return
+        params = urllib.parse.urlencode({"crtfc_key": api_key, "corp_code": corp_code, "bsns_year": year, "reprt_code": "11011"})
+        url = f"https://opendart.fss.or.kr/api/alotMatter.json?{params}"
+        with urllib.request.urlopen(urllib.request.Request(url), timeout=15) as resp:
+            data = json.loads(resp.read())
+        if data.get("status") == "000":
+            for it in data.get("list", []):
+                if "주당" in (it.get("se") or ""):
+                    comp["dividend_per_share"] = it.get("thstrm", "0").replace(",", "")
+                    break
+    except Exception as e:
+        log(f"  ERROR div {stock_code}: {e}")
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1139,8 +1594,8 @@ def _zscore_to_1_10(zscore: float) -> float:
 # ── 운임 프록시 자동 매핑 ──────────────────────────────────────────
 # 복수 프록시는 z-score 평균으로 합산 (승도리: 탱커운임은 다원적 참조)
 FREIGHT_PROXY_MAP: dict[str, list[str]] = {
-    "container_rate": ["container_proxy"],                # ZIM
-    "tanker_rate":    ["tanker_proxy", "tanker_proxy2"],  # BWET + FRO 평균
+    "container_rate": ["container_proxy"],                                      # ZIM
+    "tanker_rate":    ["tanker_proxy", "tanker_proxy2", "tanker_proxy3", "tanker_proxy4"],  # BWET+FRO+STNG+TNK 평균
 }
 
 
@@ -1511,6 +1966,20 @@ def analyze_valuation_context(valuation: dict | None, financials: dict | None) -
                 if eq and eq > 0:
                     pb = round(mcap / eq, 2)
         entry["pb"] = pb
+        # ROE fallback: yfinance ROE null → DART 재무(net_income / total_equity) 계산
+        if entry.get("roe") is None and financials:
+            comp = financials.get("companies", {}).get(key, {})
+            qs = _sorted_quarters(comp.get("quarters", {}))
+            if qs:
+                latest_q = qs[-1][1]
+                ni = latest_q.get("net_income")
+                eq = latest_q.get("total_equity")
+                if ni is not None and eq and eq > 0:
+                    entry["roe"] = round(ni / eq * 100, 1)
+                    entry["roe_source"] = "DART"
+        # mipo PE note (지주 HD현대 기준)
+        if key == "mipo":
+            entry["pe_note"] = "지주(HD현대) PE"
         # 역사적 P/E 비교
         hist = HISTORICAL_PE_RANGES.get(key)
         if pe and hist:
@@ -1723,6 +2192,240 @@ def _peakout_item(key: str, value: float | None, axis: str) -> dict:
 
 
 # ══════════════════════════════════════════════════════════════════
+#  Analysis — 투자 판단 / 선행·후행 프레임워크 / 시나리오
+# ══════════════════════════════════════════════════════════════════
+
+INDICATOR_TEMPORAL_TAGS: dict[str, str] = {
+    "demand": "lead",        # 수주·운임 → 선행
+    "order": "lead",         # 수주 건수·선가 → 선행
+    "structural": "lead",    # IMO규제·노후선 → 선행 (구조적)
+    "financial": "coincident",  # 실적 → 동행
+    "valuation": "lag",      # P/E·P/B → 후행
+}
+
+_TEMPORAL_LABELS: dict[str, str] = {
+    "lead": "선행지표",
+    "coincident": "동행지표",
+    "lag": "후행지표",
+}
+
+SCENARIO_TEMPLATES: dict[str, dict[str, Any]] = {
+    "bull": {
+        "label": "Bull (낙관)",
+        "drivers": [
+            "탱커·벌커 교체 수요 2기 조기 본격화",
+            "한미 $350B 투자 협약 → 미국향 LNG/방산 수주 확대 (한화2026전망)",
+            "중국 조선소 캐파 제약 심화 + 고부가(NO96 멤브레인) 미진입 → 한국 수혜",
+        ],
+        "score_delta": +10,
+        "probability": "25%",
+    },
+    "base": {
+        "label": "Base (기본)",
+        "drivers": [
+            "LNG·컨테이너 수주 지속, 선가 점진 상승 (2026 영업이익 ~25% YoY — 한화전망)",
+            "탱커 교체 수요 점진 유입, 2기 전환 2027~28년",
+            "마진 개선 지속, OPM 10%+ 안착",
+        ],
+        "score_delta": 0,
+        "probability": "50%",
+    },
+    "bear": {
+        "label": "Bear (비관)",
+        "drivers": [
+            "글로벌 경기침체 → 물동량 감소 → 발주 연기",
+            "UBS Capital Goods 글로벌 z-score 최하 (-0.77) — 섹터 수급 역풍",
+            "원자재·인건비 급등 + 중국 저가 수주 확대 → 마진·선가 압박",
+        ],
+        "score_delta": -15,
+        "probability": "25%",
+    },
+}
+
+
+def _build_investment_judgment_section(
+    combined: dict, fin_trends: dict, val_ctx: dict,
+    peakout: list, phase_code: str, phase_score: float,
+    pulse: dict, cycle: dict | None = None,
+) -> list[str]:
+    """투자 판단 요약: 3문장 시황 + 기업별 1줄 판정 + 금주 관전포인트."""
+    L: list[str] = []
+    L.append("## 투자 판단 요약\n")
+
+    # 1) 3문장 시황
+    # 사이클 위치
+    if phase_score >= 66:
+        cycle_sentence = f"사이클 위치: {phase_code}({phase_score:.0f}/100), 피크 구간에서 추가 상승 여력 제한적."
+    elif phase_score >= 46:
+        cycle_sentence = f"사이클 위치: {phase_code}({phase_score:.0f}/100), 확장 구간으로 수주·실적 동반 개선 중."
+    elif phase_score >= 26:
+        cycle_sentence = f"사이클 위치: {phase_code}({phase_score:.0f}/100), 초기 회복 단계로 선행지표 개선 징후."
+    else:
+        cycle_sentence = f"사이클 위치: {phase_code}({phase_score:.0f}/100), 불황 구간."
+    L.append(cycle_sentence)
+
+    # 핵심 동인
+    drivers: list[str] = []
+    demand_score = combined.get("market_pulse")
+    if demand_score is not None and demand_score > 55:
+        drivers.append("수요 환경 우호적(운임·유가 z-score 양호)")
+    elif demand_score is not None and demand_score < 40:
+        drivers.append("수요 환경 약세(운임·유가 하방 압력)")
+    opm_vals = [ft.get("op_margin") for ft in fin_trends.values() if ft.get("op_margin") is not None]
+    if opm_vals:
+        avg_opm = sum(opm_vals) / len(opm_vals)
+        if avg_opm > 7:
+            drivers.append(f"실적 레버리지 작동(평균 OPM {avg_opm:.1f}%)")
+        elif avg_opm < 3:
+            drivers.append(f"실적 부진(평균 OPM {avg_opm:.1f}%)")
+    if drivers:
+        L.append(f"핵심 동인: {', '.join(drivers)}.")
+
+    # 주요 리스크
+    risks: list[str] = []
+    peakout_warns = [p["desc"] for p in peakout if p.get("status") == "warning"]
+    if peakout_warns:
+        risks.append(f"피크아웃 경고({len(peakout_warns)}건: {', '.join(peakout_warns[:2])})")
+    pe_vals = [vc.get("pe_ttm") for vc in val_ctx.values() if vc.get("pe_ttm") is not None]
+    if pe_vals:
+        avg_pe = sum(pe_vals) / len(pe_vals)
+        if avg_pe > 20:
+            risks.append(f"밸류에이션 부담(평균 P/E {avg_pe:.0f}x)")
+    if risks:
+        L.append(f"주요 리스크: {', '.join(risks)}.\n")
+    else:
+        L.append("주요 리스크: 현재 특이사항 없음.\n")
+
+    # 2) 기업별 1줄 판정
+    _major_keys = sorted(k for k, v in SHIPBUILDER_STOCKS.items() if v.get("tier") == "major")
+    for key in _major_keys:
+        vc = val_ctx.get(key, {})
+        ft = fin_trends.get(key, {})
+        name = vc.get("name") or ft.get("name") or SHIPBUILDER_STOCKS.get(key, {}).get("name", key)
+        pe = vc.get("pe_ttm")
+        opm = ft.get("op_margin")
+        # 판정
+        if opm is not None and opm > 7 and pe is not None and pe < 15:
+            verdict = "매력적"
+        elif opm is not None and opm > 5:
+            verdict = "보유"
+        elif opm is not None and opm < 3:
+            verdict = "관망"
+        else:
+            verdict = "중립"
+        parts: list[str] = [f"- **{name}**:"]
+        if opm is not None:
+            parts.append(f"OPM {opm:.1f}%")
+        if pe is not None:
+            parts.append(f"P/E {pe:.0f}x")
+        parts.append(f"— {verdict}")
+        L.append(" ".join(parts))
+    L.append("")
+
+    # 3) 금주 관전 포인트
+    L.append("**금주 관전 포인트**:")
+    watchpoints: list[str] = []
+    if peakout_warns:
+        watchpoints.append("피크아웃 경고 지표 추이")
+    order_axis = cycle["axis_scores"].get("order") if cycle and cycle.get("axis_scores") else None
+    if order_axis is not None and order_axis > 60:
+        watchpoints.append("신규 수주 모멘텀 지속 여부")
+    demand_score_v = combined.get("market_pulse")
+    if demand_score_v is not None:
+        if demand_score_v > 55:
+            watchpoints.append("운임·유가 z-score 추이")
+        elif demand_score_v < 40:
+            watchpoints.append("수요 환경 반등 가능성")
+    if not watchpoints:
+        watchpoints = ["DART 수주공시", "글로벌 운임 동향", "실적 발표 시즌 대비"]
+    for wp in watchpoints[:3]:
+        L.append(f"- {wp}")
+    L.append("")
+    return L
+
+
+def _build_temporal_interpretation(
+    axis_scores: dict[str, float | None], pulse: dict,
+) -> list[str]:
+    """선행(수주·운임) → 동행(실적) → 후행(밸류) 시간축 해석."""
+    L: list[str] = []
+    L.append("\n### 선행-동행-후행 프레임워크\n")
+    L.append("지표를 시간축으로 재배열하면 사이클 방향을 더 명확히 읽을 수 있다.\n")
+
+    # 축별 점수를 temporal 그룹으로 매핑
+    groups: dict[str, list[tuple[str, float]]] = {"lead": [], "coincident": [], "lag": []}
+    for axis, tag in INDICATOR_TEMPORAL_TAGS.items():
+        if axis == "demand":
+            score = pulse.get("score")
+        else:
+            score = axis_scores.get(axis) if axis_scores else None
+        if score is not None:
+            groups[tag].append((axis, score))
+
+    for tag in ("lead", "coincident", "lag"):
+        items = groups[tag]
+        label = _TEMPORAL_LABELS[tag]
+        if not items:
+            continue
+        avg_score = sum(s for _, s in items) / len(items)
+        names = ", ".join(f"{a.title()}({s:.0f})" for a, s in items)
+        direction = "▲ 상승" if avg_score > 55 else ("▼ 하락" if avg_score < 40 else "→ 보합")
+        L.append(f"**{label}** ({direction}, 평균 {avg_score:.0f}/100): {names}")
+
+    # 해석
+    lead_scores = [s for _, s in groups["lead"]]
+    coin_scores = [s for _, s in groups["coincident"]]
+    lag_scores = [s for _, s in groups["lag"]]
+    lead_avg = sum(lead_scores) / len(lead_scores) if lead_scores else None
+    coin_avg = sum(coin_scores) / len(coin_scores) if coin_scores else None
+    lag_avg = sum(lag_scores) / len(lag_scores) if lag_scores else None
+
+    L.append("")
+    if lead_avg is not None and coin_avg is not None:
+        if lead_avg > coin_avg + 10:
+            L.append("→ 선행지표 > 동행지표: 업사이클 가속 신호. 실적 개선이 뒤따를 가능성.")
+        elif lead_avg < coin_avg - 10:
+            L.append("→ 선행지표 < 동행지표: 모멘텀 둔화. 현재 실적은 좋지만 향후 감속 가능.")
+        else:
+            L.append("→ 선행·동행 균형: 현재 사이클 속도가 유지되고 있다.")
+    if lag_avg is not None and coin_avg is not None:
+        if lag_avg > coin_avg + 15:
+            L.append("→ 후행(밸류) 고평가: 시장이 실적 이상으로 미래를 선반영. 밸류 부담.")
+        elif lag_avg < coin_avg - 15:
+            L.append("→ 후행(밸류) 저평가: 시장이 실적 개선을 아직 반영하지 못함. 재평가 여지.")
+    L.append("")
+    return L
+
+
+def _build_scenario_section(combined: dict, cycle: dict | None) -> list[str]:
+    """Bull/Base/Bear 3개 시나리오 × 예상점수/국면/함의."""
+    L: list[str] = []
+    L.append("### 시나리오 분석\n")
+    current_score = combined.get("combined") or 0
+
+    L.extend(["| 시나리오 | 확률 | 예상 점수 | 국면 | 핵심 동인 |",
+              "|----------|------|----------|------|-----------|"])
+    for key in ("bull", "base", "bear"):
+        tmpl = SCENARIO_TEMPLATES[key]
+        est_score = max(0, min(100, current_score + tmpl["score_delta"]))
+        phase_c, phase_d = determine_cycle_phase(est_score)
+        drivers_str = " / ".join(tmpl["drivers"][:2])
+        L.append(f"| {tmpl['label']} | {tmpl['probability']} | {est_score:.0f}/100 | {phase_c} | {drivers_str} |")
+    L.append("")
+
+    # 시나리오별 함의
+    for key in ("bull", "base", "bear"):
+        tmpl = SCENARIO_TEMPLATES[key]
+        est_score = max(0, min(100, current_score + tmpl["score_delta"]))
+        phase_c, _ = determine_cycle_phase(est_score)
+        L.append(f"**{tmpl['label']}** ({tmpl['probability']}): ", )
+        for d in tmpl["drivers"]:
+            L.append(f"  - {d}")
+        L.append(f"  → 예상 종합 {est_score:.0f}/100 ({phase_c})\n")
+    return L
+
+
+# ══════════════════════════════════════════════════════════════════
 #  Report
 # ══════════════════════════════════════════════════════════════════
 
@@ -1858,14 +2561,17 @@ def _append_score_history(week: int, year: int, combined: dict,
         except (json.JSONDecodeError, OSError):
             pass
 
-    entry = {
-        "date": datetime.now().strftime("%Y-%m-%d"),
+    week_tag = f"{year}-W{week:02d}"
+    entry: dict[str, Any] = {
+        "date": datetime.now(KST).strftime("%Y-%m-%d"),
+        "week_tag": week_tag,
         "year": year, "week": week,
         "combined": combined.get("combined"),
         "market_pulse": pulse.get("score"),
         "cycle_score": combined.get("cycle_score"),
+        "pulse_details": pulse.get("details", {}),  # v6.1: WoW 비교용
     }
-    # 같은 주 기존 엔트리 교체
+    # week_tag 기반 upsert (동일 주차 → 덮어쓰기)
     history = [h for h in history if not (h.get("year") == year and h.get("week") == week)]
     history.append(entry)
     # 최대 260건 유지
@@ -1899,7 +2605,7 @@ def _load_longterm_proxies() -> dict[str, Any]:
 def _append_peakout_history(peakout: list) -> None:
     """피크아웃 히스토리에 주간 스냅샷 append (최대 52건)."""
     existing: list[dict[str, Any]] = _load_peakout_history()
-    date_str = datetime.now().strftime("%Y-%m-%d")
+    date_str = datetime.now(KST).strftime("%Y-%m-%d")
     snapshot: dict[str, Any] = {"date": date_str}
     for p in peakout:
         key = p.get("key", p.get("desc", "")[:10])
@@ -1932,7 +2638,7 @@ def _append_vessel_mix_history(vessel_mix: dict, week: int, year: int) -> None:
         return
     entry: dict[str, Any] = {
         "week_tag": week_tag,
-        "date": datetime.now().strftime("%Y-%m-%d"),
+        "date": datetime.now(KST).strftime("%Y-%m-%d"),
         "phase1_ratio": vessel_mix.get("phase1_ratio"),
         "phase2_ratio": vessel_mix.get("phase2_ratio"),
         "by_category": vessel_mix.get("by_category", {}),
@@ -2155,30 +2861,42 @@ def _build_peakout_table(peakout: list) -> list[str]:
     return L
 
 
-def _build_scoring_detail_section(pulse: dict, cycle: dict | None,
-                                   fin_trends: dict, val_ctx: dict,
-                                   dart_data: dict | None,
-                                   manual: dict, indicators: dict) -> list[str]:
-    """축별 산출 근거 서브섹션 — 스코어링 투명화 + 측정방법 설명."""
-    valid_keys = set(SHIPBUILDER_STOCKS.keys())
-    L: list[str] = ["", "### 축별 산출 근거", ""]
-    L.append("> 종합점수 = Market Pulse(수요) x 15% + Cycle Score(실적+수주+밸류+구조) x 85%\n")
-
-    # ── Demand ──
+def _scoring_detail_demand(pulse: dict, indicators: dict,
+                           score_history: list | None = None) -> list[str]:
+    """Demand 축 상세 — z-score + WoW변동 + 해석."""
+    L: list[str] = []
     pulse_details = pulse.get("details", {})
     L.append("**수요 (Demand, 15%)**: Market Pulse {:.1f}/100".format(pulse.get("score", 0)))
     L.append("")
     L.append("**[측정방법]** 6개 거시지표의 z-score(52주 평균 대비 표준편차)를 5단계 비율로 변환 후 가중합산.")
     L.append("- **데이터 소스**: yfinance 일별 종가 (52주 이동평균·표준편차)")
-    L.append("- **z-score → 비율 변환** (5단계 계단함수):")
-    L.append("  - z >= +1.5 → 1.00 (강한 호조) / z >= +0.5 → 0.75 (호조)")
-    L.append("  - z >= -0.5 → 0.50 (보통) / z >= -1.5 → 0.25 (부진) / else → 0.00 (매우 부진)")
-    L.append("- **가중치**: BDI 25% (건화물 수요), 천연가스 25% (LNG선 수요), 유가 WTI+Brent 각 15% (에너지선 수요), 후판(SLX) 10% (원가), 원/달러 10% (수출 경쟁력)")
-    L.append("- **점수** = (비율 x 가중치 합산 / 유효 가중치 합) x 100")
+    L.append("- **z-score → 비율 변환**: z>=+1.5→1.00 / z>=+0.5→0.75 / z>=-0.5→0.50 / z>=-1.5→0.25 / else→0.00")
+    L.append("- **가중치**: BDI 25%, 천연가스 25%, WTI+Brent 각 15%, 후판 10%, 원/달러 10%")
     L.append("")
+
+    # z-score 해석 매핑
+    _DEMAND_INTERPRET: dict[str, dict[str, str]] = {
+        "bdi":    {"pos": "건화물 수요 강세", "neu": "보합", "neg": "약세"},
+        "natgas": {"pos": "LNG선 수요 강세", "neu": "보합", "neg": "약화 우려"},
+        "wti":    {"pos": "에너지선 수요 호조", "neu": "중립", "neg": "수요 약화 가능"},
+        "brent":  {"pos": "에너지선 수요 호조", "neu": "중립", "neg": "수요 약화 가능"},
+        "steel":  {"pos": "후판가 상승→원가 압박", "neu": "보합", "neg": "원가 하락→마진 개선"},
+        "krw":    {"pos": "원화 약세→수출 경쟁력 상승", "neu": "중립", "neg": "원화 강세→마진 축소"},
+    }
+
+    # 전주 z-score 추출 (score_history[-1] = 직전 저장분, 현재는 아직 미저장)
+    prev_zscores: dict[str, float] = {}
+    if score_history and len(score_history) >= 1:
+        prev_entry = score_history[-1]
+        prev_pulse_d = prev_entry.get("pulse_details", {})
+        for k, d in prev_pulse_d.items():
+            if "zscore" in d:
+                prev_zscores[k] = d["zscore"]
+
     if pulse_details:
-        L.extend(["| 지표 | 현재값 | z-score | 비율 | 기여 | 가중 |",
-                   "|------|--------|---------|------|------|------|"])
+        L.extend(["| 지표 | 현재값 | z-score | WoW변동 | 비율 | 기여 | 가중 | 해석 |",
+                   "|------|--------|---------|---------|------|------|------|------|"])
+        groups: dict[str, list[float]] = {"Freight": [], "Energy": [], "Cost": []}
         for key, det in pulse_details.items():
             ind = indicators.get(key, {})
             close = ind.get("close", 0)
@@ -2188,48 +2906,200 @@ def _build_scoring_detail_section(pulse: dict, cycle: dict | None,
             weight = det.get("weight", "")
             ratio_str = f"{ratio:.2f}" if ratio is not None else "-"
             contrib_str = f"{contrib:.1f}" if contrib is not None else "-"
+            # WoW 변동
+            prev_z = prev_zscores.get(key)
+            wow_str = f"{z - prev_z:+.2f}" if prev_z is not None else "-"
+            # 해석
+            interp = _DEMAND_INTERPRET.get(key, {})
+            if z >= 0.5:
+                interpret = interp.get("pos", "호조")
+            elif z <= -0.5:
+                interpret = interp.get("neg", "부진")
+            else:
+                interpret = interp.get("neu", "중립")
             L.append(f"| {ind.get('name', key)} | {close:,.2f} | {z:+.2f} | "
-                     f"{ratio_str} | {contrib_str} | {weight} |")
-    L.append("")
+                     f"{wow_str} | {ratio_str} | {contrib_str} | {weight} | {interpret} |")
+            # 그룹별 집계
+            if key in ("bdi",):
+                groups["Freight"].append(z)
+            elif key in ("wti", "brent", "natgas"):
+                groups["Energy"].append(z)
+            elif key in ("steel", "krw"):
+                groups["Cost"].append(z)
 
-    # ── Financial ──
-    cycle_details = (cycle or {}).get("details", {})
-    fin_detail = cycle_details.get("financial", {})
+        # 그룹별 요약 + 내러티브
+        L.append("")
+        group_names = {"Freight": "운임(건화물)", "Energy": "에너지(유가·가스)", "Cost": "원가(후판·환율)"}
+        for gk, vals in groups.items():
+            if vals:
+                avg = sum(vals) / len(vals)
+                label = "호조" if avg > 0.5 else ("부진" if avg < -0.5 else "보합")
+                L.append(f"- **{group_names[gk]}**: z평균 {avg:+.2f} ({label})")
+                # 그룹별 내러티브
+                direction = "pos" if avg > 0.5 else ("neg" if avg < -0.5 else None)
+                if direction and gk in ("Freight", "Energy"):
+                    narrative = DEMAND_GROUP_NARRATIVES.get(f"{gk}.{direction}", "")
+                    if narrative:
+                        L.append(f"  {narrative}")
+                elif gk == "Cost":
+                    # Cost 그룹은 steel과 krw를 분리 해석
+                    steel_z = pulse_details.get("steel", {}).get("zscore")
+                    krw_z = pulse_details.get("krw", {}).get("zscore")
+                    if steel_z is not None:
+                        sd = "pos" if steel_z > 0.5 else ("neg" if steel_z < -0.5 else None)
+                        if sd:
+                            sn = DEMAND_GROUP_NARRATIVES.get(f"Cost.steel.{sd}", "")
+                            if sn:
+                                L.append(f"  {sn}")
+                    if krw_z is not None:
+                        kd = "pos" if krw_z > 0.5 else ("neg" if krw_z < -0.5 else None)
+                        if kd:
+                            kn = DEMAND_GROUP_NARRATIVES.get(f"Cost.krw.{kd}", "")
+                            if kn:
+                                L.append(f"  {kn}")
+
+        # 운임 프록시 컨텍스트 (컨테이너 + 탱커)
+        L.append("")
+        # 컨테이너 프록시
+        zim_ind = indicators.get("container_proxy", {})
+        zim_z = zim_ind.get("zscore")
+        if zim_z is not None:
+            c_snap = CONTAINER_MARKET_SNAPSHOT
+            c_label = "강세" if zim_z > 0.5 else ("약세" if zim_z < -0.5 else "보합")
+            c_driver = c_snap.get("key_drivers", [""])[0] if c_snap.get("key_drivers") else ""
+            L.append(f"**[컨테이너]** ZIM z={zim_z:+.2f} ({c_label}) | "
+                     f"SCFI {c_snap.get('scfi_index', '-')} ({c_snap.get('scfi_yoy_change', '')}). "
+                     f"{c_driver}")
+        # 탱커 프록시
+        tanker_keys = FREIGHT_PROXY_MAP.get("tanker_rate", [])
+        tanker_zs: list[tuple[str, float]] = []
+        for tk in tanker_keys:
+            t_ind = indicators.get(tk, {})
+            tz = t_ind.get("zscore")
+            if tz is not None:
+                ticker = TIER1_INDICATORS.get(tk, {}).get("ticker", tk)
+                tanker_zs.append((ticker, tz))
+        if tanker_zs:
+            avg_tz = sum(z for _, z in tanker_zs) / len(tanker_zs)
+            t_label = "강세" if avg_tz > 0.5 else ("약세" if avg_tz < -0.5 else "보합")
+            z_strs = ", ".join(f"{t} z={z:+.2f}" for t, z in tanker_zs)
+            t_snap = TANKER_MARKET_SNAPSHOT
+            t_driver = t_snap.get("key_drivers", [""])[0] if t_snap.get("key_drivers") else ""
+            L.append(f"**[탱커]** 프록시 z평균={avg_tz:+.2f} ({t_label}) | {z_strs}. "
+                     f"VLCC ${t_snap.get('vlcc_dayrate_usd', '-')}/일. {t_driver}")
+
+    L.append("")
+    return L
+
+
+def _scoring_detail_financial(cycle: dict | None, fin_trends: dict,
+                               financials: dict | None = None) -> list[str]:
+    """Financial 축 상세 — 매출/영업이익 절대값 + OPM/ROE + 계약자산."""
+    valid_keys = set(SHIPBUILDER_STOCKS.keys())
+    L: list[str] = []
     fin_score = (cycle or {}).get("axis_scores", {}).get("financial")
     L.append(f"**실적 (Financial, 25%)**: {fin_score:.0f}/100" if fin_score is not None else "**실적 (Financial, 25%)**: 데이터 부족")
     L.append("")
-    L.append("**[측정방법]** 각 조선사의 영업이익률(OPM)과 자기자본이익률(ROE)을 0~100 점수로 변환 후 전사 평균.")
-    L.append("- **데이터 소스**: DART 전자공시 분기 재무제표 (최근 12분기)")
-    L.append("- **OPM 점수** = min(100, max(0, OPM%)) x 10 — OPM 10%이면 만점, 0% 이하면 0점")
-    L.append("- **ROE 점수** = min(100, max(0, ROE% / 3)) x 10 — ROE 30%이면 만점, 0% 이하면 0점")
-    L.append("- **축 점수** = 전 기업의 OPM점수 + ROE점수 단순평균")
+    L.append("**[측정방법]** 각 조선사의 OPM/ROE를 0~100 점수로 변환 후 전사 평균.")
+    L.append("- OPM 점수 = min(100, max(0, OPM%)) x 10 | ROE 점수 = min(100, max(0, ROE%/3)) x 10")
     L.append("")
+
     if fin_trends:
-        L.extend(["| 기업 | OPM% | OPM→점수 | ROE% | ROE→점수 |",
-                   "|------|------|----------|------|----------|"])
+        # 기업별 실적 테이블 (매출/영업이익 절대값 포함)
+        L.extend(["| 기업 | 매출(조) | 영업이익(억) | OPM% | QoQ | ROE% | OPM→점수 | ROE→점수 |",
+                   "|------|---------|------------|------|-----|------|----------|----------|"])
         for key, ft in fin_trends.items():
             if key not in valid_keys:
                 continue
             name = ft.get("name", key)
             opm = ft.get("op_margin")
             roe = ft.get("roe")
+            opm_qoq = ft.get("op_margin_qoq")
+            rev = ft.get("revenue")
+            op = ft.get("operating_profit")
+            rev_str = f"{rev / 1e12:.2f}" if rev else "-"
+            op_str = f"{op / 1e8:.0f}" if op else "-"
             opm_str = f"{opm:.1f}" if opm is not None else "-"
+            qoq_str = f"{opm_qoq:+.1f}%p" if opm_qoq is not None else "-"
             opm_sc = f"{min(10, max(0, opm)) * 10:.0f}" if opm is not None else "-"
             roe_str = f"{roe:.1f}" if roe is not None else "-"
             roe_sc = f"{min(10, max(0, roe / 3)) * 10:.0f}" if roe is not None else "-"
-            L.append(f"| {name} | {opm_str} | {opm_sc} | {roe_str} | {roe_sc} |")
-    L.append("")
+            seg_mark = " *" if ft.get("segment_adjusted") else ""
+            L.append(f"| {name}{seg_mark} | {rev_str} | {op_str} | {opm_str} | {qoq_str} | {roe_str} | {opm_sc} | {roe_sc} |")
 
-    # ── Order ──
+        # 세그먼트 주석
+        seg_keys = [k for k, ft in fin_trends.items() if k in valid_keys and ft.get("segment_adjusted")]
+        if seg_keys:
+            for sk in seg_keys:
+                ft = fin_trends[sk]
+                pct = round(ft.get("segment_ratio", 0) * 100)
+                L.append(f"> *{ft.get('name', sk)}: {ft.get('segment_name', '조선')} {pct}% 비중 적용*")
+
+        # 계약자산(잔고) 추이 테이블
+        ca_rows: list[tuple[str, ...]] = []
+        for key, ft in fin_trends.items():
+            if key not in valid_keys:
+                continue
+            ca = ft.get("contract_assets")
+            ca_qoq = ft.get("contract_assets_qoq")
+            ca_j = ft.get("ca_judgment", "")
+            if ca is not None:
+                ca_rows.append((ft.get("name", key), f"{ca / 1e12:.2f}", f"{ca_qoq:+.1f}%" if ca_qoq is not None else "-", ca_j))
+        if ca_rows:
+            L.append("")
+            L.extend(["| 기업 | 계약자산(조) | QoQ | 판단 |",
+                       "|------|------------|-----|------|"])
+            for name, ca_s, qoq_s, judge in ca_rows:
+                L.append(f"| {name} | {ca_s} | {qoq_s} | {judge} |")
+
+        # 기업별 현황 내러티브
+        L.append("")
+        L.append("**기업별 현황**:")
+        for key, ft in fin_trends.items():
+            if key not in valid_keys:
+                continue
+            profile = MAJOR_PROFILES.get(key)
+            if not profile:
+                continue
+            name = profile["name"]
+            focus = ", ".join(v.split("(")[0] for v in profile["focus_vessels"][:2])
+            opm = ft.get("op_margin")
+            opm_qoq = ft.get("op_margin_qoq")
+            # OPM+QoQ 조합으로 상황 판단
+            if opm is not None and opm > 5:
+                if opm_qoq is not None and opm_qoq > 0:
+                    status = "실적 호조"
+                elif opm_qoq is not None and opm_qoq < -2:
+                    status = "마진 둔화"
+                else:
+                    status = "안정"
+            elif opm is not None and opm > 0:
+                if opm_qoq is not None and opm_qoq > 0:
+                    status = "마진 개선 중"
+                else:
+                    status = "저마진"
+            elif opm is not None:
+                status = "실적 악화"
+            else:
+                status = "데이터 부족"
+            edge = profile.get("competitive_edge", "")[:60]
+            opm_str = f"OPM {opm:.0f}%" if opm is not None else ""
+            L.append(f"- **{name}** ({status}): 주력 {focus}. {opm_str}. {edge}")
+
+    L.append("")
+    return L
+
+
+def _scoring_detail_order(cycle: dict | None, dart_data: dict | None,
+                           fin_trends: dict) -> list[str]:
+    """Order 축 상세 — 기업별 수주 + 대형 수주 Top 5 + 선종 믹스."""
+    L: list[str] = []
     order_score = (cycle or {}).get("axis_scores", {}).get("order")
     L.append(f"**수주 (Order, 22%)**: {order_score:.0f}/100" if order_score is not None else "**수주 (Order, 22%)**: 데이터 부족")
     L.append("")
-    L.append("**[측정방법]** 3개 수주 하위지표를 각각 0~100으로 변환 후 평균.")
-    L.append("- **데이터 소스**: DART 수주공시 (최근 90일), DART 분기 재무제표 (계약자산)")
-    L.append("- **수주 건수 점수** = min(100, 건수 x 5) — 20건이면 만점. 수주 파이프라인 활발도 측정")
-    L.append("- **평균 선가 점수** = min(100, 평균선가(USD) / 300만) — $300M이면 만점. 고부가선 비중 반영")
-    L.append("- **계약자산 QoQ 점수** = min(100, max(0, 50 + QoQ% x 2.5)) — QoQ +20%면 만점, -20%면 0점. 잔고 증감 측정")
+    L.append("**[측정방법]** 3개 하위지표: 수주건수(x5, cap100) + 평균선가(/300M) + 계약자산 QoQ(50+QoQ%x2.5)")
     L.append("")
+
     if dart_data and dart_data.get("estimates"):
         est = dart_data["estimates"]
         n_orders = est.get("total_orders", 0)
@@ -2244,68 +3114,280 @@ def _build_scoring_detail_section(pulse: dict, cycle: dict | None,
             avg_ca = sum(ca_qoqs) / len(ca_qoqs)
             ca_sc = min(100, max(0, 50 + avg_ca * 2.5))
             L.append(f"- 계약자산 QoQ: {avg_ca:+.1f}% → 50 + ({avg_ca:.1f} x 2.5) = {ca_sc:.1f}")
-    L.append("")
+        L.append("")
 
-    # ── Valuation ──
+        # 기업별 수주 현황 테이블
+        orders = dart_data.get("orders", [])
+        if orders:
+            company_orders: dict[str, dict] = {}
+            for o in orders:
+                k = o.get("key", "기타")
+                if k not in company_orders:
+                    company_orders[k] = {"count": 0, "ships": 0, "amount": 0, "types": []}
+                company_orders[k]["count"] += 1
+                company_orders[k]["ships"] += o.get("ship_count", 1)
+                company_orders[k]["amount"] += o.get("contract_amount_usd", 0)
+                vt = _classify_vessel_type(o.get("report_name", ""), o)
+                if vt and vt != "미분류":
+                    company_orders[k]["types"].append(vt)
+
+            L.extend(["| 기업 | 건수 | 척수 | 금액(억$) | 주요선종 |",
+                       "|------|------|------|----------|---------|"])
+            for k in sorted(company_orders.keys()):
+                co = company_orders[k]
+                name = SHIPBUILDER_STOCKS.get(k, {}).get("name", k)
+                amt = co["amount"] / 1e8 if co["amount"] > 0 else 0
+                # 선종 빈도 상위 2개
+                from collections import Counter
+                type_counts = Counter(co["types"])
+                top_types = ", ".join(t for t, _ in type_counts.most_common(2)) or "-"
+                L.append(f"| {name} | {co['count']} | {co['ships']} | {amt:.1f} | {top_types} |")
+            L.append("")
+
+            # 대형 수주 Top 5 (금액순)
+            sorted_orders = sorted(orders, key=lambda o: o.get("contract_amount_usd", 0), reverse=True)
+            top5 = sorted_orders[:5]
+            if top5 and top5[0].get("contract_amount_usd", 0) > 0:
+                L.append("**대형 수주 Top 5**:")
+                for i, o in enumerate(top5, 1):
+                    name = SHIPBUILDER_STOCKS.get(o.get("key", ""), {}).get("name", o.get("key", "?"))
+                    amt_usd = o.get("contract_amount_usd", 0)
+                    vt = _classify_vessel_type(o.get("report_name", ""), o)
+                    rpt = o.get("report_name", "")[:40]
+                    L.append(f"  {i}. {name} ${amt_usd / 1e6:.0f}M ({vt}) — {rpt}")
+                L.append("")
+
+            # 선종 믹스: Phase1(LNG/컨) vs Phase2(탱커/벌크) 비율
+            all_types = []
+            for o in orders:
+                vt = _classify_vessel_type(o.get("report_name", ""), o)
+                cnt = o.get("ship_count", 1)
+                all_types.extend([vt] * cnt)
+            if all_types:
+                from collections import Counter as _C2
+                tc = _C2(all_types)
+                total = sum(tc.values())
+                phase1 = sum(tc.get(t, 0) for t in ("LNG운반선", "컨테이너선"))
+                phase2 = sum(tc.get(t, 0) for t in ("탱커", "VLCC", "벌크선", "PC선", "수에즈맥스"))
+                if total > 0:
+                    L.append(f"- 선종 비중: Phase1(LNG/컨) {phase1/total*100:.0f}% vs Phase2(탱커/벌크) {phase2/total*100:.0f}%")
+                    L.append("")
+
+                # 주요 선종별 시장 환경
+                seen_types: set[str] = set()
+                vessel_lines: list[str] = []
+                for vtype, count in tc.most_common():
+                    if vtype == "미분류" or vtype in seen_types:
+                        continue
+                    seen_types.add(vtype)
+                    driver_info = VESSEL_DRIVERS.get(vtype)
+                    if not driver_info:
+                        continue
+                    stage = driver_info.get("cycle_stage", "")
+                    drivers_top2 = "; ".join(driver_info.get("drivers", [])[:2])
+                    line = f"- **{vtype}** ({count}척, {stage}): {drivers_top2}"
+                    # LNG운반선 → 파이프라인 추가
+                    if vtype == "LNG운반선":
+                        pipeline = driver_info.get("pipeline", {})
+                        if pipeline:
+                            line += f"\n  → 확정 미발주 파이프라인: {pipeline.get('total', '-')}"
+                    # 컨테이너선 → SCFI 추가
+                    elif vtype == "컨테이너선":
+                        c_snap = CONTAINER_MARKET_SNAPSHOT
+                        line += f"\n  → SCFI {c_snap.get('scfi_index', '-')} ({c_snap.get('scfi_yoy_change', '')})"
+                    # 탱커 계열 → dayrate + 섀도우 플릿 추가
+                    elif vtype in ("탱커", "VLCC"):
+                        t_snap = TANKER_MARKET_SNAPSHOT
+                        fa = t_snap.get("fleet_age", {})
+                        shadow = t_snap.get("shadow_fleet", {})
+                        shadow_str = f", 섀도우 플릿 {shadow['sanctioned_vessels']}({shadow['pct_of_global_tanker']}%)" if shadow else ""
+                        line += (f"\n  → VLCC ${t_snap.get('vlcc_dayrate_usd', '-')}/일, "
+                                 f"오더북/함대 {t_snap.get('orderbook_to_fleet', '-')}, "
+                                 f"선령20y+ {fa.get('20y_plus_pct', '-')}%{shadow_str}")
+                    vessel_lines.append(line)
+                if vessel_lines:
+                    L.append("**주요 선종별 시장 환경**:")
+                    L.extend(vessel_lines)
+                    L.append("")
+    L.append("")
+    return L
+
+
+def _scoring_detail_valuation(cycle: dict | None, val_ctx: dict) -> list[str]:
+    """Valuation 축 상세 — 시총/PE/EV·EBITDA/20Y위치/해석."""
+    valid_keys = set(SHIPBUILDER_STOCKS.keys())
+    L: list[str] = []
     val_score = (cycle or {}).get("axis_scores", {}).get("valuation")
     L.append(f"**밸류에이션 (Valuation, 13%)**: {val_score:.0f}/100" if val_score is not None else "**밸류에이션 (Valuation, 13%)**: 데이터 부족")
     L.append("")
-    L.append("**[측정방법]** 현재 P/E를 20년 역사적 평균과 비교. 사이클 역지표 — P/E가 높을수록 후기 사이클.")
-    L.append("- **데이터 소스**: yfinance TTM P/E + 20년 수동 통계(2005~2025, 조선업 적자 기간 제외)")
-    L.append("- **괴리율** = (현재PE / 20Y평균PE - 1) x 100%")
-    L.append("- **점수** = max(0, min(100, 100 - (괴리율% + 50) x 0.67))")
-    L.append("  - PE가 20Y 평균의 -50% (저평가) → 100점 (초기 사이클)")
-    L.append("  - PE가 20Y 평균과 동일 → 67점")
-    L.append("  - PE가 20Y 평균의 +100% (2배, 고평가) → 0점 (후기 사이클)")
-    L.append("- **해석**: 높은 점수 = 저평가 = 사이클 초기 / 낮은 점수 = 고평가 = 사이클 후기")
+    L.append("**[측정방법]** 현재 PE를 20Y 역사적 평균과 비교. 사이클 역지표.")
+    L.append("- 점수 = max(0, min(100, 100 - (괴리%+50) x 0.67))")
+    L.append("- 높은 점수 = 저평가 = 초기 사이클 / 낮은 점수 = 고평가 = 후기 사이클")
     L.append("")
     if val_ctx:
-        L.extend(["| 기업 | PE TTM | 20Y 평균 | 괴리% | →점수 |",
-                   "|------|--------|----------|-------|-------|"])
+        L.extend(["| 기업 | 시총(조) | PE TTM | PE소스 | EV/EBITDA | 20Y평균 | 괴리% | 20Y내위치 | →점수 | 해석 |",
+                   "|------|---------|--------|--------|----------|---------|-------|----------|-------|------|"])
         for key, vc in val_ctx.items():
             if key not in valid_keys:
                 continue
             name = vc.get("name", key)
             pe = vc.get("pe_ttm")
+            pe_src = vc.get("pe_source", "-")
+            mcap = vc.get("market_cap")
+            mcap_str = f"{mcap / 1e12:.1f}" if mcap else "-"
+            ev_ebitda = vc.get("ev_ebitda")
+            ev_str = f"{ev_ebitda:.1f}" if ev_ebitda else "-"
             hist = HISTORICAL_PE_RANGES.get(key, {})
+            pe_note = vc.get("pe_note", "")
+            pe_suffix = f" *({pe_note})*" if pe_note else ""
+
             if pe is not None and hist.get("avg"):
                 vs_pct = (pe / hist["avg"] - 1) * 100
                 sc = max(0, min(100, 100 - (vs_pct + 50) * 0.67))
-                L.append(f"| {name} | {pe:.1f}x | {hist['avg']:.0f}x | {vs_pct:+.0f}% | {sc:.1f} |")
+                # 20Y 내 위치 (백분위)
+                pe_range = hist["max"] - hist["min"]
+                position = round((pe - hist["min"]) / pe_range * 100, 0) if pe_range > 0 else 50
+                position = max(0, min(100, position))
+                # 해석
+                if vs_pct > 50:
+                    interpret = "고평가(후기)"
+                elif vs_pct > -20:
+                    interpret = "적정 밴드"
+                else:
+                    interpret = "저평가(초기)"
+                L.append(f"| {name} | {mcap_str} | {pe:.1f}x{pe_suffix} | {pe_src} | "
+                         f"{ev_str} | {hist['avg']:.0f}x | {vs_pct:+.0f}% | {position:.0f}% | {sc:.1f} | {interpret} |")
             elif pe is not None:
-                L.append(f"| {name} | {pe:.1f}x | - | - | - |")
-    L.append("")
+                L.append(f"| {name} | {mcap_str} | {pe:.1f}x{pe_suffix} | {pe_src} | {ev_str} | - | - | - | - | - |")
 
-    # ── Structural ──
+        # 주목할 기업 코멘트 (저평가/고평가만)
+        notable: list[str] = []
+        for key, vc in val_ctx.items():
+            if key not in valid_keys:
+                continue
+            pe = vc.get("pe_ttm")
+            hist = HISTORICAL_PE_RANGES.get(key, {})
+            profile = MAJOR_PROFILES.get(key)
+            if pe is None or not hist.get("avg") or not profile:
+                continue
+            vs_pct = (pe / hist["avg"] - 1) * 100
+            if vs_pct > 50:
+                peak = hist.get("peak_range", "")
+                edge = profile.get("competitive_edge", "")[:60]
+                notable.append(f"> {profile['name']}: PE {pe:.1f}x — 역사적 고평가 구간 접근. 과거 피크 PE {peak}. {edge}")
+            elif vs_pct < -20:
+                edge = profile.get("competitive_edge", "")[:60]
+                trough = hist.get("trough", "")
+                notable.append(f"> {profile['name']}: PE {pe:.1f}x — 저평가(초기). {edge}. 과거 저점: {trough}")
+        if notable:
+            L.append("")
+            L.extend(notable)
+
+    L.append("")
+    return L
+
+
+def _scoring_detail_structural(cycle: dict | None, manual: dict,
+                                indicators: dict) -> list[str]:
+    """Structural 축 상세 — 근거/해석 + staleness 경고."""
+    L: list[str] = []
     struct_score = (cycle or {}).get("axis_scores", {}).get("structural")
     L.append(f"**구조 (Structural, 25%)**: {struct_score:.0f}/100" if struct_score is not None else "**구조 (Structural, 25%)**: 데이터 부족")
     L.append("")
-    L.append("**[측정방법]** 5개 구조적 지표를 1~10 점수로 평가 후 가중합산. 수동 입력 + 자동 프록시 혼합.")
-    L.append("- **수동 지표** (전문가 판단, `--manual-update`로 입력):")
-    L.append("  - IMO 규제 강도(25%): 1=규제완화 10=최강규제. 규제 강할수록 교체수요 증가 → 점수 상승")
-    L.append("  - 중국 캐파 위협(20%): 1=증설없음 10=대규모증설. **역지표** — 중국 증설 많으면 한국 수혜 감소")
-    L.append("  - 노후선 교체압력(15%): 1=선대젊음 10=교체시급. 교체시급할수록 신조수요 증가")
-    L.append("- **자동 프록시** (yfinance z-score → 1~10 선형변환):")
-    L.append("  - 컨테이너 운임(15%): ZIM(ZIM) z-score → `clip(1, 10, 5.5 + z x 2.25)`")
-    L.append("  - 탱커 운임(15%): BWET+FRO 평균 z-score → 동일 변환. 수동 입력이 있으면 수동 우선")
-    L.append("- **점수** = (각 지표의 (값-1)/9 x 가중치 합산 / 총 가중치) x 100")
-    L.append("")
-    manual_scores = manual.get("scores", {})
-    if manual_scores or indicators:
-        L.extend(["| 지표 | 값(1-10) | 가중치 | 유형 | 설명 |",
-                   "|------|----------|--------|------|------|"])
-        auto_scores = auto_structural_scores(indicators) if indicators else {}
-        for key, meta in MANUAL_INDICATORS.items():
-            val = manual_scores.get(key)
-            auto_val = auto_scores.get(key)
-            if val is not None:
-                L.append(f"| {meta['name']} | {val:.1f} | {meta['weight']}% | 수동 | {meta['desc']} |")
-            elif auto_val is not None:
-                L.append(f"| {meta['name']} | {auto_val:.1f} | {meta['weight']}% | 자동 | z→1~10 선형변환 |")
-            else:
-                L.append(f"| {meta['name']} | - | {meta['weight']}% | 미입력 | {meta['desc']} |")
+    L.append("**[측정방법]** 5개 구조적 지표를 1~10 점수로 평가 후 가중합산. 수동 + 자동 프록시 혼합.")
     L.append("")
 
+    # 구체적 근거 매핑 (수동 지표) — v6.2 확장 컨텍스트
+    _MANUAL_RATIONALE: dict[str, str] = {
+        "regulation":     ("IMO EEXI(기존선 에너지효율)/CII(탄소집약도)/ETS(배출권거래) 3중 규제. "
+                           "2027년 본격 시행으로 교체 수요 가속. 저탄소 엔진 전환율 15% 불과. "
+                           "미국 관세에서 조선=전략적 필수재 면제 대상 — 수출 경쟁력 보호"),
+        "china_capacity": ("중국 캐파 증설 진행 중이나 고부가(LNG 멤브레인 NO96) 미진입. "
+                           "벌크·컨테이너 물량 독점(47%) — 한국은 고부가 특화로 경합 제한적"),
+        "vessel_age":     ("전 세계 선대 선령 20y+ 22%, 15y+ 51% — 역사적 고령. "
+                           "CII 등급 하락 시 강제 감속·퇴역 압력 가중. 교체 사이클 본격 진입"),
+    }
+
+    manual_scores = manual.get("scores", {})
+    auto_scores = auto_structural_scores(indicators) if indicators else {}
+
+    L.extend(["| 지표 | 값(1-10) | 가중치 | 유형 | 근거/해석 |",
+               "|------|----------|--------|------|----------|"])
+    for key, meta in MANUAL_INDICATORS.items():
+        val = manual_scores.get(key)
+        auto_val = auto_scores.get(key)
+        if val is not None:
+            rationale = _MANUAL_RATIONALE.get(key, meta['desc'])
+            L.append(f"| {meta['name']} | {val:.1f} | {meta['weight']}% | 수동 | {rationale} |")
+        elif auto_val is not None:
+            # 자동 프록시: 원본 z-score + 스냅샷 내러티브
+            proxy_keys = FREIGHT_PROXY_MAP.get(key, [])
+            z_parts: list[str] = []
+            for pk in proxy_keys:
+                ind = indicators.get(pk, {})
+                if "zscore" in ind:
+                    ticker = TIER1_INDICATORS.get(pk, {}).get("ticker", pk)
+                    z_parts.append(f"{ticker} z={ind['zscore']:+.2f}")
+            z_info = ", ".join(z_parts) if z_parts else "프록시"
+            # 스냅샷 컨텍스트 추가
+            snap_ctx = ""
+            if key == "container_rate":
+                c_snap = CONTAINER_MARKET_SNAPSHOT
+                c_driver = c_snap.get("key_drivers", [""])[0] if c_snap.get("key_drivers") else ""
+                snap_ctx = f". SCFI {c_snap.get('scfi_index', '-')}. {c_driver}"
+            elif key == "tanker_rate":
+                t_snap = TANKER_MARKET_SNAPSHOT
+                t_driver = t_snap.get("key_drivers", [""])[0] if t_snap.get("key_drivers") else ""
+                shadow = t_snap.get("shadow_fleet", {})
+                shadow_ctx = f" 섀도우 플릿 {shadow['sanctioned_vessels']}({shadow['pct_of_global_tanker']}%) 제재." if shadow else ""
+                snap_ctx = f". VLCC ${t_snap.get('vlcc_dayrate_usd', '-')}/일. {t_driver}.{shadow_ctx}"
+            L.append(f"| {meta['name']} | {auto_val:.1f} | {meta['weight']}% | 자동 | {z_info}{snap_ctx} |")
+        else:
+            L.append(f"| {meta['name']} | - | {meta['weight']}% | **미입력** | `--manual-update {key}=N` 으로 설정 필요 |")
+
+    # 공급 부족 신호 (정적 지식 기반)
+    shortage = INDUSTRY_INTRO.get("supply_shortage_signals")
+    if shortage:
+        L.append("\n**[공급 부족 신호]**")
+        if shortage.get("secondhand_parity"):
+            L.append(f"- 중고선 패리티: {shortage['secondhand_parity']}")
+        if shortage.get("orderbook_to_fleet"):
+            L.append(f"- 오더북/함대비: {shortage['orderbook_to_fleet']}")
+        if shortage.get("yard_capacity_vs_demand"):
+            L.append(f"- 캐파 대비 수요: {shortage['yard_capacity_vs_demand']}")
+
+    # staleness 경고
+    updated_at = manual.get("updated_at")
+    if updated_at:
+        try:
+            updated_dt = datetime.fromisoformat(updated_at)
+            days_ago = (datetime.now() - updated_dt).days
+            if days_ago > 90:
+                L.append(f"\n> **수동 지표 {days_ago}일 미갱신** — `--manual-update`로 최신화 필요")
+        except (ValueError, TypeError):
+            pass
+    elif manual_scores:
+        pass  # updated_at 없지만 scores 존재 → OK
+    else:
+        L.append("\n> **수동 지표 미설정** — `--manual-update regulation=8 china_capacity=4 vessel_age=8` 실행 필요")
+    L.append("")
+    return L
+
+
+def _build_scoring_detail_section(pulse: dict, cycle: dict | None,
+                                   fin_trends: dict, val_ctx: dict,
+                                   dart_data: dict | None,
+                                   manual: dict, indicators: dict,
+                                   financials: dict | None = None,
+                                   score_history: list | None = None) -> list[str]:
+    """축별 산출 근거 — 5개 서브함수로 위임. v6.2 컨텍스트 내러티브 강화."""
+    L: list[str] = ["", "### 축별 산출 근거", ""]
+    L.append("> 종합점수 = Market Pulse(수요) x 15% + Cycle Score(실적+수주+밸류+구조) x 85%\n")
+    L.extend(_scoring_detail_demand(pulse, indicators, score_history))
+    L.extend(_scoring_detail_financial(cycle, fin_trends, financials))
+    L.extend(_scoring_detail_order(cycle, dart_data, fin_trends))
+    L.extend(_scoring_detail_valuation(cycle, val_ctx))
+    L.extend(_scoring_detail_structural(cycle, manual, indicators))
     return L
 
 
@@ -2316,7 +3398,7 @@ def build_weekly_report(data: dict, pulse: dict, cycle: dict | None,
                         vessel_mix: dict | None = None,
                         prev_data: dict | None = None,
                         financials: dict | None = None) -> str:
-    """v5.5 리포트 — 스코어링 투명화·KSOE 교체·20Y PE·수주 시계열."""
+    """v6.0 리포트 — 투자판단 요약/시나리오/선행-후행 프레임워크 추가."""
     now = datetime.now()
     week = now.isocalendar()[1]
     phase_score = combined.get("combined") or pulse["score"]
@@ -2336,6 +3418,13 @@ def build_weekly_report(data: dict, pulse: dict, cycle: dict | None,
 
     if not has_prev:
         L.append("> *첫 리포트 — 다음 기부터 전월 변동 추적 시작*\n")
+
+    # ══════════════════════════════════════════════════════════════
+    # 투자 판단 요약 (최상단)
+    # ══════════════════════════════════════════════════════════════
+    L.extend(_build_investment_judgment_section(
+        combined, fin_trends, val_ctx, peakout, phase_code, phase_score,
+        pulse, cycle))
 
     # ══════════════════════════════════════════════════════════════
     # 조선업 개요 (정적 콘텐츠)
@@ -2391,9 +3480,12 @@ def build_weekly_report(data: dict, pulse: dict, cycle: dict | None,
                 sc = cycle["axis_scores"].get(axis)
             sc_str = f"{sc:.0f}/100" if sc is not None else "데이터 부족"
             L.append(f"- {axis.title()} ({weight}%): {sc_str}")
-        # 축별 산출 근거
+        # 축별 산출 근거 (v6.2: 컨텍스트 내러티브 강화)
+        score_history = _load_score_history() if SCORE_HISTORY_FILE.exists() else []
         L.extend(_build_scoring_detail_section(pulse, cycle, fin_trends, val_ctx,
-                                                dart_data, manual, indicators))
+                                                dart_data, manual, indicators,
+                                                financials=financials,
+                                                score_history=score_history))
 
     L.append(f"\n- 사이클 단계: {SUPERCYCLE_LABELS['PRE']}")
     if peakout_any:
@@ -2435,6 +3527,14 @@ def build_weekly_report(data: dict, pulse: dict, cycle: dict | None,
     L.append("\n> \"전세계 조선 캐파는 필요한 수요에 비해 1/3도 되지 않는다\" "
              "— 공급 제약이 사이클 지속의 핵심 (김봉수 교수, KAIST)")
 
+    # 역사적 슈퍼사이클 패턴 비교
+    hp = INDUSTRY_INTRO.get("historical_pattern")
+    if hp:
+        L.append(f"\n**{hp['title']}**")
+        L.append(f"- **2003-07**: {hp['then']}")
+        L.append(f"- **현재**: {hp['now']}")
+        L.append(f"- **시사점**: {hp['implication']}\n")
+
     # 차트 해설: 장기 사이클 프록시
     L.append("\n> **장기 사이클 프록시 차트**: 5개 선종 대표주의 장기 정규화 추이. "
              "FRO(탱커), SBLK(벌크), Cheniere(LNG), ZIM(컨테이너), Transocean(해양플랜트). "
@@ -2442,6 +3542,13 @@ def build_weekly_report(data: dict, pulse: dict, cycle: dict | None,
              "50 이상이면 전 선종 호황 → 조선 수주 호조.")
     L.append("> **스코어 추이 차트**: Combined Score의 주간 추이. "
              "상승 추세면 업사이클 가속, 하락 전환 시 피크아웃 경계.")
+
+    # 선행-동행-후행 프레임워크
+    axis_scores = (cycle or {}).get("axis_scores", {})
+    L.extend(_build_temporal_interpretation(axis_scores, pulse))
+
+    # 시나리오 분석
+    L.extend(_build_scenario_section(combined, cycle))
 
     # ══════════════════════════════════════════════════════════════
     # 2. 기업 종합
@@ -2857,6 +3964,18 @@ def build_weekly_report(data: dict, pulse: dict, cycle: dict | None,
                 manual_parts.append(f"{m['name']} {v:.0f}/10")
         if manual_parts:
             L.append(f"\n**수동 지표**: {' / '.join(manual_parts)}")
+            # stale 경고
+            _updated = manual_d.get("updated_at")
+            if _updated:
+                try:
+                    _last = datetime.fromisoformat(_updated)
+                    if _last.tzinfo is None:
+                        _last = _last.replace(tzinfo=KST)
+                    _days = (datetime.now(KST) - _last).days
+                    if _days >= 90:
+                        L.append(f"⚠️ 수동 지표 {_days}일 미갱신 — `--manual-update`로 업데이트 필요")
+                except (ValueError, TypeError):
+                    pass
             # 수동 지표 해설
             MANUAL_EXPLANATIONS = {
                 "regulation": ("IMO 규제(EEXI 기존선 에너지효율/CII 탄소집약도/ETS 배출권거래). "
@@ -2957,6 +4076,8 @@ def build_weekly_report(data: dict, pulse: dict, cycle: dict | None,
                 L.append(f"· 긍정 요인: {fw['positive']}")
             if fw.get("risk"):
                 L.append(f"· 최대 리스크: {fw['risk']}")
+            if fw.get("leading_indicator"):
+                L.append(f"· 선행지표: {fw['leading_indicator']}")
             L.append("")
         L.append(f"> 출처: 승도리 #959 (t.me/deferred_gratification/959)")
 
@@ -3044,7 +4165,7 @@ def build_weekly_report(data: dict, pulse: dict, cycle: dict | None,
     for key, src in REPORT_SOURCES.items():
         L.append(f"- [{src['title']}]({src['url']})")
 
-    L.append(f"\n*Generated by shipbuilding_cycle_tracker.py v5.5*")
+    L.append(f"\n*Generated by shipbuilding_cycle_tracker.py v6.2*")
     return "\n".join(L)
 
 
@@ -3084,14 +4205,14 @@ def format_telegram_dm(pulse: dict, combined: dict, signals: list,
 
     score_str = f"{combined['combined']:.1f}" if combined.get("combined") is not None else f"{pulse['score']:.1f}"
 
-    # 전월 비교 화살표
+    # 전월 비교 화살표 (임계치 2.0 — 100점 스케일에서 의미 있는 변동만)
     def _arrow(cur: float | None, prv: float | None) -> str:
         if cur is None or prv is None:
             return ""
         delta = cur - prv
-        if delta > 0.5:
+        if delta > 2.0:
             return f" ↑{delta:+.1f}"
-        elif delta < -0.5:
+        elif delta < -2.0:
             return f" ↓{delta:+.1f}"
         return " →"
 
@@ -3099,6 +4220,7 @@ def format_telegram_dm(pulse: dict, combined: dict, signals: list,
     score_arrow = _arrow(combined.get("combined"), prev_score)
 
     L = [f"<b>🚢 조선 사이클 W{week} | {phase_code} {score_str}/100{score_arrow}</b>"]
+    L.append(f"━━━━━━━━━━━━━━━━")
     L.append(f"({phase_desc})")
     L.append(f"Demand {combined.get('market_pulse') or 0:.0f} + Cycle {combined.get('cycle_score') or 0:.0f} (15:85 가중)")
     # 5축 점수 1줄
@@ -3116,6 +4238,7 @@ def format_telegram_dm(pulse: dict, combined: dict, signals: list,
     L.append("")
 
     # 밸류에이션 + 해석
+    L.append("─ ─ ─ ─ ─ ─ ─ ─")
     if val_ctx:
         pe_vals = [vc["pe_ttm"] for vc in val_ctx.values() if vc.get("pe_ttm")]
         if pe_vals:
@@ -3189,6 +4312,8 @@ def format_telegram_dm(pulse: dict, combined: dict, signals: list,
         p2r = vessel_mix.get("phase2_ratio", 0)
         if vessel_mix.get("phase_signal") == "REAL_TRANSITION":
             L.append(f" ⚡ 탱커·벌커({p2r:.0%}) > LNG({p1r:.0%}) — Real 전환!")
+        elif p2r >= 0.30:
+            L.append(f" 🔶 1기 {p1r:.0%} / 2기 {p2r:.0%} — 2기 접근 (30%↑)")
         else:
             L.append(f" 1기(LNG·컨) {p1r:.0%} / 2기(탱커) {p2r:.0%} — Pre 단계 유지")
 
@@ -3210,10 +4335,8 @@ def format_telegram_dm(pulse: dict, combined: dict, signals: list,
              f"| 오더북/함대 {TANKER_MARKET_SNAPSHOT['orderbook_to_fleet'].split(' ')[0]} "
              f"| 선령20y+ {TANKER_MARKET_SNAPSHOT['fleet_age']['20y_plus_pct']}%")
 
-    # 대형사(한진) + 중소형사 + 경쟁국 요약
-    hanjin_p = MAJOR_PROFILES.get("hanjin", {})
-    hanjin_types = '/'.join(t.split('(')[0] for t in hanjin_p.get('focus_vessels', [])[:2])
-    L.append(f"<b>[중소형사]</b> 대한(수에즈맥스 62%)")
+    # 경쟁국 요약 (대한조선은 major로 승격됨 — v6.0)
+    L.append("─ ─ ─ ─ ─ ─ ─ ─")
     L.append("<b>[경쟁국]</b> 중국: 물량 독점, 고부가 미진입. 일본: 인력 부족→한국 수혜")
 
     return "\n".join(L)
@@ -3228,7 +4351,7 @@ def _setup_chart_env():
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    for font in ["AppleGothic", "Apple SD Gothic Neo", "NanumGothic", "DejaVu Sans"]:
+    for font in ["NanumGothic", "AppleGothic", "Apple SD Gothic Neo", "DejaVu Sans"]:
         try:
             plt.rcParams["font.family"] = font
             break
@@ -4056,11 +5179,13 @@ def generate_charts(data: dict, pulse: dict, combined: dict,
 # ══════════════════════════════════════════════════════════════════
 
 def _find_korean_font() -> str | None:
-    """시스템에서 한글 TTC/TTF 폰트 경로 반환."""
+    """시스템에서 한글 TTC/TTF 폰트 경로 반환. NanumGothic 우선 (윈도우 호환)."""
     candidates = [
+        "/System/Library/AssetsV2/com_apple_MobileAsset_Font8/7a0b5c0f3c1d41c4c52a33343496c9c65ad52c50.asset/AssetData/NanumGothic.ttc",
+        "/Library/Fonts/NanumGothic.ttf",
+        "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",  # Linux
         "/System/Library/Fonts/AppleSDGothicNeo.ttc",
         "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
-        "/Library/Fonts/NanumGothic.ttf",
     ]
     for p in candidates:
         if Path(p).exists():
@@ -4083,7 +5208,7 @@ def build_pdf_report(report_md: str, charts: list[tuple[Path, str]],
         pdf.set_margins(10, 10, 10)
         pdf.set_auto_page_break(auto=True, margin=15)
 
-        # 폰트 등록
+        # 폰트 등록 (fpdf2 2.8+ TTC 직접 지원)
         pdf.add_font("Korean", "", font_path)
         pdf.add_font("Korean", "B", font_path)
 
@@ -4093,7 +5218,7 @@ def build_pdf_report(report_md: str, charts: list[tuple[Path, str]],
         pdf.cell(0, 12, "조선업 사이클 분석 리포트", align="C")
         pdf.ln()
         pdf.set_font("Korean", "", 12)
-        pdf.cell(0, 8, f"{date_str}  |  5축 스코어링 + 피크아웃  |  v5.1", align="C")
+        pdf.cell(0, 8, f"{date_str}  |  5축 스코어링 + 피크아웃  |  v6.2", align="C")
         pdf.ln(8)
 
         # ── 본문 ──
@@ -4531,8 +5656,39 @@ def load_manual_indicators() -> dict:
 
 def save_manual_indicators(data: dict) -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    data["updated_at"] = datetime.now().isoformat()
+    data["updated_at"] = datetime.now(KST).isoformat()
     MANUAL_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+
+
+def send_manual_update_reminder(dry_run: bool = False) -> bool:
+    """수동 지표가 90일 이상 미갱신이면 DM 리마인더 전송."""
+    data = load_manual_indicators()
+    updated_at = data.get("updated_at")
+    if not updated_at:
+        _send_progress_dm("⚠️ 수동 지표 미설정. `--manual-update` 로 초기화 필요.", dry_run)
+        return True
+    try:
+        last = datetime.fromisoformat(updated_at)
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=KST)
+        days_old = (datetime.now(KST) - last).days
+    except (ValueError, TypeError):
+        days_old = 999
+    if days_old >= 90:
+        _send_progress_dm(
+            f"⚠️ 수동 지표 {days_old}일 미갱신 — `--manual-update regulation=8 vessel_age=7` 등으로 업데이트 필요",
+            dry_run,
+        )
+        return True
+    return False
+
+
+def _ensure_history_files() -> None:
+    """히스토리 파일이 없으면 빈 리스트로 생성."""
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    for fpath in (SCORE_HISTORY_FILE, PEAKOUT_HISTORY_FILE, VESSEL_MIX_HISTORY_FILE):
+        if not fpath.exists():
+            fpath.write_text("[]")
 
 
 def update_manual(updates: list[str]) -> dict:
@@ -4655,6 +5811,7 @@ def show_status() -> None:
 
 
 def generate_report(notify: bool = False, dry_run: bool = False) -> dict[str, Any]:
+    _ensure_history_files()
     data = _load_latest_data()
     if not data:
         log("ERROR: No data")
@@ -4705,7 +5862,7 @@ def generate_report(notify: bool = False, dry_run: bool = False) -> dict[str, An
     pdf_path: Path | None = None
 
     if notify or not dry_run:
-        _send_progress_dm("🚢 조선업 사이클 리포트 v5.3 생성 시작...", dry_run)
+        _send_progress_dm("🚢 조선업 사이클 리포트 v6.2 생성 시작...", dry_run)
 
         # 차트 생성
         try:
@@ -4730,15 +5887,17 @@ def generate_report(notify: bool = False, dry_run: bool = False) -> dict[str, An
             _send_progress_dm(f"⚠️ PDF 빌드 실패: {e}", dry_run)
 
     if notify:
-        # 텍스트 전문 전송 (DM only)
-        send_telegram_full_report(report, dry_run)
-        # PDF 전송 (DM only)
+        # v6.1: PDF만 전송 (텍스트 청크 제거 — 윈도우 깨짐 방지)
         if pdf_path and pdf_path.exists():
             phase_score = combined.get("combined") or pulse["score"]
             pc, pd = determine_cycle_phase(phase_score)
             caption = f"🚢 조선업 사이클 분석 W{week} | {pc} {phase_score:.0f}/100 | {date_str}"
             send_telegram_pdf(pdf_path, caption, dry_run=dry_run)
-            _send_progress_dm("✅ 리포트 전문 + PDF 전송 완료", dry_run)
+            _send_progress_dm("✅ PDF 리포트 전송 완료", dry_run)
+        else:
+            # PDF 빌드 실패 시 텍스트 fallback
+            send_telegram_full_report(report, dry_run)
+            _send_progress_dm("⚠️ PDF 실패 → 텍스트 fallback 전송", dry_run)
 
     phase_score = combined.get("combined") or pulse["score"]
     pc, _ = determine_cycle_phase(phase_score)
@@ -4757,10 +5916,12 @@ def main():
     parser.add_argument("--manual-update", nargs="+", metavar="K=V", help="수동 지표 (1~10)")
     parser.add_argument("--status", action="store_true", help="현재 상태")
     parser.add_argument("--setup", action="store_true", help="DART 초기 설정")
+    parser.add_argument("--remind", action="store_true", help="수동 지표 미갱신 리마인더")
     parser.add_argument("--dry-run", action="store_true", help="미리보기")
     args = parser.parse_args()
 
-    if not any([args.collect, args.collect_longterm, args.report, args.manual_update, args.status, args.setup]):
+    if not any([args.collect, args.collect_longterm, args.report, args.manual_update,
+                args.status, args.setup, args.remind]):
         parser.print_help()
         return
 
@@ -4787,6 +5948,8 @@ def main():
         result = generate_report(notify=args.notify, dry_run=args.dry_run)
         if "error" not in result:
             log(f"Report: pulse={result['market_pulse']}, phase={result['phase']}")
+    if args.remind:
+        send_manual_update_reminder(dry_run=args.dry_run)
     if args.status:
         show_status()
 
