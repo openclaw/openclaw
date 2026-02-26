@@ -3,6 +3,7 @@ import { describe, expect, test, vi } from "vitest";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import type { HooksConfigResolved } from "./hooks.js";
+import { canonicalizePathVariant } from "./security-path.js";
 import { createGatewayHttpServer, createHooksRequestHandler } from "./server-http.js";
 import { withTempConfig } from "./test-temp-config.js";
 
@@ -87,30 +88,7 @@ function createHooksConfig(): HooksConfigResolved {
 }
 
 function canonicalizePluginPath(pathname: string): string {
-  let decoded = pathname;
-  for (let pass = 0; pass < 3; pass++) {
-    let nextDecoded = decoded;
-    try {
-      nextDecoded = decodeURIComponent(decoded);
-    } catch {
-      break;
-    }
-    if (nextDecoded === decoded) {
-      break;
-    }
-    decoded = nextDecoded;
-  }
-  let resolved = decoded;
-  try {
-    resolved = new URL(decoded, "http://localhost").pathname;
-  } catch {
-    resolved = decoded;
-  }
-  const collapsed = resolved.toLowerCase().replace(/\/{2,}/g, "/");
-  if (collapsed.length <= 1) {
-    return collapsed;
-  }
-  return collapsed.replace(/\/+$/, "");
+  return canonicalizePathVariant(pathname);
 }
 
 type RouteVariant = {
