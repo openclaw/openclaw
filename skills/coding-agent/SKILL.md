@@ -181,8 +181,13 @@ bash pty:true workdir:~/project command:"opencode run 'Your task'"
 
 ## Cursor Agent CLI
 
+**Binary note:** on most setups the executable is `cursor-agent` (not `cursor`).
+
+### Quick Start
+
 ```bash
-# Note: the local binary is usually `cursor-agent` (not `cursor`)
+# Auth check
+bash pty:true command:"cursor-agent status"
 
 # One-shot headless run
 bash pty:true workdir:~/project command:"cursor-agent --print --output-format text 'Implement retry logic for API calls'"
@@ -191,11 +196,34 @@ bash pty:true workdir:~/project command:"cursor-agent --print --output-format te
 bash pty:true workdir:~/project background:true command:"cursor-agent --print --output-format stream-json 'Refactor auth module and summarize file-by-file changes'"
 ```
 
-Helpful flags:
+### Common Flags
 
-- `--workspace <path>` to pin workspace explicitly
-- `--mode plan|ask` for planning/Q&A only
-- `--model <model>` to select a specific Cursor model
+| Flag                       | Effect                                                    |
+| -------------------------- | --------------------------------------------------------- |
+| `--print` / `-p`           | Non-interactive/headless mode (best for automation)       |
+| `--output-format <format>` | `text`, `json`, or `stream-json` output in `--print` mode |
+| `--workspace <path>`       | Pin workspace explicitly instead of relying on CWD        |
+| `--mode plan\|ask`         | Read-only planning or Q&A mode                            |
+| `--model <model>`          | Pick a specific model                                     |
+| `--resume [chatId]`        | Resume an existing chat session                           |
+| `--continue`               | Resume the latest chat session                            |
+| `--approve-mcps`           | Auto-approve MCP servers (headless/print flows)           |
+
+### PR Review Example
+
+```bash
+REVIEW_DIR=$(mktemp -d)
+git clone https://github.com/user/repo.git "$REVIEW_DIR"
+cd "$REVIEW_DIR" && gh pr checkout 130
+
+bash pty:true workdir:"$REVIEW_DIR" command:"cursor-agent --print --output-format text 'Review this PR against origin/main. Summarize risks, test gaps, and suggested fixes.'"
+```
+
+### Structured Output Example
+
+```bash
+bash pty:true workdir:~/project command:"cursor-agent --print --output-format stream-json 'Create a migration plan for the auth module'"
+```
 
 ---
 
