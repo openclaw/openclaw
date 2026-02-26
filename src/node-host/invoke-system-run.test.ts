@@ -252,6 +252,39 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     },
   );
 
+  it.runIf(process.platform !== "win32")(
+    "denies approval-based execution when cwd contains a symlink parent component",
+    async () => {
+      const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-cwd-parent-link-"));
+      const safeRoot = path.join(tmp, "safe-root");
+      const safeSub = path.join(safeRoot, "sub");
+      const linkRoot = path.join(tmp, "approved-link");
+      fs.mkdirSync(safeSub, { recursive: true });
+      fs.symlinkSync(safeRoot, linkRoot, "dir");
+      try {
+        const { runCommand, sendInvokeResult } = await runSystemInvoke({
+          preferMacAppExecHost: false,
+          command: ["./run.sh"],
+          cwd: path.join(linkRoot, "sub"),
+          approved: true,
+          security: "full",
+          ask: "off",
+        });
+        expect(runCommand).not.toHaveBeenCalled();
+        expect(sendInvokeResult).toHaveBeenCalledWith(
+          expect.objectContaining({
+            ok: false,
+            error: expect.objectContaining({
+              message: expect.stringContaining("no symlink path components"),
+            }),
+          }),
+        );
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("uses canonical executable path for approval-based relative command execution", async () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-cwd-real-"));
     const script = path.join(tmp, "run.sh");
