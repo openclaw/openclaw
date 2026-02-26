@@ -17,6 +17,7 @@ import {
   recordPendingHistoryEntryIfEnabled,
   isDangerousNameMatchingEnabled,
   resolveControlCommandGate,
+  resolveDmGroupAccessWithLists,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveChannelMediaMaxBytes,
@@ -883,68 +884,38 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const kind = channelKind(channelInfo.type);
 
     // Enforce DM/group policy and allowlist checks (same as normal messages)
-    if (kind === "direct") {
-      const dmPolicy = account.config.dmPolicy ?? "pairing";
-      if (dmPolicy === "disabled") {
-        logVerboseMessage(`mattermost: drop reaction (dmPolicy=disabled sender=${userId})`);
-        return;
-      }
-      // For pairing/allowlist modes, only allow reactions from approved senders
-      if (dmPolicy !== "open") {
-        const configAllowFrom = normalizeAllowList(account.config.allowFrom ?? []);
-        const storeAllowFrom = normalizeAllowList(
-          dmPolicy === "allowlist"
-            ? []
-            : await core.channel.pairing.readAllowFromStore("mattermost").catch(() => []),
-        );
-        const effectiveAllowFrom = Array.from(new Set([...configAllowFrom, ...storeAllowFrom]));
-        const allowed = isSenderAllowed({
+    const dmPolicy = account.config.dmPolicy ?? "pairing";
+    const storeAllowFrom = normalizeAllowList(
+      dmPolicy === "allowlist"
+        ? []
+        : await core.channel.pairing.readAllowFromStore("mattermost").catch(() => []),
+    );
+    const reactionAccess = resolveDmGroupAccessWithLists({
+      isGroup: kind !== "direct",
+      dmPolicy,
+      groupPolicy,
+      allowFrom: account.config.allowFrom,
+      groupAllowFrom: account.config.groupAllowFrom,
+      storeAllowFrom,
+      isSenderAllowed: (allowFrom) =>
+        isSenderAllowed({
           senderId: userId,
           senderName,
-          allowFrom: effectiveAllowFrom,
+          allowFrom: normalizeAllowList(allowFrom),
           allowNameMatching,
-        });
-        if (!allowed) {
-          logVerboseMessage(
-            `mattermost: drop reaction (dmPolicy=${dmPolicy} sender=${userId} not allowed)`,
-          );
-          return;
-        }
-      }
-    } else if (kind) {
-      if (groupPolicy === "disabled") {
-        logVerboseMessage(`mattermost: drop reaction (groupPolicy=disabled channel=${channelId})`);
-        return;
-      }
-      if (groupPolicy === "allowlist") {
-        const dmPolicyForStore = account.config.dmPolicy ?? "pairing";
-        const configAllowFrom = normalizeAllowList(account.config.allowFrom ?? []);
-        const configGroupAllowFrom = normalizeAllowList(account.config.groupAllowFrom ?? []);
-        const storeAllowFrom = normalizeAllowList(
-          dmPolicyForStore === "allowlist"
-            ? []
-            : await core.channel.pairing.readAllowFromStore("mattermost").catch(() => []),
+        }),
+    });
+    if (reactionAccess.decision !== "allow") {
+      if (kind === "direct") {
+        logVerboseMessage(
+          `mattermost: drop reaction (dmPolicy=${dmPolicy} sender=${userId} reason=${reactionAccess.reason})`,
         );
-        const effectiveGroupAllowFrom = Array.from(
-          new Set([
-            ...(configGroupAllowFrom.length > 0 ? configGroupAllowFrom : configAllowFrom),
-            ...storeAllowFrom,
-          ]),
+      } else {
+        logVerboseMessage(
+          `mattermost: drop reaction (groupPolicy=${groupPolicy} sender=${userId} reason=${reactionAccess.reason} channel=${channelId})`,
         );
-        // Drop when allowlist is empty (same as normal message handler)
-        const allowed =
-          effectiveGroupAllowFrom.length > 0 &&
-          isSenderAllowed({
-            senderId: userId,
-            senderName,
-            allowFrom: effectiveGroupAllowFrom,
-            allowNameMatching,
-          });
-        if (!allowed) {
-          logVerboseMessage(`mattermost: drop reaction (groupPolicy=allowlist sender=${userId})`);
-          return;
-        }
       }
+      return;
     }
 
     const teamId = channelInfo?.team_id ?? undefined;
