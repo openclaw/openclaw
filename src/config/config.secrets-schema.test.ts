@@ -17,6 +17,7 @@ describe("config secret refs schema", () => {
             source: "exec",
             command: "/usr/local/bin/openclaw-secret-resolver",
             args: ["resolve"],
+            allowSymlinkCommand: true,
           },
         },
       },

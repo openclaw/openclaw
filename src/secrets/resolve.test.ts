@@ -145,6 +145,120 @@ describe("secret ref resolver", () => {
     expect(value).toBe("plain-secret");
   });
 
+  it("rejects symlink command paths unless allowSymlinkCommand is enabled", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-exec-link-"));
+    cleanupRoots.push(root);
+    const scriptPath = path.join(root, "resolver-target.mjs");
+    const symlinkPath = path.join(root, "resolver-link.mjs");
+    await writeSecureFile(
+      scriptPath,
+      ["#!/usr/bin/env node", "process.stdout.write('plain-secret');"].join("\n"),
+      0o700,
+    );
+    await fs.symlink(scriptPath, symlinkPath);
+
+    await expect(
+      resolveSecretRefString(
+        { source: "exec", provider: "execmain", id: "openai/api-key" },
+        {
+          config: {
+            secrets: {
+              providers: {
+                execmain: {
+                  source: "exec",
+                  command: symlinkPath,
+                  passEnv: ["PATH"],
+                  jsonOnly: false,
+                },
+              },
+            },
+          },
+        },
+      ),
+    ).rejects.toThrow("must not be a symlink");
+  });
+
+  it("allows symlink command paths when allowSymlinkCommand is enabled", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-exec-link-"));
+    cleanupRoots.push(root);
+    const scriptPath = path.join(root, "resolver-target.mjs");
+    const symlinkPath = path.join(root, "resolver-link.mjs");
+    await writeSecureFile(
+      scriptPath,
+      ["#!/usr/bin/env node", "process.stdout.write('plain-secret');"].join("\n"),
+      0o700,
+    );
+    await fs.symlink(scriptPath, symlinkPath);
+    const trustedRoot = await fs.realpath(root);
+
+    const value = await resolveSecretRefString(
+      { source: "exec", provider: "execmain", id: "openai/api-key" },
+      {
+        config: {
+          secrets: {
+            providers: {
+              execmain: {
+                source: "exec",
+                command: symlinkPath,
+                passEnv: ["PATH"],
+                jsonOnly: false,
+                allowSymlinkCommand: true,
+                trustedDirs: [trustedRoot],
+              },
+            },
+          },
+        },
+      },
+    );
+    expect(value).toBe("plain-secret");
+  });
+
+  it("checks trustedDirs against resolved symlink target", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-exec-link-"));
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-exec-out-"));
+    cleanupRoots.push(root);
+    cleanupRoots.push(outside);
+    const scriptPath = path.join(outside, "resolver-target.mjs");
+    const symlinkPath = path.join(root, "resolver-link.mjs");
+    await writeSecureFile(
+      scriptPath,
+      ["#!/usr/bin/env node", "process.stdout.write('plain-secret');"].join("\n"),
+      0o700,
+    );
+    await fs.symlink(scriptPath, symlinkPath);
+
+    await expect(
+      resolveSecretRefString(
+        { source: "exec", provider: "execmain", id: "openai/api-key" },
+        {
+          config: {
+            secrets: {
+              providers: {
+                execmain: {
+                  source: "exec",
+                  command: symlinkPath,
+                  passEnv: ["PATH"],
+                  jsonOnly: false,
+                  allowSymlinkCommand: true,
+                  trustedDirs: [root],
+                },
+              },
+            },
+          },
+        },
+      ),
+    ).rejects.toThrow("outside trustedDirs");
+  });
+
   it("rejects exec refs when protocolVersion is not 1", async () => {
     if (process.platform === "win32") {
       return;

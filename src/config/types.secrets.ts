@@ -128,6 +128,7 @@ export type ExecSecretProviderConfig = {
   passEnv?: string[];
   trustedDirs?: string[];
   allowInsecurePath?: boolean;
+  allowSymlinkCommand?: boolean;
 };
 
 export type SecretProviderConfig =

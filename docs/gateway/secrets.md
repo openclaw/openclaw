@@ -126,7 +126,9 @@ Define providers under `secrets.providers`:
 ### Exec provider
 
 - Runs configured absolute binary path, no shell.
-- `command` must point to a regular file (not a symlink).
+- By default, `command` must point to a regular file (not a symlink).
+- Set `allowSymlinkCommand: true` to allow symlink command paths (for example Homebrew shims). OpenClaw validates the resolved target path.
+- When `trustedDirs` is set, checks apply to the resolved target path.
 - Supports timeout, no-output timeout, output byte limits, env allowlist, and trusted dirs.
 - Request payload (stdin):
 
@@ -153,6 +155,37 @@ Optional per-id errors:
 ## Validated exec integration examples
 
 The patterns below were validated end-to-end with `openclaw secrets audit --json` and `unresolvedRefCount=0`.
+
+### Direct Homebrew command path (no wrapper)
+
+Use this when your command path is a Homebrew symlink (for example `/opt/homebrew/bin/op`):
+
+```json5
+{
+  secrets: {
+    providers: {
+      onepassword_openai: {
+        source: "exec",
+        command: "/opt/homebrew/bin/op",
+        allowSymlinkCommand: true,
+        trustedDirs: ["/opt/homebrew"],
+        args: ["read", "op://Personal/OpenClaw QA API Key/password"],
+        passEnv: ["HOME"],
+        jsonOnly: false,
+      },
+    },
+  },
+  models: {
+    providers: {
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        models: [{ id: "gpt-5", name: "gpt-5" }],
+        apiKey: { source: "exec", provider: "onepassword_openai", id: "value" },
+      },
+    },
+  },
+}
+```
 
 ### 1Password (`op`)
 
@@ -184,6 +217,7 @@ chmod 700 /usr/local/libexec/openclaw/op-openai.sh
     providers: {
       openai: {
         baseUrl: "https://api.openai.com/v1",
+        models: [{ id: "gpt-5", name: "gpt-5" }],
         apiKey: { source: "exec", provider: "onepassword_openai", id: "value" },
       },
     },
@@ -221,6 +255,7 @@ chmod 700 /usr/local/libexec/openclaw/vault-openai.sh
     providers: {
       openai: {
         baseUrl: "https://api.openai.com/v1",
+        models: [{ id: "gpt-5", name: "gpt-5" }],
         apiKey: { source: "exec", provider: "vault_openai", id: "value" },
       },
     },
@@ -258,6 +293,7 @@ chmod 700 /usr/local/libexec/openclaw/sops-openai.sh
     providers: {
       openai: {
         baseUrl: "https://api.openai.com/v1",
+        models: [{ id: "gpt-5", name: "gpt-5" }],
         apiKey: { source: "exec", provider: "sops_openai", id: "value" },
       },
     },
