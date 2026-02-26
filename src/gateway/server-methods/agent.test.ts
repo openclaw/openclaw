@@ -43,9 +43,14 @@ vi.mock("../../commands/agent.js", () => ({
   agentCommand: mocks.agentCommand,
 }));
 
-vi.mock("../../config/config.js", () => ({
-  loadConfig: () => mocks.loadConfigReturn,
-}));
+vi.mock("../../config/config.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
+  return {
+    ...actual,
+    loadConfig: () => mocks.loadConfigReturn,
+  };
+});
 
 vi.mock("../../agents/agent-scope.js", () => ({
   listAgentIds: () => ["main"],
