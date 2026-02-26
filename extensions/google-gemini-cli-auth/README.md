@@ -2,6 +2,12 @@
 
 OAuth provider plugin for **Gemini CLI** (Google Code Assist).
 
+## Account safety caution
+
+- This plugin is an unofficial integration and is not endorsed by Google.
+- Some users have reported account restrictions or suspensions after using third-party Gemini CLI and Antigravity OAuth clients.
+- Use caution, review the applicable Google terms, and avoid using a mission-critical account.
+
 ## Enable
 
 Bundled plugins are disabled by default. Enable this one:
