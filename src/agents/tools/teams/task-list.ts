@@ -6,20 +6,15 @@
 import { Type } from "@sinclair/typebox";
 import { getTeamManager } from "../../../teams/pool.js";
 import { getTeamsBaseDir, validateTeamNameOrThrow } from "../../../teams/storage.js";
+import { optionalStringEnum } from "../../schema/typebox.js";
 import type { AnyAgentTool } from "../common.js";
 import { jsonResult, readStringParam } from "../common.js";
 
+const TASK_STATUSES = ["pending", "claimed", "in_progress", "completed", "deleted"] as const;
+
 const TaskListSchema = Type.Object({
   team_name: Type.String({ minLength: 1, maxLength: 50 }),
-  status: Type.Optional(
-    Type.Union([
-      Type.Literal("pending"),
-      Type.Literal("claimed"),
-      Type.Literal("in_progress"),
-      Type.Literal("completed"),
-      Type.Literal("deleted"),
-    ]),
-  ),
+  status: optionalStringEnum(TASK_STATUSES),
   owner: Type.Optional(Type.String()),
   includeCompleted: Type.Optional(Type.Boolean()),
 });

@@ -11,19 +11,17 @@ import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { writeInboxMessage, listMembers } from "../../../teams/inbox.js";
 import { getTeamsBaseDir, validateTeamNameOrThrow } from "../../../teams/storage.js";
 import type { TeamMessage } from "../../../teams/types.js";
+import { stringEnum } from "../../schema/typebox.js";
 import { isTeammateAgentId } from "../../teammate-scope.js";
 import type { AnyAgentTool } from "../common.js";
 import { jsonResult, readStringParam } from "../common.js";
 import { createAgentToAgentPolicy, type AgentToAgentPolicy } from "../sessions-access.js";
 
+const MESSAGE_TYPES = ["message", "broadcast", "shutdown_request", "shutdown_response"] as const;
+
 const SendMessageSchema = Type.Object({
   team_name: Type.String({ minLength: 1, maxLength: 50 }),
-  type: Type.Union([
-    Type.Literal("message"),
-    Type.Literal("broadcast"),
-    Type.Literal("shutdown_request"),
-    Type.Literal("shutdown_response"),
-  ]),
+  type: stringEnum(MESSAGE_TYPES),
   recipient: Type.Optional(Type.String()),
   content: Type.String({ minLength: 1, maxLength: 100000 }),
   summary: Type.Optional(Type.String({ maxLength: 50 })),

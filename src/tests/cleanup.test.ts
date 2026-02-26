@@ -17,6 +17,7 @@ import {
 vi.mock("../teams/pool.js", () => ({
   getTeamManager: vi.fn(),
   closeAll: vi.fn(),
+  closeTeamManager: vi.fn(),
 }));
 
 describe("Cleanup & Maintenance", () => {
