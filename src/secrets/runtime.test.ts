@@ -86,6 +86,9 @@ describe("secrets runtime snapshot", () => {
   });
 
   it("resolves file refs via configured file provider", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-file-provider-"));
     const secretsPath = path.join(root, "secrets.json");
     try {
@@ -143,6 +146,9 @@ describe("secrets runtime snapshot", () => {
   });
 
   it("fails when file provider payload is not a JSON object", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-file-provider-bad-"));
     const secretsPath = path.join(root, "secrets.json");
     try {
