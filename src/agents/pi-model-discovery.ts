@@ -1,14 +1,46 @@
 import fs from "node:fs";
 import path from "node:path";
-import {
-  AuthStorage,
-  InMemoryAuthStorageBackend,
-  ModelRegistry,
+import * as PiCodingAgent from "@mariozechner/pi-coding-agent";
+import type {
+  AuthStorage as PiAuthStorage,
+  ModelRegistry as PiModelRegistry,
 } from "@mariozechner/pi-coding-agent";
 import { ensureAuthProfileStore } from "./auth-profiles.js";
 import { resolvePiCredentialMapFromStore, type PiCredentialMap } from "./pi-auth-credentials.js";
 
-export { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
+const PiAuthStorageClass = PiCodingAgent.AuthStorage;
+const PiModelRegistryClass = PiCodingAgent.ModelRegistry;
+
+export { PiAuthStorageClass as AuthStorage, PiModelRegistryClass as ModelRegistry };
+
+type InMemoryAuthStorageBackendLike = {
+  withLock<T>(
+    update: (current: string) => {
+      result: T;
+      next?: string;
+    },
+  ): T;
+};
+
+function createInMemoryAuthStorageBackend(
+  initialData: PiCredentialMap,
+): InMemoryAuthStorageBackendLike {
+  let snapshot = JSON.stringify(initialData, null, 2);
+  return {
+    withLock<T>(
+      update: (current: string) => {
+        result: T;
+        next?: string;
+      },
+    ): T {
+      const { result, next } = update(snapshot);
+      if (typeof next === "string") {
+        snapshot = next;
+      }
+      return result;
+    },
+  };
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -60,19 +92,25 @@ function scrubLegacyStaticAuthJsonEntries(pathname: string): void {
 function createAuthStorage(AuthStorageLike: unknown, path: string, creds: PiCredentialMap) {
   const withInMemory = AuthStorageLike as { inMemory?: (data?: unknown) => unknown };
   if (typeof withInMemory.inMemory === "function") {
-    return withInMemory.inMemory(creds) as AuthStorage;
+    return withInMemory.inMemory(creds) as PiAuthStorage;
   }
 
   const withFromStorage = AuthStorageLike as {
     fromStorage?: (storage: unknown) => unknown;
   };
   if (typeof withFromStorage.fromStorage === "function") {
-    const backend = new InMemoryAuthStorageBackend();
+    const backendCtor = (
+      PiCodingAgent as { InMemoryAuthStorageBackend?: new () => InMemoryAuthStorageBackendLike }
+    ).InMemoryAuthStorageBackend;
+    const backend =
+      typeof backendCtor === "function"
+        ? new backendCtor()
+        : createInMemoryAuthStorageBackend(creds);
     backend.withLock(() => ({
       result: undefined,
       next: JSON.stringify(creds, null, 2),
     }));
-    return withFromStorage.fromStorage(backend) as AuthStorage;
+    return withFromStorage.fromStorage(backend) as PiAuthStorage;
   }
 
   const withFactory = AuthStorageLike as { create?: (path: string) => unknown };
@@ -80,7 +118,7 @@ function createAuthStorage(AuthStorageLike: unknown, path: string, creds: PiCred
     typeof withFactory.create === "function"
       ? withFactory.create(path)
       : new (AuthStorageLike as { new (path: string): unknown })(path)
-  ) as AuthStorage & {
+  ) as PiAuthStorage & {
     setRuntimeApiKey?: (provider: string, apiKey: string) => void;
   };
   if (typeof withRuntimeOverride.setRuntimeApiKey === "function") {
@@ -101,13 +139,13 @@ function resolvePiCredentials(agentDir: string): PiCredentialMap {
 }
 
 // Compatibility helpers for pi-coding-agent 0.50+ (discover* helpers removed).
-export function discoverAuthStorage(agentDir: string): AuthStorage {
+export function discoverAuthStorage(agentDir: string): PiAuthStorage {
   const credentials = resolvePiCredentials(agentDir);
   const authPath = path.join(agentDir, "auth.json");
   scrubLegacyStaticAuthJsonEntries(authPath);
-  return createAuthStorage(AuthStorage, authPath, credentials);
+  return createAuthStorage(PiAuthStorageClass, authPath, credentials);
 }
 
-export function discoverModels(authStorage: AuthStorage, agentDir: string): ModelRegistry {
-  return new ModelRegistry(authStorage, path.join(agentDir, "models.json"));
+export function discoverModels(authStorage: PiAuthStorage, agentDir: string): PiModelRegistry {
+  return new PiModelRegistryClass(authStorage, path.join(agentDir, "models.json"));
 }
