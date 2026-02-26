@@ -366,6 +366,73 @@ describe("credential-vault", () => {
     });
   });
 
+  describe("plaintext → encrypted migration", () => {
+    /** Simulate a pre-encryption install by downgrading credentials.enc → credentials.json */
+    function downgradeToLegacy(store: Record<string, string>): void {
+      const encPath = path.join(testVaultDir, "credentials.enc");
+      const legacyPath = path.join(testVaultDir, "credentials.json");
+      if (fs.existsSync(encPath)) {
+        fs.unlinkSync(encPath);
+      }
+      fs.writeFileSync(legacyPath, JSON.stringify(store), "utf8");
+      fs.chmodSync(legacyPath, 0o600);
+    }
+
+    it("auto-migrates legacy credentials.json to credentials.enc on first read", () => {
+      const secretValue = "sk-ant-api01-migratevalue1234567890";
+
+      // Store via API to get proper registry entry + encrypted file
+      storeCredential("migrate-key", secretValue, "provider", vaultOptions);
+      const legacyPath = path.join(testVaultDir, "credentials.json");
+      const encPath = path.join(testVaultDir, "credentials.enc");
+
+      // Simulate legacy install: replace encrypted file with plaintext JSON
+      downgradeToLegacy({ "provider:migrate-key": secretValue });
+      expect(fs.existsSync(legacyPath)).toBe(true);
+      expect(fs.existsSync(encPath)).toBe(false);
+
+      // Read triggers migration
+      const result = getCredential("migrate-key", "provider", "test", vaultOptions);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value).toBe(secretValue);
+      }
+
+      // Legacy file removed, encrypted file created
+      expect(fs.existsSync(legacyPath)).toBe(false);
+      expect(fs.existsSync(encPath)).toBe(true);
+    });
+
+    it("encrypted credentials survive a re-read after migration", () => {
+      const secretValue = "abcdefgh-ABCDEFGH-1234567890123456";
+      storeCredential("discord-token", secretValue, "channel", vaultOptions);
+      downgradeToLegacy({ "channel:discord-token": secretValue });
+
+      // First read triggers migration
+      getCredential("discord-token", "channel", "test", vaultOptions);
+
+      // Second read uses encrypted store
+      const result2 = getCredential("discord-token", "channel", "test", vaultOptions);
+      expect(result2.ok).toBe(true);
+      if (result2.ok) {
+        expect(result2.value).toBe(secretValue);
+      }
+    });
+
+    it("credentials.enc is not readable as plaintext JSON", () => {
+      storeCredential(
+        "secret-token",
+        "sk-ant-api01-supersecrettoken1234",
+        "provider",
+        vaultOptions,
+      );
+      const encPath = path.join(testVaultDir, "credentials.enc");
+      const raw = fs.readFileSync(encPath, "utf8");
+      expect(raw).not.toContain("sk-ant-api01-supersecrettoken1234");
+      expect(() => JSON.parse(raw)).toThrow();
+    });
+  });
+
   describe("file permissions", () => {
     it("should create registry with secure permissions", () => {
       storeCredential("perm-test", "value-12345678901234567890", "provider", vaultOptions);

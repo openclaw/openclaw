@@ -92,5 +92,7 @@ export function decryptCredentials(data: Buffer, vaultDir: string): string {
   const ciphertext = data.subarray(offset);
   const decipher = createDecipheriv("aes-256-gcm", key, iv);
   decipher.setAuthTag(tag);
-  return decipher.update(ciphertext) + decipher.final("utf8");
+  // Concatenate as Buffers before decoding to UTF-8 to avoid implicit latin1
+  // coercion from Buffer + string arithmetic.
+  return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString("utf8");
 }
