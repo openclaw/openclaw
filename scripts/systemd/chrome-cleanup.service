@@ -1,12 +1,17 @@
 [Unit]
 Description=OpenClaw Chrome Browser Process Cleanup
 After=network.target
+Documentation=https://github.com/openclaw/openclaw/blob/main/scripts/chrome-cleanup.sh
 
 [Service]
 Type=simple
-ExecStart=%h/.openclaw/browser/chrome-cleanup.sh daemon
+# FIX: Updated path to match actual installation location
+ExecStart=%h/.openclaw/workspace/scripts/chrome-cleanup.sh daemon
 Restart=always
 RestartSec=10
+# FIX: Add graceful shutdown timeout
+TimeoutStopSec=30
+KillSignal=SIGTERM
 
 [Install]
 WantedBy=default.target

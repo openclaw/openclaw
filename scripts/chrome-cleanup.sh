@@ -198,7 +198,8 @@ do_scan() {
     pids_str="$(find_main_chrome_pids)"
     [[ -z "$pids_str" ]] && return 0
 
-    local -a pids=("$pids_str")
+    # FIX: Properly initialize array from space-separated PIDs
+    read -ra pids <<< "$pids_str"
     local killed=0
 
     # Build sorted list: pid:elapsed:rss_tree_mb:has_cdp
@@ -283,7 +284,8 @@ show_status() {
         return 0
     fi
     
-    local -a pids=("$pids_str")
+    # FIX: Properly initialize array from space-separated PIDs
+    read -ra pids <<< "$pids_str"
     echo "Found ${#pids[@]} process(es):"
     echo ""
     
@@ -310,7 +312,8 @@ kill_all_chrome() {
         return 0
     fi
     
-    local -a pids=("$pids_str")
+    # FIX: Properly initialize array from space-separated PIDs
+    read -ra pids <<< "$pids_str"
     echo "Killing ${#pids[@]} OpenClaw Chrome process(es)..."
     
     for pid in "${pids[@]}"; do
@@ -336,6 +339,9 @@ kill_all_chrome() {
 # ── Daemon mode ──────────────────────────────────────────────────────────────
 run_daemon() {
     log "INFO" "Chrome cleanup daemon starting (platform=$PLATFORM, max=$MAX_CHROME_INSTANCES, idle=${IDLE_TIMEOUT_SECS}s)"
+    
+    # FIX: Add signal handling for graceful shutdown
+    trap 'log "INFO" "Received SIGTERM/SIGINT, shutting down gracefully"; exit 0' SIGTERM SIGINT
     
     while true; do
         rotate_log
