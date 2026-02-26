@@ -143,4 +143,33 @@ describe("signal createSignalEventHandler inbound contract", () => {
       expect.any(Object),
     );
   });
+
+  it("does not auto-authorize DM commands in open mode without allowlists", async () => {
+    const handler = createSignalEventHandler(
+      createBaseSignalEventHandlerDeps({
+        cfg: {
+          messages: { inbound: { debounceMs: 0 } },
+          channels: { signal: { dmPolicy: "open", allowFrom: [] } },
+        },
+        allowFrom: [],
+        groupAllowFrom: [],
+        account: "+15550009999",
+        blockStreaming: false,
+        historyLimit: 0,
+        groupHistories: new Map(),
+      }),
+    );
+
+    await handler(
+      createSignalReceiveEvent({
+        dataMessage: {
+          message: "/status",
+          attachments: [],
+        },
+      }),
+    );
+
+    expect(capture.ctx).toBeTruthy();
+    expect(capture.ctx?.CommandAuthorized).toBe(false);
+  });
 });
