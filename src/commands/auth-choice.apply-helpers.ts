@@ -1,12 +1,12 @@
 import { resolveEnvApiKey } from "../agents/model-auth.js";
 import type { OpenClawConfig } from "../config/types.js";
-import {
-  DEFAULT_SECRET_PROVIDER_ALIAS,
-  type SecretInput,
-  type SecretRef,
-} from "../config/types.secrets.js";
+import { type SecretInput, type SecretRef } from "../config/types.secrets.js";
 import { encodeJsonPointerToken } from "../secrets/json-pointer.js";
 import { PROVIDER_ENV_VARS } from "../secrets/provider-env-vars.js";
+import {
+  isValidFileSecretRefId,
+  resolveDefaultSecretProviderAlias,
+} from "../secrets/ref-contract.js";
 import { resolveSecretRefString } from "../secrets/resolve.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { formatApiKeyPreview } from "./auth-choice.api-key.js";
@@ -16,19 +16,8 @@ import type { SecretInputMode } from "./onboard-types.js";
 
 const ENV_SOURCE_LABEL_RE = /(?:^|:\s)([A-Z][A-Z0-9_]*)$/;
 const ENV_SECRET_REF_ID_RE = /^[A-Z][A-Z0-9_]{0,127}$/;
-const FILE_SECRET_REF_SEGMENT_RE = /^(?:[^~]|~0|~1)*$/;
 
 type SecretRefChoice = "env" | "provider";
-
-function isValidFileSecretRefId(value: string): boolean {
-  if (!value.startsWith("/")) {
-    return false;
-  }
-  return value
-    .slice(1)
-    .split("/")
-    .every((segment) => FILE_SECRET_REF_SEGMENT_RE.test(segment));
-}
 
 function formatErrorMessage(error: unknown): string {
   if (error instanceof Error && typeof error.message === "string" && error.message.trim()) {
@@ -51,59 +40,33 @@ function resolveDefaultFilePointerId(provider: string): string {
   return `/providers/${encodeJsonPointerToken(provider)}/apiKey`;
 }
 
-function resolveDefaultProviderAlias(
-  config: OpenClawConfig,
-  source: "env" | "file" | "exec",
-): string {
-  const configured =
-    source === "env"
-      ? config.secrets?.defaults?.env
-      : source === "file"
-        ? config.secrets?.defaults?.file
-        : config.secrets?.defaults?.exec;
-  if (configured?.trim()) {
-    return configured.trim();
-  }
-  const providers = config.secrets?.providers;
-  if (providers) {
-    for (const [providerName, provider] of Object.entries(providers)) {
-      if (provider?.source === source) {
-        return providerName;
-      }
-    }
-  }
-  return DEFAULT_SECRET_PROVIDER_ALIAS;
-}
-
 function resolveRefFallbackInput(params: {
   config: OpenClawConfig;
   provider: string;
   preferredEnvVar?: string;
-  envKeyValue?: string;
-}): { input: SecretInput; resolvedValue: string } {
+}): { ref: SecretRef; resolvedValue: string } {
   const fallbackEnvVar = params.preferredEnvVar ?? resolveDefaultProviderEnvVar(params.provider);
-  if (fallbackEnvVar) {
-    const value = process.env[fallbackEnvVar]?.trim();
-    if (value) {
-      return {
-        input: {
-          source: "env",
-          provider: resolveDefaultProviderAlias(params.config, "env"),
-          id: fallbackEnvVar,
-        },
-        resolvedValue: value,
-      };
-    }
+  if (!fallbackEnvVar) {
+    throw new Error(
+      `No default environment variable mapping found for provider "${params.provider}". Set a provider-specific env var, or re-run onboarding in an interactive terminal to configure a ref.`,
+    );
   }
-  if (params.envKeyValue?.trim()) {
-    return {
-      input: params.envKeyValue.trim(),
-      resolvedValue: params.envKeyValue.trim(),
-    };
+  const value = process.env[fallbackEnvVar]?.trim();
+  if (!value) {
+    throw new Error(
+      `Environment variable "${fallbackEnvVar}" is required for --secret-input-mode ref in non-interactive onboarding.`,
+    );
   }
-  throw new Error(
-    `No environment variable found for provider "${params.provider}". Re-run onboarding in an interactive terminal to set a secret reference.`,
-  );
+  return {
+    ref: {
+      source: "env",
+      provider: resolveDefaultSecretProviderAlias(params.config, "env", {
+        preferFirstProviderForSource: true,
+      }),
+      id: fallbackEnvVar,
+    },
+    resolvedValue: value,
+  };
 }
 
 async function resolveApiKeyRefForOnboarding(params: {
@@ -163,7 +126,9 @@ async function resolveApiKeyRefForOnboarding(params: {
       }
       const ref: SecretRef = {
         source: "env",
-        provider: resolveDefaultProviderAlias(params.config, "env"),
+        provider: resolveDefaultSecretProviderAlias(params.config, "env", {
+          preferFirstProviderForSource: true,
+        }),
         id: envVar,
       };
       const resolvedValue = await resolveSecretRefString(ref, {
@@ -187,7 +152,9 @@ async function resolveApiKeyRefForOnboarding(params: {
       );
       continue;
     }
-    const defaultProvider = resolveDefaultProviderAlias(params.config, "file");
+    const defaultProvider = resolveDefaultSecretProviderAlias(params.config, "file", {
+      preferFirstProviderForSource: true,
+    });
     const selectedProvider = await params.prompter.select<string>({
       message: "Select secret provider",
       initialValue:
@@ -477,9 +444,8 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
         config: params.config,
         provider: params.provider,
         preferredEnvVar: envKey?.source ? extractEnvVarFromSourceLabel(envKey.source) : undefined,
-        envKeyValue: envKey?.apiKey,
       });
-      await params.setCredential(fallback.input, selectedMode);
+      await params.setCredential(fallback.ref, selectedMode);
       return fallback.resolvedValue;
     }
     const resolved = await resolveApiKeyRefForOnboarding({

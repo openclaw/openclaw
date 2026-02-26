@@ -9,12 +9,16 @@ import type {
   SecretRef,
   SecretRefSource,
 } from "../config/types.secrets.js";
-import { DEFAULT_SECRET_PROVIDER_ALIAS } from "../config/types.secrets.js";
 import { inspectPathPermissions, safeStat } from "../security/audit-fs.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { resolveUserPath } from "../utils.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { readJsonPointer } from "./json-pointer.js";
+import {
+  RAW_FILE_REF_ID,
+  resolveDefaultSecretProviderAlias,
+  secretRefKey,
+} from "./ref-contract.js";
 import { isNonEmptyString, isRecord, normalizePositiveInt } from "./shared.js";
 
 const DEFAULT_PROVIDER_CONCURRENCY = 4;
@@ -25,8 +29,6 @@ const DEFAULT_FILE_TIMEOUT_MS = 5_000;
 const DEFAULT_EXEC_TIMEOUT_MS = 5_000;
 const DEFAULT_EXEC_NO_OUTPUT_TIMEOUT_MS = 2_000;
 const DEFAULT_EXEC_MAX_OUTPUT_BYTES = 1024 * 1024;
-const RAW_FILE_REF_ID = "value";
-
 const WINDOWS_ABS_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH_PATTERN = /^\\\\[^\\]+\\[^\\]+/;
 
@@ -57,16 +59,6 @@ function isAbsolutePathname(value: string): boolean {
   );
 }
 
-function resolveSourceDefaultAlias(source: SecretRefSource, config: OpenClawConfig): string {
-  const configured =
-    source === "env"
-      ? config.secrets?.defaults?.env
-      : source === "file"
-        ? config.secrets?.defaults?.file
-        : config.secrets?.defaults?.exec;
-  return configured?.trim() || DEFAULT_SECRET_PROVIDER_ALIAS;
-}
-
 function resolveResolutionLimits(config: OpenClawConfig): ResolutionLimits {
   const resolution = config.secrets?.resolution;
   return {
@@ -82,10 +74,6 @@ function resolveResolutionLimits(config: OpenClawConfig): ResolutionLimits {
   };
 }
 
-function toRefKey(ref: SecretRef): string {
-  return `${ref.source}:${ref.provider}:${ref.id}`;
-}
-
 function toProviderKey(source: SecretRefSource, provider: string): string {
   return `${source}:${provider}`;
 }
@@ -93,7 +81,7 @@ function toProviderKey(source: SecretRefSource, provider: string): string {
 function resolveConfiguredProvider(ref: SecretRef, config: OpenClawConfig): SecretProviderConfig {
   const providerConfig = config.secrets?.providers?.[ref.provider];
   if (!providerConfig) {
-    if (ref.source === "env" && ref.provider === resolveSourceDefaultAlias("env", config)) {
+    if (ref.source === "env" && ref.provider === resolveDefaultSecretProviderAlias(config, "env")) {
       return { source: "env" };
     }
     throw new Error(
@@ -602,7 +590,7 @@ export async function resolveSecretRefValues(
     if (!id) {
       throw new Error("Secret reference id is empty.");
     }
-    uniqueRefs.set(toRefKey(ref), { ...ref, id });
+    uniqueRefs.set(secretRefKey(ref), { ...ref, id });
   }
 
   const grouped = new Map<
@@ -656,7 +644,7 @@ export async function resolveSecretRefValues(
           `Secret provider "${result.group.providerName}" did not return id "${ref.id}".`,
         );
       }
-      resolved.set(toRefKey(ref), result.values.get(ref.id));
+      resolved.set(secretRefKey(ref), result.values.get(ref.id));
     }
   }
   return resolved;
@@ -667,7 +655,7 @@ export async function resolveSecretRefValue(
   options: ResolveSecretRefOptions,
 ): Promise<unknown> {
   const cache = options.cache;
-  const key = toRefKey(ref);
+  const key = secretRefKey(ref);
   if (cache?.resolvedByRefKey?.has(key)) {
     return await (cache.resolvedByRefKey.get(key) as Promise<unknown>);
   }
