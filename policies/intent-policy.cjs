@@ -109,6 +109,9 @@ class IntentPolicy {
       level,
       estimatedTokens: TOKEN_ESTIMATES[level] || 500,
       cached: !!hint?.cached,
+      source: hint?.source || "none",
+      authoritative: hint?.authoritative || false,
+      method: hint?.method || "none",
     };
   }
 }

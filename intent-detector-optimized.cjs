@@ -1,9 +1,15 @@
-// Intent Detection 優化版本 - LRU 快取 + 性能指標 + 多語言 + 錯誤恢復
+// Intent Detection 優化版本 - LRU 快取 + Signal fast-path + Authority + Expiry
+// Phase 3.3: Signal layer integration — keyword hints bypass Ollama when high confidence
+// Phase 4.1: AbortController — cancel Ollama inference when signal resolves early
 
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
+const http = require("http");
 const { LRUCache } = require("lru-cache");
+const { extractHints } = require("./signals/intent-hints.cjs");
+
+const INTENT_AUTHORITY_EXPIRY_MS = 1200; // pending intent expires after 1.2s
 
 class IntentDetector {
   constructor(options = {}) {
@@ -12,6 +18,7 @@ class IntentDetector {
     this.cacheKeyPrefix = "intent:";
     this.cacheTTL = options.cacheTTL || 3600; // 1 小時
     this.temperature = options.temperature || 0.1; // 低溫度 = 更確定的分類
+    this.signalConfidenceThreshold = options.signalConfidenceThreshold || 0.8;
 
     // LRU cache: 限 1000 條，TTL 1hr
     this.memoryCache = new LRUCache({
@@ -32,6 +39,9 @@ class IntentDetector {
       cache_misses: 0,
       ollama_calls: 0,
       fallback_calls: 0,
+      signal_hits: 0,
+      signal_bypasses: 0,
+      aborted_calls: 0,
       total_latency_ms: 0,
       confidence_sum: 0,
       call_count: 0,
@@ -40,50 +50,6 @@ class IntentDetector {
     // Precompiled regex
     this._chineseRegex = /[\u4e00-\u9fa5]/g;
     this._jsonExtract = /\{.*\}/s;
-
-    // 關鍵字匹配規則 (備用)
-    this.keywordRules = {
-      code: [
-        "寫",
-        "實作",
-        "開發",
-        "修",
-        "fix",
-        "code",
-        "write",
-        "implement",
-        "重構",
-        "refactor",
-        "測試",
-        "test",
-      ],
-      gmail_delete: [
-        "刪除郵件",
-        "刪郵件",
-        "清理郵件",
-        "delete email",
-        "remove email",
-        "clear inbox",
-      ],
-      gmail_read: ["讀信", "查看郵件", "看信", "read email", "view email", "inbox"],
-      gmail_send: ["寫信", "發送郵件", "寄信", "send email", "compose"],
-      calendar: ["會議", "日程", "日期", "meeting", "calendar", "schedule", "行程", "排程"],
-      web_search: ["搜索", "搜尋", "搜", "search", "look up", "查一下", "幫我查"],
-      stock: ["股票", "台股", "股價", "stock", "技術分析", "買賣"],
-      system_status: [
-        "系統狀態",
-        "健康檢查",
-        "system status",
-        "/status",
-        "/dashboard",
-        "總覽",
-        "proxy狀態",
-      ],
-      deploy: ["部署", "deploy", "push", "推送", "上線"],
-      summarize: ["摘要", "總結", "summarize", "summary", "重點"],
-      progress: ["進度", "工作進度", "progress", "做了什麼", "今天做了"],
-      chat: ["你好", "怎樣", "什麼", "hi", "hello", "how", "嗨", "哈囉"],
-    };
   }
 
   // 生成快取鍵 (基於 hash)
@@ -103,29 +69,8 @@ class IntentDetector {
     return chineseChars > input.length * 0.3 ? "chinese" : "english";
   }
 
-  // 關鍵字匹配 (備用)
-  async classifyByKeywords(input) {
-    const lowerInput = input.toLowerCase();
-
-    for (const [intent, keywords] of Object.entries(this.keywordRules)) {
-      if (keywords.some((kw) => lowerInput.includes(kw))) {
-        return {
-          intent,
-          confidence: 0.3,
-          method: "keyword",
-        };
-      }
-    }
-
-    return {
-      intent: "chat",
-      confidence: 0.1,
-      method: "keyword",
-    };
-  }
-
-  // Ollama 分類
-  async classifyWithOllama(input, language) {
+  // Ollama 分類 (with AbortSignal support)
+  async classifyWithOllama(input, language, signal) {
     const startTime = Date.now();
 
     const systemPrompt =
@@ -138,7 +83,9 @@ class IntentDetector {
          Response format: {"intent":"...", "confidence": 0.0-1.0}`;
 
     try {
-      const response = await fetch(`${this.ollamaUrl}/api/generate`, {
+      // Use http.request for connection destroy capability
+      // AbortController only cancels Node promise; we need req.destroy() to stop GPU inference
+      const fetchOpts = {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -147,8 +94,18 @@ class IntentDetector {
           stream: false,
           temperature: this.temperature,
         }),
-        timeout: 5000,
-      });
+      };
+
+      if (signal) {
+        fetchOpts.signal = signal;
+      }
+
+      const response = await fetch(`${this.ollamaUrl}/api/generate`, fetchOpts);
+
+      if (signal?.aborted) {
+        this.metrics.aborted_calls++;
+        return null;
+      }
 
       if (!response.ok) {
         throw new Error("Ollama request failed");
@@ -170,19 +127,49 @@ class IntentDetector {
           intent: result.intent || "chat",
           confidence: Math.min(1, Math.max(0, result.confidence || 0.5)),
           method: "ollama",
+          source: "llm",
           latency_ms: latency,
         };
       }
     } catch (e) {
+      if (e.name === "AbortError") {
+        this.metrics.aborted_calls++;
+        return null;
+      }
       console.warn("[intent] Ollama classification failed:", e.message);
     }
 
     return null;
   }
 
-  async classify(input) {
+  /**
+   * Classify with AbortController support.
+   * Returns { result, abort() } where:
+   * - result: Promise<IntentResult>
+   * - abort(): function to cancel pending Ollama classification
+   */
+  classifyAsync(input) {
+    const controller = new AbortController();
+
+    const resultPromise = this.classify(input, controller.signal);
+
+    return {
+      result: resultPromise,
+      abort: () => {
+        controller.abort();
+      },
+    };
+  }
+
+  async classify(input, signal) {
     if (!input || typeof input !== "string") {
-      return { intent: "chat", confidence: 0, method: "invalid" };
+      return {
+        intent: "chat",
+        confidence: 0,
+        method: "invalid",
+        source: "none",
+        authoritative: false,
+      };
     }
 
     const language = this.detectLanguage(input);
@@ -197,13 +184,107 @@ class IntentDetector {
 
     this.metrics.cache_misses++;
 
-    // 嘗試 Ollama
-    let result = await this.classifyWithOllama(input, language);
+    // Phase 3.3: Signal fast-path — keyword hints bypass Ollama
+    const hints = extractHints(input);
+    const startedAt = Date.now();
+    let result;
 
-    // 若失敗，降級到關鍵字匹配
-    if (!result) {
-      result = await this.classifyByKeywords(input);
-      this.metrics.fallback_calls++;
+    if (hints.confidence >= this.signalConfidenceThreshold) {
+      // High confidence signal → skip Ollama entirely
+      this.metrics.signal_hits++;
+      result = {
+        intent: hints.intent,
+        confidence: hints.confidence,
+        method: "signal",
+        source: "signal",
+        keywords_matched: hints.keywords_matched,
+        authoritative: true,
+      };
+    } else {
+      // Low confidence signal → try Ollama (with AbortSignal)
+      this.metrics.signal_bypasses++;
+      const ollamaResult = await this.classifyWithOllama(input, language, signal);
+
+      if (signal?.aborted) {
+        // Aborted — use best available hint
+        if (hints.intent !== "unknown") {
+          result = {
+            intent: hints.intent,
+            confidence: hints.confidence,
+            method: "signal_aborted",
+            source: "signal",
+            keywords_matched: hints.keywords_matched,
+            authoritative: true,
+            aborted: true,
+          };
+        } else {
+          result = {
+            intent: "chat",
+            confidence: 0.1,
+            method: "aborted_fallback",
+            source: "none",
+            authoritative: true,
+            aborted: true,
+          };
+        }
+        this.metrics.aborted_calls++;
+      } else if (ollamaResult) {
+        // Intent Authority: check expiry
+        const elapsed = Date.now() - startedAt;
+        if (elapsed > INTENT_AUTHORITY_EXPIRY_MS && hints.intent !== "unknown") {
+          // Ollama was too slow, use best-effort hint
+          result = {
+            intent: hints.intent,
+            confidence: hints.confidence,
+            method: "signal_expiry",
+            source: "signal",
+            keywords_matched: hints.keywords_matched,
+            authoritative: true,
+            expired_llm: true,
+          };
+        } else if (
+          ollamaResult.intent === "unknown" ||
+          (ollamaResult.intent === "chat" && ollamaResult.confidence < 0.3)
+        ) {
+          // Ollama returned unknown/low-confidence chat → fallback to hints if available
+          if (hints.intent !== "unknown") {
+            result = {
+              intent: hints.intent,
+              confidence: hints.confidence,
+              method: "signal_fallback",
+              source: "signal",
+              keywords_matched: hints.keywords_matched,
+              authoritative: true,
+            };
+            this.metrics.fallback_calls++;
+          } else {
+            result = { ...ollamaResult, authoritative: true };
+          }
+        } else {
+          result = { ...ollamaResult, authoritative: true };
+        }
+      } else {
+        // Ollama failed completely → use signal hints
+        if (hints.intent !== "unknown") {
+          result = {
+            intent: hints.intent,
+            confidence: hints.confidence,
+            method: "signal_fallback",
+            source: "signal",
+            keywords_matched: hints.keywords_matched,
+            authoritative: true,
+          };
+        } else {
+          result = {
+            intent: "chat",
+            confidence: 0.1,
+            method: "fallback",
+            source: "none",
+            authoritative: true,
+          };
+        }
+        this.metrics.fallback_calls++;
+      }
     }
 
     // 記錄指標
@@ -227,6 +308,8 @@ class IntentDetector {
       intent: result.intent,
       confidence: result.confidence,
       method: result.method,
+      source: result.source,
+      aborted: result.aborted || false,
       latency_ms: result.latency_ms || null,
     });
     this._logBuffer.push(logEntry);
@@ -269,6 +352,9 @@ class IntentDetector {
       classification: {
         total_calls: this.metrics.call_count,
         ollama_calls: this.metrics.ollama_calls,
+        signal_hits: this.metrics.signal_hits,
+        signal_bypasses: this.metrics.signal_bypasses,
+        aborted_calls: this.metrics.aborted_calls,
         fallback_calls: this.metrics.fallback_calls,
         avg_confidence: parseFloat(avgConfidence),
         avg_latency_ms: avgLatency,

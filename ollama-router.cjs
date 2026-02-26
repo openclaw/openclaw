@@ -239,6 +239,149 @@ function tryOllamaChat(messages, options) {
   });
 }
 
+// ─── Streaming Chat (Phase 4.3) ─────────────────────────────────
+
+/**
+ * Stream Ollama response with TTFT/TPS metrics.
+ * Returns { success, stream, metrics } where stream is a ReadableStream-like.
+ * Caller must pipe stream to response.
+ *
+ * @param {Array} messages - Chat messages
+ * @param {Object} options - { model, timeout }
+ * @param {Function} onChunk - (text, isFirst) => void
+ * @param {Function} onDone - ({ content, metrics }) => void
+ * @param {Function} onError - (error) => void
+ */
+function tryOllamaChatStream(messages, options, onChunk, onDone, onError) {
+  const model = (options && options.model) || OLLAMA_MODEL;
+  const timeout = (options && options.timeout) || OLLAMA_TIMEOUT;
+
+  const startTime = Date.now();
+  ollamaStats.total++;
+
+  const body = JSON.stringify({
+    model: model,
+    messages: messages,
+    keep_alive: "1h",
+    stream: true,
+  });
+
+  const opts = {
+    hostname: OLLAMA_HOST,
+    port: OLLAMA_PORT,
+    path: "/v1/chat/completions",
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Content-Length": Buffer.byteLength(body),
+    },
+    timeout: timeout,
+  };
+
+  let firstTokenTime = null;
+  let tokenCount = 0;
+  let fullContent = "";
+  let buffer = "";
+
+  const req = http.request(opts, (res) => {
+    if (res.statusCode !== 200) {
+      ollamaStats.error++;
+      ollamaStats.consecutiveFailures++;
+      onError(new Error(`Ollama HTTP ${res.statusCode}`));
+      return;
+    }
+
+    res.on("data", (chunk) => {
+      buffer += chunk.toString();
+      // Parse SSE lines
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || ""; // keep incomplete line
+
+      for (const line of lines) {
+        if (!line.startsWith("data: ")) {
+          continue;
+        }
+        const data = line.slice(6).trim();
+        if (data === "[DONE]") {
+          continue;
+        }
+
+        try {
+          const parsed = JSON.parse(data);
+          const delta = parsed.choices?.[0]?.delta?.content;
+          if (delta) {
+            if (!firstTokenTime) {
+              firstTokenTime = Date.now();
+            }
+            tokenCount++;
+            fullContent += delta;
+            onChunk(delta, tokenCount === 1);
+          }
+        } catch {
+          // skip malformed chunks
+        }
+      }
+    });
+
+    res.on("end", () => {
+      const totalMs = Date.now() - startTime;
+      const ttft = firstTokenTime ? firstTokenTime - startTime : totalMs;
+      const streamMs = firstTokenTime ? Date.now() - firstTokenTime : 0;
+      const tps = streamMs > 0 ? Math.round((tokenCount / streamMs) * 1000) : 0;
+
+      ollamaStats.totalLatency += totalMs;
+
+      if (!fullContent) {
+        ollamaStats.error++;
+        ollamaStats.consecutiveFailures++;
+        onError(new Error("empty_stream_response"));
+        return;
+      }
+
+      ollamaStats.consecutiveFailures = 0;
+      ollamaStats.success++;
+
+      onDone({
+        content: fullContent,
+        model,
+        latency: totalMs,
+        metrics: {
+          ttft_ms: ttft,
+          tps,
+          total_stream_ms: streamMs,
+          token_count: tokenCount,
+        },
+      });
+    });
+  });
+
+  req.on("error", (e) => {
+    ollamaStats.error++;
+    ollamaStats.consecutiveFailures++;
+    if (ollamaStats.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+      restartOllama();
+      ollamaStats.consecutiveFailures = 0;
+    }
+    onError(e);
+  });
+
+  req.on("timeout", () => {
+    req.destroy();
+    ollamaStats.timeout++;
+    ollamaStats.consecutiveFailures++;
+    if (ollamaStats.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+      restartOllama();
+      ollamaStats.consecutiveFailures = 0;
+    }
+    onError(new Error("stream_timeout"));
+  });
+
+  req.write(body);
+  req.end();
+
+  return req; // return for abort capability
+}
+
 // ─── Model Selection Helper ──────────────────────────────────────
 
 function getModelForForce(forceModel) {
@@ -266,6 +409,7 @@ function getStats() {
 
 module.exports = {
   tryOllamaChat,
+  tryOllamaChatStream,
   assessQuality,
   detectForceModel,
   stripForceDirective,

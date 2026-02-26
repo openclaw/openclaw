@@ -50,6 +50,9 @@ class DecisionEngine {
         complexity: intent.complexity,
         executor: decision.executor,
         reason: decision.reason,
+        intent_source: intent.source,
+        intent_method: intent.method,
+        intent_authoritative: intent.authoritative,
       });
     }
 
@@ -87,7 +90,10 @@ class DecisionEngine {
   }
 
   getStats() {
-    return this.stateStore.getSnapshot();
+    return {
+      ...this.stateStore.getSnapshot(),
+      routing: this.reducer.getStats ? this.reducer.getStats() : {},
+    };
   }
 }
 

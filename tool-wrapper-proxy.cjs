@@ -39,6 +39,7 @@ const {
   setLastDevProject,
 } = require("./lib/openclaw-p0.2-last-dev-project.cjs");
 const { DecisionEngine } = require("./decision-engine.cjs");
+const { OllamaKeepalive } = require("./infra/ollama-keepalive.cjs");
 
 const UPSTREAM_HOST = "localhost";
 const UPSTREAM_PORT = 3456;
@@ -236,6 +237,8 @@ const specManager = new SpecManager({
 // ─── Decision Engine (Phase 0) ──────────────────────────────
 
 const decisionEngine = new DecisionEngine();
+const ollamaKeepalive = new OllamaKeepalive();
+ollamaKeepalive.start();
 
 // ─── P1.9 + P1.11: Circuit Breaker ──────────────────────────────
 
@@ -4361,6 +4364,7 @@ function localExec(action, args) {
 async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
   const trace = createTrace(reqId);
   req._trace = trace;
+  ollamaKeepalive.touch(); // Update idle timer for warm-keep
 
   // Ollama health check: restart if unresponsive
   const checkOllamaHealth = async () => {
@@ -4452,26 +4456,40 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
     // memoryContext = await fetchMemories(userText); // Mem0 removed
   }
 
-  // P0.1: 非阻塞 intent 分類 (在背景運行，不影響主路徑)
+  // P0.1 + Phase 4.1: Async intent with AbortController
+  // Signal fast-path resolves immediately; Ollama runs in background with abort support
+  let intentAbort = null;
+  let intentPromise = null;
   if (userText && intentClassifier) {
-    void (async () => {
-      const span = traceSpan(trace, "intent_classify");
-      try {
-        const hint = await intentClassifier.classify(userText);
+    const { result, abort } = intentClassifier.classifyAsync(userText);
+    intentAbort = abort;
+    const span = traceSpan(trace, "intent_classify");
+    intentPromise = result
+      .then((hint) => {
         if (hint && hint.intent) {
           req.intent_hint = hint;
           trace.intent_cache_hit = !!hint.cached;
-          span.end({ intent: hint.intent, confidence: hint.confidence, cached: !!hint.cached });
+          span.end({
+            intent: hint.intent,
+            confidence: hint.confidence,
+            cached: !!hint.cached,
+            source: hint.source || "unknown",
+            method: hint.method || "unknown",
+            authoritative: !!hint.authoritative,
+            aborted: !!hint.aborted,
+          });
           console.log(
-            `[wrapper] #${reqId} intent classified: ${hint.intent}=${(hint.confidence || 0).toFixed(2)}`,
+            `[wrapper] #${reqId} intent classified: ${hint.intent}=${(hint.confidence || 0).toFixed(2)} source=${hint.source || "?"} method=${hint.method || "?"}`,
           );
         } else {
           span.end({ intent: null });
         }
-      } catch (e) {
+        return hint;
+      })
+      .catch((e) => {
         span.end({ error: e.message });
-      }
-    })();
+        return null;
+      });
   }
 
   // Priority 1.5: Financial Agent routing (between dev mode and CLI tools)
@@ -4500,6 +4518,10 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
       analysis += `\n⚠️ 免責聲明: 本分析僅供參考，非投資建議。`;
       skillContext = `[台股分析]\n${analysis}`;
       span.end({ symbol: stockSymbol, success: true });
+      decisionEngine.recordSuccess("claude", Date.now() - trace._start);
+      if (intentAbort) {
+        intentAbort();
+      } // cancel pending Ollama intent classify
       finalizeTrace(trace, "taiwan_stock", { route_path: "stock_direct" });
       return sendDirectResponse(reqId, skillContext, wantsStream, res);
     } catch (e) {
@@ -4540,6 +4562,10 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
       try {
         const output = await localExec(execAction.action, execAction.args);
         span.end({ action: execAction.action, success: true });
+        decisionEngine.recordSuccess("local", Date.now() - trace._start);
+        if (intentAbort) {
+          intentAbort();
+        }
         finalizeTrace(trace, "local", { route_path: "exec_direct" });
         return sendDirectResponse(reqId, output, wantsStream, res);
       } catch (e) {
@@ -4781,6 +4807,7 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
             const truncated =
               output.length > 3000 ? output.slice(0, 3000) + "\n...(truncated)" : output;
             recordRoutingOutcome(cpIntent, "session_bridge", true, Date.now() - cpStartTime);
+            decisionEngine.recordSuccess("claude", Date.now() - cpStartTime);
             const _pPredicted = predictExecutor(cpIntent);
             if (_pPredicted === "session_bridge") {
               softPreWarm(cpProject);
@@ -4796,6 +4823,7 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
             trace.fallback = true;
             console.error(`[wrapper] #${reqId} control_plane error: ${e.message}`);
             recordRoutingOutcome(cpIntent, "session_bridge", false, Date.now() - cpStartTime);
+            decisionEngine.recordFailure("claude");
             console.log(
               `[wrapper] #${reqId} control_plane: session-bridge failed, falling through to dev mode`,
             );
@@ -4875,10 +4903,12 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
           reply = JSON.stringify(orchRes);
         }
         orchSpan.end({ success: true });
+        decisionEngine.recordSuccess("claude", Date.now() - trace._start);
         finalizeTrace(trace, "agent_orchestrator", { route_path: "agent_task" });
         return sendDirectResponse(reqId, reply, wantsStream, res);
       } catch (e) {
         orchSpan.end({ error: e.message });
+        decisionEngine.recordFailure("claude");
         finalizeTrace(trace, "agent_orchestrator", { route_path: "agent_task", fallback: true });
         console.error(`[wrapper] #${reqId} agent_task error: ${e.message}`);
         return sendDirectResponse(
@@ -4898,6 +4928,10 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
       console.log(`[wrapper] #${reqId} SYSTEM CMD: ${sysIntent.type}`);
       const sysResult = await handleSystemCommand(sysIntent.type);
       sysSpan.end({ type: sysIntent.type });
+      decisionEngine.recordSuccess("local", Date.now() - trace._start);
+      if (intentAbort) {
+        intentAbort();
+      }
       finalizeTrace(trace, "system", { route_path: "system_cmd" });
       return sendDirectResponse(reqId, sysResult, wantsStream, res);
     }
@@ -4983,6 +5017,8 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
             results.push(`⊘ ${cmd} (無法路由)`);
           }
         }
+        decisionEngine.recordSuccess("local", Date.now() - trace._start);
+        finalizeTrace(trace, "local", { route_path: "follow_up_exec_all" });
         return sendDirectResponse(reqId, results.join("\n\n───\n\n"), wantsStream, res);
       } else {
         // Execute first suggestion only
@@ -5056,6 +5092,8 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
             );
             const output = result.output || "(no output)";
             const response = `git push ${remote} ${branch} 完成:\n\n${output}`;
+            decisionEngine.recordSuccess("claude", Date.now() - trace._start);
+            finalizeTrace(trace, "session_bridge", { route_path: "dev_git_push" });
             return sendDirectResponse(reqId, response, wantsStream, res);
           } catch (e) {
             console.error(`[wrapper] #${reqId} git push via session-bridge failed: ${e.message}`);
@@ -5101,6 +5139,11 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
     try {
       const [wtData, procs] = await fetchWorkProgress();
       const progressText = formatProgressResponse(wtData, procs);
+      decisionEngine.recordSuccess("local", Date.now() - trace._start);
+      if (intentAbort) {
+        intentAbort();
+      }
+      finalizeTrace(trace, "local", { route_path: "progress_query" });
       return sendDirectResponse(reqId, progressText, wantsStream, res);
     } catch (e) {
       console.error(`[wrapper] #${reqId} progress error: ${e.message}`);
@@ -5150,6 +5193,16 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
     const isForceOllama = forceModel === "ollama" || forceModel === "glm";
     const isForceClaude = forceModel === "claude" || forceModel === "opus";
 
+    // Phase 4.1: Await intent if not yet resolved (with 1.2s timeout)
+    if (intentPromise && !req.intent_hint) {
+      const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 1200));
+      await Promise.race([intentPromise, timeoutPromise]);
+      // If intent resolved via signal, abort pending Ollama to free GPU
+      if (req.intent_hint?.source === "signal" && intentAbort) {
+        intentAbort();
+      }
+    }
+
     // DecisionEngine decides executor (unless force override)
     const decision = decisionEngine.decide(
       { userText, intentHint: req.intent_hint, forceModel },
@@ -5168,7 +5221,18 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
 
       const ollamaMessages = prepareOllamaMessages(msgs, memoryContext);
       const ollamaOpts = forceModel === "glm" ? ollamaRouter.getModelForForce("glm") : {};
-      const ollamaResult = await ollamaRouter.tryOllamaChat(ollamaMessages, ollamaOpts);
+
+      // Phase 4.3: Use streaming API for TTFT/TPS metrics, collect full response for quality gate
+      const ollamaResult = await new Promise((resolve) => {
+        ollamaRouter.tryOllamaChatStream(
+          ollamaMessages,
+          ollamaOpts,
+          () => {}, // onChunk: collected internally by tryOllamaChatStream
+          (result) => resolve({ success: true, ...result }),
+          (err) =>
+            resolve({ success: false, reason: err.message, latency: Date.now() - trace._start }),
+        );
+      });
 
       if (ollamaResult.success) {
         const quality = ollamaRouter.assessQuality(ollamaResult.content, userText);
@@ -5199,11 +5263,20 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
             ollamaResult.latency,
           );
 
+          // Phase 4.3: Stream observability span
+          const streamMetrics = ollamaResult.metrics || {};
           ollamaSpan.end({
             model: modelName,
             quality,
             latency: ollamaResult.latency,
             success: true,
+          });
+          trace.spans.push({
+            stage: "stream",
+            ttft_ms: streamMetrics.ttft_ms || 0,
+            tps: streamMetrics.tps || 0,
+            total_stream_ms: streamMetrics.total_stream_ms || 0,
+            token_count: streamMetrics.token_count || 0,
           });
           finalizeTrace(trace, "ollama", {
             route_path: "ollama_direct",
@@ -5250,11 +5323,13 @@ async function handleChatCompletion(reqId, parsed, wantsStream, req, res) {
       userText,
     );
     claudeSpan.end({});
+    decisionEngine.recordSuccess("claude", Date.now() - trace._start);
     finalizeTrace(trace, "claude", {
       route_path: trace.fallback ? "ollama_fallback_claude" : "claude_direct",
     });
     return result;
   } else {
+    decisionEngine.recordSuccess("claude", Date.now() - trace._start);
     finalizeTrace(trace, skillContext ? "claude_with_skill" : "claude", {
       route_path: "passthrough",
     });
