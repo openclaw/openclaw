@@ -890,7 +890,16 @@ export async function minimaxTTS(params: {
       throw new Error("MiniMax T2A returned no audio data");
     }
 
-    return Buffer.from(hexAudio, "hex");
+    if (hexAudio.length % 2 !== 0 || !/^[0-9a-fA-F]+$/.test(hexAudio)) {
+      throw new Error("MiniMax T2A returned malformed hex audio data");
+    }
+
+    const audioBuffer = Buffer.from(hexAudio, "hex");
+    if (audioBuffer.length === 0) {
+      throw new Error("MiniMax T2A hex audio decoded to empty buffer");
+    }
+
+    return audioBuffer;
   } finally {
     clearTimeout(timeout);
   }
