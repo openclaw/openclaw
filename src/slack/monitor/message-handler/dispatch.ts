@@ -1,4 +1,5 @@
 import { resolveHumanDelayConfig } from "../../../agents/identity.js";
+import { resolveAgentOutboundIdentity } from "../../../infra/outbound/identity.js";
 import { dispatchInboundMessage } from "../../../auto-reply/dispatch.js";
 import { clearHistoryEntriesIfEnabled } from "../../../auto-reply/reply/history.js";
 import { createReplyDispatcherWithTyping } from "../../../auto-reply/reply/reply-dispatcher.js";
@@ -69,6 +70,16 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const { ctx, account, message, route } = prepared;
   const cfg = ctx.cfg;
   const runtime = ctx.runtime;
+
+  // Resolve agent identity for Slack chat:write.customize overrides.
+  const outboundIdentity = resolveAgentOutboundIdentity(cfg, route.agentId);
+  const slackIdentity = outboundIdentity
+    ? {
+        username: outboundIdentity.name,
+        iconUrl: outboundIdentity.avatarUrl,
+        iconEmoji: outboundIdentity.emoji,
+      }
+    : undefined;
 
   if (prepared.isDirectMessage) {
     const sessionCfg = cfg.session;
@@ -190,6 +201,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       textLimit: ctx.textLimit,
       replyThreadTs,
       replyToMode: ctx.replyToMode,
+      ...(slackIdentity ? { identity: slackIdentity } : {}),
     });
     replyPlan.markSent();
   };
