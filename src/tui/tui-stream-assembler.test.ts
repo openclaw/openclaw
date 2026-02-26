@@ -152,6 +152,35 @@ describe("TuiStreamAssembler", () => {
     expect(finalText).toBe("Draft line 1");
   });
 
+  it("prefers final text when non-text blocks appear only in final payload", () => {
+    const assembler = new TuiStreamAssembler();
+    assembler.ingestDelta(
+      "run-5c",
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Draft line 1" },
+          { type: "text", text: "Draft line 2" },
+        ],
+      },
+      false,
+    );
+
+    const finalText = assembler.finalize(
+      "run-5c",
+      {
+        role: "assistant",
+        content: [
+          { type: "tool_use", name: "search" },
+          { type: "text", text: "Draft line 2" },
+        ],
+      },
+      false,
+    );
+
+    expect(finalText).toBe("Draft line 2");
+  });
+
   it("accepts richer final payload when it extends streamed text", () => {
     const assembler = new TuiStreamAssembler();
     assembler.ingestDelta(
