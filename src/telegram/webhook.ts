@@ -250,7 +250,8 @@ export async function startTelegramWebhook(opts: {
     throw err;
   }
 
-  runtime.log?.(`webhook listening on ${publicUrl}`);
+  runtime.log?.(`webhook local listener on http://${host}:${port}${path}`);
+  runtime.log?.(`webhook advertised to telegram on ${publicUrl}`);
 
   let shutDown = false;
   const shutdown = () => {
