@@ -7,14 +7,20 @@ import {
   PresenceUpdateListener,
   type User,
 } from "@buape/carbon";
-import { danger } from "../../globals.js";
+import { danger, logVerbose } from "../../globals.js";
 import { formatDurationSeconds } from "../../infra/format-time/format-duration.ts";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { readChannelAllowFromStore } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
+import { resolveDmGroupAccessWithLists } from "../../security/dm-policy-shared.js";
 import {
+  isDiscordGroupAllowedByPolicy,
+  normalizeDiscordAllowList,
   normalizeDiscordSlug,
+  resolveDiscordAllowListMatch,
   resolveDiscordChannelConfigWithFallback,
+  resolveGroupDmAllow,
   resolveDiscordGuildEntry,
   shouldEmitDiscordReactionNotification,
 } from "./allow-list.js";
@@ -37,6 +43,12 @@ type DiscordReactionListenerParams = {
   accountId: string;
   runtime: RuntimeEnv;
   botUserId?: string;
+  dmEnabled: boolean;
+  groupDmEnabled: boolean;
+  groupDmChannels: string[];
+  dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
+  allowFrom: string[];
+  groupPolicy: "open" | "allowlist" | "disabled";
   allowNameMatching: boolean;
   guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
   logger: Logger;
@@ -179,6 +191,12 @@ async function runDiscordReactionHandler(params: {
         cfg: params.handlerParams.cfg,
         accountId: params.handlerParams.accountId,
         botUserId: params.handlerParams.botUserId,
+        dmEnabled: params.handlerParams.dmEnabled,
+        groupDmEnabled: params.handlerParams.groupDmEnabled,
+        groupDmChannels: params.handlerParams.groupDmChannels,
+        dmPolicy: params.handlerParams.dmPolicy,
+        allowFrom: params.handlerParams.allowFrom,
+        groupPolicy: params.handlerParams.groupPolicy,
         allowNameMatching: params.handlerParams.allowNameMatching,
         guildEntries: params.handlerParams.guildEntries,
         logger: params.handlerParams.logger,
@@ -193,6 +211,12 @@ async function handleDiscordReactionEvent(params: {
   cfg: LoadedConfig;
   accountId: string;
   botUserId?: string;
+  dmEnabled: boolean;
+  groupDmEnabled: boolean;
+  groupDmChannels: string[];
+  dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
+  allowFrom: string[];
+  groupPolicy: "open" | "allowlist" | "disabled";
   allowNameMatching: boolean;
   guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
   logger: Logger;
@@ -236,6 +260,12 @@ async function handleDiscordReactionEvent(params: {
       channelType === ChannelType.PublicThread ||
       channelType === ChannelType.PrivateThread ||
       channelType === ChannelType.AnnouncementThread;
+    if (isDirectMessage && !params.dmEnabled) {
+      return;
+    }
+    if (isGroupDm && !params.groupDmEnabled) {
+      return;
+    }
     let parentId = "parentId" in channel ? (channel.parentId ?? undefined) : undefined;
     let parentName: string | undefined;
     let parentSlug = "";
@@ -263,6 +293,45 @@ async function handleDiscordReactionEvent(params: {
       const contextKey = `discord:reaction:${action}:${data.message_id}:${user.id}:${emojiLabel}`;
       reactionBase = { baseText, contextKey };
       return reactionBase;
+    };
+    const isDirectReactionAuthorized = async () => {
+      if (!isDirectMessage) {
+        return true;
+      }
+      const storeAllowFrom =
+        params.dmPolicy === "allowlist"
+          ? []
+          : await readChannelAllowFromStore("discord").catch(() => []);
+      const access = resolveDmGroupAccessWithLists({
+        isGroup: false,
+        dmPolicy: params.dmPolicy,
+        groupPolicy: params.groupPolicy,
+        allowFrom: params.allowFrom,
+        groupAllowFrom: [],
+        storeAllowFrom,
+        isSenderAllowed: (allowEntries) => {
+          const allowList = normalizeDiscordAllowList(allowEntries, ["discord:", "user:", "pk:"]);
+          const allowMatch = allowList
+            ? resolveDiscordAllowListMatch({
+                allowList,
+                candidate: {
+                  id: user.id,
+                  name: user.username,
+                  tag: formatDiscordUserTag(user),
+                },
+                allowNameMatching: params.allowNameMatching,
+              })
+            : { allowed: false };
+          return allowMatch.allowed;
+        },
+      });
+      if (access.decision !== "allow") {
+        logVerbose(
+          `discord reaction blocked sender=${user.id} (dmPolicy=${params.dmPolicy}, decision=${access.decision}, reason=${access.reason})`,
+        );
+        return false;
+      }
+      return true;
     };
     const emitReaction = (text: string, parentPeerId?: string) => {
       const { contextKey } = resolveReactionBase();
@@ -322,6 +391,44 @@ async function handleDiscordReactionEvent(params: {
         parentSlug,
         scope: "thread",
       });
+    const isGuildReactionAllowed = (channelConfig: { allowed?: boolean } | null) => {
+      if (!isGuildMessage) {
+        return true;
+      }
+      const channelAllowlistConfigured =
+        Boolean(guildInfo?.channels) && Object.keys(guildInfo?.channels ?? {}).length > 0;
+      const channelAllowed = channelConfig?.allowed !== false;
+      if (
+        !isDiscordGroupAllowedByPolicy({
+          groupPolicy: params.groupPolicy,
+          guildAllowlisted: Boolean(guildInfo),
+          channelAllowlistConfigured,
+          channelAllowed,
+        })
+      ) {
+        return false;
+      }
+      if (channelConfig?.allowed === false) {
+        return false;
+      }
+      return true;
+    };
+
+    if (!(await isDirectReactionAuthorized())) {
+      return;
+    }
+
+    if (
+      isGroupDm &&
+      !resolveGroupDmAllow({
+        channels: params.groupDmChannels,
+        channelId: data.channel_id,
+        channelName,
+        channelSlug,
+      })
+    ) {
+      return;
+    }
 
     // Parallelize async operations for thread channels
     if (isThreadChannel) {
@@ -370,6 +477,9 @@ async function handleDiscordReactionEvent(params: {
       if (channelConfig?.allowed === false) {
         return;
       }
+      if (!isGuildReactionAllowed(channelConfig)) {
+        return;
+      }
 
       const messageAuthorId = message?.author?.id ?? undefined;
       if (!shouldNotifyReaction({ mode: reactionMode, messageAuthorId })) {
@@ -392,6 +502,9 @@ async function handleDiscordReactionEvent(params: {
       scope: "channel",
     });
     if (channelConfig?.allowed === false) {
+      return;
+    }
+    if (!isGuildReactionAllowed(channelConfig)) {
       return;
     }
 
