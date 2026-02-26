@@ -686,8 +686,10 @@ Set a token so **all** WS clients must authenticate:
 
 Doctor can generate one for you: `openclaw doctor --generate-gateway-token`.
 
-Note: `gateway.remote.token` is **only** for remote CLI calls; it does not
-protect local WS access.
+Note: `gateway.remote.token` / `.password` are client credential sources. They
+do **not** protect local WS access by themselves.
+Local call paths can use `gateway.remote.*` as fallback when `gateway.auth.*`
+is unset.
 Optional: pin remote TLS with `gateway.remote.tlsFingerprint` when using `wss://`.
 
 Local device pairing:
