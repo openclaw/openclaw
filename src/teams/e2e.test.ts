@@ -269,6 +269,7 @@ describe("E2E Workflow Tests", () => {
       // 5. Exchange messages
       manager.storeMessage({
         id: "msg-1",
+        from: "researcher",
         type: "message",
         sender: "researcher",
         recipient: "coder",
@@ -278,6 +279,7 @@ describe("E2E Workflow Tests", () => {
 
       manager.storeMessage({
         id: "msg-2",
+        from: "coder",
         type: "broadcast",
         sender: "coder",
         recipient: "",
@@ -437,6 +439,7 @@ describe("E2E Workflow Tests", () => {
       // Alice sends to Bob
       manager.storeMessage({
         id: "msg-1",
+        from: "alice",
         type: "message",
         sender: "alice",
         recipient: "bob",
@@ -460,6 +463,7 @@ describe("E2E Workflow Tests", () => {
       // Team lead sends broadcast
       manager.storeMessage({
         id: "broadcast-1",
+        from: "lead",
         type: "broadcast",
         sender: "lead",
         recipient: "",

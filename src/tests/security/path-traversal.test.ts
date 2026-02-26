@@ -5,8 +5,12 @@
 
 import * as fs from "fs/promises";
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { sanitizeSessionKey, ensureInboxDirectory, writeInboxMessage } from "../../teams/inbox";
-import { validateTeamName, validateTeamNameOrThrow, getTeamDirectory } from "../../teams/storage";
+import { sanitizeSessionKey, ensureInboxDirectory, writeInboxMessage } from "../../teams/inbox.js";
+import {
+  validateTeamName,
+  validateTeamNameOrThrow,
+  getTeamDirectory,
+} from "../../teams/storage.js";
 
 vi.mock("fs/promises");
 vi.mock("path", () => ({

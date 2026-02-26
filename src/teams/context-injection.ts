@@ -3,7 +3,7 @@
  * Converts pending inbox messages into XML for agent context
  */
 
-import type { SessionEntry } from "../../config/sessions/types";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { readInboxMessages, clearInboxMessages } from "./inbox.js";
 import type { TeamMessage } from "./types.js";
 
@@ -64,16 +64,27 @@ function messageToXml(message: TeamMessage | Record<string, unknown>): string {
  * Inject pending messages into agent context
  * Returns XML string for inclusion in system prompt
  */
+/**
+ * * Inject pending messages into agent context
+ * Returns XML string for inclusion in system prompt
+ *
+ * Note: sessionKey is a property on the SessionEntry type extension used for inbox path
+ * but is not part of the core SessionEntry type. It is added to hold session data
+ * for teammate session context injection.
+ */
 export async function injectPendingMessages(
-  session: SessionEntry,
+  session: SessionEntry & { sessionKey?: string },
   stateDir: string = process.env.OPENCLAW_STATE_DIR || process.cwd(),
 ): Promise<string> {
-  if (!session.teamId || !session.sessionKey) {
+  // Type assertion for session with optional sessionKey extension
+  type SessionWithKey = SessionEntry & { sessionKey: string };
+  const sessionWithKey = session as SessionWithKey;
+  const teamName = sessionWithKey.teamId;
+  const sessionKey = sessionWithKey.sessionKey;
+
+  if (!teamName || !sessionKey) {
     return "";
   }
-
-  const teamName = session.teamId;
-  const sessionKey = session.sessionKey;
 
   // Read pending messages
   const messages = await readInboxMessages(teamName, stateDir, sessionKey);
@@ -85,7 +96,7 @@ export async function injectPendingMessages(
   // Generate XML for each message
   let context = "";
   for (const msg of messages) {
-    context += messageToXml(msg as TeamMessage);
+    context += messageToXml(msg as unknown as TeamMessage);
   }
 
   // Clear processed messages

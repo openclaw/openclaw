@@ -60,7 +60,7 @@ export interface Task {
   /** Present continuous form shown during work (max 100 chars) */
   activeForm?: string;
   /** Current status */
-  status: "pending" | "claimed" | "in_progress" | "completed" | "failed";
+  status: "pending" | "claimed" | "in_progress" | "completed" | "failed" | "deleted";
   /** Session key of the claiming agent (empty if unassigned) */
   owner?: string;
   /** Array of task IDs that must complete before this task can start */
@@ -89,7 +89,13 @@ export interface TeamMessage {
   /** Session key of the recipient (optional for broadcast) */
   to?: string;
   /** Message type */
-  type: "message" | "broadcast" | "shutdown_request" | "shutdown_response" | "idle";
+  type:
+    | "message"
+    | "broadcast"
+    | "shutdown_request"
+    | "shutdown_response"
+    | "idle"
+    | "plan_approval_response";
   /** Message content (max 100KB) */
   content: string;
   /** Brief summary shown in UI (5-10 words) */
@@ -161,7 +167,7 @@ export interface CreateTaskParams {
  */
 export interface TaskListOptions {
   /** Filter by status */
-  status?: "pending" | "claimed" | "in_progress" | "completed" | "failed";
+  status?: "pending" | "claimed" | "in_progress" | "completed" | "failed" | "deleted";
   /** Filter by owner session key */
   owner?: string;
   /** Include completed tasks in results */

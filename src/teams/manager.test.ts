@@ -7,10 +7,12 @@ import { rm, mkdir } from "fs/promises";
 import { join } from "path";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { TeamManager } from "./manager.js";
+import type { TeamMessageExtended } from "./manager.js";
 import type { TeamMessage } from "./types.js";
 
 // Helper type for test messages with sender/recipient
 interface TestTeamMessage extends Omit<TeamMessage, "from" | "to"> {
+  from: string;
   sender: string;
   recipient: string;
 }
@@ -151,7 +153,7 @@ vi.mock("node:sqlite", () => {
       let changes = 0;
       for (const row of table) {
         if (condition(row)) {
-          Object.assign(row, updates);
+          Object.assign(row as Record<string, unknown>, updates);
           changes++;
         }
       }
@@ -222,7 +224,7 @@ vi.mock("node:sqlite", () => {
         if (whereMatch && params.length > 0) {
           const column = whereMatch[1];
           const value = params[0];
-          results = results.filter((row) => row[column] === value);
+          results = results.filter((row) => (row as Record<string, unknown>)[column] === value);
         }
 
         // Apply ORDER BY
@@ -230,10 +232,12 @@ vi.mock("node:sqlite", () => {
         if (orderByMatch) {
           const column = orderByMatch[1];
           results.sort((a, b) => {
-            if (a[column] < b[column]) {
+            const aVal = (a as Record<string, unknown>)[column] as string | number;
+            const bVal = (b as Record<string, unknown>)[column] as string | number;
+            if (aVal < bVal) {
               return -1;
             }
-            if (a[column] > b[column]) {
+            if (aVal > bVal) {
               return 1;
             }
             return 0;
@@ -274,7 +278,7 @@ vi.mock("node:sqlite", () => {
           });
 
           const condition = whereColumn
-            ? (row: unknown) => row[whereColumn] === whereValue
+            ? (row: unknown) => (row as Record<string, unknown>)[whereColumn] === whereValue
             : () => true;
           const changes = this._db._updateRow(tableName, condition, updates);
           return isUpdate ? { affectedRows: changes, insertId: 0 } : [];
@@ -285,7 +289,7 @@ vi.mock("node:sqlite", () => {
       if (sql.includes("DELETE FROM")) {
         const whereMatch = sql.match(/WHERE\s+(\w+)\s+=\s+\?/i);
         const condition = whereMatch
-          ? (row: unknown) => row[whereMatch[1]] === params[0]
+          ? (row: unknown) => (row as Record<string, unknown>)[whereMatch[1]] === params[0]
           : () => true;
         const changes = this._db._deleteRow(tableName, condition);
         return isUpdate ? { affectedRows: changes, insertId: 0 } : [];
@@ -1200,6 +1204,7 @@ describe("TeamManager", () => {
         const message: TestTeamMessage = {
           id: crypto.randomUUID(),
           type: "message",
+          from: "agent-1",
           sender: "agent-1",
           recipient: "agent-2",
           content: "Hello",
@@ -1221,6 +1226,7 @@ describe("TeamManager", () => {
         const message: TestTeamMessage = {
           id: crypto.randomUUID(),
           type: "broadcast",
+          from: "team-lead",
           sender: "team-lead",
           recipient: "",
           content: "Team update",
@@ -1242,6 +1248,7 @@ describe("TeamManager", () => {
         const message: TestTeamMessage = {
           id: crypto.randomUUID(),
           type: "shutdown_request",
+          from: "team-lead",
           sender: "team-lead",
           recipient: "agent-1",
           content: "Task complete, wrapping up",
@@ -1262,6 +1269,7 @@ describe("TeamManager", () => {
         const message: TestTeamMessage = {
           id: crypto.randomUUID(),
           type: "shutdown_response",
+          from: "agent-1",
           sender: "agent-1",
           recipient: "team-lead",
           content: "Exiting",
@@ -1285,6 +1293,7 @@ describe("TeamManager", () => {
         const message: TestTeamMessage = {
           id: crypto.randomUUID(),
           type: "plan_approval_response",
+          from: "team-lead",
           sender: "team-lead",
           recipient: "agent-1",
           content: "Plan approved",
@@ -1307,6 +1316,7 @@ describe("TeamManager", () => {
         const message: TestTeamMessage = {
           id: crypto.randomUUID(),
           type: "message",
+          from: "agent-1",
           sender: "agent-1",
           recipient: "agent-2",
           content: "Long message content here",
@@ -1329,6 +1339,7 @@ describe("TeamManager", () => {
         const message: TestTeamMessage = {
           id: crypto.randomUUID(),
           type: "message",
+          from: "agent-1",
           sender: "agent-1",
           recipient: "agent-2",
           content: "Test",
@@ -1362,6 +1373,7 @@ describe("TeamManager", () => {
           toStoreMessage({
             id: crypto.randomUUID(),
             type: "message",
+            from: "agent-1",
             sender: "agent-1",
             recipient: "agent-2",
             content: "To agent-2",
@@ -1373,6 +1385,7 @@ describe("TeamManager", () => {
           toStoreMessage({
             id: crypto.randomUUID(),
             type: "message",
+            from: "agent-3",
             sender: "agent-3",
             recipient: "agent-4",
             content: "To agent-4",
@@ -1395,6 +1408,7 @@ describe("TeamManager", () => {
           toStoreMessage({
             id: crypto.randomUUID(),
             type: "message",
+            from: "agent-1",
             sender: "agent-1",
             recipient: "agent-2",
             content: "First",
@@ -1406,6 +1420,7 @@ describe("TeamManager", () => {
           toStoreMessage({
             id: crypto.randomUUID(),
             type: "message",
+            from: "agent-3",
             sender: "agent-3",
             recipient: "agent-2",
             content: "Second",
@@ -1417,6 +1432,7 @@ describe("TeamManager", () => {
           toStoreMessage({
             id: crypto.randomUUID(),
             type: "message",
+            from: "agent-1",
             sender: "agent-1",
             recipient: "agent-2",
             content: "Third",
@@ -1436,9 +1452,10 @@ describe("TeamManager", () => {
       it("should include all message properties", () => {
         const manager = new TeamManager("test-team", TEST_DIR);
 
-        const original: TeamMessage = {
+        const original: TeamMessageExtended = {
           id: crypto.randomUUID(),
           type: "message",
+          from: "agent-1",
           sender: "agent-1",
           recipient: "agent-2",
           content: "Test message",
@@ -1470,6 +1487,7 @@ describe("TeamManager", () => {
         const message: TestTeamMessage = {
           id: crypto.randomUUID(),
           type: "message",
+          from: "agent-1",
           sender: "agent-1",
           recipient: "agent-2",
           content: "Test",
@@ -1500,6 +1518,7 @@ describe("TeamManager", () => {
         const message: TestTeamMessage = {
           id: crypto.randomUUID(),
           type: "message",
+          from: "agent-1",
           sender: "agent-1",
           recipient: "agent-2",
           content: "Test content",
@@ -1524,6 +1543,7 @@ describe("TeamManager", () => {
           toStoreMessage({
             id: crypto.randomUUID(),
             type: "message",
+            from: "agent-1",
             sender: "agent-1",
             recipient: "agent-2",
             content: "Message 1",
@@ -1535,6 +1555,7 @@ describe("TeamManager", () => {
           toStoreMessage({
             id: crypto.randomUUID(),
             type: "message",
+            from: "agent-3",
             sender: "agent-3",
             recipient: "agent-4",
             content: "Message 2",

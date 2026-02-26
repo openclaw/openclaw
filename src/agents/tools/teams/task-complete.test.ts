@@ -4,6 +4,16 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
+
+// Helper type for tool results
+interface ToolResult {
+  status?: string;
+  error?: string;
+  taskId?: string;
+  announced?: boolean;
+}
+
+const getDetails = (result: { details: unknown }): ToolResult => result.details as ToolResult;
 import { createTaskCompleteTool } from "./task-complete.js";
 
 // Mock storage modules
@@ -181,7 +191,7 @@ describe("TaskComplete Tool", () => {
           content: "Task task-1 completed: Fixed the bug in auth module",
         }),
       );
-      expect(result.details.announced).toBe(true);
+      expect(getDetails(result).announced).toBe(true);
     });
 
     it("should not announce if teammate is the lead", async () => {
@@ -231,8 +241,8 @@ describe("TaskComplete Tool", () => {
         announce: true,
       });
 
-      expect(result.details.taskId).toBe("task-1");
-      expect(result.details.status).toBe("completed");
+      expect(getDetails(result).taskId).toBe("task-1");
+      expect(getDetails(result).status).toBe("completed");
       expect(mockManager.completeTask).toHaveBeenCalled();
     });
 

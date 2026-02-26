@@ -5,8 +5,8 @@
 
 import * as fs from "fs/promises";
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { ensureInboxDirectory } from "../../teams/inbox";
-import { TeamManager } from "../../teams/manager";
+import { ensureInboxDirectory } from "../../teams/inbox.js";
+import { TeamManager } from "../../teams/manager.js";
 
 // Mock path module
 vi.mock("path", () => ({
@@ -27,7 +27,7 @@ vi.mock("node:sqlite", () => {
 
   class MockDatabaseSync {
     private _path: string;
-    private _data: Map<string, unknown[]> = new Map();
+    public _data: Map<string, Record<string, unknown>[]> = new Map();
 
     constructor(path: string) {
       this._path = path;
@@ -59,23 +59,30 @@ vi.mock("node:sqlite", () => {
       this._data.set("messages", []);
     }
 
-    _getTableData(tableName: string): unknown[] {
+    _getTableData(tableName: string): Record<string, unknown>[] {
       return this._data.get(tableName) || [];
     }
 
-    _insertRow(tableName: string, row: unknown): void {
+    _insertRow(tableName: string, row: Record<string, unknown>): void {
       const table = this._data.get(tableName);
       if (table) {
         table.push(row);
       }
     }
 
-    _query(tableName: string, condition?: (row: unknown) => boolean): unknown[] {
+    _query(
+      tableName: string,
+      condition?: (row: Record<string, unknown>) => boolean,
+    ): Record<string, unknown>[] {
       const table = this._data.get(tableName) || [];
       return condition ? table.filter(condition) : table;
     }
 
-    _update(tableName: string, condition: (row: unknown) => boolean, updates: unknown): number {
+    _update(
+      tableName: string,
+      condition: (row: Record<string, unknown>) => boolean,
+      updates: Record<string, unknown>,
+    ): number {
       const table = this._data.get(tableName);
       if (!table) {
         return 0;
@@ -92,25 +99,25 @@ vi.mock("node:sqlite", () => {
   }
 
   class MockStatement {
-    private _db: unknown;
+    private _db: MockDatabaseSync;
     private _sql: string;
 
-    constructor(db: unknown, sql: string) {
+    constructor(db: MockDatabaseSync, sql: string) {
       this._db = db;
       this._sql = sql;
     }
 
-    all(...params: unknown[]): unknown[] {
-      return this._query(params);
+    all(...params: unknown[]): Record<string, unknown>[] {
+      return this._query(params) as Record<string, unknown>[];
     }
 
-    get(...params: unknown[]): unknown {
-      const results = this._query(params);
-      return results.length > 0 ? results[0] : (undefined as unknown);
+    get(...params: unknown[]): Record<string, unknown> | undefined {
+      const results = this._query(params) as Record<string, unknown>[];
+      return results.length > 0 ? results[0] : undefined;
     }
 
-    run(...params: unknown[]): unknown {
-      const results = this._query(params, true);
+    run(...params: unknown[]): { changes: number; lastInsertRowid: unknown } {
+      const results = this._query(params, true) as { affectedRows: number; insertId: unknown };
       return { changes: results.affectedRows, lastInsertRowid: results.insertId };
     }
 
@@ -159,7 +166,7 @@ vi.mock("node:sqlite", () => {
           }
         });
         const condition = whereColumn
-          ? (row: unknown) => row[whereColumn] === whereValue
+          ? (row: Record<string, unknown>) => row[whereColumn] === whereValue
           : () => true;
         const changes = this._db._update(tableName, condition, updates);
         return isUpdate ? { affectedRows: changes, insertId: 0 } : [];
@@ -168,7 +175,7 @@ vi.mock("node:sqlite", () => {
       if (this._sql.includes("DELETE FROM")) {
         const whereMatch = this._sql.match(/WHERE\s+(\w+)\s+=\s+\?/i);
         const condition = whereMatch
-          ? (row: unknown) => row[whereMatch[1]] === params[0]
+          ? (row: Record<string, unknown>) => row[whereMatch[1]] === params[0]
           : () => true;
         const initialLength = table.length;
         const filtered = table.filter((row) => !condition(row));
@@ -204,7 +211,9 @@ vi.mock("node:sqlite", () => {
     }
   }
 
-  const mockDefault = MockDatabaseSync;
+  const mockDefault = MockDatabaseSync as typeof MockDatabaseSync & {
+    DatabaseSync: typeof MockDatabaseSync;
+  };
   mockDefault.DatabaseSync = MockDatabaseSync;
   return { default: mockDefault, DatabaseSync: mockDefault };
 });
@@ -261,6 +270,8 @@ describe("Team Isolation", () => {
       teamA.storeMessage({
         id: crypto.randomUUID(),
         type: "message",
+        from: "agent-a",
+        to: "agent-b",
         sender: "agent-a",
         recipient: "agent-b",
         content: "Secret message",

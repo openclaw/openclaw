@@ -57,7 +57,9 @@ vi.mock("node:sqlite", () => {
   }
 
   // The module uses both default export and DatabaseSync property
-  const mockDefault = MockDatabaseSync;
+  const mockDefault = MockDatabaseSync as typeof MockDatabaseSync & {
+    DatabaseSync: typeof MockDatabaseSync;
+  };
   mockDefault.DatabaseSync = MockDatabaseSync;
   return {
     default: mockDefault,
@@ -66,8 +68,18 @@ vi.mock("node:sqlite", () => {
 });
 
 // Helper to get the most recent database instance
-function getLatestMockInstance(): MockDatabaseSync {
-  return mockInstances[mockInstances.length - 1];
+function getLatestMockInstance(): {
+  path: string;
+  execCalls: readonly string[];
+  pragmaCalls: readonly string[];
+  isOpen: boolean;
+  exec: (sql: string) => void;
+  pragma: (statement: string) => void;
+  close: () => void;
+} {
+  return mockInstances[
+    mockInstances.length - 1
+  ] as typeof getLatestMockInstance extends () => infer R ? R : never;
 }
 
 // Helper to get all database instances
@@ -400,8 +412,8 @@ describe("SQLite Ledger Initialization", () => {
       ledger2.openDatabase();
 
       const instances = getAllMockInstances();
-      expect(instances[0].path).toContain("team-alpha");
-      expect(instances[1].path).toContain("team-beta");
+      expect((instances[0] as { path: string }).path).toContain("team-alpha");
+      expect((instances[1] as { path: string }).path).toContain("team-beta");
 
       ledger1.close();
       ledger2.close();

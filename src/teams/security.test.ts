@@ -300,6 +300,7 @@ describe("Security Tests", () => {
     it("should not leak messages between teams", () => {
       manager1.storeMessage({
         id: "msg-1",
+        from: "sender-1",
         type: "message",
         sender: "sender-1",
         recipient: "recipient-1",
@@ -309,6 +310,7 @@ describe("Security Tests", () => {
 
       manager2.storeMessage({
         id: "msg-2",
+        from: "sender-2",
         type: "message",
         sender: "sender-2",
         recipient: "recipient-2",

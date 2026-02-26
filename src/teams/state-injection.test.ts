@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import type { SessionEntry } from "../../config/sessions/types.ts";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { closeAll } from "./pool.js";
 import { formatTeamState } from "./state-injection.js";
 import type { TeamState } from "./types.js";
@@ -171,16 +171,18 @@ vi.mock("node:sqlite", () => {
 
       if (this._sql.includes("INSERT")) {
         const data = this.extractInsertData();
-        this._db._insertRow(tableName, data);
+        this._db._insertRow(tableName!, data);
         return { changes: 1, lastInsertRowid: 1 };
       } else if (this._sql.includes("UPDATE")) {
         const updates = this.extractUpdates();
         const conditions = this.extractConditions();
-        const updated = this._db._updateRow(tableName, conditions, updates);
+        const combinedCondition = (row: unknown) => conditions.every((cond) => cond(row));
+        const updated = this._db._updateRow(tableName!, combinedCondition, updates);
         return { changes: updated ? 1 : 0 };
       } else if (this._sql.includes("DELETE")) {
         const conditions = this.extractConditions();
-        const deleted = this._db._deleteRow(tableName, conditions);
+        const combinedCondition = (row: unknown) => conditions.every((cond) => cond(row));
+        const deleted = this._db._deleteRow(tableName!, combinedCondition);
         return { changes: deleted ? 1 : 0 };
       }
       return { changes: 0 };
@@ -243,7 +245,7 @@ vi.mock("node:sqlite", () => {
             );
           });
           const param = this._boundParams[index] ?? this._boundParams[0];
-          conditions.push((row: unknown) => row[column] === param);
+          conditions.push((row: unknown) => (row as Record<string, unknown>)[column] === param);
         }
       }
       return conditions;
@@ -264,7 +266,7 @@ vi.mock("node:sqlite", () => {
     }
 
     private extractUpdates(): Partial<unknown> {
-      const updates: Partial<unknown> = {};
+      const updates: Record<string, unknown> = {};
       const setMatch = this._sql.match(/SET\s+(.+?)\s+WHERE/i);
       if (setMatch) {
         const setClause = setMatch[1];
@@ -341,7 +343,7 @@ describe("Team State Injection", () => {
         updatedAt: Date.now(),
       };
 
-      const { injectTeamState } = await import("./state-injection");
+      const { injectTeamState } = await import("./state-injection.js");
       const result = await injectTeamState(leadSession, mockStateDir);
 
       expect(result).toContain("=== TEAM STATE ===");
@@ -362,7 +364,7 @@ describe("Team State Injection", () => {
         updatedAt: Date.now(),
       };
 
-      const { injectTeamState } = await import("./state-injection");
+      const { injectTeamState } = await import("./state-injection.js");
       const result = await injectTeamState(memberSession, mockStateDir);
 
       expect(result).toBe("");
@@ -375,7 +377,7 @@ describe("Team State Injection", () => {
         updatedAt: Date.now(),
       };
 
-      const { injectTeamState } = await import("./state-injection");
+      const { injectTeamState } = await import("./state-injection.js");
       const result = await injectTeamState(nonTeamSession, mockStateDir);
 
       expect(result).toBe("");
@@ -389,7 +391,7 @@ describe("Team State Injection", () => {
         updatedAt: Date.now(),
       };
 
-      const { injectTeamState } = await import("./state-injection");
+      const { injectTeamState } = await import("./state-injection.js");
       const result = await injectTeamState(sessionWithoutRole, mockStateDir);
 
       expect(result).toBe("");

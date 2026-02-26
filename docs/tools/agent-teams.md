@@ -212,7 +212,7 @@ If members are unresponsive, the team remains active.
 - **Medium**: 4-6 members for moderate complexity
 - **Large**: 7-10 members for complex projects
 
-### Communication
+### Team Communication
 
 - Use broadcasts sparingly
 - Prefer direct messages for coordination

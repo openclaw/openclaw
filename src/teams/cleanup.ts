@@ -85,7 +85,8 @@ export async function archiveCompletedTasks(
     .all("completed", now - maxAge);
 
   for (const task of oldCompletedTasks) {
-    const result = dbResult.prepare("DELETE FROM tasks WHERE id = ?").run(task.id);
+    const typedTask = task as { id: string };
+    const result = dbResult.prepare("DELETE FROM tasks WHERE id = ?").run(typedTask.id);
     if (result.changes > 0) {
       archivedCount++;
     }

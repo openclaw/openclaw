@@ -4,7 +4,7 @@
  */
 
 import * as fs from "fs/promises";
-import type { Stats } from "node:fs";
+import type { Stats, Dirent } from "node:fs";
 import * as path from "path";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
@@ -30,12 +30,27 @@ interface MockTask {
 interface MockDatabase {
   setTable(tableName: string, data: unknown[]): void;
   getTable(tableName: string): unknown[];
+  exec(sql: string): void;
 }
 
 // Helper type for accessing mock database
 const getDb = (manager: unknown): MockDatabase => {
   return (manager as { ledger: { getDb: () => unknown } }).ledger.getDb() as MockDatabase;
 };
+
+// Helper to create mock Dirent objects with proper type
+type TestDirent = Dirent;
+const createMockDirent = (name: string, isDir: boolean): TestDirent =>
+  ({
+    name,
+    isDirectory: () => isDir,
+    isFile: () => !isDir,
+    isBlockDevice: () => false,
+    isCharacterDevice: () => false,
+    isSymbolicLink: () => false,
+    isFIFO: () => false,
+    isSocket: () => false,
+  }) as unknown as TestDirent;
 
 vi.mock("node:sqlite", () => {
   class MockDatabaseSync {
@@ -73,8 +88,8 @@ vi.mock("node:sqlite", () => {
             return members;
           }
           if (sql.includes("SELECT") && sql.includes("WHERE status = ?")) {
-            const status = args[0];
-            const completedAt = args[1];
+            const status = args[0] as string;
+            const completedAt = args[1] as number;
             return tasks.filter((t: unknown) => {
               const task = t as MockTask;
               return task.status === status && task.completedAt && task.completedAt < completedAt;
@@ -85,26 +100,28 @@ vi.mock("node:sqlite", () => {
         get: (...args: unknown[]) => {
           if (sql.includes("SELECT id")) {
             const tasks = this._tables.get("tasks") || [];
-            const id = args[0];
-            return tasks.find((t: unknown) => t.id === id);
+            const id = args[0] as string;
+            return tasks.find((t: unknown) => (t as MockTask).id === id);
           }
           return null;
         },
         run: (...args: unknown[]) => {
           if (sql.includes("DELETE FROM tasks")) {
-            const id = args[0];
+            const id = args[0] as string;
             const tasks = this._tables.get("tasks") || [];
-            const index = tasks.findIndex((t: unknown) => t.id === id);
+            const index = tasks.findIndex((t: unknown) => (t as MockTask).id === id);
             if (index >= 0) {
               tasks.splice(index, 1);
             }
             return { changes: index >= 0 ? 1 : 0 };
           }
           if (sql.includes("UPDATE tasks SET status")) {
-            const status = args[0];
-            const id = args[1];
+            const status = args[0] as string;
+            const id = args[1] as string;
             const tasks = this._tables.get("tasks") || [];
-            const task = tasks.find((t: unknown) => t.id === id);
+            const task = tasks.find((t: unknown) => (t as MockTask).id === id) as
+              | MockTask
+              | undefined;
             if (task) {
               task.status = status;
               if (status === "completed") {
@@ -187,9 +204,9 @@ describe("cleanupOldMessages", () => {
       const oldMessagesPath = path.join(stateDir, teamName, "inbox", "agent-1", "messages.jsonl");
 
       vi.mocked(fs.readdir).mockResolvedValue([
-        { name: "agent-1", isDirectory: () => true },
-        { name: "agent-2", isDirectory: () => true },
-      ] as unknown as { name: string; isDirectory: () => boolean }[]);
+        createMockDirent("agent-1", true),
+        createMockDirent("agent-2", true),
+      ] as never);
 
       vi.mocked(fs.stat).mockImplementation(async (filePath) => {
         if (filePath === oldMessagesPath) {
@@ -209,10 +226,7 @@ describe("cleanupOldMessages", () => {
     it("When cleaning up Then it should not delete any messages", async () => {
       const now = Date.now();
 
-      vi.mocked(fs.readdir).mockResolvedValue([{ name: "agent-1", isDirectory: () => true }] as {
-        name: string;
-        isDirectory: () => boolean;
-      }[] as unknown as { name: string; isDirectory: () => boolean }[]);
+      vi.mocked(fs.readdir).mockResolvedValue([createMockDirent("agent-1", true)] as never);
 
       vi.mocked(fs.stat).mockResolvedValue({ mtimeMs: now - 10 * 60 * 60 * 1000 } as Stats);
 
@@ -236,10 +250,10 @@ describe("cleanupOldMessages", () => {
   describe("Given mixed file types in inbox", () => {
     it("When cleaning up Then it should only process directories", async () => {
       vi.mocked(fs.readdir).mockResolvedValue([
-        { name: "agent-1", isDirectory: () => true },
-        { name: ".DS_Store", isDirectory: () => false },
-        { name: "README.md", isDirectory: () => false },
-      ] as unknown as { name: string; isDirectory: () => boolean }[]);
+        createMockDirent("agent-1", true),
+        createMockDirent(".DS_Store", false),
+        createMockDirent("README.md", false),
+      ] as never);
 
       vi.mocked(fs.stat).mockResolvedValue({ mtimeMs: Date.now() } as Stats);
 
@@ -380,10 +394,7 @@ describe("cleanupInactiveTeams", () => {
       };
 
       vi.mocked(fs.readdir).mockResolvedValue(
-        Object.keys(teamConfigs).map((name) => ({ name, isDirectory: () => true })) as {
-          name: string;
-          isDirectory: () => true;
-        }[],
+        Object.keys(teamConfigs).map((name) => createMockDirent(name, true)) as never,
       );
 
       vi.mocked(fs.readFile).mockImplementation(async (filePath) => {
@@ -409,10 +420,7 @@ describe("cleanupInactiveTeams", () => {
       };
 
       vi.mocked(fs.readdir).mockResolvedValue(
-        Object.keys(teamConfigs).map((name) => ({ name, isDirectory: () => true })) as {
-          name: string;
-          isDirectory: () => true;
-        }[],
+        Object.keys(teamConfigs).map((name) => createMockDirent(name, true)) as never,
       );
 
       vi.mocked(fs.readFile).mockImplementation(async (filePath) => {
@@ -443,9 +451,9 @@ describe("cleanupInactiveTeams", () => {
   describe("Given teams with missing config files", () => {
     it("When cleaning inactive teams Then it should skip teams without config", async () => {
       vi.mocked(fs.readdir).mockResolvedValue([
-        { name: "team-with-config", isDirectory: () => true },
-        { name: "team-without-config", isDirectory: () => true },
-      ] as unknown as { name: string; isDirectory: () => boolean }[]);
+        createMockDirent("team-with-config", true),
+        createMockDirent("team-without-config", true),
+      ] as never);
 
       const callCount = { value: 0 };
       vi.mocked(fs.readFile).mockImplementation(async () => {
@@ -551,7 +559,7 @@ describe("checkpointWAL", () => {
   describe("Given a team with a WAL database", () => {
     it("When executing WAL checkpoint Then it should execute PRAGMA checkpoint", async () => {
       const manager = getTeamManager(teamName, stateDir);
-      const db = getDb(manager) as { exec: () => void };
+      const db = getDb(manager);
 
       const execSpy = vi.spyOn(db, "exec");
 
@@ -564,7 +572,7 @@ describe("checkpointWAL", () => {
   describe("Given multiple checkpoint calls", () => {
     it("When executing checkpoints multiple times Then each should execute PRAGMA", async () => {
       const manager = getTeamManager(teamName, stateDir);
-      const db = getDb(manager) as { exec: () => void };
+      const db = getDb(manager);
 
       const execSpy = vi.spyOn(db, "exec");
 
@@ -607,9 +615,7 @@ describe("getTeamStats", () => {
         { sessionKey: "agent-2", agentId: "agent-2", name: "Agent 2" },
       ]);
 
-      vi.mocked(fs.readdir).mockResolvedValue([
-        { name: "agent-1", isDirectory: () => true },
-      ] as unknown as { name: string; isDirectory: () => boolean }[]);
+      vi.mocked(fs.readdir).mockResolvedValue([createMockDirent("agent-1", true)] as never);
 
       vi.mocked(fs.readFile).mockResolvedValue('{"message":"test1"}\n{"message":"test2"}\n');
 
@@ -633,9 +639,7 @@ describe("getTeamStats", () => {
       db.setTable("tasks", [{ id: "1", status: "pending", completedAt: undefined }]);
       db.setTable("members", [{ sessionKey: "agent-1", agentId: "agent-1", name: "Agent 1" }]);
 
-      vi.mocked(fs.readdir).mockResolvedValue(
-        [] as unknown as { name: string; isDirectory: () => boolean }[],
-      );
+      vi.mocked(fs.readdir).mockResolvedValue([] as never);
       vi.mocked(fs.stat).mockResolvedValue({ size: 2048 } as Stats);
 
       const stats = await getTeamStats(teamName, stateDir);
@@ -652,9 +656,7 @@ describe("getTeamStats", () => {
       db.setTable("tasks", []);
       db.setTable("members", []);
 
-      vi.mocked(fs.readdir).mockResolvedValue(
-        [] as unknown as { name: string; isDirectory: () => boolean }[],
-      );
+      vi.mocked(fs.readdir).mockResolvedValue([] as never);
       vi.mocked(fs.stat).mockRejectedValue(new Error("ENOENT"));
 
       const stats = await getTeamStats(teamName, stateDir);
@@ -681,9 +683,7 @@ describe("End-to-End Cleanup Workflow", () => {
     it("When running all cleanup operations Then they should complete in sequence", async () => {
       const now = Date.now();
 
-      vi.mocked(fs.readdir).mockResolvedValue([
-        { name: "agent-1", isDirectory: () => true },
-      ] as unknown as { name: string; isDirectory: () => boolean }[]);
+      vi.mocked(fs.readdir).mockResolvedValue([createMockDirent("agent-1", true)] as never);
 
       vi.mocked(fs.stat).mockResolvedValue({
         mtimeMs: now - 30 * 60 * 60 * 1000,

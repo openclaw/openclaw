@@ -4,6 +4,7 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { injectPendingMessages } from "./context-injection.js";
 import * as inbox from "./inbox.js";
 
@@ -11,6 +12,16 @@ vi.mock("./inbox.js", () => ({
   readInboxMessages: vi.fn(),
   clearInboxMessages: vi.fn(),
 }));
+
+// Helper to create mock SessionEntry with required fields
+const createMockSession = (
+  partial: Partial<SessionEntry> & { teamId?: string; sessionKey?: string },
+): SessionEntry =>
+  ({
+    sessionId: partial.sessionId ?? "test-session-id",
+    updatedAt: partial.updatedAt ?? Date.now(),
+    ...partial,
+  }) as SessionEntry;
 
 describe("Message Injection", () => {
   const mockStateDir = "/mock/state";
@@ -35,10 +46,10 @@ describe("Message Injection", () => {
       vi.mocked(inbox.readInboxMessages).mockResolvedValue(mockMessages);
       vi.mocked(inbox.clearInboxMessages).mockResolvedValue();
 
-      const session = {
+      const session = createMockSession({
         teamId: mockTeamName,
         sessionKey: mockSessionKey,
-      } as { teamId: string; sessionKey: string };
+      });
 
       const result = await injectPendingMessages(session, mockStateDir);
 
@@ -64,10 +75,10 @@ describe("Message Injection", () => {
       vi.mocked(inbox.readInboxMessages).mockResolvedValue(mockMessages);
       vi.mocked(inbox.clearInboxMessages).mockResolvedValue();
 
-      const session = {
+      const session = createMockSession({
         teamId: mockTeamName,
         sessionKey: mockSessionKey,
-      } as { teamId: string; sessionKey: string };
+      });
 
       const result = await injectPendingMessages(session, mockStateDir);
 
@@ -90,10 +101,10 @@ describe("Message Injection", () => {
       vi.mocked(inbox.readInboxMessages).mockResolvedValue(mockMessages);
       vi.mocked(inbox.clearInboxMessages).mockResolvedValue();
 
-      const session = {
+      const session = createMockSession({
         teamId: mockTeamName,
         sessionKey: mockSessionKey,
-      } as { teamId: string; sessionKey: string };
+      });
 
       await injectPendingMessages(session, mockStateDir);
 
@@ -120,10 +131,10 @@ describe("Message Injection", () => {
       vi.mocked(inbox.readInboxMessages).mockResolvedValue(mockMessages);
       vi.mocked(inbox.clearInboxMessages).mockResolvedValue();
 
-      const session = {
+      const session = createMockSession({
         teamId: mockTeamName,
         sessionKey: mockSessionKey,
-      } as { teamId: string; sessionKey: string };
+      });
 
       const result = await injectPendingMessages(session, mockStateDir);
 
@@ -145,10 +156,10 @@ describe("Message Injection", () => {
       vi.mocked(inbox.readInboxMessages).mockResolvedValue(mockMessages);
       vi.mocked(inbox.clearInboxMessages).mockResolvedValue();
 
-      const session = {
+      const session = createMockSession({
         teamId: mockTeamName,
         sessionKey: mockSessionKey,
-      } as { teamId: string; sessionKey: string };
+      });
 
       const result = await injectPendingMessages(session, mockStateDir);
 
@@ -168,10 +179,10 @@ describe("Message Injection", () => {
       vi.mocked(inbox.readInboxMessages).mockResolvedValue(mockMessages);
       vi.mocked(inbox.clearInboxMessages).mockResolvedValue();
 
-      const session = {
+      const session = createMockSession({
         teamId: mockTeamName,
         sessionKey: mockSessionKey,
-      } as { teamId: string; sessionKey: string };
+      });
 
       const result = await injectPendingMessages(session, mockStateDir);
 
@@ -193,10 +204,10 @@ describe("Message Injection", () => {
       vi.mocked(inbox.readInboxMessages).mockResolvedValue(mockMessages);
       vi.mocked(inbox.clearInboxMessages).mockResolvedValue();
 
-      const session = {
+      const session = createMockSession({
         teamId: mockTeamName,
         sessionKey: mockSessionKey,
-      } as { teamId: string; sessionKey: string };
+      });
 
       const result = await injectPendingMessages(session, mockStateDir);
 
@@ -219,10 +230,10 @@ describe("Message Injection", () => {
       vi.mocked(inbox.readInboxMessages).mockResolvedValue(mockMessages);
       vi.mocked(inbox.clearInboxMessages).mockResolvedValue();
 
-      const session = {
+      const session = createMockSession({
         teamId: mockTeamName,
         sessionKey: mockSessionKey,
-      } as { teamId: string; sessionKey: string };
+      });
 
       const result = await injectPendingMessages(session, mockStateDir);
 
@@ -242,10 +253,10 @@ describe("Message Injection", () => {
       vi.mocked(inbox.readInboxMessages).mockResolvedValue(mockMessages);
       vi.mocked(inbox.clearInboxMessages).mockResolvedValue();
 
-      const session = {
+      const session = createMockSession({
         teamId: mockTeamName,
         sessionKey: mockSessionKey,
-      } as { teamId: string; sessionKey: string };
+      });
 
       const result = await injectPendingMessages(session, mockStateDir);
 
@@ -255,9 +266,11 @@ describe("Message Injection", () => {
 
   describe("No Team Context", () => {
     it("should return empty string when no teamId", async () => {
-      const session = {
+      const session = createMockSession({
         sessionKey: mockSessionKey,
-      } as { teamId: string; sessionKey: string };
+      });
+      // Explicitly remove teamId for this test
+      delete (session as Partial<SessionEntry>).teamId;
 
       const result = await injectPendingMessages(session, mockStateDir);
 
@@ -266,11 +279,16 @@ describe("Message Injection", () => {
     });
 
     it("should return empty string when no sessionKey", async () => {
-      const session = {
+      const session = createMockSession({
         teamId: mockTeamName,
-      } as { teamId: string; sessionKey: string };
+      });
+      // Explicitly remove sessionKey for this test - note: sessionKey is not on SessionEntry
+      // The test is checking what happens when injectPendingMessages gets incomplete session
 
-      const result = await injectPendingMessages(session, mockStateDir);
+      const result = await injectPendingMessages(
+        { ...session, sessionKey: undefined } as unknown as SessionEntry,
+        mockStateDir,
+      );
 
       expect(result).toBe("");
       expect(inbox.readInboxMessages).not.toHaveBeenCalled();
@@ -279,10 +297,10 @@ describe("Message Injection", () => {
     it("should return empty string when empty inbox", async () => {
       vi.mocked(inbox.readInboxMessages).mockResolvedValue([]);
 
-      const session = {
+      const session = createMockSession({
         teamId: mockTeamName,
         sessionKey: mockSessionKey,
-      } as { teamId: string; sessionKey: string };
+      });
 
       const result = await injectPendingMessages(session, mockStateDir);
 
@@ -313,10 +331,10 @@ describe("Message Injection", () => {
       vi.mocked(inbox.readInboxMessages).mockResolvedValue(mockMessages);
       vi.mocked(inbox.clearInboxMessages).mockResolvedValue();
 
-      const session = {
+      const session = createMockSession({
         teamId: mockTeamName,
         sessionKey: mockSessionKey,
-      } as { teamId: string; sessionKey: string };
+      });
 
       const result = await injectPendingMessages(session, mockStateDir);
 
@@ -348,10 +366,10 @@ describe("Message Injection", () => {
       vi.mocked(inbox.readInboxMessages).mockResolvedValue(mockMessages);
       vi.mocked(inbox.clearInboxMessages).mockResolvedValue();
 
-      const session = {
+      const session = createMockSession({
         teamId: mockTeamName,
         sessionKey: mockSessionKey,
-      } as { teamId: string; sessionKey: string };
+      });
 
       const result = await injectPendingMessages(session, mockStateDir);
 
@@ -383,10 +401,10 @@ describe("Message Injection", () => {
       vi.mocked(inbox.readInboxMessages).mockResolvedValue(mockMessages);
       vi.mocked(inbox.clearInboxMessages).mockResolvedValue();
 
-      const session = {
+      const session = createMockSession({
         teamId: mockTeamName,
         sessionKey: mockSessionKey,
-      } as { teamId: string; sessionKey: string };
+      });
 
       await injectPendingMessages(session, mockStateDir);
 
@@ -410,10 +428,10 @@ describe("Message Injection", () => {
       vi.mocked(inbox.readInboxMessages).mockResolvedValue(mockMessages);
       vi.mocked(inbox.clearInboxMessages).mockResolvedValue();
 
-      const session = {
+      const session = createMockSession({
         teamId: mockTeamName,
         sessionKey: mockSessionKey,
-      } as { teamId: string; sessionKey: string };
+      });
 
       const result = await injectPendingMessages(session, mockStateDir);
 
@@ -433,10 +451,10 @@ describe("Message Injection", () => {
       vi.mocked(inbox.readInboxMessages).mockResolvedValue(mockMessages);
       vi.mocked(inbox.clearInboxMessages).mockResolvedValue();
 
-      const session = {
+      const session = createMockSession({
         teamId: mockTeamName,
         sessionKey: mockSessionKey,
-      } as { teamId: string; sessionKey: string };
+      });
 
       const result = await injectPendingMessages(session, mockStateDir);
 
@@ -461,10 +479,10 @@ describe("Message Injection", () => {
       vi.mocked(inbox.readInboxMessages).mockResolvedValue(mockMessages);
       vi.mocked(inbox.clearInboxMessages).mockResolvedValue();
 
-      const session = {
+      const session = createMockSession({
         teamId: mockTeamName,
         sessionKey: mockSessionKey,
-      } as { teamId: string; sessionKey: string };
+      });
 
       const result = await injectPendingMessages(session, mockStateDir);
 
@@ -489,10 +507,10 @@ describe("Message Injection", () => {
       vi.mocked(inbox.readInboxMessages).mockResolvedValue(mockMessages);
       vi.mocked(inbox.clearInboxMessages).mockResolvedValue();
 
-      const session = {
+      const session = createMockSession({
         teamId: mockTeamName,
         sessionKey: mockSessionKey,
-      } as { teamId: string; sessionKey: string };
+      });
 
       const result = await injectPendingMessages(session, mockStateDir);
 
@@ -515,10 +533,10 @@ describe("Message Injection", () => {
       vi.mocked(inbox.readInboxMessages).mockResolvedValue(mockMessages);
       vi.mocked(inbox.clearInboxMessages).mockResolvedValue();
 
-      const session = {
+      const session = createMockSession({
         teamId: mockTeamName,
         sessionKey: mockSessionKey,
-      } as { teamId: string; sessionKey: string };
+      });
 
       const result = await injectPendingMessages(session, mockStateDir);
 
@@ -541,10 +559,10 @@ describe("Message Injection", () => {
       vi.mocked(inbox.readInboxMessages).mockResolvedValue(mockMessages);
       vi.mocked(inbox.clearInboxMessages).mockResolvedValue();
 
-      const session = {
+      const session = createMockSession({
         teamId: mockTeamName,
         sessionKey: mockSessionKey,
-      } as { teamId: string; sessionKey: string };
+      });
 
       const result = await injectPendingMessages(session, mockStateDir);
 
@@ -564,10 +582,10 @@ describe("Message Injection", () => {
       vi.mocked(inbox.readInboxMessages).mockResolvedValue(mockMessages);
       vi.mocked(inbox.clearInboxMessages).mockResolvedValue();
 
-      const session = {
+      const session = createMockSession({
         teamId: mockTeamName,
         sessionKey: mockSessionKey,
-      } as { teamId: string; sessionKey: string };
+      });
 
       const result = await injectPendingMessages(session, mockStateDir);
 

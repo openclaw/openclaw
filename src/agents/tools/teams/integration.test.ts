@@ -16,6 +16,27 @@ import { createTaskListTool } from "./task-list.js";
 import { createTeamCreateTool } from "./team-create.js";
 import { createTeammateSpawnTool } from "./teammate-spawn.js";
 
+// Helper type for tool results
+interface ToolResult {
+  teamName?: string;
+  teamId?: string;
+  status?: string;
+  error?: string;
+  sessionKey?: string;
+  teammateId?: string;
+  taskId?: string;
+  tasks?: Array<{ subject: string; status: string; id: string }>;
+  delivered?: boolean;
+  announced?: boolean;
+  message?: string;
+  warnings?: string[];
+  name?: string;
+  agentId?: string;
+}
+
+// Type helper for accessing details
+const getDetails = (result: { details: unknown }): ToolResult => result.details as ToolResult;
+
 // Mock config for agentToAgent policy
 vi.mock("../../../config/config.js", () => ({
   loadConfig: vi.fn(() => ({
@@ -72,8 +93,8 @@ describe("Agent Teams Integration", () => {
         description: "Development squad",
       });
 
-      expect(result.details.teamName).toBe("dev-squad");
-      expect(result.details.status).toBe("active");
+      expect(getDetails(result).teamName).toBe("dev-squad");
+      expect(getDetails(result).status).toBe("active");
     });
 
     it("should spawn teammate with correct session key format", async () => {
@@ -97,16 +118,16 @@ describe("Agent Teams Integration", () => {
       });
 
       // Check the result
-      if (result.details.error) {
+      if (getDetails(result).error) {
         // If there's an error, log it for debugging
-        console.log("Spawn error:", result.details.error);
+        console.log("Spawn error:", getDetails(result).error);
       }
 
-      expect(result.details.status).toBe("spawned");
+      expect(getDetails(result).status).toBe("spawned");
       // New format: agent:teammate-{name}:main (not using agent_id parameter)
-      expect(result.details.sessionKey).toBe("agent:teammate-worker:main");
+      expect(getDetails(result).sessionKey).toBe("agent:teammate-worker:main");
       // teammateId is now the sanitized name
-      expect(result.details.teammateId).toBe("worker");
+      expect(getDetails(result).teammateId).toBe("worker");
     });
   });
 
@@ -128,8 +149,8 @@ describe("Agent Teams Integration", () => {
         description: "A test task for verification",
       });
 
-      expect(taskResult.details.status).toBe("pending");
-      expect(taskResult.details.taskId).toBeDefined();
+      expect(getDetails(taskResult).status).toBe("pending");
+      expect(getDetails(taskResult).taskId).toBeDefined();
 
       // List tasks
       const listTool = createTaskListTool();
@@ -137,8 +158,8 @@ describe("Agent Teams Integration", () => {
         team_name: "task-team",
       });
 
-      expect(listResult.details.tasks.length).toBeGreaterThan(0);
-      const task = listResult.details.tasks.find(
+      expect(getDetails(listResult).tasks?.length).toBeGreaterThan(0);
+      const task = getDetails(listResult).tasks?.find(
         (t: { subject: string }) => t.subject === "Test Task",
       );
       expect(task).toBeDefined();
@@ -161,7 +182,7 @@ describe("Agent Teams Integration", () => {
         team_name: "claim-team",
         name: "Worker",
       });
-      const workerKey = spawnResult.details.sessionKey;
+      const workerKey = getDetails(spawnResult).sessionKey!;
 
       // Create task
       const taskCreateTool = createTaskCreateTool();
@@ -170,7 +191,7 @@ describe("Agent Teams Integration", () => {
         subject: "Work Task",
         description: "A task to be claimed and completed",
       });
-      const taskId = taskResult.details.taskId;
+      const taskId = getDetails(taskResult).taskId;
 
       // Claim task as teammate
       const claimTool = createTaskClaimTool({
@@ -181,7 +202,7 @@ describe("Agent Teams Integration", () => {
         task_id: taskId,
       });
 
-      expect(claimResult.details.status).toBe("claimed");
+      expect(getDetails(claimResult).status).toBe("claimed");
 
       // Complete task with announcement
       const completeTool = createTaskCompleteTool({
@@ -194,8 +215,8 @@ describe("Agent Teams Integration", () => {
         announce: true,
       });
 
-      expect(completeResult.details.status).toBe("completed");
-      expect(completeResult.details.announced).toBe(true);
+      expect(getDetails(completeResult).status).toBe("completed");
+      expect(getDetails(completeResult).announced).toBe(true);
 
       // Check lead's inbox for announcement
       const inboxMessages = await readInboxMessages(
@@ -203,9 +224,11 @@ describe("Agent Teams Integration", () => {
         `${tempDir}/teams`,
         leadSessionKey,
       );
-      const announceMsg = inboxMessages.find((m: { type: string }) => m.type === "task_complete");
+      const announceMsg = inboxMessages.find(
+        (m: Record<string, unknown>) => (m as { type: string }).type === "task_complete",
+      );
       expect(announceMsg).toBeDefined();
-      expect(announceMsg.content).toContain("completed");
+      expect((announceMsg as { content: string }).content).toContain("completed");
     });
   });
 
@@ -227,7 +250,7 @@ describe("Agent Teams Integration", () => {
         team_name: "msg-team",
         name: "Worker",
       });
-      const workerKey = spawnResult.details.sessionKey;
+      const workerKey = getDetails(spawnResult).sessionKey!;
 
       // Send message from lead to teammate
       const sendTool = createSendMessageTool({
@@ -241,7 +264,7 @@ describe("Agent Teams Integration", () => {
         content: "Hello from the lead!",
       });
 
-      expect(msgResult.details.delivered).toBe(true);
+      expect(getDetails(msgResult).delivered).toBe(true);
 
       // Check teammate's inbox
       const inboxMessages = await readInboxMessages("msg-team", `${tempDir}/teams`, workerKey);
@@ -284,7 +307,7 @@ describe("Agent Teams Integration", () => {
       });
 
       // Teammates are now full agents, not restricted by agentToAgent policy
-      expect(spawnResult.details.status).toBe("spawned");
+      expect(getDetails(spawnResult).status).toBe("spawned");
     });
   });
 
@@ -299,7 +322,7 @@ describe("Agent Teams Integration", () => {
         name: "Worker",
       });
 
-      expect(result.details.error).toContain("not found");
+      expect(getDetails(result).error).toContain("not found");
     });
 
     it("should handle claiming non-existent task", async () => {
@@ -320,7 +343,7 @@ describe("Agent Teams Integration", () => {
         task_id: "non-existent-task",
       });
 
-      expect(result.details.error).toBeDefined();
+      expect(getDetails(result).error).toBeDefined();
     });
   });
 });

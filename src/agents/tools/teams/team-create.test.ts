@@ -4,6 +4,19 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
+
+// Helper type for tool results
+interface ToolResult {
+  teamName?: string;
+  teamId?: string;
+  status?: string;
+  error?: string;
+  message?: string;
+  warnings?: string[];
+  teamDir?: string;
+}
+
+const getDetails = (result: { details: unknown }): ToolResult => result.details as ToolResult;
 import { createTeamCreateTool } from "./team-create.js";
 
 // Mock randomUUID to return predictable values
@@ -112,7 +125,7 @@ describe("TeamCreate Tool", () => {
         }),
       );
 
-      const details = result.details;
+      const details = getDetails(result);
       expect(details.teamId).toBe("test-uuid-1234");
       expect(details.teamName).toBe("my-team");
       expect(details.status).toBe("active");
@@ -439,8 +452,11 @@ describe("TeamCreate Tool", () => {
       const tool = createTeamCreateTool();
       const result = await tool.execute("tool-call-1", { team_name: "existing-team" });
 
-      expect(result.content[0].text).toContain("Team 'existing-team' already exists");
-      expect(result.content[0].text).toContain("choose a different name");
+      const content = result.content[0];
+      expect("text" in content ? content.text : "").toContain(
+        "Team 'existing-team' already exists",
+      );
+      expect("text" in content ? content.text : "").toContain("choose a different name");
     });
 
     it("should accept valid team names with only lowercase letters", async () => {
@@ -456,7 +472,7 @@ describe("TeamCreate Tool", () => {
       const result = await tool.execute("tool-call-1", { team_name: "myteam" });
 
       expect(validateTeamNameOrThrow).toHaveBeenCalledWith("myteam");
-      expect(result.details.status).toBe("active");
+      expect(getDetails(result).status).toBe("active");
     });
 
     it("should accept valid team names with numbers", async () => {
@@ -472,7 +488,7 @@ describe("TeamCreate Tool", () => {
       const result = await tool.execute("tool-call-1", { team_name: "team123" });
 
       expect(validateTeamNameOrThrow).toHaveBeenCalledWith("team123");
-      expect(result.details.status).toBe("active");
+      expect(getDetails(result).status).toBe("active");
     });
 
     it("should accept valid team names with hyphens", async () => {
@@ -488,7 +504,7 @@ describe("TeamCreate Tool", () => {
       const result = await tool.execute("tool-call-1", { team_name: "my-team-name" });
 
       expect(validateTeamNameOrThrow).toHaveBeenCalledWith("my-team-name");
-      expect(result.details.status).toBe("active");
+      expect(getDetails(result).status).toBe("active");
     });
 
     it("should accept valid team names with mixed lowercase, numbers, and hyphens", async () => {
@@ -504,7 +520,7 @@ describe("TeamCreate Tool", () => {
       const result = await tool.execute("tool-call-1", { team_name: "team-v2-123" });
 
       expect(validateTeamNameOrThrow).toHaveBeenCalledWith("team-v2-123");
-      expect(result.details.status).toBe("active");
+      expect(getDetails(result).status).toBe("active");
     });
   });
 
@@ -711,10 +727,10 @@ describe("TeamCreate Tool", () => {
       const tool = createTeamCreateTool();
       const result = await tool.execute("tool-call-1", { team_name: "test-team" });
 
-      expect(result.details.warnings).toBeDefined();
-      expect(result.details.warnings).toHaveLength(1);
-      expect(result.details.warnings[0]).toContain("tools.agentToAgent is not enabled");
-      expect(result.details.message).toContain("WARNING");
+      expect(getDetails(result).warnings).toBeDefined();
+      expect(getDetails(result).warnings).toHaveLength(1);
+      expect(getDetails(result).warnings![0]).toContain("tools.agentToAgent is not enabled");
+      expect(getDetails(result).message).toContain("WARNING");
     });
 
     it("should warn when agentToAgent.allow does not include wildcard", async () => {
@@ -736,9 +752,11 @@ describe("TeamCreate Tool", () => {
       const tool = createTeamCreateTool();
       const result = await tool.execute("tool-call-1", { team_name: "test-team" });
 
-      expect(result.details.warnings).toBeDefined();
-      expect(result.details.warnings).toHaveLength(1);
-      expect(result.details.warnings[0]).toContain("tools.agentToAgent.allow does not include '*'");
+      expect(getDetails(result).warnings).toBeDefined();
+      expect(getDetails(result).warnings).toHaveLength(1);
+      expect(getDetails(result).warnings![0]).toContain(
+        "tools.agentToAgent.allow does not include '*'",
+      );
     });
 
     it("should not warn when agentToAgent is enabled with wildcard", async () => {
@@ -760,8 +778,8 @@ describe("TeamCreate Tool", () => {
       const tool = createTeamCreateTool();
       const result = await tool.execute("tool-call-1", { team_name: "test-team" });
 
-      expect(result.details.warnings).toBeUndefined();
-      expect(result.details.message).not.toContain("WARNING");
+      expect(getDetails(result).warnings).toBeUndefined();
+      expect(getDetails(result).message).not.toContain("WARNING");
     });
   });
 });

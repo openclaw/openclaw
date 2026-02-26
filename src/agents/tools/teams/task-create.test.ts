@@ -4,6 +4,17 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
+
+// Helper type for tool results
+interface ToolResult {
+  status?: string;
+  error?: string;
+  taskId?: string;
+  subject?: string;
+  dependsOn?: string[];
+}
+
+const getDetails = (result: { details: unknown }): ToolResult => result.details as ToolResult;
 import { createTaskCreateTool } from "./task-create.js";
 
 // Helper type for test data assertions
@@ -533,7 +544,7 @@ describe("TaskCreate Tool", () => {
       expect(mockManager.addTaskDependency).toHaveBeenCalledTimes(2);
       expect(mockManager.addTaskDependency).toHaveBeenCalledWith("test-task-uuid-1234", "task-1");
       expect(mockManager.addTaskDependency).toHaveBeenCalledWith("test-task-uuid-1234", "task-2");
-      expect(result.details.taskId).toBe("test-task-uuid-1234");
+      expect(getDetails(result).taskId).toBe("test-task-uuid-1234");
       expect((result.details as TaskCreateResultData).status).toBe("pending");
     });
   });

@@ -3,7 +3,7 @@
  * Injects team state into agent context to prevent context amnesia
  */
 
-import type { SessionEntry } from "../../config/sessions/types.ts";
+import type { SessionEntry } from "../config/sessions/types.js";
 import { getTeamManager } from "./pool.js";
 import type { TeamState } from "./types.js";
 

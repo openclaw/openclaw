@@ -10,6 +10,7 @@ import {
   archiveCompletedTasks,
   cleanupInactiveTeams,
   closeAllManagers,
+  checkpointWAL,
 } from "../teams/cleanup.js";
 
 // Mock the pool module

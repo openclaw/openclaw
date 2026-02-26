@@ -4,6 +4,22 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
+
+// Helper type for tool results
+interface ToolResult {
+  teammateId?: string;
+  sessionKey?: string;
+  status?: string;
+  error?: string;
+  teamName?: string;
+  agentId?: string;
+  role?: string;
+  name?: string;
+  runId?: string;
+  message?: string;
+}
+
+const getDetails = (result: { details: unknown }): ToolResult => result.details as ToolResult;
 import { createTeammateSpawnTool } from "./teammate-spawn.js";
 
 // Mock storage modules
@@ -127,7 +143,7 @@ describe("TeammateSpawn Tool", () => {
         }),
       );
 
-      const details = result.details;
+      const details = getDetails(result);
       expect(details.sessionKey).toBe("agent:teammate-test-researcher:main");
       expect(details.agentId).toBe("teammate-test-researcher");
       expect(details.name).toBe("Test Researcher");
@@ -175,8 +191,8 @@ describe("TeammateSpawn Tool", () => {
       });
 
       // Each teammate gets a unique session key based on their name
-      expect(result1.details.sessionKey).toBe("agent:teammate-teammate-1:main");
-      expect(result2.details.sessionKey).toBe("agent:teammate-teammate-2:main");
+      expect(getDetails(result1).sessionKey).toBe("agent:teammate-teammate-1:main");
+      expect(getDetails(result2).sessionKey).toBe("agent:teammate-teammate-2:main");
     });
 
     it("should return session information in response", async () => {
@@ -236,8 +252,8 @@ describe("TeammateSpawn Tool", () => {
       });
 
       // Name should be sanitized (lowercase, special chars replaced)
-      expect(result.details.agentId).toBe("teammate-test-researcher");
-      expect(result.details.sessionKey).toBe("agent:teammate-test-researcher:main");
+      expect(getDetails(result).agentId).toBe("teammate-test-researcher");
+      expect(getDetails(result).sessionKey).toBe("agent:teammate-test-researcher:main");
     });
 
     it("should handle spaces in name", async () => {
@@ -253,7 +269,7 @@ describe("TeammateSpawn Tool", () => {
         name: "Frontend Developer",
       });
 
-      expect(result.details.agentId).toBe("teammate-frontend-developer");
+      expect(getDetails(result).agentId).toBe("teammate-frontend-developer");
     });
 
     it("should handle uppercase letters in name", async () => {
@@ -269,7 +285,7 @@ describe("TeammateSpawn Tool", () => {
         name: "RESEARCHER",
       });
 
-      expect(result.details.agentId).toBe("teammate-researcher");
+      expect(getDetails(result).agentId).toBe("teammate-researcher");
     });
   });
 
@@ -298,7 +314,7 @@ describe("TeammateSpawn Tool", () => {
       );
 
       // Tool should execute successfully
-      expect(result.details.name).toBe("Test Agent");
+      expect(getDetails(result).name).toBe("Test Agent");
       expect(mockManager.addMember).toHaveBeenCalled();
     });
 
@@ -321,7 +337,7 @@ describe("TeammateSpawn Tool", () => {
         expect.objectContaining({ method: "sessions.patch" }),
       );
 
-      expect(result.details.name).toBe("Test Agent");
+      expect(getDetails(result).name).toBe("Test Agent");
       expect(mockManager.addMember).toHaveBeenCalled();
     });
   });
@@ -457,8 +473,9 @@ describe("TeammateSpawn Tool", () => {
       const tool = createTeammateSpawnTool();
       const result = await tool.execute("tool-call-1", { team_name: "non-existent", name: "Test" });
 
-      expect(result.content[0].text).toContain("Team 'non-existent' not found");
-      expect(result.content[0].text).toContain("create the team first");
+      const content = result.content[0];
+      expect("text" in content ? content.text : "").toContain("Team 'non-existent' not found");
+      expect("text" in content ? content.text : "").toContain("create the team first");
     });
 
     it("should reject spawning into shutdown team", async () => {
@@ -483,8 +500,9 @@ describe("TeammateSpawn Tool", () => {
         name: "Test",
       });
 
-      expect(result.content[0].text).toContain("Team 'shutdown-team' is not active");
-      expect(result.content[0].text).toContain("status: shutdown");
+      const content = result.content[0];
+      expect("text" in content ? content.text : "").toContain("Team 'shutdown-team' is not active");
+      expect("text" in content ? content.text : "").toContain("status: shutdown");
     });
 
     it("should accept valid team names with only lowercase letters", async () => {
@@ -500,7 +518,7 @@ describe("TeammateSpawn Tool", () => {
       const result = await tool.execute("tool-call-1", { team_name: "myteam", name: "Test" });
 
       expect(validateTeamNameOrThrow).toHaveBeenCalledWith("myteam");
-      expect(result.details.name).toBe("Test");
+      expect(getDetails(result).name).toBe("Test");
     });
 
     it("should accept valid team names with numbers", async () => {
@@ -516,7 +534,7 @@ describe("TeammateSpawn Tool", () => {
       const result = await tool.execute("tool-call-1", { team_name: "team123", name: "Test" });
 
       expect(validateTeamNameOrThrow).toHaveBeenCalledWith("team123");
-      expect(result.details.name).toBe("Test");
+      expect(getDetails(result).name).toBe("Test");
     });
 
     it("should accept valid team names with hyphens", async () => {
@@ -532,7 +550,7 @@ describe("TeammateSpawn Tool", () => {
       const result = await tool.execute("tool-call-1", { team_name: "my-team-name", name: "Test" });
 
       expect(validateTeamNameOrThrow).toHaveBeenCalledWith("my-team-name");
-      expect(result.details.name).toBe("Test");
+      expect(getDetails(result).name).toBe("Test");
     });
 
     it("should accept valid team names with mixed lowercase, numbers, and hyphens", async () => {
@@ -548,7 +566,7 @@ describe("TeammateSpawn Tool", () => {
       const result = await tool.execute("tool-call-1", { team_name: "team-v2-123", name: "Test" });
 
       expect(validateTeamNameOrThrow).toHaveBeenCalledWith("team-v2-123");
-      expect(result.details.name).toBe("Test");
+      expect(getDetails(result).name).toBe("Test");
     });
   });
 
@@ -571,8 +589,8 @@ describe("TeammateSpawn Tool", () => {
       });
 
       // Error is caught and returned as JSON error
-      expect(result.details.error).toContain("Failed to spawn teammate");
-      expect(result.details.error).toContain("SQLITE_CORRUPT");
+      expect(getDetails(result).error).toContain("Failed to spawn teammate");
+      expect(getDetails(result).error).toContain("SQLITE_CORRUPT");
     });
 
     it("should handle errors from teamDirectoryExists check", async () => {
@@ -638,8 +656,8 @@ describe("TeammateSpawn Tool", () => {
         name: "New Member",
       });
 
-      expect(result.details.sessionKey).toBe("agent:teammate-new-member:main");
-      expect(result.details.teammateId).toBe("new-member");
+      expect(getDetails(result).sessionKey).toBe("agent:teammate-new-member:main");
+      expect(getDetails(result).teammateId).toBe("new-member");
     });
 
     it("should return teamName in response", async () => {
@@ -655,7 +673,7 @@ describe("TeammateSpawn Tool", () => {
         name: "Member",
       });
 
-      expect(result.details.teamName).toBe("research-team");
+      expect(getDetails(result).teamName).toBe("research-team");
     });
 
     it("should add member with teamRole as member", async () => {
@@ -688,7 +706,7 @@ describe("TeammateSpawn Tool", () => {
         name: "Custom Name",
       });
 
-      expect(result.details.name).toBe("Custom Name");
+      expect(getDetails(result).name).toBe("Custom Name");
       expect(mockManager.addMember).toHaveBeenCalledWith(
         expect.objectContaining({
           name: "Custom Name",
@@ -712,7 +730,7 @@ describe("TeammateSpawn Tool", () => {
       });
 
       // Session key should follow format: agent:teammate-{name}:main
-      expect(result.details.sessionKey).toBe("agent:teammate-researcher:main");
+      expect(getDetails(result).sessionKey).toBe("agent:teammate-researcher:main");
     });
 
     it("should use sanitized name in agent ID", async () => {
@@ -729,7 +747,7 @@ describe("TeammateSpawn Tool", () => {
       });
 
       // Name is sanitized to "data-scientist"
-      expect(result.details.agentId).toBe("teammate-data-scientist");
+      expect(getDetails(result).agentId).toBe("teammate-data-scientist");
     });
 
     it("should store session key in member record", async () => {
@@ -765,7 +783,7 @@ describe("TeammateSpawn Tool", () => {
         name: "Worker",
       });
 
-      expect(result.details.teammateId).toBe("worker");
+      expect(getDetails(result).teammateId).toBe("worker");
     });
   });
 

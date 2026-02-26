@@ -4,6 +4,20 @@
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
+
+// Helper type for tool results
+interface ToolResult {
+  status?: string;
+  error?: string;
+  teamName?: string;
+  message?: string;
+  pendingApprovals?: string[];
+  deleted?: boolean;
+  teamId?: string;
+  requestId?: string;
+}
+
+const getDetails = (result: { details: unknown }): ToolResult => result.details as ToolResult;
 import { closeTeamManager } from "../../../teams/pool.js";
 import { deleteTeamDirectory } from "../../../teams/storage.js";
 import { createTeamShutdownTool } from "./team-shutdown.js";
@@ -274,8 +288,8 @@ describe("TeamShutdown Tool", () => {
       const tool = createTeamShutdownTool();
       const result = await tool.execute("tool-call-1", { team_name: "my-team" });
 
-      expect(result.details.pendingApprovals).toEqual(["researcher", "developer"]);
-      expect(result.details.pendingApprovals).not.toContain("tester");
+      expect(getDetails(result).pendingApprovals).toEqual(["researcher", "developer"]);
+      expect(getDetails(result).pendingApprovals).not.toContain("tester");
     });
 
     it("should use default reason when not provided", async () => {
@@ -321,7 +335,7 @@ describe("TeamShutdown Tool", () => {
       const tool = createTeamShutdownTool();
       const result = await tool.execute("tool-call-1", { team_name: "my-team" });
 
-      expect(result.details.message).toBe(
+      expect(getDetails(result).message).toBe(
         "Shutdown request sent to 1 member(s). Waiting for approval.",
       );
     });
@@ -483,8 +497,8 @@ describe("TeamShutdown Tool", () => {
 
       // Team is not deleted because there are active members
       expect(deleteTeamDirectory).not.toHaveBeenCalled();
-      expect(result.details.status).toBe("pending_shutdown");
-      expect(result.details.deleted).toBeUndefined();
+      expect(getDetails(result).status).toBe("pending_shutdown");
+      expect(getDetails(result).deleted).toBeUndefined();
     });
   });
 
@@ -514,7 +528,8 @@ describe("TeamShutdown Tool", () => {
       const tool = createTeamShutdownTool();
       const result = await tool.execute("tool-call-1", { team_name: "non-existent" });
 
-      expect(result.content[0].text).toContain("Team 'non-existent' not found");
+      const content = result.content[0];
+      expect("text" in content ? content.text : "").toContain("Team 'non-existent' not found");
     });
 
     it("should reject already shutdown team", async () => {

@@ -172,6 +172,8 @@ export type SessionEntry = {
   teamName?: string;
   /** Assigned capabilities for team members */
   teamCapabilities?: string[];
+  /** Session key for inbox path (optional, used for teammate message routing) */
+  sessionKey?: string;
 };
 
 function normalizeRuntimeField(value: string | undefined): string | undefined {
