@@ -109,6 +109,23 @@ describe("commands registry", () => {
     expect(findCommandByNativeName("tts", "discord")).toBeUndefined();
   });
 
+  it("keeps discord native command specs within slash-command limits", () => {
+    const native = listNativeCommandSpecsForConfig(
+      { commands: { native: true } },
+      { provider: "discord" },
+    );
+    for (const spec of native) {
+      expect(spec.name).toMatch(/^[a-z0-9_-]{1,32}$/);
+      expect(spec.description.length).toBeGreaterThan(0);
+      expect(spec.description.length).toBeLessThanOrEqual(100);
+      for (const arg of spec.args ?? []) {
+        expect(arg.name).toMatch(/^[a-z0-9_-]{1,32}$/);
+        expect(arg.description.length).toBeGreaterThan(0);
+        expect(arg.description.length).toBeLessThanOrEqual(100);
+      }
+    }
+  });
+
   it("keeps ACP native action choices aligned with implemented handlers", () => {
     const acp = listChatCommands().find((command) => command.key === "acp");
     expect(acp).toBeTruthy();

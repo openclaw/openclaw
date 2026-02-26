@@ -3,6 +3,7 @@ import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   type ExecApprovalDecision,
 } from "../../infra/exec-approvals.js";
+import { buildSystemRunApprovalBindingV1 } from "../../infra/system-run-approval-binding.js";
 import type { ExecApprovalManager } from "../exec-approval-manager.js";
 import {
   ErrorCodes,
@@ -44,6 +45,7 @@ export function createExecApprovalHandlers(
         id?: string;
         command: string;
         commandArgv?: string[];
+        env?: Record<string, string>;
         cwd?: string;
         nodeId?: string;
         host?: string;
@@ -76,6 +78,24 @@ export function createExecApprovalHandlers(
         );
         return;
       }
+      if (host === "node" && (!Array.isArray(commandArgv) || commandArgv.length === 0)) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "commandArgv is required for host=node"),
+        );
+        return;
+      }
+      const systemRunBindingV1 =
+        host === "node"
+          ? buildSystemRunApprovalBindingV1({
+              argv: commandArgv,
+              cwd: p.cwd,
+              agentId: p.agentId,
+              sessionKey: p.sessionKey,
+              env: p.env,
+            })
+          : null;
       if (explicitId && manager.getSnapshot(explicitId)) {
         respond(
           false,
@@ -87,6 +107,8 @@ export function createExecApprovalHandlers(
       const request = {
         command: p.command,
         commandArgv,
+        envKeys: systemRunBindingV1?.envKeys?.length ? systemRunBindingV1.envKeys : undefined,
+        systemRunBindingV1: systemRunBindingV1?.binding ?? null,
         cwd: p.cwd ?? null,
         nodeId: host === "node" ? nodeId : null,
         host: host || null,

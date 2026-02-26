@@ -25,6 +25,7 @@ import {
   MarkdownConfigSchema,
   MSTeamsReplyStyleSchema,
   ProviderCommandsSchema,
+  SecretRefSchema,
   ReplyToModeSchema,
   RetryConfigSchema,
   TtsConfigSchema,
@@ -165,11 +166,39 @@ export const TelegramAccountSchemaBase = z
       .strict()
       .optional(),
     proxy: z.string().optional(),
-    webhookUrl: z.string().optional(),
-    webhookSecret: z.string().optional().register(sensitive),
-    webhookPath: z.string().optional(),
-    webhookHost: z.string().optional(),
-    webhookPort: z.number().int().positive().optional(),
+    webhookUrl: z
+      .string()
+      .optional()
+      .describe(
+        "Public HTTPS webhook URL registered with Telegram for inbound updates. This must be internet-reachable and requires channels.telegram.webhookSecret.",
+      ),
+    webhookSecret: z
+      .string()
+      .optional()
+      .describe(
+        "Secret token sent to Telegram during webhook registration and verified on inbound webhook requests. Telegram returns this value for verification; this is not the gateway auth token and not the bot token.",
+      )
+      .register(sensitive),
+    webhookPath: z
+      .string()
+      .optional()
+      .describe(
+        "Local webhook route path served by the gateway listener. Defaults to /telegram-webhook.",
+      ),
+    webhookHost: z
+      .string()
+      .optional()
+      .describe(
+        "Local bind host for the webhook listener. Defaults to 127.0.0.1; keep loopback unless you intentionally expose direct ingress.",
+      ),
+    webhookPort: z
+      .number()
+      .int()
+      .nonnegative()
+      .optional()
+      .describe(
+        "Local bind port for the webhook listener. Defaults to 8787; set to 0 to let the OS assign an ephemeral port.",
+      ),
     actions: z
       .object({
         reactions: z.boolean().optional(),
@@ -526,7 +555,11 @@ export const GoogleChatAccountSchema = z
     groupAllowFrom: z.array(z.union([z.string(), z.number()])).optional(),
     groups: z.record(z.string(), GoogleChatGroupSchema.optional()).optional(),
     defaultTo: z.string().optional(),
-    serviceAccount: z.union([z.string(), z.record(z.string(), z.unknown())]).optional(),
+    serviceAccount: z
+      .union([z.string(), z.record(z.string(), z.unknown()), SecretRefSchema])
+      .optional()
+      .register(sensitive),
+    serviceAccountRef: SecretRefSchema.optional().register(sensitive),
     serviceAccountFile: z.string().optional(),
     audienceType: z.enum(["app-url", "project-number"]).optional(),
     audience: z.string().optional(),

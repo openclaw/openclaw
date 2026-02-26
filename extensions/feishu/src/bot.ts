@@ -943,15 +943,19 @@ export async function handleFeishuMessage(params: {
     });
 
     log(`feishu[${account.accountId}]: dispatching to agent (session=${route.sessionKey})`);
-
-    const { queuedFinal, counts } = await core.channel.reply.dispatchReplyFromConfig({
-      ctx: ctxPayload,
-      cfg,
+    const { queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
       dispatcher,
-      replyOptions,
+      onSettled: () => {
+        markDispatchIdle();
+      },
+      run: () =>
+        core.channel.reply.dispatchReplyFromConfig({
+          ctx: ctxPayload,
+          cfg,
+          dispatcher,
+          replyOptions,
+        }),
     });
-
-    markDispatchIdle();
 
     if (isGroup && historyKey && chatHistories) {
       clearHistoryEntriesIfEnabled({

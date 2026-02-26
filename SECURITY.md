@@ -53,10 +53,12 @@ These are frequently reported but are typically closed with no code change:
 - Authorized user-triggered local actions presented as privilege escalation. Example: an allowlisted/owner sender running `/export-session /absolute/path.html` to write on the host. In this trust model, authorized user actions are trusted host actions unless you demonstrate an auth/sandbox/boundary bypass.
 - Reports that only show a malicious plugin executing privileged actions after a trusted operator installs/enables it.
 - Reports that assume per-user multi-tenant authorization on a shared gateway host/config.
+- Reports that only show differences in heuristic detection/parity (for example obfuscation-pattern detection on one exec path but not another) without demonstrating bypass of auth, approvals, allowlist enforcement, sandboxing, or other documented trust boundaries.
 - ReDoS/DoS claims that require trusted operator configuration input (for example catastrophic regex in `sessionFilter` or `logging.redactPatterns`) without a trust-boundary bypass.
 - Missing HSTS findings on default local/loopback deployments.
 - Slack webhook signature findings when HTTP mode already uses signing-secret verification.
 - Discord inbound webhook signature findings for paths not used by this repo's Discord integration.
+- Claims that Microsoft Teams `fileConsent/invoke` `uploadInfo.uploadUrl` is attacker-controlled without demonstrating one of: auth boundary bypass, a real authenticated Teams/Bot Framework event carrying attacker-chosen URL, or compromise of the Microsoft/Bot trust path.
 - Scanner-only claims against stale/nonexistent paths, or claims without a working repro.
 
 ### Duplicate Report Handling
@@ -113,8 +115,10 @@ Plugins/extensions are part of OpenClaw's trusted computing base for a gateway.
 - Reports where the only claim is that a trusted-installed/enabled plugin can execute with gateway/host privileges (documented trust model behavior).
 - Any report whose only claim is that an operator-enabled `dangerous*`/`dangerously*` config option weakens defaults (these are explicit break-glass tradeoffs by design)
 - Reports that depend on trusted operator-supplied configuration values to trigger availability impact (for example custom regex patterns). These may still be fixed as defense-in-depth hardening, but are not security-boundary bypasses.
+- Reports whose only claim is heuristic/parity drift in command-risk detection (for example obfuscation-pattern checks) across exec surfaces, without a demonstrated trust-boundary bypass. These may be accepted as hardening improvements, but not as vulnerabilities.
 - Exposed secrets that are third-party/user-controlled credentials (not OpenClaw-owned and not granting access to OpenClaw-operated infrastructure/services) without demonstrated OpenClaw impact
 - Reports whose only claim is host-side exec when sandbox runtime is disabled/unavailable (documented default behavior in the trusted-operator model), without a boundary bypass.
+- Reports whose only claim is that a platform-provided upload destination URL is untrusted (for example Microsoft Teams `fileConsent/invoke` `uploadInfo.uploadUrl`) without proving attacker control in an authenticated production flow.
 
 ## Deployment Assumptions
 

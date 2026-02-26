@@ -292,6 +292,13 @@ export {
   isPrivateIpAddress,
 } from "../infra/net/ssrf.js";
 export type { LookupFn, SsrFPolicy } from "../infra/net/ssrf.js";
+export {
+  buildHostnameAllowlistPolicyFromSuffixAllowlist,
+  isHttpsUrlAllowedByHostnameSuffixAllowlist,
+  normalizeHostnameSuffixAllowlist,
+} from "./ssrf-policy.js";
+export { fetchWithBearerAuthScopeFallback } from "./fetch-auth.js";
+export type { ScopeTokenProvider } from "./fetch-auth.js";
 export { rawDataToString } from "../infra/ws.js";
 export { isWSLSync, isWSL2Sync, isWSLEnv } from "../infra/wsl.js";
 export { isTruthyEnvValue } from "../infra/env.js";
@@ -402,11 +409,15 @@ export {
 } from "../agents/tools/common.js";
 export { formatDocsLink } from "../terminal/links.js";
 export {
+  DM_GROUP_ACCESS_REASON,
+  readStoreAllowFromForDmPolicy,
   resolveDmAllowState,
   resolveDmGroupAccessDecision,
+  resolveDmGroupAccessWithCommandGate,
   resolveDmGroupAccessWithLists,
   resolveEffectiveAllowFromLists,
 } from "../security/dm-policy-shared.js";
+export type { DmGroupAccessReasonCode } from "../security/dm-policy-shared.js";
 export type { HookEntry } from "../hooks/types.js";
 export { clamp, escapeRegExp, normalizeE164, safeParseJson, sleep } from "../utils.js";
 export { stripAnsi } from "../terminal/ansi.js";

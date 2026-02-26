@@ -1,3 +1,5 @@
+import type { SecretInput } from "./types.secrets.js";
+
 export type ModelApi =
   | "openai-completions"
   | "openai-responses"
@@ -43,7 +45,7 @@ export type ModelDefinitionConfig = {
 
 export type ModelProviderConfig = {
   baseUrl: string;
-  apiKey?: string;
+  apiKey?: SecretInput;
   auth?: ModelProviderAuthMode;
   api?: ModelApi;
   headers?: Record<string, string>;

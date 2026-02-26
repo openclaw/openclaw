@@ -70,6 +70,8 @@ OpenClaw ships with the pi‑ai catalog. These providers require **no**
 - Auth: OAuth (ChatGPT)
 - Example model: `openai-codex/gpt-5.3-codex`
 - CLI: `openclaw onboard --auth-choice openai-codex` or `openclaw models auth login --provider openai-codex`
+- Default transport is `auto` (WebSocket-first, SSE fallback)
+- Override per model via `agents.defaults.models["openai-codex/<model>"].params.transport` (`"sse"`, `"websocket"`, or `"auto"`)
 
 ```json5
 {

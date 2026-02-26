@@ -13,7 +13,10 @@ import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { readChannelAllowFromStore } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
-import { resolveDmGroupAccessWithLists } from "../../security/dm-policy-shared.js";
+import {
+  readStoreAllowFromForDmPolicy,
+  resolveDmGroupAccessWithLists,
+} from "../../security/dm-policy-shared.js";
 import {
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordAllowList,
@@ -233,10 +236,11 @@ async function authorizeDiscordReactionIngress(
     return { allowed: false, reason: "group-dm-disabled" };
   }
   if (params.isDirectMessage) {
-    const storeAllowFrom =
-      params.dmPolicy === "allowlist"
-        ? []
-        : await readChannelAllowFromStore("discord").catch(() => []);
+    const storeAllowFrom = await readStoreAllowFromForDmPolicy({
+      provider: "discord",
+      dmPolicy: params.dmPolicy,
+      readStore: (provider) => readChannelAllowFromStore(provider),
+    });
     const access = resolveDmGroupAccessWithLists({
       isGroup: false,
       dmPolicy: params.dmPolicy,

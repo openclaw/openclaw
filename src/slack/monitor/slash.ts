@@ -10,6 +10,7 @@ import {
   readChannelAllowFromStore,
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
+import { readStoreAllowFromForDmPolicy } from "../../security/dm-policy-shared.js";
 import { chunkItems } from "../../utils/chunk-items.js";
 import type { ResolvedSlackAccount } from "../accounts.js";
 import {
@@ -335,10 +336,13 @@ export async function registerSlackMonitorSlashCommands(params: {
         return;
       }
 
-      const storeAllowFrom =
-        ctx.dmPolicy === "allowlist"
-          ? []
-          : await readChannelAllowFromStore("slack").catch(() => []);
+      const storeAllowFrom = isDirectMessage
+        ? await readStoreAllowFromForDmPolicy({
+            provider: "slack",
+            dmPolicy: ctx.dmPolicy,
+            readStore: (provider) => readChannelAllowFromStore(provider),
+          })
+        : [];
       const effectiveAllowFrom = normalizeAllowList([...ctx.allowFrom, ...storeAllowFrom]);
       const effectiveAllowFromLower = normalizeAllowListLower(effectiveAllowFrom);
 

@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/config.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
+import { coerceSecretRef } from "../config/types.secrets.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   DEFAULT_COPILOT_API_BASE_URL,
@@ -12,6 +13,7 @@ import {
   KILOCODE_DEFAULT_MAX_TOKENS,
   KILOCODE_MODEL_CATALOG,
 } from "../providers/kilocode-shared.js";
+import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { ensureAuthProfileStore, listProfilesForProvider } from "./auth-profiles.js";
 import { discoverBedrockModels } from "./bedrock-discovery.js";
 import {
@@ -356,10 +358,24 @@ function resolveApiKeyFromProfiles(params: {
       continue;
     }
     if (cred.type === "api_key") {
-      return cred.key;
+      if (cred.key?.trim()) {
+        return cred.key;
+      }
+      const keyRef = coerceSecretRef(cred.keyRef);
+      if (keyRef?.source === "env" && keyRef.id.trim()) {
+        return keyRef.id.trim();
+      }
+      continue;
     }
     if (cred.type === "token") {
-      return cred.token;
+      if (cred.token?.trim()) {
+        return cred.token;
+      }
+      const tokenRef = coerceSecretRef(cred.tokenRef);
+      if (tokenRef?.source === "env" && tokenRef.id.trim()) {
+        return tokenRef.id.trim();
+      }
+      continue;
     }
   }
   return undefined;
@@ -405,16 +421,17 @@ export function normalizeProviders(params: {
   for (const [key, provider] of Object.entries(providers)) {
     const normalizedKey = key.trim();
     let normalizedProvider = provider;
+    const configuredApiKey = normalizedProvider.apiKey;
 
     // Fix common misconfig: apiKey set to "${ENV_VAR}" instead of "ENV_VAR".
     if (
-      normalizedProvider.apiKey &&
-      normalizeApiKeyConfig(normalizedProvider.apiKey) !== normalizedProvider.apiKey
+      typeof configuredApiKey === "string" &&
+      normalizeApiKeyConfig(configuredApiKey) !== configuredApiKey
     ) {
       mutated = true;
       normalizedProvider = {
         ...normalizedProvider,
-        apiKey: normalizeApiKeyConfig(normalizedProvider.apiKey),
+        apiKey: normalizeApiKeyConfig(configuredApiKey),
       };
     }
 
@@ -422,7 +439,9 @@ export function normalizeProviders(params: {
     // Fill it from the environment or auth profiles when possible.
     const hasModels =
       Array.isArray(normalizedProvider.models) && normalizedProvider.models.length > 0;
-    if (hasModels && !normalizedProvider.apiKey?.trim()) {
+    const normalizedApiKey = normalizeOptionalSecretInput(normalizedProvider.apiKey);
+    const hasConfiguredApiKey = Boolean(normalizedApiKey || normalizedProvider.apiKey);
+    if (hasModels && !hasConfiguredApiKey) {
       const authMode =
         normalizedProvider.auth ?? (normalizedKey === "amazon-bedrock" ? "aws-sdk" : undefined);
       if (authMode === "aws-sdk") {
@@ -461,6 +480,7 @@ function buildMinimaxProvider(): ProviderConfig {
   return {
     baseUrl: MINIMAX_PORTAL_BASE_URL,
     api: "anthropic-messages",
+    authHeader: true,
     models: [
       buildMinimaxTextModel({
         id: MINIMAX_DEFAULT_MODEL_ID,
@@ -496,6 +516,7 @@ function buildMinimaxPortalProvider(): ProviderConfig {
   return {
     baseUrl: MINIMAX_PORTAL_BASE_URL,
     api: "anthropic-messages",
+    authHeader: true,
     models: [
       buildMinimaxTextModel({
         id: MINIMAX_DEFAULT_MODEL_ID,
@@ -1013,7 +1034,13 @@ export async function resolveImplicitCopilotProvider(params: {
     const profileId = listProfilesForProvider(authStore, "github-copilot")[0];
     const profile = profileId ? authStore.profiles[profileId] : undefined;
     if (profile && profile.type === "token") {
-      selectedGithubToken = profile.token;
+      selectedGithubToken = profile.token?.trim() ?? "";
+      if (!selectedGithubToken) {
+        const tokenRef = coerceSecretRef(profile.tokenRef);
+        if (tokenRef?.source === "env" && tokenRef.id.trim()) {
+          selectedGithubToken = (env[tokenRef.id] ?? process.env[tokenRef.id] ?? "").trim();
+        }
+      }
     }
   }
 
@@ -1030,17 +1057,8 @@ export async function resolveImplicitCopilotProvider(params: {
     }
   }
 
-  // pi-coding-agent's ModelRegistry marks a model "available" only if its
-  // `AuthStorage` has auth configured for that provider (via auth.json/env/etc).
-  // Our Copilot auth lives in OpenClaw's auth-profiles store instead, so we also
-  // write a runtime-only auth.json entry for pi-coding-agent to pick up.
-  //
-  // This is safe because it's (1) within OpenClaw's agent dir, (2) contains the
-  // GitHub token (not the exchanged Copilot token), and (3) matches existing
-  // patterns for OAuth-like providers in pi-coding-agent.
-  // Note: we deliberately do not write pi-coding-agent's `auth.json` here.
-  // OpenClaw uses its own auth store and exchanges tokens at runtime.
-  // `models list` uses OpenClaw's auth heuristics for availability.
+  // We deliberately do not write pi-coding-agent auth.json here.
+  // OpenClaw keeps auth in auth-profiles and resolves runtime availability from that store.
 
   // We intentionally do NOT define custom models for Copilot in models.json.
   // pi-coding-agent treats providers with models as replacements requiring apiKey.

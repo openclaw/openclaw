@@ -1,4 +1,5 @@
 import { createTypingKeepaliveLoop } from "./typing-lifecycle.js";
+import { createTypingStartGuard } from "./typing-start-guard.js";
 
 export type TypingCallbacks = {
   onReplyStart: () => Promise<void>;
@@ -13,6 +14,8 @@ export type CreateTypingCallbacksParams = {
   onStartError: (err: unknown) => void;
   onStopError?: (err: unknown) => void;
   keepaliveIntervalMs?: number;
+  /** Stop keepalive after this many consecutive start() failures. Default: 2 */
+  maxConsecutiveFailures?: number;
   /** Maximum duration for typing indicator before auto-cleanup (safety TTL). Default: 60s */
   maxDurationMs?: number;
 };
@@ -20,20 +23,23 @@ export type CreateTypingCallbacksParams = {
 export function createTypingCallbacks(params: CreateTypingCallbacksParams): TypingCallbacks {
   const stop = params.stop;
   const keepaliveIntervalMs = params.keepaliveIntervalMs ?? 3_000;
+  const maxConsecutiveFailures = Math.max(1, params.maxConsecutiveFailures ?? 2);
   const maxDurationMs = params.maxDurationMs ?? 60_000; // Default 60s TTL
   let stopSent = false;
   let closed = false;
   let ttlTimer: ReturnType<typeof setTimeout> | undefined;
 
-  const fireStart = async () => {
-    if (closed) {
-      return;
-    }
-    try {
-      await params.start();
-    } catch (err) {
-      params.onStartError(err);
-    }
+  const startGuard = createTypingStartGuard({
+    isSealed: () => closed,
+    onStartError: params.onStartError,
+    maxConsecutiveFailures,
+    onTrip: () => {
+      keepaliveLoop.stop();
+    },
+  });
+
+  const fireStart = async (): Promise<void> => {
+    await startGuard.run(() => params.start());
   };
 
   const keepaliveLoop = createTypingKeepaliveLoop({
@@ -67,9 +73,13 @@ export function createTypingCallbacks(params: CreateTypingCallbacksParams): Typi
       return;
     }
     stopSent = false;
+    startGuard.reset();
     keepaliveLoop.stop();
     clearTtlTimer();
     await fireStart();
+    if (startGuard.isTripped()) {
+      return;
+    }
     keepaliveLoop.start();
     startTtlTimer(); // Start TTL safety timer
   };
