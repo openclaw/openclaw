@@ -452,7 +452,7 @@ describe("runWithModelFallback", () => {
     expect(result.result).toBe("ok");
     expect(run).toHaveBeenCalledTimes(2);
     expect(run.mock.calls[1]?.[0]).toBe("anthropic");
-    expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-3-5");
+    expect(run.mock.calls[1]?.[1]).toBe("claude-haiku-4-5");
   });
 
   it("skips providers when all profiles are in cooldown", async () => {

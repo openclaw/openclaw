@@ -198,7 +198,7 @@ describe("runWithModelFallback – probe logic", () => {
     expect(result.result).toBe("fallback-ok");
     expect(run).toHaveBeenCalledTimes(2);
     expect(run).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini");
-    expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5");
+    expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-4-5");
   });
 
   it("throttles probe when called within 30s interval", async () => {
