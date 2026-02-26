@@ -204,7 +204,10 @@ class SmsManager(private val context: Context) {
     private suspend fun ensureSmsPermission(): Boolean {
         if (hasSmsPermission()) return true
         val requester = permissionRequester ?: return false
-        val results = requester.requestIfMissing(listOf(Manifest.permission.SEND_SMS))
+        val results = requester.requestIfMissing(
+            permissions = listOf(Manifest.permission.SEND_SMS),
+            contextHint = "sending SMS",
+        )
         return results[Manifest.permission.SEND_SMS] == true
     }
 

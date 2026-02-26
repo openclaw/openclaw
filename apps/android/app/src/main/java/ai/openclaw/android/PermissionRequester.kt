@@ -33,6 +33,7 @@ class PermissionRequester(private val activity: ComponentActivity) {
   suspend fun requestIfMissing(
     permissions: List<String>,
     timeoutMs: Long = 20_000,
+    contextHint: String? = null,
   ): Map<String, Boolean> =
     mutex.withLock {
       val missing =
@@ -46,7 +47,7 @@ class PermissionRequester(private val activity: ComponentActivity) {
       val needsRationale =
         missing.any { ActivityCompat.shouldShowRequestPermissionRationale(activity, it) }
       if (needsRationale) {
-        val proceed = showRationaleDialog(missing)
+        val proceed = showRationaleDialog(missing, contextHint = contextHint)
         if (!proceed) {
           return permissions.associateWith { perm ->
             ContextCompat.checkSelfPermission(activity, perm) == PackageManager.PERMISSION_GRANTED
@@ -78,18 +79,21 @@ class PermissionRequester(private val activity: ComponentActivity) {
           !ActivityCompat.shouldShowRequestPermissionRationale(activity, it)
         }
       if (denied.isNotEmpty()) {
-        showSettingsDialog(denied)
+        showSettingsDialog(denied, contextHint = contextHint)
       }
 
       return merged
     }
 
-  private suspend fun showRationaleDialog(permissions: List<String>): Boolean =
+  private suspend fun showRationaleDialog(
+    permissions: List<String>,
+    contextHint: String? = null,
+  ): Boolean =
     withContext(Dispatchers.Main) {
       suspendCancellableCoroutine { cont ->
         AlertDialog.Builder(activity)
           .setTitle("Permission required")
-          .setMessage(buildRationaleMessage(permissions))
+          .setMessage(buildRationaleMessage(permissions, contextHint = contextHint))
           .setPositiveButton("Continue") { _, _ -> cont.resume(true) }
           .setNegativeButton("Not now") { _, _ -> cont.resume(false) }
           .setOnCancelListener { cont.resume(false) }
@@ -97,10 +101,13 @@ class PermissionRequester(private val activity: ComponentActivity) {
       }
     }
 
-  private fun showSettingsDialog(permissions: List<String>) {
+  private fun showSettingsDialog(
+    permissions: List<String>,
+    contextHint: String? = null,
+  ) {
     AlertDialog.Builder(activity)
       .setTitle("Enable permission in Settings")
-      .setMessage(buildSettingsMessage(permissions))
+      .setMessage(buildSettingsMessage(permissions, contextHint = contextHint))
       .setPositiveButton("Open Settings") { _, _ ->
         val intent =
           Intent(
@@ -113,14 +120,24 @@ class PermissionRequester(private val activity: ComponentActivity) {
       .show()
   }
 
-  private fun buildRationaleMessage(permissions: List<String>): String {
+  private fun buildRationaleMessage(
+    permissions: List<String>,
+    contextHint: String? = null,
+  ): String {
     val labels = permissions.map { permissionLabel(it) }
-    return "OpenClaw needs ${labels.joinToString(", ")} permissions to continue."
+    val feature = contextHint?.trim().orEmpty()
+    val suffix = if (feature.isNotEmpty()) " for $feature" else ""
+    return "OpenClaw needs ${labels.joinToString(", ")} permission${if (labels.size > 1) "s" else ""}$suffix to continue."
   }
 
-  private fun buildSettingsMessage(permissions: List<String>): String {
+  private fun buildSettingsMessage(
+    permissions: List<String>,
+    contextHint: String? = null,
+  ): String {
     val labels = permissions.map { permissionLabel(it) }
-    return "Please enable ${labels.joinToString(", ")} in Android Settings to continue."
+    val feature = contextHint?.trim().orEmpty()
+    val suffix = if (feature.isNotEmpty()) " for $feature" else ""
+    return "Please enable ${labels.joinToString(", ")} in Android Settings$suffix to continue."
   }
 
   private fun permissionLabel(permission: String): String =

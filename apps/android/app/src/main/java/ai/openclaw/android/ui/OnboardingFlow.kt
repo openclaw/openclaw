@@ -1391,7 +1391,7 @@ private fun PermissionsStep(
 
   StepShell(title = "Permissions") {
     Text(
-      "Enable only what you need now. You can change everything later in Settings.",
+      "Connectivity permissions are requested now; mic/camera/SMS stay off until you use those features.",
       style = onboardingCalloutStyle,
       color = onboardingTextSecondary,
     )
@@ -1439,7 +1439,7 @@ private fun PermissionsStep(
     InlineDivider()
     PermissionToggleRow(
       title = "Microphone",
-      subtitle = "Voice tab transcription",
+      subtitle = "Voice tab transcription (requested on first use)",
       checked = enableMicrophone,
       granted = isPermissionGranted(context, Manifest.permission.RECORD_AUDIO),
       onCheckedChange = onMicrophoneChange,
@@ -1447,7 +1447,7 @@ private fun PermissionsStep(
     InlineDivider()
     PermissionToggleRow(
       title = "Camera",
-      subtitle = "camera.snap and camera.clip",
+      subtitle = "camera.snap and camera.clip (requested on first use)",
       checked = enableCamera,
       granted = isPermissionGranted(context, Manifest.permission.CAMERA),
       onCheckedChange = onCameraChange,
@@ -1490,7 +1490,7 @@ private fun PermissionsStep(
       InlineDivider()
       PermissionToggleRow(
         title = "SMS",
-        subtitle = "Allow gateway-triggered SMS sending",
+        subtitle = "Allow gateway-triggered SMS sending (requested on first use)",
         checked = enableSms,
         granted = isPermissionGranted(context, Manifest.permission.SEND_SMS),
         onCheckedChange = onSmsChange,

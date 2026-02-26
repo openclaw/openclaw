@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <full-backup-content>
-  <include domain="file" path="." />
+  <!-- Do not include app files in cloud/device backups. -->
+  <exclude domain="file" path="." />
+  <exclude domain="database" path="." />
+  <exclude domain="sharedpref" path="." />
+  <exclude domain="external" path="." />
 </full-backup-content>

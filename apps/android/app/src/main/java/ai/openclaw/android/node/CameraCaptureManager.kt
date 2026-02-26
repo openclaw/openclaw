@@ -76,7 +76,10 @@ class CameraCaptureManager(private val context: Context) {
 
     val requester = permissionRequester
       ?: throw IllegalStateException("CAMERA_PERMISSION_REQUIRED: grant Camera permission")
-    val results = requester.requestIfMissing(listOf(Manifest.permission.CAMERA))
+    val results = requester.requestIfMissing(
+      permissions = listOf(Manifest.permission.CAMERA),
+      contextHint = "camera capture",
+    )
     if (results[Manifest.permission.CAMERA] != true) {
       throw IllegalStateException("CAMERA_PERMISSION_REQUIRED: grant Camera permission")
     }
@@ -88,7 +91,10 @@ class CameraCaptureManager(private val context: Context) {
 
     val requester = permissionRequester
       ?: throw IllegalStateException("MIC_PERMISSION_REQUIRED: grant Microphone permission")
-    val results = requester.requestIfMissing(listOf(Manifest.permission.RECORD_AUDIO))
+    val results = requester.requestIfMissing(
+      permissions = listOf(Manifest.permission.RECORD_AUDIO),
+      contextHint = "recording video with audio",
+    )
     if (results[Manifest.permission.RECORD_AUDIO] != true) {
       throw IllegalStateException("MIC_PERMISSION_REQUIRED: grant Microphone permission")
     }

@@ -137,7 +137,10 @@ class ScreenRecordManager(private val context: Context) {
     val requester =
       permissionRequester
         ?: throw IllegalStateException("MIC_PERMISSION_REQUIRED: grant Microphone permission")
-    val results = requester.requestIfMissing(listOf(android.Manifest.permission.RECORD_AUDIO))
+    val results = requester.requestIfMissing(
+      permissions = listOf(android.Manifest.permission.RECORD_AUDIO),
+      contextHint = "screen recording with audio",
+    )
     if (results[android.Manifest.permission.RECORD_AUDIO] != true) {
       throw IllegalStateException("MIC_PERMISSION_REQUIRED: grant Microphone permission")
     }
