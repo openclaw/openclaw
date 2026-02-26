@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { ImageContent } from "@mariozechner/pi-ai";
 import { streamSimple } from "@mariozechner/pi-ai";
 import {
   createAgentSession,
@@ -128,51 +127,45 @@ type PromptBuildHookRunner = {
   ) => Promise<PluginHookBeforeAgentStartResult | undefined>;
 };
 
-export function injectHistoryImagesIntoMessages(
-  messages: AgentMessage[],
-  historyImagesByIndex: Map<number, ImageContent[]>,
-): boolean {
-  if (historyImagesByIndex.size === 0) {
+export const PRUNED_HISTORY_IMAGE_MARKER = "[image data removed - already processed by model]";
+
+/**
+ * Prunes image blocks from user messages that already have an assistant response after them.
+ * This is a one-way cleanup for previously persisted history image data.
+ */
+export function pruneProcessedHistoryImages(messages: AgentMessage[]): boolean {
+  let lastAssistantIndex = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i]?.role === "assistant") {
+      lastAssistantIndex = i;
+      break;
+    }
+  }
+  if (lastAssistantIndex < 0) {
     return false;
   }
-  let didMutate = false;
 
-  for (const [msgIndex, images] of historyImagesByIndex) {
-    // Bounds check: ensure index is valid before accessing
-    if (msgIndex < 0 || msgIndex >= messages.length) {
+  let didMutate = false;
+  for (let i = 0; i < lastAssistantIndex; i++) {
+    const message = messages[i];
+    if (!message || message.role !== "user" || !Array.isArray(message.content)) {
       continue;
     }
-    const msg = messages[msgIndex];
-    if (msg && msg.role === "user") {
-      // Convert string content to array format if needed
-      if (typeof msg.content === "string") {
-        msg.content = [{ type: "text", text: msg.content }];
-        didMutate = true;
+    for (let j = 0; j < message.content.length; j++) {
+      const block = message.content[j];
+      if (!block || typeof block !== "object") {
+        continue;
       }
-      if (Array.isArray(msg.content)) {
-        // Check for existing image content to avoid duplicates across turns
-        const existingImageData = new Set(
-          msg.content
-            .filter(
-              (c): c is ImageContent =>
-                c != null &&
-                typeof c === "object" &&
-                c.type === "image" &&
-                typeof c.data === "string",
-            )
-            .map((c) => c.data),
-        );
-        for (const img of images) {
-          // Only add if this image isn't already in the message
-          if (!existingImageData.has(img.data)) {
-            msg.content.push(img);
-            didMutate = true;
-          }
-        }
+      if ((block as { type?: string }).type !== "image") {
+        continue;
       }
+      message.content[j] = {
+        type: "text",
+        text: PRUNED_HISTORY_IMAGE_MARKER,
+      } as (typeof message.content)[number];
+      didMutate = true;
     }
   }
-
   return didMutate;
 }
 
@@ -1092,16 +1085,20 @@ export async function runEmbeddedAttempt(
         }
 
         try {
+          // One-time migration: prune image blocks from already-processed user turns.
+          // This prevents old persisted base64 payloads from bloating subsequent prompts.
+          const didPruneImages = pruneProcessedHistoryImages(activeSession.messages);
+          if (didPruneImages) {
+            activeSession.agent.replaceMessages(activeSession.messages);
+          }
+
           // Detect and load images referenced in the prompt for vision-capable models.
-          // This eliminates the need for an explicit "view" tool call by injecting
-          // images directly into the prompt when the model supports it.
-          // Also scans conversation history to enable follow-up questions about earlier images.
+          // Images are prompt-local only (pi-like behavior).
           const imageResult = await detectAndLoadPromptImages({
             prompt: effectivePrompt,
             workspaceDir: effectiveWorkspace,
             model: params.model,
             existingImages: params.images,
-            historyMessages: activeSession.messages,
             maxBytes: MAX_IMAGE_BYTES,
             maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
             workspaceOnly: effectiveFsWorkspaceOnly,
@@ -1112,21 +1109,10 @@ export async function runEmbeddedAttempt(
                 : undefined,
           });
 
-          // Inject history images into their original message positions.
-          // This ensures the model sees images in context (e.g., "compare to the first image").
-          const didMutate = injectHistoryImagesIntoMessages(
-            activeSession.messages,
-            imageResult.historyImagesByIndex,
-          );
-          if (didMutate) {
-            // Persist message mutations (e.g., injected history images) so we don't re-scan/reload.
-            activeSession.agent.replaceMessages(activeSession.messages);
-          }
-
           cacheTrace?.recordStage("prompt:images", {
             prompt: effectivePrompt,
             messages: activeSession.messages,
-            note: `images: prompt=${imageResult.images.length} history=${imageResult.historyImagesByIndex.size}`,
+            note: `images: prompt=${imageResult.images.length}`,
           });
 
           // Diagnostic: log context sizes before prompt to help debug early overflow errors.
@@ -1143,7 +1129,6 @@ export async function runEmbeddedAttempt(
                 `historyImageBlocks=${sessionSummary.totalImageBlocks} ` +
                 `systemPromptChars=${systemLen} promptChars=${promptLen} ` +
                 `promptImages=${imageResult.images.length} ` +
-                `historyImageMessages=${imageResult.historyImagesByIndex.size} ` +
                 `provider=${params.provider}/${params.modelId} sessionFile=${params.sessionFile}`,
             );
           }
