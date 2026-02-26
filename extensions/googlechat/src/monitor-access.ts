@@ -50,6 +50,11 @@ export function isSenderAllowed(
       return normalizeUserId(withoutPrefix) === normalizedSenderId;
     }
 
+    // Domain pattern: "@example.com" matches any email ending with that domain.
+    if (withoutPrefix.startsWith("@") && normalizedEmail) {
+      return normalizedEmail.endsWith(withoutPrefix);
+    }
+
     // Raw email allowlist entries are a break-glass override.
     if (allowNameMatching && normalizedEmail && isEmailLike(withoutPrefix)) {
       return withoutPrefix === normalizedEmail;

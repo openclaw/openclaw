@@ -22,4 +22,17 @@ describe("isSenderAllowed", () => {
       false,
     );
   });
+
+  it("matches domain pattern entries (e.g. @example.com)", () => {
+    expect(isSenderAllowed("users/123", "jane@example.com", ["@example.com"])).toBe(true);
+    expect(isSenderAllowed("users/123", "Jane@Example.COM", ["@example.com"])).toBe(true);
+  });
+
+  it("rejects non-matching domain patterns", () => {
+    expect(isSenderAllowed("users/123", "jane@other.com", ["@example.com"])).toBe(false);
+  });
+
+  it("rejects domain pattern when sender has no email", () => {
+    expect(isSenderAllowed("users/123", undefined, ["@example.com"])).toBe(false);
+  });
 });

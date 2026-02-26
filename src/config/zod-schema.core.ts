@@ -502,7 +502,7 @@ export const requireOpenAllowFrom = (params: {
     return;
   }
   const allow = normalizeAllowFrom(params.allowFrom);
-  if (allow.includes("*")) {
+  if (allow.includes("*") || allow.some((entry) => entry.startsWith("@"))) {
     return;
   }
   params.ctx.addIssue({

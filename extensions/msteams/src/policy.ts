@@ -203,7 +203,7 @@ export type MSTeamsReplyPolicy = {
   replyStyle: MSTeamsReplyStyle;
 };
 
-export type MSTeamsAllowlistMatch = AllowlistMatch<"wildcard" | "id" | "name">;
+export type MSTeamsAllowlistMatch = AllowlistMatch<"wildcard" | "domain" | "id" | "name">;
 
 export function resolveMSTeamsAllowlistMatch(params: {
   allowFrom: Array<string | number>;
