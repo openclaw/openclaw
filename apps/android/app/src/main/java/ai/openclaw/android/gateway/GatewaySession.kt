@@ -372,7 +372,7 @@ class GatewaySession(
 
       val signedAtMs = System.currentTimeMillis()
       val payload =
-        buildDeviceAuthPayloadV3(
+        DeviceAuthPayload.buildV3(
           deviceId = identity.deviceId,
           clientId = client.id,
           clientMode = client.mode,
@@ -583,42 +583,6 @@ class GatewaySession(
       mainSessionKey = null
     }
   }
-
-  private fun buildDeviceAuthPayloadV3(
-    deviceId: String,
-    clientId: String,
-    clientMode: String,
-    role: String,
-    scopes: List<String>,
-    signedAtMs: Long,
-    token: String?,
-    nonce: String,
-    platform: String?,
-    deviceFamily: String?,
-  ): String {
-    val scopeString = scopes.joinToString(",")
-    val authToken = token.orEmpty()
-    val platformNorm = normalizeDeviceMetadataField(platform)
-    val deviceFamilyNorm = normalizeDeviceMetadataField(deviceFamily)
-    val parts =
-      mutableListOf(
-        "v3",
-        deviceId,
-        clientId,
-        clientMode,
-        role,
-        scopeString,
-        signedAtMs.toString(),
-        authToken,
-        nonce,
-        platformNorm,
-        deviceFamilyNorm,
-      )
-    return parts.joinToString("|")
-  }
-
-  private fun normalizeDeviceMetadataField(value: String?): String =
-    value?.trim()?.lowercase(Locale.ROOT).orEmpty()
 
   private fun normalizeCanvasHostUrl(
     raw: String?,
