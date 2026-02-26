@@ -382,11 +382,17 @@ async function setupCdpProxyAuth(
     // Attached to a target — enable Fetch on the new session.
     if (msg.method === "Target.attachedToTarget") {
       const sessionId = msg.params?.sessionId as string | undefined;
+      const targetType = (msg.params?.targetInfo as { type?: string } | undefined)?.type;
       if (sessionId && !enabledSessions.has(sessionId)) {
         enabledSessions.add(sessionId);
         void enableFetchAuthOnSession(sendSessionAwait, sessionId)
           .then(() => {
-            resolveFirstFetchEnabled();
+            // Only gate launch readiness on page targets — a worker or
+            // service-worker resolving first would leave the initial page
+            // without Fetch.enable, racing into a 407.
+            if (targetType === "page") {
+              resolveFirstFetchEnabled();
+            }
           })
           .catch((err) => {
             rejectFirstFetchEnabled(err instanceof Error ? err : new Error(String(err)));
