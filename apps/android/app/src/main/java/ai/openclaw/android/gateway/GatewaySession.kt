@@ -55,13 +55,18 @@ data class GatewayConnectOptions(
 class GatewaySession(
   private val scope: CoroutineScope,
   private val identityStore: DeviceIdentityStore,
-  private val deviceAuthStore: DeviceAuthStore,
+  private val deviceAuthStore: DeviceAuthTokenStore,
   private val onConnected: (serverName: String?, remoteAddress: String?, mainSessionKey: String?) -> Unit,
   private val onDisconnected: (message: String) -> Unit,
   private val onEvent: (event: String, payloadJson: String?) -> Unit,
   private val onInvoke: (suspend (InvokeRequest) -> InvokeResult)? = null,
   private val onTlsFingerprint: ((stableId: String, fingerprint: String) -> Unit)? = null,
 ) {
+  private companion object {
+    // Keep connect timeout above observed gateway unauthorized close on lower-end devices.
+    private const val CONNECT_RPC_TIMEOUT_MS = 12_000L
+  }
+
   data class InvokeRequest(
     val id: String,
     val nodeId: String,
@@ -195,9 +200,7 @@ class GatewaySession(
     suspend fun connect() {
       val scheme = if (tls != null) "wss" else "ws"
       val url = "$scheme://${endpoint.host}:${endpoint.port}"
-      val httpScheme = if (tls != null) "https" else "http"
-      val origin = "$httpScheme://${endpoint.host}:${endpoint.port}"
-      val request = Request.Builder().url(url).header("Origin", origin).build()
+      val request = Request.Builder().url(url).build()
       socket = client.newWebSocket(request, Listener())
       try {
         connectDeferred.await()
@@ -302,26 +305,13 @@ class GatewaySession(
       val identity = identityStore.loadOrCreate()
       val storedToken = deviceAuthStore.loadToken(identity.deviceId, options.role)
       val trimmedToken = token?.trim().orEmpty()
-      val authToken = if (storedToken.isNullOrBlank()) trimmedToken else storedToken
+      // QR/setup/manual shared token must take precedence; stale role tokens can survive re-onboarding.
+      val authToken = if (trimmedToken.isNotBlank()) trimmedToken else storedToken.orEmpty()
       val payload = buildConnectParams(identity, connectNonce, authToken, password?.trim())
-      var res = request("connect", payload, timeoutMs = 8_000)
+      val res = request("connect", payload, timeoutMs = CONNECT_RPC_TIMEOUT_MS)
       if (!res.ok) {
         val msg = res.error?.message ?: "connect failed"
-        val hasStoredToken = !storedToken.isNullOrBlank()
-        val canRetryWithShared = hasStoredToken && trimmedToken.isNotBlank()
-        if (canRetryWithShared) {
-          val sharedPayload = buildConnectParams(identity, connectNonce, trimmedToken, password?.trim())
-          val sharedRes = request("connect", sharedPayload, timeoutMs = 8_000)
-          if (!sharedRes.ok) {
-            val retryMsg = sharedRes.error?.message ?: msg
-            throw IllegalStateException(retryMsg)
-          }
-          // Stored device token was bypassed successfully; clear stale token for future connects.
-          deviceAuthStore.clearToken(identity.deviceId, options.role)
-          res = sharedRes
-        } else {
-          throw IllegalStateException(msg)
-        }
+        throw IllegalStateException(msg)
       }
       handleConnectSuccess(res, identity.deviceId)
       connectDeferred.complete(Unit)
@@ -543,16 +533,8 @@ class GatewaySession(
     }
 
     private fun invokeErrorFromThrowable(err: Throwable): InvokeResult {
-      val msg = err.message?.trim().takeIf { !it.isNullOrEmpty() } ?: err::class.java.simpleName
-      val parts = msg.split(":", limit = 2)
-      if (parts.size == 2) {
-        val code = parts[0].trim()
-        val rest = parts[1].trim()
-        if (code.isNotEmpty() && code.all { it.isUpperCase() || it == '_' }) {
-          return InvokeResult.error(code = code, message = rest.ifEmpty { msg })
-        }
-      }
-      return InvokeResult.error(code = "UNAVAILABLE", message = msg)
+      val parsed = parseInvokeErrorFromThrowable(err, fallbackMessage = err::class.java.simpleName)
+      return InvokeResult.error(code = parsed.code, message = parsed.message)
     }
 
     private fun failPending() {

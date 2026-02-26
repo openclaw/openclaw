@@ -109,6 +109,30 @@ describe("commands registry", () => {
     expect(findCommandByNativeName("tts", "discord")).toBeUndefined();
   });
 
+  it("keeps ACP native action choices aligned with implemented handlers", () => {
+    const acp = listChatCommands().find((command) => command.key === "acp");
+    expect(acp).toBeTruthy();
+    const actionArg = acp?.args?.find((arg) => arg.name === "action");
+    expect(actionArg?.choices).toEqual([
+      "spawn",
+      "cancel",
+      "steer",
+      "close",
+      "sessions",
+      "status",
+      "set-mode",
+      "set",
+      "cwd",
+      "permissions",
+      "timeout",
+      "model",
+      "reset-options",
+      "doctor",
+      "install",
+      "help",
+    ]);
+  });
+
   it("detects known text commands", () => {
     const detection = getCommandDetection();
     expect(detection.exact.has("/commands")).toBe(true);
