@@ -185,16 +185,22 @@ describe("msteams file consent invoke authz", () => {
 
     await handler.run?.(context);
 
-    expect(fileConsentMockState.uploadToConsentUrl).not.toHaveBeenCalled();
-    expect(getPendingUpload(uploadId)).toBeDefined();
-    expect(sendActivity).toHaveBeenCalledWith(
-      "The file upload request has expired. Please try sending the file again.",
-    );
+    // invokeResponse should be sent immediately
     expect(sendActivity).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "invokeResponse",
       }),
     );
+
+    // Wait for async handler to complete
+    await vi.waitFor(() => {
+      expect(sendActivity).toHaveBeenCalledWith(
+        "The file upload request has expired. Please try sending the file again.",
+      );
+    });
+
+    expect(fileConsentMockState.uploadToConsentUrl).not.toHaveBeenCalled();
+    expect(getPendingUpload(uploadId)).toBeDefined();
   });
 
   it("ignores cross-conversation decline invoke and keeps pending upload", async () => {
@@ -214,13 +220,18 @@ describe("msteams file consent invoke authz", () => {
 
     await handler.run?.(context);
 
-    expect(fileConsentMockState.uploadToConsentUrl).not.toHaveBeenCalled();
-    expect(getPendingUpload(uploadId)).toBeDefined();
-    expect(sendActivity).toHaveBeenCalledTimes(1);
+    // invokeResponse should be sent immediately
     expect(sendActivity).toHaveBeenCalledWith(
       expect.objectContaining({
         type: "invokeResponse",
       }),
     );
+
+    // Wait a bit for async handler to complete
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(fileConsentMockState.uploadToConsentUrl).not.toHaveBeenCalled();
+    expect(getPendingUpload(uploadId)).toBeDefined();
+    expect(sendActivity).toHaveBeenCalledTimes(1);
   });
 });
