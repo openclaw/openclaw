@@ -86,6 +86,20 @@ function createHooksConfig(): HooksConfigResolved {
   };
 }
 
+function canonicalizePluginPath(pathname: string): string {
+  let decoded = pathname;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    decoded = pathname;
+  }
+  const collapsed = decoded.toLowerCase().replace(/\/{2,}/g, "/");
+  if (collapsed.length <= 1) {
+    return collapsed;
+  }
+  return collapsed.replace(/\/+$/, "");
+}
+
 describe("gateway plugin HTTP auth boundary", () => {
   test("applies default security headers and optional strict transport security", async () => {
     const resolvedAuth: ResolvedGatewayAuth = {
@@ -256,7 +270,7 @@ describe("gateway plugin HTTP auth boundary", () => {
       run: async () => {
         const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
           const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
-          const canonicalPath = decodeURIComponent(pathname).toLowerCase();
+          const canonicalPath = canonicalizePluginPath(pathname);
           if (canonicalPath === "/api/channels/nostr/default/profile") {
             res.statusCode = 200;
             res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -278,38 +292,42 @@ describe("gateway plugin HTTP auth boundary", () => {
           resolvedAuth,
         });
 
-        const unauthenticatedCaseVariant = createResponse();
-        await dispatchRequest(
-          server,
-          createRequest({ path: "/API/channels/nostr/default/profile" }),
-          unauthenticatedCaseVariant.res,
-        );
-        expect(unauthenticatedCaseVariant.res.statusCode).toBe(401);
-        expect(unauthenticatedCaseVariant.getBody()).toContain("Unauthorized");
+        const unauthenticatedVariants = [
+          "/API/channels/nostr/default/profile",
+          "/api/channels%2Fnostr%2Fdefault%2Fprofile",
+          "/api/%63hannels/nostr/default/profile",
+          "/api/channels//nostr/default/profile",
+          "/api/channels/nostr/default/profile/",
+          "/api/channels%2",
+          "/api//channels%2",
+        ];
+        for (const path of unauthenticatedVariants) {
+          const response = createResponse();
+          await dispatchRequest(server, createRequest({ path }), response.res);
+          expect(response.res.statusCode).toBe(401);
+          expect(response.getBody()).toContain("Unauthorized");
+        }
         expect(handlePluginRequest).not.toHaveBeenCalled();
 
-        const unauthenticatedEncodedSlash = createResponse();
-        await dispatchRequest(
-          server,
-          createRequest({ path: "/api/channels%2Fnostr%2Fdefault%2Fprofile" }),
-          unauthenticatedEncodedSlash.res,
-        );
-        expect(unauthenticatedEncodedSlash.res.statusCode).toBe(401);
-        expect(unauthenticatedEncodedSlash.getBody()).toContain("Unauthorized");
-        expect(handlePluginRequest).not.toHaveBeenCalled();
-
-        const authenticatedCaseVariant = createResponse();
-        await dispatchRequest(
-          server,
-          createRequest({
-            path: "/API/channels/nostr/default/profile",
-            authorization: "Bearer test-token",
-          }),
-          authenticatedCaseVariant.res,
-        );
-        expect(authenticatedCaseVariant.res.statusCode).toBe(200);
-        expect(authenticatedCaseVariant.getBody()).toContain('"route":"channel-canonicalized"');
-        expect(handlePluginRequest).toHaveBeenCalledTimes(1);
+        const authenticatedVariants = [
+          "/API/channels/nostr/default/profile",
+          "/api/%63hannels/nostr/default/profile",
+          "/api/channels//nostr/default/profile/",
+        ];
+        for (const path of authenticatedVariants) {
+          const response = createResponse();
+          await dispatchRequest(
+            server,
+            createRequest({
+              path,
+              authorization: "Bearer test-token",
+            }),
+            response.res,
+          );
+          expect(response.res.statusCode).toBe(200);
+          expect(response.getBody()).toContain('"route":"channel-canonicalized"');
+        }
+        expect(handlePluginRequest).toHaveBeenCalledTimes(authenticatedVariants.length);
       },
     });
   });
