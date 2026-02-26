@@ -524,7 +524,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
         parameters: Type.Object({}),
         async execute() {
           try {
-            const result = await listAppScopes(getClient({ action: "read", doc_token: "" } as any));
+            const result = await listAppScopes(getClient({ action: "create", title: "" } as any));
             return json(result);
           } catch (err) {
             return json({ error: err instanceof Error ? err.message : String(err) });
