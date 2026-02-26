@@ -490,4 +490,40 @@ describe("web_fetch extraction fallbacks", () => {
     expect(message).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
     expect(message).toContain("blocked");
   });
+
+  it("includes URL in error message when fetch fails with network error", async () => {
+    installMockFetch(() => {
+      return Promise.reject(new TypeError("fetch failed: Connection refused"));
+    });
+
+    const tool = createFetchTool({ firecrawl: { enabled: false } });
+
+    const message = await captureToolErrorMessage({
+      tool,
+      url: "https://example.com/network-fail",
+    });
+
+    expect(message).toContain("web_fetch failed for https://example.com/network-fail");
+    expect(message).toContain("Connection refused");
+  });
+
+  it("includes URL in error when both fetch and firecrawl fail", async () => {
+    installMockFetch((input: RequestInfo | URL) => {
+      const url = requestUrl(input);
+      if (url.includes("api.firecrawl.dev")) {
+        return Promise.reject(new Error("Firecrawl service unavailable"));
+      }
+      return Promise.reject(new TypeError("fetch failed: DNS lookup failed"));
+    });
+
+    const tool = createFetchTool({ firecrawl: { apiKey: "firecrawl-test" } });
+
+    const message = await captureToolErrorMessage({
+      tool,
+      url: "https://example.com/both-fail",
+    });
+
+    expect(message).toContain("web_fetch failed for https://example.com/both-fail");
+    expect(message).toContain("DNS lookup failed");
+  });
 });
