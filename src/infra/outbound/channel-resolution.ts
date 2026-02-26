@@ -47,10 +47,15 @@ function maybeBootstrapChannelPlugin(params: {
   const autoEnabled = applyPluginAutoEnable({ config: cfg }).config;
   const defaultAgentId = resolveDefaultAgentId(autoEnabled);
   const workspaceDir = resolveAgentWorkspaceDir(autoEnabled, defaultAgentId);
-  loadOpenClawPlugins({
-    config: autoEnabled,
-    workspaceDir,
-  });
+  try {
+    loadOpenClawPlugins({
+      config: autoEnabled,
+      workspaceDir,
+    });
+  } catch {
+    // Allow a follow-up resolution attempt if bootstrap failed transiently.
+    bootstrapAttempts.delete(attemptKey);
+  }
 }
 
 export function resolveOutboundChannelPlugin(params: {
