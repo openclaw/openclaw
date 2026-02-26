@@ -16,6 +16,7 @@ import {
   syncTabWithLocation,
   syncThemeWithSettings,
 } from "./app-settings.ts";
+import { resolveDocumentTitle } from "./assistant-identity.ts";
 import { loadControlUiBootstrapConfig } from "./controllers/control-ui-bootstrap.ts";
 import type { Tab } from "./navigation.ts";
 
@@ -76,6 +77,9 @@ export function handleDisconnected(host: LifecycleHost) {
 }
 
 export function handleUpdated(host: LifecycleHost, changed: Map<PropertyKey, unknown>) {
+  if (changed.has("assistantName")) {
+    document.title = resolveDocumentTitle(host.assistantName);
+  }
   if (host.tab === "chat" && host.chatManualRefreshInFlight) {
     return;
   }

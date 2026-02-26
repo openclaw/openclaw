@@ -21,3 +21,13 @@ export function normalizeAssistantIdentity(
     typeof input?.agentId === "string" && input.agentId.trim() ? input.agentId.trim() : null;
   return { agentId, name, avatar };
 }
+
+const BASE_DOCUMENT_TITLE = "OpenClaw Control";
+
+/** Build the document title, prefixing with the agent name when it differs from the default. */
+export function resolveDocumentTitle(assistantName: string): string {
+  if (assistantName && assistantName !== DEFAULT_ASSISTANT_NAME) {
+    return `${assistantName} \u2014 ${BASE_DOCUMENT_TITLE}`;
+  }
+  return BASE_DOCUMENT_TITLE;
+}
