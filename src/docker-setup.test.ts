@@ -1,11 +1,22 @@
 import { spawnSync } from "node:child_process";
 import { chmod, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { tmpdir, platform } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
+
+// Detect if running on Windows without proper bash support
+const isWindows = platform() === "win32";
+const hasBashSupport = (() => {
+  if (!isWindows) {
+    return true;
+  }
+  // Check if bash is available (e.g., via WSL or Git Bash)
+  const result = spawnSync("bash", ["-c", "exit 0"], { encoding: "utf8" });
+  return !result.error && result.status === 0;
+})();
 
 type DockerSetupSandbox = {
   rootDir: string;
@@ -95,7 +106,11 @@ function runDockerSetup(
   sandbox: DockerSetupSandbox,
   overrides: Record<string, string | undefined> = {},
 ) {
-  return spawnSync("bash", [sandbox.scriptPath], {
+  // On Windows, convert script path to use forward slashes for bash
+  const scriptPath = isWindows
+    ? sandbox.scriptPath.replace(/\\/g, "/").replace(/^([A-Za-z]):/, "/$1")
+    : sandbox.scriptPath;
+  return spawnSync("bash", [scriptPath], {
     cwd: sandbox.rootDir,
     env: createEnv(sandbox, overrides),
     encoding: "utf8",
@@ -130,6 +145,10 @@ describe("docker-setup.sh", () => {
   });
 
   it("handles env defaults, home-volume mounts, and apt build args", async () => {
+    if (!hasBashSupport) {
+      // Skip bash-dependent tests on Windows without WSL/Git Bash
+      return;
+    }
     const activeSandbox = requireSandbox(sandbox);
 
     const result = runDockerSetup(activeSandbox, {
@@ -154,6 +173,10 @@ describe("docker-setup.sh", () => {
   });
 
   it("precreates config identity dir for CLI device auth writes", async () => {
+    if (!hasBashSupport) {
+      // Skip bash-dependent tests on Windows without WSL/Git Bash
+      return;
+    }
     const activeSandbox = requireSandbox(sandbox);
     const configDir = join(activeSandbox.rootDir, "config-identity");
     const workspaceDir = join(activeSandbox.rootDir, "workspace-identity");
@@ -169,6 +192,10 @@ describe("docker-setup.sh", () => {
   });
 
   it("rejects injected multiline OPENCLAW_EXTRA_MOUNTS values", async () => {
+    if (!hasBashSupport) {
+      // Skip bash-dependent tests on Windows without WSL/Git Bash
+      return;
+    }
     const activeSandbox = requireSandbox(sandbox);
 
     const result = runDockerSetup(activeSandbox, {
@@ -180,6 +207,10 @@ describe("docker-setup.sh", () => {
   });
 
   it("rejects invalid OPENCLAW_EXTRA_MOUNTS mount format", async () => {
+    if (!hasBashSupport) {
+      // Skip bash-dependent tests on Windows without WSL/Git Bash
+      return;
+    }
     const activeSandbox = requireSandbox(sandbox);
 
     const result = runDockerSetup(activeSandbox, {
@@ -191,6 +222,10 @@ describe("docker-setup.sh", () => {
   });
 
   it("rejects invalid OPENCLAW_HOME_VOLUME names", async () => {
+    if (!hasBashSupport) {
+      // Skip bash-dependent tests on Windows without WSL/Git Bash
+      return;
+    }
     const activeSandbox = requireSandbox(sandbox);
 
     const result = runDockerSetup(activeSandbox, {

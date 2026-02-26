@@ -64,6 +64,8 @@ describe("isReasoningTagProvider", () => {
       value: "google-generative-ai",
       expected: true,
     },
+    { name: "returns true for google (gemini-api-key auth)", value: "google", expected: true },
+    { name: "returns true for xai (grok models)", value: "xai", expected: true },
     { name: "returns true for minimax", value: "minimax", expected: true },
     { name: "returns true for minimax-cn", value: "minimax-cn", expected: true },
     { name: "returns false for null", value: null, expected: false },

@@ -195,12 +195,14 @@ else
 fi
 
 # The gateway refuses to start unless gateway.mode=local is set in config.
+# For Podman/rootless deployments, we also need to allow host header origin fallback
+# since the container binds to a non-loopback address.
 # Make first-run non-interactive; users can run the wizard later to configure channels/providers.
 OPENCLAW_JSON="$OPENCLAW_CONFIG/openclaw.json"
 if ! run_as_openclaw test -f "$OPENCLAW_JSON"; then
-  printf '%s\n' '{ gateway: { mode: "local" } }' | run_as_openclaw tee "$OPENCLAW_JSON" >/dev/null
+  printf '%s\n' '{ "gateway": { "mode": "local", "controlUi": { "dangerouslyAllowHostHeaderOriginFallback": true } } }' | run_as_openclaw tee "$OPENCLAW_JSON" >/dev/null
   run_as_openclaw chmod 600 "$OPENCLAW_JSON" 2>/dev/null || true
-  echo "Created $OPENCLAW_JSON (minimal gateway.mode=local)."
+  echo "Created $OPENCLAW_JSON (minimal gateway.mode=local with controlUi fallback)."
 fi
 
 echo "Building image from $REPO_PATH..."
