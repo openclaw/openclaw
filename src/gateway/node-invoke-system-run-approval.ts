@@ -55,6 +55,7 @@ function clientHasApprovals(client: ApprovalClient | null): boolean {
 
 function approvalMatchesRequest(
   cmdText: string,
+  argv: string[],
   params: SystemRunParamsLike,
   record: ExecApprovalRecord,
 ): boolean {
@@ -62,7 +63,19 @@ function approvalMatchesRequest(
     return false;
   }
 
-  if (!cmdText || record.request.command !== cmdText) {
+  const requestedArgv = Array.isArray(record.request.commandArgv)
+    ? record.request.commandArgv
+    : null;
+  if (requestedArgv) {
+    if (requestedArgv.length === 0 || requestedArgv.length !== argv.length) {
+      return false;
+    }
+    for (let i = 0; i < requestedArgv.length; i += 1) {
+      if (requestedArgv[i] !== argv[i]) {
+        return false;
+      }
+    }
+  } else if (!cmdText || record.request.command !== cmdText) {
     return false;
   }
 
@@ -237,7 +250,7 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
     };
   }
 
-  if (!approvalMatchesRequest(cmdText, p, snapshot)) {
+  if (!approvalMatchesRequest(cmdText, cmdTextResolution.argv, p, snapshot)) {
     return {
       ok: false,
       message: "approval id does not match request",

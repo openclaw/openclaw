@@ -89,6 +89,7 @@ export const ExecApprovalRequestParamsSchema = Type.Object(
   {
     id: Type.Optional(NonEmptyString),
     command: NonEmptyString,
+    commandArgv: Type.Optional(Type.Union([Type.Array(Type.String()), Type.Null()])),
     cwd: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     nodeId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     host: Type.Optional(Type.Union([Type.String(), Type.Null()])),
