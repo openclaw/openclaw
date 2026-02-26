@@ -161,7 +161,6 @@ export function resolveIMessageInboundDecision(params: {
   });
   const effectiveDmAllowFrom = accessDecision.effectiveAllowFrom;
   const effectiveGroupAllowFrom = accessDecision.effectiveGroupAllowFrom;
-  const dmAuthorized = !isGroup && accessDecision.decision === "allow";
 
   if (accessDecision.decision !== "allow") {
     if (isGroup) {
@@ -287,7 +286,7 @@ export function resolveIMessageInboundDecision(params: {
     allowTextCommands: true,
     hasControlCommand: hasControlCommandInMessage,
   });
-  const commandAuthorized = isGroup ? commandGate.commandAuthorized : dmAuthorized;
+  const commandAuthorized = commandGate.commandAuthorized;
   if (isGroup && commandGate.shouldBlock) {
     if (params.logVerbose) {
       logInboundDrop({

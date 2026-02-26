@@ -475,7 +475,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const dmAccess = resolveAccessDecision(false);
     const effectiveDmAllow = dmAccess.effectiveAllowFrom;
     const effectiveGroupAllow = dmAccess.effectiveGroupAllowFrom;
-    const dmAllowed = dmAccess.decision === "allow";
 
     if (
       reaction &&
@@ -573,7 +572,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       allowTextCommands: true,
       hasControlCommand: hasControlCommandInMessage,
     });
-    const commandAuthorized = isGroup ? commandGate.commandAuthorized : dmAllowed;
+    const commandAuthorized = commandGate.commandAuthorized;
     if (isGroup && commandGate.shouldBlock) {
       logInboundDrop({
         log: logVerbose,
