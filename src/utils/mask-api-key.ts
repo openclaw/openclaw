@@ -1,3 +1,6 @@
-export const maskApiKey = (_value: string): string => {
+export const maskApiKey = (value: string): string => {
+  if (!value.trim()) {
+    return "missing";
+  }
   return "****";
 };
