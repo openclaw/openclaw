@@ -5,6 +5,11 @@ import { refreshChat } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { OpenClawApp } from "./app.ts";
+import {
+  normalizeVoiceboxBaseUrl,
+  synthesizeVoiceboxAndPlay,
+  stopVoiceboxPlayback,
+} from "./chat/voicebox.ts";
 import { ChatState, loadChatHistory } from "./controllers/chat.ts";
 import { icons } from "./icons.ts";
 import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
@@ -93,6 +98,12 @@ export function renderChatControls(state: AppViewState) {
   const disableFocusToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const focusActive = state.onboarding ? true : state.settings.chatFocusMode;
+  const voiceSupported = state.chatVoiceSupported;
+  const voiceEnabled = voiceSupported && state.settings.chatVoiceEnabled;
+  const voiceAutoPlay = voiceEnabled && state.settings.chatVoiceAutoPlay;
+  const voiceProfiles = state.chatVoiceProfiles;
+  const selectedProfileId = state.settings.chatVoiceboxProfileId;
+  const canPreviewVoice = voiceEnabled && Boolean(selectedProfileId);
   // Refresh icon
   const refreshIcon = html`
     <svg
@@ -225,6 +236,125 @@ export function renderChatControls(state: AppViewState) {
         title=${disableFocusToggle ? t("chat.onboardingDisabled") : t("chat.focusToggle")}
       >
         ${focusIcon}
+      </button>
+      <span class="chat-controls__separator">|</span>
+      <button
+        class="btn btn--sm btn--icon ${voiceEnabled ? "active" : ""}"
+        @click=${() => {
+          state.applySettings({
+            ...state.settings,
+            chatVoiceEnabled: !state.settings.chatVoiceEnabled,
+          });
+          if (state.settings.chatVoiceEnabled) {
+            stopVoiceboxPlayback();
+          }
+        }}
+        aria-pressed=${voiceEnabled}
+        title=${voiceSupported ? (voiceEnabled ? "Disable voice output" : "Enable voice output") : "Voicebox currently unreachable"}
+      >
+        ${icons.radio}
+      </button>
+      <button
+        class="btn btn--sm btn--icon ${voiceAutoPlay ? "active" : ""}"
+        ?disabled=${!voiceEnabled}
+        @click=${() =>
+          state.applySettings({
+            ...state.settings,
+            chatVoiceAutoPlay: !state.settings.chatVoiceAutoPlay,
+          })}
+        aria-pressed=${voiceAutoPlay}
+        title=${voiceAutoPlay ? "Disable voice auto-play" : "Enable voice auto-play"}
+      >
+        ${icons.zap}
+      </button>
+      <label class="field chat-controls__voice">
+        <select
+          .value=${selectedProfileId}
+          ?disabled=${!voiceEnabled || !voiceProfiles.length}
+          @change=${(e: Event) => {
+            state.applySettings({
+              ...state.settings,
+              chatVoiceboxProfileId: (e.target as HTMLSelectElement).value,
+            });
+          }}
+        >
+          ${
+            voiceProfiles.length
+              ? voiceProfiles.map(
+                  (option) =>
+                    html`<option value=${option.id}>
+                      ${option.name} (${option.language})
+                    </option>`,
+                )
+              : html`
+                  <option value="">No voice profiles</option>
+                `
+          }
+        </select>
+      </label>
+      <button
+        class="btn btn--sm btn--icon"
+        ?disabled=${!canPreviewVoice}
+        @click=${async () => {
+          const previewText =
+            state.chatLastAssistantText ??
+            "Hi, this is MaxBot audition. Text history stays in chat.";
+          try {
+            await synthesizeVoiceboxAndPlay({
+              baseUrl: normalizeVoiceboxBaseUrl(state.settings.chatVoiceboxUrl),
+              profileId: state.settings.chatVoiceboxProfileId,
+              text: previewText,
+            });
+          } catch (error) {
+            const detail =
+              error instanceof Error && error.message ? error.message : "unknown voicebox error";
+            window.alert(`Voicebox playback failed: ${detail}`);
+          }
+        }}
+        title="Audition selected voice"
+      >
+        ${icons.messageSquare}
+      </button>
+      <button
+        class="btn btn--sm btn--icon"
+        @click=${() => {
+          const app = state as unknown as OpenClawApp;
+          void app.refreshVoiceProfiles();
+        }}
+        title="Refresh voice profiles"
+      >
+        ${icons.loader}
+      </button>
+      <button
+        class="btn btn--sm btn--icon"
+        ?disabled=${!voiceEnabled}
+        @click=${() => {
+          stopVoiceboxPlayback();
+        }}
+        title="Stop voice playback"
+      >
+        ${icons.x}
+      </button>
+      <button
+        class="btn btn--sm btn--icon"
+        @click=${() => {
+          const nextUrl = window.prompt(
+            "Voicebox URL",
+            state.settings.chatVoiceboxUrl || "http://127.0.0.1:17493",
+          );
+          if (!nextUrl) {
+            return;
+          }
+          state.applySettings({
+            ...state.settings,
+            chatVoiceboxUrl: normalizeVoiceboxBaseUrl(nextUrl),
+          });
+          const app = state as unknown as OpenClawApp;
+          void app.refreshVoiceProfiles();
+        }}
+        title="Set Voicebox URL"
+      >
+        ${icons.globe}
       </button>
     </div>
   `;

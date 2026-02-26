@@ -130,7 +130,7 @@ img.chat-avatar {
   border: 1px solid transparent;
   background: var(--card);
   border-radius: var(--radius-lg);
-  padding: 10px 14px;
+  padding: 18px 14px 10px;
   box-shadow: none;
   transition:
     background 150ms ease-out,
@@ -143,9 +143,29 @@ img.chat-avatar {
   padding-right: 36px;
 }
 
+.chat-bubble-id {
+  position: absolute;
+  top: 4px;
+  right: 10px;
+  font-size: 10px;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  opacity: 0.75;
+  pointer-events: none;
+  color: var(--muted);
+}
+
+.chat-bubble--assistant .chat-bubble-id {
+  color: #7dd3fc;
+}
+
+.chat-bubble--user .chat-bubble-id {
+  color: #fdba74;
+}
+
 .chat-copy-btn {
   position: absolute;
-  top: 6px;
+  top: 18px;
   right: 8px;
   border: 1px solid var(--border);
   background: var(--bg);

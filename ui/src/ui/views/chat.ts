@@ -6,6 +6,7 @@ import {
   renderReadingIndicatorGroup,
   renderStreamingGroup,
 } from "../chat/grouped-render.ts";
+import { extractTextCached } from "../chat/message-extract.ts";
 import { normalizeMessage, normalizeRoleForGrouping } from "../chat/message-normalizer.ts";
 import { icons } from "../icons.ts";
 import { detectTextDirection } from "../text-direction.ts";
@@ -76,6 +77,8 @@ export type ChatProps = {
   onAbort?: () => void;
   onQueueRemove: (id: string) => void;
   onNewSession: () => void;
+  onSecurityApprove?: () => void;
+  onSecurityDeny?: () => void;
   onOpenSidebar?: (content: string) => void;
   onCloseSidebar?: () => void;
   onSplitRatioChange?: (ratio: number) => void;
@@ -250,6 +253,7 @@ export function renderChat(props: ChatProps) {
   };
 
   const hasAttachments = (props.attachments?.length ?? 0) > 0;
+  const pendingSecurityApproval = resolvePendingSecurityApproval(props.messages);
   const composePlaceholder = props.connected
     ? hasAttachments
       ? "Add a message or paste more images..."
@@ -421,6 +425,26 @@ export function renderChat(props: ChatProps) {
       }
 
       <div class="chat-compose">
+        ${
+          pendingSecurityApproval && props.onSecurityApprove && props.onSecurityDeny
+            ? html`
+                <div class="chat-approval-strip" role="status" aria-live="polite">
+                  <span class="chat-approval-strip__label">Approval needed</span>
+                  <span class="chat-approval-strip__detail">${pendingSecurityApproval.summary}</span>
+                  <button class="btn chat-approval-strip__btn" type="button" @click=${props.onSecurityApprove}>
+                    Approve
+                  </button>
+                  <button
+                    class="btn chat-approval-strip__btn chat-approval-strip__btn--deny"
+                    type="button"
+                    @click=${props.onSecurityDeny}
+                  >
+                    Do not approve
+                  </button>
+                </div>
+              `
+            : nothing
+        }
         ${renderAttachmentPreview(props)}
         <div class="chat-compose__row">
           <label class="field chat-compose__field">
@@ -477,6 +501,34 @@ export function renderChat(props: ChatProps) {
       </div>
     </section>
   `;
+}
+
+type PendingSecurityApproval = {
+  summary: string;
+};
+
+function resolvePendingSecurityApproval(messages: unknown[]): PendingSecurityApproval | null {
+  const list = Array.isArray(messages) ? messages : [];
+  for (let i = list.length - 1; i >= 0; i--) {
+    const msg = list[i] as Record<string, unknown>;
+    const role = normalizeRoleForGrouping(typeof msg.role === "string" ? msg.role : "other");
+    if (role !== "assistant") {
+      continue;
+    }
+    const text = (extractTextCached(msg) ?? "").trim();
+    if (!text) {
+      continue;
+    }
+    const isApprovalPrompt =
+      /security alert/i.test(text) ||
+      /explicit permission/i.test(text) ||
+      /would you like to allow this action/i.test(text);
+    if (!isApprovalPrompt) {
+      return null;
+    }
+    return { summary: "Security Sentinel approval requested" };
+  }
+  return null;
 }
 
 const CHAT_HISTORY_RENDER_LIMIT = 200;

@@ -8,6 +8,7 @@ import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import {
@@ -68,6 +69,56 @@ const CHAT_HISTORY_TEXT_MAX_CHARS = 12_000;
 const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
 let chatHistoryPlaceholderEmitCount = 0;
+const SIGNAL_UI_MIRROR_MARKER = "\u2063mbmirror\u2063";
+
+type UiSignalMirrorConfig = {
+  enabled: boolean;
+  target?: string;
+  baseUrl?: string;
+  account?: string;
+};
+
+function readUiSignalMirrorConfig(cfg: OpenClawConfig): UiSignalMirrorConfig {
+  const enabled = /^(1|true|yes|on)$/i.test(
+    (process.env.OPENCLAW_SIGNAL_UI_MIRROR_ENABLED ?? "").trim(),
+  );
+  const target = (process.env.OPENCLAW_SIGNAL_UI_MIRROR_TARGET ?? "").trim() || undefined;
+  const signalCfg = (cfg?.channels?.signal ?? null) as {
+    httpUrl?: string;
+    account?: string;
+  } | null;
+  const baseUrl =
+    (process.env.OPENCLAW_SIGNAL_UI_MIRROR_HTTP_URL ?? "").trim() ||
+    signalCfg?.httpUrl?.trim() ||
+    undefined;
+  const account =
+    (process.env.OPENCLAW_SIGNAL_UI_MIRROR_ACCOUNT ?? "").trim() ||
+    signalCfg?.account?.trim() ||
+    undefined;
+  return { enabled, target, baseUrl, account };
+}
+
+async function mirrorWebchatReplyToSignal(params: {
+  cfg: OpenClawConfig;
+  text: string;
+  log: (msg: string) => void;
+}): Promise<void> {
+  const mirror = readUiSignalMirrorConfig(params.cfg);
+  if (!mirror.enabled || !mirror.target || !mirror.baseUrl) {
+    return;
+  }
+  const trimmed = params.text.trim();
+  if (!trimmed) {
+    return;
+  }
+  const { sendMessageSignal } = await import("../../signal/send.js");
+  await sendMessageSignal(`signal:${mirror.target}`, `${trimmed}\n${SIGNAL_UI_MIRROR_MARKER}`, {
+    baseUrl: mirror.baseUrl,
+    account: mirror.account,
+    maxBytes: 8 * 1024 * 1024,
+  });
+  params.log(`webchat mirror delivered to signal:${mirror.target}`);
+}
 
 function stripDisallowedChatControlChars(message: string): string {
   let output = "";
@@ -888,13 +939,24 @@ export const chatHandlers: GatewayRequestHandlers = {
           onModelSelected,
         },
       })
-        .then(() => {
+        .then(async () => {
           if (!agentRunStarted) {
             const combinedReply = finalReplyParts
               .map((part) => part.trim())
               .filter(Boolean)
               .join("\n\n")
               .trim();
+            if (combinedReply) {
+              try {
+                await mirrorWebchatReplyToSignal({
+                  cfg,
+                  text: combinedReply,
+                  log: (msg) => context.logGateway.info(msg),
+                });
+              } catch (err) {
+                context.logGateway.warn(`webchat signal mirror failed: ${formatForLog(err)}`);
+              }
+            }
             let message: Record<string, unknown> | undefined;
             if (combinedReply) {
               const { storePath: latestStorePath, entry: latestEntry } =

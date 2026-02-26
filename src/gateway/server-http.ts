@@ -32,6 +32,7 @@ import {
   type ResolvedGatewayAuth,
 } from "./auth.js";
 import { CANVAS_CAPABILITY_TTL_MS, normalizeCanvasScopedUrl } from "./canvas-capability.js";
+import { handleControlUiVoiceboxProxyRequest } from "./control-ui-voicebox-proxy.js";
 import {
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
@@ -562,6 +563,13 @@ export function createGatewayHttpServer(opts: {
         }
       }
       if (controlUiEnabled) {
+        if (
+          await handleControlUiVoiceboxProxyRequest(req, res, {
+            basePath: controlUiBasePath,
+          })
+        ) {
+          return;
+        }
         if (
           handleControlUiAvatarRequest(req, res, {
             basePath: controlUiBasePath,

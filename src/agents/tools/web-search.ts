@@ -22,7 +22,8 @@ import {
 
 const SEARCH_PROVIDERS = ["brave", "perplexity", "grok", "gemini", "kimi"] as const;
 const DEFAULT_SEARCH_COUNT = 5;
-const MAX_SEARCH_COUNT = 10;
+const MAX_SEARCH_COUNT = 25;
+const BRAVE_MAX_SEARCH_COUNT = 20;
 
 const BRAVE_SEARCH_ENDPOINT = "https://api.search.brave.com/res/v1/web/search";
 const DEFAULT_PERPLEXITY_BASE_URL = "https://openrouter.ai/api/v1";
@@ -51,7 +52,7 @@ const WebSearchSchema = Type.Object({
   query: Type.String({ description: "Search query string." }),
   count: Type.Optional(
     Type.Number({
-      description: "Number of results to return (1-10).",
+      description: "Number of results to return (1-25).",
       minimum: 1,
       maximum: MAX_SEARCH_COUNT,
     }),
@@ -1234,7 +1235,7 @@ async function runWebSearch(params: {
 
   const url = new URL(BRAVE_SEARCH_ENDPOINT);
   url.searchParams.set("q", params.query);
-  url.searchParams.set("count", String(params.count));
+  url.searchParams.set("count", String(Math.min(params.count, BRAVE_MAX_SEARCH_COUNT)));
   if (params.country) {
     url.searchParams.set("country", params.country);
   }

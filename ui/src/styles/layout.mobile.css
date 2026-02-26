@@ -127,6 +127,38 @@
     display: none;
   }
 
+  /* Keep chat controls visible on mobile so voicebox controls remain accessible. */
+  .content--chat .content-header {
+    display: flex;
+    padding: 2px 2px 6px;
+    gap: 8px;
+    align-items: stretch;
+  }
+
+  .content--chat .content-header > div:first-child {
+    display: none;
+  }
+
+  .content--chat .page-meta {
+    width: 100%;
+  }
+
+  .content--chat .chat-controls {
+    width: 100%;
+    gap: 6px;
+  }
+
+  .content--chat .chat-controls__separator {
+    display: none;
+  }
+
+  .shell--chat-focus .content--chat .content-header {
+    opacity: 1;
+    transform: none;
+    max-height: none;
+    pointer-events: auto;
+  }
+
   .content {
     padding: 4px 4px 16px;
     gap: 12px;

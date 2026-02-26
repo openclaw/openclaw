@@ -1,8 +1,10 @@
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
+import { enqueueSystemEvent } from "../infra/system-events.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { isPlainObject } from "../utils.js";
+import { evaluateSecuritySentinel, writeSecuritySentinelAudit } from "./security-sentinel.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
@@ -20,6 +22,21 @@ const adjustedParamsByToolCallId = new Map<string, unknown>();
 const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
 const LOOP_WARNING_BUCKET_SIZE = 10;
 const MAX_LOOP_WARNING_KEYS = 256;
+
+function resolveSentinelAlertSessionKey(
+  ctx?: HookContext,
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  const fromCtx = ctx?.sessionKey?.trim();
+  if (fromCtx) {
+    return fromCtx;
+  }
+  const fromEnv = env.OPENCLAW_SECURITY_SENTINEL_ALERT_SESSION_KEY?.trim();
+  if (fromEnv) {
+    return fromEnv;
+  }
+  return null;
+}
 
 function shouldEmitLoopWarning(state: SessionState, warningKey: string, count: number): boolean {
   if (!state.toolLoopWarningBuckets) {
@@ -79,6 +96,29 @@ export async function runBeforeToolCallHook(args: {
 }): Promise<HookOutcome> {
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
+
+  const sentinelDecision = evaluateSecuritySentinel({ toolName, params });
+  await writeSecuritySentinelAudit({ decision: sentinelDecision, params });
+  if (sentinelDecision.blocked) {
+    const tamperType = sentinelDecision.tamperType ?? "policy_violation";
+    const alertSessionKey = resolveSentinelAlertSessionKey(args.ctx);
+    if (alertSessionKey) {
+      enqueueSystemEvent(
+        `[SECURITY ALERT] tamper_type=${tamperType} tool=${toolName} score=${sentinelDecision.riskScore} blocked=1`,
+        {
+          sessionKey: alertSessionKey,
+          contextKey: `security-sentinel:${toolName}`,
+        },
+      );
+    }
+    log.warn(
+      `security sentinel blocked tool call: tool=${toolName} tamperType=${tamperType} decision=deny score=${sentinelDecision.riskScore} reason=${sentinelDecision.reason ?? "blocked"}`,
+    );
+    return {
+      blocked: true,
+      reason: `Security sentinel blocked tool call: ${sentinelDecision.reason ?? "policy violation"}`,
+    };
+  }
 
   if (args.ctx?.sessionKey) {
     const { getDiagnosticSessionState } = await import("../logging/diagnostic-session-state.js");

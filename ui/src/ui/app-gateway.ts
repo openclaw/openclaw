@@ -13,6 +13,9 @@ import {
 import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream.ts";
 import type { OpenClawApp } from "./app.ts";
 import { shouldReloadHistoryForFinalEvent } from "./chat-event-reload.ts";
+import { isBrowserVoiceSupported, speakBrowserVoice } from "./chat/browser-voice.ts";
+import { extractText } from "./chat/message-extract.ts";
+import { normalizeVoiceboxBaseUrl, synthesizeVoiceboxAndPlay } from "./chat/voicebox.ts";
 import { loadAgents, loadToolsCatalog } from "./controllers/agents.ts";
 import { loadAssistantIdentity } from "./controllers/assistant-identity.ts";
 import { loadChatHistory } from "./controllers/chat.ts";
@@ -71,11 +74,86 @@ type GatewayHost = {
   assistantAgentId: string | null;
   sessionKey: string;
   chatRunId: string | null;
+  chatVoiceSupported: boolean;
+  chatLastAssistantText: string | null;
+  spokenVoiceRunIds: Set<string>;
   refreshSessionsAfterChat: Set<string>;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
   updateAvailable: UpdateAvailable | null;
 };
+
+function extractAssistantFinalText(payload?: ChatEventPayload): string | null {
+  if (!payload || payload.state !== "final") {
+    return null;
+  }
+  const message = payload.message as Record<string, unknown> | undefined;
+  const role = typeof message?.role === "string" ? message.role.toLowerCase() : "assistant";
+  if (role !== "assistant") {
+    return null;
+  }
+  const text = extractText(payload.message);
+  if (typeof text !== "string") {
+    return null;
+  }
+  const normalized = text.trim();
+  return normalized || null;
+}
+
+function shouldSpeakFinalMessage(
+  host: GatewayHost,
+  payload: ChatEventPayload | undefined,
+): boolean {
+  if (
+    !host.chatVoiceSupported ||
+    !host.settings.chatVoiceEnabled ||
+    !host.settings.chatVoiceAutoPlay
+  ) {
+    return false;
+  }
+  const runId = payload?.runId?.trim();
+  if (!runId) {
+    return true;
+  }
+  if (host.spokenVoiceRunIds.has(runId)) {
+    return false;
+  }
+  host.spokenVoiceRunIds.add(runId);
+  if (host.spokenVoiceRunIds.size > 500) {
+    const first = host.spokenVoiceRunIds.values().next().value;
+    if (typeof first === "string") {
+      host.spokenVoiceRunIds.delete(first);
+    }
+  }
+  return true;
+}
+
+async function speakAssistantText(host: GatewayHost, text: string): Promise<void> {
+  const provider = host.settings.chatVoiceProvider;
+  if (provider === "browser") {
+    if (isBrowserVoiceSupported()) {
+      speakBrowserVoice({
+        text,
+        voiceUri: host.settings.chatVoiceVoiceUri,
+      });
+    }
+    return;
+  }
+  const profileId = host.settings.chatVoiceboxProfileId.trim();
+  if (!profileId) {
+    return;
+  }
+  try {
+    await synthesizeVoiceboxAndPlay({
+      baseUrl: normalizeVoiceboxBaseUrl(host.settings.chatVoiceboxUrl),
+      profileId,
+      text,
+    });
+  } catch (error) {
+    // Keep strict Voicebox mode (no browser fallback) but expose debugging signal.
+    console.warn("[voicebox] synthesis failed", error);
+  }
+}
 
 type SessionDefaultsSnapshot = {
   defaultAgentId?: string;
@@ -251,6 +329,15 @@ function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | u
     );
   }
   const state = handleChatEvent(host as unknown as OpenClawApp, payload);
+  if (state === "final") {
+    const finalText = extractAssistantFinalText(payload);
+    if (finalText) {
+      host.chatLastAssistantText = finalText;
+      if (shouldSpeakFinalMessage(host, payload)) {
+        void speakAssistantText(host, finalText);
+      }
+    }
+  }
   handleTerminalChatEvent(host, payload, state);
   if (state === "final" && shouldReloadHistoryForFinalEvent(payload)) {
     void loadChatHistory(host as unknown as OpenClawApp);

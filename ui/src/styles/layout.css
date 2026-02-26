@@ -472,6 +472,15 @@
   pointer-events: none;
 }
 
+/* Keep chat controls usable even when focus mode is enabled. */
+.shell--chat-focus .content--chat .content-header {
+  opacity: 1;
+  transform: none;
+  max-height: none;
+  padding: 4px 8px;
+  pointer-events: auto;
+}
+
 .page-title {
   font-size: 26px;
   font-weight: 700;
@@ -499,6 +508,8 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
+  overflow: visible;
+  max-height: none;
 }
 
 .content--chat .content-header > div:first-child {

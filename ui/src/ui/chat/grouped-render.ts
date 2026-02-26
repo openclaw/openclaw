@@ -93,7 +93,13 @@ export function renderStreamingGroup(
             content: [{ type: "text", text }],
             timestamp: startedAt,
           },
-          { isStreaming: true, showReasoning: false },
+          {
+            isStreaming: true,
+            showReasoning: false,
+            senderTag: assistant?.name ?? "MaxBot",
+            roleClass: "assistant",
+            showSenderTag: true,
+          },
           onOpenSidebar,
         )}
         <div class="chat-group-footer">
@@ -142,6 +148,9 @@ export function renderMessageGroup(
             {
               isStreaming: group.isStreaming && index === group.messages.length - 1,
               showReasoning: opts.showReasoning,
+              senderTag: who,
+              roleClass,
+              showSenderTag: index === group.messages.length - 1,
             },
             opts.onOpenSidebar,
           ),
@@ -223,7 +232,13 @@ function renderMessageImages(images: ImageBlock[]) {
 
 function renderGroupedMessage(
   message: unknown,
-  opts: { isStreaming: boolean; showReasoning: boolean },
+  opts: {
+    isStreaming: boolean;
+    showReasoning: boolean;
+    senderTag: string;
+    roleClass: "assistant" | "user" | "other";
+    showSenderTag: boolean;
+  },
   onOpenSidebar?: (content: string) => void,
 ) {
   const m = message as Record<string, unknown>;
@@ -250,6 +265,7 @@ function renderGroupedMessage(
 
   const bubbleClasses = [
     "chat-bubble",
+    `chat-bubble--${opts.roleClass}`,
     canCopyMarkdown ? "has-copy" : "",
     opts.isStreaming ? "streaming" : "",
     "fade-in",
@@ -267,6 +283,11 @@ function renderGroupedMessage(
 
   return html`
     <div class="${bubbleClasses}">
+      ${
+        opts.showSenderTag
+          ? html`<span class="chat-bubble-id" aria-label="Message sender">${opts.senderTag}</span>`
+          : nothing
+      }
       ${canCopyMarkdown ? renderCopyAsMarkdownButton(markdown!) : nothing}
       ${renderMessageImages(images)}
       ${

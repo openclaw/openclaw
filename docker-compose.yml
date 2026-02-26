@@ -1,10 +1,45 @@
 services:
+  voicebox:
+    image: ${VOICEBOX_IMAGE:-openclaw-voicebox:local}
+    build:
+      context: .
+      dockerfile: docker/voicebox/Dockerfile
+    environment:
+      VOICEBOX_MODELS_DIR: /app/models
+      HF_HOME: /app/cache/huggingface
+      HUGGINGFACE_HUB_CACHE: /app/cache/huggingface/hub
+      TRANSFORMERS_CACHE: /app/cache/huggingface/transformers
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENCLAW_VOICEBOX_FORCE_OPENAI: ${OPENCLAW_VOICEBOX_FORCE_OPENAI:-1}
+      OPENCLAW_VOICEBOX_OPENAI_MODEL: ${OPENCLAW_VOICEBOX_OPENAI_MODEL:-gpt-4o-mini-tts}
+      OPENCLAW_VOICEBOX_OPENAI_VOICE: ${OPENCLAW_VOICEBOX_OPENAI_VOICE:-alloy}
+    volumes:
+      - ${VOICEBOX_DATA_DIR:-./.voicebox/data}:/app/data
+      - ${VOICEBOX_MODELS_DIR:-./.voicebox/models}:/app/models
+      - ${VOICEBOX_CACHE_DIR:-./.voicebox/cache}:/app/cache
+      - ${VOICEBOX_CACHE_DIR:-./.voicebox/cache}/huggingface:/root/.cache/huggingface
+    ports:
+      - "${VOICEBOX_PORT:-127.0.0.1:17493}:8000"
+    init: true
+    restart: unless-stopped
+
   openclaw-gateway:
     image: ${OPENCLAW_IMAGE:-openclaw:local}
     environment:
       HOME: /home/node
       TERM: xterm-256color
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      BRAVE_API_KEY: ${BRAVE_API_KEY}
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY}
+      OPENCLAW_SECURITY_SENTINEL_ENABLED: ${OPENCLAW_SECURITY_SENTINEL_ENABLED:-1}
+      OPENCLAW_SECURITY_SENTINEL_REQUIRE_APPROVAL_TOOLS: ${OPENCLAW_SECURITY_SENTINEL_REQUIRE_APPROVAL_TOOLS:-web_search,web_fetch,message,exec,browser,gateway,nodes,cron,sessions_send,sessions_spawn,subagents}
+      OPENCLAW_SECURITY_SENTINEL_AUDIT_PATH: ${OPENCLAW_SECURITY_SENTINEL_AUDIT_PATH:-/home/node/.openclaw/logs/security-sentinel.jsonl}
+      OPENCLAW_SIGNAL_UI_MIRROR_ENABLED: ${OPENCLAW_SIGNAL_UI_MIRROR_ENABLED:-0}
+      OPENCLAW_SIGNAL_UI_MIRROR_TARGET: ${OPENCLAW_SIGNAL_UI_MIRROR_TARGET:-}
+      OPENCLAW_SIGNAL_UI_MIRROR_HTTP_URL: ${OPENCLAW_SIGNAL_UI_MIRROR_HTTP_URL:-}
+      OPENCLAW_SIGNAL_UI_MIRROR_ACCOUNT: ${OPENCLAW_SIGNAL_UI_MIRROR_ACCOUNT:-}
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}
       CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE}
@@ -33,6 +68,13 @@ services:
       HOME: /home/node
       TERM: xterm-256color
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      BRAVE_API_KEY: ${BRAVE_API_KEY}
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY}
+      OPENCLAW_SECURITY_SENTINEL_ENABLED: ${OPENCLAW_SECURITY_SENTINEL_ENABLED:-1}
+      OPENCLAW_SECURITY_SENTINEL_REQUIRE_APPROVAL_TOOLS: ${OPENCLAW_SECURITY_SENTINEL_REQUIRE_APPROVAL_TOOLS:-web_search,web_fetch,message,exec,browser,gateway,nodes,cron,sessions_send,sessions_spawn,subagents}
+      OPENCLAW_SECURITY_SENTINEL_AUDIT_PATH: ${OPENCLAW_SECURITY_SENTINEL_AUDIT_PATH:-/home/node/.openclaw/logs/security-sentinel.jsonl}
       BROWSER: echo
       CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY}
       CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY}

@@ -50,12 +50,103 @@ import {
 } from "../identity.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
 import type {
+  SignalAttachment,
+  SignalDataMessage,
   SignalEnvelope,
   SignalEventHandlerDeps,
+  SignalMention,
   SignalReactionMessage,
   SignalReceivePayload,
 } from "./event-handler.types.js";
 import { renderSignalMentions } from "./mentions.js";
+
+const SIGNAL_UI_MIRROR_MARKER = "\u2063mbmirror\u2063";
+
+function resolveSelfSyncInbound(params: { syncMessage: unknown; account?: string }): {
+  syntheticSelf: true;
+  sourceNumber?: string;
+  sourceName: string;
+  timestamp?: number;
+  dataMessage: SignalDataMessage;
+} | null {
+  const sync = params.syncMessage;
+  if (!sync || typeof sync !== "object") {
+    return null;
+  }
+  const sentMessage = (sync as { sentMessage?: unknown }).sentMessage;
+  if (!sentMessage || typeof sentMessage !== "object") {
+    return null;
+  }
+
+  const sent = sentMessage as {
+    message?: unknown;
+    destination?: unknown;
+    destinationNumber?: unknown;
+    timestamp?: unknown;
+    attachments?: unknown;
+    mentions?: unknown;
+    quote?: unknown;
+    groupInfo?: unknown;
+  };
+
+  if (sent.groupInfo && typeof sent.groupInfo === "object") {
+    return null;
+  }
+
+  const messageRaw = typeof sent.message === "string" ? sent.message : "";
+  if (messageRaw.includes(SIGNAL_UI_MIRROR_MARKER)) {
+    return null;
+  }
+  const message = messageRaw;
+  const attachments = Array.isArray(sent.attachments)
+    ? (sent.attachments as SignalAttachment[])
+    : undefined;
+  const mentions = Array.isArray(sent.mentions) ? (sent.mentions as SignalMention[]) : undefined;
+  const quote =
+    sent.quote && typeof sent.quote === "object" ? (sent.quote as { text?: string | null }) : null;
+  const hasContent = Boolean(
+    message.trim() || quote?.text?.trim() || (attachments?.length ?? 0) > 0,
+  );
+  if (!hasContent) {
+    return null;
+  }
+
+  const destinationRaw =
+    typeof sent.destinationNumber === "string"
+      ? sent.destinationNumber
+      : typeof sent.destination === "string"
+        ? sent.destination
+        : "";
+  const destination = destinationRaw.trim();
+  const account = params.account?.trim();
+  const normalizedAccount = account ? normalizeE164(account) : "";
+  const normalizedDestination = destination ? normalizeE164(destination) : "";
+
+  // Allow only note-to-self style sync messages to prevent loops on normal outbound sends.
+  const isSelfTarget =
+    Boolean(normalizedAccount) &&
+    (normalizedDestination === normalizedAccount || normalizedDestination.length === 0);
+  if (!isSelfTarget) {
+    return null;
+  }
+
+  const timestamp = typeof sent.timestamp === "number" ? sent.timestamp : undefined;
+  return {
+    syntheticSelf: true,
+    sourceNumber: normalizedAccount || normalizedDestination || undefined,
+    sourceName: "Note to Self",
+    timestamp,
+    dataMessage: {
+      timestamp,
+      message,
+      attachments,
+      mentions,
+      quote,
+      groupInfo: null,
+    },
+  };
+}
+
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   const inboundDebounceMs = resolveInboundDebounceMs({ cfg: deps.cfg, channel: "signal" });
 
@@ -418,11 +509,24 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     if (payload?.exception?.message) {
       deps.runtime.error?.(`receive exception: ${payload.exception.message}`);
     }
-    const envelope = payload?.envelope;
+    let envelope = payload?.envelope;
     if (!envelope) {
       return;
     }
-    if (envelope.syncMessage) {
+
+    const syncSelfInbound = resolveSelfSyncInbound({
+      syncMessage: envelope.syncMessage,
+      account: deps.account,
+    });
+    if (syncSelfInbound) {
+      envelope = {
+        ...envelope,
+        sourceNumber: envelope.sourceNumber ?? syncSelfInbound.sourceNumber ?? null,
+        sourceName: envelope.sourceName ?? syncSelfInbound.sourceName,
+        timestamp: envelope.timestamp ?? syncSelfInbound.timestamp ?? null,
+        dataMessage: envelope.dataMessage ?? syncSelfInbound.dataMessage,
+      };
+    } else if (envelope.syncMessage) {
       return;
     }
 
@@ -431,7 +535,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return;
     }
     if (deps.account && sender.kind === "phone") {
-      if (sender.e164 === normalizeE164(deps.account)) {
+      if (sender.e164 === normalizeE164(deps.account) && !syncSelfInbound?.syntheticSelf) {
         return;
       }
     }

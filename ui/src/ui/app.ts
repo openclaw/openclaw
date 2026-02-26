@@ -52,6 +52,12 @@ import {
 } from "./app-tool-stream.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { normalizeAssistantIdentity } from "./assistant-identity.ts";
+import {
+  listVoiceboxProfiles,
+  normalizeVoiceboxBaseUrl,
+  stopVoiceboxPlayback,
+  type VoiceboxProfile,
+} from "./chat/voicebox.ts";
 import { loadAssistantIdentity as loadAssistantIdentityInternal } from "./controllers/assistant-identity.ts";
 import type { CronFieldErrors } from "./controllers/cron.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
@@ -152,6 +158,9 @@ export class OpenClawApp extends LitElement {
   @state() chatQueue: ChatQueueItem[] = [];
   @state() chatAttachments: ChatAttachment[] = [];
   @state() chatManualRefreshInFlight = false;
+  @state() chatVoiceSupported = true;
+  @state() chatVoiceProfiles: VoiceboxProfile[] = [];
+  @state() chatLastAssistantText: string | null = null;
   // Sidebar state for tool output viewing
   @state() sidebarOpen = false;
   @state() sidebarContent: string | null = null;
@@ -388,6 +397,7 @@ export class OpenClawApp extends LitElement {
   private themeMedia: MediaQueryList | null = null;
   private themeMediaHandler: ((event: MediaQueryListEvent) => void) | null = null;
   private topbarObserver: ResizeObserver | null = null;
+  spokenVoiceRunIds = new Set<string>();
 
   createRenderRoot() {
     return this;
@@ -395,6 +405,7 @@ export class OpenClawApp extends LitElement {
 
   connectedCallback() {
     super.connectedCallback();
+    void this.initializeVoiceOutput();
     handleConnected(this as unknown as Parameters<typeof handleConnected>[0]);
   }
 
@@ -404,6 +415,7 @@ export class OpenClawApp extends LitElement {
 
   disconnectedCallback() {
     handleDisconnected(this as unknown as Parameters<typeof handleDisconnected>[0]);
+    this.teardownVoiceOutput();
     super.disconnectedCallback();
   }
 
@@ -456,6 +468,81 @@ export class OpenClawApp extends LitElement {
 
   applySettings(next: UiSettings) {
     applySettingsInternal(this as unknown as Parameters<typeof applySettingsInternal>[0], next);
+  }
+
+  private async initializeVoiceOutput() {
+    this.chatVoiceSupported = true;
+    await this.refreshVoiceProfiles();
+  }
+
+  private teardownVoiceOutput() {
+    stopVoiceboxPlayback();
+  }
+
+  async refreshVoiceProfiles() {
+    const configured = normalizeVoiceboxBaseUrl(this.settings.chatVoiceboxUrl);
+    const candidates: string[] = [];
+    if (typeof window !== "undefined") {
+      const normalizedBasePath = this.basePath.replace(/\/+$/, "");
+      const proxyPath = `${normalizedBasePath}/__openclaw/voicebox`;
+      candidates.push(`${window.location.origin}${proxyPath}`);
+    }
+    candidates.push(configured, "http://127.0.0.1:17493", "http://localhost:17493");
+    if (typeof window !== "undefined") {
+      const host = window.location.hostname.trim();
+      if (host) {
+        candidates.push(`http://${host}:17493`);
+      }
+    }
+    const tried = new Set<string>();
+    for (const candidate of candidates) {
+      const baseUrl = normalizeVoiceboxBaseUrl(candidate);
+      if (tried.has(baseUrl)) {
+        continue;
+      }
+      tried.add(baseUrl);
+      try {
+        const profiles = await listVoiceboxProfiles(baseUrl);
+        this.chatVoiceProfiles = profiles;
+        this.chatVoiceSupported = true;
+        if (!profiles.length) {
+          if (this.settings.chatVoiceboxProfileId || this.settings.chatVoiceboxUrl !== baseUrl) {
+            this.applySettings({
+              ...this.settings,
+              chatVoiceboxUrl: baseUrl,
+              chatVoiceboxProfileId: "",
+            });
+          }
+          return;
+        }
+        const selected = this.settings.chatVoiceboxProfileId.trim();
+        if (selected && profiles.some((entry) => entry.id === selected)) {
+          if (
+            this.settings.chatVoiceboxUrl !== baseUrl ||
+            this.settings.chatVoiceProvider !== "voicebox"
+          ) {
+            this.applySettings({
+              ...this.settings,
+              chatVoiceProvider: "voicebox",
+              chatVoiceboxUrl: baseUrl,
+            });
+          }
+          return;
+        }
+        const preferred = profiles[0];
+        this.applySettings({
+          ...this.settings,
+          chatVoiceProvider: "voicebox",
+          chatVoiceboxUrl: baseUrl,
+          chatVoiceboxProfileId: preferred.id,
+        });
+        return;
+      } catch {
+        // Try next candidate endpoint.
+      }
+    }
+    this.chatVoiceSupported = false;
+    this.chatVoiceProfiles = [];
   }
 
   setTab(next: Tab) {

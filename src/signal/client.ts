@@ -138,20 +138,28 @@ export async function streamSignalEvents(params: {
   onEvent: (event: SignalSseEvent) => void;
 }): Promise<void> {
   const baseUrl = normalizeBaseUrl(params.baseUrl);
-  const url = new URL(`${baseUrl}/api/v1/events`);
-  if (params.account) {
-    url.searchParams.set("account", params.account);
-  }
 
   const fetchImpl = resolveFetch();
   if (!fetchImpl) {
     throw new Error("fetch is not available");
   }
-  const res = await fetchImpl(url, {
-    method: "GET",
-    headers: { Accept: "text/event-stream" },
-    signal: params.abortSignal,
-  });
+  const fetchSse = async (queryKey?: "account" | "username"): Promise<Response> => {
+    const url = new URL(`${baseUrl}/api/v1/events`);
+    if (queryKey && params.account) {
+      url.searchParams.set(queryKey, params.account);
+    }
+    return await fetchImpl(url, {
+      method: "GET",
+      headers: { Accept: "text/event-stream" },
+      signal: params.abortSignal,
+    });
+  };
+
+  let res = await fetchSse(params.account ? "account" : undefined);
+  if (!res.ok && res.status === 400 && params.account) {
+    // signal-cli daemon variants accept different account query names.
+    res = await fetchSse("username");
+  }
   if (!res.ok || !res.body) {
     throw new Error(`Signal SSE failed (${res.status} ${res.statusText || "error"})`);
   }

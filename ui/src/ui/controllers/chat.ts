@@ -232,7 +232,9 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       const finalMessage = normalizeFinalAssistantMessage(payload.message);
       if (finalMessage) {
         state.chatMessages = [...state.chatMessages, finalMessage];
-        return null;
+        // Force a history reload so cross-channel user turns (e.g. Signal inbound)
+        // appear in the active chat thread, not only the assistant final.
+        return "final";
       }
       return "final";
     }

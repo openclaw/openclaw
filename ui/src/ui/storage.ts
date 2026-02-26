@@ -11,6 +11,12 @@ export type UiSettings = {
   theme: ThemeMode;
   chatFocusMode: boolean;
   chatShowThinking: boolean;
+  chatVoiceEnabled: boolean;
+  chatVoiceAutoPlay: boolean;
+  chatVoiceProvider: "voicebox" | "browser";
+  chatVoiceVoiceUri: string;
+  chatVoiceboxUrl: string;
+  chatVoiceboxProfileId: string;
   splitRatio: number; // Sidebar split ratio (0.4 to 0.7, default 0.6)
   navCollapsed: boolean; // Collapsible sidebar state
   navGroupsCollapsed: Record<string, boolean>; // Which nav groups are collapsed
@@ -31,6 +37,12 @@ export function loadSettings(): UiSettings {
     theme: "system",
     chatFocusMode: false,
     chatShowThinking: true,
+    chatVoiceEnabled: true,
+    chatVoiceAutoPlay: true,
+    chatVoiceProvider: "voicebox",
+    chatVoiceVoiceUri: "",
+    chatVoiceboxUrl: "/__openclaw/voicebox",
+    chatVoiceboxProfileId: "",
     splitRatio: 0.6,
     navCollapsed: false,
     navGroupsCollapsed: {},
@@ -67,6 +79,30 @@ export function loadSettings(): UiSettings {
         typeof parsed.chatShowThinking === "boolean"
           ? parsed.chatShowThinking
           : defaults.chatShowThinking,
+      chatVoiceEnabled:
+        typeof parsed.chatVoiceEnabled === "boolean"
+          ? parsed.chatVoiceEnabled
+          : defaults.chatVoiceEnabled,
+      chatVoiceAutoPlay:
+        typeof parsed.chatVoiceAutoPlay === "boolean"
+          ? parsed.chatVoiceAutoPlay
+          : defaults.chatVoiceAutoPlay,
+      chatVoiceProvider:
+        parsed.chatVoiceProvider === "browser" || parsed.chatVoiceProvider === "voicebox"
+          ? parsed.chatVoiceProvider
+          : defaults.chatVoiceProvider,
+      chatVoiceVoiceUri:
+        typeof parsed.chatVoiceVoiceUri === "string"
+          ? parsed.chatVoiceVoiceUri
+          : defaults.chatVoiceVoiceUri,
+      chatVoiceboxUrl:
+        typeof parsed.chatVoiceboxUrl === "string" && parsed.chatVoiceboxUrl.trim()
+          ? parsed.chatVoiceboxUrl.trim()
+          : defaults.chatVoiceboxUrl,
+      chatVoiceboxProfileId:
+        typeof parsed.chatVoiceboxProfileId === "string"
+          ? parsed.chatVoiceboxProfileId
+          : defaults.chatVoiceboxProfileId,
       splitRatio:
         typeof parsed.splitRatio === "number" &&
         parsed.splitRatio >= 0.4 &&
