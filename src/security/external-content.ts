@@ -151,26 +151,74 @@ type EncodedPayload = {
 };
 
 /**
+ * Targeted confusable-character map for injection-keyword detection (M-04).
+ *
+ * Unicode NFKD handles fullwidth/math/compatibility variants but NOT
+ * script-level homoglyphs: Cyrillic "а" (U+0430) and Greek "α" (U+03B1)
+ * are visually identical to Latin "a" but NFKD leaves them unchanged.
+ *
+ * This table maps the Cyrillic and Greek characters most likely to appear as
+ * drop-in substitutes inside injection keywords (ignore, exec, admin, …).
+ * Applied only to the normalized detection copy — original content is
+ * unchanged.
+ */
+const CONFUSABLE_MAP: Readonly<Record<string, string>> = {
+  // Cyrillic lowercase → ASCII lookalike
+  "\u0430": "a", // а → a  (Cyrillic small a)
+  "\u0435": "e", // е → e  (Cyrillic small ie)
+  "\u043e": "o", // о → o  (Cyrillic small o)
+  "\u0440": "p", // р → p  (Cyrillic small er)
+  "\u0441": "c", // с → c  (Cyrillic small es)
+  "\u0443": "y", // у → y  (Cyrillic small u)
+  "\u0445": "x", // х → x  (Cyrillic small ha)
+  "\u0456": "i", // і → i  (Ukrainian/Belarusian small i)
+  // Cyrillic uppercase → ASCII lookalike
+  "\u0410": "A", // А → A  (Cyrillic capital a)
+  "\u0415": "E", // Е → E  (Cyrillic capital ie)
+  "\u041e": "O", // О → O  (Cyrillic capital o)
+  "\u0420": "P", // Р → P  (Cyrillic capital er)
+  "\u0421": "C", // С → C  (Cyrillic capital es)
+  "\u0406": "I", // І → I  (Ukrainian capital I)
+  // Greek lowercase → ASCII lookalike
+  "\u03b1": "a", // α → a  (Greek small alpha)
+  "\u03bf": "o", // ο → o  (Greek small omicron)
+  "\u03c1": "p", // ρ → p  (Greek small rho)
+  // Greek uppercase → ASCII lookalike
+  "\u0391": "A", // Α → A  (Greek capital alpha)
+  "\u039f": "O", // Ο → O  (Greek capital omicron)
+  "\u03a1": "P", // Ρ → P  (Greek capital rho)
+};
+
+// Single character-class regex built from the map keys (all single Unicode
+// chars with no regex metacharacter meaning inside []).
+const CONFUSABLE_RE = new RegExp("[" + Object.keys(CONFUSABLE_MAP).join("") + "]", "gu");
+
+function foldConfusables(text: string): string {
+  return text.replace(CONFUSABLE_RE, (ch) => CONFUSABLE_MAP[ch] ?? ch);
+}
+
+/**
  * Normalize text for injection detection.
  *
- * Applies NFKD (compatibility decomposition) then strips Unicode combining
- * marks (category M). This folds compatibility equivalents — fullwidth Latin
- * letters, math bold/italic/script variants, circled characters, etc. — back
- * to their ASCII base forms, defeating homoglyph substitution attacks that
- * try to write "ignore" or "system" with visually identical but distinct code
- * points to bypass keyword pattern regexes.
+ * Two-pass normalization:
  *
- * What NFKD covers (examples):
- *   ｉｇｎｏｒｅ (fullwidth)  → ignore
- *   𝒊𝒈𝒏𝒐𝒓𝒆 (math bold italic) → ignore
- *   ⓘⓖⓝⓞⓡⓔ (circled)       → ignore  (after strip)
- *   d̤e̤l̤e̤t̤e̤ (combining below)  → delete
+ * 1. NFKD + strip combining marks (category M) — folds fullwidth Latin,
+ *    math bold/italic/script variants, circled characters, etc. back to ASCII.
+ *    Examples:
+ *      ｉｇｎｏｒｅ  (fullwidth)        → ignore
+ *      𝒊𝒈𝒏𝒐𝒓𝒆  (math bold italic)  → ignore
+ *      ⓘⓖⓝⓞⓡⓔ  (circled)          → ignore  (after strip)
+ *      d̤e̤l̤e̤t̤e̤  (combining below)   → delete
  *
- * Limitation: pure script-level confusables (Cyrillic а vs Latin a) are NOT
- * covered — that requires a full Unicode confusable-mapping table.
+ * 2. Script-level confusable fold (M-04) — maps the Cyrillic and Greek
+ *    characters most visually similar to ASCII into their ASCII equivalents.
+ *    Examples:
+ *      іgnоrе  (Cyrillic і, о, е)  → ignore
+ *      еxеc    (Cyrillic е, х, е)  → exec   (х→x not covered by NFKD)
+ *      аdmіn   (Cyrillic а, і)     → admin
  */
 function normalizeForDetection(text: string): string {
-  return text.normalize("NFKD").replace(/\p{M}/gu, "");
+  return foldConfusables(text.normalize("NFKD").replace(/\p{M}/gu, ""));
 }
 
 function safeTest(pattern: RegExp, text: string): boolean {
