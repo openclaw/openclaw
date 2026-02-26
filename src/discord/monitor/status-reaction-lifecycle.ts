@@ -84,7 +84,8 @@ function canTransition(
     return isWaitingState(to) || to === "active";
   }
   if (isWaitingState(from)) {
-    return to === "active";
+    // Keep normal flow strict (waiting -> active), but allow explicit failure fallback.
+    return to === "active" || to === "error";
   }
   if (from === "active") {
     return to === "done" || to === "error";
