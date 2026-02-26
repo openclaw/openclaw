@@ -252,6 +252,9 @@
       "node-llama-cpp",
       "protobufjs",
       "sharp"
+    ],
+    "ignoredBuiltDependencies": [
+      "@discordjs/opus"
     ]
   }
 }

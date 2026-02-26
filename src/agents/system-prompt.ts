@@ -6,7 +6,7 @@ import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { ResolvedTimeFormat } from "./date-time.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import type { EmbeddedSandboxInfo } from "./pi-embedded-runner/types.js";
-import { sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
+import { escapePromptDelimiters, sanitizeForPromptLiteral } from "./sanitize-for-prompt.js";
 
 /**
  * Controls which hardcoded sections are included in the system prompt.
@@ -367,9 +367,11 @@ export function buildAgentSystemPrompt(params: {
   const promptMode = params.promptMode ?? "full";
   const isMinimal = promptMode === "minimal" || promptMode === "none";
   const sandboxContainerWorkspace = params.sandboxInfo?.containerWorkspaceDir?.trim();
-  const sanitizedWorkspaceDir = sanitizeForPromptLiteral(params.workspaceDir);
+  const sanitizedWorkspaceDir = escapePromptDelimiters(
+    sanitizeForPromptLiteral(params.workspaceDir),
+  );
   const sanitizedSandboxContainerWorkspace = sandboxContainerWorkspace
-    ? sanitizeForPromptLiteral(sandboxContainerWorkspace)
+    ? escapePromptDelimiters(sanitizeForPromptLiteral(sandboxContainerWorkspace))
     : "";
   const displayWorkspaceDir =
     params.sandboxInfo?.enabled && sanitizedSandboxContainerWorkspace
@@ -377,7 +379,7 @@ export function buildAgentSystemPrompt(params: {
       : sanitizedWorkspaceDir;
   const workspaceGuidance =
     params.sandboxInfo?.enabled && sanitizedSandboxContainerWorkspace
-      ? `For read/write/edit/apply_patch, file paths resolve against host workspace: ${sanitizedWorkspaceDir}. For bash/exec commands, use sandbox container paths under ${sanitizedSandboxContainerWorkspace} (or relative paths from that workdir), not host paths. Prefer relative paths so both sandboxed exec and file tools work consistently.`
+      ? `For read/write/edit/apply_patch, file paths resolve against host workspace: <user_host_workspace>${sanitizedWorkspaceDir}</user_host_workspace>. For bash/exec commands, use sandbox container paths under <user_sandbox_workspace>${sanitizedSandboxContainerWorkspace}</user_sandbox_workspace> (or relative paths from that workdir), not host paths. Prefer relative paths so both sandboxed exec and file tools work consistently.`
       : "Treat this directory as the single global workspace for file operations unless explicitly instructed otherwise.";
   const safetySection = [
     "## Safety",

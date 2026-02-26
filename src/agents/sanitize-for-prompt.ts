@@ -1,4 +1,8 @@
 /**
+ * Enhances prompt integrity by stripping control characters and escaping delimiters.
+ */
+
+/**
  * Sanitize untrusted strings before embedding them into an LLM prompt.
  *
  * Threat model (OC-19): attacker-controlled directory names (or other runtime strings)
@@ -11,8 +15,26 @@
  *
  * Notes:
  * - This is intentionally lossy; it trades edge-case path fidelity for prompt integrity.
- * - If you need lossless representation, escape instead of stripping.
  */
 export function sanitizeForPromptLiteral(value: string): string {
+  // Strip control and format characters that can disrupt prompt parsing.
   return value.replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, "");
+}
+
+/**
+ * Escapes common prompt delimiters to preventing escaping structured blocks.
+ */
+export function escapePromptDelimiters(value: string): string {
+  if (!value) {
+    return value;
+  }
+  return value
+    .replace(/---/g, "- - -")
+    .replace(/###/g, "# # #")
+    .replace(/\[\[/g, "\\[\\[")
+    .replace(/\]\]/g, "\\]\\]")
+    .replace(/<think>/gi, "&lt;think&gt;")
+    .replace(/<\/think>/gi, "&lt;/think&gt;")
+    .replace(/<final>/gi, "&lt;final&gt;")
+    .replace(/<\/final>/gi, "&lt;/final&gt;");
 }
