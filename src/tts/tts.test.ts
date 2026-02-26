@@ -370,6 +370,15 @@ describe("tts", () => {
       expect(result.warnings.length).toBeGreaterThan(0);
     });
 
+    it("rejects invalid minimax emotion and warns", () => {
+      const policy = resolveModelOverridePolicy({ enabled: true });
+      const input = "Hello [[tts:emotion=joyful]] world";
+      const result = parseTtsDirectives(input, policy);
+
+      expect(result.overrides.minimax?.emotion).toBeUndefined();
+      expect(result.warnings).toContain('invalid MiniMax emotion "joyful"');
+    });
+
     it("parses minimax model via generic model directive", () => {
       const policy = resolveModelOverridePolicy({ enabled: true });
       const input = "Hello [[tts:model=speech-2.8-hd]] world";
