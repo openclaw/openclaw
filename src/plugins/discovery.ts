@@ -66,6 +66,12 @@ function deriveIdHint(params: {
   const base = path.basename(params.filePath, path.extname(params.filePath));
   const rawPackageName = params.packageName?.trim();
   if (!rawPackageName) {
+    // When no package name is available and the file is an index file,
+    // use the parent directory name as the hint (e.g. "device-pair" from
+    // extensions/device-pair/index.ts) instead of the useless "index".
+    if (base === "index") {
+      return path.basename(path.dirname(params.filePath));
+    }
     return base;
   }
 
