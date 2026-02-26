@@ -14,7 +14,6 @@ BUILD_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 GIT_COMMIT=$(cd "$ROOT_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 GIT_BUILD_NUMBER=$(cd "$ROOT_DIR" && git rev-list --count HEAD 2>/dev/null || echo "0")
 APP_VERSION="${APP_VERSION:-$PKG_VERSION}"
-APP_BUILD="${APP_BUILD:-$GIT_BUILD_NUMBER}"
 BUILD_CONFIG="${BUILD_CONFIG:-debug}"
 BUILD_ARCHS_VALUE="${BUILD_ARCHS:-$(uname -m)}"
 if [[ "${BUILD_ARCHS_VALUE}" == "all" ]]; then
@@ -29,6 +28,30 @@ if [[ "$BUNDLE_ID" == *.debug ]]; then
   SPARKLE_FEED_URL=""
   AUTO_CHECKS=false
 fi
+
+canonical_build_from_version() {
+  local version="$1"
+  if [[ "$version" =~ ^([0-9]{4})\.([0-9]{1,2})\.([0-9]{1,2})([.-].*)?$ ]]; then
+    local year="${BASH_REMATCH[1]}"
+    local month="${BASH_REMATCH[2]}"
+    local day="${BASH_REMATCH[3]}"
+    printf "%d%02d%02d0" "$year" "$month" "$day"
+    return 0
+  fi
+  return 1
+}
+
+if [[ -z "${APP_BUILD+x}" ]]; then
+  APP_BUILD="$GIT_BUILD_NUMBER"
+  if CANONICAL_BUILD="$(canonical_build_from_version "$APP_VERSION")"; then
+    if [[ "$CANONICAL_BUILD" =~ ^[0-9]+$ ]] && (( CANONICAL_BUILD > APP_BUILD )); then
+      APP_BUILD="$CANONICAL_BUILD"
+    fi
+  fi
+else
+  APP_BUILD="${APP_BUILD}"
+fi
+
 if [[ "$AUTO_CHECKS" == "true" && ! "$APP_BUILD" =~ ^[0-9]+$ ]]; then
   echo "ERROR: APP_BUILD must be numeric for Sparkle compare (CFBundleVersion). Got: $APP_BUILD" >&2
   exit 1
