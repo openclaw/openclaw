@@ -224,21 +224,21 @@ function resolveFallbackCandidates(params: {
     const configuredFallbacks = resolveAgentModelFallbackValues(
       params.cfg?.agents?.defaults?.model,
     );
-    if (sameModelCandidate(normalizedPrimary, configuredPrimary)) {
-      return configuredFallbacks;
-    }
-    // Preserve resilience after failover: when current model is one of the
-    // configured fallback refs, keep traversing the configured fallback chain.
-    const isConfiguredFallback = configuredFallbacks.some((raw) => {
-      const resolved = resolveModelRefFromString({
-        raw: String(raw ?? ""),
-        defaultProvider,
-        aliasIndex,
+    // When user runs a different provider than config, only use configured fallbacks
+    // if the current model is already in that chain (e.g. session on first fallback).
+    if (normalizedPrimary.provider !== configuredPrimary.provider) {
+      const isConfiguredFallback = configuredFallbacks.some((raw) => {
+        const resolved = resolveModelRefFromString({
+          raw: String(raw ?? ""),
+          defaultProvider,
+          aliasIndex,
+        });
+        return resolved ? sameModelCandidate(resolved.ref, normalizedPrimary) : false;
       });
-      return resolved ? sameModelCandidate(resolved.ref, normalizedPrimary) : false;
-    });
-    // Keep legacy override behavior for ad-hoc models outside configured chain.
-    return isConfiguredFallback ? configuredFallbacks : [];
+      return isConfiguredFallback ? configuredFallbacks : [];
+    }
+    // Same provider: always use full fallback chain (model version differences within provider).
+    return configuredFallbacks;
   })();
 
   for (const raw of modelFallbacks) {
@@ -306,6 +306,76 @@ export const _probeThrottleInternals = {
   resolveProbeThrottleKey,
 } as const;
 
+type CooldownDecision =
+  | {
+      type: "skip";
+      reason: FailoverReason;
+      error: string;
+    }
+  | {
+      type: "attempt";
+      reason: FailoverReason;
+      markProbe: boolean;
+    };
+
+function resolveCooldownDecision(params: {
+  candidate: ModelCandidate;
+  isPrimary: boolean;
+  requestedModel: boolean;
+  hasFallbackCandidates: boolean;
+  now: number;
+  probeThrottleKey: string;
+  authStore: ReturnType<typeof ensureAuthProfileStore>;
+  profileIds: string[];
+}): CooldownDecision {
+  const shouldProbe = shouldProbePrimaryDuringCooldown({
+    isPrimary: params.isPrimary,
+    hasFallbackCandidates: params.hasFallbackCandidates,
+    now: params.now,
+    throttleKey: params.probeThrottleKey,
+    authStore: params.authStore,
+    profileIds: params.profileIds,
+  });
+
+  const inferredReason =
+    resolveProfilesUnavailableReason({
+      store: params.authStore,
+      profileIds: params.profileIds,
+      now: params.now,
+    }) ?? "rate_limit";
+  const isPersistentIssue =
+    inferredReason === "auth" ||
+    inferredReason === "auth_permanent" ||
+    inferredReason === "billing";
+  if (isPersistentIssue) {
+    return {
+      type: "skip",
+      reason: inferredReason,
+      error: `Provider ${params.candidate.provider} has ${inferredReason} issue (skipping all models)`,
+    };
+  }
+
+  // For primary: try when requested model or when probe allows.
+  // For same-provider fallbacks: only relax cooldown on rate_limit, which
+  // is commonly model-scoped and can recover on a sibling model.
+  const shouldAttemptDespiteCooldown =
+    (params.isPrimary && (!params.requestedModel || shouldProbe)) ||
+    (!params.isPrimary && inferredReason === "rate_limit");
+  if (!shouldAttemptDespiteCooldown) {
+    return {
+      type: "skip",
+      reason: inferredReason,
+      error: `Provider ${params.candidate.provider} is in cooldown (all profiles unavailable)`,
+    };
+  }
+
+  return {
+    type: "attempt",
+    reason: inferredReason,
+    markProbe: params.isPrimary && shouldProbe,
+  };
+}
+
 export async function runWithModelFallback<T>(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -342,41 +412,38 @@ export async function runWithModelFallback<T>(params: {
 
       if (profileIds.length > 0 && !isAnyProfileAvailable) {
         // All profiles for this provider are in cooldown.
-        // For the primary model (i === 0), probe it if the soonest cooldown
-        // expiry is close or already past. This avoids staying on a fallback
-        // model long after the real rate-limit window clears.
+        const isPrimary = i === 0;
+        const requestedModel =
+          params.provider === candidate.provider && params.model === candidate.model;
         const now = Date.now();
         const probeThrottleKey = resolveProbeThrottleKey(candidate.provider, params.agentDir);
-        const shouldProbe = shouldProbePrimaryDuringCooldown({
-          isPrimary: i === 0,
+        const decision = resolveCooldownDecision({
+          candidate,
+          isPrimary,
+          requestedModel,
           hasFallbackCandidates,
           now,
-          throttleKey: probeThrottleKey,
+          probeThrottleKey,
           authStore,
           profileIds,
         });
-        if (!shouldProbe) {
-          const inferredReason =
-            resolveProfilesUnavailableReason({
-              store: authStore,
-              profileIds,
-              now,
-            }) ?? "rate_limit";
-          // Skip without attempting
+
+        if (decision.type === "skip") {
           attempts.push({
             provider: candidate.provider,
             model: candidate.model,
-            error: `Provider ${candidate.provider} is in cooldown (all profiles unavailable)`,
-            reason: inferredReason,
+            error: decision.error,
+            reason: decision.reason,
           });
           continue;
         }
-        // Primary model probe: attempt it despite cooldown to detect recovery.
-        // If it fails, the error is caught below and we fall through to the
-        // next candidate as usual.
-        lastProbeAttempt.set(probeThrottleKey, now);
+
+        if (decision.markProbe) {
+          lastProbeAttempt.set(probeThrottleKey, now);
+        }
       }
     }
+
     try {
       const result = await params.run(candidate.provider, candidate.model);
       return {
