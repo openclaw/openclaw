@@ -14,6 +14,7 @@ let fetchWithGuard: typeof import("./input-files.js").fetchWithGuard;
 let extractImageContentFromSource: typeof import("./input-files.js").extractImageContentFromSource;
 let extractFileContentFromSource: typeof import("./input-files.js").extractFileContentFromSource;
 let normalizeInputMimeType: typeof import("./input-files.js").normalizeMimeType;
+let parseInputContentType: typeof import("./input-files.js").parseContentType;
 
 beforeAll(async () => {
   ({
@@ -21,6 +22,7 @@ beforeAll(async () => {
     extractImageContentFromSource,
     extractFileContentFromSource,
     normalizeMimeType: normalizeInputMimeType,
+    parseContentType: parseInputContentType,
   } = await import("./input-files.js"));
 });
 
@@ -163,5 +165,38 @@ describe("normalizeMimeType", () => {
     expect(normalizeInputMimeType("Ａｐｐｌｉｃａｔｉｏｎ／ＸＭＬ； charset=utf-8")).toBe(
       "application/xml",
     );
+  });
+});
+
+describe("parseContentType", () => {
+  it("normalizes fullwidth semicolons before parsing charset", () => {
+    expect(parseInputContentType("text/plain； charset=utf-16le")).toEqual({
+      mimeType: "text/plain",
+      charset: "utf-16le",
+    });
+  });
+});
+
+describe("extractFileContentFromSource", () => {
+  it("honors UTF-16LE charset when delimiter is fullwidth semicolon", async () => {
+    const utf16leText = Buffer.from("ciao", "utf16le").toString("base64");
+    const extracted = await extractFileContentFromSource({
+      source: {
+        type: "base64",
+        data: utf16leText,
+        mediaType: "text/plain； charset=utf-16le",
+        filename: "utf16.txt",
+      },
+      limits: {
+        allowUrl: false,
+        allowedMimes: new Set(["text/plain"]),
+        maxBytes: 1024 * 1024,
+        maxChars: 100,
+        maxRedirects: 0,
+        timeoutMs: 1,
+        pdf: { maxPages: 1, maxPixels: 1, minTextChars: 1 },
+      },
+    });
+    expect(extracted.text).toBe("ciao");
   });
 });
