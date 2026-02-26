@@ -167,4 +167,70 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins.length).toBe(1);
     expect(registry.plugins[0]?.origin).toBe("config");
   });
+
+  it("rejects manifest paths that escape plugin root via symlink", () => {
+    const rootDir = makeTempDir();
+    const outsideDir = makeTempDir();
+    const outsideManifest = path.join(outsideDir, "openclaw.plugin.json");
+    const linkedManifest = path.join(rootDir, "openclaw.plugin.json");
+    fs.writeFileSync(path.join(rootDir, "index.ts"), "export default function () {}", "utf-8");
+    fs.writeFileSync(
+      outsideManifest,
+      JSON.stringify({ id: "unsafe-symlink", configSchema: { type: "object" } }),
+      "utf-8",
+    );
+    try {
+      fs.symlinkSync(outsideManifest, linkedManifest);
+    } catch {
+      return;
+    }
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "unsafe-symlink",
+        rootDir,
+        origin: "workspace",
+      }),
+    ]);
+    expect(registry.plugins).toHaveLength(0);
+    expect(
+      registry.diagnostics.some((diag) => diag.message.includes("unsafe plugin manifest path")),
+    ).toBe(true);
+  });
+
+  it("rejects manifest paths that escape plugin root via hardlink", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const rootDir = makeTempDir();
+    const outsideDir = makeTempDir();
+    const outsideManifest = path.join(outsideDir, "openclaw.plugin.json");
+    const linkedManifest = path.join(rootDir, "openclaw.plugin.json");
+    fs.writeFileSync(path.join(rootDir, "index.ts"), "export default function () {}", "utf-8");
+    fs.writeFileSync(
+      outsideManifest,
+      JSON.stringify({ id: "unsafe-hardlink", configSchema: { type: "object" } }),
+      "utf-8",
+    );
+    try {
+      fs.linkSync(outsideManifest, linkedManifest);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+        return;
+      }
+      throw err;
+    }
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "unsafe-hardlink",
+        rootDir,
+        origin: "workspace",
+      }),
+    ]);
+    expect(registry.plugins).toHaveLength(0);
+    expect(
+      registry.diagnostics.some((diag) => diag.message.includes("unsafe plugin manifest path")),
+    ).toBe(true);
+  });
 });
