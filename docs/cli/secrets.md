@@ -97,6 +97,10 @@ openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --dry-run
 openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --json
 ```
 
+Plan contract details (allowed target paths, validation rules, and failure semantics):
+
+- [Secrets Apply Plan Contract](/gateway/secrets-plan-contract)
+
 ## Why no rollback backups
 
 `secrets apply` intentionally does not write rollback backups containing old plaintext values.
