@@ -41,7 +41,7 @@ import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { resolveThreadSessionKeys } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
-import { isSenderAllowed, normalizeAllowFromWithStore } from "./bot-access.js";
+import { isSenderAllowed, normalizeDmAllowFromWithStore } from "./bot-access.js";
 import {
   buildCappedTelegramMenuCommands,
   buildPluginTelegramMenuCommands,
@@ -170,7 +170,6 @@ async function resolveTelegramCommandAuth(params: {
   const groupAllowContext = await resolveTelegramGroupAllowFromContext({
     chatId,
     accountId,
-    dmPolicy: telegramCfg.dmPolicy ?? "pairing",
     isForum,
     messageThreadId,
     groupAllowFrom,
@@ -252,7 +251,7 @@ async function resolveTelegramCommandAuth(params: {
     }
   }
 
-  const dmAllow = normalizeAllowFromWithStore({
+  const dmAllow = normalizeDmAllowFromWithStore({
     allowFrom: allowFrom,
     storeAllowFrom,
     dmPolicy: telegramCfg.dmPolicy ?? "pairing",

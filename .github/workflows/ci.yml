@@ -418,12 +418,23 @@ jobs:
         include:
           - runtime: node
             task: lint
+            shard_index: 0
+            shard_count: 1
             command: pnpm lint
           - runtime: node
             task: test
+            shard_index: 1
+            shard_count: 2
+            command: pnpm canvas:a2ui:bundle && pnpm test
+          - runtime: node
+            task: test
+            shard_index: 2
+            shard_count: 2
             command: pnpm canvas:a2ui:bundle && pnpm test
           - runtime: node
             task: protocol
+            shard_index: 0
+            shard_count: 1
             command: pnpm protocol:check
     steps:
       - name: Checkout
@@ -495,6 +506,12 @@ jobs:
           pnpm -v
           pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true || pnpm install --frozen-lockfile --ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true
 
+      - name: Configure test shard (Windows)
+        if: matrix.task == 'test'
+        run: |
+          echo "OPENCLAW_TEST_SHARDS=${{ matrix.shard_count }}" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_SHARD_INDEX=${{ matrix.shard_index }}" >> "$GITHUB_ENV"
+
       - name: Configure vitest JSON reports
         if: matrix.task == 'test'
         run: echo "OPENCLAW_VITEST_REPORT_DIR=$RUNNER_TEMP/vitest-reports" >> "$GITHUB_ENV"
@@ -512,7 +529,7 @@ jobs:
         if: matrix.task == 'test'
         uses: actions/upload-artifact@v4
         with:
-          name: vitest-reports-${{ runner.os }}-${{ matrix.runtime }}
+          name: vitest-reports-${{ runner.os }}-${{ matrix.runtime }}-shard${{ matrix.shard_index }}of${{ matrix.shard_count }}
           path: |
             ${{ env.OPENCLAW_VITEST_REPORT_DIR }}
             ${{ runner.temp }}/vitest-slowest.md

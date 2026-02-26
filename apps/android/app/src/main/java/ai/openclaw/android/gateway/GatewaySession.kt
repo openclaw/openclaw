@@ -55,7 +55,7 @@ data class GatewayConnectOptions(
 class GatewaySession(
   private val scope: CoroutineScope,
   private val identityStore: DeviceIdentityStore,
-  private val deviceAuthStore: DeviceAuthStore,
+  private val deviceAuthStore: DeviceAuthTokenStore,
   private val onConnected: (serverName: String?, remoteAddress: String?, mainSessionKey: String?) -> Unit,
   private val onDisconnected: (message: String) -> Unit,
   private val onEvent: (event: String, payloadJson: String?) -> Unit,
@@ -200,9 +200,7 @@ class GatewaySession(
     suspend fun connect() {
       val scheme = if (tls != null) "wss" else "ws"
       val url = "$scheme://${endpoint.host}:${endpoint.port}"
-      val httpScheme = if (tls != null) "https" else "http"
-      val origin = "$httpScheme://${endpoint.host}:${endpoint.port}"
-      val request = Request.Builder().url(url).header("Origin", origin).build()
+      val request = Request.Builder().url(url).build()
       socket = client.newWebSocket(request, Listener())
       try {
         connectDeferred.await()
@@ -374,7 +372,7 @@ class GatewaySession(
 
       val signedAtMs = System.currentTimeMillis()
       val payload =
-        buildDeviceAuthPayload(
+        buildDeviceAuthPayloadV3(
           deviceId = identity.deviceId,
           clientId = client.id,
           clientMode = client.mode,
@@ -383,6 +381,8 @@ class GatewaySession(
           signedAtMs = signedAtMs,
           token = if (authToken.isNotEmpty()) authToken else null,
           nonce = connectNonce,
+          platform = client.platform,
+          deviceFamily = client.deviceFamily,
         )
       val signature = identityStore.signPayload(payload, identity)
       val publicKey = identityStore.publicKeyBase64Url(identity)
@@ -535,16 +535,8 @@ class GatewaySession(
     }
 
     private fun invokeErrorFromThrowable(err: Throwable): InvokeResult {
-      val msg = err.message?.trim().takeIf { !it.isNullOrEmpty() } ?: err::class.java.simpleName
-      val parts = msg.split(":", limit = 2)
-      if (parts.size == 2) {
-        val code = parts[0].trim()
-        val rest = parts[1].trim()
-        if (code.isNotEmpty() && code.all { it.isUpperCase() || it == '_' }) {
-          return InvokeResult.error(code = code, message = rest.ifEmpty { msg })
-        }
-      }
-      return InvokeResult.error(code = "UNAVAILABLE", message = msg)
+      val parsed = parseInvokeErrorFromThrowable(err, fallbackMessage = err::class.java.simpleName)
+      return InvokeResult.error(code = parsed.code, message = parsed.message)
     }
 
     private fun failPending() {
@@ -592,7 +584,7 @@ class GatewaySession(
     }
   }
 
-  private fun buildDeviceAuthPayload(
+  private fun buildDeviceAuthPayloadV3(
     deviceId: String,
     clientId: String,
     clientMode: String,
@@ -601,12 +593,16 @@ class GatewaySession(
     signedAtMs: Long,
     token: String?,
     nonce: String,
+    platform: String?,
+    deviceFamily: String?,
   ): String {
     val scopeString = scopes.joinToString(",")
     val authToken = token.orEmpty()
+    val platformNorm = normalizeDeviceMetadataField(platform)
+    val deviceFamilyNorm = normalizeDeviceMetadataField(deviceFamily)
     val parts =
       mutableListOf(
-        "v2",
+        "v3",
         deviceId,
         clientId,
         clientMode,
@@ -615,9 +611,14 @@ class GatewaySession(
         signedAtMs.toString(),
         authToken,
         nonce,
+        platformNorm,
+        deviceFamilyNorm,
       )
     return parts.joinToString("|")
   }
+
+  private fun normalizeDeviceMetadataField(value: String?): String =
+    value?.trim()?.lowercase(Locale.ROOT).orEmpty()
 
   private fun normalizeCanvasHostUrl(
     raw: String?,

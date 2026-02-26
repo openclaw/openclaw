@@ -160,11 +160,31 @@ const runs = [
   },
 ];
 const shardOverride = Number.parseInt(process.env.OPENCLAW_TEST_SHARDS ?? "", 10);
-const shardCount = isWindowsCi
-  ? Number.isFinite(shardOverride) && shardOverride > 1
-    ? shardOverride
-    : 2
-  : 1;
+const configuredShardCount =
+  Number.isFinite(shardOverride) && shardOverride > 1 ? shardOverride : null;
+const shardCount = configuredShardCount ?? (isWindowsCi ? 2 : 1);
+const shardIndexOverride = (() => {
+  const parsed = Number.parseInt(process.env.OPENCLAW_TEST_SHARD_INDEX ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+})();
+
+if (shardIndexOverride !== null && shardCount <= 1) {
+  console.error(
+    `[test-parallel] OPENCLAW_TEST_SHARD_INDEX=${String(
+      shardIndexOverride,
+    )} requires OPENCLAW_TEST_SHARDS>1.`,
+  );
+  process.exit(2);
+}
+
+if (shardIndexOverride !== null && shardIndexOverride > shardCount) {
+  console.error(
+    `[test-parallel] OPENCLAW_TEST_SHARD_INDEX=${String(
+      shardIndexOverride,
+    )} exceeds OPENCLAW_TEST_SHARDS=${String(shardCount)}.`,
+  );
+  process.exit(2);
+}
 const windowsCiArgs = isWindowsCi ? ["--dangerouslyIgnoreUnhandledErrors"] : [];
 const silentArgs =
   process.env.OPENCLAW_TEST_SHOW_PASSED_LOGS === "1" ? [] : ["--silent=passed-only"];
@@ -390,6 +410,9 @@ const runOnce = (entry, extraArgs = []) =>
 const run = async (entry) => {
   if (shardCount <= 1) {
     return runOnce(entry);
+  }
+  if (shardIndexOverride !== null) {
+    return runOnce(entry, ["--shard", `${shardIndexOverride}/${shardCount}`]);
   }
   for (let shardIndex = 1; shardIndex <= shardCount; shardIndex += 1) {
     // eslint-disable-next-line no-await-in-loop
