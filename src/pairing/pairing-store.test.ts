@@ -257,7 +257,7 @@ describe("pairing store", () => {
     });
   });
 
-  it("reads sync allowFrom with scoped + legacy dedupe and wildcard filtering", async () => {
+  it("reads sync allowFrom with account-scoped isolation and wildcard filtering", async () => {
     await withTempStateDir(async (stateDir) => {
       await writeAllowFromFixture({
         stateDir,
@@ -273,8 +273,34 @@ describe("pairing store", () => {
 
       const scoped = readChannelAllowFromStoreSync("telegram", process.env, "yy");
       const channelScoped = readChannelAllowFromStoreSync("telegram");
-      expect(scoped).toEqual(["1002", "1001"]);
+      expect(scoped).toEqual(["1002", "1001", "1002"]);
       expect(channelScoped).toEqual(["1001", "1001"]);
+    });
+  });
+
+  it("does not reuse pairing requests across accounts for the same sender id", async () => {
+    await withTempStateDir(async () => {
+      const first = await upsertChannelPairingRequest({
+        channel: "telegram",
+        accountId: "alpha",
+        id: "12345",
+      });
+      const second = await upsertChannelPairingRequest({
+        channel: "telegram",
+        accountId: "beta",
+        id: "12345",
+      });
+
+      expect(first.created).toBe(true);
+      expect(second.created).toBe(true);
+      expect(second.code).not.toBe(first.code);
+
+      const alpha = await listChannelPairingRequests("telegram", process.env, "alpha");
+      const beta = await listChannelPairingRequests("telegram", process.env, "beta");
+      expect(alpha).toHaveLength(1);
+      expect(beta).toHaveLength(1);
+      expect(alpha[0]?.code).toBe(first.code);
+      expect(beta[0]?.code).toBe(second.code);
     });
   });
 
