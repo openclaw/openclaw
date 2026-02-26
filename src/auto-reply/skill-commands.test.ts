@@ -72,8 +72,11 @@ let resolveSkillCommandInvocation: typeof import("./skill-commands.js").resolveS
 let skillCommandsTesting: typeof import("./skill-commands.js").__testing;
 
 beforeAll(async () => {
-  ({ listSkillCommandsForAgents, resolveSkillCommandInvocation, __testing: skillCommandsTesting } =
-    await import("./skill-commands.js"));
+  ({
+    listSkillCommandsForAgents,
+    resolveSkillCommandInvocation,
+    __testing: skillCommandsTesting,
+  } = await import("./skill-commands.js"));
 });
 
 describe("resolveSkillCommandInvocation", () => {
