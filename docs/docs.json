@@ -1010,6 +1010,7 @@
                   "tools/agent-send",
                   "tools/subagents",
                   "tools/acp-agents",
+                  "tools/agent-teams",
                   "tools/multi-agent-sandbox-tools"
                 ]
               },
