@@ -253,11 +253,11 @@ export async function recoverPendingDeliveries(opts: {
     const backoff = computeBackoffMs(entry.retryCount + 1);
     if (backoff > 0) {
       if (now + backoff >= deadline) {
-        const deferred = pending.length - recovered - failed - skipped;
-        opts.log.warn(
-          `Recovery time budget exceeded — ${deferred} entries deferred to next restart`,
+        opts.log.info(
+          `Backoff ${backoff}ms exceeds budget for ${entry.id} — skipping to next entry`,
         );
-        break;
+        skipped += 1;
+        continue;
       }
       opts.log.info(`Waiting ${backoff}ms before retrying delivery ${entry.id}`);
       await delayFn(backoff);
