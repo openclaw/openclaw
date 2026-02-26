@@ -1,6 +1,9 @@
 import { resolveSystemRunCommand } from "../infra/system-run-command.js";
 import type { ExecApprovalRecord } from "./exec-approval-manager.js";
-import { evaluateSystemRunApprovalMatch } from "./node-invoke-system-run-approval-match.js";
+import {
+  evaluateSystemRunApprovalMatch,
+  toSystemRunApprovalMismatchError,
+} from "./node-invoke-system-run-approval-match.js";
 
 type SystemRunParamsLike = {
   command?: unknown;
@@ -216,15 +219,7 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
     },
   });
   if (!approvalMatch.ok) {
-    return {
-      ok: false,
-      message: approvalMatch.message,
-      details: {
-        code: approvalMatch.code,
-        runId,
-        ...approvalMatch.details,
-      },
-    };
+    return toSystemRunApprovalMismatchError({ runId, match: approvalMatch });
   }
 
   // Normal path: enforce the decision recorded by the gateway.

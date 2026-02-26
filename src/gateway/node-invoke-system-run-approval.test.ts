@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { ExecApprovalManager, type ExecApprovalRecord } from "./exec-approval-manager.js";
 import { sanitizeSystemRunParamsForForwarding } from "./node-invoke-system-run-approval.js";
-import { buildSystemRunApprovalEnvBinding } from "./system-run-approval-env-binding.js";
+import { buildSystemRunApprovalEnvBinding } from "./system-run-approval-binding.js";
 
 describe("sanitizeSystemRunParamsForForwarding", () => {
   const now = Date.now();
@@ -224,7 +224,14 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
 
   test("rejects env hash mismatch", () => {
     const record = makeRecord("git diff", ["git", "diff"]);
-    record.request.envHash = buildSystemRunApprovalEnvBinding({ SAFE: "1" }).envHash;
+    record.request.systemRunBindingV1 = {
+      version: 1,
+      argv: ["git", "diff"],
+      cwd: null,
+      agentId: null,
+      sessionKey: null,
+      envHash: buildSystemRunApprovalEnvBinding({ SAFE: "1" }).envHash,
+    };
     const result = sanitizeSystemRunParamsForForwarding({
       rawParams: {
         command: ["git", "diff"],
@@ -249,7 +256,14 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
   test("accepts matching env hash with reordered keys", () => {
     const record = makeRecord("git diff", ["git", "diff"]);
     const binding = buildSystemRunApprovalEnvBinding({ SAFE_A: "1", SAFE_B: "2" });
-    record.request.envHash = binding.envHash;
+    record.request.systemRunBindingV1 = {
+      version: 1,
+      argv: ["git", "diff"],
+      cwd: null,
+      agentId: null,
+      sessionKey: null,
+      envHash: binding.envHash,
+    };
     const result = sanitizeSystemRunParamsForForwarding({
       rawParams: {
         command: ["git", "diff"],
