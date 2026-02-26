@@ -466,6 +466,53 @@ describe("tts", () => {
     });
   });
 
+  describe("minimaxTTS hex validation", () => {
+    const baseParams = {
+      text: "hello",
+      apiKey: "test-key",
+      baseUrl: "https://api.minimax.io",
+      model: "speech-2.8-hd",
+      voiceId: "English_expressive_narrator",
+      audioFormat: "mp3" as const,
+      speed: 1,
+      vol: 1,
+      pitch: 0,
+      timeoutMs: 5000,
+    };
+
+    it("rejects odd-length hex audio", async () => {
+      const mockResponse = {
+        ok: true,
+        json: async () => ({ base_resp: { status_code: 0 }, data: { audio: "abc" } }),
+      };
+      vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(mockResponse as Response);
+
+      await expect(tts.minimaxTTS(baseParams)).rejects.toThrow("malformed hex audio");
+    });
+
+    it("rejects non-hex characters in audio payload", async () => {
+      const mockResponse = {
+        ok: true,
+        json: async () => ({ base_resp: { status_code: 0 }, data: { audio: "zzzz" } }),
+      };
+      vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(mockResponse as Response);
+
+      await expect(tts.minimaxTTS(baseParams)).rejects.toThrow("malformed hex audio");
+    });
+
+    it("accepts valid hex audio", async () => {
+      const mockResponse = {
+        ok: true,
+        json: async () => ({ base_resp: { status_code: 0 }, data: { audio: "48454c4c4f" } }),
+      };
+      vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(mockResponse as Response);
+
+      const result = await tts.minimaxTTS(baseParams);
+      expect(result).toBeInstanceOf(Buffer);
+      expect(result.toString()).toBe("HELLO");
+    });
+  });
+
   describe("summarizeText", () => {
     const baseCfg: OpenClawConfig = {
       agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
