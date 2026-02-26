@@ -14,6 +14,14 @@ type ReadChannelAllowFromStore =
   typeof import("../../pairing/pairing-store.js").readChannelAllowFromStore;
 type UpsertChannelPairingRequest =
   typeof import("../../pairing/pairing-store.js").upsertChannelPairingRequest;
+type ReadChannelAllowFromStoreForAccount = (params: {
+  channel: Parameters<ReadChannelAllowFromStore>[0];
+  accountId: string;
+  env?: Parameters<ReadChannelAllowFromStore>[1];
+}) => ReturnType<ReadChannelAllowFromStore>;
+type UpsertChannelPairingRequestForAccount = (
+  params: Omit<Parameters<UpsertChannelPairingRequest>[0], "accountId"> & { accountId: string },
+) => ReturnType<UpsertChannelPairingRequest>;
 type FetchRemoteMedia = typeof import("../../media/fetch.js").fetchRemoteMedia;
 type SaveMediaBuffer = typeof import("../../media/store.js").saveMediaBuffer;
 type TextToSpeechTelephony = typeof import("../../tts/tts.js").textToSpeechTelephony;
@@ -235,8 +243,8 @@ export type PluginRuntime = {
     };
     pairing: {
       buildPairingReply: BuildPairingReply;
-      readAllowFromStore: ReadChannelAllowFromStore;
-      upsertPairingRequest: UpsertChannelPairingRequest;
+      readAllowFromStore: ReadChannelAllowFromStoreForAccount;
+      upsertPairingRequest: UpsertChannelPairingRequestForAccount;
     };
     media: {
       fetchRemoteMedia: FetchRemoteMedia;

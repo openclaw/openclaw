@@ -6,10 +6,7 @@ import {
 } from "../../config/runtime-group-policy.js";
 import { logVerbose } from "../../globals.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
-import {
-  readChannelAllowFromStore,
-  upsertChannelPairingRequest,
-} from "../../pairing/pairing-store.js";
+import { upsertChannelPairingRequest } from "../../pairing/pairing-store.js";
 import {
   readStoreAllowFromForDmPolicy,
   resolveDmGroupAccessWithLists,
@@ -66,8 +63,8 @@ export async function checkInboundAccessControl(params: {
   const configuredAllowFrom = account.allowFrom ?? [];
   const storeAllowFrom = await readStoreAllowFromForDmPolicy({
     provider: "whatsapp",
+    accountId: account.accountId,
     dmPolicy,
-    readStore: (provider) => readChannelAllowFromStore(provider, process.env, account.accountId),
   });
   // Without user config, default to self-only DM access so the owner can talk to themselves.
   const defaultAllowFrom =

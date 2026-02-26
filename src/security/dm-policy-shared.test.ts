@@ -13,9 +13,10 @@ describe("security/dm-policy-shared", () => {
   it("normalizes config + store allow entries and counts distinct senders", async () => {
     const state = await resolveDmAllowState({
       provider: "telegram",
+      accountId: "default",
       allowFrom: [" * ", " alice ", "ALICE", "bob"],
       normalizeEntry: (value) => value.toLowerCase(),
-      readStore: async () => [" Bob ", "carol", ""],
+      readStore: async (_provider, _accountId) => [" Bob ", "carol", ""],
     });
     expect(state.configAllowFrom).toEqual(["*", "alice", "ALICE", "bob"]);
     expect(state.hasWildcard).toBe(true);
@@ -26,8 +27,9 @@ describe("security/dm-policy-shared", () => {
   it("handles empty allowlists and store failures", async () => {
     const state = await resolveDmAllowState({
       provider: "slack",
+      accountId: "default",
       allowFrom: undefined,
-      readStore: async () => {
+      readStore: async (_provider, _accountId) => {
         throw new Error("offline");
       },
     });
@@ -41,8 +43,9 @@ describe("security/dm-policy-shared", () => {
     let called = false;
     const storeAllowFrom = await readStoreAllowFromForDmPolicy({
       provider: "telegram",
+      accountId: "default",
       dmPolicy: "allowlist",
-      readStore: async () => {
+      readStore: async (_provider, _accountId) => {
         called = true;
         return ["should-not-be-read"];
       },
@@ -55,8 +58,9 @@ describe("security/dm-policy-shared", () => {
     let called = false;
     const storeAllowFrom = await readStoreAllowFromForDmPolicy({
       provider: "slack",
+      accountId: "default",
       shouldRead: false,
-      readStore: async () => {
+      readStore: async (_provider, _accountId) => {
         called = true;
         return ["should-not-be-read"];
       },
