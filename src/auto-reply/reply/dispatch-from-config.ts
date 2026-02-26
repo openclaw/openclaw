@@ -12,6 +12,7 @@ import {
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { maybeApplyTtsToPayload, normalizeTtsAutoMode, resolveTtsConfig } from "../../tts/tts.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { getReplyFromConfig } from "../reply.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -253,6 +254,8 @@ export async function dispatchReplyFromConfig(params: {
   const shouldRouteToOriginating = Boolean(
     isRoutableChannel(originatingChannel) && originatingTo && originatingChannel !== currentSurface,
   );
+  const shouldSuppressTyping =
+    shouldRouteToOriginating || originatingChannel === INTERNAL_MESSAGE_CHANNEL;
   const ttsChannel = shouldRouteToOriginating ? originatingChannel : currentSurface;
 
   /**
@@ -397,6 +400,14 @@ export async function dispatchReplyFromConfig(params: {
       ctx,
       {
         ...params.replyOptions,
+        typingPolicy:
+          params.replyOptions?.typingPolicy ??
+          (originatingChannel === INTERNAL_MESSAGE_CHANNEL
+            ? "internal_webchat"
+            : shouldRouteToOriginating
+              ? "system_event"
+              : undefined),
+        suppressTyping: params.replyOptions?.suppressTyping === true || shouldSuppressTyping,
         onToolResult: (payload: ReplyPayload) => {
           const run = async () => {
             const ttsPayload = await maybeApplyTtsToPayload({
