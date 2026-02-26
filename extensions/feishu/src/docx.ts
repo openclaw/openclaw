@@ -3,11 +3,13 @@ import type * as Lark from "@larksuiteoapi/node-sdk";
 import { Type } from "@sinclair/typebox";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { listEnabledFeishuAccounts } from "./accounts.js";
-import { resolveFeishuAccount } from "./accounts.js";
-import { createFeishuClient } from "./client.js";
 import { FeishuDocSchema, type FeishuDocParams } from "./doc-schema.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { resolveToolsConfig } from "./tools-config.js";
+import {
+  createFeishuToolClient,
+  resolveAnyEnabledFeishuToolsConfig,
+  resolveFeishuToolAccount,
+} from "./tool-account.js";
 
 // ============ Helpers ============
 
@@ -455,31 +457,23 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
     return;
   }
 
-  // Use first account's config for tools configuration (registration-time defaults only)
-  const firstAccount = accounts[0];
-  const toolsCfg = resolveToolsConfig(firstAccount.config.tools);
+  // Register if enabled on any account; account routing is resolved per execution.
+  const toolsCfg = resolveAnyEnabledFeishuToolsConfig(accounts);
 
   const registered: string[] = [];
   type FeishuDocExecuteParams = FeishuDocParams & { accountId?: string };
 
-  const resolveAccount = (
-    params: { accountId?: string } | undefined,
-    defaultAccountId: string | undefined,
-  ) => {
-    const accountId =
-      typeof params?.accountId === "string" && params.accountId.trim().length > 0
-        ? params.accountId.trim()
-        : defaultAccountId;
-    return resolveFeishuAccount({ cfg: api.config!, accountId });
-  };
-
   const getClient = (params: { accountId?: string } | undefined, defaultAccountId?: string) =>
-    createFeishuClient(resolveAccount(params, defaultAccountId));
+    createFeishuToolClient({ api, executeParams: params, defaultAccountId });
 
   const getMediaMaxBytes = (
     params: { accountId?: string } | undefined,
     defaultAccountId?: string,
-  ) => (resolveAccount(params, defaultAccountId).config?.mediaMaxMb ?? 30) * 1024 * 1024;
+  ) =>
+    (resolveFeishuToolAccount({ api, executeParams: params, defaultAccountId }).config
+      ?.mediaMaxMb ?? 30) *
+    1024 *
+    1024;
 
   // Main document tool with action-based dispatch
   if (toolsCfg.doc) {
