@@ -638,6 +638,8 @@ chains, not only host `INPUT` rules.
 
 To keep Docker traffic aligned with your firewall policy, enforce rules in
 `DOCKER-USER` (this chain is evaluated before Docker's own accept rules).
+On many modern distros, `iptables`/`ip6tables` use the `iptables-nft` frontend
+and still apply these rules to the nftables backend.
 
 Minimal allowlist example (IPv4):
 
