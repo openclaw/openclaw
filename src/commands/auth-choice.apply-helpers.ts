@@ -176,11 +176,11 @@ async function resolveApiKeyRefForOnboarding(params: {
     }
     const idPrompt =
       providerEntry.source === "file"
-        ? "Secret id (JSON pointer for jsonPointer mode, or 'value' for raw mode)"
+        ? "Secret id (JSON pointer for json mode, or 'value' for singleValue mode)"
         : "Secret id for the exec provider";
     const idDefault =
       providerEntry.source === "file"
-        ? providerEntry.mode === "raw"
+        ? providerEntry.mode === "singleValue"
           ? "value"
           : defaultFilePointer
         : `${params.provider}/apiKey`;
@@ -195,17 +195,17 @@ async function resolveApiKeyRefForOnboarding(params: {
         }
         if (
           providerEntry.source === "file" &&
-          providerEntry.mode !== "raw" &&
+          providerEntry.mode !== "singleValue" &&
           !isValidFileSecretRefId(candidate)
         ) {
           return 'Use an absolute JSON pointer like "/providers/openai/apiKey".';
         }
         if (
           providerEntry.source === "file" &&
-          providerEntry.mode === "raw" &&
+          providerEntry.mode === "singleValue" &&
           candidate !== "value"
         ) {
-          return 'Raw file mode expects id "value".';
+          return 'singleValue mode expects id "value".';
         }
         return undefined;
       },

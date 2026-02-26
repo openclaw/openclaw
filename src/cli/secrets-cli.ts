@@ -20,6 +20,8 @@ type SecretsConfigureOptions = {
   apply?: boolean;
   yes?: boolean;
   planOut?: string;
+  providersOnly?: boolean;
+  skipProviderSetup?: boolean;
   json?: boolean;
 };
 type SecretsApplyOptions = {
@@ -112,14 +114,23 @@ export function registerSecretsCli(program: Command) {
 
   secrets
     .command("configure")
-    .description("Interactive SecretRef helper with preflight validation")
+    .description("Interactive secrets helper (provider setup + SecretRef mapping + preflight)")
     .option("--apply", "Apply changes immediately after preflight", false)
     .option("--yes", "Skip apply confirmation prompt", false)
+    .option("--providers-only", "Configure secrets.providers only, skip credential mapping", false)
+    .option(
+      "--skip-provider-setup",
+      "Skip provider setup and only map credential fields to existing providers",
+      false,
+    )
     .option("--plan-out <path>", "Write generated plan JSON to a file")
     .option("--json", "Output JSON", false)
     .action(async (opts: SecretsConfigureOptions) => {
       try {
-        const configured = await runSecretsConfigureInteractive();
+        const configured = await runSecretsConfigureInteractive({
+          providersOnly: Boolean(opts.providersOnly),
+          skipProviderSetup: Boolean(opts.skipProviderSetup),
+        });
         if (opts.planOut) {
           fs.writeFileSync(opts.planOut, `${JSON.stringify(configured.plan, null, 2)}\n`, "utf8");
         }
@@ -143,7 +154,11 @@ export function registerSecretsCli(program: Command) {
               defaultRuntime.log(`- warning: ${warning}`);
             }
           }
-          defaultRuntime.log(`Plan targets: ${configured.plan.targets.length}`);
+          const providerUpserts = Object.keys(configured.plan.providerUpserts ?? {}).length;
+          const providerDeletes = configured.plan.providerDeletes?.length ?? 0;
+          defaultRuntime.log(
+            `Plan: targets=${configured.plan.targets.length}, providerUpserts=${providerUpserts}, providerDeletes=${providerDeletes}.`,
+          );
           if (opts.planOut) {
             defaultRuntime.log(`Plan written to ${opts.planOut}`);
           }

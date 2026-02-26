@@ -2423,7 +2423,7 @@ Validation:
       filemain: {
         source: "file",
         path: "~/.openclaw/secrets.json",
-        mode: "jsonPointer",
+        mode: "json",
         timeoutMs: 5000,
       },
       vault: {
@@ -2443,8 +2443,9 @@ Validation:
 
 Notes:
 
-- `file` provider supports `mode: "jsonPointer"` and `mode: "raw"` (`id` must be `"value"` in raw mode).
-- `exec` provider requires an absolute `command` path and uses protocol payloads on stdin/stdout.
+- `file` provider supports `mode: "json"` and `mode: "singleValue"` (`id` must be `"value"` in singleValue mode).
+- `exec` provider requires an absolute non-symlink `command` path and uses protocol payloads on stdin/stdout.
+- `exec` child environment is minimal by default; pass required variables explicitly with `passEnv`.
 - Secret refs are resolved at activation time into an in-memory snapshot, then request paths read the snapshot only.
 
 ---

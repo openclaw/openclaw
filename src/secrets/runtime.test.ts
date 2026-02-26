@@ -115,7 +115,7 @@ describe("secrets runtime snapshot", () => {
             default: {
               source: "file",
               path: secretsPath,
-              mode: "jsonPointer",
+              mode: "json",
             },
           },
           defaults: {
@@ -163,7 +163,7 @@ describe("secrets runtime snapshot", () => {
                 default: {
                   source: "file",
                   path: secretsPath,
-                  mode: "jsonPointer",
+                  mode: "json",
                 },
               },
             },

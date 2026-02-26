@@ -50,7 +50,7 @@ const FileSecretRefSchema = z
       .string()
       .refine(
         isValidFileSecretRefId,
-        'File secret reference id must be an absolute JSON pointer (example: "/providers/openai/apiKey"), or "value" for raw mode.',
+        'File secret reference id must be an absolute JSON pointer (example: "/providers/openai/apiKey"), or "value" for singleValue mode.',
       ),
   })
   .strict();
@@ -92,7 +92,7 @@ const SecretsFileProviderSchema = z
   .object({
     source: z.literal("file"),
     path: z.string().min(1),
-    mode: z.union([z.literal("raw"), z.literal("jsonPointer")]).optional(),
+    mode: z.union([z.literal("singleValue"), z.literal("json")]).optional(),
     timeoutMs: z.number().int().positive().max(120000).optional(),
     maxBytes: z
       .number()

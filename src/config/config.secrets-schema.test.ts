@@ -10,7 +10,7 @@ describe("config secret refs schema", () => {
           filemain: {
             source: "file",
             path: "~/.openclaw/secrets.json",
-            mode: "jsonPointer",
+            mode: "json",
             timeoutMs: 10_000,
           },
           vault: {
@@ -65,14 +65,14 @@ describe("config secret refs schema", () => {
     expect(result.ok).toBe(true);
   });
 
-  it('accepts file refs with id "value" for raw mode providers', () => {
+  it('accepts file refs with id "value" for singleValue mode providers', () => {
     const result = validateConfigObjectRaw({
       secrets: {
         providers: {
           rawfile: {
             source: "file",
             path: "~/.openclaw/token.txt",
-            mode: "raw",
+            mode: "singleValue",
           },
         },
       },

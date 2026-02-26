@@ -232,7 +232,7 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
             filemain: {
               source: "file",
               path: "/tmp/does-not-exist-secrets.json",
-              mode: "jsonPointer",
+              mode: "json",
             },
           },
         },
