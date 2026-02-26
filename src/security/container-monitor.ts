@@ -1,3 +1,22 @@
+/**
+ * Container escape-attempt detection module (DC-9).
+ *
+ * Checks a running Docker container for the five primary escape-indicator
+ * categories: host-namespace access via /proc/1/cgroup, default-route
+ * presence in /proc/net/route (network escape), privileged capabilities in
+ * /proc/self/status, writable host-path mounts in /proc/mounts, and
+ * dangerous capability flags (CAP_SYS_ADMIN, CAP_NET_ADMIN, CAP_SYS_MODULE,
+ * CAP_BPF [kernel 5.8+], CAP_PERFMON [kernel 5.8+]).
+ *
+ * **Scope:** All checks invoke `docker exec` against the target container ID.
+ * The caller is responsible for ensuring the Docker daemon is accessible.
+ *
+ * **console.error usage:** `emergencyContainerKill` writes to stderr via
+ * `console.error` because it runs during a critical shutdown path where the
+ * structured logging pipeline may itself be unavailable (DC-9).  Callers
+ * should treat any stderr output from this function as a high-severity
+ * operational signal.
+ */
 import { spawn } from "node:child_process";
 
 // ---------------------------------------------------------------------------

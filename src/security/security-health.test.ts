@@ -281,7 +281,7 @@ describe("getSecurityHealthReport", () => {
       expect(report.injectionDefense.criticalDetections).toBe(0);
     });
 
-    it("returns warn when critical injection events are detected", async () => {
+    it("returns critical when critical injection events are detected", async () => {
       // querySecurityEvents is called concurrently: once in monitoring (severity:"critical"),
       // once in injection defense (no severity filter). Use implementation to distinguish.
       mockQuerySecurityEvents.mockImplementation(
@@ -295,8 +295,26 @@ describe("getSecurityHealthReport", () => {
 
       const report = await getSecurityHealthReport();
 
-      expect(report.injectionDefense.status).toBe("warn");
+      expect(report.injectionDefense.status).toBe("critical"); // AR-5: critical detections → critical status
       expect(report.injectionDefense.criticalDetections).toBe(1);
+    });
+
+    it("returns warn when only non-critical injection events are detected", async () => {
+      mockQuerySecurityEvents.mockImplementation(
+        (filters?: securityEventsMod.SecurityEventQueryFilters) => {
+          if (filters?.severity === "critical") {
+            return [];
+          }
+          return [makeSecurityEvent("injection_detected", "warn")];
+        },
+      );
+
+      const report = await getSecurityHealthReport();
+
+      // warn-severity injections do not escalate to critical (AR-5)
+      expect(report.injectionDefense.status).toBe("warn");
+      expect(report.injectionDefense.recentDetections).toBe(1);
+      expect(report.injectionDefense.criticalDetections).toBe(0);
     });
 
     it("counts only injection_detected events, not other types", async () => {

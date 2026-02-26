@@ -4,15 +4,27 @@ import path from "node:path";
 
 const READ_CALL_RE = /\bfs\.(?:readFile|readFileSync)\s*\(/;
 
-const TARGET_DIRS = ["src/memory", "src/agents/tools"];
+const TARGET_DIRS = ["src/memory", "src/agents/tools", "src/security"];
 
 const ALLOWLIST = new Set([
+  // src/memory — bulk file readers with established safe-read patterns
   "src/memory/internal.ts",
   "src/memory/manager-embedding-ops.ts",
   "src/memory/manager.ts",
   "src/memory/qmd-manager.ts",
   "src/memory/session-files.ts",
+  // src/agents/tools
   "src/agents/tools/common.ts",
+  "src/agents/tools/canvas-tool.ts", // reads canvas A2UI bundle at fixed dist path
+  // src/security — files that read their own fixed-path data stores
+  "src/security/safe-file-read.ts", // IS the safeReadTextFile implementation
+  "src/security/vault-crypto.ts", // reads vault key at fixed OS-specific path
+  "src/security/credential-vault.ts", // reads vault registry at fixed path
+  "src/security/credential-audit.ts", // reads own JSONL audit log
+  "src/security/security-events.ts", // reads own JSONL event store
+  // src/security — files that read admin-configured or bounded paths
+  "src/security/skill-scanner.ts", // reads skill files to scan them; already has size guard; using safeReadTextFile here would be circular
+  "src/security/audit-extra.async.ts", // reads plugin package.json at admin-configured paths
 ]);
 
 function shouldScanFile(file) {

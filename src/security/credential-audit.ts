@@ -460,7 +460,15 @@ export function getAuditStats(params?: {
 }
 
 /**
- * Clear old audit entries (for maintenance).
+ * Remove audit entries older than `olderThanDays` days and rewrite the audit
+ * file with recomputed entry hashes for the retained entries.
+ *
+ * **Destructive / forensic consequence (DC-8):** This operation rewrites the
+ * entire audit chain from scratch.  Entry hashes computed before the purge
+ * will NOT match the hashes in the new file — any previously exported hash
+ * references become stale.  Do not call this after exporting an audit log for
+ * legal or compliance review without recording the pre-purge state first.
+ *
  * Returns the number of entries removed.
  */
 export function purgeOldAuditEntries(params: {

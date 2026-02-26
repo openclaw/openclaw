@@ -283,6 +283,19 @@ describe("SecurityEventsManager", () => {
       const futureEvents = manager.query({ since: now + 10000 });
       expect(futureEvents).toHaveLength(0);
     });
+
+    it("since:0 returns all events (zero is a valid epoch timestamp, not falsy skip) (BP-6)", () => {
+      // Before the fix, `if (filters.since)` was falsy for 0 and the filter was skipped.
+      // With `!== undefined`, since:0 is treated as epoch-0 and all events pass.
+      const events = manager.query({ since: 0 });
+      expect(events).toHaveLength(4);
+    });
+
+    it("until:0 returns no events when all events have ts > 0 (BP-6)", () => {
+      // until:0 should filter to events at or before epoch-0, returning nothing for modern events.
+      const events = manager.query({ until: 0 });
+      expect(events).toHaveLength(0);
+    });
   });
 
   describe("subscribe", () => {

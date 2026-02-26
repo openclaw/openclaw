@@ -33,7 +33,11 @@ export type CredentialEntry = {
   accessCount: number;
   lastAccessedAt: number | null;
   lastAccessedBy: string | null;
-  /** First 8 chars of SHA-256 hash for identity verification */
+  /**
+   * First 8 hex chars of SHA-256(value) — display-only identity fingerprint.
+   * Used to detect accidental re-use or value drift across rotations.
+   * NOT a cryptographic MAC: do not use for authenticity checks (BP-14).
+   */
   hashPrefix: string;
 };
 

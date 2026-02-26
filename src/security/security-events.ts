@@ -227,7 +227,16 @@ export class SecurityEventsManager {
   }
 
   /**
-   * Initialize the events manager (load recent events into memory).
+   * Initialize the events manager by hydrating the in-memory ring buffer
+   * from the on-disk JSONL event store.
+   *
+   * **Ordering contract (DC-6):** `query()` called *before* `init()` returns
+   * results only from the current in-process ring buffer (empty on first
+   * start).  To guarantee historical events are visible, always `await init()`
+   * before the first `query()` call.  `SecuritySubsystemCoordinator.start()`
+   * handles this automatically.
+   *
+   * Safe to call multiple times — subsequent calls are no-ops.
    */
   async init(): Promise<void> {
     if (this.initialized) {
@@ -371,7 +380,7 @@ export class SecurityEventsManager {
     // If we need more or have time-based filters, read from file
     const needFileRead =
       (filters?.limit && filters.limit > events.length) ||
-      (filters?.since && events.length > 0 && events[0].ts > filters.since);
+      (filters?.since !== undefined && events.length > 0 && events[0].ts > filters.since);
 
     if (needFileRead) {
       const storePath = this.resolveStorePath();
@@ -401,10 +410,10 @@ export class SecurityEventsManager {
       if (filters.source) {
         events = events.filter((e) => e.source === filters.source);
       }
-      if (filters.since) {
+      if (filters.since !== undefined) {
         events = events.filter((e) => e.ts >= filters.since!);
       }
-      if (filters.until) {
+      if (filters.until !== undefined) {
         events = events.filter((e) => e.ts <= filters.until!);
       }
       if (filters.sessionKey) {

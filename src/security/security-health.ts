@@ -186,6 +186,10 @@ async function queryInjectionDefenseHealth(): Promise<InjectionDefenseHealth> {
 
     let status: HealthStatus = "good";
     if (criticalDetections > 0) {
+      // Critical-severity injection events warrant "critical" posture (AR-5).
+      // Previously returned "warn", which under-represented active attack signals.
+      status = "critical";
+    } else if (recentDetections > 0) {
       status = "warn";
     }
 
