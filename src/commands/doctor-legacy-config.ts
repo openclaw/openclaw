@@ -293,6 +293,51 @@ export function normalizeLegacyConfigValues(cfg: OpenClawConfig): {
   normalizeProvider("slack");
   normalizeProvider("discord");
 
+  const normalizeBrowserSsrFPolicyAlias = () => {
+    const rawBrowser = next.browser;
+    if (!isRecord(rawBrowser)) {
+      return;
+    }
+    const rawSsrFPolicy = rawBrowser.ssrfPolicy;
+    if (!isRecord(rawSsrFPolicy) || !("allowPrivateNetwork" in rawSsrFPolicy)) {
+      return;
+    }
+
+    const legacyAllowPrivateNetwork = rawSsrFPolicy.allowPrivateNetwork;
+    const currentDangerousAllowPrivateNetwork = rawSsrFPolicy.dangerouslyAllowPrivateNetwork;
+
+    let resolvedDangerousAllowPrivateNetwork: unknown = currentDangerousAllowPrivateNetwork;
+    if (
+      typeof legacyAllowPrivateNetwork === "boolean" ||
+      typeof currentDangerousAllowPrivateNetwork === "boolean"
+    ) {
+      // Preserve runtime behavior while collapsing to the canonical key.
+      resolvedDangerousAllowPrivateNetwork =
+        legacyAllowPrivateNetwork === true || currentDangerousAllowPrivateNetwork === true;
+    } else if (currentDangerousAllowPrivateNetwork === undefined) {
+      resolvedDangerousAllowPrivateNetwork = legacyAllowPrivateNetwork;
+    }
+
+    const nextSsrFPolicy: Record<string, unknown> = { ...rawSsrFPolicy };
+    delete nextSsrFPolicy.allowPrivateNetwork;
+    if (resolvedDangerousAllowPrivateNetwork !== undefined) {
+      nextSsrFPolicy.dangerouslyAllowPrivateNetwork = resolvedDangerousAllowPrivateNetwork;
+    }
+
+    const migratedBrowser = { ...next.browser } as Record<string, unknown>;
+    migratedBrowser.ssrfPolicy = nextSsrFPolicy;
+
+    next = {
+      ...next,
+      browser: migratedBrowser as OpenClawConfig["browser"],
+    };
+    changes.push(
+      `Moved browser.ssrfPolicy.allowPrivateNetwork → browser.ssrfPolicy.dangerouslyAllowPrivateNetwork (${String(resolvedDangerousAllowPrivateNetwork)}).`,
+    );
+  };
+
+  normalizeBrowserSsrFPolicyAlias();
+
   const legacyAckReaction = cfg.messages?.ackReaction?.trim();
   const hasWhatsAppConfig = cfg.channels?.whatsapp !== undefined;
   if (legacyAckReaction && hasWhatsAppConfig) {

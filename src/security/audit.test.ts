@@ -15,7 +15,8 @@ const isWindows = process.platform === "win32";
 function stubChannelPlugin(params: {
   id: "discord" | "slack" | "telegram";
   label: string;
-  resolveAccount: (cfg: OpenClawConfig) => unknown;
+  resolveAccount: (cfg: OpenClawConfig, accountId: string | null | undefined) => unknown;
+  listAccountIds?: (cfg: OpenClawConfig) => string[];
 }): ChannelPlugin {
   return {
     id: params.id,
@@ -31,11 +32,15 @@ function stubChannelPlugin(params: {
     },
     security: {},
     config: {
-      listAccountIds: (cfg) => {
-        const enabled = Boolean((cfg.channels as Record<string, unknown> | undefined)?.[params.id]);
-        return enabled ? ["default"] : [];
-      },
-      resolveAccount: (cfg) => params.resolveAccount(cfg),
+      listAccountIds:
+        params.listAccountIds ??
+        ((cfg) => {
+          const enabled = Boolean(
+            (cfg.channels as Record<string, unknown> | undefined)?.[params.id],
+          );
+          return enabled ? ["default"] : [];
+        }),
+      resolveAccount: (cfg, accountId) => params.resolveAccount(cfg, accountId),
       isEnabled: () => true,
       isConfigured: () => true,
     },
@@ -45,19 +50,46 @@ function stubChannelPlugin(params: {
 const discordPlugin = stubChannelPlugin({
   id: "discord",
   label: "Discord",
-  resolveAccount: (cfg) => ({ config: cfg.channels?.discord ?? {} }),
+  listAccountIds: (cfg) => {
+    const ids = Object.keys(cfg.channels?.discord?.accounts ?? {});
+    return ids.length > 0 ? ids : ["default"];
+  },
+  resolveAccount: (cfg, accountId) => {
+    const resolvedAccountId = typeof accountId === "string" && accountId ? accountId : "default";
+    const base = cfg.channels?.discord ?? {};
+    const account = cfg.channels?.discord?.accounts?.[resolvedAccountId] ?? {};
+    return { config: { ...base, ...account } };
+  },
 });
 
 const slackPlugin = stubChannelPlugin({
   id: "slack",
   label: "Slack",
-  resolveAccount: (cfg) => ({ config: cfg.channels?.slack ?? {} }),
+  listAccountIds: (cfg) => {
+    const ids = Object.keys(cfg.channels?.slack?.accounts ?? {});
+    return ids.length > 0 ? ids : ["default"];
+  },
+  resolveAccount: (cfg, accountId) => {
+    const resolvedAccountId = typeof accountId === "string" && accountId ? accountId : "default";
+    const base = cfg.channels?.slack ?? {};
+    const account = cfg.channels?.slack?.accounts?.[resolvedAccountId] ?? {};
+    return { config: { ...base, ...account } };
+  },
 });
 
 const telegramPlugin = stubChannelPlugin({
   id: "telegram",
   label: "Telegram",
-  resolveAccount: (cfg) => ({ config: cfg.channels?.telegram ?? {} }),
+  listAccountIds: (cfg) => {
+    const ids = Object.keys(cfg.channels?.telegram?.accounts ?? {});
+    return ids.length > 0 ? ids : ["default"];
+  },
+  resolveAccount: (cfg, accountId) => {
+    const resolvedAccountId = typeof accountId === "string" && accountId ? accountId : "default";
+    const base = cfg.channels?.telegram ?? {};
+    const account = cfg.channels?.telegram?.accounts?.[resolvedAccountId] ?? {};
+    return { config: { ...base, ...account } };
+  },
 });
 
 function successfulProbeResult(url: string) {
@@ -146,12 +178,14 @@ describe("security audit", () => {
     };
 
     const res = await audit(cfg);
+    const summary = res.findings.find((f) => f.checkId === "summary.attack_surface");
 
     expect(res.findings).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ checkId: "summary.attack_surface", severity: "info" }),
       ]),
     );
+    expect(summary?.detail).toContain("trust model: personal assistant");
   });
 
   it("flags non-loopback bind without auth as critical", async () => {
@@ -402,6 +436,54 @@ describe("security audit", () => {
         ).toBe(testCase.expected);
       }),
     );
+  });
+
+  it("warns for risky safeBinTrustedDirs entries", async () => {
+    const riskyGlobalTrustedDirs =
+      process.platform === "win32"
+        ? [String.raw`C:\Users\ci-user\bin`, String.raw`C:\Users\ci-user\.local\bin`]
+        : ["/usr/local/bin", "/tmp/openclaw-safe-bins"];
+    const cfg: OpenClawConfig = {
+      tools: {
+        exec: {
+          safeBinTrustedDirs: riskyGlobalTrustedDirs,
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "ops",
+            tools: {
+              exec: {
+                safeBinTrustedDirs: ["./relative-bin-dir"],
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    const res = await audit(cfg);
+    const finding = res.findings.find(
+      (f) => f.checkId === "tools.exec.safe_bin_trusted_dirs_risky",
+    );
+    expect(finding?.severity).toBe("warn");
+    expect(finding?.detail).toContain(riskyGlobalTrustedDirs[0]);
+    expect(finding?.detail).toContain(riskyGlobalTrustedDirs[1]);
+    expect(finding?.detail).toContain("agents.list.ops.tools.exec");
+  });
+
+  it("does not warn for non-risky absolute safeBinTrustedDirs entries", async () => {
+    const cfg: OpenClawConfig = {
+      tools: {
+        exec: {
+          safeBinTrustedDirs: ["/usr/libexec"],
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    expectNoFinding(res, "tools.exec.safe_bin_trusted_dirs_risky");
   });
 
   it("evaluates loopback control UI and logging exposure findings", async () => {
@@ -821,6 +903,31 @@ describe("security audit", () => {
     );
   });
 
+  it("flags container namespace join network mode in sandbox config", async () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          sandbox: {
+            mode: "all",
+            docker: {
+              network: "container:peer",
+            },
+          },
+        },
+      },
+    };
+    const res = await audit(cfg);
+    expect(res.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "sandbox.dangerous_network_mode",
+          severity: "critical",
+          title: "Dangerous network mode in sandbox config",
+        }),
+      ]),
+    );
+  });
+
   it("checks sandbox browser bridge-network restrictions", async () => {
     const cases: Array<{
       name: string;
@@ -1102,6 +1209,38 @@ describe("security audit", () => {
     expect(finding?.detail).toContain("hooks.gmail.allowUnsafeExternalContent=true");
     expect(finding?.detail).toContain("hooks.mappings[0].allowUnsafeExternalContent=true");
     expect(finding?.detail).toContain("tools.exec.applyPatch.workspaceOnly=false");
+  });
+
+  it("flags non-loopback Control UI without allowed origins", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        auth: { mode: "token", token: "very-long-browser-token-0123456789" },
+      },
+    };
+
+    const res = await audit(cfg);
+    expectFinding(res, "gateway.control_ui.allowed_origins_required", "critical");
+  });
+
+  it("flags dangerous host-header origin fallback and suppresses missing allowed-origins finding", async () => {
+    const cfg: OpenClawConfig = {
+      gateway: {
+        bind: "lan",
+        auth: { mode: "token", token: "very-long-browser-token-0123456789" },
+        controlUi: {
+          dangerouslyAllowHostHeaderOriginFallback: true,
+        },
+      },
+    };
+
+    const res = await audit(cfg);
+    expectFinding(res, "gateway.control_ui.host_header_origin_fallback", "critical");
+    expectNoFinding(res, "gateway.control_ui.allowed_origins_required");
+    const flags = res.findings.find((f) => f.checkId === "config.insecure_or_dangerous_flags");
+    expect(flags?.detail ?? "").toContain(
+      "gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true",
+    );
   });
 
   it("scores X-Real-IP fallback risk by gateway exposure", async () => {
@@ -1497,6 +1636,116 @@ describe("security audit", () => {
         "~/.openclaw/credentials/discord-allowFrom.json:team.owner",
       );
       expect(finding?.detail).not.toContain("<@123456789012345678>");
+    });
+  });
+
+  it("marks Discord name-based allowlists as break-glass when dangerous matching is enabled", async () => {
+    await withChannelSecurityStateDir(async () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          discord: {
+            enabled: true,
+            token: "t",
+            dangerouslyAllowNameMatching: true,
+            allowFrom: ["Alice#1234"],
+          },
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [discordPlugin],
+      });
+
+      const finding = res.findings.find(
+        (entry) => entry.checkId === "channels.discord.allowFrom.name_based_entries",
+      );
+      expect(finding).toBeDefined();
+      expect(finding?.severity).toBe("info");
+      expect(finding?.detail).toContain("out-of-scope");
+      expect(res.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "channels.discord.allowFrom.dangerous_name_matching_enabled",
+            severity: "info",
+          }),
+        ]),
+      );
+    });
+  });
+
+  it("audits non-default Discord accounts for dangerous name matching", async () => {
+    await withChannelSecurityStateDir(async () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          discord: {
+            enabled: true,
+            token: "t",
+            accounts: {
+              alpha: { token: "a" },
+              beta: {
+                token: "b",
+                dangerouslyAllowNameMatching: true,
+              },
+            },
+          },
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [discordPlugin],
+      });
+
+      expect(res.findings).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            checkId: "channels.discord.allowFrom.dangerous_name_matching_enabled",
+            title: expect.stringContaining("(account: beta)"),
+            severity: "info",
+          }),
+        ]),
+      );
+    });
+  });
+
+  it("audits name-based allowlists on non-default Discord accounts", async () => {
+    await withChannelSecurityStateDir(async () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          discord: {
+            enabled: true,
+            token: "t",
+            accounts: {
+              alpha: {
+                token: "a",
+                allowFrom: ["123456789012345678"],
+              },
+              beta: {
+                token: "b",
+                allowFrom: ["Alice#1234"],
+              },
+            },
+          },
+        },
+      };
+
+      const res = await runSecurityAudit({
+        config: cfg,
+        includeFilesystem: false,
+        includeChannelSecurity: true,
+        plugins: [discordPlugin],
+      });
+
+      const finding = res.findings.find(
+        (entry) => entry.checkId === "channels.discord.allowFrom.name_based_entries",
+      );
+      expect(finding).toBeDefined();
+      expect(finding?.detail).toContain("channels.discord.accounts.beta.allowFrom:Alice#1234");
     });
   });
 
@@ -2520,6 +2769,51 @@ description: test skill
     expect(
       res.findings.some((f) => f.checkId === "security.exposure.open_groups_with_runtime_or_fs"),
     ).toBe(false);
+  });
+
+  it("warns when config heuristics suggest a likely multi-user setup", async () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        discord: {
+          groupPolicy: "allowlist",
+          guilds: {
+            "1234567890": {
+              channels: {
+                "7777777777": { allow: true },
+              },
+            },
+          },
+        },
+      },
+      tools: { elevated: { enabled: false } },
+    };
+
+    const res = await audit(cfg);
+    const finding = res.findings.find(
+      (f) => f.checkId === "security.trust_model.multi_user_heuristic",
+    );
+
+    expect(finding?.severity).toBe("warn");
+    expect(finding?.detail).toContain(
+      'channels.discord.groupPolicy="allowlist" with configured group targets',
+    );
+    expect(finding?.detail).toContain("personal-assistant");
+    expect(finding?.remediation).toContain('agents.defaults.sandbox.mode="all"');
+  });
+
+  it("does not warn for multi-user heuristic when no shared-user signals are configured", async () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        discord: {
+          groupPolicy: "allowlist",
+        },
+      },
+      tools: { elevated: { enabled: false } },
+    };
+
+    const res = await audit(cfg);
+
+    expectNoFinding(res, "security.trust_model.multi_user_heuristic");
   });
 
   describe("maybeProbeGateway auth selection", () => {

@@ -103,4 +103,142 @@ describe("loadModelCatalog", () => {
     expect(spark?.name).toBe("gpt-5.3-codex-spark");
     expect(spark?.reasoning).toBe(true);
   });
+
+  it("merges configured models for opted-in non-pi-native providers", async () => {
+    __setModelCatalogImportForTest(
+      async () =>
+        ({
+          AuthStorage: class {},
+          ModelRegistry: class {
+            getAll() {
+              return [{ id: "gpt-4.1", provider: "openai", name: "GPT-4.1" }];
+            }
+          },
+        }) as unknown as PiSdkModule,
+    );
+
+    const result = await loadModelCatalog({
+      config: {
+        models: {
+          providers: {
+            kilocode: {
+              baseUrl: "https://api.kilo.ai/api/gateway/",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "google/gemini-3-pro-preview",
+                  name: "Gemini 3 Pro Preview",
+                  input: ["text", "image"],
+                  reasoning: true,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 1048576,
+                  maxTokens: 65536,
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(result).toContainEqual(
+      expect.objectContaining({
+        provider: "kilocode",
+        id: "google/gemini-3-pro-preview",
+        name: "Gemini 3 Pro Preview",
+      }),
+    );
+  });
+
+  it("does not merge configured models for providers that are not opted in", async () => {
+    __setModelCatalogImportForTest(
+      async () =>
+        ({
+          AuthStorage: class {},
+          ModelRegistry: class {
+            getAll() {
+              return [{ id: "gpt-4.1", provider: "openai", name: "GPT-4.1" }];
+            }
+          },
+        }) as unknown as PiSdkModule,
+    );
+
+    const result = await loadModelCatalog({
+      config: {
+        models: {
+          providers: {
+            qianfan: {
+              baseUrl: "https://qianfan.baidubce.com/v2",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "deepseek-v3.2",
+                  name: "DEEPSEEK V3.2",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 98304,
+                  maxTokens: 32768,
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(
+      result.some((entry) => entry.provider === "qianfan" && entry.id === "deepseek-v3.2"),
+    ).toBe(false);
+  });
+
+  it("does not duplicate opted-in configured models already present in ModelRegistry", async () => {
+    __setModelCatalogImportForTest(
+      async () =>
+        ({
+          AuthStorage: class {},
+          ModelRegistry: class {
+            getAll() {
+              return [
+                {
+                  id: "anthropic/claude-opus-4.6",
+                  provider: "kilocode",
+                  name: "Claude Opus 4.6",
+                },
+              ];
+            }
+          },
+        }) as unknown as PiSdkModule,
+    );
+
+    const result = await loadModelCatalog({
+      config: {
+        models: {
+          providers: {
+            kilocode: {
+              baseUrl: "https://api.kilo.ai/api/gateway/",
+              api: "openai-completions",
+              models: [
+                {
+                  id: "anthropic/claude-opus-4.6",
+                  name: "Configured Claude Opus 4.6",
+                  reasoning: true,
+                  input: ["text", "image"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 1000000,
+                  maxTokens: 128000,
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    const matches = result.filter(
+      (entry) => entry.provider === "kilocode" && entry.id === "anthropic/claude-opus-4.6",
+    );
+    expect(matches).toHaveLength(1);
+    expect(matches[0]?.name).toBe("Claude Opus 4.6");
+  });
 });

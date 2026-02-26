@@ -1,3 +1,6 @@
+import { deriveRelayToken } from './background-utils.js'
+import { classifyRelayCheckException, classifyRelayCheckResponse } from './options-validation.js'
+
 const DEFAULT_PORT = 18792
 
 function clampPort(value) {
@@ -11,17 +14,6 @@ function updateRelayUrl(port) {
   const el = document.getElementById('relay-url')
   if (!el) return
   el.textContent = `http://127.0.0.1:${port}/`
-}
-
-async function deriveRelayToken(gatewayToken, port) {
-  const enc = new TextEncoder()
-  const key = await crypto.subtle.importKey(
-    'raw', enc.encode(gatewayToken), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
-  )
-  const sig = await crypto.subtle.sign(
-    'HMAC', key, enc.encode(`openclaw-extension-relay-v1:${port}`),
-  )
-  return [...new Uint8Array(sig)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
 function setStatus(kind, message) {
@@ -47,19 +39,12 @@ async function checkRelayReachable(port, token) {
       url,
       token: relayToken,
     })
-    if (!res) throw new Error('No response from service worker')
-    if (res.status === 401) {
-      setStatus('error', 'Gateway token rejected. Check token and save again.')
-      return
-    }
-    if (res.error) throw new Error(res.error)
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    setStatus('ok', `Relay reachable and authenticated at http://127.0.0.1:${port}/`)
-  } catch {
-    setStatus(
-      'error',
-      `Relay not reachable/authenticated at http://127.0.0.1:${port}/. Start OpenClaw browser relay and verify token.`,
-    )
+    const result = classifyRelayCheckResponse(res, port)
+    if (result.action === 'throw') throw new Error(result.error)
+    setStatus(result.kind, result.message)
+  } catch (err) {
+    const result = classifyRelayCheckException(err, port)
+    setStatus(result.kind, result.message)
   }
 }
 

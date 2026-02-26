@@ -38,7 +38,7 @@ private struct ExecHostSocketRequest: Codable {
     var requestJson: String
 }
 
-private struct ExecHostRequest: Codable {
+struct ExecHostRequest: Codable {
     var command: [String]
     var rawCommand: String?
     var cwd: String?
@@ -59,7 +59,7 @@ private struct ExecHostRunResult: Codable {
     var error: String?
 }
 
-private struct ExecHostError: Codable {
+struct ExecHostError: Codable, Error {
     var code: String
     var message: String
     var reason: String?
@@ -353,38 +353,28 @@ private enum ExecHostExecutor {
     private typealias ExecApprovalContext = ExecApprovalEvaluation
 
     static func handle(_ request: ExecHostRequest) async -> ExecHostResponse {
-        let command = request.command.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-        guard !command.isEmpty else {
-            return self.errorResponse(
-                code: "INVALID_REQUEST",
-                message: "command required",
-                reason: "invalid")
+        let validatedRequest: ExecHostValidatedRequest
+        switch ExecHostRequestEvaluator.validateRequest(request) {
+        case .success(let request):
+            validatedRequest = request
+        case .failure(let error):
+            return self.errorResponse(error)
         }
 
-        let context = await self.buildContext(request: request, command: command)
-        if context.security == .deny {
-            return self.errorResponse(
-                code: "UNAVAILABLE",
-                message: "SYSTEM_RUN_DISABLED: security=deny",
-                reason: "security=deny")
-        }
+        let context = await self.buildContext(
+            request: request,
+            command: validatedRequest.command,
+            rawCommand: validatedRequest.displayCommand)
 
-        let approvalDecision = request.approvalDecision
-        if approvalDecision == .deny {
-            return self.errorResponse(
-                code: "UNAVAILABLE",
-                message: "SYSTEM_RUN_DENIED: user denied",
-                reason: "user-denied")
-        }
-
-        var approvedByAsk = approvalDecision != nil
-        if ExecApprovalHelpers.requiresAsk(
-            ask: context.ask,
-            security: context.security,
-            allowlistMatch: context.allowlistMatch,
-            skillAllow: context.skillAllow),
-            approvalDecision == nil
+        switch ExecHostRequestEvaluator.evaluate(
+            context: context,
+            approvalDecision: request.approvalDecision)
         {
+        case .deny(let error):
+            return self.errorResponse(error)
+        case .allow:
+            break
+        case .requiresPrompt:
             let decision = ExecApprovalsPromptPresenter.prompt(
                 ExecApprovalPromptRequest(
                     command: context.displayCommand,
@@ -396,32 +386,34 @@ private enum ExecHostExecutor {
                     resolvedPath: context.resolution?.resolvedPath,
                     sessionKey: request.sessionKey))
 
+            let followupDecision: ExecApprovalDecision
             switch decision {
             case .deny:
-                return self.errorResponse(
-                    code: "UNAVAILABLE",
-                    message: "SYSTEM_RUN_DENIED: user denied",
-                    reason: "user-denied")
+                followupDecision = .deny
             case .allowAlways:
-                approvedByAsk = true
+                followupDecision = .allowAlways
                 self.persistAllowlistEntry(decision: decision, context: context)
             case .allowOnce:
-                approvedByAsk = true
+                followupDecision = .allowOnce
+            }
+
+            switch ExecHostRequestEvaluator.evaluate(
+                context: context,
+                approvalDecision: followupDecision)
+            {
+            case .deny(let error):
+                return self.errorResponse(error)
+            case .allow:
+                break
+            case .requiresPrompt:
+                return self.errorResponse(
+                    code: "INVALID_REQUEST",
+                    message: "unexpected approval state",
+                    reason: "invalid")
             }
         }
 
-        self.persistAllowlistEntry(decision: approvalDecision, context: context)
-
-        if context.security == .allowlist,
-           !context.allowlistSatisfied,
-           !context.skillAllow,
-           !approvedByAsk
-        {
-            return self.errorResponse(
-                code: "UNAVAILABLE",
-                message: "SYSTEM_RUN_DENIED: allowlist miss",
-                reason: "allowlist-miss")
-        }
+        self.persistAllowlistEntry(decision: request.approvalDecision, context: context)
 
         if context.allowlistSatisfied {
             var seenPatterns = Set<String>()
@@ -445,16 +437,20 @@ private enum ExecHostExecutor {
         }
 
         return await self.runCommand(
-            command: command,
+            command: validatedRequest.command,
             cwd: request.cwd,
             env: context.env,
             timeoutMs: request.timeoutMs)
     }
 
-    private static func buildContext(request: ExecHostRequest, command: [String]) async -> ExecApprovalContext {
+    private static func buildContext(
+        request: ExecHostRequest,
+        command: [String],
+        rawCommand: String?) async -> ExecApprovalContext
+    {
         await ExecApprovalEvaluator.evaluate(
             command: command,
-            rawCommand: request.rawCommand,
+            rawCommand: rawCommand,
             cwd: request.cwd,
             envOverrides: request.env,
             agentId: request.agentId)
@@ -512,6 +508,17 @@ private enum ExecHostExecutor {
             stderr: result.stderr,
             error: result.errorMessage)
         return self.successResponse(payload)
+    }
+
+    private static func errorResponse(
+        _ error: ExecHostError) -> ExecHostResponse
+    {
+        ExecHostResponse(
+            type: "response",
+            id: UUID().uuidString,
+            ok: false,
+            payload: nil,
+            error: error)
     }
 
     private static func errorResponse(

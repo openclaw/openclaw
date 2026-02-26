@@ -1,5 +1,24 @@
 import { describe, expect, it } from "vitest";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { validateConfigObject } from "./config.js";
 import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
+
+/** Helper to build a minimal PluginManifestRegistry for testing. */
+function makeRegistry(plugins: Array<{ id: string; channels: string[] }>): PluginManifestRegistry {
+  return {
+    plugins: plugins.map((p) => ({
+      id: p.id,
+      channels: p.channels,
+      providers: [],
+      skills: [],
+      origin: "config" as const,
+      rootDir: `/fake/${p.id}`,
+      source: `/fake/${p.id}/index.js`,
+      manifestPath: `/fake/${p.id}/openclaw.plugin.json`,
+    })),
+    diagnostics: [],
+  };
+}
 
 describe("applyPluginAutoEnable", () => {
   it("auto-enables built-in channels and appends to existing allowlist", () => {
@@ -46,6 +65,23 @@ describe("applyPluginAutoEnable", () => {
     expect(result.config.plugins?.entries?.modelByChannel).toBeUndefined();
     expect(result.config.plugins?.allow).toBeUndefined();
     expect(result.changes).toEqual([]);
+  });
+
+  it("keeps auto-enabled WhatsApp config schema-valid", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: {
+          whatsapp: {
+            allowFrom: ["+15555550123"],
+          },
+        },
+      },
+      env: {},
+    });
+
+    expect(result.config.channels?.whatsapp?.enabled).toBe(true);
+    const validated = validateConfigObject(result.config);
+    expect(validated.ok).toBe(true);
   });
 
   it("respects explicit disable", () => {
@@ -116,6 +152,65 @@ describe("applyPluginAutoEnable", () => {
 
     expect(result.config.plugins?.entries?.slack?.enabled).toBeUndefined();
     expect(result.changes).toEqual([]);
+  });
+
+  describe("third-party channel plugins (pluginId ≠ channelId)", () => {
+    it("uses the plugin manifest id, not the channel id, for plugins.entries", () => {
+      // Reproduces: https://github.com/openclaw/openclaw/issues/25261
+      // Plugin "apn-channel" declares channels: ["apn"]. Doctor must write
+      // plugins.entries["apn-channel"], not plugins.entries["apn"].
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { apn: { someKey: "value" } },
+        },
+        env: {},
+        manifestRegistry: makeRegistry([{ id: "apn-channel", channels: ["apn"] }]),
+      });
+
+      expect(result.config.plugins?.entries?.["apn-channel"]?.enabled).toBe(true);
+      expect(result.config.plugins?.entries?.["apn"]).toBeUndefined();
+      expect(result.changes.join("\n")).toContain("apn configured, enabled automatically.");
+    });
+
+    it("does not double-enable when plugin is already enabled under its plugin id", () => {
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { apn: { someKey: "value" } },
+          plugins: { entries: { "apn-channel": { enabled: true } } },
+        },
+        env: {},
+        manifestRegistry: makeRegistry([{ id: "apn-channel", channels: ["apn"] }]),
+      });
+
+      expect(result.changes).toEqual([]);
+    });
+
+    it("respects explicit disable of the plugin by its plugin id", () => {
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { apn: { someKey: "value" } },
+          plugins: { entries: { "apn-channel": { enabled: false } } },
+        },
+        env: {},
+        manifestRegistry: makeRegistry([{ id: "apn-channel", channels: ["apn"] }]),
+      });
+
+      expect(result.config.plugins?.entries?.["apn-channel"]?.enabled).toBe(false);
+      expect(result.changes).toEqual([]);
+    });
+
+    it("falls back to channel key as plugin id when no installed manifest declares the channel", () => {
+      // Without a matching manifest entry, behavior is unchanged (backward compat).
+      const result = applyPluginAutoEnable({
+        config: {
+          channels: { "unknown-chan": { someKey: "value" } },
+        },
+        env: {},
+        manifestRegistry: makeRegistry([]),
+      });
+
+      expect(result.config.plugins?.entries?.["unknown-chan"]?.enabled).toBe(true);
+    });
   });
 
   describe("preferOver channel prioritization", () => {

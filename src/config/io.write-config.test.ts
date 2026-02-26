@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { withTempHome } from "./home-env.test-harness.js";
 import { createConfigIO } from "./io.js";
+import type { OpenClawConfig } from "./types.js";
 
 describe("config io write", () => {
   const silentLogger = {
@@ -122,6 +123,32 @@ describe("config io write", () => {
       expect(persisted).not.toHaveProperty("agents.defaults");
       expect(persisted).not.toHaveProperty("messages.ackReaction");
       expect(persisted).not.toHaveProperty("sessions.persistence");
+    });
+  });
+
+  it('shows actionable guidance for dmPolicy="open" without wildcard allowFrom', async () => {
+    await withTempHome("openclaw-config-io-", async (home) => {
+      const io = createConfigIO({
+        env: {} as NodeJS.ProcessEnv,
+        homedir: () => home,
+        logger: silentLogger,
+      });
+
+      const invalidConfig: OpenClawConfig = {
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            allowFrom: [],
+          },
+        },
+      } satisfies OpenClawConfig;
+
+      await expect(io.writeConfigFile(invalidConfig)).rejects.toThrow(
+        "openclaw config set channels.telegram.allowFrom '[\"*\"]'",
+      );
+      await expect(io.writeConfigFile(invalidConfig)).rejects.toThrow(
+        'openclaw config set channels.telegram.dmPolicy "pairing"',
+      );
     });
   });
 

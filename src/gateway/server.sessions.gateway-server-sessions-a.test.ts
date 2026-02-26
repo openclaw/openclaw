@@ -93,22 +93,27 @@ vi.mock("../discord/monitor/thread-bindings.js", async (importOriginal) => {
 installGatewayTestHooks({ scope: "suite" });
 
 let harness: GatewayServerHarness;
+let sharedSessionStoreDir: string;
+let sharedSessionStorePath: string;
 
 beforeAll(async () => {
   harness = await startGatewayServerHarness();
+  sharedSessionStoreDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
+  sharedSessionStorePath = path.join(sharedSessionStoreDir, "sessions.json");
 });
 
 afterAll(async () => {
   await harness.close();
+  await fs.rm(sharedSessionStoreDir, { recursive: true, force: true });
 });
 
 const openClient = async (opts?: Parameters<typeof connectOk>[1]) => await harness.openClient(opts);
 
 async function createSessionStoreDir() {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
-  const storePath = path.join(dir, "sessions.json");
-  testState.sessionStorePath = storePath;
-  return { dir, storePath };
+  await fs.rm(sharedSessionStoreDir, { recursive: true, force: true });
+  await fs.mkdir(sharedSessionStoreDir, { recursive: true });
+  testState.sessionStorePath = sharedSessionStorePath;
+  return { dir: sharedSessionStoreDir, storePath: sharedSessionStorePath };
 }
 
 async function writeSingleLineSession(dir: string, sessionId: string, content: string) {
@@ -197,6 +202,8 @@ describe("gateway server sessions", () => {
         main: {
           sessionId: "sess-main",
           updatedAt: recent,
+          modelProvider: "anthropic",
+          model: "claude-sonnet-4-6",
           inputTokens: 10,
           outputTokens: 20,
           thinkingLevel: "low",
@@ -451,11 +458,13 @@ describe("gateway server sessions", () => {
     const reset = await rpcReq<{
       ok: true;
       key: string;
-      entry: { sessionId: string };
+      entry: { sessionId: string; modelProvider?: string; model?: string };
     }>(ws, "sessions.reset", { key: "agent:main:main" });
     expect(reset.ok).toBe(true);
     expect(reset.payload?.key).toBe("agent:main:main");
     expect(reset.payload?.entry.sessionId).not.toBe("sess-main");
+    expect(reset.payload?.entry.modelProvider).toBe("anthropic");
+    expect(reset.payload?.entry.model).toBe("claude-sonnet-4-6");
     const filesAfterReset = await fs.readdir(dir);
     expect(filesAfterReset.some((f) => f.startsWith("sess-main.jsonl.reset."))).toBe(true);
 
@@ -472,9 +481,7 @@ describe("gateway server sessions", () => {
   });
 
   test("sessions.preview returns transcript previews", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-preview-"));
-    const storePath = path.join(dir, "sessions.json");
-    testState.sessionStorePath = storePath;
+    const { dir } = await createSessionStoreDir();
     const sessionId = "sess-preview";
     const transcriptPath = path.join(dir, `${sessionId}.jsonl`);
     const lines = createToolSummaryPreviewTranscriptLines(sessionId);
@@ -498,9 +505,7 @@ describe("gateway server sessions", () => {
   });
 
   test("sessions.preview resolves legacy mixed-case main alias with custom mainKey", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-preview-alias-"));
-    const storePath = path.join(dir, "sessions.json");
-    testState.sessionStorePath = storePath;
+    const { dir, storePath } = await createSessionStoreDir();
     testState.agentsConfig = { list: [{ id: "ops", default: true }] };
     testState.sessionConfig = { mainKey: "work" };
     const sessionId = "sess-legacy-main";
@@ -533,9 +538,7 @@ describe("gateway server sessions", () => {
   });
 
   test("sessions.resolve and mutators clean legacy main-alias ghost keys", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-cleanup-alias-"));
-    const storePath = path.join(dir, "sessions.json");
-    testState.sessionStorePath = storePath;
+    const { dir, storePath } = await createSessionStoreDir();
     testState.agentsConfig = { list: [{ id: "ops", default: true }] };
     testState.sessionConfig = { mainKey: "work" };
     const sessionId = "sess-alias-cleanup";
@@ -1044,9 +1047,7 @@ describe("gateway server sessions", () => {
   });
 
   test("webchat clients cannot patch or delete sessions", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-webchat-"));
-    const storePath = path.join(dir, "sessions.json");
-    testState.sessionStorePath = storePath;
+    await createSessionStoreDir();
 
     await writeSessionStore({
       entries: {

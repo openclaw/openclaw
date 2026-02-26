@@ -129,7 +129,21 @@ export const OpenClawSchema = z
     meta: z
       .object({
         lastTouchedVersion: z.string().optional(),
-        lastTouchedAt: z.string().optional(),
+        // Accept any string unchanged (backwards-compatible) and coerce numeric Unix
+        // timestamps to ISO strings (agent file edits may write Date.now()).
+        lastTouchedAt: z
+          .union([
+            z.string(),
+            z.number().transform((n, ctx) => {
+              const d = new Date(n);
+              if (Number.isNaN(d.getTime())) {
+                ctx.addIssue({ code: z.ZodIssueCode.custom, message: "Invalid timestamp" });
+                return z.NEVER;
+              }
+              return d.toISOString();
+            }),
+          ])
+          .optional(),
       })
       .strict()
       .optional(),
@@ -235,6 +249,7 @@ export const OpenClawSchema = z
         ssrfPolicy: z
           .object({
             allowPrivateNetwork: z.boolean().optional(),
+            dangerouslyAllowPrivateNetwork: z.boolean().optional(),
             allowedHostnames: z.array(z.string()).optional(),
             hostnameAllowlist: z.array(z.string()).optional(),
           })
@@ -424,6 +439,21 @@ export const OpenClawSchema = z
       .optional(),
     talk: z
       .object({
+        provider: z.string().optional(),
+        providers: z
+          .record(
+            z.string(),
+            z
+              .object({
+                voiceId: z.string().optional(),
+                voiceAliases: z.record(z.string(), z.string()).optional(),
+                modelId: z.string().optional(),
+                outputFormat: z.string().optional(),
+                apiKey: z.string().optional().register(sensitive),
+              })
+              .catchall(z.unknown()),
+          )
+          .optional(),
         voiceId: z.string().optional(),
         voiceAliases: z.record(z.string(), z.string()).optional(),
         modelId: z.string().optional(),
@@ -453,6 +483,7 @@ export const OpenClawSchema = z
             basePath: z.string().optional(),
             root: z.string().optional(),
             allowedOrigins: z.array(z.string()).optional(),
+            dangerouslyAllowHostHeaderOriginFallback: z.boolean().optional(),
             allowInsecureAuth: z.boolean().optional(),
             dangerouslyDisableDeviceAuth: z.boolean().optional(),
           })

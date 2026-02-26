@@ -452,6 +452,24 @@
     grid-template-columns: 1fr;
   }
 
+  /* Mobile: stack compose row vertically */
+  .chat-compose__row {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  /* Mobile: stack action buttons vertically */
+  .chat-compose__actions {
+    flex-direction: column;
+    width: 100%;
+    gap: 8px;
+  }
+
+  /* Mobile: full-width buttons */
+  .chat-compose .chat-compose__actions .btn {
+    width: 100%;
+  }
+
   .chat-controls {
     flex-wrap: wrap;
     gap: 8px;

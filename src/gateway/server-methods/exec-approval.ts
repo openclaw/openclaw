@@ -43,7 +43,9 @@ export function createExecApprovalHandlers(
       const p = params as {
         id?: string;
         command: string;
+        commandArgv?: string[];
         cwd?: string;
+        nodeId?: string;
         host?: string;
         security?: string;
         ask?: string;
@@ -57,6 +59,19 @@ export function createExecApprovalHandlers(
       const timeoutMs =
         typeof p.timeoutMs === "number" ? p.timeoutMs : DEFAULT_EXEC_APPROVAL_TIMEOUT_MS;
       const explicitId = typeof p.id === "string" && p.id.trim().length > 0 ? p.id.trim() : null;
+      const host = typeof p.host === "string" ? p.host.trim() : "";
+      const nodeId = typeof p.nodeId === "string" ? p.nodeId.trim() : "";
+      const commandArgv = Array.isArray(p.commandArgv)
+        ? p.commandArgv.map((entry) => String(entry))
+        : undefined;
+      if (host === "node" && !nodeId) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "nodeId is required for host=node"),
+        );
+        return;
+      }
       if (explicitId && manager.getSnapshot(explicitId)) {
         respond(
           false,
@@ -67,8 +82,10 @@ export function createExecApprovalHandlers(
       }
       const request = {
         command: p.command,
+        commandArgv,
         cwd: p.cwd ?? null,
-        host: p.host ?? null,
+        nodeId: host === "node" ? nodeId : null,
+        host: host || null,
         security: p.security ?? null,
         ask: p.ask ?? null,
         agentId: p.agentId ?? null,

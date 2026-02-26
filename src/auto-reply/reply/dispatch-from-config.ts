@@ -17,6 +17,7 @@ import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
+import { shouldSuppressReasoningPayload } from "./reply-payloads.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
 
 const AUDIO_PLACEHOLDER_RE = /^<media:audio>(\s*\([^)]*\))?$/i;
@@ -186,6 +187,8 @@ export async function dispatchReplyFromConfig(params: {
             senderName: ctx.SenderName,
             senderUsername: ctx.SenderUsername,
             senderE164: ctx.SenderE164,
+            guildId: ctx.GroupSpace,
+            channelName: ctx.GroupChannel,
           },
         },
         {
@@ -219,6 +222,8 @@ export async function dispatchReplyFromConfig(params: {
           senderName: ctx.SenderName,
           senderUsername: ctx.SenderUsername,
           senderE164: ctx.SenderE164,
+          guildId: ctx.GroupSpace,
+          channelName: ctx.GroupChannel,
         },
       }),
     ).catch((err) => {
@@ -363,6 +368,12 @@ export async function dispatchReplyFromConfig(params: {
         },
         onBlockReply: (payload: ReplyPayload, context) => {
           const run = async () => {
+            // Suppress reasoning payloads — channels using this generic dispatch
+            // path (WhatsApp, web, etc.) do not have a dedicated reasoning lane.
+            // Telegram has its own dispatch path that handles reasoning splitting.
+            if (shouldSuppressReasoningPayload(payload)) {
+              return;
+            }
             // Accumulate block text for TTS generation after streaming
             if (payload.text) {
               if (accumulatedBlockText.length > 0) {
@@ -396,6 +407,11 @@ export async function dispatchReplyFromConfig(params: {
     let queuedFinal = false;
     let routedFinalCount = 0;
     for (const reply of replies) {
+      // Suppress reasoning payloads from channel delivery — channels using this
+      // generic dispatch path do not have a dedicated reasoning lane.
+      if (shouldSuppressReasoningPayload(reply)) {
+        continue;
+      }
       const ttsReply = await maybeApplyTtsToPayload({
         payload: reply,
         cfg,

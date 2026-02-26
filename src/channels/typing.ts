@@ -1,3 +1,5 @@
+import { createTypingKeepaliveLoop } from "./typing-lifecycle.js";
+
 export type TypingCallbacks = {
   onReplyStart: () => Promise<void>;
   onIdle?: () => void;
@@ -10,9 +12,17 @@ export function createTypingCallbacks(params: {
   stop?: () => Promise<void>;
   onStartError: (err: unknown) => void;
   onStopError?: (err: unknown) => void;
+  keepaliveIntervalMs?: number;
 }): TypingCallbacks {
   const stop = params.stop;
-  const onReplyStart = async () => {
+  const keepaliveIntervalMs = params.keepaliveIntervalMs ?? 3_000;
+  let stopSent = false;
+  let closed = false;
+
+  const fireStart = async () => {
+    if (closed) {
+      return;
+    }
     try {
       await params.start();
     } catch (err) {
@@ -20,11 +30,30 @@ export function createTypingCallbacks(params: {
     }
   };
 
-  const fireStop = stop
-    ? () => {
-        void stop().catch((err) => (params.onStopError ?? params.onStartError)(err));
-      }
-    : undefined;
+  const keepaliveLoop = createTypingKeepaliveLoop({
+    intervalMs: keepaliveIntervalMs,
+    onTick: fireStart,
+  });
+
+  const onReplyStart = async () => {
+    if (closed) {
+      return;
+    }
+    stopSent = false;
+    keepaliveLoop.stop();
+    await fireStart();
+    keepaliveLoop.start();
+  };
+
+  const fireStop = () => {
+    closed = true;
+    keepaliveLoop.stop();
+    if (!stop || stopSent) {
+      return;
+    }
+    stopSent = true;
+    void stop().catch((err) => (params.onStopError ?? params.onStartError)(err));
+  };
 
   return { onReplyStart, onIdle: fireStop, onCleanup: fireStop };
 }
