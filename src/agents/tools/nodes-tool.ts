@@ -49,6 +49,23 @@ const NOTIFY_PRIORITIES = ["passive", "active", "timeSensitive"] as const;
 const NOTIFY_DELIVERIES = ["system", "overlay", "auto"] as const;
 const CAMERA_FACING = ["front", "back", "both"] as const;
 const LOCATION_ACCURACY = ["coarse", "balanced", "precise"] as const;
+type GatewayCallOptions = ReturnType<typeof readGatewayCallOptions>;
+
+async function invokeNodeCommandPayload(params: {
+  gatewayOpts: GatewayCallOptions;
+  node: string;
+  command: string;
+  commandParams?: Record<string, unknown>;
+}): Promise<unknown> {
+  const nodeId = await resolveNodeId(params.gatewayOpts, params.node);
+  const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", params.gatewayOpts, {
+    nodeId,
+    command: params.command,
+    params: params.commandParams ?? {},
+    idempotencyKey: crypto.randomUUID(),
+  });
+  return raw?.payload ?? {};
+}
 
 function isPairingRequiredMessage(message: string): boolean {
   const lower = message.toLowerCase();
@@ -273,15 +290,13 @@ export function createNodesTool(options?: {
           }
           case "camera_list": {
             const node = readStringParam(params, "node", { required: true });
-            const nodeId = await resolveNodeId(gatewayOpts, node);
-            const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
-              nodeId,
+            const payloadRaw = await invokeNodeCommandPayload({
+              gatewayOpts,
+              node,
               command: "camera.list",
-              params: {},
-              idempotencyKey: crypto.randomUUID(),
             });
             const payload =
-              raw && typeof raw.payload === "object" && raw.payload !== null ? raw.payload : {};
+              payloadRaw && typeof payloadRaw === "object" && payloadRaw !== null ? payloadRaw : {};
             return jsonResult(payload);
           }
           case "camera_clip": {
@@ -379,7 +394,6 @@ export function createNodesTool(options?: {
           }
           case "location_get": {
             const node = readStringParam(params, "node", { required: true });
-            const nodeId = await resolveNodeId(gatewayOpts, node);
             const maxAgeMs =
               typeof params.maxAgeMs === "number" && Number.isFinite(params.maxAgeMs)
                 ? params.maxAgeMs
@@ -395,28 +409,26 @@ export function createNodesTool(options?: {
               Number.isFinite(params.locationTimeoutMs)
                 ? params.locationTimeoutMs
                 : undefined;
-            const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
-              nodeId,
+            const payload = await invokeNodeCommandPayload({
+              gatewayOpts,
+              node,
               command: "location.get",
-              params: {
+              commandParams: {
                 maxAgeMs,
                 desiredAccuracy,
                 timeoutMs: locationTimeoutMs,
               },
-              idempotencyKey: crypto.randomUUID(),
             });
-            return jsonResult(raw?.payload ?? {});
+            return jsonResult(payload);
           }
           case "notifications_list": {
             const node = readStringParam(params, "node", { required: true });
-            const nodeId = await resolveNodeId(gatewayOpts, node);
-            const raw = await callGatewayTool<{ payload: unknown }>("node.invoke", gatewayOpts, {
-              nodeId,
+            const payload = await invokeNodeCommandPayload({
+              gatewayOpts,
+              node,
               command: "notifications.list",
-              params: {},
-              idempotencyKey: crypto.randomUUID(),
             });
-            return jsonResult(raw?.payload ?? {});
+            return jsonResult(payload);
           }
           case "run": {
             const node = readStringParam(params, "node", { required: true });
