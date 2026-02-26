@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { assertNoHardlinkedFinalPath } from "../../infra/hardlink-guards.js";
 import { isNotFoundPathError, isPathInside } from "../../infra/path-guards.js";
 import { execDockerRaw, type ExecDockerRawResult } from "./docker.js";
 import {
@@ -21,6 +22,7 @@ type RunCommandOptions = {
 type PathSafetyOptions = {
   action: string;
   allowFinalSymlink?: boolean;
+  allowFinalHardlink?: boolean;
   requireWritable?: boolean;
 };
 
@@ -151,6 +153,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       action: "remove files",
       requireWritable: true,
       allowFinalSymlink: true,
+      allowFinalHardlink: true,
     });
     const flags = [params.force === false ? "" : "-f", params.recursive ? "-r" : ""].filter(
       Boolean,
@@ -176,6 +179,7 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       action: "rename files",
       requireWritable: true,
       allowFinalSymlink: true,
+      allowFinalHardlink: true,
     });
     await this.assertPathSafety(to, {
       action: "rename files",
@@ -256,6 +260,12 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
       absolutePath: target.hostPath,
       rootPath: lexicalMount.hostRoot,
       allowFinalSymlink: options.allowFinalSymlink === true,
+    });
+    await assertNoHardlinkedFinalPath({
+      filePath: target.hostPath,
+      root: lexicalMount.hostRoot,
+      boundaryLabel: "sandbox mount root",
+      allowFinalHardlink: options.allowFinalHardlink === true,
     });
 
     const canonicalContainerPath = await this.resolveCanonicalContainerPath({
