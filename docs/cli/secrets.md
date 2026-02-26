@@ -78,8 +78,14 @@ Flags:
 Notes:
 
 - `configure` targets secret-bearing fields in `openclaw.json`.
+- Include all secret-bearing fields you intend to migrate (for example both `models.providers.*.apiKey` and `skills.entries.*.apiKey`) so audit can reach a clean state.
 - It performs preflight resolution before apply.
 - Apply path is one-way for migrated plaintext values.
+
+Exec provider safety note:
+
+- Homebrew installs often expose symlinked binaries under `/opt/homebrew/bin/*`.
+- Set `allowSymlinkCommand: true` only when needed for trusted package-manager paths, and pair it with `trustedDirs` (for example `["/opt/homebrew"]`).
 
 ## Apply a saved plan
 
@@ -105,3 +111,5 @@ openclaw secrets audit --check
 openclaw secrets configure
 openclaw secrets audit --check
 ```
+
+If `audit --check` still reports plaintext findings after a partial migration, verify you also migrated skill keys (`skills.entries.*.apiKey`) and any other reported target paths.

@@ -128,6 +128,7 @@ Define providers under `secrets.providers`:
 - Runs configured absolute binary path, no shell.
 - By default, `command` must point to a regular file (not a symlink).
 - Set `allowSymlinkCommand: true` to allow symlink command paths (for example Homebrew shims). OpenClaw validates the resolved target path.
+- Enable `allowSymlinkCommand` only when required for trusted package-manager paths, and pair it with `trustedDirs` (for example `["/opt/homebrew"]`).
 - When `trustedDirs` is set, checks apply to the resolved target path.
 - Supports timeout, no-output timeout, output byte limits, env allowlist, and trusted dirs.
 - Request payload (stdin):
@@ -309,6 +310,11 @@ openclaw secrets audit --check
 openclaw secrets configure
 openclaw secrets audit --check
 ```
+
+Migration completeness:
+
+- Include `skills.entries.<skillKey>.apiKey` targets when those skills use API keys.
+- If `audit --check` still reports plaintext findings after a partial migration, migrate the remaining reported paths and rerun audit.
 
 ### `secrets audit`
 
