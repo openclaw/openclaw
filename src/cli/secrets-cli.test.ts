@@ -108,7 +108,18 @@ describe("secrets CLI", () => {
         protocolVersion: 1,
         generatedAt: "2026-02-26T00:00:00.000Z",
         generatedBy: "openclaw secrets configure",
-        targets: [],
+        targets: [
+          {
+            type: "skills.entries.apiKey",
+            path: "skills.entries.qa-secret-test.apiKey",
+            pathSegments: ["skills", "entries", "qa-secret-test", "apiKey"],
+            ref: {
+              source: "env",
+              provider: "default",
+              id: "QA_SECRET_TEST_API_KEY",
+            },
+          },
+        ],
       },
       preflight: {
         mode: "dry-run",
@@ -129,7 +140,19 @@ describe("secrets CLI", () => {
 
     await createProgram().parseAsync(["secrets", "configure"], { from: "user" });
     expect(runSecretsConfigureInteractive).toHaveBeenCalled();
-    expect(runSecretsApply).toHaveBeenCalledWith(expect.objectContaining({ write: true }));
+    expect(runSecretsApply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        write: true,
+        plan: expect.objectContaining({
+          targets: expect.arrayContaining([
+            expect.objectContaining({
+              type: "skills.entries.apiKey",
+              path: "skills.entries.qa-secret-test.apiKey",
+            }),
+          ]),
+        }),
+      }),
+    );
     expect(runtimeLogs.at(-1)).toContain("Secrets applied");
   });
 });
