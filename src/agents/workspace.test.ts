@@ -121,6 +121,21 @@ describe("ensureAgentWorkspace", () => {
     const memoryContent = await fs.readFile(path.join(tempDir, "MEMORY.md"), "utf-8");
     expect(memoryContent).toBe("# Long-term memory\nImportant stuff");
   });
+
+  it("treats git-backed workspaces as existing even when template files are missing", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await fs.mkdir(path.join(tempDir, ".git"), { recursive: true });
+    await fs.writeFile(path.join(tempDir, ".git", "HEAD"), "ref: refs/heads/main\n");
+
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    await expect(fs.access(path.join(tempDir, DEFAULT_IDENTITY_FILENAME))).resolves.toBeUndefined();
+    await expect(fs.access(path.join(tempDir, DEFAULT_BOOTSTRAP_FILENAME))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    const state = await readOnboardingState(tempDir);
+    expect(state.onboardingCompletedAt).toMatch(/\d{4}-\d{2}-\d{2}T/);
+  });
 });
 
 describe("loadWorkspaceBootstrapFiles", () => {
