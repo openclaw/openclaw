@@ -142,7 +142,30 @@ export async function ensureOpenClawModelsJson(
         string,
         NonNullable<ModelsConfig["providers"]>[string]
       >;
-      mergedProviders = { ...existingProviders, ...providers };
+      mergedProviders = {};
+      for (const [key, entry] of Object.entries(existingProviders)) {
+        mergedProviders[key] = entry;
+      }
+      for (const [key, newEntry] of Object.entries(providers)) {
+        const existing = existingProviders[key] as
+          | (NonNullable<ModelsConfig["providers"]>[string] & {
+              apiKey?: string;
+              baseUrl?: string;
+            })
+          | undefined;
+        if (existing) {
+          const preserved: Record<string, unknown> = {};
+          if (typeof existing.apiKey === "string" && existing.apiKey) {
+            preserved.apiKey = existing.apiKey;
+          }
+          if (typeof existing.baseUrl === "string" && existing.baseUrl) {
+            preserved.baseUrl = existing.baseUrl;
+          }
+          mergedProviders[key] = { ...newEntry, ...preserved };
+        } else {
+          mergedProviders[key] = newEntry;
+        }
+      }
     }
   }
 
