@@ -41,7 +41,7 @@ describe("security/dm-policy-shared", () => {
       storeAllowFrom: [" owner3 ", ""],
     });
     expect(lists.effectiveAllowFrom).toEqual(["owner", "owner2", "owner3"]);
-    expect(lists.effectiveGroupAllowFrom).toEqual(["group:abc", "owner3"]);
+    expect(lists.effectiveGroupAllowFrom).toEqual(["group:abc"]);
   });
 
   it("falls back to DM allowlist for groups when groupAllowFrom is empty", () => {
@@ -51,7 +51,7 @@ describe("security/dm-policy-shared", () => {
       storeAllowFrom: [" owner2 "],
     });
     expect(lists.effectiveAllowFrom).toEqual(["owner", "owner2"]);
-    expect(lists.effectiveGroupAllowFrom).toEqual(["owner", "owner2"]);
+    expect(lists.effectiveGroupAllowFrom).toEqual(["owner"]);
   });
 
   it("excludes storeAllowFrom when dmPolicy is allowlist", () => {
@@ -65,7 +65,7 @@ describe("security/dm-policy-shared", () => {
     expect(lists.effectiveGroupAllowFrom).toEqual(["group:abc"]);
   });
 
-  it("includes storeAllowFrom when dmPolicy is pairing", () => {
+  it("keeps group allowlist explicit when dmPolicy is pairing", () => {
     const lists = resolveEffectiveAllowFromLists({
       allowFrom: ["+1111"],
       groupAllowFrom: [],
@@ -73,7 +73,7 @@ describe("security/dm-policy-shared", () => {
       dmPolicy: "pairing",
     });
     expect(lists.effectiveAllowFrom).toEqual(["+1111", "+2222"]);
-    expect(lists.effectiveGroupAllowFrom).toEqual(["+1111", "+2222"]);
+    expect(lists.effectiveGroupAllowFrom).toEqual(["+1111"]);
   });
 
   it("resolves access + effective allowlists in one shared call", () => {
@@ -89,7 +89,7 @@ describe("security/dm-policy-shared", () => {
     expect(resolved.decision).toBe("allow");
     expect(resolved.reason).toBe("dmPolicy=pairing (allowlisted)");
     expect(resolved.effectiveAllowFrom).toEqual(["owner", "paired-user"]);
-    expect(resolved.effectiveGroupAllowFrom).toEqual(["group:room", "paired-user"]);
+    expect(resolved.effectiveGroupAllowFrom).toEqual(["group:room"]);
   });
 
   it("keeps allowlist mode strict in shared resolver (no pairing-store fallback)", () => {

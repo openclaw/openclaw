@@ -182,6 +182,41 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("blocks group sender that is only present in pairing-store allowlist", async () => {
+    const processMessage = vi.fn();
+    readAllowFromStoreMock.mockResolvedValueOnce(["user-paired"]);
+    const event = {
+      type: "message",
+      message: { id: "m3b", type: "text", text: "hi" },
+      replyToken: "reply-token",
+      timestamp: Date.now(),
+      source: { type: "group", groupId: "group-1", userId: "user-paired" },
+      mode: "active",
+      webhookEventId: "evt-3b",
+      deliveryContext: { isRedelivery: false },
+    } as MessageEvent;
+
+    await handleLineWebhookEvents([event], {
+      cfg: {
+        channels: { line: { groupPolicy: "allowlist", groupAllowFrom: ["user-owner"] } },
+      },
+      account: {
+        accountId: "default",
+        enabled: true,
+        channelAccessToken: "token",
+        channelSecret: "secret",
+        tokenSource: "config",
+        config: { groupPolicy: "allowlist", groupAllowFrom: ["user-owner"] },
+      },
+      runtime: createRuntime(),
+      mediaMaxBytes: 1,
+      processMessage,
+    });
+
+    expect(buildLineMessageContextMock).not.toHaveBeenCalled();
+    expect(processMessage).not.toHaveBeenCalled();
+  });
+
   it("blocks group messages when wildcard group config disables groups", async () => {
     const processMessage = vi.fn();
     const event = {
