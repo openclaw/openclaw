@@ -24,4 +24,26 @@ describe("PlivoProvider", () => {
     expect(result.providerResponseBody).toContain("<Wait");
     expect(result.providerResponseBody).toContain('length="300"');
   });
+
+  it("uses verified request key when provided", () => {
+    const provider = new PlivoProvider({
+      authId: "MA000000000000000000",
+      authToken: "test-token",
+    });
+
+    const result = provider.parseWebhookEvent(
+      {
+        headers: { host: "example.com", "x-plivo-signature-v3-nonce": "nonce-1" },
+        rawBody:
+          "CallUUID=call-uuid&CallStatus=in-progress&Direction=outbound&From=%2B15550000000&To=%2B15550000001&Event=StartApp",
+        url: "https://example.com/voice/webhook?provider=plivo&flow=answer&callId=internal-call-id",
+        method: "POST",
+        query: { provider: "plivo", flow: "answer", callId: "internal-call-id" },
+      },
+      { verifiedRequestKey: "plivo:v3:verified" },
+    );
+
+    expect(result.events).toHaveLength(1);
+    expect(result.events[0]?.dedupeKey).toBe("plivo:v3:verified");
+  });
 });

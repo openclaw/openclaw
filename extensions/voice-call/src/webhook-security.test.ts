@@ -198,8 +198,10 @@ describe("verifyPlivoWebhook", () => {
 
     expect(first.ok).toBe(true);
     expect(first.isReplay).toBeFalsy();
+    expect(first.verifiedRequestKey).toBeTruthy();
     expect(second.ok).toBe(true);
     expect(second.isReplay).toBe(true);
+    expect(second.verifiedRequestKey).toBe(first.verifiedRequestKey);
   });
 });
 
@@ -229,8 +231,10 @@ describe("verifyTelnyxWebhook", () => {
 
     expect(first.ok).toBe(true);
     expect(first.isReplay).toBeFalsy();
+    expect(first.verifiedRequestKey).toBeTruthy();
     expect(second.ok).toBe(true);
     expect(second.isReplay).toBe(true);
+    expect(second.verifiedRequestKey).toBe(first.verifiedRequestKey);
   });
 });
 
@@ -304,8 +308,58 @@ describe("verifyTwilioWebhook", () => {
 
     expect(first.ok).toBe(true);
     expect(first.isReplay).toBeFalsy();
+    expect(first.verifiedRequestKey).toBeTruthy();
     expect(second.ok).toBe(true);
     expect(second.isReplay).toBe(true);
+    expect(second.verifiedRequestKey).toBe(first.verifiedRequestKey);
+  });
+
+  it("treats changed idempotency header as replay for identical signed requests", () => {
+    const authToken = "test-auth-token";
+    const publicUrl = "https://example.com/voice/webhook";
+    const urlWithQuery = `${publicUrl}?callId=abc`;
+    const postBody = "CallSid=CS778&CallStatus=completed&From=%2B15550000000";
+    const signature = twilioSignature({ authToken, url: urlWithQuery, postBody });
+
+    const first = verifyTwilioWebhook(
+      {
+        headers: {
+          host: "example.com",
+          "x-forwarded-proto": "https",
+          "x-twilio-signature": signature,
+          "i-twilio-idempotency-token": "idem-replay-a",
+        },
+        rawBody: postBody,
+        url: "http://local/voice/webhook?callId=abc",
+        method: "POST",
+        query: { callId: "abc" },
+      },
+      authToken,
+      { publicUrl },
+    );
+    const second = verifyTwilioWebhook(
+      {
+        headers: {
+          host: "example.com",
+          "x-forwarded-proto": "https",
+          "x-twilio-signature": signature,
+          "i-twilio-idempotency-token": "idem-replay-b",
+        },
+        rawBody: postBody,
+        url: "http://local/voice/webhook?callId=abc",
+        method: "POST",
+        query: { callId: "abc" },
+      },
+      authToken,
+      { publicUrl },
+    );
+
+    expect(first.ok).toBe(true);
+    expect(first.isReplay).toBe(false);
+    expect(first.verifiedRequestKey).toBeTruthy();
+    expect(second.ok).toBe(true);
+    expect(second.isReplay).toBe(true);
+    expect(second.verifiedRequestKey).toBe(first.verifiedRequestKey);
   });
 
   it("rejects invalid signatures even when attacker injects forwarded host", () => {

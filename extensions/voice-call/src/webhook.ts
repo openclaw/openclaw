@@ -343,7 +343,9 @@ export class VoiceCallWebhookServer {
     }
 
     // Parse events
-    const result = this.provider.parseWebhookEvent(ctx);
+    const result = this.provider.parseWebhookEvent(ctx, {
+      verifiedRequestKey: verification.verifiedRequestKey,
+    });
 
     // Process each event
     if (verification.isReplay) {

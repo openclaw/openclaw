@@ -60,7 +60,7 @@ describe("TwilioProvider", () => {
     expect(result.providerResponseBody).toContain("<Connect>");
   });
 
-  it("uses a stable dedupeKey for identical request payloads", () => {
+  it("uses a stable fallback dedupeKey for identical request payloads", () => {
     const provider = createProvider();
     const rawBody = "CallSid=CA789&Direction=inbound&SpeechResult=hello";
     const ctxA = {
@@ -78,8 +78,29 @@ describe("TwilioProvider", () => {
     expect(eventA).toBeDefined();
     expect(eventB).toBeDefined();
     expect(eventA?.id).not.toBe(eventB?.id);
-    expect(eventA?.dedupeKey).toBe("twilio:idempotency:idem-123");
+    expect(eventA?.dedupeKey).toContain("twilio:fallback:");
     expect(eventA?.dedupeKey).toBe(eventB?.dedupeKey);
+  });
+
+  it("uses verified request key for dedupe and ignores idempotency header changes", () => {
+    const provider = createProvider();
+    const rawBody = "CallSid=CA790&Direction=inbound&SpeechResult=hello";
+    const ctxA = {
+      ...createContext(rawBody, { callId: "call-1", turnToken: "turn-1" }),
+      headers: { "i-twilio-idempotency-token": "idem-a" },
+    };
+    const ctxB = {
+      ...createContext(rawBody, { callId: "call-1", turnToken: "turn-1" }),
+      headers: { "i-twilio-idempotency-token": "idem-b" },
+    };
+
+    const eventA = provider.parseWebhookEvent(ctxA, { verifiedRequestKey: "twilio:req:abc" })
+      .events[0];
+    const eventB = provider.parseWebhookEvent(ctxB, { verifiedRequestKey: "twilio:req:abc" })
+      .events[0];
+
+    expect(eventA?.dedupeKey).toBe("twilio:req:abc");
+    expect(eventB?.dedupeKey).toBe("twilio:req:abc");
   });
 
   it("keeps turnToken from query on speech events", () => {
