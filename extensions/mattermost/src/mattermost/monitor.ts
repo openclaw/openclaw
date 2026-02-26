@@ -772,32 +772,30 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         },
       });
 
-    try {
-      await core.channel.reply.dispatchReplyFromConfig({
-        ctx: ctxPayload,
-        cfg,
-        dispatcher,
-        replyOptions: {
-          ...replyOptions,
-          disableBlockStreaming:
-            typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
-          onModelSelected,
-        },
-      });
-      if (historyKey) {
-        clearHistoryEntriesIfEnabled({
-          historyMap: channelHistories,
-          historyKey,
-          limit: historyLimit,
-        });
-      }
-    } finally {
-      dispatcher.markComplete();
-      try {
-        await dispatcher.waitForIdle();
-      } finally {
+    await core.channel.reply.withReplyDispatcher({
+      dispatcher,
+      onSettled: () => {
         markDispatchIdle();
-      }
+      },
+      run: () =>
+        core.channel.reply.dispatchReplyFromConfig({
+          ctx: ctxPayload,
+          cfg,
+          dispatcher,
+          replyOptions: {
+            ...replyOptions,
+            disableBlockStreaming:
+              typeof account.blockStreaming === "boolean" ? !account.blockStreaming : undefined,
+            onModelSelected,
+          },
+        }),
+    });
+    if (historyKey) {
+      clearHistoryEntriesIfEnabled({
+        historyMap: channelHistories,
+        historyKey,
+        limit: historyLimit,
+      });
     }
   };
 

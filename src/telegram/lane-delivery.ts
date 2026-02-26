@@ -111,8 +111,10 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     hadPreviewMessage: boolean;
   }): boolean => {
     const currentPreviewText = args.currentPreviewText;
+    if (currentPreviewText === undefined) {
+      return false;
+    }
     return (
-      currentPreviewText !== undefined &&
       currentPreviewText.startsWith(args.text) &&
       args.text.length < currentPreviewText.length &&
       (args.skipRegressive === "always" || args.hadPreviewMessage)
