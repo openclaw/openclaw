@@ -163,6 +163,11 @@ export function registerStatusHealthSessionsCommands(program: Command) {
     .option("--all-agents", "Run maintenance across all configured agents", false)
     .option("--dry-run", "Preview maintenance actions without writing", false)
     .option("--enforce", "Apply maintenance even when configured mode is warn", false)
+    .option(
+      "--fix-missing",
+      "Remove store entries whose transcript files are missing (bypasses age/count retention)",
+      false,
+    )
     .option("--active-key <key>", "Protect this session key from budget-eviction")
     .option("--json", "Output JSON", false)
     .addHelpText(
@@ -170,6 +175,10 @@ export function registerStatusHealthSessionsCommands(program: Command) {
       () =>
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
           ["openclaw sessions cleanup --dry-run", "Preview stale/cap cleanup."],
+          [
+            "openclaw sessions cleanup --dry-run --fix-missing",
+            "Also preview pruning entries with missing transcript files.",
+          ],
           ["openclaw sessions cleanup --enforce", "Apply maintenance now."],
           ["openclaw sessions cleanup --agent work --dry-run", "Preview one agent store."],
           ["openclaw sessions cleanup --all-agents --dry-run", "Preview all agent stores."],
@@ -196,6 +205,7 @@ export function registerStatusHealthSessionsCommands(program: Command) {
             allAgents: Boolean(opts.allAgents || parentOpts?.allAgents),
             dryRun: Boolean(opts.dryRun),
             enforce: Boolean(opts.enforce),
+            fixMissing: Boolean(opts.fixMissing),
             activeKey: opts.activeKey as string | undefined,
             json: Boolean(opts.json || parentOpts?.json),
           },

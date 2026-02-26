@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   resolveSessionStoreTargets: vi.fn(),
   resolveMaintenanceConfig: vi.fn(),
   loadSessionStore: vi.fn(),
+  resolveSessionFilePath: vi.fn(),
+  resolveSessionFilePathOptions: vi.fn(),
   pruneStaleEntries: vi.fn(),
   capEntryCount: vi.fn(),
   updateSessionStore: vi.fn(),
@@ -24,6 +26,8 @@ vi.mock("./session-store-targets.js", () => ({
 vi.mock("../config/sessions.js", () => ({
   resolveMaintenanceConfig: mocks.resolveMaintenanceConfig,
   loadSessionStore: mocks.loadSessionStore,
+  resolveSessionFilePath: mocks.resolveSessionFilePath,
+  resolveSessionFilePathOptions: mocks.resolveSessionFilePathOptions,
   pruneStaleEntries: mocks.pruneStaleEntries,
   capEntryCount: mocks.capEntryCount,
   updateSessionStore: mocks.updateSessionStore,
@@ -74,8 +78,12 @@ describe("sessionsCleanupCommand", () => {
         return 0;
       },
     );
+    mocks.resolveSessionFilePathOptions.mockReturnValue({});
+    mocks.resolveSessionFilePath.mockImplementation(
+      (sessionId: string) => `/missing/${sessionId}.jsonl`,
+    );
     mocks.capEntryCount.mockImplementation(() => 0);
-    mocks.updateSessionStore.mockResolvedValue(undefined);
+    mocks.updateSessionStore.mockResolvedValue(0);
     mocks.enforceSessionDiskBudget.mockResolvedValue({
       totalBytesBefore: 1000,
       totalBytesAfter: 700,
@@ -130,6 +138,7 @@ describe("sessionsCleanupCommand", () => {
             overBudget: true,
           },
         });
+        return 0;
       },
     );
 
@@ -194,6 +203,29 @@ describe("sessionsCleanupCommand", () => {
         removedEntries: 1,
       }),
     );
+  });
+
+  it("counts missing transcript entries when --fix-missing is enabled in dry-run", async () => {
+    mocks.enforceSessionDiskBudget.mockResolvedValue(null);
+    mocks.loadSessionStore.mockReturnValue({
+      missing: { sessionId: "missing-transcript", updatedAt: 1 },
+    });
+
+    const { runtime, logs } = makeRuntime();
+    await sessionsCleanupCommand(
+      {
+        json: true,
+        dryRun: true,
+        fixMissing: true,
+      },
+      runtime,
+    );
+
+    expect(logs).toHaveLength(1);
+    const payload = JSON.parse(logs[0] ?? "{}") as Record<string, unknown>;
+    expect(payload.beforeCount).toBe(1);
+    expect(payload.afterCount).toBe(0);
+    expect(payload.missing).toBe(1);
   });
 
   it("renders a dry-run action table with keep/prune actions", async () => {
