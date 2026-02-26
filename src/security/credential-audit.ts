@@ -63,6 +63,27 @@ const MAX_ROTATED_FILES = 5;
 const GENESIS_HASH = "0000000000000000000000000000000000000000000000000000000000000000";
 
 // -----------------------------------------------------------------------------
+// Last-hash cache (P-H4)
+//
+// Reading and re-parsing the entire audit JSONL on every logCredentialAccess
+// call is O(n) in log size. Instead we keep a per-path cache of the last
+// written entry hash and update it in-place after each append.
+// The cache is invalidated on log rotation and on purge (both rewrite the file
+// with new hashes).
+// -----------------------------------------------------------------------------
+
+const lastHashCache = new Map<string, string>();
+
+function invalidateHashCache(auditPath: string): void {
+  lastHashCache.delete(auditPath);
+}
+
+/** Reset the hash cache — for unit tests only. */
+export function resetAuditHashCacheForTest(): void {
+  lastHashCache.clear();
+}
+
+// -----------------------------------------------------------------------------
 // File Operations
 // -----------------------------------------------------------------------------
 
@@ -111,6 +132,9 @@ function rotateAuditLogIfNeeded(options?: AuditOptions): void {
   const rotatedPath = path.join(auditDir, "audit.1.jsonl");
   fs.renameSync(auditPath, rotatedPath);
 
+  // The active file is now gone — the next write starts a fresh file (P-H4).
+  invalidateHashCache(auditPath);
+
   log.info("rotated audit log", { oldPath: auditPath, newPath: rotatedPath });
 }
 
@@ -151,11 +175,16 @@ function readAuditEntries(options?: AuditOptions): CredentialAuditEntry[] {
 }
 
 function getLastEntryHash(options?: AuditOptions): string {
-  const entries = readAuditEntries(options);
-  if (entries.length === 0) {
-    return GENESIS_HASH;
+  const auditPath = resolveAuditPath(options);
+  const cached = lastHashCache.get(auditPath);
+  if (cached !== undefined) {
+    return cached;
   }
-  return entries[entries.length - 1].entryHash;
+  // Cache miss — read the file and populate the cache.
+  const entries = readAuditEntries(options);
+  const hash = entries.length === 0 ? GENESIS_HASH : entries[entries.length - 1].entryHash;
+  lastHashCache.set(auditPath, hash);
+  return hash;
 }
 
 function computeEntryHash(entry: Omit<CredentialAuditEntry, "entryHash">): string {
@@ -174,12 +203,15 @@ function computeEntryHash(entry: Omit<CredentialAuditEntry, "entryHash">): strin
 
 function appendAuditEntry(entry: CredentialAuditEntry, options?: AuditOptions): void {
   ensureAuditDir(options);
-  rotateAuditLogIfNeeded(options);
+  rotateAuditLogIfNeeded(options); // may invalidate the cache on rotation
 
   const auditPath = resolveAuditPath(options);
   const line = JSON.stringify(entry) + "\n";
 
   fs.appendFileSync(auditPath, line, { encoding: "utf8", mode: 0o600 });
+
+  // Update the cache so the next logCredentialAccess skips the file read (P-H4).
+  lastHashCache.set(auditPath, entry.entryHash);
 }
 
 // -----------------------------------------------------------------------------
@@ -465,6 +497,9 @@ export function purgeOldAuditEntries(params: {
   const content =
     newEntries.map((e) => JSON.stringify(e)).join("\n") + (newEntries.length > 0 ? "\n" : "");
   fs.writeFileSync(auditPath, content, { encoding: "utf8", mode: 0o600 });
+
+  // All hashes were recomputed — stale cache entry would hand out the wrong hash (P-H4).
+  invalidateHashCache(auditPath);
 
   log.info("purged old audit entries", {
     removed,

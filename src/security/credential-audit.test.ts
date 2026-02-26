@@ -1,13 +1,14 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   exportAuditLog,
   getAuditStats,
   logCredentialAccess,
   purgeOldAuditEntries,
   queryAuditLog,
+  resetAuditHashCacheForTest,
   verifyAuditLogIntegrity,
   type AuditOptions,
   type CredentialAuditAction,
@@ -553,6 +554,133 @@ describe("credential-audit", () => {
       // Integrity check should detect the broken chain (entries 0 and 2 are not linked)
       const integrity = verifyAuditLogIntegrity(auditOptions);
       expect(integrity.valid).toBe(false);
+    });
+  });
+
+  describe("last-hash cache (P-H4)", () => {
+    beforeEach(() => {
+      // Each test starts with a clean cache to avoid cross-test interference.
+      resetAuditHashCacheForTest();
+    });
+
+    it("reads the audit file only once for 3 sequential logCredentialAccess calls", () => {
+      // Pre-populate the audit file so readAuditEntries actually calls readFileSync
+      // on the first (cache-miss) lookup.  Without an existing file, readAuditEntries
+      // short-circuits via existsSync and never calls readFileSync.
+      logCredentialAccess({
+        action: "read",
+        credentialName: "seed-key",
+        scope: "provider",
+        requestor: "test",
+        success: true,
+        options: auditOptions,
+      });
+      // Reset the cache so the next call is a genuine cache miss against the existing file.
+      resetAuditHashCacheForTest();
+
+      // Spy on readFileSync and count calls to the audit.jsonl file.
+      // Call-through is preserved so real behaviour is unaffected.
+      const spy = vi.spyOn(fs, "readFileSync");
+      const auditReads = () =>
+        spy.mock.calls.filter((args) => String(args[0]).endsWith("audit.jsonl")).length;
+
+      for (let i = 0; i < 3; i++) {
+        logCredentialAccess({
+          action: "read",
+          credentialName: `key-${i}`,
+          scope: "provider",
+          requestor: "test",
+          success: true,
+          options: auditOptions,
+        });
+      }
+
+      // First call has a cache miss (1 read); calls 2 and 3 are served from the cache.
+      expect(auditReads()).toBe(1);
+      spy.mockRestore();
+    });
+
+    it("produces a valid hash chain when using the cached last-hash", () => {
+      for (let i = 0; i < 5; i++) {
+        logCredentialAccess({
+          action: "read",
+          credentialName: `ckey-${i}`,
+          scope: "provider",
+          requestor: "test",
+          success: true,
+          options: auditOptions,
+        });
+      }
+
+      const integrity = verifyAuditLogIntegrity(auditOptions);
+      expect(integrity.valid).toBe(true);
+      if (integrity.valid) {
+        expect(integrity.entryCount).toBe(5);
+      }
+    });
+
+    it("re-reads the file after resetAuditHashCacheForTest (simulates external change)", () => {
+      // Write 2 entries, warming the cache.
+      for (let i = 0; i < 2; i++) {
+        logCredentialAccess({
+          action: "read",
+          credentialName: `init-${i}`,
+          scope: "provider",
+          requestor: "test",
+          success: true,
+          options: auditOptions,
+        });
+      }
+
+      resetAuditHashCacheForTest();
+
+      const spy = vi.spyOn(fs, "readFileSync");
+      logCredentialAccess({
+        action: "write",
+        credentialName: "post-reset",
+        scope: "provider",
+        requestor: "test",
+        success: true,
+        options: auditOptions,
+      });
+
+      const auditReads = spy.mock.calls.filter((args) =>
+        String(args[0]).endsWith("audit.jsonl"),
+      ).length;
+      expect(auditReads).toBeGreaterThan(0); // cache was cleared; file re-read
+      spy.mockRestore();
+
+      // Chain integrity should still hold.
+      expect(verifyAuditLogIntegrity(auditOptions).valid).toBe(true);
+    });
+
+    it("invalidates the cache after purgeOldAuditEntries and chain remains valid", () => {
+      for (let i = 0; i < 3; i++) {
+        logCredentialAccess({
+          action: "read",
+          credentialName: `purge-key-${i}`,
+          scope: "provider",
+          requestor: "test",
+          success: true,
+          options: auditOptions,
+        });
+      }
+
+      // Purge removes nothing (entries are recent) but still invalidates the cache.
+      purgeOldAuditEntries({ olderThanDays: 30, options: auditOptions });
+
+      // Write a new entry — if the cache had stale data this would break the chain.
+      logCredentialAccess({
+        action: "write",
+        credentialName: "after-purge",
+        scope: "provider",
+        requestor: "test",
+        success: true,
+        options: auditOptions,
+      });
+
+      const integrity = verifyAuditLogIntegrity(auditOptions);
+      expect(integrity.valid).toBe(true);
     });
   });
 });

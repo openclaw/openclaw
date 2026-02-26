@@ -62,6 +62,8 @@ describe("SecurityEventsManager", () => {
       };
 
       manager.emit(params);
+      // persistEvent is deferred via setImmediate (P-H3); flush before reading.
+      manager.flushWrites();
 
       const storePath = path.join(tempDir, "events.jsonl");
       expect(fs.existsSync(storePath)).toBe(true);
@@ -450,6 +452,9 @@ describe("SecurityEventsManager", () => {
         smallManager.clearDedup();
       }
 
+      // persistEvent is deferred via setImmediate (P-H3); flush before checking.
+      smallManager.flushWrites();
+
       // Check rotated file exists
       const rotatedPath = path.join(tempDir, "rotate.1.jsonl");
       expect(fs.existsSync(rotatedPath)).toBe(true);
@@ -526,6 +531,9 @@ describe("SecurityEventsManager", () => {
         message: `Key leak: ${TOKEN}`,
       });
 
+      // persistEvent is deferred via setImmediate (P-H3); flush before reading.
+      manager.flushWrites();
+
       const storePath = path.join(tempDir, "events.jsonl");
       const content = fs.readFileSync(storePath, "utf8");
       expect(content).not.toContain(TOKEN);
@@ -573,6 +581,102 @@ describe("SecurityEventsManager", () => {
       const recent = initManager.getRecent();
       expect(recent).toHaveLength(1);
       expect(recent[0].id).toBe("existing-123");
+    });
+  });
+
+  describe("deferred persistEvent via setImmediate (P-H3)", () => {
+    it("event is in ring buffer immediately after emit, before flush", () => {
+      manager.emit({
+        type: "injection_detected",
+        severity: "warn",
+        source: "test",
+        message: "deferred-write-test",
+      });
+
+      // Ring buffer is synchronous — event is available immediately.
+      const recent = manager.getRecent();
+      expect(recent).toHaveLength(1);
+      expect(recent[0].message).toBe("deferred-write-test");
+
+      // File must NOT exist yet (write is pending in setImmediate queue).
+      const storePath = path.join(tempDir, "events.jsonl");
+      expect(fs.existsSync(storePath)).toBe(false);
+    });
+
+    it("file is written after flushWrites()", () => {
+      manager.emit({
+        type: "tool_abuse_detected",
+        severity: "warn",
+        source: "test",
+        message: "flush-test",
+      });
+
+      // File should not exist before flush.
+      const storePath = path.join(tempDir, "events.jsonl");
+      expect(fs.existsSync(storePath)).toBe(false);
+
+      manager.flushWrites();
+
+      expect(fs.existsSync(storePath)).toBe(true);
+      const lines = fs
+        .readFileSync(storePath, "utf8")
+        .split("\n")
+        .filter((l) => l.trim());
+      expect(lines).toHaveLength(1);
+      const persisted = JSON.parse(lines[0]) as SecurityEvent;
+      expect(persisted.message).toBe("flush-test");
+    });
+
+    it("multiple events emitted in same tick are batched into a single flush", () => {
+      manager.emit({
+        type: "injection_detected",
+        severity: "warn",
+        source: "test",
+        message: "batch-1",
+      });
+      manager.clearDedup();
+      manager.emit({
+        type: "injection_detected",
+        severity: "warn",
+        source: "test",
+        message: "batch-2",
+      });
+      manager.clearDedup();
+      manager.emit({
+        type: "injection_detected",
+        severity: "warn",
+        source: "test",
+        message: "batch-3",
+      });
+
+      // Flush once — all three events should land in the file.
+      manager.flushWrites();
+
+      const storePath = path.join(tempDir, "events.jsonl");
+      const lines = fs
+        .readFileSync(storePath, "utf8")
+        .split("\n")
+        .filter((l) => l.trim());
+      expect(lines).toHaveLength(3);
+    });
+
+    it("flushWrites() is idempotent — calling it twice does not duplicate entries", () => {
+      manager.emit({
+        type: "auth_rate_limited",
+        severity: "warn",
+        source: "test",
+        message: "idempotent-flush",
+      });
+
+      manager.flushWrites();
+      manager.flushWrites(); // Second call should be a no-op.
+
+      const storePath = path.join(tempDir, "events.jsonl");
+      const lines = fs
+        .readFileSync(storePath, "utf8")
+        .split("\n")
+        .filter((l) => l.trim());
+      expect(lines).toHaveLength(1);
     });
   });
 

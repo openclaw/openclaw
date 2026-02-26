@@ -392,9 +392,19 @@ export class ToolMonitor {
     // Add to history
     this.callHistory.push(callWithTimestamp);
 
-    // Prune old entries
+    // Prune old call-history entries.
     const cutoff = now - this.config.windowMs;
     this.callHistory = this.callHistory.filter((c) => c.timestamp > cutoff);
+
+    // GC expired agent throttle entries so the map doesn't grow unboundedly
+    // when many distinct agentIds pass through and never call shouldThrottle (P-H1).
+    if (this.criticalAgentThrottles.size > 0) {
+      for (const [agentId, ts] of this.criticalAgentThrottles) {
+        if (now - ts >= this.config.windowMs) {
+          this.criticalAgentThrottles.delete(agentId);
+        }
+      }
+    }
 
     // Check volume
     if (this.callHistory.length > this.config.maxCallsPerWindow) {

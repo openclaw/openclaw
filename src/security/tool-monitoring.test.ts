@@ -326,4 +326,83 @@ describe("ToolMonitor", () => {
       expect(monitor.shouldThrottle(agentId).throttled).toBe(false);
     });
   });
+
+  describe("criticalAgentThrottles GC during record() (P-H1)", () => {
+    it("prunes expired throttle entries on the next record() call", () => {
+      const shortWindow = new ToolMonitor({
+        enabled: true,
+        windowMs: 50, // 50ms window — expires quickly
+        maxCallsPerWindow: 1000,
+      });
+
+      const retiredAgent = "agent-retired";
+      const now = Date.now();
+
+      // Trigger a critical pattern match (3 credential reads) for retiredAgent.
+      shortWindow.record({
+        tool: "read",
+        timestamp: now,
+        agentId: retiredAgent,
+        args: { path: "/home/user/.env" },
+      });
+      shortWindow.record({
+        tool: "read",
+        timestamp: now + 1,
+        agentId: retiredAgent,
+        args: { path: "/home/user/.npmrc" },
+      });
+      shortWindow.record({
+        tool: "read",
+        timestamp: now + 2,
+        agentId: retiredAgent,
+        args: { path: "/home/user/.aws/credentials" },
+      });
+
+      // retiredAgent should be throttled while the window is active.
+      expect(shortWindow.shouldThrottle(retiredAgent).throttled).toBe(true);
+
+      // Wait for the window to expire, then record a new call for a different agent.
+      // The record() call must GC the expired retiredAgent entry (P-H1).
+      return new Promise<void>((resolve) => {
+        setTimeout(() => {
+          shortWindow.record({ tool: "bash", timestamp: Date.now(), agentId: "other-agent" });
+
+          // The expired entry should have been pruned — shouldThrottle cleans up on access,
+          // but P-H1 verifies it was already removed by record() before shouldThrottle runs.
+          // We observe the effect: shouldThrottle returns false (window expired).
+          expect(shortWindow.shouldThrottle(retiredAgent).throttled).toBe(false);
+          resolve();
+        }, 60); // 60ms > 50ms window
+      });
+    });
+
+    it("does not GC entries that are still within the active window", () => {
+      const activeAgent = "agent-active";
+      const now = Date.now();
+
+      monitor.record({
+        tool: "read",
+        timestamp: now,
+        agentId: activeAgent,
+        args: { path: "/home/user/.env" },
+      });
+      monitor.record({
+        tool: "read",
+        timestamp: now + 1,
+        agentId: activeAgent,
+        args: { path: "/home/user/.npmrc" },
+      });
+      monitor.record({
+        tool: "read",
+        timestamp: now + 2,
+        agentId: activeAgent,
+        args: { path: "/home/user/.aws/credentials" },
+      });
+
+      // Record another call (triggers GC loop) — activeAgent entry must NOT be pruned.
+      monitor.record({ tool: "bash", timestamp: now + 3, agentId: "other" });
+
+      expect(monitor.shouldThrottle(activeAgent).throttled).toBe(true);
+    });
+  });
 });

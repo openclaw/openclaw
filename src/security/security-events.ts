@@ -202,6 +202,9 @@ export class SecurityEventsManager {
   private dedupeMap = new Map<string, { event: SecurityEvent; expiry: number }>();
   private emitter = new EventEmitter().setMaxListeners(100);
   private initialized = false;
+  /** Queued events waiting for the next setImmediate flush (P-H3). */
+  private pendingWrites: SecurityEvent[] = [];
+  private flushScheduled = false;
 
   constructor(config?: SecurityEventsConfig, alerting?: AlertingConfig) {
     this.config = {
@@ -526,7 +529,44 @@ export class SecurityEventsManager {
     return result;
   }
 
+  /**
+   * Queue an event for deferred file persistence (P-H3).
+   *
+   * `appendFileSync` blocks the event loop. By deferring via `setImmediate`
+   * we release the current execution tick to all listeners and downstream
+   * code before the I/O lands. Multiple events emitted in the same tick are
+   * batched into a single flush, reducing syscall overhead under burst loads.
+   *
+   * Events are already in the in-memory ring buffer before this returns, so
+   * queries and listeners see them immediately regardless of flush timing.
+   */
   private persistEvent(event: SecurityEvent): void {
+    this.pendingWrites.push(event);
+    if (!this.flushScheduled) {
+      this.flushScheduled = true;
+      setImmediate(() => {
+        this.flushPendingWrites();
+      });
+    }
+  }
+
+  /**
+   * Flush all pending file writes synchronously.
+   * Called automatically via setImmediate; also exposed as `flushWrites()`
+   * for tests and graceful-shutdown hooks.
+   */
+  private flushPendingWrites(): void {
+    this.flushScheduled = false;
+    const writes = this.pendingWrites.splice(0);
+    for (const event of writes) {
+      this.writeSingleEvent(event);
+    }
+  }
+
+  /**
+   * Write a single event to the backing JSONL file.
+   */
+  private writeSingleEvent(event: SecurityEvent): void {
     try {
       const storePath = this.resolveStorePath();
       const dir = path.dirname(storePath);
@@ -551,6 +591,14 @@ export class SecurityEventsManager {
         eventId: event.id,
       });
     }
+  }
+
+  /**
+   * Flush any pending deferred file writes immediately.
+   * Intended for tests and graceful-shutdown paths.
+   */
+  flushWrites(): void {
+    this.flushPendingWrites();
   }
 
   private rotateFile(storePath: string): void {
@@ -757,4 +805,12 @@ export function subscribeSecurityEvents(listener: SecurityEventListener): () => 
  */
 export function subscribeSecurityAlerts(listener: SecurityEventListener): () => void {
   return getSecurityEventsManager().subscribeAlerts(listener);
+}
+
+/**
+ * Flush any deferred file writes for the default manager immediately.
+ * Useful in tests and graceful-shutdown paths (P-H3).
+ */
+export function flushSecurityEventPersistence(): void {
+  getSecurityEventsManager().flushWrites();
 }
