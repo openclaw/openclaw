@@ -187,6 +187,19 @@ export async function isCompletionInstalled(
   shell: CompletionShell,
   binName = "openclaw",
 ): Promise<boolean> {
+  // Fish: check ~/.config/fish/completions/ directory (auto-loaded by fish).
+  if (shell === "fish") {
+    const home = process.env.HOME || os.homedir();
+    const fishTarget = path.join(
+      home,
+      ".config",
+      "fish",
+      "completions",
+      `${sanitizeCompletionBasename(binName)}.fish`,
+    );
+    return pathExists(fishTarget);
+  }
+
   const profilePath = getShellProfilePath(shell);
 
   if (!(await pathExists(profilePath))) {
@@ -334,8 +347,32 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
     }
     sourceLine = formatCompletionSourceLine("bash", binName, cachePath);
   } else if (shell === "fish") {
-    profilePath = path.join(home, ".config", "fish", "config.fish");
-    sourceLine = formatCompletionSourceLine("fish", binName, cachePath);
+    // Fish convention: place completions in ~/.config/fish/completions/
+    // where they are auto-loaded, instead of sourcing in config.fish.
+    const fishCompletionsDir = path.join(home, ".config", "fish", "completions");
+    const fishTarget = path.join(fishCompletionsDir, `${sanitizeCompletionBasename(binName)}.fish`);
+    try {
+      await fs.mkdir(fishCompletionsDir, { recursive: true });
+      await fs.copyFile(cachePath, fishTarget);
+      // Clean up legacy source line from config.fish if present.
+      const configFish = path.join(home, ".config", "fish", "config.fish");
+      if (await pathExists(configFish)) {
+        const content = await fs.readFile(configFish, "utf-8");
+        const update = updateCompletionProfile(content, binName, cachePath, "");
+        if (update.hadExisting) {
+          await fs.writeFile(configFish, update.next, "utf-8");
+          if (!yes) {
+            console.log(`Removed legacy completion source line from ${configFish}`);
+          }
+        }
+      }
+      if (!yes) {
+        console.log(`Completion installed to ${fishTarget}`);
+      }
+    } catch (err) {
+      console.error(`Failed to install fish completion: ${err as string}`);
+    }
+    return;
   } else {
     console.error(`Automated installation not supported for ${shell} yet.`);
     return;
