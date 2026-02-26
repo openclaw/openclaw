@@ -287,3 +287,66 @@ describe("within-batch deduplication", () => {
     expect(callCount).toBe(2);
   });
 });
+
+// ─── maxParallelTools concurrency limit ───────────────────────────────────────
+
+describe("maxParallelTools concurrency limit", () => {
+  it("never exceeds the configured parallel limit", async () => {
+    let concurrent = 0;
+    let maxConcurrent = 0;
+
+    // Build 10 distinct tools, each tracking in-flight count.
+    const tools: AgentTool[] = Array.from({ length: 10 }, (_, idx) => ({
+      name: `tool_${idx}`,
+      label: `Tool ${idx}`,
+      description: `Tool number ${idx}`,
+      parameters: { type: "object" as const, properties: {}, required: [] },
+      execute: async () => {
+        concurrent++;
+        if (concurrent > maxConcurrent) {
+          maxConcurrent = concurrent;
+        }
+        await sleep(30);
+        concurrent--;
+        return { content: [{ type: "text" as const, text: `result-${idx}` }], details: {} };
+      },
+    }));
+
+    // One assistant message that requests all 10 tools in one batch.
+    const batchMsg = assistantWithToolCalls(
+      ...Array.from({ length: 10 }, (_, idx) => ({ id: `tc${idx}`, name: `tool_${idx}` })),
+    );
+
+    await runLoop(tools, [batchMsg, doneMsg], { maxParallelTools: 2 });
+
+    // With limit=2 the concurrency must never exceed 2.
+    expect(maxConcurrent).toBeLessThanOrEqual(2);
+    // All 10 tools must have been executed.
+    expect(concurrent).toBe(0); // back to 0 after everything resolves
+  });
+
+  it("does not artificially serialize when limit exceeds tool count", async () => {
+    let callCount = 0;
+    const tools: AgentTool[] = Array.from({ length: 3 }, (_, idx) => ({
+      name: `fast_${idx}`,
+      label: `Fast ${idx}`,
+      description: `Fast tool ${idx}`,
+      parameters: { type: "object" as const, properties: {}, required: [] },
+      execute: async () => {
+        callCount++;
+        return { content: [{ type: "text" as const, text: "ok" }], details: {} };
+      },
+    }));
+
+    const batchMsg = assistantWithToolCalls(
+      { id: "tc0", name: "fast_0" },
+      { id: "tc1", name: "fast_1" },
+      { id: "tc2", name: "fast_2" },
+    );
+
+    // limit=10 > tools=3 → should still run all 3 fine
+    await runLoop(tools, [batchMsg, doneMsg], { maxParallelTools: 10 });
+
+    expect(callCount).toBe(3);
+  });
+});

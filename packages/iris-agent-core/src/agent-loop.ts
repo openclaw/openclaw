@@ -88,6 +88,34 @@ export function agentLoopContinue(
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
+/**
+ * Simple counting semaphore for capping parallel tool executions.
+ * acquire() resolves immediately when a slot is free, otherwise queues.
+ * release() unblocks the next waiter (or increments the slot count).
+ */
+class Semaphore {
+  private slots: number;
+  private readonly queue: (() => void)[] = [];
+  constructor(limit: number) {
+    this.slots = limit;
+  }
+  acquire(): Promise<void> {
+    if (this.slots > 0) {
+      this.slots--;
+      return Promise.resolve();
+    }
+    return new Promise((r) => this.queue.push(r));
+  }
+  release(): void {
+    const next = this.queue.shift();
+    if (next) {
+      next();
+    } else {
+      this.slots++;
+    }
+  }
+}
+
 /** Stable JSON serialisation (sorted keys) for use as cache keys. */
 function stableJson(v: unknown): string {
   if (v === null || typeof v !== "object") {
@@ -229,6 +257,7 @@ async function runLoop(
             toolTimeoutMs: config.toolTimeoutMs,
             toolCacheMs: config.toolCacheMs,
             toolCache,
+            maxParallelTools: config.maxParallelTools,
           },
         );
         toolResults.push(...toolExecution.toolResults);
@@ -393,7 +422,12 @@ async function executeToolCallsParallel(
   signal: AbortSignal | undefined,
   stream: EventStream<AgentEvent, AgentMessage[]>,
   getSteeringMessages?: () => Promise<AgentMessage[]>,
-  opts?: { toolTimeoutMs?: number; toolCacheMs?: number; toolCache?: ToolCache },
+  opts?: {
+    toolTimeoutMs?: number;
+    toolCacheMs?: number;
+    toolCache?: ToolCache;
+    maxParallelTools?: number;
+  },
 ): Promise<{ toolResults: AgentMessage[]; steeringMessages?: AgentMessage[] }> {
   const toolCalls = assistantMessage.content.filter((c): c is ToolCall => c.type === "toolCall");
 
@@ -421,7 +455,9 @@ async function executeToolCallsParallel(
     });
   }
 
-  const { toolTimeoutMs, toolCacheMs, toolCache } = opts ?? {};
+  const { toolTimeoutMs, toolCacheMs, toolCache, maxParallelTools } = opts ?? {};
+  // Default to 5; use a large number to effectively disable.
+  const sem = new Semaphore(maxParallelTools ?? 5);
 
   // Per-tool durations for observability (sequential-equivalent estimate).
   // Cache hits get duration=0 (they're instant).
@@ -469,6 +505,7 @@ async function executeToolCallsParallel(
     const toolSignal = makeToolSignal(signal, toolTimeoutMs);
 
     const promise = (async () => {
+      await sem.acquire();
       const toolStart = Date.now();
       try {
         const result = await tool.execute(
@@ -495,6 +532,7 @@ async function executeToolCallsParallel(
         return result;
       } finally {
         toolDurations[i] = Date.now() - toolStart;
+        sem.release();
       }
     })();
 
@@ -515,8 +553,9 @@ async function executeToolCallsParallel(
     const saved = seqEstimate - wall;
     const names = toolCalls.map((tc) => tc.name).join(",");
     const cacheStr = cacheHits > 0 ? ` cached=${cacheHits}` : "";
+    const limit = maxParallelTools ?? 5;
     process.stderr.write(
-      `[iris-parallel] n=${toolCalls.length} wall=${wall}ms seq_est=${seqEstimate}ms saved=${saved}ms${cacheStr} tools=[${names}]\n`,
+      `[iris-parallel] n=${toolCalls.length} wall=${wall}ms seq_est=${seqEstimate}ms saved=${saved}ms${cacheStr} limit=${limit} tools=[${names}]\n`,
     );
   }
 

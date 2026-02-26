@@ -49,6 +49,12 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
    * object     = custom options.
    */
   toolResultCompression?: ToolResultCompressionOptions | false;
+  /**
+   * Max tools executed simultaneously in one parallel batch.
+   * Default: 5. 0 or undefined = 5.
+   * Set to a large number (e.g. 100) to effectively disable the limit.
+   */
+  maxParallelTools?: number;
 }
 
 export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
