@@ -1,33 +1,35 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../../test-utils/env.js";
 
-const callGatewayStatusProbe = vi.fn(async () => ({ ok: true as const }));
-const loadGatewayTlsRuntime = vi.fn(async () => ({
+const callGatewayStatusProbe = vi.fn(async (_opts?: unknown) => ({ ok: true as const }));
+const loadGatewayTlsRuntime = vi.fn(async (_cfg?: unknown) => ({
   enabled: true,
   required: true,
   fingerprintSha256: "sha256:11:22:33:44",
 }));
-const findExtraGatewayServices = vi.fn(async () => []);
+const findExtraGatewayServices = vi.fn(async (_env?: unknown, _opts?: unknown) => []);
 const inspectPortUsage = vi.fn(async (port: number) => ({
   port,
   status: "free" as const,
   listeners: [],
   hints: [],
 }));
-const readLastGatewayErrorLine = vi.fn(async () => null);
-const auditGatewayServiceConfig = vi.fn(async () => undefined);
-const serviceIsLoaded = vi.fn(async () => true);
-const serviceReadRuntime = vi.fn(async () => ({ status: "running" }));
-const serviceReadCommand = vi.fn(async () => ({
+const readLastGatewayErrorLine = vi.fn(async (_env?: NodeJS.ProcessEnv) => null);
+const auditGatewayServiceConfig = vi.fn(async (_opts?: unknown) => undefined);
+const serviceIsLoaded = vi.fn(async (_opts?: unknown) => true);
+const serviceReadRuntime = vi.fn(async (_env?: NodeJS.ProcessEnv) => ({ status: "running" }));
+const serviceReadCommand = vi.fn(async (_env?: NodeJS.ProcessEnv) => ({
   programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
   environment: {
     OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
     OPENCLAW_CONFIG_PATH: "/tmp/openclaw-daemon/openclaw.json",
   },
 }));
-const resolveGatewayBindHost = vi.fn(async () => "0.0.0.0");
+const resolveGatewayBindHost = vi.fn(
+  async (_bindMode?: string, _customBindHost?: string) => "0.0.0.0",
+);
 const pickPrimaryTailnetIPv4 = vi.fn(() => "100.64.0.9");
-const resolveGatewayPort = vi.fn((_cfg?: unknown) => 18789);
+const resolveGatewayPort = vi.fn((_cfg?: unknown, _env?: unknown) => 18789);
 const resolveStateDir = vi.fn(
   (env: NodeJS.ProcessEnv) => env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw-cli",
 );
