@@ -17,6 +17,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/Canvas default node resolution: when multiple connected canvas-capable nodes exist and no single `mac-*` candidate is selected, default to the first connected candidate instead of failing with `node required` for implicit-node canvas tool calls. Landed from contributor PR #27444 by @carbaj03. Thanks @carbaj03.
 - TUI/stream assembly: preserve streamed text across real tool-boundary drops without keeping stale streamed text when non-text blocks appear only in the final payload. Landed from contributor PR #27711 by @scz2011. (#27674)
 - Hooks/Internal `message:sent`: forward `sessionKey` on outbound sends from agent delivery, cron isolated delivery, gateway receipt acks, heartbeat sends, session-maintenance warnings, and restart-sentinel recovery so internal `message:sent` hooks consistently dispatch with session context. Landed from contributor PR #27584 by @qualiobra. Thanks @qualiobra.
 - Models/MiniMax auth header defaults: set `authHeader: true` for both onboarding-generated MiniMax API providers and implicit built-in MiniMax (`minimax`, `minimax-portal`) provider templates so first requests no longer fail with MiniMax `401 authentication_error` due to missing `Authorization` header. Landed from contributor PRs #27622 by @riccoyuanft and #27631 by @kevinWangSheng. (#27600, #15303)
