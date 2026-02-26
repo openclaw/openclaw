@@ -65,11 +65,43 @@ export type TalkProviderConfig = {
   [key: string]: unknown;
 };
 
+/** Typed ElevenLabs config for Talk mode (mirrors messages.tts.elevenlabs). */
+export type TalkElevenLabsConfig = {
+  apiKey?: string;
+  baseUrl?: string;
+  voiceId?: string;
+  voiceAliases?: Record<string, string>;
+  modelId?: string;
+  outputFormat?: string;
+  seed?: number;
+  applyTextNormalization?: "auto" | "on" | "off";
+  languageCode?: string;
+  voiceSettings?: {
+    stability?: number;
+    similarityBoost?: number;
+    style?: number;
+    useSpeakerBoost?: boolean;
+    speed?: number;
+  };
+};
+
+/** Typed OpenAI config for Talk mode (extends messages.tts.openai with baseUrl). */
+export type TalkOpenAIConfig = {
+  apiKey?: string;
+  baseUrl?: string;
+  model?: string;
+  voice?: string;
+};
+
 export type TalkConfig = {
   /** Active Talk TTS provider (for example "elevenlabs"). */
   provider?: string;
   /** Provider-specific Talk config keyed by provider id. */
   providers?: Record<string, TalkProviderConfig>;
+  /** Typed ElevenLabs shortcut (merged into providers.elevenlabs). */
+  elevenlabs?: TalkElevenLabsConfig;
+  /** Typed OpenAI shortcut (merged into providers.openai). */
+  openai?: TalkOpenAIConfig;
   /** Stop speaking when user starts talking (default: true). */
   interruptOnSpeech?: boolean;
 
