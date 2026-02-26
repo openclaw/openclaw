@@ -117,6 +117,32 @@ describe("talk normalization", () => {
     });
   });
 
+  it("preserves baseUrl in provider config", () => {
+    const normalized = normalizeTalkSection({
+      provider: "elevenlabs",
+      providers: {
+        elevenlabs: {
+          voiceId: "voice-123",
+          baseUrl: "https://custom.tts.example.com",
+        },
+      },
+    });
+
+    expect(normalized?.providers?.elevenlabs?.baseUrl).toBe("https://custom.tts.example.com");
+  });
+
+  it("trims and normalizes baseUrl as a string field", () => {
+    const normalized = normalizeTalkSection({
+      providers: {
+        elevenlabs: {
+          baseUrl: "  http://localhost:8880  ",
+        },
+      },
+    });
+
+    expect(normalized?.providers?.elevenlabs?.baseUrl).toBe("http://localhost:8880");
+  });
+
   it("does not apply ELEVENLABS_API_KEY when active provider is not elevenlabs", async () => {
     await withEnvAsync({ ELEVENLABS_API_KEY: "env-eleven-key" }, async () => {
       await withTempConfig(

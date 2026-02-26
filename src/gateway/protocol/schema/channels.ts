@@ -23,6 +23,7 @@ const TalkProviderConfigSchema = Type.Object(
     modelId: Type.Optional(Type.String()),
     outputFormat: Type.Optional(Type.String()),
     apiKey: Type.Optional(Type.String()),
+    baseUrl: Type.Optional(Type.String()),
   },
   { additionalProperties: true },
 );

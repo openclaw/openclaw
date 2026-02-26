@@ -151,6 +151,8 @@ export const FIELD_HELP: Record<string, string> = {
   "talk.providers.*.modelId": "Provider default model ID for Talk mode.",
   "talk.providers.*.outputFormat": "Provider default output format for Talk mode.",
   "talk.providers.*.apiKey": "Provider API key for Talk mode.", // pragma: allowlist secret
+  "talk.providers.*.baseUrl":
+    "Custom TTS API base URL for the provider (e.g. a self-hosted ElevenLabs-compatible server).",
   "talk.voiceId":
     "Legacy ElevenLabs default voice ID for Talk mode. Prefer talk.providers.elevenlabs.voiceId.",
   "talk.voiceAliases":

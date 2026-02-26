@@ -64,6 +64,7 @@ actor TalkModeRuntime {
     private var lastSpokenText: String?
     private var apiKey: String?
     private var fallbackVoiceId: String?
+    private var ttsBaseUrl: URL?
     private var lastPlaybackWasPCM: Bool = false
 
     private let silenceWindow: TimeInterval = 0.7
@@ -558,6 +559,16 @@ actor TalkModeRuntime {
             synthTimeoutSeconds: synthTimeoutSeconds)
     }
 
+    /// Create an ElevenLabsTTSClient, forwarding any custom base URL configured
+    /// via `talk.providers.elevenlabs.baseUrl` (config) or the
+    /// `ELEVENLABS_BASE_URL` env var.
+    private func makeElevenLabsClient(apiKey: String) -> ElevenLabsTTSClient {
+        if let baseUrl = self.ttsBaseUrl {
+            return ElevenLabsTTSClient(apiKey: apiKey, baseUrl: baseUrl)
+        }
+        return ElevenLabsTTSClient(apiKey: apiKey)
+    }
+
     private func playElevenLabs(input: TalkPlaybackInput, apiKey: String, voiceId: String) async throws {
         let desiredOutputFormat = input.directive?.outputFormat ?? self.defaultOutputFormat ?? "pcm_44100"
         let outputFormat = ElevenLabsTTSClient.validatedOutputFormat(desiredOutputFormat)
@@ -591,7 +602,7 @@ actor TalkModeRuntime {
 
         let request = makeRequest(outputFormat: outputFormat)
         self.ttsLogger.info("talk TTS synth timeout=\(input.synthTimeoutSeconds, privacy: .public)s")
-        let client = ElevenLabsTTSClient(apiKey: apiKey)
+        let client = self.makeElevenLabsClient(apiKey: apiKey)
         let stream = client.streamSynthesize(voiceId: voiceId, request: request)
         guard self.isCurrent(input.generation) else { return }
 
@@ -673,14 +684,20 @@ actor TalkModeRuntime {
         let trimmed = preferred?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !trimmed.isEmpty {
             if let resolved = self.resolveVoiceAlias(trimmed) { return resolved }
+            // Custom TTS servers may use short voice IDs (e.g. "alloy", "nova");
+            // skip ElevenLabs-specific voice ID format validation.
+            if self.ttsBaseUrl != nil {
+                self.ttsLogger.info("talk custom server: using voiceId=\(trimmed, privacy: .public) directly")
+                return trimmed
+            }
             self.ttsLogger.warning("talk unknown voice alias \(trimmed, privacy: .public)")
         }
         if let fallbackVoiceId { return fallbackVoiceId }
 
         do {
-            let voices = try await ElevenLabsTTSClient(apiKey: apiKey).listVoices()
+            let voices = try await self.makeElevenLabsClient(apiKey: apiKey).listVoices()
             guard let first = voices.first else {
-                self.ttsLogger.error("elevenlabs voices list empty")
+                self.ttsLogger.error("TTS voices list empty")
                 return nil
             }
             self.fallbackVoiceId = first.voiceId
@@ -695,7 +712,10 @@ actor TalkModeRuntime {
                 .info("talk default voice selected \(name, privacy: .public) (\(first.voiceId, privacy: .public))")
             return first.voiceId
         } catch {
-            self.ttsLogger.error("elevenlabs list voices failed: \(error.localizedDescription, privacy: .public)")
+            self.ttsLogger.error("list voices failed: \(error.localizedDescription, privacy: .public)")
+            if self.ttsBaseUrl != nil {
+                self.ttsLogger.warning("talk custom server may not support /v1/voices; configure talk.voiceId")
+            }
             return nil
         }
     }
@@ -779,9 +799,13 @@ extension TalkModeRuntime {
         self.defaultOutputFormat = cfg.outputFormat
         self.interruptOnSpeech = cfg.interruptOnSpeech
         self.apiKey = cfg.apiKey
+        self.ttsBaseUrl = cfg.baseUrl
         let hasApiKey = (cfg.apiKey?.isEmpty == false)
         let voiceLabel = (cfg.voiceId?.isEmpty == false) ? cfg.voiceId! : "none"
         let modelLabel = (cfg.modelId?.isEmpty == false) ? cfg.modelId! : "none"
+        if let customBase = cfg.baseUrl {
+            self.logger.info("talk config custom TTS baseUrl=\(customBase.absoluteString, privacy: .public)")
+        }
         self.logger
             .info(
                 "talk config voiceId=\(voiceLabel, privacy: .public) " +
@@ -797,6 +821,7 @@ extension TalkModeRuntime {
         let outputFormat: String?
         let interruptOnSpeech: Bool
         let apiKey: String?
+        let baseUrl: URL?
     }
 
     struct TalkProviderConfigSelection {
@@ -922,6 +947,18 @@ extension TalkModeRuntime {
             } else {
                 nil
             }
+            let configBaseUrl = activeConfig?["baseUrl"]?.stringValue?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let envBaseUrl = (activeProvider == Self.defaultTalkProvider)
+                ? env["ELEVENLABS_BASE_URL"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+                : nil
+            // baseUrl: config takes priority over env var (intentionally opposite of
+            // apiKey, where env wins) because an explicit config entry is a stronger signal
+            // than a blanket env var when pointing at a non-default TTS server.
+            let baseUrlString = (configBaseUrl?.isEmpty == false ? configBaseUrl : nil)
+                ?? (envBaseUrl?.isEmpty == false ? envBaseUrl : nil)
+            let baseUrl = baseUrlString
+                .flatMap { URL(string: $0.replacingOccurrences(of: "/+$", with: "", options: .regularExpression)) }
             if activeProvider != Self.defaultTalkProvider {
                 self.ttsLogger
                     .info("talk provider \(activeProvider, privacy: .public) unsupported; using system voice")
@@ -934,19 +971,24 @@ extension TalkModeRuntime {
                 modelId: resolvedModel,
                 outputFormat: outputFormat,
                 interruptOnSpeech: interrupt ?? true,
-                apiKey: resolvedApiKey)
+                apiKey: resolvedApiKey,
+                baseUrl: baseUrl)
         } catch {
             let resolvedVoice =
                 (envVoice?.isEmpty == false ? envVoice : nil) ??
                 (sagVoice?.isEmpty == false ? sagVoice : nil)
             let resolvedApiKey = envApiKey?.isEmpty == false ? envApiKey : nil
+            let fallbackBaseUrlStr = env["ELEVENLABS_BASE_URL"]?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let baseUrl = (fallbackBaseUrlStr?.isEmpty == false ? fallbackBaseUrlStr : nil)
+                .flatMap { URL(string: $0.replacingOccurrences(of: "/+$", with: "", options: .regularExpression)) }
             return TalkRuntimeConfig(
                 voiceId: resolvedVoice,
                 voiceAliases: [:],
                 modelId: Self.defaultModelIdFallback,
                 outputFormat: nil,
                 interruptOnSpeech: true,
-                apiKey: resolvedApiKey)
+                apiKey: resolvedApiKey,
+                baseUrl: baseUrl)
         }
     }
 
