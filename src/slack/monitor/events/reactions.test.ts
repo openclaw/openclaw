@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import type { SlackMonitorContext } from "../context.js";
 import { registerSlackReactionEvents } from "./reactions.js";
+import {
+  createSlackSystemEventTestHarness,
+  type SlackSystemEventTestOverrides,
+} from "./system-event-test-harness.js";
 
 const enqueueSystemEventMock = vi.fn();
 const readAllowFromStoreMock = vi.fn();
@@ -18,55 +21,12 @@ type SlackReactionHandler = (args: {
   body: unknown;
 }) => Promise<void>;
 
-function createReactionContext(overrides?: {
-  dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
-  allowFrom?: string[];
-  channelType?: "im" | "channel";
-  channelUsers?: string[];
-}) {
-  let addedHandler: SlackReactionHandler | null = null;
-  let removedHandler: SlackReactionHandler | null = null;
-  const channelType = overrides?.channelType ?? "im";
-  const app = {
-    event: vi.fn((name: string, handler: SlackReactionHandler) => {
-      if (name === "reaction_added") {
-        addedHandler = handler;
-      } else if (name === "reaction_removed") {
-        removedHandler = handler;
-      }
-    }),
-  };
-  const ctx = {
-    app,
-    runtime: { error: vi.fn() },
-    dmEnabled: true,
-    dmPolicy: overrides?.dmPolicy ?? "open",
-    defaultRequireMention: true,
-    channelsConfig: overrides?.channelUsers
-      ? {
-          C1: {
-            users: overrides.channelUsers,
-            allow: true,
-          },
-        }
-      : undefined,
-    groupPolicy: "open",
-    allowFrom: overrides?.allowFrom ?? [],
-    allowNameMatching: false,
-    shouldDropMismatchedSlackEvent: vi.fn().mockReturnValue(false),
-    isChannelAllowed: vi.fn().mockReturnValue(true),
-    resolveChannelName: vi.fn().mockResolvedValue({
-      name: channelType === "im" ? "direct" : "general",
-      type: channelType,
-    }),
-    resolveUserName: vi.fn().mockResolvedValue({ name: "alice" }),
-    resolveSlackSystemEventSessionKey: vi.fn().mockReturnValue("agent:main:main"),
-  } as unknown as SlackMonitorContext;
-  registerSlackReactionEvents({ ctx });
+function createReactionContext(overrides?: SlackSystemEventTestOverrides) {
+  const harness = createSlackSystemEventTestHarness(overrides);
+  registerSlackReactionEvents({ ctx: harness.ctx });
   return {
-    ctx,
-    getAddedHandler: () => addedHandler,
-    getRemovedHandler: () => removedHandler,
+    getAddedHandler: () => harness.getHandler("reaction_added") as SlackReactionHandler | null,
+    getRemovedHandler: () => harness.getHandler("reaction_removed") as SlackReactionHandler | null,
   };
 }
 
