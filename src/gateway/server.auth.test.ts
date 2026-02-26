@@ -672,6 +672,17 @@ describe("gateway server auth/connect", () => {
       ws.close();
     });
 
+    test("rejects non-local browser origins for non-control-ui clients", async () => {
+      const ws = await openWs(port, { origin: "https://attacker.example" });
+      const res = await connectReq(ws, {
+        token: "secret",
+        client: TEST_OPERATOR_CLIENT,
+      });
+      expect(res.ok).toBe(false);
+      expect(res.error?.message ?? "").toContain("origin not allowed");
+      ws.close();
+    });
+
     test("returns control ui hint when token is missing", async () => {
       const ws = await openWs(port, { origin: originForPort(port) });
       const res = await connectReq(ws, {
@@ -700,6 +711,27 @@ describe("gateway server auth/connect", () => {
         ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
       );
       ws.close();
+    });
+
+    test("rate-limits browser-origin auth failures on loopback even when loopback exemption is enabled", async () => {
+      testState.gatewayAuth = {
+        mode: "token",
+        token: "secret",
+        rateLimit: { maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000, exemptLoopback: true },
+      };
+      await withGatewayServer(async ({ port }) => {
+        const firstWs = await openWs(port, { origin: originForPort(port) });
+        const first = await connectReq(firstWs, { token: "wrong" });
+        expect(first.ok).toBe(false);
+        expect(first.error?.message ?? "").not.toContain("retry later");
+        firstWs.close();
+
+        const secondWs = await openWs(port, { origin: originForPort(port) });
+        const second = await connectReq(secondWs, { token: "wrong" });
+        expect(second.ok).toBe(false);
+        expect(second.error?.message ?? "").toContain("retry later");
+        secondWs.close();
+      });
     });
   });
 
@@ -1210,6 +1242,43 @@ describe("gateway server auth/connect", () => {
     expect(updated?.tokens?.operator?.scopes).toContain("operator.admin");
 
     ws2.close();
+    await server.close();
+    restoreGatewayToken(prevToken);
+  });
+
+  test("does not silently auto-pair non-control-ui browser clients on loopback", async () => {
+    const { listDevicePairing } = await import("../infra/device-pairing.js");
+    const { randomUUID } = await import("node:crypto");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const { server, ws, port, prevToken } = await startServerWithClient("secret");
+    ws.close();
+
+    const browserWs = await openWs(port, { origin: originForPort(port) });
+    const nonce = await readConnectChallengeNonce(browserWs);
+    const { identity, device } = await createSignedDevice({
+      token: "secret",
+      scopes: ["operator.admin"],
+      clientId: TEST_OPERATOR_CLIENT.id,
+      clientMode: TEST_OPERATOR_CLIENT.mode,
+      identityPath: path.join(os.tmpdir(), `openclaw-browser-device-${randomUUID()}.json`),
+      nonce,
+    });
+    const res = await connectReq(browserWs, {
+      token: "secret",
+      scopes: ["operator.admin"],
+      client: TEST_OPERATOR_CLIENT,
+      device,
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error?.message ?? "").toContain("pairing required");
+
+    const pairing = await listDevicePairing();
+    const pending = pairing.pending.find((entry) => entry.deviceId === identity.deviceId);
+    expect(pending).toBeTruthy();
+    expect(pending?.silent).toBe(false);
+
+    browserWs.close();
     await server.close();
     restoreGatewayToken(prevToken);
   });
