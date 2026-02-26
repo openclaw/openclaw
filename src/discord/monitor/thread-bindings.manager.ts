@@ -424,6 +424,9 @@ export function createThreadBindingManager(
   registerSessionBindingAdapter({
     channel: "discord",
     accountId,
+    capabilities: {
+      placements: ["current", "child"],
+    },
     bind: async (input) => {
       if (input.conversation.channel !== "discord") {
         return null;
@@ -433,6 +436,7 @@ export function createThreadBindingManager(
         return null;
       }
       const conversationId = input.conversation.conversationId.trim();
+      const placement = input.placement === "child" ? "child" : "current";
       const metadata = input.metadata ?? {};
       const label =
         typeof metadata.label === "string" ? metadata.label.trim() || undefined : undefined;
@@ -446,10 +450,27 @@ export function createThreadBindingManager(
         typeof metadata.boundBy === "string" ? metadata.boundBy.trim() || undefined : undefined;
       const agentId =
         typeof metadata.agentId === "string" ? metadata.agentId.trim() || undefined : undefined;
+      let threadId: string | undefined;
+      let channelId = input.conversation.parentConversationId?.trim() || undefined;
+      let createThread = false;
+
+      if (placement === "child") {
+        createThread = true;
+        if (!channelId && conversationId) {
+          channelId =
+            (await resolveChannelIdForBinding({
+              accountId,
+              token: resolveCurrentToken(),
+              threadId: conversationId,
+            })) ?? undefined;
+        }
+      } else {
+        threadId = conversationId || undefined;
+      }
       const bound = await manager.bindTarget({
-        threadId: conversationId || undefined,
-        channelId: input.conversation.parentConversationId?.trim() || undefined,
-        createThread: !conversationId,
+        threadId,
+        channelId,
+        createThread,
         threadName,
         targetKind: toThreadBindingTargetKind(input.targetKind),
         targetSessionKey,

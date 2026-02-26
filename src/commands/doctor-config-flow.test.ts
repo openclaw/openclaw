@@ -26,14 +26,14 @@ type DiscordGuildRule = {
 };
 
 type DiscordAccountRule = {
-  allowFrom: string[];
-  dm: { allowFrom: string[]; groupChannels: string[] };
-  execApprovals: { approvers: string[] };
-  guilds: Record<string, DiscordGuildRule>;
+  allowFrom?: string[];
+  dm?: { allowFrom: string[]; groupChannels: string[] };
+  execApprovals?: { approvers: string[] };
+  guilds?: Record<string, DiscordGuildRule>;
 };
 
 type RepairedDiscordPolicy = {
-  allowFrom: string[];
+  allowFrom?: string[];
   dm: { allowFrom: string[]; groupChannels: string[] };
   execApprovals: { approvers: string[] };
   guilds: Record<string, DiscordGuildRule>;
@@ -186,18 +186,20 @@ describe("doctor config flow", () => {
       const cfg = result.cfg as unknown as {
         channels: {
           telegram: {
-            allowFrom: string[];
-            groupAllowFrom: string[];
+            allowFrom?: string[];
+            groupAllowFrom?: string[];
             groups: Record<
               string,
               { allowFrom: string[]; topics: Record<string, { allowFrom: string[] }> }
             >;
-            accounts: Record<string, { allowFrom: string[] }>;
+            accounts: Record<string, { allowFrom?: string[]; groupAllowFrom?: string[] }>;
           };
         };
       };
-      expect(cfg.channels.telegram.allowFrom).toEqual(["111"]);
-      expect(cfg.channels.telegram.groupAllowFrom).toEqual(["222"]);
+      expect(cfg.channels.telegram.allowFrom).toBeUndefined();
+      expect(cfg.channels.telegram.groupAllowFrom).toBeUndefined();
+      expect(cfg.channels.telegram.accounts.default.allowFrom).toEqual(["111"]);
+      expect(cfg.channels.telegram.accounts.default.groupAllowFrom).toEqual(["222"]);
       expect(cfg.channels.telegram.groups["-100123"].allowFrom).toEqual(["333"]);
       expect(cfg.channels.telegram.groups["-100123"].topics["99"].allowFrom).toEqual(["444"]);
       expect(cfg.channels.telegram.accounts.alerts.allowFrom).toEqual(["444"]);
@@ -262,7 +264,8 @@ describe("doctor config flow", () => {
         channels: { discord: RepairedDiscordPolicy };
       };
 
-      expect(cfg.channels.discord.allowFrom).toEqual(["123"]);
+      expect(cfg.channels.discord.allowFrom).toBeUndefined();
+      expect(cfg.channels.discord.accounts.default.allowFrom).toEqual(["123"]);
       expect(cfg.channels.discord.dm.allowFrom).toEqual(["456"]);
       expect(cfg.channels.discord.dm.groupChannels).toEqual(["789"]);
       expect(cfg.channels.discord.execApprovals.approvers).toEqual(["321"]);
