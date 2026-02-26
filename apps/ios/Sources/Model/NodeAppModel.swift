@@ -90,9 +90,7 @@ final class NodeAppModel {
     var lastShareEventText: String = "No share events yet."
     var openChatRequestID: Int = 0
     private(set) var pendingAgentDeepLinkPrompt: AgentDeepLinkPrompt?
-    private var queuedAgentDeepLinkPrompt: AgentDeepLinkPrompt?
     private var lastAgentDeepLinkPromptAt: Date = .distantPast
-    @ObservationIgnored private var queuedAgentDeepLinkPromptTask: Task<Void, Never>?
 
     // Primary "node" connection: used for device capabilities and node.invoke requests.
     private let nodeGateway = GatewayNodeSession()
@@ -101,6 +99,7 @@ final class NodeAppModel {
     private var nodeGatewayTask: Task<Void, Never>?
     private var operatorGatewayTask: Task<Void, Never>?
     private var voiceWakeSyncTask: Task<Void, Never>?
+    private var liveActivityTask: Task<Void, Never>?
     @ObservationIgnored private var cameraHUDDismissTask: Task<Void, Never>?
     @ObservationIgnored private lazy var capabilityRouter: NodeCapabilityRouter = self.buildCapabilityRouter()
     private let gatewayHealthMonitor = GatewayHealthMonitor()
@@ -637,6 +636,31 @@ final class NodeAppModel {
                     self.applyTalkModeSync(enabled: decoded.enabled, phase: decoded.phase)
                 default:
                     continue
+                }
+            }
+        }
+    }
+
+    /// Subscribe to operator gateway server events and drive the Live Activity.
+    func startLiveActivityEventLoop() {
+        self.liveActivityTask?.cancel()
+        let la = LiveActivityManager.shared
+        if la.isActive { la.handleReconnect() }
+        else { la.startActivity(agentName: self.selectedAgentId ?? "main", sessionKey: self.mainSessionKey) }
+        self.liveActivityTask = Task { [weak self] in
+            guard let self else { return }
+            let stream = await self.operatorGateway.subscribeServerEvents(bufferingNewest: 200)
+            for await evt in stream {
+                if Task.isCancelled { return }
+                guard evt.event == "agent" || evt.event == "chat",
+                      let payload = evt.payload else { continue }
+                await MainActor.run {
+                    let agent = self.selectedAgentId ?? "main", session = self.mainSessionKey
+                    switch evt.event {
+                    case "agent": LiveActivityManager.shared.dispatchAgentEvent(payload, agentName: agent, sessionKey: session)
+                    case "chat": LiveActivityManager.shared.dispatchChatEvent(payload)
+                    default: break
+                    }
                 }
             }
         }
@@ -1695,6 +1719,8 @@ extension NodeAppModel {
         self.operatorGatewayTask = nil
         self.voiceWakeSyncTask?.cancel()
         self.voiceWakeSyncTask = nil
+        self.liveActivityTask?.cancel()
+        self.liveActivityTask = nil
         LiveActivityManager.shared.handleDisconnect()
         self.gatewayHealthMonitor.stop()
         Task {
@@ -1732,7 +1758,8 @@ private extension NodeAppModel {
         self.operatorConnected = false
         self.voiceWakeSyncTask?.cancel()
         self.voiceWakeSyncTask = nil
-        LiveActivityManager.shared.handleDisconnect()
+        self.liveActivityTask?.cancel()
+        self.liveActivityTask = nil
         self.gatewayDefaultAgentId = nil
         self.gatewayAgents = []
         self.selectedAgentId = GatewaySettingsStore.loadGatewaySelectedAgentId(stableID: stableID)
@@ -1813,7 +1840,7 @@ private extension NodeAppModel {
                             await self.refreshAgentsFromGateway()
                             await self.refreshShareRouteFromGateway()
                             await self.startVoiceWakeSync()
-                            await MainActor.run { LiveActivityManager.shared.handleReconnect() }
+                            await MainActor.run { self.startLiveActivityEventLoop() }
                             await MainActor.run { self.startGatewayHealthMonitor() }
                         },
                         onDisconnected: { [weak self] reason in
@@ -1886,14 +1913,6 @@ private extension NodeAppModel {
                     self.gatewayStatusText = (attempt == 0) ? "Connecting…" : "Reconnecting…"
                     self.gatewayServerName = nil
                     self.gatewayRemoteAddress = nil
-                    let liveActivity = LiveActivityManager.shared
-                    if liveActivity.isActive {
-                        liveActivity.handleConnecting()
-                    } else {
-                        liveActivity.startActivity(
-                            agentName: self.selectedAgentId ?? "main",
-                            sessionKey: self.mainSessionKey)
-                    }
                 }
 
                 do {
@@ -2605,31 +2624,19 @@ extension NodeAppModel {
                     "agent deep link rejected: unkeyed message too long chars=\(message.count, privacy: .public)")
                 return
             }
+            if Date().timeIntervalSince(self.lastAgentDeepLinkPromptAt) < 1.0 {
+                self.deepLinkLogger.debug("agent deep link prompt throttled")
+                return
+            }
+            self.lastAgentDeepLinkPromptAt = Date()
+
             let urlText = originalURL.absoluteString
             let prompt = AgentDeepLinkPrompt(
                 id: UUID().uuidString,
                 messagePreview: message,
                 urlPreview: urlText.count > 500 ? "\(urlText.prefix(500))…" : urlText,
                 request: self.effectiveAgentDeepLinkForPrompt(link))
-
-            let promptIntervalSeconds = 5.0
-            let elapsed = Date().timeIntervalSince(self.lastAgentDeepLinkPromptAt)
-            if elapsed < promptIntervalSeconds {
-                if self.pendingAgentDeepLinkPrompt != nil {
-                    self.pendingAgentDeepLinkPrompt = prompt
-                    self.recordShareEvent("Updated local confirmation request (\(message.count) chars).")
-                    self.deepLinkLogger.debug("agent deep link prompt coalesced into active confirmation")
-                    return
-                }
-
-                let remaining = max(0, promptIntervalSeconds - elapsed)
-                self.queueAgentDeepLinkPrompt(prompt, initialDelaySeconds: remaining)
-                self.recordShareEvent("Queued local confirmation (\(message.count) chars).")
-                self.deepLinkLogger.debug("agent deep link prompt queued due to rate limit")
-                return
-            }
-
-            self.presentAgentDeepLinkPrompt(prompt)
+            self.pendingAgentDeepLinkPrompt = prompt
             self.recordShareEvent("Awaiting local confirmation (\(message.count) chars).")
             self.deepLinkLogger.info("agent deep link requires local confirmation")
             return
@@ -2696,60 +2703,6 @@ extension NodeAppModel {
         self.screen.errorText = "Deep link cancelled."
         self.recordShareEvent("Cancelled: deep link confirmation declined.")
         self.deepLinkLogger.info("agent deep link cancelled by local user")
-    }
-
-    private func presentAgentDeepLinkPrompt(_ prompt: AgentDeepLinkPrompt) {
-        self.lastAgentDeepLinkPromptAt = Date()
-        self.pendingAgentDeepLinkPrompt = prompt
-    }
-
-    private func queueAgentDeepLinkPrompt(_ prompt: AgentDeepLinkPrompt, initialDelaySeconds: TimeInterval) {
-        self.queuedAgentDeepLinkPrompt = prompt
-        guard self.queuedAgentDeepLinkPromptTask == nil else { return }
-
-        self.queuedAgentDeepLinkPromptTask = Task { [weak self] in
-            guard let self else { return }
-            let delayNs = UInt64(max(0, initialDelaySeconds) * 1_000_000_000)
-            if delayNs > 0 {
-                do {
-                    try await Task.sleep(nanoseconds: delayNs)
-                } catch {
-                    return
-                }
-            }
-            await self.deliverQueuedAgentDeepLinkPrompt()
-        }
-    }
-
-    private func deliverQueuedAgentDeepLinkPrompt() async {
-        defer { self.queuedAgentDeepLinkPromptTask = nil }
-        let promptIntervalSeconds = 5.0
-        while let prompt = self.queuedAgentDeepLinkPrompt {
-            if self.pendingAgentDeepLinkPrompt != nil {
-                do {
-                    try await Task.sleep(nanoseconds: 200_000_000)
-                } catch {
-                    return
-                }
-                continue
-            }
-
-            let elapsed = Date().timeIntervalSince(self.lastAgentDeepLinkPromptAt)
-            if elapsed < promptIntervalSeconds {
-                let remaining = max(0, promptIntervalSeconds - elapsed)
-                do {
-                    try await Task.sleep(nanoseconds: UInt64(remaining * 1_000_000_000))
-                } catch {
-                    return
-                }
-                continue
-            }
-
-            self.queuedAgentDeepLinkPrompt = nil
-            self.presentAgentDeepLinkPrompt(prompt)
-            self.recordShareEvent("Awaiting local confirmation (\(prompt.messagePreview.count) chars).")
-            self.deepLinkLogger.info("agent deep link queued prompt delivered")
-        }
     }
 
     private func submitAgentDeepLink(_ link: AgentDeepLink, messageCharCount: Int) async {
