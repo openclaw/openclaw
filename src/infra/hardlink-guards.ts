@@ -6,9 +6,9 @@ export async function assertNoHardlinkedFinalPath(params: {
   filePath: string;
   root: string;
   boundaryLabel: string;
-  allowFinalHardlink?: boolean;
+  allowFinalHardlinkForUnlink?: boolean;
 }): Promise<void> {
-  if (params.allowFinalHardlink) {
+  if (params.allowFinalHardlinkForUnlink) {
     return;
   }
   let stat: Awaited<ReturnType<typeof fs.stat>>;
