@@ -240,6 +240,86 @@ describe("secrets apply", () => {
     expect(nextConfig.models?.providers?.openai).toBeUndefined();
   });
 
+  it("migrates skills entries apiKey targets alongside provider api keys", async () => {
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                api: "openai-completions",
+                apiKey: "sk-openai-plaintext",
+                models: [{ id: "gpt-5", name: "gpt-5" }],
+              },
+            },
+          },
+          skills: {
+            entries: {
+              "qa-secret-test": {
+                enabled: true,
+                apiKey: "sk-skill-plaintext",
+              },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    const plan: SecretsApplyPlan = {
+      version: 1,
+      protocolVersion: 1,
+      generatedAt: new Date().toISOString(),
+      generatedBy: "manual",
+      targets: [
+        {
+          type: "models.providers.apiKey",
+          path: "models.providers.openai.apiKey",
+          pathSegments: ["models", "providers", "openai", "apiKey"],
+          providerId: "openai",
+          ref: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        },
+        {
+          type: "skills.entries.apiKey",
+          path: "skills.entries.qa-secret-test.apiKey",
+          pathSegments: ["skills", "entries", "qa-secret-test", "apiKey"],
+          ref: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        },
+      ],
+      options: {
+        scrubEnv: true,
+        scrubAuthProfilesForProviderTargets: true,
+        scrubLegacyAuthJson: true,
+      },
+    };
+
+    const result = await runSecretsApply({ plan, env, write: true });
+    expect(result.changed).toBe(true);
+
+    const nextConfig = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+      models: { providers: { openai: { apiKey: unknown } } };
+      skills: { entries: { "qa-secret-test": { apiKey: unknown } } };
+    };
+    expect(nextConfig.models.providers.openai.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "OPENAI_API_KEY",
+    });
+    expect(nextConfig.skills.entries["qa-secret-test"].apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "OPENAI_API_KEY",
+    });
+
+    const rawConfig = await fs.readFile(configPath, "utf8");
+    expect(rawConfig).not.toContain("sk-openai-plaintext");
+    expect(rawConfig).not.toContain("sk-skill-plaintext");
+  });
+
   it("applies provider upserts and deletes from plan", async () => {
     await fs.writeFile(
       configPath,

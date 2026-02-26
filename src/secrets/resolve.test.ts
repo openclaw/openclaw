@@ -219,6 +219,76 @@ describe("secret ref resolver", () => {
     expect(value).toBe("plain-secret");
   });
 
+  it("handles Homebrew-style symlinked exec commands with args only when explicitly allowed", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-homebrew-"));
+    cleanupRoots.push(root);
+    const binDir = path.join(root, "opt", "homebrew", "bin");
+    const cellarDir = path.join(root, "opt", "homebrew", "Cellar", "node", "25.0.0", "bin");
+    await fs.mkdir(binDir, { recursive: true });
+    await fs.mkdir(cellarDir, { recursive: true });
+
+    const targetCommand = path.join(cellarDir, "node");
+    const symlinkCommand = path.join(binDir, "node");
+    await writeSecureFile(
+      targetCommand,
+      [
+        `#!${process.execPath}`,
+        "import fs from 'node:fs';",
+        "const req = JSON.parse(fs.readFileSync(0, 'utf8'));",
+        "const suffix = process.argv[2] ?? 'missing';",
+        "const values = Object.fromEntries((req.ids ?? []).map((id) => [id, `${suffix}:${id}`]));",
+        "process.stdout.write(JSON.stringify({ protocolVersion: 1, values }));",
+      ].join("\n"),
+      0o700,
+    );
+    await fs.symlink(targetCommand, symlinkCommand);
+    const trustedRoot = await fs.realpath(root);
+
+    await expect(
+      resolveSecretRefString(
+        { source: "exec", provider: "execmain", id: "openai/api-key" },
+        {
+          config: {
+            secrets: {
+              providers: {
+                execmain: {
+                  source: "exec",
+                  command: symlinkCommand,
+                  args: ["brew"],
+                  passEnv: ["PATH"],
+                },
+              },
+            },
+          },
+        },
+      ),
+    ).rejects.toThrow("must not be a symlink");
+
+    const value = await resolveSecretRefString(
+      { source: "exec", provider: "execmain", id: "openai/api-key" },
+      {
+        config: {
+          secrets: {
+            providers: {
+              execmain: {
+                source: "exec",
+                command: symlinkCommand,
+                args: ["brew"],
+                allowSymlinkCommand: true,
+                trustedDirs: [trustedRoot],
+              },
+            },
+          },
+        },
+      },
+    );
+    expect(value).toBe("brew:openai/api-key");
+  });
+
   it("checks trustedDirs against resolved symlink target", async () => {
     if (process.platform === "win32") {
       return;
