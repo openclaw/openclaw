@@ -202,10 +202,13 @@ export function parseTtsDirectives(
             if (!policy.allowModelId) {
               break;
             }
-            if (isValidOpenAIModel(rawValue, openaiBaseUrl)) {
-              overrides.openai = { ...overrides.openai, model: rawValue };
-            } else if (isValidMinimaxModel(rawValue)) {
+            // Check MiniMax first: its model set is finite and known, while
+            // isValidOpenAIModel accepts any string when a custom endpoint is
+            // configured, which would swallow MiniMax model names.
+            if (isValidMinimaxModel(rawValue)) {
               overrides.minimax = { ...overrides.minimax, model: rawValue };
+            } else if (isValidOpenAIModel(rawValue, openaiBaseUrl)) {
+              overrides.openai = { ...overrides.openai, model: rawValue };
             } else {
               overrides.elevenlabs = { ...overrides.elevenlabs, modelId: rawValue };
             }
