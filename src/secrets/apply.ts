@@ -8,6 +8,7 @@ import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { resolveStateDir, type OpenClawConfig } from "../config/config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
+import type { SecretProviderConfig } from "../config/types.secrets.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { createSecretsConfigIO } from "./config-io.js";
 import { type SecretsApplyPlan, normalizeSecretsPlanOptions } from "./plan.js";
@@ -209,6 +210,48 @@ function resolveGoogleChatRefPath(pathLabel: string): string {
   throw new Error(`Google Chat target path must end with ".serviceAccount": ${pathLabel}`);
 }
 
+function applyProviderPlanMutations(params: {
+  config: OpenClawConfig;
+  upserts: Record<string, SecretProviderConfig> | undefined;
+  deletes: string[] | undefined;
+}): boolean {
+  const currentProviders = isRecord(params.config.secrets?.providers)
+    ? structuredClone(params.config.secrets?.providers)
+    : {};
+  let changed = false;
+
+  for (const providerAlias of params.deletes ?? []) {
+    if (!Object.prototype.hasOwnProperty.call(currentProviders, providerAlias)) {
+      continue;
+    }
+    delete currentProviders[providerAlias];
+    changed = true;
+  }
+
+  for (const [providerAlias, providerConfig] of Object.entries(params.upserts ?? {})) {
+    const previous = currentProviders[providerAlias];
+    if (isDeepStrictEqual(previous, providerConfig)) {
+      continue;
+    }
+    currentProviders[providerAlias] = structuredClone(providerConfig);
+    changed = true;
+  }
+
+  if (!changed) {
+    return false;
+  }
+
+  params.config.secrets ??= {};
+  if (Object.keys(currentProviders).length === 0) {
+    if ("providers" in params.config.secrets) {
+      delete params.config.secrets.providers;
+    }
+    return true;
+  }
+  params.config.secrets.providers = currentProviders;
+  return true;
+}
+
 async function projectPlanState(params: {
   plan: SecretsApplyPlan;
   env: NodeJS.ProcessEnv;
@@ -225,6 +268,16 @@ async function projectPlanState(params: {
   const warnings: string[] = [];
   const scrubbedValues = new Set<string>();
   const providerTargets = new Set<string>();
+  const configPath = resolveUserPath(snapshot.path);
+
+  const providerConfigChanged = applyProviderPlanMutations({
+    config: nextConfig,
+    upserts: params.plan.providerUpserts,
+    deletes: params.plan.providerDeletes,
+  });
+  if (providerConfigChanged) {
+    changedFiles.add(configPath);
+  }
 
   for (const target of params.plan.targets) {
     if (target.type === "channels.googlechat.serviceAccount") {
@@ -236,7 +289,7 @@ async function projectPlanState(params: {
       const wroteRef = setByDotPath(nextConfig, refPath, target.ref);
       const deletedLegacy = deleteByDotPath(nextConfig, target.path);
       if (wroteRef || deletedLegacy) {
-        changedFiles.add(resolveUserPath(snapshot.path));
+        changedFiles.add(configPath);
       }
       continue;
     }
@@ -247,7 +300,7 @@ async function projectPlanState(params: {
     }
     const wroteRef = setByDotPath(nextConfig, target.path, target.ref);
     if (wroteRef) {
-      changedFiles.add(resolveUserPath(snapshot.path));
+      changedFiles.add(configPath);
     }
     if (target.type === "models.providers.apiKey" && target.providerId) {
       providerTargets.add(normalizeProviderId(target.providerId));
@@ -400,7 +453,7 @@ async function projectPlanState(params: {
 
   return {
     nextConfig,
-    configPath: resolveUserPath(snapshot.path),
+    configPath,
     configWriteOptions: writeOptions,
     authStoreByPath,
     authJsonByPath,

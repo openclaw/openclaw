@@ -271,7 +271,7 @@ Note: plugins can add additional top-level commands (for example `openclaw voice
 
 - `openclaw secrets reload` — re-resolve refs and atomically swap the runtime snapshot.
 - `openclaw secrets audit` — scan for plaintext residues, unresolved refs, and precedence drift.
-- `openclaw secrets configure` — interactive helper to build SecretRef plan and preflight/apply safely.
+- `openclaw secrets configure` — interactive helper for provider setup + SecretRef mapping + preflight/apply.
 - `openclaw secrets apply --from <plan.json>` — apply a previously generated plan (`--dry-run` supported).
 
 ## Plugins

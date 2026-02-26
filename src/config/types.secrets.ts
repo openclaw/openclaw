@@ -106,7 +106,7 @@ export type EnvSecretProviderConfig = {
   allowlist?: string[];
 };
 
-export type FileSecretProviderMode = "raw" | "jsonPointer";
+export type FileSecretProviderMode = "singleValue" | "json";
 
 export type FileSecretProviderConfig = {
   source: "file";

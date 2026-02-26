@@ -53,14 +53,27 @@ Exit behavior:
 
 ## Configure (interactive helper)
 
-Build SecretRef changes interactively, run preflight, and optionally apply:
+Build provider + SecretRef changes interactively, run preflight, and optionally apply:
 
 ```bash
 openclaw secrets configure
 openclaw secrets configure --plan-out /tmp/openclaw-secrets-plan.json
 openclaw secrets configure --apply --yes
+openclaw secrets configure --providers-only
+openclaw secrets configure --skip-provider-setup
 openclaw secrets configure --json
 ```
+
+Flow:
+
+- Provider setup first (`add/edit/remove` for `secrets.providers` aliases).
+- Credential mapping second (select fields and assign `{source, provider, id}` refs).
+- Preflight and optional apply last.
+
+Flags:
+
+- `--providers-only`: configure `secrets.providers` only, skip credential mapping.
+- `--skip-provider-setup`: skip provider setup and map credentials to existing providers.
 
 Notes:
 

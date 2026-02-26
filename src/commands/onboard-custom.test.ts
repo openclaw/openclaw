@@ -268,7 +268,7 @@ describe("promptCustomApiConfig", () => {
           filemain: {
             source: "file",
             path: "/tmp/openclaw-missing-provider.json",
-            mode: "jsonPointer",
+            mode: "json",
           },
         },
       },

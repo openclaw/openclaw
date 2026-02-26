@@ -37,7 +37,7 @@ describe("secret ref resolver", () => {
     expect(value).toBe("sk-env-value");
   });
 
-  it("resolves file refs in jsonPointer mode", async () => {
+  it("resolves file refs in json mode", async () => {
     if (process.platform === "win32") {
       return;
     }
@@ -64,7 +64,7 @@ describe("secret ref resolver", () => {
               filemain: {
                 source: "file",
                 path: filePath,
-                mode: "jsonPointer",
+                mode: "json",
               },
             },
           },
@@ -253,11 +253,11 @@ describe("secret ref resolver", () => {
     ).rejects.toThrow("returned invalid JSON");
   });
 
-  it("supports file raw mode with id=value", async () => {
+  it("supports file singleValue mode with id=value", async () => {
     if (process.platform === "win32") {
       return;
     }
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-raw-"));
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-single-value-"));
     cleanupRoots.push(root);
     const filePath = path.join(root, "token.txt");
     await writeSecureFile(filePath, "raw-token-value\n");
@@ -271,7 +271,7 @@ describe("secret ref resolver", () => {
               rawfile: {
                 source: "file",
                 path: filePath,
-                mode: "raw",
+                mode: "singleValue",
               },
             },
           },
@@ -320,7 +320,7 @@ describe("secret ref resolver", () => {
                 filemain: {
                   source: "file",
                   path: filePath,
-                  mode: "jsonPointer",
+                  mode: "json",
                   timeoutMs: 5,
                 },
               },

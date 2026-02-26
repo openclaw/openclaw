@@ -775,7 +775,7 @@ describe("applyAuthChoice", () => {
             filemain: {
               source: "file",
               path: "/tmp/openclaw-missing-secrets.json",
-              mode: "jsonPointer",
+              mode: "json",
             },
           },
         },

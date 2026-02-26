@@ -6,7 +6,7 @@ import {
 
 const FILE_SECRET_REF_SEGMENT_PATTERN = /^(?:[^~]|~0|~1)*$/;
 
-export const RAW_FILE_REF_ID = "value";
+export const SINGLE_VALUE_FILE_REF_ID = "value";
 
 export type SecretRefDefaultsCarrier = {
   secrets?: {
@@ -53,7 +53,7 @@ export function resolveDefaultSecretProviderAlias(
 }
 
 export function isValidFileSecretRefId(value: string): boolean {
-  if (value === RAW_FILE_REF_ID) {
+  if (value === SINGLE_VALUE_FILE_REF_ID) {
     return true;
   }
   if (!value.startsWith("/")) {
