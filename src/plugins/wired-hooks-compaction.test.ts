@@ -122,4 +122,72 @@ describe("compaction hook wiring", () => {
 
     expect(hookMocks.runner.runAfterCompaction).not.toHaveBeenCalled();
   });
+
+  it("clears stale assistant usage after final compaction", () => {
+    const messages = [
+      { role: "user", content: "hello" },
+      {
+        role: "assistant",
+        content: "response one",
+        usage: { totalTokens: 180_000, input: 100, output: 50 },
+      },
+      {
+        role: "assistant",
+        content: "response two",
+        usage: { totalTokens: 181_000, input: 120, output: 60 },
+      },
+    ];
+
+    const ctx = {
+      params: { runId: "r4", session: { messages } },
+      state: { compactionInFlight: true },
+      log: { debug: vi.fn(), warn: vi.fn() },
+      maybeResolveCompactionWait: vi.fn(),
+      getCompactionCount: () => 1,
+      incrementCompactionCount: vi.fn(),
+    };
+
+    handleAutoCompactionEnd(
+      ctx as never,
+      {
+        type: "auto_compaction_end",
+        willRetry: false,
+      } as never,
+    );
+
+    const assistantOne = messages[1] as { usage?: unknown };
+    const assistantTwo = messages[2] as { usage?: unknown };
+    expect(assistantOne.usage).toBeUndefined();
+    expect(assistantTwo.usage).toBeUndefined();
+  });
+
+  it("does not clear assistant usage while compaction is retrying", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: "response",
+        usage: { totalTokens: 184_297, input: 130_000, output: 2_000 },
+      },
+    ];
+
+    const ctx = {
+      params: { runId: "r5", session: { messages } },
+      state: { compactionInFlight: true },
+      log: { debug: vi.fn(), warn: vi.fn() },
+      noteCompactionRetry: vi.fn(),
+      resetForCompactionRetry: vi.fn(),
+      getCompactionCount: () => 0,
+    };
+
+    handleAutoCompactionEnd(
+      ctx as never,
+      {
+        type: "auto_compaction_end",
+        willRetry: true,
+      } as never,
+    );
+
+    const assistant = messages[0] as { usage?: unknown };
+    expect(assistant.usage).toEqual({ totalTokens: 184_297, input: 130_000, output: 2_000 });
+  });
 });
