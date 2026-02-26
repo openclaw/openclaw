@@ -78,6 +78,7 @@ export class FeishuStreamingSession {
   async start(
     receiveId: string,
     receiveIdType: "open_id" | "user_id" | "union_id" | "email" | "chat_id" = "chat_id",
+    options?: { replyToMessageId?: string; replyInThread?: boolean },
   ): Promise<void> {
     if (this.state) {
       return;
@@ -114,16 +115,29 @@ export class FeishuStreamingSession {
       throw new Error(`Create card failed: ${createData.msg}`);
     }
     const cardId = createData.data.card_id;
+    const cardContent = JSON.stringify({ type: "card", data: { card_id: cardId } });
 
-    // Send card message
-    const sendRes = await this.client.im.message.create({
-      params: { receive_id_type: receiveIdType },
-      data: {
-        receive_id: receiveId,
-        msg_type: "interactive",
-        content: JSON.stringify({ type: "card", data: { card_id: cardId } }),
-      },
-    });
+    // Send card message — reply into thread when configured
+    let sendRes;
+    if (options?.replyToMessageId) {
+      sendRes = await this.client.im.message.reply({
+        path: { message_id: options.replyToMessageId },
+        data: {
+          msg_type: "interactive",
+          content: cardContent,
+          ...(options.replyInThread ? { reply_in_thread: true } : {}),
+        },
+      });
+    } else {
+      sendRes = await this.client.im.message.create({
+        params: { receive_id_type: receiveIdType },
+        data: {
+          receive_id: receiveId,
+          msg_type: "interactive",
+          content: cardContent,
+        },
+      });
+    }
     if (sendRes.code !== 0 || !sendRes.data?.message_id) {
       throw new Error(`Send card failed: ${sendRes.msg}`);
     }

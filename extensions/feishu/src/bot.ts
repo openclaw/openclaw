@@ -790,6 +790,9 @@ export async function handleFeishuMessage(params: {
       log(`feishu[${account.accountId}]: group session scope=${groupSessionScope}, peer=${peerId}`);
     }
 
+    const replyInThread =
+      (groupConfig?.replyInThread ?? feishuCfg?.replyInThread ?? "disabled") === "enabled";
+
     let route = core.channel.routing.resolveAgentRoute({
       cfg,
       channel: "feishu",
@@ -965,6 +968,7 @@ export async function handleFeishuMessage(params: {
       runtime: runtime as RuntimeEnv,
       chatId: ctx.chatId,
       replyToMessageId: ctx.messageId,
+      replyInThread,
       mentionTargets: ctx.mentionTargets,
       accountId: account.accountId,
     });
