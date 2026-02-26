@@ -40,6 +40,8 @@ function cloneFirstTemplateModel(params: {
   return undefined;
 }
 
+const CODEX_GPT53_ELIGIBLE_PROVIDERS = new Set(["openai-codex", "github-copilot"]);
+
 function resolveOpenAICodexGpt53FallbackModel(
   provider: string,
   modelId: string,
@@ -47,7 +49,7 @@ function resolveOpenAICodexGpt53FallbackModel(
 ): Model<Api> | undefined {
   const normalizedProvider = normalizeProviderId(provider);
   const trimmedModelId = modelId.trim();
-  if (normalizedProvider !== "openai-codex") {
+  if (!CODEX_GPT53_ELIGIBLE_PROVIDERS.has(normalizedProvider)) {
     return undefined;
   }
   if (trimmedModelId.toLowerCase() !== OPENAI_CODEX_GPT_53_MODEL_ID) {
