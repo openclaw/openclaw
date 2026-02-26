@@ -18,7 +18,7 @@ const runGatewayLoop = vi.fn(async ({ start }: { start: () => Promise<unknown> }
   await start();
 });
 
-const { defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
+const { runtimeErrors, defaultRuntime, resetRuntimeCapture } = createCliRuntimeCapture();
 
 vi.mock("../../config/config.js", () => ({
   getConfigPath: () => "/tmp/openclaw-test-missing-config.json",
@@ -150,6 +150,42 @@ describe("gateway run option collisions", () => {
       expect.objectContaining({
         bind: "loopback",
       }),
+    );
+  });
+
+  it("accepts --auth none override", async () => {
+    await runGatewayCli(["gateway", "run", "--auth", "none", "--allow-unconfigured"]);
+
+    expect(startGatewayServer).toHaveBeenCalledWith(
+      18789,
+      expect.objectContaining({
+        auth: expect.objectContaining({
+          mode: "none",
+        }),
+      }),
+    );
+  });
+
+  it("accepts --auth trusted-proxy override", async () => {
+    await runGatewayCli(["gateway", "run", "--auth", "trusted-proxy", "--allow-unconfigured"]);
+
+    expect(startGatewayServer).toHaveBeenCalledWith(
+      18789,
+      expect.objectContaining({
+        auth: expect.objectContaining({
+          mode: "trusted-proxy",
+        }),
+      }),
+    );
+  });
+
+  it("prints all supported modes on invalid --auth value", async () => {
+    await expect(
+      runGatewayCli(["gateway", "run", "--auth", "bad-mode", "--allow-unconfigured"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain(
+      'Invalid --auth (use "none", "token", "password", or "trusted-proxy")',
     );
   });
 });
