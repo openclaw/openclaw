@@ -152,13 +152,9 @@ Optional per-id errors:
 }
 ```
 
-## Validated exec integration examples
+## Exec integration examples
 
-The patterns below were validated end-to-end with `openclaw secrets audit --json` and `unresolvedRefCount=0`.
-
-### Direct Homebrew command path (no wrapper)
-
-Use this when your command path is a Homebrew symlink (for example `/opt/homebrew/bin/op`):
+### 1Password CLI
 
 ```json5
 {
@@ -167,7 +163,7 @@ Use this when your command path is a Homebrew symlink (for example `/opt/homebre
       onepassword_openai: {
         source: "exec",
         command: "/opt/homebrew/bin/op",
-        allowSymlinkCommand: true,
+        allowSymlinkCommand: true, // required for Homebrew symlinked binaries
         trustedDirs: ["/opt/homebrew"],
         args: ["read", "op://Personal/OpenClaw QA API Key/password"],
         passEnv: ["HOME"],
@@ -187,57 +183,7 @@ Use this when your command path is a Homebrew symlink (for example `/opt/homebre
 }
 ```
 
-### 1Password (`op`)
-
-1. Create a wrapper script (non-symlink command path):
-
-```bash
-cat >/usr/local/libexec/openclaw/op-openai.sh <<'SH'
-#!/bin/sh
-exec /opt/homebrew/bin/op read 'op://Personal/OpenClaw QA API Key/password'
-SH
-chmod 700 /usr/local/libexec/openclaw/op-openai.sh
-```
-
-2. Configure provider + ref:
-
-```json5
-{
-  secrets: {
-    providers: {
-      onepassword_openai: {
-        source: "exec",
-        command: "/usr/local/libexec/openclaw/op-openai.sh",
-        passEnv: ["HOME"],
-        jsonOnly: false,
-      },
-    },
-  },
-  models: {
-    providers: {
-      openai: {
-        baseUrl: "https://api.openai.com/v1",
-        models: [{ id: "gpt-5", name: "gpt-5" }],
-        apiKey: { source: "exec", provider: "onepassword_openai", id: "value" },
-      },
-    },
-  },
-}
-```
-
 ### HashiCorp Vault CLI
-
-1. Wrapper script:
-
-```bash
-cat >/usr/local/libexec/openclaw/vault-openai.sh <<'SH'
-#!/bin/sh
-exec /opt/homebrew/opt/vault/bin/vault kv get -field=OPENAI_API_KEY secret/openclaw
-SH
-chmod 700 /usr/local/libexec/openclaw/vault-openai.sh
-```
-
-2. Provider + ref:
 
 ```json5
 {
@@ -245,7 +191,10 @@ chmod 700 /usr/local/libexec/openclaw/vault-openai.sh
     providers: {
       vault_openai: {
         source: "exec",
-        command: "/usr/local/libexec/openclaw/vault-openai.sh",
+        command: "/opt/homebrew/bin/vault",
+        allowSymlinkCommand: true, // required for Homebrew symlinked binaries
+        trustedDirs: ["/opt/homebrew"],
+        args: ["kv", "get", "-field=OPENAI_API_KEY", "secret/openclaw"],
         passEnv: ["VAULT_ADDR", "VAULT_TOKEN"],
         jsonOnly: false,
       },
@@ -265,25 +214,16 @@ chmod 700 /usr/local/libexec/openclaw/vault-openai.sh
 
 ### `sops`
 
-1. Wrapper script:
-
-```bash
-cat >/usr/local/libexec/openclaw/sops-openai.sh <<'SH'
-#!/bin/sh
-exec /opt/homebrew/bin/sops -d --extract '["providers"]["openai"]["apiKey"]' /path/to/secrets.enc.json
-SH
-chmod 700 /usr/local/libexec/openclaw/sops-openai.sh
-```
-
-2. Provider + ref:
-
 ```json5
 {
   secrets: {
     providers: {
       sops_openai: {
         source: "exec",
-        command: "/usr/local/libexec/openclaw/sops-openai.sh",
+        command: "/opt/homebrew/bin/sops",
+        allowSymlinkCommand: true, // required for Homebrew symlinked binaries
+        trustedDirs: ["/opt/homebrew"],
+        args: ["-d", "--extract", '["providers"]["openai"]["apiKey"]', "/path/to/secrets.enc.json"],
         passEnv: ["SOPS_AGE_KEY_FILE"],
         jsonOnly: false,
       },
