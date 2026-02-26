@@ -3,11 +3,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, test } from "vitest";
 import type { ExecApprovalRequestPayload } from "../infra/exec-approvals.js";
+import { buildSystemRunApprovalBindingV1 } from "../infra/system-run-approval-binding.js";
 import { evaluateSystemRunApprovalMatch } from "./node-invoke-system-run-approval-match.js";
-import {
-  buildSystemRunApprovalBindingV1,
-  buildSystemRunApprovalEnvBinding,
-} from "./system-run-approval-binding.js";
 
 type FixtureCase = {
   name: string;
@@ -25,10 +22,8 @@ type FixtureCase = {
       sessionKey?: string | null;
       env?: Record<string, string>;
     };
-    envHashFrom?: Record<string, string>;
   };
   invoke: {
-    cmdText: string;
     argv: string[];
     binding: {
       cwd: string | null;
@@ -71,9 +66,6 @@ function buildRequestPayload(entry: FixtureCase): ExecApprovalRequestPayload {
       env: entry.request.bindingV1.env,
     }).binding;
   }
-  if (entry.request.envHashFrom) {
-    payload.envHash = buildSystemRunApprovalEnvBinding(entry.request.envHashFrom).envHash;
-  }
   return payload;
 }
 
@@ -81,7 +73,6 @@ describe("system-run approval binding contract fixtures", () => {
   for (const entry of fixture.cases) {
     test(entry.name, () => {
       const result = evaluateSystemRunApprovalMatch({
-        cmdText: entry.invoke.cmdText,
         argv: entry.invoke.argv,
         request: buildRequestPayload(entry),
         binding: entry.invoke.binding,
