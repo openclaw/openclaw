@@ -220,22 +220,10 @@ export const TelegramAccountSchemaBase = z
 
 export const TelegramAccountSchema = TelegramAccountSchemaBase.superRefine((value, ctx) => {
   normalizeTelegramStreamingConfig(value);
-  requireOpenAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message:
-      'channels.telegram.dmPolicy="open" requires channels.telegram.allowFrom to include "*"',
-  });
-  requireAllowlistAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message:
-      'channels.telegram.dmPolicy="allowlist" requires channels.telegram.allowFrom to contain at least one sender ID',
-  });
+  // Account-level schemas skip allowFrom validation because accounts inherit
+  // allowFrom from the parent channel config at runtime (resolveTelegramAccount
+  // shallow-merges top-level and account values in src/telegram/accounts.ts).
+  // Validation is enforced at the top-level TelegramConfigSchema instead.
   validateTelegramCustomCommands(value, ctx);
 });
 
@@ -847,23 +835,10 @@ export const SignalAccountSchemaBase = z
   })
   .strict();
 
-export const SignalAccountSchema = SignalAccountSchemaBase.superRefine((value, ctx) => {
-  requireOpenAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message: 'channels.signal.dmPolicy="open" requires channels.signal.allowFrom to include "*"',
-  });
-  requireAllowlistAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message:
-      'channels.signal.dmPolicy="allowlist" requires channels.signal.allowFrom to contain at least one sender ID',
-  });
-});
+// Account-level schemas skip allowFrom validation because accounts inherit
+// allowFrom from the parent channel config at runtime.
+// Validation is enforced at the top-level SignalConfigSchema instead.
+export const SignalAccountSchema = SignalAccountSchemaBase;
 
 export const SignalConfigSchema = SignalAccountSchemaBase.extend({
   accounts: z.record(z.string(), SignalAccountSchema.optional()).optional(),
@@ -972,8 +947,18 @@ function refineIrcAllowFromAndNickserv(value: IrcBaseConfig, ctx: z.RefinementCt
   }
 }
 
+// Account-level schemas skip allowFrom validation because accounts inherit
+// allowFrom from the parent channel config at runtime.
+// Validation is enforced at the top-level IrcConfigSchema instead.
 export const IrcAccountSchema = IrcAccountSchemaBase.superRefine((value, ctx) => {
-  refineIrcAllowFromAndNickserv(value, ctx);
+  // Only validate nickserv at account level, not allowFrom (inherited from parent).
+  if (value.nickserv?.register && !value.nickserv.registerEmail?.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["nickserv", "registerEmail"],
+      message: "channels.irc.nickserv.register=true requires channels.irc.nickserv.registerEmail",
+    });
+  }
 });
 
 export const IrcConfigSchema = IrcAccountSchemaBase.extend({
@@ -1035,24 +1020,10 @@ export const IMessageAccountSchemaBase = z
   })
   .strict();
 
-export const IMessageAccountSchema = IMessageAccountSchemaBase.superRefine((value, ctx) => {
-  requireOpenAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message:
-      'channels.imessage.dmPolicy="open" requires channels.imessage.allowFrom to include "*"',
-  });
-  requireAllowlistAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message:
-      'channels.imessage.dmPolicy="allowlist" requires channels.imessage.allowFrom to contain at least one sender ID',
-  });
-});
+// Account-level schemas skip allowFrom validation because accounts inherit
+// allowFrom from the parent channel config at runtime.
+// Validation is enforced at the top-level IMessageConfigSchema instead.
+export const IMessageAccountSchema = IMessageAccountSchemaBase;
 
 export const IMessageConfigSchema = IMessageAccountSchemaBase.extend({
   accounts: z.record(z.string(), IMessageAccountSchema.optional()).optional(),
@@ -1132,23 +1103,10 @@ export const BlueBubblesAccountSchemaBase = z
   })
   .strict();
 
-export const BlueBubblesAccountSchema = BlueBubblesAccountSchemaBase.superRefine((value, ctx) => {
-  requireOpenAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message: 'channels.bluebubbles.accounts.*.dmPolicy="open" requires allowFrom to include "*"',
-  });
-  requireAllowlistAllowFrom({
-    policy: value.dmPolicy,
-    allowFrom: value.allowFrom,
-    ctx,
-    path: ["allowFrom"],
-    message:
-      'channels.bluebubbles.accounts.*.dmPolicy="allowlist" requires allowFrom to contain at least one sender ID',
-  });
-});
+// Account-level schemas skip allowFrom validation because accounts inherit
+// allowFrom from the parent channel config at runtime.
+// Validation is enforced at the top-level BlueBubblesConfigSchema instead.
+export const BlueBubblesAccountSchema = BlueBubblesAccountSchemaBase;
 
 export const BlueBubblesConfigSchema = BlueBubblesAccountSchemaBase.extend({
   accounts: z.record(z.string(), BlueBubblesAccountSchema.optional()).optional(),
