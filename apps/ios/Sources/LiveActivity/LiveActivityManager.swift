@@ -43,13 +43,39 @@ final class LiveActivityManager {
     /// Whether an agent run is currently in progress.
     private var isRunning: Bool = false
 
-    private init() {}
+    private init() {
+        // End any stale activities from previous app launches.
+        Task { @MainActor in
+            self.endStaleActivities()
+        }
+    }
 
     // MARK: - Public API
+
+    /// End all existing Live Activities except the one we're currently tracking.
+    /// Prevents duplicate Dynamic Islands after app relaunches.
+    private func endStaleActivities() {
+        let stale = Activity<OpenClawActivityAttributes>.activities.filter { $0.id != currentActivity?.id }
+        if !stale.isEmpty {
+            logger.info("[LA] ending \(stale.count) stale activities")
+        }
+        for activity in stale {
+            let finalState = OpenClawActivityAttributes.ContentState(
+                subject: nil, statusText: "Ended",
+                currentToolLabel: nil, currentToolIcon: nil, previousToolLabel: nil,
+                toolStepCount: 0, streamingText: nil,
+                isFinished: false, isError: false, isIdle: false, isDisconnected: false, isConnecting: false,
+                startedAt: .now, endedAt: .now)
+            Task { await activity.end(ActivityContent(state: finalState, staleDate: nil), dismissalPolicy: .immediate) }
+        }
+    }
 
     /// Start a persistent Live Activity in "Connecting" state.
     /// Called when the gateway begins connecting, before `onConnected` fires.
     func startActivity(agentName: String, sessionKey: String) {
+        // End any stale activities before starting a new one.
+        endStaleActivities()
+
         if currentActivity != nil {
             logger.info("[LA] activity already running, skipping start")
             return

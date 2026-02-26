@@ -30,11 +30,11 @@ struct OpenClawLiveActivity: Widget {
                         } else if context.state.isConnecting {
                             Text("Connecting...")
                                 .font(.subheadline)
-                                .foregroundStyle(.orange)
+                                .foregroundStyle(.secondary)
                         } else if context.state.isIdle {
                             Text("Idle")
                                 .font(.subheadline)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(.green)
                         } else if context.state.isFinished {
                             Text("Complete")
                                 .font(.subheadline)
@@ -62,7 +62,7 @@ struct OpenClawLiveActivity: Widget {
                     } else if context.state.isIdle {
                         Image(systemName: "antenna.radiowaves.left.and.right")
                             .font(.caption)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.green)
                     } else if context.state.isFinished || context.state.isError {
                         if let endedAt = context.state.endedAt {
                             let elapsed = endedAt.timeIntervalSince(context.state.startedAt)
@@ -103,13 +103,13 @@ struct OpenClawLiveActivity: Widget {
                 } else if context.state.isConnecting {
                     Text("Connecting...")
                         .font(.caption2)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .frame(maxWidth: 64)
                 } else if context.state.isIdle {
                     Image(systemName: "antenna.radiowaves.left.and.right")
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.green)
                 } else if context.state.isFinished {
                     Text("Done")
                         .font(.caption2)
@@ -147,9 +147,9 @@ struct OpenClawLiveActivity: Widget {
     private func dotColor(state: OpenClawActivityAttributes.ContentState) -> Color {
         if state.isDisconnected { return .red }
         if state.isError { return .red }
-        if state.isConnecting { return .orange }
+        if state.isConnecting { return .gray }
         if state.isFinished { return .green }
-        if state.isIdle { return .gray }
+        if state.isIdle { return .green }
         return .blue
     }
 
@@ -181,7 +181,7 @@ struct OpenClawLiveActivity: Widget {
                             .foregroundStyle(.secondary)
                         Text("Connecting...")
                             .font(.subheadline)
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(.secondary)
                     } else if state.isIdle {
                         Text("OpenClaw")
                             .font(.subheadline.bold())
@@ -189,7 +189,7 @@ struct OpenClawLiveActivity: Widget {
                             .foregroundStyle(.secondary)
                         Text("Idle")
                             .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(.green)
                     } else if let subject = state.subject, !state.isFinished, !state.isError {
                         Text(subject)
                             .font(.subheadline.bold())
@@ -215,7 +215,7 @@ struct OpenClawLiveActivity: Widget {
                 } else if state.isIdle {
                     Image(systemName: "antenna.radiowaves.left.and.right")
                         .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.green)
                 } else if state.isFinished || state.isError, let endedAt = state.endedAt {
                     let elapsed = endedAt.timeIntervalSince(state.startedAt)
                     Text(Duration.seconds(elapsed).formatted(.time(pattern: .minuteSecond)))
@@ -245,15 +245,15 @@ struct OpenClawLiveActivity: Widget {
                         .controlSize(.small)
                     Text("Connecting...")
                         .font(.body)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(.secondary)
                 }
             } else if state.isIdle {
                 HStack(spacing: 6) {
                     Image(systemName: "antenna.radiowaves.left.and.right")
-                        .foregroundStyle(.gray)
+                        .foregroundStyle(.green)
                     Text("Idle")
                         .font(.body)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(.green)
                 }
             } else if state.isFinished {
                 HStack(spacing: 6) {
