@@ -170,7 +170,7 @@ jobs:
           token: ${{ secrets.DO_API_TOKEN }}
 
       - name: Configure kubectl
-        run: doctl kubernetes cluster kubeconfig save 3600b910-dab8-43a6-91ba-2b12e829bac5
+        run: doctl kubernetes cluster kubeconfig save 1a153000-90a6-48ad-9375-7ef901a9bf7f
 
       - name: Deploy
         run: |
