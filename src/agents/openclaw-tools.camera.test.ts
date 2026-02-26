@@ -138,6 +138,42 @@ describe("nodes camera_snap", () => {
   });
 });
 
+describe("nodes notifications_list", () => {
+  it("invokes notifications.list and returns payload", async () => {
+    callGateway.mockImplementation(async ({ method, params }) => {
+      if (method === "node.list") {
+        return mockNodeList(["notifications.list"]);
+      }
+      if (method === "node.invoke") {
+        expect(params).toMatchObject({
+          nodeId: NODE_ID,
+          command: "notifications.list",
+          params: {},
+        });
+        return {
+          payload: {
+            enabled: true,
+            connected: true,
+            count: 1,
+            notifications: [{ key: "n1", packageName: "com.example.app" }],
+          },
+        };
+      }
+      return unexpectedGatewayMethod(method);
+    });
+
+    const result = await executeNodes({
+      action: "notifications_list",
+      node: NODE_ID,
+    });
+
+    expect(result.content?.[0]).toMatchObject({
+      type: "text",
+      text: expect.stringContaining('"notifications"'),
+    });
+  });
+});
+
 describe("nodes run", () => {
   it("passes invoke and command timeouts", async () => {
     callGateway.mockImplementation(async ({ method, params }) => {
