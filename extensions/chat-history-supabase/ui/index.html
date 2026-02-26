@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Conversas â€” Iris</title>
+  <title>Conversas &mdash; Iris</title>
   <!-- __CONVERSATIONS_CONFIG__ -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   <style>
@@ -131,6 +131,13 @@
     }
 
     /* â”€â”€ Main chat â”€â”€ */
+    #chat-column {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
     #chat-area {
       flex: 1;
       display: flex;
@@ -354,6 +361,65 @@
       color: #fca5a5;
     }
 
+    /* ── Input bar (Phase 3) ── */
+    #input-bar {
+      display: none;
+      align-items: center;
+      gap: 8px;
+      padding: 10px 16px;
+      border-top: 1px solid var(--border);
+      background: var(--sidebar);
+    }
+
+    #input-bar.visible { display: flex; }
+
+    #msg-input {
+      flex: 1;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      padding: 8px 16px;
+      color: var(--text);
+      font-size: 14px;
+      outline: none;
+    }
+
+    #msg-input::placeholder { color: var(--muted); }
+    #msg-input:focus { border-color: var(--accent); }
+
+    .input-btn {
+      width: 36px;
+      height: 36px;
+      min-width: 36px;
+      border-radius: 50%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      transition: background 0.15s;
+      color: var(--text);
+    }
+
+    .input-btn:hover { background: rgba(124, 58, 237, 0.2); border-color: var(--accent); }
+    .input-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    #btn-send { background: var(--accent); border-color: var(--accent); }
+    #btn-send:hover { background: var(--accent-lt); }
+
+    #btn-record.recording {
+      background: rgba(239, 68, 68, 0.2);
+      border-color: var(--red);
+      animation: pulse-record 1s ease-in-out infinite;
+    }
+
+    @keyframes pulse-record { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+
+    #record-timer { font-size: 12px; color: var(--red); white-space: nowrap; display: none; }
+    #record-timer.visible { display: block; }
+
     /* Scrollbar */
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: transparent; }
@@ -367,20 +433,33 @@
     <aside id="sidebar">
       <div id="sidebar-header">
         <h2>Conversas</h2>
-        <input id="search" type="search" placeholder="Buscar por nome ou mensagemâ€¦" />
+        <input id="search" type="search" placeholder="Buscar por nome ou mensagem&hellip;" />
       </div>
       <div id="contacts"></div>
     </aside>
 
-    <!-- Main chat area -->
-    <main id="chat-area">
-      <div id="empty-state">
-        <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-          <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
-        </svg>
-        <p>Selecione uma conversa</p>
+    <!-- Main chat column (chat area + input bar) -->
+    <div id="chat-column">
+      <main id="chat-area">
+        <div id="empty-state">
+          <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+          </svg>
+          <p>Selecione uma conversa</p>
+        </div>
+      </main>
+
+      <!-- Input bar (Phase 3) — sibling of chat-area inside chat-column so it persists across renders -->
+      <div id="input-bar">
+        <button class="input-btn" id="btn-attach" title="Anexar arquivo">📎</button>
+        <input type="file" id="file-input" style="display:none" />
+        <button class="input-btn" id="btn-record" title="Gravar áudio">🎤</button>
+        <span id="record-timer"></span>
+        <button class="input-btn" id="btn-tts" title="Texto → Voz da Iris (TTS)">🔊</button>
+        <input id="msg-input" type="text" placeholder="Escreva uma mensagem…" />
+        <button class="input-btn" id="btn-send" title="Enviar mensagem">➤</button>
       </div>
-    </main>
+    </div>
   </div>
 
   <script>
@@ -397,7 +476,7 @@
     // â”€â”€ State â”€â”€
     let conversations = []; // { chatId, name, lastBody, lastTime, unread, active }
     let selectedChatId = null;
-    let allMessages = {}; // chatId â†’ Message[]
+    let allMessages = {}; // chatId &#x2192; Message[]
     let searchFilter = '';
 
     // â”€â”€ Elements â”€â”€
@@ -531,6 +610,7 @@
       selectedChatId = chatId;
       renderSidebar();
       renderChatLoading(chatId);
+      showInputBar(chatId);
 
       if (!allMessages[chatId]) {
         await loadMessages(chatId);
@@ -657,7 +737,7 @@
             ${content}
             <div class="bubble-footer">
               <span class="bubble-time">${time}</span>
-              ${dir === 'outbound' ? 'âœ“âœ“' : ''}
+              ${dir === 'outbound' ? '&#x2713;&#x2713;' : ''}
             </div>
           </div>
         </div>
@@ -673,7 +753,7 @@
       return `
         <div class="audio-player">
           ${msg.media_url ? `<audio id="${id}" src="${escHtml(msg.media_url)}" preload="none"></audio>` : ''}
-          <button class="play-btn" data-audio-id="${id}" title="Play">â–¶</button>
+          <button class="play-btn" data-audio-id="${id}" title="Play">&#9654;</button>
           <div class="audio-waveform">
             ${Array.from({ length: 20 }, () => '<div class="waveform-bar"></div>').join('')}
           </div>
@@ -696,11 +776,11 @@
         document.querySelectorAll('.play-btn').forEach(b => {
           if (b !== btn) {
             const a = document.getElementById(b.dataset.audioId);
-            if (a && !a.paused) { a.pause(); b.textContent = 'â–¶'; }
+            if (a && !a.paused) { a.pause(); b.textContent = '&#9654;'; }
           }
         });
         audio.play();
-        btn.textContent = 'â¸';
+        btn.textContent = '&#9208;';
         audio.ontimeupdate = () => {
           const bars = btn.closest('.audio-player').querySelectorAll('.waveform-bar');
           const progress = audio.currentTime / (audio.duration || 1);
@@ -713,10 +793,10 @@
             dur.textContent = `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
           }
         };
-        audio.onended = () => { btn.textContent = 'â–¶'; };
+        audio.onended = () => { btn.textContent = '&#9654;'; };
       } else {
         audio.pause();
-        btn.textContent = 'â–¶';
+        btn.textContent = '&#9654;';
       }
     }
 
@@ -785,7 +865,7 @@
         }, (payload) => {
           const msg = payload.new;
           if (!msg || msg.chat_id !== selectedChatId) return;
-          // Transcription updated â€” re-render chat
+          // Transcription updated &mdash; re-render chat
           if (allMessages[msg.chat_id]) {
             const idx = allMessages[msg.chat_id].findIndex(m => m.id === msg.id || m.message_id === msg.message_id);
             if (idx >= 0) {
@@ -804,6 +884,219 @@
     });
 
     // â”€â”€ Boot â”€â”€
+    // ── Phase 3: Input bar ──
+    const inputBar = document.getElementById('input-bar');
+    const msgInput = document.getElementById('msg-input');
+    const btnSend  = document.getElementById('btn-send');
+    const btnRecord = document.getElementById('btn-record');
+    const btnTts   = document.getElementById('btn-tts');
+    const btnAttach = document.getElementById('btn-attach');
+    const fileInput = document.getElementById('file-input');
+    const recordTimer = document.getElementById('record-timer');
+
+    // Track active chat state for sending
+    let activeChannel = 'whatsapp';
+    let activeAccountId = null;
+    let mediaRecorder = null;
+    let recordedChunks = [];
+    let recordSeconds = 0;
+    let recordInterval = null;
+
+    function showInputBar(chatId) {
+      // Resolve channel + accountId from first message of this chat
+      const msgs = allMessages[chatId];
+      if (msgs && msgs.length > 0) {
+        activeChannel = msgs[0].channel || 'whatsapp';
+        activeAccountId = msgs[0].session_key || null;
+      } else {
+        activeChannel = 'whatsapp';
+        activeAccountId = null;
+      }
+      inputBar.classList.add('visible');
+      msgInput.value = '';
+      msgInput.focus();
+    }
+
+    function showSendError(msg) {
+      const banner = document.createElement('div');
+      banner.className = 'error-banner';
+      banner.style.cssText = 'position:fixed;bottom:70px;right:20px;z-index:999;max-width:340px';
+      banner.textContent = msg;
+      document.body.appendChild(banner);
+      setTimeout(() => banner.remove(), 4000);
+    }
+
+    function setInputsBusy(busy) {
+      [btnSend, btnRecord, btnTts, btnAttach].forEach(b => { b.disabled = busy; });
+      msgInput.disabled = busy;
+    }
+
+    // ── Send text ──
+    async function sendText() {
+      const message = msgInput.value.trim();
+      if (!message || !selectedChatId) return;
+      setInputsBusy(true);
+      try {
+        const res = await fetch('/conversations/send', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chatId: selectedChatId,
+            channel: activeChannel,
+            accountId: activeAccountId,
+            message,
+          }),
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || 'Erro ao enviar');
+        msgInput.value = '';
+      } catch (err) {
+        showSendError('Erro ao enviar: ' + err.message);
+      } finally {
+        setInputsBusy(false);
+        msgInput.focus();
+      }
+    }
+
+    btnSend.addEventListener('click', sendText);
+    msgInput.addEventListener('keydown', function(e) {
+      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendText(); }
+    });
+
+    // ── Send TTS ──
+    btnTts.addEventListener('click', async function() {
+      const text = msgInput.value.trim();
+      if (!text) { msgInput.focus(); return; }
+      if (!selectedChatId) return;
+      setInputsBusy(true);
+      btnTts.textContent = '⏳';
+      try {
+        const res = await fetch('/conversations/send-tts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chatId: selectedChatId,
+            channel: activeChannel,
+            accountId: activeAccountId,
+            text,
+          }),
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || 'Erro no TTS');
+        msgInput.value = '';
+      } catch (err) {
+        showSendError('Erro TTS: ' + err.message);
+      } finally {
+        setInputsBusy(false);
+        btnTts.textContent = '🔊';
+        msgInput.focus();
+      }
+    });
+
+    // ── Record audio ──
+    btnRecord.addEventListener('click', async function() {
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        mediaRecorder.stop();
+        return;
+      }
+
+      if (!selectedChatId) return;
+
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        recordedChunks = [];
+        mediaRecorder = new MediaRecorder(stream);
+
+        mediaRecorder.ondataavailable = function(e) {
+          if (e.data && e.data.size > 0) recordedChunks.push(e.data);
+        };
+
+        mediaRecorder.onstop = async function() {
+          clearInterval(recordInterval);
+          recordTimer.classList.remove('visible');
+          btnRecord.classList.remove('recording');
+          btnRecord.textContent = '🎙️';
+          stream.getTracks().forEach(function(t) { t.stop(); });
+
+          const mimeType = mediaRecorder.mimeType || 'audio/webm';
+          const blob = new Blob(recordedChunks, { type: mimeType });
+          const ext = mimeType.includes('ogg') ? 'ogg' : 'webm';
+
+          setInputsBusy(true);
+          btnRecord.textContent = '⏳';
+          try {
+            const params = new URLSearchParams({
+              chatId: selectedChatId,
+              channel: activeChannel,
+              contentType: mimeType,
+              filename: 'audio.' + ext,
+            });
+            if (activeAccountId) params.set('accountId', activeAccountId);
+            const res = await fetch('/conversations/send-media?' + params.toString(), {
+              method: 'POST',
+              body: blob,
+            });
+            const data = await res.json();
+            if (!data.ok) throw new Error(data.error || 'Erro ao enviar áudio');
+          } catch (err) {
+            showSendError('Erro ao enviar áudio: ' + err.message);
+          } finally {
+            setInputsBusy(false);
+            btnRecord.textContent = '🎙️';
+          }
+        };
+
+        mediaRecorder.start();
+        btnRecord.classList.add('recording');
+        btnRecord.textContent = '⏹';
+        recordSeconds = 0;
+        recordTimer.classList.add('visible');
+        recordTimer.textContent = '0:00';
+        recordInterval = setInterval(function() {
+          recordSeconds++;
+          const m = Math.floor(recordSeconds / 60);
+          const s = String(recordSeconds % 60).padStart(2, '0');
+          recordTimer.textContent = m + ':' + s;
+        }, 1000);
+
+      } catch (err) {
+        showSendError('Microfone não disponível: ' + err.message);
+      }
+    });
+
+    // ── Attach file ──
+    btnAttach.addEventListener('click', function() { fileInput.click(); });
+
+    fileInput.addEventListener('change', async function() {
+      const file = fileInput.files[0];
+      if (!file || !selectedChatId) return;
+      fileInput.value = '';
+
+      setInputsBusy(true);
+      btnAttach.textContent = '⏳';
+      try {
+        const buffer = await file.arrayBuffer();
+        const params = new URLSearchParams({
+          chatId: selectedChatId,
+          channel: activeChannel,
+          contentType: file.type || 'application/octet-stream',
+          filename: file.name,
+        });
+        if (activeAccountId) params.set('accountId', activeAccountId);
+        const res = await fetch('/conversations/send-media?' + params.toString(), {
+          method: 'POST',
+          body: buffer,
+        });
+        const data = await res.json();
+        if (!data.ok) throw new Error(data.error || 'Erro ao enviar arquivo');
+      } catch (err) {
+        showSendError('Erro ao enviar arquivo: ' + err.message);
+      } finally {
+        setInputsBusy(false);
+        btnAttach.textContent = '📎';
+      }
+    });
+
     async function boot() {
       contactsEl.innerHTML = '<div style="display:flex;justify-content:center;padding:40px"><div class="loading-spinner"></div></div>';
       await loadConversations();
