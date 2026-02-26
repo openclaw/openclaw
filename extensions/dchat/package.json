@@ -7,8 +7,8 @@
     "nkn-sdk": "^1.3.6",
     "zod": "^4.3.6"
   },
-  "devDependencies": {
-    "openclaw": "workspace:*"
+  "peerDependencies": {
+    "openclaw": "*"
   },
   "openclaw": {
     "extensions": [
