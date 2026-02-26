@@ -394,12 +394,12 @@ describe("delivery-queue", () => {
 
       expect(deliver).not.toHaveBeenCalled();
       expect(delay).not.toHaveBeenCalled();
-      expect(result).toEqual({ recovered: 0, failed: 0, skipped: 0 });
+      expect(result).toEqual({ recovered: 0, failed: 0, skipped: 1 });
 
       const remaining = await loadPendingDeliveries(tmpDir);
       expect(remaining).toHaveLength(1);
 
-      expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("deferred to next restart"));
+      expect(log.info).toHaveBeenCalledWith(expect.stringContaining("Backoff"));
     });
 
     it("returns zeros when queue is empty", async () => {
