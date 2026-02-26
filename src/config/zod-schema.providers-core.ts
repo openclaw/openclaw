@@ -295,6 +295,27 @@ export const TelegramConfigSchema = TelegramAccountSchemaBase.extend({
     if (account.enabled === false) {
       continue;
     }
+    const effectiveDmPolicy = account.dmPolicy ?? value.dmPolicy;
+    const effectiveAllowFrom = Array.isArray(account.allowFrom)
+      ? account.allowFrom
+      : value.allowFrom;
+    requireOpenAllowFrom({
+      policy: effectiveDmPolicy,
+      allowFrom: effectiveAllowFrom,
+      ctx,
+      path: ["accounts", accountId, "allowFrom"],
+      message:
+        'channels.telegram.accounts.*.dmPolicy="open" requires channels.telegram.allowFrom or channels.telegram.accounts.*.allowFrom to include "*"',
+    });
+    requireAllowlistAllowFrom({
+      policy: effectiveDmPolicy,
+      allowFrom: effectiveAllowFrom,
+      ctx,
+      path: ["accounts", accountId, "allowFrom"],
+      message:
+        'channels.telegram.accounts.*.dmPolicy="allowlist" requires channels.telegram.allowFrom or channels.telegram.accounts.*.allowFrom to contain at least one sender ID',
+    });
+
     const accountWebhookUrl =
       typeof account.webhookUrl === "string" ? account.webhookUrl.trim() : "";
     if (!accountWebhookUrl) {
