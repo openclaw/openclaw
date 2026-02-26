@@ -15,6 +15,7 @@ const requiredPathGroups = [
   "dist/build-info.json",
 ];
 const forbiddenPrefixes = ["dist/OpenClaw.app/"];
+const appcastPath = resolve("appcast.xml");
 
 type PackageJson = {
   name?: string;
@@ -87,8 +88,84 @@ function checkPluginVersions() {
   }
 }
 
+function canonicalSparkleVersionFromShortVersion(shortVersion: string): number | null {
+  const match = /^([0-9]{4})\.([0-9]{1,2})\.([0-9]{1,2})([.-].*)?$/.exec(shortVersion.trim());
+  if (!match) {
+    return null;
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (
+    !Number.isInteger(year) ||
+    !Number.isInteger(month) ||
+    !Number.isInteger(day) ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31
+  ) {
+    return null;
+  }
+  return Number(`${year}${String(month).padStart(2, "0")}${String(day).padStart(2, "0")}0`);
+}
+
+function extractTag(item: string, tag: string): string | null {
+  const escapedTag = tag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const regex = new RegExp(`<${escapedTag}>([^<]+)</${escapedTag}>`);
+  return regex.exec(item)?.[1]?.trim() ?? null;
+}
+
+function checkAppcastSparkleVersions() {
+  const xml = readFileSync(appcastPath, "utf8");
+  const itemMatches = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)];
+  const errors: string[] = [];
+
+  if (itemMatches.length === 0) {
+    errors.push("appcast.xml contains no <item> entries.");
+  }
+
+  for (const [, item] of itemMatches) {
+    const title = extractTag(item, "title") ?? "unknown";
+    const shortVersion = extractTag(item, "sparkle:shortVersionString");
+    const sparkleVersion = extractTag(item, "sparkle:version");
+
+    if (!sparkleVersion) {
+      errors.push(`appcast item '${title}' is missing sparkle:version.`);
+      continue;
+    }
+    if (!/^[0-9]+$/.test(sparkleVersion)) {
+      errors.push(`appcast item '${title}' has non-numeric sparkle:version '${sparkleVersion}'.`);
+      continue;
+    }
+
+    if (!shortVersion) {
+      continue;
+    }
+    const canonicalFloor = canonicalSparkleVersionFromShortVersion(shortVersion);
+    if (canonicalFloor === null) {
+      continue;
+    }
+    const sparkleBuild = Number(sparkleVersion);
+    if (sparkleBuild < canonicalFloor) {
+      errors.push(
+        `appcast item '${title}' has sparkle:version ${sparkleBuild} below canonical floor ${canonicalFloor} derived from ${shortVersion}.`,
+      );
+    }
+  }
+
+  if (errors.length > 0) {
+    console.error("release-check: appcast sparkle version validation failed:");
+    for (const error of errors) {
+      console.error(`  - ${error}`);
+    }
+    process.exit(1);
+  }
+}
+
 function main() {
   checkPluginVersions();
+  checkAppcastSparkleVersions();
 
   const results = runPackDry();
   const files = results.flatMap((entry) => entry.files ?? []);
