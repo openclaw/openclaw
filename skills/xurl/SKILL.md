@@ -104,6 +104,14 @@ Examples with inline secret flags are intentionally omitted. If OAuth1 or app-on
 
 Tokens are persisted to `~/.xurl` in YAML format. Each app has its own isolated tokens. Do not read this file through the agent/LLM. Once authenticated, every command below will auto‑attach the right `Authorization` header.
 
+## OpenClaw cron note (Browser Relay)
+
+In this deployment, X/Twitter cron jobs for posting and replying are executed via OpenClaw Browser Relay using the web UI
+Use the OpenClaw browser tool with profile=chrome
+Ensure a Chrome tab is attached with the Browser Relay toolbar badge ON
+Do not replace these cron flows with xurl API calls
+For reply type jobs, verify the new reply is visible in x.com/ma200line/with_replies
+
 ---
 
 ## Quick Reference
