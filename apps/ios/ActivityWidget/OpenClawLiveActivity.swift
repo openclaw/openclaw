@@ -27,6 +27,10 @@ struct OpenClawLiveActivity: Widget {
                             Text("Disconnected")
                                 .font(.subheadline)
                                 .foregroundStyle(.red)
+                        } else if context.state.isConnecting {
+                            Text("Connecting...")
+                                .font(.subheadline)
+                                .foregroundStyle(.orange)
                         } else if context.state.isIdle {
                             Text("Idle")
                                 .font(.subheadline)
@@ -52,6 +56,9 @@ struct OpenClawLiveActivity: Widget {
                         Image(systemName: "wifi.slash")
                             .font(.caption)
                             .foregroundStyle(.red)
+                    } else if context.state.isConnecting {
+                        ProgressView()
+                            .controlSize(.small)
                     } else if context.state.isIdle {
                         Image(systemName: "antenna.radiowaves.left.and.right")
                             .font(.caption)
@@ -73,7 +80,7 @@ struct OpenClawLiveActivity: Widget {
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     if let prev = context.state.previousToolLabel,
-                       !context.state.isFinished, !context.state.isError, !context.state.isIdle
+                       !context.state.isFinished, !context.state.isError, !context.state.isIdle, !context.state.isConnecting
                     {
                         HStack(spacing: 6) {
                             Image(systemName: "checkmark")
@@ -93,6 +100,12 @@ struct OpenClawLiveActivity: Widget {
                     Image(systemName: "wifi.slash")
                         .font(.caption2)
                         .foregroundStyle(.red)
+                } else if context.state.isConnecting {
+                    Text("Connecting...")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .lineLimit(1)
+                        .frame(maxWidth: 64)
                 } else if context.state.isIdle {
                     Image(systemName: "antenna.radiowaves.left.and.right")
                         .font(.caption2)
@@ -134,6 +147,7 @@ struct OpenClawLiveActivity: Widget {
     private func dotColor(state: OpenClawActivityAttributes.ContentState) -> Color {
         if state.isDisconnected { return .red }
         if state.isError { return .red }
+        if state.isConnecting { return .orange }
         if state.isFinished { return .green }
         if state.isIdle { return .gray }
         return .blue
@@ -160,6 +174,14 @@ struct OpenClawLiveActivity: Widget {
                         Text("Disconnected")
                             .font(.subheadline)
                             .foregroundStyle(.red)
+                    } else if state.isConnecting {
+                        Text("OpenClaw")
+                            .font(.subheadline.bold())
+                        Text("·")
+                            .foregroundStyle(.secondary)
+                        Text("Connecting...")
+                            .font(.subheadline)
+                            .foregroundStyle(.orange)
                     } else if state.isIdle {
                         Text("OpenClaw")
                             .font(.subheadline.bold())
@@ -187,6 +209,9 @@ struct OpenClawLiveActivity: Widget {
                     Image(systemName: "wifi.slash")
                         .font(.caption)
                         .foregroundStyle(.red)
+                } else if state.isConnecting {
+                    ProgressView()
+                        .controlSize(.small)
                 } else if state.isIdle {
                     Image(systemName: "antenna.radiowaves.left.and.right")
                         .font(.caption)
@@ -213,6 +238,14 @@ struct OpenClawLiveActivity: Widget {
                     Text("Disconnected")
                         .font(.body)
                         .foregroundStyle(.red)
+                }
+            } else if state.isConnecting {
+                HStack(spacing: 6) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Connecting...")
+                        .font(.body)
+                        .foregroundStyle(.orange)
                 }
             } else if state.isIdle {
                 HStack(spacing: 6) {
@@ -265,7 +298,7 @@ struct OpenClawLiveActivity: Widget {
             }
 
             // Footer: step counter + previous tool (only during active run)
-            if !state.isIdle {
+            if !state.isIdle, !state.isConnecting {
                 HStack {
                     if state.toolStepCount > 0 {
                         Text("Step \(state.toolStepCount)")

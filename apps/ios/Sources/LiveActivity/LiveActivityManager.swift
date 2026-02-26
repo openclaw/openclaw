@@ -47,8 +47,8 @@ final class LiveActivityManager {
 
     // MARK: - Public API
 
-    /// Start a persistent Live Activity when the gateway connects.
-    /// The activity stays visible until `endActivity()` is called (on gateway disconnect).
+    /// Start a persistent Live Activity in "Connecting" state.
+    /// Called when the gateway begins connecting, before `onConnected` fires.
     func startActivity(agentName: String, sessionKey: String) {
         if currentActivity != nil {
             logger.info("[LA] activity already running, skipping start")
@@ -70,7 +70,7 @@ final class LiveActivityManager {
             sessionKey: sessionKey)
         let initialState = OpenClawActivityAttributes.ContentState(
             subject: nil,
-            statusText: "Idle",
+            statusText: "Connecting...",
             currentToolLabel: nil,
             currentToolIcon: nil,
             previousToolLabel: nil,
@@ -78,8 +78,9 @@ final class LiveActivityManager {
             streamingText: nil,
             isFinished: false,
             isError: false,
-            isIdle: true,
+            isIdle: false,
             isDisconnected: false,
+            isConnecting: true,
             startedAt: activityStartDate)
         let content = ActivityContent(state: initialState, staleDate: nil)
 
@@ -88,10 +89,38 @@ final class LiveActivityManager {
                 attributes: attributes,
                 content: content,
                 pushType: nil)
-            logger.info("Live Activity started (persistent) id=\(self.currentActivity?.id ?? "?")")
+            logger.info("Live Activity started (connecting) id=\(self.currentActivity?.id ?? "?")")
         } catch {
             logger.error("Failed to start Live Activity: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    /// Gateway is attempting to connect — show "Connecting..." state.
+    func handleConnecting() {
+        guard let activity = currentActivity else { return }
+        logger.info("[LA] handleConnecting — showing Connecting...")
+        isRunning = false
+        debounceTimer?.invalidate()
+        debounceTimer = nil
+        idleTransitionTimer?.invalidate()
+        idleTransitionTimer = nil
+        pendingContent = nil
+
+        let connectingState = OpenClawActivityAttributes.ContentState(
+            subject: nil,
+            statusText: "Connecting...",
+            currentToolLabel: nil,
+            currentToolIcon: nil,
+            previousToolLabel: nil,
+            toolStepCount: 0,
+            streamingText: nil,
+            isFinished: false,
+            isError: false,
+            isIdle: false,
+            isDisconnected: false,
+            isConnecting: true,
+            startedAt: activityStartDate)
+        Task { await activity.update(ActivityContent(state: connectingState, staleDate: nil)) }
     }
 
     /// Begin a new agent run. Transitions from idle → active.
@@ -203,6 +232,7 @@ final class LiveActivityManager {
             isError: false,
             isIdle: false,
             isDisconnected: false,
+            isConnecting: false,
             startedAt: capturedStart,
             endedAt: .now)
         Task { await capturedActivity?.update(ActivityContent(state: doneState, staleDate: nil)) }
@@ -245,6 +275,7 @@ final class LiveActivityManager {
             isError: true,
             isIdle: false,
             isDisconnected: false,
+            isConnecting: false,
             startedAt: activityStartDate,
             endedAt: .now)
         guard let activity = currentActivity else { return }
@@ -280,6 +311,7 @@ final class LiveActivityManager {
             isError: false,
             isIdle: false,
             isDisconnected: true,
+            isConnecting: false,
             startedAt: activityStartDate)
         Task { await activity.update(ActivityContent(state: disconnectedState, staleDate: nil)) }
     }
@@ -320,6 +352,7 @@ final class LiveActivityManager {
                 isError: false,
                 isIdle: false,
                 isDisconnected: true,
+                isConnecting: false,
                 startedAt: capturedStart,
                 endedAt: .now)
             let content = ActivityContent(state: finalState, staleDate: nil)
@@ -634,6 +667,7 @@ final class LiveActivityManager {
             isError: false,
             isIdle: true,
             isDisconnected: false,
+            isConnecting: false,
             startedAt: activityStartDate)
         Task { await activity.update(ActivityContent(state: idleState, staleDate: nil)) }
     }
@@ -655,6 +689,7 @@ final class LiveActivityManager {
             isError: false,
             isIdle: false,
             isDisconnected: false,
+            isConnecting: false,
             startedAt: activityStartDate)
         guard let activity = currentActivity else { return }
         Task { await activity.update(ActivityContent(state: state, staleDate: nil)) }
@@ -674,6 +709,7 @@ final class LiveActivityManager {
             isError: false,
             isIdle: false,
             isDisconnected: false,
+            isConnecting: false,
             startedAt: activityStartDate)
         pendingContent = ActivityContent(state: state, staleDate: nil)
 
