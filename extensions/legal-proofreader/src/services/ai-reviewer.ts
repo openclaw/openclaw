@@ -226,7 +226,31 @@ async function runBatchReview(params: {
         config,
         runId: `${runId}-attempt-${attempt}`,
       });
-      return await parseIssuesResponseText(responseText);
+
+      try {
+        return await parseIssuesResponseText(responseText);
+      } catch (parseErr) {
+        const repairPrompt = [
+          systemPrompt,
+          "Your previous answer had invalid or malformed JSON.",
+          "Repair it and return ONLY one valid payload wrapped in <issues>...</issues>.",
+          "Preserve issue meanings; do not invent new issues.",
+          "=== PREVIOUS MODEL OUTPUT ===",
+          responseText,
+        ].join("\n\n");
+
+        const repairedText = await reviewWithModel({
+          prompt: repairPrompt,
+          config,
+          runId: `${runId}-attempt-${attempt}-repair`,
+        });
+
+        try {
+          return await parseIssuesResponseText(repairedText);
+        } catch {
+          throw parseErr;
+        }
+      }
     } catch (err) {
       lastErr = err;
       if (attempt < backoffMs.length) {
