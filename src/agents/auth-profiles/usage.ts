@@ -28,6 +28,45 @@ export function isProfileInCooldown(store: AuthProfileStore, profileId: string):
 }
 
 /**
+ * Check if a profile is in cooldown for a specific model. Billing/auth
+ * disables apply to all models, but rate-limit / timeout cooldowns are
+ * checked per-model when a model key is provided.
+ */
+export function isProfileInCooldownForModel(
+  store: AuthProfileStore,
+  profileId: string,
+  model?: string,
+): boolean {
+  const stats = store.usageStats?.[profileId];
+  if (!stats) {
+    return false;
+  }
+
+  // Billing/auth disabled applies to ALL models
+  if (
+    typeof stats.disabledUntil === "number" &&
+    Number.isFinite(stats.disabledUntil) &&
+    stats.disabledUntil > 0 &&
+    Date.now() < stats.disabledUntil
+  ) {
+    return true;
+  }
+
+  // No model specified → fall back to global cooldown check
+  if (!model) {
+    return isProfileInCooldown(store, profileId);
+  }
+
+  // Check model-specific cooldown
+  const mc = stats.modelCooldowns?.[model];
+  if (mc?.cooldownUntil && Date.now() < mc.cooldownUntil) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
  * Return the soonest `unusableUntil` timestamp (ms epoch) among the given
  * profiles, or `null` when no profile has a recorded cooldown. Note: the
  * returned timestamp may be in the past if the cooldown has already expired.
@@ -37,17 +76,25 @@ export function getSoonestCooldownExpiry(
   profileIds: string[],
 ): number | null {
   let soonest: number | null = null;
+  const consider = (until: unknown) => {
+    if (typeof until !== "number" || !Number.isFinite(until) || until <= 0) {
+      return;
+    }
+    if (soonest === null || until < soonest) {
+      soonest = until;
+    }
+  };
   for (const id of profileIds) {
     const stats = store.usageStats?.[id];
     if (!stats) {
       continue;
     }
-    const until = resolveProfileUnusableUntil(stats);
-    if (typeof until !== "number" || !Number.isFinite(until) || until <= 0) {
-      continue;
-    }
-    if (soonest === null || until < soonest) {
-      soonest = until;
+    consider(resolveProfileUnusableUntil(stats));
+    // Also consider per-model cooldowns so probe timing accounts for them
+    if (stats.modelCooldowns) {
+      for (const mc of Object.values(stats.modelCooldowns)) {
+        consider(mc.cooldownUntil);
+      }
     }
   }
   return soonest;
@@ -107,6 +154,25 @@ export function clearExpiredCooldowns(store: AuthProfileStore, now?: number): bo
       profileMutated = true;
     }
 
+    // Clear expired model-level cooldowns
+    if (stats.modelCooldowns) {
+      for (const [modelKey, mc] of Object.entries(stats.modelCooldowns)) {
+        if (
+          typeof mc.cooldownUntil === "number" &&
+          Number.isFinite(mc.cooldownUntil) &&
+          mc.cooldownUntil > 0 &&
+          ts >= mc.cooldownUntil
+        ) {
+          delete stats.modelCooldowns[modelKey];
+          profileMutated = true;
+        }
+      }
+      // Remove the map entirely if empty
+      if (Object.keys(stats.modelCooldowns).length === 0) {
+        stats.modelCooldowns = undefined;
+      }
+    }
+
     // Reset error counters when ALL cooldowns have expired so the profile gets
     // a fair retry window. Preserves lastFailureAt for the failureWindowMs
     // decay check in computeNextProfileUsageStats.
@@ -149,6 +215,7 @@ export async function markAuthProfileUsed(params: {
         disabledUntil: undefined,
         disabledReason: undefined,
         failureCounts: undefined,
+        modelCooldowns: undefined,
       };
       return true;
     },
@@ -170,16 +237,32 @@ export async function markAuthProfileUsed(params: {
     disabledUntil: undefined,
     disabledReason: undefined,
     failureCounts: undefined,
+    modelCooldowns: undefined,
   };
   saveAuthProfileStore(store, agentDir);
 }
 
-export function calculateAuthProfileCooldownMs(errorCount: number): number {
+export function calculateAuthProfileCooldownMs(
+  errorCount: number,
+  reason?: AuthProfileFailureReason,
+): number {
   const normalized = Math.max(1, errorCount);
-  return Math.min(
-    60 * 60 * 1000, // 1 hour max
-    60 * 1000 * 5 ** Math.min(normalized - 1, 3),
+
+  // Timeout uses a shorter cooldown — likely transient network/provider issue
+  if (reason === "timeout") {
+    return Math.min(
+      5 * 60 * 1000, // 5 min max
+      30 * 1000 * 2 ** Math.min(normalized - 1, 4),
+    );
+  }
+
+  // Rate limit / other: gentler 2^n backoff with jitter (was 5^n)
+  const base = Math.min(
+    15 * 60 * 1000, // 15 min max (was 1 hour)
+    60 * 1000 * 2 ** Math.min(normalized - 1, 4),
   );
+  const jitter = base * (0.1 + Math.random() * 0.1);
+  return Math.floor(base + jitter);
 }
 
 type ResolvedAuthCooldownConfig = {
@@ -261,6 +344,9 @@ function computeNextProfileUsageStats(params: {
   now: number;
   reason: AuthProfileFailureReason;
   cfgResolved: ResolvedAuthCooldownConfig;
+  model?: string;
+  /** Server-provided Retry-After delay (ms). When available, used instead of calculated backoff. */
+  retryAfterMs?: number;
 }): ProfileUsageStats {
   const windowMs = params.cfgResolved.failureWindowMs;
   const windowExpired =
@@ -290,8 +376,31 @@ function computeNextProfileUsageStats(params: {
     updatedStats.disabledUntil = params.now + backoffMs;
     updatedStats.disabledReason = "billing";
   } else {
-    const backoffMs = calculateAuthProfileCooldownMs(nextErrorCount);
-    updatedStats.cooldownUntil = params.now + backoffMs;
+    // Compute backoff: prefer server-provided Retry-After, then calculated
+    let backoffMs: number;
+    if (params.retryAfterMs && params.retryAfterMs > 0) {
+      // Cap server-provided value at 15 min to avoid pathologically long waits
+      backoffMs = Math.min(params.retryAfterMs, 15 * 60 * 1000);
+    } else if (params.reason === "timeout") {
+      const timeoutCount = failureCounts.timeout ?? 1;
+      backoffMs = calculateAuthProfileCooldownMs(timeoutCount, "timeout");
+    } else {
+      backoffMs = calculateAuthProfileCooldownMs(nextErrorCount, params.reason);
+    }
+
+    if (params.model) {
+      // Record per-model cooldown instead of global profile cooldown
+      const existingMc = updatedStats.modelCooldowns ?? {};
+      const prevEntry = existingMc[params.model] ?? {};
+      existingMc[params.model] = {
+        cooldownUntil: params.now + backoffMs,
+        errorCount: (prevEntry.errorCount ?? 0) + 1,
+        lastFailureAt: params.now,
+      };
+      updatedStats.modelCooldowns = existingMc;
+    } else {
+      updatedStats.cooldownUntil = params.now + backoffMs;
+    }
   }
 
   return updatedStats;
@@ -307,8 +416,12 @@ export async function markAuthProfileFailure(params: {
   reason: AuthProfileFailureReason;
   cfg?: OpenClawConfig;
   agentDir?: string;
+  /** When set, cooldown is recorded per-model instead of globally on the profile. */
+  model?: string;
+  /** Server-provided Retry-After delay (ms). Overrides calculated backoff when present. */
+  retryAfterMs?: number;
 }): Promise<void> {
-  const { store, profileId, reason, agentDir, cfg } = params;
+  const { store, profileId, reason, agentDir, cfg, model, retryAfterMs } = params;
   const updated = await updateAuthProfileStoreWithLock({
     agentDir,
     updater: (freshStore) => {
@@ -331,6 +444,8 @@ export async function markAuthProfileFailure(params: {
         now,
         reason,
         cfgResolved,
+        model,
+        retryAfterMs,
       });
       return true;
     },
@@ -357,13 +472,15 @@ export async function markAuthProfileFailure(params: {
     now,
     reason,
     cfgResolved,
+    model,
+    retryAfterMs,
   });
   saveAuthProfileStore(store, agentDir);
 }
 
 /**
  * Mark a profile as failed/rate-limited. Applies exponential backoff cooldown.
- * Cooldown times: 1min, 5min, 25min, max 1 hour.
+ * Cooldown times: 1min, 2min, 4min, 8min, max 15 min.
  * Uses store lock to avoid overwriting concurrent usage updates.
  */
 export async function markAuthProfileCooldown(params: {
@@ -400,6 +517,7 @@ export async function clearAuthProfileCooldown(params: {
         ...freshStore.usageStats[profileId],
         errorCount: 0,
         cooldownUntil: undefined,
+        modelCooldowns: undefined,
       };
       return true;
     },
@@ -416,6 +534,7 @@ export async function clearAuthProfileCooldown(params: {
     ...store.usageStats[profileId],
     errorCount: 0,
     cooldownUntil: undefined,
+    modelCooldowns: undefined,
   };
   saveAuthProfileStore(store, agentDir);
 }

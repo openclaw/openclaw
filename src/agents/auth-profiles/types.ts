@@ -40,6 +40,13 @@ export type AuthProfileFailureReason =
   | "timeout"
   | "unknown";
 
+/** Per-model cooldown state within a profile */
+export type ModelCooldownEntry = {
+  cooldownUntil?: number;
+  errorCount?: number;
+  lastFailureAt?: number;
+};
+
 /** Per-profile usage statistics for round-robin and cooldown tracking */
 export type ProfileUsageStats = {
   lastUsed?: number;
@@ -49,6 +56,12 @@ export type ProfileUsageStats = {
   errorCount?: number;
   failureCounts?: Partial<Record<AuthProfileFailureReason, number>>;
   lastFailureAt?: number;
+  /**
+   * Per-model cooldown tracking. When a specific model (e.g. claude-opus-4-6)
+   * hits a rate limit, only that model is cooldown-blocked on this profile —
+   * other models sharing the same profile remain available.
+   */
+  modelCooldowns?: Record<string, ModelCooldownEntry>;
 };
 
 export type AuthProfileStore = {

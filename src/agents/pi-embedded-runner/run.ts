@@ -5,7 +5,7 @@ import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import { resolveOpenClawAgentDir } from "../agent-paths.js";
 import {
-  isProfileInCooldown,
+  isProfileInCooldownForModel,
   markAuthProfileFailure,
   markAuthProfileGood,
   markAuthProfileUsed,
@@ -17,7 +17,7 @@ import {
   resolveContextWindowInfo,
 } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS, DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
-import { FailoverError, resolveFailoverStatus } from "../failover-error.js";
+import { FailoverError, parseRetryAfterMs, resolveFailoverStatus } from "../failover-error.js";
 import {
   ensureAuthProfileStore,
   getApiKeyForModel,
@@ -420,7 +420,7 @@ export async function runEmbeddedPiAgent(
         let nextIndex = profileIndex + 1;
         while (nextIndex < profileCandidates.length) {
           const candidate = profileCandidates[nextIndex];
-          if (candidate && isProfileInCooldown(authStore, candidate)) {
+          if (candidate && isProfileInCooldownForModel(authStore, candidate, modelId)) {
             nextIndex += 1;
             continue;
           }
@@ -446,7 +446,7 @@ export async function runEmbeddedPiAgent(
           if (
             candidate &&
             candidate !== lockedProfileId &&
-            isProfileInCooldown(authStore, candidate)
+            isProfileInCooldownForModel(authStore, candidate, modelId)
           ) {
             profileIndex += 1;
             continue;
@@ -821,6 +821,8 @@ export async function runEmbeddedPiAgent(
                 reason: promptFailoverReason,
                 cfg: params.config,
                 agentDir: params.agentDir,
+                model: modelId,
+                retryAfterMs: parseRetryAfterMs(promptError) ?? undefined,
               });
             }
             if (
@@ -905,12 +907,16 @@ export async function runEmbeddedPiAgent(
                 timedOut || assistantFailoverReason === "timeout"
                   ? "timeout"
                   : (assistantFailoverReason ?? "unknown");
+              const rotationRetryAfterMs =
+                parseRetryAfterMs({ message: lastAssistant?.errorMessage }) ?? undefined;
               await markAuthProfileFailure({
                 store: authStore,
                 profileId: lastProfileId,
                 reason,
                 cfg: params.config,
                 agentDir: params.agentDir,
+                model: modelId,
+                retryAfterMs: rotationRetryAfterMs,
               });
               if (timedOut && !isProbeSession) {
                 log.warn(

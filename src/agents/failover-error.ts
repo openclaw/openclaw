@@ -11,6 +11,8 @@ export class FailoverError extends Error {
   readonly profileId?: string;
   readonly status?: number;
   readonly code?: string;
+  /** Server-provided retry delay in milliseconds (from Retry-After header). */
+  readonly retryAfterMs?: number;
 
   constructor(
     message: string,
@@ -22,6 +24,7 @@ export class FailoverError extends Error {
       status?: number;
       code?: string;
       cause?: unknown;
+      retryAfterMs?: number;
     },
   ) {
     super(message, { cause: params.cause });
@@ -32,6 +35,7 @@ export class FailoverError extends Error {
     this.profileId = params.profileId;
     this.status = params.status;
     this.code = params.code;
+    this.retryAfterMs = params.retryAfterMs;
   }
 }
 
@@ -206,6 +210,79 @@ export function describeFailoverError(err: unknown): {
   };
 }
 
+/**
+ * Extract a Retry-After delay (in milliseconds) from an error object.
+ * Tries multiple strategies:
+ * 1. `err.headers["retry-after"]` or `err.headers.get("retry-after")` (HTTP response)
+ * 2. `err.retry_after` or `err.retryAfter` (SDK-specific)
+ * 3. Regex match in error message (e.g. "retry after 30 seconds")
+ * Returns `null` when no Retry-After information can be extracted.
+ */
+export function parseRetryAfterMs(err: unknown): number | null {
+  if (!err || typeof err !== "object") {
+    return null;
+  }
+
+  // Strategy 1: headers object (Anthropic/OpenAI SDK errors often expose .headers)
+  const headers = (err as { headers?: unknown }).headers;
+  if (headers) {
+    let raw: string | null | undefined;
+    if (typeof headers === "object" && headers !== null) {
+      if (typeof (headers as { get?: unknown }).get === "function") {
+        raw = (headers as { get(key: string): string | null }).get("retry-after");
+      } else {
+        const candidate =
+          (headers as Record<string, unknown>)["retry-after"] ??
+          (headers as Record<string, unknown>)["Retry-After"];
+        raw = typeof candidate === "string" ? candidate : null;
+      }
+    }
+    if (typeof raw === "string") {
+      const seconds = Number(raw);
+      if (Number.isFinite(seconds) && seconds > 0) {
+        return Math.ceil(seconds * 1000);
+      }
+      // HTTP-date format
+      const dateMs = Date.parse(raw);
+      if (Number.isFinite(dateMs)) {
+        const delayMs = dateMs - Date.now();
+        if (delayMs > 0) {
+          return delayMs;
+        }
+      }
+    }
+  }
+
+  // Strategy 2: SDK fields
+  const retryAfter =
+    (err as { retry_after?: unknown }).retry_after ?? (err as { retryAfter?: unknown }).retryAfter;
+  if (typeof retryAfter === "number" && Number.isFinite(retryAfter) && retryAfter > 0) {
+    return Math.ceil(retryAfter * 1000);
+  }
+
+  // Strategy 3: error message pattern "retry after N seconds" / "try again in N seconds"
+  const message = getErrorMessage(err);
+  if (message) {
+    const match = message.match(
+      /(?:retry|try again)\s+(?:after|in)\s+(\d+(?:\.\d+)?)\s*(?:s(?:ec(?:ond)?s?)?)?/i,
+    );
+    if (match?.[1]) {
+      const seconds = Number(match[1]);
+      if (Number.isFinite(seconds) && seconds > 0) {
+        return Math.ceil(seconds * 1000);
+      }
+    }
+  }
+
+  // Walk into cause
+  const cause = "cause" in err ? (err as { cause?: unknown }).cause : undefined;
+  if (cause && typeof cause === "object") {
+    return parseRetryAfterMs(cause);
+  }
+
+  return null;
+}
+
 export function coerceToFailoverError(
   err: unknown,
   context?: {
@@ -225,6 +302,7 @@ export function coerceToFailoverError(
   const message = getErrorMessage(err) || String(err);
   const status = getStatusCode(err) ?? resolveFailoverStatus(reason);
   const code = getErrorCode(err);
+  const retryAfterMs = parseRetryAfterMs(err) ?? undefined;
 
   return new FailoverError(message, {
     reason,
@@ -234,5 +312,6 @@ export function coerceToFailoverError(
     status,
     code,
     cause: err instanceof Error ? err : undefined,
+    retryAfterMs,
   });
 }
