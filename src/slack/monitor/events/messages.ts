@@ -2,7 +2,6 @@ import type { SlackEventMiddlewareArgs } from "@slack/bolt";
 import { danger } from "../../../globals.js";
 import { enqueueSystemEvent } from "../../../infra/system-events.js";
 import type { SlackAppMentionEvent, SlackMessageEvent } from "../../types.js";
-import { resolveSlackChannelLabel } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackMessageHandler } from "../message-handler.js";
 import type {
@@ -10,6 +9,7 @@ import type {
   SlackMessageDeletedEvent,
   SlackThreadBroadcastEvent,
 } from "../types.js";
+import { authorizeAndResolveSlackSystemEventContext } from "./system-event-context.js";
 
 export function registerSlackMessageEvents(params: {
   ctx: SlackMonitorContext;
@@ -17,30 +17,15 @@ export function registerSlackMessageEvents(params: {
 }) {
   const { ctx, handleSlackMessage } = params;
 
-  const resolveSlackChannelSystemEventTarget = async (channelId: string | undefined) => {
-    const channelInfo = channelId ? await ctx.resolveChannelName(channelId) : {};
-    const channelType = channelInfo?.type;
-    if (
-      !ctx.isChannelAllowed({
-        channelId,
-        channelName: channelInfo?.name,
-        channelType,
-      })
-    ) {
-      return null;
-    }
-
-    const label = resolveSlackChannelLabel({
-      channelId,
-      channelName: channelInfo?.name,
-    });
-    const sessionKey = ctx.resolveSlackSystemEventSessionKey({
-      channelId,
-      channelType,
-    });
-
-    return { channelInfo, channelType, label, sessionKey };
-  };
+  const resolveChangedSenderId = (changed: SlackMessageChangedEvent): string | undefined =>
+    changed.message?.user ??
+    changed.previous_message?.user ??
+    changed.message?.bot_id ??
+    changed.previous_message?.bot_id;
+  const resolveDeletedSenderId = (deleted: SlackMessageDeletedEvent): string | undefined =>
+    deleted.previous_message?.user ?? deleted.previous_message?.bot_id;
+  const resolveThreadBroadcastSenderId = (thread: SlackThreadBroadcastEvent): string | undefined =>
+    thread.user ?? thread.message?.user ?? thread.message?.bot_id;
 
   ctx.app.event("message", async ({ event, body }: SlackEventMiddlewareArgs<"message">) => {
     try {
@@ -52,13 +37,18 @@ export function registerSlackMessageEvents(params: {
       if (message.subtype === "message_changed") {
         const changed = event as SlackMessageChangedEvent;
         const channelId = changed.channel;
-        const target = await resolveSlackChannelSystemEventTarget(channelId);
-        if (!target) {
+        const ingressContext = await authorizeAndResolveSlackSystemEventContext({
+          ctx,
+          senderId: resolveChangedSenderId(changed),
+          channelId,
+          eventKind: "message_changed",
+        });
+        if (!ingressContext) {
           return;
         }
         const messageId = changed.message?.ts ?? changed.previous_message?.ts;
-        enqueueSystemEvent(`Slack message edited in ${target.label}.`, {
-          sessionKey: target.sessionKey,
+        enqueueSystemEvent(`Slack message edited in ${ingressContext.channelLabel}.`, {
+          sessionKey: ingressContext.sessionKey,
           contextKey: `slack:message:changed:${channelId ?? "unknown"}:${messageId ?? changed.event_ts ?? "unknown"}`,
         });
         return;
@@ -66,12 +56,17 @@ export function registerSlackMessageEvents(params: {
       if (message.subtype === "message_deleted") {
         const deleted = event as SlackMessageDeletedEvent;
         const channelId = deleted.channel;
-        const target = await resolveSlackChannelSystemEventTarget(channelId);
-        if (!target) {
+        const ingressContext = await authorizeAndResolveSlackSystemEventContext({
+          ctx,
+          senderId: resolveDeletedSenderId(deleted),
+          channelId,
+          eventKind: "message_deleted",
+        });
+        if (!ingressContext) {
           return;
         }
-        enqueueSystemEvent(`Slack message deleted in ${target.label}.`, {
-          sessionKey: target.sessionKey,
+        enqueueSystemEvent(`Slack message deleted in ${ingressContext.channelLabel}.`, {
+          sessionKey: ingressContext.sessionKey,
           contextKey: `slack:message:deleted:${channelId ?? "unknown"}:${deleted.deleted_ts ?? deleted.event_ts ?? "unknown"}`,
         });
         return;
@@ -79,13 +74,18 @@ export function registerSlackMessageEvents(params: {
       if (message.subtype === "thread_broadcast") {
         const thread = event as SlackThreadBroadcastEvent;
         const channelId = thread.channel;
-        const target = await resolveSlackChannelSystemEventTarget(channelId);
-        if (!target) {
+        const ingressContext = await authorizeAndResolveSlackSystemEventContext({
+          ctx,
+          senderId: resolveThreadBroadcastSenderId(thread),
+          channelId,
+          eventKind: "thread_broadcast",
+        });
+        if (!ingressContext) {
           return;
         }
         const messageId = thread.message?.ts ?? thread.event_ts;
-        enqueueSystemEvent(`Slack thread reply broadcast in ${target.label}.`, {
-          sessionKey: target.sessionKey,
+        enqueueSystemEvent(`Slack thread reply broadcast in ${ingressContext.channelLabel}.`, {
+          sessionKey: ingressContext.sessionKey,
           contextKey: `slack:thread:broadcast:${channelId ?? "unknown"}:${messageId ?? "unknown"}`,
         });
         return;
