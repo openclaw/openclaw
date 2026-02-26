@@ -8,7 +8,7 @@ import {
   resolveTargetIdFromQuery,
   withPlaywrightRouteContext,
 } from "./agent.shared.js";
-import { DEFAULT_TRACE_DIR, resolvePathWithinRoot } from "./path-output.js";
+import { DEFAULT_TRACE_DIR, resolveWritablePathWithinRoot } from "./path-output.js";
 import type { BrowserRouteRegistrar } from "./types.js";
 import { toBoolean, toStringOrEmpty } from "./utils.js";
 
@@ -122,7 +122,7 @@ export function registerBrowserAgentDebugRoutes(
         const id = crypto.randomUUID();
         const dir = DEFAULT_TRACE_DIR;
         await fs.mkdir(dir, { recursive: true });
-        const tracePathResult = resolvePathWithinRoot({
+        const tracePathResult = await resolveWritablePathWithinRoot({
           rootDir: dir,
           requestedPath: out,
           scopeLabel: "trace directory",

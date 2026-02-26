@@ -95,12 +95,53 @@ export function resolvePreferredOpenClawTmpDir(
     }
   };
 
+  const resolveFallbackState = (
+    fallbackPath: string,
+    requireWritableAccess: boolean,
+  ): "available" | "missing" | "invalid" => {
+    try {
+      const candidate = lstatSync(fallbackPath);
+      if (!isTrustedPreferredDir(candidate)) {
+        return "invalid";
+      }
+      if (requireWritableAccess) {
+        accessSync(fallbackPath, fs.constants.W_OK | fs.constants.X_OK);
+      }
+      return "available";
+    } catch (err) {
+      if (isNodeErrorWithCode(err, "ENOENT")) {
+        return "missing";
+      }
+      return "invalid";
+    }
+  };
+
+  const ensureTrustedFallbackDir = (): string => {
+    const fallbackPath = fallback();
+    const state = resolveFallbackState(fallbackPath, true);
+    if (state === "available") {
+      return fallbackPath;
+    }
+    if (state === "invalid") {
+      throw new Error(`Unsafe fallback OpenClaw temp dir: ${fallbackPath}`);
+    }
+    try {
+      mkdirSync(fallbackPath, { recursive: true, mode: 0o700 });
+    } catch {
+      throw new Error(`Unable to create fallback OpenClaw temp dir: ${fallbackPath}`);
+    }
+    if (resolveFallbackState(fallbackPath, true) !== "available") {
+      throw new Error(`Unsafe fallback OpenClaw temp dir: ${fallbackPath}`);
+    }
+    return fallbackPath;
+  };
+
   const existingPreferredState = resolvePreferredState(true);
   if (existingPreferredState === "available") {
     return POSIX_OPENCLAW_TMP_DIR;
   }
   if (existingPreferredState === "invalid") {
-    return fallback();
+    return ensureTrustedFallbackDir();
   }
 
   try {
@@ -108,10 +149,10 @@ export function resolvePreferredOpenClawTmpDir(
     // Create with a safe default; subsequent callers expect it exists.
     mkdirSync(POSIX_OPENCLAW_TMP_DIR, { recursive: true, mode: 0o700 });
     if (resolvePreferredState(true) !== "available") {
-      return fallback();
+      return ensureTrustedFallbackDir();
     }
     return POSIX_OPENCLAW_TMP_DIR;
   } catch {
-    return fallback();
+    return ensureTrustedFallbackDir();
   }
 }
