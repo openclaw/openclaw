@@ -87,7 +87,9 @@ describe('dmPolicy="allowlist" requires non-empty allowFrom', () => {
     expect(res.ok).toBe(true);
   });
 
-  it('rejects telegram account dmPolicy="allowlist" without allowFrom', () => {
+  it('accepts telegram account dmPolicy="allowlist" without own allowFrom (inherits from parent)', () => {
+    // Account-level schemas skip allowFrom validation because accounts inherit
+    // allowFrom from the parent channel config at runtime.
     const res = validateConfigObject({
       channels: {
         telegram: {
@@ -97,10 +99,7 @@ describe('dmPolicy="allowlist" requires non-empty allowFrom', () => {
         },
       },
     });
-    expect(res.ok).toBe(false);
-    if (!res.ok) {
-      expect(res.issues.some((i) => i.path.includes("allowFrom"))).toBe(true);
-    }
+    expect(res.ok).toBe(true);
   });
 
   it('accepts telegram account dmPolicy="allowlist" with allowFrom entries', () => {
