@@ -159,7 +159,7 @@ describe("msteams file consent invoke authz", () => {
     await vi.waitFor(() => {
       expect(fileConsentMockState.uploadToConsentUrl).toHaveBeenCalledTimes(1);
     });
-    
+
     expect(fileConsentMockState.uploadToConsentUrl).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "https://upload.example.com/put",
