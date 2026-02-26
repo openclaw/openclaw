@@ -9,14 +9,10 @@ import { ensureAuthStoreFile, resolveAuthStorePath, resolveLegacyAuthStorePath }
 import type { AuthProfileCredential, AuthProfileStore, ProfileUsageStats } from "./types.js";
 
 type LegacyAuthStore = Record<string, AuthProfileCredential>;
+type CredentialRejectReason = "non_object" | "invalid_type" | "missing_provider";
+type RejectedCredentialEntry = { key: string; reason: CredentialRejectReason };
 
-function _syncAuthProfileStore(target: AuthProfileStore, source: AuthProfileStore): void {
-  target.version = source.version;
-  target.profiles = source.profiles;
-  target.order = source.order;
-  target.lastGood = source.lastGood;
-  target.usageStats = source.usageStats;
-}
+const AUTH_PROFILE_TYPES = new Set<AuthProfileCredential["type"]>(["api_key", "oauth", "token"]);
 
 export async function updateAuthProfileStoreWithLock(params: {
   agentDir?: string;
@@ -61,6 +57,49 @@ function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<Auth
   return entry as Partial<AuthProfileCredential>;
 }
 
+function parseCredentialEntry(
+  raw: unknown,
+  fallbackProvider?: string,
+): { ok: true; credential: AuthProfileCredential } | { ok: false; reason: CredentialRejectReason } {
+  if (!raw || typeof raw !== "object") {
+    return { ok: false, reason: "non_object" };
+  }
+  const typed = normalizeRawCredentialEntry(raw as Record<string, unknown>);
+  if (!AUTH_PROFILE_TYPES.has(typed.type as AuthProfileCredential["type"])) {
+    return { ok: false, reason: "invalid_type" };
+  }
+  const provider = typed.provider ?? fallbackProvider;
+  if (typeof provider !== "string" || provider.trim().length === 0) {
+    return { ok: false, reason: "missing_provider" };
+  }
+  return {
+    ok: true,
+    credential: {
+      ...typed,
+      provider,
+    } as AuthProfileCredential,
+  };
+}
+
+function warnRejectedCredentialEntries(source: string, rejected: RejectedCredentialEntry[]): void {
+  if (rejected.length === 0) {
+    return;
+  }
+  const reasons = rejected.reduce(
+    (acc, current) => {
+      acc[current.reason] = (acc[current.reason] ?? 0) + 1;
+      return acc;
+    },
+    {} as Partial<Record<CredentialRejectReason, number>>,
+  );
+  log.warn("ignored invalid auth profile entries during store load", {
+    source,
+    dropped: rejected.length,
+    reasons,
+    keys: rejected.slice(0, 10).map((entry) => entry.key),
+  });
+}
+
 function coerceLegacyStore(raw: unknown): LegacyAuthStore | null {
   if (!raw || typeof raw !== "object") {
     return null;
@@ -70,19 +109,16 @@ function coerceLegacyStore(raw: unknown): LegacyAuthStore | null {
     return null;
   }
   const entries: LegacyAuthStore = {};
+  const rejected: RejectedCredentialEntry[] = [];
   for (const [key, value] of Object.entries(record)) {
-    if (!value || typeof value !== "object") {
+    const parsed = parseCredentialEntry(value, key);
+    if (!parsed.ok) {
+      rejected.push({ key, reason: parsed.reason });
       continue;
     }
-    const typed = normalizeRawCredentialEntry(value as Record<string, unknown>);
-    if (typed.type !== "api_key" && typed.type !== "oauth" && typed.type !== "token") {
-      continue;
-    }
-    entries[key] = {
-      ...typed,
-      provider: String(typed.provider ?? key),
-    } as AuthProfileCredential;
+    entries[key] = parsed.credential;
   }
+  warnRejectedCredentialEntries("auth.json", rejected);
   return Object.keys(entries).length > 0 ? entries : null;
 }
 
@@ -96,19 +132,16 @@ function coerceAuthStore(raw: unknown): AuthProfileStore | null {
   }
   const profiles = record.profiles as Record<string, unknown>;
   const normalized: Record<string, AuthProfileCredential> = {};
+  const rejected: RejectedCredentialEntry[] = [];
   for (const [key, value] of Object.entries(profiles)) {
-    if (!value || typeof value !== "object") {
+    const parsed = parseCredentialEntry(value);
+    if (!parsed.ok) {
+      rejected.push({ key, reason: parsed.reason });
       continue;
     }
-    const typed = normalizeRawCredentialEntry(value as Record<string, unknown>);
-    if (typed.type !== "api_key" && typed.type !== "oauth" && typed.type !== "token") {
-      continue;
-    }
-    if (!typed.provider) {
-      continue;
-    }
-    normalized[key] = typed as AuthProfileCredential;
+    normalized[key] = parsed.credential;
   }
+  warnRejectedCredentialEntries("auth-profiles.json", rejected);
   const order =
     record.order && typeof record.order === "object"
       ? Object.entries(record.order as Record<string, unknown>).reduce(
@@ -242,19 +275,26 @@ function applyLegacyStore(store: AuthProfileStore, legacy: LegacyAuthStore): voi
   }
 }
 
+function loadCoercedStoreWithExternalSync(authPath: string): AuthProfileStore | null {
+  const raw = loadJsonFile(authPath);
+  const store = coerceAuthStore(raw);
+  if (!store) {
+    return null;
+  }
+  // Sync from external CLI tools on every load.
+  const synced = syncExternalCliCredentials(store);
+  if (synced) {
+    saveJsonFile(authPath, store);
+  }
+  return store;
+}
+
 export function loadAuthProfileStore(): AuthProfileStore {
   const authPath = resolveAuthStorePath();
-  const raw = loadJsonFile(authPath);
-  const asStore = coerceAuthStore(raw);
+  const asStore = loadCoercedStoreWithExternalSync(authPath);
   if (asStore) {
-    // Sync from external CLI tools on every load
-    const synced = syncExternalCliCredentials(asStore);
-    if (synced) {
-      saveJsonFile(authPath, asStore);
-    }
     return asStore;
   }
-
   const legacyRaw = loadJsonFile(resolveLegacyAuthStorePath());
   const legacy = coerceLegacyStore(legacyRaw);
   if (legacy) {
@@ -277,14 +317,8 @@ function loadAuthProfileStoreForAgent(
   _options?: { allowKeychainPrompt?: boolean },
 ): AuthProfileStore {
   const authPath = resolveAuthStorePath(agentDir);
-  const raw = loadJsonFile(authPath);
-  const asStore = coerceAuthStore(raw);
+  const asStore = loadCoercedStoreWithExternalSync(authPath);
   if (asStore) {
-    // Sync from external CLI tools on every load
-    const synced = syncExternalCliCredentials(asStore);
-    if (synced) {
-      saveJsonFile(authPath, asStore);
-    }
     return asStore;
   }
 
