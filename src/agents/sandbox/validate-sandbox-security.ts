@@ -139,7 +139,10 @@ function isPathInsidePosix(root: string, target: string): boolean {
   if (root === "/") {
     return true;
   }
-  return target === root || target.startsWith(`${root}/`);
+  // Normalize path separators for cross-platform comparison
+  const normalizedRoot = root.replace(/\\/g, "/");
+  const normalizedTarget = target.replace(/\\/g, "/");
+  return normalizedTarget === normalizedRoot || normalizedTarget.startsWith(`${normalizedRoot}/`);
 }
 
 function getOutsideAllowedRootsReason(

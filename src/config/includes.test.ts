@@ -620,6 +620,10 @@ describe("security: path traversal protection (CWE-22)", () => {
     });
 
     it("allows include files when the config root path is a symlink", async () => {
+      // Windows symlink behavior differs (requires admin privileges or Developer Mode)
+      if (process.platform === "win32") {
+        return;
+      }
       const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-includes-symlink-"));
       try {
         const realRoot = path.join(tempRoot, "real");
