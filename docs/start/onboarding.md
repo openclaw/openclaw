@@ -36,7 +36,6 @@ Security trust model:
 - Shared/multi-user setups require lock-down (split trust boundaries, keep tool access minimal, and follow [Security](/gateway/security)).
 - Local onboarding now defaults new configs to `tools.profile: "messaging"` so broad runtime/filesystem tools are opt-in.
 - If hooks/webhooks or other untrusted content feeds are enabled, use a strong modern model tier and keep strict tool policy/sandboxing.
-
 </Step>
 <Step title="Local vs Remote">
 <Frame>
