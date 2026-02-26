@@ -36,6 +36,10 @@ import {
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
+import {
+  resolveDmGroupAccessDecision,
+  resolveEffectiveAllowFromLists,
+} from "../../security/dm-policy-shared.js";
 import { normalizeE164 } from "../../utils.js";
 import {
   formatSignalPairingIdLine,
@@ -45,9 +49,15 @@ import {
   resolveSignalPeerId,
   resolveSignalRecipient,
   resolveSignalSender,
+  type SignalSender,
 } from "../identity.js";
 import { sendMessageSignal, sendReadReceiptSignal, sendTypingSignal } from "../send.js";
-import type { SignalEventHandlerDeps, SignalReceivePayload } from "./event-handler.types.js";
+import type {
+  SignalEnvelope,
+  SignalEventHandlerDeps,
+  SignalReactionMessage,
+  SignalReceivePayload,
+} from "./event-handler.types.js";
 import { renderSignalMentions } from "./mentions.js";
 export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
   const inboundDebounceMs = resolveInboundDebounceMs({ cfg: deps.cfg, channel: "signal" });
@@ -222,6 +232,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
       ...prefixOptions,
       humanDelay: resolveHumanDelayConfig(deps.cfg, route.agentId),
+      typingCallbacks,
       deliver: async (payload) => {
         await deps.deliverReplies({
           replies: [payload],
@@ -237,7 +248,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       onError: (err, info) => {
         deps.runtime.error?.(danger(`signal ${info.kind} reply failed: ${String(err)}`));
       },
-      onReplyStart: typingCallbacks.onReplyStart,
     });
 
     const { queuedFinal } = await dispatchInboundMessage({
@@ -317,6 +327,85 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     },
   });
 
+  function handleReactionOnlyInbound(params: {
+    envelope: SignalEnvelope;
+    sender: SignalSender;
+    senderDisplay: string;
+    reaction: SignalReactionMessage;
+    hasBodyContent: boolean;
+    resolveAccessDecision: (isGroup: boolean) => {
+      decision: "allow" | "block" | "pairing";
+      reason: string;
+    };
+  }): boolean {
+    if (params.hasBodyContent) {
+      return false;
+    }
+    if (params.reaction.isRemove) {
+      return true; // Ignore reaction removals
+    }
+    const emojiLabel = params.reaction.emoji?.trim() || "emoji";
+    const senderName = params.envelope.sourceName ?? params.senderDisplay;
+    logVerbose(`signal reaction: ${emojiLabel} from ${senderName}`);
+    const groupId = params.reaction.groupInfo?.groupId ?? undefined;
+    const groupName = params.reaction.groupInfo?.groupName ?? undefined;
+    const isGroup = Boolean(groupId);
+    const reactionAccess = params.resolveAccessDecision(isGroup);
+    if (reactionAccess.decision !== "allow") {
+      logVerbose(
+        `Blocked signal reaction sender ${params.senderDisplay} (${reactionAccess.reason})`,
+      );
+      return true;
+    }
+    const targets = deps.resolveSignalReactionTargets(params.reaction);
+    const shouldNotify = deps.shouldEmitSignalReactionNotification({
+      mode: deps.reactionMode,
+      account: deps.account,
+      targets,
+      sender: params.sender,
+      allowlist: deps.reactionAllowlist,
+    });
+    if (!shouldNotify) {
+      return true;
+    }
+
+    const senderPeerId = resolveSignalPeerId(params.sender);
+    const route = resolveAgentRoute({
+      cfg: deps.cfg,
+      channel: "signal",
+      accountId: deps.accountId,
+      peer: {
+        kind: isGroup ? "group" : "direct",
+        id: isGroup ? (groupId ?? "unknown") : senderPeerId,
+      },
+    });
+    const groupLabel = isGroup ? `${groupName ?? "Signal Group"} id:${groupId}` : undefined;
+    const messageId = params.reaction.targetSentTimestamp
+      ? String(params.reaction.targetSentTimestamp)
+      : "unknown";
+    const text = deps.buildSignalReactionSystemEventText({
+      emojiLabel,
+      actorLabel: senderName,
+      messageId,
+      targetLabel: targets[0]?.display,
+      groupLabel,
+    });
+    const senderId = formatSignalSenderId(params.sender);
+    const contextKey = [
+      "signal",
+      "reaction",
+      "added",
+      messageId,
+      senderId,
+      emojiLabel,
+      groupId ?? "",
+    ]
+      .filter(Boolean)
+      .join(":");
+    enqueueSystemEvent(text, { sessionKey: route.sessionKey, contextKey });
+    return true;
+  }
+
   return async (event: { event?: string; data?: string }) => {
     if (event.event !== "receive" || !event.data) {
       return;
@@ -366,71 +455,47 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const quoteText = dataMessage?.quote?.text?.trim() ?? "";
     const hasBodyContent =
       Boolean(messageText || quoteText) || Boolean(!reaction && dataMessage?.attachments?.length);
+    const senderDisplay = formatSignalSenderDisplay(sender);
+    const storeAllowFrom =
+      deps.dmPolicy === "allowlist"
+        ? []
+        : await readChannelAllowFromStore("signal").catch(() => []);
+    const { effectiveAllowFrom: effectiveDmAllow, effectiveGroupAllowFrom: effectiveGroupAllow } =
+      resolveEffectiveAllowFromLists({
+        allowFrom: deps.allowFrom,
+        groupAllowFrom: deps.groupAllowFrom,
+        storeAllowFrom,
+        dmPolicy: deps.dmPolicy,
+      });
+    const resolveAccessDecision = (isGroup: boolean) =>
+      resolveDmGroupAccessDecision({
+        isGroup,
+        dmPolicy: deps.dmPolicy,
+        groupPolicy: deps.groupPolicy,
+        effectiveAllowFrom: effectiveDmAllow,
+        effectiveGroupAllowFrom: effectiveGroupAllow,
+        isSenderAllowed: (allowFrom) => isSignalSenderAllowed(sender, allowFrom),
+      });
+    const dmAccess = resolveAccessDecision(false);
+    const dmAllowed = dmAccess.decision === "allow";
 
-    if (reaction && !hasBodyContent) {
-      if (reaction.isRemove) {
-        return;
-      } // Ignore reaction removals
-      const emojiLabel = reaction.emoji?.trim() || "emoji";
-      const senderDisplay = formatSignalSenderDisplay(sender);
-      const senderName = envelope.sourceName ?? senderDisplay;
-      logVerbose(`signal reaction: ${emojiLabel} from ${senderName}`);
-      const targets = deps.resolveSignalReactionTargets(reaction);
-      const shouldNotify = deps.shouldEmitSignalReactionNotification({
-        mode: deps.reactionMode,
-        account: deps.account,
-        targets,
+    if (
+      reaction &&
+      handleReactionOnlyInbound({
+        envelope,
         sender,
-        allowlist: deps.reactionAllowlist,
-      });
-      if (!shouldNotify) {
-        return;
-      }
-
-      const groupId = reaction.groupInfo?.groupId ?? undefined;
-      const groupName = reaction.groupInfo?.groupName ?? undefined;
-      const isGroup = Boolean(groupId);
-      const senderPeerId = resolveSignalPeerId(sender);
-      const route = resolveAgentRoute({
-        cfg: deps.cfg,
-        channel: "signal",
-        accountId: deps.accountId,
-        peer: {
-          kind: isGroup ? "group" : "direct",
-          id: isGroup ? (groupId ?? "unknown") : senderPeerId,
-        },
-      });
-      const groupLabel = isGroup ? `${groupName ?? "Signal Group"} id:${groupId}` : undefined;
-      const messageId = reaction.targetSentTimestamp
-        ? String(reaction.targetSentTimestamp)
-        : "unknown";
-      const text = deps.buildSignalReactionSystemEventText({
-        emojiLabel,
-        actorLabel: senderName,
-        messageId,
-        targetLabel: targets[0]?.display,
-        groupLabel,
-      });
-      const senderId = formatSignalSenderId(sender);
-      const contextKey = [
-        "signal",
-        "reaction",
-        "added",
-        messageId,
-        senderId,
-        emojiLabel,
-        groupId ?? "",
-      ]
-        .filter(Boolean)
-        .join(":");
-      enqueueSystemEvent(text, { sessionKey: route.sessionKey, contextKey });
+        senderDisplay,
+        reaction,
+        hasBodyContent,
+        resolveAccessDecision,
+      })
+    ) {
       return;
     }
     if (!dataMessage) {
       return;
     }
 
-    const senderDisplay = formatSignalSenderDisplay(sender);
     const senderRecipient = resolveSignalRecipient(sender);
     const senderPeerId = resolveSignalPeerId(sender);
     const senderAllowId = formatSignalSenderId(sender);
@@ -441,20 +506,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const groupId = dataMessage.groupInfo?.groupId ?? undefined;
     const groupName = dataMessage.groupInfo?.groupName ?? undefined;
     const isGroup = Boolean(groupId);
-    const storeAllowFrom =
-      deps.dmPolicy === "allowlist"
-        ? []
-        : await readChannelAllowFromStore("signal").catch(() => []);
-    const effectiveDmAllow = [...deps.allowFrom, ...storeAllowFrom];
-    const effectiveGroupAllow = [...deps.groupAllowFrom, ...storeAllowFrom];
-    const dmAllowed =
-      deps.dmPolicy === "open" ? true : isSignalSenderAllowed(sender, effectiveDmAllow);
 
     if (!isGroup) {
-      if (deps.dmPolicy === "disabled") {
+      if (dmAccess.decision === "block") {
+        if (deps.dmPolicy !== "disabled") {
+          logVerbose(`Blocked signal sender ${senderDisplay} (dmPolicy=${deps.dmPolicy})`);
+        }
         return;
       }
-      if (!dmAllowed) {
+      if (dmAccess.decision === "pairing") {
         if (deps.dmPolicy === "pairing") {
           const senderId = senderAllowId;
           const { code, created } = await upsertChannelPairingRequest({
@@ -483,23 +543,20 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
               logVerbose(`signal pairing reply failed for ${senderId}: ${String(err)}`);
             }
           }
-        } else {
-          logVerbose(`Blocked signal sender ${senderDisplay} (dmPolicy=${deps.dmPolicy})`);
         }
         return;
       }
     }
-    if (isGroup && deps.groupPolicy === "disabled") {
-      logVerbose("Blocked signal group message (groupPolicy: disabled)");
-      return;
-    }
-    if (isGroup && deps.groupPolicy === "allowlist") {
-      if (effectiveGroupAllow.length === 0) {
-        logVerbose("Blocked signal group message (groupPolicy: allowlist, no groupAllowFrom)");
-        return;
-      }
-      if (!isSignalSenderAllowed(sender, effectiveGroupAllow)) {
-        logVerbose(`Blocked signal group sender ${senderDisplay} (not in groupAllowFrom)`);
+    if (isGroup) {
+      const groupAccess = resolveAccessDecision(true);
+      if (groupAccess.decision !== "allow") {
+        if (groupAccess.reason === "groupPolicy=disabled") {
+          logVerbose("Blocked signal group message (groupPolicy: disabled)");
+        } else if (groupAccess.reason === "groupPolicy=allowlist (empty allowlist)") {
+          logVerbose("Blocked signal group message (groupPolicy: allowlist, no groupAllowFrom)");
+        } else {
+          logVerbose(`Blocked signal group sender ${senderDisplay} (not in groupAllowFrom)`);
+        }
         return;
       }
     }

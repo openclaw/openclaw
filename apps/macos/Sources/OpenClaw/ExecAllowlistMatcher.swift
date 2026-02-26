@@ -8,7 +8,7 @@ enum ExecAllowlistMatcher {
 
         for entry in entries {
             switch ExecApprovalHelpers.validateAllowlistPattern(entry.pattern) {
-            case .valid(let pattern):
+            case let .valid(pattern):
                 let target = resolvedPath ?? rawExecutable
                 if self.matches(pattern: pattern, target: target) { return entry }
             case .invalid:

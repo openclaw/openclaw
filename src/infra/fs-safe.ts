@@ -3,6 +3,7 @@ import { constants as fsConstants } from "node:fs";
 import type { FileHandle } from "node:fs/promises";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sameFileIdentity } from "./file-identity.js";
 import { isNotFoundPathError, isPathInside, isSymlinkOpenError } from "./path-guards.js";
 
 export type SafeOpenErrorCode =
@@ -62,13 +63,13 @@ async function openVerifiedLocalFile(filePath: string): Promise<SafeOpenResult> 
     if (!stat.isFile()) {
       throw new SafeOpenError("not-file", "not a file");
     }
-    if (stat.ino !== lstat.ino || stat.dev !== lstat.dev) {
+    if (!sameFileIdentity(stat, lstat)) {
       throw new SafeOpenError("path-mismatch", "path changed during read");
     }
 
     const realPath = await fs.realpath(filePath);
     const realStat = await fs.stat(realPath);
-    if (stat.ino !== realStat.ino || stat.dev !== realStat.dev) {
+    if (!sameFileIdentity(stat, realStat)) {
       throw new SafeOpenError("path-mismatch", "path mismatch");
     }
 

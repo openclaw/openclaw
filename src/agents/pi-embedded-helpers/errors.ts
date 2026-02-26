@@ -161,6 +161,8 @@ const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
   /^(?:context overflow:|request_too_large\b|request size exceeds\b|request exceeds the maximum size\b|context length exceeded\b|maximum context length\b|prompt is too long\b|exceeds model context window\b)/i;
 const BILLING_ERROR_HEAD_RE =
   /^(?:error[:\s-]+)?billing(?:\s+error)?(?:[:\s-]+|$)|^(?:error[:\s-]+)?(?:credit balance|insufficient credits?|payment required|http\s*402\b)/i;
+const BILLING_ERROR_HARD_402_RE =
+  /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|^\s*402\s+payment/i;
 const HTTP_STATUS_PREFIX_RE = /^(?:http\s*)?(\d{3})\s+(.+)$/i;
 const HTTP_STATUS_CODE_PREFIX_RE = /^(?:http\s*)?(\d{3})(?:\s+([\s\S]+))?$/i;
 const HTML_ERROR_PREFIX_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
@@ -613,6 +615,8 @@ type ErrorPattern = RegExp | string;
 const ERROR_PATTERNS = {
   rateLimit: [
     /rate[_ ]limit|too many requests|429/,
+    "model_cooldown",
+    "cooling down",
     "exceeded your current quota",
     "resource has been exhausted",
     "quota exceeded",
@@ -703,10 +707,25 @@ export function isTimeoutErrorMessage(raw: string): boolean {
   return matchesErrorPatterns(raw, ERROR_PATTERNS.timeout);
 }
 
+/**
+ * Maximum character length for a string to be considered a billing error message.
+ * Real API billing errors are short, structured messages (typically under 300 chars).
+ * Longer text is almost certainly assistant content that happens to mention billing keywords.
+ */
+const BILLING_ERROR_MAX_LENGTH = 512;
+
 export function isBillingErrorMessage(raw: string): boolean {
   const value = raw.toLowerCase();
   if (!value) {
     return false;
+  }
+  // Real billing error messages from APIs are short structured payloads.
+  // Long text (e.g. multi-paragraph assistant responses) that happens to mention
+  // "billing", "payment", etc. should not be treated as a billing error.
+  if (raw.length > BILLING_ERROR_MAX_LENGTH) {
+    // Keep explicit status/code 402 detection for providers that wrap errors in
+    // larger payloads (for example nested JSON bodies or prefixed metadata).
+    return BILLING_ERROR_HARD_402_RE.test(value);
   }
   if (matchesErrorPatterns(value, ERROR_PATTERNS.billing)) {
     return true;

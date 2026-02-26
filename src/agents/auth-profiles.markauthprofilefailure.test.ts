@@ -26,6 +26,11 @@ async function withAuthProfileStore(
             provider: "anthropic",
             key: "sk-default",
           },
+          "openrouter:default": {
+            type: "api_key",
+            provider: "openrouter",
+            key: "sk-or-default",
+          },
         },
       }),
     );
@@ -151,6 +156,29 @@ describe("markAuthProfileFailure", () => {
     } finally {
       fs.rmSync(agentDir, { recursive: true, force: true });
     }
+  });
+
+  it("does not persist cooldown windows for OpenRouter profiles", async () => {
+    await withAuthProfileStore(async ({ agentDir, store }) => {
+      await markAuthProfileFailure({
+        store,
+        profileId: "openrouter:default",
+        reason: "rate_limit",
+        agentDir,
+      });
+
+      await markAuthProfileFailure({
+        store,
+        profileId: "openrouter:default",
+        reason: "billing",
+        agentDir,
+      });
+
+      expect(store.usageStats?.["openrouter:default"]).toBeUndefined();
+
+      const reloaded = ensureAuthProfileStore(agentDir);
+      expect(reloaded.usageStats?.["openrouter:default"]).toBeUndefined();
+    });
   });
 });
 

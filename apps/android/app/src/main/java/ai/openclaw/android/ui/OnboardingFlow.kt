@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -51,6 +52,8 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -74,6 +77,8 @@ import androidx.core.content.ContextCompat
 import ai.openclaw.android.LocationMode
 import ai.openclaw.android.MainViewModel
 import ai.openclaw.android.R
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 
 private enum class OnboardingStep(val index: Int, val label: String) {
   Welcome(1, "Welcome"),
@@ -192,6 +197,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
   var gatewayUrl by rememberSaveable { mutableStateOf("") }
   var gatewayPassword by rememberSaveable { mutableStateOf("") }
   var gatewayInputMode by rememberSaveable { mutableStateOf(GatewayInputMode.SetupCode) }
+  var gatewayAdvancedOpen by rememberSaveable { mutableStateOf(false) }
   var manualHost by rememberSaveable { mutableStateOf("10.0.2.2") }
   var manualPort by rememberSaveable { mutableStateOf("18789") }
   var manualTls by rememberSaveable { mutableStateOf(false) }
@@ -244,6 +250,23 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
   val permissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
       step = OnboardingStep.FinalCheck
+    }
+
+  val qrScanLauncher =
+    rememberLauncherForActivityResult(ScanContract()) { result ->
+      val contents = result.contents?.trim().orEmpty()
+      if (contents.isEmpty()) {
+        return@rememberLauncherForActivityResult
+      }
+      val scannedSetupCode = resolveScannedSetupCode(contents)
+      if (scannedSetupCode == null) {
+        gatewayError = "QR code did not contain a valid setup code."
+        return@rememberLauncherForActivityResult
+      }
+      setupCode = scannedSetupCode
+      gatewayInputMode = GatewayInputMode.SetupCode
+      gatewayError = null
+      attemptedConnect = false
     }
 
   if (pendingTrust != null) {
@@ -316,6 +339,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
           OnboardingStep.Gateway ->
             GatewayStep(
               inputMode = gatewayInputMode,
+              advancedOpen = gatewayAdvancedOpen,
               setupCode = setupCode,
               manualHost = manualHost,
               manualPort = manualPort,
@@ -323,6 +347,18 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
               gatewayToken = persistedGatewayToken,
               gatewayPassword = gatewayPassword,
               gatewayError = gatewayError,
+              onScanQrClick = {
+                gatewayError = null
+                qrScanLauncher.launch(
+                  ScanOptions().apply {
+                    setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                    setPrompt("Scan OpenClaw onboarding QR")
+                    setBeepEnabled(false)
+                    setOrientationLocked(false)
+                  },
+                )
+              },
+              onAdvancedOpenChange = { gatewayAdvancedOpen = it },
               onInputModeChange = {
                 gatewayInputMode = it
                 gatewayError = null
@@ -367,7 +403,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
               remoteAddress = remoteAddress,
               attemptedConnect = attemptedConnect,
               enabledPermissions = enabledPermissionSummary,
-              methodLabel = if (gatewayInputMode == GatewayInputMode.SetupCode) "Setup Code" else "Manual",
+              methodLabel = if (gatewayInputMode == GatewayInputMode.SetupCode) "QR / Setup Code" else "Manual",
             )
         }
       }
@@ -429,7 +465,7 @@ fun OnboardingFlow(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                 if (gatewayInputMode == GatewayInputMode.SetupCode) {
                   val parsedSetup = decodeGatewaySetupCode(setupCode)
                   if (parsedSetup == null) {
-                    gatewayError = "Invalid setup code."
+                    gatewayError = "Scan QR code first, or use Advanced setup."
                     return@Button
                   }
                   val parsedGateway = parseGatewayEndpoint(parsedSetup.url)
@@ -607,6 +643,7 @@ private fun WelcomeStep() {
 @Composable
 private fun GatewayStep(
   inputMode: GatewayInputMode,
+  advancedOpen: Boolean,
   setupCode: String,
   manualHost: String,
   manualPort: String,
@@ -614,6 +651,8 @@ private fun GatewayStep(
   gatewayToken: String,
   gatewayPassword: String,
   gatewayError: String?,
+  onScanQrClick: () -> Unit,
+  onAdvancedOpenChange: (Boolean) -> Unit,
   onInputModeChange: (GatewayInputMode) -> Unit,
   onSetupCodeChange: (String) -> Unit,
   onManualHostChange: (String) -> Unit,
@@ -626,175 +665,225 @@ private fun GatewayStep(
   val manualResolvedEndpoint = remember(manualHost, manualPort, manualTls) { composeGatewayManualUrl(manualHost, manualPort, manualTls)?.let { parseGatewayEndpoint(it)?.displayUrl } }
 
   StepShell(title = "Gateway Connection") {
-    GuideBlock(title = "Get setup code + gateway URL") {
+    GuideBlock(title = "Scan onboarding QR") {
       Text("Run these on the gateway host:", style = onboardingCalloutStyle, color = onboardingTextSecondary)
-      CommandBlock("openclaw qr --setup-code-only")
-      CommandBlock("openclaw qr --json")
-      Text(
-        "`--json` prints `setupCode` and `gatewayUrl`.",
-        style = onboardingCalloutStyle,
-        color = onboardingTextSecondary,
-      )
-      Text(
-        "Auto URL discovery is not wired yet. Android emulator uses `10.0.2.2`; real devices need LAN/Tailscale host.",
-        style = onboardingCalloutStyle,
-        color = onboardingTextSecondary,
-      )
+      CommandBlock("openclaw qr")
+      Text("Then scan with this device.", style = onboardingCalloutStyle, color = onboardingTextSecondary)
     }
-    GatewayModeToggle(inputMode = inputMode, onInputModeChange = onInputModeChange)
+    Button(
+      onClick = onScanQrClick,
+      modifier = Modifier.fillMaxWidth().height(48.dp),
+      shape = RoundedCornerShape(12.dp),
+      colors =
+        ButtonDefaults.buttonColors(
+          containerColor = onboardingAccent,
+          contentColor = Color.White,
+        ),
+    ) {
+      Text("Scan QR code", style = onboardingHeadlineStyle.copy(fontWeight = FontWeight.Bold))
+    }
+    if (!resolvedEndpoint.isNullOrBlank()) {
+      Text("QR captured. Review endpoint below.", style = onboardingCalloutStyle, color = onboardingSuccess)
+      ResolvedEndpoint(endpoint = resolvedEndpoint)
+    }
 
-    if (inputMode == GatewayInputMode.SetupCode) {
-      Text("SETUP CODE", style = onboardingCaption1Style.copy(letterSpacing = 0.9.sp), color = onboardingTextSecondary)
-      OutlinedTextField(
-        value = setupCode,
-        onValueChange = onSetupCodeChange,
-        placeholder = { Text("Paste code from `openclaw qr --setup-code-only`", color = onboardingTextTertiary, style = onboardingBodyStyle) },
-        modifier = Modifier.fillMaxWidth(),
-        minLines = 3,
-        maxLines = 5,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
-        textStyle = onboardingBodyStyle.copy(fontFamily = FontFamily.Monospace, color = onboardingText),
-        shape = RoundedCornerShape(14.dp),
-        colors =
-          OutlinedTextFieldDefaults.colors(
-            focusedContainerColor = onboardingSurface,
-            unfocusedContainerColor = onboardingSurface,
-            focusedBorderColor = onboardingAccent,
-            unfocusedBorderColor = onboardingBorder,
-            focusedTextColor = onboardingText,
-            unfocusedTextColor = onboardingText,
-            cursorColor = onboardingAccent,
-          ),
-      )
-      if (!resolvedEndpoint.isNullOrBlank()) {
-        ResolvedEndpoint(endpoint = resolvedEndpoint)
-      }
-    } else {
-      Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        QuickFillChip(label = "Android Emulator", onClick = {
-          onManualHostChange("10.0.2.2")
-          onManualPortChange("18789")
-          onManualTlsChange(false)
-        })
-        QuickFillChip(label = "Localhost", onClick = {
-          onManualHostChange("127.0.0.1")
-          onManualPortChange("18789")
-          onManualTlsChange(false)
-        })
-      }
-
-      Text("HOST", style = onboardingCaption1Style.copy(letterSpacing = 0.9.sp), color = onboardingTextSecondary)
-      OutlinedTextField(
-        value = manualHost,
-        onValueChange = onManualHostChange,
-        placeholder = { Text("10.0.2.2", color = onboardingTextTertiary, style = onboardingBodyStyle) },
-        modifier = Modifier.fillMaxWidth(),
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-        textStyle = onboardingBodyStyle.copy(color = onboardingText),
-        shape = RoundedCornerShape(14.dp),
-        colors =
-          OutlinedTextFieldDefaults.colors(
-            focusedContainerColor = onboardingSurface,
-            unfocusedContainerColor = onboardingSurface,
-            focusedBorderColor = onboardingAccent,
-            unfocusedBorderColor = onboardingBorder,
-            focusedTextColor = onboardingText,
-            unfocusedTextColor = onboardingText,
-            cursorColor = onboardingAccent,
-          ),
-      )
-
-      Text("PORT", style = onboardingCaption1Style.copy(letterSpacing = 0.9.sp), color = onboardingTextSecondary)
-      OutlinedTextField(
-        value = manualPort,
-        onValueChange = onManualPortChange,
-        placeholder = { Text("18789", color = onboardingTextTertiary, style = onboardingBodyStyle) },
-        modifier = Modifier.fillMaxWidth(),
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-        textStyle = onboardingBodyStyle.copy(fontFamily = FontFamily.Monospace, color = onboardingText),
-        shape = RoundedCornerShape(14.dp),
-        colors =
-          OutlinedTextFieldDefaults.colors(
-            focusedContainerColor = onboardingSurface,
-            unfocusedContainerColor = onboardingSurface,
-            focusedBorderColor = onboardingAccent,
-            unfocusedBorderColor = onboardingBorder,
-            focusedTextColor = onboardingText,
-            unfocusedTextColor = onboardingText,
-            cursorColor = onboardingAccent,
-          ),
-      )
-
+    Surface(
+      modifier = Modifier.fillMaxWidth(),
+      shape = RoundedCornerShape(12.dp),
+      color = onboardingSurface,
+      border = androidx.compose.foundation.BorderStroke(1.dp, onboardingBorderStrong),
+      onClick = { onAdvancedOpenChange(!advancedOpen) },
+    ) {
       Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
       ) {
         Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-          Text("Use TLS", style = onboardingHeadlineStyle, color = onboardingText)
-          Text("Switch to secure websocket (`wss`).", style = onboardingCalloutStyle.copy(lineHeight = 18.sp), color = onboardingTextSecondary)
+          Text("Advanced setup", style = onboardingHeadlineStyle, color = onboardingText)
+          Text("Paste setup code or enter host/port manually.", style = onboardingCaption1Style, color = onboardingTextSecondary)
         }
-        Switch(
-          checked = manualTls,
-          onCheckedChange = onManualTlsChange,
-          colors =
-            SwitchDefaults.colors(
-              checkedTrackColor = onboardingAccent,
-              uncheckedTrackColor = onboardingBorderStrong,
-              checkedThumbColor = Color.White,
-              uncheckedThumbColor = Color.White,
-            ),
+        Icon(
+          imageVector = if (advancedOpen) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+          contentDescription = if (advancedOpen) "Collapse advanced setup" else "Expand advanced setup",
+          tint = onboardingTextSecondary,
         )
       }
+    }
 
-      Text("TOKEN (OPTIONAL)", style = onboardingCaption1Style.copy(letterSpacing = 0.9.sp), color = onboardingTextSecondary)
-      OutlinedTextField(
-        value = gatewayToken,
-        onValueChange = onTokenChange,
-        placeholder = { Text("token", color = onboardingTextTertiary, style = onboardingBodyStyle) },
-        modifier = Modifier.fillMaxWidth(),
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
-        textStyle = onboardingBodyStyle.copy(color = onboardingText),
-        shape = RoundedCornerShape(14.dp),
-        colors =
-          OutlinedTextFieldDefaults.colors(
-            focusedContainerColor = onboardingSurface,
-            unfocusedContainerColor = onboardingSurface,
-            focusedBorderColor = onboardingAccent,
-            unfocusedBorderColor = onboardingBorder,
-            focusedTextColor = onboardingText,
-            unfocusedTextColor = onboardingText,
-            cursorColor = onboardingAccent,
-          ),
-      )
+    AnimatedVisibility(visible = advancedOpen) {
+      Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        GuideBlock(title = "Manual setup commands") {
+          Text("Run these on the gateway host:", style = onboardingCalloutStyle, color = onboardingTextSecondary)
+          CommandBlock("openclaw qr --setup-code-only")
+          CommandBlock("openclaw qr --json")
+          Text(
+            "`--json` prints `setupCode` and `gatewayUrl`.",
+            style = onboardingCalloutStyle,
+            color = onboardingTextSecondary,
+          )
+          Text(
+            "Auto URL discovery is not wired yet. Android emulator uses `10.0.2.2`; real devices need LAN/Tailscale host.",
+            style = onboardingCalloutStyle,
+            color = onboardingTextSecondary,
+          )
+        }
+        GatewayModeToggle(inputMode = inputMode, onInputModeChange = onInputModeChange)
 
-      Text("PASSWORD (OPTIONAL)", style = onboardingCaption1Style.copy(letterSpacing = 0.9.sp), color = onboardingTextSecondary)
-      OutlinedTextField(
-        value = gatewayPassword,
-        onValueChange = onPasswordChange,
-        placeholder = { Text("password", color = onboardingTextTertiary, style = onboardingBodyStyle) },
-        modifier = Modifier.fillMaxWidth(),
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
-        textStyle = onboardingBodyStyle.copy(color = onboardingText),
-        shape = RoundedCornerShape(14.dp),
-        colors =
-          OutlinedTextFieldDefaults.colors(
-            focusedContainerColor = onboardingSurface,
-            unfocusedContainerColor = onboardingSurface,
-            focusedBorderColor = onboardingAccent,
-            unfocusedBorderColor = onboardingBorder,
-            focusedTextColor = onboardingText,
-            unfocusedTextColor = onboardingText,
-            cursorColor = onboardingAccent,
-          ),
-      )
+        if (inputMode == GatewayInputMode.SetupCode) {
+          Text("SETUP CODE", style = onboardingCaption1Style.copy(letterSpacing = 0.9.sp), color = onboardingTextSecondary)
+          OutlinedTextField(
+            value = setupCode,
+            onValueChange = onSetupCodeChange,
+            placeholder = { Text("Paste code from `openclaw qr --setup-code-only`", color = onboardingTextTertiary, style = onboardingBodyStyle) },
+            modifier = Modifier.fillMaxWidth(),
+            minLines = 3,
+            maxLines = 5,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+            textStyle = onboardingBodyStyle.copy(fontFamily = FontFamily.Monospace, color = onboardingText),
+            shape = RoundedCornerShape(14.dp),
+            colors =
+              OutlinedTextFieldDefaults.colors(
+                focusedContainerColor = onboardingSurface,
+                unfocusedContainerColor = onboardingSurface,
+                focusedBorderColor = onboardingAccent,
+                unfocusedBorderColor = onboardingBorder,
+                focusedTextColor = onboardingText,
+                unfocusedTextColor = onboardingText,
+                cursorColor = onboardingAccent,
+              ),
+          )
+          if (!resolvedEndpoint.isNullOrBlank()) {
+            ResolvedEndpoint(endpoint = resolvedEndpoint)
+          }
+        } else {
+          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            QuickFillChip(label = "Android Emulator", onClick = {
+              onManualHostChange("10.0.2.2")
+              onManualPortChange("18789")
+              onManualTlsChange(false)
+            })
+            QuickFillChip(label = "Localhost", onClick = {
+              onManualHostChange("127.0.0.1")
+              onManualPortChange("18789")
+              onManualTlsChange(false)
+            })
+          }
 
-      if (!manualResolvedEndpoint.isNullOrBlank()) {
-        ResolvedEndpoint(endpoint = manualResolvedEndpoint)
+          Text("HOST", style = onboardingCaption1Style.copy(letterSpacing = 0.9.sp), color = onboardingTextSecondary)
+          OutlinedTextField(
+            value = manualHost,
+            onValueChange = onManualHostChange,
+            placeholder = { Text("10.0.2.2", color = onboardingTextTertiary, style = onboardingBodyStyle) },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+            textStyle = onboardingBodyStyle.copy(color = onboardingText),
+            shape = RoundedCornerShape(14.dp),
+            colors =
+              OutlinedTextFieldDefaults.colors(
+                focusedContainerColor = onboardingSurface,
+                unfocusedContainerColor = onboardingSurface,
+                focusedBorderColor = onboardingAccent,
+                unfocusedBorderColor = onboardingBorder,
+                focusedTextColor = onboardingText,
+                unfocusedTextColor = onboardingText,
+                cursorColor = onboardingAccent,
+              ),
+          )
+
+          Text("PORT", style = onboardingCaption1Style.copy(letterSpacing = 0.9.sp), color = onboardingTextSecondary)
+          OutlinedTextField(
+            value = manualPort,
+            onValueChange = onManualPortChange,
+            placeholder = { Text("18789", color = onboardingTextTertiary, style = onboardingBodyStyle) },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            textStyle = onboardingBodyStyle.copy(fontFamily = FontFamily.Monospace, color = onboardingText),
+            shape = RoundedCornerShape(14.dp),
+            colors =
+              OutlinedTextFieldDefaults.colors(
+                focusedContainerColor = onboardingSurface,
+                unfocusedContainerColor = onboardingSurface,
+                focusedBorderColor = onboardingAccent,
+                unfocusedBorderColor = onboardingBorder,
+                focusedTextColor = onboardingText,
+                unfocusedTextColor = onboardingText,
+                cursorColor = onboardingAccent,
+              ),
+          )
+
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+          ) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+              Text("Use TLS", style = onboardingHeadlineStyle, color = onboardingText)
+              Text("Switch to secure websocket (`wss`).", style = onboardingCalloutStyle.copy(lineHeight = 18.sp), color = onboardingTextSecondary)
+            }
+            Switch(
+              checked = manualTls,
+              onCheckedChange = onManualTlsChange,
+              colors =
+                SwitchDefaults.colors(
+                  checkedTrackColor = onboardingAccent,
+                  uncheckedTrackColor = onboardingBorderStrong,
+                  checkedThumbColor = Color.White,
+                  uncheckedThumbColor = Color.White,
+                ),
+            )
+          }
+
+          Text("TOKEN (OPTIONAL)", style = onboardingCaption1Style.copy(letterSpacing = 0.9.sp), color = onboardingTextSecondary)
+          OutlinedTextField(
+            value = gatewayToken,
+            onValueChange = onTokenChange,
+            placeholder = { Text("token", color = onboardingTextTertiary, style = onboardingBodyStyle) },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+            textStyle = onboardingBodyStyle.copy(color = onboardingText),
+            shape = RoundedCornerShape(14.dp),
+            colors =
+              OutlinedTextFieldDefaults.colors(
+                focusedContainerColor = onboardingSurface,
+                unfocusedContainerColor = onboardingSurface,
+                focusedBorderColor = onboardingAccent,
+                unfocusedBorderColor = onboardingBorder,
+                focusedTextColor = onboardingText,
+                unfocusedTextColor = onboardingText,
+                cursorColor = onboardingAccent,
+              ),
+          )
+
+          Text("PASSWORD (OPTIONAL)", style = onboardingCaption1Style.copy(letterSpacing = 0.9.sp), color = onboardingTextSecondary)
+          OutlinedTextField(
+            value = gatewayPassword,
+            onValueChange = onPasswordChange,
+            placeholder = { Text("password", color = onboardingTextTertiary, style = onboardingBodyStyle) },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+            textStyle = onboardingBodyStyle.copy(color = onboardingText),
+            shape = RoundedCornerShape(14.dp),
+            colors =
+              OutlinedTextFieldDefaults.colors(
+                focusedContainerColor = onboardingSurface,
+                unfocusedContainerColor = onboardingSurface,
+                focusedBorderColor = onboardingAccent,
+                unfocusedBorderColor = onboardingBorder,
+                focusedTextColor = onboardingText,
+                unfocusedTextColor = onboardingText,
+                cursorColor = onboardingAccent,
+              ),
+          )
+
+          if (!manualResolvedEndpoint.isNullOrBlank()) {
+            ResolvedEndpoint(endpoint = manualResolvedEndpoint)
+          }
+        }
       }
     }
 
@@ -964,7 +1053,7 @@ private fun PermissionsStep(
     }
     PermissionToggleRow(
       title = "Microphone",
-      subtitle = "Talk mode + voice features",
+      subtitle = "Voice tab transcription",
       checked = enableMicrophone,
       granted = isPermissionGranted(context, Manifest.permission.RECORD_AUDIO),
       onCheckedChange = onMicrophoneChange,

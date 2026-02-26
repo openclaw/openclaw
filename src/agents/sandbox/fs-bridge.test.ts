@@ -13,6 +13,28 @@ import { createSandboxTestContext } from "./test-fixtures.js";
 import type { SandboxContext } from "./types.js";
 
 const mockedExecDockerRaw = vi.mocked(execDockerRaw);
+const DOCKER_SCRIPT_INDEX = 5;
+const DOCKER_FIRST_SCRIPT_ARG_INDEX = 7;
+
+function getDockerScript(args: string[]): string {
+  return String(args[DOCKER_SCRIPT_INDEX] ?? "");
+}
+
+function getDockerArg(args: string[], position: number): string {
+  return String(args[DOCKER_FIRST_SCRIPT_ARG_INDEX + position - 1] ?? "");
+}
+
+function getDockerPathArg(args: string[]): string {
+  return getDockerArg(args, 1);
+}
+
+function getScriptsFromCalls(): string[] {
+  return mockedExecDockerRaw.mock.calls.map(([args]) => getDockerScript(args));
+}
+
+function findCallByScriptFragment(fragment: string) {
+  return mockedExecDockerRaw.mock.calls.find(([args]) => getDockerScript(args).includes(fragment));
+}
 
 function createSandbox(overrides?: Partial<SandboxContext>): SandboxContext {
   return createSandboxTestContext({
@@ -31,10 +53,10 @@ describe("sandbox fs bridge shell compatibility", () => {
   beforeEach(() => {
     mockedExecDockerRaw.mockClear();
     mockedExecDockerRaw.mockImplementation(async (args) => {
-      const script = args[5] ?? "";
+      const script = getDockerScript(args);
       if (script.includes('readlink -f -- "$cursor"')) {
         return {
-          stdout: Buffer.from(`${String(args.at(-2) ?? "")}\n`),
+          stdout: Buffer.from(`${getDockerArg(args, 1)}\n`),
           stderr: Buffer.alloc(0),
           code: 0,
         };
@@ -73,12 +95,49 @@ describe("sandbox fs bridge shell compatibility", () => {
 
     expect(mockedExecDockerRaw).toHaveBeenCalled();
 
-    const scripts = mockedExecDockerRaw.mock.calls.map(([args]) => args[5] ?? "");
+    const scripts = getScriptsFromCalls();
     const executables = mockedExecDockerRaw.mock.calls.map(([args]) => args[3] ?? "");
 
     expect(executables.every((shell) => shell === "sh")).toBe(true);
-    expect(scripts.every((script) => script.includes("set -eu;"))).toBe(true);
+    expect(scripts.every((script) => /set -eu[;\n]/.test(script))).toBe(true);
     expect(scripts.some((script) => script.includes("pipefail"))).toBe(false);
+  });
+
+  it("resolveCanonicalContainerPath script is valid POSIX sh (no do; token)", async () => {
+    const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
+
+    await bridge.readFile({ filePath: "a.txt" });
+
+    const scripts = getScriptsFromCalls();
+    const canonicalScript = scripts.find((script) => script.includes("allow_final"));
+    expect(canonicalScript).toBeDefined();
+    // "; " joining can create "do; cmd", which is invalid in POSIX sh.
+    expect(canonicalScript).not.toMatch(/\bdo;/);
+    // Keep command on the next line after "do" for POSIX-sh safety.
+    expect(canonicalScript).toMatch(/\bdo\n\s*parent=/);
+  });
+
+  it("reads inbound media-style filenames with triple-dash ids", async () => {
+    const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
+    const inboundPath = "media/inbound/file_1095---f00a04a2-99a0-4d98-99b0-dfe61c5a4198.ogg";
+
+    await bridge.readFile({ filePath: inboundPath });
+
+    const readCall = findCallByScriptFragment('cat -- "$1"');
+    expect(readCall).toBeDefined();
+    const readPath = readCall ? getDockerPathArg(readCall[0]) : "";
+    expect(readPath).toContain("file_1095---");
+  });
+
+  it("resolves dash-leading basenames into absolute container paths", async () => {
+    const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
+
+    await bridge.readFile({ filePath: "--leading.txt" });
+
+    const readCall = findCallByScriptFragment('cat -- "$1"');
+    expect(readCall).toBeDefined();
+    const readPath = readCall ? getDockerPathArg(readCall[0]) : "";
+    expect(readPath).toBe("/workspace/--leading.txt");
   });
 
   it("resolves bind-mounted absolute container paths for reads", async () => {
@@ -96,7 +155,7 @@ describe("sandbox fs bridge shell compatibility", () => {
     expect(args).toEqual(
       expect.arrayContaining(["moltbot-sbx-test", "sh", "-c", 'set -eu; cat -- "$1"']),
     );
-    expect(args.at(-1)).toBe("/workspace-two/README.md");
+    expect(getDockerPathArg(args)).toBe("/workspace-two/README.md");
   });
 
   it("blocks writes into read-only bind mounts", async () => {
@@ -138,7 +197,7 @@ describe("sandbox fs bridge shell compatibility", () => {
 
   it("rejects container-canonicalized paths outside allowed mounts", async () => {
     mockedExecDockerRaw.mockImplementation(async (args) => {
-      const script = args[5] ?? "";
+      const script = getDockerScript(args);
       if (script.includes('readlink -f -- "$cursor"')) {
         return {
           stdout: Buffer.from("/etc/passwd\n"),
@@ -162,7 +221,7 @@ describe("sandbox fs bridge shell compatibility", () => {
 
     const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
     await expect(bridge.readFile({ filePath: "a.txt" })).rejects.toThrow(/escapes allowed mounts/i);
-    const scripts = mockedExecDockerRaw.mock.calls.map(([args]) => args[5] ?? "");
+    const scripts = getScriptsFromCalls();
     expect(scripts.some((script) => script.includes('cat -- "$1"'))).toBe(false);
   });
 });

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, URL } from "node:url";
 import { isNotFoundPathError, isPathInside } from "../infra/path-guards.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 
 const UNICODE_SPACES = /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g;
 const HTTP_URL_RE = /^https?:\/\//i;
@@ -181,12 +182,40 @@ async function resolveAllowedTmpMediaPath(params: {
     return undefined;
   }
   const resolved = path.resolve(resolveSandboxInputPath(params.candidate, params.sandboxRoot));
-  const tmpDir = path.resolve(os.tmpdir());
-  if (!isPathInside(tmpDir, resolved)) {
+  const openClawTmpDir = path.resolve(resolvePreferredOpenClawTmpDir());
+  if (!isPathInside(openClawTmpDir, resolved)) {
     return undefined;
   }
-  await assertNoSymlinkEscape(path.relative(tmpDir, resolved), tmpDir);
+  await assertNoTmpAliasEscape({ filePath: resolved, tmpRoot: openClawTmpDir });
   return resolved;
+}
+
+async function assertNoTmpAliasEscape(params: {
+  filePath: string;
+  tmpRoot: string;
+}): Promise<void> {
+  await assertNoSymlinkEscape(path.relative(params.tmpRoot, params.filePath), params.tmpRoot);
+  await assertNoHardlinkedFinalPath(params.filePath, params.tmpRoot);
+}
+
+async function assertNoHardlinkedFinalPath(filePath: string, tmpRoot: string): Promise<void> {
+  let stat: Awaited<ReturnType<typeof fs.stat>>;
+  try {
+    stat = await fs.stat(filePath);
+  } catch (err) {
+    if (isNotFoundPathError(err)) {
+      return;
+    }
+    throw err;
+  }
+  if (!stat.isFile()) {
+    return;
+  }
+  if (stat.nlink > 1) {
+    throw new Error(
+      `Hardlinked tmp media path is not allowed under tmp root (${shortPath(tmpRoot)}): ${shortPath(filePath)}`,
+    );
+  }
 }
 
 async function assertNoSymlinkEscape(

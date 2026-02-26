@@ -1,12 +1,14 @@
 import fs from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSessionStore, saveSessionStore, type SessionEntry } from "../../config/sessions.js";
 import type { FollowupRun } from "./queue.js";
 import { createMockTypingController } from "./test-helpers.js";
 
 const runEmbeddedPiAgentMock = vi.fn();
+const routeReplyMock = vi.fn();
+const isRoutableChannelMock = vi.fn();
 
 vi.mock(
   "../../agents/model-fallback.js",
@@ -17,7 +19,35 @@ vi.mock("../../agents/pi-embedded.js", () => ({
   runEmbeddedPiAgent: (params: unknown) => runEmbeddedPiAgentMock(params),
 }));
 
+vi.mock("./route-reply.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./route-reply.js")>();
+  return {
+    ...actual,
+    isRoutableChannel: (...args: unknown[]) => isRoutableChannelMock(...args),
+    routeReply: (...args: unknown[]) => routeReplyMock(...args),
+  };
+});
+
 import { createFollowupRunner } from "./followup-runner.js";
+
+const ROUTABLE_TEST_CHANNELS = new Set([
+  "telegram",
+  "slack",
+  "discord",
+  "signal",
+  "imessage",
+  "whatsapp",
+  "feishu",
+]);
+
+beforeEach(() => {
+  routeReplyMock.mockReset();
+  routeReplyMock.mockResolvedValue({ ok: true });
+  isRoutableChannelMock.mockReset();
+  isRoutableChannelMock.mockImplementation((ch: string | undefined) =>
+    Boolean(ch?.trim() && ROUTABLE_TEST_CHANNELS.has(ch.trim().toLowerCase())),
+  );
+});
 
 const baseQueuedRun = (messageProvider = "whatsapp"): FollowupRun =>
   ({
@@ -48,6 +78,20 @@ const baseQueuedRun = (messageProvider = "whatsapp"): FollowupRun =>
       blockReplyBreak: "message_end",
     },
   }) as FollowupRun;
+
+function createQueuedRun(
+  overrides: Partial<Omit<FollowupRun, "run">> & { run?: Partial<FollowupRun["run"]> } = {},
+): FollowupRun {
+  const base = baseQueuedRun();
+  return {
+    ...base,
+    ...overrides,
+    run: {
+      ...base.run,
+      ...overrides.run,
+    },
+  };
+}
 
 function mockCompactionRun(params: {
   willRetry: boolean;
@@ -100,32 +144,11 @@ describe("createFollowupRunner compaction", () => {
       defaultModel: "anthropic/claude-opus-4-5",
     });
 
-    const queued = {
-      prompt: "hello",
-      summaryLine: "hello",
-      enqueuedAt: Date.now(),
+    const queued = createQueuedRun({
       run: {
-        sessionId: "session",
-        sessionKey: "main",
-        messageProvider: "whatsapp",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/tmp",
-        config: {},
-        skillsSnapshot: {},
-        provider: "anthropic",
-        model: "claude",
-        thinkLevel: "low",
         verboseLevel: "on",
-        elevatedLevel: "off",
-        bashElevated: {
-          enabled: false,
-          allowed: false,
-          defaultLevel: "off",
-        },
-        timeoutMs: 1_000,
-        blockReplyBreak: "message_end",
       },
-    } as FollowupRun;
+    });
 
     await runner(queued);
 
@@ -204,6 +227,56 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
+  it("suppresses replies when provider is synthetic but originating channel matches", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      messagingToolSentTexts: ["different message"],
+      messagingToolSentTargets: [{ tool: "telegram", provider: "telegram", to: "268300329" }],
+      meta: {},
+    });
+
+    const runner = createMessagingDedupeRunner(onBlockReply);
+
+    await runner({
+      ...baseQueuedRun("heartbeat"),
+      originatingChannel: "telegram",
+      originatingTo: "268300329",
+    } as FollowupRun);
+
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("does not suppress replies for same target when account differs", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      messagingToolSentTexts: ["different message"],
+      messagingToolSentTargets: [
+        { tool: "telegram", provider: "telegram", to: "268300329", accountId: "work" },
+      ],
+      meta: {},
+    });
+
+    const runner = createMessagingDedupeRunner(onBlockReply);
+
+    await runner({
+      ...baseQueuedRun("heartbeat"),
+      originatingChannel: "telegram",
+      originatingTo: "268300329",
+      originatingAccountId: "personal",
+    } as FollowupRun);
+
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "268300329",
+        accountId: "personal",
+      }),
+    );
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
   it("drops media URL from payload when messaging tool already sent it", async () => {
     const onBlockReply = vi.fn(async () => {});
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
@@ -278,6 +351,81 @@ describe("createFollowupRunner messaging tool dedupe", () => {
     expect(store[sessionKey]?.inputTokens).toBe(1_000);
     expect(store[sessionKey]?.outputTokens).toBe(50);
   });
+
+  it("does not fall back to dispatcher when cross-channel origin routing fails", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      meta: {},
+    });
+    routeReplyMock.mockResolvedValueOnce({
+      ok: false,
+      error: "forced route failure",
+    });
+
+    const runner = createMessagingDedupeRunner(onBlockReply);
+
+    await runner({
+      ...baseQueuedRun("webchat"),
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+    } as FollowupRun);
+
+    expect(routeReplyMock).toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("falls back to dispatcher when same-channel origin routing fails", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      meta: {},
+    });
+    routeReplyMock.mockResolvedValueOnce({
+      ok: false,
+      error: "outbound adapter unavailable",
+    });
+
+    const runner = createMessagingDedupeRunner(onBlockReply);
+
+    await runner({
+      ...baseQueuedRun(" Feishu "),
+      originatingChannel: "FEISHU",
+      originatingTo: "ou_abc123",
+    } as FollowupRun);
+
+    expect(routeReplyMock).toHaveBeenCalled();
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply).toHaveBeenCalledWith(expect.objectContaining({ text: "hello world!" }));
+  });
+
+  it("routes followups with originating account/thread metadata", async () => {
+    const onBlockReply = vi.fn(async () => {});
+    runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      meta: {},
+    });
+
+    const runner = createMessagingDedupeRunner(onBlockReply);
+
+    await runner({
+      ...baseQueuedRun("webchat"),
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      originatingAccountId: "work",
+      originatingThreadId: "1739142736.000100",
+    } as FollowupRun);
+
+    expect(routeReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        to: "channel:C1",
+        accountId: "work",
+        threadId: "1739142736.000100",
+      }),
+    );
+    expect(onBlockReply).not.toHaveBeenCalled();
+  });
 });
 
 describe("createFollowupRunner agentDir forwarding", () => {
@@ -296,7 +444,7 @@ describe("createFollowupRunner agentDir forwarding", () => {
       defaultModel: "anthropic/claude-opus-4-5",
     });
     const agentDir = path.join("/tmp", "agent-dir");
-    const queued = baseQueuedRun();
+    const queued = createQueuedRun();
     await runner({
       ...queued,
       run: {
