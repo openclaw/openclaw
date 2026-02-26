@@ -1,3 +1,4 @@
+import { normalizeProviderId } from "../agents/model-selection.js";
 import { getActiveEmbeddedRunCount } from "../agents/pi-embedded-runner/runs.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CliDeps } from "../cli/deps.js";
@@ -123,6 +124,18 @@ export function createGatewayReloadHandlers(params: {
     setCommandLaneConcurrency(CommandLane.Cron, nextConfig.cron?.maxConcurrentRuns ?? 1);
     setCommandLaneConcurrency(CommandLane.Main, resolveAgentMaxConcurrent(nextConfig));
     setCommandLaneConcurrency(CommandLane.Subagent, resolveSubagentMaxConcurrent(nextConfig));
+    // Provider lanes (e.g., provider:openai, provider:google) — optional per-provider throttles.
+    const providers = nextConfig.models?.providers ?? {};
+    for (const [providerIdRaw, providerCfg] of Object.entries(providers)) {
+      const max = providerCfg?.maxConcurrentRuns;
+      if (typeof max === "number" && Number.isFinite(max) && max > 0) {
+        const providerId = normalizeProviderId(providerIdRaw.trim());
+        if (!providerId) {
+          continue;
+        }
+        setCommandLaneConcurrency(`provider:${providerId}`, max);
+      }
+    }
 
     if (plan.hotReasons.length > 0) {
       params.logReload.info(`config hot reload applied (${plan.hotReasons.join(", ")})`);

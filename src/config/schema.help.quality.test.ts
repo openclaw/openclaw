@@ -343,6 +343,7 @@ const TARGET_KEYS = [
   "models.providers.*.apiKey",
   "models.providers.*.api",
   "models.providers.*.headers",
+  "models.providers.*.maxConcurrentRuns",
   "models.providers.*.models",
   "models.bedrockDiscovery",
   "models.bedrockDiscovery.enabled",

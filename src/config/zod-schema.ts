@@ -495,6 +495,7 @@ export const OpenClawSchema = z
           .optional(),
         trustedProxies: z.array(z.string()).optional(),
         allowRealIpFallback: z.boolean().optional(),
+        providerConcurrency: z.record(z.string(), z.number().finite().positive()).optional(),
         tools: z
           .object({
             deny: z.array(z.string()).optional(),

@@ -368,6 +368,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "models.providers.*.api": "Model Provider API Adapter",
   "models.providers.*.headers": "Model Provider Headers",
   "models.providers.*.authHeader": "Model Provider Authorization Header",
+  "models.providers.*.maxConcurrentRuns": "Model Provider Max Concurrent Runs",
   "models.providers.*.models": "Model Provider Model List",
   "models.bedrockDiscovery": "Bedrock Model Discovery",
   "models.bedrockDiscovery.enabled": "Bedrock Discovery Enabled",
