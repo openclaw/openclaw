@@ -35,10 +35,7 @@ import { logVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { logDebug, logError } from "../../logger.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
-import {
-  readChannelAllowFromStore,
-  upsertChannelPairingRequest,
-} from "../../pairing/pairing-store.js";
+import { upsertChannelPairingRequest } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
 import { readStoreAllowFromForDmPolicy } from "../../security/dm-policy-shared.js";
@@ -474,8 +471,8 @@ async function ensureDmComponentAuthorized(params: {
 
   const storeAllowFrom = await readStoreAllowFromForDmPolicy({
     provider: "discord",
+    accountId: ctx.accountId,
     dmPolicy,
-    readStore: (provider) => readChannelAllowFromStore(provider),
   });
   const effectiveAllowFrom = [...(ctx.allowFrom ?? []), ...storeAllowFrom];
   const allowList = normalizeDiscordAllowList(effectiveAllowFrom, ["discord:", "user:", "pk:"]);
@@ -498,6 +495,7 @@ async function ensureDmComponentAuthorized(params: {
     const { code, created } = await upsertChannelPairingRequest({
       channel: "discord",
       id: user.id,
+      accountId: ctx.accountId,
       meta: {
         tag: formatDiscordUserTag(user),
         name: user.username,

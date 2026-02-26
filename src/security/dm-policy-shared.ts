@@ -52,14 +52,19 @@ export type DmGroupAccessReasonCode =
 
 export async function readStoreAllowFromForDmPolicy(params: {
   provider: ChannelId;
+  accountId: string;
   dmPolicy?: string | null;
   shouldRead?: boolean | null;
-  readStore?: (provider: ChannelId) => Promise<string[]>;
+  readStore?: (provider: ChannelId, accountId: string) => Promise<string[]>;
 }): Promise<string[]> {
   if (params.shouldRead === false || params.dmPolicy === "allowlist") {
     return [];
   }
-  return await (params.readStore ?? readChannelAllowFromStore)(params.provider).catch(() => []);
+  const readStore =
+    params.readStore ??
+    ((provider: ChannelId, accountId: string) =>
+      readChannelAllowFromStore(provider, process.env, accountId));
+  return await readStore(params.provider, params.accountId).catch(() => []);
 }
 
 export function resolveDmGroupAccessDecision(params: {
@@ -258,9 +263,10 @@ export function resolveDmGroupAccessWithCommandGate(params: {
 
 export async function resolveDmAllowState(params: {
   provider: ChannelId;
+  accountId: string;
   allowFrom?: Array<string | number> | null;
   normalizeEntry?: (raw: string) => string;
-  readStore?: (provider: ChannelId) => Promise<string[]>;
+  readStore?: (provider: ChannelId, accountId: string) => Promise<string[]>;
 }): Promise<{
   configAllowFrom: string[];
   hasWildcard: boolean;
@@ -273,6 +279,7 @@ export async function resolveDmAllowState(params: {
   const hasWildcard = configAllowFrom.includes("*");
   const storeAllowFrom = await readStoreAllowFromForDmPolicy({
     provider: params.provider,
+    accountId: params.accountId,
     readStore: params.readStore,
   });
   const normalizeEntry = params.normalizeEntry ?? ((value: string) => value);
