@@ -6,10 +6,10 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { formatZonedTimestamp } from "../../infra/format-time/format-datetime.js";
+import { buildSystemRunApprovalBindingV1 } from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { validateExecApprovalRequestParams } from "../protocol/index.js";
-import { buildSystemRunApprovalBindingV1 } from "../system-run-approval-binding.js";
 import { waitForAgentJob } from "./agent-job.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
@@ -248,6 +248,7 @@ describe("exec approval handlers", () => {
 
   const defaultExecApprovalRequestParams = {
     command: "echo ok",
+    commandArgv: ["echo", "ok"],
     cwd: "/tmp",
     nodeId: "node-1",
     host: "node",
@@ -380,6 +381,25 @@ describe("exec approval handlers", () => {
       undefined,
       expect.objectContaining({
         message: "nodeId is required for host=node",
+      }),
+    );
+  });
+
+  it("rejects host=node approval requests without commandArgv", async () => {
+    const { handlers, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        commandArgv: undefined,
+      },
+    });
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "commandArgv is required for host=node",
       }),
     );
   });
