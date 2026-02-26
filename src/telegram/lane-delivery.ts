@@ -123,6 +123,11 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     const hadPreviewMessage =
       typeof previewMessageIdOverride === "number" || typeof lanePreviewMessageId === "number";
     if (stopBeforeEdit) {
+      if (!hadPreviewMessage && context === "final") {
+        // If debounce prevented the first preview, replace stale pending partial text
+        // before final stop() flush sends the first visible preview.
+        lane.stream.update(text);
+      }
       await params.stopDraftLane(lane);
     }
     const previewMessageId =
