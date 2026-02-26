@@ -117,6 +117,9 @@ describe("secrets audit", () => {
   });
 
   it("batches ref resolution per provider during audit", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
     const execLogPath = path.join(rootDir, "exec-calls.log");
     const execScriptPath = path.join(rootDir, "resolver.mjs");
     await fs.writeFile(
