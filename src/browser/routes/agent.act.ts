@@ -192,8 +192,8 @@ export function registerBrowserAgentActRoutes(
                 }
                 const rec = field as Record<string, unknown>;
                 const ref = toStringOrEmpty(rec.ref);
-                const type = toStringOrEmpty(rec.type);
-                if (!ref || !type) {
+                const type = toStringOrEmpty(rec.type) || "text";
+                if (!ref) {
                   return null;
                 }
                 const value =
