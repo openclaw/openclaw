@@ -66,6 +66,96 @@ describe("channels command", () => {
     expect(next.channels?.telegram?.accounts?.alerts?.botToken).toBe("123:abc");
   });
 
+  it("moves single-account telegram config into accounts.default when adding non-default", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {
+        channels: {
+          telegram: {
+            enabled: true,
+            botToken: "legacy-token",
+            dmPolicy: "allowlist",
+            allowFrom: ["111"],
+            groupPolicy: "allowlist",
+            streaming: "partial",
+          },
+        },
+      },
+    });
+
+    await channelsAddCommand(
+      { channel: "telegram", account: "alerts", token: "alerts-token" },
+      runtime,
+      { hasFlags: true },
+    );
+
+    const next = configMocks.writeConfigFile.mock.calls[0]?.[0] as {
+      channels?: {
+        telegram?: {
+          botToken?: string;
+          dmPolicy?: string;
+          allowFrom?: string[];
+          groupPolicy?: string;
+          streaming?: string;
+          accounts?: Record<
+            string,
+            {
+              botToken?: string;
+              dmPolicy?: string;
+              allowFrom?: string[];
+              groupPolicy?: string;
+              streaming?: string;
+            }
+          >;
+        };
+      };
+    };
+    expect(next.channels?.telegram?.accounts?.default).toEqual({
+      botToken: "legacy-token",
+      dmPolicy: "allowlist",
+      allowFrom: ["111"],
+      groupPolicy: "allowlist",
+      streaming: "partial",
+    });
+    expect(next.channels?.telegram?.botToken).toBeUndefined();
+    expect(next.channels?.telegram?.dmPolicy).toBeUndefined();
+    expect(next.channels?.telegram?.allowFrom).toBeUndefined();
+    expect(next.channels?.telegram?.groupPolicy).toBeUndefined();
+    expect(next.channels?.telegram?.streaming).toBeUndefined();
+    expect(next.channels?.telegram?.accounts?.alerts?.botToken).toBe("alerts-token");
+  });
+
+  it("seeds accounts.default for env-only single-account telegram config when adding non-default", async () => {
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {
+        channels: {
+          telegram: {
+            enabled: true,
+          },
+        },
+      },
+    });
+
+    await channelsAddCommand(
+      { channel: "telegram", account: "alerts", token: "alerts-token" },
+      runtime,
+      { hasFlags: true },
+    );
+
+    const next = configMocks.writeConfigFile.mock.calls[0]?.[0] as {
+      channels?: {
+        telegram?: {
+          enabled?: boolean;
+          accounts?: Record<string, { botToken?: string }>;
+        };
+      };
+    };
+    expect(next.channels?.telegram?.enabled).toBe(true);
+    expect(next.channels?.telegram?.accounts?.default).toEqual({});
+    expect(next.channels?.telegram?.accounts?.alerts?.botToken).toBe("alerts-token");
+  });
+
   it("adds a default slack account with tokens", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue({ ...baseConfigSnapshot });
     await channelsAddCommand(

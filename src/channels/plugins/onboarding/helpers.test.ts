@@ -554,6 +554,39 @@ describe("patchChannelConfigForAccount", () => {
     expect(next.channels?.slack?.accounts?.work?.appToken).toBe("new-app");
   });
 
+  it("moves single-account config into default account when patching non-default", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        telegram: {
+          enabled: true,
+          botToken: "legacy-token",
+          allowFrom: ["100"],
+          groupPolicy: "allowlist",
+          streaming: "partial",
+        },
+      },
+    };
+
+    const next = patchChannelConfigForAccount({
+      cfg,
+      channel: "telegram",
+      accountId: "work",
+      patch: { botToken: "work-token" },
+    });
+
+    expect(next.channels?.telegram?.accounts?.default).toEqual({
+      botToken: "legacy-token",
+      allowFrom: ["100"],
+      groupPolicy: "allowlist",
+      streaming: "partial",
+    });
+    expect(next.channels?.telegram?.botToken).toBeUndefined();
+    expect(next.channels?.telegram?.allowFrom).toBeUndefined();
+    expect(next.channels?.telegram?.groupPolicy).toBeUndefined();
+    expect(next.channels?.telegram?.streaming).toBeUndefined();
+    expect(next.channels?.telegram?.accounts?.work?.botToken).toBe("work-token");
+  });
+
   it("supports imessage/signal account-scoped channel patches", () => {
     const cfg: OpenClawConfig = {
       channels: {
