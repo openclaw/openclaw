@@ -18,6 +18,7 @@ const CAMERA_DANGEROUS_COMMANDS = ["camera.snap", "camera.clip"];
 const SCREEN_DANGEROUS_COMMANDS = ["screen.record"];
 
 const LOCATION_COMMANDS = ["location.get"];
+const NOTIFICATION_COMMANDS = ["notifications.list"];
 
 const DEVICE_COMMANDS = ["device.info", "device.status"];
 
@@ -69,6 +70,7 @@ const PLATFORM_DEFAULTS: Record<string, string[]> = {
     ...CANVAS_COMMANDS,
     ...CAMERA_COMMANDS,
     ...LOCATION_COMMANDS,
+    ...NOTIFICATION_COMMANDS,
     ...DEVICE_COMMANDS,
     ...CONTACTS_COMMANDS,
     ...CALENDAR_COMMANDS,

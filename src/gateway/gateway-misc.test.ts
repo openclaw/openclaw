@@ -334,6 +334,19 @@ describe("resolveNodeCommandAllowlist", () => {
     }
   });
 
+  it("includes Android notifications.list by default", () => {
+    const allow = resolveNodeCommandAllowlist(
+      {},
+      {
+        platform: "android 16",
+        deviceFamily: "Android",
+      },
+    );
+
+    expect(allow.has("notifications.list")).toBe(true);
+    expect(allow.has("system.notify")).toBe(false);
+  });
+
   it("can explicitly allow dangerous commands via allowCommands", () => {
     const allow = resolveNodeCommandAllowlist(
       {
