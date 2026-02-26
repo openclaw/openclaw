@@ -40,7 +40,7 @@ import {
 } from "../../utils/message-channel.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
-import { INTERNAL_PROVIDER_NAMES } from "./agent-runner-helpers.js";
+import { EXTERNAL_CHANNEL_NAMES } from "./agent-runner-helpers.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 
@@ -333,10 +333,10 @@ export async function initSessionState(params: {
   }
 
   const baseEntry = !isNewSession && freshEntry ? entry : undefined;
-  // Synthetic/internal providers must not overwrite the session's real reply route.
-  // Heartbeat, cron-event, exec-event, and similar internal triggers carry synthetic
-  // From/To/Provider values that are meaningless for outbound delivery routing.
-  const isInternalProvider = INTERNAL_PROVIDER_NAMES.has(ctx.Provider?.toLowerCase() ?? "");
+  // Only real external channel providers (discord, telegram, etc.) should update
+  // the session's outbound routing.  Everything else (webchat, inter-session messages,
+  // heartbeat, cron-event, etc.) preserves the existing routing to prevent corruption.
+  const isExternalChannel = EXTERNAL_CHANNEL_NAMES.has(ctx.Provider?.toLowerCase() ?? "");
   // Track the originating channel/to for announce routing (subagent announce-back).
   const originatingChannelRaw = ctx.OriginatingChannel as string | undefined;
   const lastChannelRaw = resolveLastChannelRaw({
@@ -344,11 +344,12 @@ export async function initSessionState(params: {
     persistedLastChannel: baseEntry?.lastChannel,
     sessionKey,
   });
-  // For internal providers, skip ctx.To (synthetic heartbeat sender) so it can't
-  // overwrite the session's real lastTo with a meaningless value like "heartbeat".
-  const lastToRaw = isInternalProvider
-    ? ctx.OriginatingTo || baseEntry?.lastTo
-    : ctx.OriginatingTo || ctx.To || baseEntry?.lastTo;
+  // Only allow real external channels to update lastTo.  Internal providers and
+  // non-deliverable sources (webchat/inter-session) must not overwrite the session's
+  // real routing target.
+  const lastToRaw = isExternalChannel
+    ? ctx.OriginatingTo || ctx.To || baseEntry?.lastTo
+    : ctx.OriginatingTo || baseEntry?.lastTo;
   const lastAccountIdRaw = ctx.AccountId || baseEntry?.lastAccountId;
   // Only fall back to persisted threadId for thread sessions.  Non-thread
   // sessions (e.g. DM without topics) must not inherit a stale threadId from a

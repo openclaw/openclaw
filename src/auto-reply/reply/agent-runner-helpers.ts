@@ -21,6 +21,24 @@ export const INTERNAL_PROVIDER_NAMES = new Set([
 ]);
 
 /**
+ * External channel provider names that are real deliverable endpoints.
+ * Only these should be allowed to update a session's outbound routing
+ * (lastTo/lastChannel).  Anything not in this set (webchat, internal
+ * providers, inter-session messages) preserves the existing routing.
+ */
+export const EXTERNAL_CHANNEL_NAMES = new Set([
+  "discord",
+  "telegram",
+  "whatsapp",
+  "signal",
+  "slack",
+  "irc",
+  "googlechat",
+  "imessage",
+  "bluebubbles",
+]);
+
+/**
  * Returns undefined when the channel is an internal synthetic provider, otherwise
  * returns the channel as-is.  Use this wherever a provider string is being promoted
  * to a reply-routing channel.
