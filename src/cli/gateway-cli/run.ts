@@ -186,9 +186,14 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   }
   const authModeRaw = toOptionString(opts.auth);
   const authMode: GatewayAuthMode | null =
-    authModeRaw === "token" || authModeRaw === "password" ? authModeRaw : null;
+    authModeRaw === "none" ||
+    authModeRaw === "token" ||
+    authModeRaw === "password" ||
+    authModeRaw === "trusted-proxy"
+      ? authModeRaw
+      : null;
   if (authModeRaw && !authMode) {
-    defaultRuntime.error('Invalid --auth (use "token" or "password")');
+    defaultRuntime.error('Invalid --auth (use "none", "token", "password", or "trusted-proxy")');
     defaultRuntime.exit(1);
     return;
   }
