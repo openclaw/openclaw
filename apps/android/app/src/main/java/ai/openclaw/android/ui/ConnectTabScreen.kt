@@ -40,6 +40,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.content.Intent
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
@@ -47,6 +52,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import ai.openclaw.android.MainViewModel
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 private enum class ConnectInputMode {
   SetupCode,
@@ -64,6 +72,12 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
   val manualEnabled by viewModel.manualEnabled.collectAsState()
   val gatewayToken by viewModel.gatewayToken.collectAsState()
   val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
+  val reconnectAttempts by viewModel.gatewayReconnectAttempts.collectAsState()
+  val lastGatewayError by viewModel.lastGatewayError.collectAsState()
+  val lastConnectedAtMs by viewModel.lastGatewayConnectedAtMs.collectAsState()
+  val lastDisconnectedAtMs by viewModel.lastGatewayDisconnectedAtMs.collectAsState()
+
+  val context = LocalContext.current
 
   var advancedOpen by rememberSaveable { mutableStateOf(false) }
   var inputMode by
@@ -82,6 +96,7 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
   var manualTlsInput by rememberSaveable { mutableStateOf(manualTls) }
   var passwordInput by rememberSaveable { mutableStateOf("") }
   var validationText by rememberSaveable { mutableStateOf<String?>(null) }
+  var actionFeedbackText by rememberSaveable { mutableStateOf<String?>(null) }
 
   if (pendingTrust != null) {
     val prompt = pendingTrust!!
@@ -158,6 +173,84 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
       Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text("Gateway state", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
         Text(statusText, style = mobileBody, color = mobileText)
+      }
+    }
+
+    Surface(
+      modifier = Modifier.fillMaxWidth(),
+      shape = RoundedCornerShape(14.dp),
+      color = mobileSurface,
+      border = BorderStroke(1.dp, mobileBorder),
+    ) {
+      Column(
+        modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+      ) {
+        Text("Diagnostics", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
+        Text("TLS: ${if (manualTlsInput) "enabled" else "disabled"}", style = mobileCallout, color = mobileText)
+        Text("Token: ${if (gatewayToken.isBlank()) "not set" else "set"}", style = mobileCallout, color = mobileText)
+        Text("Reconnect attempts: $reconnectAttempts", style = mobileCallout, color = mobileText)
+        Text(
+          "Last error: ${lastGatewayError ?: "none"}",
+          style = mobileCallout,
+          color = if (lastGatewayError.isNullOrBlank()) mobileTextSecondary else mobileWarning,
+        )
+        Text(
+          "Last connected: ${formatGatewayTime(lastConnectedAtMs)}",
+          style = mobileCaption1,
+          color = mobileTextSecondary,
+        )
+        Text(
+          "Last disconnected: ${formatGatewayTime(lastDisconnectedAtMs)}",
+          style = mobileCaption1,
+          color = mobileTextSecondary,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
+          TextButton(
+            onClick = {
+              val manager = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+              manager?.setPrimaryClip(
+                ClipData.newPlainText("OpenClaw diagnostics", viewModel.gatewayDebugSummary()),
+              )
+              actionFeedbackText = "Copied diagnostics"
+            },
+            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
+          ) {
+            Text("Copy debug summary", style = mobileCallout.copy(fontWeight = FontWeight.SemiBold), color = mobileAccent)
+          }
+
+          TextButton(
+            onClick = {
+              val summary = viewModel.gatewayDebugSummary()
+              val intent =
+                Intent(Intent.ACTION_SEND).apply {
+                  type = "text/plain"
+                  putExtra(Intent.EXTRA_SUBJECT, "OpenClaw Android diagnostics")
+                  putExtra(Intent.EXTRA_TEXT, summary)
+                  addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+              context.startActivity(Intent.createChooser(intent, "Share diagnostics").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+              actionFeedbackText = "Opened share sheet"
+            },
+            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
+          ) {
+            Text("Share", style = mobileCallout.copy(fontWeight = FontWeight.SemiBold), color = mobileAccent)
+          }
+
+          TextButton(
+            onClick = {
+              viewModel.resetGatewayDiagnostics()
+              actionFeedbackText = "Diagnostics reset"
+            },
+            contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp),
+          ) {
+            Text("Reset", style = mobileCallout.copy(fontWeight = FontWeight.SemiBold), color = mobileWarning)
+          }
+        }
+
+        if (!actionFeedbackText.isNullOrBlank()) {
+          Text(actionFeedbackText!!, style = mobileCaption1, color = mobileSuccess)
+        }
       }
     }
 
@@ -491,3 +584,9 @@ private fun outlinedColors() =
     unfocusedTextColor = mobileText,
     cursorColor = mobileAccent,
   )
+
+private fun formatGatewayTime(epochMs: Long?): String {
+  if (epochMs == null) return "n/a"
+  val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+  return formatter.format(Date(epochMs))
+}

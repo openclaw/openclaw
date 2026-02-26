@@ -7,6 +7,7 @@ import android.os.SystemClock
 import android.util.Log
 import androidx.core.content.ContextCompat
 import ai.openclaw.android.chat.ChatController
+import ai.openclaw.android.chat.ChatConnectionState
 import ai.openclaw.android.chat.ChatMessage
 import ai.openclaw.android.chat.ChatPendingToolCall
 import ai.openclaw.android.chat.ChatSessionEntry
@@ -38,6 +39,9 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 
@@ -129,6 +133,10 @@ class NodeRuntime(context: Context) {
     sms = sms,
   )
 
+  private val batteryHandler: BatteryHandler = BatteryHandler(
+    appContext = appContext,
+  )
+
   private val a2uiHandler: A2UIHandler = A2UIHandler(
     canvas = canvas,
     json = json,
@@ -161,6 +169,7 @@ class NodeRuntime(context: Context) {
     motionHandler = motionHandler,
     screenHandler = screenHandler,
     smsHandler = smsHandlerImpl,
+    batteryHandler = batteryHandler,
     a2uiHandler = a2uiHandler,
     debugHandler = debugHandler,
     appUpdateHandler = appUpdateHandler,
@@ -192,6 +201,15 @@ class NodeRuntime(context: Context) {
 
   private val _statusText = MutableStateFlow("Offline")
   val statusText: StateFlow<String> = _statusText.asStateFlow()
+
+  private val _gatewayReconnectAttempts = MutableStateFlow(0)
+  val gatewayReconnectAttempts: StateFlow<Int> = _gatewayReconnectAttempts.asStateFlow()
+  private val _lastGatewayError = MutableStateFlow<String?>(null)
+  val lastGatewayError: StateFlow<String?> = _lastGatewayError.asStateFlow()
+  private val _lastGatewayConnectedAtMs = MutableStateFlow<Long?>(null)
+  val lastGatewayConnectedAtMs: StateFlow<Long?> = _lastGatewayConnectedAtMs.asStateFlow()
+  private val _lastGatewayDisconnectedAtMs = MutableStateFlow<Long?>(null)
+  val lastGatewayDisconnectedAtMs: StateFlow<Long?> = _lastGatewayDisconnectedAtMs.asStateFlow()
 
   private val _pendingGatewayTrust = MutableStateFlow<GatewayTrustPrompt?>(null)
   val pendingGatewayTrust: StateFlow<GatewayTrustPrompt?> = _pendingGatewayTrust.asStateFlow()
@@ -243,6 +261,8 @@ class NodeRuntime(context: Context) {
       onConnected = { name, remote, mainSessionKey ->
         operatorConnected = true
         operatorStatusText = "Connected"
+        _lastGatewayConnectedAtMs.value = System.currentTimeMillis()
+        _lastGatewayError.value = null
         _serverName.value = name
         _remoteAddress.value = remote
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
@@ -259,6 +279,10 @@ class NodeRuntime(context: Context) {
       onDisconnected = { message ->
         operatorConnected = false
         operatorStatusText = message
+        _lastGatewayDisconnectedAtMs.value = System.currentTimeMillis()
+        if (message.isNotBlank() && !message.equals("Offline", ignoreCase = true)) {
+          _lastGatewayError.value = message
+        }
         _serverName.value = null
         _remoteAddress.value = null
         _seamColorArgb.value = DEFAULT_SEAM_COLOR_ARGB
@@ -543,6 +567,7 @@ class NodeRuntime(context: Context) {
   val chatMessages: StateFlow<List<ChatMessage>> = chat.messages
   val chatError: StateFlow<String?> = chat.errorText
   val chatHealthOk: StateFlow<Boolean> = chat.healthOk
+  val chatConnectionState: StateFlow<ChatConnectionState> = chat.connectionState
   val chatThinkingLevel: StateFlow<String> = chat.thinkingLevel
   val chatStreamingAssistantText: StateFlow<String?> = chat.streamingAssistantText
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = chat.pendingToolCalls
@@ -714,8 +739,10 @@ class NodeRuntime(context: Context) {
     val endpoint =
       connectedEndpoint ?: run {
         _statusText.value = "Failed: no cached gateway endpoint"
+        _lastGatewayError.value = "Failed: no cached gateway endpoint"
         return
       }
+    _gatewayReconnectAttempts.value = _gatewayReconnectAttempts.value + 1
     operatorStatusText = "Connecting…"
     updateStatus()
     val token = prefs.loadGatewayToken()
@@ -728,6 +755,9 @@ class NodeRuntime(context: Context) {
   }
 
   fun connect(endpoint: GatewayEndpoint) {
+    if (!operatorConnected) {
+      _gatewayReconnectAttempts.value = _gatewayReconnectAttempts.value + 1
+    }
     val tls = connectionManager.resolveTlsParams(endpoint)
     if (tls?.required == true && tls.expectedFingerprint.isNullOrBlank() && !tls.allowTOFU) {
       // First-time TLS (strict mode): capture fingerprint, ask user to verify out-of-band, then store and connect.
@@ -743,7 +773,9 @@ class NodeRuntime(context: Context) {
             } else {
               "Check host/port and TLS mode, then try again."
             }
-          _statusText.value = "Failed: can't read TLS fingerprint for $endpointHint. $hint"
+          val error = "Failed: can't read TLS fingerprint for $endpointHint. $hint"
+          _statusText.value = error
+          _lastGatewayError.value = error
           return@launch
         }
         _pendingGatewayTrust.value = GatewayTrustPrompt(endpoint = endpoint, fingerprintSha256 = fp)
@@ -792,7 +824,9 @@ class NodeRuntime(context: Context) {
     val host = manualHost.value.trim()
     val port = manualPort.value
     if (host.isEmpty() || port <= 0 || port > 65535) {
-      _statusText.value = "Failed: invalid manual host/port"
+      val error = "Failed: invalid manual host/port"
+      _statusText.value = error
+      _lastGatewayError.value = error
       return
     }
     connect(GatewayEndpoint.manual(host = host, port = port))
@@ -902,8 +936,42 @@ class NodeRuntime(context: Context) {
     chat.abort()
   }
 
+  fun retryLastChatMessage(): Boolean {
+    return chat.retryLastMessage()
+  }
+
   fun sendChat(message: String, thinking: String, attachments: List<OutgoingAttachment>) {
     chat.sendMessage(message = message, thinkingLevel = thinking, attachments = attachments)
+  }
+
+  fun gatewayDebugSummary(): String {
+    val endpoint = connectedEndpoint
+    val endpointText = endpoint?.let { "${if (it.tlsEnabled) "wss" else "ws"}://${it.host}:${it.port}" } ?: remoteAddress.value ?: "not set"
+    val tlsMode = if (manualTls.value) "on" else "off"
+    val tokenPresent = gatewayToken.value.trim().isNotEmpty()
+    val reconnects = gatewayReconnectAttempts.value
+    val lastError = lastGatewayError.value ?: "none"
+    val connectedAt = lastGatewayConnectedAtMs.value?.let { formatTimestamp(it) } ?: "n/a"
+    val disconnectedAt = lastGatewayDisconnectedAtMs.value?.let { formatTimestamp(it) } ?: "n/a"
+
+    return buildString {
+      appendLine("OpenClaw Android diagnostics")
+      appendLine("status: ${statusText.value}")
+      appendLine("endpoint: $endpointText")
+      appendLine("manualTls: $tlsMode")
+      appendLine("tokenPresent: $tokenPresent")
+      appendLine("reconnectAttempts: $reconnects")
+      appendLine("lastConnectedAt: $connectedAt")
+      appendLine("lastDisconnectedAt: $disconnectedAt")
+      appendLine("lastError: $lastError")
+    }.trim()
+  }
+
+  fun resetGatewayDiagnostics() {
+    _gatewayReconnectAttempts.value = 0
+    _lastGatewayError.value = null
+    _lastGatewayConnectedAtMs.value = null
+    _lastGatewayDisconnectedAtMs.value = null
   }
 
   private fun handleGatewayEvent(event: String, payloadJson: String?) {
@@ -955,6 +1023,11 @@ class NodeRuntime(context: Context) {
         if (_cameraHud.value?.token == token) _cameraHud.value = null
       }
     }
+  }
+
+  private fun formatTimestamp(epochMs: Long): String {
+    val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+    return formatter.format(Date(epochMs))
   }
 
 }

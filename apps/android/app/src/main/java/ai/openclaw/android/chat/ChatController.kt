@@ -39,6 +39,9 @@ class ChatController(
   private val _healthOk = MutableStateFlow(false)
   val healthOk: StateFlow<Boolean> = _healthOk.asStateFlow()
 
+  private val _connectionState = MutableStateFlow(ChatConnectionState.Connecting)
+  val connectionState: StateFlow<ChatConnectionState> = _connectionState.asStateFlow()
+
   private val _thinkingLevel = MutableStateFlow("off")
   val thinkingLevel: StateFlow<String> = _thinkingLevel.asStateFlow()
 
@@ -59,15 +62,21 @@ class ChatController(
   private val pendingRunTimeoutJobs = ConcurrentHashMap<String, Job>()
   private val pendingRunTimeoutMs = 120_000L
 
+  private var streamingPublishJob: Job? = null
+  private var latestStreamingText: String? = null
   private var lastHealthPollAtMs: Long? = null
+  private var lastOutbound: PendingOutbound? = null
 
   fun onDisconnected(message: String) {
     _healthOk.value = false
+    _connectionState.value = ChatConnectionState.Reconnecting
     // Not an error; keep connection status in the UI pill.
     _errorText.value = null
     clearPendingRuns()
     pendingToolCallsById.clear()
     publishPendingToolCalls()
+    latestStreamingText = null
+    streamingPublishJob?.cancel()
     _streamingAssistantText.value = null
     _sessionId.value = null
   }
@@ -125,6 +134,7 @@ class ChatController(
     val text = if (trimmed.isEmpty() && attachments.isNotEmpty()) "See attached." else trimmed
     val sessionKey = _sessionKey.value
     val thinking = normalizeThinking(thinkingLevel)
+    lastOutbound = PendingOutbound(text = text, thinkingLevel = thinking, attachments = attachments, sessionKey = sessionKey)
 
     // Optimistic user message.
     val userContent =
@@ -157,6 +167,8 @@ class ChatController(
     }
 
     _errorText.value = null
+    latestStreamingText = null
+    streamingPublishJob?.cancel()
     _streamingAssistantText.value = null
     pendingToolCallsById.clear()
     publishPendingToolCalls()
@@ -225,6 +237,19 @@ class ChatController(
     }
   }
 
+  fun retryLastMessage(): Boolean {
+    val outbound = lastOutbound ?: return false
+    if (_sessionKey.value != outbound.sessionKey) {
+      _sessionKey.value = outbound.sessionKey
+    }
+    sendMessage(
+      message = outbound.text,
+      thinkingLevel = outbound.thinkingLevel,
+      attachments = outbound.attachments,
+    )
+    return true
+  }
+
   fun handleGatewayEvent(event: String, payloadJson: String?) {
     when (event) {
       "tick" -> {
@@ -233,6 +258,7 @@ class ChatController(
       "health" -> {
         // If we receive a health snapshot, the gateway is reachable.
         _healthOk.value = true
+        _connectionState.value = ChatConnectionState.Connected
       }
       "seqGap" -> {
         _errorText.value = "Event stream interrupted; try refreshing."
@@ -252,9 +278,12 @@ class ChatController(
   private suspend fun bootstrap(forceHealth: Boolean) {
     _errorText.value = null
     _healthOk.value = false
+    _connectionState.value = ChatConnectionState.Connecting
     clearPendingRuns()
     pendingToolCallsById.clear()
     publishPendingToolCalls()
+    latestStreamingText = null
+    streamingPublishJob?.cancel()
     _streamingAssistantText.value = null
     _sessionId.value = null
 
@@ -300,8 +329,10 @@ class ChatController(
     try {
       session.request("health", null)
       _healthOk.value = true
+      _connectionState.value = ChatConnectionState.Connected
     } catch (_: Throwable) {
       _healthOk.value = false
+      _connectionState.value = ChatConnectionState.Reconnecting
     }
   }
 
@@ -321,7 +352,7 @@ class ChatController(
         if (!isPending) return
         val text = parseAssistantDeltaText(payload)
         if (!text.isNullOrEmpty()) {
-          _streamingAssistantText.value = text
+          queueStreamingText(text)
         }
       }
       "final", "aborted", "error" -> {
@@ -331,7 +362,7 @@ class ChatController(
         if (runId != null) clearPendingRun(runId) else clearPendingRuns()
         pendingToolCallsById.clear()
         publishPendingToolCalls()
-        _streamingAssistantText.value = null
+        flushStreamingText()
         scope.launch {
           try {
             val historyJson =
@@ -342,6 +373,10 @@ class ChatController(
             history.thinkingLevel?.trim()?.takeIf { it.isNotEmpty() }?.let { _thinkingLevel.value = it }
           } catch (_: Throwable) {
             // best-effort
+          } finally {
+            latestStreamingText = null
+            streamingPublishJob?.cancel()
+            _streamingAssistantText.value = null
           }
         }
       }
@@ -393,6 +428,25 @@ class ChatController(
         publishPendingToolCalls()
         _streamingAssistantText.value = null
       }
+    }
+  }
+
+  private fun queueStreamingText(text: String) {
+    latestStreamingText = text
+    if (streamingPublishJob?.isActive == true) return
+    streamingPublishJob =
+      scope.launch {
+        delay(60)
+        flushStreamingText()
+      }
+  }
+
+  private fun flushStreamingText() {
+    streamingPublishJob?.cancel()
+    streamingPublishJob = null
+    val next = latestStreamingText?.trim().orEmpty()
+    if (next.isNotEmpty()) {
+      _streamingAssistantText.value = next
     }
   }
 
@@ -535,3 +589,10 @@ private fun JsonElement?.asLongOrNull(): Long? =
     is JsonPrimitive -> content.toLongOrNull()
     else -> null
   }
+
+private data class PendingOutbound(
+  val text: String,
+  val thinkingLevel: String,
+  val attachments: List<OutgoingAttachment>,
+  val sessionKey: String,
+)

@@ -93,7 +93,8 @@ private val markdownParser: Parser by lazy {
 
 @Composable
 fun ChatMarkdown(text: String, textColor: Color) {
-  val document = remember(text) { markdownParser.parse(text) as Document }
+  val normalized = remember(text) { normalizeMarkdownInput(text) }
+  val document = remember(normalized) { markdownParser.parse(normalized) as Document }
   val inlineStyles = InlineStyles(inlineCodeBg = mobileCodeBg, inlineCodeColor = mobileCodeText)
 
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -430,7 +431,7 @@ private fun AnnotatedString.Builder.appendInlineNode(
   while (current != null) {
     when (current) {
       is MarkdownTextNode -> append(current.literal)
-      is SoftLineBreak -> append('\n')
+      is SoftLineBreak -> append(' ')
       is HardLineBreak -> append('\n')
       is Code -> {
         withStyle(
@@ -543,6 +544,13 @@ private data class ParsedDataImage(
   val mimeType: String,
   val base64: String,
 )
+
+private fun normalizeMarkdownInput(raw: String): String {
+  return raw
+    .replace("\r\n", "\n")
+    .replace(Regex("\n{3,}"), "\n\n")
+    .trimEnd()
+}
 
 @Composable
 private fun InlineBase64Image(base64: String, mimeType: String?) {

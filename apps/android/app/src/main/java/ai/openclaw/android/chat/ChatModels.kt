@@ -42,3 +42,9 @@ data class OutgoingAttachment(
   val fileName: String,
   val base64: String,
 )
+
+enum class ChatConnectionState {
+  Connected,
+  Connecting,
+  Reconnecting,
+}

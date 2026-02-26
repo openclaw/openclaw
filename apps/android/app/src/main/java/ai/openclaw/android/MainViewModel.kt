@@ -3,6 +3,7 @@ package ai.openclaw.android
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import ai.openclaw.android.gateway.GatewayEndpoint
+import ai.openclaw.android.chat.ChatConnectionState
 import ai.openclaw.android.chat.OutgoingAttachment
 import ai.openclaw.android.node.CameraCaptureManager
 import ai.openclaw.android.node.CanvasController
@@ -32,6 +33,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val serverName: StateFlow<String?> = runtime.serverName
   val remoteAddress: StateFlow<String?> = runtime.remoteAddress
   val pendingGatewayTrust: StateFlow<NodeRuntime.GatewayTrustPrompt?> = runtime.pendingGatewayTrust
+  val gatewayReconnectAttempts: StateFlow<Int> = runtime.gatewayReconnectAttempts
+  val lastGatewayError: StateFlow<String?> = runtime.lastGatewayError
+  val lastGatewayConnectedAtMs: StateFlow<Long?> = runtime.lastGatewayConnectedAtMs
+  val lastGatewayDisconnectedAtMs: StateFlow<Long?> = runtime.lastGatewayDisconnectedAtMs
   val isForeground: StateFlow<Boolean> = runtime.isForeground
   val seamColorArgb: StateFlow<Long> = runtime.seamColorArgb
   val mainSessionKey: StateFlow<String> = runtime.mainSessionKey
@@ -69,6 +74,7 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
   val chatMessages = runtime.chatMessages
   val chatError: StateFlow<String?> = runtime.chatError
   val chatHealthOk: StateFlow<Boolean> = runtime.chatHealthOk
+  val chatConnectionState: StateFlow<ChatConnectionState> = runtime.chatConnectionState
   val chatThinkingLevel: StateFlow<String> = runtime.chatThinkingLevel
   val chatStreamingAssistantText: StateFlow<String?> = runtime.chatStreamingAssistantText
   val chatPendingToolCalls = runtime.chatPendingToolCalls
@@ -155,6 +161,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
     runtime.connectManual()
   }
 
+  fun gatewayDebugSummary(): String {
+    return runtime.gatewayDebugSummary()
+  }
+
+  fun resetGatewayDiagnostics() {
+    runtime.resetGatewayDiagnostics()
+  }
+
   fun disconnect() {
     runtime.disconnect()
   }
@@ -201,6 +215,10 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
   fun abortChat() {
     runtime.abortChat()
+  }
+
+  fun retryLastChatMessage(): Boolean {
+    return runtime.retryLastChatMessage()
   }
 
   fun sendChat(message: String, thinking: String, attachments: List<OutgoingAttachment>) {

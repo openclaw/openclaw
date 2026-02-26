@@ -63,12 +63,14 @@ fun ChatComposer(
   healthOk: Boolean,
   thinkingLevel: String,
   pendingRunCount: Int,
+  errorText: String?,
   attachments: List<PendingImageAttachment>,
   onPickImages: () -> Unit,
   onRemoveAttachment: (id: String) -> Unit,
   onSetThinkingLevel: (level: String) -> Unit,
   onRefresh: () -> Unit,
   onAbort: () -> Unit,
+  onRetryLast: () -> Unit,
   onSend: (text: String) -> Unit,
 ) {
   var input by rememberSaveable { mutableStateOf("") }
@@ -76,6 +78,7 @@ fun ChatComposer(
 
   val canSend = pendingRunCount == 0 && (input.trim().isNotEmpty() || attachments.isNotEmpty()) && healthOk
   val sendBusy = pendingRunCount > 0
+  val canRetryLast = !errorText.isNullOrBlank() && pendingRunCount == 0
 
   Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
     Row(
@@ -172,6 +175,14 @@ fun ChatComposer(
           enabled = pendingRunCount > 0,
           compact = true,
           onClick = onAbort,
+        )
+
+        SecondaryActionButton(
+          label = "Retry",
+          icon = Icons.Default.Refresh,
+          enabled = canRetryLast,
+          compact = true,
+          onClick = onRetryLast,
         )
       }
 

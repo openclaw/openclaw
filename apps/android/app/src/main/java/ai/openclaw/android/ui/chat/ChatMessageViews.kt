@@ -1,5 +1,10 @@
 package ai.openclaw.android.ui.chat
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.graphics.BitmapFactory
+import android.util.Base64
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
@@ -13,6 +18,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -39,6 +45,7 @@ import ai.openclaw.android.ui.mobileCaption2
 import ai.openclaw.android.ui.mobileCodeBg
 import ai.openclaw.android.ui.mobileCodeText
 import ai.openclaw.android.ui.mobileHeadline
+import ai.openclaw.android.ui.mobileSuccess
 import ai.openclaw.android.ui.mobileText
 import ai.openclaw.android.ui.mobileTextSecondary
 import ai.openclaw.android.ui.mobileWarning
@@ -51,6 +58,9 @@ private data class ChatBubbleStyle(
   val borderColor: Color,
   val roleColor: Color,
 )
+
+private const val COLLAPSE_CHAR_THRESHOLD = 1400
+private const val COLLAPSE_PREVIEW_CHARS = 700
 
 @Composable
 fun ChatMessageBubble(message: ChatMessage) {
@@ -68,7 +78,20 @@ fun ChatMessageBubble(message: ChatMessage) {
 
   if (displayableContent.isEmpty()) return
 
-  ChatBubbleContainer(style = style, roleLabel = roleLabel(role)) {
+  val copyPayload =
+    displayableContent
+      .asSequence()
+      .filter { it.type == "text" }
+      .mapNotNull { it.text?.trim() }
+      .filter { it.isNotEmpty() }
+      .joinToString("\n\n")
+      .trim()
+
+  ChatBubbleContainer(
+    style = style,
+    roleLabel = roleLabel(role),
+    copyPayload = copyPayload.takeIf { it.isNotEmpty() },
+  ) {
     ChatMessageBody(content = displayableContent, textColor = mobileText)
   }
 }
@@ -77,9 +100,19 @@ fun ChatMessageBubble(message: ChatMessage) {
 private fun ChatBubbleContainer(
   style: ChatBubbleStyle,
   roleLabel: String,
+  copyPayload: String? = null,
   modifier: Modifier = Modifier,
   content: @Composable () -> Unit,
 ) {
+  val context = LocalContext.current
+  var copied by remember(copyPayload) { mutableStateOf(false) }
+
+  LaunchedEffect(copied) {
+    if (!copied) return@LaunchedEffect
+    kotlinx.coroutines.delay(1500)
+    copied = false
+  }
+
   Row(
     modifier = modifier.fillMaxWidth(),
     horizontalArrangement = if (style.alignEnd) Arrangement.End else Arrangement.Start,
@@ -96,11 +129,32 @@ private fun ChatBubbleContainer(
         modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(3.dp),
       ) {
-        Text(
-          text = roleLabel,
-          style = mobileCaption2.copy(fontWeight = FontWeight.SemiBold, letterSpacing = 0.6.sp),
-          color = style.roleColor,
-        )
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+          verticalAlignment = Alignment.CenterVertically,
+        ) {
+          Text(
+            text = roleLabel,
+            style = mobileCaption2.copy(fontWeight = FontWeight.SemiBold, letterSpacing = 0.6.sp),
+            color = style.roleColor,
+          )
+          if (!copyPayload.isNullOrBlank()) {
+            TextButton(
+              onClick = {
+                val manager = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                manager?.setPrimaryClip(ClipData.newPlainText("chat-message", copyPayload))
+                copied = true
+              },
+            ) {
+              Text(
+                text = if (copied) "Copied" else "Copy",
+                style = mobileCaption2.copy(fontWeight = FontWeight.SemiBold),
+                color = if (copied) mobileSuccess else mobileAccent,
+              )
+            }
+          }
+        }
         content()
       }
     }
@@ -114,13 +168,32 @@ private fun ChatMessageBody(content: List<ChatMessageContent>, textColor: Color)
       when (part.type) {
         "text" -> {
           val text = part.text ?: continue
-          ChatMarkdown(text = text, textColor = textColor)
+          ChatMessageTextPart(text = text, textColor = textColor)
         }
         else -> {
           val b64 = part.base64 ?: continue
           ChatBase64Image(base64 = b64, mimeType = part.mimeType)
         }
       }
+    }
+  }
+}
+
+@Composable
+private fun ChatMessageTextPart(text: String, textColor: Color) {
+  var expanded by remember(text) { mutableStateOf(false) }
+  val shouldCollapse = text.length > COLLAPSE_CHAR_THRESHOLD
+  val previewText = remember(text) { text.take(COLLAPSE_PREVIEW_CHARS).trimEnd() + "\n\n…" }
+
+  ChatMarkdown(text = if (shouldCollapse && !expanded) previewText else text, textColor = textColor)
+
+  if (shouldCollapse) {
+    TextButton(onClick = { expanded = !expanded }, modifier = Modifier.padding(top = 2.dp)) {
+      Text(
+        text = if (expanded) "Show less" else "Show more",
+        style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
+        color = mobileAccent,
+      )
     }
   }
 }
@@ -274,6 +347,15 @@ private fun PulseDot(alpha: Float, color: Color) {
 
 @Composable
 fun ChatCodeBlock(code: String, language: String?) {
+  val context = LocalContext.current
+  var copied by remember(code) { mutableStateOf(false) }
+
+  LaunchedEffect(copied) {
+    if (!copied) return@LaunchedEffect
+    kotlinx.coroutines.delay(2_000)
+    copied = false
+  }
+
   Surface(
     shape = RoundedCornerShape(8.dp),
     color = mobileCodeBg,
@@ -281,17 +363,44 @@ fun ChatCodeBlock(code: String, language: String?) {
     modifier = Modifier.fillMaxWidth(),
   ) {
     Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-      if (!language.isNullOrBlank()) {
-        Text(
-          text = language.uppercase(Locale.US),
-          style = mobileCaption2.copy(letterSpacing = 0.4.sp),
-          color = mobileTextSecondary,
-        )
+      Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        if (!language.isNullOrBlank()) {
+          Text(
+            text = language.uppercase(Locale.US),
+            style = mobileCaption2.copy(letterSpacing = 0.4.sp),
+            color = mobileTextSecondary,
+          )
+        } else {
+          Text(
+            text = "CODE",
+            style = mobileCaption2.copy(letterSpacing = 0.4.sp),
+            color = mobileTextSecondary,
+          )
+        }
+
+        TextButton(
+          onClick = {
+            val manager = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+            manager?.setPrimaryClip(ClipData.newPlainText("code", code.trimEnd()))
+            copied = true
+          },
+        ) {
+          Text(
+            text = if (copied) "Copied" else "Copy",
+            style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
+            color = if (copied) mobileSuccess else mobileAccent,
+          )
+        }
       }
+
       Text(
         text = code.trimEnd(),
         fontFamily = FontFamily.Monospace,
-        style = mobileCallout,
+        style = mobileCallout.copy(lineHeight = 20.sp),
         color = mobileCodeText,
       )
     }

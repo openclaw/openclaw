@@ -1,6 +1,9 @@
 package ai.openclaw.android.ui.chat
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.ContentResolver
+import android.content.Context
 import android.net.Uri
 import android.util.Base64
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -23,8 +26,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -33,6 +38,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ai.openclaw.android.MainViewModel
+import ai.openclaw.android.chat.ChatConnectionState
+import ai.openclaw.android.chat.ChatMessage
 import ai.openclaw.android.chat.ChatSessionEntry
 import ai.openclaw.android.chat.OutgoingAttachment
 import ai.openclaw.android.ui.mobileAccent
@@ -59,6 +66,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
   val errorText by viewModel.chatError.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   val healthOk by viewModel.chatHealthOk.collectAsState()
+  val connectionState by viewModel.chatConnectionState.collectAsState()
   val sessionKey by viewModel.chatSessionKey.collectAsState()
   val mainSessionKey by viewModel.mainSessionKey.collectAsState()
   val thinkingLevel by viewModel.chatThinkingLevel.collectAsState()
@@ -105,8 +113,10 @@ fun ChatSheetContent(viewModel: MainViewModel) {
     ChatThreadSelector(
       sessionKey = sessionKey,
       sessions = sessions,
+      messages = messages,
       mainSessionKey = mainSessionKey,
       healthOk = healthOk,
+      connectionState = connectionState,
       onSelectSession = { key -> viewModel.switchChatSession(key) },
     )
 
@@ -128,6 +138,7 @@ fun ChatSheetContent(viewModel: MainViewModel) {
         healthOk = healthOk,
         thinkingLevel = thinkingLevel,
         pendingRunCount = pendingRunCount,
+        errorText = errorText,
         attachments = attachments,
         onPickImages = { pickImages.launch("image/*") },
         onRemoveAttachment = { id -> attachments.removeAll { it.id == id } },
@@ -137,6 +148,12 @@ fun ChatSheetContent(viewModel: MainViewModel) {
           viewModel.refreshChatSessions(limit = 200)
         },
         onAbort = { viewModel.abortChat() },
+        onRetryLast = {
+          val retried = viewModel.retryLastChatMessage()
+          if (!retried) {
+            viewModel.refreshChat()
+          }
+        },
         onSend = { text ->
           val outgoing =
             attachments.map { att ->
@@ -159,13 +176,41 @@ fun ChatSheetContent(viewModel: MainViewModel) {
 private fun ChatThreadSelector(
   sessionKey: String,
   sessions: List<ChatSessionEntry>,
+  messages: List<ChatMessage>,
   mainSessionKey: String,
   healthOk: Boolean,
+  connectionState: ChatConnectionState,
   onSelectSession: (String) -> Unit,
 ) {
   val sessionOptions = resolveSessionChoices(sessionKey, sessions, mainSessionKey = mainSessionKey)
   val currentSessionLabel =
     friendlySessionName(sessionOptions.firstOrNull { it.key == sessionKey }?.displayName ?: sessionKey)
+  val context = LocalContext.current
+  var copiedAll by remember(messages, sessionKey) { mutableStateOf(false) }
+
+  LaunchedEffect(copiedAll) {
+    if (!copiedAll) return@LaunchedEffect
+    kotlinx.coroutines.delay(1500)
+    copiedAll = false
+  }
+
+  val threadTranscript =
+    remember(messages) {
+      messages
+        .mapNotNull { msg ->
+          val text =
+            msg.content
+              .asSequence()
+              .filter { it.type == "text" }
+              .mapNotNull { it.text?.trim() }
+              .filter { it.isNotEmpty() }
+              .joinToString("\n\n")
+              .trim()
+          if (text.isBlank()) null else "${msg.role.uppercase()}:\n$text"
+        }
+        .joinToString("\n\n")
+        .trim()
+    }
 
   Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
     Row(
@@ -186,7 +231,29 @@ private fun ChatThreadSelector(
           maxLines = 1,
           overflow = TextOverflow.Ellipsis,
         )
-        ChatConnectionPill(healthOk = healthOk)
+        if (threadTranscript.isNotBlank()) {
+          Surface(
+            shape = RoundedCornerShape(999.dp),
+            color = if (copiedAll) mobileSuccessSoft else Color.White,
+            border = BorderStroke(1.dp, if (copiedAll) mobileSuccess.copy(alpha = 0.4f) else mobileBorder),
+            onClick = {
+              val manager = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+              manager?.setPrimaryClip(ClipData.newPlainText("chat-thread", threadTranscript))
+              copiedAll = true
+            },
+          ) {
+            Text(
+              text = if (copiedAll) "Copied all" else "Copy all",
+              style = mobileCaption2.copy(fontWeight = FontWeight.SemiBold),
+              color = if (copiedAll) mobileSuccess else mobileTextSecondary,
+              modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+            )
+          }
+        }
+        ChatConnectionPill(
+          healthOk = healthOk,
+          connectionState = connectionState,
+        )
       }
     }
 
@@ -219,16 +286,26 @@ private fun ChatThreadSelector(
 }
 
 @Composable
-private fun ChatConnectionPill(healthOk: Boolean) {
+private fun ChatConnectionPill(
+  healthOk: Boolean,
+  connectionState: ChatConnectionState,
+) {
+  val (label, fg, bg) =
+    when {
+      healthOk -> Triple("Connected", mobileSuccess, mobileSuccessSoft)
+      connectionState == ChatConnectionState.Connecting -> Triple("Connecting…", mobileWarning, mobileWarningSoft)
+      else -> Triple("Reconnecting…", mobileWarning, mobileWarningSoft)
+    }
+
   Surface(
     shape = RoundedCornerShape(999.dp),
-    color = if (healthOk) mobileSuccessSoft else mobileWarningSoft,
-    border = BorderStroke(1.dp, if (healthOk) mobileSuccess.copy(alpha = 0.35f) else mobileWarning.copy(alpha = 0.35f)),
+    color = bg,
+    border = BorderStroke(1.dp, fg.copy(alpha = 0.35f)),
   ) {
     Text(
-      text = if (healthOk) "Connected" else "Offline",
+      text = label,
       style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
-      color = if (healthOk) mobileSuccess else mobileWarning,
+      color = fg,
       modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
     )
   }
