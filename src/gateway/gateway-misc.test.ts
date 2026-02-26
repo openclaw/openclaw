@@ -1,5 +1,5 @@
-import * as fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { describe, expect, it, test, vi } from "vitest";
@@ -332,6 +332,19 @@ describe("resolveNodeCommandAllowlist", () => {
     for (const cmd of DEFAULT_DANGEROUS_NODE_COMMANDS) {
       expect(allow.has(cmd)).toBe(false);
     }
+  });
+
+  it("includes Android notifications.list by default", () => {
+    const allow = resolveNodeCommandAllowlist(
+      {},
+      {
+        platform: "android 16",
+        deviceFamily: "Android",
+      },
+    );
+
+    expect(allow.has("notifications.list")).toBe(true);
+    expect(allow.has("system.notify")).toBe(false);
   });
 
   it("can explicitly allow dangerous commands via allowCommands", () => {

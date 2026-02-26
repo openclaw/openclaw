@@ -1,7 +1,7 @@
 import type { Command } from "commander";
+import type { LogLevel } from "../../logging/levels.js";
 import { setVerbose } from "../../globals.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
-import type { LogLevel } from "../../logging/levels.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getCommandPath, getVerboseFlag, hasHelpOrVersion } from "../argv.js";
 import { emitCliBanner } from "../banner.js";
@@ -25,6 +25,7 @@ const PLUGIN_REQUIRED_COMMANDS = new Set([
   "message",
   "channels",
   "directory",
+  "agents",
   "configure",
   "onboard",
 ]);

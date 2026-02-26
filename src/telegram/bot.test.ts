@@ -193,6 +193,50 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-2");
   });
 
+  it("allows callback_query in groups when group policy authorizes the sender", async () => {
+    onSpy.mockClear();
+    editMessageTextSpy.mockClear();
+    listSkillCommandsForAgents.mockClear();
+
+    createTelegramBot({
+      token: "tok",
+      config: {
+        channels: {
+          telegram: {
+            dmPolicy: "open",
+            capabilities: { inlineButtons: "allowlist" },
+            allowFrom: [],
+            groupPolicy: "open",
+            groups: { "*": { requireMention: false } },
+          },
+        },
+      },
+    });
+    const callbackHandler = onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+    expect(callbackHandler).toBeDefined();
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-group-1",
+        data: "commands_page_2",
+        from: { id: 42, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: -100999, type: "supergroup", title: "Test Group" },
+          date: 1736380800,
+          message_id: 20,
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    // The callback should be processed (not silently blocked)
+    expect(editMessageTextSpy).toHaveBeenCalledTimes(1);
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-group-1");
+  });
+
   it("edits commands list for pagination callbacks", async () => {
     onSpy.mockClear();
     listSkillCommandsForAgents.mockClear();

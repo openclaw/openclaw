@@ -1,5 +1,6 @@
 package ai.openclaw.android.node
 
+import ai.openclaw.android.gateway.parseInvokeErrorFromThrowable
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -37,14 +38,9 @@ fun parseHexColorArgb(raw: String?): Long? {
 }
 
 fun invokeErrorFromThrowable(err: Throwable): Pair<String, String> {
-  val raw = (err.message ?: "").trim()
-  if (raw.isEmpty()) return "UNAVAILABLE" to "UNAVAILABLE: error"
-
-  val idx = raw.indexOf(':')
-  if (idx <= 0) return "UNAVAILABLE" to raw
-  val code = raw.substring(0, idx).trim().ifEmpty { "UNAVAILABLE" }
-  val message = raw.substring(idx + 1).trim().ifEmpty { raw }
-  return code to "$code: $message"
+  val parsed = parseInvokeErrorFromThrowable(err, fallbackMessage = "UNAVAILABLE: error")
+  val message = if (parsed.hadExplicitCode) parsed.prefixedMessage else parsed.message
+  return parsed.code to message
 }
 
 fun normalizeMainKey(raw: String?): String? {
