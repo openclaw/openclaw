@@ -162,6 +162,24 @@ function createMockRuntime(): PluginRuntime {
           vi.fn() as unknown as PluginRuntime["channel"]["reply"]["resolveHumanDelayConfig"],
         dispatchReplyFromConfig:
           vi.fn() as unknown as PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"],
+        withReplyDispatcher: vi.fn(
+          async ({
+            dispatcher,
+            run,
+            onSettled,
+          }: Parameters<PluginRuntime["channel"]["reply"]["withReplyDispatcher"]>[0]) => {
+            try {
+              return await run();
+            } finally {
+              dispatcher.markComplete();
+              try {
+                await dispatcher.waitForIdle();
+              } finally {
+                await onSettled?.();
+              }
+            }
+          },
+        ) as unknown as PluginRuntime["channel"]["reply"]["withReplyDispatcher"],
         finalizeInboundContext: vi.fn(
           (ctx: Record<string, unknown>) => ctx,
         ) as unknown as PluginRuntime["channel"]["reply"]["finalizeInboundContext"],
