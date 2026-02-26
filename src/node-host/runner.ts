@@ -189,6 +189,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     scopes: [],
     caps: ["system", ...(browserProxyEnabled ? ["browser"] : [])],
     commands: [
+      "system.run.prepare",
       "system.run",
       "system.which",
       "system.execApprovals.get",

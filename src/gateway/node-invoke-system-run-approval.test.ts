@@ -229,6 +229,50 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     expectAllowOnceForwardingResult(result);
   });
 
+  test("uses systemRunPlanV2 for forwarded command context and ignores caller tampering", () => {
+    const record = makeRecord("echo SAFE", ["echo", "SAFE"]);
+    record.request.systemRunPlanV2 = {
+      version: 2,
+      argv: ["/usr/bin/echo", "SAFE"],
+      cwd: "/real/cwd",
+      rawCommand: "/usr/bin/echo SAFE",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+    };
+    record.request.systemRunBindingV1 = buildSystemRunApprovalBindingV1({
+      argv: ["/usr/bin/echo", "SAFE"],
+      cwd: "/real/cwd",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+    }).binding;
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["echo", "PWNED"],
+        rawCommand: "echo PWNED",
+        cwd: "/tmp/attacker-link/sub",
+        agentId: "attacker",
+        sessionKey: "agent:attacker:main",
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client,
+      execApprovalManager: manager(record),
+      nowMs: now,
+    });
+    expectAllowOnceForwardingResult(result);
+    if (!result.ok) {
+      throw new Error("unreachable");
+    }
+    const forwarded = result.params as Record<string, unknown>;
+    expect(forwarded.command).toEqual(["/usr/bin/echo", "SAFE"]);
+    expect(forwarded.rawCommand).toBe("/usr/bin/echo SAFE");
+    expect(forwarded.cwd).toBe("/real/cwd");
+    expect(forwarded.agentId).toBe("main");
+    expect(forwarded.sessionKey).toBe("agent:main:main");
+  });
+
   test("rejects env overrides when approval record lacks env binding", () => {
     const result = sanitizeSystemRunParamsForForwarding({
       rawParams: {

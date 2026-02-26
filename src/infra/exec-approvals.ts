@@ -20,12 +20,22 @@ export type SystemRunApprovalBindingV1 = {
   envHash: string | null;
 };
 
+export type SystemRunApprovalPlanV2 = {
+  version: 2;
+  argv: string[];
+  cwd: string | null;
+  rawCommand: string | null;
+  agentId: string | null;
+  sessionKey: string | null;
+};
+
 export type ExecApprovalRequestPayload = {
   command: string;
   commandArgv?: string[];
   // Optional UI-safe env key preview for approval prompts.
   envKeys?: string[];
   systemRunBindingV1?: SystemRunApprovalBindingV1 | null;
+  systemRunPlanV2?: SystemRunApprovalPlanV2 | null;
   cwd?: string | null;
   nodeId?: string | null;
   host?: string | null;

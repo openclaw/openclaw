@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { SystemRunApprovalBindingV1 } from "./exec-approvals.js";
+import type { SystemRunApprovalBindingV1, SystemRunApprovalPlanV2 } from "./exec-approvals.js";
 import { normalizeEnvVarKey } from "./host-env-security.js";
 
 type NormalizedSystemRunEnvEntry = [key: string, value: string];
@@ -14,6 +14,28 @@ function normalizeString(value: unknown): string | null {
 
 function normalizeStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.map((entry) => String(entry)) : [];
+}
+
+export function normalizeSystemRunApprovalPlanV2(value: unknown): SystemRunApprovalPlanV2 | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const candidate = value as Record<string, unknown>;
+  if (candidate.version !== 2) {
+    return null;
+  }
+  const argv = normalizeStringArray(candidate.argv);
+  if (argv.length === 0) {
+    return null;
+  }
+  return {
+    version: 2,
+    argv,
+    cwd: normalizeString(candidate.cwd),
+    rawCommand: normalizeString(candidate.rawCommand),
+    agentId: normalizeString(candidate.agentId),
+    sessionKey: normalizeString(candidate.sessionKey),
+  };
 }
 
 function normalizeSystemRunEnvEntries(env: unknown): NormalizedSystemRunEnvEntry[] {
