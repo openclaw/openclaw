@@ -96,6 +96,41 @@ describe("extractGeminiCliCredentials", () => {
     return layout;
   }
 
+  function installNpmShimLayout(params: { oauth2Exists?: boolean; oauth2Content?: string }) {
+    const binDir = join(rootDir, "fake", "npm-bin");
+    const geminiPath = join(binDir, "gemini");
+    const resolvedPath = geminiPath;
+    const oauth2Path = join(
+      binDir,
+      "node_modules",
+      "@google",
+      "gemini-cli",
+      "node_modules",
+      "@google",
+      "gemini-cli-core",
+      "dist",
+      "src",
+      "code_assist",
+      "oauth2.js",
+    );
+    process.env.PATH = binDir;
+
+    mockExistsSync.mockImplementation((p: string) => {
+      const normalized = normalizePath(p);
+      if (normalized === normalizePath(geminiPath)) {
+        return true;
+      }
+      if (params.oauth2Exists && normalized === normalizePath(oauth2Path)) {
+        return true;
+      }
+      return false;
+    });
+    mockRealpathSync.mockReturnValue(resolvedPath);
+    if (params.oauth2Content !== undefined) {
+      mockReadFileSync.mockReturnValue(params.oauth2Content);
+    }
+  }
+
   beforeEach(async () => {
     vi.clearAllMocks();
     originalPath = process.env.PATH;
@@ -116,6 +151,19 @@ describe("extractGeminiCliCredentials", () => {
 
   it("extracts credentials from oauth2.js in known path", async () => {
     installGeminiLayout({ oauth2Exists: true, oauth2Content: FAKE_OAUTH2_CONTENT });
+
+    const { extractGeminiCliCredentials, clearCredentialsCache } = await import("./oauth.js");
+    clearCredentialsCache();
+    const result = extractGeminiCliCredentials();
+
+    expect(result).toEqual({
+      clientId: FAKE_CLIENT_ID,
+      clientSecret: FAKE_CLIENT_SECRET,
+    });
+  });
+
+  it("extracts credentials when PATH entry is an npm global shim", async () => {
+    installNpmShimLayout({ oauth2Exists: true, oauth2Content: FAKE_OAUTH2_CONTENT });
 
     const { extractGeminiCliCredentials, clearCredentialsCache } = await import("./oauth.js");
     clearCredentialsCache();

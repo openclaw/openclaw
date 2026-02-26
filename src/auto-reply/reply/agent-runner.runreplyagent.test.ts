@@ -1188,6 +1188,54 @@ describe("runReplyAgent typing (heartbeat)", () => {
     });
   });
 
+  it("surfaces overflow fallback when embedded run returns empty payloads", async () => {
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
+      payloads: [],
+      meta: {
+        durationMs: 1,
+        error: {
+          kind: "context_overflow",
+          message: 'Context overflow: Summarization failed: 400 {"message":"prompt is too long"}',
+        },
+      },
+    }));
+
+    const { run } = createMinimalRun();
+    const res = await run();
+    const payload = Array.isArray(res) ? res[0] : res;
+    expect(payload).toMatchObject({
+      text: expect.stringContaining("conversation is too large"),
+    });
+    if (!payload) {
+      throw new Error("expected payload");
+    }
+    expect(payload.text).toContain("/new");
+  });
+
+  it("surfaces overflow fallback when embedded payload text is whitespace-only", async () => {
+    state.runEmbeddedPiAgentMock.mockImplementationOnce(async () => ({
+      payloads: [{ text: "   \n\t  ", isError: true }],
+      meta: {
+        durationMs: 1,
+        error: {
+          kind: "context_overflow",
+          message: 'Context overflow: Summarization failed: 400 {"message":"prompt is too long"}',
+        },
+      },
+    }));
+
+    const { run } = createMinimalRun();
+    const res = await run();
+    const payload = Array.isArray(res) ? res[0] : res;
+    expect(payload).toMatchObject({
+      text: expect.stringContaining("conversation is too large"),
+    });
+    if (!payload) {
+      throw new Error("expected payload");
+    }
+    expect(payload.text).toContain("/new");
+  });
+
   it("resets the session after role ordering payloads", async () => {
     await withTempStateDir(async (stateDir) => {
       const sessionId = "session";

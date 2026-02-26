@@ -7,8 +7,10 @@ import {
   resolveControlCommandGate,
   resolveDefaultGroupPolicy,
   isDangerousNameMatchingEnabled,
+  readStoreAllowFromForDmPolicy,
   resolveMentionGating,
   formatAllowlistMatchMeta,
+  resolveEffectiveAllowFromLists,
   type HistoryEntry,
 } from "openclaw/plugin-sdk";
 import {
@@ -127,29 +129,34 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const senderName = from.name ?? from.id;
     const senderId = from.aadObjectId ?? from.id;
     const dmPolicy = msteamsCfg?.dmPolicy ?? "pairing";
-    const storedAllowFrom =
-      dmPolicy === "allowlist"
-        ? []
-        : await core.channel.pairing.readAllowFromStore("msteams").catch(() => []);
+    const storedAllowFrom = await readStoreAllowFromForDmPolicy({
+      provider: "msteams",
+      dmPolicy,
+      readStore: (provider) => core.channel.pairing.readAllowFromStore(provider),
+    });
     const useAccessGroups = cfg.commands?.useAccessGroups !== false;
 
     // Check DM policy for direct messages.
     const dmAllowFrom = msteamsCfg?.allowFrom ?? [];
     const configuredDmAllowFrom = dmAllowFrom.map((v) => String(v));
-    const effectiveDmAllowFrom = [...configuredDmAllowFrom, ...storedAllowFrom];
+    const groupAllowFrom = msteamsCfg?.groupAllowFrom;
+    const resolvedAllowFromLists = resolveEffectiveAllowFromLists({
+      allowFrom: configuredDmAllowFrom,
+      groupAllowFrom,
+      storeAllowFrom: storedAllowFrom,
+      dmPolicy,
+    });
+    const effectiveDmAllowFrom = resolvedAllowFromLists.effectiveAllowFrom;
     if (isDirectMessage && msteamsCfg) {
-      const allowFrom = dmAllowFrom;
-
       if (dmPolicy === "disabled") {
         log.debug?.("dropping dm (dms disabled)");
         return;
       }
 
       if (dmPolicy !== "open") {
-        const effectiveAllowFrom = [...allowFrom.map((v) => String(v)), ...storedAllowFrom];
         const allowNameMatching = isDangerousNameMatchingEnabled(msteamsCfg);
         const allowMatch = resolveMSTeamsAllowlistMatch({
-          allowFrom: effectiveAllowFrom,
+          allowFrom: effectiveDmAllowFrom,
           senderId,
           senderName,
           allowNameMatching,
@@ -184,13 +191,8 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       !isDirectMessage && msteamsCfg
         ? (msteamsCfg.groupPolicy ?? defaultGroupPolicy ?? "allowlist")
         : "disabled";
-    const groupAllowFrom =
-      !isDirectMessage && msteamsCfg
-        ? (msteamsCfg.groupAllowFrom ??
-          (msteamsCfg.allowFrom && msteamsCfg.allowFrom.length > 0 ? msteamsCfg.allowFrom : []))
-        : [];
     const effectiveGroupAllowFrom =
-      !isDirectMessage && msteamsCfg ? groupAllowFrom.map((v) => String(v)) : [];
+      !isDirectMessage && msteamsCfg ? resolvedAllowFromLists.effectiveGroupAllowFrom : [];
     const teamId = activity.channelData?.team?.id;
     const teamName = activity.channelData?.team?.name;
     const channelName = activity.channelData?.channel?.name;
@@ -533,14 +535,20 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     log.info("dispatching to agent", { sessionKey: route.sessionKey });
     try {
-      const { queuedFinal, counts } = await core.channel.reply.dispatchReplyFromConfig({
-        ctx: ctxPayload,
-        cfg,
+      const { queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
         dispatcher,
-        replyOptions,
+        onSettled: () => {
+          markDispatchIdle();
+        },
+        run: () =>
+          core.channel.reply.dispatchReplyFromConfig({
+            ctx: ctxPayload,
+            cfg,
+            dispatcher,
+            replyOptions,
+          }),
       });
 
-      markDispatchIdle();
       log.info("dispatch complete", { queuedFinal, counts });
 
       if (!queuedFinal) {

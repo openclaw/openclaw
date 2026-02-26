@@ -5,10 +5,12 @@ import {
   formatTextWithAttachmentLinks,
   logInboundDrop,
   isDangerousNameMatchingEnabled,
+  readStoreAllowFromForDmPolicy,
   resolveControlCommandGate,
   resolveOutboundMediaUrls,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
+  resolveEffectiveAllowFromLists,
   warnMissingProviderGroupPolicyFallbackOnce,
   type OutboundReplyPayload,
   type OpenClawConfig,
@@ -35,13 +37,19 @@ function resolveIrcEffectiveAllowlists(params: {
   configAllowFrom: string[];
   configGroupAllowFrom: string[];
   storeAllowList: string[];
+  dmPolicy: string;
 }): {
   effectiveAllowFrom: string[];
   effectiveGroupAllowFrom: string[];
 } {
-  const effectiveAllowFrom = [...params.configAllowFrom, ...params.storeAllowList].filter(Boolean);
-  // Pairing-store entries are DM approvals and must not widen group sender authorization.
-  const effectiveGroupAllowFrom = [...params.configGroupAllowFrom].filter(Boolean);
+  const { effectiveAllowFrom, effectiveGroupAllowFrom } = resolveEffectiveAllowFromLists({
+    allowFrom: params.configAllowFrom,
+    groupAllowFrom: params.configGroupAllowFrom,
+    storeAllowFrom: params.storeAllowList,
+    dmPolicy: params.dmPolicy,
+    // IRC intentionally requires explicit groupAllowFrom; do not fallback to allowFrom.
+    groupAllowFromFallbackToAllowFrom: false,
+  });
   return { effectiveAllowFrom, effectiveGroupAllowFrom };
 }
 
@@ -113,10 +121,11 @@ export async function handleIrcInbound(params: {
 
   const configAllowFrom = normalizeIrcAllowlist(account.config.allowFrom);
   const configGroupAllowFrom = normalizeIrcAllowlist(account.config.groupAllowFrom);
-  const storeAllowFrom =
-    dmPolicy === "allowlist"
-      ? []
-      : await core.channel.pairing.readAllowFromStore(CHANNEL_ID).catch(() => []);
+  const storeAllowFrom = await readStoreAllowFromForDmPolicy({
+    provider: CHANNEL_ID,
+    dmPolicy,
+    readStore: (provider) => core.channel.pairing.readAllowFromStore(provider),
+  });
   const storeAllowList = normalizeIrcAllowlist(storeAllowFrom);
 
   const groupMatch = resolveIrcGroupMatch({
@@ -141,6 +150,7 @@ export async function handleIrcInbound(params: {
     configAllowFrom,
     configGroupAllowFrom,
     storeAllowList,
+    dmPolicy,
   });
 
   const allowTextCommands = core.channel.commands.shouldHandleTextCommands({

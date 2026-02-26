@@ -1002,7 +1002,12 @@
               },
               {
                 "group": "Agent coordination",
-                "pages": ["tools/agent-send", "tools/subagents", "tools/multi-agent-sandbox-tools"]
+                "pages": [
+                  "tools/agent-send",
+                  "tools/subagents",
+                  "tools/acp-agents",
+                  "tools/multi-agent-sandbox-tools"
+                ]
               },
               {
                 "group": "Skills",
@@ -1135,6 +1140,8 @@
                       "gateway/configuration-reference",
                       "gateway/configuration-examples",
                       "gateway/authentication",
+                      "gateway/secrets",
+                      "gateway/secrets-plan-contract",
                       "gateway/trusted-proxy-auth",
                       "gateway/health",
                       "gateway/heartbeat",
@@ -1230,6 +1237,7 @@
                   "cli/qr",
                   "cli/reset",
                   "cli/sandbox",
+                  "cli/secrets",
                   "cli/security",
                   "cli/sessions",
                   "cli/setup",

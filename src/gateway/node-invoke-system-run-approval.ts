@@ -1,5 +1,9 @@
 import { resolveSystemRunCommand } from "../infra/system-run-command.js";
 import type { ExecApprovalRecord } from "./exec-approval-manager.js";
+import {
+  evaluateSystemRunApprovalMatch,
+  toSystemRunApprovalMismatchError,
+} from "./node-invoke-system-run-approval-match.js";
 
 type SystemRunParamsLike = {
   command?: unknown;
@@ -51,40 +55,6 @@ function normalizeApprovalDecision(value: unknown): "allow-once" | "allow-always
 function clientHasApprovals(client: ApprovalClient | null): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client?.connect?.scopes : [];
   return scopes.includes("operator.admin") || scopes.includes("operator.approvals");
-}
-
-function approvalMatchesRequest(
-  cmdText: string,
-  params: SystemRunParamsLike,
-  record: ExecApprovalRecord,
-): boolean {
-  if (record.request.host !== "node") {
-    return false;
-  }
-
-  if (!cmdText || record.request.command !== cmdText) {
-    return false;
-  }
-
-  const reqCwd = record.request.cwd ?? null;
-  const runCwd = normalizeString(params.cwd) ?? null;
-  if (reqCwd !== runCwd) {
-    return false;
-  }
-
-  const reqAgentId = record.request.agentId ?? null;
-  const runAgentId = normalizeString(params.agentId) ?? null;
-  if (reqAgentId !== runAgentId) {
-    return false;
-  }
-
-  const reqSessionKey = record.request.sessionKey ?? null;
-  const runSessionKey = normalizeString(params.sessionKey) ?? null;
-  if (reqSessionKey !== runSessionKey) {
-    return false;
-  }
-
-  return true;
 }
 
 function pickSystemRunParams(raw: Record<string, unknown>): Record<string, unknown> {
@@ -237,12 +207,19 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
     };
   }
 
-  if (!approvalMatchesRequest(cmdText, p, snapshot)) {
-    return {
-      ok: false,
-      message: "approval id does not match request",
-      details: { code: "APPROVAL_REQUEST_MISMATCH", runId },
-    };
+  const approvalMatch = evaluateSystemRunApprovalMatch({
+    cmdText,
+    argv: cmdTextResolution.argv,
+    request: snapshot.request,
+    binding: {
+      cwd: normalizeString(p.cwd) ?? null,
+      agentId: normalizeString(p.agentId) ?? null,
+      sessionKey: normalizeString(p.sessionKey) ?? null,
+      env: p.env,
+    },
+  });
+  if (!approvalMatch.ok) {
+    return toSystemRunApprovalMismatchError({ runId, match: approvalMatch });
   }
 
   // Normal path: enforce the decision recorded by the gateway.

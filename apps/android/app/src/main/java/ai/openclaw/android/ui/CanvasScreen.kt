@@ -13,6 +13,9 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
@@ -25,6 +28,18 @@ import ai.openclaw.android.MainViewModel
 fun CanvasScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
   val context = LocalContext.current
   val isDebuggable = (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0
+  val webViewRef = remember { mutableStateOf<WebView?>(null) }
+
+  DisposableEffect(viewModel) {
+    onDispose {
+      val webView = webViewRef.value ?: return@onDispose
+      viewModel.canvas.detach(webView)
+      webView.removeJavascriptInterface(CanvasA2UIActionBridge.interfaceName)
+      webView.stopLoading()
+      webView.destroy()
+      webViewRef.value = null
+    }
+  }
 
   AndroidView(
     modifier = modifier,
@@ -33,6 +48,11 @@ fun CanvasScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
         settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+        settings.useWideViewPort = false
+        settings.loadWithOverviewMode = false
+        settings.builtInZoomControls = false
+        settings.displayZoomControls = false
+        settings.setSupportZoom(false)
         if (WebViewFeature.isFeatureSupported(WebViewFeature.ALGORITHMIC_DARKENING)) {
           WebSettingsCompat.setAlgorithmicDarkeningAllowed(settings, false)
         } else {
@@ -104,6 +124,7 @@ fun CanvasScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
         val bridge = CanvasA2UIActionBridge { payload -> viewModel.handleCanvasA2UIActionFromWebView(payload) }
         addJavascriptInterface(bridge, CanvasA2UIActionBridge.interfaceName)
         viewModel.canvas.attach(this)
+        webViewRef.value = this
       }
     },
   )

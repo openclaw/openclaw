@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { ExecApprovalManager, type ExecApprovalRecord } from "./exec-approval-manager.js";
 import { sanitizeSystemRunParamsForForwarding } from "./node-invoke-system-run-approval.js";
+import { buildSystemRunApprovalEnvBinding } from "./system-run-approval-binding.js";
 
 describe("sanitizeSystemRunParamsForForwarding", () => {
   const now = Date.now();
@@ -13,13 +14,14 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     },
   };
 
-  function makeRecord(command: string): ExecApprovalRecord {
+  function makeRecord(command: string, commandArgv?: string[]): ExecApprovalRecord {
     return {
       id: "approval-1",
       request: {
         host: "node",
         nodeId: "node-1",
         command,
+        commandArgv,
         cwd: null,
         agentId: null,
         sessionKey: null,
@@ -139,6 +141,146 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     });
     expectAllowOnceForwardingResult(result);
   });
+
+  test("rejects trailing-space argv mismatch against legacy command-only approval", () => {
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["runner "],
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client,
+      execApprovalManager: manager(makeRecord("runner")),
+      nowMs: now,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("unreachable");
+    }
+    expect(result.message).toContain("approval id does not match request");
+    expect(result.details?.code).toBe("APPROVAL_REQUEST_MISMATCH");
+  });
+
+  test("enforces commandArgv identity when approval includes argv binding", () => {
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["echo", "SAFE"],
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client,
+      execApprovalManager: manager(makeRecord("echo SAFE", ["echo SAFE"])),
+      nowMs: now,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("unreachable");
+    }
+    expect(result.message).toContain("approval id does not match request");
+    expect(result.details?.code).toBe("APPROVAL_REQUEST_MISMATCH");
+  });
+
+  test("accepts matching commandArgv binding for trailing-space argv", () => {
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["runner "],
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client,
+      execApprovalManager: manager(makeRecord('"runner "', ["runner "])),
+      nowMs: now,
+    });
+    expectAllowOnceForwardingResult(result);
+  });
+
+  test("rejects env overrides when approval record lacks env binding", () => {
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["git", "diff"],
+        rawCommand: "git diff",
+        env: { GIT_EXTERNAL_DIFF: "/tmp/pwn.sh" },
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client,
+      execApprovalManager: manager(makeRecord("git diff", ["git", "diff"])),
+      nowMs: now,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("unreachable");
+    }
+    expect(result.details?.code).toBe("APPROVAL_ENV_BINDING_MISSING");
+  });
+
+  test("rejects env hash mismatch", () => {
+    const record = makeRecord("git diff", ["git", "diff"]);
+    record.request.systemRunBindingV1 = {
+      version: 1,
+      argv: ["git", "diff"],
+      cwd: null,
+      agentId: null,
+      sessionKey: null,
+      envHash: buildSystemRunApprovalEnvBinding({ SAFE: "1" }).envHash,
+    };
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["git", "diff"],
+        rawCommand: "git diff",
+        env: { SAFE: "2" },
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client,
+      execApprovalManager: manager(record),
+      nowMs: now,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("unreachable");
+    }
+    expect(result.details?.code).toBe("APPROVAL_ENV_MISMATCH");
+  });
+
+  test("accepts matching env hash with reordered keys", () => {
+    const record = makeRecord("git diff", ["git", "diff"]);
+    const binding = buildSystemRunApprovalEnvBinding({ SAFE_A: "1", SAFE_B: "2" });
+    record.request.systemRunBindingV1 = {
+      version: 1,
+      argv: ["git", "diff"],
+      cwd: null,
+      agentId: null,
+      sessionKey: null,
+      envHash: binding.envHash,
+    };
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["git", "diff"],
+        rawCommand: "git diff",
+        env: { SAFE_B: "2", SAFE_A: "1" },
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client,
+      execApprovalManager: manager(record),
+      nowMs: now,
+    });
+    expectAllowOnceForwardingResult(result);
+  });
+
   test("consumes allow-once approvals and blocks same runId replay", async () => {
     const approvalManager = new ExecApprovalManager();
     const runId = "approval-replay-1";

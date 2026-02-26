@@ -39,6 +39,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     resolveGroupActivation,
     resolveGroupRequireMention,
     resolveTelegramGroupConfig,
+    sendChatActionHandler,
     runtime,
     replyToMode,
     streamMode,
@@ -70,6 +71,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       resolveGroupActivation,
       resolveGroupRequireMention,
       resolveTelegramGroupConfig,
+      sendChatActionHandler,
     });
     if (!context) {
       return;

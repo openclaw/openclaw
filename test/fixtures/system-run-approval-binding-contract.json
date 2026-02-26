@@ -1,0 +1,116 @@
+{
+  "cases": [
+    {
+      "name": "v1 matches when env key order changes",
+      "request": {
+        "host": "node",
+        "command": "git diff",
+        "bindingV1": {
+          "argv": ["git", "diff"],
+          "cwd": null,
+          "agentId": null,
+          "sessionKey": null,
+          "env": { "SAFE_A": "1", "SAFE_B": "2" }
+        }
+      },
+      "invoke": {
+        "cmdText": "git diff",
+        "argv": ["git", "diff"],
+        "binding": {
+          "cwd": null,
+          "agentId": null,
+          "sessionKey": null,
+          "env": { "SAFE_B": "2", "SAFE_A": "1" }
+        }
+      },
+      "expected": { "ok": true }
+    },
+    {
+      "name": "v1 rejects env mismatch",
+      "request": {
+        "host": "node",
+        "command": "git diff",
+        "bindingV1": {
+          "argv": ["git", "diff"],
+          "cwd": null,
+          "agentId": null,
+          "sessionKey": null,
+          "env": { "SAFE": "1" }
+        }
+      },
+      "invoke": {
+        "cmdText": "git diff",
+        "argv": ["git", "diff"],
+        "binding": {
+          "cwd": null,
+          "agentId": null,
+          "sessionKey": null,
+          "env": { "SAFE": "2" }
+        }
+      },
+      "expected": { "ok": false, "code": "APPROVAL_ENV_MISMATCH" }
+    },
+    {
+      "name": "v1 rejects unbound env overrides",
+      "request": {
+        "host": "node",
+        "command": "git diff",
+        "bindingV1": {
+          "argv": ["git", "diff"],
+          "cwd": null,
+          "agentId": null,
+          "sessionKey": null
+        }
+      },
+      "invoke": {
+        "cmdText": "git diff",
+        "argv": ["git", "diff"],
+        "binding": {
+          "cwd": null,
+          "agentId": null,
+          "sessionKey": null,
+          "env": { "GIT_EXTERNAL_DIFF": "/tmp/pwn.sh" }
+        }
+      },
+      "expected": { "ok": false, "code": "APPROVAL_ENV_BINDING_MISSING" }
+    },
+    {
+      "name": "legacy rejects argv mismatch",
+      "request": {
+        "host": "node",
+        "command": "echo SAFE",
+        "commandArgv": ["echo SAFE"]
+      },
+      "invoke": {
+        "cmdText": "echo SAFE",
+        "argv": ["echo", "SAFE"],
+        "binding": {
+          "cwd": null,
+          "agentId": null,
+          "sessionKey": null
+        }
+      },
+      "expected": { "ok": false, "code": "APPROVAL_REQUEST_MISMATCH" }
+    },
+    {
+      "name": "legacy accepts matching env hash",
+      "request": {
+        "host": "node",
+        "command": "git diff",
+        "commandArgv": ["git", "diff"],
+        "envHashFrom": { "SAFE_A": "1", "SAFE_B": "2" }
+      },
+      "invoke": {
+        "cmdText": "git diff",
+        "argv": ["git", "diff"],
+        "binding": {
+          "cwd": null,
+          "agentId": null,
+          "sessionKey": null,
+          "env": { "SAFE_B": "2", "SAFE_A": "1" }
+        }
+      },
+      "expected": { "ok": true }
+    }
+  ]
+}

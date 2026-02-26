@@ -27,6 +27,7 @@ import type { getChildLogger } from "../../../logging.js";
 import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
 import { readChannelAllowFromStore } from "../../../pairing/pairing-store.js";
 import type { resolveAgentRoute } from "../../../routing/resolve-route.js";
+import { readStoreAllowFromForDmPolicy } from "../../../security/dm-policy-shared.js";
 import { jidToE164, normalizeE164 } from "../../../utils.js";
 import { resolveWhatsAppAccount } from "../../accounts.js";
 import { newConnectionId } from "../../reconnect.js";
@@ -90,12 +91,11 @@ async function resolveWhatsAppCommandAuthorized(params: {
     return normalizeAllowFromE164(configuredGroupAllowFrom).includes(senderE164);
   }
 
-  const storeAllowFrom =
-    dmPolicy === "allowlist"
-      ? []
-      : await readChannelAllowFromStore("whatsapp", process.env, params.msg.accountId).catch(
-          () => [],
-        );
+  const storeAllowFrom = await readStoreAllowFromForDmPolicy({
+    provider: "whatsapp",
+    dmPolicy,
+    readStore: (provider) => readChannelAllowFromStore(provider, process.env, params.msg.accountId),
+  });
   const combinedAllowFrom = Array.from(
     new Set([...(configuredAllowFrom ?? []), ...storeAllowFrom]),
   );

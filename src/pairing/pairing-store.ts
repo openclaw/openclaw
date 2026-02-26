@@ -218,6 +218,12 @@ function requestMatchesAccountId(entry: PairingRequest, normalizedAccountId: str
   );
 }
 
+function shouldIncludeLegacyAllowFromEntries(normalizedAccountId: string): boolean {
+  // Keep backward compatibility for legacy channel-scoped allowFrom only on default account.
+  // Non-default accounts should remain isolated to avoid cross-account implicit approvals.
+  return !normalizedAccountId || normalizedAccountId === "default";
+}
+
 function normalizeId(value: string | number): string {
   return String(value).trim();
 }
@@ -237,7 +243,9 @@ function normalizeAllowEntry(channel: PairingChannel, entry: string): string {
 
 function normalizeAllowFromList(channel: PairingChannel, store: AllowFromStore): string[] {
   const list = Array.isArray(store.allowFrom) ? store.allowFrom : [];
-  return list.map((v) => normalizeAllowEntry(channel, String(v))).filter(Boolean);
+  return dedupePreserveOrder(
+    list.map((v) => normalizeAllowEntry(channel, String(v))).filter(Boolean),
+  );
 }
 
 function normalizeAllowFromInput(channel: PairingChannel, entry: string | number): string {
@@ -262,20 +270,46 @@ async function readAllowFromStateForPath(
   channel: PairingChannel,
   filePath: string,
 ): Promise<string[]> {
-  const { value } = await readJsonFile<AllowFromStore>(filePath, {
+  return (await readAllowFromStateForPathWithExists(channel, filePath)).entries;
+}
+
+async function readAllowFromStateForPathWithExists(
+  channel: PairingChannel,
+  filePath: string,
+): Promise<{ entries: string[]; exists: boolean }> {
+  const { value, exists } = await readJsonFile<AllowFromStore>(filePath, {
     version: 1,
     allowFrom: [],
   });
-  return normalizeAllowFromList(channel, value);
+  const entries = normalizeAllowFromList(channel, value);
+  return { entries, exists };
 }
 
 function readAllowFromStateForPathSync(channel: PairingChannel, filePath: string): string[] {
+  return readAllowFromStateForPathSyncWithExists(channel, filePath).entries;
+}
+
+function readAllowFromStateForPathSyncWithExists(
+  channel: PairingChannel,
+  filePath: string,
+): { entries: string[]; exists: boolean } {
+  let raw = "";
   try {
-    const raw = fs.readFileSync(filePath, "utf8");
+    raw = fs.readFileSync(filePath, "utf8");
+  } catch (err) {
+    const code = (err as { code?: string }).code;
+    if (code === "ENOENT") {
+      return { entries: [], exists: false };
+    }
+    return { entries: [], exists: false };
+  }
+  try {
     const parsed = JSON.parse(raw) as AllowFromStore;
-    return normalizeAllowFromList(channel, parsed);
+    const entries = normalizeAllowFromList(channel, parsed);
+    return { entries, exists: true };
   } catch {
-    return [];
+    // Keep parity with async reads: malformed JSON still means the file exists.
+    return { entries: [], exists: true };
   }
 }
 
@@ -298,6 +332,24 @@ async function writeAllowFromState(filePath: string, allowFrom: string[]): Promi
     version: 1,
     allowFrom,
   } satisfies AllowFromStore);
+}
+
+async function readNonDefaultAccountAllowFrom(params: {
+  channel: PairingChannel;
+  env: NodeJS.ProcessEnv;
+  accountId: string;
+}): Promise<string[]> {
+  const scopedPath = resolveAllowFromPath(params.channel, params.env, params.accountId);
+  return await readAllowFromStateForPath(params.channel, scopedPath);
+}
+
+function readNonDefaultAccountAllowFromSync(params: {
+  channel: PairingChannel;
+  env: NodeJS.ProcessEnv;
+  accountId: string;
+}): string[] {
+  const scopedPath = resolveAllowFromPath(params.channel, params.env, params.accountId);
+  return readAllowFromStateForPathSync(params.channel, scopedPath);
 }
 
 async function updateAllowFromStoreEntry(params: {
@@ -342,10 +394,17 @@ export async function readChannelAllowFromStore(
     return await readAllowFromStateForPath(channel, filePath);
   }
 
+  if (!shouldIncludeLegacyAllowFromEntries(normalizedAccountId)) {
+    return await readNonDefaultAccountAllowFrom({
+      channel,
+      env,
+      accountId: normalizedAccountId,
+    });
+  }
   const scopedPath = resolveAllowFromPath(channel, env, accountId);
   const scopedEntries = await readAllowFromStateForPath(channel, scopedPath);
   // Backward compatibility: legacy channel-level allowFrom store was unscoped.
-  // Keep honoring it alongside account-scoped files to prevent re-pair prompts after upgrades.
+  // Keep honoring it for default account to prevent re-pair prompts after upgrades.
   const legacyPath = resolveAllowFromPath(channel, env);
   const legacyEntries = await readAllowFromStateForPath(channel, legacyPath);
   return dedupePreserveOrder([...scopedEntries, ...legacyEntries]);
@@ -362,6 +421,13 @@ export function readChannelAllowFromStoreSync(
     return readAllowFromStateForPathSync(channel, filePath);
   }
 
+  if (!shouldIncludeLegacyAllowFromEntries(normalizedAccountId)) {
+    return readNonDefaultAccountAllowFromSync({
+      channel,
+      env,
+      accountId: normalizedAccountId,
+    });
+  }
   const scopedPath = resolveAllowFromPath(channel, env, accountId);
   const scopedEntries = readAllowFromStateForPathSync(channel, scopedPath);
   const legacyPath = resolveAllowFromPath(channel, env);
@@ -503,7 +569,13 @@ export async function upsertChannelPairingRequest(params: {
         nowMs,
       );
       reqs = prunedExpired;
-      const existingIdx = reqs.findIndex((r) => r.id === id);
+      const normalizedMatchingAccountId = normalizePairingAccountId(normalizedAccountId);
+      const existingIdx = reqs.findIndex((r) => {
+        if (r.id !== id) {
+          return false;
+        }
+        return requestMatchesAccountId(r, normalizedMatchingAccountId);
+      });
       const existingCodes = new Set(
         reqs.map((req) =>
           String(req.code ?? "")
