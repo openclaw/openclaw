@@ -185,14 +185,16 @@ describe("getSecurityHealthReport", () => {
       expect(report.vault.auditEntryCount).toBe(17);
     });
 
-    it("returns good defaults when vault module throws", async () => {
+    it("returns warn (not good) when vault module throws", async () => {
       mockListCredentials.mockImplementation(() => {
         throw new Error("vault unavailable");
       });
 
       const report = await getSecurityHealthReport();
 
-      expect(report.vault.status).toBe("good");
+      // Fail-open was a security bug (C-02): query failure must surface as warn
+      expect(report.vault.status).toBe("warn");
+      expect(report.vault.auditIntegrityOk).toBe(false);
       expect(report.vault.credentialCount).toBe(0);
     });
   });
@@ -255,14 +257,15 @@ describe("getSecurityHealthReport", () => {
       expect(report.monitoring.highRiskSessions).toBe(1);
     });
 
-    it("returns good defaults when monitoring module throws", async () => {
+    it("returns warn (not good) when monitoring module throws", async () => {
       mockGetMonitorRunner.mockImplementation(() => {
         throw new Error("not initialized");
       });
 
       const report = await getSecurityHealthReport();
 
-      expect(report.monitoring.status).toBe("good");
+      // Fail-open was a security bug (C-02): query failure must surface as warn
+      expect(report.monitoring.status).toBe("warn");
       expect(report.monitoring.runnerRunning).toBe(false);
     });
   });
@@ -316,7 +319,7 @@ describe("getSecurityHealthReport", () => {
       expect(report.injectionDefense.criticalDetections).toBe(1);
     });
 
-    it("returns good defaults when events module throws", async () => {
+    it("returns warn (not good) when events module throws", async () => {
       mockQuerySecurityEvents.mockImplementation(() => {
         throw new Error("events not ready");
       });
@@ -326,7 +329,8 @@ describe("getSecurityHealthReport", () => {
 
       const report = await getSecurityHealthReport();
 
-      expect(report.injectionDefense.status).toBe("good");
+      // Fail-open was a security bug (C-02): query failure must surface as warn
+      expect(report.injectionDefense.status).toBe("warn");
     });
   });
 

@@ -59,9 +59,16 @@ function parsePattern(raw: string): RegExp | null {
   return compileSafeRegex(raw, "gi");
 }
 
+// Compile default patterns once at module load — avoids 18 RegExp constructions per call.
+const DEFAULT_COMPILED_PATTERNS: RegExp[] = DEFAULT_REDACT_PATTERNS.map(parsePattern).filter(
+  (re): re is RegExp => Boolean(re),
+);
+
 function resolvePatterns(value?: string[]): RegExp[] {
-  const source = value?.length ? value : DEFAULT_REDACT_PATTERNS;
-  return source.map(parsePattern).filter((re): re is RegExp => Boolean(re));
+  if (!value?.length) {
+    return DEFAULT_COMPILED_PATTERNS;
+  }
+  return value.map(parsePattern).filter((re): re is RegExp => Boolean(re));
 }
 
 function maskToken(token: string): string {
@@ -104,7 +111,14 @@ function redactText(text: string, patterns: RegExp[]): string {
   return next;
 }
 
+// Cache the config-resolved redact options so loadConfig() is not called on every invocation.
+// Invalidate via invalidateRedactCache() when config reloads.
+let cachedRedactOptions: RedactOptions | null = null;
+
 function resolveConfigRedaction(): RedactOptions {
+  if (cachedRedactOptions !== null) {
+    return cachedRedactOptions;
+  }
   let cfg: OpenClawConfig["logging"] | undefined;
   try {
     const loaded = requireConfig?.("../config/config.js") as
@@ -116,10 +130,19 @@ function resolveConfigRedaction(): RedactOptions {
   } catch {
     cfg = undefined;
   }
-  return {
+  cachedRedactOptions = {
     mode: normalizeMode(cfg?.redactSensitive),
     patterns: cfg?.redactPatterns,
   };
+  return cachedRedactOptions;
+}
+
+/**
+ * Invalidate the cached redact options so the next call to `redactSensitiveText`
+ * re-reads the current config. Call this from config reload paths.
+ */
+export function invalidateRedactCache(): void {
+  cachedRedactOptions = null;
 }
 
 export function redactSensitiveText(text: string, options?: RedactOptions): string {

@@ -357,7 +357,9 @@ export function validateCredentialFormat(
     return { valid: true };
   }
 
-  return { valid: true }; // Allow unknown formats with warning
+  // Unknown format — accept but warn so operators can audit unexpected credential shapes
+  log.warn("credential stored with unrecognised format", { name });
+  return { valid: true };
 }
 
 // -----------------------------------------------------------------------------

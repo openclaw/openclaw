@@ -107,12 +107,13 @@ async function queryVaultHealth(): Promise<VaultHealth> {
 
     return { credentialCount, rotationDueCount, auditIntegrityOk, auditEntryCount, status };
   } catch {
+    // Return warn (not good) so callers can distinguish "healthy" from "query failed"
     return {
       credentialCount: 0,
       rotationDueCount: 0,
-      auditIntegrityOk: true,
+      auditIntegrityOk: false,
       auditEntryCount: 0,
-      status: "good",
+      status: "warn",
     };
   }
 }
@@ -157,6 +158,7 @@ async function queryMonitoringHealth(): Promise<MonitoringHealth> {
       status,
     };
   } catch {
+    // Return warn (not good) so callers can distinguish "healthy" from "query failed"
     return {
       runnerRunning: false,
       totalEvents: 0,
@@ -164,7 +166,7 @@ async function queryMonitoringHealth(): Promise<MonitoringHealth> {
       warnEvents: 0,
       highRiskSessions: 0,
       recentCriticalAlerts: [],
-      status: "good",
+      status: "warn",
     };
   }
 }
@@ -189,7 +191,8 @@ async function queryInjectionDefenseHealth(): Promise<InjectionDefenseHealth> {
 
     return { recentDetections, criticalDetections, status };
   } catch {
-    return { recentDetections: 0, criticalDetections: 0, status: "good" };
+    // Return warn (not good) so callers can distinguish "healthy" from "query failed"
+    return { recentDetections: 0, criticalDetections: 0, status: "warn" };
   }
 }
 
@@ -199,7 +202,8 @@ async function queryInjectionDefenseHealth(): Promise<InjectionDefenseHealth> {
  * Generate a full security posture report by querying all subsystems.
  *
  * Always resolves — individual subsystem failures are caught and reported as
- * healthy defaults (subsystem not yet initialized is not an error).
+ * `status: "warn"` with safe zero values so callers can distinguish an
+ * uninitialised subsystem from a genuinely healthy one.
  *
  * @example
  * ```ts

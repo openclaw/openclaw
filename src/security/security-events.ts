@@ -133,6 +133,9 @@ const DEFAULT_IN_MEMORY_LIMIT = 500;
 const DEFAULT_DEDUPE_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 const MAX_DETAILS_SIZE = 10_000; // chars
 const MAX_ROTATED_FILES = 3;
+// Maximum number of live dedup entries before a prune pass is forced.
+// At ~400 bytes/entry this caps the dedup map at ~4MB.
+const MAX_DEDUPE_MAP_SIZE = 10_000;
 
 const SEVERITY_ORDER: Record<SecurityEventSeverity, number> = {
   info: 0,
@@ -144,31 +147,47 @@ const SEVERITY_ORDER: Record<SecurityEventSeverity, number> = {
 // Ring Buffer
 // -----------------------------------------------------------------------------
 
+// O(1) circular buffer using a fixed-size pre-allocated array with a head index.
+// Replaces the previous Array.shift()-based implementation (O(n) per insert).
 class RingBuffer<T> {
-  private buffer: T[] = [];
-  private maxSize: number;
+  private readonly buf: (T | undefined)[];
+  private head = 0; // next write slot (oldest entry after wrap)
+  private _size = 0;
+  private readonly maxSize: number;
 
   constructor(maxSize: number) {
     this.maxSize = maxSize;
+    this.buf = Array.from<T | undefined>({ length: maxSize });
   }
 
   push(item: T): void {
-    this.buffer.push(item);
-    while (this.buffer.length > this.maxSize) {
-      this.buffer.shift();
+    this.buf[this.head] = item;
+    this.head = (this.head + 1) % this.maxSize;
+    if (this._size < this.maxSize) {
+      this._size++;
     }
   }
 
   getAll(): T[] {
-    return [...this.buffer];
+    if (this._size < this.maxSize) {
+      return this.buf.slice(0, this._size) as T[];
+    }
+    // Reconstruct in insertion order (oldest first): head points to oldest entry
+    const result: T[] = Array.from<T>({ length: this.maxSize });
+    for (let i = 0; i < this.maxSize; i++) {
+      result[i] = this.buf[(this.head + i) % this.maxSize] as T;
+    }
+    return result;
   }
 
   clear(): void {
-    this.buffer = [];
+    this.buf.fill(undefined);
+    this.head = 0;
+    this._size = 0;
   }
 
   size(): number {
-    return this.buffer.length;
+    return this._size;
   }
 }
 
@@ -237,6 +256,19 @@ export class SecurityEventsManager {
     // Generate fingerprint
     const fingerprint =
       params.fingerprint ?? this.computeFingerprint(params.type, params.source, params.message);
+
+    // Lazy prune: keep dedupeMap bounded to avoid unbounded memory growth.
+    // Prune expired entries when over the size cap; if still over cap after
+    // pruning (all entries are fresh), evict the oldest by insertion order.
+    if (this.dedupeMap.size >= MAX_DEDUPE_MAP_SIZE) {
+      this.pruneDedup();
+      if (this.dedupeMap.size >= MAX_DEDUPE_MAP_SIZE) {
+        const firstKey = this.dedupeMap.keys().next().value;
+        if (firstKey !== undefined) {
+          this.dedupeMap.delete(firstKey);
+        }
+      }
+    }
 
     // Check dedup
     const dedupEntry = this.dedupeMap.get(fingerprint);
