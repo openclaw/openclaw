@@ -56,19 +56,19 @@ export async function resolveBoundaryPath(
   const outsideLexicalCanonicalPath = lexicalInside
     ? undefined
     : await resolvePathViaExistingAncestor(absolutePath);
-  const canonicalOutsideLexicalPath = outsideLexicalCanonicalPath ?? absolutePath;
-
-  if (
-    !params.skipLexicalRootCheck &&
-    !lexicalInside &&
-    !isPathInside(rootCanonicalPath, canonicalOutsideLexicalPath)
-  ) {
-    throw pathEscapeError({
-      boundaryLabel: params.boundaryLabel,
-      rootPath,
-      absolutePath,
-    });
-  }
+  const canonicalOutsideLexicalPath = resolveCanonicalOutsideLexicalPath({
+    absolutePath,
+    outsideLexicalCanonicalPath,
+  });
+  assertLexicalBoundaryOrCanonicalAlias({
+    skipLexicalRootCheck: params.skipLexicalRootCheck,
+    lexicalInside,
+    canonicalOutsideLexicalPath,
+    rootCanonicalPath,
+    boundaryLabel: params.boundaryLabel,
+    rootPath,
+    absolutePath,
+  });
 
   if (!lexicalInside) {
     const canonicalPath = canonicalOutsideLexicalPath;
@@ -79,15 +79,13 @@ export async function resolveBoundaryPath(
       absolutePath,
     });
     const kind = await getPathKind(absolutePath, false);
-    return {
+    return buildResolvedBoundaryPath({
       absolutePath,
       canonicalPath,
       rootPath,
       rootCanonicalPath,
-      relativePath: relativeInsideRoot(rootCanonicalPath, canonicalPath),
-      exists: kind.exists,
-      kind: kind.kind,
-    };
+      kind,
+    });
   }
 
   return resolveBoundaryPathLexicalAsync({
@@ -108,19 +106,19 @@ export function resolveBoundaryPathSync(params: ResolveBoundaryPathParams): Reso
   const outsideLexicalCanonicalPath = lexicalInside
     ? undefined
     : resolvePathViaExistingAncestorSync(absolutePath);
-  const canonicalOutsideLexicalPath = outsideLexicalCanonicalPath ?? absolutePath;
-
-  if (
-    !params.skipLexicalRootCheck &&
-    !lexicalInside &&
-    !isPathInside(rootCanonicalPath, canonicalOutsideLexicalPath)
-  ) {
-    throw pathEscapeError({
-      boundaryLabel: params.boundaryLabel,
-      rootPath,
-      absolutePath,
-    });
-  }
+  const canonicalOutsideLexicalPath = resolveCanonicalOutsideLexicalPath({
+    absolutePath,
+    outsideLexicalCanonicalPath,
+  });
+  assertLexicalBoundaryOrCanonicalAlias({
+    skipLexicalRootCheck: params.skipLexicalRootCheck,
+    lexicalInside,
+    canonicalOutsideLexicalPath,
+    rootCanonicalPath,
+    boundaryLabel: params.boundaryLabel,
+    rootPath,
+    absolutePath,
+  });
 
   if (!lexicalInside) {
     const canonicalPath = canonicalOutsideLexicalPath;
@@ -131,15 +129,13 @@ export function resolveBoundaryPathSync(params: ResolveBoundaryPathParams): Reso
       absolutePath,
     });
     const kind = getPathKindSync(absolutePath, false);
-    return {
+    return buildResolvedBoundaryPath({
       absolutePath,
       canonicalPath,
       rootPath,
       rootCanonicalPath,
-      relativePath: relativeInsideRoot(rootCanonicalPath, canonicalPath),
-      exists: kind.exists,
-      kind: kind.kind,
-    };
+      kind,
+    });
   }
 
   return resolveBoundaryPathLexicalSync({
@@ -228,15 +224,13 @@ async function resolveBoundaryPathLexicalAsync(params: {
     absolutePath: params.absolutePath,
   });
   const kind = await getPathKind(params.absolutePath, preserveFinalSymlink);
-  return {
+  return buildResolvedBoundaryPath({
     absolutePath: params.absolutePath,
     canonicalPath: canonicalCursor,
     rootPath: params.rootPath,
     rootCanonicalPath: params.rootCanonicalPath,
-    relativePath: relativeInsideRoot(params.rootCanonicalPath, canonicalCursor),
-    exists: kind.exists,
-    kind: kind.kind,
-  };
+    kind,
+  });
 }
 
 function resolveBoundaryPathLexicalSync(params: {
@@ -317,14 +311,59 @@ function resolveBoundaryPathLexicalSync(params: {
     absolutePath: params.absolutePath,
   });
   const kind = getPathKindSync(params.absolutePath, preserveFinalSymlink);
-  return {
+  return buildResolvedBoundaryPath({
     absolutePath: params.absolutePath,
     canonicalPath: canonicalCursor,
     rootPath: params.rootPath,
     rootCanonicalPath: params.rootCanonicalPath,
-    relativePath: relativeInsideRoot(params.rootCanonicalPath, canonicalCursor),
-    exists: kind.exists,
-    kind: kind.kind,
+    kind,
+  });
+}
+
+function resolveCanonicalOutsideLexicalPath(params: {
+  absolutePath: string;
+  outsideLexicalCanonicalPath?: string;
+}): string {
+  return params.outsideLexicalCanonicalPath ?? params.absolutePath;
+}
+
+function assertLexicalBoundaryOrCanonicalAlias(params: {
+  skipLexicalRootCheck?: boolean;
+  lexicalInside: boolean;
+  canonicalOutsideLexicalPath: string;
+  rootCanonicalPath: string;
+  boundaryLabel: string;
+  rootPath: string;
+  absolutePath: string;
+}): void {
+  if (params.skipLexicalRootCheck || params.lexicalInside) {
+    return;
+  }
+  if (isPathInside(params.rootCanonicalPath, params.canonicalOutsideLexicalPath)) {
+    return;
+  }
+  throw pathEscapeError({
+    boundaryLabel: params.boundaryLabel,
+    rootPath: params.rootPath,
+    absolutePath: params.absolutePath,
+  });
+}
+
+function buildResolvedBoundaryPath(params: {
+  absolutePath: string;
+  canonicalPath: string;
+  rootPath: string;
+  rootCanonicalPath: string;
+  kind: { exists: boolean; kind: ResolvedBoundaryPathKind };
+}): ResolvedBoundaryPath {
+  return {
+    absolutePath: params.absolutePath,
+    canonicalPath: params.canonicalPath,
+    rootPath: params.rootPath,
+    rootCanonicalPath: params.rootCanonicalPath,
+    relativePath: relativeInsideRoot(params.rootCanonicalPath, params.canonicalPath),
+    exists: params.kind.exists,
+    kind: params.kind.kind,
   };
 }
 
