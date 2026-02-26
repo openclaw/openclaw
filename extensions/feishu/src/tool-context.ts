@@ -1,4 +1,3 @@
-import type { BeforeToolCallHook } from "openclaw/plugin-sdk";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 
 /**
@@ -9,7 +8,12 @@ import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/acco
  * capture a per-agent client) to select the right Feishu account at execution
  * time.
  */
-export const resolveFeishuAccountForToolContext: BeforeToolCallHook = async (ctx) => {
+export const resolveFeishuAccountForToolContext = async (ctx: {
+  toolName: string;
+  params: Record<string, unknown>;
+  agentId?: string;
+  sessionKey?: string;
+}) => {
   const toolName = ctx.toolName;
   if (typeof toolName !== "string" || !toolName.startsWith("feishu_")) {
     return { blocked: false, params: ctx.params };
@@ -21,18 +25,10 @@ export const resolveFeishuAccountForToolContext: BeforeToolCallHook = async (ctx
     return { blocked: false, params: ctx.params };
   }
 
-  const agentAccountId = ctx.agentAccountId;
-  if (!agentAccountId) {
-    // Backward-compatible: no agent account context => default account.
-    return {
-      blocked: false,
-      params: { ...(ctx.params ?? {}), accountId: DEFAULT_ACCOUNT_ID },
-    };
-  }
-
-  const accountId = normalizeAccountId(agentAccountId);
+  // NOTE: Plugin hook context does not currently expose agentAccountId.
+  // We still keep a safe fallback: inject default accountId unless caller already provided one.
   return {
     blocked: false,
-    params: { ...(ctx.params ?? {}), accountId },
+    params: { ...(ctx.params ?? {}), accountId: DEFAULT_ACCOUNT_ID },
   };
 };
