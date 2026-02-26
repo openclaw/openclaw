@@ -46,6 +46,26 @@ export function listSkillCommandsForWorkspace(params: {
   });
 }
 
+// Deduplicate skill commands by skillName, keeping the first registration.
+// When multiple agents have a skill with the same name (e.g. one with a
+// workspace override and one from bundled), the suffix-renamed entries
+// (github_2, github_3…) are dropped so every interface sees a clean list.
+function dedupeBySkillName(commands: SkillCommandSpec[]): SkillCommandSpec[] {
+  const seen = new Set<string>();
+  const out: SkillCommandSpec[] = [];
+  for (const cmd of commands) {
+    const key = cmd.skillName.trim().toLowerCase();
+    if (key && seen.has(key)) {
+      continue;
+    }
+    if (key) {
+      seen.add(key);
+    }
+    out.push(cmd);
+  }
+  return out;
+}
+
 export function listSkillCommandsForAgents(params: {
   cfg: OpenClawConfig;
   agentIds?: string[];
@@ -109,8 +129,15 @@ export function listSkillCommandsForAgents(params: {
       entries.push(command);
     }
   }
-  return entries;
+  // Dedupe by skillName across workspaces so every interface (Discord, TUI,
+  // Slack, text) sees a consistent command list without platform-specific
+  // workarounds.
+  return dedupeBySkillName(entries);
 }
+
+export const __testing = {
+  dedupeBySkillName,
+};
 
 function normalizeSkillCommandLookup(value: string): string {
   return value
