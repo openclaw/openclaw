@@ -319,6 +319,11 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("telegram")).toBe(false);
     expect(names.has("whatsapp")).toBe(false);
   });
+  it("does not expose tts tool for voice message provider", () => {
+    const tools = createOpenClawCodingTools({ messageProvider: "voice" });
+    const names = new Set(tools.map((tool) => tool.name));
+    expect(names.has("tts")).toBe(false);
+  });
   it("filters session tools for sub-agent sessions by default", () => {
     const tools = createOpenClawCodingTools({
       sessionKey: "agent:main:subagent:test",
