@@ -143,7 +143,7 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.providerOverride).toBe("anthropic");
     });
 
-    it("clears delivery routing metadata when forceNew is true", () => {
+    it("clears delivery routing metadata and deliveryContext when forceNew is true", () => {
       const result = resolveWithStoredEntry({
         entry: {
           sessionId: "existing-session-id-789",
@@ -153,6 +153,11 @@ describe("resolveCronSession", () => {
           lastTo: "channel:C0XXXXXXXXX",
           lastAccountId: "acct-123",
           lastThreadId: "1737500000.123456",
+          deliveryContext: {
+            channel: "slack",
+            to: "channel:C0XXXXXXXXX",
+            threadId: "1737500000.123456",
+          },
           modelOverride: "gpt-5.2",
         },
         fresh: true,
@@ -160,11 +165,14 @@ describe("resolveCronSession", () => {
       });
 
       expect(result.isNewSession).toBe(true);
-      // Delivery routing state must be cleared to prevent thread leaking
+      // Delivery routing state must be cleared to prevent thread leaking.
+      // deliveryContext must also be cleared because normalizeSessionEntryDelivery
+      // repopulates lastThreadId from deliveryContext.threadId on store writes.
       expect(result.sessionEntry.lastChannel).toBeUndefined();
       expect(result.sessionEntry.lastTo).toBeUndefined();
       expect(result.sessionEntry.lastAccountId).toBeUndefined();
       expect(result.sessionEntry.lastThreadId).toBeUndefined();
+      expect(result.sessionEntry.deliveryContext).toBeUndefined();
       // Per-session overrides must be preserved
       expect(result.sessionEntry.modelOverride).toBe("gpt-5.2");
     });
@@ -177,6 +185,11 @@ describe("resolveCronSession", () => {
           lastChannel: "slack" as never,
           lastTo: "channel:C0XXXXXXXXX",
           lastThreadId: "1737500000.999999",
+          deliveryContext: {
+            channel: "slack",
+            to: "channel:C0XXXXXXXXX",
+            threadId: "1737500000.999999",
+          },
         },
         fresh: false,
       });
@@ -186,6 +199,7 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.lastTo).toBeUndefined();
       expect(result.sessionEntry.lastAccountId).toBeUndefined();
       expect(result.sessionEntry.lastThreadId).toBeUndefined();
+      expect(result.sessionEntry.deliveryContext).toBeUndefined();
     });
 
     it("preserves delivery routing metadata when reusing fresh session", () => {
@@ -197,6 +211,11 @@ describe("resolveCronSession", () => {
           lastChannel: "slack" as never,
           lastTo: "channel:C0XXXXXXXXX",
           lastThreadId: "1737500000.123456",
+          deliveryContext: {
+            channel: "slack",
+            to: "channel:C0XXXXXXXXX",
+            threadId: "1737500000.123456",
+          },
         },
         fresh: true,
       });
@@ -205,6 +224,11 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.lastChannel).toBe("slack");
       expect(result.sessionEntry.lastTo).toBe("channel:C0XXXXXXXXX");
       expect(result.sessionEntry.lastThreadId).toBe("1737500000.123456");
+      expect(result.sessionEntry.deliveryContext).toEqual({
+        channel: "slack",
+        to: "channel:C0XXXXXXXXX",
+        threadId: "1737500000.123456",
+      });
     });
 
     it("creates new sessionId when entry exists but has no sessionId", () => {
