@@ -1095,6 +1095,72 @@ function maybeRepairOpenPolicyAllowFrom(cfg: OpenClawConfig): {
   return { config: next, changes };
 }
 
+/**
+ * Scan all channel configs for dmPolicy="allowlist" without any allowFrom entries.
+ * This configuration causes all DMs to be silently dropped because no sender can
+ * match the empty allowlist. Common after upgrades that remove external allowlist
+ * file support.
+ */
+function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
+  const channels = cfg.channels;
+  if (!channels || typeof channels !== "object") {
+    return [];
+  }
+
+  const warnings: string[] = [];
+
+  const hasEntries = (list?: Array<string | number>) =>
+    Array.isArray(list) && list.map((v) => String(v).trim()).filter(Boolean).length > 0;
+
+  const checkAccount = (account: Record<string, unknown>, prefix: string) => {
+    const dmEntry = account.dm;
+    const dm =
+      dmEntry && typeof dmEntry === "object" && !Array.isArray(dmEntry)
+        ? (dmEntry as Record<string, unknown>)
+        : undefined;
+    const dmPolicy =
+      (account.dmPolicy as string | undefined) ?? (dm?.policy as string | undefined) ?? undefined;
+
+    if (dmPolicy !== "allowlist") {
+      return;
+    }
+
+    const topAllowFrom = account.allowFrom as Array<string | number> | undefined;
+    const nestedAllowFrom = dm?.allowFrom as Array<string | number> | undefined;
+
+    if (hasEntries(topAllowFrom) || hasEntries(nestedAllowFrom)) {
+      return;
+    }
+
+    warnings.push(
+      `- ${prefix}.dmPolicy is "allowlist" but allowFrom is empty — all DMs will be silently dropped. Add sender IDs to ${prefix}.allowFrom or change dmPolicy to "pairing".`,
+    );
+  };
+
+  for (const [channelName, channelConfig] of Object.entries(
+    channels as Record<string, Record<string, unknown>>,
+  )) {
+    if (!channelConfig || typeof channelConfig !== "object") {
+      continue;
+    }
+    checkAccount(channelConfig, `channels.${channelName}`);
+
+    const accounts = channelConfig.accounts;
+    if (accounts && typeof accounts === "object") {
+      for (const [accountId, account] of Object.entries(
+        accounts as Record<string, Record<string, unknown>>,
+      )) {
+        if (!account || typeof account !== "object") {
+          continue;
+        }
+        checkAccount(account, `channels.${channelName}.accounts.${accountId}`);
+      }
+    }
+  }
+
+  return warnings;
+}
+
 type ExecSafeBinCoverageHit = {
   scopePath: string;
   bin: string;
@@ -1551,6 +1617,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       cfg = allowFromRepair.config;
     }
 
+    const emptyAllowlistWarnings = detectEmptyAllowlistPolicy(candidate);
+    if (emptyAllowlistWarnings.length > 0) {
+      note(emptyAllowlistWarnings.join("\n"), "Doctor warnings");
+    }
+
     const toolsBySenderRepair = maybeRepairLegacyToolsBySenderKeys(candidate);
     if (toolsBySenderRepair.changes.length > 0) {
       note(toolsBySenderRepair.changes.join("\n"), "Doctor changes");
@@ -1601,6 +1672,11 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
         ].join("\n"),
         "Doctor warnings",
       );
+    }
+
+    const emptyAllowlistWarnings = detectEmptyAllowlistPolicy(candidate);
+    if (emptyAllowlistWarnings.length > 0) {
+      note(emptyAllowlistWarnings.join("\n"), "Doctor warnings");
     }
 
     const toolsBySenderHits = scanLegacyToolsBySenderKeys(candidate);
