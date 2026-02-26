@@ -37,7 +37,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("findGatewayPidsOnPortSync", () => {
+describe.runIf(process.platform !== "win32")("findGatewayPidsOnPortSync", () => {
   it("parses lsof output and filters non-openclaw/current processes", () => {
     spawnSyncMock.mockReturnValue({
       error: undefined,
@@ -76,7 +76,7 @@ describe("findGatewayPidsOnPortSync", () => {
   });
 });
 
-describe("cleanStaleGatewayProcessesSync", () => {
+describe.runIf(process.platform !== "win32")("cleanStaleGatewayProcessesSync", () => {
   it("kills stale gateway pids discovered on the gateway port", () => {
     spawnSyncMock.mockReturnValue({
       error: undefined,
