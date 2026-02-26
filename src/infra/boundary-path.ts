@@ -53,8 +53,16 @@ export async function resolveBoundaryPath(
     ? path.resolve(params.rootCanonicalPath)
     : await resolvePathViaExistingAncestor(rootPath);
   const lexicalInside = isPathInside(rootPath, absolutePath);
+  const outsideLexicalCanonicalPath = lexicalInside
+    ? undefined
+    : await resolvePathViaExistingAncestor(absolutePath);
+  const canonicalOutsideLexicalPath = outsideLexicalCanonicalPath ?? absolutePath;
 
-  if (!params.skipLexicalRootCheck && !lexicalInside) {
+  if (
+    !params.skipLexicalRootCheck &&
+    !lexicalInside &&
+    !isPathInside(rootCanonicalPath, canonicalOutsideLexicalPath)
+  ) {
     throw pathEscapeError({
       boundaryLabel: params.boundaryLabel,
       rootPath,
@@ -63,7 +71,7 @@ export async function resolveBoundaryPath(
   }
 
   if (!lexicalInside) {
-    const canonicalPath = await resolvePathViaExistingAncestor(absolutePath);
+    const canonicalPath = canonicalOutsideLexicalPath;
     assertInsideBoundary({
       boundaryLabel: params.boundaryLabel,
       rootCanonicalPath,
@@ -97,8 +105,16 @@ export function resolveBoundaryPathSync(params: ResolveBoundaryPathParams): Reso
     ? path.resolve(params.rootCanonicalPath)
     : resolvePathViaExistingAncestorSync(rootPath);
   const lexicalInside = isPathInside(rootPath, absolutePath);
+  const outsideLexicalCanonicalPath = lexicalInside
+    ? undefined
+    : resolvePathViaExistingAncestorSync(absolutePath);
+  const canonicalOutsideLexicalPath = outsideLexicalCanonicalPath ?? absolutePath;
 
-  if (!params.skipLexicalRootCheck && !lexicalInside) {
+  if (
+    !params.skipLexicalRootCheck &&
+    !lexicalInside &&
+    !isPathInside(rootCanonicalPath, canonicalOutsideLexicalPath)
+  ) {
     throw pathEscapeError({
       boundaryLabel: params.boundaryLabel,
       rootPath,
@@ -107,7 +123,7 @@ export function resolveBoundaryPathSync(params: ResolveBoundaryPathParams): Reso
   }
 
   if (!lexicalInside) {
-    const canonicalPath = resolvePathViaExistingAncestorSync(absolutePath);
+    const canonicalPath = canonicalOutsideLexicalPath;
     assertInsideBoundary({
       boundaryLabel: params.boundaryLabel,
       rootCanonicalPath,

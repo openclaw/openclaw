@@ -117,6 +117,37 @@ describe("resolveBoundaryPath", () => {
     });
   });
 
+  it("allows canonical aliases that still resolve inside root", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    await withTempRoot("openclaw-boundary-path-", async (base) => {
+      const root = path.join(base, "workspace");
+      const aliasRoot = path.join(base, "workspace-alias");
+      const fileName = "plugin.js";
+      await fs.mkdir(root, { recursive: true });
+      await fs.writeFile(path.join(root, fileName), "export default {}", "utf8");
+      await fs.symlink(root, aliasRoot);
+
+      const resolved = await resolveBoundaryPath({
+        absolutePath: path.join(aliasRoot, fileName),
+        rootPath: await fs.realpath(root),
+        boundaryLabel: "plugin root",
+      });
+      expect(resolved.exists).toBe(true);
+      expect(isPathInside(resolved.rootCanonicalPath, resolved.canonicalPath)).toBe(true);
+
+      const resolvedSync = resolveBoundaryPathSync({
+        absolutePath: path.join(aliasRoot, fileName),
+        rootPath: await fs.realpath(root),
+        boundaryLabel: "plugin root",
+      });
+      expect(resolvedSync.exists).toBe(true);
+      expect(isPathInside(resolvedSync.rootCanonicalPath, resolvedSync.canonicalPath)).toBe(true);
+    });
+  });
+
   it("maintains containment invariant across randomized alias cases", async () => {
     if (process.platform === "win32") {
       return;
