@@ -1,9 +1,12 @@
+import fs from "node:fs";
+import path from "node:path";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig, GatewayBindMode } from "../config/config.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
+import { resolveCredentialVaultDir } from "../security/credential-vault.js";
 import { resolveDmAllowState } from "../security/dm-policy-shared.js";
 import { formatHealthSummary, getSecurityHealthReport } from "../security/security-health.js";
 import { note } from "../terminal/note.js";
@@ -234,6 +237,18 @@ export async function noteSecurityPosture(): Promise<void> {
     if (report.injectionDefense.criticalDetections > 0) {
       lines.push(
         `- WARN: ${report.injectionDefense.criticalDetections} critical injection pattern(s) detected in files (last 24h)`,
+      );
+    }
+
+    // Legacy plaintext credential file (CD-4)
+    // Pre-encryption installs left credentials.json alongside the vault.
+    // Flag it so users know to migrate and remove the plaintext file.
+    const vaultDir = resolveCredentialVaultDir();
+    const legacyCredPath = path.join(vaultDir, "credentials.json");
+    if (fs.existsSync(legacyCredPath)) {
+      lines.push(
+        `- WARN: Legacy plaintext credential file detected: ${legacyCredPath}`,
+        `  Run: ${formatCliCommand("openclaw security credentials migrate")} to encrypt and remove it`,
       );
     }
 
