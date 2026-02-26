@@ -271,6 +271,42 @@ describe("discoverOpenClawPlugins", () => {
     );
   });
 
+  it("ignores package manifests that are hardlinked aliases", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const stateDir = makeTempDir();
+    const globalExt = path.join(stateDir, "extensions", "pack");
+    const outsideDir = path.join(stateDir, "outside");
+    const outsideManifest = path.join(outsideDir, "package.json");
+    const linkedManifest = path.join(globalExt, "package.json");
+    fs.mkdirSync(globalExt, { recursive: true });
+    fs.mkdirSync(outsideDir, { recursive: true });
+    fs.writeFileSync(path.join(globalExt, "entry.ts"), "export default {}", "utf-8");
+    fs.writeFileSync(
+      outsideManifest,
+      JSON.stringify({
+        name: "@openclaw/pack",
+        openclaw: { extensions: ["./entry.ts"] },
+      }),
+      "utf-8",
+    );
+    try {
+      fs.linkSync(outsideManifest, linkedManifest);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+        return;
+      }
+      throw err;
+    }
+
+    const { candidates } = await withStateDir(stateDir, async () => {
+      return discoverOpenClawPlugins({});
+    });
+
+    expect(candidates.some((candidate) => candidate.idHint === "pack")).toBe(false);
+  });
+
   it.runIf(process.platform !== "win32")("blocks world-writable plugin paths", async () => {
     const stateDir = makeTempDir();
     const globalExt = path.join(stateDir, "extensions");
