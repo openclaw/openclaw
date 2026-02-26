@@ -20,6 +20,7 @@ const webhookStats = {
 };
 
 let lastActivityAt = 0;
+const startTimeMs = Date.now();
 
 function markActivity() {
   lastActivityAt = Date.now();
@@ -380,6 +381,32 @@ export function stopDiagnosticHeartbeat() {
     clearInterval(heartbeatInterval);
     heartbeatInterval = null;
   }
+}
+
+/**
+ * Telemetry MVP (v0): read-only snapshot of current in-memory diagnostic state.
+ * This intentionally reuses existing diagnostic state; it does not introduce a new telemetry system.
+ */
+export function getTelemetrySnapshot() {
+  const now = Date.now();
+
+  // These aggregates mirror what the heartbeat computes internally.
+  const states = Array.from(diagnosticSessionStates.values());
+  const activeCount = states.filter((s) => s.state === "processing").length;
+  const waitingCount = states.filter((s) => s.state === "waiting").length;
+  const totalQueued = states.reduce((acc, s) => acc + (s.queueDepth ?? 0), 0);
+
+  return {
+    now,
+    sinceStartMs: now - startTimeMs,
+    sessions: {
+      activeCount,
+      waitingCount,
+      totalQueued,
+      stateCount: diagnosticSessionStates.size,
+    },
+    lastActivityAt,
+  };
 }
 
 export function getDiagnosticSessionStateCountForTest(): number {
