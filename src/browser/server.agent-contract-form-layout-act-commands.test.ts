@@ -69,6 +69,17 @@ describe("browser control server", () => {
         fields: [{ ref: "6", type: "textbox", value: "hello" }],
       });
 
+      const fillWithoutType = await postJson<{ ok: boolean }>(`${base}/act`, {
+        kind: "fill",
+        fields: [{ ref: "7", value: "world" }],
+      });
+      expect(fillWithoutType.ok).toBe(true);
+      expect(pwMocks.fillFormViaPlaywright).toHaveBeenCalledWith({
+        cdpUrl: state.cdpBaseUrl,
+        targetId: "abcd1234",
+        fields: [{ ref: "7", type: "text", value: "world" }],
+      });
+
       const resize = await postJson<{ ok: boolean }>(`${base}/act`, {
         kind: "resize",
         width: 800,
