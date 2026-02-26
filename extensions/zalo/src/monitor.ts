@@ -355,6 +355,7 @@ async function processMessageWithPipeline(params: {
     isGroup,
     dmPolicy,
     configuredAllowFrom: configAllowFrom,
+    configuredGroupAllowFrom: groupAllowFrom,
     senderId,
     isSenderAllowed: isZaloSenderAllowed,
     readAllowFromStore: () => core.channel.pairing.readAllowFromStore("zalo"),

@@ -256,10 +256,11 @@ export function resolveIMessageInboundDecision(params: {
   const canDetectMention = mentionRegexes.length > 0;
 
   const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
+  const commandDmAllowFrom = isGroup ? params.allowFrom : effectiveDmAllowFrom;
   const ownerAllowedForCommands =
-    effectiveDmAllowFrom.length > 0
+    commandDmAllowFrom.length > 0
       ? isAllowedIMessageSender({
-          allowFrom: effectiveDmAllowFrom,
+          allowFrom: commandDmAllowFrom,
           sender,
           chatId,
           chatGuid,
@@ -280,7 +281,7 @@ export function resolveIMessageInboundDecision(params: {
   const commandGate = resolveControlCommandGate({
     useAccessGroups,
     authorizers: [
-      { configured: effectiveDmAllowFrom.length > 0, allowed: ownerAllowedForCommands },
+      { configured: commandDmAllowFrom.length > 0, allowed: ownerAllowedForCommands },
       { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
     ],
     allowTextCommands: true,
