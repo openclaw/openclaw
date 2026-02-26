@@ -1,6 +1,6 @@
 import { resolveSystemRunCommand } from "../infra/system-run-command.js";
 import type { ExecApprovalRecord } from "./exec-approval-manager.js";
-import { approvalMatchesSystemRunRequest } from "./node-invoke-system-run-approval-match.js";
+import { evaluateSystemRunApprovalMatch } from "./node-invoke-system-run-approval-match.js";
 
 type SystemRunParamsLike = {
   command?: unknown;
@@ -204,22 +204,26 @@ export function sanitizeSystemRunParamsForForwarding(opts: {
     };
   }
 
-  if (
-    !approvalMatchesSystemRunRequest({
-      cmdText,
-      argv: cmdTextResolution.argv,
-      request: snapshot.request,
-      binding: {
-        cwd: normalizeString(p.cwd) ?? null,
-        agentId: normalizeString(p.agentId) ?? null,
-        sessionKey: normalizeString(p.sessionKey) ?? null,
-      },
-    })
-  ) {
+  const approvalMatch = evaluateSystemRunApprovalMatch({
+    cmdText,
+    argv: cmdTextResolution.argv,
+    request: snapshot.request,
+    binding: {
+      cwd: normalizeString(p.cwd) ?? null,
+      agentId: normalizeString(p.agentId) ?? null,
+      sessionKey: normalizeString(p.sessionKey) ?? null,
+      env: p.env,
+    },
+  });
+  if (!approvalMatch.ok) {
     return {
       ok: false,
-      message: "approval id does not match request",
-      details: { code: "APPROVAL_REQUEST_MISMATCH", runId },
+      message: approvalMatch.message,
+      details: {
+        code: approvalMatch.code,
+        runId,
+        ...approvalMatch.details,
+      },
     };
   }
 

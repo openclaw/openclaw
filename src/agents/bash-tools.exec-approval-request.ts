@@ -9,6 +9,7 @@ export type RequestExecApprovalDecisionParams = {
   id: string;
   command: string;
   commandArgv?: string[];
+  env?: Record<string, string>;
   cwd: string;
   nodeId?: string;
   host: "gateway" | "node";
@@ -68,6 +69,7 @@ export async function registerExecApprovalRequest(
       id: params.id,
       command: params.command,
       commandArgv: params.commandArgv,
+      env: params.env,
       cwd: params.cwd,
       nodeId: params.nodeId,
       host: params.host,
@@ -127,6 +129,7 @@ export async function requestExecApprovalDecisionForHost(params: {
   approvalId: string;
   command: string;
   commandArgv?: string[];
+  env?: Record<string, string>;
   workdir: string;
   host: "gateway" | "node";
   nodeId?: string;
@@ -144,6 +147,7 @@ export async function requestExecApprovalDecisionForHost(params: {
     id: params.approvalId,
     command: params.command,
     commandArgv: params.commandArgv,
+    env: params.env,
     cwd: params.workdir,
     nodeId: params.nodeId,
     host: params.host,
@@ -163,6 +167,7 @@ export async function registerExecApprovalRequestForHost(params: {
   approvalId: string;
   command: string;
   commandArgv?: string[];
+  env?: Record<string, string>;
   workdir: string;
   host: "gateway" | "node";
   nodeId?: string;
@@ -180,6 +185,7 @@ export async function registerExecApprovalRequestForHost(params: {
     id: params.approvalId,
     command: params.command,
     commandArgv: params.commandArgv,
+    env: params.env,
     cwd: params.workdir,
     nodeId: params.nodeId,
     host: params.host,

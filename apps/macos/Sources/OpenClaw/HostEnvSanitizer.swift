@@ -14,6 +14,7 @@ enum HostEnvSanitizer {
         "RUBYOPT",
         "BASH_ENV",
         "ENV",
+        "GIT_EXTERNAL_DIFF",
         "SHELL",
         "SHELLOPTS",
         "PS4",

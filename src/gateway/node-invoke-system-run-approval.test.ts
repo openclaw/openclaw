@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { ExecApprovalManager, type ExecApprovalRecord } from "./exec-approval-manager.js";
 import { sanitizeSystemRunParamsForForwarding } from "./node-invoke-system-run-approval.js";
+import { buildSystemRunApprovalEnvBinding } from "./system-run-approval-env-binding.js";
 
 describe("sanitizeSystemRunParamsForForwarding", () => {
   const now = Date.now();
@@ -198,6 +199,74 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     });
     expectAllowOnceForwardingResult(result);
   });
+
+  test("rejects env overrides when approval record lacks env binding", () => {
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["git", "diff"],
+        rawCommand: "git diff",
+        env: { GIT_EXTERNAL_DIFF: "/tmp/pwn.sh" },
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client,
+      execApprovalManager: manager(makeRecord("git diff", ["git", "diff"])),
+      nowMs: now,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("unreachable");
+    }
+    expect(result.details?.code).toBe("APPROVAL_ENV_BINDING_MISSING");
+  });
+
+  test("rejects env hash mismatch", () => {
+    const record = makeRecord("git diff", ["git", "diff"]);
+    record.request.envHash = buildSystemRunApprovalEnvBinding({ SAFE: "1" }).envHash;
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["git", "diff"],
+        rawCommand: "git diff",
+        env: { SAFE: "2" },
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client,
+      execApprovalManager: manager(record),
+      nowMs: now,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("unreachable");
+    }
+    expect(result.details?.code).toBe("APPROVAL_ENV_MISMATCH");
+  });
+
+  test("accepts matching env hash with reordered keys", () => {
+    const record = makeRecord("git diff", ["git", "diff"]);
+    const binding = buildSystemRunApprovalEnvBinding({ SAFE_A: "1", SAFE_B: "2" });
+    record.request.envHash = binding.envHash;
+    const result = sanitizeSystemRunParamsForForwarding({
+      rawParams: {
+        command: ["git", "diff"],
+        rawCommand: "git diff",
+        env: { SAFE_B: "2", SAFE_A: "1" },
+        runId: "approval-1",
+        approved: true,
+        approvalDecision: "allow-once",
+      },
+      nodeId: "node-1",
+      client,
+      execApprovalManager: manager(record),
+      nowMs: now,
+    });
+    expectAllowOnceForwardingResult(result);
+  });
+
   test("consumes allow-once approvals and blocks same runId replay", async () => {
     const approvalManager = new ExecApprovalManager();
     const runId = "approval-replay-1";
