@@ -161,14 +161,17 @@ describe("credential-vault", () => {
       }
     });
 
-    it("should return SCOPE_MISMATCH for wrong scope", () => {
+    it("should return NOT_FOUND when requested scope does not match stored scope", () => {
+      // Registry key embeds scope ("scope:name"), so a different scope resolves
+      // to a different key and the entry is simply not found (CQ-5: no dead
+      // SCOPE_MISMATCH path; buildAccountName guarantees scope isolation).
       storeCredential("scope-test", "valid-credential-12345678", "provider", vaultOptions);
 
       const result = getCredential("scope-test", "channel", "test", vaultOptions);
 
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.code).toBe("NOT_FOUND"); // Won't find it in wrong scope
+        expect(result.code).toBe("NOT_FOUND");
       }
     });
 

@@ -41,7 +41,6 @@ export type VaultErrorCode =
   | "NOT_FOUND"
   | "ACCESS_DENIED"
   | "KEYCHAIN_UNAVAILABLE"
-  | "SCOPE_MISMATCH"
   | "VALIDATION_FAILED"
   | "WRITE_FAILED"
   | "INVALID_VALUE";
@@ -534,30 +533,6 @@ export function getCredential(
       ok: false,
       error: `Credential "${name}" not found in scope "${scope}"`,
       code: "NOT_FOUND",
-    };
-  }
-
-  // Verify scope matches
-  if (entry.scope !== scope) {
-    log.warn("credential scope mismatch", {
-      name,
-      expectedScope: scope,
-      actualScope: entry.scope,
-      requestor,
-    });
-    safeLogCredentialAccess({
-      action: "read",
-      credentialName: name,
-      scope,
-      requestor,
-      success: false,
-      error: `Credential "${name}" exists but in different scope`,
-      options: options?.auditOptions,
-    });
-    return {
-      ok: false,
-      error: `Credential "${name}" exists but in different scope`,
-      code: "SCOPE_MISMATCH",
     };
   }
 

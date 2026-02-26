@@ -146,6 +146,51 @@ describe("RollingStats", () => {
       expect(result.lastValue).toBeNull();
     });
   });
+
+  describe("NumericRingBuffer O(1) window (BP-13)", () => {
+    it("windowedMean stays correct after window wraps", () => {
+      // windowSize=3; push 5 values — only last 3 should count
+      const narrow = new RollingStats(3);
+      narrow.add(1);
+      narrow.add(2);
+      narrow.add(3);
+      narrow.add(4); // evicts 1
+      narrow.add(5); // evicts 2
+
+      // Window should contain [3, 4, 5]
+      expect(narrow.windowedMean()).toBeCloseTo((3 + 4 + 5) / 3, 5);
+    });
+
+    it("windowedStdDev stays correct after window wraps", () => {
+      const narrow = new RollingStats(4);
+      for (let i = 1; i <= 6; i++) {
+        narrow.add(i);
+      }
+      // Window = [3, 4, 5, 6]; mean = 4.5; var = (2.25+0.25+0.25+2.25)/4 = 1.25
+      expect(narrow.windowedStdDev()).toBeCloseTo(Math.sqrt(1.25), 4);
+    });
+
+    it("reset clears the ring buffer — windowedMean returns 0 after reset", () => {
+      const s = new RollingStats(10);
+      for (let i = 0; i < 8; i++) {
+        s.add(42);
+      }
+      s.reset();
+      expect(s.windowedMean()).toBe(0);
+      expect(s.windowedStdDev()).toBe(0);
+    });
+
+    it("window eviction does not affect Welford global count/mean", () => {
+      // Add 10 values [1..10] into a window of 3.
+      const s = new RollingStats(3);
+      for (let i = 1; i <= 10; i++) {
+        s.add(i);
+      }
+      // Welford tracks all 10; window only has the last 3.
+      expect(s.getStats().count).toBe(10);
+      expect(s.windowedMean()).toBeCloseTo((8 + 9 + 10) / 3, 5);
+    });
+  });
 });
 
 describe("ExponentialMovingAverage", () => {

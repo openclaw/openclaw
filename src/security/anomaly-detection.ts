@@ -52,6 +52,52 @@ export interface AnomalyResult {
 }
 
 // -----------------------------------------------------------------------------
+// Numeric Ring Buffer (used by RollingStats for O(1) window maintenance)
+// -----------------------------------------------------------------------------
+
+/** Fixed-capacity numeric ring buffer — O(1) push, avoids O(n) Array.shift(). */
+class NumericRingBuffer {
+  private readonly buf: Float64Array;
+  private head = 0;
+  private _size = 0;
+  readonly capacity: number;
+
+  constructor(capacity: number) {
+    this.capacity = capacity;
+    this.buf = new Float64Array(capacity);
+  }
+
+  push(value: number): void {
+    this.buf[this.head] = value;
+    this.head = (this.head + 1) % this.capacity;
+    if (this._size < this.capacity) {
+      this._size++;
+    }
+  }
+
+  get size(): number {
+    return this._size;
+  }
+
+  /** Returns values in insertion order (oldest first). */
+  toArray(): number[] {
+    if (this._size < this.capacity) {
+      return Array.from(this.buf.subarray(0, this._size));
+    }
+    return Array.from<number>(
+      { length: this.capacity },
+      (_, i) => this.buf[(this.head + i) % this.capacity],
+    );
+  }
+
+  reset(): void {
+    this.buf.fill(0);
+    this.head = 0;
+    this._size = 0;
+  }
+}
+
+// -----------------------------------------------------------------------------
 // Rolling Statistics Calculator
 // -----------------------------------------------------------------------------
 
@@ -68,12 +114,13 @@ export class RollingStats {
   private lastValue: number | null = null;
   private lastTimestamp: number | null = null;
 
-  // For windowed calculations
+  // For windowed calculations — O(1) push via ring buffer (BP-13)
   private windowSize: number;
-  private values: number[] = [];
+  private values: NumericRingBuffer;
 
   constructor(windowSize = 100) {
     this.windowSize = windowSize;
+    this.values = new NumericRingBuffer(windowSize);
   }
 
   /**
@@ -98,11 +145,8 @@ export class RollingStats {
     const delta2 = value - this.mean;
     this.m2 += delta * delta2;
 
-    // Maintain rolling window
+    // Maintain rolling window — O(1) push, no Array.shift()
     this.values.push(value);
-    if (this.values.length > this.windowSize) {
-      this.values.shift();
-    }
   }
 
   /**
@@ -143,22 +187,24 @@ export class RollingStats {
    * Get windowed mean (only from recent values).
    */
   windowedMean(): number {
-    if (this.values.length === 0) {
+    if (this.values.size === 0) {
       return 0;
     }
-    return this.values.reduce((a, b) => a + b, 0) / this.values.length;
+    const arr = this.values.toArray();
+    return arr.reduce((a, b) => a + b, 0) / arr.length;
   }
 
   /**
    * Get windowed standard deviation.
    */
   windowedStdDev(): number {
-    if (this.values.length < 2) {
+    if (this.values.size < 2) {
       return 0;
     }
-    const mean = this.windowedMean();
-    const sumSquaredDiff = this.values.reduce((acc, val) => acc + (val - mean) ** 2, 0);
-    return Math.sqrt(sumSquaredDiff / this.values.length);
+    const arr = this.values.toArray();
+    const mean = arr.reduce((a, b) => a + b, 0) / arr.length;
+    const sumSquaredDiff = arr.reduce((acc, val) => acc + (val - mean) ** 2, 0);
+    return Math.sqrt(sumSquaredDiff / arr.length);
   }
 
   /**
@@ -199,7 +245,7 @@ export class RollingStats {
     this.max = -Infinity;
     this.lastValue = null;
     this.lastTimestamp = null;
-    this.values = [];
+    this.values.reset();
   }
 }
 
