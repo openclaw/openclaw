@@ -18,6 +18,7 @@ import {
 import { logVerbose } from "../../globals.js";
 import { clearCommandLane, getQueueSize } from "../../process/command-queue.js";
 import { normalizeMainKey } from "../../routing/session-key.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { hasControlCommand } from "../command-detection.js";
 import { buildInboundMediaNote } from "../media-note.js";
@@ -233,11 +234,21 @@ export async function runPreparedReply(
   const isGroupChat = sessionCtx.ChatType === "group";
   const wasMentioned = ctx.WasMentioned === true;
   const isHeartbeat = opts?.isHeartbeat === true;
+  const typingPolicy =
+    opts?.typingPolicy ??
+    (isHeartbeat
+      ? "heartbeat"
+      : ctx.OriginatingChannel === INTERNAL_MESSAGE_CHANNEL
+        ? "internal_webchat"
+        : "auto");
+  const suppressTyping = opts?.suppressTyping === true;
   const typingMode = resolveTypingMode({
     configured: sessionCfg?.typingMode ?? agentCfg?.typingMode,
     isGroupChat,
     wasMentioned,
     isHeartbeat,
+    typingPolicy,
+    suppressTyping,
   });
   const shouldInjectGroupIntro = Boolean(
     isGroupChat && (isFirstTurnInSession || sessionEntry?.groupActivationNeedsSystemIntro),
@@ -462,8 +473,8 @@ export async function runPreparedReply(
       sessionId: sessionIdFinal,
       sessionKey,
       messageProvider: resolveOriginMessageProvider({
-        originatingChannel: sessionCtx.OriginatingChannel,
-        provider: sessionCtx.Provider,
+        originatingChannel: ctx.OriginatingChannel ?? sessionCtx.OriginatingChannel,
+        provider: ctx.Surface ?? ctx.Provider ?? sessionCtx.Provider,
       }),
       agentAccountId: sessionCtx.AccountId,
       groupId: resolveGroupSessionKey(sessionCtx)?.id ?? undefined,
