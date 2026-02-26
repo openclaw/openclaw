@@ -22,17 +22,17 @@ enum HostEnvSecurityPolicy {
         "PS4",
         "GCONV_PATH",
         "IFS",
-        "SSLKEYLOGFILE",
+        "SSLKEYLOGFILE"
     ]
 
     static let blockedOverrideKeys: Set<String> = [
         "HOME",
-        "ZDOTDIR",
+        "ZDOTDIR"
     ]
 
     static let blockedPrefixes: [String] = [
         "DYLD_",
         "LD_",
-        "BASH_FUNC_",
+        "BASH_FUNC_"
     ]
 }
