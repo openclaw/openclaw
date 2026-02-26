@@ -137,6 +137,7 @@ vi.mock("../../agents/context.js", async (importOriginal) => {
   return {
     ...actual,
     lookupContextTokens: vi.fn().mockReturnValue(128000),
+    resolveContextTokensForModel: vi.fn().mockReturnValue(128000),
   };
 });
 

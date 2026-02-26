@@ -10,7 +10,7 @@ import { resolveOpenClawAgentDir } from "./agent-paths.js";
 import { lookupCachedContextTokens, MODEL_CONTEXT_TOKEN_CACHE } from "./context-cache.js";
 import { normalizeProviderId } from "./model-selection.js";
 
-type ModelEntry = { id: string; contextWindow?: number };
+type ModelEntry = { id: string; provider?: string; contextWindow?: number };
 type ModelRegistryLike = {
   getAvailable?: () => ModelEntry[];
   getAll: () => ModelEntry[];
@@ -29,6 +29,63 @@ const CONFIG_LOAD_RETRY_POLICY: BackoffPolicy = {
   jitter: 0,
 };
 
+function normalizeCacheKey(value?: string): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized || undefined;
+}
+
+function normalizeProviderKey(value?: string): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized || undefined;
+}
+
+function resolveModelCacheKeys(params: { provider?: string; modelId?: string }): {
+  scopedKey?: string;
+  legacyKey?: string;
+} {
+  const modelKey = normalizeCacheKey(params.modelId);
+  if (!modelKey) {
+    return {};
+  }
+
+  const providerKey = normalizeProviderKey(params.provider);
+  if (!providerKey) {
+    const slash = modelKey.indexOf("/");
+    if (slash > 0) {
+      const scopedKey = modelKey;
+      const legacyKey = normalizeCacheKey(modelKey.slice(slash + 1));
+      return { scopedKey, legacyKey: legacyKey ?? modelKey };
+    }
+    return { legacyKey: modelKey };
+  }
+
+  if (modelKey.startsWith(`${providerKey}/`)) {
+    const legacyKey = normalizeCacheKey(modelKey.slice(providerKey.length + 1));
+    return { scopedKey: modelKey, legacyKey: legacyKey ?? modelKey };
+  }
+
+  return {
+    scopedKey: `${providerKey}/${modelKey}`,
+    legacyKey: modelKey,
+  };
+}
+
+function setMinContextWindow(cache: Map<string, number>, key: string | undefined, value: number) {
+  if (!key) {
+    return;
+  }
+  const existing = cache.get(key);
+  if (existing === undefined || value < existing) {
+    cache.set(key, value);
+  }
+}
+
 export function applyDiscoveredContextWindows(params: {
   cache: Map<string, number>;
   models: ModelEntry[];
@@ -42,16 +99,17 @@ export function applyDiscoveredContextWindows(params: {
     if (!contextWindow || contextWindow <= 0) {
       continue;
     }
-    const existing = params.cache.get(model.id);
-    // When the same bare model id appears under multiple providers with different
-    // limits, keep the smaller window. This cache feeds both display paths and
-    // runtime paths (flush thresholds, session context-token persistence), so
-    // overestimating the limit could delay compaction and cause context overflow.
-    // Callers that know the active provider should use resolveContextTokensForModel,
-    // which tries the provider-qualified key first and falls back here.
-    if (existing === undefined || contextWindow < existing) {
-      params.cache.set(model.id, contextWindow);
-    }
+    const { scopedKey, legacyKey } = resolveModelCacheKeys({
+      provider: model.provider,
+      modelId: model.id,
+    });
+
+    // Provider-scoped is authoritative when available.
+    setMinContextWindow(params.cache, scopedKey, contextWindow);
+
+    // Keep legacy fallback key for backward compatibility.
+    // If multiple providers collide on the same bare model id, keep smallest (fail-safe).
+    setMinContextWindow(params.cache, legacyKey, contextWindow);
   }
 }
 
@@ -63,7 +121,7 @@ export function applyConfiguredContextWindows(params: {
   if (!providers || typeof providers !== "object") {
     return;
   }
-  for (const provider of Object.values(providers)) {
+  for (const [providerId, provider] of Object.entries(providers)) {
     if (!Array.isArray(provider?.models)) {
       continue;
     }
@@ -74,7 +132,18 @@ export function applyConfiguredContextWindows(params: {
       if (!modelId || !contextWindow || contextWindow <= 0) {
         continue;
       }
-      params.cache.set(modelId, contextWindow);
+      const { scopedKey, legacyKey } = resolveModelCacheKeys({
+        provider: providerId,
+        modelId,
+      });
+
+      if (scopedKey) {
+        // Explicit config wins for provider-scoped lookups.
+        params.cache.set(scopedKey, contextWindow);
+      }
+
+      // Keep legacy fallback fail-safe.
+      setMinContextWindow(params.cache, legacyKey, contextWindow);
     }
   }
 }
@@ -243,7 +312,8 @@ export function lookupContextTokens(
   modelId?: string,
   options?: { allowAsyncLoad?: boolean },
 ): number | undefined {
-  if (!modelId) {
+  const key = normalizeCacheKey(modelId);
+  if (!key) {
     return undefined;
   }
   if (options?.allowAsyncLoad === false) {
@@ -254,7 +324,7 @@ export function lookupContextTokens(
     // Best-effort: kick off loading on demand, but don't block lookups.
     void ensureContextWindowCacheLoaded();
   }
-  return lookupCachedContextTokens(modelId);
+  return lookupCachedContextTokens(key);
 }
 
 if (shouldEagerWarmContextWindowCache()) {

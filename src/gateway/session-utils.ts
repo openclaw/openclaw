@@ -1005,10 +1005,19 @@ export function getSessionDefaults(cfg: OpenClawConfig): GatewaySessionsDefaults
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
+  const configuredContextTokensOverride =
+    typeof cfg.agents?.defaults?.contextTokens === "number" && cfg.agents.defaults.contextTokens > 0
+      ? Math.trunc(cfg.agents.defaults.contextTokens)
+      : undefined;
   const contextTokens =
-    cfg.agents?.defaults?.contextTokens ??
-    lookupContextTokens(resolved.model, { allowAsyncLoad: false }) ??
-    DEFAULT_CONTEXT_TOKENS;
+    resolveContextTokensForModel({
+      cfg,
+      provider: resolved.provider,
+      model: resolved.model,
+      contextTokensOverride: configuredContextTokensOverride,
+      fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
+      allowAsyncLoad: false,
+    }) ?? DEFAULT_CONTEXT_TOKENS;
   return {
     modelProvider: resolved.provider ?? null,
     model: resolved.model ?? null,
