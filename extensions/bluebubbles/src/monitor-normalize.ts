@@ -7,6 +7,20 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function hasDefinedProperty(record: Record<string, unknown> | null, key: string): boolean {
+  if (!record || !Object.prototype.hasOwnProperty.call(record, key)) {
+    return false;
+  }
+  const value = record[key];
+  if (value === null || value === undefined) {
+    return false;
+  }
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  return true;
+}
+
 function readString(record: Record<string, unknown> | null, key: string): string | undefined {
   if (!record) {
     return undefined;
@@ -28,7 +42,28 @@ function readBoolean(record: Record<string, unknown> | null, key: string): boole
     return undefined;
   }
   const value = record[key];
-  return typeof value === "boolean" ? value : undefined;
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    if (value === 1) {
+      return true;
+    }
+    if (value === 0) {
+      return false;
+    }
+    return undefined;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["1", "true", "yes", "y"].includes(normalized)) {
+      return true;
+    }
+    if (["0", "false", "no", "n"].includes(normalized)) {
+      return false;
+    }
+  }
+  return undefined;
 }
 
 function readNumberLike(record: Record<string, unknown> | null, key: string): number | undefined {
@@ -154,15 +189,22 @@ function extractReplyMetadata(message: Record<string, unknown>): {
 
   const directReplyId =
     readString(message, "replyToMessageGuid") ??
+    readString(message, "reply_to_message_guid") ??
     readString(message, "replyToGuid") ??
+    readString(message, "reply_to_guid") ??
     readString(message, "replyGuid") ??
     readString(message, "selectedMessageGuid") ??
+    readString(message, "selected_message_guid") ??
     readString(message, "selectedMessageId") ??
+    readString(message, "selected_message_id") ??
     readString(message, "replyToMessageId") ??
+    readString(message, "reply_to_message_id") ??
     readString(message, "replyId") ??
+    readString(message, "reply_id") ??
     readString(replyRecord, "guid") ??
     readString(replyRecord, "id") ??
-    readString(replyRecord, "messageId");
+    readString(replyRecord, "messageId") ??
+    readString(replyRecord, "message_id");
 
   const associatedType =
     readNumberLike(message, "associatedMessageType") ??
@@ -170,13 +212,18 @@ function extractReplyMetadata(message: Record<string, unknown>): {
   const associatedGuid =
     readString(message, "associatedMessageGuid") ??
     readString(message, "associated_message_guid") ??
-    readString(message, "associatedMessageId");
+    readString(message, "associatedMessageId") ??
+    readString(message, "associated_message_id");
   const isReactionAssociation =
     typeof associatedType === "number" && REACTION_TYPE_MAP.has(associatedType);
 
   const replyToId = directReplyId ?? (!isReactionAssociation ? associatedGuid : undefined);
-  const threadOriginatorGuid = readString(message, "threadOriginatorGuid");
-  const messageGuid = readString(message, "guid");
+  const threadOriginatorGuid =
+    readString(message, "threadOriginatorGuid") ?? readString(message, "thread_originator_guid");
+  const messageGuid =
+    readString(message, "guid") ??
+    readString(message, "messageGuid") ??
+    readString(message, "message_guid");
   const fallbackReplyId =
     !replyToId && threadOriginatorGuid && threadOriginatorGuid !== messageGuid
       ? threadOriginatorGuid
@@ -469,6 +516,12 @@ export type NormalizedWebhookMessage = {
   replyToId?: string;
   replyToBody?: string;
   replyToSender?: string;
+  itemType?: number;
+  dateEdited?: number;
+  explicitWasMentioned?: boolean;
+  hasConversationLabel?: boolean;
+  hasExplicitGroupChatFlag?: boolean;
+  hasMessageIdFull?: boolean;
 };
 
 export type NormalizedWebhookReaction = {
@@ -717,6 +770,22 @@ export function normalizeWebhookMessage(
     readNumber(message, "date") ??
     readNumber(message, "dateCreated") ??
     readNumber(message, "timestamp");
+  const itemType =
+    readNumberLike(message, "itemType") ?? readNumberLike(message, "item_type") ?? undefined;
+  const dateEdited =
+    readNumberLike(message, "dateEdited") ?? readNumberLike(message, "date_edited") ?? undefined;
+  const explicitWasMentioned =
+    readBoolean(message, "wasMentioned") ?? readBoolean(message, "was_mentioned");
+  const hasConversationLabel =
+    hasDefinedProperty(message, "conversationLabel") ||
+    hasDefinedProperty(message, "conversation_label");
+  const hasExplicitGroupChatFlag =
+    hasDefinedProperty(message, "isGroupChat") ||
+    hasDefinedProperty(message, "is_group_chat") ||
+    hasDefinedProperty(message, "isGroup") ||
+    hasDefinedProperty(message, "is_group");
+  const hasMessageIdFull =
+    hasDefinedProperty(message, "messageIdFull") || hasDefinedProperty(message, "message_id_full");
   const timestamp =
     typeof timestampRaw === "number"
       ? timestampRaw > 1_000_000_000_000
@@ -755,6 +824,12 @@ export function normalizeWebhookMessage(
     replyToId: replyMetadata.replyToId,
     replyToBody: replyMetadata.replyToBody,
     replyToSender: replyMetadata.replyToSender,
+    itemType,
+    dateEdited,
+    explicitWasMentioned,
+    hasConversationLabel,
+    hasExplicitGroupChatFlag,
+    hasMessageIdFull,
   };
 }
 
@@ -769,7 +844,8 @@ export function normalizeWebhookReaction(
   const associatedGuid =
     readString(message, "associatedMessageGuid") ??
     readString(message, "associated_message_guid") ??
-    readString(message, "associatedMessageId");
+    readString(message, "associatedMessageId") ??
+    readString(message, "associated_message_id");
   const associatedType =
     readNumberLike(message, "associatedMessageType") ??
     readNumberLike(message, "associated_message_type");

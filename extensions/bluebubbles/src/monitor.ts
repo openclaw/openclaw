@@ -1,5 +1,9 @@
+import { spawnSync } from "node:child_process";
 import { timingSafeEqual } from "node:crypto";
+import { existsSync } from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk";
 import {
   isRequestBodyLimitError,
@@ -338,6 +342,213 @@ function safeEqualSecret(aRaw: string, bRaw: string): boolean {
   return timingSafeEqual(bufA, bufB);
 }
 
+type ParsedWebhookEventType =
+  | "new-message"
+  | "updated-message"
+  | "message-reaction"
+  | "message-send-error"
+  | "participant-added"
+  | "participant-removed"
+  | "participant-left"
+  | "unknown";
+
+function normalizeEventTypeToken(value: unknown): string {
+  if (typeof value !== "string") {
+    return "";
+  }
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[_\s]+/g, "-")
+    .replace(/-+/g, "-");
+}
+
+function resolveWebhookEventType(payload: Record<string, unknown>): {
+  raw: string;
+  normalized: ParsedWebhookEventType;
+} {
+  const dataRecord = asRecord(payload.data);
+  const candidates = [
+    payload.type,
+    payload.event,
+    payload.eventType,
+    dataRecord?.type,
+    dataRecord?.event,
+  ];
+  const raw =
+    candidates
+      .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+      .find((entry) => entry.length > 0) ?? "";
+
+  const token = normalizeEventTypeToken(raw);
+  const aliases = new Map<string, ParsedWebhookEventType>([
+    ["new-message", "new-message"],
+    ["new-messages", "new-message"],
+    ["message-new", "new-message"],
+    ["message-created", "new-message"],
+    ["message-create", "new-message"],
+    ["updated-message", "updated-message"],
+    ["message-updated", "updated-message"],
+    ["message-update", "updated-message"],
+    ["message-updates", "updated-message"],
+    ["reaction", "message-reaction"],
+    ["message-reaction", "message-reaction"],
+    ["message-reactions", "message-reaction"],
+    ["tapback", "message-reaction"],
+    ["tapback-update", "message-reaction"],
+    ["message-send-error", "message-send-error"],
+    ["message-send-errors", "message-send-error"],
+    ["send-error", "message-send-error"],
+    ["send-errors", "message-send-error"],
+    ["participant-added", "participant-added"],
+    ["participant-add", "participant-added"],
+    ["participant-removed", "participant-removed"],
+    ["participant-remove", "participant-removed"],
+    ["participant-left", "participant-left"],
+    ["participant-leave", "participant-left"],
+  ]);
+
+  const normalized = aliases.get(token) ?? "unknown";
+  return { raw, normalized };
+}
+
+function summarizeWebhookEventPayload(payload: Record<string, unknown>): string {
+  const data = asRecord(payload.data) ?? payload;
+  const message = asRecord((asRecord(data)?.message as unknown) ?? data);
+  const chatGuid =
+    (typeof message?.chatGuid === "string" ? message.chatGuid : undefined) ??
+    (typeof message?.chat_guid === "string" ? message.chat_guid : undefined);
+  const messageGuid =
+    (typeof message?.guid === "string" ? message.guid : undefined) ??
+    (typeof message?.messageId === "string" ? message.messageId : undefined);
+  const sender =
+    (typeof message?.sender === "string" ? message.sender : undefined) ??
+    (typeof message?.from === "string" ? message.from : undefined);
+  const bits = [
+    chatGuid ? `chatGuid=${chatGuid}` : "",
+    messageGuid ? `messageGuid=${messageGuid}` : "",
+    sender ? `sender=${sender}` : "",
+  ].filter(Boolean);
+  return bits.join(" ");
+}
+
+function resolveMessagesDbPath(config: OpenClawConfig): string {
+  const configured = (config.channels as Record<string, unknown> | undefined)?.imessage as
+    | Record<string, unknown>
+    | undefined;
+  const dbPathRaw = typeof configured?.dbPath === "string" ? configured.dbPath.trim() : "";
+  const fallback = join(homedir(), "Library", "Messages", "chat.db");
+  if (!dbPathRaw) {
+    return fallback;
+  }
+  return dbPathRaw;
+}
+
+function looksLikeBlueBubblesGuid(value: string): boolean {
+  return /^[A-Za-z0-9-]{8,128}$/.test(value);
+}
+
+function fetchEditedMessageTextFromDb(params: {
+  config: OpenClawConfig;
+  guid: string;
+}): string | undefined {
+  const guid = params.guid.trim();
+  if (!guid || !looksLikeBlueBubblesGuid(guid)) {
+    return undefined;
+  }
+
+  const dbPath = resolveMessagesDbPath(params.config);
+  if (!existsSync(dbPath)) {
+    return undefined;
+  }
+
+  const sql = `SELECT text FROM message WHERE guid='${guid}' LIMIT 1;`;
+  const proc = spawnSync("sqlite3", ["-noheader", "-csv", dbPath, sql], {
+    encoding: "utf8",
+    timeout: 1200,
+  });
+  if (proc.status !== 0) {
+    return undefined;
+  }
+  const text = (proc.stdout ?? "").trim();
+  return text || undefined;
+}
+
+function shouldIgnoreUpdatedNonConversationalEvent(
+  eventType: ParsedWebhookEventType,
+  message: NormalizedWebhookMessage,
+): boolean {
+  if (eventType !== "updated-message") {
+    return false;
+  }
+  const text = message.text.trim();
+  const hasAttachments = (message.attachments?.length ?? 0) > 0;
+  if (hasAttachments) {
+    return false;
+  }
+
+  // Some BlueBubbles update events (e.g., Kept / playback updates) can surface as
+  // non-conversational payloads with GUID-like text. They should never trigger replies.
+  if (text && looksLikeBlueBubblesGuid(text)) {
+    return true;
+  }
+
+  // Empty updated-message rows without edits/reactions are non-conversational updates.
+  if (
+    !text &&
+    !message.dateEdited &&
+    !message.associatedMessageGuid &&
+    typeof message.associatedMessageType !== "number"
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+function shouldResolveUpdatedEditText(
+  eventType: ParsedWebhookEventType,
+  message: NormalizedWebhookMessage,
+): boolean {
+  if (eventType !== "updated-message") {
+    return false;
+  }
+  if (!message.messageId?.trim()) {
+    return false;
+  }
+  if (message.text.trim()) {
+    return false;
+  }
+  if ((message.itemType ?? -1) !== 0) {
+    return false;
+  }
+  return typeof message.dateEdited === "number" && message.dateEdited > 0;
+}
+
+function hasExplicitChatContext(message: NormalizedWebhookMessage): boolean {
+  const hasChatGuid = Boolean(message.chatGuid?.trim());
+  const hasChatIdentifier = Boolean(message.chatIdentifier?.trim());
+  const hasChatId = typeof message.chatId === "number" && Number.isFinite(message.chatId);
+  return Boolean(
+    hasChatGuid ||
+    hasChatIdentifier ||
+    hasChatId ||
+    message.hasConversationLabel ||
+    message.hasExplicitGroupChatFlag ||
+    message.hasMessageIdFull,
+  );
+}
+
+function shouldDropMentionOnlyDirectPayload(message: NormalizedWebhookMessage): boolean {
+  if (message.isGroup) {
+    return false;
+  }
+  if (message.explicitWasMentioned !== true) {
+    return false;
+  }
+  return !hasExplicitChatContext(message);
+}
+
 export async function handleBlueBubblesWebhookRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -370,45 +581,59 @@ export async function handleBlueBubblesWebhookRequest(
       `webhook received path=${path} keys=${Object.keys(payload).join(",") || "none"}`,
     );
   }
-  const eventTypeRaw = payload.type;
-  const eventType = typeof eventTypeRaw === "string" ? eventTypeRaw.trim() : "";
-  const allowedEventTypes = new Set([
-    "new-message",
-    "updated-message",
-    "message-reaction",
-    "reaction",
-  ]);
-  if (eventType && !allowedEventTypes.has(eventType)) {
+  const parsedEvent = resolveWebhookEventType(payload);
+  const eventType = parsedEvent.normalized;
+  const eventSummary = summarizeWebhookEventPayload(payload);
+
+  // Deterministic ignore path for known non-message event families.
+  if (
+    eventType === "message-send-error" ||
+    eventType === "participant-added" ||
+    eventType === "participant-removed" ||
+    eventType === "participant-left"
+  ) {
     res.statusCode = 200;
     res.end("ok");
     if (firstTarget) {
-      logVerbose(firstTarget.core, firstTarget.runtime, `webhook ignored type=${eventType}`);
+      const suffix = eventSummary ? ` ${eventSummary}` : "";
+      logVerbose(
+        firstTarget.core,
+        firstTarget.runtime,
+        `webhook accepted event=${eventType}${suffix}`,
+      );
     }
     return true;
   }
+
   const reaction = normalizeWebhookReaction(payload);
-  if (
-    (eventType === "updated-message" ||
-      eventType === "message-reaction" ||
-      eventType === "reaction") &&
-    !reaction
-  ) {
+  const message = reaction ? null : normalizeWebhookMessage(payload);
+
+  // For updated-message/reaction events, missing parsable reaction should not be noisy.
+  if (eventType === "message-reaction" && !reaction) {
     res.statusCode = 200;
     res.end("ok");
     if (firstTarget) {
       logVerbose(
         firstTarget.core,
         firstTarget.runtime,
-        `webhook ignored ${eventType || "event"} without reaction`,
+        `webhook ignored message-reaction without parsable tapback${eventSummary ? ` ${eventSummary}` : ""}`,
       );
     }
     return true;
   }
-  const message = reaction ? null : normalizeWebhookMessage(payload);
+
+  // Unknown payload families are acknowledged but ignored to avoid "could not parse" noise.
   if (!message && !reaction) {
-    res.statusCode = 400;
-    res.end("invalid payload");
-    console.warn("[bluebubbles] webhook rejected: unable to parse message payload");
+    res.statusCode = 200;
+    res.end("ok");
+    if (firstTarget) {
+      const rawType = parsedEvent.raw || "none";
+      logVerbose(
+        firstTarget.core,
+        firstTarget.runtime,
+        `webhook ignored unparsed type=${eventType} rawType=${rawType} keys=${Object.keys(payload).join(",") || "none"}${eventSummary ? ` ${eventSummary}` : ""}`,
+      );
+    }
     return true;
   }
 
@@ -449,10 +674,51 @@ export async function handleBlueBubblesWebhookRequest(
       );
     });
   } else if (message) {
+    let hydratedMessage = message;
+
+    if (shouldIgnoreUpdatedNonConversationalEvent(eventType, hydratedMessage)) {
+      if (firstTarget) {
+        logVerbose(
+          firstTarget.core,
+          firstTarget.runtime,
+          `webhook ignored updated-message non-conversational payload guid=${hydratedMessage.messageId ?? ""} text=${hydratedMessage.text.trim().slice(0, 80)}`,
+        );
+      }
+      res.statusCode = 200;
+      res.end("ok");
+      return true;
+    }
+
+    if (shouldResolveUpdatedEditText(eventType, hydratedMessage)) {
+      const editedText = fetchEditedMessageTextFromDb({
+        config: target.config,
+        guid: hydratedMessage.messageId ?? "",
+      });
+      if (editedText) {
+        hydratedMessage = { ...hydratedMessage, text: editedText };
+        logVerbose(
+          target.core,
+          target.runtime,
+          `webhook hydrated updated-message text guid=${hydratedMessage.messageId} itemType=${hydratedMessage.itemType ?? ""}`,
+        );
+      }
+    }
+
+    if (shouldDropMentionOnlyDirectPayload(hydratedMessage)) {
+      logVerbose(
+        target.core,
+        target.runtime,
+        `webhook dropped ambiguous mention-only direct payload sender=${hydratedMessage.senderId} msg=${hydratedMessage.messageId ?? ""}`,
+      );
+      res.statusCode = 200;
+      res.end("ok");
+      return true;
+    }
+
     // Route messages through debouncer to coalesce rapid-fire events
     // (e.g., text message + URL balloon arriving as separate webhooks)
     const debouncer = getOrCreateDebouncer(target);
-    debouncer.enqueue({ message, target }).catch((err) => {
+    debouncer.enqueue({ message: hydratedMessage, target }).catch((err) => {
       target.runtime.error?.(
         `[${target.account.accountId}] BlueBubbles webhook failed: ${String(err)}`,
       );
