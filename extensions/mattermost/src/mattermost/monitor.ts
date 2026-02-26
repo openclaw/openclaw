@@ -18,7 +18,6 @@ import {
   isDangerousNameMatchingEnabled,
   resolveControlCommandGate,
   resolveDmGroupAccessWithLists,
-  resolveEffectiveAllowFromLists,
   resolveAllowlistProviderRuntimeGroupPolicy,
   resolveDefaultGroupPolicy,
   resolveChannelMediaMaxBytes,
@@ -38,6 +37,11 @@ import {
   type MattermostPost,
   type MattermostUser,
 } from "./client.js";
+import {
+  isMattermostSenderAllowed,
+  normalizeMattermostAllowList,
+  resolveMattermostEffectiveAllowFromLists,
+} from "./monitor-auth.js";
 import {
   createDedupeCache,
   formatInboundFromLabel,
@@ -130,68 +134,6 @@ function channelChatType(kind: ChatType): "direct" | "group" | "channel" {
     return "group";
   }
   return "channel";
-}
-
-function normalizeAllowEntry(entry: string): string {
-  const trimmed = entry.trim();
-  if (!trimmed) {
-    return "";
-  }
-  if (trimmed === "*") {
-    return "*";
-  }
-  return trimmed
-    .replace(/^(mattermost|user):/i, "")
-    .replace(/^@/, "")
-    .toLowerCase();
-}
-
-function normalizeAllowList(entries: Array<string | number>): string[] {
-  const normalized = entries.map((entry) => normalizeAllowEntry(String(entry))).filter(Boolean);
-  return Array.from(new Set(normalized));
-}
-
-export function resolveMattermostEffectiveAllowFromLists(params: {
-  allowFrom?: Array<string | number> | null;
-  groupAllowFrom?: Array<string | number> | null;
-  storeAllowFrom?: Array<string | number> | null;
-  dmPolicy?: string | null;
-}): {
-  effectiveAllowFrom: string[];
-  effectiveGroupAllowFrom: string[];
-} {
-  return resolveEffectiveAllowFromLists({
-    allowFrom: normalizeAllowList(params.allowFrom ?? []),
-    groupAllowFrom: normalizeAllowList(params.groupAllowFrom ?? []),
-    storeAllowFrom: normalizeAllowList(params.storeAllowFrom ?? []),
-    dmPolicy: params.dmPolicy,
-  });
-}
-
-function isSenderAllowed(params: {
-  senderId: string;
-  senderName?: string;
-  allowFrom: string[];
-  allowNameMatching?: boolean;
-}): boolean {
-  const allowFrom = params.allowFrom;
-  if (allowFrom.length === 0) {
-    return false;
-  }
-  if (allowFrom.includes("*")) {
-    return true;
-  }
-  const normalizedSenderId = normalizeAllowEntry(params.senderId);
-  const normalizedSenderName = params.senderName ? normalizeAllowEntry(params.senderName) : "";
-  return allowFrom.some((entry) => {
-    if (entry === normalizedSenderId) {
-      return true;
-    }
-    if (params.allowNameMatching !== true) {
-      return false;
-    }
-    return normalizedSenderName ? entry === normalizedSenderName : false;
-  });
 }
 
 type MattermostMediaInfo = {
@@ -418,7 +360,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       senderId;
     const rawText = post.message?.trim() || "";
     const dmPolicy = account.config.dmPolicy ?? "pairing";
-    const storeAllowFrom = normalizeAllowList(
+    const storeAllowFrom = normalizeMattermostAllowList(
       dmPolicy === "allowlist"
         ? []
         : await core.channel.pairing.readAllowFromStore("mattermost").catch(() => []),
@@ -437,13 +379,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     const hasControlCommand = core.channel.text.hasControlCommand(rawText, cfg);
     const isControlCommand = allowTextCommands && hasControlCommand;
     const useAccessGroups = cfg.commands?.useAccessGroups !== false;
-    const senderAllowedForCommands = isSenderAllowed({
+    const senderAllowedForCommands = isMattermostSenderAllowed({
       senderId,
       senderName,
       allowFrom: effectiveAllowFrom,
       allowNameMatching,
     });
-    const groupAllowedForCommands = isSenderAllowed({
+    const groupAllowedForCommands = isMattermostSenderAllowed({
       senderId,
       senderName,
       allowFrom: effectiveGroupAllowFrom,
@@ -901,7 +843,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
 
     // Enforce DM/group policy and allowlist checks (same as normal messages)
     const dmPolicy = account.config.dmPolicy ?? "pairing";
-    const storeAllowFrom = normalizeAllowList(
+    const storeAllowFrom = normalizeMattermostAllowList(
       dmPolicy === "allowlist"
         ? []
         : await core.channel.pairing.readAllowFromStore("mattermost").catch(() => []),
@@ -914,10 +856,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       groupAllowFrom: account.config.groupAllowFrom,
       storeAllowFrom,
       isSenderAllowed: (allowFrom) =>
-        isSenderAllowed({
+        isMattermostSenderAllowed({
           senderId: userId,
           senderName,
-          allowFrom: normalizeAllowList(allowFrom),
+          allowFrom: normalizeMattermostAllowList(allowFrom),
           allowNameMatching,
         }),
     });
