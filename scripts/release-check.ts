@@ -22,6 +22,12 @@ type PackageJson = {
   version?: string;
 };
 
+type CalverSparkleFloors = {
+  dateKey: number;
+  legacyFloor: number;
+  laneFloor: number;
+};
+
 function normalizePluginSyncVersion(version: string): string {
   const normalized = version.trim().replace(/^v/, "");
   const base = /^([0-9]+\.[0-9]+\.[0-9]+)/.exec(normalized)?.[1];
@@ -88,7 +94,7 @@ function checkPluginVersions() {
   }
 }
 
-function canonicalSparkleVersionFromShortVersion(shortVersion: string): number | null {
+function sparkleFloorsFromShortVersion(shortVersion: string): CalverSparkleFloors | null {
   const match = /^([0-9]{4})\.([0-9]{1,2})\.([0-9]{1,2})([.-].*)?$/.exec(shortVersion.trim());
   if (!match) {
     return null;
@@ -107,7 +113,24 @@ function canonicalSparkleVersionFromShortVersion(shortVersion: string): number |
   ) {
     return null;
   }
-  return Number(`${year}${String(month).padStart(2, "0")}${String(day).padStart(2, "0")}0`);
+
+  const dateKey = Number(`${year}${String(month).padStart(2, "0")}${String(day).padStart(2, "0")}`);
+  const legacyFloor = Number(`${dateKey}0`);
+
+  // Must stay aligned with canonical_build_from_version in scripts/package-mac-app.sh.
+  const suffix = match[4] ?? "";
+  let lane = 90;
+  if (suffix.length > 0) {
+    const numericSuffix = /([0-9]+)$/.exec(suffix)?.[1];
+    if (numericSuffix) {
+      lane = Math.min(Number.parseInt(numericSuffix, 10), 89);
+    } else {
+      lane = 1;
+    }
+  }
+
+  const laneFloor = Number(`${dateKey}${String(lane).padStart(2, "0")}`);
+  return { dateKey, legacyFloor, laneFloor };
 }
 
 function extractTag(item: string, tag: string): string | null {
@@ -120,6 +143,8 @@ function checkAppcastSparkleVersions() {
   const xml = readFileSync(appcastPath, "utf8");
   const itemMatches = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)];
   const errors: string[] = [];
+  const calverItems: Array<{ title: string; sparkleBuild: number; floors: CalverSparkleFloors }> =
+    [];
 
   if (itemMatches.length === 0) {
     errors.push("appcast.xml contains no <item> entries.");
@@ -142,14 +167,30 @@ function checkAppcastSparkleVersions() {
     if (!shortVersion) {
       continue;
     }
-    const canonicalFloor = canonicalSparkleVersionFromShortVersion(shortVersion);
-    if (canonicalFloor === null) {
+    const floors = sparkleFloorsFromShortVersion(shortVersion);
+    if (floors === null) {
       continue;
     }
+
     const sparkleBuild = Number(sparkleVersion);
-    if (sparkleBuild < canonicalFloor) {
+    calverItems.push({ title, sparkleBuild, floors });
+  }
+
+  const adoptionDateKey = calverItems
+    .filter((item) => item.sparkleBuild >= 1_000_000_000)
+    .map((item) => item.floors.dateKey)
+    .toSorted((a, b) => a - b)[0];
+
+  for (const item of calverItems) {
+    const expectLaneFloor =
+      item.sparkleBuild >= 1_000_000_000 ||
+      (typeof adoptionDateKey === "number" && item.floors.dateKey >= adoptionDateKey);
+    const floor = expectLaneFloor ? item.floors.laneFloor : item.floors.legacyFloor;
+
+    if (item.sparkleBuild < floor) {
+      const floorLabel = expectLaneFloor ? "lane floor" : "legacy floor";
       errors.push(
-        `appcast item '${title}' has sparkle:version ${sparkleBuild} below canonical floor ${canonicalFloor} derived from ${shortVersion}.`,
+        `appcast item '${item.title}' has sparkle:version ${item.sparkleBuild} below ${floorLabel} ${floor}.`,
       );
     }
   }
