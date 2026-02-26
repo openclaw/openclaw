@@ -1,5 +1,10 @@
 import type { ExecApprovalRequestPayload } from "../infra/exec-approvals.js";
-import { matchSystemRunApprovalEnvBinding } from "./system-run-approval-env-binding.js";
+import {
+  buildSystemRunApprovalBindingV1,
+  matchLegacySystemRunApprovalBinding,
+  matchSystemRunApprovalBindingV1,
+  type SystemRunApprovalMatchResult,
+} from "./system-run-approval-binding.js";
 
 export type SystemRunApprovalBinding = {
   cwd: string | null;
@@ -8,35 +13,16 @@ export type SystemRunApprovalBinding = {
   env?: unknown;
 };
 
-function argvMatchesRequest(requestedArgv: string[], argv: string[]): boolean {
-  if (requestedArgv.length === 0 || requestedArgv.length !== argv.length) {
-    return false;
-  }
-  for (let i = 0; i < requestedArgv.length; i += 1) {
-    if (requestedArgv[i] !== argv[i]) {
-      return false;
-    }
-  }
-  return true;
+function requestMismatch(): SystemRunApprovalMatchResult {
+  return {
+    ok: false,
+    code: "APPROVAL_REQUEST_MISMATCH",
+    message: "approval id does not match request",
+  };
 }
 
-export function approvalMatchesSystemRunRequest(params: {
-  cmdText: string;
-  argv: string[];
-  request: ExecApprovalRequestPayload;
-  binding: SystemRunApprovalBinding;
-}): boolean {
-  return evaluateSystemRunApprovalMatch(params).ok;
-}
-
-export type SystemRunApprovalMatchResult =
-  | { ok: true }
-  | {
-      ok: false;
-      code: "APPROVAL_REQUEST_MISMATCH" | "APPROVAL_ENV_BINDING_MISSING" | "APPROVAL_ENV_MISMATCH";
-      message: string;
-      details?: Record<string, unknown>;
-    };
+export { toSystemRunApprovalMismatchError } from "./system-run-approval-binding.js";
+export type { SystemRunApprovalMatchResult } from "./system-run-approval-binding.js";
 
 export function evaluateSystemRunApprovalMatch(params: {
   cmdText: string;
@@ -45,59 +31,30 @@ export function evaluateSystemRunApprovalMatch(params: {
   binding: SystemRunApprovalBinding;
 }): SystemRunApprovalMatchResult {
   if (params.request.host !== "node") {
-    return {
-      ok: false,
-      code: "APPROVAL_REQUEST_MISMATCH",
-      message: "approval id does not match request",
-    };
+    return requestMismatch();
   }
 
-  const requestedArgv = params.request.commandArgv;
-  if (Array.isArray(requestedArgv)) {
-    if (!argvMatchesRequest(requestedArgv, params.argv)) {
-      return {
-        ok: false,
-        code: "APPROVAL_REQUEST_MISMATCH",
-        message: "approval id does not match request",
-      };
-    }
-  } else if (!params.cmdText || params.request.command !== params.cmdText) {
-    return {
-      ok: false,
-      code: "APPROVAL_REQUEST_MISMATCH",
-      message: "approval id does not match request",
-    };
-  }
-
-  if ((params.request.cwd ?? null) !== params.binding.cwd) {
-    return {
-      ok: false,
-      code: "APPROVAL_REQUEST_MISMATCH",
-      message: "approval id does not match request",
-    };
-  }
-  if ((params.request.agentId ?? null) !== params.binding.agentId) {
-    return {
-      ok: false,
-      code: "APPROVAL_REQUEST_MISMATCH",
-      message: "approval id does not match request",
-    };
-  }
-  if ((params.request.sessionKey ?? null) !== params.binding.sessionKey) {
-    return {
-      ok: false,
-      code: "APPROVAL_REQUEST_MISMATCH",
-      message: "approval id does not match request",
-    };
-  }
-
-  const envMatch = matchSystemRunApprovalEnvBinding({
-    request: params.request,
+  const actualBinding = buildSystemRunApprovalBindingV1({
+    argv: params.argv,
+    cwd: params.binding.cwd,
+    agentId: params.binding.agentId,
+    sessionKey: params.binding.sessionKey,
     env: params.binding.env,
   });
-  if (!envMatch.ok) {
-    return envMatch;
+
+  const expectedBinding = params.request.systemRunBindingV1;
+  if (expectedBinding) {
+    return matchSystemRunApprovalBindingV1({
+      expected: expectedBinding,
+      actual: actualBinding.binding,
+      actualEnvKeys: actualBinding.envKeys,
+    });
   }
 
-  return { ok: true };
+  return matchLegacySystemRunApprovalBinding({
+    request: params.request,
+    cmdText: params.cmdText,
+    argv: params.argv,
+    binding: params.binding,
+  });
 }
