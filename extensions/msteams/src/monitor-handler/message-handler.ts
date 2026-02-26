@@ -533,30 +533,23 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
 
     log.info("dispatching to agent", { sessionKey: route.sessionKey });
     try {
-      try {
-        const { queuedFinal, counts } = await core.channel.reply.dispatchReplyFromConfig({
-          ctx: ctxPayload,
-          cfg,
-          dispatcher,
-          replyOptions,
-        });
+      const { queuedFinal, counts } = await core.channel.reply.withReplyDispatcher({
+        dispatcher,
+        onSettled: () => {
+          markDispatchIdle();
+        },
+        run: () =>
+          core.channel.reply.dispatchReplyFromConfig({
+            ctx: ctxPayload,
+            cfg,
+            dispatcher,
+            replyOptions,
+          }),
+      });
 
-        log.info("dispatch complete", { queuedFinal, counts });
+      log.info("dispatch complete", { queuedFinal, counts });
 
-        if (!queuedFinal) {
-          if (isRoomish && historyKey) {
-            clearHistoryEntriesIfEnabled({
-              historyMap: conversationHistories,
-              historyKey,
-              limit: historyLimit,
-            });
-          }
-          return;
-        }
-        const finalCount = counts.final;
-        logVerboseMessage(
-          `msteams: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${teamsTo}`,
-        );
+      if (!queuedFinal) {
         if (isRoomish && historyKey) {
           clearHistoryEntriesIfEnabled({
             historyMap: conversationHistories,
@@ -564,13 +557,18 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             limit: historyLimit,
           });
         }
-      } finally {
-        dispatcher.markComplete();
-        try {
-          await dispatcher.waitForIdle();
-        } finally {
-          markDispatchIdle();
-        }
+        return;
+      }
+      const finalCount = counts.final;
+      logVerboseMessage(
+        `msteams: delivered ${finalCount} reply${finalCount === 1 ? "" : "ies"} to ${teamsTo}`,
+      );
+      if (isRoomish && historyKey) {
+        clearHistoryEntriesIfEnabled({
+          historyMap: conversationHistories,
+          historyKey,
+          limit: historyLimit,
+        });
       }
     } catch (err) {
       log.error("dispatch failed", { error: String(err) });
