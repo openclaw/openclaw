@@ -1,6 +1,63 @@
 #!/usr/bin/env node
 
+import crypto from "node:crypto";
+import fs from "node:fs";
 import module from "node:module";
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
+
+function applyAnthropicThinkingPatch() {
+  const isDebug = process.env.OPENCLAW_DEBUG === "1";
+  const logDebug = (msg) => {
+    if (isDebug) {
+      console.error(msg);
+    }
+  };
+
+  try {
+    const modulePath = require.resolve("@mariozechner/pi-ai/dist/providers/anthropic.js");
+    const content = fs.readFileSync(modulePath, "utf8");
+
+    const brokenCodeRegex = /thinking:\s*sanitizeSurrogates\(\s*block\.thinking\s*\),/g;
+    const fixedCode = "thinking: block.thinking,";
+
+    if (brokenCodeRegex.test(content)) {
+      const updatedContent = content.replace(brokenCodeRegex, fixedCode);
+
+      const tempPath = `${modulePath}.patch.tmp-${process.pid}-${crypto.randomBytes(4).toString("hex")}`;
+
+      try {
+        fs.writeFileSync(tempPath, updatedContent, "utf8");
+        fs.renameSync(tempPath, modulePath);
+        logDebug("[OpenClaw Patch] Successfully applied Anthropic thinking blocks fix.");
+      } catch (writeError) {
+        try {
+          if (fs.existsSync(tempPath)) {
+            fs.unlinkSync(tempPath);
+          }
+        } catch {
+          // Ignore cleanup error
+        }
+        throw writeError;
+      }
+    }
+  } catch (e) {
+    // Added EROFS for container/serverless environments
+    if (["EACCES", "EPERM", "EROFS"].includes(e.code)) {
+      console.warn(
+        "⚠️ [OpenClaw Patch] Could not apply Anthropic API fix due to file system restrictions.",
+      );
+      console.warn(
+        "   To fix this safely, adjust your permissions or ensure the filesystem is writable.",
+      );
+    } else if (e.code !== "MODULE_NOT_FOUND") {
+      logDebug(`[OpenClaw Patch] Skipped patch: ${e.message}`);
+    }
+  }
+}
+
+applyAnthropicThinkingPatch();
 
 // https://nodejs.org/api/module.html#module-compile-cache
 if (module.enableCompileCache && !process.env.NODE_DISABLE_COMPILE_CACHE) {
