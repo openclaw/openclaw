@@ -60,6 +60,7 @@ import {
 } from "./heartbeat-wake.js";
 import type { OutboundSendDeps } from "./outbound/deliver.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";
+import { buildOutboundSessionContext } from "./outbound/session-context.js";
 import {
   resolveHeartbeatDeliveryTarget,
   resolveHeartbeatSenderContext,
@@ -696,6 +697,11 @@ export async function runHeartbeatOnce(opts: {
   }
 
   const heartbeatOkText = responsePrefix ? `${responsePrefix} ${HEARTBEAT_TOKEN}` : HEARTBEAT_TOKEN;
+  const outboundSession = buildOutboundSessionContext({
+    cfg,
+    agentId,
+    sessionKey,
+  });
   const canAttemptHeartbeatOk = Boolean(
     visibility.showOk && delivery.channel !== "none" && delivery.to,
   );
@@ -721,9 +727,8 @@ export async function runHeartbeatOnce(opts: {
       accountId: delivery.accountId,
       threadId: delivery.threadId,
       payloads: [{ text: heartbeatOkText }],
-      agentId,
+      session: outboundSession,
       deps: opts.deps,
-      sessionKey,
     });
     return true;
   };
@@ -915,7 +920,7 @@ export async function runHeartbeatOnce(opts: {
       channel: delivery.channel,
       to: delivery.to,
       accountId: deliveryAccountId,
-      agentId,
+      session: outboundSession,
       threadId: delivery.threadId,
       payloads: [
         ...reasoningPayloads,
@@ -929,7 +934,6 @@ export async function runHeartbeatOnce(opts: {
             ]),
       ],
       deps: opts.deps,
-      sessionKey,
     });
 
     // Record last delivered heartbeat payload for dedupe.
