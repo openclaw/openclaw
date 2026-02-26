@@ -45,7 +45,7 @@ async function waitForRunningRuntime(params: {
   let lastPid: number | undefined;
   while (Date.now() < deadline) {
     const runtime = await readLaunchAgentRuntime(params.env);
-    lastStatus = runtime.status;
+    lastStatus = runtime.status ?? "unknown";
     lastPid = runtime.pid;
     if (
       runtime.status === "running" &&
