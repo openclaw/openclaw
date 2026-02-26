@@ -6,7 +6,7 @@ import { detectMime, jsonResult } from "openclaw/plugin-sdk";
 import { reviewArticles } from "../services/ai-reviewer.js";
 import { alignArticles } from "../services/article-aligner.js";
 import { extractDocxArticles } from "../services/docx-reader.js";
-import { extractArabicPdfText } from "../services/pdf-extractor.js";
+import { extractArabicSourceWithStage0 } from "../services/stage0-source-extractor.js";
 import { writeIssuesReport } from "../services/xlsx-writer.js";
 import {
   resolveConfiguredWorkspace,
@@ -143,17 +143,22 @@ export function createStage1Tool(api: OpenClawPluginApi): AnyAgentTool {
         const pdfBuffer = await fs.readFile(resolvedSourcePdf);
         const docxBuffer = await fs.readFile(resolvedTranslationDocx);
 
-        const { pages, articleTexts } = await extractArabicPdfText(new Uint8Array(pdfBuffer));
-        if (pages.length > 100) {
+        const sourceExtract = await extractArabicSourceWithStage0({
+          config: api.config,
+          sourcePdfPath: resolvedSourcePdf,
+          pdfBuffer: new Uint8Array(pdfBuffer),
+        });
+
+        if (sourceExtract.pages.length > 100) {
           return jsonResult({
             warning:
               "Source PDF exceeds 100 pages. Confirm before proceeding to avoid long processing time.",
-            pageCount: pages.length,
+            pageCount: sourceExtract.pages.length,
           });
         }
 
         const englishArticles = await extractDocxArticles(docxBuffer);
-        const { aligned, glossary } = alignArticles(articleTexts, englishArticles);
+        const { aligned, glossary } = alignArticles(sourceExtract.articleTexts, englishArticles);
         if (aligned.length > 200) {
           return jsonResult({
             warning: "Aligned article count exceeds 200. Confirm before proceeding.",
@@ -180,6 +185,9 @@ export function createStage1Tool(api: OpenClawPluginApi): AnyAgentTool {
           issuesByCategory,
           issuesBySeverity,
           articleCount: aligned.length,
+          sourceExtractionMode: sourceExtract.mode,
+          sourceExtractionDiagnostics: sourceExtract.diagnostics,
+          sourceArticleCount: Object.keys(sourceExtract.articleTexts).length,
           durationMs,
         });
       } catch (err) {
