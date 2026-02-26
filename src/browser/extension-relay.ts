@@ -820,6 +820,11 @@ export async function ensureChromeExtensionRelayServer(opts: {
     extensionConnected,
     stop: async () => {
       relayRuntimeByPort.delete(port);
+      for (const [, pending] of pendingExtension) {
+        clearTimeout(pending.timer);
+        pending.reject(new Error("server stopping"));
+      }
+      pendingExtension.clear();
       try {
         extensionWs?.close(1001, "server stopping");
       } catch {
