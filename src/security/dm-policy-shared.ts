@@ -77,6 +77,41 @@ export function resolveDmGroupAccessDecision(params: {
   return { decision: "block", reason: `dmPolicy=${dmPolicy} (not allowlisted)` };
 }
 
+export function resolveDmGroupAccessWithLists(params: {
+  isGroup: boolean;
+  dmPolicy?: string | null;
+  groupPolicy?: string | null;
+  allowFrom?: Array<string | number> | null;
+  groupAllowFrom?: Array<string | number> | null;
+  storeAllowFrom?: Array<string | number> | null;
+  isSenderAllowed: (allowFrom: string[]) => boolean;
+}): {
+  decision: DmGroupAccessDecision;
+  reason: string;
+  effectiveAllowFrom: string[];
+  effectiveGroupAllowFrom: string[];
+} {
+  const { effectiveAllowFrom, effectiveGroupAllowFrom } = resolveEffectiveAllowFromLists({
+    allowFrom: params.allowFrom,
+    groupAllowFrom: params.groupAllowFrom,
+    storeAllowFrom: params.storeAllowFrom,
+    dmPolicy: params.dmPolicy,
+  });
+  const access = resolveDmGroupAccessDecision({
+    isGroup: params.isGroup,
+    dmPolicy: params.dmPolicy,
+    groupPolicy: params.groupPolicy,
+    effectiveAllowFrom,
+    effectiveGroupAllowFrom,
+    isSenderAllowed: params.isSenderAllowed,
+  });
+  return {
+    ...access,
+    effectiveAllowFrom,
+    effectiveGroupAllowFrom,
+  };
+}
+
 export async function resolveDmAllowState(params: {
   provider: ChannelId;
   allowFrom?: Array<string | number> | null;
