@@ -58,6 +58,9 @@ jobs:
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             version="${GITHUB_REF#refs/tags/v}"
             tags+=("${IMAGE}:${version}-amd64")
+            if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
+              tags+=("${IMAGE}:latest-amd64")
+            fi
           fi
           if [[ ${#tags[@]} -eq 0 ]]; then
             echo "::error::No amd64 tags resolved for ref ${GITHUB_REF}"
@@ -117,6 +120,9 @@ jobs:
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             version="${GITHUB_REF#refs/tags/v}"
             tags+=("${IMAGE}:${version}-arm64")
+            if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
+              tags+=("${IMAGE}:latest-arm64")
+            fi
           fi
           if [[ ${#tags[@]} -eq 0 ]]; then
             echo "::error::No arm64 tags resolved for ref ${GITHUB_REF}"
