@@ -38,6 +38,10 @@ const TURN_PREFIX_INSTRUCTIONS =
   " early progress, and any details needed to understand the retained suffix.";
 const MAX_TOOL_FAILURES = 8;
 const MAX_TOOL_FAILURE_CHARS = 240;
+const MAX_COMPACTION_SUMMARY_CHARS = 16_000;
+const MAX_FILE_OPS_SECTION_CHARS = 2_000;
+const MAX_FILE_OPS_LIST_CHARS = 900;
+const SUMMARY_TRUNCATED_MARKER = "\n\n[Compaction summary truncated to fit budget]";
 const DEFAULT_RECENT_TURNS_PRESERVE = 3;
 const DEFAULT_QUALITY_GUARD_MAX_RETRIES = 1;
 const MAX_RECENT_TURNS_PRESERVE = 12;
@@ -194,17 +198,83 @@ function computeFileLists(fileOps: FileOperations): {
 }
 
 function formatFileOperations(readFiles: string[], modifiedFiles: string[]): string {
-  const sections: string[] = [];
-  if (readFiles.length > 0) {
-    sections.push(`<read-files>\n${readFiles.join("\n")}\n</read-files>`);
+  function formatBoundedFileList(tag: string, files: string[], maxChars: number): string {
+    if (files.length === 0 || maxChars <= 0) {
+      return "";
+    }
+    const openTag = `<${tag}>\n`;
+    const closeTag = `\n</${tag}>`;
+    const lines: string[] = [];
+    let usedChars = openTag.length + closeTag.length;
+
+    for (let i = 0; i < files.length; i++) {
+      const line = `${files[i]}\n`;
+      const remaining = files.length - i - 1;
+      const overflowLine = remaining > 0 ? `...and ${remaining} more\n` : "";
+      const projected = usedChars + line.length + overflowLine.length;
+      if (projected > maxChars) {
+        const overflow = `...and ${files.length - i} more\n`;
+        if (usedChars + overflow.length <= maxChars) {
+          lines.push(overflow);
+        }
+        break;
+      }
+      lines.push(line);
+      usedChars += line.length;
+    }
+
+    return lines.length > 0 ? `${openTag}${lines.join("")}${closeTag}` : "";
   }
-  if (modifiedFiles.length > 0) {
-    sections.push(`<modified-files>\n${modifiedFiles.join("\n")}\n</modified-files>`);
+
+  const sections: string[] = [];
+  const readSection = formatBoundedFileList("read-files", readFiles, MAX_FILE_OPS_LIST_CHARS);
+  const modifiedSection = formatBoundedFileList(
+    "modified-files",
+    modifiedFiles,
+    MAX_FILE_OPS_LIST_CHARS,
+  );
+  if (readSection) {
+    sections.push(readSection);
+  }
+  if (modifiedSection) {
+    sections.push(modifiedSection);
   }
   if (sections.length === 0) {
     return "";
   }
-  return `\n\n${sections.join("\n\n")}`;
+  const combined = `\n\n${sections.join("\n\n")}`;
+  return capCompactionSummary(combined, MAX_FILE_OPS_SECTION_CHARS);
+}
+
+function capCompactionSummary(summary: string, maxChars = MAX_COMPACTION_SUMMARY_CHARS): string {
+  if (maxChars <= 0 || summary.length <= maxChars) {
+    return summary;
+  }
+  const marker = SUMMARY_TRUNCATED_MARKER;
+  const budget = Math.max(0, maxChars - marker.length);
+  if (budget <= 0) {
+    return marker.slice(0, maxChars);
+  }
+  return `${summary.slice(0, budget)}${marker}`;
+}
+
+function capCompactionSummaryPreservingSuffix(
+  summaryBody: string,
+  suffix: string,
+  maxChars = MAX_COMPACTION_SUMMARY_CHARS,
+): string {
+  if (!suffix) {
+    return capCompactionSummary(summaryBody, maxChars);
+  }
+  if (maxChars <= 0) {
+    return capCompactionSummary(`${summaryBody}${suffix}`, maxChars);
+  }
+  if (suffix.length >= maxChars) {
+    return suffix.slice(0, maxChars);
+  }
+  const bodyBudget = Math.max(0, maxChars - suffix.length);
+  const cappedBody = capCompactionSummary(summaryBody, bodyBudget);
+  return `${cappedBody}${suffix}`;
 }
 
 function extractMessageText(message: AgentMessage): string {
@@ -987,10 +1057,9 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
       summary = appendSummarySection(summary, fileOpsSummary);
 
       // Append workspace critical context (Session Startup + Red Lines from AGENTS.md)
+      // after capping the main summary body so the critical rules survive truncation.
       const workspaceContext = await readWorkspaceContextForSummary();
-      if (workspaceContext) {
-        summary = appendSummarySection(summary, workspaceContext);
-      }
+      summary = capCompactionSummaryPreservingSuffix(summary, workspaceContext);
 
       return {
         compaction: {
@@ -1023,10 +1092,17 @@ export const __testing = {
   resolveQualityGuardMaxRetries,
   extractOpaqueIdentifiers,
   auditSummaryQuality,
+  capCompactionSummary,
+  capCompactionSummaryPreservingSuffix,
+  formatFileOperations,
   computeAdaptiveChunkRatio,
   isOversizedForSummary,
   readWorkspaceContextForSummary,
   BASE_CHUNK_RATIO,
   MIN_CHUNK_RATIO,
   SAFETY_MARGIN,
+  MAX_COMPACTION_SUMMARY_CHARS,
+  MAX_FILE_OPS_SECTION_CHARS,
+  MAX_FILE_OPS_LIST_CHARS,
+  SUMMARY_TRUNCATED_MARKER,
 } as const;
