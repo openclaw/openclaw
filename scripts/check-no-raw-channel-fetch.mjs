@@ -40,7 +40,7 @@ const allowedRawFetchCallsites = new Set([
   "extensions/matrix/src/directory-live.ts:41",
   "extensions/matrix/src/matrix/client/config.ts:171",
   "extensions/mattermost/src/mattermost/client.ts:211",
-  "extensions/mattermost/src/mattermost/monitor.ts:234",
+  "extensions/mattermost/src/mattermost/monitor.ts:230",
   "extensions/mattermost/src/mattermost/probe.ts:27",
   "extensions/minimax-portal-auth/oauth.ts:71",
   "extensions/minimax-portal-auth/oauth.ts:112",
@@ -89,6 +89,9 @@ async function collectTypeScriptFiles(targetPath) {
   for (const entry of entries) {
     const entryPath = path.join(targetPath, entry.name);
     if (entry.isDirectory()) {
+      if (entry.name === "node_modules") {
+        continue;
+      }
       files.push(...(await collectTypeScriptFiles(entryPath)));
       continue;
     }
