@@ -295,6 +295,32 @@ describe("loadOpenClawPlugins", () => {
     expect(Object.keys(registry.gatewayHandlers)).toContain("allowed.ping");
   });
 
+  it("loads plugins when source and root differ only by realpath alias", () => {
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+    const plugin = writePlugin({
+      id: "alias-safe",
+      body: `export default { id: "alias-safe", register() {} };`,
+    });
+    const realRoot = fs.realpathSync(plugin.dir);
+    if (realRoot === plugin.dir) {
+      return;
+    }
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: plugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [plugin.file] },
+          allow: ["alias-safe"],
+        },
+      },
+    });
+
+    const loaded = registry.plugins.find((entry) => entry.id === "alias-safe");
+    expect(loaded?.status).toBe("loaded");
+  });
+
   it("denylist disables plugins even if allowed", () => {
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
     const plugin = writePlugin({
