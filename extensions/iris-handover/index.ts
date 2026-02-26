@@ -1,4 +1,4 @@
-import fs from "node:fs";
+﻿import fs from "node:fs";
 import path from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
@@ -17,6 +17,9 @@ type PluginConfig = {
   contactsFile?: string;
   soulFile?: string;
   outputFile?: string;
+  supabaseUrl?: string;
+  supabaseServiceKey?: string;
+  openaiApiKey?: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -50,6 +53,96 @@ function readFileSafe(filePath: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * Generate embedding via OpenAI text-embedding-3-small and insert handover + vector into Supabase.
+ */
+async function supabaseInsertHandoverWithEmbedding(
+  config: PluginConfig,
+  row: {
+    session_key: string;
+    agent_id: string;
+    content: string;
+    char_count: number;
+    token_count: number | null;
+    model: string;
+  },
+): Promise<void> {
+  if (!config.supabaseUrl || !config.supabaseServiceKey) return;
+
+  let embedding: number[] | null = null;
+  const openaiKey = config.openaiApiKey ?? process.env.OPENAI_API_KEY;
+
+  if (openaiKey) {
+    try {
+      const embRes = await fetch("https://api.openai.com/v1/embeddings", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${openaiKey}`,
+        },
+        body: JSON.stringify({
+          model: "text-embedding-3-small",
+          input: row.content.slice(0, 8000),
+        }),
+      });
+      if (embRes.ok) {
+        const embJson = (await embRes.json()) as { data: { embedding: number[] }[] };
+        embedding = embJson.data?.[0]?.embedding ?? null;
+      } else {
+        console.warn(`[iris-handover] Embedding API error ${embRes.status}`);
+      }
+    } catch (embErr) {
+      console.warn(
+        `[iris-handover] Embedding failed: ${embErr instanceof Error ? embErr.message : String(embErr)}`,
+      );
+    }
+  }
+
+  const payload: Record<string, unknown> = { ...row };
+  if (embedding) {
+    payload.embedding = JSON.stringify(embedding);
+  }
+
+  const url = `${config.supabaseUrl}/rest/v1/handovers`;
+  const res = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${config.supabaseServiceKey}`,
+      apikey: config.supabaseServiceKey,
+      Prefer: "return=minimal",
+    },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`Supabase handover insert error ${res.status}: ${body}`);
+  }
+}
+
+/**
+ * Save a timestamped copy to memory/handovers/ for local archive.
+ */
+function saveHandoverArchive(workspace: string, handoverText: string, date: Date): void {
+  const tz = "America/Manaus";
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "00";
+  const stamp = `${get("year")}-${get("month")}-${get("day")}_${get("hour")}h${get("minute")}`;
+  const dir = path.resolve(workspace, "memory", "handovers");
+  fs.mkdirSync(dir, { recursive: true });
+  const archivePath = path.join(dir, `${stamp}.md`);
+  fs.writeFileSync(archivePath, handoverText, "utf-8");
+  console.log(`[iris-handover] Arquivo local: ${archivePath}`);
 }
 
 function formatDateStampInTimeZone(date: Date, timeZone: string): string {
@@ -345,6 +438,26 @@ export default function register(api: OpenClawPluginApi) {
       console.log(
         `[iris-handover] Salvo em ${outputFile} (${handoverText.length} chars, ${response.usage.output_tokens} tokens)`,
       );
+
+      // Save timestamped archive locally
+      saveHandoverArchive(workspace, handoverText, now);
+
+      // Save to Supabase with embedding (non-fatal)
+      try {
+        await supabaseInsertHandoverWithEmbedding(config, {
+          session_key: ctx.sessionKey ?? "unknown",
+          agent_id: ctx.agentId ?? "main",
+          content: handoverText,
+          char_count: handoverText.length,
+          token_count: response.usage.output_tokens ?? null,
+          model: config.model ?? "claude-sonnet-4-20250514",
+        });
+        console.log("[iris-handover] Handover salvo no Supabase com embedding.");
+      } catch (supaErr) {
+        console.warn(
+          `[iris-handover] Falhou ao salvar no Supabase (handover local OK): ${supaErr instanceof Error ? supaErr.message : String(supaErr)}`,
+        );
+      }
     } catch (err) {
       // Silent fallback — must not crash the compaction
       console.warn(

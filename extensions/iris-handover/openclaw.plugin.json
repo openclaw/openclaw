@@ -41,6 +41,18 @@
       "outputFile": {
         "type": "string",
         "description": "Caminho relativo ao workspace para salvar o handover. Default: memory/handover.md"
+      },
+      "supabaseUrl": {
+        "type": "string",
+        "description": "Supabase project URL para persistir handovers. Opcional."
+      },
+      "supabaseServiceKey": {
+        "type": "string",
+        "description": "Supabase service_role key. Opcional."
+      },
+      "openaiApiKey": {
+        "type": "string",
+        "description": "OpenAI API key para embeddings (text-embedding-3-small). Opcional se OPENAI_API_KEY estiver no env."
       }
     },
     "uiHints": {
@@ -79,6 +91,18 @@
       "outputFile": {
         "label": "Output Handover",
         "placeholder": "memory/handover.md"
+      },
+      "supabaseUrl": {
+        "label": "Supabase URL",
+        "placeholder": "https://xxx.supabase.co"
+      },
+      "supabaseServiceKey": {
+        "label": "Supabase Service Key",
+        "sensitive": true
+      },
+      "openaiApiKey": {
+        "label": "OpenAI API Key (embeddings)",
+        "sensitive": true
       }
     }
   }
