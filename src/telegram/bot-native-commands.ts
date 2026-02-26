@@ -170,7 +170,6 @@ async function resolveTelegramCommandAuth(params: {
   const groupAllowContext = await resolveTelegramGroupAllowFromContext({
     chatId,
     accountId,
-    dmPolicy: telegramCfg.dmPolicy ?? "pairing",
     isForum,
     messageThreadId,
     groupAllowFrom,
