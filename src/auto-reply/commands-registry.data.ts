@@ -6,7 +6,7 @@ import type {
   CommandCategory,
   CommandScope,
 } from "./commands-registry.types.js";
-import { listThinkingLevels } from "./thinking.js";
+import { listEffortLevels, listThinkingLevels } from "./thinking.js";
 
 type DefineChatCommandInput = {
   key: string;
@@ -582,6 +582,22 @@ function buildChatCommands(): ChatCommandDefinition[] {
       argsMenu: "auto",
     }),
     defineChatCommand({
+      key: "effort",
+      nativeName: "effort",
+      description: "Set effort level (independent of thinking).",
+      textAlias: "/effort",
+      category: "options",
+      args: [
+        {
+          name: "level",
+          description: "off, low, medium, high, max",
+          type: "string",
+          choices: ({ provider, model }) => listEffortLevels(provider, model),
+        },
+      ],
+      argsMenu: "auto",
+    }),
+    defineChatCommand({
       key: "verbose",
       nativeName: "verbose",
       description: "Toggle verbose mode.",
@@ -741,6 +757,7 @@ function buildChatCommands(): ChatCommandDefinition[] {
 
   registerAlias(commands, "whoami", "/id");
   registerAlias(commands, "think", "/thinking", "/t");
+  registerAlias(commands, "effort", "/e");
   registerAlias(commands, "verbose", "/v");
   registerAlias(commands, "reasoning", "/reason");
   registerAlias(commands, "elevated", "/elev");

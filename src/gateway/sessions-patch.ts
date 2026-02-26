@@ -12,6 +12,7 @@ import {
   formatXHighModelHint,
   normalizeElevatedLevel,
   normalizeReasoningLevel,
+  normalizeEffortLevel,
   normalizeThinkLevel,
   normalizeUsageDisplay,
   supportsXHighThinking,
@@ -165,6 +166,19 @@ export async function applySessionsPatchToStore(params: {
         );
       }
       next.thinkingLevel = normalized;
+    }
+  }
+
+  if ("effortLevel" in patch) {
+    const raw = (patch as Record<string, unknown>).effortLevel as string | null | undefined;
+    if (raw === null) {
+      delete next.effortLevel;
+    } else if (raw !== undefined) {
+      const normalized = normalizeEffortLevel(raw);
+      if (!normalized) {
+        return invalid(`invalid effortLevel (use off|low|medium|high|max)`);
+      }
+      next.effortLevel = normalized;
     }
   }
 

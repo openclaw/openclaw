@@ -2,8 +2,15 @@ import type { OpenClawConfig } from "../../config/config.js";
 import type { ExecAsk, ExecHost, ExecSecurity } from "../../infra/exec-approvals.js";
 import { extractModelDirective } from "../model.js";
 import type { MsgContext } from "../templating.js";
-import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "./directives.js";
+import type {
+  EffortLevel,
+  ElevatedLevel,
+  ReasoningLevel,
+  ThinkLevel,
+  VerboseLevel,
+} from "./directives.js";
 import {
+  extractEffortDirective,
   extractElevatedDirective,
   extractExecDirective,
   extractReasoningDirective,
@@ -20,6 +27,9 @@ export type InlineDirectives = {
   hasThinkDirective: boolean;
   thinkLevel?: ThinkLevel;
   rawThinkLevel?: string;
+  hasEffortDirective: boolean;
+  effortLevel?: EffortLevel;
+  rawEffortLevel?: string;
   hasVerboseDirective: boolean;
   verboseLevel?: VerboseLevel;
   rawVerboseLevel?: string;
@@ -75,11 +85,17 @@ export function parseInlineDirectives(
     hasDirective: hasThinkDirective,
   } = extractThinkDirective(body);
   const {
+    cleaned: effortCleaned,
+    effortLevel,
+    rawLevel: rawEffortLevel,
+    hasDirective: hasEffortDirective,
+  } = extractEffortDirective(thinkCleaned);
+  const {
     cleaned: verboseCleaned,
     verboseLevel,
     rawLevel: rawVerboseLevel,
     hasDirective: hasVerboseDirective,
-  } = extractVerboseDirective(thinkCleaned);
+  } = extractVerboseDirective(effortCleaned);
   const {
     cleaned: reasoningCleaned,
     reasoningLevel,
@@ -148,6 +164,9 @@ export function parseInlineDirectives(
     hasThinkDirective,
     thinkLevel,
     rawThinkLevel,
+    hasEffortDirective,
+    effortLevel,
+    rawEffortLevel,
     hasVerboseDirective,
     verboseLevel,
     rawVerboseLevel,
@@ -200,6 +219,7 @@ export function isDirectiveOnly(params: {
   const { directives, cleanedBody, ctx, cfg, agentId, isGroup } = params;
   if (
     !directives.hasThinkDirective &&
+    !directives.hasEffortDirective &&
     !directives.hasVerboseDirective &&
     !directives.hasReasoningDirective &&
     !directives.hasElevatedDirective &&

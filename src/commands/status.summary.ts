@@ -31,6 +31,10 @@ const buildFlags = (entry?: SessionEntry): string[] => {
   if (typeof think === "string" && think.length > 0) {
     flags.push(`think:${think}`);
   }
+  const effort = entry?.effortLevel;
+  if (typeof effort === "string" && effort.length > 0 && effort !== "off") {
+    flags.push(`effort:${effort}`);
+  }
   const verbose = entry?.verboseLevel;
   if (typeof verbose === "string" && verbose.length > 0) {
     flags.push(`verbose:${verbose}`);

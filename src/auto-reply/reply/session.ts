@@ -232,6 +232,7 @@ export async function initSessionState(params: {
   let resetTriggered = false;
 
   let persistedThinking: string | undefined;
+  let persistedEffort: string | undefined;
   let persistedVerbose: string | undefined;
   let persistedReasoning: string | undefined;
   let persistedTtsAuto: TtsAutoMode | undefined;
@@ -364,6 +365,7 @@ export async function initSessionState(params: {
     systemSent = entry.systemSent ?? false;
     abortedLastRun = entry.abortedLastRun ?? false;
     persistedThinking = entry.thinkingLevel;
+    persistedEffort = entry.effortLevel;
     persistedVerbose = entry.verboseLevel;
     persistedReasoning = entry.reasoningLevel;
     persistedTtsAuto = entry.ttsAuto;
@@ -380,6 +382,7 @@ export async function initSessionState(params: {
     // so the user doesn't have to re-enable them every time.
     if (resetTriggered && entry) {
       persistedThinking = entry.thinkingLevel;
+      persistedEffort = entry.effortLevel;
       persistedVerbose = entry.verboseLevel;
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
@@ -430,6 +433,7 @@ export async function initSessionState(params: {
     abortedLastRun,
     // Persist previously stored thinking/verbose levels when present.
     thinkingLevel: persistedThinking ?? baseEntry?.thinkingLevel,
+    effortLevel: persistedEffort ?? baseEntry?.effortLevel,
     verboseLevel: persistedVerbose ?? baseEntry?.verboseLevel,
     reasoningLevel: persistedReasoning ?? baseEntry?.reasoningLevel,
     ttsAuto: persistedTtsAuto ?? baseEntry?.ttsAuto,
