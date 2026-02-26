@@ -11,7 +11,7 @@ import {
   validateExecApprovalRequestParams,
   validateExecApprovalResolveParams,
 } from "../protocol/index.js";
-import { buildSystemRunApprovalEnvBinding } from "../system-run-approval-env-binding.js";
+import { buildSystemRunApprovalBindingV1 } from "../system-run-approval-binding.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 export function createExecApprovalHandlers(
@@ -70,7 +70,16 @@ export function createExecApprovalHandlers(
       const commandArgv = Array.isArray(p.commandArgv)
         ? p.commandArgv.map((entry) => String(entry))
         : undefined;
-      const envBinding = buildSystemRunApprovalEnvBinding(p.env);
+      const systemRunBindingV1 =
+        host === "node" && Array.isArray(commandArgv) && commandArgv.length > 0
+          ? buildSystemRunApprovalBindingV1({
+              argv: commandArgv,
+              cwd: p.cwd,
+              agentId: p.agentId,
+              sessionKey: p.sessionKey,
+              env: p.env,
+            })
+          : null;
       if (host === "node" && !nodeId) {
         respond(
           false,
@@ -90,8 +99,8 @@ export function createExecApprovalHandlers(
       const request = {
         command: p.command,
         commandArgv,
-        envHash: envBinding.envHash,
-        envKeys: envBinding.envKeys.length > 0 ? envBinding.envKeys : undefined,
+        envKeys: systemRunBindingV1?.envKeys?.length ? systemRunBindingV1.envKeys : undefined,
+        systemRunBindingV1: systemRunBindingV1?.binding ?? null,
         cwd: p.cwd ?? null,
         nodeId: host === "node" ? nodeId : null,
         host: host || null,
