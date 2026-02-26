@@ -29,6 +29,7 @@ import {
   ReplyToModeSchema,
   RetryConfigSchema,
   TtsConfigSchema,
+  requireAllowlistAllowFrom,
   requireOpenAllowFrom,
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
@@ -227,6 +228,14 @@ export const TelegramAccountSchema = TelegramAccountSchemaBase.superRefine((valu
     message:
       'channels.telegram.dmPolicy="open" requires channels.telegram.allowFrom to include "*"',
   });
+  requireAllowlistAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message:
+      'channels.telegram.dmPolicy="allowlist" requires channels.telegram.allowFrom to contain at least one sender ID',
+  });
   validateTelegramCustomCommands(value, ctx);
 });
 
@@ -241,6 +250,14 @@ export const TelegramConfigSchema = TelegramAccountSchemaBase.extend({
     path: ["allowFrom"],
     message:
       'channels.telegram.dmPolicy="open" requires channels.telegram.allowFrom to include "*"',
+  });
+  requireAllowlistAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message:
+      'channels.telegram.dmPolicy="allowlist" requires channels.telegram.allowFrom to contain at least one sender ID',
   });
   validateTelegramCustomCommands(value, ctx);
 
@@ -508,6 +525,14 @@ export const DiscordAccountSchema = z
       message:
         'channels.discord.dmPolicy="open" requires channels.discord.allowFrom (or channels.discord.dm.allowFrom) to include "*"',
     });
+    requireAllowlistAllowFrom({
+      policy: dmPolicy,
+      allowFrom,
+      ctx,
+      path: [...allowFromPath],
+      message:
+        'channels.discord.dmPolicy="allowlist" requires channels.discord.allowFrom (or channels.discord.dm.allowFrom) to contain at least one sender ID',
+    });
   });
 
 export const DiscordConfigSchema = DiscordAccountSchema.extend({
@@ -529,6 +554,14 @@ export const GoogleChatDmSchema = z
       path: ["allowFrom"],
       message:
         'channels.googlechat.dm.policy="open" requires channels.googlechat.dm.allowFrom to include "*"',
+    });
+    requireAllowlistAllowFrom({
+      policy: value.policy,
+      allowFrom: value.allowFrom,
+      ctx,
+      path: ["allowFrom"],
+      message:
+        'channels.googlechat.dm.policy="allowlist" requires channels.googlechat.dm.allowFrom to contain at least one sender ID',
     });
   });
 
@@ -718,6 +751,14 @@ export const SlackAccountSchema = z
       message:
         'channels.slack.dmPolicy="open" requires channels.slack.allowFrom (or channels.slack.dm.allowFrom) to include "*"',
     });
+    requireAllowlistAllowFrom({
+      policy: dmPolicy,
+      allowFrom,
+      ctx,
+      path: [...allowFromPath],
+      message:
+        'channels.slack.dmPolicy="allowlist" requires channels.slack.allowFrom (or channels.slack.dm.allowFrom) to contain at least one sender ID',
+    });
   });
 
 export const SlackConfigSchema = SlackAccountSchema.safeExtend({
@@ -814,6 +855,14 @@ export const SignalAccountSchema = SignalAccountSchemaBase.superRefine((value, c
     path: ["allowFrom"],
     message: 'channels.signal.dmPolicy="open" requires channels.signal.allowFrom to include "*"',
   });
+  requireAllowlistAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message:
+      'channels.signal.dmPolicy="allowlist" requires channels.signal.allowFrom to contain at least one sender ID',
+  });
 });
 
 export const SignalConfigSchema = SignalAccountSchemaBase.extend({
@@ -825,6 +874,14 @@ export const SignalConfigSchema = SignalAccountSchemaBase.extend({
     ctx,
     path: ["allowFrom"],
     message: 'channels.signal.dmPolicy="open" requires channels.signal.allowFrom to include "*"',
+  });
+  requireAllowlistAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message:
+      'channels.signal.dmPolicy="allowlist" requires channels.signal.allowFrom to contain at least one sender ID',
   });
 });
 
@@ -897,6 +954,14 @@ function refineIrcAllowFromAndNickserv(value: IrcBaseConfig, ctx: z.RefinementCt
     ctx,
     path: ["allowFrom"],
     message: 'channels.irc.dmPolicy="open" requires channels.irc.allowFrom to include "*"',
+  });
+  requireAllowlistAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message:
+      'channels.irc.dmPolicy="allowlist" requires channels.irc.allowFrom to contain at least one sender ID',
   });
   if (value.nickserv?.register && !value.nickserv.registerEmail?.trim()) {
     ctx.addIssue({
@@ -979,6 +1044,14 @@ export const IMessageAccountSchema = IMessageAccountSchemaBase.superRefine((valu
     message:
       'channels.imessage.dmPolicy="open" requires channels.imessage.allowFrom to include "*"',
   });
+  requireAllowlistAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message:
+      'channels.imessage.dmPolicy="allowlist" requires channels.imessage.allowFrom to contain at least one sender ID',
+  });
 });
 
 export const IMessageConfigSchema = IMessageAccountSchemaBase.extend({
@@ -991,6 +1064,14 @@ export const IMessageConfigSchema = IMessageAccountSchemaBase.extend({
     path: ["allowFrom"],
     message:
       'channels.imessage.dmPolicy="open" requires channels.imessage.allowFrom to include "*"',
+  });
+  requireAllowlistAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message:
+      'channels.imessage.dmPolicy="allowlist" requires channels.imessage.allowFrom to contain at least one sender ID',
   });
 });
 
@@ -1059,6 +1140,14 @@ export const BlueBubblesAccountSchema = BlueBubblesAccountSchemaBase.superRefine
     path: ["allowFrom"],
     message: 'channels.bluebubbles.accounts.*.dmPolicy="open" requires allowFrom to include "*"',
   });
+  requireAllowlistAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message:
+      'channels.bluebubbles.accounts.*.dmPolicy="allowlist" requires allowFrom to contain at least one sender ID',
+  });
 });
 
 export const BlueBubblesConfigSchema = BlueBubblesAccountSchemaBase.extend({
@@ -1072,6 +1161,14 @@ export const BlueBubblesConfigSchema = BlueBubblesAccountSchemaBase.extend({
     path: ["allowFrom"],
     message:
       'channels.bluebubbles.dmPolicy="open" requires channels.bluebubbles.allowFrom to include "*"',
+  });
+  requireAllowlistAllowFrom({
+    policy: value.dmPolicy,
+    allowFrom: value.allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message:
+      'channels.bluebubbles.dmPolicy="allowlist" requires channels.bluebubbles.allowFrom to contain at least one sender ID',
   });
 });
 
@@ -1143,5 +1240,13 @@ export const MSTeamsConfigSchema = z
       path: ["allowFrom"],
       message:
         'channels.msteams.dmPolicy="open" requires channels.msteams.allowFrom to include "*"',
+    });
+    requireAllowlistAllowFrom({
+      policy: value.dmPolicy,
+      allowFrom: value.allowFrom,
+      ctx,
+      path: ["allowFrom"],
+      message:
+        'channels.msteams.dmPolicy="allowlist" requires channels.msteams.allowFrom to contain at least one sender ID',
     });
   });
