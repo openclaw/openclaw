@@ -524,13 +524,23 @@ export async function spawnSubagentDirect(
     }
   }
 
+  // Check if we're in a cron isolated session - don't add "do not poll" note
+  // because cron sessions end immediately after the agent produces a response,
+  // so the agent needs to wait for subagent results to keep the turn alive.
+  const isCronSession = ctx.agentSessionKey?.includes(":cron:");
+  const note =
+    spawnMode === "session"
+      ? SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE
+      : isCronSession
+        ? undefined
+        : SUBAGENT_SPAWN_ACCEPTED_NOTE;
+
   return {
     status: "accepted",
     childSessionKey,
     runId: childRunId,
     mode: spawnMode,
-    note:
-      spawnMode === "session" ? SUBAGENT_SPAWN_SESSION_ACCEPTED_NOTE : SUBAGENT_SPAWN_ACCEPTED_NOTE,
+    note,
     modelApplied: resolvedModel ? modelApplied : undefined,
   };
 }
