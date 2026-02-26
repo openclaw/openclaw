@@ -14,14 +14,13 @@ export async function resolveSlackEffectiveAllowFrom(
   options?: { includePairingStore?: boolean },
 ) {
   const includePairingStore = options?.includePairingStore === true;
-  const storeAllowFrom =
-    includePairingStore
-      ? await readStoreAllowFromForDmPolicy({
-          provider: "slack",
-          dmPolicy: ctx.dmPolicy,
-          readStore: (provider) => readChannelAllowFromStore(provider),
-        })
-      : [];
+  const storeAllowFrom = includePairingStore
+    ? await readStoreAllowFromForDmPolicy({
+        provider: "slack",
+        dmPolicy: ctx.dmPolicy,
+        readStore: (provider) => readChannelAllowFromStore(provider),
+      })
+    : [];
   const allowFrom = normalizeAllowList([...ctx.allowFrom, ...storeAllowFrom]);
   const allowFromLower = normalizeAllowListLower(allowFrom);
   return { allowFrom, allowFromLower };
