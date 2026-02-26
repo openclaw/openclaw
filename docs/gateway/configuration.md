@@ -239,7 +239,8 @@ When validation fails:
     ```
 
     - `every`: duration string (`30m`, `2h`). Set `0m` to disable.
-    - `target`: `last` | `whatsapp` | `telegram` | `discord` | `none` (DM-style `user:<id>` heartbeat delivery is blocked)
+    - `target`: `last` | `whatsapp` | `telegram` | `discord` | `none`
+    - `directPolicy`: `allow` (default) or `block` for DM-style heartbeat targets
     - See [Heartbeat](/gateway/heartbeat) for the full guide.
 
   </Accordion>
