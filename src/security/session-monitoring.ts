@@ -168,6 +168,20 @@ export class SessionRiskMonitor {
     });
 
     // Check threshold — warn alert fires once; critical auto-isolates independently
+    //
+    // Design note (CQ-7): When a session's score escalates gradually from
+    // threshold → threshold*1.5 (critical), the warn alert fires at the initial
+    // crossing (setting alertedAt), but the subsequent auto-isolation in the else-if
+    // branch does NOT re-emit a full risk-factor summary event to the event bus.
+    // `isolateSession()` emits a "session_anomaly/critical" event with the score,
+    // but WITHOUT the individual risk-factor list that `emitHighRiskAlert()` includes.
+    // Observers that missed the initial warn event cannot reconstruct why the session
+    // was isolated without querying the session profile directly.
+    //
+    // This is a known gap: the fix would be to call `emitHighRiskAlert()` again when
+    // crossing the critical threshold, gated on `totalScore >= criticalThreshold &&
+    // session.alertedAt !== null` (i.e. initial warn was already sent). Deferred to
+    // avoid silent behaviour change in alerting subscribers.
     const criticalThreshold = this.config.threshold * CRITICAL_MULTIPLIER;
     if (session.totalScore >= this.config.threshold && !session.alertedAt) {
       this.emitHighRiskAlert(session);

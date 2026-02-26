@@ -169,6 +169,43 @@ This prevents context leakage between different users.
 
 ---
 
+## Dangerous Config Flags
+
+### `allowUnsafeExternalContent` — injection scanner bypass
+
+Several hook types (Gmail hooks, custom hook mappings) support an
+`allowUnsafeExternalContent: true` option. **Setting this flag disables the
+injection scanner hard-stop for that hook source.** Incoming content from that
+source will no longer be blocked for injection attempts; the agent processes
+the content as if it were fully trusted.
+
+**This is a significant security regression.** A malicious email or external
+webhook payload could use prompt-injection techniques to manipulate the
+agent's tool calls, exfiltrate data, or escalate privileges.
+
+Only set this flag when:
+
+1. The injection scanner produces too many false positives for a specific
+   trusted internal source (e.g. an internal monitoring webhook with
+   structured JSON payloads).
+2. You have an independent security control at the source (e.g. the hook
+   source is an authenticated internal service with no user-controlled input).
+
+```yaml
+# openclaw.yaml — use with care
+hooks:
+  gmail:
+    allowUnsafeExternalContent: false # default — keep this
+  mappings:
+    - name: "internal-monitor"
+      allowUnsafeExternalContent: false # default — keep this
+```
+
+The `openclaw security audit` command reports any hook with this flag enabled
+as a security finding. The doctor health check also surfaces it.
+
+---
+
 ## Container Sandbox
 
 ### Keep sandboxing enabled
