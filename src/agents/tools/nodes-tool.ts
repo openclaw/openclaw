@@ -186,7 +186,7 @@ export function createNodesTool(options?: {
             const node = readStringParam(params, "node", { required: true });
             const nodeId = await resolveNodeId(gatewayOpts, node);
             const facingRaw =
-              typeof params.facing === "string" ? params.facing.toLowerCase() : "both";
+              typeof params.facing === "string" ? params.facing.toLowerCase() : "front";
             const facings: CameraFacing[] =
               facingRaw === "both"
                 ? ["front", "back"]
@@ -198,11 +198,11 @@ export function createNodesTool(options?: {
             const maxWidth =
               typeof params.maxWidth === "number" && Number.isFinite(params.maxWidth)
                 ? params.maxWidth
-                : undefined;
+                : 1600;
             const quality =
               typeof params.quality === "number" && Number.isFinite(params.quality)
                 ? params.quality
-                : undefined;
+                : 0.95;
             const delayMs =
               typeof params.delayMs === "number" && Number.isFinite(params.delayMs)
                 ? params.delayMs
