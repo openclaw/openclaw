@@ -20,8 +20,8 @@ const {
 } = vi.hoisted(() => {
   const createdBindingManagers: Array<{ stop: ReturnType<typeof vi.fn> }> = [];
   return {
-    clientFetchUserMock: vi.fn(async () => ({ id: "bot-1" })),
-    clientGetPluginMock: vi.fn(() => undefined),
+    clientFetchUserMock: vi.fn(async (_target: string) => ({ id: "bot-1" })),
+    clientGetPluginMock: vi.fn<(_name: string) => unknown>(() => undefined),
     createDiscordNativeCommandMock: vi.fn(() => ({ name: "mock-command" })),
     createNoopThreadBindingManagerMock: vi.fn(() => {
       const manager = { stop: vi.fn() };
