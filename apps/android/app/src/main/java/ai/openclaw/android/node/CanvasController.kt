@@ -2,6 +2,7 @@ package ai.openclaw.android.node
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.net.Uri
 import android.os.Looper
 import android.util.Log
 import android.webkit.WebView
@@ -65,8 +66,8 @@ class CanvasController {
   }
 
   fun navigate(url: String) {
-    val trimmed = url.trim()
-    this.url = if (trimmed.isBlank() || trimmed == "/") null else trimmed
+    val normalized = normalizeCanvasUrl(url)
+    this.url = normalized
     _currentUrl.value = this.url
     reload()
   }
@@ -88,6 +89,32 @@ class CanvasController {
 
   fun onPageFinished() {
     applyDebugStatus()
+  }
+
+  private fun normalizeCanvasUrl(raw: String): String? {
+    val trimmed = raw.trim()
+    if (trimmed.isBlank() || trimmed == "/") return null
+
+    // Internal session targets (for example agent:main:main) are not browser URLs.
+    // Treat them as "show canvas" without attempting WebView navigation.
+    if (trimmed.startsWith("agent:") || trimmed.startsWith("session:")) {
+      if (BuildConfig.DEBUG) {
+        Log.w("OpenClawCanvas", "ignore internal canvas target: $trimmed")
+      }
+      return null
+    }
+
+    val parsed = runCatching { Uri.parse(trimmed) }.getOrNull() ?: return null
+    val scheme = parsed.scheme?.lowercase().orEmpty()
+    return when (scheme) {
+      "http", "https", "file", "about", "data" -> trimmed
+      else -> {
+        if (BuildConfig.DEBUG) {
+          Log.w("OpenClawCanvas", "ignore unsupported canvas URL scheme: $trimmed")
+        }
+        null
+      }
+    }
   }
 
   private inline fun withWebViewOnMain(crossinline block: (WebView) -> Unit) {

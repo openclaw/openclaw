@@ -719,12 +719,21 @@ class NodeRuntime(context: Context) {
 
   fun connect(endpoint: GatewayEndpoint) {
     val tls = connectionManager.resolveTlsParams(endpoint)
-    if (tls?.required == true && tls.expectedFingerprint.isNullOrBlank()) {
-      // First-time TLS: capture fingerprint, ask user to verify out-of-band, then store and connect.
+    if (tls?.required == true && tls.expectedFingerprint.isNullOrBlank() && !tls.allowTOFU) {
+      // First-time TLS (strict mode): capture fingerprint, ask user to verify out-of-band, then store and connect.
       _statusText.value = "Verify gateway TLS fingerprint…"
       scope.launch {
         val fp = probeGatewayTlsFingerprint(endpoint.host, endpoint.port) ?: run {
-          _statusText.value = "Failed: can't read TLS fingerprint"
+          val host = endpoint.host.trim()
+          val schemeHint = if (endpoint.port == 443) "https" else "wss"
+          val endpointHint = "$schemeHint://$host:${endpoint.port}"
+          val hint =
+            if (looksLikeIpLiteral(host)) {
+              "Tip: use your tailnet DNS hostname (not raw IP) for TLS, then try again."
+            } else {
+              "Check host/port and TLS mode, then try again."
+            }
+          _statusText.value = "Failed: can't read TLS fingerprint for $endpointHint. $hint"
           return@launch
         }
         _pendingGatewayTrust.value = GatewayTrustPrompt(endpoint = endpoint, fingerprintSha256 = fp)
@@ -759,6 +768,14 @@ class NodeRuntime(context: Context) {
       ContextCompat.checkSelfPermission(appContext, Manifest.permission.RECORD_AUDIO) ==
         PackageManager.PERMISSION_GRANTED
       )
+  }
+
+  private fun looksLikeIpLiteral(host: String): Boolean {
+    val trimmed = host.trim()
+    if (trimmed.isEmpty()) return false
+    val ipv4 = Regex("""^\d{1,3}(\.\d{1,3}){3}$""")
+    val ipv6 = Regex("""^[0-9a-fA-F:]+$""")
+    return ipv4.matches(trimmed) || (trimmed.contains(":") && ipv6.matches(trimmed))
   }
 
   fun connectManual() {
