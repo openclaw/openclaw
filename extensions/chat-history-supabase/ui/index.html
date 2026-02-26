@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Conversas — Iris</title>
+  <title>Conversas â€” Iris</title>
   <!-- __CONVERSATIONS_CONFIG__ -->
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   <style>
@@ -33,7 +33,7 @@
       height: 100%;
     }
 
-    /* ── Sidebar ── */
+    /* â”€â”€ Sidebar â”€â”€ */
     #sidebar {
       width: var(--sidebar-w);
       min-width: var(--sidebar-w);
@@ -130,7 +130,7 @@
       text-align: center;
     }
 
-    /* ── Main chat ── */
+    /* â”€â”€ Main chat â”€â”€ */
     #chat-area {
       flex: 1;
       display: flex;
@@ -367,7 +367,7 @@
     <aside id="sidebar">
       <div id="sidebar-header">
         <h2>Conversas</h2>
-        <input id="search" type="search" placeholder="Buscar por nome ou mensagem…" />
+        <input id="search" type="search" placeholder="Buscar por nome ou mensagemâ€¦" />
       </div>
       <div id="contacts"></div>
     </aside>
@@ -388,24 +388,24 @@
     const cfg = window.__CONVERSATIONS_CONFIG__;
     if (!cfg || !cfg.supabaseUrl || !cfg.supabaseKey) {
       document.getElementById('empty-state').innerHTML =
-        '<div class="error-banner">Plugin não configurado. Adicione supabaseUrl e supabaseServiceKey no openclaw.json.</div>';
+        '<div class="error-banner">Plugin nÃ£o configurado. Adicione supabaseUrl e supabaseServiceKey no openclaw.json.</div>';
       return;
     }
 
     const supabase = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseKey);
 
-    // ── State ──
+    // â”€â”€ State â”€â”€
     let conversations = []; // { chatId, name, lastBody, lastTime, unread, active }
     let selectedChatId = null;
-    let allMessages = {}; // chatId → Message[]
+    let allMessages = {}; // chatId â†’ Message[]
     let searchFilter = '';
 
-    // ── Elements ──
+    // â”€â”€ Elements â”€â”€
     const contactsEl = document.getElementById('contacts');
     const chatArea = document.getElementById('chat-area');
     const searchEl = document.getElementById('search');
 
-    // ── Helpers ──
+    // â”€â”€ Helpers â”€â”€
     function initial(name) {
       if (!name) return '?';
       return name.replace(/[^a-zA-Z0-9\u00C0-\u017F\u4e00-\u9fa5]/g, ' ')
@@ -440,7 +440,7 @@
       return msg.sender_name || msg.sender || msg.chat_id || 'Desconhecido';
     }
 
-    // ── Load all conversations ──
+    // â”€â”€ Load all conversations â”€â”€
     async function loadConversations() {
       const { data, error } = await supabase
         .from('chat_messages')
@@ -460,7 +460,7 @@
           map[msg.chat_id] = {
             chatId: msg.chat_id,
             name: msg.direction === 'inbound' ? chatName(msg) : null,
-            lastBody: msg.body || (msg.media_type ? '[mídia]' : ''),
+            lastBody: msg.body || (msg.media_type ? '[mÃ­dia]' : ''),
             lastTime: msg.timestamp,
             unread: 0,
           };
@@ -481,7 +481,7 @@
       renderSidebar();
     }
 
-    // ── Render sidebar ──
+    // â”€â”€ Render sidebar â”€â”€
     function renderSidebar() {
       const q = searchFilter.toLowerCase();
       const filtered = q
@@ -526,7 +526,7 @@
       return String(str || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     }
 
-    // ── Select chat ──
+    // â”€â”€ Select chat â”€â”€
     async function selectChat(chatId) {
       selectedChatId = chatId;
       renderSidebar();
@@ -552,7 +552,7 @@
       allMessages[chatId] = data || [];
     }
 
-    // ── Render chat loading ──
+    // â”€â”€ Render chat loading â”€â”€
     function renderChatLoading(chatId) {
       const conv = conversations.find(c => c.chatId === chatId);
       const name = conv?.name || chatId;
@@ -570,7 +570,7 @@
       `;
     }
 
-    // ── Render chat messages ──
+    // â”€â”€ Render chat messages â”€â”€
     function renderChat(chatId) {
       const messages = allMessages[chatId] || [];
       const conv = conversations.find(c => c.chatId === chatId);
@@ -602,7 +602,7 @@
           const id = btn.dataset.target;
           const el = document.getElementById(id);
           if (el) el.classList.toggle('visible');
-          btn.textContent = el?.classList.contains('visible') ? 'Ocultar transcrição' : 'Ver transcrição';
+          btn.textContent = el?.classList.contains('visible') ? 'Ocultar transcriÃ§Ã£o' : 'Ver transcriÃ§Ã£o';
         });
       });
 
@@ -657,7 +657,7 @@
             ${content}
             <div class="bubble-footer">
               <span class="bubble-time">${time}</span>
-              ${dir === 'outbound' ? '✓✓' : ''}
+              ${dir === 'outbound' ? 'âœ“âœ“' : ''}
             </div>
           </div>
         </div>
@@ -673,14 +673,14 @@
       return `
         <div class="audio-player">
           ${msg.media_url ? `<audio id="${id}" src="${escHtml(msg.media_url)}" preload="none"></audio>` : ''}
-          <button class="play-btn" data-audio-id="${id}" title="Play">▶</button>
+          <button class="play-btn" data-audio-id="${id}" title="Play">â–¶</button>
           <div class="audio-waveform">
             ${Array.from({ length: 20 }, () => '<div class="waveform-bar"></div>').join('')}
           </div>
           <span class="audio-duration">0:00</span>
         </div>
         ${hasTranscription ? `
-          <button class="transcription-toggle" data-target="${transcId}">Ver transcrição</button>
+          <button class="transcription-toggle" data-target="${transcId}">Ver transcriÃ§Ã£o</button>
           <div class="transcription-text" id="${transcId}">"${escHtml(msg.transcription)}"</div>
         ` : ''}
       `;
@@ -696,11 +696,11 @@
         document.querySelectorAll('.play-btn').forEach(b => {
           if (b !== btn) {
             const a = document.getElementById(b.dataset.audioId);
-            if (a && !a.paused) { a.pause(); b.textContent = '▶'; }
+            if (a && !a.paused) { a.pause(); b.textContent = 'â–¶'; }
           }
         });
         audio.play();
-        btn.textContent = '⏸';
+        btn.textContent = 'â¸';
         audio.ontimeupdate = () => {
           const bars = btn.closest('.audio-player').querySelectorAll('.waveform-bar');
           const progress = audio.currentTime / (audio.duration || 1);
@@ -713,14 +713,14 @@
             dur.textContent = `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
           }
         };
-        audio.onended = () => { btn.textContent = '▶'; };
+        audio.onended = () => { btn.textContent = 'â–¶'; };
       } else {
         audio.pause();
-        btn.textContent = '▶';
+        btn.textContent = 'â–¶';
       }
     }
 
-    // ── Error banner ──
+    // â”€â”€ Error banner â”€â”€
     function showError(msg) {
       const banner = document.createElement('div');
       banner.className = 'error-banner';
@@ -728,7 +728,7 @@
       chatArea.prepend(banner);
     }
 
-    // ── Supabase Realtime ──
+    // â”€â”€ Supabase Realtime â”€â”€
     function subscribeRealtime() {
       supabase
         .channel('chat_messages_inserts')
@@ -743,7 +743,7 @@
           // Update conversations list
           const existing = conversations.find(c => c.chatId === msg.chat_id);
           if (existing) {
-            existing.lastBody = msg.body || (msg.media_type ? '[mídia]' : '');
+            existing.lastBody = msg.body || (msg.media_type ? '[mÃ­dia]' : '');
             existing.lastTime = msg.timestamp;
             if (msg.direction === 'inbound' && !msg.is_read) existing.unread = (existing.unread || 0) + 1;
             if (msg.direction === 'inbound' && msg.sender_name && !existing.name) {
@@ -785,7 +785,7 @@
         }, (payload) => {
           const msg = payload.new;
           if (!msg || msg.chat_id !== selectedChatId) return;
-          // Transcription updated — re-render chat
+          // Transcription updated â€” re-render chat
           if (allMessages[msg.chat_id]) {
             const idx = allMessages[msg.chat_id].findIndex(m => m.id === msg.id || m.message_id === msg.message_id);
             if (idx >= 0) {
@@ -797,13 +797,13 @@
         .subscribe();
     }
 
-    // ── Search ──
+    // â”€â”€ Search â”€â”€
     searchEl.addEventListener('input', () => {
       searchFilter = searchEl.value;
       renderSidebar();
     });
 
-    // ── Boot ──
+    // â”€â”€ Boot â”€â”€
     async function boot() {
       contactsEl.innerHTML = '<div style="display:flex;justify-content:center;padding:40px"><div class="loading-spinner"></div></div>';
       await loadConversations();
