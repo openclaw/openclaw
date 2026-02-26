@@ -1,0 +1,12 @@
+[Unit]
+Description=OpenClaw Chrome Browser Process Cleanup
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/.openclaw/browser/chrome-cleanup.sh daemon
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target
