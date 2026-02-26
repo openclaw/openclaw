@@ -20,6 +20,8 @@ class InvokeDispatcher(
   private val isForeground: () -> Boolean,
   private val cameraEnabled: () -> Boolean,
   private val locationEnabled: () -> Boolean,
+  private val smsAvailable: () -> Boolean,
+  private val debugBuild: () -> Boolean,
   private val onCanvasA2uiPush: () -> Unit,
   private val onCanvasA2uiReset: () -> Unit,
 ) {
@@ -36,18 +38,7 @@ class InvokeDispatcher(
         message = "NODE_BACKGROUND_UNAVAILABLE: canvas/camera/screen commands require foreground",
       )
     }
-    if (spec.availability == InvokeCommandAvailability.CameraEnabled && !cameraEnabled()) {
-      return GatewaySession.InvokeResult.error(
-        code = "CAMERA_DISABLED",
-        message = "CAMERA_DISABLED: enable Camera in Settings",
-      )
-    }
-    if (spec.availability == InvokeCommandAvailability.LocationEnabled && !locationEnabled()) {
-      return GatewaySession.InvokeResult.error(
-        code = "LOCATION_DISABLED",
-        message = "LOCATION_DISABLED: enable Location in Settings",
-      )
-    }
+    availabilityError(spec.availability)?.let { return it }
 
     return when (command) {
       // Canvas commands
@@ -168,6 +159,48 @@ class InvokeDispatcher(
         code = "NODE_BACKGROUND_UNAVAILABLE",
         message = "NODE_BACKGROUND_UNAVAILABLE: canvas unavailable",
       )
+    }
+  }
+
+  private fun availabilityError(availability: InvokeCommandAvailability): GatewaySession.InvokeResult? {
+    return when (availability) {
+      InvokeCommandAvailability.Always -> null
+      InvokeCommandAvailability.CameraEnabled ->
+        if (cameraEnabled()) {
+          null
+        } else {
+          GatewaySession.InvokeResult.error(
+            code = "CAMERA_DISABLED",
+            message = "CAMERA_DISABLED: enable Camera in Settings",
+          )
+        }
+      InvokeCommandAvailability.LocationEnabled ->
+        if (locationEnabled()) {
+          null
+        } else {
+          GatewaySession.InvokeResult.error(
+            code = "LOCATION_DISABLED",
+            message = "LOCATION_DISABLED: enable Location in Settings",
+          )
+        }
+      InvokeCommandAvailability.SmsAvailable ->
+        if (smsAvailable()) {
+          null
+        } else {
+          GatewaySession.InvokeResult.error(
+            code = "SMS_UNAVAILABLE",
+            message = "SMS_UNAVAILABLE: SMS not available on this device",
+          )
+        }
+      InvokeCommandAvailability.DebugBuild ->
+        if (debugBuild()) {
+          null
+        } else {
+          GatewaySession.InvokeResult.error(
+            code = "INVALID_REQUEST",
+            message = "INVALID_REQUEST: unknown command",
+          )
+        }
     }
   }
 }
