@@ -2,6 +2,7 @@ export type SlackModalPrivateMetadata = {
   sessionKey?: string;
   channelId?: string;
   channelType?: string;
+  userId?: string;
 };
 
 const SLACK_PRIVATE_METADATA_MAX = 3000;
@@ -20,6 +21,7 @@ export function parseSlackModalPrivateMetadata(raw: unknown): SlackModalPrivateM
       sessionKey: normalizeString(parsed.sessionKey),
       channelId: normalizeString(parsed.channelId),
       channelType: normalizeString(parsed.channelType),
+      userId: normalizeString(parsed.userId),
     };
   } catch {
     return {};
@@ -31,6 +33,7 @@ export function encodeSlackModalPrivateMetadata(input: SlackModalPrivateMetadata
     ...(input.sessionKey ? { sessionKey: input.sessionKey } : {}),
     ...(input.channelId ? { channelId: input.channelId } : {}),
     ...(input.channelType ? { channelType: input.channelType } : {}),
+    ...(input.userId ? { userId: input.userId } : {}),
   };
   const encoded = JSON.stringify(payload);
   if (encoded.length > SLACK_PRIVATE_METADATA_MAX) {
