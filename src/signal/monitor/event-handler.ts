@@ -31,10 +31,7 @@ import { danger, logVerbose, shouldLogVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { mediaKindFromMime } from "../../media/constants.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
-import {
-  readChannelAllowFromStore,
-  upsertChannelPairingRequest,
-} from "../../pairing/pairing-store.js";
+import { upsertChannelPairingRequest } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import {
   DM_GROUP_ACCESS_REASON,
@@ -459,8 +456,8 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const senderDisplay = formatSignalSenderDisplay(sender);
     const storeAllowFrom = await readStoreAllowFromForDmPolicy({
       provider: "signal",
+      accountId: deps.accountId,
       dmPolicy: deps.dmPolicy,
-      readStore: (provider) => readChannelAllowFromStore(provider),
     });
     const resolveAccessDecision = (isGroup: boolean) =>
       resolveDmGroupAccessWithLists({
@@ -517,6 +514,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           const { code, created } = await upsertChannelPairingRequest({
             channel: "signal",
             id: senderId,
+            accountId: deps.accountId,
             meta: { name: envelope.sourceName ?? undefined },
           });
           if (created) {
