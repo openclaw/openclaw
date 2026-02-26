@@ -620,6 +620,16 @@ export function resolveAttemptFsWorkspaceOnly(params: {
   });
 }
 
+export function prependSystemPromptAddition(params: {
+  systemPrompt: string;
+  systemPromptAddition?: string;
+}): string {
+  if (!params.systemPromptAddition) {
+    return params.systemPrompt;
+  }
+  return `${params.systemPromptAddition}\n\n${params.systemPrompt}`;
+}
+
 /** Build legacy compaction params passed into context-engine afterTurn hooks. */
 export function buildAfterTurnLegacyCompactionParams(params: {
   attempt: Pick<
@@ -1407,6 +1417,16 @@ export async function runEmbeddedAttempt(
             });
             if (assembled.messages !== activeSession.messages) {
               activeSession.agent.replaceMessages(assembled.messages);
+            }
+            if (assembled.systemPromptAddition) {
+              systemPromptText = prependSystemPromptAddition({
+                systemPrompt: systemPromptText,
+                systemPromptAddition: assembled.systemPromptAddition,
+              });
+              applySystemPromptOverrideToSession(activeSession, systemPromptText);
+              log.debug(
+                `context engine: prepended system prompt addition (${assembled.systemPromptAddition.length} chars)`,
+              );
             }
           } catch (assembleErr) {
             log.warn(

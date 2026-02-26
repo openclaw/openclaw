@@ -7,6 +7,8 @@ export type AssembleResult = {
   messages: AgentMessage[];
   /** Estimated total tokens in assembled context */
   estimatedTokens: number;
+  /** Optional context-engine-provided instructions prepended to the runtime system prompt */
+  systemPromptAddition?: string;
 };
 
 export type CompactResult = {

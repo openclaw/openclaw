@@ -57,6 +57,7 @@ class MockContextEngine implements ContextEngine {
     return {
       messages: params.messages,
       estimatedTokens: 42,
+      systemPromptAddition: "mock system addition",
     };
   }
 
@@ -126,6 +127,7 @@ describe("Engine contract tests", () => {
     expect(result.messages).toHaveLength(2);
     expect(typeof result.estimatedTokens).toBe("number");
     expect(result.estimatedTokens).toBe(42);
+    expect(result.systemPromptAddition).toBe("mock system addition");
   });
 
   it("compact() returns CompactResult with ok, compacted, reason, result fields", async () => {
@@ -304,6 +306,7 @@ describe("LegacyContextEngine parity", () => {
     expect(result.messages).toBe(messages);
     expect(result.messages).toHaveLength(3);
     expect(result.estimatedTokens).toBe(0);
+    expect(result.systemPromptAddition).toBeUndefined();
   });
 
   it("dispose() completes without error", async () => {
