@@ -207,7 +207,6 @@ Use this when auditing access or deciding what to back up:
   - `~/.openclaw/credentials/<channel>-<accountId>-allowFrom.json` (non-default accounts)
 - **Model auth profiles**: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
 - **File-backed secrets payload (optional)**: `~/.openclaw/secrets.json`
-- **Secrets migration backups (optional)**: `~/.openclaw/backups/secrets-migrate/<backupId>/`
 - **Legacy OAuth import**: `~/.openclaw/credentials/oauth.json`
 
 ## Security Audit Checklist
@@ -764,7 +763,6 @@ Assume anything under `~/.openclaw/` (or `$OPENCLAW_STATE_DIR/`) may contain sec
 - `credentials/**`: channel credentials (example: WhatsApp creds), pairing allowlists, legacy OAuth imports.
 - `agents/<agentId>/agent/auth-profiles.json`: API keys, token profiles, OAuth tokens, and optional `keyRef`/`tokenRef`.
 - `secrets.json` (optional): file-backed secret payload used by `file` SecretRef providers (`secrets.providers`).
-- `backups/secrets-migrate/**` (optional): migration rollback backups + manifests.
 - `agents/<agentId>/agent/auth.json`: legacy compatibility file. Static `api_key` entries are scrubbed when discovered.
 - `agents/<agentId>/sessions/**`: session transcripts (`*.jsonl`) + routing metadata (`sessions.json`) that can contain private messages and tool output.
 - `extensions/**`: installed plugins (plus their `node_modules/`).

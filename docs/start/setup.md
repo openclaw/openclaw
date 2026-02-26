@@ -135,7 +135,6 @@ Use this when debugging auth or deciding what to back up:
   - `~/.openclaw/credentials/<channel>-<accountId>-allowFrom.json` (non-default accounts)
 - **Model auth profiles**: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
 - **File-backed secrets payload (optional)**: `~/.openclaw/secrets.json`
-- **Secrets migration backups (optional)**: `~/.openclaw/backups/secrets-migrate/<backupId>/`
 - **Legacy OAuth import**: `~/.openclaw/credentials/oauth.json`
   More detail: [Security](/gateway/security#credential-storage-map).
 

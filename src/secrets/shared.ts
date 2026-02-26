@@ -25,3 +25,18 @@ export function writeJsonFileSecure(pathname: string, value: unknown): void {
   fs.writeFileSync(pathname, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   fs.chmodSync(pathname, 0o600);
 }
+
+export function readTextFileIfExists(pathname: string): string | null {
+  if (!fs.existsSync(pathname)) {
+    return null;
+  }
+  return fs.readFileSync(pathname, "utf8");
+}
+
+export function writeTextFileAtomic(pathname: string, value: string, mode = 0o600): void {
+  ensureDirForFile(pathname);
+  const tempPath = `${pathname}.tmp-${process.pid}-${Date.now()}`;
+  fs.writeFileSync(tempPath, value, "utf8");
+  fs.chmodSync(tempPath, mode);
+  fs.renameSync(tempPath, pathname);
+}

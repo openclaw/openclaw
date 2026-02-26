@@ -1,8 +1,8 @@
 ---
-summary: "Secrets management: SecretRef contract, runtime snapshot behavior, and migration"
+summary: "Secrets management: SecretRef contract, runtime snapshot behavior, and safe one-way scrubbing"
 read_when:
   - Configuring SecretRefs for providers, auth profiles, skills, or Google Chat
-  - Operating secrets reload/migrate safely in production
+  - Operating secrets reload/audit/configure/apply safely in production
   - Understanding fail-fast and last-known-good behavior
 title: "Secrets Management"
 ---
@@ -208,51 +208,58 @@ Behavior:
 - Repeated failures while already degraded log warnings but do not spam events.
 - Startup fail-fast does not emit degraded events because no runtime snapshot exists yet.
 
-## Migration command
+## Audit and configure workflow
 
-Use `openclaw secrets migrate` to move plaintext static secrets into file-backed refs.
-
-Dry-run (default):
+Use this default operator flow:
 
 ```bash
-openclaw secrets migrate
+openclaw secrets audit --check
+openclaw secrets configure
+openclaw secrets audit --check
 ```
 
-Apply:
+### `secrets audit`
+
+Findings include:
+
+- plaintext values at rest (`openclaw.json`, `auth-profiles.json`, `.env`)
+- unresolved refs
+- precedence shadowing (`auth-profiles` taking priority over config refs)
+- legacy residues (`auth.json`, OAuth out-of-scope reminders)
+
+### `secrets configure`
+
+Interactive helper that:
+
+- lets you select secret-bearing fields in `openclaw.json`
+- captures SecretRef details (`source`, `provider`, `id`)
+- runs preflight resolution
+- can apply immediately
+
+`configure` apply defaults to:
+
+- scrub matching static creds from `auth-profiles.json` for targeted providers
+- scrub legacy static `api_key` entries from `auth.json`
+- scrub matching known secret lines from `<config-dir>/.env`
+
+### `secrets apply`
+
+Apply a saved plan:
 
 ```bash
-openclaw secrets migrate --write
+openclaw secrets apply --from /tmp/openclaw-secrets-plan.json
+openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --dry-run
 ```
 
-Rollback by backup id:
+## One-way safety policy
 
-```bash
-openclaw secrets migrate --rollback 20260224T193000Z
-```
+OpenClaw intentionally does **not** write rollback backups that contain pre-migration plaintext secret values.
 
-What migration covers:
+Safety model:
 
-- `openclaw.json` fields listed above
-- `auth-profiles.json` plaintext API key/token fields
-- optional scrub of matching plaintext values from `<config-dir>/.env` (default on)
-
-Migration writes secrets to:
-
-- configured default `file` provider path when present
-- otherwise `<state-dir>/secrets.json`
-
-`.env` scrub semantics:
-
-- target path is `<config-dir>/.env`
-- only known secret env keys are eligible
-- a line is removed only when value exactly matches a migrated plaintext value
-- comments/non-secret keys/unmatched values are preserved
-
-Backups:
-
-- path: `~/.openclaw/backups/secrets-migrate/<backupId>/`
-- manifest: `manifest.json`
-- retention: 20 backups
+- preflight must succeed before write mode
+- runtime activation is validated before commit
+- apply updates files using atomic file replacement and best-effort in-memory restore on failure
 
 ## `auth.json` compatibility notes
 

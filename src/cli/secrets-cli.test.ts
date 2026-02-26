@@ -3,8 +3,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createCliRuntimeCapture } from "./test-runtime-capture.js";
 
 const callGatewayFromCli = vi.fn();
-const runSecretsMigration = vi.fn();
-const rollbackSecretsMigration = vi.fn();
+const runSecretsAudit = vi.fn();
+const resolveSecretsAuditExitCode = vi.fn();
+const runSecretsConfigureInteractive = vi.fn();
+const runSecretsApply = vi.fn();
+const confirm = vi.fn();
 
 const { defaultRuntime, runtimeLogs, runtimeErrors, resetRuntimeCapture } =
   createCliRuntimeCapture();
@@ -19,9 +22,22 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime,
 }));
 
-vi.mock("../secrets/migrate.js", () => ({
-  runSecretsMigration: (options: unknown) => runSecretsMigration(options),
-  rollbackSecretsMigration: (options: unknown) => rollbackSecretsMigration(options),
+vi.mock("../secrets/audit.js", () => ({
+  runSecretsAudit: () => runSecretsAudit(),
+  resolveSecretsAuditExitCode: (report: unknown, check: boolean) =>
+    resolveSecretsAuditExitCode(report, check),
+}));
+
+vi.mock("../secrets/configure.js", () => ({
+  runSecretsConfigureInteractive: () => runSecretsConfigureInteractive(),
+}));
+
+vi.mock("../secrets/apply.js", () => ({
+  runSecretsApply: (options: unknown) => runSecretsApply(options),
+}));
+
+vi.mock("@clack/prompts", () => ({
+  confirm: (options: unknown) => confirm(options),
 }));
 
 const { registerSecretsCli } = await import("./secrets-cli.js");
@@ -37,8 +53,11 @@ describe("secrets CLI", () => {
   beforeEach(() => {
     resetRuntimeCapture();
     callGatewayFromCli.mockReset();
-    runSecretsMigration.mockReset();
-    rollbackSecretsMigration.mockReset();
+    runSecretsAudit.mockReset();
+    resolveSecretsAuditExitCode.mockReset();
+    runSecretsConfigureInteractive.mockReset();
+    runSecretsApply.mockReset();
+    confirm.mockReset();
   });
 
   it("calls secrets.reload and prints human output", async () => {
@@ -60,37 +79,57 @@ describe("secrets CLI", () => {
     expect(runtimeLogs.at(-1)).toContain('"ok": true');
   });
 
-  it("runs secrets migrate as dry-run by default", async () => {
-    runSecretsMigration.mockResolvedValue({
-      mode: "dry-run",
-      changed: true,
-      secretsFilePath: "/tmp/secrets.enc.json",
-      counters: { secretsWritten: 3 },
-      changedFiles: ["/tmp/openclaw.json"],
+  it("runs secrets audit and exits via check code", async () => {
+    runSecretsAudit.mockResolvedValue({
+      version: 1,
+      status: "findings",
+      filesScanned: [],
+      summary: {
+        plaintextCount: 1,
+        unresolvedRefCount: 0,
+        shadowedRefCount: 0,
+        legacyResidueCount: 0,
+      },
+      findings: [],
     });
+    resolveSecretsAuditExitCode.mockReturnValue(1);
 
-    await createProgram().parseAsync(["secrets", "migrate"], { from: "user" });
-
-    expect(runSecretsMigration).toHaveBeenCalledWith(
-      expect.objectContaining({ write: false, scrubEnv: true }),
-    );
-    expect(runtimeLogs.at(-1)).toContain("dry run");
+    await expect(
+      createProgram().parseAsync(["secrets", "audit", "--check"], { from: "user" }),
+    ).rejects.toBeTruthy();
+    expect(runSecretsAudit).toHaveBeenCalled();
+    expect(resolveSecretsAuditExitCode).toHaveBeenCalledWith(expect.anything(), true);
   });
 
-  it("runs rollback when --rollback is provided", async () => {
-    rollbackSecretsMigration.mockResolvedValue({
-      backupId: "20260221T010203Z",
-      restoredFiles: 2,
-      deletedFiles: 1,
+  it("runs secrets configure then apply when confirmed", async () => {
+    runSecretsConfigureInteractive.mockResolvedValue({
+      plan: {
+        version: 1,
+        protocolVersion: 1,
+        generatedAt: "2026-02-26T00:00:00.000Z",
+        generatedBy: "openclaw secrets configure",
+        targets: [],
+      },
+      preflight: {
+        mode: "dry-run",
+        changed: true,
+        changedFiles: ["/tmp/openclaw.json"],
+        warningCount: 0,
+        warnings: [],
+      },
+    });
+    confirm.mockResolvedValue(true);
+    runSecretsApply.mockResolvedValue({
+      mode: "write",
+      changed: true,
+      changedFiles: ["/tmp/openclaw.json"],
+      warningCount: 0,
+      warnings: [],
     });
 
-    await createProgram().parseAsync(["secrets", "migrate", "--rollback", "20260221T010203Z"], {
-      from: "user",
-    });
-
-    expect(rollbackSecretsMigration).toHaveBeenCalledWith({
-      backupId: "20260221T010203Z",
-    });
-    expect(runtimeLogs.at(-1)).toContain("rollback complete");
+    await createProgram().parseAsync(["secrets", "configure"], { from: "user" });
+    expect(runSecretsConfigureInteractive).toHaveBeenCalled();
+    expect(runSecretsApply).toHaveBeenCalledWith(expect.objectContaining({ write: true }));
+    expect(runtimeLogs.at(-1)).toContain("Secrets applied");
   });
 });
