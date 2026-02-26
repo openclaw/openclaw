@@ -26,7 +26,11 @@ import {
   resolveMatrixAllowListMatch,
   resolveMatrixAllowListMatches,
 } from "./allowlist.js";
-import { resolveMatrixBodyForAgent } from "./inbound-body.js";
+import {
+  resolveMatrixBodyForAgent,
+  resolveMatrixInboundSenderLabel,
+  resolveMatrixSenderUsername,
+} from "./inbound-body.js";
 import { resolveMatrixLocation, type MatrixLocationPayload } from "./location.js";
 import { downloadMatrixMedia } from "./media.js";
 import { resolveMentions } from "./mentions.js";
@@ -216,7 +220,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
       }
 
       const senderName = await getMemberDisplayName(roomId, senderId);
-      const senderUsername = senderId.split(":")[0]?.replace(/^@/, "");
+      const senderUsername = resolveMatrixSenderUsername(senderId);
+      const senderLabel = resolveMatrixInboundSenderLabel({
+        senderName,
+        senderId,
+        senderUsername,
+      });
       const storeAllowFrom = isDirectMessage
         ? await readStoreAllowFromForDmPolicy({
             provider: "matrix",
@@ -531,7 +540,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         envelope: envelopeOptions,
         body: textWithId,
         chatType: isDirectMessage ? "direct" : "channel",
-        sender: { name: senderName, username: senderUsername },
+        senderLabel,
       });
 
       const groupSystemPrompt = roomConfig?.systemPrompt?.trim() || undefined;
@@ -540,8 +549,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
         BodyForAgent: resolveMatrixBodyForAgent({
           isDirectMessage,
           bodyText,
-          senderName,
-          senderId,
+          senderLabel,
         }),
         RawBody: bodyText,
         CommandBody: bodyText,
