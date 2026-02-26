@@ -502,6 +502,7 @@ export async function processMessage(
 
   const dmPolicy = account.config.dmPolicy ?? "pairing";
   const groupPolicy = account.config.groupPolicy ?? "allowlist";
+  const configuredAllowFrom = (account.config.allowFrom ?? []).map((entry) => String(entry));
   const storeAllowFrom = await readStoreAllowFromForDmPolicy({
     provider: "bluebubbles",
     dmPolicy,
@@ -511,7 +512,7 @@ export async function processMessage(
     isGroup,
     dmPolicy,
     groupPolicy,
-    allowFrom: account.config.allowFrom,
+    allowFrom: configuredAllowFrom,
     groupAllowFrom: account.config.groupAllowFrom,
     storeAllowFrom,
     isSenderAllowed: (allowFrom) =>
@@ -666,10 +667,11 @@ export async function processMessage(
   // Command gating (parity with iMessage/WhatsApp)
   const useAccessGroups = config.commands?.useAccessGroups !== false;
   const hasControlCmd = core.channel.text.hasControlCommand(messageText, config);
+  const commandDmAllowFrom = isGroup ? configuredAllowFrom : effectiveAllowFrom;
   const ownerAllowedForCommands =
-    effectiveAllowFrom.length > 0
+    commandDmAllowFrom.length > 0
       ? isAllowedBlueBubblesSender({
-          allowFrom: effectiveAllowFrom,
+          allowFrom: commandDmAllowFrom,
           sender: message.senderId,
           chatId: message.chatId ?? undefined,
           chatGuid: message.chatGuid ?? undefined,
@@ -690,7 +692,7 @@ export async function processMessage(
   const commandGate = resolveControlCommandGate({
     useAccessGroups,
     authorizers: [
-      { configured: effectiveAllowFrom.length > 0, allowed: ownerAllowedForCommands },
+      { configured: commandDmAllowFrom.length > 0, allowed: ownerAllowedForCommands },
       { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },
     ],
     allowTextCommands: true,
