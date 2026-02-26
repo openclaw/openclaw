@@ -129,9 +129,6 @@ class DeviceHandler(
   }
 
   private fun mapThermalState(powerManager: PowerManager?): String {
-    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
-      return "nominal"
-    }
     val thermal = powerManager?.currentThermalStatus ?: return "nominal"
     return when (thermal) {
       PowerManager.THERMAL_STATUS_NONE, PowerManager.THERMAL_STATUS_LIGHT -> "nominal"
