@@ -87,6 +87,12 @@ describe("normalizeBrazilPhone", () => {
     expect(normalizeBrazilPhone("+5531987654321")).toBe("+553187654321");
   });
 
+  it("normalizes formatted Brazilian input before applying DDD rules", () => {
+    expect(normalizeBrazilPhone("+55 (47) 98417-8525")).toBe("+554784178525");
+    expect(normalizeBrazilPhone("55 47 98417 8525")).toBe("+554784178525");
+    expect(normalizeBrazilPhone("+55 (11) 99999-8888")).toBe("+5511999998888");
+  });
+
   it("keeps 9th digit for São Paulo DDDs (11-19)", () => {
     // DDD 11 (São Paulo capital) - keep 9
     expect(normalizeBrazilPhone("+5511999998888")).toBe("+5511999998888");
@@ -136,6 +142,11 @@ describe("normalizeWhatsAppTarget - Brazilian numbers", () => {
     // Issue #20187: DDD 47 should have the 9th digit removed
     expect(normalizeWhatsAppTarget("+5547984178525")).toBe("+554784178525");
     expect(normalizeWhatsAppTarget("whatsapp:+5547984178525")).toBe("+554784178525");
+  });
+
+  it("normalizes formatted Brazilian numbers in messaging targets", () => {
+    expect(normalizeWhatsAppTarget("+55 (47) 98417-8525")).toBe("+554784178525");
+    expect(normalizeWhatsAppTarget("whatsapp:+55 (11) 99999-8888")).toBe("+5511999998888");
   });
 
   it("preserves 9th digit for São Paulo numbers (DDD 11-19)", () => {

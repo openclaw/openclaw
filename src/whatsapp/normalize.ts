@@ -33,27 +33,27 @@ const BRAZIL_DDD_WITH_NINTH_DIGIT = new Set([
  * WhatsApp internally registers numbers without the 9th digit for most area codes.
  * Only DDDs 11-19 (SP), 21-22, 24 (RJ), and 27-28 (ES) keep the 9th digit.
  *
- * @param phone - Phone number (should already have + prefix)
+ * @param phone - Phone number in any common user format
  * @returns Normalized phone number for WhatsApp
  */
 export function normalizeBrazilPhone(phone: string): string {
-  // Brazilian format: +55 (2 digits DDD) + 9 (optional) + 8 digits
-  // Carrier format: +55DD9XXXXXXXX (14 digits total including +)
-  // WhatsApp format: +55DDXXXXXXXX (13 digits total including +)
-  if (!phone.startsWith("+55") || phone.length !== 14 || phone[5] !== "9") {
+  const trimmed = phone.trim();
+  const digits = trimmed.replace(/\D/g, "");
+  // Carrier format: 55 + DDD(2) + 9 + 8-digit subscriber => 13 digits (without '+')
+  if (!digits.startsWith("55") || digits.length !== 13 || digits[4] !== "9") {
     return phone;
   }
 
-  // Extract DDD (area code) - digits at positions 3 and 4 after +55
-  const ddd = parseInt(phone.slice(3, 5), 10);
+  // Extract DDD (area code) right after country code.
+  const ddd = parseInt(digits.slice(2, 4), 10);
 
   // For DDDs that keep the 9th digit, return as-is
   if (BRAZIL_DDD_WITH_NINTH_DIGIT.has(ddd)) {
-    return phone;
+    return `+${digits}`;
   }
 
   // For other DDDs, remove the 9th digit
-  return phone.slice(0, 5) + phone.slice(6);
+  return `+${digits.slice(0, 4)}${digits.slice(5)}`;
 }
 
 const WHATSAPP_USER_JID_RE = /^(\d+)(?::\d+)?@s\.whatsapp\.net$/i;
