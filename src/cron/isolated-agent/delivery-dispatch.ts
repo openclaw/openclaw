@@ -182,6 +182,7 @@ export async function dispatchCronDelivery(
         bestEffort: params.deliveryBestEffort,
         deps: createOutboundSendDeps(params.deps),
         abortSignal: params.abortSignal,
+        sessionKey: params.agentSessionKey,
       });
       delivered = deliveryResults.length > 0;
       return null;
