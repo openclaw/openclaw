@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveSecretRefString, resolveSecretRefValue } from "./resolve.js";
 
@@ -15,6 +15,7 @@ describe("secret ref resolver", () => {
   const cleanupRoots: string[] = [];
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     while (cleanupRoots.length > 0) {
       const root = cleanupRoots.pop();
       if (!root) {
@@ -278,6 +279,56 @@ describe("secret ref resolver", () => {
       },
     );
     expect(value).toBe("raw-token-value");
+  });
+
+  it("times out file provider reads when timeoutMs elapses", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-resolve-timeout-"));
+    cleanupRoots.push(root);
+    const filePath = path.join(root, "secrets.json");
+    await writeSecureFile(
+      filePath,
+      JSON.stringify({
+        providers: {
+          openai: {
+            apiKey: "sk-file-value",
+          },
+        },
+      }),
+    );
+
+    const originalReadFile = fs.readFile.bind(fs);
+    vi.spyOn(fs, "readFile").mockImplementation(((
+      targetPath: Parameters<typeof fs.readFile>[0],
+      options?: Parameters<typeof fs.readFile>[1],
+    ) => {
+      if (typeof targetPath === "string" && targetPath === filePath) {
+        return new Promise<Buffer>(() => {});
+      }
+      return originalReadFile(targetPath, options);
+    }) as typeof fs.readFile);
+
+    await expect(
+      resolveSecretRefString(
+        { source: "file", provider: "filemain", id: "/providers/openai/apiKey" },
+        {
+          config: {
+            secrets: {
+              providers: {
+                filemain: {
+                  source: "file",
+                  path: filePath,
+                  mode: "jsonPointer",
+                  timeoutMs: 5,
+                },
+              },
+            },
+          },
+        },
+      ),
+    ).rejects.toThrow('File provider "filemain" timed out');
   });
 
   it("rejects misconfigured provider source mismatches", async () => {

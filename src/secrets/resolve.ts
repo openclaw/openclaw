@@ -188,11 +188,20 @@ async function readFileProviderPayload(params: {
       DEFAULT_FILE_TIMEOUT_MS,
     );
     const maxBytes = normalizePositiveInt(params.providerConfig.maxBytes, DEFAULT_FILE_MAX_BYTES);
-    const timeoutHandle = setTimeout(() => {
-      // noop marker to keep timeout behavior explicit and deterministic
-    }, timeoutMs);
+    const abortController = new AbortController();
+    const timeoutErrorMessage = `File provider "${params.providerName}" timed out after ${timeoutMs}ms.`;
+    let timeoutHandle: NodeJS.Timeout | null = null;
+    const timeoutPromise = new Promise<never>((_resolve, reject) => {
+      timeoutHandle = setTimeout(() => {
+        abortController.abort();
+        reject(new Error(timeoutErrorMessage));
+      }, timeoutMs);
+    });
     try {
-      const payload = await fs.readFile(filePath);
+      const payload = await Promise.race([
+        fs.readFile(filePath, { signal: abortController.signal }),
+        timeoutPromise,
+      ]);
       if (payload.byteLength > maxBytes) {
         throw new Error(`File provider "${params.providerName}" exceeded maxBytes (${maxBytes}).`);
       }
@@ -205,8 +214,15 @@ async function readFileProviderPayload(params: {
         throw new Error(`File provider "${params.providerName}" payload is not a JSON object.`);
       }
       return parsed;
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new Error(timeoutErrorMessage, { cause: error });
+      }
+      throw error;
     } finally {
-      clearTimeout(timeoutHandle);
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
     }
   })();
 
