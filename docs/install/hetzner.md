@@ -209,14 +209,10 @@ Anything installed at runtime will be lost on restart.
 
 All external binaries required by skills must be installed at image build time.
 
-The examples below show three common binaries only:
+The section below shows the Dockerfile pattern for installing skill binaries.
 
-- `gog` for Gmail access
-- `goplaces` for Google Places
-- `wacli` for WhatsApp
-
-These are examples, not a complete list.
-You may install as many binaries as needed using the same pattern.
+Replace the placeholder `RUN` lines with the actual binaries your skills need.
+Check each skill's documentation for download URLs and install instructions.
 
 If you add new skills later that depend on additional binaries, you must:
 
@@ -231,19 +227,11 @@ FROM node:22-bookworm
 
 RUN apt-get update && apt-get install -y socat && rm -rf /var/lib/apt/lists/*
 
-# Example binary 1: Gmail CLI
-RUN curl -L https://github.com/steipete/gog/releases/latest/download/gog_Linux_x86_64.tar.gz \
-  | tar -xz -C /usr/local/bin && chmod +x /usr/local/bin/gog
-
-# Example binary 2: Google Places CLI
-RUN curl -L https://github.com/steipete/goplaces/releases/latest/download/goplaces_Linux_x86_64.tar.gz \
-  | tar -xz -C /usr/local/bin && chmod +x /usr/local/bin/goplaces
-
-# Example binary 3: WhatsApp CLI
-RUN curl -L https://github.com/steipete/wacli/releases/latest/download/wacli_Linux_x86_64.tar.gz \
-  | tar -xz -C /usr/local/bin && chmod +x /usr/local/bin/wacli
-
-# Add more binaries below using the same pattern
+# Install skill binaries here. Example pattern:
+# RUN curl -L https://github.com/OWNER/REPO/releases/latest/download/BINARY_Linux_x86_64.tar.gz \
+#   | tar -xz -C /usr/local/bin && chmod +x /usr/local/bin/BINARY
+#
+# Add one RUN line per binary your skills require.
 
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
@@ -272,20 +260,16 @@ docker compose build
 docker compose up -d openclaw-gateway
 ```
 
-Verify binaries:
+Verify binaries (replace `BINARY` with the actual binary names you installed):
 
 ```bash
-docker compose exec openclaw-gateway which gog
-docker compose exec openclaw-gateway which goplaces
-docker compose exec openclaw-gateway which wacli
+docker compose exec openclaw-gateway which BINARY
 ```
 
 Expected output:
 
 ```
-/usr/local/bin/gog
-/usr/local/bin/goplaces
-/usr/local/bin/wacli
+/usr/local/bin/BINARY
 ```
 
 ---
