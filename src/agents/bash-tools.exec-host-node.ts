@@ -194,6 +194,7 @@ export async function executeNodeHostCommand(
       const registration = await registerExecApprovalRequestForHost({
         approvalId,
         command: params.command,
+        commandArgv: argv,
         workdir: params.workdir,
         host: "node",
         nodeId,
