@@ -21,6 +21,7 @@ import type { DmPolicy } from "../config/types.base.js";
 import type { TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
 import { danger, logVerbose, warn } from "../globals.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
 import { MediaFetchError } from "../media/fetch.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
@@ -801,6 +802,13 @@ export const registerTelegramHandlers = ({
           contextKey: `telegram:reaction:add:${chatId}:${messageId}:${user?.id ?? "anon"}:${emoji}`,
         });
         logVerbose(`telegram: reaction event enqueued: ${text}`);
+      }
+
+      // Optionally wake the agent so queued reaction events are processed
+      // promptly instead of waiting for the next message or heartbeat.
+      const reactionWake = telegramCfg.reactionWake ?? "off";
+      if (reactionWake === "on") {
+        requestHeartbeatNow({ reason: "telegram-reaction", sessionKey });
       }
     } catch (err) {
       runtime.error?.(danger(`telegram reaction handler failed: ${String(err)}`));

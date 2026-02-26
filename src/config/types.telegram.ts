@@ -152,6 +152,12 @@ export type TelegramAccountConfig = {
    * - "extensive": agent can react liberally when appropriate
    */
   reactionLevel?: "off" | "ack" | "minimal" | "extensive";
+  /**
+   * Wake the agent immediately when a reaction is received.
+   * - "off" (default): reaction events are queued until the next message or heartbeat
+   * - "on": trigger an immediate agent turn to process reaction events
+   */
+  reactionWake?: "off" | "on";
   /** Heartbeat visibility settings for this channel. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Controls whether link previews are shown in outbound messages. Default: true. */
