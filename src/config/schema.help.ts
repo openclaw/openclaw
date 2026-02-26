@@ -101,6 +101,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Explicit gateway-level tool denylist to block risky tools even if lower-level policies allow them. Use deny rules for emergency response and defense-in-depth hardening.",
   "gateway.channelHealthCheckMinutes":
     "Interval in minutes for automatic channel health probing and status updates. Use lower intervals for faster detection, or higher intervals to reduce periodic probe noise.",
+  "gateway.dangerouslyAllowPlaintextInternal":
+    "DANGEROUS: Allow plaintext ws:// connections to non-loopback internal addresses (RFC1918 private IPs: 10.x.x.x, 172.16-31.x.x, 192.168.x.x, and CGNAT 100.64/10). This enables layered security where an external TLS gateway terminates encryption and forwards plaintext to internal OpenClaw gateways. Only enable if you understand the security implications. Default: false (secure by default).",
   "gateway.tailscale":
     "Tailscale integration settings for Serve/Funnel exposure and lifecycle handling on gateway start/exit. Keep off unless your deployment intentionally relies on Tailscale ingress.",
   "gateway.tailscale.mode":

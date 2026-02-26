@@ -364,4 +364,13 @@ export type GatewayConfig = {
    * Set to 0 to disable. Default: 5.
    */
   channelHealthCheckMinutes?: number;
+  /**
+   * DANGEROUS: Allow plaintext ws:// connections to non-loopback internal addresses
+   * (RFC1918 private IPs: 10.x.x.x, 172.16-31.x.x, 192.168.x.x, and CGNAT 100.64/10).
+   * This enables layered security where an external TLS gateway
+   * terminates encryption and forwards plaintext to internal OpenClaw gateways.
+   * Only enable if you understand the security implications.
+   * Default: false (secure by default).
+   */
+  dangerouslyAllowPlaintextInternal?: boolean;
 };
