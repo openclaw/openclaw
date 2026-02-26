@@ -88,6 +88,19 @@ function isCanvasPath(pathname: string): boolean {
   );
 }
 
+function decodePathnameOnce(pathname: string): string {
+  try {
+    return decodeURIComponent(pathname);
+  } catch {
+    return pathname;
+  }
+}
+
+function isProtectedPluginChannelPath(pathname: string): boolean {
+  const normalized = decodePathnameOnce(pathname).toLowerCase();
+  return normalized === "/api/channels" || normalized.startsWith("/api/channels/");
+}
+
 function isNodeWsClient(client: GatewayWsClient): boolean {
   if (client.connect.role === "node") {
     return true;
@@ -493,7 +506,7 @@ export function createGatewayHttpServer(opts: {
         // Channel HTTP endpoints are gateway-auth protected by default.
         // Non-channel plugin routes remain plugin-owned and must enforce
         // their own auth when exposing sensitive functionality.
-        if (requestPath === "/api/channels" || requestPath.startsWith("/api/channels/")) {
+        if (isProtectedPluginChannelPath(requestPath)) {
           const token = getBearerToken(req);
           const authResult = await authorizeHttpGatewayConnect({
             auth: resolvedAuth,
