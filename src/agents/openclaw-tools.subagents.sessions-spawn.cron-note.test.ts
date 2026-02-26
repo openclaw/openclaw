@@ -42,14 +42,16 @@ describe("sessions_spawn: cron isolated session note suppression", () => {
     expect(details.status).toBe("accepted");
   });
 
-  it("suppresses ACCEPTED_NOTE for any agent with :cron: in session key", async () => {
+  it("does not suppress ACCEPTED_NOTE for non-canonical cron-like keys", async () => {
     setupSessionsSpawnGatewayMock({});
-    // Ensure the check uses includes(":cron:") not startsWith("cron:")
     const tool = await getSessionsSpawnTool({
-      agentSessionKey: "agent:marian-job-search:cron:a7c7874a:run:abc123",
+      agentSessionKey: "agent:main:slack:cron:job:run:uuid",
     });
-    const result = await tool.execute("call-other-agent-cron", { task: "test task", mode: "run" });
-    expect((result.details as SpawnResult).note).toBeUndefined();
+    const result = await tool.execute("call-cron-like-noncanonical", {
+      task: "test task",
+      mode: "run",
+    });
+    expect((result.details as SpawnResult).note).toBe(SUBAGENT_SPAWN_ACCEPTED_NOTE);
   });
 
   it("does not suppress note when agentSessionKey is undefined", async () => {
