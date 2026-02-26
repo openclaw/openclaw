@@ -1,0 +1,25 @@
+{
+  "name": "@openclaw/legal-proofreader",
+  "version": "2026.2.13",
+  "private": true,
+  "description": "OpenClaw legal proofreader extension (Arabic ↔ English)",
+  "type": "module",
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "jszip": "^3.10.1",
+    "linkedom": "^0.18.12",
+    "mammoth": "^1.8.0",
+    "pdfjs-dist": "^5.4.624"
+  },
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.1.26"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

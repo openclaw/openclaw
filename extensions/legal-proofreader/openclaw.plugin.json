@@ -1,0 +1,10 @@
+{
+  "id": "legal-proofreader",
+  "name": "Legal Proofreader",
+  "description": "Arabic↔English legal proofreading tools (stage1 issues report + stage2 tracked DOCX apply).",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
