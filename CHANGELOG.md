@@ -13,6 +13,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Auto-reply/Streaming: suppress only exact `NO_REPLY` final replies while still filtering streaming partial sentinel fragments (`NO_`, `NO_RE`, `HEARTBEAT_...`) so substantive replies ending with `NO_REPLY` are delivered and partial silent tokens do not leak during streaming. (#19576) Thanks @aldoeliacim.
 - Doctor/State integrity: ignore metadata-only slash routing sessions when checking recent missing transcripts so `openclaw doctor` no longer reports false-positive transcript-missing warnings for `*:slash:*` keys. (#27375) thanks @gumadeiras.
 - Channels/Multi-account config: when adding a non-default channel account to a single-account top-level channel setup, move existing account-scoped top-level single-account values into `channels.<channel>.accounts.default` before writing the new account so the original account keeps working without duplicated account values at channel root; `openclaw doctor --fix` now repairs previously mixed channel account shapes the same way. (#27334) thanks @gumadeiras.
 - Telegram/Inline buttons: allow callback-query button handling in groups (including `/models` follow-up buttons) when group policy authorizes the sender, by removing the redundant callback allowlist gate that blocked open-policy groups. (#27343) Thanks @GodsBoy.
