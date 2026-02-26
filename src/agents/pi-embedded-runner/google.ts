@@ -24,6 +24,7 @@ import {
 } from "../session-transcript-repair.js";
 import type { TranscriptPolicy } from "../transcript-policy.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
+import { makeZeroUsageSnapshot } from "../usage.js";
 import { log } from "./logger.js";
 import { dropThinkingBlocks } from "./thinking.js";
 import { describeUnknownError } from "./utils.js";
@@ -186,9 +187,13 @@ function stripStaleAssistantUsageBeforeLatestCompaction(messages: AgentMessage[]
       continue;
     }
 
+    // pi-coding-agent expects assistant usage to always be present during context
+    // accounting. Keep stale snapshots structurally valid, but zeroed out.
     const candidateRecord = candidate as unknown as Record<string, unknown>;
-    const { usage: _droppedUsage, ...rest } = candidateRecord;
-    out[i] = rest as unknown as AgentMessage;
+    out[i] = {
+      ...candidateRecord,
+      usage: makeZeroUsageSnapshot(),
+    } as unknown as AgentMessage;
     touched = true;
   }
   return touched ? out : messages;
