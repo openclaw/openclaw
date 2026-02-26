@@ -5,6 +5,7 @@ import ai.openclaw.android.protocol.OpenClawCanvasA2UICommand
 import ai.openclaw.android.protocol.OpenClawCanvasCommand
 import ai.openclaw.android.protocol.OpenClawCameraCommand
 import ai.openclaw.android.protocol.OpenClawLocationCommand
+import ai.openclaw.android.protocol.OpenClawNotificationsCommand
 import ai.openclaw.android.protocol.OpenClawScreenCommand
 import ai.openclaw.android.protocol.OpenClawSmsCommand
 
@@ -12,6 +13,7 @@ class InvokeDispatcher(
   private val canvas: CanvasController,
   private val cameraHandler: CameraHandler,
   private val locationHandler: LocationHandler,
+  private val notificationsHandler: NotificationsHandler,
   private val screenHandler: ScreenHandler,
   private val smsHandler: SmsHandler,
   private val a2uiHandler: A2UIHandler,
@@ -113,6 +115,9 @@ class InvokeDispatcher(
 
       // Location command
       OpenClawLocationCommand.Get.rawValue -> locationHandler.handleLocationGet(paramsJson)
+
+      // Notifications command
+      OpenClawNotificationsCommand.List.rawValue -> notificationsHandler.handleNotificationsList(paramsJson)
 
       // Screen command
       OpenClawScreenCommand.Record.rawValue -> screenHandler.handleScreenRecord(paramsJson)

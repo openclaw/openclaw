@@ -4,6 +4,7 @@ import ai.openclaw.android.protocol.OpenClawCanvasA2UICommand
 import ai.openclaw.android.protocol.OpenClawCanvasCommand
 import ai.openclaw.android.protocol.OpenClawCameraCommand
 import ai.openclaw.android.protocol.OpenClawLocationCommand
+import ai.openclaw.android.protocol.OpenClawNotificationsCommand
 import ai.openclaw.android.protocol.OpenClawScreenCommand
 import ai.openclaw.android.protocol.OpenClawSmsCommand
 
@@ -73,6 +74,9 @@ object InvokeCommandRegistry {
       InvokeCommandSpec(
         name = OpenClawLocationCommand.Get.rawValue,
         availability = InvokeCommandAvailability.LocationEnabled,
+      ),
+      InvokeCommandSpec(
+        name = OpenClawNotificationsCommand.List.rawValue,
       ),
       InvokeCommandSpec(
         name = OpenClawSmsCommand.Send.rawValue,

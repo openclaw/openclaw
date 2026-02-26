@@ -69,3 +69,12 @@ enum class OpenClawLocationCommand(val rawValue: String) {
     const val NamespacePrefix: String = "location."
   }
 }
+
+enum class OpenClawNotificationsCommand(val rawValue: String) {
+  List("notifications.list"),
+  ;
+
+  companion object {
+    const val NamespacePrefix: String = "notifications."
+  }
+}
