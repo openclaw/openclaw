@@ -1270,11 +1270,23 @@ def build_sector_factcheck(mkt: dict, geo: dict, social: dict,
         extras.append(f"EPU글 {epu_gl['close']:.0f}({epu_gl_change:+.1f}%)")
 
     credit = mkt.get("credit_data", {})
+    credit_date_str = ""
     if credit:
         ratio = credit.get("ratio")
         signal = credit.get("signal", "")
+        # 기준일 파싱: "2026/02/24" or "2026-02-24"
+        raw_cd = credit.get("date", "")
+        if raw_cd:
+            normalized = raw_cd.replace("/", "-")
+            try:
+                cm, cd = int(normalized[5:7]), int(normalized[8:10])
+                credit_date_str = f"{cm}/{cd}"
+            except (ValueError, IndexError):
+                pass
         if ratio is not None:
-            extras.append(f"신용{ratio}%({signal})" if signal else f"신용{ratio}%")
+            tag = f"{credit_date_str} " if credit_date_str else ""
+            extras.append(f"신용{ratio}%({signal} {tag}기준)".rstrip()
+                          if signal else f"신용{ratio}%({tag}기준)".rstrip())
 
     if company_tickers:
         extras.append(f"기업: {','.join(company_tickers[:5])}")
