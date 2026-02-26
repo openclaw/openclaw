@@ -55,6 +55,7 @@ type ShouldHandleTextCommands =
   typeof import("../../auto-reply/commands-registry.js").shouldHandleTextCommands;
 type DispatchReplyFromConfig =
   typeof import("../../auto-reply/reply/dispatch-from-config.js").dispatchReplyFromConfig;
+type WithReplyDispatcher = typeof import("../../auto-reply/dispatch.js").withReplyDispatcher;
 type FinalizeInboundContext =
   typeof import("../../auto-reply/reply/inbound-context.js").finalizeInboundContext;
 type FormatAgentEnvelope = typeof import("../../auto-reply/envelope.js").formatAgentEnvelope;
@@ -222,6 +223,7 @@ export type PluginRuntime = {
       resolveEffectiveMessagesConfig: ResolveEffectiveMessagesConfig;
       resolveHumanDelayConfig: ResolveHumanDelayConfig;
       dispatchReplyFromConfig: DispatchReplyFromConfig;
+      withReplyDispatcher: WithReplyDispatcher;
       finalizeInboundContext: FinalizeInboundContext;
       formatAgentEnvelope: FormatAgentEnvelope;
       /** @deprecated Prefer `BodyForAgent` + structured user-context blocks (do not build plaintext envelopes for prompts). */

@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { fetchWithBearerAuthScopeFallback } from "./fetch-auth.js";
 
+const asFetch = (fn: unknown): typeof fetch => fn as typeof fetch;
+
 describe("fetchWithBearerAuthScopeFallback", () => {
   it("rejects non-https urls when https is required", async () => {
     await expect(
@@ -19,7 +21,7 @@ describe("fetchWithBearerAuthScopeFallback", () => {
     const response = await fetchWithBearerAuthScopeFallback({
       url: "https://example.com/file",
       scopes: ["https://graph.microsoft.com"],
-      fetchFn,
+      fetchFn: asFetch(fetchFn),
       tokenProvider,
     });
 
@@ -38,7 +40,7 @@ describe("fetchWithBearerAuthScopeFallback", () => {
     const response = await fetchWithBearerAuthScopeFallback({
       url: "https://graph.microsoft.com/v1.0/me",
       scopes: ["https://graph.microsoft.com", "https://api.botframework.com"],
-      fetchFn,
+      fetchFn: asFetch(fetchFn),
       tokenProvider,
     });
 
@@ -57,7 +59,7 @@ describe("fetchWithBearerAuthScopeFallback", () => {
     const response = await fetchWithBearerAuthScopeFallback({
       url: "https://example.com/file",
       scopes: ["https://graph.microsoft.com"],
-      fetchFn,
+      fetchFn: asFetch(fetchFn),
       tokenProvider,
       shouldAttachAuth: () => false,
     });
@@ -82,7 +84,7 @@ describe("fetchWithBearerAuthScopeFallback", () => {
     const response = await fetchWithBearerAuthScopeFallback({
       url: "https://graph.microsoft.com/v1.0/me",
       scopes: ["https://first.example", "https://second.example"],
-      fetchFn,
+      fetchFn: asFetch(fetchFn),
       tokenProvider,
     });
 
