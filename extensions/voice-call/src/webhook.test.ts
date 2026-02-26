@@ -7,7 +7,7 @@ import { VoiceCallWebhookServer } from "./webhook.js";
 
 const provider: VoiceCallProvider = {
   name: "mock",
-  verifyWebhook: () => ({ ok: true }),
+  verifyWebhook: () => ({ ok: true, verifiedRequestKey: "mock:req:base" }),
   parseWebhookEvent: () => ({ events: [] }),
   initiateCall: async () => ({ providerCallId: "provider-call", status: "initiated" }),
   hangupCall: async () => {},
@@ -123,7 +123,7 @@ describe("VoiceCallWebhookServer replay handling", () => {
   it("acknowledges replayed webhook requests and skips event side effects", async () => {
     const replayProvider: VoiceCallProvider = {
       ...provider,
-      verifyWebhook: () => ({ ok: true, isReplay: true }),
+      verifyWebhook: () => ({ ok: true, isReplay: true, verifiedRequestKey: "mock:req:replay" }),
       parseWebhookEvent: () => ({
         events: [
           {
@@ -213,6 +213,39 @@ describe("VoiceCallWebhookServer replay handling", () => {
       });
       expect(processEvent).toHaveBeenCalledTimes(1);
       expect(processEvent.mock.calls[0]?.[0]?.dedupeKey).toBe("verified:req:123");
+    } finally {
+      await server.stop();
+    }
+  });
+
+  it("rejects requests when verification succeeds without a request key", async () => {
+    const parseWebhookEvent = vi.fn(() => ({ events: [], statusCode: 200 }));
+    const badProvider: VoiceCallProvider = {
+      ...provider,
+      verifyWebhook: () => ({ ok: true }),
+      parseWebhookEvent,
+    };
+    const { manager } = createManager([]);
+    const config = createConfig({ serve: { port: 0, bind: "127.0.0.1", path: "/voice/webhook" } });
+    const server = new VoiceCallWebhookServer(config, manager, badProvider);
+
+    try {
+      const baseUrl = await server.start();
+      const address = (
+        server as unknown as { server?: { address?: () => unknown } }
+      ).server?.address?.();
+      const requestUrl = new URL(baseUrl);
+      if (address && typeof address === "object" && "port" in address && address.port) {
+        requestUrl.port = String(address.port);
+      }
+      const response = await fetch(requestUrl.toString(), {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: "CallSid=CA123&SpeechResult=hello",
+      });
+
+      expect(response.status).toBe(401);
+      expect(parseWebhookEvent).not.toHaveBeenCalled();
     } finally {
       await server.stop();
     }
