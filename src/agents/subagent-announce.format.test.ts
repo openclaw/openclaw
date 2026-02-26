@@ -825,6 +825,47 @@ describe("subagent announce formatting", () => {
     }
   });
 
+  it("routes manual completion direct-send for telegram forum topics", async () => {
+    sendSpy.mockClear();
+    agentSpy.mockClear();
+    sessionStore = {
+      "agent:main:subagent:test": {
+        sessionId: "child-session-telegram-topic",
+      },
+      "agent:main:main": {
+        sessionId: "requester-session-telegram-topic",
+        lastChannel: "telegram",
+        lastTo: "123:topic:999",
+        lastThreadId: 999,
+      },
+    };
+    chatHistoryMock.mockResolvedValueOnce({
+      messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
+    });
+
+    const didAnnounce = await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-direct-telegram-topic",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterOrigin: {
+        channel: "telegram",
+        to: "123",
+        threadId: 42,
+      },
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+    });
+
+    expect(didAnnounce).toBe(true);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(agentSpy).not.toHaveBeenCalled();
+    const call = sendSpy.mock.calls[0]?.[0] as { params?: Record<string, unknown> };
+    expect(call?.params?.channel).toBe("telegram");
+    expect(call?.params?.to).toBe("123");
+    expect(call?.params?.threadId).toBe("42");
+  });
+
   it("uses hook-provided thread target across requester thread variants", async () => {
     const cases = [
       {

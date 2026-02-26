@@ -28,8 +28,11 @@ import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { resolveOutboundTarget } from "./targets.js";
 
 describe("resolveOutboundTarget channel resolution", () => {
+  let registrySeq = 0;
+
   beforeEach(() => {
-    setActivePluginRegistry(createTestRegistry([]));
+    registrySeq += 1;
+    setActivePluginRegistry(createTestRegistry([]), `targets-test-${registrySeq}`);
     mocks.getChannelPlugin.mockReset();
     mocks.loadOpenClawPlugins.mockReset();
   });
@@ -57,5 +60,44 @@ describe("resolveOutboundTarget channel resolution", () => {
 
     expect(result).toEqual({ ok: true, to: "123456" });
     expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries bootstrap on subsequent resolve when the first bootstrap attempt fails", () => {
+    const telegramPlugin = {
+      id: "telegram",
+      meta: { label: "Telegram" },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({}),
+      },
+    };
+    mocks.getChannelPlugin
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce(undefined)
+      .mockReturnValueOnce(telegramPlugin)
+      .mockReturnValue(telegramPlugin);
+    mocks.loadOpenClawPlugins
+      .mockImplementationOnce(() => {
+        throw new Error("bootstrap failed");
+      })
+      .mockImplementation(() => undefined);
+
+    const first = resolveOutboundTarget({
+      channel: "telegram",
+      to: "123456",
+      cfg: { channels: { telegram: { botToken: "test-token" } } },
+      mode: "explicit",
+    });
+    const second = resolveOutboundTarget({
+      channel: "telegram",
+      to: "123456",
+      cfg: { channels: { telegram: { botToken: "test-token" } } },
+      mode: "explicit",
+    });
+
+    expect(first.ok).toBe(false);
+    expect(second).toEqual({ ok: true, to: "123456" });
+    expect(mocks.loadOpenClawPlugins).toHaveBeenCalledTimes(2);
   });
 });
