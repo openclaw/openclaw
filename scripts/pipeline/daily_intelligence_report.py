@@ -1629,7 +1629,37 @@ def build_falsification(mkt: dict, geo: dict,
 
     if not flags:
         return "  반증 플래그 없음. 무행동 유지."
-    return "\n".join(flags[:4])
+
+    # 규칙 플래그를 LLM에 넘겨 해석 심화
+    raw_flags = "\n".join(flags[:4])
+    try:
+        messages = [
+            {"role": "system", "content": (
+                "너는 투자 반증 분석가다. 아래 규칙 기반 플래그를 받아, "
+                "각 플래그에 대해 1-2문장으로 투자자가 주의해야 할 핵심 맥락을 추가해라.\n"
+                "규칙:\n"
+                "- 반드시 한국어로만 작성\n"
+                "- 각 플래그는 '⚠️'로 시작\n"
+                "- 영어/일본어/중국어 단어 사용 금지, 지표명(VIX,EPU,KOSPI 등)만 예외\n"
+                "- 플래그 수를 늘리지 말고, 받은 것만 심화\n"
+                "- 쓸데없는 서론/결론 없이 바로 플래그만 출력"
+            )},
+            {"role": "user", "content": raw_flags},
+        ]
+        content, model, error = llm_chat_with_fallback(
+            messages, MODELS_PREMIUM, max_tokens=500, timeout=45,
+        )
+        log(f"Falsification model: {model or 'FAILED'}{f' err={error}' if error else ''}")
+        if content:
+            cleaned = _clean_llm_text(content)
+            lines = [l.strip() for l in cleaned.split("\n") if l.strip()]
+            if len(lines) >= 1:
+                return "\n".join(lines[:4])
+    except Exception as e:
+        log(f"Falsification LLM error: {e}")
+
+    # LLM 실패 시 규칙 기반 원문 반환
+    return raw_flags
 
 
 def build_executive_summary(factcheck: str, pest: str,
