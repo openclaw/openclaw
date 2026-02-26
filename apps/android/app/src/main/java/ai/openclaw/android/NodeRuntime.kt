@@ -457,6 +457,16 @@ class NodeRuntime(context: Context) {
     canvas.navigate("")
   }
 
+  fun onCanvasPageFinished(url: String?) {
+    val current = url?.trim().orEmpty()
+    if (current.isBlank()) return
+    if (!current.contains("/__openclaw__/a2ui/")) return
+
+    _canvasA2uiHydrated.value = true
+    _canvasRehydratePending.value = false
+    _canvasRehydrateErrorText.value = null
+  }
+
   fun requestCanvasRehydrate(source: String = "manual", force: Boolean = true) {
     scope.launch {
       if (!_nodeConnected.value) {

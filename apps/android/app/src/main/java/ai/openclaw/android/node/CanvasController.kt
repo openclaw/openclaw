@@ -66,6 +66,31 @@ class CanvasController {
   }
 
   fun navigate(url: String) {
+    val trimmed = url.trim()
+
+    // Blank navigate payload means "present current canvas". Do not drop to scaffold.
+    if (trimmed.isBlank() || trimmed == "/") {
+      if (BuildConfig.DEBUG) {
+        Log.d("OpenClawCanvas", "ignore blank canvas navigate payload")
+      }
+      if (!this.url.isNullOrBlank()) {
+        reload()
+      }
+      return
+    }
+
+    // Internal session targets (for example agent:main:main) are control targets,
+    // not navigable URLs. Keep the current canvas URL instead of dropping to scaffold.
+    if (trimmed.startsWith("agent:") || trimmed.startsWith("session:")) {
+      if (BuildConfig.DEBUG) {
+        Log.w("OpenClawCanvas", "ignore internal canvas target: $trimmed")
+      }
+      if (!this.url.isNullOrBlank()) {
+        reload()
+      }
+      return
+    }
+
     val normalized = normalizeCanvasUrl(url)
     this.url = normalized
     _currentUrl.value = this.url
@@ -94,15 +119,6 @@ class CanvasController {
   private fun normalizeCanvasUrl(raw: String): String? {
     val trimmed = raw.trim()
     if (trimmed.isBlank() || trimmed == "/") return null
-
-    // Internal session targets (for example agent:main:main) are not browser URLs.
-    // Treat them as "show canvas" without attempting WebView navigation.
-    if (trimmed.startsWith("agent:") || trimmed.startsWith("session:")) {
-      if (BuildConfig.DEBUG) {
-        Log.w("OpenClawCanvas", "ignore internal canvas target: $trimmed")
-      }
-      return null
-    }
 
     val parsed = runCatching { Uri.parse(trimmed) }.getOrNull() ?: return null
     val scheme = parsed.scheme?.lowercase().orEmpty()

@@ -30,6 +30,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -45,6 +46,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import ai.openclaw.android.MainViewModel
+import kotlinx.coroutines.delay
 
 private enum class HomeTab(
   val label: String,
@@ -139,13 +141,67 @@ private fun ScreenTabScreen(viewModel: MainViewModel) {
   val canvasA2uiHydrated by viewModel.canvasA2uiHydrated.collectAsState()
   val canvasRehydratePending by viewModel.canvasRehydratePending.collectAsState()
   val canvasRehydrateErrorText by viewModel.canvasRehydrateErrorText.collectAsState()
-  val isA2uiUrl = canvasUrl?.contains("/__openclaw__/a2ui/") == true
-  val showRestoreCta = isConnected && isNodeConnected && (canvasUrl.isNullOrBlank() || (isA2uiUrl && !canvasA2uiHydrated))
+
+  // Auto-rehydrate once per Screen-tab entry to avoid retry loops.
+  var autoRehydrateArmed by rememberSaveable { mutableStateOf(true) }
+  var hydrationRetryArmed by rememberSaveable { mutableStateOf(true) }
+
+  LaunchedEffect(isConnected, isNodeConnected) {
+    if (!isConnected || !isNodeConnected) {
+      autoRehydrateArmed = true
+      hydrationRetryArmed = true
+    }
+  }
+
+  LaunchedEffect(isConnected, isNodeConnected, canvasUrl, canvasA2uiHydrated, canvasRehydratePending, autoRehydrateArmed) {
+    if (!autoRehydrateArmed) return@LaunchedEffect
+    if (!isConnected || !isNodeConnected) return@LaunchedEffect
+    if (canvasRehydratePending) return@LaunchedEffect
+
+    val needsAutoRestore = canvasUrl.isNullOrBlank() || !canvasA2uiHydrated
+    if (!needsAutoRestore) {
+      autoRehydrateArmed = false
+      return@LaunchedEffect
+    }
+
+    autoRehydrateArmed = false
+    viewModel.requestCanvasRehydrate(source = "screen_tab_auto")
+  }
+
+  // One-shot hydration retry when URL is set but A2UI has not hydrated yet.
+  LaunchedEffect(isConnected, isNodeConnected, canvasUrl, canvasA2uiHydrated, canvasRehydratePending, hydrationRetryArmed) {
+    if (!hydrationRetryArmed) return@LaunchedEffect
+    if (!isConnected || !isNodeConnected) return@LaunchedEffect
+    if (canvasRehydratePending) return@LaunchedEffect
+    if (canvasUrl.isNullOrBlank()) return@LaunchedEffect
+
+    if (canvasA2uiHydrated) {
+      hydrationRetryArmed = false
+      return@LaunchedEffect
+    }
+
+    delay(2500)
+    if (canvasRehydratePending || canvasA2uiHydrated) {
+      hydrationRetryArmed = false
+      return@LaunchedEffect
+    }
+
+    hydrationRetryArmed = false
+    viewModel.requestCanvasRehydrate(source = "screen_tab_hydration_retry")
+  }
+
+  // Keep CTA out of the way once URL exists, but show it for initial blank state,
+  // pending requests, or explicit errors.
+  val showRestoreCta =
+    isConnected &&
+      isNodeConnected &&
+      (canvasUrl.isNullOrBlank() || canvasRehydratePending || !canvasRehydrateErrorText.isNullOrBlank())
   val restoreCtaText =
     when {
       canvasRehydratePending -> "Restore requested. Waiting for agent…"
       !canvasRehydrateErrorText.isNullOrBlank() -> canvasRehydrateErrorText!!
-      else -> "Canvas reset. Tap to restore dashboard."
+      !canvasUrl.isNullOrBlank() && !canvasA2uiHydrated -> "Loading dashboard…"
+      else -> "No canvas update yet. Tap to retry."
     }
 
   Box(modifier = Modifier.fillMaxSize()) {

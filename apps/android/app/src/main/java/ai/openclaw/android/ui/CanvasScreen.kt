@@ -93,6 +93,7 @@ fun CanvasScreen(viewModel: MainViewModel, modifier: Modifier = Modifier) {
                 Log.d("OpenClawWebView", "onPageFinished: $url")
               }
               viewModel.canvas.onPageFinished()
+              viewModel.onCanvasPageFinished(url)
             }
 
             override fun onRenderProcessGone(

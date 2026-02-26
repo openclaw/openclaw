@@ -181,10 +181,15 @@ export async function handleA2uiHttpRequest(
 
   try {
     const lower = result.realPath.toLowerCase();
+    const detectedMime = await detectMime({ filePath: result.realPath });
     const mime =
       lower.endsWith(".html") || lower.endsWith(".htm")
         ? "text/html"
-        : ((await detectMime({ filePath: result.realPath })) ?? "application/octet-stream");
+        : lower.endsWith(".js")
+          ? "application/javascript; charset=utf-8"
+          : detectedMime && detectedMime !== "application/octet-stream"
+            ? detectedMime
+            : "application/octet-stream";
     res.setHeader("Cache-Control", "no-store");
 
     if (req.method === "HEAD") {
