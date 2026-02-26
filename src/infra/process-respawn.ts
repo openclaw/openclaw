@@ -9,11 +9,21 @@ export type GatewayRespawnResult = {
 };
 
 const SUPERVISOR_HINT_ENV_VARS = [
+  // macOS launchd — native env vars (may be set by launchd itself)
   "LAUNCH_JOB_LABEL",
   "LAUNCH_JOB_NAME",
+  // macOS launchd — OpenClaw's own plist generator sets these via
+  // buildServiceEnvironment() in service-env.ts. launchd does NOT
+  // automatically inject LAUNCH_JOB_LABEL into the child environment,
+  // so OPENCLAW_LAUNCHD_LABEL is the reliable supervised-mode signal.
+  "OPENCLAW_LAUNCHD_LABEL",
+  // Linux systemd
   "INVOCATION_ID",
   "SYSTEMD_EXEC_PID",
   "JOURNAL_STREAM",
+  "OPENCLAW_SYSTEMD_UNIT",
+  // Generic service marker (set by both launchd and systemd plist/unit generators)
+  "OPENCLAW_SERVICE_MARKER",
 ];
 
 function isTruthy(value: string | undefined): boolean {
