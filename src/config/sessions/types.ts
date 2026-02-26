@@ -22,6 +22,49 @@ export type SessionOrigin = {
   threadId?: string | number;
 };
 
+export type SessionAcpIdentitySource = "ensure" | "status" | "event";
+
+export type SessionAcpIdentityState = "pending" | "resolved";
+
+export type SessionAcpIdentity = {
+  state: SessionAcpIdentityState;
+  acpxRecordId?: string;
+  acpxSessionId?: string;
+  agentSessionId?: string;
+  source: SessionAcpIdentitySource;
+  lastUpdatedAt: number;
+};
+
+export type SessionAcpMeta = {
+  backend: string;
+  agent: string;
+  runtimeSessionName: string;
+  identity?: SessionAcpIdentity;
+  mode: "persistent" | "oneshot";
+  runtimeOptions?: AcpSessionRuntimeOptions;
+  cwd?: string;
+  state: "idle" | "running" | "error";
+  lastActivityAt: number;
+  lastError?: string;
+};
+
+export type AcpSessionRuntimeOptions = {
+  /**
+   * ACP runtime mode set via session/set_mode (for example: "plan", "normal", "auto").
+   */
+  runtimeMode?: string;
+  /** ACP runtime config option: model id. */
+  model?: string;
+  /** Working directory override for ACP session turns. */
+  cwd?: string;
+  /** ACP runtime config option: permission profile id. */
+  permissionProfile?: string;
+  /** ACP runtime config option: per-turn timeout in seconds. */
+  timeoutSeconds?: number;
+  /** Backend-specific option bag mapped through session/set_config_option. */
+  backendExtras?: Record<string, string>;
+};
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -41,6 +84,14 @@ export type SessionEntry = {
   spawnDepth?: number;
   systemSent?: boolean;
   abortedLastRun?: boolean;
+  /**
+   * Session-level stop cutoff captured when /stop is received.
+   * Messages at/before this boundary are skipped to avoid replaying
+   * queued pre-stop backlog.
+   */
+  abortCutoffMessageSid?: string;
+  /** Epoch ms cutoff paired with abortCutoffMessageSid when available. */
+  abortCutoffTimestamp?: number;
   chatType?: SessionChatType;
   thinkingLevel?: string;
   verboseLevel?: string;
@@ -112,6 +163,7 @@ export type SessionEntry = {
   lastThreadId?: string | number;
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
+  acp?: SessionAcpMeta;
 };
 
 function normalizeRuntimeField(value: string | undefined): string | undefined {

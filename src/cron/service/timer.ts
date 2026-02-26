@@ -36,11 +36,13 @@ const MIN_REFIRE_GAP_MS = 2_000;
  * from wedging the entire cron lane.
  */
 export const DEFAULT_JOB_TIMEOUT_MS = 10 * 60_000; // 10 minutes
+const AGENT_TURN_SAFETY_TIMEOUT_MS = 60 * 60_000; // 60 minutes
 
 type TimedCronRunOutcome = CronRunOutcome &
   CronRunTelemetry & {
     jobId: string;
     delivered?: boolean;
+    deliveryAttempted?: boolean;
     startedAt: number;
     endedAt: number;
   };
@@ -51,7 +53,7 @@ function resolveCronJobTimeoutMs(job: CronJob): number | undefined {
       ? Math.floor(job.payload.timeoutSeconds * 1_000)
       : undefined;
   if (configuredTimeoutMs === undefined) {
-    return DEFAULT_JOB_TIMEOUT_MS;
+    return job.payload.kind === "agentTurn" ? AGENT_TURN_SAFETY_TIMEOUT_MS : DEFAULT_JOB_TIMEOUT_MS;
   }
   return configuredTimeoutMs <= 0 ? undefined : configuredTimeoutMs;
 }
@@ -606,7 +608,9 @@ export async function executeJobCore(
   state: CronServiceState,
   job: CronJob,
   abortSignal?: AbortSignal,
-): Promise<CronRunOutcome & CronRunTelemetry & { delivered?: boolean }> {
+): Promise<
+  CronRunOutcome & CronRunTelemetry & { delivered?: boolean; deliveryAttempted?: boolean }
+> {
   const resolveAbortError = () => ({
     status: "error" as const,
     error: timeoutErrorMessage(),
@@ -729,17 +733,22 @@ export async function executeJobCore(
     return { status: "error", error: timeoutErrorMessage() };
   }
 
-  // Post a short summary back to the main session — but only when the
-  // isolated run did NOT already deliver its output to the target channel.
-  // When `res.delivered` is true the announce flow (or direct outbound
-  // delivery) already sent the result, so posting the summary to main
-  // would wake the main agent and cause a duplicate message.
+  // Post a short summary back to the main session only when announce
+  // delivery was requested and we are confident no outbound delivery path
+  // ran. If delivery was attempted but final ack is uncertain, suppress the
+  // main summary to avoid duplicate user-facing sends.
   // See: https://github.com/openclaw/openclaw/issues/15692
   const summaryText = res.summary?.trim();
   const deliveryPlan = resolveCronDeliveryPlan(job);
   const suppressMainSummary =
     res.status === "error" && res.errorKind === "delivery-target" && deliveryPlan.requested;
-  if (summaryText && deliveryPlan.requested && !res.delivered && !suppressMainSummary) {
+  if (
+    summaryText &&
+    deliveryPlan.requested &&
+    !res.delivered &&
+    res.deliveryAttempted !== true &&
+    !suppressMainSummary
+  ) {
     const prefix = "Cron";
     const label =
       res.status === "error" ? `${prefix} (error): ${summaryText}` : `${prefix}: ${summaryText}`;
@@ -762,6 +771,7 @@ export async function executeJobCore(
     error: res.error,
     summary: res.summary,
     delivered: res.delivered,
+    deliveryAttempted: res.deliveryAttempted,
     sessionId: res.sessionId,
     sessionKey: res.sessionKey,
     model: res.model,

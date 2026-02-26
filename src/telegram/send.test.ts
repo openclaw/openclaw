@@ -1280,6 +1280,23 @@ describe("sendStickerTelegram", () => {
     expect(sendSticker).toHaveBeenNthCalledWith(2, chatId, "fileId123", undefined);
     expect(res.messageId).toBe("109");
   });
+
+  it("fails when sticker send returns no message_id", async () => {
+    const chatId = "123";
+    const sendSticker = vi.fn().mockResolvedValue({
+      chat: { id: chatId },
+    });
+    const api = { sendSticker } as unknown as {
+      sendSticker: typeof sendSticker;
+    };
+
+    await expect(
+      sendStickerTelegram(chatId, "fileId123", {
+        token: "tok",
+        api,
+      }),
+    ).rejects.toThrow(/returned no message_id/i);
+  });
 });
 
 describe("shared send behaviors", () => {
@@ -1541,6 +1558,20 @@ describe("sendPollTelegram", () => {
     ).rejects.toThrow(/durationHours is not supported/i);
 
     expect(api.sendPoll).not.toHaveBeenCalled();
+  });
+
+  it("fails when poll send returns no message_id", async () => {
+    const api = {
+      sendPoll: vi.fn(async () => ({ chat: { id: 555 }, poll: { id: "p1" } })),
+    };
+
+    await expect(
+      sendPollTelegram(
+        "123",
+        { question: "Q", options: ["A", "B"] },
+        { token: "t", api: api as unknown as Bot["api"] },
+      ),
+    ).rejects.toThrow(/returned no message_id/i);
   });
 });
 

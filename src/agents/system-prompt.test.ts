@@ -221,6 +221,9 @@ describe("buildAgentSystemPrompt", () => {
     );
     expect(prompt).toContain("Completion is push-based: it will auto-announce when done.");
     expect(prompt).toContain("Do not poll `subagents list` / `sessions_list` in a loop");
+    expect(prompt).toContain(
+      "When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.",
+    );
   });
 
   it("lists available tools when provided", () => {
@@ -233,6 +236,52 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("sessions_list");
     expect(prompt).toContain("sessions_history");
     expect(prompt).toContain("sessions_send");
+  });
+
+  it("documents ACP sessions_spawn agent targeting requirements", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn"],
+    });
+
+    expect(prompt).toContain("sessions_spawn");
+    expect(prompt).toContain(
+      'runtime="acp" requires `agentId` unless `acp.defaultAgent` is configured',
+    );
+    expect(prompt).toContain("not agents_list");
+  });
+
+  it("guides harness requests to ACP thread-bound spawns", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn", "subagents", "agents_list", "exec"],
+    });
+
+    expect(prompt).toContain(
+      'For requests like "do this in codex/claude code/gemini", treat it as ACP harness intent',
+    );
+    expect(prompt).toContain(
+      'On Discord, default ACP harness requests to thread-bound persistent sessions (`thread: true`, `mode: "session"`)',
+    );
+    expect(prompt).toContain(
+      "do not route ACP harness requests through `subagents`/`agents_list` or local PTY exec flows",
+    );
+  });
+
+  it("omits ACP harness guidance when ACP is disabled", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn", "subagents", "agents_list", "exec"],
+      acpEnabled: false,
+    });
+
+    expect(prompt).not.toContain(
+      'For requests like "do this in codex/claude code/gemini", treat it as ACP harness intent',
+    );
+    expect(prompt).not.toContain('runtime="acp" requires `agentId`');
+    expect(prompt).not.toContain("not ACP harness ids");
+    expect(prompt).toContain("- sessions_spawn: Spawn an isolated sub-agent session");
+    expect(prompt).toContain("- agents_list: List OpenClaw agent ids allowed for sessions_spawn");
   });
 
   it("preserves tool casing in the prompt", () => {
@@ -599,17 +648,39 @@ describe("buildSubagentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Sub-Agent Spawning");
-    expect(prompt).toContain("You CAN spawn your own sub-agents");
+    expect(prompt).toContain(
+      "You CAN spawn your own sub-agents for parallel or complex work using `sessions_spawn`.",
+    );
     expect(prompt).toContain("sessions_spawn");
-    expect(prompt).toContain("`subagents` tool");
-    expect(prompt).toContain("announce their results back to you automatically");
-    expect(prompt).toContain("Do NOT repeatedly poll `subagents list`");
+    expect(prompt).toContain('runtime: "acp"');
+    expect(prompt).toContain("For ACP harness sessions (codex/claudecode/gemini)");
+    expect(prompt).toContain("set `agentId` unless `acp.defaultAgent` is configured");
+    expect(prompt).toContain("Do not ask users to run slash commands or CLI");
+    expect(prompt).toContain("Do not use `exec` (`openclaw ...`, `acpx ...`)");
+    expect(prompt).toContain("Use `subagents` only for OpenClaw subagents");
+    expect(prompt).toContain("Subagent results auto-announce back to you");
+    expect(prompt).toContain("Avoid polling loops");
     expect(prompt).toContain("spawned by the main agent");
     expect(prompt).toContain("reported to the main agent");
     expect(prompt).toContain("[compacted: tool output removed to free context]");
     expect(prompt).toContain("[truncated: output exceeded context limit]");
     expect(prompt).toContain("offset/limit");
     expect(prompt).toContain("instead of full-file `cat`");
+  });
+
+  it("omits ACP spawning guidance when ACP is disabled", () => {
+    const prompt = buildSubagentSystemPrompt({
+      childSessionKey: "agent:main:subagent:abc",
+      task: "research task",
+      childDepth: 1,
+      maxSpawnDepth: 2,
+      acpEnabled: false,
+    });
+
+    expect(prompt).not.toContain('runtime: "acp"');
+    expect(prompt).not.toContain("For ACP harness sessions (codex/claudecode/gemini)");
+    expect(prompt).not.toContain("set `agentId` unless `acp.defaultAgent` is configured");
+    expect(prompt).toContain("You CAN spawn your own sub-agents");
   });
 
   it("renders depth-2 leaf guidance with parent orchestrator labels", () => {

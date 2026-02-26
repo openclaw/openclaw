@@ -452,6 +452,29 @@ Notes:
 - `meta.preferOver` lists channel ids to skip auto-enable when both are configured.
 - `meta.detailLabel` and `meta.systemImage` let UIs show richer channel labels/icons.
 
+### Channel onboarding hooks
+
+Channel plugins can define optional onboarding hooks on `plugin.onboarding`:
+
+- `configure(ctx)` is the baseline setup flow.
+- `configureInteractive(ctx)` can fully own interactive setup for both configured and unconfigured states.
+- `configureWhenConfigured(ctx)` can override behavior only for already configured channels.
+
+Hook precedence in the wizard:
+
+1. `configureInteractive` (if present)
+2. `configureWhenConfigured` (only when channel status is already configured)
+3. fallback to `configure`
+
+Context details:
+
+- `configureInteractive` and `configureWhenConfigured` receive:
+  - `configured` (`true` or `false`)
+  - `label` (user-facing channel name used by prompts)
+  - plus the shared config/runtime/prompter/options fields
+- Returning `"skip"` leaves selection and account tracking unchanged.
+- Returning `{ cfg, accountId? }` applies config updates and records account selection.
+
 ### Write a new messaging channel (step‑by‑step)
 
 Use this when you want a **new chat surface** (a "messaging channel"), not a model provider.

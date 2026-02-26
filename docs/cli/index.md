@@ -400,6 +400,8 @@ Subcommands:
 - Tip: `channels status` prints warnings with suggested fixes when it can detect common misconfigurations (then points you to `openclaw doctor`).
 - `channels logs`: show recent channel logs from the gateway log file.
 - `channels add`: wizard-style setup when no flags are passed; flags switch to non-interactive mode.
+  - When adding a non-default account to a channel still using single-account top-level config, OpenClaw moves account-scoped values into `channels.<channel>.accounts.default` before writing the new account.
+  - Non-interactive `channels add` does not auto-create/upgrade bindings; channel-only bindings continue to match the default account.
 - `channels remove`: disable by default; pass `--delete` to remove config entries without prompts.
 - `channels login`: interactive channel login (WhatsApp Web only).
 - `channels logout`: log out of a channel session (if supported).
@@ -574,7 +576,37 @@ Options:
 - `--non-interactive`
 - `--json`
 
-Binding specs use `channel[:accountId]`. When `accountId` is omitted for WhatsApp, the default account id is used.
+Binding specs use `channel[:accountId]`. When `accountId` is omitted, OpenClaw may resolve account scope via channel defaults/plugin hooks; otherwise it is a channel binding without explicit account scope.
+
+#### `agents bindings`
+
+List routing bindings.
+
+Options:
+
+- `--agent <id>`
+- `--json`
+
+#### `agents bind`
+
+Add routing bindings for an agent.
+
+Options:
+
+- `--agent <id>`
+- `--bind <channel[:accountId]>` (repeatable)
+- `--json`
+
+#### `agents unbind`
+
+Remove routing bindings for an agent.
+
+Options:
+
+- `--agent <id>`
+- `--bind <channel[:accountId]>` (repeatable)
+- `--all`
+- `--json`
 
 #### `agents delete <id>`
 

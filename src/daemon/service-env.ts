@@ -25,6 +25,35 @@ type BuildServicePathOptions = MinimalServicePathOptions & {
   env?: Record<string, string | undefined>;
 };
 
+const SERVICE_PROXY_ENV_KEYS = [
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "NO_PROXY",
+  "ALL_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "no_proxy",
+  "all_proxy",
+] as const;
+
+function readServiceProxyEnvironment(
+  env: Record<string, string | undefined>,
+): Record<string, string | undefined> {
+  const out: Record<string, string | undefined> = {};
+  for (const key of SERVICE_PROXY_ENV_KEYS) {
+    const value = env[key];
+    if (typeof value !== "string") {
+      continue;
+    }
+    const trimmed = value.trim();
+    if (!trimmed) {
+      continue;
+    }
+    out[key] = trimmed;
+  }
+  return out;
+}
+
 function addNonEmptyDir(dirs: string[], dir: string | undefined): void {
   if (dir) {
     dirs.push(dir);
@@ -218,10 +247,12 @@ export function buildServiceEnvironment(params: {
   const configPath = env.OPENCLAW_CONFIG_PATH;
   // Keep a usable temp directory for supervised services even when the host env omits TMPDIR.
   const tmpDir = env.TMPDIR?.trim() || os.tmpdir();
+  const proxyEnv = readServiceProxyEnvironment(env);
   return {
     HOME: env.HOME,
     TMPDIR: tmpDir,
     PATH: buildMinimalServicePath({ env }),
+    ...proxyEnv,
     OPENCLAW_PROFILE: profile,
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: configPath,
@@ -242,10 +273,12 @@ export function buildNodeServiceEnvironment(params: {
   const stateDir = env.OPENCLAW_STATE_DIR;
   const configPath = env.OPENCLAW_CONFIG_PATH;
   const tmpDir = env.TMPDIR?.trim() || os.tmpdir();
+  const proxyEnv = readServiceProxyEnvironment(env);
   return {
     HOME: env.HOME,
     TMPDIR: tmpDir,
     PATH: buildMinimalServicePath({ env }),
+    ...proxyEnv,
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_CONFIG_PATH: configPath,
     OPENCLAW_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(),

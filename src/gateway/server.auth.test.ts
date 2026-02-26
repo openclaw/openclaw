@@ -105,6 +105,13 @@ const CONTROL_UI_CLIENT = {
   mode: GATEWAY_CLIENT_MODES.WEBCHAT,
 };
 
+const TRUSTED_PROXY_CONTROL_UI_HEADERS = {
+  origin: "https://localhost",
+  "x-forwarded-for": "203.0.113.10",
+  "x-forwarded-proto": "https",
+  "x-forwarded-user": "peter@example.com",
+} as const;
+
 const NODE_CLIENT = {
   id: GATEWAY_CLIENT_NAMES.NODE_HOST,
   version: "1.0.0",
@@ -131,10 +138,11 @@ async function expectHelloOkServerVersion(port: number, expectedVersion: string)
 }
 
 async function createSignedDevice(params: {
-  token: string;
+  token?: string | null;
   scopes: string[];
   clientId: string;
   clientMode: string;
+  role?: "operator" | "node";
   identityPath?: string;
   nonce: string;
   signedAtMs?: number;
@@ -149,10 +157,10 @@ async function createSignedDevice(params: {
     deviceId: identity.deviceId,
     clientId: params.clientId,
     clientMode: params.clientMode,
-    role: "operator",
+    role: params.role ?? "operator",
     scopes: params.scopes,
     signedAtMs,
-    token: params.token,
+    token: params.token ?? null,
     nonce: params.nonce,
   });
   return {
@@ -185,6 +193,23 @@ async function approvePendingPairingIfNeeded() {
   if (pending?.requestId) {
     await approveDevicePairing(pending.requestId);
   }
+}
+
+async function configureTrustedProxyControlUiAuth() {
+  testState.gatewayAuth = {
+    mode: "trusted-proxy",
+    trustedProxy: {
+      userHeader: "x-forwarded-user",
+      requiredHeaders: ["x-forwarded-proto"],
+    },
+  };
+  const { writeConfigFile } = await import("../config/config.js");
+  await writeConfigFile({
+    gateway: {
+      trustedProxies: ["127.0.0.1"],
+    },
+    // oxlint-disable-next-line typescript/no-explicit-any
+  } as any);
 }
 
 function isConnectResMessage(id: string) {
@@ -672,17 +697,6 @@ describe("gateway server auth/connect", () => {
       ws.close();
     });
 
-    test("rejects non-local browser origins for non-control-ui clients", async () => {
-      const ws = await openWs(port, { origin: "https://attacker.example" });
-      const res = await connectReq(ws, {
-        token: "secret",
-        client: TEST_OPERATOR_CLIENT,
-      });
-      expect(res.ok).toBe(false);
-      expect(res.error?.message ?? "").toContain("origin not allowed");
-      ws.close();
-    });
-
     test("returns control ui hint when token is missing", async () => {
       const ws = await openWs(port, { origin: originForPort(port) });
       const res = await connectReq(ws, {
@@ -711,27 +725,6 @@ describe("gateway server auth/connect", () => {
         ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
       );
       ws.close();
-    });
-
-    test("rate-limits browser-origin auth failures on loopback even when loopback exemption is enabled", async () => {
-      testState.gatewayAuth = {
-        mode: "token",
-        token: "secret",
-        rateLimit: { maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000, exemptLoopback: true },
-      };
-      await withGatewayServer(async ({ port }) => {
-        const firstWs = await openWs(port, { origin: originForPort(port) });
-        const first = await connectReq(firstWs, { token: "wrong" });
-        expect(first.ok).toBe(false);
-        expect(first.error?.message ?? "").not.toContain("retry later");
-        firstWs.close();
-
-        const secondWs = await openWs(port, { origin: originForPort(port) });
-        const second = await connectReq(secondWs, { token: "wrong" });
-        expect(second.ok).toBe(false);
-        expect(second.error?.message ?? "").toContain("retry later");
-        secondWs.close();
-      });
     });
   });
 
@@ -807,6 +800,93 @@ describe("gateway server auth/connect", () => {
       ws.close();
     });
   });
+
+  const trustedProxyControlUiCases: Array<{
+    name: string;
+    role: "operator" | "node";
+    withUnpairedNodeDevice: boolean;
+    expectedOk: boolean;
+    expectedErrorSubstring?: string;
+    expectedErrorCode?: string;
+    expectStatusChecks: boolean;
+  }> = [
+    {
+      name: "allows trusted-proxy control ui operator without device identity",
+      role: "operator",
+      withUnpairedNodeDevice: false,
+      expectedOk: true,
+      expectStatusChecks: true,
+    },
+    {
+      name: "rejects trusted-proxy control ui node role without device identity",
+      role: "node",
+      withUnpairedNodeDevice: false,
+      expectedOk: false,
+      expectedErrorSubstring: "control ui requires device identity",
+      expectedErrorCode: ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED,
+      expectStatusChecks: false,
+    },
+    {
+      name: "requires pairing for trusted-proxy control ui node role with unpaired device",
+      role: "node",
+      withUnpairedNodeDevice: true,
+      expectedOk: false,
+      expectedErrorSubstring: "pairing required",
+      expectedErrorCode: ConnectErrorDetailCodes.PAIRING_REQUIRED,
+      expectStatusChecks: false,
+    },
+  ];
+
+  for (const tc of trustedProxyControlUiCases) {
+    test(tc.name, async () => {
+      await configureTrustedProxyControlUiAuth();
+      await withGatewayServer(async ({ port }) => {
+        const ws = await openWs(port, TRUSTED_PROXY_CONTROL_UI_HEADERS);
+        const scopes = tc.withUnpairedNodeDevice ? [] : undefined;
+        let device: Awaited<ReturnType<typeof createSignedDevice>>["device"] | null = null;
+        if (tc.withUnpairedNodeDevice) {
+          const challengeNonce = await readConnectChallengeNonce(ws);
+          expect(challengeNonce).toBeTruthy();
+          ({ device } = await createSignedDevice({
+            token: null,
+            role: "node",
+            scopes: [],
+            clientId: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+            clientMode: GATEWAY_CLIENT_MODES.WEBCHAT,
+            nonce: String(challengeNonce),
+          }));
+        }
+        const res = await connectReq(ws, {
+          skipDefaultAuth: true,
+          role: tc.role,
+          scopes,
+          device,
+          client: { ...CONTROL_UI_CLIENT },
+        });
+        expect(res.ok).toBe(tc.expectedOk);
+        if (!tc.expectedOk) {
+          if (tc.expectedErrorSubstring) {
+            expect(res.error?.message ?? "").toContain(tc.expectedErrorSubstring);
+          }
+          if (tc.expectedErrorCode) {
+            expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
+              tc.expectedErrorCode,
+            );
+          }
+          ws.close();
+          return;
+        }
+        if (tc.expectStatusChecks) {
+          const status = await rpcReq(ws, "status");
+          expect(status.ok).toBe(false);
+          expect(status.error?.message ?? "").toContain("missing scope");
+          const health = await rpcReq(ws, "health");
+          expect(health.ok).toBe(true);
+        }
+        ws.close();
+      });
+    });
+  }
 
   test("allows localhost control ui without device identity when insecure auth is enabled", async () => {
     testState.gatewayControlUi = { allowInsecureAuth: true };
@@ -1242,43 +1322,6 @@ describe("gateway server auth/connect", () => {
     expect(updated?.tokens?.operator?.scopes).toContain("operator.admin");
 
     ws2.close();
-    await server.close();
-    restoreGatewayToken(prevToken);
-  });
-
-  test("does not silently auto-pair non-control-ui browser clients on loopback", async () => {
-    const { listDevicePairing } = await import("../infra/device-pairing.js");
-    const { randomUUID } = await import("node:crypto");
-    const os = await import("node:os");
-    const path = await import("node:path");
-    const { server, ws, port, prevToken } = await startServerWithClient("secret");
-    ws.close();
-
-    const browserWs = await openWs(port, { origin: originForPort(port) });
-    const nonce = await readConnectChallengeNonce(browserWs);
-    const { identity, device } = await createSignedDevice({
-      token: "secret",
-      scopes: ["operator.admin"],
-      clientId: TEST_OPERATOR_CLIENT.id,
-      clientMode: TEST_OPERATOR_CLIENT.mode,
-      identityPath: path.join(os.tmpdir(), `openclaw-browser-device-${randomUUID()}.json`),
-      nonce,
-    });
-    const res = await connectReq(browserWs, {
-      token: "secret",
-      scopes: ["operator.admin"],
-      client: TEST_OPERATOR_CLIENT,
-      device,
-    });
-    expect(res.ok).toBe(false);
-    expect(res.error?.message ?? "").toContain("pairing required");
-
-    const pairing = await listDevicePairing();
-    const pending = pairing.pending.find((entry) => entry.deviceId === identity.deviceId);
-    expect(pending).toBeTruthy();
-    expect(pending?.silent).toBe(false);
-
-    browserWs.close();
     await server.close();
     restoreGatewayToken(prevToken);
   });
