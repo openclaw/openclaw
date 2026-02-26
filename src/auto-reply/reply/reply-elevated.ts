@@ -245,6 +245,11 @@ export function resolveElevatedPermissions(params: {
  * `!== false` (default-enabled) because `allowFrom` acts as a second gate,
  * system-initiated contexts have no sender so we require explicit
  * `enabled: true` to avoid silently granting host-exec privileges.
+ *
+ * Security: `sessions_send` is owner-only + dangerous-tools gated, and the
+ * parent session already validates the sender via `resolveElevatedPermissions`.
+ * Cron and CLI agent commands are trusted local contexts. The `allowFrom`
+ * sender gate is therefore not applicable here.
  */
 export function resolveSystemElevatedDefaults(params: {
   cfg: OpenClawConfig;
