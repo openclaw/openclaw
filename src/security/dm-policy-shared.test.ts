@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   resolveDmAllowState,
   resolveDmGroupAccessDecision,
+  resolveDmGroupAccessWithLists,
   resolveEffectiveAllowFromLists,
 } from "./dm-policy-shared.js";
 
@@ -73,6 +74,37 @@ describe("security/dm-policy-shared", () => {
     });
     expect(lists.effectiveAllowFrom).toEqual(["+1111", "+2222"]);
     expect(lists.effectiveGroupAllowFrom).toEqual(["+1111", "+2222"]);
+  });
+
+  it("resolves access + effective allowlists in one shared call", () => {
+    const resolved = resolveDmGroupAccessWithLists({
+      isGroup: false,
+      dmPolicy: "pairing",
+      groupPolicy: "allowlist",
+      allowFrom: ["owner"],
+      groupAllowFrom: ["group:room"],
+      storeAllowFrom: ["paired-user"],
+      isSenderAllowed: (allowFrom) => allowFrom.includes("paired-user"),
+    });
+    expect(resolved.decision).toBe("allow");
+    expect(resolved.reason).toBe("dmPolicy=pairing (allowlisted)");
+    expect(resolved.effectiveAllowFrom).toEqual(["owner", "paired-user"]);
+    expect(resolved.effectiveGroupAllowFrom).toEqual(["group:room", "paired-user"]);
+  });
+
+  it("keeps allowlist mode strict in shared resolver (no pairing-store fallback)", () => {
+    const resolved = resolveDmGroupAccessWithLists({
+      isGroup: false,
+      dmPolicy: "allowlist",
+      groupPolicy: "allowlist",
+      allowFrom: ["owner"],
+      groupAllowFrom: [],
+      storeAllowFrom: ["paired-user"],
+      isSenderAllowed: () => false,
+    });
+    expect(resolved.decision).toBe("block");
+    expect(resolved.reason).toBe("dmPolicy=allowlist (not allowlisted)");
+    expect(resolved.effectiveAllowFrom).toEqual(["owner"]);
   });
 
   const channels = [
