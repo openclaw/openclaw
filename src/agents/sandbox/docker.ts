@@ -162,6 +162,7 @@ export function execDockerRaw(
 }
 
 import { formatCliCommand } from "../../cli/command-format.js";
+import type { SandboxDockerVolumeSetting } from "../../config/types.sandbox.js";
 import { defaultRuntime } from "../../runtime.js";
 import { computeSandboxConfigHash } from "./config-hash.js";
 import { DEFAULT_SANDBOX_IMAGE } from "./constants.js";
@@ -312,6 +313,50 @@ function formatUlimitValue(
   return `${name}=${soft}:${hard}`;
 }
 
+function volumeSettingToBindSpec(volume: SandboxDockerVolumeSetting): string | null {
+  if (volume.strategy !== "bind") {
+    return null;
+  }
+  const source = volume.source?.trim();
+  const target = volume.target?.trim();
+  if (!source || !target) {
+    return null;
+  }
+  return `${source}:${target}:${volume.readOnly ? "ro" : "rw"}`;
+}
+
+function appendVolumeMounts(args: string[], cfg: SandboxDockerConfig): void {
+  for (const volume of cfg.volumes ?? []) {
+    const target = volume.target.trim();
+    if (!target) {
+      continue;
+    }
+    if (volume.strategy === "ephemeral") {
+      args.push("--mount", `type=volume,target=${target}${volume.readOnly ? ",readonly" : ""}`);
+      continue;
+    }
+    if (volume.strategy === "named") {
+      const source = volume.source?.trim();
+      if (!source) {
+        continue;
+      }
+      args.push(
+        "--mount",
+        `type=volume,source=${source},target=${target}${volume.readOnly ? ",readonly" : ""}`,
+      );
+      continue;
+    }
+    const source = volume.source?.trim();
+    if (!source) {
+      continue;
+    }
+    args.push(
+      "--mount",
+      `type=bind,source=${source},target=${target}${volume.readOnly ? ",readonly" : ""}`,
+    );
+  }
+}
+
 export function buildSandboxCreateArgs(params: {
   name: string;
   cfg: SandboxDockerConfig;
@@ -326,8 +371,13 @@ export function buildSandboxCreateArgs(params: {
   allowContainerNamespaceJoin?: boolean;
 }) {
   // Runtime security validation: blocks dangerous bind mounts, network modes, and profiles.
+  const bindSpecsFromVolumes = (params.cfg.volumes ?? [])
+    .map((entry) => volumeSettingToBindSpec(entry))
+    .filter((entry): entry is string => typeof entry === "string");
+
   validateSandboxSecurity({
     ...params.cfg,
+    binds: [...(params.cfg.binds ?? []), ...bindSpecsFromVolumes],
     allowedSourceRoots: params.bindSourceRoots,
     allowSourcesOutsideAllowedRoots:
       params.allowSourcesOutsideAllowedRoots ??
@@ -461,6 +511,7 @@ async function createSandboxContainer(params: {
     workspaceAccess: params.workspaceAccess,
   });
   appendCustomBinds(args, cfg);
+  appendVolumeMounts(args, cfg);
   args.push(cfg.image, "sleep", "infinity");
 
   await execDocker(args);
