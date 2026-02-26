@@ -8,7 +8,11 @@ import type {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAccountId, parseAgentSessionKey } from "../routing/session-key.js";
 import { compileSafeRegex } from "../security/safe-regex.js";
-import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
+import {
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+  type DeliverableMessageChannel,
+} from "../utils/message-channel.js";
 import type {
   ExecApprovalDecision,
   ExecApprovalRequest,
@@ -209,6 +213,11 @@ function buildExpiredMessage(request: ExecApprovalRequest) {
   return `⏱️ Exec approval expired. ID: ${request.id}`;
 }
 
+function normalizeTurnSourceChannel(value?: string | null): DeliverableMessageChannel | undefined {
+  const normalized = value ? normalizeMessageChannel(value) : undefined;
+  return normalized && isDeliverableMessageChannel(normalized) ? normalized : undefined;
+}
+
 function defaultResolveSessionTarget(params: {
   cfg: OpenClawConfig;
   request: ExecApprovalRequest;
@@ -225,7 +234,14 @@ function defaultResolveSessionTarget(params: {
   if (!entry) {
     return null;
   }
-  const target = resolveSessionDeliveryTarget({ entry, requestedChannel: "last" });
+  const target = resolveSessionDeliveryTarget({
+    entry,
+    requestedChannel: "last",
+    turnSourceChannel: normalizeTurnSourceChannel(params.request.request.turnSourceChannel),
+    turnSourceTo: params.request.request.turnSourceTo?.trim() || undefined,
+    turnSourceAccountId: params.request.request.turnSourceAccountId?.trim() || undefined,
+    turnSourceThreadId: params.request.request.turnSourceThreadId ?? undefined,
+  });
   if (!target.channel || !target.to) {
     return null;
   }

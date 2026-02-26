@@ -242,6 +242,78 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
   });
 
+  test("requires gateway auth for canonicalized /api/channels variants", async () => {
+    const resolvedAuth: ResolvedGatewayAuth = {
+      mode: "token",
+      token: "test-token",
+      password: undefined,
+      allowTailscale: false,
+    };
+
+    await withTempConfig({
+      cfg: { gateway: { trustedProxies: [] } },
+      prefix: "openclaw-plugin-http-auth-canonicalized-test-",
+      run: async () => {
+        const handlePluginRequest = vi.fn(async (req: IncomingMessage, res: ServerResponse) => {
+          const pathname = new URL(req.url ?? "/", "http://localhost").pathname;
+          const canonicalPath = decodeURIComponent(pathname).toLowerCase();
+          if (canonicalPath === "/api/channels/nostr/default/profile") {
+            res.statusCode = 200;
+            res.setHeader("Content-Type", "application/json; charset=utf-8");
+            res.end(JSON.stringify({ ok: true, route: "channel-canonicalized" }));
+            return true;
+          }
+          return false;
+        });
+
+        const server = createGatewayHttpServer({
+          canvasHost: null,
+          clients: new Set(),
+          controlUiEnabled: false,
+          controlUiBasePath: "/__control__",
+          openAiChatCompletionsEnabled: false,
+          openResponsesEnabled: false,
+          handleHooksRequest: async () => false,
+          handlePluginRequest,
+          resolvedAuth,
+        });
+
+        const unauthenticatedCaseVariant = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({ path: "/API/channels/nostr/default/profile" }),
+          unauthenticatedCaseVariant.res,
+        );
+        expect(unauthenticatedCaseVariant.res.statusCode).toBe(401);
+        expect(unauthenticatedCaseVariant.getBody()).toContain("Unauthorized");
+        expect(handlePluginRequest).not.toHaveBeenCalled();
+
+        const unauthenticatedEncodedSlash = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({ path: "/api/channels%2Fnostr%2Fdefault%2Fprofile" }),
+          unauthenticatedEncodedSlash.res,
+        );
+        expect(unauthenticatedEncodedSlash.res.statusCode).toBe(401);
+        expect(unauthenticatedEncodedSlash.getBody()).toContain("Unauthorized");
+        expect(handlePluginRequest).not.toHaveBeenCalled();
+
+        const authenticatedCaseVariant = createResponse();
+        await dispatchRequest(
+          server,
+          createRequest({
+            path: "/API/channels/nostr/default/profile",
+            authorization: "Bearer test-token",
+          }),
+          authenticatedCaseVariant.res,
+        );
+        expect(authenticatedCaseVariant.res.statusCode).toBe(200);
+        expect(authenticatedCaseVariant.getBody()).toContain('"route":"channel-canonicalized"');
+        expect(handlePluginRequest).toHaveBeenCalledTimes(1);
+      },
+    });
+  });
+
   test.each(["0.0.0.0", "::"])(
     "returns 404 (not 500) for non-hook routes with hooks enabled and bindHost=%s",
     async (bindHost) => {
