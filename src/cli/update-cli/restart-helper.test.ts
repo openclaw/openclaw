@@ -22,6 +22,19 @@ describe("restart-helper", () => {
     await fs.unlink(scriptPath);
   }
 
+  function expectWindowsRestartWaitOrdering(content: string) {
+    const endCommand = 'schtasks /End /TN "';
+    const waitCommand = "timeout /t 3 /nobreak >nul";
+    const runCommand = 'schtasks /Run /TN "';
+    const endIndex = content.indexOf(endCommand);
+    const waitIndex = content.indexOf(waitCommand, endIndex);
+    const runIndex = content.indexOf(runCommand, waitIndex);
+
+    expect(endIndex).toBeGreaterThanOrEqual(0);
+    expect(waitIndex).toBeGreaterThan(endIndex);
+    expect(runIndex).toBeGreaterThan(waitIndex);
+  }
+
   beforeEach(() => {
     vi.resetAllMocks();
   });
@@ -91,6 +104,7 @@ describe("restart-helper", () => {
       expect(content).toContain("@echo off");
       expect(content).toContain('schtasks /End /TN "OpenClaw Gateway"');
       expect(content).toContain('schtasks /Run /TN "OpenClaw Gateway"');
+      expectWindowsRestartWaitOrdering(content);
       // Batch self-cleanup
       expect(content).toContain('del "%~f0"');
       await cleanupScript(scriptPath);
@@ -105,6 +119,7 @@ describe("restart-helper", () => {
       });
       expect(content).toContain('schtasks /End /TN "OpenClaw Gateway (custom)"');
       expect(content).toContain('schtasks /Run /TN "OpenClaw Gateway (custom)"');
+      expectWindowsRestartWaitOrdering(content);
       await cleanupScript(scriptPath);
     });
 
@@ -135,6 +150,7 @@ describe("restart-helper", () => {
         OPENCLAW_PROFILE: "production",
       });
       expect(content).toContain('schtasks /End /TN "OpenClaw Gateway (production)"');
+      expectWindowsRestartWaitOrdering(content);
       await cleanupScript(scriptPath);
     });
 

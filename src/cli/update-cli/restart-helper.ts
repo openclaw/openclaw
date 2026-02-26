@@ -101,6 +101,8 @@ REM Standalone restart script — survives parent process termination.
 REM Wait briefly to ensure file locks are released after update.
 timeout /t 2 /nobreak >nul
 schtasks /End /TN "${taskName}"
+REM Wait for the ended gateway process to release bound ports before rerun.
+timeout /t 3 /nobreak >nul
 schtasks /Run /TN "${taskName}"
 REM Self-cleanup
 del "%~f0"
