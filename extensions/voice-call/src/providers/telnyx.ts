@@ -1,5 +1,4 @@
 import crypto from "node:crypto";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk";
 import type { TelnyxConfig } from "../config.js";
 import type {
   EndReason,
@@ -17,6 +16,7 @@ import type {
 } from "../types.js";
 import { verifyTelnyxWebhook } from "../webhook-security.js";
 import type { VoiceCallProvider } from "./base.js";
+import { guardedJsonApiRequest } from "./shared/guarded-json-api.js";
 
 /**
  * Telnyx Voice API provider implementation.
@@ -61,33 +61,19 @@ export class TelnyxProvider implements VoiceCallProvider {
     body: Record<string, unknown>,
     options?: { allowNotFound?: boolean },
   ): Promise<T> {
-    const { response, release } = await fetchWithSsrFGuard({
+    return await guardedJsonApiRequest<T>({
       url: `${this.baseUrl}${endpoint}`,
-      init: {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${this.apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(body),
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.apiKey}`,
+        "Content-Type": "application/json",
       },
-      policy: { allowedHostnames: [this.apiHost] },
+      body,
+      allowNotFound: options?.allowNotFound,
+      allowedHostnames: [this.apiHost],
       auditContext: "voice-call.telnyx.api",
+      errorPrefix: "Telnyx API error",
     });
-    try {
-      if (!response.ok) {
-        if (options?.allowNotFound && response.status === 404) {
-          return undefined as T;
-        }
-        const errorText = await response.text();
-        throw new Error(`Telnyx API error: ${response.status} ${errorText}`);
-      }
-
-      const text = await response.text();
-      return text ? (JSON.parse(text) as T) : (undefined as T);
-    } finally {
-      await release();
-    }
   }
 
   /**
