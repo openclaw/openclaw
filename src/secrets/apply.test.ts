@@ -1,0 +1,149 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { runSecretsApply } from "./apply.js";
+import type { SecretsApplyPlan } from "./plan.js";
+
+describe("secrets apply", () => {
+  let rootDir = "";
+  let stateDir = "";
+  let configPath = "";
+  let authStorePath = "";
+  let authJsonPath = "";
+  let envPath = "";
+  let env: NodeJS.ProcessEnv;
+
+  beforeEach(async () => {
+    rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secrets-apply-"));
+    stateDir = path.join(rootDir, ".openclaw");
+    configPath = path.join(stateDir, "openclaw.json");
+    authStorePath = path.join(stateDir, "agents", "main", "agent", "auth-profiles.json");
+    authJsonPath = path.join(stateDir, "agents", "main", "agent", "auth.json");
+    envPath = path.join(stateDir, ".env");
+    env = {
+      ...process.env,
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENAI_API_KEY: "sk-live-env",
+    };
+
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.mkdir(path.dirname(authStorePath), { recursive: true });
+
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                api: "openai-completions",
+                apiKey: "sk-openai-plaintext",
+                models: [{ id: "gpt-5", name: "gpt-5" }],
+              },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    await fs.writeFile(
+      authStorePath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-openai-plaintext",
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    await fs.writeFile(
+      authJsonPath,
+      `${JSON.stringify(
+        {
+          openai: {
+            type: "api_key",
+            key: "sk-openai-plaintext",
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    await fs.writeFile(envPath, "OPENAI_API_KEY=sk-openai-plaintext\nUNRELATED=value\n", "utf8");
+  });
+
+  afterEach(async () => {
+    await fs.rm(rootDir, { recursive: true, force: true });
+  });
+
+  it("preflights and applies one-way scrub without plaintext backups", async () => {
+    const plan: SecretsApplyPlan = {
+      version: 1,
+      protocolVersion: 1,
+      generatedAt: new Date().toISOString(),
+      generatedBy: "manual",
+      targets: [
+        {
+          type: "models.providers.apiKey",
+          path: "models.providers.openai.apiKey",
+          providerId: "openai",
+          ref: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+        },
+      ],
+      options: {
+        scrubEnv: true,
+        scrubAuthProfilesForProviderTargets: true,
+        scrubLegacyAuthJson: true,
+      },
+    };
+
+    const dryRun = await runSecretsApply({ plan, env, write: false });
+    expect(dryRun.mode).toBe("dry-run");
+    expect(dryRun.changed).toBe(true);
+
+    const applied = await runSecretsApply({ plan, env, write: true });
+    expect(applied.mode).toBe("write");
+    expect(applied.changed).toBe(true);
+
+    const nextConfig = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+      models: { providers: { openai: { apiKey: unknown } } };
+    };
+    expect(nextConfig.models.providers.openai.apiKey).toEqual({
+      source: "env",
+      provider: "default",
+      id: "OPENAI_API_KEY",
+    });
+
+    const nextAuthStore = JSON.parse(await fs.readFile(authStorePath, "utf8")) as {
+      profiles: { "openai:default": { key?: string; keyRef?: unknown } };
+    };
+    expect(nextAuthStore.profiles["openai:default"].key).toBeUndefined();
+    expect(nextAuthStore.profiles["openai:default"].keyRef).toBeUndefined();
+
+    const nextAuthJson = JSON.parse(await fs.readFile(authJsonPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    expect(nextAuthJson.openai).toBeUndefined();
+
+    const nextEnv = await fs.readFile(envPath, "utf8");
+    expect(nextEnv).not.toContain("sk-openai-plaintext");
+    expect(nextEnv).toContain("UNRELATED=value");
+  });
+});

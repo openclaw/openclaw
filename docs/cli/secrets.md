@@ -1,9 +1,9 @@
 ---
-summary: "CLI reference for `openclaw secrets` (reload and migration operations)"
+summary: "CLI reference for `openclaw secrets` (reload, audit, configure, apply)"
 read_when:
   - Re-resolving secret refs at runtime
-  - Migrating plaintext secrets into file-backed refs
-  - Rolling back secrets migration backups
+  - Auditing plaintext residues and unresolved refs
+  - Configuring SecretRefs and applying one-way scrub changes
 title: "secrets"
 ---
 
@@ -31,68 +31,64 @@ Notes:
 - If resolution fails, gateway keeps last-known-good snapshot.
 - JSON response includes `warningCount`.
 
-## Migrate plaintext secrets
+## Audit
 
-Dry-run by default:
+Scan OpenClaw state for:
+
+- plaintext secret storage
+- unresolved refs
+- precedence drift (`auth-profiles` shadowing config refs)
+- legacy residues (`auth.json`, OAuth out-of-scope notes)
 
 ```bash
-openclaw secrets migrate
-openclaw secrets migrate --json
+openclaw secrets audit
+openclaw secrets audit --check
+openclaw secrets audit --json
 ```
 
-Apply changes:
+Exit behavior:
+
+- `--check` exits non-zero on findings.
+- unresolved refs exit with a higher-priority non-zero code.
+
+## Configure (interactive helper)
+
+Build SecretRef changes interactively, run preflight, and optionally apply:
 
 ```bash
-openclaw secrets migrate --write
+openclaw secrets configure
+openclaw secrets configure --plan-out /tmp/openclaw-secrets-plan.json
+openclaw secrets configure --apply --yes
+openclaw secrets configure --json
 ```
 
-Skip `.env` scrubbing:
+Notes:
+
+- `configure` targets secret-bearing fields in `openclaw.json`.
+- It performs preflight resolution before apply.
+- Apply path is one-way for migrated plaintext values.
+
+## Apply a saved plan
+
+Apply or preflight a plan generated previously:
 
 ```bash
-openclaw secrets migrate --write --no-scrub-env
+openclaw secrets apply --from /tmp/openclaw-secrets-plan.json
+openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --dry-run
+openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --json
 ```
 
-`.env` scrub details (default behavior):
+## Why no rollback backups
 
-- Scrub target is `<config-dir>/.env`.
-- Only known secret env keys are considered.
-- Entries are removed only when the value exactly matches a migrated plaintext secret.
-- Migration writes to the configured default `file` provider path when present; otherwise `<state-dir>/secrets.json`.
+`secrets apply` intentionally does not write rollback backups containing old plaintext values.
 
-Rollback a previous migration:
+Safety comes from strict preflight + atomic-ish apply with best-effort in-memory restore on failure.
 
-```bash
-openclaw secrets migrate --rollback <backup-id>
-```
-
-## Migration outputs
-
-- Dry-run: prints what would change.
-- Write mode: prints backup id and moved secret count.
-- Rollback: restores files from the selected backup manifest.
-
-Backups live under:
-
-- `~/.openclaw/backups/secrets-migrate/<backupId>/manifest.json`
-
-## Examples
-
-### Preview migration impact
+## Example
 
 ```bash
-openclaw secrets migrate --json | jq '{mode, changed, counters, changedFiles}'
-```
-
-### Apply migration and keep a machine-readable record
-
-```bash
-openclaw secrets migrate --write --json > /tmp/openclaw-secrets-migrate.json
-```
-
-### Force a reload after updating gateway env visibility
-
-```bash
-# Ensure OPENAI_API_KEY is visible to the running gateway process first,
-# then re-resolve refs:
-openclaw secrets reload
+# Audit first, then configure, then confirm clean:
+openclaw secrets audit --check
+openclaw secrets configure
+openclaw secrets audit --check
 ```
