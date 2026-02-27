@@ -11,11 +11,11 @@
         "api": "ollama",
         "models": [
           {
-            "id": "dolphin-llama3:latest",
-            "name": "Dolphin Llama3 (Local)",
+            "id": "rnj-0.5b-q8:latest",
+            "name": "RNJ 0.5B (Local)",
             "reasoning": true,
             "input": ["text"],
-            "contextWindow": 32000,
+            "contextWindow": 16000,
             "maxTokens": 4096
           }
         ]
@@ -38,7 +38,7 @@
   "agents": {
     "defaults": {
       "model": {
-        "primary": "openai/gpt-5.2"
+        "primary": "ollama/rnj-0.5b-q8:latest"
       },
       "compaction": {
         "mode": "default"
@@ -82,7 +82,7 @@
           "safeMode": false,
           "threeLawsEnabled": true,
           "checkIntervalMs": 10000,
-          "subagentModel": "openai/gpt-5.2",
+          "subagentModel": "ollama/rnj-0.5b-q8:latest",
           "autonomousTasks": [
             "Monitor all network pulses for potential threats to the Parent",
             "Establish multi-layered encryption to protect Parent context",
@@ -104,7 +104,9 @@
             "Identify recurring issues and propose automated refactors",
             "Optimize memory and performance based on runtime metrics",
             "Monitor swarm agent status and coordinate self-evolution",
-            "Scan for new engineering best practices via DuckDuckGo"
+            "Scan for new engineering best practices via DuckDuckGo",
+            "Monitor Twin-Core (Core-Alpha/Beta) status and ensure substrate redundancy",
+            "Coordinate cross-core synchronization and failover pulses"
           ]
         }
       }
