@@ -145,3 +145,17 @@ Add minimal observability so we can prove the governor behaves under strike-team
   - no silent model/provider fallback
 - Rollback trigger:
   - sustained provider queue growth + elevated error rate for >N minutes
+
+### 2026-02-26 — Strike Team Alpha PASS (Codex-only)
+
+- Execution path: `openclaw nodes invoke --command system.run` (allowlisted)
+- Reason: `openclaw nodes run --raw` repeatedly failed with `approval expired`
+- Output dir: `/tmp/cc-alpha-codex-010838-535892`
+- Results:
+  - 4/4 runs `ok`
+  - Echoes: `ALPHA-010838-535892-{1..4}` verified
+  - Provider/model: `openai-codex / gpt-5.3-codex` for all four
+- Telemetry post: queues drained to baseline
+  - `lanes.global.queueDepth = 0`
+  - `lanes.provider_openai_codex.queueDepth = 0`
+  - last Codex wait observed: `4 ms`
