@@ -304,6 +304,372 @@ function collectConfigSecrets(params: {
       accountId,
     );
   }
+
+  // Collect channel tokens (telegram, discord, slack, bluebubbles)
+  const telegramConfig = params.config.channels?.telegram as
+    | { botToken?: unknown; accounts?: Record<string, { botToken?: unknown }> }
+    | undefined;
+  if (telegramConfig) {
+    const collectTelegramToken = (
+      value: unknown,
+      pathLabel: string,
+      accountId?: string,
+    ) => {
+      const ref = coerceSecretRef(value, defaults);
+      if (ref) {
+        params.collector.refAssignments.push({
+          file: params.configPath,
+          path: pathLabel,
+          ref,
+          expected: "string",
+          provider: accountId ? "telegram" : undefined,
+        });
+        return;
+      }
+      if (isNonEmptyString(value)) {
+        addFinding(params.collector, {
+          code: "PLAINTEXT_FOUND",
+          severity: "warn",
+          file: params.configPath,
+          jsonPath: pathLabel,
+          message: "Telegram botToken is stored as plaintext.",
+        });
+      }
+    };
+
+    collectTelegramToken(telegramConfig.botToken, "channels.telegram.botToken");
+    if (isRecord(telegramConfig.accounts)) {
+      for (const [accountId, accountValue] of Object.entries(telegramConfig.accounts)) {
+        if (!isRecord(accountValue)) {
+          continue;
+        }
+        collectTelegramToken(
+          accountValue.botToken,
+          `channels.telegram.accounts.${accountId}.botToken`,
+          accountId,
+        );
+      }
+    }
+  }
+
+  const discordConfig = params.config.channels?.discord as
+    | { token?: unknown; accounts?: Record<string, { token?: unknown }> }
+    | undefined;
+  if (discordConfig) {
+    const collectDiscordToken = (
+      value: unknown,
+      pathLabel: string,
+    ) => {
+      const ref = coerceSecretRef(value, defaults);
+      if (ref) {
+        params.collector.refAssignments.push({
+          file: params.configPath,
+          path: pathLabel,
+          ref,
+          expected: "string",
+          provider: "discord",
+        });
+        return;
+      }
+      if (isNonEmptyString(value)) {
+        addFinding(params.collector, {
+          code: "PLAINTEXT_FOUND",
+          severity: "warn",
+          file: params.configPath,
+          jsonPath: pathLabel,
+          message: "Discord token is stored as plaintext.",
+        });
+      }
+    };
+
+    collectDiscordToken(discordConfig.token, "channels.discord.token");
+    if (isRecord(discordConfig.accounts)) {
+      for (const [accountId, accountValue] of Object.entries(discordConfig.accounts)) {
+        if (!isRecord(accountValue)) {
+          continue;
+        }
+        collectDiscordToken(
+          accountValue.token,
+          `channels.discord.accounts.${accountId}.token`,
+        );
+      }
+    }
+  }
+
+  const slackConfig = params.config.channels?.slack as
+    | { botToken?: unknown; accounts?: Record<string, { botToken?: unknown }> }
+    | undefined;
+  if (slackConfig) {
+    const collectSlackToken = (
+      value: unknown,
+      pathLabel: string,
+    ) => {
+      const ref = coerceSecretRef(value, defaults);
+      if (ref) {
+        params.collector.refAssignments.push({
+          file: params.configPath,
+          path: pathLabel,
+          ref,
+          expected: "string",
+          provider: "slack",
+        });
+        return;
+      }
+      if (isNonEmptyString(value)) {
+        addFinding(params.collector, {
+          code: "PLAINTEXT_FOUND",
+          severity: "warn",
+          file: params.configPath,
+          jsonPath: pathLabel,
+          message: "Slack botToken is stored as plaintext.",
+        });
+      }
+    };
+
+    collectSlackToken(slackConfig.botToken, "channels.slack.botToken");
+    if (isRecord(slackConfig.accounts)) {
+      for (const [accountId, accountValue] of Object.entries(slackConfig.accounts)) {
+        if (!isRecord(accountValue)) {
+          continue;
+        }
+        collectSlackToken(
+          accountValue.botToken,
+          `channels.slack.accounts.${accountId}.botToken`,
+        );
+      }
+    }
+  }
+
+  const bluebubblesConfig = params.config.channels?.bluebubbles as
+    | { password?: unknown; accounts?: Record<string, { password?: unknown }> }
+    | undefined;
+  if (bluebubblesConfig) {
+    const collectBluebubblesPassword = (
+      value: unknown,
+      pathLabel: string,
+    ) => {
+      const ref = coerceSecretRef(value, defaults);
+      if (ref) {
+        params.collector.refAssignments.push({
+          file: params.configPath,
+          path: pathLabel,
+          ref,
+          expected: "string",
+          provider: "bluebubbles",
+        });
+        return;
+      }
+      if (isNonEmptyString(value)) {
+        addFinding(params.collector, {
+          code: "PLAINTEXT_FOUND",
+          severity: "warn",
+          file: params.configPath,
+          jsonPath: pathLabel,
+          message: "BlueBubbles password is stored as plaintext.",
+        });
+      }
+    };
+
+    collectBluebubblesPassword(bluebubblesConfig.password, "channels.bluebubbles.password");
+    if (isRecord(bluebubblesConfig.accounts)) {
+      for (const [accountId, accountValue] of Object.entries(bluebubblesConfig.accounts)) {
+        if (!isRecord(accountValue)) {
+          continue;
+        }
+        collectBluebubblesPassword(
+          accountValue.password,
+          `channels.bluebubbles.accounts.${accountId}.password`,
+        );
+      }
+    }
+  }
+
+  // Collect gateway and hooks tokens
+  const gatewayConfig = params.config.gateway?.auth as { token?: unknown } | undefined;
+  if (gatewayConfig) {
+    const ref = coerceSecretRef(gatewayConfig.token, defaults);
+    if (ref) {
+      params.collector.refAssignments.push({
+        file: params.configPath,
+        path: "gateway.auth.token",
+        ref,
+        expected: "string",
+        provider: "gateway",
+      });
+    } else if (isNonEmptyString(gatewayConfig.token)) {
+      addFinding(params.collector, {
+        code: "PLAINTEXT_FOUND",
+        severity: "warn",
+        file: params.configPath,
+        jsonPath: "gateway.auth.token",
+        message: "Gateway auth token is stored as plaintext.",
+      });
+    }
+  }
+
+  const hooksConfig = params.config.hooks as { token?: unknown } | undefined;
+  if (hooksConfig) {
+    const ref = coerceSecretRef(hooksConfig.token, defaults);
+    if (ref) {
+      params.collector.refAssignments.push({
+        file: params.configPath,
+        path: "hooks.token",
+        ref,
+        expected: "string",
+        provider: "hooks",
+      });
+    } else if (isNonEmptyString(hooksConfig.token)) {
+      addFinding(params.collector, {
+        code: "PLAINTEXT_FOUND",
+        severity: "warn",
+        file: params.configPath,
+        jsonPath: "hooks.token",
+        message: "Hooks token is stored as plaintext.",
+      });
+    }
+  }
+
+  // Collect talk/TTS API keys
+  const talkConfig = params.config.gateway?.talk as
+    | { apiKey?: unknown; providers?: Record<string, { apiKey?: unknown }> }
+    | undefined;
+  if (talkConfig) {
+    const collectTalkApiKey = (
+      value: unknown,
+      pathLabel: string,
+      provider?: string,
+    ) => {
+      const ref = coerceSecretRef(value, defaults);
+      if (ref) {
+        params.collector.refAssignments.push({
+          file: params.configPath,
+          path: pathLabel,
+          ref,
+          expected: "string",
+          provider,
+        });
+        return;
+      }
+      if (isNonEmptyString(value)) {
+        addFinding(params.collector, {
+          code: "PLAINTEXT_FOUND",
+          severity: "warn",
+          file: params.configPath,
+          jsonPath: pathLabel,
+          message: "Talk apiKey is stored as plaintext.",
+        });
+      }
+    };
+
+    collectTalkApiKey(talkConfig.apiKey, "gateway.talk.apiKey");
+    if (isRecord(talkConfig.providers)) {
+      for (const [providerId, providerValue] of Object.entries(talkConfig.providers)) {
+        if (!isRecord(providerValue)) {
+          continue;
+        }
+        collectTalkApiKey(
+          providerValue.apiKey,
+          `gateway.talk.providers.${providerId}.apiKey`,
+          providerId,
+        );
+      }
+    }
+  }
+
+  // Collect model provider headers (e.g., CF AI Gateway headers)
+  const modelProviders = params.config.models?.providers as
+    | Record<string, { headers?: Record<string, unknown> }>
+    | undefined;
+  if (modelProviders) {
+    for (const [providerId, provider] of Object.entries(modelProviders)) {
+      if (!isRecord(provider.headers)) {
+        continue;
+      }
+      for (const [headerKey, headerValue] of Object.entries(provider.headers)) {
+        // Check if header key looks like it might contain a secret
+        const isSecretLike =
+          headerKey.toLowerCase().includes("auth") ||
+          headerKey.toLowerCase().includes("token") ||
+          headerKey.toLowerCase().includes("key") ||
+          headerKey.toLowerCase().includes("secret");
+
+        if (!isSecretLike) {
+          continue;
+        }
+
+        const pathLabel = `models.providers.${providerId}.headers.${headerKey}`;
+        const ref = coerceSecretRef(headerValue, defaults);
+        if (ref) {
+          params.collector.refAssignments.push({
+            file: params.configPath,
+            path: pathLabel,
+            ref,
+            expected: "string",
+            provider: providerId,
+          });
+          continue;
+        }
+        if (isNonEmptyString(headerValue)) {
+          addFinding(params.collector, {
+            code: "PLAINTEXT_FOUND",
+            severity: "warn",
+            file: params.configPath,
+            jsonPath: pathLabel,
+            message: "Model provider header value is stored as plaintext.",
+            provider: providerId,
+          });
+        }
+      }
+    }
+  }
+
+  // Collect plugin config secrets (e.g., Home Assistant API tokens)
+  const pluginEntries = params.config.plugins?.entries as
+    | Record<string, { config?: Record<string, unknown> }>
+    | undefined;
+  if (pluginEntries) {
+    for (const [pluginId, plugin] of Object.entries(pluginEntries)) {
+      if (!isRecord(plugin.config)) {
+        continue;
+      }
+      for (const [configKey, configValue] of Object.entries(plugin.config)) {
+        // Check if config key looks like it might contain a secret
+        const isSecretLike =
+          configKey.toLowerCase().endsWith("token") ||
+          configKey.toLowerCase().endsWith("key") ||
+          configKey.toLowerCase().endsWith("secret") ||
+          configKey.toLowerCase().endsWith("password") ||
+          configKey.toLowerCase().endsWith("hatoken");
+
+        if (!isSecretLike) {
+          continue;
+        }
+
+        const pathLabel = `plugins.entries.${pluginId}.config.${configKey}`;
+        const ref = coerceSecretRef(configValue, defaults);
+        if (ref) {
+          params.collector.refAssignments.push({
+            file: params.configPath,
+            path: pathLabel,
+            ref,
+            expected: "string",
+            provider: pluginId,
+          });
+          continue;
+        }
+        if (isNonEmptyString(configValue)) {
+          addFinding(params.collector, {
+            code: "PLAINTEXT_FOUND",
+            severity: "warn",
+            file: params.configPath,
+            jsonPath: pathLabel,
+            message: "Plugin config value is stored as plaintext.",
+            provider: pluginId,
+          });
+        }
+      }
+    }
+  }
 }
 
 function collectAuthStorePaths(config: OpenClawConfig, stateDir: string): string[] {

@@ -4,7 +4,16 @@ import { SecretProviderSchema } from "../config/zod-schema.core.js";
 export type SecretsPlanTargetType =
   | "models.providers.apiKey"
   | "skills.entries.apiKey"
-  | "channels.googlechat.serviceAccount";
+  | "channels.googlechat.serviceAccount"
+  | "channels.telegram.botToken"
+  | "channels.discord.token"
+  | "channels.slack.botToken"
+  | "channels.bluebubbles.password"
+  | "gateway.auth.token"
+  | "hooks.token"
+  | "gateway.talk.apiKey"
+  | "models.providers.headers"
+  | "plugins.entries.config";
 
 export type SecretsPlanTarget = {
   type: SecretsPlanTargetType;
@@ -51,7 +60,16 @@ function isSecretsPlanTargetType(value: unknown): value is SecretsPlanTargetType
   return (
     value === "models.providers.apiKey" ||
     value === "skills.entries.apiKey" ||
-    value === "channels.googlechat.serviceAccount"
+    value === "channels.googlechat.serviceAccount" ||
+    value === "channels.telegram.botToken" ||
+    value === "channels.discord.token" ||
+    value === "channels.slack.botToken" ||
+    value === "channels.bluebubbles.password" ||
+    value === "gateway.auth.token" ||
+    value === "hooks.token" ||
+    value === "gateway.talk.apiKey" ||
+    value === "models.providers.headers" ||
+    value === "plugins.entries.config"
   );
 }
 
@@ -122,6 +140,76 @@ function hasMatchingPathShape(
       candidate.accountId === segments[3]
     );
   }
+  if (candidate.type === "channels.telegram.botToken") {
+    if (segments.length === 3 && segments[0] === "channels" && segments[1] === "telegram" && segments[2] === "botToken") {
+      return true;
+    }
+    if (segments.length === 5 && segments[0] === "channels" && segments[1] === "telegram" && segments[2] === "accounts" && segments[4] === "botToken") {
+      return candidate.accountId === undefined || candidate.accountId.trim().length === 0 || candidate.accountId === segments[3];
+    }
+    return false;
+  }
+  if (candidate.type === "channels.discord.token") {
+    if (segments.length === 3 && segments[0] === "channels" && segments[1] === "discord" && segments[2] === "token") {
+      return true;
+    }
+    if (segments.length === 5 && segments[0] === "channels" && segments[1] === "discord" && segments[2] === "accounts" && segments[4] === "token") {
+      return true;
+    }
+    return false;
+  }
+  if (candidate.type === "channels.slack.botToken") {
+    if (segments.length === 3 && segments[0] === "channels" && segments[1] === "slack" && segments[2] === "botToken") {
+      return true;
+    }
+    if (segments.length === 5 && segments[0] === "channels" && segments[1] === "slack" && segments[2] === "accounts" && segments[4] === "botToken") {
+      return true;
+    }
+    return false;
+  }
+  if (candidate.type === "channels.bluebubbles.password") {
+    if (segments.length === 3 && segments[0] === "channels" && segments[1] === "bluebubbles" && segments[2] === "password") {
+      return true;
+    }
+    if (segments.length === 5 && segments[0] === "channels" && segments[1] === "bluebubbles" && segments[2] === "accounts" && segments[4] === "password") {
+      return true;
+    }
+    return false;
+  }
+  if (candidate.type === "gateway.auth.token") {
+    return segments.length === 3 && segments[0] === "gateway" && segments[1] === "auth" && segments[2] === "token";
+  }
+  if (candidate.type === "hooks.token") {
+    return segments.length === 2 && segments[0] === "hooks" && segments[1] === "token";
+  }
+  if (candidate.type === "gateway.talk.apiKey") {
+    if (segments.length === 3 && segments[0] === "gateway" && segments[1] === "talk" && segments[2] === "apiKey") {
+      return true;
+    }
+    if (segments.length === 5 && segments[0] === "gateway" && segments[1] === "talk" && segments[2] === "providers" && segments[4] === "apiKey") {
+      return candidate.providerId === undefined || candidate.providerId.trim().length === 0 || candidate.providerId === segments[3];
+    }
+    return false;
+  }
+  if (candidate.type === "models.providers.headers") {
+    return (
+      segments.length === 4 &&
+      segments[0] === "models" &&
+      segments[1] === "providers" &&
+      segments[3] !== "" &&
+      (candidate.providerId === undefined || candidate.providerId.trim().length === 0 || candidate.providerId === segments[2])
+    );
+  }
+  if (candidate.type === "plugins.entries.config") {
+    return (
+      segments.length === 4 &&
+      segments[0] === "plugins" &&
+      segments[1] === "entries" &&
+      segments[3] !== "" &&
+      (candidate.providerId === undefined || candidate.providerId.trim().length === 0 || candidate.providerId === segments[2])
+    );
+  }
+  
   return false;
 }
 
@@ -176,9 +264,7 @@ export function isSecretsApplyPlan(value: unknown): value is SecretsApplyPlan {
     const candidate = target as Partial<SecretsPlanTarget>;
     const ref = candidate.ref as Partial<SecretRef> | undefined;
     if (
-      (candidate.type !== "models.providers.apiKey" &&
-        candidate.type !== "skills.entries.apiKey" &&
-        candidate.type !== "channels.googlechat.serviceAccount") ||
+      !isSecretsPlanTargetType(candidate.type) ||
       typeof candidate.path !== "string" ||
       !candidate.path.trim() ||
       (candidate.pathSegments !== undefined && !Array.isArray(candidate.pathSegments)) ||

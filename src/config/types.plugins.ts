@@ -1,3 +1,5 @@
+import type { SecretInput } from "./types.secrets.js";
+
 export type PluginEntryConfig = {
   enabled?: boolean;
   config?: Record<string, unknown>;
