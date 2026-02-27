@@ -690,9 +690,9 @@ export const buildTelegramMessageContext = async ({
     Timestamp: msg.date ? msg.date * 1000 : undefined,
     WasMentioned: isGroup ? effectiveWasMentioned : undefined,
     // Filter out cached stickers from current-message media; reply media is still valid context.
-    MediaPath: contextMedia[0]?.path,
-    MediaType: contextMedia[0]?.contentType,
-    MediaUrl: contextMedia[0]?.path,
+    MediaPath: contextMedia.length > 0 ? contextMedia[0]?.path : undefined,
+    MediaType: contextMedia.length > 0 ? contextMedia[0]?.contentType : undefined,
+    MediaUrl: contextMedia.length > 0 ? contextMedia[0]?.path : undefined,
     MediaPaths: contextMedia.length > 0 ? contextMedia.map((m) => m.path) : undefined,
     MediaUrls: contextMedia.length > 0 ? contextMedia.map((m) => m.path) : undefined,
     MediaTypes:
