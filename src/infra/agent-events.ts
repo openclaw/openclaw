@@ -96,6 +96,9 @@ export function emitAgentEvent(event: Omit<AgentEventPayload, "seq" | "ts">) {
   const nextSeq = (seqByRun.get(event.runId) ?? 0) + 1;
   seqByRun.set(event.runId, nextSeq);
   const context = runContextById.get(event.runId);
+  if (context) {
+    context.lastActiveAt = Date.now();
+  }
   const sessionKey =
     typeof event.sessionKey === "string" && event.sessionKey.trim()
       ? event.sessionKey
