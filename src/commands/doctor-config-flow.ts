@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ZodIssue } from "zod";
+import { normalizeProviderId, parseModelRef } from "../agents/model-selection.js";
 import { normalizeChatChannelId } from "../channels/registry.js";
 import {
   isNumericTelegramUserId,
@@ -9,12 +10,16 @@ import {
 import { fetchTelegramChatId } from "../channels/telegram/api.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { CONFIG_PATH, migrateLegacyConfig, readConfigFileSnapshot } from "../config/config.js";
+import {
+  OpenClawSchema,
+  CONFIG_PATH,
+  migrateLegacyConfig,
+  readConfigFileSnapshot,
+} from "../config/config.js";
 import { collectProviderDangerousNameMatchingScopes } from "../config/dangerous-name-matching.js";
-import { formatConfigIssueLines } from "../config/issue-format.js";
+import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { parseToolsBySenderTypedKey } from "../config/types.tools.js";
-import { OpenClawSchema } from "../config/zod-schema.js";
 import { resolveCommandResolutionFromArgv } from "../infra/exec-command-resolution.js";
 import {
   listInterpreterLikeSafeBins,
@@ -26,16 +31,7 @@ import {
   normalizeTrustedSafeBinDirs,
 } from "../infra/exec-safe-bin-trust.js";
 import { readChannelAllowFromStore } from "../pairing/pairing-store.js";
-import {
-  formatChannelAccountsDefaultPath,
-  formatSetExplicitDefaultInstruction,
-  formatSetExplicitDefaultToConfiguredInstruction,
-} from "../routing/default-account-warnings.js";
-import {
-  DEFAULT_ACCOUNT_ID,
-  normalizeAccountId,
-  normalizeOptionalAccountId,
-} from "../routing/session-key.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 import {
   isDiscordMutableAllowEntry,
   isGoogleChatMutableAllowEntry,
@@ -224,21 +220,15 @@ function normalizeBindingChannelKey(raw?: string | null): string {
   return (raw ?? "").trim().toLowerCase();
 }
 
-type ChannelMissingDefaultAccountContext = {
-  channelKey: string;
-  channel: Record<string, unknown>;
-  normalizedAccountIds: string[];
-};
-
-function collectChannelsMissingDefaultAccount(
-  cfg: OpenClawConfig,
-): ChannelMissingDefaultAccountContext[] {
+export function collectMissingDefaultAccountBindingWarnings(cfg: OpenClawConfig): string[] {
   const channels = asObjectRecord(cfg.channels);
   if (!channels) {
     return [];
   }
 
-  const contexts: ChannelMissingDefaultAccountContext[] = [];
+  const bindings = Array.isArray(cfg.bindings) ? cfg.bindings : [];
+  const warnings: string[] = [];
+
   for (const [channelKey, rawChannel] of Object.entries(channels)) {
     const channel = asObjectRecord(rawChannel);
     if (!channel) {
@@ -255,20 +245,10 @@ function collectChannelsMissingDefaultAccount(
           .map((accountId) => normalizeAccountId(accountId))
           .filter(Boolean),
       ),
-    ).toSorted((a, b) => a.localeCompare(b));
+    );
     if (normalizedAccountIds.length === 0 || normalizedAccountIds.includes(DEFAULT_ACCOUNT_ID)) {
       continue;
     }
-    contexts.push({ channelKey, channel, normalizedAccountIds });
-  }
-  return contexts;
-}
-
-export function collectMissingDefaultAccountBindingWarnings(cfg: OpenClawConfig): string[] {
-  const bindings = Array.isArray(cfg.bindings) ? cfg.bindings : [];
-  const warnings: string[] = [];
-
-  for (const { channelKey, normalizedAccountIds } of collectChannelsMissingDefaultAccount(cfg)) {
     const accountIdSet = new Set(normalizedAccountIds);
     const channelPattern = normalizeBindingChannelKey(channelKey);
 
@@ -316,43 +296,13 @@ export function collectMissingDefaultAccountBindingWarnings(cfg: OpenClawConfig)
     }
     if (coveredAccountIds.size > 0) {
       warnings.push(
-        `- channels.${channelKey}: accounts.default is missing and account bindings only cover a subset of configured accounts. Uncovered accounts: ${uncoveredAccountIds.join(", ")}. Add bindings[].match.accountId for uncovered accounts (or "*"), or add ${formatChannelAccountsDefaultPath(channelKey)}.`,
+        `- channels.${channelKey}: accounts.default is missing and account bindings only cover a subset of configured accounts. Uncovered accounts: ${uncoveredAccountIds.join(", ")}. Add bindings[].match.accountId for uncovered accounts (or "*"), or add channels.${channelKey}.accounts.default.`,
       );
       continue;
     }
 
     warnings.push(
-      `- channels.${channelKey}: accounts.default is missing and no valid account-scoped binding exists for configured accounts (${normalizedAccountIds.join(", ")}). Channel-only bindings (no accountId) match only default. Add bindings[].match.accountId for one of these accounts (or "*"), or add ${formatChannelAccountsDefaultPath(channelKey)}.`,
-    );
-  }
-
-  return warnings;
-}
-
-export function collectMissingExplicitDefaultAccountWarnings(cfg: OpenClawConfig): string[] {
-  const warnings: string[] = [];
-  for (const { channelKey, channel, normalizedAccountIds } of collectChannelsMissingDefaultAccount(
-    cfg,
-  )) {
-    if (normalizedAccountIds.length < 2) {
-      continue;
-    }
-
-    const preferredDefault = normalizeOptionalAccountId(
-      typeof channel.defaultAccount === "string" ? channel.defaultAccount : undefined,
-    );
-    if (preferredDefault) {
-      if (normalizedAccountIds.includes(preferredDefault)) {
-        continue;
-      }
-      warnings.push(
-        `- channels.${channelKey}: defaultAccount is set to "${preferredDefault}" but does not match configured accounts (${normalizedAccountIds.join(", ")}). ${formatSetExplicitDefaultToConfiguredInstruction({ channelKey })} to avoid fallback routing.`,
-      );
-      continue;
-    }
-
-    warnings.push(
-      `- channels.${channelKey}: multiple accounts are configured but no explicit default is set. ${formatSetExplicitDefaultInstruction(channelKey)} to avoid fallback routing.`,
+      `- channels.${channelKey}: accounts.default is missing and no valid account-scoped binding exists for configured accounts (${normalizedAccountIds.join(", ")}). Channel-only bindings (no accountId) match only default. Add bindings[].match.accountId for one of these accounts (or "*"), or add channels.${channelKey}.accounts.default.`,
     );
   }
 
@@ -1778,6 +1728,134 @@ async function maybeMigrateLegacyConfig(): Promise<string[]> {
   return changes;
 }
 
+// Well-known providers built into pi-ai's model registry. These always have
+// model routing available without requiring explicit models.providers entries.
+const PI_BUILTIN_PROVIDERS = new Set([
+  "amazon-bedrock",
+  "anthropic",
+  "azure-openai-responses",
+  "cerebras",
+  "github-copilot",
+  "google",
+  "google-antigravity",
+  "google-gemini-cli",
+  "google-vertex",
+  "groq",
+  "huggingface",
+  "kimi-coding",
+  "minimax",
+  "minimax-cn",
+  "mistral",
+  "openai",
+  "openai-codex",
+  "opencode",
+  "openrouter",
+  "vercel-ai-gateway",
+  "xai",
+  "zai",
+]);
+
+type FallbackProviderWarning = {
+  /** Config path label (e.g. "agents.defaults.model.fallbacks[0]"). */
+  path: string;
+  /** The raw fallback entry string. */
+  entry: string;
+  /** The resolved (normalized) provider id. */
+  provider: string;
+  /** Defined provider ids for the hint message. */
+  definedProviders: string[];
+};
+
+/**
+ * Scan all fallback references in the config and flag any that reference
+ * providers not defined in models.providers and not a known built-in.
+ */
+export function collectFallbackProviderWarnings(cfg: OpenClawConfig): FallbackProviderWarning[] {
+  const explicitProviders = cfg.models?.providers;
+  const cliBackends = cfg.agents?.defaults?.cliBackends;
+
+  // Build the set of known provider ids (normalized).
+  const definedProviderIds = new Set(PI_BUILTIN_PROVIDERS);
+  if (explicitProviders) {
+    for (const key of Object.keys(explicitProviders)) {
+      definedProviderIds.add(normalizeProviderId(key));
+    }
+  }
+  if (cliBackends) {
+    for (const key of Object.keys(cliBackends)) {
+      definedProviderIds.add(normalizeProviderId(key));
+    }
+  }
+  // claude-cli and codex-cli are recognized CLI providers.
+  definedProviderIds.add("claude-cli");
+  definedProviderIds.add("codex-cli");
+
+  const definedList = [...definedProviderIds].toSorted();
+  const warnings: FallbackProviderWarning[] = [];
+
+  const DEFAULT_PROVIDER = "anthropic";
+
+  const checkFallback = (pathLabel: string, entry: string) => {
+    const trimmed = entry.trim();
+    if (!trimmed) {
+      return;
+    }
+    const ref = parseModelRef(trimmed, DEFAULT_PROVIDER);
+    if (!ref) {
+      return;
+    }
+    const normalized = normalizeProviderId(ref.provider);
+    if (!definedProviderIds.has(normalized)) {
+      warnings.push({
+        path: pathLabel,
+        entry: trimmed,
+        provider: normalized,
+        definedProviders: definedList,
+      });
+    }
+  };
+
+  // Check agents.defaults.model fallbacks.
+  const defaultModelFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
+  for (let i = 0; i < defaultModelFallbacks.length; i++) {
+    checkFallback(`agents.defaults.model.fallbacks[${i}]`, defaultModelFallbacks[i]);
+  }
+
+  // Check agents.defaults.imageModel fallbacks.
+  const defaultImageFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.imageModel);
+  for (let i = 0; i < defaultImageFallbacks.length; i++) {
+    checkFallback(`agents.defaults.imageModel.fallbacks[${i}]`, defaultImageFallbacks[i]);
+  }
+
+  // Check agents.defaults.subagents.model fallbacks.
+  const subagentFallbacks = resolveAgentModelFallbackValues(cfg.agents?.defaults?.subagents?.model);
+  for (let i = 0; i < subagentFallbacks.length; i++) {
+    checkFallback(`agents.defaults.subagents.model.fallbacks[${i}]`, subagentFallbacks[i]);
+  }
+
+  // Check per-agent fallbacks.
+  const agentList = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
+  for (const agent of agentList) {
+    if (!agent || typeof agent !== "object") {
+      continue;
+    }
+    const agentId = typeof agent.id === "string" ? agent.id : "?";
+    const agentFallbacks = resolveAgentModelFallbackValues(agent.model);
+    for (let i = 0; i < agentFallbacks.length; i++) {
+      checkFallback(`agents.list[${agentId}].model.fallbacks[${i}]`, agentFallbacks[i]);
+    }
+    const subagentModelFallbacks = resolveAgentModelFallbackValues(agent.subagents?.model);
+    for (let i = 0; i < subagentModelFallbacks.length; i++) {
+      checkFallback(
+        `agents.list[${agentId}].subagents.model.fallbacks[${i}]`,
+        subagentModelFallbacks[i],
+      );
+    }
+  }
+
+  return warnings;
+}
+
 export async function loadAndMaybeMigrateDoctorConfig(params: {
   options: DoctorOptions;
   confirm: (p: { message: string; initialValue: boolean }) => Promise<boolean>;
@@ -1809,13 +1887,13 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   }
   const warnings = snapshot.warnings ?? [];
   if (warnings.length > 0) {
-    const lines = formatConfigIssueLines(warnings, "-").join("\n");
+    const lines = warnings.map((issue) => `- ${issue.path}: ${issue.message}`).join("\n");
     note(lines, "Config warnings");
   }
 
   if (snapshot.legacyIssues.length > 0) {
     note(
-      formatConfigIssueLines(snapshot.legacyIssues, "-").join("\n"),
+      snapshot.legacyIssues.map((issue) => `- ${issue.path}: ${issue.message}`).join("\n"),
       "Compatibility config keys detected",
     );
     const { config: migrated, changes } = migrateLegacyConfig(snapshot.parsed);
@@ -1866,10 +1944,6 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     collectMissingDefaultAccountBindingWarnings(candidate);
   if (missingDefaultAccountBindingWarnings.length > 0) {
     note(missingDefaultAccountBindingWarnings.join("\n"), "Doctor warnings");
-  }
-  const missingExplicitDefaultWarnings = collectMissingExplicitDefaultAccountWarnings(candidate);
-  if (missingExplicitDefaultWarnings.length > 0) {
-    note(missingExplicitDefaultWarnings.join("\n"), "Doctor warnings");
   }
 
   if (shouldRepair) {
@@ -2096,6 +2170,17 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   }
 
   noteOpencodeProviderOverrides(cfg);
+
+  const fallbackProviderWarnings = collectFallbackProviderWarnings(cfg);
+  if (fallbackProviderWarnings.length > 0) {
+    const lines = fallbackProviderWarnings.map((w) => {
+      const definedHint =
+        w.definedProviders.length > 0 ? ` Defined providers: ${w.definedProviders.join(", ")}` : "";
+      return `- ${w.path}: "${w.entry}" references undefined provider "${w.provider}".${definedHint}`;
+    });
+    lines.push("- Fix: add the missing provider to models.providers or check for typos.");
+    note(lines.join("\n"), "Fallback provider warnings");
+  }
 
   return {
     cfg,
