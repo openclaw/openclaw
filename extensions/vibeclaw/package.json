@@ -4,9 +4,6 @@
   "private": true,
   "description": "VibeClaw: Zero-Config skill discovery via Vibe Index (93,600+ resources)",
   "type": "module",
-  "peerDependencies": {
-    "openclaw": ">=2026.1.26"
-  },
   "openclaw": {
     "extensions": [
       "./index.ts"
