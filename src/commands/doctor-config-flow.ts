@@ -1289,10 +1289,6 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
       (parentDm?.policy as string | undefined) ??
       undefined;
 
-    if (dmPolicy !== "allowlist") {
-      return;
-    }
-
     const topAllowFrom =
       (account.allowFrom as Array<string | number> | undefined) ??
       (parent?.allowFrom as Array<string | number> | undefined);
@@ -1300,13 +1296,29 @@ function detectEmptyAllowlistPolicy(cfg: OpenClawConfig): string[] {
     const parentNestedAllowFrom = parentDm?.allowFrom as Array<string | number> | undefined;
     const effectiveAllowFrom = topAllowFrom ?? nestedAllowFrom ?? parentNestedAllowFrom;
 
-    if (hasAllowFromEntries(effectiveAllowFrom)) {
-      return;
+    if (dmPolicy === "allowlist" && !hasAllowFromEntries(effectiveAllowFrom)) {
+      warnings.push(
+        `- ${prefix}.dmPolicy is "allowlist" but allowFrom is empty — all DMs will be blocked. Add sender IDs to ${prefix}.allowFrom, or run "${formatCliCommand("openclaw doctor --fix")}" to auto-migrate from pairing store when entries exist.`,
+      );
     }
 
-    warnings.push(
-      `- ${prefix}.dmPolicy is "allowlist" but allowFrom is empty — all DMs will be blocked. Add sender IDs to ${prefix}.allowFrom, or run "${formatCliCommand("openclaw doctor --fix")}" to auto-migrate from pairing store when entries exist.`,
-    );
+    const groupPolicy =
+      (account.groupPolicy as string | undefined) ??
+      (parent?.groupPolicy as string | undefined) ??
+      undefined;
+
+    if (groupPolicy === "allowlist") {
+      const groupAllowFrom =
+        (account.groupAllowFrom as Array<string | number> | undefined) ??
+        (parent?.groupAllowFrom as Array<string | number> | undefined);
+      const effectiveGroupAllowFrom = groupAllowFrom ?? effectiveAllowFrom;
+
+      if (!hasAllowFromEntries(effectiveGroupAllowFrom)) {
+        warnings.push(
+          `- ${prefix}.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — all group messages will be silently dropped. Add sender IDs to ${prefix}.groupAllowFrom or ${prefix}.allowFrom, or set groupPolicy to "open".`,
+        );
+      }
+    }
   };
 
   for (const [channelName, channelConfig] of Object.entries(
