@@ -27,7 +27,7 @@ import { splitTelegramCaption } from "./caption.js";
 import { resolveTelegramFetch } from "./fetch.js";
 import { renderTelegramHtmlText } from "./format.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
-import { makeProxyFetch } from "./proxy.js";
+import { makeEnvProxyFetch, makeProxyFetch } from "./proxy.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 import { maybePersistResolvedTelegramTarget } from "./target-writeback.js";
 import {
@@ -122,7 +122,11 @@ function resolveTelegramClientOptions(
   account: ResolvedTelegramAccount,
 ): ApiClientOptions | undefined {
   const proxyUrl = account.config.proxy?.trim();
-  const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl) : undefined;
+  // Fall back to HTTPS_PROXY / HTTP_PROXY env vars when no explicit proxy is
+  // configured. Node.js 22's globalThis.fetch (undici) silently ignores these
+  // variables, so we must wire the dispatcher manually — matching the behaviour
+  // users expect from curl and browsers. See: #28607
+  const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl) : makeEnvProxyFetch();
   const fetchImpl = resolveTelegramFetch(proxyFetch, {
     network: account.config.network,
   });

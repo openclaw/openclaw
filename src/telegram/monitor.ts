@@ -13,7 +13,7 @@ import { resolveTelegramAllowedUpdates } from "./allowed-updates.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { createTelegramBot } from "./bot.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
-import { makeProxyFetch } from "./proxy.js";
+import { makeEnvProxyFetch, makeProxyFetch } from "./proxy.js";
 import { readTelegramUpdateOffset, writeTelegramUpdateOffset } from "./update-offset-store.js";
 import { startTelegramWebhook } from "./webhook.js";
 
@@ -134,8 +134,12 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       );
     }
 
+    // Fall back to HTTPS_PROXY / HTTP_PROXY env vars when no explicit proxy is
+    // configured. Node.js 22's globalThis.fetch (undici) silently ignores
+    // these variables — wire the dispatcher manually. See: #28607
     const proxyFetch =
-      opts.proxyFetch ?? (account.config.proxy ? makeProxyFetch(account.config.proxy) : undefined);
+      opts.proxyFetch ??
+      (account.config.proxy ? makeProxyFetch(account.config.proxy) : makeEnvProxyFetch());
 
     let lastUpdateId = await readTelegramUpdateOffset({
       accountId: account.accountId,
