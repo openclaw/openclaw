@@ -236,7 +236,11 @@ async function evaluateSystemRunPolicyPhase(
   const configuredSecurity = opts.resolveExecSecurity(
     agentExec?.security ?? cfg.tools?.exec?.security,
   );
-  const configuredAsk = opts.resolveExecAsk(agentExec?.ask ?? cfg.tools?.exec?.ask);
+  // Get exec-approvals.json defaults as fallback when tools.exec.ask is not configured
+  const execApprovalsDefaults = resolveExecApprovals();
+  const configuredAsk = opts.resolveExecAsk(
+    agentExec?.ask ?? cfg.tools?.exec?.ask ?? execApprovalsDefaults.defaults.ask,
+  );
   const approvals = resolveExecApprovals(parsed.agentId, {
     security: configuredSecurity,
     ask: configuredAsk,
