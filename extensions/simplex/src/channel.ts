@@ -14,10 +14,8 @@ import {
   resolveSimplexAccount,
   type ResolvedSimplexAccount,
 } from "./types.js";
-
 // Active bus handles per account
 const activeBuses = new Map<string, SimplexBusHandle>();
-
 export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
   id: "simplex",
   meta: {
@@ -38,7 +36,6 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
   },
   reload: { configPrefixes: ["channels.simplex"] },
   configSchema: simplexChannelConfigSchema,
-
   config: {
     listAccountIds: (cfg) => listSimplexAccountIds(cfg),
     resolveAccount: (cfg, accountId) => resolveSimplexAccount({ cfg, accountId }),
@@ -56,7 +53,6 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
     formatAllowFrom: ({ allowFrom }) =>
       allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
   },
-
   pairing: {
     idLabel: "simplexContactId",
     normalizeAllowEntry: (entry) => entry.trim(),
@@ -67,7 +63,6 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
       }
     },
   },
-
   security: {
     resolveDmPolicy: ({ account }) => ({
       policy: account.dmPolicy,
@@ -77,7 +72,6 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
       approveHint: formatPairingApproveHint("simplex"),
     }),
   },
-
   messaging: {
     normalizeTarget: (target) => target.trim(),
     targetResolver: {
@@ -88,7 +82,6 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
       hint: "<simplex contact name or ID>",
     },
   },
-
   outbound: {
     deliveryMode: "direct",
     textChunkLimit: 4096,
@@ -102,14 +95,12 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
       if (!bus.isConnected()) {
         throw new Error("SimpleX WebSocket not connected");
       }
-
       const tableMode = runtime.channel.text.resolveMarkdownTableMode({
         cfg: runtime.config.loadConfig(),
         channel: "simplex",
         accountId: aid,
       });
       const message = runtime.channel.text.convertMarkdownTables(text ?? "", tableMode);
-
       await bus.sendMessage(to, message);
       return {
         channel: "simplex" as const,
@@ -118,7 +109,6 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
       };
     },
   },
-
   status: {
     defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
     collectStatusIssues: (accounts) => collectStatusIssuesFromLastError("simplex", accounts),
@@ -144,30 +134,22 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
       lastOutboundAt: runtime?.lastOutboundAt ?? null,
     }),
   },
-
   gateway: {
     startAccount: async (ctx) => {
       const account = ctx.account;
       ctx.setStatus({
         accountId: account.accountId,
-        wsUrl: account.wsUrl,
       });
       ctx.log?.info(`[${account.accountId}] Starting SimpleX provider (${account.wsUrl})`);
-
       if (!account.configured) {
         throw new Error("SimpleX channel not configured");
       }
-
       const runtime = getSimplexRuntime();
-
       const bus = startSimplexBus({
-        wsUrl: account.wsUrl,
-
         onMessage: async (msg) => {
           ctx.log?.debug?.(
             `[${account.accountId}] DM from ${msg.contactName}: ${msg.text.slice(0, 50)}...`,
           );
-
           // Forward to OpenClaw's message pipeline
           await (
             runtime.channel.reply as {
@@ -187,26 +169,20 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
             },
           });
         },
-
         onError: (error, context) => {
           ctx.log?.error?.(`[${account.accountId}] SimpleX error (${context}): ${error.message}`);
         },
-
         onConnect: () => {
           ctx.log?.info(`[${account.accountId}] Connected to SimpleX CLI at ${account.wsUrl}`);
         },
-
         onDisconnect: (code, reason) => {
           ctx.log?.warn?.(
             `[${account.accountId}] Disconnected from SimpleX CLI: ${code} ${reason}`,
           );
         },
       });
-
       activeBuses.set(account.accountId, bus);
-
       ctx.log?.info(`[${account.accountId}] SimpleX provider started`);
-
       return {
         stop: () => {
           bus.close();
