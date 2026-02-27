@@ -7,6 +7,7 @@ import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { SafeOpenError, readLocalFileSafely } from "../infra/fs-safe.js";
 import { resolvePinnedHostname } from "../infra/net/ssrf.js";
+import { logDebug } from "../logger.js";
 import { resolveConfigDir } from "../utils.js";
 import { detectMime, extensionForMime } from "./mime.js";
 
@@ -99,7 +100,9 @@ export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS) {
           return;
         }
         if (now - stat.mtimeMs > ttlMs) {
-          await fs.rm(full).catch(() => {});
+          await fs.rm(full).catch((err) => {
+            logDebug(`media cleanup: failed to remove ${full}: ${err}`);
+          });
         }
       }),
     );
@@ -117,7 +120,9 @@ export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS) {
         return;
       }
       if (stat.isFile() && now - stat.mtimeMs > ttlMs) {
-        await fs.rm(full).catch(() => {});
+        await fs.rm(full).catch((err) => {
+          logDebug(`media cleanup: failed to remove ${full}: ${err}`);
+        });
       }
     }),
   );
