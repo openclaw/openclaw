@@ -1,7 +1,12 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentTool, AgentToolResult } from "@mariozechner/pi-agent-core";
-import { type ExecHost, maxAsk, minSecurity } from "../infra/exec-approvals.js";
+import {
+  type ExecHost,
+  loadExecApprovals,
+  maxAsk,
+  minSecurity,
+} from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   getShellPathFromLoginShell,
@@ -324,7 +329,12 @@ export function createExecTool(
       if (elevatedRequested && elevatedMode === "full") {
         security = "full";
       }
-      const configuredAsk = defaults?.ask ?? "on-miss";
+      // Fix #29172: Inherit ask from exec-approvals.json when tools.exec.ask is not set.
+      // Previously this would hardcode "on-miss" when defaults?.ask was undefined,
+      // ignoring exec-approvals.json which may have ask: "off".
+      const execApprovalsFile = loadExecApprovals();
+      const execApprovalsAsk = execApprovalsFile.defaults?.ask;
+      const configuredAsk = defaults?.ask ?? execApprovalsAsk ?? "on-miss";
       const requestedAsk = normalizeExecAsk(params.ask);
       let ask = maxAsk(configuredAsk, requestedAsk ?? configuredAsk);
       const bypassApprovals = elevatedRequested && elevatedMode === "full";

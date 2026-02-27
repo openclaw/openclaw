@@ -7,6 +7,7 @@ import {
   type ExecApprovalsFile,
   type ExecAsk,
   type ExecSecurity,
+  loadExecApprovals,
   maxAsk,
   minSecurity,
   resolveExecApprovalsFromFile,
@@ -110,7 +111,10 @@ function resolveNodesRunPolicy(opts: NodesRunOpts, execDefaults: ExecDefaults | 
   if (opts.security && !requestedSecurity) {
     throw new Error("invalid --security (use deny|allowlist|full)");
   }
-  const configuredAsk = normalizeExecAsk(execDefaults?.ask) ?? "on-miss";
+  // Fix #29172: Inherit ask from exec-approvals.json when tools.exec.ask is not set.
+  const execApprovalsFile = loadExecApprovals();
+  const execApprovalsAsk = execApprovalsFile.defaults?.ask;
+  const configuredAsk = normalizeExecAsk(execDefaults?.ask) ?? execApprovalsAsk ?? "on-miss";
   const requestedAsk = normalizeExecAsk(opts.ask);
   if (opts.ask && !requestedAsk) {
     throw new Error("invalid --ask (use off|on-miss|always)");
