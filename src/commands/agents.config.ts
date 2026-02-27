@@ -131,6 +131,7 @@ export function applyAgentConfig(
     workspace?: string;
     agentDir?: string;
     model?: string;
+    skills?: string[] | null;
   },
 ): OpenClawConfig {
   const agentId = normalizeAgentId(params.agentId);
@@ -144,6 +145,7 @@ export function applyAgentConfig(
     ...(params.workspace ? { workspace: params.workspace } : {}),
     ...(params.agentDir ? { agentDir: params.agentDir } : {}),
     ...(params.model ? { model: params.model } : {}),
+    ...(params.skills !== undefined ? { skills: params.skills ?? undefined } : {}),
   };
   const nextList = [...list];
   if (index >= 0) {

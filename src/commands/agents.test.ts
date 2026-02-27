@@ -72,6 +72,7 @@ describe("agents helpers", () => {
       name: "Work",
       workspace: "/new-ws",
       agentDir: "/state/work/agent",
+      skills: ["github", "bash"],
     });
 
     const work = next.agents?.list?.find((agent) => agent.id === "work");
@@ -79,6 +80,7 @@ describe("agents helpers", () => {
     expect(work?.workspace).toBe("/new-ws");
     expect(work?.agentDir).toBe("/state/work/agent");
     expect(work?.model).toBe("anthropic/claude");
+    expect(work?.skills).toEqual(["github", "bash"]);
   });
 
   it("applyAgentBindings skips duplicates and reports conflicts", () => {
