@@ -79,6 +79,8 @@ type WhatsAppSharedConfig = {
 };
 
 type WhatsAppConfigCore = {
+  /** If false, do not start the WhatsApp channel. Default: true (auto-detected). */
+  enabled?: boolean;
   /** Optional provider capability tags used for agent/runtime guidance. */
   capabilities?: string[];
   /** Markdown formatting overrides (tables). */

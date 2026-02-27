@@ -105,6 +105,30 @@ describe("applyPluginAutoEnable", () => {
     expect(result.config.plugins?.entries?.["google-gemini-cli-auth"]?.enabled).toBe(true);
   });
 
+  it("auto-enables whatsapp when config entry exists (no auth check)", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: { whatsapp: { dmPolicy: "allowlist", allowFrom: ["+15555550123"] } },
+      },
+      env: {},
+    });
+
+    expect(result.config.channels?.whatsapp?.enabled).toBe(true);
+    expect(result.changes.join("\n")).toContain("WhatsApp configured, enabled automatically.");
+  });
+
+  it("respects explicit disable via channels.whatsapp.enabled = false", () => {
+    const result = applyPluginAutoEnable({
+      config: {
+        channels: { whatsapp: { dmPolicy: "allowlist", enabled: false } },
+      },
+      env: {},
+    });
+
+    expect(result.config.channels?.whatsapp?.enabled).toBe(false);
+    expect(result.changes).toEqual([]);
+  });
+
   it("skips when plugins are globally disabled", () => {
     const result = applyPluginAutoEnable({
       config: {

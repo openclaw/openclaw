@@ -97,6 +97,7 @@ export const WhatsAppAccountSchema = WhatsAppSharedSchema.extend({
   });
 
 export const WhatsAppConfigSchema = WhatsAppSharedSchema.extend({
+  enabled: z.boolean().optional(),
   accounts: z.record(z.string(), WhatsAppAccountSchema.optional()).optional(),
   mediaMaxMb: z.number().int().positive().optional().default(50),
   actions: z
