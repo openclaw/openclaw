@@ -11,7 +11,7 @@ import {
 } from "./allowlist.js";
 
 type MatrixDmPolicy = "open" | "pairing" | "allowlist" | "disabled";
-type MatrixGroupPolicy = "open" | "allowlist" | "disabled";
+type MatrixGroupPolicy = "open" | "allowlist" | "disabled" | "listen-only";
 
 export async function resolveMatrixAccessState(params: {
   isDirectMessage: boolean;

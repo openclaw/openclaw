@@ -169,7 +169,7 @@ async function noteMSTeamsCredentialHelp(prompter: WizardPrompter): Promise<void
 
 function setMSTeamsGroupPolicy(
   cfg: OpenClawConfig,
-  groupPolicy: "open" | "allowlist" | "disabled",
+  groupPolicy: "open" | "allowlist" | "disabled" | "listen-only",
 ): OpenClawConfig {
   return {
     ...cfg,

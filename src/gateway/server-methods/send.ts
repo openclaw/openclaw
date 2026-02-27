@@ -11,9 +11,9 @@ import {
 } from "../../infra/outbound/outbound-session.js";
 import { normalizeReplyPayloadsForDelivery } from "../../infra/outbound/payloads.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
+import { isOutboundSuppressed } from "../../infra/outbound/suppress-outbound.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { normalizePollInput } from "../../polls.js";
-import { isOutboundSuppressed } from "../../infra/outbound/suppress-outbound.js";
 import {
   ErrorCodes,
   errorShape,

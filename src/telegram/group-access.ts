@@ -98,11 +98,11 @@ export type TelegramGroupPolicyBlockReason =
   | "group-chat-not-allowed";
 
 export type TelegramGroupPolicyAccessResult =
-  | { allowed: true; groupPolicy: "open" | "disabled" | "allowlist" }
+  | { allowed: true; groupPolicy: "open" | "disabled" | "allowlist" | "listen-only" }
   | {
       allowed: false;
       reason: TelegramGroupPolicyBlockReason;
-      groupPolicy: "open" | "disabled" | "allowlist";
+      groupPolicy: "open" | "disabled" | "allowlist" | "listen-only";
     };
 
 export const resolveTelegramRuntimeGroupPolicy = (params: {

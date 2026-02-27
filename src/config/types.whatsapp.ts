@@ -78,6 +78,8 @@ type WhatsAppSharedConfig = {
   debounceMs?: number;
   /** Heartbeat visibility settings. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Suppress all outbound messages (listen-only mode). */
+  suppressOutbound?: boolean;
 };
 
 type WhatsAppConfigCore = {

@@ -142,7 +142,10 @@ async function promptMatrixAllowFrom(params: {
   }
 }
 
-function setMatrixGroupPolicy(cfg: CoreConfig, groupPolicy: "open" | "allowlist" | "disabled") {
+function setMatrixGroupPolicy(
+  cfg: CoreConfig,
+  groupPolicy: "open" | "allowlist" | "disabled" | "listen-only",
+) {
   return {
     ...cfg,
     channels: {

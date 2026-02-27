@@ -56,7 +56,7 @@ type DiscordReactionRoutingParams = {
   groupDmChannels: string[];
   dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
   allowFrom: string[];
-  groupPolicy: "open" | "allowlist" | "disabled";
+  groupPolicy: "open" | "allowlist" | "disabled" | "listen-only";
   allowNameMatching: boolean;
   guildEntries?: Record<string, import("./allow-list.js").DiscordGuildEntryResolved>;
 };
@@ -237,7 +237,7 @@ type DiscordReactionIngressAuthorizationParams = {
   groupDmChannels: string[];
   dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
   allowFrom: string[];
-  groupPolicy: "open" | "allowlist" | "disabled";
+  groupPolicy: "open" | "allowlist" | "disabled" | "listen-only";
   allowNameMatching: boolean;
   guildInfo: import("./allow-list.js").DiscordGuildEntryResolved | null;
   channelConfig?: { allowed?: boolean } | null;
