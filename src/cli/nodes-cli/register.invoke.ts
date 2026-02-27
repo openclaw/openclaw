@@ -104,13 +104,23 @@ function requirePreparedRunPayload(payload: unknown) {
   return prepared;
 }
 
-function resolveNodesRunPolicy(opts: NodesRunOpts, execDefaults: ExecDefaults | undefined) {
+function resolveNodesRunPolicy(
+  opts: NodesRunOpts,
+  execDefaults: ExecDefaults | undefined,
+  agentId?: string,
+) {
   const configuredSecurity = normalizeExecSecurity(execDefaults?.security) ?? "allowlist";
   const requestedSecurity = normalizeExecSecurity(opts.security);
   if (opts.security && !requestedSecurity) {
     throw new Error("invalid --security (use deny|allowlist|full)");
   }
-  const configuredAsk = normalizeExecAsk(execDefaults?.ask) ?? "on-miss";
+  // Load exec-approvals.json defaults to use as fallback when tools.exec.ask is not set
+  const execApprovalsDefaults = resolveExecApprovalsFromFile({
+    file: { defaults: { ask: execDefaults?.ask } } as ExecApprovalsFile,
+    agentId,
+  });
+  const configuredAsk =
+    normalizeExecAsk(execDefaults?.ask) ?? execApprovalsDefaults.defaults.ask ?? "on-miss";
   const requestedAsk = normalizeExecAsk(opts.ask);
   if (opts.ask && !requestedAsk) {
     throw new Error("invalid --ask (use off|on-miss|always)");
@@ -399,7 +409,7 @@ export function registerNodesInvokeCommands(nodes: Command) {
             execDefaults,
           });
           const approvalPlan = preparedContext.prepared.plan;
-          const policy = resolveNodesRunPolicy(opts, execDefaults);
+          const policy = resolveNodesRunPolicy(opts, execDefaults, agentId);
           const approvals = await resolveNodeApprovals({
             opts,
             nodeId,
