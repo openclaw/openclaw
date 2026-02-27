@@ -11,13 +11,13 @@ export function isSilentReplyText(
     return false;
   }
   const escaped = escapeRegExp(token);
-  // Use explicit ASCII whitespace [ \t\r\n] instead of \s to avoid false-positives
-  // with non-ASCII characters. JavaScript's \s matches all Unicode whitespace
-  // (including U+3000 ideographic space and other CJK-adjacent whitespace), and
-  // older versions of this regex used \W/\b which match all non-ASCII characters —
-  // causing CJK messages containing the token to be silently dropped (#24773).
-  // This ensures only the bare token (with optional ASCII spacing) is treated as silent.
-  return new RegExp(`^[ \\t\\r\\n]*${escaped}[ \\t\\r\\n]*$`).test(text);
+  // Use \s (which includes Unicode whitespace like U+3000 ideographic space) so that
+  // a bare token surrounded by any whitespace is correctly treated as silent.
+  // The ^ and $ anchors prevent false-positives: CJK text containing the token
+  // won't match because the non-whitespace CJK characters aren't consumed by \s.
+  // The original bug (#24773) was caused by \W/\b anchors matching all non-ASCII
+  // characters — \s is safe here because it only matches whitespace, not CJK text.
+  return new RegExp(`^\\s*${escaped}\\s*$`).test(text);
 }
 
 /**

@@ -45,6 +45,26 @@ describe("isSilentReplyText", () => {
     expect(isSilentReplyText("返事なし NO_REPLY")).toBe(false);
     expect(isSilentReplyText("NO_REPLY 返事なし")).toBe(false);
   });
+
+  // Unicode whitespace (e.g. U+3000 ideographic space, U+00A0 non-breaking space)
+  // must be accepted around the bare token, not just ASCII spaces.
+  it("returns true for token surrounded by Unicode whitespace", () => {
+    // U+3000 ideographic space (common in CJK input methods)
+    expect(isSilentReplyText("\u3000NO_REPLY\u3000")).toBe(true);
+    expect(isSilentReplyText("\u3000NO_REPLY")).toBe(true);
+    expect(isSilentReplyText("NO_REPLY\u3000")).toBe(true);
+    // U+00A0 non-breaking space
+    expect(isSilentReplyText("\u00A0NO_REPLY\u00A0")).toBe(true);
+    // Mixed Unicode and ASCII whitespace
+    expect(isSilentReplyText(" \u3000 NO_REPLY \u3000 ")).toBe(true);
+  });
+
+  // CJK text with Unicode whitespace around the token must NOT be treated as silent.
+  it("returns false for CJK text with Unicode whitespace around the token (#24773)", () => {
+    expect(isSilentReplyText("好的\u3000NO_REPLY")).toBe(false);
+    expect(isSilentReplyText("NO_REPLY\u3000返事なし")).toBe(false);
+    expect(isSilentReplyText("\u3000好的 NO_REPLY\u3000")).toBe(false);
+  });
 });
 
 describe("stripSilentToken", () => {
@@ -111,5 +131,11 @@ describe("isSilentReplyPrefixText", () => {
     expect(isSilentReplyPrefixText("NO_X")).toBe(false);
     expect(isSilentReplyPrefixText("NO_REPLY more")).toBe(false);
     expect(isSilentReplyPrefixText("NO-")).toBe(false);
+  });
+
+  // trimStart() in modern JS handles Unicode whitespace (U+3000, U+00A0, etc.)
+  it("accepts prefix with leading Unicode whitespace", () => {
+    expect(isSilentReplyPrefixText("\u3000NO_")).toBe(true);
+    expect(isSilentReplyPrefixText("\u00A0NO_RE")).toBe(true);
   });
 });
