@@ -1,10 +1,16 @@
 import { completeSimple, type AssistantMessage } from "@mariozechner/pi-ai";
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { getApiKeyForModel } from "../agents/model-auth.js";
 import { resolveModel } from "../agents/pi-embedded-runner/model.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { withEnv } from "../test-utils/env.js";
 import * as tts from "./tts.js";
+
+vi.mock("../process/exec.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../process/exec.js")>();
+  return { ...original, runCommandWithTimeout: vi.fn() };
+});
 
 vi.mock("@mariozechner/pi-ai", () => ({
   completeSimple: vi.fn(),
@@ -543,6 +549,338 @@ describe("tts", () => {
 
         expect(result.mediaUrl).toBeDefined();
         expect(fetchMock).toHaveBeenCalledTimes(1);
+      });
+    });
+  });
+
+  describe("local provider", () => {
+    const baseCfg = (): OpenClawConfig => ({
+      agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+      messages: {
+        tts: {
+          auto: "always",
+          provider: "local",
+          // Disable all cloud providers so they don't pollute errors.
+          edge: { enabled: false },
+          local: {
+            command: "/usr/local/bin/fake-tts",
+            args: ["--text", "{{Text}}", "--out", "{{Output}}"],
+          },
+        },
+      },
+    });
+
+    const okResult = () => ({
+      stdout: "",
+      stderr: "",
+      code: 0 as number | null,
+      signal: null as NodeJS.Signals | null,
+      killed: false,
+      termination: "exit" as const,
+    });
+
+    beforeEach(() => {
+      vi.mocked(runCommandWithTimeout).mockResolvedValue(okResult());
+    });
+
+    // ── config resolution ───────────────────────────────────────────────────
+
+    describe("resolveTtsConfig", () => {
+      it("maps local.command and local.args from raw config", () => {
+        const config = tts.resolveTtsConfig(baseCfg());
+        expect(config.local?.command).toBe("/usr/local/bin/fake-tts");
+        expect(config.local?.args).toEqual(["--text", "{{Text}}", "--out", "{{Output}}"]);
+      });
+
+      it("defaults args to [] when omitted", () => {
+        const cfg: OpenClawConfig = {
+          ...baseCfg(),
+          messages: {
+            tts: {
+              local: { command: "/bin/tts" },
+            },
+          },
+        };
+        const config = tts.resolveTtsConfig(cfg);
+        expect(config.local?.args).toEqual([]);
+      });
+
+      it("sets config.local to undefined when command is missing or absent", () => {
+        const cases: OpenClawConfig[] = [
+          { agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } }, messages: { tts: {} } },
+          {
+            agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+            // @ts-expect-error – intentionally testing runtime behaviour
+            messages: { tts: { local: {} } },
+          },
+          {
+            agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+            // @ts-expect-error – intentionally testing runtime behaviour
+            messages: { tts: { local: { command: "" } } },
+          },
+        ];
+        for (const cfg of cases) {
+          expect(tts.resolveTtsConfig(cfg).local).toBeUndefined();
+        }
+      });
+    });
+
+    // ── isTtsProviderConfigured ──────────────────────────────────────────────
+
+    describe("isTtsProviderConfigured", () => {
+      it("returns true when local.command is set", () => {
+        const config = tts.resolveTtsConfig(baseCfg());
+        expect(tts.isTtsProviderConfigured(config, "local")).toBe(true);
+      });
+
+      it("returns false when local config is absent", () => {
+        const config = tts.resolveTtsConfig({
+          agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+          messages: { tts: {} },
+        });
+        expect(tts.isTtsProviderConfigured(config, "local")).toBe(false);
+      });
+    });
+
+    // ── textToSpeech ────────────────────────────────────────────────────────
+
+    describe("textToSpeech", () => {
+      it("returns success with an mp3 audioPath for non-Telegram channels", async () => {
+        const result = await tts.textToSpeech({
+          text: "Hello world",
+          cfg: baseCfg(),
+          prefsPath: `/tmp/tts-local-test-${Date.now()}.json`,
+          channel: "whatsapp",
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.provider).toBe("local");
+        expect(result.audioPath).toMatch(/\.mp3$/);
+        expect(result.latencyMs).toBeGreaterThanOrEqual(0);
+        expect(runCommandWithTimeout).toHaveBeenCalledTimes(1);
+      });
+
+      it("uses .ogg extension and opus format placeholder for Telegram", async () => {
+        const cfg: OpenClawConfig = {
+          ...baseCfg(),
+          messages: {
+            tts: {
+              ...baseCfg().messages!.tts,
+              local: {
+                command: "/bin/tts",
+                args: ["--format", "{{Format}}", "--out", "{{Output}}"],
+              },
+            },
+          },
+        };
+
+        vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+          // Capture what was passed so we can assert on it.
+          (vi.mocked(runCommandWithTimeout) as ReturnType<typeof vi.fn> & { lastArgv?: string[] }).lastArgv = argv;
+          return okResult();
+        });
+
+        const result = await tts.textToSpeech({
+          text: "Hello Telegram",
+          cfg,
+          prefsPath: `/tmp/tts-local-telegram-${Date.now()}.json`,
+          channel: "telegram",
+        });
+
+        expect(result.success).toBe(true);
+        expect(result.audioPath).toMatch(/\.ogg$/);
+        const argv = (vi.mocked(runCommandWithTimeout) as ReturnType<typeof vi.fn> & { lastArgv?: string[] }).lastArgv ?? [];
+        expect(argv).toContain("opus");
+      });
+
+      it("substitutes {{Text}}, {{Output}}, {{Channel}}, {{Format}} placeholders in args", async () => {
+        const cfg: OpenClawConfig = {
+          ...baseCfg(),
+          messages: {
+            tts: {
+              ...baseCfg().messages!.tts,
+              local: {
+                command: "/bin/tts",
+                args: ["{{Text}}", "{{Output}}", "{{Channel}}", "{{Format}}"],
+              },
+            },
+          },
+        };
+
+        let capturedArgv: string[] = [];
+        vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+          capturedArgv = argv;
+          return okResult();
+        });
+
+        const prefsPath = `/tmp/tts-local-placeholders-${Date.now()}.json`;
+        await tts.textToSpeech({
+          text: "synthesize this",
+          cfg,
+          prefsPath,
+          channel: "whatsapp",
+        });
+
+        expect(capturedArgv[0]).toBe("/bin/tts");
+        expect(capturedArgv[1]).toBe("synthesize this");  // {{Text}}
+        expect(capturedArgv[2]).toMatch(/\.mp3$/);          // {{Output}}
+        expect(capturedArgv[3]).toBe("whatsapp");           // {{Channel}}
+        expect(capturedArgv[4]).toBe("mp3");                // {{Format}}
+      });
+
+      it("passes no extra args when args array is empty", async () => {
+        const cfg: OpenClawConfig = {
+          ...baseCfg(),
+          messages: {
+            tts: {
+              ...baseCfg().messages!.tts,
+              local: { command: "/bin/tts" },
+            },
+          },
+        };
+
+        let capturedArgv: string[] = [];
+        vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+          capturedArgv = argv;
+          return okResult();
+        });
+
+        await tts.textToSpeech({
+          text: "hello",
+          cfg,
+          prefsPath: `/tmp/tts-local-noargs-${Date.now()}.json`,
+        });
+
+        expect(capturedArgv).toEqual(["/bin/tts"]);
+      });
+
+      it("passes timeoutMs from config through to runCommandWithTimeout", async () => {
+        const cfg: OpenClawConfig = {
+          ...baseCfg(),
+          messages: {
+            tts: {
+              ...baseCfg().messages!.tts,
+              timeoutMs: 12345,
+              local: { command: "/bin/tts" },
+            },
+          },
+        };
+
+        let capturedOpts: unknown;
+        vi.mocked(runCommandWithTimeout).mockImplementation(async (_argv, opts) => {
+          capturedOpts = opts;
+          return okResult();
+        });
+
+        await tts.textToSpeech({
+          text: "hello",
+          cfg,
+          prefsPath: `/tmp/tts-local-timeout-${Date.now()}.json`,
+        });
+
+        expect((capturedOpts as { timeoutMs: number }).timeoutMs).toBe(12345);
+      });
+
+      it("falls through with error when no command is configured", async () => {
+        // No local.command → config.local is undefined → 'continue' to next provider.
+        // All cloud providers also disabled/unconfigured → overall failure.
+        const cfg: OpenClawConfig = {
+          agents: { defaults: { model: { primary: "openai/gpt-4o-mini" } } },
+          messages: {
+            tts: {
+              auto: "always",
+              provider: "local",
+              edge: { enabled: false },
+              // local intentionally omitted
+            },
+          },
+        };
+
+        const result = await tts.textToSpeech({
+          text: "hello",
+          cfg,
+          prefsPath: `/tmp/tts-local-noconfig-${Date.now()}.json`,
+        });
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain("local: no command configured");
+        // runCommandWithTimeout should never have been called.
+        expect(runCommandWithTimeout).not.toHaveBeenCalled();
+      });
+
+      it("throws and falls back when exit code is non-zero", async () => {
+        vi.mocked(runCommandWithTimeout).mockResolvedValue({
+          ...okResult(),
+          code: 1,
+          stderr: "voice synthesis failed",
+        });
+
+        const result = await tts.textToSpeech({
+          text: "hello",
+          cfg: baseCfg(),
+          prefsPath: `/tmp/tts-local-fail-${Date.now()}.json`,
+        });
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain("local: voice synthesis failed");
+      });
+
+      it("uses fallback message when exit is non-zero and stderr is empty", async () => {
+        vi.mocked(runCommandWithTimeout).mockResolvedValue({
+          ...okResult(),
+          code: 127,
+          stderr: "   ",
+        });
+
+        const result = await tts.textToSpeech({
+          text: "hello",
+          cfg: baseCfg(),
+          prefsPath: `/tmp/tts-local-empty-stderr-${Date.now()}.json`,
+        });
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain("local TTS command failed");
+      });
+
+      it("falls back to remaining providers when local throws", async () => {
+        vi.mocked(runCommandWithTimeout).mockRejectedValue(new Error("ENOENT: command not found"));
+
+        // Local fails, edge disabled, no cloud keys → all-failure result.
+        const result = await tts.textToSpeech({
+          text: "hello",
+          cfg: baseCfg(),
+          prefsPath: `/tmp/tts-local-throw-${Date.now()}.json`,
+        });
+
+        expect(result.success).toBe(false);
+        // Local error is captured; other providers also tried.
+        expect(result.error).toContain("local: ENOENT: command not found");
+      });
+
+      it("channel is 'unknown' when no channel is provided", async () => {
+        let capturedArgv: string[] = [];
+        const cfg: OpenClawConfig = {
+          ...baseCfg(),
+          messages: {
+            tts: {
+              ...baseCfg().messages!.tts,
+              local: { command: "/bin/tts", args: ["{{Channel}}"] },
+            },
+          },
+        };
+        vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
+          capturedArgv = argv;
+          return okResult();
+        });
+
+        await tts.textToSpeech({
+          text: "hello",
+          cfg,
+          prefsPath: `/tmp/tts-local-nochannel-${Date.now()}.json`,
+          // channel intentionally omitted
+        });
+
+        expect(capturedArgv[1]).toBe("unknown");
       });
     });
   });

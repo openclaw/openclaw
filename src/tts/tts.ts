@@ -2,30 +2,32 @@ import { randomBytes } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
-  readFileSync,
-  writeFileSync,
   mkdtempSync,
-  rmSync,
+  readFileSync,
   renameSync,
+  rmSync,
   unlinkSync,
+  writeFileSync,
 } from "node:fs";
 import path from "node:path";
+import { applyTemplate } from "../auto-reply/templating.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import { normalizeChannelId } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { normalizeResolvedSecretInputString } from "../config/types.secrets.js";
 import type {
-  TtsConfig,
   TtsAutoMode,
+  TtsConfig,
   TtsMode,
-  TtsProvider,
   TtsModelOverrideConfig,
+  TtsProvider,
 } from "../config/types.tts.js";
 import { logVerbose } from "../globals.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { stripMarkdown } from "../line/markdown-to-line.js";
 import { isVoiceCompatibleAudio } from "../media/audio.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import {
   edgeTTS,
@@ -132,6 +134,10 @@ export type ResolvedTtsConfig = {
   prefsPath?: string;
   maxTextLength: number;
   timeoutMs: number;
+  local?: {
+    command: string;
+    args: string[];
+  };
 };
 
 type TtsUserPrefs = {
@@ -313,6 +319,9 @@ export function resolveTtsConfig(cfg: OpenClawConfig): ResolvedTtsConfig {
     prefsPath: raw.prefsPath,
     maxTextLength: raw.maxTextLength ?? DEFAULT_MAX_TEXT_LENGTH,
     timeoutMs: raw.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    local: raw.local?.command
+      ? { command: raw.local.command, args: raw.local.args ?? [] }
+      : undefined,
   };
 }
 
@@ -498,7 +507,11 @@ function resolveOutputFormat(channelId?: string | null) {
 }
 
 function resolveChannelId(channel: string | undefined): ChannelId | null {
-  return channel ? normalizeChannelId(channel) : null;
+  if (!channel) return null;
+  const normalized = normalizeChannelId(channel);
+  if (normalized) return normalized;
+  // Fall back to raw string when registry lookup fails (e.g. tts tool context)
+  return (channel.trim().toLowerCase() as ChannelId) || null;
 }
 
 function resolveEdgeOutputFormat(config: ResolvedTtsConfig): string {
@@ -518,7 +531,7 @@ export function resolveTtsApiKey(
   return undefined;
 }
 
-export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge"] as const;
+export const TTS_PROVIDERS = ["openai", "elevenlabs", "edge", "local"] as const;
 
 export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
   return [primary, ...TTS_PROVIDERS.filter((provider) => provider !== primary)];
@@ -527,6 +540,9 @@ export function resolveTtsProviderOrder(primary: TtsProvider): TtsProvider[] {
 export function isTtsProviderConfigured(config: ResolvedTtsConfig, provider: TtsProvider): boolean {
   if (provider === "edge") {
     return config.edge.enabled;
+  }
+  if (provider === "local") {
+    return Boolean(config.local?.command);
   }
   return Boolean(resolveTtsApiKey(config, provider));
 }
@@ -641,6 +657,44 @@ export async function textToSpeech(params: {
           latencyMs: Date.now() - providerStart,
           provider,
           outputFormat: edgeResult.outputFormat,
+          voiceCompatible,
+        };
+      }
+
+      if (provider === "local") {
+        const localCfg = config.local;
+        if (!localCfg?.command) {
+          errors.push("local: no command configured");
+          continue;
+        }
+        const tempRoot = resolvePreferredOpenClawTmpDir();
+        mkdirSync(tempRoot, { recursive: true, mode: 0o700 });
+        const tempDir = mkdtempSync(path.join(tempRoot, "tts-"));
+        const ext = channelId === "telegram" ? ".ogg" : ".mp3";
+        const audioPath = path.join(tempDir, `voice-${Date.now()}${ext}`);
+        const ttsChannel = channelId ?? "unknown";
+        const ttsFormat = channelId === "telegram" ? "opus" : "mp3";
+        // {{PascalCase}} placeholders in args align with media/link CLI runner convention.
+        const templCtx = {
+          Text: params.text,
+          Output: audioPath,
+          Channel: ttsChannel,
+          Format: ttsFormat,
+        };
+        const args = (localCfg.args ?? []).map((a) => applyTemplate(a, templCtx));
+        const localResult = await runCommandWithTimeout([localCfg.command, ...args], {
+          timeoutMs: config.timeoutMs,
+        });
+        if (localResult.code !== 0) {
+          throw new Error(localResult.stderr.trim() || "local TTS command failed");
+        }
+        scheduleCleanup(tempDir);
+        const voiceCompatible = isVoiceCompatibleAudio({ fileName: audioPath });
+        return {
+          success: true,
+          audioPath,
+          latencyMs: Date.now() - providerStart,
+          provider,
           voiceCompatible,
         };
       }
