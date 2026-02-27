@@ -18,6 +18,14 @@ export const FeishuDocSchema = Type.Union([
     content: Type.String({ description: "Markdown content to append to end of document" }),
   }),
   Type.Object({
+    action: Type.Literal("insert"),
+    doc_token: Type.String({ description: "Document token" }),
+    content: Type.String({ description: "Markdown content to insert" }),
+    after_block_id: Type.String({
+      description: "Insert content after this block ID. Use list_blocks to find block IDs.",
+    }),
+  }),
+  Type.Object({
     action: Type.Literal("create"),
     title: Type.String({ description: "Document title" }),
     folder_token: Type.Optional(Type.String({ description: "Target folder token (optional)" })),

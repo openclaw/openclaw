@@ -73,6 +73,9 @@ function sortBlocksByFirstLevel(blocks: any[], firstLevelIds: string[]): any[] {
 /**
  * Insert blocks using Descendant API (single request, <1000 blocks).
  * For larger documents, use insertBlocksInBatches from docx-batch-insert.ts.
+ *
+ * @param parentBlockId - Parent block to insert into (defaults to docToken = document root)
+ * @param index - Position within parent's children (-1 = end, 0 = first)
  */
 /* eslint-disable @typescript-eslint/no-explicit-any -- SDK block types */
 async function insertBlocksWithDescendant(
@@ -80,6 +83,7 @@ async function insertBlocksWithDescendant(
   docToken: string,
   blocks: any[],
   firstLevelBlockIds: string[],
+  { parentBlockId = docToken, index = -1 }: { parentBlockId?: string; index?: number } = {},
 ): Promise<{ children: any[]; skipped: string[] }> {
   /* eslint-enable @typescript-eslint/no-explicit-any */
   const descendants = cleanBlocksForDescendant(blocks);
@@ -89,10 +93,11 @@ async function insertBlocksWithDescendant(
   }
 
   const res = await client.docx.documentBlockDescendant.create({
-    path: { document_id: docToken, block_id: docToken },
+    path: { document_id: docToken, block_id: parentBlockId },
     data: {
       children_id: firstLevelBlockIds,
       descendants,
+      index,
     },
   });
 
@@ -270,6 +275,82 @@ async function appendDoc(
   };
 }
 
+async function insertDoc(
+  client: Lark.Client,
+  docToken: string,
+  markdown: string,
+  afterBlockId: string,
+  maxBytes: number,
+  logger?: Logger,
+) {
+  // Resolve parent block and insertion index
+  const blockInfo = await client.docx.documentBlock.get({
+    path: { document_id: docToken, block_id: afterBlockId },
+  });
+  if (blockInfo.code !== 0) {
+    throw new Error(blockInfo.msg);
+  }
+
+  const parentId = blockInfo.data?.block?.parent_id ?? docToken;
+
+  // Find afterBlockId's position within its parent's children
+  const childrenRes = await client.docx.documentBlockChildren.get({
+    path: { document_id: docToken, block_id: parentId },
+  });
+  if (childrenRes.code !== 0) {
+    throw new Error(childrenRes.msg);
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block type
+  const items: any[] = childrenRes.data?.items ?? [];
+  const blockIndex = items.findIndex((item) => item.block_id === afterBlockId);
+  // Insert immediately after the target block (blockIndex + 1), or at end if not found
+  const insertIndex = blockIndex === -1 ? -1 : blockIndex + 1;
+
+  logger?.info?.("feishu_doc: Converting markdown...");
+  const { blocks, firstLevelBlockIds } = await convertMarkdown(client, markdown);
+  if (blocks.length === 0) {
+    throw new Error("Content is empty");
+  }
+  const sortedBlocks = sortBlocksByFirstLevel(blocks, firstLevelBlockIds);
+
+  logger?.info?.(
+    `feishu_doc: Converted to ${blocks.length} blocks, inserting at index ${insertIndex}...`,
+  );
+  const { children: inserted } =
+    blocks.length > BATCH_SIZE
+      ? await insertBlocksInBatches(
+          client,
+          docToken,
+          sortedBlocks,
+          firstLevelBlockIds,
+          logger,
+          parentId,
+          insertIndex,
+        )
+      : await insertBlocksWithDescendant(client, docToken, sortedBlocks, firstLevelBlockIds, {
+          parentBlockId: parentId,
+          index: insertIndex,
+        });
+
+  const imageUrls = extractImageUrls(markdown);
+  if (imageUrls.length > 0) {
+    logger?.info?.(
+      `feishu_doc: Inserted ${inserted.length} blocks, processing ${imageUrls.length} images...`,
+    );
+  }
+  const imagesProcessed = await processImages(client, docToken, markdown, inserted, maxBytes);
+
+  logger?.info?.(`feishu_doc: Done (${blocks.length} blocks, ${imagesProcessed} images)`);
+  return {
+    success: true,
+    blocks_added: blocks.length,
+    images_processed: imagesProcessed,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block type
+    block_ids: inserted.map((b: any) => b.block_id),
+  };
+}
+
 async function updateBlock(
   client: Lark.Client,
   docToken: string,
@@ -407,7 +488,7 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
         name: "feishu_doc",
         label: "Feishu Doc",
         description:
-          "Feishu document operations. Actions: read, write, append, create, list_blocks, get_block, update_block, delete_block, insert_table_row, insert_table_column, delete_table_rows, delete_table_columns, merge_table_cells, color_text, upload_image",
+          "Feishu document operations. Actions: read, write, append, insert, create, list_blocks, get_block, update_block, delete_block, insert_table_row, insert_table_column, delete_table_rows, delete_table_columns, merge_table_cells, color_text, upload_image",
         parameters: FeishuDocSchema,
         async execute(_toolCallId, params) {
           const p = params as FeishuDocParams;
@@ -423,6 +504,17 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
               case "append":
                 return json(
                   await appendDoc(client, p.doc_token, p.content, mediaMaxBytes, api.logger),
+                );
+              case "insert":
+                return json(
+                  await insertDoc(
+                    client,
+                    p.doc_token,
+                    p.content,
+                    p.after_block_id,
+                    mediaMaxBytes,
+                    api.logger,
+                  ),
                 );
               case "create":
                 return json(await createDoc(client, p.title, p.folder_token));

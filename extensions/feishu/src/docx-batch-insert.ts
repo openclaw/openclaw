@@ -56,6 +56,9 @@ function collectDescendants(blocks: any[], firstLevelIds: string[]): any[] {
 
 /**
  * Insert a single batch of blocks using Descendant API.
+ *
+ * @param parentBlockId - Parent block to insert into (defaults to docToken)
+ * @param index - Position within parent's children (-1 = end)
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block types
 async function insertBatch(
@@ -63,6 +66,8 @@ async function insertBatch(
   docToken: string,
   blocks: any[],
   firstLevelBlockIds: string[],
+  parentBlockId: string = docToken,
+  index: number = -1,
 ): Promise<any[]> {
   const descendants = cleanBlocksForDescendant(blocks);
 
@@ -71,10 +76,11 @@ async function insertBatch(
   }
 
   const res = await client.docx.documentBlockDescendant.create({
-    path: { document_id: docToken, block_id: docToken },
+    path: { document_id: docToken, block_id: parentBlockId },
     data: {
       children_id: firstLevelBlockIds,
       descendants,
+      index,
     },
   });
 
@@ -96,6 +102,9 @@ async function insertBatch(
  * @param blocks - All blocks from Convert API
  * @param firstLevelBlockIds - IDs of top-level blocks to insert
  * @param logger - Optional logger for progress updates
+ * @param parentBlockId - Parent block to insert into (defaults to docToken = document root)
+ * @param startIndex - Starting position within parent (-1 = end). For multi-batch inserts,
+ *   each batch advances this by the number of first-level IDs inserted so far.
  * @returns Inserted children blocks and any skipped block IDs
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK block types
@@ -105,6 +114,8 @@ export async function insertBlocksInBatches(
   blocks: any[],
   firstLevelBlockIds: string[],
   logger?: Logger,
+  parentBlockId: string = docToken,
+  startIndex: number = -1,
 ): Promise<{ children: any[]; skipped: string[] }> {
   const allChildren: any[] = [];
 
@@ -139,15 +150,30 @@ export async function insertBlocksInBatches(
     batches.push(currentBatch);
   }
 
-  // Insert each batch
+  // Insert each batch, advancing index for position-aware inserts.
+  // When startIndex == -1 (append to end), each batch appends after the previous.
+  // When startIndex >= 0, each batch starts at startIndex + count of first-level IDs already inserted.
+  let currentIndex = startIndex;
   for (let i = 0; i < batches.length; i++) {
     const batch = batches[i];
     logger?.info?.(
       `feishu_doc: Inserting batch ${i + 1}/${batches.length} (${batch.blocks.length} blocks)...`,
     );
 
-    const children = await insertBatch(client, docToken, batch.blocks, batch.firstLevelIds);
+    const children = await insertBatch(
+      client,
+      docToken,
+      batch.blocks,
+      batch.firstLevelIds,
+      parentBlockId,
+      currentIndex,
+    );
     allChildren.push(...children);
+
+    // Advance index only for explicit positions; -1 always means "after last inserted"
+    if (currentIndex !== -1) {
+      currentIndex += batch.firstLevelIds.length;
+    }
   }
 
   return { children: allChildren, skipped: [] };
