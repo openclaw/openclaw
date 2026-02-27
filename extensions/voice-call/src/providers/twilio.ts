@@ -95,6 +95,7 @@ export class TwilioProvider implements VoiceCallProvider {
   private readonly twimlStorage = new Map<string, string>();
   /** Track notify-mode calls to avoid streaming on follow-up callbacks */
   private readonly notifyCalls = new Set<string>();
+  private readonly activeStreamCalls = new Set<string>();
 
   /**
    * Delete stored TwiML for a given `callId`.
@@ -167,6 +168,7 @@ export class TwilioProvider implements VoiceCallProvider {
 
   unregisterCallStream(callSid: string): void {
     this.callStreamMap.delete(callSid);
+    this.activeStreamCalls.delete(callSid);
   }
 
   isValidStreamToken(callSid: string, token?: string): boolean {
@@ -338,12 +340,14 @@ export class TwilioProvider implements VoiceCallProvider {
       case "no-answer":
       case "failed":
         this.streamAuthTokens.delete(callSid);
+        this.activeStreamCalls.delete(callSid);
         if (callIdOverride) {
           this.deleteStoredTwiml(callIdOverride);
         }
         return { ...baseEvent, type: "call.ended", reason: callStatus };
       case "canceled":
         this.streamAuthTokens.delete(callSid);
+        this.activeStreamCalls.delete(callSid);
         if (callIdOverride) {
           this.deleteStoredTwiml(callIdOverride);
         }
@@ -359,6 +363,12 @@ export class TwilioProvider implements VoiceCallProvider {
   private static readonly PAUSE_TWIML = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Pause length="30"/>
+</Response>`;
+
+  private static readonly QUEUE_TWIML = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="alice">Please hold while we connect you.</Say>
+  <Enqueue waitUrl="/voice/hold-music">hold-queue</Enqueue>
 </Response>`;
 
   /**
@@ -412,7 +422,13 @@ export class TwilioProvider implements VoiceCallProvider {
     // Handle subsequent webhook requests (status callbacks, etc.)
     // For inbound calls, answer immediately with stream
     if (direction === "inbound") {
+      if (this.activeStreamCalls.size > 0) {
+        return TwilioProvider.QUEUE_TWIML;
+      }
       const streamUrl = callSid ? this.getStreamUrlForCall(callSid) : null;
+      if (streamUrl && callSid) {
+        this.activeStreamCalls.add(callSid);
+      }
       return streamUrl ? this.getStreamConnectXml(streamUrl) : TwilioProvider.PAUSE_TWIML;
     }
 
@@ -546,6 +562,7 @@ export class TwilioProvider implements VoiceCallProvider {
 
     this.callWebhookUrls.delete(input.providerCallId);
     this.streamAuthTokens.delete(input.providerCallId);
+    this.activeStreamCalls.delete(input.providerCallId);
 
     await this.apiRequest(
       `/Calls/${input.providerCallId}.json`,
