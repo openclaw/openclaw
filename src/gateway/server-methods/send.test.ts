@@ -573,6 +573,61 @@ describe("gateway send mirroring", () => {
   });
 });
 
+describe("gateway send suppressOutbound", () => {
+  let registrySeq = 0;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    registrySeq += 1;
+    setActivePluginRegistry(createTestRegistry([]), `suppress-send-${registrySeq}`);
+    mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "resolved" });
+    mocks.resolveMessageChannelSelection.mockResolvedValue({
+      channel: "slack",
+      configured: ["slack"],
+    });
+    mocks.isOutboundSuppressed.mockReturnValue(false);
+  });
+
+  it("blocks send when suppressOutbound is active", async () => {
+    mocks.isOutboundSuppressed.mockReturnValue(true);
+
+    const { respond } = await runSend({
+      to: "x",
+      message: "hello",
+      channel: "slack",
+      idempotencyKey: "idem-suppress-send",
+    });
+
+    expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: expect.stringContaining("Outbound suppressed"),
+      }),
+    );
+  });
+
+  it("allows send when suppressOutbound is inactive", async () => {
+    mockDeliverySuccess("m-allow");
+
+    const { respond } = await runSend({
+      to: "x",
+      message: "hello",
+      channel: "slack",
+      idempotencyKey: "idem-allow-send",
+    });
+
+    expect(mocks.deliverOutboundPayloads).toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      expect.objectContaining({ messageId: "m-allow" }),
+      undefined,
+      expect.objectContaining({ channel: "slack" }),
+    );
+  });
+});
+
 describe("gateway poll suppressOutbound", () => {
   let registrySeq = 0;
 

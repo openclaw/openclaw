@@ -168,6 +168,19 @@ export const sendHandlers: GatewayRequestHandlers = {
       typeof request.threadId === "string" && request.threadId.trim().length
         ? request.threadId.trim()
         : undefined;
+    if (isOutboundSuppressed({ cfg, channel, accountId })) {
+      console.warn(`[suppressOutbound] Blocked send → ${channel}/${to}`);
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `Outbound suppressed for channel ${channel} (listen-only mode)`,
+        ),
+      );
+      return;
+    }
+
     const outboundChannel = channel;
     const plugin = resolveOutboundChannelPlugin({ channel, cfg });
     if (!plugin) {
