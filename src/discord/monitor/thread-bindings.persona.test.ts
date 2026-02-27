@@ -26,6 +26,7 @@ describe("thread binding persona", () => {
       agentId: "codex",
       boundBy: "system",
       boundAt: Date.now(),
+      lastActivityAt: Date.now(),
       label: "codex-thread",
     } satisfies ThreadBindingRecord;
     expect(resolveThreadBindingPersonaFromRecord(record)).toBe("⚙️ codex-thread");
