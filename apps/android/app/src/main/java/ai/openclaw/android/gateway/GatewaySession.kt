@@ -734,7 +734,7 @@ private fun parseJsonOrNull(payload: String): JsonElement? {
   }
 }
 
-private fun replaceCanvasCapabilityInScopedHostUrl(
+internal fun replaceCanvasCapabilityInScopedHostUrl(
   scopedUrl: String,
   capability: String,
 ): String? {
@@ -742,7 +742,10 @@ private fun replaceCanvasCapabilityInScopedHostUrl(
   val markerStart = scopedUrl.indexOf(marker)
   if (markerStart < 0) return null
   val capabilityStart = markerStart + marker.length
-  val capabilityEnd = scopedUrl.indexOf("/", capabilityStart)
+  val slashEnd = scopedUrl.indexOf("/", capabilityStart).takeIf { it >= 0 }
+  val queryEnd = scopedUrl.indexOf("?", capabilityStart).takeIf { it >= 0 }
+  val fragmentEnd = scopedUrl.indexOf("#", capabilityStart).takeIf { it >= 0 }
+  val capabilityEnd = listOfNotNull(slashEnd, queryEnd, fragmentEnd).minOrNull() ?: scopedUrl.length
   if (capabilityEnd <= capabilityStart) return null
   return scopedUrl.substring(0, capabilityStart) + capability + scopedUrl.substring(capabilityEnd)
 }
