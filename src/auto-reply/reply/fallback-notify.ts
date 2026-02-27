@@ -28,9 +28,6 @@ function evictStale(now: number): void {
   for (const [key, entry] of lastNotifiedFallback) {
     if (now - entry.ts > ENTRY_TTL_MS) {
       lastNotifiedFallback.delete(key);
-    } else {
-      // Map iterates in insertion order; once we hit a fresh entry the rest are newer.
-      break;
     }
   }
 }
@@ -107,4 +104,19 @@ export function checkFallbackNotification(params: {
   const reason = primaryAttempt?.reason ? ` (${primaryAttempt.reason})` : "";
 
   return `⚡ Using fallback model \`${usedProvider}/${usedModel}\` — primary \`${primaryKey}\` is unavailable${reason}`;
+}
+
+/**
+ * Remove a session's entry from the tracker.
+ *
+ * Call this on session finalization so entries don't linger until TTL
+ * expiry or max-size eviction.
+ */
+export function clearFallbackTracker(sessionKey: string): void {
+  lastNotifiedFallback.delete(sessionKey);
+}
+
+/** @internal — exposed for tests only. */
+export function _testGetTrackerSize(): number {
+  return lastNotifiedFallback.size;
 }

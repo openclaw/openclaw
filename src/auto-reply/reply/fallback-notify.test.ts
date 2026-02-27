@@ -1,5 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { checkFallbackNotification } from "./fallback-notify.js";
+import {
+  checkFallbackNotification,
+  clearFallbackTracker,
+  _testGetTrackerSize,
+} from "./fallback-notify.js";
 
 describe("checkFallbackNotification", () => {
   afterEach(() => {
@@ -267,5 +271,63 @@ describe("checkFallbackNotification", () => {
       attempts: [{ provider: "openai", model: "gpt-4.1-mini", error: "rate limited" }],
     });
     expect(afterTtl).toBeDefined();
+  });
+
+  it("clearFallbackTracker removes a session entry so next call re-notifies", () => {
+    const sessionKey = "test-clear-session";
+
+    // Record a fallback notification
+    const first = checkFallbackNotification({
+      sessionKey,
+      originalProvider: "openai",
+      originalModel: "gpt-4.1-mini",
+      usedProvider: "anthropic",
+      usedModel: "claude-haiku-3-5",
+      attempts: [{ provider: "openai", model: "gpt-4.1-mini", error: "rate limited" }],
+    });
+    expect(first).toBeDefined();
+
+    // Suppressed — already notified
+    const suppressed = checkFallbackNotification({
+      sessionKey,
+      originalProvider: "openai",
+      originalModel: "gpt-4.1-mini",
+      usedProvider: "anthropic",
+      usedModel: "claude-haiku-3-5",
+      attempts: [{ provider: "openai", model: "gpt-4.1-mini", error: "rate limited" }],
+    });
+    expect(suppressed).toBeUndefined();
+
+    // Explicitly clear the session (simulates session finalization)
+    clearFallbackTracker(sessionKey);
+
+    // Should notify again — entry was cleared
+    const afterClear = checkFallbackNotification({
+      sessionKey,
+      originalProvider: "openai",
+      originalModel: "gpt-4.1-mini",
+      usedProvider: "anthropic",
+      usedModel: "claude-haiku-3-5",
+      attempts: [{ provider: "openai", model: "gpt-4.1-mini", error: "rate limited" }],
+    });
+    expect(afterClear).toBeDefined();
+  });
+
+  it("_testGetTrackerSize reflects map size accurately", () => {
+    const sizeBefore = _testGetTrackerSize();
+
+    checkFallbackNotification({
+      sessionKey: "test-size-session",
+      originalProvider: "openai",
+      originalModel: "gpt-4.1-mini",
+      usedProvider: "anthropic",
+      usedModel: "claude-haiku-3-5",
+      attempts: [{ provider: "openai", model: "gpt-4.1-mini", error: "rate limited" }],
+    });
+
+    expect(_testGetTrackerSize()).toBe(sizeBefore + 1);
+
+    clearFallbackTracker("test-size-session");
+    expect(_testGetTrackerSize()).toBe(sizeBefore);
   });
 });
