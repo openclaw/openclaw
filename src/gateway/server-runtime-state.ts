@@ -28,8 +28,10 @@ import { isProtectedPluginRoutePath } from "./security-path.js";
 import type { DedupeEntry } from "./server-shared.js";
 import { createGatewayHooksRequestHandler } from "./server/hooks.js";
 import { listenGatewayHttpServer } from "./server/http-listen.js";
-import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
-import { isRegisteredPluginHttpRoutePath } from "./server/plugins-http.js";
+import {
+  createGatewayPluginRequestHandler,
+  isRegisteredPluginHttpRoutePath,
+} from "./server/plugins-http.js";
 import type { GatewayTlsRuntime } from "./server/tls.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
