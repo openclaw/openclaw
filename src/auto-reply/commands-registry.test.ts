@@ -109,6 +109,17 @@ describe("commands registry", () => {
     expect(findCommandByNativeName("tts", "discord")).toBeUndefined();
   });
 
+  it("renames status to agentstatus for slack", () => {
+    const native = listNativeCommandSpecsForConfig(
+      { commands: { native: true } },
+      { provider: "slack" },
+    );
+    expect(native.find((spec) => spec.name === "agentstatus")).toBeTruthy();
+    expect(native.find((spec) => spec.name === "status")).toBeFalsy();
+    expect(findCommandByNativeName("agentstatus", "slack")?.key).toBe("status");
+    expect(findCommandByNativeName("status", "slack")).toBeUndefined();
+  });
+
   it("keeps discord native command specs within slash-command limits", () => {
     const native = listNativeCommandSpecsForConfig(
       { commands: { native: true } },

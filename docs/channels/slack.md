@@ -208,7 +208,8 @@ For actions/directory reads, user token can be preferred when configured. For wr
 
 - Native command auto-mode is **off** for Slack (`commands.native: "auto"` does not enable Slack native commands).
 - Enable native Slack command handlers with `channels.slack.commands.native: true` (or global `commands.native: true`).
-- When native commands are enabled, register matching slash commands in Slack (`/<command>` names).
+- When native commands are enabled, register matching slash commands in Slack (`/<command>` names), with one exception:
+  - register `/agentstatus` for the status command (Slack reserves `/status`)
 - If native commands are not enabled, you can run a single configured slash command via `channels.slack.slashCommand`.
 - Native arg menus now adapt their rendering strategy:
   - up to 5 options: button blocks

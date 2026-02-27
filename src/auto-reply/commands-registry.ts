@@ -123,6 +123,11 @@ const NATIVE_NAME_OVERRIDES: Record<string, Record<string, string>> = {
   discord: {
     tts: "voice",
   },
+  slack: {
+    // Slack reserves /status — registering it returns "invalid name"
+    // and invalidates the entire slash_commands manifest array.
+    status: "agentstatus",
+  },
 };
 
 function resolveNativeName(command: ChatCommandDefinition, provider?: string): string | undefined {
