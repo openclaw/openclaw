@@ -9,6 +9,16 @@ import { readGeneratedModelsJson } from "./models-config.test-utils.js";
 
 installModelsConfigTestHooks();
 
+const MODEL_ENTRY = {
+  id: "test-model",
+  name: "Test Model",
+  reasoning: false,
+  input: ["text"] as const,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  contextWindow: 128000,
+  maxTokens: 32000,
+};
+
 describe("models-config secret redaction", () => {
   it("redacts resolved API key with REDACTED placeholder", async () => {
     await withTempHome(async () => {
@@ -19,7 +29,7 @@ describe("models-config secret redaction", () => {
               baseUrl: "http://localhost:4000/v1",
               apiKey: "sk-ant-secret-key-abc123",
               api: "openai-completions",
-              models: [{ id: "test-model", name: "Test" }],
+              models: [MODEL_ENTRY],
             },
           },
         },
@@ -31,9 +41,7 @@ describe("models-config secret redaction", () => {
         providers: Record<string, { apiKey?: string }>;
       }>();
       expect(parsed.providers["custom-proxy"]).toBeDefined();
-      // The resolved key must NOT appear in the persisted file
       expect(parsed.providers["custom-proxy"].apiKey).not.toBe("sk-ant-secret-key-abc123");
-      // It should be replaced with the REDACTED placeholder
       expect(parsed.providers["custom-proxy"].apiKey).toBe("REDACTED");
     });
   });
@@ -47,7 +55,7 @@ describe("models-config secret redaction", () => {
               baseUrl: "http://localhost:4000/v1",
               apiKey: "CUSTOM_PROXY_API_KEY",
               api: "openai-completions",
-              models: [{ id: "test-model", name: "Test" }],
+              models: [MODEL_ENTRY],
             },
           },
         },
@@ -59,7 +67,6 @@ describe("models-config secret redaction", () => {
         providers: Record<string, { apiKey?: string }>;
       }>();
       expect(parsed.providers["custom-proxy"]).toBeDefined();
-      // Env var names are safe references — they should be preserved
       expect(parsed.providers["custom-proxy"].apiKey).toBe("CUSTOM_PROXY_API_KEY");
     });
   });
