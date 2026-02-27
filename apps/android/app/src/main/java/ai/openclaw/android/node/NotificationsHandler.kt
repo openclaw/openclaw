@@ -55,6 +55,11 @@ class NotificationsHandler private constructor(
   }
 
   suspend fun handleNotificationsActions(paramsJson: String?): GatewaySession.InvokeResult {
+    val snapshot = stateProvider.readSnapshot(appContext)
+    if (snapshot.enabled && !snapshot.connected) {
+      stateProvider.requestServiceRebind(appContext)
+    }
+
     val params = parseParamsObject(paramsJson)
       ?: return GatewaySession.InvokeResult.error(
         code = "INVALID_REQUEST",

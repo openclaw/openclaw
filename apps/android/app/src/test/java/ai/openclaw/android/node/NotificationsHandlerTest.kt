@@ -168,6 +168,26 @@ class NotificationsHandlerTest {
     }
 
   @Test
+  fun notificationsActions_requestsRebindWhenEnabledButDisconnected() =
+    runTest {
+      val provider =
+        FakeNotificationsStateProvider(
+          DeviceNotificationSnapshot(
+            enabled = true,
+            connected = false,
+            notifications = listOf(sampleEntry("n5")),
+          ),
+        )
+      val handler = NotificationsHandler.forTesting(appContext = appContext(), stateProvider = provider)
+
+      val result = handler.handleNotificationsActions("""{"key":"n5","action":"open"}""")
+
+      assertTrue(result.ok)
+      assertEquals(1, provider.rebindRequests)
+      assertEquals(1, provider.actionRequests)
+    }
+
+  @Test
   fun sanitizeNotificationTextReturnsNullForBlankInput() {
     assertNull(sanitizeNotificationText(null))
     assertNull(sanitizeNotificationText("    "))
