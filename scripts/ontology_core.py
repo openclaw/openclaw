@@ -570,6 +570,107 @@ Key Properties:
         slug = re.sub(r"_+", "_", slug).strip("_")
         return slug
 
+    def sector_insights(self, insight_text, insight_tags=None, top_n=5):
+        """Analyze insight and find related sectors/companies/technologies.
+        
+        Args:
+            insight_text: The insight text to analyze
+            insight_tags: Optional list of tags (e.g., ['AI', 'knowledge'])
+            top_n: Number of top matches to return
+            
+        Returns:
+            dict with correlated sectors, companies, and cross-sector bridges
+        """
+        import re
+        from collections import Counter
+        
+        # 1. Extract keywords from insight
+        text_lower = insight_text.lower()
+        keywords = set()
+        
+        # Known sector/tech keywords in ontology
+        keyword_map = {
+            "ai": ["ai", "인공지능", "machine learning", "llm", "gpt"],
+            "knowledge": ["knowledge", "지식", "ontology", "온톨로지"],
+            "agent": ["agent", "에이전트", "orchestration", "오케스트레이션"],
+            "semiconductor": ["반도체", "semiconductor", "chip", "dram", "hbm", "memory"],
+            "display": ["디스플레이", "display", "oled", "panel", "패널"],
+            "automotive": ["자동차", "automotive", "ev", "전기차", "전장"],
+            "biotech": ["바이오", "biotech", "bio", "제약"],
+            "finance": ["금융", "finance", "증권", "은행", "fintech"],
+        }
+        
+        matched_sectors = []
+        for sector, sector_keywords in keyword_map.items():
+            for kw in sector_keywords:
+                if kw in text_lower:
+                    matched_sectors.append(sector)
+                    keywords.add(kw)
+                    break
+        
+        # 2. Query graph for related entities
+        # Find stocks in matched sectors
+        sector_stocks = {}
+        stock_scores = Counter()
+        
+        for sector in set(matched_sectors):
+            sector_stocks[sector] = []
+            sector_uri = self.sector_uri(sector)
+            
+            # Query stocks belonging to this sector
+            query = f"""
+            PREFIX ron: <http://ron.openclaw.local/ontology#>
+            SELECT ?stock ?name ?ticker WHERE {{
+                ?stock ron:belongsTo <{sector_uri}> ;
+                       ron:name ?name .
+                OPTIONAL {{ ?stock ron:ticker ?ticker }}
+            }}
+            LIMIT 20
+            """
+            try:
+                results = self.query_sparql(query)
+                for row in results.get("results", {}).get("bindings", []):
+                    stock_name = row.get("name", {}).get("value", "")
+                    ticker = row.get("ticker", {}).get("value", "")
+                    score = len([k for k in sector_keywords if k in text_lower])
+                    stock_scores[ticker or stock_name] = score
+                    sector_stocks[sector].append({
+                        "name": stock_name,
+                        "ticker": ticker,
+                        "score": score
+                    })
+            except Exception as e:
+                pass  # Silent fail for missing sector data
+        
+        # 3. Find cross-sector bridges (if multiple sectors matched)
+        bridges = []
+        if len(set(matched_sectors)) >= 2:
+            pairs = [(a, b) for i, a in enumerate(set(matched_sectors)) 
+                     for b in list(set(matched_sectors))[i+1:]]
+            for s1, s2 in pairs:
+                bridges.append({
+                    "sectors": [s1, s2],
+                    "type": "cross_sector_bridge",
+                    "description": f"{s1} + {s2} 간 연관성"
+                })
+        
+        # 4. Build result
+        top_stocks = [
+            {"name": name, "score": score}
+            for name, score in stock_scores.most_common(top_n)
+        ]
+        
+        return {
+            "insight_summary": insight_text[:200] + "..." if len(insight_text) > 200 else insight_text,
+            "matched_sectors": list(set(matched_sectors)),
+            "keywords": list(keywords),
+            "top_correlated_stocks": top_stocks,
+            "sector_stocks_map": sector_stocks,
+            "cross_sector_bridges": bridges,
+            "correlation_score": len(matched_sectors) * 2 + len(keywords),
+            "actionable": len(matched_sectors) > 0
+        }
+
     # ─── Dry Run ──────────────────────────────────────────
     def dry_run(self, import_etf=None, import_memory=None):
         """Report what would change without writing"""
@@ -611,6 +712,11 @@ Key Properties:
 
 # ─── CLI ──────────────────────────────────────────────────
 def main():
+    # Ensure running under Python 3.9+ to avoid accidental python2/older-3 invocations
+    if sys.version_info < (3, 9):
+        print(f"ERROR: ontology_core.py requires Python 3.9+, found {sys.version}", file=sys.stderr)
+        return
+
     parser = argparse.ArgumentParser(description="OpenClaw Ontology Core")
     # Make --action optional with default 'stats' to avoid usage errors when called
     # by cron or supervisors without arguments. This is a safe, non-invasive change.
@@ -620,7 +726,8 @@ def main():
                                  "get_segment_snapshot", "query", "natural_query",
                                  "import_etf", "import_credit", "add_relation",
                                  "remove_entity", "get_related", "extract_entities",
-                                 "dry_run", "check_integrity", "export"])
+                                 "dry_run", "check_integrity", "export",
+                                 "sector_insights"])
     parser.add_argument("--type", help="Entity type (for add_entity)")
     parser.add_argument("--id", help="Entity ID")
     parser.add_argument("--props", help="JSON properties string")
@@ -629,7 +736,7 @@ def main():
     parser.add_argument("--date", help="Date (for observations)")
     parser.add_argument("--revenue", type=float, help="Revenue")
     parser.add_argument("--op", type=float, help="Operating profit")
-    parser.add_argument("--margin", type=float, help="Margin %")
+    parser.add_argument("--margin", type=float, help="Margin %%")
     parser.add_argument("--source", help="Data source")
     parser.add_argument("--sparql", help="SPARQL query string")
     parser.add_argument("--question", help="Natural language question")
@@ -639,7 +746,8 @@ def main():
     parser.add_argument("--subject", help="Subject URI (for relations)")
     parser.add_argument("--predicate", help="Predicate (for relations)")
     parser.add_argument("--object", help="Object URI (for relations)")
-    parser.add_argument("--text", help="Text for entity extraction")
+    parser.add_argument("--text", help="Text for entity extraction or sector_insights")
+    parser.add_argument("--tags", help="Tags for sector_insights (comma-separated)")
     parser.add_argument("--depth", type=int, default=2, help="Traversal depth")
     parser.add_argument("--format", default="turtle", help="Export format")
     parser.add_argument("--ttl", help="Custom TTL path")
@@ -682,7 +790,16 @@ def main():
         result = core.query_natural(args.question)
 
     elif args.action == "import_etf":
-        result = core.import_etf_data(args.path)
+        result = {"imported": [], "errors": []}
+        if args.import_etf_paths:
+            for path in args.import_etf_paths:
+                try:
+                    r = core.import_etf_data(path)
+                    result["imported"].append({"path": path, "result": r})
+                except Exception as e:
+                    result["errors"].append({"path": path, "error": str(e)})
+        else:
+            result["errors"].append({"error": "No --import-etf paths provided"})
 
     elif args.action == "import_credit":
         result = core.import_credit_data(args.path)
@@ -726,8 +843,24 @@ def main():
         print(core.export_graph(fmt=args.format))
         return
 
+    elif args.action == "sector_insights":
+        if not args.text:
+            result = {"error": "--text required for sector_insights"}
+        else:
+            tags = args.tags.split(",") if args.tags else None
+            result = core.sector_insights(args.text, insight_tags=tags, top_n=args.n)
+
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit as e:
+        # Preserve argparse exits
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"FATAL: ontology_core.py failed: {e}", file=sys.stderr)
+        sys.exit(1)
