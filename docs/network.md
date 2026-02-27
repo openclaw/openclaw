@@ -38,6 +38,7 @@ Local trust:
 - [Bonjour / mDNS](/gateway/bonjour)
 - [Remote access (SSH)](/gateway/remote)
 - [Tailscale](/gateway/tailscale)
+- [Cloudflare Tunnel](/gateway/cloudflare-tunnel)
 
 ## Nodes + transports
 

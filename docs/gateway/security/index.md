@@ -184,7 +184,7 @@ If more than one person can DM your bot:
 
 - **Inbound access** (DM policies, group policies, allowlists): can strangers trigger the bot?
 - **Tool blast radius** (elevated tools + open rooms): could prompt injection turn into shell/file/network actions?
-- **Network exposure** (Gateway bind/auth, Tailscale Serve/Funnel, weak/short auth tokens).
+- **Network exposure** (Gateway bind/auth, Tailscale Serve/Funnel, Cloudflare Tunnel, weak/short auth tokens).
 - **Browser control exposure** (remote nodes, relay ports, remote CDP endpoints).
 - **Local disk hygiene** (permissions, symlinks, config includes, “synced folder” paths).
 - **Plugins** (extensions exist without an explicit allowlist).
@@ -626,7 +626,7 @@ Bind mode controls where the Gateway listens:
 
 Rules of thumb:
 
-- Prefer Tailscale Serve over LAN binds (Serve keeps the Gateway on loopback, and Tailscale handles access).
+- Prefer Tailscale Serve or [Cloudflare Tunnel](/gateway/cloudflare-tunnel) over LAN binds (both keep the Gateway on loopback while providing remote access).
 - If you must bind to LAN, firewall the port to a tight allowlist of source IPs; do not port-forward it broadly.
 - Never expose the Gateway unauthenticated on `0.0.0.0`.
 

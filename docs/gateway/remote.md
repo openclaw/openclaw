@@ -12,6 +12,16 @@ This repo supports “remote over SSH” by keeping a single Gateway (the master
 - For **operators (you / the macOS app)**: SSH tunneling is the universal fallback.
 - For **nodes (iOS/Android and future devices)**: connect to the Gateway **WebSocket** (LAN/tailnet or SSH tunnel as needed).
 
+## Choosing a remote access method
+
+| Method                                                                         | Network requirement              | Auth model        | Setup effort | Best for                                        |
+| ------------------------------------------------------------------------------ | -------------------------------- | ----------------- | ------------ | ----------------------------------------------- |
+| SSH tunnel                                                                     | SSH access to host               | SSH keys          | Minimal      | Quick CLI access, universal fallback            |
+| [Tailscale Serve](/gateway/tailscale)                                          | Tailnet membership               | Identity headers  | Easy         | Private access across devices                   |
+| [Tailscale Funnel](/gateway/tailscale#public-internet-funnel--shared-password) | Public internet (via Tailscale)  | Password required | Easy         | Simple public access                            |
+| [Cloudflare Tunnel](/gateway/cloudflare-tunnel)                                | Public internet (via Cloudflare) | Password or SSO   | Moderate     | Production public access with Cloudflare Access |
+| [Trusted proxy](/gateway/trusted-proxy-auth)                                   | Depends on proxy                 | SSO/OAuth         | Advanced     | Enterprise with existing reverse proxy          |
+
 ## The core idea
 
 - The Gateway WebSocket binds to **loopback** on your configured port (defaults to 18789).
@@ -49,6 +59,18 @@ Keep the Gateway local but expose it safely:
 - Tailscale Serve the Control UI and keep the Gateway loopback-only.
 
 Guide: [Tailscale](/gateway/tailscale) and [Web overview](/web).
+
+### 4) Public access via Cloudflare Tunnel (no VPN needed)
+
+Use [Cloudflare Tunnel](/gateway/cloudflare-tunnel) when clients cannot join a
+tailnet or VPN. The `cloudflared` daemon creates an outbound-only connection from
+your Gateway host to Cloudflare's edge, giving you a public HTTPS URL.
+
+- **Best for:** public internet access with optional SSO via Cloudflare Access.
+- **Keep** `gateway.bind: "loopback"` and let `cloudflared` proxy inbound traffic.
+- **Always** require auth (`password` or `trusted-proxy` mode).
+
+Guide: [Cloudflare Tunnel](/gateway/cloudflare-tunnel).
 
 ## Command flow (what runs where)
 

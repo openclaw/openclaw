@@ -636,6 +636,10 @@
       "destination": "/gateway/tailscale"
     },
     {
+      "source": "/cloudflare-tunnel",
+      "destination": "/gateway/cloudflare-tunnel"
+    },
+    {
       "source": "/talk",
       "destination": "/nodes/talk"
     },
@@ -1229,7 +1233,12 @@
               },
               {
                 "group": "Remote access",
-                "pages": ["gateway/remote", "gateway/remote-gateway-readme", "gateway/tailscale"]
+                "pages": [
+                  "gateway/remote",
+                  "gateway/remote-gateway-readme",
+                  "gateway/tailscale",
+                  "gateway/cloudflare-tunnel"
+                ]
               },
               {
                 "group": "Security",
