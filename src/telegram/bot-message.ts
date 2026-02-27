@@ -51,7 +51,11 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     primaryCtx: TelegramContext,
     allMedia: TelegramMediaRef[],
     storeAllowFrom: string[],
-    options?: { messageIdOverride?: string; forceWasMentioned?: boolean },
+    options?: {
+      messageIdOverride?: string;
+      forceWasMentioned?: boolean;
+      approvalCommandOrigin?: "typed" | "button";
+    },
     replyMedia?: TelegramMediaRef[],
   ) => {
     const context = await buildTelegramMessageContext({

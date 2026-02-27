@@ -39,4 +39,14 @@ describe("buildTelegramMessageContext sender prefix", () => {
     expect(ctx).not.toBeNull();
     expect(ctx?.ctxPayload?.MessageSid).toBe("67890");
   });
+
+  it("propagates approval command origin from options", async () => {
+    const ctx = await buildCtx({
+      messageId: 12345,
+      options: { approvalCommandOrigin: "button" },
+    });
+
+    expect(ctx).not.toBeNull();
+    expect(ctx?.ctxPayload?.ApprovalCommandOrigin).toBe("button");
+  });
 });

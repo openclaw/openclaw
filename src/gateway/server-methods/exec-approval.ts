@@ -1,6 +1,7 @@
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
+  type ExecApprovalResolveAudit,
   type ExecApprovalDecision,
 } from "../../infra/exec-approvals.js";
 import { buildSystemRunApprovalBindingV1 } from "../../infra/system-run-approval-binding.js";
@@ -261,7 +262,7 @@ export function createExecApprovalHandlers(
         );
         return;
       }
-      const p = params as { id: string; decision: string };
+      const p = params as { id: string; decision: string; audit?: ExecApprovalResolveAudit };
       const decision = p.decision as ExecApprovalDecision;
       if (decision !== "allow-once" && decision !== "allow-always" && decision !== "deny") {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid decision"));
@@ -276,7 +277,14 @@ export function createExecApprovalHandlers(
       }
       context.broadcast(
         "exec.approval.resolved",
-        { id: p.id, decision, resolvedBy, ts: Date.now(), request: snapshot?.request },
+        {
+          id: p.id,
+          decision,
+          resolvedBy,
+          ts: Date.now(),
+          request: snapshot?.request,
+          audit: p.audit,
+        },
         { dropIfSlow: true },
       );
       void opts?.forwarder
@@ -286,6 +294,7 @@ export function createExecApprovalHandlers(
           resolvedBy,
           ts: Date.now(),
           request: snapshot?.request,
+          audit: p.audit,
         })
         .catch((err) => {
           context.logGateway?.error?.(`exec approvals: forward resolve failed: ${String(err)}`);

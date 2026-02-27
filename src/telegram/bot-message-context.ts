@@ -78,6 +78,7 @@ export type TelegramMediaRef = {
 type TelegramMessageContextOptions = {
   forceWasMentioned?: boolean;
   messageIdOverride?: string;
+  approvalCommandOrigin?: "typed" | "button";
 };
 
 type TelegramLogger = {
@@ -689,6 +690,7 @@ export const buildTelegramMessageContext = async ({
     ForwardedDate: forwardOrigin?.date ? forwardOrigin.date * 1000 : undefined,
     Timestamp: msg.date ? msg.date * 1000 : undefined,
     WasMentioned: isGroup ? effectiveWasMentioned : undefined,
+    ApprovalCommandOrigin: options?.approvalCommandOrigin,
     // Filter out cached stickers from current-message media; reply media is still valid context.
     MediaPath: contextMedia.length > 0 ? contextMedia[0]?.path : undefined,
     MediaType: contextMedia.length > 0 ? contextMedia[0]?.contentType : undefined,

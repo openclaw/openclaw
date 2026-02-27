@@ -1227,6 +1227,7 @@ export const registerTelegramHandlers = ({
           await processMessage(buildSyntheticContext(ctx, syntheticMessage), [], storeAllowFrom, {
             forceWasMentioned: true,
             messageIdOverride: callback.id,
+            approvalCommandOrigin: "button",
           });
           return;
         }
@@ -1242,6 +1243,7 @@ export const registerTelegramHandlers = ({
       await processMessage(buildSyntheticContext(ctx, syntheticMessage), [], storeAllowFrom, {
         forceWasMentioned: true,
         messageIdOverride: callback.id,
+        approvalCommandOrigin: "button",
       });
     } catch (err) {
       runtime.error?.(danger(`callback handler failed: ${String(err)}`));

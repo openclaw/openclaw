@@ -296,9 +296,20 @@ describe("exec approval handlers", () => {
     id: string;
     respond: ReturnType<typeof vi.fn>;
     context: { broadcast: (event: string, payload: unknown) => void };
+    audit?: {
+      origin: "typed" | "button";
+      channel?: string;
+      surface?: string;
+      senderId?: string;
+      commandSource?: "text" | "native";
+    };
   }) {
     return params.handlers["exec.approval.resolve"]({
-      params: { id: params.id, decision: "allow-once" } as ExecApprovalResolveArgs["params"],
+      params: {
+        id: params.id,
+        decision: "allow-once",
+        ...(params.audit ? { audit: params.audit } : {}),
+      } as ExecApprovalResolveArgs["params"],
       respond: params.respond as unknown as ExecApprovalResolveArgs["respond"],
       context: toExecApprovalResolveContext(params.context),
       client: null,
@@ -442,6 +453,49 @@ describe("exec approval handlers", () => {
       undefined,
     );
     expect(broadcasts.some((entry) => entry.event === "exec.approval.resolved")).toBe(true);
+  });
+
+  it("broadcasts resolve audit metadata", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: { twoPhase: true },
+    });
+
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    const id = (requested?.payload as { id?: string })?.id ?? "";
+    expect(id).not.toBe("");
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id,
+      respond: resolveRespond,
+      context,
+      audit: {
+        origin: "button",
+        channel: "telegram",
+        surface: "telegram",
+        senderId: "123",
+        commandSource: "text",
+      },
+    });
+    await requestPromise;
+
+    const resolved = broadcasts.find((entry) => entry.event === "exec.approval.resolved");
+    expect(resolved).toBeTruthy();
+    expect((resolved?.payload as { audit?: unknown })?.audit).toEqual(
+      expect.objectContaining({
+        origin: "button",
+        channel: "telegram",
+        surface: "telegram",
+        senderId: "123",
+        commandSource: "text",
+      }),
+    );
   });
 
   it("stores versioned system.run binding and sorted env keys on approval request", async () => {

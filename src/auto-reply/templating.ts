@@ -127,6 +127,8 @@ export type MsgContext = {
   WasMentioned?: boolean;
   CommandAuthorized?: boolean;
   CommandSource?: "text" | "native";
+  /** Structured origin for interactive command flows (for audit metadata). */
+  ApprovalCommandOrigin?: "typed" | "button";
   CommandTargetSessionKey?: string;
   /** Gateway client scopes when the message originates from the gateway. */
   GatewayClientScopes?: string[];

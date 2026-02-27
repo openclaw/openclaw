@@ -1,5 +1,6 @@
 import { callGateway } from "../../gateway/call.js";
 import { logVerbose } from "../../globals.js";
+import type { ExecApprovalResolveAudit } from "../../infra/exec-approvals.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -79,6 +80,16 @@ function buildResolvedByLabel(params: Parameters<CommandHandler>[0]): string {
   return `${channel}:${sender}`;
 }
 
+function buildApprovalAudit(params: Parameters<CommandHandler>[0]): ExecApprovalResolveAudit {
+  return {
+    origin: params.command.approvalCommandOrigin === "button" ? "button" : "typed",
+    channel: params.command.channel || undefined,
+    surface: params.command.surface || undefined,
+    senderId: params.command.senderId || undefined,
+    commandSource: params.command.commandSource ?? "text",
+  };
+}
+
 export const handleApproveCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -114,10 +125,11 @@ export const handleApproveCommand: CommandHandler = async (params, allowTextComm
   }
 
   const resolvedBy = buildResolvedByLabel(params);
+  const audit = buildApprovalAudit(params);
   try {
     await callGateway({
       method: "exec.approval.resolve",
-      params: { id: parsed.id, decision: parsed.decision },
+      params: { id: parsed.id, decision: parsed.decision, audit },
       clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
       clientDisplayName: `Chat approval (${resolvedBy})`,
       mode: GATEWAY_CLIENT_MODES.BACKEND,

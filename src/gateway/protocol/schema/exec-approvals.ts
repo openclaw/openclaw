@@ -126,6 +126,18 @@ export const ExecApprovalResolveParamsSchema = Type.Object(
   {
     id: NonEmptyString,
     decision: NonEmptyString,
+    audit: Type.Optional(
+      Type.Object(
+        {
+          origin: Type.Union([Type.Literal("typed"), Type.Literal("button")]),
+          channel: Type.Optional(Type.String()),
+          surface: Type.Optional(Type.String()),
+          senderId: Type.Optional(Type.String()),
+          commandSource: Type.Optional(Type.Union([Type.Literal("text"), Type.Literal("native")])),
+        },
+        { additionalProperties: false },
+      ),
+    ),
   },
   { additionalProperties: false },
 );

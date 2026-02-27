@@ -40,13 +40,20 @@ const TARGETS_CFG = {
 function createForwarder(params: {
   cfg: OpenClawConfig;
   deliver?: ReturnType<typeof vi.fn>;
+  editTelegramMessage?: ReturnType<typeof vi.fn>;
   resolveSessionTarget?: () => { channel: string; to: string } | null;
 }) {
   const deliver = params.deliver ?? vi.fn().mockResolvedValue([]);
+  const editTelegramMessage =
+    params.editTelegramMessage ??
+    vi.fn().mockResolvedValue({ ok: true, messageId: "m1", chatId: "123" });
   const deps: NonNullable<Parameters<typeof createExecApprovalForwarder>[0]> = {
     getConfig: () => params.cfg,
     deliver: deliver as unknown as NonNullable<
       NonNullable<Parameters<typeof createExecApprovalForwarder>[0]>["deliver"]
+    >,
+    editTelegramMessage: editTelegramMessage as unknown as NonNullable<
+      NonNullable<Parameters<typeof createExecApprovalForwarder>[0]>["editTelegramMessage"]
     >,
     nowMs: () => 1000,
   };
@@ -54,7 +61,7 @@ function createForwarder(params: {
     deps.resolveSessionTarget = params.resolveSessionTarget;
   }
   const forwarder = createExecApprovalForwarder(deps);
-  return { deliver, forwarder };
+  return { deliver, editTelegramMessage, forwarder };
 }
 
 function makeSessionCfg(options: { discordExecApprovalsEnabled?: boolean } = {}): OpenClawConfig {
@@ -130,13 +137,26 @@ describe("exec approval forwarder", () => {
 
   it("forwards to explicit targets and expires", async () => {
     vi.useFakeTimers();
-    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+    const deliver = vi.fn().mockResolvedValue([
+      {
+        channel: "telegram",
+        messageId: "tg-req-1",
+        chatId: "123",
+      },
+    ]);
+    const { editTelegramMessage, forwarder } = createForwarder({ cfg: TARGETS_CFG, deliver });
 
     await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
     expect(deliver).toHaveBeenCalledTimes(1);
 
     await vi.runAllTimersAsync();
-    expect(deliver).toHaveBeenCalledTimes(2);
+    expect(deliver).toHaveBeenCalledTimes(1);
+    expect(editTelegramMessage).toHaveBeenCalledWith(
+      "123",
+      "tg-req-1",
+      expect.stringContaining("⏱️ Exec approval expired. ID: req-1"),
+      expect.objectContaining({ buttons: [] }),
+    );
   });
 
   it("adds Telegram approval buttons on request forwards", async () => {
@@ -339,6 +359,66 @@ describe("exec approval forwarder", () => {
     });
 
     expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
+  it("edits old telegram approval message on resolve and clears buttons", async () => {
+    vi.useFakeTimers();
+    const deliver = vi.fn().mockResolvedValue([
+      {
+        channel: "telegram",
+        messageId: "tg-req-2",
+        chatId: "123",
+      },
+    ]);
+    const { editTelegramMessage, forwarder } = createForwarder({ cfg: TARGETS_CFG, deliver });
+
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+    await Promise.resolve();
+    await forwarder.handleResolved({
+      id: baseRequest.id,
+      decision: "allow-once",
+      resolvedBy: "telegram:123",
+      ts: 2000,
+    });
+
+    expect(editTelegramMessage).toHaveBeenCalledWith(
+      "123",
+      "tg-req-2",
+      expect.stringContaining("✅ Exec approval allowed once."),
+      expect.objectContaining({ buttons: [] }),
+    );
+    expect(deliver).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends resolved follow-up when telegram request edit fails", async () => {
+    vi.useFakeTimers();
+    const deliver = vi.fn().mockResolvedValue([
+      {
+        channel: "telegram",
+        messageId: "tg-req-3",
+        chatId: "123",
+      },
+    ]);
+    const editTelegramMessage = vi.fn().mockRejectedValue(new Error("edit failed"));
+    const { forwarder } = createForwarder({
+      cfg: TARGETS_CFG,
+      deliver,
+      editTelegramMessage,
+    });
+
+    await expect(forwarder.handleRequested(baseRequest)).resolves.toBe(true);
+    await Promise.resolve();
+    await forwarder.handleResolved({
+      id: baseRequest.id,
+      decision: "allow-once",
+      resolvedBy: "telegram:123",
+      ts: 2000,
+    });
+
+    expect(deliver).toHaveBeenCalledTimes(2);
+    const resolvedPayload = (deliver.mock.calls[1]?.[0] as { payloads?: Array<{ text?: string }> })
+      ?.payloads?.[0];
+    expect(resolvedPayload?.text).toContain("✅ Exec approval allowed once.");
   });
 
   it("uses a longer fence when command already contains triple backticks", async () => {

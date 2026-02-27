@@ -782,6 +782,52 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("prefers telegram adapter sendPayload for interactive channelData payloads", async () => {
+    const sendPayload = vi
+      .fn()
+      .mockResolvedValue({ channel: "telegram", messageId: "tg-adapter-1", chatId: "123" });
+    const sendText = vi.fn().mockResolvedValue({ channel: "telegram", messageId: "txt-1" });
+    const sendMedia = vi.fn().mockResolvedValue({ channel: "telegram", messageId: "med-1" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          plugin: createOutboundTestPlugin({
+            id: "telegram",
+            outbound: { deliveryMode: "direct", sendPayload, sendText, sendMedia },
+          }),
+          source: "test",
+        },
+      ]),
+    );
+
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "tg-direct-1", chatId: "123" });
+    const buttons = [
+      [{ text: "Allow once", callback_data: "/approve abc allow-once" }],
+      [{ text: "Deny", callback_data: "/approve abc deny" }],
+    ];
+
+    const results = await deliverOutboundPayloads({
+      cfg: { channels: { telegram: { botToken: "tok-1" } } } as OpenClawConfig,
+      channel: "telegram",
+      to: "123",
+      payloads: [{ text: "Approval needed", channelData: { telegram: { buttons } } }],
+      deps: { sendTelegram },
+    });
+
+    expect(sendPayload).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "123",
+        payload: expect.objectContaining({
+          channelData: { telegram: { buttons } },
+        }),
+      }),
+    );
+    expect(sendTelegram).not.toHaveBeenCalled();
+    expect(sendText).not.toHaveBeenCalled();
+    expect(results[0]).toMatchObject({ channel: "telegram", messageId: "tg-adapter-1" });
+  });
+
   it("uses telegram direct-send fallback for channelData buttons when sendPayload is unavailable", async () => {
     const sendText = vi.fn().mockResolvedValue({ channel: "telegram", messageId: "txt-1" });
     const sendMedia = vi.fn().mockResolvedValue({ channel: "telegram", messageId: "med-1" });

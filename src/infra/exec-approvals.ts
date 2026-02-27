@@ -57,12 +57,21 @@ export type ExecApprovalRequest = {
   expiresAtMs: number;
 };
 
+export type ExecApprovalResolveAudit = {
+  origin: "typed" | "button";
+  channel?: string;
+  surface?: string;
+  senderId?: string;
+  commandSource?: "text" | "native";
+};
+
 export type ExecApprovalResolved = {
   id: string;
   decision: ExecApprovalDecision;
   resolvedBy?: string | null;
   ts: number;
   request?: ExecApprovalRequest["request"];
+  audit?: ExecApprovalResolveAudit | null;
 };
 
 export type ExecApprovalsDefaults = {

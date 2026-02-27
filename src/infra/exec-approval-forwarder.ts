@@ -9,6 +9,7 @@ import type {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAccountId, parseAgentSessionKey } from "../routing/session-key.js";
 import { compileSafeRegex } from "../security/safe-regex.js";
+import { editMessageTelegram } from "../telegram/send.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -19,6 +20,7 @@ import type {
   ExecApprovalRequest,
   ExecApprovalResolved,
 } from "./exec-approvals.js";
+import type { OutboundDeliveryResult } from "./outbound/deliver.js";
 import { deliverOutboundPayloads } from "./outbound/deliver.js";
 import { resolveSessionDeliveryTarget } from "./outbound/targets.js";
 
@@ -28,10 +30,18 @@ export type { ExecApprovalRequest, ExecApprovalResolved };
 
 type ForwardTarget = ExecApprovalForwardTarget & { source: "session" | "target" };
 
+type PendingTelegramMessageRef = {
+  targetKey: string;
+  accountId?: string;
+  chatId: string;
+  messageId: string;
+};
+
 type PendingApproval = {
   request: ExecApprovalRequest;
   targets: ForwardTarget[];
   timeoutId: NodeJS.Timeout | null;
+  telegramMessages: PendingTelegramMessageRef[];
 };
 
 export type ExecApprovalForwarder = {
@@ -43,6 +53,7 @@ export type ExecApprovalForwarder = {
 export type ExecApprovalForwarderDeps = {
   getConfig?: () => OpenClawConfig;
   deliver?: typeof deliverOutboundPayloads;
+  editTelegramMessage?: typeof editMessageTelegram;
   nowMs?: () => number;
   resolveSessionTarget?: (params: {
     cfg: OpenClawConfig;
@@ -290,7 +301,8 @@ async function deliverToTargets(params: {
   deliver: typeof deliverOutboundPayloads;
   shouldSend?: () => boolean;
   payloadForTarget?: (target: ForwardTarget) => ReplyPayload;
-}) {
+}): Promise<Array<{ target: ForwardTarget; deliveries: OutboundDeliveryResult[] }>> {
+  const sent: Array<{ target: ForwardTarget; deliveries: OutboundDeliveryResult[] }> = [];
   const deliveries = params.targets.map(async (target) => {
     if (params.shouldSend && !params.shouldSend()) {
       return;
@@ -303,7 +315,7 @@ async function deliverToTargets(params: {
       const payload: ReplyPayload = params.payloadForTarget
         ? params.payloadForTarget(target)
         : { text: params.text };
-      await params.deliver({
+      const result = await params.deliver({
         cfg: params.cfg,
         channel,
         to: target.to,
@@ -311,11 +323,86 @@ async function deliverToTargets(params: {
         threadId: target.threadId,
         payloads: [payload],
       });
+      sent.push({ target, deliveries: result });
     } catch (err) {
       log.error(`exec approvals: failed to deliver to ${channel}:${target.to}: ${String(err)}`);
     }
   });
   await Promise.allSettled(deliveries);
+  return sent;
+}
+
+function collectTelegramMessageRefs(
+  deliveries: Array<{ target: ForwardTarget; deliveries: OutboundDeliveryResult[] }>,
+): PendingTelegramMessageRef[] {
+  const refs: PendingTelegramMessageRef[] = [];
+  for (const item of deliveries) {
+    const normalizedChannel = normalizeMessageChannel(item.target.channel) ?? item.target.channel;
+    if (normalizedChannel !== "telegram") {
+      continue;
+    }
+    const targetKey = buildTargetKey(item.target);
+    for (const delivery of item.deliveries) {
+      const chatId = typeof delivery.chatId === "string" ? delivery.chatId.trim() : "";
+      const messageId = typeof delivery.messageId === "string" ? delivery.messageId.trim() : "";
+      if (!chatId || !messageId) {
+        continue;
+      }
+      refs.push({
+        targetKey,
+        accountId: item.target.accountId,
+        chatId,
+        messageId,
+      });
+    }
+  }
+  return refs;
+}
+
+function buildFinalizedRequestMessage(params: {
+  request: ExecApprovalRequest;
+  statusText: string;
+  nowMs: number;
+}): string {
+  const combined = `${buildRequestMessage(params.request, params.nowMs)}\n\n${params.statusText}`;
+  if (combined.length <= 3900) {
+    return combined;
+  }
+  return `${params.statusText}\nID: ${params.request.id}`;
+}
+
+async function markPendingTelegramMessagesFinal(params: {
+  entry: PendingApproval;
+  statusText: string;
+  nowMs: number;
+  editTelegramMessage: typeof editMessageTelegram;
+}): Promise<Set<string>> {
+  const editedTargetKeys = new Set<string>();
+  const seen = new Set<string>();
+  const finalizedText = buildFinalizedRequestMessage({
+    request: params.entry.request,
+    statusText: params.statusText,
+    nowMs: params.nowMs,
+  });
+  for (const ref of params.entry.telegramMessages) {
+    const dedupeKey = `${ref.chatId}:${ref.messageId}`;
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+    seen.add(dedupeKey);
+    try {
+      await params.editTelegramMessage(ref.chatId, ref.messageId, finalizedText, {
+        accountId: ref.accountId,
+        buttons: [],
+      });
+      editedTargetKeys.add(ref.targetKey);
+    } catch (err) {
+      log.error(
+        `exec approvals: failed to edit telegram request ${ref.chatId}/${ref.messageId}: ${String(err)}`,
+      );
+    }
+  }
+  return editedTargetKeys;
 }
 
 function resolveForwardTargets(params: {
@@ -365,6 +452,7 @@ export function createExecApprovalForwarder(
 ): ExecApprovalForwarder {
   const getConfig = deps.getConfig ?? loadConfig;
   const deliver = deps.deliver ?? deliverOutboundPayloads;
+  const editTelegramMessage = deps.editTelegramMessage ?? editMessageTelegram;
   const nowMs = deps.nowMs ?? Date.now;
   const resolveSessionTarget = deps.resolveSessionTarget ?? defaultResolveSessionTarget;
   const pending = new Map<string, PendingApproval>();
@@ -395,12 +483,28 @@ export function createExecApprovalForwarder(
         }
         pending.delete(request.id);
         const expiredText = buildExpiredMessage(request);
-        await deliverToTargets({ cfg, targets: entry.targets, text: expiredText, deliver });
+        const editedTargetKeys = await markPendingTelegramMessagesFinal({
+          entry,
+          statusText: expiredText,
+          nowMs: nowMs(),
+          editTelegramMessage,
+        });
+        const followUpTargets = entry.targets.filter(
+          (target) => !editedTargetKeys.has(buildTargetKey(target)),
+        );
+        if (followUpTargets.length > 0) {
+          await deliverToTargets({ cfg, targets: followUpTargets, text: expiredText, deliver });
+        }
       })();
     }, expiresInMs);
     timeoutId.unref?.();
 
-    const pendingEntry: PendingApproval = { request, targets: filteredTargets, timeoutId };
+    const pendingEntry: PendingApproval = {
+      request,
+      targets: filteredTargets,
+      timeoutId,
+      telegramMessages: [],
+    };
     pending.set(request.id, pendingEntry);
 
     if (pending.get(request.id) !== pendingEntry) {
@@ -429,9 +533,16 @@ export function createExecApprovalForwarder(
           },
         };
       },
-    }).catch((err) => {
-      log.error(`exec approvals: failed to deliver request ${request.id}: ${String(err)}`);
-    });
+    })
+      .then((deliveries) => {
+        if (pending.get(request.id) !== pendingEntry) {
+          return;
+        }
+        pendingEntry.telegramMessages = collectTelegramMessageRefs(deliveries);
+      })
+      .catch((err) => {
+        log.error(`exec approvals: failed to deliver request ${request.id}: ${String(err)}`);
+      });
     return true;
   };
 
@@ -467,7 +578,21 @@ export function createExecApprovalForwarder(
       return;
     }
     const text = buildResolvedMessage(resolved);
-    await deliverToTargets({ cfg, targets, text, deliver });
+    const editedTargetKeys = entry
+      ? await markPendingTelegramMessagesFinal({
+          entry,
+          statusText: text,
+          nowMs: nowMs(),
+          editTelegramMessage,
+        })
+      : new Set<string>();
+    const followUpTargets = targets.filter(
+      (target) => !editedTargetKeys.has(buildTargetKey(target)),
+    );
+    if (followUpTargets.length === 0) {
+      return;
+    }
+    await deliverToTargets({ cfg, targets: followUpTargets, text, deliver });
   };
 
   const stop = () => {

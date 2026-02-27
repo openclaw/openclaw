@@ -284,7 +284,11 @@ describe("/approve command", () => {
     expect(callGatewayMock).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "exec.approval.resolve",
-        params: { id: "abc", decision: "allow-once" },
+        params: expect.objectContaining({
+          id: "abc",
+          decision: "allow-once",
+          audit: expect.objectContaining({ origin: "typed" }),
+        }),
       }),
     );
   });
@@ -304,7 +308,11 @@ describe("/approve command", () => {
     expect(callGatewayMock).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "exec.approval.resolve",
-        params: { id: "abc", decision: "allow-once" },
+        params: expect.objectContaining({
+          id: "abc",
+          decision: "allow-once",
+          audit: expect.objectContaining({ origin: "typed" }),
+        }),
       }),
     );
   });
@@ -346,10 +354,48 @@ describe("/approve command", () => {
       expect(callGatewayMock).toHaveBeenLastCalledWith(
         expect.objectContaining({
           method: "exec.approval.resolve",
-          params: { id: "abc", decision: "allow-once" },
+          params: expect.objectContaining({
+            id: "abc",
+            decision: "allow-once",
+            audit: expect.objectContaining({ origin: "typed" }),
+          }),
         }),
       );
     }
+  });
+
+  it("tags callback-origin approvals as button in resolve audit metadata", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { telegram: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/approve abc allow-once", cfg, {
+      Provider: "telegram",
+      Surface: "telegram",
+      SenderId: "123",
+      ApprovalCommandOrigin: "button",
+      CommandSource: "text",
+    });
+
+    callGatewayMock.mockResolvedValue({ ok: true });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "exec.approval.resolve",
+        params: expect.objectContaining({
+          id: "abc",
+          decision: "allow-once",
+          audit: expect.objectContaining({
+            origin: "button",
+            channel: "telegram",
+            surface: "telegram",
+            senderId: "123",
+          }),
+        }),
+      }),
+    );
   });
 });
 

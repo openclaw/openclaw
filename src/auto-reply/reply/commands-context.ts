@@ -36,6 +36,8 @@ export function buildCommandContext(params: {
     senderIsOwner: auth.senderIsOwner,
     isAuthorizedSender: auth.isAuthorizedSender,
     senderId: auth.senderId,
+    commandSource: ctx.CommandSource,
+    approvalCommandOrigin: ctx.ApprovalCommandOrigin,
     abortKey,
     rawBodyNormalized,
     commandBodyNormalized,

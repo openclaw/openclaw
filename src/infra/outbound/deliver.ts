@@ -558,6 +558,17 @@ async function deliverOutboundPayloadsCore(
         replyToId: effectivePayload.replyToId ?? params.replyToId ?? undefined,
         threadId: params.threadId ?? undefined,
       };
+      if (handler.sendPayload && effectivePayload.channelData) {
+        const delivery = await handler.sendPayload(effectivePayload, sendOverrides);
+        results.push(delivery);
+        emitMessageSent({
+          success: true,
+          content: payloadSummary.text,
+          messageId: delivery.messageId,
+        });
+        continue;
+      }
+      // Legacy compatibility path while adapters migrate to sendPayload.
       if (channel === "telegram" && !handler.sendPayload && effectivePayload.channelData) {
         const telegramData = effectivePayload.channelData.telegram as
           | {
@@ -585,16 +596,6 @@ async function deliverOutboundPayloadsCore(
           });
           continue;
         }
-      }
-      if (handler.sendPayload && effectivePayload.channelData) {
-        const delivery = await handler.sendPayload(effectivePayload, sendOverrides);
-        results.push(delivery);
-        emitMessageSent({
-          success: true,
-          content: payloadSummary.text,
-          messageId: delivery.messageId,
-        });
-        continue;
       }
       if (payloadSummary.mediaUrls.length === 0) {
         const beforeCount = results.length;

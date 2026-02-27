@@ -15,6 +15,8 @@ export type CommandContext = {
   senderIsOwner: boolean;
   isAuthorizedSender: boolean;
   senderId?: string;
+  commandSource?: "text" | "native";
+  approvalCommandOrigin?: "typed" | "button";
   abortKey?: string;
   rawBodyNormalized: string;
   commandBodyNormalized: string;
