@@ -14,6 +14,8 @@ const MemorySearchSchema = Type.Object({
   query: Type.String(),
   maxResults: Type.Optional(Type.Number()),
   minScore: Type.Optional(Type.Number()),
+  since: Type.Optional(Type.String()),
+  entity: Type.Optional(Type.String()),
 });
 
 const MemoryGetSchema = Type.Object({
@@ -50,12 +52,14 @@ export function createMemorySearchTool(options: {
     label: "Memory Search",
     name: "memory_search",
     description:
-      "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos; returns top snippets with path + lines. If response has disabled=true, memory retrieval is unavailable and should be surfaced to the user.",
+      "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos; returns top snippets with path + lines. Optional filters: since (e.g. '7d', '30d', '2026-02-25') for time-based filtering; entity (e.g. 'Peter', 'market-signals') to filter by entity mentions. If response has disabled=true, memory retrieval is unavailable and should be surfaced to the user.",
     parameters: MemorySearchSchema,
     execute: async (_toolCallId, params) => {
       const query = readStringParam(params, "query", { required: true });
       const maxResults = readNumberParam(params, "maxResults");
       const minScore = readNumberParam(params, "minScore");
+      const since = readStringParam(params, "since");
+      const entity = readStringParam(params, "entity");
       const { manager, error } = await getMemorySearchManager({
         cfg,
         agentId,
@@ -69,11 +73,14 @@ export function createMemorySearchTool(options: {
           mode: citationsMode,
           sessionKey: options.agentSessionKey,
         });
-        const rawResults = await manager.search(query, {
+        const searchOptions = {
           maxResults,
           minScore,
           sessionKey: options.agentSessionKey,
-        });
+          since,
+          entity,
+        };
+        const rawResults = await manager.search(query, searchOptions);
         const status = manager.status();
         const decorated = decorateCitations(rawResults, includeCitations);
         const resolved = resolveMemoryBackendConfig({ cfg, agentId });
