@@ -1,9 +1,12 @@
 import type { ImageContent } from "@mariozechner/pi-ai";
-import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
 import type { ThinkLevel } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/config.js";
+import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
+import { resolveHeartbeatPrompt } from "../auto-reply/heartbeat.js";
 import { shouldLogVerbose } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import { resolveSessionAgentIds } from "./agent-scope.js";
@@ -27,7 +30,6 @@ import {
 import { resolveOpenClawDocsPath } from "./docs-path.js";
 import { FailoverError, resolveFailoverStatus } from "./failover-error.js";
 import { classifyFailoverReason, isFailoverErrorMessage } from "./pi-embedded-helpers.js";
-import type { EmbeddedPiRunResult } from "./pi-embedded-runner.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "./workspace-run.js";
 
 const log = createSubsystemLogger("agent/claude-cli");
@@ -279,6 +281,14 @@ export async function runCliAgent(params: {
           log.warn(
             `cli watchdog timeout: provider=${params.provider} model=${modelId} session=${cliSessionIdToSend ?? params.sessionId} noOutputTimeoutMs=${noOutputTimeoutMs} pid=${managedRun.pid ?? "unknown"}`,
           );
+          if (params.sessionKey) {
+            const stallNotice =
+              `CLI agent (provider=${params.provider}) produced no output for ${Math.round(noOutputTimeoutMs / 1000)}s and was terminated. ` +
+              "It may have been waiting for an interactive approval prompt. " +
+              "Try re-running with --dangerously-skip-permissions, or check the session log for a pending prompt.";
+            enqueueSystemEvent(stallNotice, { sessionKey: params.sessionKey });
+            requestHeartbeatNow({ reason: "cli:watchdog:stall" });
+          }
           throw new FailoverError(timeoutReason, {
             reason: "timeout",
             provider: params.provider,
