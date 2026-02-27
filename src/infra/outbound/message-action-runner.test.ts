@@ -1081,3 +1081,135 @@ describe("runMessageAction accountId defaults", () => {
     expect(ctx.params.accountId).toBe("account-b");
   });
 });
+
+describe("runMessageAction outbound allowlist enforcement", () => {
+  // WhatsApp config with a restricted allowFrom — only +15551111111 is allowed.
+  const restrictedConfig = {
+    channels: {
+      whatsapp: {
+        allowFrom: ["+15551111111"],
+      },
+    },
+  } as OpenClawConfig;
+
+  // WhatsApp config with wildcard — all targets allowed.
+  const wildcardConfig = {
+    channels: {
+      whatsapp: {
+        allowFrom: ["*"],
+      },
+    },
+  } as OpenClawConfig;
+
+  // WhatsApp config with empty allowFrom — open access (no restriction).
+  const openConfig = {
+    channels: {
+      whatsapp: {},
+    },
+  } as OpenClawConfig;
+
+  beforeEach(() => {
+    installChannelRuntimes({ includeTelegram: false });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "whatsapp",
+          source: "test",
+          plugin: whatsappPlugin,
+        },
+      ]),
+    );
+  });
+
+  afterEach(() => {
+    setActivePluginRegistry(createTestRegistry([]));
+  });
+
+  it("blocks send to a target not in the allowFrom list", async () => {
+    await expect(
+      runDrySend({
+        cfg: restrictedConfig,
+        actionParams: {
+          channel: "whatsapp",
+          target: "+15559999999",
+          message: "hello",
+        },
+      }),
+    ).rejects.toThrow(/Target not in allowlist/);
+  });
+
+  it("allows send to a target that is in the allowFrom list", async () => {
+    const result = await runDrySend({
+      cfg: restrictedConfig,
+      actionParams: {
+        channel: "whatsapp",
+        target: "+15551111111",
+        message: "hello",
+      },
+    });
+    expect(result.kind).toBe("send");
+  });
+
+  it("allows send when allowFrom contains wildcard", async () => {
+    const result = await runDrySend({
+      cfg: wildcardConfig,
+      actionParams: {
+        channel: "whatsapp",
+        target: "+15559999999",
+        message: "hello",
+      },
+    });
+    expect(result.kind).toBe("send");
+  });
+
+  it("allows send when allowFrom is empty (open access)", async () => {
+    const result = await runDrySend({
+      cfg: openConfig,
+      actionParams: {
+        channel: "whatsapp",
+        target: "+15559999999",
+        message: "hello",
+      },
+    });
+    expect(result.kind).toBe("send");
+  });
+
+  it("allows group JID targets regardless of allowlist", async () => {
+    const result = await runDrySend({
+      cfg: restrictedConfig,
+      actionParams: {
+        channel: "whatsapp",
+        target: "120363123456789@g.us",
+        message: "hello",
+      },
+    });
+    expect(result.kind).toBe("send");
+  });
+
+  it("blocks poll to a target not in the allowFrom list", async () => {
+    await expect(
+      runDryAction({
+        cfg: restrictedConfig,
+        action: "send" as const,
+        actionParams: {
+          channel: "whatsapp",
+          target: "+15559999999",
+          message: "hello",
+        },
+      }),
+    ).rejects.toThrow(/Target not in allowlist/);
+  });
+
+  it("provides clear error message for blocked targets", async () => {
+    await expect(
+      runDrySend({
+        cfg: restrictedConfig,
+        actionParams: {
+          channel: "whatsapp",
+          target: "+15559999999",
+          message: "hello",
+        },
+      }),
+    ).rejects.toThrow(/allowFrom/);
+  });
+});

@@ -18,6 +18,7 @@ import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { type GatewayClientMode, type GatewayClientName } from "../../utils/message-channel.js";
 import { throwIfAborted } from "./abort.js";
+import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
 import {
   listConfiguredMessageChannels,
   resolveMessageChannelSelection,
@@ -83,6 +84,80 @@ function resolveAndApplyOutboundThreadId(
     params.threadId = resolved;
   }
   return resolved ?? undefined;
+}
+
+// Actions that deliver content to an explicit target and should be gated by the
+// channel's outbound allowlist.  Read-only or management actions (react, delete,
+// search, etc.) are excluded intentionally.
+// Note: "broadcast" is not listed because handleBroadcastAction returns early
+// and recurses into runMessageAction with action="send" per target — each
+// individual send is checked there.
+const ALLOWLIST_GUARDED_ACTIONS = new Set<ChannelMessageActionName>([
+  "send",
+  "poll",
+  "reply",
+  "sendWithEffect",
+  "sendAttachment",
+  "thread-create",
+  "thread-reply",
+  "sticker",
+]);
+
+/**
+ * Enforce the channel's outbound allowlist on the resolved target.
+ *
+ * Uses the same plugin allowFrom + resolveTarget mechanism that the
+ * CLI/heartbeat delivery path uses (via `resolveOutboundTarget`), so the
+ * behaviour stays consistent across all send surfaces.
+ */
+function enforceOutboundAllowlist(params: {
+  cfg: OpenClawConfig;
+  channel: ChannelId;
+  action: ChannelMessageActionName;
+  to: string;
+  accountId?: string | null;
+}): void {
+  if (!ALLOWLIST_GUARDED_ACTIONS.has(params.action)) {
+    return;
+  }
+
+  const plugin = resolveOutboundChannelPlugin({
+    channel: params.channel,
+    cfg: params.cfg,
+  });
+  if (!plugin) {
+    return;
+  }
+
+  const resolveAllowFrom = plugin.config.resolveAllowFrom;
+  const resolveTarget = plugin.outbound?.resolveTarget;
+  if (!resolveAllowFrom || !resolveTarget) {
+    // Channel has no allowlist enforcement capability — nothing to check.
+    return;
+  }
+
+  const allowFromRaw = resolveAllowFrom({
+    cfg: params.cfg,
+    accountId: params.accountId ?? undefined,
+  });
+  if (!allowFromRaw || allowFromRaw.length === 0) {
+    // No allowlist configured — open access.
+    return;
+  }
+
+  const allowFrom = allowFromRaw.map((entry) => String(entry));
+  const result = resolveTarget({
+    cfg: params.cfg,
+    to: params.to,
+    allowFrom,
+    accountId: params.accountId ?? undefined,
+    mode: "explicit",
+  });
+  if (!result.ok) {
+    throw new Error(
+      `Target not in allowlist. The message tool cannot send to "${params.to}" on ${params.channel} because it is not in the configured allowFrom list.`,
+    );
+  }
 }
 
 export type RunMessageActionParams = {
@@ -765,6 +840,20 @@ export async function runMessageAction(
     toolContext: input.toolContext,
     cfg,
   });
+
+  // Enforce outbound allowlist: reject sends to targets not in the configured
+  // allowFrom list for the channel.  Uses the resolved `to` from params
+  // (already written by resolveActionTarget / applyTargetToParams above).
+  const outboundTo = typeof params.to === "string" ? params.to.trim() : "";
+  if (outboundTo) {
+    enforceOutboundAllowlist({
+      cfg,
+      channel,
+      action,
+      to: outboundTo,
+      accountId,
+    });
+  }
 
   const gateway = resolveGateway(input);
 
