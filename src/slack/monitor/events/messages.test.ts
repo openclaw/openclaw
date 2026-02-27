@@ -82,10 +82,10 @@ function makeThreadBroadcastEvent(overrides?: { channel?: string; user?: string 
 }
 
 describe("registerSlackMessageEvents", () => {
-  it("enqueues message_changed system events when dmPolicy is open", async () => {
+  it("skips message_changed events without processing", async () => {
     enqueueSystemEventMock.mockClear();
     readAllowFromStoreMock.mockReset().mockResolvedValue([]);
-    const { getMessageHandler } = createMessagesContext({ dmPolicy: "open" });
+    const { getMessageHandler, handleSlackMessage } = createMessagesContext({ dmPolicy: "open" });
     const messageHandler = getMessageHandler();
     expect(messageHandler).toBeTruthy();
 
@@ -94,58 +94,23 @@ describe("registerSlackMessageEvents", () => {
       body: {},
     });
 
-    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("blocks message_changed system events when dmPolicy is disabled", async () => {
-    enqueueSystemEventMock.mockClear();
-    readAllowFromStoreMock.mockReset().mockResolvedValue([]);
-    const { getMessageHandler } = createMessagesContext({ dmPolicy: "disabled" });
-    const messageHandler = getMessageHandler();
-    expect(messageHandler).toBeTruthy();
-
-    await messageHandler!({
-      event: makeChangedEvent(),
-      body: {},
-    });
-
+    expect(handleSlackMessage).not.toHaveBeenCalled();
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });
 
-  it("blocks message_changed system events for unauthorized senders in allowlist mode", async () => {
+  it("skips message_deleted events without processing", async () => {
     enqueueSystemEventMock.mockClear();
     readAllowFromStoreMock.mockReset().mockResolvedValue([]);
-    const { getMessageHandler } = createMessagesContext({
-      dmPolicy: "allowlist",
-      allowFrom: ["U2"],
-    });
+    const { getMessageHandler, handleSlackMessage } = createMessagesContext({ dmPolicy: "open" });
     const messageHandler = getMessageHandler();
     expect(messageHandler).toBeTruthy();
 
     await messageHandler!({
-      event: makeChangedEvent({ user: "U1" }),
+      event: makeDeletedEvent(),
       body: {},
     });
 
-    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-  });
-
-  it("blocks message_deleted system events for users outside channel users allowlist", async () => {
-    enqueueSystemEventMock.mockClear();
-    readAllowFromStoreMock.mockReset().mockResolvedValue([]);
-    const { getMessageHandler } = createMessagesContext({
-      dmPolicy: "open",
-      channelType: "channel",
-      channelUsers: ["U_OWNER"],
-    });
-    const messageHandler = getMessageHandler();
-    expect(messageHandler).toBeTruthy();
-
-    await messageHandler!({
-      event: makeDeletedEvent({ channel: "C1", user: "U_ATTACKER" }),
-      body: {},
-    });
-
+    expect(handleSlackMessage).not.toHaveBeenCalled();
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
   });
 
