@@ -22,6 +22,10 @@ COPY --chown=node:node ui/package.json ./ui/package.json
 COPY --chown=node:node patches ./patches
 COPY --chown=node:node scripts ./scripts
 
+# Pre-create the corepack cache dir so the node user can write to it when
+# pnpm install triggers a corepack download (avoids EACCES on /home/node/.cache)
+RUN mkdir -p /home/node/.cache && chown -R node:node /home/node
+
 USER node
 RUN pnpm install --frozen-lockfile
 
