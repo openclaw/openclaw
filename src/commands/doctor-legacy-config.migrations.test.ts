@@ -297,4 +297,27 @@ describe("normalizeCompatibilityConfigValues", () => {
       "Moved browser.ssrfPolicy.allowPrivateNetwork → browser.ssrfPolicy.dangerouslyAllowPrivateNetwork (true).",
     );
   });
+
+  it("does not add empty default account for multi-account Discord without top-level values", () => {
+    const res = normalizeCompatibilityConfigValues({
+      channels: {
+        discord: {
+          enabled: true,
+          accounts: {
+            bot1: {
+              token: "token1",
+            },
+            bot2: {
+              token: "token2",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.config.channels?.discord?.accounts?.default).toBeUndefined();
+    expect(res.config.channels?.discord?.accounts?.bot1?.token).toBe("token1");
+    expect(res.config.channels?.discord?.accounts?.bot2?.token).toBe("token2");
+    expect(res.changes).toEqual([]);
+  });
 });

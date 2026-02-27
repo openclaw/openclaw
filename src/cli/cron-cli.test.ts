@@ -504,4 +504,24 @@ describe("cron cli", () => {
   it("rejects --exact on edit when existing job is not cron", async () => {
     await expectCronEditWithScheduleLookupExit({ kind: "every", everyMs: 60_000 }, ["--exact"]);
   });
+
+  it("uses 10 minute timeout on cron run by default", async () => {
+    await runCronCommand(["cron", "run", "job-1"]);
+
+    const runCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.run");
+    expect(runCall).toBeDefined();
+    const opts = runCall?.[1] as { timeout?: string };
+    expect(opts?.timeout).toBe("600000");
+    const params = runCall?.[2] as { id?: string; mode?: string };
+    expect(params?.id).toBe("job-1");
+    expect(params?.mode).toBe("force");
+  });
+
+  it("uses --due mode when passed to cron run", async () => {
+    await runCronCommand(["cron", "run", "job-1", "--due"]);
+
+    const runCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.run");
+    const params = runCall?.[2] as { id?: string; mode?: string };
+    expect(params?.mode).toBe("due");
+  });
 });
