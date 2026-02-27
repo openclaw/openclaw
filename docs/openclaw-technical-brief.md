@@ -50,3 +50,36 @@ A one-sentence mental model for each project:
 **Strengths.** Always-on presence across 12+ messaging channels means you interact through apps you already use — no special interface required. Native support for Chinese ecosystem channels (Feishu) and providers (Qwen, DeepSeek) serves users in that region. Local-first architecture keeps all conversations and memory on your hardware. The three-layer memory system provides continuity that survives individual sessions. A plugin architecture makes it straightforward to add channels, tools, or behaviors.
 
 **Limitations.** OpenClaw is single-user by design — a personal assistant, not a team platform. The Gateway requires always-on hardware (a local machine or server you control). Initial setup — model provider, channel connections, memory configuration — has a steeper learning curve than hosted solutions. Local model quality depends directly on available hardware; smaller machines are limited to smaller models.
+
+---
+
+## 3. Our Localization and Development
+
+### Feishu Extension
+
+We contributed bug fixes and new features to the Feishu channel extension — resolving `resolveAllowFrom` string handling issues and adding public permission management (`get_public`, `update_public` actions for `feishu_perm`) with corresponding tests. This work enables OpenClaw to operate within the Chinese enterprise ecosystem. Four Feishu app accounts are configured across our deployment, covering different workspaces and use cases.
+
+### Peekaboo (macOS UI Automation)
+
+Peekaboo is a visual automation tool that captures screenshots, reads UI elements, and performs clicks and text input — letting the agent operate macOS applications without requiring APIs. In practice, we use it for Ctrip travel booking, Photos library browsing, Calendar manipulation, and interaction with arbitrary macOS apps, all driven by natural language commands through messaging channels.
+
+### Deployed Skills
+
+Ten skills are running on a Mac mini M4 with 32 GB RAM:
+
+| Skill | Capability |
+|-------|-----------|
+| Feishu Doc | Read and write Feishu documents |
+| Feishu Drive | Cloud storage file management |
+| Feishu Wiki | Knowledge base navigation |
+| Feishu Perm | Document permission management |
+| Peekaboo | macOS screen capture and UI automation |
+| Himalaya | Email management via IMAP/SMTP |
+| Coding Agent | Delegate tasks to Codex/Claude Code agents |
+| Browser | Web browsing and search via Chrome extension |
+| Weather | Current conditions and forecasts |
+| Healthcheck | Host security hardening and risk assessment |
+
+### Capabilities in Action
+
+From any connected messaging channel, a user can write Feishu documents, coordinate meetings, automate macOS applications through Peekaboo, manage email, browse the web, and delegate coding tasks — all via natural language. The Gateway routes each request to the appropriate skill, executes tool calls locally, and streams the result back through the same channel the user wrote from.
