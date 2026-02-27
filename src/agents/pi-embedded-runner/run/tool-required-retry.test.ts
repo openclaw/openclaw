@@ -77,6 +77,42 @@ describe("tool-required retry guard", () => {
     expect(shouldRetry).toBe(false);
   });
 
+  it("does not classify tool-help questions as tool-required execution tasks", () => {
+    const shouldRetry = shouldRetryToolRequiredToolless({
+      provider: "openai-codex",
+      prompt: "What command should I run to inspect logs in this repo?",
+      assistantTexts: ["I'll explain which command to use and why."],
+      lastAssistant: { stopReason: "end_turn", content: [] } as never,
+      toolMetas: [],
+      didSendViaMessagingTool: false,
+      hasClientToolCall: false,
+      promptError: null,
+      aborted: false,
+      timedOut: false,
+      timedOutDuringCompaction: false,
+    });
+
+    expect(shouldRetry).toBe(false);
+  });
+
+  it("uses latest assistant chunk for ack-only detection", () => {
+    const shouldRetry = shouldRetryToolRequiredToolless({
+      provider: "openai-codex",
+      prompt: "Run tests and fix this file in the repo.",
+      assistantTexts: ["I'll do that.", "I ran tests and updated src/app.ts."],
+      lastAssistant: { stopReason: "end_turn", content: [] } as never,
+      toolMetas: [],
+      didSendViaMessagingTool: false,
+      hasClientToolCall: false,
+      promptError: null,
+      aborted: false,
+      timedOut: false,
+      timedOutDuringCompaction: false,
+    });
+
+    expect(shouldRetry).toBe(false);
+  });
+
   it("adds explicit no-ack instruction", () => {
     const prompt = buildToolRequiredRetryPrompt("Fix failing tests.");
     expect(prompt).toContain("do not send an acknowledgement-only response");
