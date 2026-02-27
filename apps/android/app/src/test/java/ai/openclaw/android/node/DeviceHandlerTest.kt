@@ -73,6 +73,68 @@ class DeviceHandlerTest {
     assertTrue(payload.getValue("uptimeSeconds").jsonPrimitive.double >= 0.0)
   }
 
+  @Test
+  fun handleDevicePermissions_returnsExpectedShape() {
+    val handler = DeviceHandler(appContext())
+
+    val result = handler.handleDevicePermissions(null)
+
+    assertTrue(result.ok)
+    val payload = parsePayload(result.payloadJson)
+    val permissions = payload.getValue("permissions").jsonObject
+    val expected =
+      listOf(
+        "camera",
+        "microphone",
+        "location",
+        "backgroundLocation",
+        "sms",
+        "notificationListener",
+        "screenCapture",
+      )
+    for (key in expected) {
+      val state = permissions.getValue(key).jsonObject
+      val status = state.getValue("status").jsonPrimitive.content
+      assertTrue(status == "granted" || status == "denied")
+      state.getValue("promptable").jsonPrimitive.boolean
+    }
+  }
+
+  @Test
+  fun handleDeviceHealth_returnsExpectedShape() {
+    val handler = DeviceHandler(appContext())
+
+    val result = handler.handleDeviceHealth(null)
+
+    assertTrue(result.ok)
+    val payload = parsePayload(result.payloadJson)
+    val memory = payload.getValue("memory").jsonObject
+    val battery = payload.getValue("battery").jsonObject
+    val power = payload.getValue("power").jsonObject
+    val system = payload.getValue("system").jsonObject
+
+    val pressure = memory.getValue("pressure").jsonPrimitive.content
+    assertTrue(pressure in setOf("normal", "moderate", "high", "critical", "unknown"))
+    val totalRamBytes = memory.getValue("totalRamBytes").jsonPrimitive.content.toLong()
+    val availableRamBytes = memory.getValue("availableRamBytes").jsonPrimitive.content.toLong()
+    val usedRamBytes = memory.getValue("usedRamBytes").jsonPrimitive.content.toLong()
+    assertTrue(totalRamBytes >= 0L)
+    assertTrue(availableRamBytes >= 0L)
+    assertTrue(usedRamBytes >= 0L)
+    memory.getValue("lowMemory").jsonPrimitive.boolean
+
+    val batteryState = battery.getValue("state").jsonPrimitive.content
+    assertTrue(batteryState in setOf("unknown", "unplugged", "charging", "full"))
+    val chargingType = battery.getValue("chargingType").jsonPrimitive.content
+    assertTrue(chargingType in setOf("none", "ac", "usb", "wireless", "dock"))
+    battery["temperatureC"]?.jsonPrimitive?.double
+    battery["currentMa"]?.jsonPrimitive?.double
+
+    power.getValue("dozeModeEnabled").jsonPrimitive.boolean
+    power.getValue("lowPowerModeEnabled").jsonPrimitive.boolean
+    system["securityPatchLevel"]?.jsonPrimitive?.content
+  }
+
   private fun appContext(): Context = RuntimeEnvironment.getApplication()
 
   private fun parsePayload(payloadJson: String?): JsonObject {
