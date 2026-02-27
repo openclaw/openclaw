@@ -244,6 +244,24 @@ describe("packNpmSpecToArchive", () => {
     });
   });
 
+  it("returns friendly error for 404 (package not on npm)", async () => {
+    const cwd = await createFixtureDir();
+    mockPackCommandResult({
+      stdout: "",
+      stderr: "npm error code E404\nnpm error 404  '@openclaw/whatsapp@*' is not in this registry.",
+      code: 1,
+    });
+
+    const result = await runPack("@openclaw/whatsapp", cwd);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error).toContain("Package not found on npm");
+      expect(result.error).toContain("@openclaw/whatsapp");
+      expect(result.error).toContain("docs.openclaw.ai/tools/plugin");
+    }
+  });
+
   it("returns explicit error when npm pack produces no archive name", async () => {
     const cwd = await createFixtureDir();
     mockPackCommandResult({
