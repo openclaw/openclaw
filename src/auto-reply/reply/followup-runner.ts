@@ -3,7 +3,7 @@ import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
-import { runWithModelFallback } from "../../agents/model-fallback.js";
+import { resolveFallbackCandidates, runWithModelFallback } from "../../agents/model-fallback.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
@@ -227,8 +227,21 @@ export function createFollowupRunner(params: {
         fallbackModel = fallbackResult.model;
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
+        // Log the full fallback chain so operators can see every model that was attempted.
+        const fallbackChainForLog = resolveFallbackCandidates({
+          cfg: queued.run.config,
+          provider: queued.run.provider,
+          model: queued.run.model,
+          fallbacksOverride: resolveRunModelFallbacksOverride({
+            cfg: queued.run.config,
+            agentId: queued.run.agentId,
+            sessionKey: queued.run.sessionKey,
+          }),
+        })
+          .map((c) => `${c.provider}/${c.model}`)
+          .join(" → ");
         defaultRuntime.error?.(
-          `Followup agent failed before reply (provider=${fallbackProvider} model=${fallbackModel}): ${message}`,
+          `Followup agent failed before reply (chain=${fallbackChainForLog}): ${message}`,
         );
         return;
       }

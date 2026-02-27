@@ -3,7 +3,7 @@ import fs from "node:fs";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import { getCliSessionId } from "../../agents/cli-session.js";
-import { runWithModelFallback } from "../../agents/model-fallback.js";
+import { resolveFallbackCandidates, runWithModelFallback } from "../../agents/model-fallback.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import {
   isCompactionFailureError,
@@ -574,6 +574,14 @@ export async function runAgentTurnWithFallback(params: {
         };
       }
 
+      // Compute the full fallback chain for diagnostic logging so operators
+      // can see every provider/model that was (or would be) attempted.
+      const fallbackChainForLog = resolveFallbackCandidates(
+        resolveModelFallbackOptions(params.followupRun.run),
+      )
+        .map((c) => `${c.provider}/${c.model}`)
+        .join(" → ");
+
       if (isTransientHttp && !didRetryTransientHttpError) {
         didRetryTransientHttpError = true;
         // Retry the full runWithModelFallback() cycle — transient errors
@@ -581,7 +589,7 @@ export async function runAgentTurnWithFallback(params: {
         // back to an alternate model first would not help. Instead we wait
         // and retry the complete primary→fallback chain.
         defaultRuntime.error(
-          `Transient HTTP provider error before reply (provider=${fallbackProvider} model=${fallbackModel} error=${message}). Retrying once in ${TRANSIENT_HTTP_RETRY_DELAY_MS}ms.`,
+          `Transient HTTP provider error before reply (chain=${fallbackChainForLog} error=${message}). Retrying once in ${TRANSIENT_HTTP_RETRY_DELAY_MS}ms.`,
         );
         await new Promise<void>((resolve) => {
           setTimeout(resolve, TRANSIENT_HTTP_RETRY_DELAY_MS);
@@ -590,7 +598,7 @@ export async function runAgentTurnWithFallback(params: {
       }
 
       defaultRuntime.error(
-        `Embedded agent failed before reply (provider=${fallbackProvider} model=${fallbackModel}): ${message}`,
+        `Embedded agent failed before reply (chain=${fallbackChainForLog}): ${message}`,
       );
       const safeMessage = isTransientHttp
         ? sanitizeUserFacingText(message, { errorContext: true })
