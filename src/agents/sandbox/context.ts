@@ -26,6 +26,18 @@ import type {
 } from "./types.js";
 import { ensureSandboxWorkspace } from "./workspace.js";
 
+const SEATBELT_PROFILE_NAME_PATTERN = /^[a-zA-Z0-9_-]+(?:\.sb)?$/;
+
+const RESERVED_SEATBELT_PARAM_KEYS = new Set([
+  "PROJECT_DIR",
+  "WORKSPACE_DIR",
+  "STATE_DIR",
+  "AGENT_ID",
+  "SEATBELT_PROFILE_DIR",
+  "WORKSPACE_ACCESS",
+  "TMPDIR",
+]);
+
 async function ensureSandboxWorkspaceLayout(params: {
   cfg: ReturnType<typeof resolveSandboxConfigForAgent>;
   rawSessionKey: string;
@@ -127,6 +139,16 @@ async function resolveSeatbeltContextConfig(params: {
   if (!rawProfile) {
     return undefined;
   }
+  if (
+    rawProfile.includes("/") ||
+    rawProfile.includes("\\") ||
+    rawProfile.includes("..") ||
+    !SEATBELT_PROFILE_NAME_PATTERN.test(rawProfile)
+  ) {
+    throw new Error(
+      `Invalid seatbelt profile "${rawProfile}". Profile names must not contain path separators or ".." segments.`,
+    );
+  }
   const profile = rawProfile.endsWith(".sb") ? rawProfile.slice(0, -3) : rawProfile;
   const profileFile = `${profile}.sb`;
   const profilePath = path.join(params.cfg.seatbelt.profileDir, profileFile);
@@ -198,13 +220,19 @@ async function resolveSeatbeltContextConfig(params: {
     TMPDIR: "/tmp",
   };
 
+  const userParams = Object.fromEntries(
+    Object.entries(params.cfg.seatbelt.params ?? {}).filter(
+      ([key]) => !RESERVED_SEATBELT_PARAM_KEYS.has(key),
+    ),
+  );
+
   return {
     profileDir: params.cfg.seatbelt.profileDir,
     profile,
     profilePath,
     params: {
+      ...userParams,
       ...defaults,
-      ...(params.cfg.seatbelt.params ?? {}),
     },
   };
 }

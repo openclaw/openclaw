@@ -11,6 +11,7 @@ function createSeatbeltConfig(params: {
   profileDir: string;
   profile: string;
   workspaceAccess?: "none" | "ro" | "rw";
+  profileParams?: Record<string, string>;
 }): OpenClawConfig {
   return {
     agents: {
@@ -22,6 +23,7 @@ function createSeatbeltConfig(params: {
           seatbelt: {
             profileDir: params.profileDir,
             profile: params.profile,
+            params: params.profileParams,
           },
         },
       },
@@ -75,6 +77,22 @@ describeSeatbelt("resolveSeatbeltContextConfig profile handling", () => {
     await expect(fs.access(path.join(profileDir, "demo-open.sb"))).resolves.toBeUndefined();
   });
 
+  it("handles demo profile names with explicit .sb suffix", async () => {
+    const profileDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-seatbelt-profile-install-ext-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-seatbelt-work-"));
+    cleanupPaths.push(profileDir, workspaceDir);
+
+    const context = await resolveSandboxContext({
+      config: createSeatbeltConfig({ profileDir, profile: "demo-open.sb" }),
+      sessionKey: "agent:main:main",
+      workspaceDir,
+    });
+
+    expect(context?.backend).toBe("seatbelt");
+    expect(context?.seatbelt?.profile).toBe("demo-open");
+    await expect(fs.access(path.join(profileDir, "demo-open.sb"))).resolves.toBeUndefined();
+  });
+
   it("throws a clear error when profile is still missing after best-effort install", async () => {
     const profileDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-seatbelt-profile-missing-"));
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-seatbelt-work-"));
@@ -109,5 +127,50 @@ describeSeatbelt("resolveSeatbeltContextConfig profile handling", () => {
         workspaceDir,
       }),
     ).rejects.toThrow(/exists but is not readable/);
+  });
+
+
+  it("rejects traversal-like profile names even if config bypasses schema parsing", async () => {
+    const profileDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-seatbelt-profile-traversal-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-seatbelt-work-"));
+    cleanupPaths.push(profileDir, workspaceDir);
+
+    await expect(
+      resolveSandboxContext({
+        config: createSeatbeltConfig({ profileDir, profile: "../evil" }) as OpenClawConfig,
+        sessionKey: "agent:main:main",
+        workspaceDir,
+      }),
+    ).rejects.toThrow(/Invalid seatbelt profile/);
+  });
+
+  it("keeps reserved seatbelt params non-overridable while preserving custom params", async () => {
+    const profileDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-seatbelt-profile-params-"));
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-seatbelt-work-"));
+    cleanupPaths.push(profileDir, workspaceDir);
+
+    await fs.writeFile(path.join(profileDir, "custom.sb"), '(version 1)\n(allow default)\n', "utf8");
+
+    const context = await resolveSandboxContext({
+      config: createSeatbeltConfig({
+        profileDir,
+        profile: "custom",
+        workspaceAccess: "ro",
+        profileParams: {
+          WORKSPACE_ACCESS: "rw",
+          AGENT_ID: "evil-agent",
+          STATE_DIR: "/tmp/evil",
+          CUSTOM_FLAG: "on",
+        },
+      }),
+      sessionKey: "agent:main:main",
+      workspaceDir,
+    });
+
+    expect(context?.backend).toBe("seatbelt");
+    expect(context?.seatbelt?.params.WORKSPACE_ACCESS).toBe("ro");
+    expect(context?.seatbelt?.params.AGENT_ID).toBe("main");
+    expect(context?.seatbelt?.params.STATE_DIR).not.toBe("/tmp/evil");
+    expect(context?.seatbelt?.params.CUSTOM_FLAG).toBe("on");
   });
 });

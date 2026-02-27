@@ -50,7 +50,7 @@ OpenClaw populates these profile params automatically:
 - `WORKSPACE_ACCESS`
 - `TMPDIR`
 
-User-supplied `sandbox.seatbelt.params` are merged after defaults and may override keys.
+User-supplied `sandbox.seatbelt.params` are merged with defaults, but reserved runtime keys (`PROJECT_DIR`, `WORKSPACE_DIR`, `STATE_DIR`, `AGENT_ID`, `SEATBELT_PROFILE_DIR`, `WORKSPACE_ACCESS`, `TMPDIR`) are always enforced by OpenClaw and cannot be overridden.
 
 ## Demo profiles shipped by OpenClaw
 

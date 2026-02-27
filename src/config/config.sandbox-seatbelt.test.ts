@@ -38,7 +38,7 @@ describe("sandbox seatbelt config", () => {
     }
   });
 
-  it("allows seatbelt backend without profile at parse time", () => {
+  it("rejects defaults seatbelt backend without a resolved profile", () => {
     const res = validateConfigObject({
       agents: {
         defaults: {
@@ -49,7 +49,16 @@ describe("sandbox seatbelt config", () => {
       },
     });
 
-    expect(res.ok).toBe(true);
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(
+        res.issues.some(
+          (issue) =>
+            issue.path.includes("agents.defaults.sandbox.seatbelt.profile") ||
+            issue.message.includes("sandbox.seatbelt.profile"),
+        ),
+      ).toBe(true);
+    }
   });
 
   it("allows agent seatbelt backend to inherit profile from defaults", () => {
@@ -75,6 +84,37 @@ describe("sandbox seatbelt config", () => {
     });
 
     expect(res.ok).toBe(true);
+  });
+
+  it("rejects agent seatbelt backend when profile is missing from agent and defaults", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            backend: "docker",
+          },
+        },
+        list: [
+          {
+            id: "worker",
+            sandbox: {
+              backend: "seatbelt",
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(
+        res.issues.some(
+          (issue) =>
+            issue.path.includes("agents.list[0].sandbox.seatbelt.profile") ||
+            issue.message.includes("resolved profile"),
+        ),
+      ).toBe(true);
+    }
   });
 
   it("rejects traversal-like seatbelt profile names", () => {
