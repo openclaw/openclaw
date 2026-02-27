@@ -333,7 +333,13 @@ export function createPinnedDispatcher(pinned: PinnedHostname): Dispatcher {
   return new Agent({
     connect: {
       lookup: pinned.lookup,
+      autoSelectFamily: true,
+      autoSelectFamilyAttemptTimeout: 300,
+      keepAlive: true,
+      keepAliveInitialDelay: 15_000, // send OS-level keepalive probes after 15s idle
     },
+    keepAliveTimeout: 20_000, // close idle connections after 20s
+    keepAliveMaxTimeout: 60_000,
   });
 }
 
