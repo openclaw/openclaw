@@ -1,6 +1,7 @@
 import {
   applyAccountNameToChannelSection,
   buildChannelConfigSchema,
+  createScopedPairingAccess,
   DEFAULT_ACCOUNT_ID,
   deleteAccountFromConfigSection,
   formatPairingApproveHint,
@@ -352,6 +353,12 @@ export const dchatPlugin: ChannelPlugin<ResolvedDchatAccount> = {
               // Load config for reply dispatch
               const cfg = core.config.loadConfig();
 
+              const pairing = createScopedPairingAccess({
+                core,
+                channel: "dchat",
+                accountId: account.accountId,
+              });
+
               // Resolve command authorization for slash commands (/status, /stop, etc.)
               const isGroup = inbound.chatType === "group";
               const dmPolicy = account.config.dm?.policy ?? "pairing";
@@ -373,7 +380,7 @@ export const dchatPlugin: ChannelPlugin<ResolvedDchatAccount> = {
                   configuredAllowFrom: configAllowFrom,
                   senderId: src,
                   isSenderAllowed,
-                  readAllowFromStore: () => core.channel.pairing.readAllowFromStore("dchat"),
+                  readAllowFromStore: () => pairing.readAllowFromStore(),
                   shouldComputeCommandAuthorized: (body, c) =>
                     core.channel.commands.shouldComputeCommandAuthorized(body, c),
                   resolveCommandAuthorizedFromAuthorizers: (params) =>
@@ -390,14 +397,11 @@ export const dchatPlugin: ChannelPlugin<ResolvedDchatAccount> = {
                   const storeAllowFrom =
                     dmPolicy === "allowlist"
                       ? []
-                      : await core.channel.pairing
-                          .readAllowFromStore("dchat")
-                          .catch(() => [] as string[]);
+                      : await pairing.readAllowFromStore().catch(() => [] as string[]);
                   const effectiveAllowFrom = [...configAllowFrom, ...storeAllowFrom.map(String)];
                   if (!isSenderAllowed(src, effectiveAllowFrom)) {
                     if (dmPolicy === "pairing") {
-                      const { code, created } = await core.channel.pairing.upsertPairingRequest({
-                        channel: "dchat",
+                      const { code, created } = await pairing.upsertPairingRequest({
                         id: src.toLowerCase(),
                         meta: { name: src },
                       });
