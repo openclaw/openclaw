@@ -709,7 +709,6 @@ export async function runReplyAgent(params: {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
     }
 
-
     return finalizeWithFollowup(
       finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,
       queueKey,
