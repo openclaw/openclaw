@@ -225,6 +225,45 @@ describe("restart-helper", () => {
       await cleanupScript(scriptPath);
     });
 
+    it("expands HOME in plist path instead of leaving literal $HOME", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      process.getuid = () => 501;
+
+      const { scriptPath, content } = await prepareAndReadScript({
+        HOME: "/Users/testuser",
+        OPENCLAW_PROFILE: "default",
+      });
+      // The plist path must contain the resolved home dir, not literal $HOME
+      expect(content).toContain("/Users/testuser/Library/LaunchAgents/");
+      expect(content).not.toContain("$HOME");
+      await cleanupScript(scriptPath);
+    });
+
+    it("prefers env parameter HOME over process.env.HOME for plist path", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      process.getuid = () => 502;
+
+      const { scriptPath, content } = await prepareAndReadScript({
+        HOME: "/Users/envhome",
+        OPENCLAW_PROFILE: "default",
+      });
+      expect(content).toContain("/Users/envhome/Library/LaunchAgents/");
+      await cleanupScript(scriptPath);
+    });
+
+    it("shell-escapes the label in the plist path on macOS", async () => {
+      Object.defineProperty(process, "platform", { value: "darwin" });
+      process.getuid = () => 501;
+
+      const { scriptPath, content } = await prepareAndReadScript({
+        HOME: "/Users/testuser",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.it's-a-test",
+      });
+      // The plist path must also shell-escape the label to prevent injection
+      expect(content).toContain("ai.openclaw.it'\\''s-a-test.plist");
+      await cleanupScript(scriptPath);
+    });
+
     it("rejects unsafe batch profile names on Windows", async () => {
       Object.defineProperty(process, "platform", { value: "win32" });
       const scriptPath = await prepareRestartScript({
