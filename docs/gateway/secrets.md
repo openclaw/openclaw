@@ -213,6 +213,39 @@ Optional per-id errors:
 }
 ```
 
+### Bitwarden Secrets (BWS)
+
+This example uses a small wrapper script that implements the exec provider protocol and calls the Bitwarden Secrets CLI (`bws`) once per batch.
+
+- Script: `scripts/secrets/openclaw-bws-resolver`
+- `bws` must be installed and authenticated via `BWS_ACCESS_TOKEN`
+
+```json5
+{
+  secrets: {
+    providers: {
+      bws: {
+        source: "exec",
+        // Point this at wherever you install the resolver.
+        command: "/usr/local/bin/openclaw-bws-resolver",
+        args: [],
+        passEnv: ["BWS_ACCESS_TOKEN", "PATH"],
+        jsonOnly: true,
+      },
+    },
+  },
+  models: {
+    providers: {
+      openai: {
+        baseUrl: "https://api.openai.com/v1",
+        models: [{ id: "gpt-5", name: "gpt-5" }],
+        apiKey: { source: "exec", provider: "bws", id: "OPENAI_API_KEY" },
+      },
+    },
+  },
+}
+```
+
 ### `sops`
 
 ```json5
