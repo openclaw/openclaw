@@ -1,17 +1,18 @@
+import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
 import {
   getLastTtsAttempt,
   getTtsMaxLength,
   getTtsProvider,
   isSummarizationEnabled,
-  isTtsEnabled,
   isTtsProviderConfigured,
   resolveTtsApiKey,
+  resolveTtsAutoMode,
   resolveTtsConfig,
   resolveTtsPrefsPath,
   setLastTtsAttempt,
   setSummarizationEnabled,
-  setTtsEnabled,
+  setTtsAutoMode,
   setTtsMaxLength,
   setTtsProvider,
   textToSpeech,
@@ -40,14 +41,40 @@ function parseTtsCommand(normalized: string): ParsedTtsCommand | null {
   return { action: action.toLowerCase(), args: tail.join(" ").trim() };
 }
 
+/** Map action names to TtsAutoMode values; `undefined` means the action is not a mode alias. */
+const MODE_ALIASES: Record<string, TtsAutoMode | undefined> = {
+  on: "always",
+  off: "off",
+  always: "always",
+  inbound: "inbound",
+  tagged: "tagged",
+};
+
+/** Human-readable label for each auto mode. */
+function autoModeLabel(mode: TtsAutoMode): string {
+  switch (mode) {
+    case "off":
+      return "off";
+    case "always":
+      return "always (every reply)";
+    case "inbound":
+      return "inbound (voice replies only when you send voice)";
+    case "tagged":
+      return "tagged (voice only when agent uses [[tts:...]])";
+  }
+}
+
 function ttsUsage(): ReplyPayload {
   // Keep usage in one place so help/validation stays consistent.
   return {
     text:
       `🔊 **TTS (Text-to-Speech) Help**\n\n` +
+      `**Modes:**\n` +
+      `• /tts on — Always reply with voice (alias: /tts always)\n` +
+      `• /tts off — Disable automatic TTS\n` +
+      `• /tts inbound — Voice reply only when you send a voice note\n` +
+      `• /tts tagged — Voice only when agent uses [[tts:...]] directive\n\n` +
       `**Commands:**\n` +
-      `• /tts on — Enable automatic TTS for replies\n` +
-      `• /tts off — Disable TTS\n` +
       `• /tts status — Show current settings\n` +
       `• /tts provider [name] — View/change provider\n` +
       `• /tts limit [number] — View/change text limit\n` +
@@ -62,6 +89,7 @@ function ttsUsage(): ReplyPayload {
       `• Summary ON: AI summarizes, then generates audio\n` +
       `• Summary OFF: Truncates text, then generates audio\n\n` +
       `**Examples:**\n` +
+      `/tts inbound\n` +
       `/tts provider edge\n` +
       `/tts limit 2000\n` +
       `/tts audio Hello, this is a test!`,
@@ -93,14 +121,13 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     return { shouldContinue: false, reply: ttsUsage() };
   }
 
-  if (action === "on") {
-    setTtsEnabled(prefsPath, true);
-    return { shouldContinue: false, reply: { text: "🔊 TTS enabled." } };
-  }
-
-  if (action === "off") {
-    setTtsEnabled(prefsPath, false);
-    return { shouldContinue: false, reply: { text: "🔇 TTS disabled." } };
+  // Handle mode aliases: on, off, always, inbound, tagged.
+  const modeTarget = MODE_ALIASES[action];
+  if (modeTarget !== undefined) {
+    setTtsAutoMode(prefsPath, modeTarget);
+    const label = autoModeLabel(modeTarget);
+    const icon = modeTarget === "off" ? "🔇" : "🔊";
+    return { shouldContinue: false, reply: { text: `${icon} TTS mode set to ${label}.` } };
   }
 
   if (action === "audio") {
@@ -247,7 +274,8 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
   }
 
   if (action === "status") {
-    const enabled = isTtsEnabled(config, prefsPath);
+    const autoMode = resolveTtsAutoMode({ config, prefsPath });
+    const enabled = autoMode !== "off";
     const provider = getTtsProvider(config, prefsPath);
     const hasKey = isTtsProviderConfigured(config, provider);
     const maxLength = getTtsMaxLength(prefsPath);
@@ -255,7 +283,7 @@ export const handleTtsCommands: CommandHandler = async (params, allowTextCommand
     const last = getLastTtsAttempt();
     const lines = [
       "📊 TTS status",
-      `State: ${enabled ? "✅ enabled" : "❌ disabled"}`,
+      `Mode: ${enabled ? "✅" : "❌"} ${autoModeLabel(autoMode)}`,
       `Provider: ${provider} (${hasKey ? "✅ configured" : "❌ not configured"})`,
       `Text limit: ${maxLength} chars`,
       `Auto-summary: ${summarize ? "on" : "off"}`,
