@@ -53,11 +53,12 @@ RUN apt-get update && \
 WORKDIR /app
 
 # Copy built artifacts from builder stage
+# Note: ui:build outputs to /app/dist/control-ui/ (vite outDir: ../dist/control-ui),
+# so it is already included in the /app/dist COPY below.
 COPY --from=builder --chown=node:node /app/dist ./dist
 COPY --from=builder --chown=node:node /app/node_modules ./node_modules
 COPY --from=builder --chown=node:node /app/package.json ./package.json
 COPY --from=builder --chown=node:node /app/openclaw.mjs ./openclaw.mjs
-COPY --from=builder --chown=node:node /app/ui/dist ./ui/dist
 COPY --from=builder --chown=node:node /app/skills ./skills
 COPY --from=builder --chown=node:node /app/extensions ./extensions
 
