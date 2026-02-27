@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveAgentConfig } from "../config/group-policy.js";
 import { resolvePluginTools } from "../plugins/tools.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveSessionAgentId } from "./agent-scope.js";
@@ -65,6 +66,8 @@ export function createOpenClawTools(options?: {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
+  /** If true, omit the nodes tool from the tool list. */
+  disableNodesTool?: boolean;
   /** Trusted sender id from inbound context (not tool args). */
   requesterSenderId?: string | null;
   /** Whether the requesting sender is an owner. */
@@ -108,20 +111,32 @@ export function createOpenClawTools(options?: {
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         requesterSenderId: options?.requesterSenderId ?? undefined,
       });
+  const agentId = options?.agentSessionKey
+    ? resolveSessionAgentId(options.agentSessionKey)
+    : undefined;
+  const agentConfig =
+    options?.config && agentId ? resolveAgentConfig(options.config, agentId) : undefined;
+  const nodesDisabledByConfig =
+    agentConfig?.tools?.nodes?.enabled === false ||
+    options?.config?.tools?.nodes?.enabled === false;
+  const nodesTool =
+    (options?.disableNodesTool ?? nodesDisabledByConfig)
+      ? null
+      : createNodesTool({
+          agentSessionKey: options?.agentSessionKey,
+          agentChannel: options?.agentChannel,
+          agentAccountId: options?.agentAccountId,
+          currentChannelId: options?.currentChannelId,
+          currentThreadTs: options?.currentThreadTs,
+          config: options?.config,
+        });
   const tools: AnyAgentTool[] = [
     createBrowserTool({
       sandboxBridgeUrl: options?.sandboxBrowserBridgeUrl,
       allowHostControl: options?.allowHostBrowserControl,
     }),
     createCanvasTool({ config: options?.config }),
-    createNodesTool({
-      agentSessionKey: options?.agentSessionKey,
-      agentChannel: options?.agentChannel,
-      agentAccountId: options?.agentAccountId,
-      currentChannelId: options?.currentChannelId,
-      currentThreadTs: options?.currentThreadTs,
-      config: options?.config,
-    }),
+    ...(nodesTool ? [nodesTool] : []),
     createCronTool({
       agentSessionKey: options?.agentSessionKey,
     }),

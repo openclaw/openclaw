@@ -58,6 +58,8 @@ export type RunEmbeddedPiAgentParams = {
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
+  /** If true, omit the nodes tool from the tool list. */
+  disableNodesTool?: boolean;
   sessionFile: string;
   workspaceDir: string;
   agentDir?: string;
