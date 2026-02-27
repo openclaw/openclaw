@@ -41,4 +41,24 @@ describe("pruneStickerMediaFromContext", () => {
     expect(ctx.MediaUrls).toBeUndefined();
     expect(ctx.MediaTypes).toBeUndefined();
   });
+
+  it("does not prune when sticker media is already omitted from context", () => {
+    const ctx = {
+      MediaPath: "/tmp/replied.jpg",
+      MediaUrl: "/tmp/replied.jpg",
+      MediaType: "image/jpeg",
+      MediaPaths: ["/tmp/replied.jpg"],
+      MediaUrls: ["/tmp/replied.jpg"],
+      MediaTypes: ["image/jpeg"],
+    };
+
+    pruneStickerMediaFromContext(ctx, { stickerMediaIncluded: false });
+
+    expect(ctx.MediaPath).toBe("/tmp/replied.jpg");
+    expect(ctx.MediaUrl).toBe("/tmp/replied.jpg");
+    expect(ctx.MediaType).toBe("image/jpeg");
+    expect(ctx.MediaPaths).toEqual(["/tmp/replied.jpg"]);
+    expect(ctx.MediaUrls).toEqual(["/tmp/replied.jpg"]);
+    expect(ctx.MediaTypes).toEqual(["image/jpeg"]);
+  });
 });

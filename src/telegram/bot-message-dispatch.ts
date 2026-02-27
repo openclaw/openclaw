@@ -60,14 +60,20 @@ async function resolveStickerVisionSupport(cfg: OpenClawConfig, agentId: string)
   }
 }
 
-export function pruneStickerMediaFromContext(ctxPayload: {
-  MediaPath?: string;
-  MediaUrl?: string;
-  MediaType?: string;
-  MediaPaths?: string[];
-  MediaUrls?: string[];
-  MediaTypes?: string[];
-}) {
+export function pruneStickerMediaFromContext(
+  ctxPayload: {
+    MediaPath?: string;
+    MediaUrl?: string;
+    MediaType?: string;
+    MediaPaths?: string[];
+    MediaUrls?: string[];
+    MediaTypes?: string[];
+  },
+  opts?: { stickerMediaIncluded?: boolean },
+) {
+  if (opts?.stickerMediaIncluded === false) {
+    return;
+  }
   const nextMediaPaths = Array.isArray(ctxPayload.MediaPaths)
     ? ctxPayload.MediaPaths.slice(1)
     : undefined;
@@ -337,7 +343,9 @@ export const dispatchTelegramMessage = async ({
         ctxPayload.Body = formattedDesc;
         ctxPayload.BodyForAgent = formattedDesc;
         // Drop only the sticker attachment; keep replied media context if present.
-        pruneStickerMediaFromContext(ctxPayload);
+        pruneStickerMediaFromContext(ctxPayload, {
+          stickerMediaIncluded: ctxPayload.StickerMediaIncluded,
+        });
       }
 
       // Cache the description for future encounters
