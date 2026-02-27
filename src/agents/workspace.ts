@@ -64,9 +64,24 @@ async function readSymlinkedBootstrapFile(params: {
     }
 
     const realPath = await fs.realpath(params.filePath);
-    fd = await fs.open(realPath, "r");
+
+    // Validate file type BEFORE opening to avoid blocking on FIFOs/special files.
+    const preOpenStat = await fs.lstat(realPath);
+    if (
+      !preOpenStat.isFile() ||
+      preOpenStat.nlink > 1 ||
+      preOpenStat.size > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES
+    ) {
+      return { ok: false, reason: "validation" };
+    }
+
+    fd = await fs.open(realPath, syncFs.constants.O_RDONLY | syncFs.constants.O_NOFOLLOW);
     const stat = await fd.stat();
     if (!stat.isFile() || stat.nlink > 1 || stat.size > MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES) {
+      return { ok: false, reason: "validation" };
+    }
+    // TOCTOU mitigation: ensure the file didn't change between lstat and open.
+    if (preOpenStat.dev !== stat.dev || preOpenStat.ino !== stat.ino) {
       return { ok: false, reason: "validation" };
     }
 
