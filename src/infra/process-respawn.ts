@@ -22,6 +22,29 @@ function isLikelySupervisedProcess(env: NodeJS.ProcessEnv = process.env): boolea
 }
 
 /**
+ * Spawn a detached `launchctl kickstart -k` to force an immediate launchd
+ * restart, bypassing ThrottleInterval.  The -k flag sends SIGTERM to the
+ * current process, so this MUST be non-blocking (spawn, not spawnSync) to
+ * avoid deadlocking — the gateway needs to be free to handle the signal
+ * and exit so launchd can start the replacement.
+ */
+function schedulelaunchdKickstart(label: string): boolean {
+  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+  const target = uid !== undefined ? `gui/${uid}/${label}` : label;
+  try {
+    const child = spawn("launchctl", ["kickstart", "-k", target], {
+      detached: true,
+      stdio: "ignore",
+    });
+    child.on("error", () => {}); // best-effort; suppress uncaught error event
+    child.unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Attempt to restart this process with a fresh PID.
  * - supervised environments (launchd/systemd): caller should exit and let supervisor restart
  * - OPENCLAW_NO_RESPAWN=1: caller should keep in-process restart behavior (tests/dev)
@@ -32,6 +55,11 @@ export function restartGatewayProcessWithFreshPid(): GatewayRespawnResult {
     return { mode: "disabled" };
   }
   if (isLikelySupervisedProcess(process.env)) {
+    // On macOS under launchd, fire a detached kickstart so launchd restarts
+    // us immediately instead of waiting for ThrottleInterval (up to 60s).
+    if (process.platform === "darwin" && process.env.OPENCLAW_LAUNCHD_LABEL?.trim()) {
+      schedulelaunchdKickstart(process.env.OPENCLAW_LAUNCHD_LABEL.trim());
+    }
     return { mode: "supervised" };
   }
 
