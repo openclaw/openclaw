@@ -265,6 +265,7 @@ export class AcpSessionManager {
       const meta: SessionAcpMeta = {
         backend: handle.backend || backend.id,
         agent: resolvedAgent.logicalId,
+        runtimeAgent: resolvedAgent.runtimeId,
         runtimeSessionName: handle.runtimeSessionName,
         identity: initializedIdentity,
         mode: input.mode,
@@ -306,6 +307,7 @@ export class AcpSessionManager {
         handle,
         backend: handle.backend || backend.id,
         agent: resolvedAgent.logicalId,
+        runtimeAgent: resolvedAgent.runtimeId,
         mode: input.mode,
         cwd: effectiveCwd,
       });
@@ -947,7 +949,8 @@ export class AcpSessionManager {
     meta: SessionAcpMeta;
   }): Promise<{ runtime: AcpRuntime; handle: AcpRuntimeHandle; meta: SessionAcpMeta }> {
     const agent =
-      params.meta.agent?.trim() || resolveAcpAgentFromSessionKey(params.sessionKey, "main");
+      (params.meta.runtimeAgent ?? params.meta.agent)?.trim() ||
+      resolveAcpAgentFromSessionKey(params.sessionKey, "main");
     const mode = params.meta.mode;
     const runtimeOptions = resolveRuntimeOptionsFromMeta(params.meta);
     const cwd = runtimeOptions.cwd ?? normalizeText(params.meta.cwd);
@@ -955,7 +958,8 @@ export class AcpSessionManager {
     const cached = this.getCachedRuntimeState(params.sessionKey);
     if (cached) {
       const backendMatches = !configuredBackend || cached.backend === configuredBackend;
-      const agentMatches = cached.agent === agent;
+      // Compare using logical agent ID (fleet name) for cache validity; runtimeAgent may differ.
+      const agentMatches = cached.agent === params.meta.agent;
       const modeMatches = cached.mode === mode;
       const cwdMatches = (cached.cwd ?? "") === (cwd ?? "");
       if (backendMatches && agentMatches && modeMatches && cwdMatches) {
@@ -1050,7 +1054,8 @@ export class AcpSessionManager {
       runtime,
       handle: nextHandle,
       backend: ensured.backend || backend.id,
-      agent,
+      agent: params.meta.agent,
+      runtimeAgent: agent,
       mode,
       cwd: effectiveCwd,
       appliedControlSignature: undefined,

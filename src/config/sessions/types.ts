@@ -37,7 +37,12 @@ export type SessionAcpIdentity = {
 
 export type SessionAcpMeta = {
   backend: string;
+  /** Logical fleet agent ID (e.g. "ibo"). Used for policy checks and metadata. */
   agent: string;
+  /** Runtime-compatible agent name (e.g. "codex"). Used for ensureSession calls including
+   * reattach after idle eviction or process restart. Falls back to \`agent\` when absent
+   * (built-in agents where the two values are identical). */
+  runtimeAgent?: string;
   runtimeSessionName: string;
   identity?: SessionAcpIdentity;
   mode: "persistent" | "oneshot";

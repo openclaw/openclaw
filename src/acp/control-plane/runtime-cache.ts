@@ -5,6 +5,8 @@ export type CachedRuntimeState = {
   handle: AcpRuntimeHandle;
   backend: string;
   agent: string;
+  /** Runtime-compatible agent name. See SessionAcpMeta.runtimeAgent. */
+  runtimeAgent?: string;
   mode: AcpRuntimeSessionMode;
   cwd?: string;
   appliedControlSignature?: string;
