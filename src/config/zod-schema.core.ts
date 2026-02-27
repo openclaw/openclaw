@@ -426,7 +426,7 @@ export const TtsConfigSchema = z
     timeoutMs: z.number().int().min(1000).max(120000).optional(),
     local: z
       .object({
-        command: z.string().optional(),
+        command: z.string(),
         args: z.array(z.string()).optional(),
       })
       .strict()

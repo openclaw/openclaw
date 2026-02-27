@@ -507,9 +507,13 @@ function resolveOutputFormat(channelId?: string | null) {
 }
 
 function resolveChannelId(channel: string | undefined): ChannelId | null {
-  if (!channel) return null;
+  if (!channel) {
+    return null;
+  }
   const normalized = normalizeChannelId(channel);
-  if (normalized) return normalized;
+  if (normalized) {
+    return normalized;
+  }
   // Fall back to raw string when registry lookup fails (e.g. tts tool context)
   return (channel.trim().toLowerCase() as ChannelId) || null;
 }
@@ -682,10 +686,25 @@ export async function textToSpeech(params: {
           Format: ttsFormat,
         };
         const args = (localCfg.args ?? []).map((a) => applyTemplate(a, templCtx));
-        const localResult = await runCommandWithTimeout([localCfg.command, ...args], {
-          timeoutMs: config.timeoutMs,
-        });
+        let localResult: Awaited<ReturnType<typeof runCommandWithTimeout>>;
+        try {
+          localResult = await runCommandWithTimeout([localCfg.command, ...args], {
+            timeoutMs: config.timeoutMs,
+          });
+        } catch (err) {
+          try {
+            rmSync(tempDir, { recursive: true, force: true });
+          } catch {
+            // ignore cleanup errors
+          }
+          throw err;
+        }
         if (localResult.code !== 0) {
+          try {
+            rmSync(tempDir, { recursive: true, force: true });
+          } catch {
+            // ignore cleanup errors
+          }
           throw new Error(localResult.stderr.trim() || "local TTS command failed");
         }
         scheduleCleanup(tempDir);
