@@ -64,15 +64,47 @@ function normalizeKey(key: string): string {
 }
 
 export class PostgresDatastore implements Datastore {
+  private _preloaded = false;
+  private _preloadPromise: Promise<void> | null = null;
+
+  constructor() {
+    // Clear stale cache entries from any previous instance (e.g. test teardown
+    // via setDatastore(null) followed by a fresh instantiation).
+    cache.clear();
+  }
+
+  /**
+   * Kick off a background preload so the cache is warm for future reads.
+   * Safe to call multiple times — only the first invocation triggers a load.
+   */
+  ensurePreloaded(): Promise<void> {
+    if (!this._preloadPromise) {
+      this._preloadPromise = this.preloadAll()
+        .then(() => {
+          this._preloaded = true;
+        })
+        .catch((err) => {
+          console.warn("[postgres-datastore] background preload failed:", err);
+          // Allow retry on next call.
+          this._preloadPromise = null;
+        });
+    }
+    return this._preloadPromise;
+  }
+
   /**
    * Synchronous read from the in-memory write-through cache.
    * Returns null if the key has never been loaded.
    *
-   * Call `preload()` at startup to populate the cache for keys you need
-   * to read synchronously.
+   * Call `preloadAll()` or `ensurePreloaded()` at startup to populate the
+   * cache for keys you need to read synchronously.
    */
   read<T>(key: string): T | null {
     const dbKey = normalizeKey(key);
+    if (!this._preloaded && !cache.has(dbKey)) {
+      // Trigger lazy preload so future reads hit the cache.
+      void this.ensurePreloaded();
+    }
     return (cache.get(dbKey) as T) ?? null;
   }
 
@@ -176,5 +208,6 @@ export class PostgresDatastore implements Datastore {
     for (const row of res.rows) {
       cache.set(row.key, structuredClone(row.data));
     }
+    this._preloaded = true;
   }
 }

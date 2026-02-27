@@ -119,6 +119,6 @@ export function setDatastore(ds: Datastore | null): void {
 export async function initDatastore(): Promise<void> {
   const ds = getDatastore();
   if (ds instanceof PostgresDatastore) {
-    await ds.preloadAll();
+    await ds.ensurePreloaded();
   }
 }

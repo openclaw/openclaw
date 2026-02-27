@@ -457,7 +457,7 @@ export function saveBindingsToDisk(params: { force?: boolean; minIntervalMs?: nu
   };
   void getDatastore()
     .write(resolveThreadBindingsPath(), payload)
-    .catch(() => {});
+    .catch((err) => console.warn("[thread-bindings] failed to persist bindings:", err));
   THREAD_BINDINGS_STATE.lastPersistedAtMs = now;
 }
 

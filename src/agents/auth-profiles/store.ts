@@ -358,7 +358,7 @@ export function loadAuthProfileStore(): AuthProfileStore {
     if (synced) {
       void getDatastore()
         .write(authPath, asStore)
-        .catch(() => {});
+        .catch((err) => log.warn("failed to persist synced auth-profiles", { err }));
     }
     return asStore;
   }
@@ -393,7 +393,7 @@ function loadAuthProfileStoreForAgent(
     if (synced && !readOnly) {
       void getDatastore()
         .write(authPath, asStore)
-        .catch(() => {});
+        .catch((err) => log.warn("failed to persist synced auth-profiles", { err }));
     }
     return asStore;
   }
@@ -407,7 +407,7 @@ function loadAuthProfileStoreForAgent(
       // Clone main store to subagent directory for auth inheritance
       void getDatastore()
         .write(authPath, mainStore)
-        .catch(() => {});
+        .catch((err) => log.warn("failed to persist inherited auth-profiles", { err, agentDir }));
       log.info("inherited auth-profiles from main agent", { agentDir });
       return mainStore;
     }
@@ -429,26 +429,25 @@ function loadAuthProfileStoreForAgent(
   const forceReadOnly = process.env.OPENCLAW_AUTH_STORE_READONLY === "1";
   const shouldWrite = !readOnly && !forceReadOnly && (legacy !== null || mergedOAuth || syncedCli);
   if (shouldWrite) {
+    const deleteLegacy = shouldWrite && legacy !== null;
     void getDatastore()
       .write(authPath, store)
-      .catch(() => {});
-  }
-
-  // PR #368: legacy auth.json could get re-migrated from other agent dirs,
-  // overwriting fresh OAuth creds with stale tokens (fixes #363). Delete only
-  // after we've successfully written auth-profiles.json.
-  if (shouldWrite && legacy !== null) {
-    const legacyPath = resolveLegacyAuthStorePath(agentDir);
-    try {
-      fs.unlinkSync(legacyPath);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
-        log.warn("failed to delete legacy auth.json after migration", {
-          err,
-          legacyPath,
-        });
-      }
-    }
+      .then(() => {
+        // Delete legacy auth.json only after the migrated store is durably saved.
+        // PR #368: legacy auth.json could get re-migrated from other agent dirs,
+        // overwriting fresh OAuth creds with stale tokens (fixes #363).
+        if (deleteLegacy) {
+          const legacyPath = resolveLegacyAuthStorePath(agentDir);
+          try {
+            fs.unlinkSync(legacyPath);
+          } catch (err) {
+            if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+              log.warn("failed to delete legacy auth.json after migration", { err, legacyPath });
+            }
+          }
+        }
+      })
+      .catch((err) => log.warn("failed to persist migrated auth-profiles", { err }));
   }
 
   return store;

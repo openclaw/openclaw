@@ -129,5 +129,5 @@ export function saveSubagentRegistryToDisk(runs: Map<string, SubagentRunRecord>)
   };
   void getDatastore()
     .write(pathname, out)
-    .catch(() => {});
+    .catch((err) => console.warn("[subagent-registry] failed to persist registry:", err));
 }

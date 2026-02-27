@@ -46,7 +46,7 @@ function loadCache(): StickerCache {
 function saveCache(cache: StickerCache): void {
   void getDatastore()
     .write(CACHE_FILE, cache)
-    .catch(() => {});
+    .catch((err) => console.warn("[sticker-cache] failed to persist cache:", err));
 }
 
 /**

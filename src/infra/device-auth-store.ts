@@ -41,7 +41,7 @@ function writeStore(filePath: string, store: DeviceAuthStore): void {
         // no-op — postgres backend has no file to chmod
       }
     })
-    .catch(() => {});
+    .catch((err) => console.warn("[device-auth] failed to persist token store:", err));
 }
 
 export function loadDeviceAuthToken(params: {
