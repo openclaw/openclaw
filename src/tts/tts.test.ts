@@ -987,9 +987,8 @@ describe("tts", () => {
       });
 
       it("sets voiceCompatible false for non-Telegram .mp3 output", async () => {
-        // .mp3 is in TELEGRAM_VOICE_AUDIO_EXTENSIONS so voiceCompatible is true
-        // (it can be sent as voice in capable channels); the Telegram-specific
-        // audioAsVoice flag is gated separately by channelId in maybeApplyTtsToPayload.
+        // Keep parity with cloud providers: non-Telegram outputs should not
+        // advertise voice compatibility, even when the extension is voice-capable.
         const result = await tts.textToSpeech({
           text: "Hello world",
           cfg: baseCfg(),
@@ -998,7 +997,7 @@ describe("tts", () => {
         });
 
         expect(result.success).toBe(true);
-        expect(result.voiceCompatible).toBe(true);
+        expect(result.voiceCompatible).toBe(false);
         expect(result.audioPath).toMatch(/\.mp3$/);
       });
 

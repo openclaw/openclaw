@@ -724,7 +724,8 @@ export async function textToSpeech(params: {
           continue;
         }
         scheduleCleanup(tempDir);
-        const voiceCompatible = isVoiceCompatibleAudio({ fileName: audioPath });
+        const voiceCompatible =
+          channelId === "telegram" ? isVoiceCompatibleAudio({ fileName: audioPath }) : false;
         return {
           success: true,
           audioPath,
