@@ -20,7 +20,7 @@ const DEFAULT_CONTEXT_WINDOW = 16000;
 const DEFAULT_MAX_TOKENS = 4096;
 const MIN_CONTEXT_WINDOW = 16000;
 const MIN_MAX_TOKENS = 1000;
-const VERIFY_TIMEOUT_MS = 10000;
+const VERIFY_TIMEOUT_MS = 30_000;
 
 /**
  * Detects if a URL is from Azure AI Foundry or Azure OpenAI.
@@ -323,7 +323,8 @@ async function requestOpenAiVerification(params: {
     body: {
       model: params.modelId,
       messages: [{ role: "user", content: "Hi" }],
-      max_tokens: 1024,
+      max_tokens: 1,
+      stream: false,
     },
   });
 }
@@ -349,8 +350,9 @@ async function requestAnthropicVerification(params: {
     headers: buildAnthropicHeaders(params.apiKey),
     body: {
       model: params.modelId,
-      max_tokens: 1024,
+      max_tokens: 1,
       messages: [{ role: "user", content: "Hi" }],
+      stream: false,
     },
   });
 }
