@@ -305,6 +305,18 @@ export const ToolsWebSearchSchema = z
   .strict()
   .optional();
 
+const FirecrawlSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    apiKey: z.string().optional(),
+    baseUrl: z.string().optional(),
+    onlyMainContent: z.boolean().optional(),
+    maxAgeMs: z.number().nonnegative().optional(),
+    timeoutSeconds: z.number().positive().optional(),
+  })
+  .strict()
+  .optional();
+
 export const ToolsWebFetchSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -314,6 +326,8 @@ export const ToolsWebFetchSchema = z
     cacheTtlMinutes: z.number().nonnegative().optional(),
     maxRedirects: z.number().int().nonnegative().optional(),
     userAgent: z.string().optional(),
+    readability: z.boolean().optional(),
+    firecrawl: FirecrawlSchema,
   })
   .strict()
   .optional();

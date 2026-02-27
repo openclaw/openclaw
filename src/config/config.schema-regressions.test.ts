@@ -130,4 +130,55 @@ describe("config schema regressions", () => {
       expect(res.issues[0]?.path).toBe("channels.imessage.attachmentRoots.0");
     }
   });
+
+  it("accepts tools.web.fetch.firecrawl config block (#27833)", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          fetch: {
+            firecrawl: {
+              enabled: true,
+              apiKey: "fc-test",
+              baseUrl: "https://api.firecrawl.dev",
+              onlyMainContent: true,
+              maxAgeMs: 172800000,
+              timeoutSeconds: 60,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts tools.web.fetch.readability config key", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          fetch: {
+            readability: false,
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
+  it("rejects invalid firecrawl config keys (strict mode)", () => {
+    const res = validateConfigObject({
+      tools: {
+        web: {
+          fetch: {
+            firecrawl: {
+              unknownKey: true,
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(false);
+  });
 });
