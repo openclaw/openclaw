@@ -42,7 +42,7 @@ const ACK_ONLY_PATTERNS = [
 ] as const;
 
 const RESULT_LIKE_PATTERNS = [
-  /\b(done|completed|finished|here(?:'|’)s|result|output|found|fixed|updated)\b/i,
+  /\b(done|completed|finished|here(?:'|’)s|result|found|fixed|updated)\b/i,
   /```/,
   /\n\s*[-*]\s+/,
 ] as const;

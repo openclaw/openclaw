@@ -218,4 +218,23 @@ describe("tool-required retry guard", () => {
 
     expect(shouldRetry).toBe(false);
   });
+
+  it("does retry ack-only text that mentions output before doing work", () => {
+    const shouldRetry = shouldRetryToolRequiredToolless({
+      provider: "openai-codex",
+      prompt: "Run tests, inspect output, and fix the file in this repo.",
+      assistantTexts: ["I'll inspect the output and fix the file now."],
+      lastAssistant: { stopReason: "end_turn", content: [] } as never,
+      toolMetas: [],
+      didSendViaMessagingTool: false,
+      hasClientToolCall: false,
+      disableTools: false,
+      promptError: null,
+      aborted: false,
+      timedOut: false,
+      timedOutDuringCompaction: false,
+    });
+
+    expect(shouldRetry).toBe(true);
+  });
 });
