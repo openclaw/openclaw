@@ -55,68 +55,103 @@ export function resolveModel(
   const modelRegistry = discoverModels(authStorage, resolvedAgentDir);
   const model = modelRegistry.find(provider, modelId) as Model<Api> | null;
 
-  if (!model) {
-    const providers = cfg?.models?.providers ?? {};
-    const inlineModels = buildInlineProviderModels(providers);
-    const normalizedProvider = normalizeProviderId(provider);
-    const inlineMatch = inlineModels.find(
-      (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
-    );
-    if (inlineMatch) {
-      const normalized = normalizeModelCompat(inlineMatch as Model<Api>);
-      return {
-        model: normalized,
-        authStorage,
-        modelRegistry,
-      };
-    }
-    // Forward-compat fallbacks must be checked BEFORE the generic providerCfg fallback.
-    // Otherwise, configured providers can default to a generic API and break specific transports.
-    const forwardCompat = resolveForwardCompatModel(provider, modelId, modelRegistry);
-    if (forwardCompat) {
-      return { model: forwardCompat, authStorage, modelRegistry };
-    }
-    // OpenRouter is a pass-through proxy — any model ID available on OpenRouter
-    // should work without being pre-registered in the local catalog.
-    if (normalizedProvider === "openrouter") {
-      const fallbackModel: Model<Api> = normalizeModelCompat({
-        id: modelId,
-        name: modelId,
-        api: "openai-completions",
-        provider,
-        baseUrl: "https://openrouter.ai/api/v1",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: DEFAULT_CONTEXT_TOKENS,
-        // Align with OPENROUTER_DEFAULT_MAX_TOKENS in models-config.providers.ts
-        maxTokens: 8192,
-      } as Model<Api>);
-      return { model: fallbackModel, authStorage, modelRegistry };
-    }
-    const providerCfg = providers[provider];
-    if (providerCfg || modelId.startsWith("mock-")) {
-      const fallbackModel: Model<Api> = normalizeModelCompat({
-        id: modelId,
-        name: modelId,
-        api: providerCfg?.api ?? "openai-responses",
-        provider,
-        baseUrl: providerCfg?.baseUrl,
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: providerCfg?.models?.[0]?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
-        maxTokens: providerCfg?.models?.[0]?.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
-      } as Model<Api>);
-      return { model: fallbackModel, authStorage, modelRegistry };
-    }
+  const providers = cfg?.models?.providers ?? {};
+
+  if (model) {
+    const overridden = applyProviderApiOverride(model, provider, providers);
+    return { model: normalizeModelCompat(overridden), authStorage, modelRegistry };
+  }
+
+  const inlineModels = buildInlineProviderModels(providers);
+  const normalizedProvider = normalizeProviderId(provider);
+  const inlineMatch = inlineModels.find(
+    (entry) => normalizeProviderId(entry.provider) === normalizedProvider && entry.id === modelId,
+  );
+  if (inlineMatch) {
+    const normalized = normalizeModelCompat(inlineMatch as Model<Api>);
     return {
-      error: buildUnknownModelError(provider, modelId),
+      model: normalized,
       authStorage,
       modelRegistry,
     };
   }
-  return { model: normalizeModelCompat(model), authStorage, modelRegistry };
+  // Forward-compat fallbacks must be checked BEFORE the generic providerCfg fallback.
+  // Otherwise, configured providers can default to a generic API and break specific transports.
+  const forwardCompat = resolveForwardCompatModel(provider, modelId, modelRegistry);
+  if (forwardCompat) {
+    const overridden = applyProviderApiOverride(forwardCompat, provider, providers);
+    return { model: overridden, authStorage, modelRegistry };
+  }
+  // OpenRouter is a pass-through proxy — any model ID available on OpenRouter
+  // should work without being pre-registered in the local catalog.
+  if (normalizedProvider === "openrouter") {
+    const fallbackModel: Model<Api> = normalizeModelCompat({
+      id: modelId,
+      name: modelId,
+      api: "openai-completions",
+      provider,
+      baseUrl: "https://openrouter.ai/api/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: DEFAULT_CONTEXT_TOKENS,
+      // Align with OPENROUTER_DEFAULT_MAX_TOKENS in models-config.providers.ts
+      maxTokens: 8192,
+    } as Model<Api>);
+    return { model: fallbackModel, authStorage, modelRegistry };
+  }
+  const providerCfg = providers[provider];
+  if (providerCfg || modelId.startsWith("mock-")) {
+    const fallbackModel: Model<Api> = normalizeModelCompat({
+      id: modelId,
+      name: modelId,
+      api: providerCfg?.api ?? "openai-responses",
+      provider,
+      baseUrl: providerCfg?.baseUrl,
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: providerCfg?.models?.[0]?.contextWindow ?? DEFAULT_CONTEXT_TOKENS,
+      maxTokens: providerCfg?.models?.[0]?.maxTokens ?? DEFAULT_CONTEXT_TOKENS,
+    } as Model<Api>);
+    return { model: fallbackModel, authStorage, modelRegistry };
+  }
+  return {
+    error: buildUnknownModelError(provider, modelId),
+    authStorage,
+    modelRegistry,
+  };
+}
+
+/**
+ * When the user's provider config specifies an explicit `api` override,
+ * apply it to the resolved model. This lets e.g. openai-codex users switch
+ * from `openai-codex-responses` to `openai-completions` when their OAuth
+ * token lacks required scopes (api.responses.write).
+ *
+ * When the API type changes, the model's existing baseUrl (e.g.
+ * chatgpt.com/backend-api for codex-responses) is likely incompatible with
+ * the new API. Use the user's explicit baseUrl from config, or clear it so
+ * pi-ai resolves the default endpoint for the target API.
+ *
+ * @internal Exported for testing only
+ */
+export function applyProviderApiOverride(
+  model: Model<Api>,
+  provider: string,
+  providers: Record<string, InlineProviderConfig>,
+): Model<Api> {
+  const providerCfg = providers[provider];
+  if (!providerCfg?.api || providerCfg.api === model.api) {
+    return model;
+  }
+  const overridden = { ...model, api: providerCfg.api } as Model<Api>;
+  if (providerCfg.baseUrl) {
+    (overridden as unknown as Record<string, unknown>).baseUrl = providerCfg.baseUrl;
+  } else {
+    delete (overridden as unknown as Record<string, unknown>).baseUrl;
+  }
+  return overridden;
 }
 
 /**

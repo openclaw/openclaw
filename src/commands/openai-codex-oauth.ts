@@ -1,5 +1,5 @@
 import type { OAuthCredentials } from "@mariozechner/pi-ai";
-import { loginOpenAICodex } from "@mariozechner/pi-ai";
+import { loginOpenAICodexEnhanced } from "../agents/openai-codex-enhanced-oauth.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { createVpsAwareOAuthHandlers } from "./oauth-flow.js";
@@ -39,7 +39,7 @@ export async function loginOpenAICodexOAuth(params: {
       localBrowserMessage: localBrowserMessage ?? "Complete sign-in in browser…",
     });
 
-    const creds = await loginOpenAICodex({
+    const creds = await loginOpenAICodexEnhanced({
       onAuth,
       onPrompt,
       onProgress: (msg) => spin.update(msg),

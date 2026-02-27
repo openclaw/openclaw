@@ -6,12 +6,13 @@ vi.mock("../pi-model-discovery.js", () => ({
 }));
 
 import type { OpenClawConfig } from "../../config/config.js";
-import { buildInlineProviderModels, resolveModel } from "./model.js";
+import { applyProviderApiOverride, buildInlineProviderModels, resolveModel } from "./model.js";
 import {
   buildOpenAICodexForwardCompatExpectation,
   makeModel,
   mockDiscoveredModel,
   mockOpenAICodexTemplateModel,
+  OPENAI_CODEX_TEMPLATE_MODEL,
   resetMockDiscoverModels,
 } from "./model.test-harness.js";
 
@@ -323,5 +324,170 @@ describe("resolveModel", () => {
 
     expect(result.model).toBeUndefined();
     expect(result.error).toBe("Unknown model: google-antigravity/some-model");
+  });
+
+  it("applies provider-level api override to registry models (#27055)", () => {
+    mockDiscoveredModel({
+      provider: "openai-codex",
+      modelId: "gpt-5.2",
+      templateModel: {
+        ...OPENAI_CODEX_TEMPLATE_MODEL,
+        id: "gpt-5.2",
+        name: "GPT-5.2",
+      },
+    });
+
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          "openai-codex": {
+            api: "openai-completions",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("openai-codex", "gpt-5.2", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      id: "gpt-5.2",
+      provider: "openai-codex",
+      api: "openai-completions",
+    });
+    // Provider-specific baseUrl should be cleared when switching API
+    expect(result.model?.baseUrl).toBeUndefined();
+  });
+
+  it("applies provider-level api + baseUrl override to registry models", () => {
+    mockDiscoveredModel({
+      provider: "openai-codex",
+      modelId: "gpt-5",
+      templateModel: {
+        ...OPENAI_CODEX_TEMPLATE_MODEL,
+        id: "gpt-5",
+        name: "GPT-5",
+      },
+    });
+
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          "openai-codex": {
+            api: "openai-completions",
+            baseUrl: "https://custom.example.com/v1",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("openai-codex", "gpt-5", "/tmp/agent", cfg);
+
+    expect(result.model).toMatchObject({
+      id: "gpt-5",
+      api: "openai-completions",
+      baseUrl: "https://custom.example.com/v1",
+    });
+  });
+
+  it("does not override api when provider config matches registry", () => {
+    mockDiscoveredModel({
+      provider: "openai-codex",
+      modelId: "gpt-5.2-codex",
+      templateModel: OPENAI_CODEX_TEMPLATE_MODEL,
+    });
+
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          "openai-codex": {
+            api: "openai-codex-responses",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("openai-codex", "gpt-5.2-codex", "/tmp/agent", cfg);
+
+    expect(result.model).toMatchObject({
+      id: "gpt-5.2-codex",
+      api: "openai-codex-responses",
+      baseUrl: "https://chatgpt.com/backend-api",
+    });
+  });
+
+  it("applies provider api override to forward-compat fallback models", () => {
+    mockOpenAICodexTemplateModel();
+
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: {
+          "openai-codex": {
+            api: "openai-completions",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModel("openai-codex", "gpt-5.3-codex", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expect(result.model).toMatchObject({
+      id: "gpt-5.3-codex",
+      provider: "openai-codex",
+      api: "openai-completions",
+    });
+    expect(result.model?.baseUrl).toBeUndefined();
+  });
+});
+
+describe("applyProviderApiOverride", () => {
+  const toModel = () =>
+    ({ ...OPENAI_CODEX_TEMPLATE_MODEL }) as unknown as Parameters<
+      typeof applyProviderApiOverride
+    >[0];
+
+  it("returns model unchanged when no provider config exists", () => {
+    const model = toModel();
+    const result = applyProviderApiOverride(model, "openai-codex", {});
+    expect(result).toBe(model);
+  });
+
+  it("returns model unchanged when provider config has no api", () => {
+    const model = toModel();
+    const result = applyProviderApiOverride(model, "openai-codex", {
+      "openai-codex": { baseUrl: "https://example.com" },
+    });
+    expect(result).toBe(model);
+  });
+
+  it("returns model unchanged when provider api matches", () => {
+    const model = toModel();
+    // Model's api is "openai-codex-responses" (pi-ai extension, not in ModelApi union).
+    // Simulate a matching config by overriding the model's api to a known ModelApi value.
+    model.api = "openai-completions";
+    const result = applyProviderApiOverride(model, "openai-codex", {
+      "openai-codex": { api: "openai-completions" },
+    });
+    expect(result).toBe(model);
+  });
+
+  it("overrides api and clears baseUrl", () => {
+    const model = toModel();
+    const result = applyProviderApiOverride(model, "openai-codex", {
+      "openai-codex": { api: "openai-completions" },
+    });
+    expect(result.api).toBe("openai-completions");
+    expect(result.baseUrl).toBeUndefined();
+    expect(result.id).toBe("gpt-5.2-codex");
+  });
+
+  it("overrides api and uses explicit baseUrl from config", () => {
+    const model = toModel();
+    const result = applyProviderApiOverride(model, "openai-codex", {
+      "openai-codex": { api: "openai-completions", baseUrl: "https://custom.example.com" },
+    });
+    expect(result.api).toBe("openai-completions");
+    expect(result.baseUrl).toBe("https://custom.example.com");
   });
 });

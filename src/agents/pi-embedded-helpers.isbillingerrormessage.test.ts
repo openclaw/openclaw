@@ -514,6 +514,9 @@ describe("classifyFailoverReason", () => {
       ),
     ).toBe("rate_limit");
   });
+  it("classifies OAuth accountId extraction failure as auth (#27055)", () => {
+    expect(classifyFailoverReason("Failed to extract accountId from token")).toBe("auth");
+  });
   it("classifies permanent auth errors as auth_permanent", () => {
     expect(classifyFailoverReason("invalid_api_key")).toBe("auth_permanent");
     expect(classifyFailoverReason("Your api key has been revoked")).toBe("auth_permanent");

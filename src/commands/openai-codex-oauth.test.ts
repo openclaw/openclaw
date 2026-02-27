@@ -3,12 +3,12 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 
 const mocks = vi.hoisted(() => ({
-  loginOpenAICodex: vi.fn(),
+  loginOpenAICodexEnhanced: vi.fn(),
   createVpsAwareOAuthHandlers: vi.fn(),
 }));
 
-vi.mock("@mariozechner/pi-ai", () => ({
-  loginOpenAICodex: mocks.loginOpenAICodex,
+vi.mock("../agents/openai-codex-enhanced-oauth.js", () => ({
+  loginOpenAICodexEnhanced: mocks.loginOpenAICodexEnhanced,
 }));
 
 vi.mock("./oauth-flow.js", () => ({
@@ -53,7 +53,7 @@ describe("loginOpenAICodexOAuth", () => {
       onAuth: vi.fn(),
       onPrompt: vi.fn(),
     });
-    mocks.loginOpenAICodex.mockResolvedValue(creds);
+    mocks.loginOpenAICodexEnhanced.mockResolvedValue(creds);
 
     const { prompter, spin } = createPrompter();
     const runtime = createRuntime();
@@ -65,7 +65,7 @@ describe("loginOpenAICodexOAuth", () => {
     });
 
     expect(result).toEqual(creds);
-    expect(mocks.loginOpenAICodex).toHaveBeenCalledOnce();
+    expect(mocks.loginOpenAICodexEnhanced).toHaveBeenCalledOnce();
     expect(spin.stop).toHaveBeenCalledWith("OpenAI OAuth complete");
     expect(runtime.error).not.toHaveBeenCalled();
   });
@@ -75,7 +75,7 @@ describe("loginOpenAICodexOAuth", () => {
       onAuth: vi.fn(),
       onPrompt: vi.fn(),
     });
-    mocks.loginOpenAICodex.mockRejectedValue(new Error("oauth failed"));
+    mocks.loginOpenAICodexEnhanced.mockRejectedValue(new Error("oauth failed"));
 
     const { prompter, spin } = createPrompter();
     const runtime = createRuntime();
