@@ -16,7 +16,7 @@ describe("vivgrid-models", () => {
     expect(provider.baseUrl).toBe(VIVGRID_BASE_URL);
     expect(provider.api).toBe("openai-completions");
     expect(provider.models).toHaveLength(1);
-    expect(provider.models[0]?.id).toBe("auto");
+    expect(provider.models[0]?.id).toBe("gpt-5-mini");
   });
 
   it("maps discovered model ids to model-level APIs by naming rules", async () => {
@@ -56,7 +56,7 @@ describe("vivgrid-models", () => {
 
       const provider = await buildVivgridProviderWithDiscovery();
 
-      expect(provider.models.map((m) => m.id)).toEqual(["auto"]);
+      expect(provider.models.map((m) => m.id)).toEqual(["gpt-5-mini"]);
       expect(provider.api).toBe("openai-completions");
     });
   });
