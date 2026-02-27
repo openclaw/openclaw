@@ -584,7 +584,7 @@ describe("onboard (non-interactive): provider auth", () => {
       expect(cfg.auth?.profiles?.["vivgrid:default"]?.mode).toBe("api_key");
       expect(cfg.models?.providers?.vivgrid?.baseUrl).toBe(VIVGRID_BASE_URL);
       expect(cfg.models?.providers?.vivgrid?.api).toBe("openai-completions");
-      expect(cfg.agents?.defaults?.model?.primary).toBe("vivgrid/auto");
+      expect(cfg.agents?.defaults?.model?.primary).toBe("vivgrid/gpt-5-mini");
       await expectApiKeyProfile({
         profileId: "vivgrid:default",
         provider: "vivgrid",

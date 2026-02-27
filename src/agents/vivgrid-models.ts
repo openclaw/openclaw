@@ -6,7 +6,7 @@ type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 type ProviderConfig = NonNullable<ModelsConfig["providers"]>[string];
 
 export const VIVGRID_BASE_URL = "https://api.vivgrid.com/v1";
-export const VIVGRID_DEFAULT_MODEL_ID = "auto";
+export const VIVGRID_DEFAULT_MODEL_ID = "gpt-5-mini";
 const VIVGRID_DEFAULT_CONTEXT_WINDOW = 262144;
 const VIVGRID_DEFAULT_MAX_TOKENS = 32768;
 const VIVGRID_DEFAULT_COST = {
@@ -132,7 +132,7 @@ async function discoverVivgridModels(
       return [];
     }
 
-    return models
+    const discoveredModels = models
       .map((model) => ({
         id: typeof model.id === "string" ? model.id.trim() : "",
         api: inferVivgridModelApi(model),
@@ -156,6 +156,18 @@ async function discoverVivgridModels(
           maxTokens: VIVGRID_DEFAULT_MAX_TOKENS,
         } satisfies ModelDefinitionConfig;
       });
+
+    if (discoveredModels.length === 1) {
+      const onlyModel = discoveredModels[0];
+      const resolvedApi = onlyModel?.api ?? "openai-completions";
+      log.info(`Vivgrid discovered model ${onlyModel?.id} (api: ${resolvedApi}).`);
+    } else if (discoveredModels.length > 1) {
+      log.info(
+        `Vivgrid discovered ${discoveredModels.length} models; API is determined by the selected model.`,
+      );
+    }
+
+    return discoveredModels;
   } catch (error) {
     log.warn(`Failed to discover Vivgrid models: ${String(error)}`);
     return [];
@@ -169,7 +181,7 @@ export function buildVivgridProvider(): ProviderConfig {
     models: [
       {
         id: VIVGRID_DEFAULT_MODEL_ID,
-        name: "Vivgrid Auto",
+        name: "Vivgrid GPT-5 mini",
         reasoning: true,
         input: ["text", "image"],
         cost: VIVGRID_DEFAULT_COST,
