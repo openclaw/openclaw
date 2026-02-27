@@ -36,7 +36,7 @@ describe("secret-wallet plugin registration", () => {
     const registered = collectRegisteredTools();
     const names = registered.map((entry) => entry.tool?.name).filter(Boolean);
     expect(names).toEqual(["secret_wallet_status", "secret_wallet_list", "secret_wallet_get"]);
-    expect(registered.every((entry) => entry.optional === true)).toBe(true);
+    expect(registered.every((entry) => entry.optional === undefined)).toBe(true);
   });
 
   it("registers all gated tools when enabled", () => {
@@ -48,6 +48,15 @@ describe("secret-wallet plugin registration", () => {
     expect(names).toContain("secret_wallet_add");
     expect(names).toContain("secret_wallet_remove");
     expect(names).toContain("secret_wallet_inject");
+    expect(
+      registered
+        .filter((entry) =>
+          ["secret_wallet_add", "secret_wallet_remove", "secret_wallet_inject"].includes(
+            entry.tool?.name ?? "",
+          ),
+        )
+        .every((entry) => entry.optional === true),
+    ).toBe(true);
   });
 
   it("returns null tools in sandbox mode", () => {

@@ -33,13 +33,10 @@ export default function register(api: PluginApi) {
   const injectTool = createSecretWalletInjectTool(config);
 
   for (const tool of readTools) {
-    api.registerTool(
-      (ctx) => {
-        if (ctx.sandboxed) return null;
-        return tool;
-      },
-      { optional: true },
-    );
+    api.registerTool((ctx) => {
+      if (ctx.sandboxed) return null;
+      return tool;
+    });
   }
 
   if (config.allowWriteTools) {

@@ -164,6 +164,7 @@ function createInjectTool(config: PluginConfig) {
       "Run a command with only selected secrets injected via --only filters. Does not load all secrets by default.",
     parameters: Type.Object({
       command: Type.Array(Type.String(), {
+        minItems: 1,
         description: "Command and arguments (for example ['node', 'server.js'])",
       }),
       secretNames: Type.Array(Type.String(), {

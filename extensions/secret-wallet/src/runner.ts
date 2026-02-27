@@ -41,6 +41,7 @@ export async function runSecretWallet(
 
     let stdout = "";
     let stdoutBytes = 0;
+    let killedForSize = false;
     let stderr = "";
 
     child.stdout?.setEncoding("utf8");
@@ -49,6 +50,7 @@ export async function runSecretWallet(
     child.stdout?.on("data", (chunk: string) => {
       stdoutBytes += Buffer.byteLength(chunk, "utf8");
       if (stdoutBytes > maxStdoutBytes) {
+        killedForSize = true;
         child.kill("SIGKILL");
         return;
       }
@@ -79,6 +81,14 @@ export async function runSecretWallet(
       if (exitCode === 0) {
         resolve({ ok: true, stdout, exitCode });
       } else {
+        if (killedForSize) {
+          resolve({
+            ok: false,
+            error: `Output exceeded ${maxStdoutBytes} bytes limit`,
+            exitCode,
+          });
+          return;
+        }
         resolve({
           ok: false,
           error: stderr.trim() || `secret-wallet exited with code ${exitCode}`,
