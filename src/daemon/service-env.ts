@@ -236,12 +236,13 @@ export function buildServiceEnvironment(params: {
   port: number;
   token?: string;
   launchdLabel?: string;
+  platform?: NodeJS.Platform;
 }): Record<string, string | undefined> {
   const { env, port, token, launchdLabel } = params;
+  const platform = params.platform ?? process.platform;
   const profile = env.OPENCLAW_PROFILE;
   const resolvedLaunchdLabel =
-    launchdLabel ||
-    (process.platform === "darwin" ? resolveGatewayLaunchAgentLabel(profile) : undefined);
+    launchdLabel || (platform === "darwin" ? resolveGatewayLaunchAgentLabel(profile) : undefined);
   const systemdUnit = `${resolveGatewaySystemdServiceName(profile)}.service`;
   const stateDir = env.OPENCLAW_STATE_DIR;
   const configPath = env.OPENCLAW_CONFIG_PATH;
@@ -252,7 +253,7 @@ export function buildServiceEnvironment(params: {
   // cannot locate the system CA bundle. Default to /etc/ssl/cert.pem so TLS verification
   // works correctly when running as a LaunchAgent without extra user configuration.
   const nodeCaCerts =
-    env.NODE_EXTRA_CA_CERTS ?? (process.platform === "darwin" ? "/etc/ssl/cert.pem" : undefined);
+    env.NODE_EXTRA_CA_CERTS ?? (platform === "darwin" ? "/etc/ssl/cert.pem" : undefined);
   return {
     HOME: env.HOME,
     TMPDIR: tmpDir,
@@ -274,8 +275,10 @@ export function buildServiceEnvironment(params: {
 
 export function buildNodeServiceEnvironment(params: {
   env: Record<string, string | undefined>;
+  platform?: NodeJS.Platform;
 }): Record<string, string | undefined> {
   const { env } = params;
+  const platform = params.platform ?? process.platform;
   const stateDir = env.OPENCLAW_STATE_DIR;
   const configPath = env.OPENCLAW_CONFIG_PATH;
   const tmpDir = env.TMPDIR?.trim() || os.tmpdir();
@@ -284,7 +287,7 @@ export function buildNodeServiceEnvironment(params: {
   // cannot locate the system CA bundle. Default to /etc/ssl/cert.pem so TLS verification
   // works correctly when running as a LaunchAgent without extra user configuration.
   const nodeCaCerts =
-    env.NODE_EXTRA_CA_CERTS ?? (process.platform === "darwin" ? "/etc/ssl/cert.pem" : undefined);
+    env.NODE_EXTRA_CA_CERTS ?? (platform === "darwin" ? "/etc/ssl/cert.pem" : undefined);
   return {
     HOME: env.HOME,
     TMPDIR: tmpDir,
