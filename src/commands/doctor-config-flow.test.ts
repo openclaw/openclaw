@@ -198,11 +198,11 @@ describe("doctor config flow", () => {
       };
       expect(cfg.channels.telegram.allowFrom).toBeUndefined();
       expect(cfg.channels.telegram.groupAllowFrom).toBeUndefined();
-      expect(cfg.channels.telegram.accounts.default.allowFrom).toEqual(["111"]);
-      expect(cfg.channels.telegram.accounts.default.groupAllowFrom).toEqual(["222"]);
       expect(cfg.channels.telegram.groups["-100123"].allowFrom).toEqual(["333"]);
       expect(cfg.channels.telegram.groups["-100123"].topics["99"].allowFrom).toEqual(["444"]);
       expect(cfg.channels.telegram.accounts.alerts.allowFrom).toEqual(["444"]);
+      expect(cfg.channels.telegram.accounts.default.allowFrom).toEqual(["111"]);
+      expect(cfg.channels.telegram.accounts.default.groupAllowFrom).toEqual(["222"]);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -261,11 +261,23 @@ describe("doctor config flow", () => {
       });
 
       const cfg = result.cfg as unknown as {
-        channels: { discord: RepairedDiscordPolicy };
+        channels: {
+          discord: Omit<RepairedDiscordPolicy, "allowFrom"> & {
+            allowFrom?: string[];
+            accounts: Record<string, DiscordAccountRule> & {
+              default: { allowFrom: string[] };
+              work: {
+                allowFrom: string[];
+                dm: { allowFrom: string[]; groupChannels: string[] };
+                execApprovals: { approvers: string[] };
+                guilds: Record<string, DiscordGuildRule>;
+              };
+            };
+          };
+        };
       };
 
       expect(cfg.channels.discord.allowFrom).toBeUndefined();
-      expect(cfg.channels.discord.accounts.default.allowFrom).toEqual(["123"]);
       expect(cfg.channels.discord.dm.allowFrom).toEqual(["456"]);
       expect(cfg.channels.discord.dm.groupChannels).toEqual(["789"]);
       expect(cfg.channels.discord.execApprovals.approvers).toEqual(["321"]);
@@ -273,6 +285,7 @@ describe("doctor config flow", () => {
       expect(cfg.channels.discord.guilds["100"].roles).toEqual(["222"]);
       expect(cfg.channels.discord.guilds["100"].channels.general.users).toEqual(["333"]);
       expect(cfg.channels.discord.guilds["100"].channels.general.roles).toEqual(["444"]);
+      expect(cfg.channels.discord.accounts.default.allowFrom).toEqual(["123"]);
       expect(cfg.channels.discord.accounts.work.allowFrom).toEqual(["555"]);
       const workAccount = cfg.channels.discord.accounts.work;
       expect(workAccount.dm).toBeDefined();
@@ -286,6 +299,35 @@ describe("doctor config flow", () => {
       expect(workAccount.guilds?.["200"]?.channels?.help?.users).toEqual(["1111"]);
       expect(workAccount.guilds?.["200"]?.channels?.help?.roles).toEqual(["1212"]);
     });
+  });
+
+  it("does not restore top-level allowFrom when config is intentionally default-account scoped", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        channels: {
+          discord: {
+            accounts: {
+              default: { token: "discord-default-token", allowFrom: ["123"] },
+              work: { token: "discord-work-token" },
+            },
+          },
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    const cfg = result.cfg as {
+      channels: {
+        discord: {
+          allowFrom?: string[];
+          accounts: Record<string, { allowFrom?: string[] }>;
+        };
+      };
+    };
+
+    expect(cfg.channels.discord.allowFrom).toBeUndefined();
+    expect(cfg.channels.discord.accounts.default.allowFrom).toEqual(["123"]);
   });
 
   it('adds allowFrom ["*"] when dmPolicy="open" and allowFrom is missing on repair', async () => {
@@ -408,6 +450,50 @@ describe("doctor config flow", () => {
       };
     };
     expect(cfg.channels.discord.accounts.work.allowFrom).toEqual(["*"]);
+  });
+
+  it('repairs dmPolicy="allowlist" by restoring allowFrom from pairing store on repair', async () => {
+    const result = await withTempHome(async (home) => {
+      const configDir = path.join(home, ".openclaw");
+      const credentialsDir = path.join(configDir, "credentials");
+      await fs.mkdir(credentialsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(configDir, "openclaw.json"),
+        JSON.stringify(
+          {
+            channels: {
+              telegram: {
+                botToken: "fake-token",
+                dmPolicy: "allowlist",
+              },
+            },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(credentialsDir, "telegram-allowFrom.json"),
+        JSON.stringify({ version: 1, allowFrom: ["12345"] }, null, 2),
+        "utf-8",
+      );
+      return await loadAndMaybeMigrateDoctorConfig({
+        options: { nonInteractive: true, repair: true },
+        confirm: async () => false,
+      });
+    });
+
+    const cfg = result.cfg as {
+      channels: {
+        telegram: {
+          dmPolicy: string;
+          allowFrom: string[];
+        };
+      };
+    };
+    expect(cfg.channels.telegram.dmPolicy).toBe("allowlist");
+    expect(cfg.channels.telegram.allowFrom).toEqual(["12345"]);
   });
 
   it("migrates legacy toolsBySender keys to typed id entries on repair", async () => {

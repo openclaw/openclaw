@@ -9,6 +9,7 @@ export type RequestExecApprovalDecisionParams = {
   id: string;
   command: string;
   commandArgv?: string[];
+  env?: Record<string, string>;
   cwd: string;
   nodeId?: string;
   host: "gateway" | "node";
@@ -17,7 +18,57 @@ export type RequestExecApprovalDecisionParams = {
   agentId?: string;
   resolvedPath?: string;
   sessionKey?: string;
+  turnSourceChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
 };
+
+type ExecApprovalRequestToolParams = {
+  id: string;
+  command: string;
+  commandArgv?: string[];
+  env?: Record<string, string>;
+  cwd: string;
+  nodeId?: string;
+  host: "gateway" | "node";
+  security: ExecSecurity;
+  ask: ExecAsk;
+  agentId?: string;
+  resolvedPath?: string;
+  sessionKey?: string;
+  turnSourceChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
+  timeoutMs: number;
+  twoPhase: true;
+};
+
+function buildExecApprovalRequestToolParams(
+  params: RequestExecApprovalDecisionParams,
+): ExecApprovalRequestToolParams {
+  return {
+    id: params.id,
+    command: params.command,
+    commandArgv: params.commandArgv,
+    env: params.env,
+    cwd: params.cwd,
+    nodeId: params.nodeId,
+    host: params.host,
+    security: params.security,
+    ask: params.ask,
+    agentId: params.agentId,
+    resolvedPath: params.resolvedPath,
+    sessionKey: params.sessionKey,
+    turnSourceChannel: params.turnSourceChannel,
+    turnSourceTo: params.turnSourceTo,
+    turnSourceAccountId: params.turnSourceAccountId,
+    turnSourceThreadId: params.turnSourceThreadId,
+    timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
+    twoPhase: true,
+  };
+}
 
 type ParsedDecision = { present: boolean; value: string | null };
 
@@ -60,21 +111,7 @@ export async function registerExecApprovalRequest(
   }>(
     "exec.approval.request",
     { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
-    {
-      id: params.id,
-      command: params.command,
-      commandArgv: params.commandArgv,
-      cwd: params.cwd,
-      nodeId: params.nodeId,
-      host: params.host,
-      security: params.security,
-      ask: params.ask,
-      agentId: params.agentId,
-      resolvedPath: params.resolvedPath,
-      sessionKey: params.sessionKey,
-      timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
-      twoPhase: true,
-    },
+    buildExecApprovalRequestToolParams(params),
     { expectFinal: false },
   );
   const decision = parseDecision(registrationResult);
@@ -119,6 +156,7 @@ export async function requestExecApprovalDecisionForHost(params: {
   approvalId: string;
   command: string;
   commandArgv?: string[];
+  env?: Record<string, string>;
   workdir: string;
   host: "gateway" | "node";
   nodeId?: string;
@@ -127,11 +165,16 @@ export async function requestExecApprovalDecisionForHost(params: {
   agentId?: string;
   resolvedPath?: string;
   sessionKey?: string;
+  turnSourceChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
 }): Promise<string | null> {
   return await requestExecApprovalDecision({
     id: params.approvalId,
     command: params.command,
     commandArgv: params.commandArgv,
+    env: params.env,
     cwd: params.workdir,
     nodeId: params.nodeId,
     host: params.host,
@@ -140,6 +183,10 @@ export async function requestExecApprovalDecisionForHost(params: {
     agentId: params.agentId,
     resolvedPath: params.resolvedPath,
     sessionKey: params.sessionKey,
+    turnSourceChannel: params.turnSourceChannel,
+    turnSourceTo: params.turnSourceTo,
+    turnSourceAccountId: params.turnSourceAccountId,
+    turnSourceThreadId: params.turnSourceThreadId,
   });
 }
 
@@ -147,6 +194,7 @@ export async function registerExecApprovalRequestForHost(params: {
   approvalId: string;
   command: string;
   commandArgv?: string[];
+  env?: Record<string, string>;
   workdir: string;
   host: "gateway" | "node";
   nodeId?: string;
@@ -155,11 +203,16 @@ export async function registerExecApprovalRequestForHost(params: {
   agentId?: string;
   resolvedPath?: string;
   sessionKey?: string;
+  turnSourceChannel?: string;
+  turnSourceTo?: string;
+  turnSourceAccountId?: string;
+  turnSourceThreadId?: string | number;
 }): Promise<ExecApprovalRegistration> {
   return await registerExecApprovalRequest({
     id: params.approvalId,
     command: params.command,
     commandArgv: params.commandArgv,
+    env: params.env,
     cwd: params.workdir,
     nodeId: params.nodeId,
     host: params.host,
@@ -168,5 +221,9 @@ export async function registerExecApprovalRequestForHost(params: {
     agentId: params.agentId,
     resolvedPath: params.resolvedPath,
     sessionKey: params.sessionKey,
+    turnSourceChannel: params.turnSourceChannel,
+    turnSourceTo: params.turnSourceTo,
+    turnSourceAccountId: params.turnSourceAccountId,
+    turnSourceThreadId: params.turnSourceThreadId,
   });
 }

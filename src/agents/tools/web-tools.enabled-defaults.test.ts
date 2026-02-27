@@ -1,3 +1,4 @@
+import { EnvHttpProxyAgent } from "undici";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import { createWebFetchTool, createWebSearchTool } from "./web-tools.js";
@@ -45,6 +46,29 @@ function createKimiSearchTool(kimiConfig?: { apiKey?: string; baseUrl?: string; 
   });
 }
 
+function createProviderSearchTool(provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi") {
+  const searchConfig =
+    provider === "perplexity"
+      ? { provider, perplexity: { apiKey: "pplx-config-test" } }
+      : provider === "grok"
+        ? { provider, grok: { apiKey: "xai-config-test" } }
+        : provider === "gemini"
+          ? { provider, gemini: { apiKey: "gemini-config-test" } }
+          : provider === "kimi"
+            ? { provider, kimi: { apiKey: "moonshot-config-test" } }
+            : { provider, apiKey: "brave-config-test" };
+  return createWebSearchTool({
+    config: {
+      tools: {
+        web: {
+          search: searchConfig,
+        },
+      },
+    },
+    sandboxed: true,
+  });
+}
+
 function parseFirstRequestBody(mockFetch: ReturnType<typeof installMockFetch>) {
   const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
   const requestBody = request?.body;
@@ -59,6 +83,34 @@ function installPerplexitySuccessFetch() {
     choices: [{ message: { content: "ok" } }],
     citations: [],
   });
+}
+
+function createProviderSuccessPayload(
+  provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi",
+) {
+  if (provider === "brave") {
+    return { web: { results: [] } };
+  }
+  if (provider === "perplexity") {
+    return { choices: [{ message: { content: "ok" } }], citations: [] };
+  }
+  if (provider === "grok") {
+    return { output_text: "ok", citations: [] };
+  }
+  if (provider === "gemini") {
+    return {
+      candidates: [
+        {
+          content: { parts: [{ text: "ok" }] },
+          groundingMetadata: { groundingChunks: [] },
+        },
+      ],
+    };
+  }
+  return {
+    choices: [{ finish_reason: "stop", message: { role: "assistant", content: "ok" } }],
+    search_results: [],
+  };
 }
 
 async function executePerplexitySearch(
@@ -143,6 +195,45 @@ describe("web_search country and language parameters", () => {
     expect(mockFetch).not.toHaveBeenCalled();
     expect(result?.details).toMatchObject({ error: "invalid_freshness" });
   });
+
+  it("uses proxy-aware dispatcher when HTTP_PROXY is configured", async () => {
+    vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
+    const mockFetch = installMockFetch({ web: { results: [] } });
+    const tool = createWebSearchTool({ config: undefined, sandboxed: true });
+
+    await tool?.execute?.("call-1", { query: "proxy-test" });
+
+    const requestInit = mockFetch.mock.calls[0]?.[1] as
+      | (RequestInit & { dispatcher?: unknown })
+      | undefined;
+    expect(requestInit?.dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
+  });
+});
+
+describe("web_search provider proxy dispatch", () => {
+  const priorFetch = global.fetch;
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    global.fetch = priorFetch;
+  });
+
+  it.each(["brave", "perplexity", "grok", "gemini", "kimi"] as const)(
+    "uses proxy-aware dispatcher for %s provider when HTTP_PROXY is configured",
+    async (provider) => {
+      vi.stubEnv("HTTP_PROXY", "http://127.0.0.1:7890");
+      const mockFetch = installMockFetch(createProviderSuccessPayload(provider));
+      const tool = createProviderSearchTool(provider);
+      expect(tool).not.toBeNull();
+
+      await tool?.execute?.("call-1", { query: `proxy-${provider}-test` });
+
+      const requestInit = mockFetch.mock.calls[0]?.[1] as
+        | (RequestInit & { dispatcher?: unknown })
+        | undefined;
+      expect(requestInit?.dispatcher).toBeInstanceOf(EnvHttpProxyAgent);
+    },
+  );
 });
 
 describe("web_search perplexity baseUrl defaults", () => {

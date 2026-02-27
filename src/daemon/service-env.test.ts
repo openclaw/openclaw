@@ -329,6 +329,31 @@ describe("buildServiceEnvironment", () => {
     expect(env.http_proxy).toBe("http://proxy.local:7890");
     expect(env.all_proxy).toBe("socks5://proxy.local:1080");
   });
+  it("defaults NODE_EXTRA_CA_CERTS to system cert bundle on macOS", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/home/user" },
+      port: 18789,
+      platform: "darwin",
+    });
+    expect(env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/cert.pem");
+  });
+
+  it("does not default NODE_EXTRA_CA_CERTS on non-macOS", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/home/user" },
+      port: 18789,
+      platform: "linux",
+    });
+    expect(env.NODE_EXTRA_CA_CERTS).toBeUndefined();
+  });
+
+  it("respects user-provided NODE_EXTRA_CA_CERTS over the default", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/home/user", NODE_EXTRA_CA_CERTS: "/custom/certs/ca.pem" },
+      port: 18789,
+    });
+    expect(env.NODE_EXTRA_CA_CERTS).toBe("/custom/certs/ca.pem");
+  });
 });
 
 describe("buildNodeServiceEnvironment", () => {
@@ -364,6 +389,29 @@ describe("buildNodeServiceEnvironment", () => {
       env: { HOME: "/home/user" },
     });
     expect(env.TMPDIR).toBe(os.tmpdir());
+  });
+
+  it("defaults NODE_EXTRA_CA_CERTS to system cert bundle on macOS for node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user" },
+      platform: "darwin",
+    });
+    expect(env.NODE_EXTRA_CA_CERTS).toBe("/etc/ssl/cert.pem");
+  });
+
+  it("does not default NODE_EXTRA_CA_CERTS on non-macOS for node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user" },
+      platform: "linux",
+    });
+    expect(env.NODE_EXTRA_CA_CERTS).toBeUndefined();
+  });
+
+  it("respects user-provided NODE_EXTRA_CA_CERTS for node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/home/user", NODE_EXTRA_CA_CERTS: "/custom/certs/ca.pem" },
+    });
+    expect(env.NODE_EXTRA_CA_CERTS).toBe("/custom/certs/ca.pem");
   });
 });
 

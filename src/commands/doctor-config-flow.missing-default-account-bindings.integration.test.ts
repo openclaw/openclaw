@@ -14,7 +14,7 @@ vi.mock("./doctor-legacy-config.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./doctor-legacy-config.js")>();
   return {
     ...actual,
-    normalizeLegacyConfigValues: (cfg: unknown) => ({
+    normalizeCompatibilityConfigValues: (cfg: unknown) => ({
       config: cfg,
       changes: [],
     }),

@@ -65,8 +65,6 @@ class NodeRuntime(context: Context) {
   private val cameraHandler: CameraHandler = CameraHandler(
     appContext = appContext,
     camera = camera,
-    prefs = prefs,
-    connectedEndpoint = { connectedEndpoint },
     externalAudioCaptureActive = externalAudioCaptureActive,
     showCameraHud = ::showCameraHud,
     triggerCameraFlash = ::triggerCameraFlash,
@@ -90,6 +88,10 @@ class NodeRuntime(context: Context) {
     isForeground = { _isForeground.value },
     locationMode = { locationMode.value },
     locationPreciseEnabled = { locationPreciseEnabled.value },
+  )
+
+  private val deviceHandler: DeviceHandler = DeviceHandler(
+    appContext = appContext,
   )
 
   private val notificationsHandler: NotificationsHandler = NotificationsHandler(
@@ -127,6 +129,7 @@ class NodeRuntime(context: Context) {
     canvas = canvas,
     cameraHandler = cameraHandler,
     locationHandler = locationHandler,
+    deviceHandler = deviceHandler,
     notificationsHandler = notificationsHandler,
     screenHandler = screenHandler,
     smsHandler = smsHandlerImpl,
@@ -138,6 +141,7 @@ class NodeRuntime(context: Context) {
     locationEnabled = { locationMode.value != LocationMode.Off },
     smsAvailable = { sms.canSendSms() },
     debugBuild = { BuildConfig.DEBUG },
+    refreshNodeCanvasCapability = { nodeSession.refreshNodeCanvasCapability() },
     onCanvasA2uiPush = {
       _canvasA2uiHydrated.value = true
       _canvasRehydratePending.value = false
