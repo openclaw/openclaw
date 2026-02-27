@@ -44,44 +44,34 @@ export function registerCronSimpleCommands(cron: Command) {
       .option("--force", "Force removal even if job is running", false)
       .action(async (id, opts) => {
         try {
-          // First check if job exists and get its status
-          const listRes = (await callGatewayFromCli("cron.list", opts, {})) as { jobs?: Array<{ id?: string; name?: string; state?: { runningAtMs?: number } }> } | null;
-          const jobs = listRes?.jobs ?? [];
-          const job = jobs.find((j) => j.id === id || j.name === id);
+          // Try to remove directly first - cron.remove will fail if job doesn't exist
+          const res = await callGatewayFromCli("cron.remove", opts, { id, force: opts.force });
+          const removed = res?.removed === true;
 
-          if (!job) {
+          if (opts.json) {
+            defaultRuntime.log(JSON.stringify({ ok: true, removed, id }, null, 2));
+          } else if (removed) {
+            defaultRuntime.log(`✓ Removed job: ${id}`);
+          } else {
+            defaultRuntime.log(`⚠️  Job not removed: ${id}`);
+          }
+        } catch (err) {
+          const errorMessage = err instanceof Error ? err.message : String(err);
+
+          // Provide helpful error messages for common cases
+          if (errorMessage.includes("not found") || errorMessage.includes("not exist")) {
             const errorMsg = opts.json
               ? JSON.stringify({ ok: false, error: t("error.cron.jobNotFound", { id }), id }, null, 2)
               : `❌ ${t("error.cron.jobNotFound", { id })}`;
             defaultRuntime.log(errorMsg);
-            defaultRuntime.exit(1);
-            return;
-          }
-
-          const jobId = job.id;
-          const isRunning = job.state?.runningAtMs != null;
-
-          if (isRunning && !opts.force) {
+          } else if (errorMessage.includes("running") && !opts.force) {
             const errorMsg = opts.json
-              ? JSON.stringify({ ok: false, error: t("error.cron.jobRunning"), id: jobId }, null, 2)
+              ? JSON.stringify({ ok: false, error: t("error.cron.jobRunning"), id }, null, 2)
               : `⚠️  ${t("error.cron.jobRunning")}`;
             defaultRuntime.log(errorMsg);
-            defaultRuntime.exit(1);
-            return;
-          }
-
-          const res = await callGatewayFromCli("cron.remove", opts, { id: jobId });
-          const removed = res?.removed === true;
-
-          if (opts.json) {
-            defaultRuntime.log(JSON.stringify({ ok: true, removed, id: jobId }, null, 2));
-          } else if (removed) {
-            defaultRuntime.log(`✓ ${t("success.cron.jobRemoved", { name: job.name ?? jobId })} (${jobId})`);
           } else {
-            defaultRuntime.log(`⚠️  Job not removed: ${job.name ?? jobId} (${jobId})`);
+            defaultRuntime.error(danger(errorMessage));
           }
-        } catch (err) {
-          defaultRuntime.error(danger(String(err)));
           defaultRuntime.exit(1);
         }
       }),

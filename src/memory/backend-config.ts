@@ -18,6 +18,12 @@ import { splitShellArgs } from "../utils/shell-argv.js";
 
 const execFileAsync = promisify(execFile);
 
+// Cache for QMD binary availability checks to avoid repeated subprocess calls
+const QMD_AVAILABILITY_CACHE = new Map<
+  string,
+  { available: true; path: string } | { available: false; error: string }
+>();
+
 export type ResolvedMemoryBackendConfig = {
   backend: MemoryBackend;
   citations: MemoryCitationsMode;
@@ -360,11 +366,20 @@ export function resolveMemoryBackendConfig(params: {
 /**
  * Check if the QMD binary is available on the system PATH.
  * Returns the resolved command path if available, null otherwise.
+ * Results are cached to avoid repeated subprocess calls.
  */
 export async function checkQmdBinaryAvailable(
   command = "qmd",
   timeoutMs = 5000,
 ): Promise<{ available: true; path: string } | { available: false; error: string }> {
+  const cacheKey = `${command}:${timeoutMs}`;
+
+  // Check cache first
+  const cached = QMD_AVAILABILITY_CACHE.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
   const isWindows = process.platform === "win32";
   const resolvedCommand = isWindows && !path.extname(command) ? `${command}.cmd` : command;
 
@@ -377,7 +392,9 @@ export async function checkQmdBinaryAvailable(
       encoding: "utf8",
       shell: needsShell,
     });
-    return { available: true, path: resolvedCommand };
+    const result = { available: true as const, path: resolvedCommand };
+    QMD_AVAILABILITY_CACHE.set(cacheKey, result);
+    return result;
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     const errorLower = error.toLowerCase();
@@ -396,14 +413,18 @@ export async function checkQmdBinaryAvailable(
     // Also check if the command name appears in the error (common for "not found" errors)
     const isCommandMentioned = error.includes(command) || error.includes(resolvedCommand);
     if (isNotFound || (isCommandMentioned && errorLower.includes("fail"))) {
-      return {
-        available: false,
+      const result = {
+        available: false as const,
         error: `QMD binary "${command}" not found on PATH. Please install QMD or check your configuration.`,
       };
+      QMD_AVAILABILITY_CACHE.set(cacheKey, result);
+      return result;
     }
-    return {
-      available: false,
+    const result = {
+      available: false as const,
       error: `QMD binary check failed: ${error}`,
     };
+    QMD_AVAILABILITY_CACHE.set(cacheKey, result);
+    return result;
   }
 }
