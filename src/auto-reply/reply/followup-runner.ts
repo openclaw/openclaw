@@ -1,10 +1,10 @@
 import crypto from "node:crypto";
-import { resolveAgentModelFallbacksOverride } from "../../agents/agent-scope.js";
+import { resolveRunModelFallbacksOverride } from "../../agents/agent-scope.js";
 import { lookupContextTokens } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { runWithModelFallback } from "../../agents/model-fallback.js";
 import { runEmbeddedPiAgent } from "../../agents/pi-embedded.js";
-import { resolveAgentIdFromSessionKey, type SessionEntry } from "../../config/sessions.js";
+import type { SessionEntry } from "../../config/sessions.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import { registerAgentRunContext } from "../../infra/agent-events.js";
@@ -103,10 +103,23 @@ export function createFollowupRunner(params: {
           cfg: queued.run.config,
         });
         if (!result.ok) {
-          // Keep origin isolation strict: do not fall back to the current
-          // dispatcher when explicit origin routing failed.
           const errorMsg = result.error ?? "unknown error";
           logVerbose(`followup queue: route-reply failed: ${errorMsg}`);
+          // Fall back to the caller-provided dispatcher only when the
+          // originating channel matches the session's message provider.
+          // In that case onBlockReply was created by the same channel's
+          // handler and delivers to the correct destination.  For true
+          // cross-channel routing (origin !== provider), falling back
+          // would send to the wrong channel, so we drop the payload.
+          const provider = resolveOriginMessageProvider({
+            provider: queued.run.messageProvider,
+          });
+          const origin = resolveOriginMessageProvider({
+            originatingChannel,
+          });
+          if (opts?.onBlockReply && origin && origin === provider) {
+            await opts.onBlockReply(payload);
+          }
         }
       } else if (opts?.onBlockReply) {
         await opts.onBlockReply(payload);
@@ -133,10 +146,11 @@ export function createFollowupRunner(params: {
           provider: queued.run.provider,
           model: queued.run.model,
           agentDir: queued.run.agentDir,
-          fallbacksOverride: resolveAgentModelFallbacksOverride(
-            queued.run.config,
-            resolveAgentIdFromSessionKey(queued.run.sessionKey),
-          ),
+          fallbacksOverride: resolveRunModelFallbacksOverride({
+            cfg: queued.run.config,
+            agentId: queued.run.agentId,
+            sessionKey: queued.run.sessionKey,
+          }),
           run: (provider, model) => {
             const authProfile = resolveRunAuthProfile(queued.run, provider);
             return runEmbeddedPiAgent({
@@ -300,7 +314,15 @@ export function createFollowupRunner(params: {
 
       await sendFollowupPayloads(finalPayloads, queued);
     } finally {
+      // Both signals are required for the typing controller to clean up.
+      // The main inbound dispatch path calls markDispatchIdle() from the
+      // buffered dispatcher's finally block, but followup turns bypass the
+      // dispatcher entirely — so we must fire both signals here.  Without
+      // this, NO_REPLY / empty-payload followups leave the typing indicator
+      // stuck (the keepalive loop keeps sending "typing" to Telegram
+      // indefinitely until the TTL expires).
       typing.markRunComplete();
+      typing.markDispatchIdle();
     }
   };
 }

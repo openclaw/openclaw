@@ -385,12 +385,12 @@ class TalkModeManager(
     val key = sessionKey.trim()
     if (key.isEmpty()) return
     if (chatSubscribedSessionKey == key) return
-    try {
-      session.sendNodeEvent("chat.subscribe", """{"sessionKey":"$key"}""")
+    val sent = session.sendNodeEvent("chat.subscribe", """{"sessionKey":"$key"}""")
+    if (sent) {
       chatSubscribedSessionKey = key
       Log.d(tag, "chat.subscribe ok sessionKey=$key")
-    } catch (err: Throwable) {
-      Log.w(tag, "chat.subscribe failed sessionKey=$key err=${err.message ?: err::class.java.simpleName}")
+    } else {
+      Log.w(tag, "chat.subscribe failed sessionKey=$key")
     }
   }
 

@@ -13,13 +13,19 @@ import { createSandboxTestContext } from "./test-fixtures.js";
 import type { SandboxContext } from "./types.js";
 
 const mockedExecDockerRaw = vi.mocked(execDockerRaw);
+const DOCKER_SCRIPT_INDEX = 5;
+const DOCKER_FIRST_SCRIPT_ARG_INDEX = 7;
 
 function getDockerScript(args: string[]): string {
-  return String(args[5] ?? "");
+  return String(args[DOCKER_SCRIPT_INDEX] ?? "");
+}
+
+function getDockerArg(args: string[], position: number): string {
+  return String(args[DOCKER_FIRST_SCRIPT_ARG_INDEX + position - 1] ?? "");
 }
 
 function getDockerPathArg(args: string[]): string {
-  return String(args.at(-1) ?? "");
+  return getDockerArg(args, 1);
 }
 
 function getScriptsFromCalls(): string[] {
@@ -50,7 +56,7 @@ describe("sandbox fs bridge shell compatibility", () => {
       const script = getDockerScript(args);
       if (script.includes('readlink -f -- "$cursor"')) {
         return {
-          stdout: Buffer.from(`${String(args.at(-2) ?? "")}\n`),
+          stdout: Buffer.from(`${getDockerArg(args, 1)}\n`),
           stderr: Buffer.alloc(0),
           code: 0,
         };
@@ -123,6 +129,17 @@ describe("sandbox fs bridge shell compatibility", () => {
     expect(readPath).toContain("file_1095---");
   });
 
+  it("resolves dash-leading basenames into absolute container paths", async () => {
+    const bridge = createSandboxFsBridge({ sandbox: createSandbox() });
+
+    await bridge.readFile({ filePath: "--leading.txt" });
+
+    const readCall = findCallByScriptFragment('cat -- "$1"');
+    expect(readCall).toBeDefined();
+    const readPath = readCall ? getDockerPathArg(readCall[0]) : "";
+    expect(readPath).toBe("/workspace/--leading.txt");
+  });
+
   it("resolves bind-mounted absolute container paths for reads", async () => {
     const sandbox = createSandbox({
       docker: {
@@ -176,6 +193,42 @@ describe("sandbox fs bridge shell compatibility", () => {
     await expect(bridge.readFile({ filePath: "link.txt" })).rejects.toThrow(/Symlink escapes/);
     expect(mockedExecDockerRaw).not.toHaveBeenCalled();
     await fs.rm(stateDir, { recursive: true, force: true });
+  });
+
+  it("rejects pre-existing host hardlink escapes before docker exec", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fs-bridge-hardlink-"));
+    const workspaceDir = path.join(stateDir, "workspace");
+    const outsideDir = path.join(stateDir, "outside");
+    const outsideFile = path.join(outsideDir, "secret.txt");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(outsideDir, { recursive: true });
+    await fs.writeFile(outsideFile, "classified");
+    const hardlinkPath = path.join(workspaceDir, "link.txt");
+    try {
+      try {
+        await fs.link(outsideFile, hardlinkPath);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "EXDEV") {
+          return;
+        }
+        throw err;
+      }
+
+      const bridge = createSandboxFsBridge({
+        sandbox: createSandbox({
+          workspaceDir,
+          agentWorkspaceDir: workspaceDir,
+        }),
+      });
+
+      await expect(bridge.readFile({ filePath: "link.txt" })).rejects.toThrow(/hardlink|sandbox/i);
+      expect(mockedExecDockerRaw).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 
   it("rejects container-canonicalized paths outside allowed mounts", async () => {
