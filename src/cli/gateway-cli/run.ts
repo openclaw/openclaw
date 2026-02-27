@@ -178,12 +178,12 @@ async function runGatewayCommand(opts: GatewayRunOpts) {
   const cfg = loadConfig();
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
-    defaultRuntime.error("Invalid port");
+    defaultRuntime.error(`Invalid port: ${JSON.stringify(opts.port)}`);
     defaultRuntime.exit(1);
   }
   const port = portOverride ?? resolveGatewayPort(cfg);
   if (!Number.isFinite(port) || port <= 0) {
-    defaultRuntime.error("Invalid port");
+    defaultRuntime.error(`Invalid port: ${port}`);
     defaultRuntime.exit(1);
   }
   if (opts.force) {
