@@ -271,7 +271,13 @@ async function readDoc(client: Lark.Client, docToken: string) {
   };
 }
 
-async function createDoc(client: Lark.Client, title: string, folderToken?: string) {
+async function createDoc(
+  client: Lark.Client,
+  title: string,
+  folderToken?: string,
+  ownerOpenId?: string,
+  ownerPermType: "view" | "edit" | "full_access" = "full_access",
+) {
   const res = await client.docx.document.create({
     data: { title, folder_token: folderToken },
   });
@@ -279,10 +285,34 @@ async function createDoc(client: Lark.Client, title: string, folderToken?: strin
     throw new Error(res.msg);
   }
   const doc = res.data?.document;
+  const docToken = doc?.document_id;
+
+  // Auto add owner permission if ownerOpenId is provided
+  if (docToken && ownerOpenId) {
+    try {
+      await client.drive.permissionMember.create({
+        path: { token: docToken },
+        params: { type: "docx", need_notification: false },
+        data: {
+          member_type: "openid",
+          member_id: ownerOpenId,
+          perm: ownerPermType,
+        },
+      });
+    } catch (err) {
+      console.warn("Failed to add owner permission (non-critical):", err);
+    }
+  }
+
   return {
-    document_id: doc?.document_id,
+    document_id: docToken,
     title: doc?.title,
-    url: `https://feishu.cn/docx/${doc?.document_id}`,
+    url: `https://feishu.cn/docx/${docToken}`,
+    ...(ownerOpenId && {
+      owner_permission_added: true,
+      owner_open_id: ownerOpenId,
+      owner_perm_type: ownerPermType,
+    }),
   };
 }
 
@@ -512,7 +542,15 @@ export function registerFeishuDocTools(api: OpenClawPluginApi) {
                     ),
                   );
                 case "create":
-                  return json(await createDoc(client, p.title, p.folder_token));
+                  return json(
+                    await createDoc(
+                      client,
+                      p.title,
+                      p.folder_token,
+                      (p as any).owner_open_id,
+                      (p as any).owner_perm_type,
+                    ),
+                  );
                 case "list_blocks":
                   return json(await listBlocks(client, p.doc_token));
                 case "get_block":
