@@ -98,6 +98,35 @@ describe("Ollama provider", () => {
     }
   });
 
+  it("preserves SecretRef apiKey on ollama provider instead of injecting placeholder", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const saved = process.env.OLLAMA_API_KEY;
+    delete process.env.OLLAMA_API_KEY;
+
+    try {
+      const secretRef = { source: "env", id: "MY_OLLAMA_KEY" };
+      const providers = await resolveImplicitProviders({
+        agentDir,
+        explicitProviders: {
+          ollama: {
+            baseUrl: "http://remote-ollama:11434",
+            api: "ollama",
+            apiKey: secretRef as never,
+            models: [],
+          },
+        },
+      });
+
+      expect(providers?.ollama).toBeDefined();
+      // SecretRef must be preserved, not overwritten with "local"
+      expect(providers?.ollama?.apiKey).toEqual(secretRef);
+    } finally {
+      if (saved !== undefined) {
+        process.env.OLLAMA_API_KEY = saved;
+      }
+    }
+  });
+
   it("should have correct model structure without streaming override", () => {
     const mockOllamaModel = {
       id: "llama3.3:latest",

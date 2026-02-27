@@ -489,7 +489,12 @@ export function normalizeProviders(params: {
 
     // Keyless local providers (ollama, vllm) don't need real auth — inject a
     // placeholder so the pi SDK's ModelRegistry accepts the provider config.
-    const currentApiKey = normalizeOptionalSecretInput(normalizedProvider.apiKey);
+    // Check for SecretRef objects (non-string truthy values) before normalizing.
+    const hasSecretRef =
+      normalizedProvider.apiKey != null && typeof normalizedProvider.apiKey !== "string";
+    const currentApiKey = hasSecretRef
+      ? "secret-ref"
+      : normalizeOptionalSecretInput(normalizedProvider.apiKey);
     if (!currentApiKey?.trim() && KEYLESS_LOCAL_PROVIDERS.has(normalizedKey)) {
       mutated = true;
       normalizedProvider = { ...normalizedProvider, apiKey: KEYLESS_LOCAL_PLACEHOLDER };
@@ -984,7 +989,7 @@ export async function resolveImplicitProviders(params: {
     const ollamaBaseUrl = ollamaExplicit?.baseUrl;
     providers.ollama = {
       ...(await buildOllamaProvider(ollamaBaseUrl)),
-      apiKey: ollamaKey ?? KEYLESS_LOCAL_PLACEHOLDER,
+      apiKey: ollamaKey ?? ollamaExplicit?.apiKey ?? KEYLESS_LOCAL_PLACEHOLDER,
     };
   }
 
