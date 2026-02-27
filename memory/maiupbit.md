@@ -185,8 +185,15 @@ commit `24c61b9f`, pushed
 - `docs/O-001-Operation-Plan.md` — MAI Universe 운용 계획서
 - `docs/D-002-LiveTrading-Flywheel.md` — 플라이휠 설계서
 
+## 운용 결정 (2026-02-27)
+
+- [x] BTT 전량 매도 후 BTC 중심 포지션으로 전환 완료
+- [x] **지니님 결정:** 현재는 BTC 매매 플랜(DCA/익절/손절) 즉시 설정하지 않고, 백데이터를 충분히 확보한 뒤 분석 기반으로 설정
+- [ ] 백데이터 축적 기간 동안은 현 상태 유지 + 정기 리포트 데이터 누적
+
 ## 다음 액션
 
+- [ ] 백데이터 누적 후 BTC 매매 플랜(분할매수/익절/손절) 재설계
 - [ ] Transformer 모델 실제 학습 (BTC 90일 데이터)
 - [ ] Jupyter 교육 노트북
 - [ ] README에 PyPI 배지 추가

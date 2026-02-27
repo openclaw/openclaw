@@ -1,0 +1,182 @@
+version: 1
+updated_at: 2026-02-26T12:15:00+09:00
+projects:
+  - project_id: MAIBEAUTY
+    name: MAIBEAUTY (BnF)
+    repo: https://github.com/jini92/MAIBEAUTY
+    memory_ref: memory/vietnam-beauty.md
+    stage: BUILD
+    owner_agent: builder
+    health_score: 0.66
+    contrib_score: 0.52
+    revenue_score: 0.36
+    risk_score: 0.54
+
+  - project_id: MAIOSS
+    name: MAIOSS
+    repo: https://github.com/jini92/MAIOSS
+    memory_ref: memory/maioss.md
+    stage: DEPLOY
+    owner_agent: operator
+    health_score: 0.74
+    contrib_score: 0.68
+    revenue_score: 0.42
+    risk_score: 0.41
+
+  - project_id: MAISTAR7
+    name: MAISTAR7
+    repo: null
+    memory_ref: memory/maistar7.md
+    stage: CREATE
+    owner_agent: scout
+    health_score: 0.51
+    contrib_score: 0.44
+    revenue_score: 0.16
+    risk_score: 0.58
+
+  - project_id: MAICON
+    name: MAICON
+    repo: https://github.com/jini92/MAICON
+    memory_ref: memory/maicon.md
+    stage: CREATE
+    owner_agent: scout
+    health_score: 0.54
+    contrib_score: 0.46
+    revenue_score: 0.20
+    risk_score: 0.56
+
+  - project_id: MAITUTOR
+    name: MAITUTOR
+    repo: https://github.com/jini92/MAITUTOR
+    memory_ref: memory/maitutor.md
+    stage: DISCOVER
+    owner_agent: scout
+    health_score: 0.48
+    contrib_score: 0.40
+    revenue_score: 0.12
+    risk_score: 0.60
+
+  - project_id: MAIBOTALKS
+    name: MAIBOTALKS (BOTALKS)
+    repo: https://github.com/jini92/MAIBOTALKS
+    memory_ref: memory/maibotalks.md
+    stage: DEPLOY
+    owner_agent: operator
+    health_score: 0.72
+    contrib_score: 0.63
+    revenue_score: 0.33
+    risk_score: 0.49
+
+  - project_id: MAITOK
+    name: MAITOK (Tikly)
+    repo: https://github.com/jini92/MAITOK
+    memory_ref: memory/maitok.md
+    stage: BUILD
+    owner_agent: builder
+    health_score: 0.64
+    contrib_score: 0.57
+    revenue_score: 0.24
+    risk_score: 0.52
+
+  - project_id: MAIAX
+    name: MAIAX
+    repo: https://github.com/jini92/MAIAX
+    memory_ref: memory/maiax.md
+    stage: BUILD
+    owner_agent: builder
+    health_score: 0.62
+    contrib_score: 0.55
+    revenue_score: 0.18
+    risk_score: 0.57
+
+  - project_id: MAISECONDBRAIN
+    name: MAISECONDBRAIN (Mnemo)
+    repo: https://github.com/jini92/MAISECONDBRAIN
+    memory_ref: memory/maisecondbrain.md
+    stage: CREATE
+    owner_agent: scout
+    health_score: 0.58
+    contrib_score: 0.62
+    revenue_score: 0.22
+    risk_score: 0.48
+
+  - project_id: MAIPATENT
+    name: MAIPatent
+    repo: https://github.com/jini92/MAIPatent
+    memory_ref: memory/maipatent.md
+    stage: DISCOVER
+    owner_agent: scout
+    health_score: 0.43
+    contrib_score: 0.35
+    revenue_score: 0.10
+    risk_score: 0.55
+
+  - project_id: MAITALKCART
+    name: MAITalkCart
+    repo: https://github.com/jini92/MAITalkCart
+    memory_ref: memory/maitalkcart.md
+    stage: DISCOVER
+    owner_agent: scout
+    health_score: 0.42
+    contrib_score: 0.34
+    revenue_score: 0.11
+    risk_score: 0.56
+
+  - project_id: MAITHINK
+    name: MAITHINK
+    repo: https://github.com/jini92/MAITHINK
+    memory_ref: memory/maithink.md
+    stage: DISCOVER
+    owner_agent: scout
+    health_score: 0.45
+    contrib_score: 0.36
+    revenue_score: 0.12
+    risk_score: 0.50
+
+  - project_id: MAITCAD
+    name: MAITCAD
+    repo: https://github.com/jini92/MAITCAD
+    memory_ref: memory/maitcad.md
+    stage: DISCOVER
+    owner_agent: scout
+    health_score: 0.47
+    contrib_score: 0.38
+    revenue_score: 0.14
+    risk_score: 0.51
+
+  - project_id: MAITB
+    name: MAITB
+    repo: https://github.com/jini92/MAITB
+    memory_ref: memory/maitb.md
+    stage: DISCOVER
+    owner_agent: scout
+    health_score: 0.46
+    contrib_score: 0.41
+    revenue_score: 0.13
+    risk_score: 0.49
+
+  - project_id: MAIPNID
+    name: MAIPnID
+    repo: https://github.com/jini92/MAIPnID
+    memory_ref: memory/maipnid.md
+    stage: DISCOVER
+    owner_agent: scout
+    health_score: 0.46
+    contrib_score: 0.37
+    revenue_score: 0.14
+    risk_score: 0.53
+
+  - project_id: MAIUPBIT
+    name: M.AI.UPbit
+    repo: https://github.com/jini92/M.AI.UPbit
+    memory_ref: memory/maiupbit.md
+    stage: BUILD
+    owner_agent: operator
+    health_score: 0.67
+    contrib_score: 0.58
+    revenue_score: 0.37
+    risk_score: 0.61
+
+notes:
+  - "MEMORY.md + memory/*.md 기준 16개 활성 프로젝트 전체를 등록함."
+  - "stage/score는 운영 초기 보수값으로 입력했으며, 규칙은 REGISTRY-RULES.md를 따른다."

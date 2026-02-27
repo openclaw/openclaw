@@ -1,0 +1,86 @@
+version: 2
+updated_at: 2026-02-26T12:20:00+09:00
+policies:
+  - action_type: internal_code_change
+    risk_tier: low
+    auto_allowed: true
+    requires_approval: false
+    required_checks: [tests, docs_sync]
+
+  - action_type: internal_documentation
+    risk_tier: low
+    auto_allowed: true
+    requires_approval: false
+    required_checks: [memory_log]
+
+  - action_type: external_message_broadcast
+    risk_tier: high
+    auto_allowed: false
+    requires_approval: true
+    required_checks: [content_review, recipient_scope]
+
+  - action_type: production_deploy
+    risk_tier: high
+    auto_allowed: false
+    requires_approval: true
+    required_checks: [tests, rollback_plan, changelog]
+
+  - action_type: destructive_delete_or_rollback
+    risk_tier: critical
+    auto_allowed: false
+    requires_approval: true
+    required_checks: [backup, impact_assessment, explicit_user_confirmation]
+
+  - action_type: paid_resource_change
+    risk_tier: high
+    auto_allowed: false
+    requires_approval: true
+    required_checks: [cost_estimate, budget_owner_confirmation]
+
+  - action_type: credential_or_secret_change
+    risk_tier: critical
+    auto_allowed: false
+    requires_approval: true
+    required_checks: [secret_scope_review, rotation_plan, rollback_plan, explicit_user_confirmation]
+
+  - action_type: access_control_change
+    risk_tier: critical
+    auto_allowed: false
+    requires_approval: true
+    required_checks: [least_privilege_review, impact_assessment, dual_approval]
+
+  - action_type: external_data_export_or_share
+    risk_tier: high
+    auto_allowed: false
+    requires_approval: true
+    required_checks: [data_classification, pii_redaction_check, recipient_scope, retention_policy]
+
+  - action_type: database_schema_or_state_migration
+    risk_tier: high
+    auto_allowed: false
+    requires_approval: true
+    required_checks: [migration_plan, backup, rollback_plan, dry_run_result]
+
+  - action_type: automation_schedule_or_autonomous_rule_change
+    risk_tier: medium
+    auto_allowed: false
+    requires_approval: true
+    required_checks: [simulation_result, kill_switch_validation, monitoring_plan]
+
+  - action_type: third_party_integration_or_webhook_change
+    risk_tier: high
+    auto_allowed: false
+    requires_approval: true
+    required_checks: [security_review, secret_management, rate_limit_plan, incident_contact]
+
+  - action_type: financial_transaction_or_billing_change
+    risk_tier: critical
+    auto_allowed: false
+    requires_approval: true
+    required_checks: [cost_estimate, budget_owner_confirmation, dual_approval, audit_trail]
+
+  - action_type: unknown_or_unclassified_action
+    risk_tier: high
+    auto_allowed: false
+    requires_approval: true
+    required_checks: [manual_risk_assessment, explicit_user_confirmation]

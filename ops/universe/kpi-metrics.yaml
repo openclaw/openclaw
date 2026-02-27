@@ -1,0 +1,26 @@
+version: 1
+updated_at: 2026-02-26T00:00:00+09:00
+metrics:
+  contribution:
+    - stars_growth
+    - community_response_time
+    - docs_published_count
+    - opensource_release_count
+  revenue:
+    - mrr
+    - arr
+    - conversion_rate
+    - paid_user_growth
+  operations:
+    - deployment_success_rate
+    - mttr_minutes
+    - incident_count
+    - test_pass_rate
+  strategy:
+    - cross_project_synergy_count
+    - stage_transition_rate
+reporting:
+  cadence:
+    daily: health_snapshot
+    weekly: contribution_revenue_balance_report
+    monthly: strategic_rebalance_review

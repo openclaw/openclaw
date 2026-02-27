@@ -9,18 +9,20 @@ Migrate the complete MAIBOT environment to a new machine in one shot.
 
 ## What Gets Migrated
 
-| Component          | Source                 | Method                     |
-| ------------------ | ---------------------- | -------------------------- |
-| OpenClaw Gateway   | npm registry           | `npm i -g openclaw`        |
-| pnpm               | npm registry           | `npm i -g pnpm@10`         |
-| EAS CLI            | npm registry           | `npm i -g eas-cli`         |
-| MAIBOT workspace   | GitHub `jini92/MAIBOT` | `git clone` → `C:\MAIBOT`  |
-| MAI projects (7개) | GitHub `jini92/*`      | `git clone` → `C:\TEST\*`  |
-| OpenClaw config    | `~/.openclaw/`         | Export → import            |
-| Obsidian vault     | OneDrive sync          | symlinks for project docs  |
-| GPU pipeline       | Python venvs + vendor  | Conditional (if GPU)       |
-| Credentials        | `.env` files           | Interactive or secure copy |
-| Cron jobs          | OpenClaw gateway       | Re-register 4 jobs         |
+| Component           | Source                 | Method                               |
+| ------------------- | ---------------------- | ------------------------------------ |
+| OpenClaw Gateway    | npm registry           | `npm i -g openclaw`                  |
+| pnpm                | npm registry           | `npm i -g pnpm@10`                   |
+| EAS CLI             | npm registry           | `npm i -g eas-cli`                   |
+| MAIBOT workspace    | GitHub `jini92/MAIBOT` | `git clone` → `C:\MAIBOT`            |
+| MAI projects (16개) | GitHub `jini92/*`      | `git clone` → `C:\TEST\*`            |
+| Claude Code CLI     | npm registry           | `npm i -g @anthropic-ai/claude-code` |
+| OpenClaw config     | `~/.openclaw/`         | Export → import                      |
+| Obsidian vault      | OneDrive sync          | symlinks for project docs            |
+| GPU pipeline        | Python venvs + vendor  | Conditional (if GPU)                 |
+| Credentials         | `.env` files           | Interactive or secure copy           |
+| Cron jobs           | OpenClaw gateway       | Re-register 21 jobs                  |
+| Python envs         | pip / venv             | M.AI.UPbit + MAISECONDBRAIN          |
 
 ## Migration Steps
 
@@ -46,13 +48,35 @@ openclaw --version; pnpm --version; eas --version
 git clone https://github.com/jini92/MAIBOT.git C:\MAIBOT
 
 # MAI projects (C:\TEST\)
-$projects = @("MAIBEAUTY","MAIOSS","MAISTAR7","MAICON","MAITUTOR","MAIBOTALKS","MAITOK")
+$projects = @("MAIBEAUTY","MAIOSS","MAISTAR7","MAICON","MAITUTOR","MAIBOTALKS","MAITOK","MAIAX","MAISECONDBRAIN","MAIPatent","MAITalkCart","MAITHINK","MAITCAD","MAITB","MAIPnID","M.AI.UPbit")
 foreach ($p in $projects) {
     git clone "https://github.com/jini92/$p.git" "C:\TEST\$p"
 }
+# Auxiliary repos
+git clone "https://github.com/jini92/botalks-web.git" "C:\TEST\botalks-web"
 ```
 
-Note: MAISTAR7, MAICON repos may be TBD — skip if not yet created on GitHub.
+Note: Some repos may be TBD — skip if `git clone` fails (not yet created on GitHub).
+
+### Step 3b: Install Claude Code CLI
+
+```powershell
+npm i -g @anthropic-ai/claude-code
+claude login   # Claude Max account: jini92.lee@gmail.com
+claude --version
+```
+
+### Step 3c: Python Environments
+
+```powershell
+# M.AI.UPbit (crypto analysis)
+cd C:\TEST\M.AI.UPbit
+pip install -e .
+
+# MAISECONDBRAIN / Mnemo (knowledge graph)
+cd C:\TEST\MAISECONDBRAIN
+pip install -r requirements.txt
+```
 
 ### Step 4: Configure OpenClaw
 
@@ -144,16 +168,35 @@ foreach ($k in $links.Keys) {
 
 ### Step 9: Restore Cron Jobs
 
-Re-register 4 cron jobs via OpenClaw:
+Re-register 21 cron jobs via OpenClaw. Key jobs:
 
-| Job                            | Schedule  | Type               |
-| ------------------------------ | --------- | ------------------ |
-| Daily AI Monetization Briefing | 05:00 KST | isolated agentTurn |
-| Daily AI Tech Briefing         | 05:05 KST | isolated agentTurn |
-| Moltbot Update Check           | 05:10 KST | isolated agentTurn |
-| 고혈압 약 복용 알림            | 06:00 KST | main systemEvent   |
+| Job                      | Schedule        | Type               |
+| ------------------------ | --------------- | ------------------ |
+| AI 수익화 브리핑         | 03:00 KST daily | isolated agentTurn |
+| AI 기술 브리핑           | 03:05 KST daily | isolated agentTurn |
+| MAIBOT 업데이트 체크     | 03:10 KST daily | isolated agentTurn |
+| 테크 인텔리전스          | 04:00 KST daily | isolated agentTurn |
+| 사업화 인텔리전스        | 04:30 KST daily | isolated agentTurn |
+| Mnemo 볼트 보강          | 05:00 KST daily | isolated agentTurn |
+| 💊 약 리마인더           | 05:30 KST daily | main systemEvent   |
+| M.AI.UPbit 시장 모니터링 | 05:30 KST daily | isolated agentTurn |
+| 모닝 브리핑              | 06:00 KST daily | isolated agentTurn |
+| M.AI.UPbit 일일 분석     | 06:30 KST daily | isolated agentTurn |
+| M.AI.UPbit 퀀트 시즌     | 06:35 KST daily | isolated agentTurn |
+| M.AI.UPbit 오전 자동매매 | 07:00 KST daily | isolated agentTurn |
+| M.AI.UPbit 매매 평가     | 07:30 KST daily | isolated agentTurn |
+| 오후 순찰                | 12:00 KST daily | isolated agentTurn |
+| M.AI.UPbit 오후 자동매매 | 19:00 KST daily | isolated agentTurn |
+| 주간 리뷰                | Mon 07:00 KST   | isolated agentTurn |
+| 퀀트 모멘텀 리포트       | Mon 07:00 KST   | isolated agentTurn |
+| 주간 기회 리뷰           | Mon 07:30 KST   | isolated agentTurn |
+| M.AI.UPbit 주간 성과     | Mon 08:00 KST   | isolated agentTurn |
+| Dependency Health        | Wed 10:00 KST   | isolated agentTurn |
+| Friday Documentation     | Fri 10:00 KST   | isolated agentTurn |
+| Monthly Full Check       | 1st Mon 09:00   | isolated agentTurn |
 
-All isolated jobs deliver to `channel:1466624220632059934` (Discord).
+All isolated jobs deliver to `channel:1466624220632059934` (Discord DM).
+Full schedule definitions in `HEARTBEAT.md`.
 
 ### Step 10: Validate
 
@@ -197,12 +240,14 @@ openclaw gateway start
 
 MAIBOT이 자동으로 처리:
 
-- MAI 프로젝트 7개 클론 (`C:\TEST\*`)
-- gsudo 설치 (Admin 원격 실행)
+- MAI 프로젝트 16개 클론 (`C:\TEST\*`)
+- gsudo 설치 (Admin 원격 실행, Windows only)
+- Claude Code CLI 설치 (3-Layer 멀티에이전트)
 - Chrome 디버그 모드 설정
-- EAS CLI 설치
+- EAS CLI 설치/업데이트
+- Python 환경 구성 (M.AI.UPbit, MAISECONDBRAIN)
 - Obsidian 심볼릭 링크 연결
-- Cron jobs 4개 복원
+- Cron jobs 21개 복원
 - Exec 자동승인 설정
 - 전체 검증
 
