@@ -56,6 +56,14 @@ const NOTIFY_DELIVERIES = ["system", "overlay", "auto"] as const;
 const NOTIFICATIONS_ACTIONS = ["open", "dismiss", "reply"] as const;
 const CAMERA_FACING = ["front", "back", "both"] as const;
 const LOCATION_ACCURACY = ["coarse", "balanced", "precise"] as const;
+const NODE_READ_ACTION_COMMANDS = {
+  camera_list: "camera.list",
+  notifications_list: "notifications.list",
+  device_status: "device.status",
+  device_info: "device.info",
+  device_permissions: "device.permissions",
+  device_health: "device.health",
+} as const;
 type GatewayCallOptions = ReturnType<typeof readGatewayCallOptions>;
 
 async function invokeNodeCommandPayload(params: {
@@ -317,18 +325,7 @@ export function createNodesTool(options?: {
           case "device_permissions":
           case "device_health": {
             const node = readStringParam(params, "node", { required: true });
-            const command =
-              action === "camera_list"
-                ? "camera.list"
-                : action === "notifications_list"
-                  ? "notifications.list"
-                  : action === "device_status"
-                    ? "device.status"
-                    : action === "device_info"
-                      ? "device.info"
-                      : action === "device_permissions"
-                        ? "device.permissions"
-                        : "device.health";
+            const command = NODE_READ_ACTION_COMMANDS[action];
             const payloadRaw = await invokeNodeCommandPayload({
               gatewayOpts,
               node,
