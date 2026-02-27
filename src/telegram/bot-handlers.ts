@@ -143,7 +143,6 @@ export const registerTelegramHandlers = ({
     ctx: TelegramContext;
     msg: Message;
     allMedia: TelegramMediaRef[];
-    replyMedia: TelegramMediaRef[];
     storeAllowFrom: string[];
     debounceKey: string | null;
     debounceLane: TelegramDebounceLane;
@@ -211,13 +210,8 @@ export const registerTelegramHandlers = ({
         return;
       }
       if (entries.length === 1) {
-        await processMessage(
-          last.ctx,
-          last.allMedia,
-          last.storeAllowFrom,
-          undefined,
-          last.replyMedia,
-        );
+        const replyMedia = await resolveReplyMediaForMessage(last.ctx, last.msg);
+        await processMessage(last.ctx, last.allMedia, last.storeAllowFrom, undefined, replyMedia);
         return;
       }
       const combinedText = entries
@@ -225,8 +219,7 @@ export const registerTelegramHandlers = ({
         .filter(Boolean)
         .join("\n");
       const combinedMedia = entries.flatMap((entry) => entry.allMedia);
-      const combinedReplyMedia = entries.flatMap((entry) => entry.replyMedia);
-      if (!combinedText.trim() && combinedMedia.length === 0 && combinedReplyMedia.length === 0) {
+      if (!combinedText.trim() && combinedMedia.length === 0) {
         return;
       }
       const first = entries[0];
@@ -237,12 +230,14 @@ export const registerTelegramHandlers = ({
         date: last.msg.date ?? first.msg.date,
       });
       const messageIdOverride = last.msg.message_id ? String(last.msg.message_id) : undefined;
+      const syntheticCtx = buildSyntheticContext(baseCtx, syntheticMessage);
+      const replyMedia = await resolveReplyMediaForMessage(baseCtx, syntheticMessage);
       await processMessage(
-        buildSyntheticContext(baseCtx, syntheticMessage),
+        syntheticCtx,
         combinedMedia,
         first.storeAllowFrom,
         messageIdOverride ? { messageIdOverride } : undefined,
-        combinedReplyMedia,
+        replyMedia,
       );
     },
     onError: (err) => {
@@ -968,7 +963,6 @@ export const registerTelegramHandlers = ({
           },
         ]
       : [];
-    const replyMedia = await resolveReplyMediaForMessage(ctx, msg);
     const senderId = msg.from?.id ? String(msg.from.id) : "";
     const conversationKey =
       resolvedThreadId != null ? `${chatId}:topic:${resolvedThreadId}` : String(chatId);
@@ -980,7 +974,6 @@ export const registerTelegramHandlers = ({
       ctx,
       msg,
       allMedia,
-      replyMedia,
       storeAllowFrom,
       debounceKey,
       debounceLane,

@@ -451,6 +451,104 @@ describe("createTelegramBot", () => {
     }
   });
 
+  it("defers reply media download until debounce flush", async () => {
+    const DEBOUNCE_MS = 4321;
+    onSpy.mockClear();
+    replySpy.mockClear();
+    getFileSpy.mockClear();
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      messages: {
+        inbound: {
+          debounceMs: DEBOUNCE_MS,
+        },
+      },
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    });
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(new Uint8Array([0x89, 0x50, 0x4e, 0x47]), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+    );
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      createTelegramBot({ token: "tok" });
+      const handler = getOnHandler("message") as (ctx: Record<string, unknown>) => Promise<void>;
+
+      await handler({
+        message: {
+          chat: { id: 7, type: "private" },
+          text: "first",
+          date: 1736380800,
+          message_id: 101,
+          from: { id: 42, first_name: "Ada" },
+          reply_to_message: {
+            message_id: 9001,
+            photo: [{ file_id: "reply-photo-1" }],
+            from: { first_name: "Ada" },
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+      await handler({
+        message: {
+          chat: { id: 7, type: "private" },
+          text: "second",
+          date: 1736380801,
+          message_id: 102,
+          from: { id: 42, first_name: "Ada" },
+          reply_to_message: {
+            message_id: 9001,
+            photo: [{ file_id: "reply-photo-1" }],
+            from: { first_name: "Ada" },
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({}),
+      });
+
+      expect(replySpy).not.toHaveBeenCalled();
+      expect(getFileSpy).not.toHaveBeenCalled();
+
+      const flushTimerCallIndex = setTimeoutSpy.mock.calls.findLastIndex(
+        (call) => call[1] === DEBOUNCE_MS,
+      );
+      const flushTimer =
+        flushTimerCallIndex >= 0
+          ? (setTimeoutSpy.mock.calls[flushTimerCallIndex]?.[0] as (() => unknown) | undefined)
+          : undefined;
+      if (flushTimerCallIndex >= 0) {
+        clearTimeout(
+          setTimeoutSpy.mock.results[flushTimerCallIndex]?.value as ReturnType<typeof setTimeout>,
+        );
+      }
+      expect(flushTimer).toBeTypeOf("function");
+      await flushTimer?.();
+      await vi.waitFor(() => {
+        expect(replySpy).toHaveBeenCalledTimes(1);
+      });
+
+      expect(getFileSpy).toHaveBeenCalledTimes(1);
+      expect(getFileSpy).toHaveBeenCalledWith("reply-photo-1");
+    } finally {
+      setTimeoutSpy.mockRestore();
+      fetchSpy.mockRestore();
+    }
+  });
+
   it("handles quote-only replies without reply metadata", async () => {
     onSpy.mockClear();
     sendMessageSpy.mockClear();
