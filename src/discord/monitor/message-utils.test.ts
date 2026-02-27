@@ -565,7 +565,7 @@ describe("resolveDiscordMessageText", () => {
     expect(text).toBe("<media:sticker> (1 sticker)");
   });
 
-  it("uses embed title when content is empty", () => {
+  it("ignores embed title when content is empty", () => {
     const text = resolveDiscordMessageText(
       asMessage({
         content: "",
@@ -573,10 +573,10 @@ describe("resolveDiscordMessageText", () => {
       }),
     );
 
-    expect(text).toBe("Breaking");
+    expect(text).toBe("");
   });
 
-  it("uses embed description when content is empty", () => {
+  it("ignores embed description when content is empty", () => {
     const text = resolveDiscordMessageText(
       asMessage({
         content: "",
@@ -584,10 +584,10 @@ describe("resolveDiscordMessageText", () => {
       }),
     );
 
-    expect(text).toBe("Details");
+    expect(text).toBe("");
   });
 
-  it("joins embed title and description when content is empty", () => {
+  it("ignores combined embed title/description when content is empty", () => {
     const text = resolveDiscordMessageText(
       asMessage({
         content: "",
@@ -595,7 +595,7 @@ describe("resolveDiscordMessageText", () => {
       }),
     );
 
-    expect(text).toBe("Breaking\nDetails");
+    expect(text).toBe("");
   });
 
   it("prefers message content over embed fallback text", () => {
@@ -609,7 +609,7 @@ describe("resolveDiscordMessageText", () => {
     expect(text).toBe("hello from content");
   });
 
-  it("joins forwarded snapshot embed title and description when content is empty", () => {
+  it("ignores forwarded snapshot embed title/description when content is empty", () => {
     const text = resolveDiscordMessageText(
       asForwardedSnapshotMessage({
         content: "",
@@ -618,8 +618,7 @@ describe("resolveDiscordMessageText", () => {
       { includeForwarded: true },
     );
 
-    expect(text).toContain("[Forwarded message from @Bob]");
-    expect(text).toContain("Forwarded title\nForwarded details");
+    expect(text).toBe("");
   });
 });
 

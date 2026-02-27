@@ -10,7 +10,7 @@ describe("resolveDiscordThreadStarter", () => {
     __resetDiscordThreadStarterCacheForTest();
   });
 
-  it("falls back to joined embed title and description when content is empty", async () => {
+  it("ignores embed title/description when starter content is empty", async () => {
     const get = vi.fn().mockResolvedValue({
       content: "   ",
       embeds: [{ title: "Alert", description: "Details" }],
@@ -27,14 +27,10 @@ describe("resolveDiscordThreadStarter", () => {
       resolveTimestampMs: () => 123,
     });
 
-    expect(result).toEqual({
-      text: "Alert\nDetails",
-      author: "Alice",
-      timestamp: 123,
-    });
+    expect(result).toBeNull();
   });
 
-  it("prefers starter content over embed fallback text", async () => {
+  it("prefers starter content over embed metadata", async () => {
     const get = vi.fn().mockResolvedValue({
       content: "starter content",
       embeds: [{ title: "Alert", description: "Details" }],
