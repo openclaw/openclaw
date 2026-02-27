@@ -176,7 +176,7 @@ describe("runCapability skips tiny audio files", () => {
 
       expect(transcribeCalled).toBe(true);
       expect(result.outputs).toHaveLength(1);
-      expect(result.outputs[0]?.text).toBe("hello world");
+      expect(result.outputs[0].text).toBe("hello world");
       expect(result.decision.outcome).toBe("success");
     } finally {
       process.env.PATH = originalPath;
