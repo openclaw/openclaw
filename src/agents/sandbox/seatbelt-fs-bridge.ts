@@ -32,7 +32,9 @@ class SeatbeltFsBridgeImpl implements SandboxFsBridge {
 
   constructor(sandbox: SandboxContext) {
     this.sandbox = sandbox;
-    this.mounts = buildSandboxFsMounts(sandbox);
+    // Seatbelt backend must not trust docker.binds here because bind specs are
+    // only validated for docker execution paths.
+    this.mounts = buildSandboxFsMounts(sandbox).filter((mount) => mount.source !== "bind");
     this.mountsByContainer = [...this.mounts].toSorted(
       (a, b) => b.containerRoot.length - a.containerRoot.length,
     );

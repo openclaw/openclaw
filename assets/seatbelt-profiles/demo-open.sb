@@ -17,9 +17,19 @@
 (allow process-exec)
 (allow network*)
 
-; Allow workspace + temp access.
-(allow file-read* file-write* (subpath (param "PROJECT_DIR")))
-(allow file-read* file-write* (subpath (param "WORKSPACE_DIR")))
+; Always allow reads in project + workspace paths.
+(allow file-read* (subpath (param "PROJECT_DIR")))
+(allow file-read* (subpath (param "WORKSPACE_DIR")))
+
+; WORKSPACE_ACCESS controls write permission at the profile layer.
+(if (string=? (param "WORKSPACE_ACCESS") "rw")
+  (allow file-write* (subpath (param "PROJECT_DIR")))
+  (deny file-write* (subpath (param "PROJECT_DIR"))))
+(if (string=? (param "WORKSPACE_ACCESS") "rw")
+  (allow file-write* (subpath (param "WORKSPACE_DIR")))
+  (deny file-write* (subpath (param "WORKSPACE_DIR"))))
+
+; Keep runtime temp writable.
 (allow file-read* file-write* (subpath (param "TMPDIR")))
 
 ; Protect installed seatbelt profiles from runtime mutation.

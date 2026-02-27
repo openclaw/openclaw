@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import {
   ensureConfiguredSeatbeltDemoProfiles,
   ensureSeatbeltDemoProfiles,
+  resolveBundledSeatbeltProfilesDir,
   SEATBELT_DEMO_PROFILE_NAMES,
 } from "./seatbelt-profiles.js";
 
@@ -48,6 +49,27 @@ describe("seatbelt demo profile installer", () => {
 
     const persisted = await fs.readFile(markerPath, "utf8");
     expect(persisted).toBe(markerContents);
+  });
+
+  it("demo-open profile gates writes by WORKSPACE_ACCESS while keeping reads", async () => {
+    const bundledDir = resolveBundledSeatbeltProfilesDir();
+    expect(bundledDir).not.toBeNull();
+
+    const profile = await fs.readFile(path.join(bundledDir!, "demo-open.sb"), "utf8");
+    expect(profile).toContain('(allow file-read* (subpath (param "PROJECT_DIR")))');
+    expect(profile).toContain('(allow file-read* (subpath (param "WORKSPACE_DIR")))');
+    expect(profile).toContain(
+      '(if (string=? (param "WORKSPACE_ACCESS") "rw")\n  (allow file-write* (subpath (param "PROJECT_DIR")))',
+    );
+    expect(profile).toContain(
+      '(if (string=? (param "WORKSPACE_ACCESS") "rw")\n  (allow file-write* (subpath (param "WORKSPACE_DIR")))',
+    );
+    expect(profile).not.toContain(
+      '(allow file-read* file-write* (subpath (param "PROJECT_DIR")))',
+    );
+    expect(profile).not.toContain(
+      '(allow file-read* file-write* (subpath (param "WORKSPACE_DIR")))',
+    );
   });
 
   it("installs profiles for each configured seatbelt profileDir", async () => {

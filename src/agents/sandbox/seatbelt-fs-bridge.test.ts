@@ -10,6 +10,7 @@ function createSeatbeltSandbox(params: {
   workspaceDir: string;
   agentWorkspaceDir?: string;
   workspaceAccess?: SandboxContext["workspaceAccess"];
+  dockerBinds?: string[];
 }): SandboxContext {
   const profileDir = path.join(params.workspaceDir, "profiles");
   return createSandboxTestContext({
@@ -20,6 +21,9 @@ function createSeatbeltSandbox(params: {
       workspaceAccess: params.workspaceAccess ?? "rw",
       containerName: "",
       containerWorkdir: params.workspaceDir,
+      docker: {
+        binds: params.dockerBinds,
+      },
       seatbelt: {
         profileDir,
         profile: "demo-open",
@@ -56,6 +60,31 @@ describe("seatbelt fs bridge", () => {
 
       await bridge.remove({ filePath: "notes/todo.txt" });
       expect(await bridge.stat({ filePath: "notes/todo.txt" })).toBeNull();
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores docker.binds mounts when resolving seatbelt fs paths", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-seatbelt-fs-binds-"));
+    const workspaceDir = path.join(stateDir, "workspace");
+    const externalDir = path.join(stateDir, "external");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.mkdir(externalDir, { recursive: true });
+    await fs.writeFile(path.join(externalDir, "secret.txt"), "top-secret", "utf8");
+
+    try {
+      const bridge = createSeatbeltFsBridge({
+        sandbox: createSeatbeltSandbox({
+          workspaceDir,
+          workspaceAccess: "rw",
+          dockerBinds: [externalDir + ":/external:rw"],
+        }),
+      });
+
+      await expect(bridge.readFile({ filePath: "/external/secret.txt" })).rejects.toThrow(
+        /escapes allowed mounts|escapes sandbox root/,
+      );
     } finally {
       await fs.rm(stateDir, { recursive: true, force: true });
     }
