@@ -137,7 +137,7 @@
     },
     {
       "source": "/providers/grammy",
-      "destination": "/channels/grammy"
+      "destination": "/channels/telegram"
     },
     {
       "source": "/providers/imessage",
@@ -365,7 +365,11 @@
     },
     {
       "source": "/grammy",
-      "destination": "/channels/grammy"
+      "destination": "/channels/telegram"
+    },
+    {
+      "source": "/channels/grammy",
+      "destination": "/channels/telegram"
     },
     {
       "source": "/group-messages",
@@ -1271,12 +1275,7 @@
               },
               {
                 "group": "Technical reference",
-                "pages": [
-                  "reference/wizard",
-                  "reference/token-use",
-                  "reference/prompt-caching",
-                  "channels/grammy"
-                ]
+                "pages": ["reference/wizard", "reference/token-use", "reference/prompt-caching"]
               },
               {
                 "group": "Concept internals",
