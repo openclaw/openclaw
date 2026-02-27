@@ -20,6 +20,7 @@ import {
   replySpy,
   sendMessageSpy,
   setMyCommandsSpy,
+  useSpy,
   wasSentByBot,
 } from "./bot.create-telegram-bot.test-harness.js";
 import { createTelegramBot } from "./bot.js";
@@ -1376,6 +1377,16 @@ describe("createTelegramBot", () => {
     });
 
     expect(enqueueSystemEventSpy).toHaveBeenCalledTimes(expectedEnqueueCalls);
+  });
+
+  it("registers sent-message-recording transformer on bot.api.config", () => {
+    useSpy.mockClear();
+    createTelegramBot({ token: "tok" });
+
+    // The throttler is the first transformer, and the sent-message-recording transformer is the second.
+    // useSpy captures all bot.api.config.use() calls.
+    expect(useSpy).toHaveBeenCalledTimes(2);
+    expect(typeof useSpy.mock.calls[1]?.[0]).toBe("function");
   });
 
   it("skips reaction when reactionNotifications is off", async () => {
