@@ -383,6 +383,43 @@ describe("resolveSessionModelRef", () => {
 
     expect(resolved).toEqual({ provider: "anthropic", model: "claude-sonnet-4-6" });
   });
+
+  test("strips @auth_profile suffix from runtime model without modelProvider", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+        },
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveSessionModelRef(cfg, {
+      sessionId: "at-suffix",
+      updatedAt: Date.now(),
+      model: "claude-opus-4-6@anthropic:claude_max",
+      modelProvider: undefined,
+    });
+
+    expect(resolved).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
+  });
+
+  test("strips @auth_profile suffix from modelOverride", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-6" },
+        },
+      },
+    } as OpenClawConfig;
+
+    const resolved = resolveSessionModelRef(cfg, {
+      sessionId: "at-override",
+      updatedAt: Date.now(),
+      modelOverride: "google/gemini-flash-latest@google:bevfresh",
+    });
+
+    expect(resolved).toEqual({ provider: "google", model: "gemini-flash-latest" });
+  });
 });
 
 describe("resolveSessionModelIdentityRef", () => {

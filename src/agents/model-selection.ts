@@ -160,12 +160,19 @@ export function parseModelRef(raw: string, defaultProvider: string): ModelRef | 
   if (!trimmed) {
     return null;
   }
-  const slash = trimmed.indexOf("/");
-  if (slash === -1) {
-    return normalizeModelRef(defaultProvider, trimmed);
+  // Strip trailing @auth_profile suffix before parsing provider/model so that
+  // config values like "anthropic/claude-opus-4-6@anthropic:claude_max" do not
+  // leak the auth profile into the model name sent to the API (#23042).
+  const { model: stripped } = splitTrailingAuthProfile(trimmed);
+  if (!stripped) {
+    return null;
   }
-  const providerRaw = trimmed.slice(0, slash).trim();
-  const model = trimmed.slice(slash + 1).trim();
+  const slash = stripped.indexOf("/");
+  if (slash === -1) {
+    return normalizeModelRef(defaultProvider, stripped);
+  }
+  const providerRaw = stripped.slice(0, slash).trim();
+  const model = stripped.slice(slash + 1).trim();
   if (!providerRaw || !model) {
     return null;
   }

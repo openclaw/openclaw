@@ -133,6 +133,27 @@ describe("model-selection", () => {
       expect(parseModelRef("anthropic/", "anthropic")).toBeNull();
       expect(parseModelRef("/model", "anthropic")).toBeNull();
     });
+
+    it("strips trailing @auth_profile suffix from provider/model refs", () => {
+      expect(parseModelRef("anthropic/claude-opus-4-6@anthropic:claude_max", "openai")).toEqual({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      });
+    });
+
+    it("strips trailing @auth_profile suffix from bare model refs", () => {
+      expect(parseModelRef("claude-opus-4-6@myprofile", "anthropic")).toEqual({
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+      });
+    });
+
+    it("strips trailing @auth_profile suffix from nested model refs", () => {
+      expect(parseModelRef("google/gemini-flash-latest@google:bevfresh", "anthropic")).toEqual({
+        provider: "google",
+        model: "gemini-flash-latest",
+      });
+    });
   });
 
   describe("inferUniqueProviderFromConfiguredModels", () => {
@@ -467,6 +488,24 @@ describe("model-selection", () => {
         defaultModel: "gpt-4",
       });
       expect(result).toEqual({ provider: "openai", model: "gpt-4" });
+    });
+
+    it("strips @auth_profile suffix from configured model primary", () => {
+      const cfg: Partial<OpenClawConfig> = {
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-6@anthropic:claude_max" },
+          },
+        },
+      };
+
+      const result = resolveConfiguredModelRef({
+        cfg: cfg as OpenClawConfig,
+        defaultProvider: "openai",
+        defaultModel: "gpt-4",
+      });
+
+      expect(result).toEqual({ provider: "anthropic", model: "claude-opus-4-6" });
     });
   });
 });
