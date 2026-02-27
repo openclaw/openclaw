@@ -1,5 +1,23 @@
 import { ProxyAgent, fetch as undiciFetch } from "undici";
 
+/**
+ * Resolve a proxy URL from explicit config or standard environment variables.
+ * Priority: explicit config > HTTPS_PROXY > HTTP_PROXY > https_proxy > http_proxy.
+ */
+export function resolveProxyUrl(configProxy: string | undefined): string | undefined {
+  const explicit = configProxy?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  return (
+    process.env.HTTPS_PROXY?.trim() ||
+    process.env.HTTP_PROXY?.trim() ||
+    process.env.https_proxy?.trim() ||
+    process.env.http_proxy?.trim() ||
+    undefined
+  );
+}
+
 export function makeProxyFetch(proxyUrl: string): typeof fetch {
   const agent = new ProxyAgent(proxyUrl);
   // undici's fetch is runtime-compatible with global fetch but the types diverge
