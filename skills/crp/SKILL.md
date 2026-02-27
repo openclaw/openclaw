@@ -150,9 +150,47 @@ Auth is automatic via `DefaultAzureCredential` → your `az login` session.
 - Readonly queries: sets `request_readonly=True` on `ClientRequestProperties`
 - Destructive tools: `execute_command`, `ingest_inline_into_table`, `ingest_csv_file_to_table`
 
+### Direct REST API Pattern (faster than agency/uvx)
+
+Write KQL to a `.ps1` file (avoids pipe `|` being swallowed by cmd) and call the Kusto REST endpoint directly:
+
+```powershell
+# C:\temp\kusto-query.ps1
+$token = (az account get-access-token --resource https://azcrp.kusto.windows.net | ConvertFrom-Json).accessToken
+
+$query = @"
+ApiQosEvent
+| where subscriptionId == "c15bc211-af19-4a38-8f69-f567f6751f9e"
+| where PreciseTimeStamp >= ago(1d)
+| take 10
+"@
+
+$body = @{ db = "crp_allprod"; csl = $query; properties = @{} } | ConvertTo-Json
+
+Invoke-RestMethod `
+    -Uri "https://azcrp.kusto.windows.net/v2/rest/query" `
+    -Method POST `
+    -Headers @{ Authorization = "Bearer $token"; "Content-Type" = "application/json" } `
+    -Body $body | ConvertTo-Json -Depth 10
+```
+
+Run via: `powershell.exe -ExecutionPolicy Bypass -File C:\temp\kusto-query.ps1`
+
+Response shape: `v2` API returns an array of frames — look for `"TableKind": "PrimaryResult"` for the actual rows. `Columns` + `Rows` arrays (not objects).
+
+⚠️ **Key gotcha:** Never inline KQL with `|` pipes directly in a PowerShell `-Command` string passed through `vscode.terminal` — cmd.exe intercepts the pipes. Always write to a `.ps1` file first.
+
 ### CRP-Relevant Clusters
 
-Find cluster URIs from Jarvis (https://jarvis-west.dc.ad.msft.net) or ask Lead Saia to look up via Copilot.
+| Alias         | Cluster URI                                       | Key Database  |
+| ------------- | ------------------------------------------------- | ------------- |
+| Azcrp         | `https://azcrp.kusto.windows.net`                 | `crp_allprod` |
+| Azcore        | `https://azcore.centralus.kusto.windows.net`      | `Fa`          |
+| Disks         | `https://disks.kusto.windows.net`                 | `Disks`       |
+| Azcrpfollower | `https://azcrpfollower.kusto.windows.net`         | `crp_allprod` |
+| Azspot        | `https://azspot.southcentralus.kusto.windows.net` | `spot_prod`   |
+
+(From Kusto Explorer connections file: `C:\Users\dchitoraga\AppData\Local\Kusto.Explorer\UserConnections.xml`)
 
 ## Key Learnings
 
