@@ -15,12 +15,34 @@ const TEAM_NAME_REGEX = /^[a-z0-9-]{1,50}$/;
 
 /**
  * Get the base directory for teams
- * Teams are stored under a "teams" subdirectory of the state directory
+ * Teams are stored under a "teams" subdirectory of the state directory.
+ *
+ * For teammate agents, the cwd and OPENCLAW_STATE_DIR may not point to the
+ * parent agent's workspace (where the team was created). In that case we
+ * walk up from the teammate's own workspace/agent directory — which lives
+ * inside the team structure at {teamsDir}/{teamName}/agents/{name}/ — to
+ * find the enclosing teams directory.
+ *
  * @returns The teams base directory path
  */
 export function getTeamsBaseDir(): string {
-  const stateDir = process.env.OPENCLAW_STATE_DIR || process.cwd();
-  return join(stateDir, "teams");
+  // 1. Explicit env always wins
+  if (process.env.OPENCLAW_STATE_DIR) {
+    return join(process.env.OPENCLAW_STATE_DIR, "teams");
+  }
+
+  // 2. Check if cwd is inside a team structure:
+  //    .../teams/<teamName>/agents/<name>/workspace  (teammate workspace)
+  //    .../teams/<teamName>/agents/<name>/agent       (teammate agent dir)
+  //    Match pattern: /teams/<x>/agents/<y>/
+  const cwd = process.cwd();
+  const teamsMatch = cwd.match(/^(.+\/teams)\/[^/]+\/agents\/[^/]+/);
+  if (teamsMatch) {
+    return teamsMatch[1];
+  }
+
+  // 3. Default: teams dir under cwd
+  return join(cwd, "teams");
 }
 
 /**
