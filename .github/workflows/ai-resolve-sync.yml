@@ -1,0 +1,78 @@
+name: AI Resolve Sync Failure
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  resolve:
+    if: github.event.label.name == 'ai-fix'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.AMERICAN_CLAW_DISPATCH_TOKEN }}
+
+      - name: Resolve with Claude Code
+        id: claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          prompt: |
+            You are resolving a sync failure in this repository (justuseapen/else-core).
+            This is a fork of openclaw/openclaw with local patches.
+
+            Read the issue body for full context including error logs, the sync branch name,
+            and specific instructions for resolving the failure.
+
+            Key rules:
+            - When resolving merge conflicts, ALWAYS prefer our local patches in:
+              Dockerfiles, orchestrator/, .github/workflows/
+            - For upstream-only files, take upstream's version
+            - If the issue is a PR creation failure, retry creating the PR
+            - Create a PR targeting main when done, marked ready-for-review
+            - Do NOT auto-merge anything
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          timeout_minutes: 15
+          model: claude-sonnet-4-5-20250929
+
+      - name: Comment on success
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue comment ${{ github.event.issue.number }} \
+            --body "Claude Code resolved this issue. Check the linked PR for the fix."
+
+      - name: Fallback to Copilot
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.AMERICAN_CLAW_DISPATCH_TOKEN }}
+        run: |
+          gh issue comment ${{ github.event.issue.number }} \
+            --body "Claude Code could not resolve this. Assigning to Copilot as fallback."
+
+          # Assign Copilot to the issue for automated resolution
+          gh api graphql -f query='
+            mutation {
+              addAssigneesToAssignable(input: {
+                assignableId: "${{ github.event.issue.node_id }}"
+                assigneeIds: ["copilot"]
+              }) {
+                clientMutationId
+              }
+            }
+          ' || echo "Warning: Could not assign Copilot. Manual intervention needed."
+
+      - name: Close issue on success
+        if: success()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh issue close ${{ github.event.issue.number }} --reason completed
