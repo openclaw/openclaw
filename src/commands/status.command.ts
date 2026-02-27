@@ -114,11 +114,15 @@ function resolveNonceRecoveryContext(params: {
         return parsedPort ?? params.fallbackPort;
       }
       // For non-loopback URLs, prefer explicit listener settings; otherwise use
-      // the probed URL port when available.
+      // the probed URL port when available. If URL omits the port, use the
+      // scheme default because that's the only concrete remote listener hint.
       if (params.listenerPortConfigured) {
         return params.fallbackPort;
       }
-      return parsedPort ?? params.fallbackPort;
+      if (parsedPort !== null) {
+        return parsedPort;
+      }
+      return parsed.protocol === "wss:" ? 443 : 80;
     } catch {
       // Use configured fallback below.
     }

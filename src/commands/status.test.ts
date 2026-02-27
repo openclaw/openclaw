@@ -568,7 +568,7 @@ describe("statusCommand", () => {
     expect(joined).toContain("devices approve req-close-456");
   });
 
-  it("prints nonce recovery guidance when handshake nonce is missing behind proxy", async () => {
+  it("uses wss default port for nonce guidance when non-loopback URL omits port", async () => {
     mocks.probeGateway.mockResolvedValueOnce({
       ok: false,
       url: "wss://forward.example.com",
@@ -586,9 +586,29 @@ describe("statusCommand", () => {
     const joined = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
     expect(joined).toContain("Gateway device nonce handshake failed.");
     expect(joined).toContain("cloud proxy/WSS forwarder");
-    expect(joined).toContain("ssh -L 18789:127.0.0.1:18789 <user>@<host>");
-    expect(joined).toContain("http://127.0.0.1:18789");
+    expect(joined).toContain("ssh -L 443:127.0.0.1:443 <user>@<host>");
+    expect(joined).toContain("http://127.0.0.1:443");
     expect(joined).toContain("trusted-proxy");
+  });
+
+  it("uses ws default port for nonce guidance when non-loopback URL omits port", async () => {
+    mocks.probeGateway.mockResolvedValueOnce({
+      ok: false,
+      url: "ws://forward.example.com",
+      connectLatencyMs: null,
+      error: "connect failed: device nonce required",
+      close: { code: 1008, reason: "connect failed" },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+
+    runtimeLogMock.mockClear();
+    await statusCommand({}, runtime as never);
+    const joined = runtimeLogMock.mock.calls.map((c: unknown[]) => String(c[0])).join("\n");
+    expect(joined).toContain("ssh -L 80:127.0.0.1:80 <user>@<host>");
+    expect(joined).toContain("http://127.0.0.1:80");
   });
 
   it("uses probe URL port for nonce guidance when listener port is not configured", async () => {
