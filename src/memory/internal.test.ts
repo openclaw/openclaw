@@ -230,3 +230,98 @@ describe("remapChunkLines", () => {
     }
   });
 });
+
+describe("chunkMarkdown — section strategy", () => {
+  it("splits at ## heading boundaries", () => {
+    const makeLines = (n: number, prefix: string): string[] =>
+      Array.from({ length: n }, (_, i) => `${prefix} line ${i + 1}`);
+
+    const content = [
+      "## Section One",
+      "",
+      ...makeLines(6, "Alpha"),
+      "",
+      "## Section Two",
+      "",
+      ...makeLines(6, "Beta"),
+    ].join("\n");
+
+    const chunks = chunkMarkdown(content, { tokens: 400, overlap: 0, strategy: "section" });
+    expect(chunks.length).toBe(2);
+    expect(chunks.some((c) => c.text.includes("Section One"))).toBe(true);
+    expect(chunks.some((c) => c.text.includes("Section Two"))).toBe(true);
+  });
+
+  it("injects section title into sub-chunks of large sections", () => {
+    const bigLines = Array.from({ length: 90 }, (_, i) => `line content ${i}`);
+    const content = ["## Big Section", ...bigLines].join("\n");
+
+    const chunks = chunkMarkdown(content, { tokens: 400, overlap: 0, strategy: "section" });
+    expect(chunks.length).toBeGreaterThan(1);
+    // All continuation sub-chunks should start with the section title
+    for (let i = 1; i < chunks.length; i++) {
+      expect(chunks[i].text).toContain("## Big Section");
+    }
+  });
+
+  it("merges tiny section into previous section", () => {
+    const content = [
+      "## Main Section",
+      "",
+      "Line one with enough content.",
+      "Line two with enough content.",
+      "Line three with enough content.",
+      "Line four with enough content.",
+      "Line five with enough content.",
+      "",
+      "## Tiny",
+      "",
+      "Just one line.",
+    ].join("\n");
+
+    const chunks = chunkMarkdown(content, { tokens: 400, overlap: 0, strategy: "section" });
+    // Tiny section should merge into Main Section
+    expect(chunks.length).toBe(1);
+    expect(chunks[0].text).toContain("## Tiny");
+    expect(chunks[0].text).toContain("## Main Section");
+  });
+
+  it("returns single chunk when no ## headings found", () => {
+    const content = "# H1 Title\n\nSome content.\n\nMore content.\n";
+    const chunks = chunkMarkdown(content, { tokens: 400, overlap: 0, strategy: "section" });
+    expect(chunks.length).toBe(1);
+  });
+
+  it("preserves correct line numbers", () => {
+    const makeLines = (n: number, label: string): string[] =>
+      Array.from({ length: n }, (_, i) => `${label} content line ${i + 1}`);
+
+    const sectionALines = ["## Section A", "", ...makeLines(6, "A")];
+    const sectionBLines = ["## Section B", "", ...makeLines(6, "B")];
+    const content = [...sectionALines, "", ...sectionBLines].join("\n");
+
+    const chunks = chunkMarkdown(content, { tokens: 400, overlap: 0, strategy: "section" });
+    expect(chunks.length).toBe(2);
+
+    const chunkA = chunks.find(
+      (c) => c.text.includes("Section A") && !c.text.includes("Section B"),
+    );
+    const chunkB = chunks.find((c) => c.text.includes("Section B"));
+    expect(chunkA).toBeDefined();
+    expect(chunkB).toBeDefined();
+    expect(chunkA!.startLine).toBe(1);
+    expect(chunkB!.startLine).toBeGreaterThan(chunkA!.endLine);
+  });
+
+  it("produces same output as default when strategy is token", () => {
+    const content = "line one\nline two\nline three";
+    const withToken = chunkMarkdown(content, { tokens: 400, overlap: 0, strategy: "token" });
+    const withDefault = chunkMarkdown(content, { tokens: 400, overlap: 0 });
+    expect(withToken).toEqual(withDefault);
+  });
+
+  it("handles empty content gracefully", () => {
+    const chunks = chunkMarkdown("", { tokens: 400, overlap: 0, strategy: "section" });
+    expect(chunks).toEqual([]);
+  });
+});

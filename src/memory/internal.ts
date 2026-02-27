@@ -181,10 +181,120 @@ export async function buildFileEntry(
   };
 }
 
+/**
+ * Section-aware chunking: splits structured markdown at ## heading boundaries,
+ * injects section title into each chunk for better retrieval specificity,
+ * merges tiny sections, and sub-splits large sections at paragraph boundaries.
+ */
+export function chunkMarkdownBySection(content: string): MemoryChunk[] {
+  const lines = content.split("\n");
+  if (lines.length === 0) {
+    return [];
+  }
+
+  const MIN_SECTION_LINES = 5;
+  const MAX_SECTION_LINES = 80;
+
+  // Find ## heading boundaries (0-based line indices)
+  const headingIndices: number[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (/^##\s/.test(lines[i] ?? "")) {
+      headingIndices.push(i);
+    }
+  }
+
+  // No ## headings — return the whole content as one chunk
+  if (headingIndices.length === 0) {
+    const text = content.trim();
+    if (!text) {
+      return [];
+    }
+    return [{ startLine: 1, endLine: lines.length, text, hash: hashText(text) }];
+  }
+
+  // Build raw sections
+  type RawSection = { title: string; startIdx: number; endIdx: number };
+  const rawSections: RawSection[] = [];
+
+  // Preamble (before first ##)
+  if (headingIndices[0] > 0) {
+    rawSections.push({ title: "", startIdx: 0, endIdx: headingIndices[0] });
+  }
+
+  for (let i = 0; i < headingIndices.length; i++) {
+    const start = headingIndices[i];
+    const end = i + 1 < headingIndices.length ? headingIndices[i + 1] : lines.length;
+    rawSections.push({ title: lines[start] ?? "", startIdx: start, endIdx: end });
+  }
+
+  // Merge tiny sections (< MIN_SECTION_LINES non-empty lines) into previous
+  const nonEmptyCount = (s: RawSection): number =>
+    lines.slice(s.startIdx, s.endIdx).filter((l) => l.trim()).length;
+
+  const merged: RawSection[] = [];
+  for (const section of rawSections) {
+    if (nonEmptyCount(section) < MIN_SECTION_LINES && merged.length > 0) {
+      merged[merged.length - 1].endIdx = section.endIdx;
+    } else {
+      merged.push({ ...section });
+    }
+  }
+
+  // Generate chunks (sub-splitting large sections)
+  const chunks: MemoryChunk[] = [];
+
+  const pushChunk = (chunkLines: string[], startLineNo: number): void => {
+    const text = chunkLines.join("\n").trim();
+    if (!text) {
+      return;
+    }
+    chunks.push({
+      startLine: startLineNo,
+      endLine: startLineNo + chunkLines.length - 1,
+      text,
+      hash: hashText(text),
+    });
+  };
+
+  for (const section of merged) {
+    const sectionLines = lines.slice(section.startIdx, section.endIdx);
+    const title = section.title;
+
+    if (sectionLines.length <= MAX_SECTION_LINES) {
+      pushChunk(sectionLines, section.startIdx + 1);
+    } else {
+      // Sub-split at paragraph boundaries (blank lines)
+      let subStart = 0;
+      while (subStart < sectionLines.length) {
+        let subEnd = Math.min(subStart + MAX_SECTION_LINES, sectionLines.length);
+        // Try to break at a blank line near the end of the window
+        if (subEnd < sectionLines.length) {
+          for (let i = subEnd - 1; i > subStart + Math.floor(MAX_SECTION_LINES / 2); i--) {
+            if (sectionLines[i] === "") {
+              subEnd = i + 1;
+              break;
+            }
+          }
+        }
+        const subLines = sectionLines.slice(subStart, subEnd);
+        // Inject section title into continuation sub-chunks
+        const chunkLines = subStart > 0 && title ? [title, ...subLines] : subLines;
+        pushChunk(chunkLines, section.startIdx + subStart + 1);
+        subStart = subEnd;
+      }
+    }
+  }
+
+  return chunks;
+}
+
 export function chunkMarkdown(
   content: string,
-  chunking: { tokens: number; overlap: number },
+  chunking: { tokens: number; overlap: number; strategy?: "token" | "section" },
 ): MemoryChunk[] {
+  if (chunking.strategy === "section") {
+    return chunkMarkdownBySection(content);
+  }
   const lines = content.split("\n");
   if (lines.length === 0) {
     return [];
