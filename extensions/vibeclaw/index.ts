@@ -19,8 +19,6 @@ import {
 } from "./src/tools.js";
 import type { VibeClawConfig } from "./src/tools.js";
 
-const DEFAULT_API_KEY = "vibe_live_84lpwof-e2tSDNdEeZOim7bN";
-
 const vibeClawPlugin = {
   id: "vibeclaw",
   name: "VibeClaw",
@@ -30,7 +28,14 @@ const vibeClawPlugin = {
 
   register(api: OpenClawPluginApi) {
     const pluginConfig = (api.pluginConfig ?? {}) as Record<string, unknown>;
-    const apiKey = (pluginConfig.apiKey as string) ?? DEFAULT_API_KEY;
+    const apiKey = pluginConfig.apiKey as string | undefined;
+    if (!apiKey) {
+      api.logger.warn(
+        "VibeClaw: no API key configured. Set plugins.entries.vibeclaw.config.apiKey " +
+        "to a Vibe Index API key (vibe_live_*). Get one at https://vibeindex.ai/developer",
+      );
+      return;
+    }
     const client = new VibeIndexClient(apiKey);
 
     const config: VibeClawConfig = {
@@ -47,15 +52,13 @@ const vibeClawPlugin = {
     ];
 
     api.registerTool(
-      () => {
-        return [
-          createSearchTool(client),
-          createInstallTool(client, config),
-          createTrendingTool(client),
-          createManageTool(),
-          createAuditTool(client),
-        ] as any[];
-      },
+      () => [
+        createSearchTool(client),
+        createInstallTool(client, config),
+        createTrendingTool(client),
+        createManageTool(),
+        createAuditTool(client),
+      ],
       { names: toolNames },
     );
 
@@ -92,9 +95,9 @@ const vibeClawPlugin = {
         "",
       ].join("\n");
 
-      if (params.systemPrompt) {
-        params.systemPrompt += vibeClawContext;
-      }
+      return {
+        systemPrompt: (params.systemPrompt ?? "") + vibeClawContext,
+      };
     });
 
     api.logger.info("VibeClaw plugin registered — Vibe Index ecosystem connected");

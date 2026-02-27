@@ -72,7 +72,7 @@ export class VibeIndexClient {
     const response = await globalThis.fetch(url.toString(), {
       headers: {
         "X-API-Key": this.apiKey,
-        "User-Agent": "VibeClaw/0.1.0",
+        "User-Agent": "VibeClaw/0.3.0",
       },
     });
 

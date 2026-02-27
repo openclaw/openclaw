@@ -15,6 +15,23 @@ const CONFIG_DIR = process.env.OPENCLAW_STATE_DIR
 const SKILLS_DIR = path.join(CONFIG_DIR, "skills");
 
 /**
+ * Validate and sanitize a skill name to prevent path traversal.
+ * Only allows alphanumeric characters, hyphens, underscores, and dots.
+ */
+function sanitizeSkillName(name: string): string | null {
+  const sanitized = name.replace(/[^a-zA-Z0-9\-_.]/g, "");
+  if (!sanitized || sanitized.includes("..") || sanitized.startsWith(".")) {
+    return null;
+  }
+  // Ensure the resolved path stays within SKILLS_DIR
+  const resolved = path.resolve(SKILLS_DIR, sanitized);
+  if (!resolved.startsWith(SKILLS_DIR + path.sep)) {
+    return null;
+  }
+  return sanitized;
+}
+
+/**
  * Possible paths where SKILL.md might live in a GitHub repo.
  * We try each in order until one succeeds.
  */
@@ -50,8 +67,8 @@ async function downloadSkillMd(
       });
       if (response.ok) {
         const content = await response.text();
-        // Validate it looks like a SKILL.md (has frontmatter)
-        if (content.startsWith("---") || content.includes("name:")) {
+        // Validate it looks like a SKILL.md: must have YAML frontmatter (--- delimited) with a name field
+        if (content.startsWith("---") && content.indexOf("---", 3) > 3 && content.includes("name:")) {
           return { content, url };
         }
       }
@@ -81,7 +98,16 @@ export async function installSkillFromGitHub(
   skillName: string,
   opts?: { force?: boolean },
 ): Promise<InstallResult> {
-  const skillDir = path.join(SKILLS_DIR, skillName);
+  const safeName = sanitizeSkillName(skillName);
+  if (!safeName) {
+    return {
+      success: false,
+      skillName,
+      error: `Invalid skill name "${skillName}". Names must be alphanumeric with hyphens/underscores only.`,
+    };
+  }
+
+  const skillDir = path.join(SKILLS_DIR, safeName);
   const skillFile = path.join(skillDir, "SKILL.md");
 
   // Check if already installed
@@ -171,7 +197,9 @@ export async function getInstalledSkillMeta(skillName: string): Promise<{
   sourceUrl: string;
   skillName: string;
 } | null> {
-  const metaPath = path.join(SKILLS_DIR, skillName, ".vibeclaw.json");
+  const safeName = sanitizeSkillName(skillName);
+  if (!safeName) return null;
+  const metaPath = path.join(SKILLS_DIR, safeName, ".vibeclaw.json");
   try {
     const content = await fs.readFile(metaPath, "utf-8");
     return JSON.parse(content);
@@ -184,7 +212,9 @@ export async function getInstalledSkillMeta(skillName: string): Promise<{
  * Uninstall a VibeClaw-installed skill
  */
 export async function uninstallSkill(skillName: string): Promise<boolean> {
-  const skillDir = path.join(SKILLS_DIR, skillName);
+  const safeName = sanitizeSkillName(skillName);
+  if (!safeName) return false;
+  const skillDir = path.join(SKILLS_DIR, safeName);
   const metaPath = path.join(skillDir, ".vibeclaw.json");
 
   try {
