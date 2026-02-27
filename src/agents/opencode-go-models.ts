@@ -6,7 +6,7 @@
  *
  * It is identical to OpenCode Zen except:
  * - API endpoint: https://opencode.ai/zen/go/v1 (instead of /zen/v1)
- * - Only supports: glm-5, minimax-2.5, kimi-k2.5
+ * - Only supports: glm-5, minimax-m2.5, kimi-k2.5
  *
  * Auth URL: https://opencode.ai/auth
  */
@@ -17,7 +17,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 const log = createSubsystemLogger("opencode-go-models");
 
 export const OPENCODE_GO_API_BASE_URL = "https://opencode.ai/zen/go/v1";
-export const OPENCODE_GO_DEFAULT_MODEL = "glm-5";
+export const OPENCODE_GO_DEFAULT_MODEL = "minimax-m2.5";
 export const OPENCODE_GO_DEFAULT_MODEL_REF = `opencode-go/${OPENCODE_GO_DEFAULT_MODEL}`;
 
 // Cache for fetched models (1 hour TTL)
@@ -32,8 +32,8 @@ const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 export const OPENCODE_GO_MODEL_ALIASES: Record<string, string> = {
   glm: "glm-5",
   "glm-5": "glm-5",
-  minimax: "minimax-2.5",
-  "minimax-2.5": "minimax-2.5",
+  minimax: "minimax-m2.5",
+  "minimax-m2.5": "minimax-m2.5",
   kimi: "kimi-k2.5",
   "kimi-k2.5": "kimi-k2.5",
 };
@@ -48,13 +48,9 @@ export function resolveOpencodeGoAlias(modelIdOrAlias: string): string {
 }
 
 /**
- * OpenCode Go routes models to specific API shapes by family.
+ * OpenCode Go routes all models through OpenAI-compatible completions API.
  */
-export function resolveOpencodeGoModelApi(modelId: string): ModelApi {
-  const lower = modelId.toLowerCase();
-  if (lower.startsWith("minimax-")) {
-    return "anthropic-messages";
-  }
+export function resolveOpencodeGoModelApi(_modelId: string): ModelApi {
   return "openai-completions";
 }
 
@@ -74,7 +70,7 @@ const MODEL_COSTS: Record<
   { input: number; output: number; cacheRead: number; cacheWrite: number }
 > = {
   "glm-5": { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  "minimax-2.5": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+  "minimax-m2.5": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
   "kimi-k2.5": { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0 },
 };
 
@@ -82,7 +78,7 @@ const DEFAULT_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
 const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
   "glm-5": 204800,
-  "minimax-2.5": 200000,
+  "minimax-m2.5": 200000,
   "kimi-k2.5": 131072,
 };
 
@@ -92,7 +88,7 @@ function getDefaultContextWindow(modelId: string): number {
 
 const MODEL_MAX_TOKENS: Record<string, number> = {
   "glm-5": 131072,
-  "minimax-2.5": 64000,
+  "minimax-m2.5": 64000,
   "kimi-k2.5": 65536,
 };
 
@@ -122,7 +118,7 @@ function buildModelDefinition(modelId: string): ModelDefinitionConfig {
  */
 const MODEL_NAMES: Record<string, string> = {
   "glm-5": "GLM-5",
-  "minimax-2.5": "MiniMax 2.5",
+  "minimax-m2.5": "MiniMax M2.5",
   "kimi-k2.5": "Kimi K2.5",
 };
 
@@ -141,7 +137,7 @@ function formatModelName(modelId: string): string {
  * Static fallback models when API is unreachable.
  */
 export function getOpencodeGoStaticFallbackModels(): ModelDefinitionConfig[] {
-  const modelIds = ["glm-5", "minimax-2.5", "kimi-k2.5"];
+  const modelIds = ["glm-5", "minimax-m2.5", "kimi-k2.5"];
 
   return modelIds.map(buildModelDefinition);
 }

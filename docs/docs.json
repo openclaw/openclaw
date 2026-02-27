@@ -1083,6 +1083,7 @@
                   "providers/mistral",
                   "providers/minimax",
                   "providers/opencode",
+                  "providers/opencode-go",
                   "providers/glm",
                   "providers/zai",
                   "providers/synthetic",

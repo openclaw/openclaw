@@ -7,7 +7,7 @@ export function applyOpencodeGoProviderConfig(cfg: OpenClawConfig): OpenClawConf
   const models = { ...cfg.agents?.defaults?.models };
   models[OPENCODE_GO_DEFAULT_MODEL_REF] = {
     ...models[OPENCODE_GO_DEFAULT_MODEL_REF],
-    alias: models[OPENCODE_GO_DEFAULT_MODEL_REF]?.alias ?? "GLM",
+    alias: models[OPENCODE_GO_DEFAULT_MODEL_REF]?.alias ?? "MiniMax",
   };
 
   return {

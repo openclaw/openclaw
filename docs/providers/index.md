@@ -46,6 +46,7 @@ See [Venice AI](/providers/venice).
 - [Moonshot AI (Kimi + Kimi Coding)](/providers/moonshot)
 - [Mistral](/providers/mistral)
 - [OpenCode Zen](/providers/opencode)
+- [OpenCode Go](/providers/opencode-go)
 - [Amazon Bedrock](/providers/bedrock)
 - [Z.AI](/providers/zai)
 - [Xiaomi](/providers/xiaomi)

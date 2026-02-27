@@ -45,9 +45,6 @@ export function normalizeProviderId(provider: string): string {
   if (normalized === "opencode-zen") {
     return "opencode";
   }
-  if (normalized === "opencode-go-zen") {
-    return "opencode-go";
-  }
   if (normalized === "qwen") {
     return "qwen-portal";
   }

@@ -12,7 +12,7 @@ describe("resolveOpencodeGoAlias", () => {
   });
 
   it("resolves minimax alias", () => {
-    expect(resolveOpencodeGoAlias("minimax")).toBe("minimax-2.5");
+    expect(resolveOpencodeGoAlias("minimax")).toBe("minimax-m2.5");
   });
 
   it("resolves kimi alias", () => {
@@ -31,7 +31,7 @@ describe("resolveOpencodeGoAlias", () => {
 
 describe("resolveOpencodeGoModelApi", () => {
   it("maps APIs by model family", () => {
-    expect(resolveOpencodeGoModelApi("minimax-2.5")).toBe("anthropic-messages");
+    expect(resolveOpencodeGoModelApi("minimax-m2.5")).toBe("openai-completions");
     expect(resolveOpencodeGoModelApi("glm-5")).toBe("openai-completions");
     expect(resolveOpencodeGoModelApi("kimi-k2.5")).toBe("openai-completions");
     expect(resolveOpencodeGoModelApi("some-unknown-model")).toBe("openai-completions");
@@ -50,7 +50,7 @@ describe("getOpencodeGoStaticFallbackModels", () => {
     const ids = models.map((m) => m.id);
 
     expect(ids).toContain("glm-5");
-    expect(ids).toContain("minimax-2.5");
+    expect(ids).toContain("minimax-m2.5");
     expect(ids).toContain("kimi-k2.5");
   });
 
@@ -71,10 +71,10 @@ describe("getOpencodeGoStaticFallbackModels", () => {
 describe("OPENCODE_GO_MODEL_ALIASES", () => {
   it("has expected aliases", () => {
     expect(OPENCODE_GO_MODEL_ALIASES.glm).toBe("glm-5");
-    expect(OPENCODE_GO_MODEL_ALIASES.minimax).toBe("minimax-2.5");
+    expect(OPENCODE_GO_MODEL_ALIASES.minimax).toBe("minimax-m2.5");
     expect(OPENCODE_GO_MODEL_ALIASES.kimi).toBe("kimi-k2.5");
     expect(OPENCODE_GO_MODEL_ALIASES["glm-5"]).toBe("glm-5");
-    expect(OPENCODE_GO_MODEL_ALIASES["minimax-2.5"]).toBe("minimax-2.5");
+    expect(OPENCODE_GO_MODEL_ALIASES["minimax-m2.5"]).toBe("minimax-m2.5");
     expect(OPENCODE_GO_MODEL_ALIASES["kimi-k2.5"]).toBe("kimi-k2.5");
   });
 });
