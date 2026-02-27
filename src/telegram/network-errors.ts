@@ -40,6 +40,8 @@ const RECOVERABLE_MESSAGE_SNIPPETS = [
   "timed out", // grammY getUpdates returns "timed out after X seconds" (not matched by "timeout")
 ];
 
+const GRAMMY_NETWORK_REQUEST_FAILED_RE = /^network request for '.+' failed!?$/i;
+
 function normalizeCode(code?: string): string {
   return code?.trim().toUpperCase() ?? "";
 }
@@ -140,6 +142,12 @@ export function isRecoverableTelegramNetworkError(
 
     const message = formatErrorMessage(candidate).trim().toLowerCase();
     if (message && ALWAYS_RECOVERABLE_MESSAGES.has(message)) {
+      return true;
+    }
+    // grammY wraps failed API requests with messages like:
+    // "Network request for 'sendPhoto' failed!"
+    // Treat these as recoverable in send context too so upload sends can retry.
+    if (message && GRAMMY_NETWORK_REQUEST_FAILED_RE.test(message)) {
       return true;
     }
     if (allowMessageMatch && message) {

@@ -363,6 +363,63 @@ describe("sendMessageTelegram", () => {
     ).rejects.toThrow(/returned no message_id/i);
   });
 
+  it("reproduces sendPhoto network error for local image media sends", async () => {
+    mockLoadedMedia({
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/png",
+      fileName: "photo.png",
+    });
+    const sendPhoto = vi
+      .fn()
+      .mockRejectedValue(new Error("Network request for 'sendPhoto' failed!"));
+    const api = { sendPhoto } as unknown as {
+      sendPhoto: typeof sendPhoto;
+    };
+
+    await expect(
+      sendMessageTelegram("123", "caption", {
+        token: "tok",
+        api,
+        mediaUrl: "/tmp/openclaw-telegram-photo.png",
+        mediaLocalRoots: ["/tmp"],
+        retry: { attempts: 1, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+      }),
+    ).rejects.toThrow("Network request for 'sendPhoto' failed!");
+
+    expect(loadWebMedia).toHaveBeenCalledWith("/tmp/openclaw-telegram-photo.png", {
+      localRoots: ["/tmp"],
+      maxBytes: undefined,
+    });
+  });
+
+  it("retries sendPhoto network request failures for media sends", async () => {
+    mockLoadedMedia({
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/png",
+      fileName: "photo.png",
+    });
+    const sendPhoto = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Network request for 'sendPhoto' failed!"))
+      .mockResolvedValueOnce({
+        message_id: 77,
+        chat: { id: "123" },
+      });
+    const api = { sendPhoto } as unknown as {
+      sendPhoto: typeof sendPhoto;
+    };
+
+    const result = await sendMessageTelegram("123", "caption", {
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/photo.png",
+      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+    });
+
+    expect(sendPhoto).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({ messageId: "77", chatId: "123" });
+  });
+
   it("uses native fetch for BAN compatibility when api is omitted", async () => {
     const originalFetch = globalThis.fetch;
     const originalBun = (globalThis as { Bun?: unknown }).Bun;
