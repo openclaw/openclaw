@@ -100,6 +100,25 @@ export const telegramOutbound: ChannelOutboundAdapter = {
       mediaLocalRoots,
     };
 
+    // Use chunker to split long text into chunks (same as sendText path)
+    const textLimit = 4000; // Telegram message limit
+    if (text && !mediaUrls.length) {
+      const chunks = markdownToTelegramHtmlChunks(text, textLimit);
+      if (chunks.length === 0) {
+        return { channel: "telegram", messageId: "unknown", chatId: to };
+      }
+      // Send each chunk, attaching buttons only to the last chunk
+      let finalResult: Awaited<ReturnType<typeof send>> | undefined;
+      for (let i = 0; i < chunks.length; i += 1) {
+        const isLast = i === chunks.length - 1;
+        finalResult = await send(to, chunks[i], {
+          ...payloadOpts,
+          buttons: isLast ? telegramData?.buttons : undefined,
+        });
+      }
+      return { channel: "telegram", ...(finalResult ?? { messageId: "unknown", chatId: to }) };
+    }
+
     if (mediaUrls.length === 0) {
       const result = await send(to, text, {
         ...payloadOpts,
