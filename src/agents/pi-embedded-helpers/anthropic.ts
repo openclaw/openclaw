@@ -45,7 +45,7 @@ export function assessLastAssistantMessage(
       }
     } else {
       hasNonThinkingContent = true;
-      if (block.type === "text" && (!block.text || block.text.trim() === "")) {
+      if (block.type === "text" && (!block.text || String(block.text ?? "").trim() === "")) {
         textBlockIsEmpty = true;
       }
     }
