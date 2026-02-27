@@ -17,13 +17,13 @@ export type StatusReactionAdapter = {
 export type StatusReactionEmojis = {
   queued?: string; // Default: uses initialEmoji param
   thinking?: string; // Default: "🧠"
-  tool?: string; // Default: "🛠️"
-  coding?: string; // Default: "💻"
-  web?: string; // Default: "🌐"
+  tool?: string; // Default: "⚡"
+  coding?: string; // Default: "✍️"
+  web?: string; // Default: "⚡"
   done?: string; // Default: "✅"
   error?: string; // Default: "❌"
-  stallSoft?: string; // Default: "⏳"
-  stallHard?: string; // Default: "⚠️"
+  stallSoft?: string; // Default: "⚡"
+  stallHard?: string; // Default: "✍️"
 };
 
 export type StatusReactionTiming = {
@@ -50,14 +50,14 @@ export type StatusReactionController = {
 
 export const DEFAULT_EMOJIS: Required<StatusReactionEmojis> = {
   queued: "👀",
-  thinking: "🤔",
-  tool: "🔥",
-  coding: "👨‍💻",
+  thinking: "🧠",
+  tool: "⚡",
+  coding: "✍️",
   web: "⚡",
-  done: "👍",
-  error: "😱",
-  stallSoft: "🥱",
-  stallHard: "😨",
+  done: "✅",
+  error: "❌",
+  stallSoft: "⚡",
+  stallHard: "✍️",
 };
 
 export const DEFAULT_TIMING: Required<StatusReactionTiming> = {

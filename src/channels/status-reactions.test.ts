@@ -459,6 +459,20 @@ describe("constants", () => {
     }
   });
 
+  it("uses the Bernard kernel emoji defaults", () => {
+    expect(DEFAULT_EMOJIS).toEqual({
+      queued: "👀",
+      thinking: "🧠",
+      tool: "⚡",
+      coding: "✍️",
+      web: "⚡",
+      done: "✅",
+      error: "❌",
+      stallSoft: "⚡",
+      stallHard: "✍️",
+    });
+  });
+
   it("should export DEFAULT_TIMING with all required keys", () => {
     for (const key of ["debounceMs", "stallSoftMs", "stallHardMs", "doneHoldMs", "errorHoldMs"]) {
       expect(DEFAULT_TIMING).toHaveProperty(key);
