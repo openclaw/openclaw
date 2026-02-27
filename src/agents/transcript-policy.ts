@@ -55,7 +55,11 @@ function isOpenAiProvider(provider?: string | null): boolean {
 }
 
 function isAnthropicApi(modelApi?: string | null, provider?: string | null): boolean {
-  if (modelApi === "anthropic-messages" || modelApi === "bedrock-converse-stream") {
+  if (
+    modelApi === "anthropic-messages" ||
+    modelApi === "bedrock-converse-stream" ||
+    modelApi === "bedrock-invoke"
+  ) {
     return true;
   }
   const normalized = normalizeProviderId(provider ?? "");

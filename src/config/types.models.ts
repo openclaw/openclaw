@@ -8,6 +8,7 @@ export const MODEL_APIS = [
   "google-generative-ai",
   "github-copilot",
   "bedrock-converse-stream",
+  "bedrock-invoke",
   "ollama",
 ] as const;
 
