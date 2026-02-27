@@ -1,3 +1,4 @@
+import type { ReplyPayload } from "../auto-reply/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadConfig } from "../config/config.js";
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
@@ -221,6 +222,29 @@ function normalizeTurnSourceChannel(value?: string | null): DeliverableMessageCh
   return normalized && isDeliverableMessageChannel(normalized) ? normalized : undefined;
 }
 
+function buildRequestButtons(
+  approvalId: string,
+): Array<Array<{ text: string; callback_data: string }>> | undefined {
+  const allowOnce = `/approve ${approvalId} allow-once`;
+  const allowAlways = `/approve ${approvalId} allow-always`;
+  const deny = `/approve ${approvalId} deny`;
+  const maxBytes = 64;
+  if (
+    Buffer.byteLength(allowOnce, "utf8") > maxBytes ||
+    Buffer.byteLength(allowAlways, "utf8") > maxBytes ||
+    Buffer.byteLength(deny, "utf8") > maxBytes
+  ) {
+    return undefined;
+  }
+  return [
+    [
+      { text: "Allow once", callback_data: allowOnce },
+      { text: "Always allow", callback_data: allowAlways },
+    ],
+    [{ text: "Deny", callback_data: deny }],
+  ];
+}
+
 function defaultResolveSessionTarget(params: {
   cfg: OpenClawConfig;
   request: ExecApprovalRequest;
@@ -265,6 +289,7 @@ async function deliverToTargets(params: {
   text: string;
   deliver: typeof deliverOutboundPayloads;
   shouldSend?: () => boolean;
+  payloadForTarget?: (target: ForwardTarget) => ReplyPayload;
 }) {
   const deliveries = params.targets.map(async (target) => {
     if (params.shouldSend && !params.shouldSend()) {
@@ -275,13 +300,16 @@ async function deliverToTargets(params: {
       return;
     }
     try {
+      const payload: ReplyPayload = params.payloadForTarget
+        ? params.payloadForTarget(target)
+        : { text: params.text };
       await params.deliver({
         cfg: params.cfg,
         channel,
         to: target.to,
         accountId: target.accountId,
         threadId: target.threadId,
-        payloads: [{ text: params.text }],
+        payloads: [payload],
       });
     } catch (err) {
       log.error(`exec approvals: failed to deliver to ${channel}:${target.to}: ${String(err)}`);
@@ -380,12 +408,27 @@ export function createExecApprovalForwarder(
     }
 
     const text = buildRequestMessage(request, nowMs());
+    const requestButtons = buildRequestButtons(request.id);
     void deliverToTargets({
       cfg,
       targets: filteredTargets,
       text,
       deliver,
       shouldSend: () => pending.get(request.id) === pendingEntry,
+      payloadForTarget: (target) => {
+        const normalizedChannel = normalizeMessageChannel(target.channel) ?? target.channel;
+        if (normalizedChannel !== "telegram" || !requestButtons) {
+          return { text };
+        }
+        return {
+          text,
+          channelData: {
+            telegram: {
+              buttons: requestButtons,
+            },
+          },
+        };
+      },
     }).catch((err) => {
       log.error(`exec approvals: failed to deliver request ${request.id}: ${String(err)}`);
     });

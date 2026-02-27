@@ -8,6 +8,8 @@ import {
 import type { CommandHandler } from "./commands-types.js";
 
 const COMMAND = "/approve";
+const DASH_VARIANTS_REGEX = /[‐‑‒–—―−﹣－]/g;
+const INVISIBLE_CHARS_REGEX = /[\u200B-\u200D\uFEFF]/g;
 
 const DECISION_ALIASES: Record<string, "allow-once" | "allow-always" | "deny"> = {
   allow: "allow-once",
@@ -26,6 +28,17 @@ type ParsedApproveCommand =
   | { ok: true; id: string; decision: "allow-once" | "allow-always" | "deny" }
   | { ok: false; error: string };
 
+function normalizeDecisionToken(token: string): string {
+  return token
+    .normalize("NFKC")
+    .replace(INVISIBLE_CHARS_REGEX, "")
+    .replace(/\u00ad/g, "")
+    .replace(DASH_VARIANTS_REGEX, "-")
+    .trim()
+    .toLowerCase()
+    .replace(/^[^a-z0-9]+|[^a-z0-9-]+$/g, "");
+}
+
 function parseApproveCommand(raw: string): ParsedApproveCommand | null {
   const trimmed = raw.trim();
   if (!trimmed.toLowerCase().startsWith(COMMAND)) {
@@ -40,8 +53,8 @@ function parseApproveCommand(raw: string): ParsedApproveCommand | null {
     return { ok: false, error: "Usage: /approve <id> allow-once|allow-always|deny" };
   }
 
-  const first = tokens[0].toLowerCase();
-  const second = tokens[1].toLowerCase();
+  const first = normalizeDecisionToken(tokens[0] ?? "");
+  const second = normalizeDecisionToken(tokens[1] ?? "");
 
   if (DECISION_ALIASES[first]) {
     return {

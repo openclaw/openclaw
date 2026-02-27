@@ -94,6 +94,13 @@ async function expectDiscordSessionTargetRequest(params: {
   expect(deliver).toHaveBeenCalledTimes(params.expectedDeliveryCount);
 }
 
+function getFirstDeliveryPayload(deliver: ReturnType<typeof vi.fn>) {
+  const firstCall = deliver.mock.calls[0]?.[0] as
+    | { payloads?: Array<Record<string, unknown>> }
+    | undefined;
+  return firstCall?.payloads?.[0] ?? {};
+}
+
 describe("exec approval forwarder", () => {
   it("forwards to session target and resolves", async () => {
     vi.useFakeTimers();
@@ -130,6 +137,42 @@ describe("exec approval forwarder", () => {
 
     await vi.runAllTimersAsync();
     expect(deliver).toHaveBeenCalledTimes(2);
+  });
+
+  it("adds Telegram approval buttons on request forwards", async () => {
+    vi.useFakeTimers();
+    const deliver = vi.fn().mockResolvedValue([]);
+    const cfg = {
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "telegram", to: "123" }],
+        },
+      },
+    } as OpenClawConfig;
+
+    const forwarder = createExecApprovalForwarder({
+      getConfig: () => cfg,
+      deliver,
+      nowMs: () => 1000,
+      resolveSessionTarget: () => null,
+    });
+
+    await forwarder.handleRequested(baseRequest);
+
+    const payload = getFirstDeliveryPayload(deliver);
+    const channelData = payload.channelData as
+      | {
+          telegram?: { buttons?: Array<Array<{ text?: string; callback_data?: string }>> };
+        }
+      | undefined;
+    const buttons = channelData?.telegram?.buttons ?? [];
+    expect(buttons).toHaveLength(2);
+    expect(buttons[0]?.[0]?.text).toBe("Allow once");
+    expect(buttons[0]?.[0]?.callback_data).toBe(`/approve ${baseRequest.id} allow-once`);
+    expect(buttons[1]?.[0]?.text).toBe("Deny");
+    expect(buttons[1]?.[0]?.callback_data).toBe(`/approve ${baseRequest.id} deny`);
   });
 
   it("formats single-line commands as inline code", async () => {

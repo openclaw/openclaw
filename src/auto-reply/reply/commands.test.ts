@@ -289,6 +289,26 @@ describe("/approve command", () => {
     );
   });
 
+  it("accepts mobile dash variants in decision token", async () => {
+    const cfg = {
+      commands: { text: true },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+    } as OpenClawConfig;
+    const params = buildParams("/approve abc allow‑once", cfg, { SenderId: "123" });
+
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+
+    const result = await handleCommands(params);
+    expect(result.shouldContinue).toBe(false);
+    expect(result.reply?.text).toContain("Exec approval allow-once submitted");
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "exec.approval.resolve",
+        params: { id: "abc", decision: "allow-once" },
+      }),
+    );
+  });
+
   it("rejects gateway clients without approvals scope", async () => {
     const cfg = {
       commands: { text: true },

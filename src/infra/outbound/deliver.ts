@@ -26,7 +26,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { markdownToSignalTextChunks, type SignalTextStyleRange } from "../../signal/format.js";
 import { sendMessageSignal } from "../../signal/send.js";
 import type { sendMessageSlack } from "../../slack/send.js";
-import type { sendMessageTelegram } from "../../telegram/send.js";
+import { sendMessageTelegram } from "../../telegram/send.js";
 import type { sendMessageWhatsApp } from "../../web/outbound.js";
 import { throwIfAborted } from "./abort.js";
 import { ackDelivery, enqueueDelivery, failDelivery } from "./delivery-queue.js";
@@ -105,6 +105,21 @@ type ChannelHandler = {
     },
   ) => Promise<OutboundDeliveryResult>;
 };
+
+function parseThreadIdForTelegram(threadId?: string | number | null): number | undefined {
+  if (typeof threadId === "number" && Number.isFinite(threadId)) {
+    return Math.trunc(threadId);
+  }
+  if (typeof threadId !== "string") {
+    return undefined;
+  }
+  const trimmed = threadId.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
 
 type ChannelHandlerParams = {
   cfg: OpenClawConfig;
@@ -327,9 +342,9 @@ async function deliverOutboundPayloadsCore(
   const signalMaxBytes = isSignalChannel
     ? resolveChannelMediaMaxBytes({
         cfg,
-        resolveChannelLimitMb: ({ cfg, accountId }) =>
-          cfg.channels?.signal?.accounts?.[accountId]?.mediaMaxMb ??
-          cfg.channels?.signal?.mediaMaxMb,
+        resolveChannelLimitMb: ({ cfg: channelCfg, accountId: channelAccountId }) =>
+          channelCfg.channels?.signal?.accounts?.[channelAccountId]?.mediaMaxMb ??
+          channelCfg.channels?.signal?.mediaMaxMb,
         accountId,
       })
     : undefined;
@@ -543,6 +558,30 @@ async function deliverOutboundPayloadsCore(
         replyToId: effectivePayload.replyToId ?? params.replyToId ?? undefined,
         threadId: params.threadId ?? undefined,
       };
+      if (channel === "telegram" && !handler.sendPayload && effectivePayload.channelData) {
+        const telegramData = effectivePayload.channelData.telegram as
+          | {
+              buttons?: Array<Array<{ text?: string; callback_data?: string }>>;
+              quoteText?: string;
+            }
+          | undefined;
+        const buttons = telegramData?.buttons;
+        const hasButtons = Array.isArray(buttons) && buttons.length > 0;
+        if (hasButtons) {
+          const sendTelegram = params.deps?.sendTelegram ?? sendMessageTelegram;
+          const result = await sendTelegram(to, payloadSummary.text, {
+            verbose: false,
+            accountId: accountId ?? undefined,
+            messageThreadId: parseThreadIdForTelegram(params.threadId),
+            quoteText:
+              typeof telegramData?.quoteText === "string" ? telegramData.quoteText : undefined,
+            buttons: buttons as Array<Array<{ text: string; callback_data: string }>>,
+          });
+          results.push({ channel: "telegram", ...result });
+          emitMessageSent(true);
+          continue;
+        }
+      }
       if (handler.sendPayload && effectivePayload.channelData) {
         const delivery = await handler.sendPayload(effectivePayload, sendOverrides);
         results.push(delivery);

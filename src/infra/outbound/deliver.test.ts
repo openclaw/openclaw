@@ -782,6 +782,45 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
+  it("uses telegram direct-send fallback for channelData buttons when sendPayload is unavailable", async () => {
+    const sendText = vi.fn().mockResolvedValue({ channel: "telegram", messageId: "txt-1" });
+    const sendMedia = vi.fn().mockResolvedValue({ channel: "telegram", messageId: "med-1" });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          plugin: createOutboundTestPlugin({
+            id: "telegram",
+            outbound: { deliveryMode: "direct", sendText, sendMedia },
+          }),
+          source: "test",
+        },
+      ]),
+    );
+
+    const sendTelegram = vi.fn().mockResolvedValue({ messageId: "tg-1", chatId: "123" });
+    const buttons = [
+      [{ text: "Allow once", callback_data: "/approve abc allow-once" }],
+      [{ text: "Deny", callback_data: "/approve abc deny" }],
+    ];
+
+    const results = await deliverOutboundPayloads({
+      cfg: { channels: { telegram: { botToken: "tok-1" } } } as OpenClawConfig,
+      channel: "telegram",
+      to: "123",
+      payloads: [{ text: "Approval needed", channelData: { telegram: { buttons } } }],
+      deps: { sendTelegram },
+    });
+
+    expect(sendTelegram).toHaveBeenCalledWith(
+      "123",
+      "Approval needed",
+      expect.objectContaining({ buttons, verbose: false }),
+    );
+    expect(sendText).not.toHaveBeenCalled();
+    expect(results[0]).toMatchObject({ channel: "telegram", messageId: "tg-1", chatId: "123" });
+  });
+
   it("emits message_sent failure when delivery errors", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
     const sendWhatsApp = vi.fn().mockRejectedValue(new Error("downstream failed"));
