@@ -28,9 +28,14 @@ export type CredentialAuditEntry = {
   requestor: string;
   success: boolean;
   error?: string;
-  /** SHA-256 of this entry (without this field) */
+  /**
+   * SHA-256 hex digest of this entry (computed without this field itself).
+   * Used for tamper detection via hash-chain verification — **not** a keyed
+   * MAC.  The full 64-char hex is stored and compared; the 8-char prefix
+   * shown in log messages is display-only for human readability.
+   */
   entryHash: string;
-  /** Hash of previous entry for chain verification */
+  /** SHA-256 of the preceding entry (genesis = 64 zeros), for chain linking. */
   prevEntryHash: string;
 };
 
@@ -261,7 +266,7 @@ export function logCredentialAccess(params: {
     scope,
     requestor,
     success,
-    entryHash: entryHash.slice(0, 8),
+    entryHash: entryHash.slice(0, 8), // display prefix only — full hash stored in file
   });
 }
 
