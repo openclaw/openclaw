@@ -31,6 +31,8 @@ export default defineConfig(() => {
       outDir: path.resolve(here, "../dist/control-ui"),
       emptyOutDir: true,
       sourcemap: true,
+      // Keep CI/onboard logs clean; current control UI chunking is intentionally above 500 kB.
+      chunkSizeWarningLimit: 1024,
     },
     server: {
       host: true,

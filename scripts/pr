@@ -664,6 +664,44 @@ validate_changelog_entry_for_pr() {
   echo "changelog validated: found PR #$pr (contributor handle unavailable, skipping thanks check)"
 }
 
+validate_changelog_merge_hygiene() {
+  local diff
+  diff=$(git diff --unified=0 origin/main...HEAD -- CHANGELOG.md)
+
+  local removed_lines
+  removed_lines=$(printf '%s\n' "$diff" | awk '
+    /^---/ { next }
+    /^-/ { print substr($0, 2) }
+  ')
+  if [ -z "$removed_lines" ]; then
+    return 0
+  fi
+
+  local removed_refs
+  removed_refs=$(printf '%s\n' "$removed_lines" | rg -o '#[0-9]+' | sort -u || true)
+  if [ -z "$removed_refs" ]; then
+    return 0
+  fi
+
+  local added_lines
+  added_lines=$(printf '%s\n' "$diff" | awk '
+    /^\+\+\+/ { next }
+    /^\+/ { print substr($0, 2) }
+  ')
+
+  local ref
+  while IFS= read -r ref; do
+    [ -z "$ref" ] && continue
+    if ! printf '%s\n' "$added_lines" | rg -q -F "$ref"; then
+      echo "CHANGELOG.md drops existing entry reference $ref without re-adding it."
+      echo "Likely merge conflict loss; restore the dropped entry (or keep the same PR ref in rewritten text)."
+      exit 1
+    fi
+  done <<<"$removed_refs"
+
+  echo "changelog merge hygiene validated: no dropped PR references"
+}
+
 changed_changelog_fragment_files() {
   git diff --name-only origin/main...HEAD -- changelog/fragments | rg '^changelog/fragments/.*\.md$' || true
 }
@@ -757,6 +795,7 @@ prepare_gates() {
   fi
   local contrib="${PR_AUTHOR:-}"
   if [ "$has_changelog_update" = "true" ]; then
+    validate_changelog_merge_hygiene
     validate_changelog_entry_for_pr "$pr" "$contrib"
   fi
   if [ "$has_fragment_update" = "true" ]; then

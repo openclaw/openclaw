@@ -41,6 +41,8 @@ export function registerCronEditCommand(cron: Command) {
       )
       .option("--agent <id>", "Set agent id")
       .option("--clear-agent", "Unset agent and use default", false)
+      .option("--session-key <key>", "Set session key for job routing")
+      .option("--clear-session-key", "Unset session key", false)
       .option("--wake <mode>", "Wake mode (now|next-heartbeat)")
       .option("--at <when>", "Set one-shot time (ISO) or duration like 20m")
       .option("--every <duration>", "Set interval duration like 10m")
@@ -125,10 +127,6 @@ export function registerCronEditCommand(cron: Command) {
           if (typeof opts.session === "string") {
             patch.sessionTarget = opts.session;
           }
-          if (typeof opts.sessionKey === "string" && opts.sessionKey.trim()) {
-            patch.sessionTarget = "session";
-            patch.sessionKey = opts.sessionKey.trim();
-          }
           if (typeof opts.wake === "string") {
             patch.wakeMode = opts.wake;
           }
@@ -140,6 +138,15 @@ export function registerCronEditCommand(cron: Command) {
           }
           if (opts.clearAgent) {
             patch.agentId = null;
+          }
+          if (opts.sessionKey && opts.clearSessionKey) {
+            throw new Error("Use --session-key or --clear-session-key, not both");
+          }
+          if (typeof opts.sessionKey === "string" && opts.sessionKey.trim()) {
+            patch.sessionKey = opts.sessionKey.trim();
+          }
+          if (opts.clearSessionKey) {
+            patch.sessionKey = null;
           }
 
           const scheduleChosen = [opts.at, opts.every, opts.cron].filter(Boolean).length;
