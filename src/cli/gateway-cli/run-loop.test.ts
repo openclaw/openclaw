@@ -9,6 +9,7 @@ const consumeGatewaySigusr1RestartAuthorization = vi.fn(() => true);
 const isGatewaySigusr1RestartExternallyAllowed = vi.fn(() => false);
 const markGatewaySigusr1RestartHandled = vi.fn();
 const getActiveTaskCount = vi.fn(() => 0);
+const waitForActiveTasks = vi.fn(async (_timeoutMs: number) => ({ drained: true }));
 const markGatewayDraining = vi.fn();
 const resetAllLanes = vi.fn();
 const restartGatewayProcessWithFreshPid = vi.fn<
@@ -37,6 +38,7 @@ vi.mock("../../infra/process-respawn.js", () => ({
 
 vi.mock("../../process/command-queue.js", () => ({
   getActiveTaskCount: () => getActiveTaskCount(),
+  waitForActiveTasks: (timeoutMs: number) => waitForActiveTasks(timeoutMs),
   markGatewayDraining: () => markGatewayDraining(),
   resetAllLanes: () => resetAllLanes(),
 }));
@@ -231,6 +233,26 @@ describe("runGatewayLoop", () => {
       expect(markGatewayDraining).toHaveBeenCalledTimes(2);
       expect(resetAllLanes).toHaveBeenCalledTimes(2);
       expect(acquireGatewayLock).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  it("exits when non-abortable lane tasks fail to drain for in-process restart", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async () => {
+      getActiveTaskCount.mockReturnValueOnce(1).mockReturnValueOnce(1);
+      waitForActiveTasks.mockResolvedValueOnce({ drained: false });
+
+      const { start, runtime, exited } = await createSignaledLoopHarness();
+      process.emit("SIGUSR1");
+
+      await expect(exited).resolves.toBe(1);
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(waitForActiveTasks).toHaveBeenCalledWith(10_000);
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(gatewayLog.error).toHaveBeenCalledWith(
+        "in-process restart cancelled; non-abortable lane tasks are still active after 10000ms",
+      );
     });
   });
 

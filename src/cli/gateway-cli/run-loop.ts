@@ -11,6 +11,7 @@ import {
   getActiveTaskCount,
   markGatewayDraining,
   resetAllLanes,
+  waitForActiveTasks,
 } from "../../process/command-queue.js";
 import { createRestartIterationHook } from "../../process/restart-recovery.js";
 import type { defaultRuntime } from "../../runtime.js";
@@ -79,6 +80,20 @@ export async function runGatewayLoop(params: {
     if (hadLock && !(await reacquireLockForInProcessRestart())) {
       return;
     }
+    const remainingLaneTasks = getActiveTaskCount();
+    if (remainingLaneTasks > 0) {
+      gatewayLog.info(
+        `waiting for ${remainingLaneTasks} non-abortable lane task(s) before in-process restart (timeout ${IN_PROCESS_RESTART_DRAIN_TIMEOUT_MS}ms)`,
+      );
+      const { drained } = await waitForActiveTasks(IN_PROCESS_RESTART_DRAIN_TIMEOUT_MS);
+      if (!drained) {
+        gatewayLog.error(
+          `in-process restart cancelled; non-abortable lane tasks are still active after ${IN_PROCESS_RESTART_DRAIN_TIMEOUT_MS}ms`,
+        );
+        exitProcess(1);
+        return;
+      }
+    }
     shuttingDown = false;
     restartResolver?.();
   };
@@ -88,6 +103,7 @@ export async function runGatewayLoop(params: {
   };
 
   const FORCED_RESTART_TIMEOUT_MS = 30_000;
+  const IN_PROCESS_RESTART_DRAIN_TIMEOUT_MS = 10_000;
   const SHUTDOWN_TIMEOUT_MS = 5_000;
 
   const request = (action: GatewayRunSignalAction, signal: string) => {
@@ -100,8 +116,9 @@ export async function runGatewayLoop(params: {
     gatewayLog.info(`received ${signal}; ${isRestart ? "restarting" : "shutting down"}`);
 
     // Allow extra time for forced cancellation on restart.
-    const forceExitMs =
-      isRestart ? FORCED_RESTART_TIMEOUT_MS + SHUTDOWN_TIMEOUT_MS : SHUTDOWN_TIMEOUT_MS;
+    const forceExitMs = isRestart
+      ? FORCED_RESTART_TIMEOUT_MS + SHUTDOWN_TIMEOUT_MS
+      : SHUTDOWN_TIMEOUT_MS;
     const forceExitTimer = setTimeout(() => {
       gatewayLog.error("shutdown timed out; exiting without full cleanup");
       exitProcess(0);
