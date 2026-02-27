@@ -12,6 +12,7 @@ import { danger, logVerbose, shouldLogVerbose } from "../../../globals.js";
 import { resolveAgentOutboundIdentity } from "../../../infra/outbound/identity.js";
 import { removeSlackReaction } from "../../actions.js";
 import { createSlackDraftStream } from "../../draft-stream.js";
+import { recordSlackThreadParticipation } from "../../sent-thread-cache.js";
 import {
   applyAppendOnlyStreamUpdate,
   buildStatusFinalPreviewText,
@@ -424,6 +425,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   }
 
   const anyReplyDelivered = queuedFinal || (counts.block ?? 0) > 0 || (counts.final ?? 0) > 0;
+
+  if (anyReplyDelivered && statusThreadTs) {
+    recordSlackThreadParticipation(message.channel, statusThreadTs);
+  }
 
   if (!anyReplyDelivered) {
     await draftStream.clear();
