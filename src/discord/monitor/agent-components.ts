@@ -23,6 +23,7 @@ import { formatInboundEnvelope, resolveEnvelopeFormatOptions } from "../../auto-
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
 import { dispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
 import { createReplyReferencePlanner } from "../../auto-reply/reply/reply-reference.js";
+import { resolveCommandAuthorizedFromAuthorizers } from "../../channels/command-gating.js";
 import { createReplyPrefixOptions } from "../../channels/reply-prefix.js";
 import { recordInboundSession } from "../../channels/session.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -34,12 +35,10 @@ import { logVerbose } from "../../globals.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { logDebug, logError } from "../../logger.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
-import {
-  readChannelAllowFromStore,
-  upsertChannelPairingRequest,
-} from "../../pairing/pairing-store.js";
+import { upsertChannelPairingRequest } from "../../pairing/pairing-store.js";
 import { resolveAgentRoute } from "../../routing/resolve-route.js";
 import { createNonExitingRuntime, type RuntimeEnv } from "../../runtime.js";
+import { readStoreAllowFromForDmPolicy } from "../../security/dm-policy-shared.js";
 import { resolveDiscordComponentEntry, resolveDiscordModalEntry } from "../components-registry.js";
 import {
   createDiscordFormModal,
@@ -470,8 +469,11 @@ async function ensureDmComponentAuthorized(params: {
     return true;
   }
 
-  const storeAllowFrom =
-    dmPolicy === "allowlist" ? [] : await readChannelAllowFromStore("discord").catch(() => []);
+  const storeAllowFrom = await readStoreAllowFromForDmPolicy({
+    provider: "discord",
+    accountId: ctx.accountId,
+    dmPolicy,
+  });
   const effectiveAllowFrom = [...(ctx.allowFrom ?? []), ...storeAllowFrom];
   const allowList = normalizeDiscordAllowList(effectiveAllowFrom, ["discord:", "user:", "pk:"]);
   const allowMatch = allowList
@@ -493,6 +495,7 @@ async function ensureDmComponentAuthorized(params: {
     const { code, created } = await upsertChannelPairingRequest({
       channel: "discord",
       id: user.id,
+      accountId: ctx.accountId,
       meta: {
         tag: formatDiscordUserTag(user),
         name: user.username,
@@ -727,6 +730,57 @@ function formatModalSubmissionText(
   return lines.join("\n");
 }
 
+function resolveComponentCommandAuthorized(params: {
+  ctx: AgentComponentContext;
+  interactionCtx: ComponentInteractionContext;
+  channelConfig: ReturnType<typeof resolveDiscordChannelConfigWithFallback>;
+  guildInfo: ReturnType<typeof resolveDiscordGuildEntry>;
+  allowNameMatching: boolean;
+}): boolean {
+  const { ctx, interactionCtx, channelConfig, guildInfo } = params;
+  if (interactionCtx.isDirectMessage) {
+    return true;
+  }
+
+  const ownerAllowList = normalizeDiscordAllowList(ctx.allowFrom, ["discord:", "user:", "pk:"]);
+  const ownerOk = ownerAllowList
+    ? resolveDiscordAllowListMatch({
+        allowList: ownerAllowList,
+        candidate: {
+          id: interactionCtx.user.id,
+          name: interactionCtx.user.username,
+          tag: formatDiscordUserTag(interactionCtx.user),
+        },
+        allowNameMatching: params.allowNameMatching,
+      }).allowed
+    : false;
+
+  const { hasAccessRestrictions, memberAllowed } = resolveDiscordMemberAccessState({
+    channelConfig,
+    guildInfo,
+    memberRoleIds: interactionCtx.memberRoleIds,
+    sender: {
+      id: interactionCtx.user.id,
+      name: interactionCtx.user.username,
+      tag: formatDiscordUserTag(interactionCtx.user),
+    },
+    allowNameMatching: params.allowNameMatching,
+  });
+  const useAccessGroups = ctx.cfg.commands?.useAccessGroups !== false;
+  const authorizers = useAccessGroups
+    ? [
+        { configured: ownerAllowList != null, allowed: ownerOk },
+        { configured: hasAccessRestrictions, allowed: memberAllowed },
+      ]
+    : [{ configured: hasAccessRestrictions, allowed: memberAllowed }];
+
+  return resolveCommandAuthorizedFromAuthorizers({
+    useAccessGroups,
+    authorizers,
+    modeWhenAccessGroupsOff: "configured",
+  });
+}
+
 async function dispatchDiscordComponentEvent(params: {
   ctx: AgentComponentContext;
   interaction: AgentComponentInteraction;
@@ -780,12 +834,20 @@ async function dispatchDiscordComponentEvent(params: {
     parentSlug: channelCtx.parentSlug,
     scope: channelCtx.isThread ? "thread" : "channel",
   });
+  const allowNameMatching = isDangerousNameMatchingEnabled(ctx.discordConfig);
   const groupSystemPrompt = channelConfig?.systemPrompt?.trim() || undefined;
   const ownerAllowFrom = resolveDiscordOwnerAllowFrom({
     channelConfig,
     guildInfo,
     sender: { id: interactionCtx.user.id, name: interactionCtx.user.username, tag: senderTag },
-    allowNameMatching: isDangerousNameMatchingEnabled(ctx.discordConfig),
+    allowNameMatching,
+  });
+  const commandAuthorized = resolveComponentCommandAuthorized({
+    ctx,
+    interactionCtx,
+    channelConfig,
+    guildInfo,
+    allowNameMatching,
   });
   const storePath = resolveStorePath(ctx.cfg.session?.store, { agentId });
   const envelopeOptions = resolveEnvelopeFormatOptions(ctx.cfg);
@@ -830,7 +892,7 @@ async function dispatchDiscordComponentEvent(params: {
     Provider: "discord" as const,
     Surface: "discord" as const,
     WasMentioned: true,
-    CommandAuthorized: true,
+    CommandAuthorized: commandAuthorized,
     CommandSource: "text" as const,
     MessageSid: interaction.rawData.id,
     Timestamp: timestamp,

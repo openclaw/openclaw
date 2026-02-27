@@ -1,4 +1,8 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveMainSessionKeyFromConfig } from "../config/sessions.js";
+import { drainSystemEvents } from "../infra/system-events.js";
 import {
   connectOk,
   installGatewayTestHooks,
@@ -170,11 +174,13 @@ describe("gateway hot reload", () => {
   let prevSkipChannels: string | undefined;
   let prevSkipGmail: string | undefined;
   let prevSkipProviders: string | undefined;
+  let prevOpenAiApiKey: string | undefined;
 
   beforeEach(() => {
     prevSkipChannels = process.env.OPENCLAW_SKIP_CHANNELS;
     prevSkipGmail = process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
     prevSkipProviders = process.env.OPENCLAW_SKIP_PROVIDERS;
+    prevOpenAiApiKey = process.env.OPENAI_API_KEY;
     process.env.OPENCLAW_SKIP_CHANNELS = "0";
     delete process.env.OPENCLAW_SKIP_GMAIL_WATCHER;
     delete process.env.OPENCLAW_SKIP_PROVIDERS;
@@ -196,7 +202,77 @@ describe("gateway hot reload", () => {
     } else {
       process.env.OPENCLAW_SKIP_PROVIDERS = prevSkipProviders;
     }
+    if (prevOpenAiApiKey === undefined) {
+      delete process.env.OPENAI_API_KEY;
+    } else {
+      process.env.OPENAI_API_KEY = prevOpenAiApiKey;
+    }
   });
+
+  async function writeEnvRefConfig() {
+    const configPath = process.env.OPENCLAW_CONFIG_PATH;
+    if (!configPath) {
+      throw new Error("OPENCLAW_CONFIG_PATH is not set");
+    }
+    await fs.writeFile(
+      configPath,
+      `${JSON.stringify(
+        {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+                models: [],
+              },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+  }
+
+  async function writeAuthProfileEnvRefStore() {
+    const stateDir = process.env.OPENCLAW_STATE_DIR;
+    if (!stateDir) {
+      throw new Error("OPENCLAW_STATE_DIR is not set");
+    }
+    const authStorePath = path.join(stateDir, "agents", "main", "agent", "auth-profiles.json");
+    await fs.mkdir(path.dirname(authStorePath), { recursive: true });
+    await fs.writeFile(
+      authStorePath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          profiles: {
+            missing: {
+              type: "api_key",
+              provider: "openai",
+              keyRef: { source: "env", provider: "default", id: "MISSING_OPENCLAW_AUTH_REF" },
+            },
+          },
+          selectedProfileId: "missing",
+          lastUsedProfileByModel: {},
+          usageStats: {},
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+  }
+
+  async function removeMainAuthProfileStore() {
+    const stateDir = process.env.OPENCLAW_STATE_DIR;
+    if (!stateDir) {
+      return;
+    }
+    const authStorePath = path.join(stateDir, "agents", "main", "agent", "auth-profiles.json");
+    await fs.rm(authStorePath, { force: true });
+  }
 
   it("applies hot reload actions and emits restart signal", async () => {
     await withGatewayServer(async () => {
@@ -281,7 +357,7 @@ describe("gateway hot reload", () => {
       const signalSpy = vi.fn();
       process.once("SIGUSR1", signalSpy);
 
-      onRestart?.(
+      const restartResult = onRestart?.(
         {
           changedPaths: ["gateway.port"],
           restartGateway: true,
@@ -297,9 +373,104 @@ describe("gateway hot reload", () => {
         },
         {},
       );
+      await Promise.resolve(restartResult);
 
       expect(signalSpy).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it("fails startup when required secret refs are unresolved", async () => {
+    await writeEnvRefConfig();
+    delete process.env.OPENAI_API_KEY;
+    await expect(withGatewayServer(async () => {})).rejects.toThrow(
+      "Startup failed: required secrets are unavailable",
+    );
+  });
+
+  it("fails startup when auth-profile secret refs are unresolved", async () => {
+    await writeAuthProfileEnvRefStore();
+    delete process.env.MISSING_OPENCLAW_AUTH_REF;
+    try {
+      await expect(withGatewayServer(async () => {})).rejects.toThrow(
+        'Environment variable "MISSING_OPENCLAW_AUTH_REF" is missing or empty.',
+      );
+    } finally {
+      await removeMainAuthProfileStore();
+    }
+  });
+
+  it("emits one-shot degraded and recovered system events during secret reload transitions", async () => {
+    await writeEnvRefConfig();
+    process.env.OPENAI_API_KEY = "sk-startup";
+
+    await withGatewayServer(async () => {
+      const onHotReload = hoisted.getOnHotReload();
+      expect(onHotReload).toBeTypeOf("function");
+      const sessionKey = resolveMainSessionKeyFromConfig();
+      const plan = {
+        changedPaths: ["models.providers.openai.apiKey"],
+        restartGateway: false,
+        restartReasons: [],
+        hotReasons: ["models.providers.openai.apiKey"],
+        reloadHooks: false,
+        restartGmailWatcher: false,
+        restartBrowserControl: false,
+        restartCron: false,
+        restartHeartbeat: false,
+        restartChannels: new Set(),
+        noopPaths: [],
+      };
+      const nextConfig = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+              models: [],
+            },
+          },
+        },
+      };
+
+      delete process.env.OPENAI_API_KEY;
+      await expect(onHotReload?.(plan, nextConfig)).rejects.toThrow(
+        'Environment variable "OPENAI_API_KEY" is missing or empty.',
+      );
+      const degradedEvents = drainSystemEvents(sessionKey);
+      expect(degradedEvents.some((event) => event.includes("[SECRETS_RELOADER_DEGRADED]"))).toBe(
+        true,
+      );
+
+      await expect(onHotReload?.(plan, nextConfig)).rejects.toThrow(
+        'Environment variable "OPENAI_API_KEY" is missing or empty.',
+      );
+      expect(drainSystemEvents(sessionKey)).toEqual([]);
+
+      process.env.OPENAI_API_KEY = "sk-recovered";
+      await expect(onHotReload?.(plan, nextConfig)).resolves.toBeUndefined();
+      const recoveredEvents = drainSystemEvents(sessionKey);
+      expect(recoveredEvents.some((event) => event.includes("[SECRETS_RELOADER_RECOVERED]"))).toBe(
+        true,
+      );
+    });
+  });
+
+  it("serves secrets.reload immediately after startup without race failures", async () => {
+    await writeEnvRefConfig();
+    process.env.OPENAI_API_KEY = "sk-startup";
+    const { server, ws } = await startServerWithClient();
+    try {
+      await connectOk(ws);
+      const [first, second] = await Promise.all([
+        rpcReq<{ warningCount: number }>(ws, "secrets.reload", {}),
+        rpcReq<{ warningCount: number }>(ws, "secrets.reload", {}),
+      ]);
+      expect(first.ok).toBe(true);
+      expect(second.ok).toBe(true);
+    } finally {
+      ws.close();
+      await server.close();
+    }
   });
 });
 

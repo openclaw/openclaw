@@ -24,6 +24,14 @@ import {
   type ExecAllowlistEntry,
 } from "./exec-approvals.js";
 
+function buildNestedEnvShellCommand(params: {
+  envExecutable: string;
+  depth: number;
+  payload: string;
+}): string[] {
+  return [...Array(params.depth).fill(params.envExecutable), "/bin/sh", "-c", params.payload];
+}
+
 describe("exec approvals allowlist matching", () => {
   const baseResolution = {
     rawExecutable: "rg",
@@ -41,6 +49,22 @@ describe("exec approvals allowlist matching", () => {
       const match = matchAllowlist(testCase.entries, baseResolution);
       expect(match?.pattern ?? null).toBe(testCase.expectedPattern);
     }
+  });
+
+  it("matches bare * wildcard pattern against any resolved path", () => {
+    const match = matchAllowlist([{ pattern: "*" }], baseResolution);
+    expect(match).not.toBeNull();
+    expect(match?.pattern).toBe("*");
+  });
+
+  it("matches bare * wildcard against arbitrary executables", () => {
+    const match = matchAllowlist([{ pattern: "*" }], {
+      rawExecutable: "python3",
+      resolvedPath: "/usr/bin/python3",
+      executableName: "python3",
+    });
+    expect(match).not.toBeNull();
+    expect(match?.pattern).toBe("*");
   });
 
   it("requires a resolved path", () => {
@@ -279,6 +303,40 @@ describe("exec approvals command resolution", () => {
 
     expect(analysis.ok).toBe(true);
     expect(analysis.segments[0]?.resolution?.policyBlocked).toBe(true);
+    expect(allowlistEval.allowlistSatisfied).toBe(false);
+    expect(allowlistEval.segmentSatisfiedBy).toEqual([null]);
+  });
+
+  it("fails closed when transparent env wrappers exceed unwrap depth", () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const dir = makeTempDir();
+    const binDir = path.join(dir, "bin");
+    fs.mkdirSync(binDir, { recursive: true });
+    const envPath = path.join(binDir, "env");
+    fs.writeFileSync(envPath, "#!/bin/sh\n");
+    fs.chmodSync(envPath, 0o755);
+
+    const analysis = analyzeArgvCommand({
+      argv: buildNestedEnvShellCommand({
+        envExecutable: envPath,
+        depth: 5,
+        payload: "echo pwned",
+      }),
+      cwd: dir,
+      env: makePathEnv(binDir),
+    });
+    const allowlistEval = evaluateExecAllowlist({
+      analysis,
+      allowlist: [{ pattern: envPath }],
+      safeBins: normalizeSafeBins([]),
+      cwd: dir,
+    });
+
+    expect(analysis.ok).toBe(true);
+    expect(analysis.segments[0]?.resolution?.policyBlocked).toBe(true);
+    expect(analysis.segments[0]?.resolution?.blockedWrapper).toBe("env");
     expect(allowlistEval.allowlistSatisfied).toBe(false);
     expect(allowlistEval.segmentSatisfiedBy).toEqual([null]);
   });
@@ -542,6 +600,26 @@ describe("exec approvals shell allowlist (chained commands)", () => {
     });
     expect(result.analysisOk).toBe(false);
     expect(result.allowlistSatisfied).toBe(false);
+  });
+
+  it("satisfies allowlist when bare * wildcard is present", () => {
+    const dir = makeTempDir();
+    const binPath = path.join(dir, "mybin");
+    fs.writeFileSync(binPath, "#!/bin/sh\n", { mode: 0o755 });
+    const env = makePathEnv(dir);
+    try {
+      const result = evaluateShellAllowlist({
+        command: "mybin --flag",
+        allowlist: [{ pattern: "*" }],
+        safeBins: new Set(),
+        cwd: dir,
+        env,
+      });
+      expect(result.analysisOk).toBe(true);
+      expect(result.allowlistSatisfied).toBe(true);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

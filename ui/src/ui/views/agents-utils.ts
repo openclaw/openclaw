@@ -244,6 +244,13 @@ export function resolveModelFallbacks(model?: unknown): string[] | null {
   return null;
 }
 
+export function resolveEffectiveModelFallbacks(
+  entryModel?: unknown,
+  defaultModel?: unknown,
+): string[] | null {
+  return resolveModelFallbacks(entryModel) ?? resolveModelFallbacks(defaultModel);
+}
+
 export function parseFallbackList(value: string): string[] {
   return value
     .split(",")

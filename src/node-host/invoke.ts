@@ -20,7 +20,7 @@ import {
 } from "../infra/exec-host.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
 import { runBrowserProxyCommand } from "./invoke-browser.js";
-import { handleSystemRunInvoke } from "./invoke-system-run.js";
+import { buildSystemRunApprovalPlanV2, handleSystemRunInvoke } from "./invoke-system-run.js";
 import type {
   ExecEventPayload,
   RunResult,
@@ -423,13 +423,41 @@ export async function handleInvoke(
   // macOS native command shims — translate structured Node API calls into shell commands.
   // This allows the headless macOS node to handle commands that would normally require
   // the iOS/Android Node app, by delegating to macOS CLI tools.
-  if (process.platform === "darwin" && command !== "system.run") {
+  if (
+    process.platform === "darwin" &&
+    command !== "system.run" &&
+    command !== "system.run.prepare"
+  ) {
     const shimResult = await handleDarwinShim(command, frame);
     if (shimResult !== null) {
       await sendInvokeResult(client, frame, shimResult);
       return;
     }
     // If shim returned null, command is not shimmed — fall through to unsupported
+  }
+
+  if (command === "system.run.prepare") {
+    try {
+      const params = decodeParams<{
+        command?: unknown;
+        rawCommand?: unknown;
+        cwd?: unknown;
+        agentId?: unknown;
+        sessionKey?: unknown;
+      }>(frame.paramsJSON);
+      const prepared = buildSystemRunApprovalPlanV2(params);
+      if (!prepared.ok) {
+        await sendErrorResult(client, frame, "INVALID_REQUEST", prepared.message);
+        return;
+      }
+      await sendJsonPayloadResult(client, frame, {
+        cmdText: prepared.cmdText,
+        plan: prepared.plan,
+      });
+    } catch (err) {
+      await sendInvalidRequestResult(client, frame, err);
+    }
+    return;
   }
 
   if (command !== "system.run") {
@@ -589,14 +617,24 @@ type InvokeResult = {
   error?: { code: string; message: string };
 };
 
-function execShim(cmd: string, args: string[], timeoutMs = 15_000): Promise<{ stdout: string; stderr: string; code: number }> {
+function execShim(
+  cmd: string,
+  args: string[],
+  timeoutMs = 15_000,
+): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve) => {
     const proc = spawn(cmd, args, { timeout: timeoutMs, stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
-    proc.stdout?.on("data", (d: Buffer) => { stdout += d.toString(); });
-    proc.stderr?.on("data", (d: Buffer) => { stderr += d.toString(); });
-    proc.on("close", (code) => resolve({ stdout: stdout.trim(), stderr: stderr.trim(), code: code ?? 1 }));
+    proc.stdout?.on("data", (d: Buffer) => {
+      stdout += d.toString();
+    });
+    proc.stderr?.on("data", (d: Buffer) => {
+      stderr += d.toString();
+    });
+    proc.on("close", (code) =>
+      resolve({ stdout: stdout.trim(), stderr: stderr.trim(), code: code ?? 1 }),
+    );
     proc.on("error", (err) => resolve({ stdout: "", stderr: String(err), code: 1 }));
   });
 }
@@ -619,7 +657,12 @@ async function handleDarwinShim(
 
     case "camera.list": {
       const r = await execShim("system_profiler", ["SPCameraDataType", "-json"]);
-      if (r.code !== 0) return { ok: false, error: { code: "UNAVAILABLE", message: r.stderr || "cannot list cameras" } };
+      if (r.code !== 0) {
+        return {
+          ok: false,
+          error: { code: "UNAVAILABLE", message: r.stderr || "cannot list cameras" },
+        };
+      }
       try {
         const data = JSON.parse(r.stdout);
         const cameras = data.SPCameraDataType ?? [];
@@ -630,7 +673,10 @@ async function handleDarwinShim(
         }));
         return { ok: true, payload: { devices } };
       } catch {
-        return { ok: true, payload: { devices: [{ name: "FaceTime HD Camera", id: "default", position: "front" }] } };
+        return {
+          ok: true,
+          payload: { devices: [{ name: "FaceTime HD Camera", id: "default", position: "front" }] },
+        };
       }
     }
 
@@ -650,7 +696,11 @@ async function handleDarwinShim(
       // Fallback: ffmpeg single-frame capture
       const hasFfmpeg = (await execShim("which", ["ffmpeg"])).code === 0;
       if (hasFfmpeg) {
-        const r = await execShim("ffmpeg", ["-f", "avfoundation", "-framerate", "30", "-i", "0", "-frames:v", "1", "-y", tmpFile], 10_000);
+        const r = await execShim(
+          "ffmpeg",
+          ["-f", "avfoundation", "-framerate", "30", "-i", "0", "-frames:v", "1", "-y", tmpFile],
+          10_000,
+        );
         if (r.code === 0 && fs.existsSync(tmpFile)) {
           const data = fs.readFileSync(tmpFile);
           const b64 = data.toString("base64");
@@ -658,7 +708,13 @@ async function handleDarwinShim(
           return { ok: true, payload: { base64: b64, format: "jpeg", width: 0, height: 0 } };
         }
       }
-      return { ok: false, error: { code: "UNAVAILABLE", message: "install imagesnap (brew install imagesnap) or ffmpeg for camera capture" } };
+      return {
+        ok: false,
+        error: {
+          code: "UNAVAILABLE",
+          message: "install imagesnap (brew install imagesnap) or ffmpeg for camera capture",
+        },
+      };
     }
 
     case "camera.clip": {
@@ -666,15 +722,41 @@ async function handleDarwinShim(
       const durationSec = Math.max(1, Math.round(durationMs / 1000));
       const tmpFile = `/tmp/openclaw-clip-${Date.now()}.mp4`;
       const hasFfmpeg = (await execShim("which", ["ffmpeg"])).code === 0;
-      if (!hasFfmpeg) return { ok: false, error: { code: "UNAVAILABLE", message: "install ffmpeg for video capture" } };
-      const r = await execShim("ffmpeg", ["-f", "avfoundation", "-framerate", "30", "-i", "0:0", "-t", String(durationSec), "-y", tmpFile], durationMs + 10_000);
+      if (!hasFfmpeg) {
+        return {
+          ok: false,
+          error: { code: "UNAVAILABLE", message: "install ffmpeg for video capture" },
+        };
+      }
+      const r = await execShim(
+        "ffmpeg",
+        [
+          "-f",
+          "avfoundation",
+          "-framerate",
+          "30",
+          "-i",
+          "0:0",
+          "-t",
+          String(durationSec),
+          "-y",
+          tmpFile,
+        ],
+        durationMs + 10_000,
+      );
       if (r.code === 0 && fs.existsSync(tmpFile)) {
         const data = fs.readFileSync(tmpFile);
         const b64 = data.toString("base64");
         fs.unlinkSync(tmpFile);
-        return { ok: true, payload: { base64: b64, format: "mp4", durationMs: durationSec * 1000, hasAudio: true } };
+        return {
+          ok: true,
+          payload: { base64: b64, format: "mp4", durationMs: durationSec * 1000, hasAudio: true },
+        };
       }
-      return { ok: false, error: { code: "UNAVAILABLE", message: r.stderr || "ffmpeg clip capture failed" } };
+      return {
+        ok: false,
+        error: { code: "UNAVAILABLE", message: r.stderr || "ffmpeg clip capture failed" },
+      };
     }
 
     case "screen.record": {
@@ -686,7 +768,13 @@ async function handleDarwinShim(
         fs.unlinkSync(tmpFile);
         return { ok: true, payload: { base64: b64, format: "png" } };
       }
-      return { ok: false, error: { code: "UNAVAILABLE", message: "screencapture failed (check Screen Recording permission)" } };
+      return {
+        ok: false,
+        error: {
+          code: "UNAVAILABLE",
+          message: "screencapture failed (check Screen Recording permission)",
+        },
+      };
     }
 
     case "location.get": {
@@ -708,12 +796,26 @@ let d=D();if let l=d.wait(){print("{\\"lat\\":\\(l.coordinate.latitude),\\"lon\\
       if (r.code === 0 && r.stdout.includes("lat")) {
         try {
           const loc = JSON.parse(r.stdout);
-          return { ok: true, payload: { latitude: loc.lat, longitude: loc.lon, altitude: loc.alt, accuracy: loc.acc } };
+          return {
+            ok: true,
+            payload: {
+              latitude: loc.lat,
+              longitude: loc.lon,
+              altitude: loc.alt,
+              accuracy: loc.acc,
+            },
+          };
         } catch {
           return { ok: false, error: { code: "UNAVAILABLE", message: "failed to parse location" } };
         }
       }
-      return { ok: false, error: { code: "UNAVAILABLE", message: "Location Services unavailable (check System Settings > Privacy)" } };
+      return {
+        ok: false,
+        error: {
+          code: "UNAVAILABLE",
+          message: "Location Services unavailable (check System Settings > Privacy)",
+        },
+      };
     }
 
     case "device.info":
@@ -726,11 +828,17 @@ let d=D();if let l=d.wait(){print("{\\"lat\\":\\(l.coordinate.latitude),\\"lon\\
       if (sw.code === 0) {
         for (const line of sw.stdout.split("\n")) {
           const [k, v] = line.split(":").map((s) => s.trim());
-          if (k && v) info[k.replace(/\s+/g, "_").toLowerCase()] = v;
+          if (k && v) {
+            info[k.replace(/\s+/g, "_").toLowerCase()] = v;
+          }
         }
       }
       if (hw.code === 0) {
-        try { info.hardware = JSON.parse(hw.stdout); } catch { /* ignore */ }
+        try {
+          info.hardware = JSON.parse(hw.stdout);
+        } catch {
+          /* ignore */
+        }
       }
       return { ok: true, payload: info };
     }
@@ -741,7 +849,13 @@ let d=D();if let l=d.wait(){print("{\\"lat\\":\\(l.coordinate.latitude),\\"lon\\
     case "photos.latest": {
       // These require macOS CLI tools or AppleScript bridges
       // Delegate to system.run with appropriate AppleScript
-      return { ok: false, error: { code: "UNAVAILABLE", message: `${command} not yet shimmed on macOS headless node — use system.run with AppleScript/CLI as workaround` } };
+      return {
+        ok: false,
+        error: {
+          code: "UNAVAILABLE",
+          message: `${command} not yet shimmed on macOS headless node — use system.run with AppleScript/CLI as workaround`,
+        },
+      };
     }
 
     default:

@@ -47,10 +47,14 @@ function mergeProviderModels(implicit: ProviderConfig, explicit: ProviderConfig)
 
     // Refresh capability metadata from the implicit catalog while preserving
     // user-specific fields (cost, headers, compat, etc.) on explicit entries.
+    // reasoning is treated as user-overridable: if the user has explicitly set
+    // it in their config (key present), honour that value; otherwise fall back
+    // to the built-in catalog default so new reasoning models work out of the
+    // box without requiring every user to configure it.
     return {
       ...explicitModel,
       input: implicitModel.input,
-      reasoning: implicitModel.reasoning,
+      reasoning: "reasoning" in explicitModel ? explicitModel.reasoning : implicitModel.reasoning,
       contextWindow: implicitModel.contextWindow,
       maxTokens: implicitModel.maxTokens,
     };
@@ -138,7 +142,30 @@ export async function ensureOpenClawModelsJson(
         string,
         NonNullable<ModelsConfig["providers"]>[string]
       >;
-      mergedProviders = { ...existingProviders, ...providers };
+      mergedProviders = {};
+      for (const [key, entry] of Object.entries(existingProviders)) {
+        mergedProviders[key] = entry;
+      }
+      for (const [key, newEntry] of Object.entries(providers)) {
+        const existing = existingProviders[key] as
+          | (NonNullable<ModelsConfig["providers"]>[string] & {
+              apiKey?: string;
+              baseUrl?: string;
+            })
+          | undefined;
+        if (existing) {
+          const preserved: Record<string, unknown> = {};
+          if (typeof existing.apiKey === "string" && existing.apiKey) {
+            preserved.apiKey = existing.apiKey;
+          }
+          if (typeof existing.baseUrl === "string" && existing.baseUrl) {
+            preserved.baseUrl = existing.baseUrl;
+          }
+          mergedProviders[key] = { ...newEntry, ...preserved };
+        } else {
+          mergedProviders[key] = newEntry;
+        }
+      }
     }
   }
 

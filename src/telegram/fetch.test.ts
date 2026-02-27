@@ -4,6 +4,12 @@ import { resetTelegramFetchStateForTests, resolveTelegramFetch } from "./fetch.j
 
 const setDefaultAutoSelectFamily = vi.hoisted(() => vi.fn());
 const setDefaultResultOrder = vi.hoisted(() => vi.fn());
+const setGlobalDispatcher = vi.hoisted(() => vi.fn());
+const AgentCtor = vi.hoisted(() =>
+  vi.fn(function MockAgent(this: { options: unknown }, options: unknown) {
+    this.options = options;
+  }),
+);
 
 vi.mock("node:net", async () => {
   const actual = await vi.importActual<typeof import("node:net")>("node:net");
@@ -21,12 +27,19 @@ vi.mock("node:dns", async () => {
   };
 });
 
+vi.mock("undici", () => ({
+  Agent: AgentCtor,
+  setGlobalDispatcher,
+}));
+
 const originalFetch = globalThis.fetch;
 
 afterEach(() => {
   resetTelegramFetchStateForTests();
   setDefaultAutoSelectFamily.mockReset();
   setDefaultResultOrder.mockReset();
+  setGlobalDispatcher.mockReset();
+  AgentCtor.mockClear();
   vi.unstubAllEnvs();
   vi.clearAllMocks();
   if (originalFetch) {
@@ -132,5 +145,46 @@ describe("resolveTelegramFetch", () => {
     resolveTelegramFetch(undefined, { network: { dnsResultOrder: "ipv4first" } });
 
     expect(setDefaultResultOrder).toHaveBeenCalledTimes(2);
+  });
+
+  it("replaces global undici dispatcher with autoSelectFamily-enabled agent", async () => {
+    globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+    resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+    expect(AgentCtor).toHaveBeenCalledWith({
+      connect: {
+        autoSelectFamily: true,
+        autoSelectFamilyAttemptTimeout: 300,
+      },
+    });
+  });
+
+  it("sets global dispatcher only once across repeated equal decisions", async () => {
+    globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+    resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
+    resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("updates global dispatcher when autoSelectFamily decision changes", async () => {
+    globalThis.fetch = vi.fn(async () => ({})) as unknown as typeof fetch;
+    resolveTelegramFetch(undefined, { network: { autoSelectFamily: true } });
+    resolveTelegramFetch(undefined, { network: { autoSelectFamily: false } });
+
+    expect(setGlobalDispatcher).toHaveBeenCalledTimes(2);
+    expect(AgentCtor).toHaveBeenNthCalledWith(1, {
+      connect: {
+        autoSelectFamily: true,
+        autoSelectFamilyAttemptTimeout: 300,
+      },
+    });
+    expect(AgentCtor).toHaveBeenNthCalledWith(2, {
+      connect: {
+        autoSelectFamily: false,
+        autoSelectFamilyAttemptTimeout: 300,
+      },
+    });
   });
 });

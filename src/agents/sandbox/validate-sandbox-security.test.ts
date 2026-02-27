@@ -1,4 +1,4 @@
-import { mkdtempSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -117,6 +117,44 @@ describe("validateBindMounts", () => {
     expect(run).toThrow(/blocked path/);
   });
 
+  it("blocks symlink-parent escapes with non-existent leaf outside allowed roots", () => {
+    if (process.platform === "win32") {
+      // Windows source paths (e.g. C:\\...) are intentionally rejected as non-POSIX.
+      return;
+    }
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-sbx-"));
+    const workspace = join(dir, "workspace");
+    const outside = join(dir, "outside");
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(outside, { recursive: true });
+    const link = join(workspace, "alias-out");
+    symlinkSync(outside, link);
+    const missingLeaf = join(link, "not-yet-created");
+    expect(() =>
+      validateBindMounts([`${missingLeaf}:/mnt/data:ro`], {
+        allowedSourceRoots: [workspace],
+      }),
+    ).toThrow(/outside allowed roots/);
+  });
+
+  it("blocks symlink-parent escapes into blocked paths when leaf does not exist", () => {
+    if (process.platform === "win32") {
+      // Windows source paths (e.g. C:\\...) are intentionally rejected as non-POSIX.
+      return;
+    }
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-sbx-"));
+    const workspace = join(dir, "workspace");
+    mkdirSync(workspace, { recursive: true });
+    const link = join(workspace, "run-link");
+    symlinkSync("/var/run", link);
+    const missingLeaf = join(link, "openclaw-not-created");
+    expect(() =>
+      validateBindMounts([`${missingLeaf}:/mnt/run:ro`], {
+        allowedSourceRoots: [workspace],
+      }),
+    ).toThrow(/blocked path/);
+  });
+
   it("rejects non-absolute source paths (relative or named volumes)", () => {
     const cases = ["../etc/passwd:/mnt/passwd", "etc/passwd:/mnt/passwd", "myvol:/mnt"] as const;
     for (const source of cases) {
@@ -183,6 +221,30 @@ describe("validateNetworkMode", () => {
     for (const testCase of cases) {
       expect(() => validateNetworkMode(testCase.mode), testCase.mode).toThrow(testCase.expected);
     }
+  });
+
+  it("blocks container namespace joins by default", () => {
+    const cases = [
+      {
+        mode: "container:abc123",
+        expected: /network mode "container:abc123" is blocked by default/,
+      },
+      {
+        mode: "CONTAINER:ABC123",
+        expected: /network mode "CONTAINER:ABC123" is blocked by default/,
+      },
+    ] as const;
+    for (const testCase of cases) {
+      expect(() => validateNetworkMode(testCase.mode), testCase.mode).toThrow(testCase.expected);
+    }
+  });
+
+  it("allows container namespace joins with explicit dangerous override", () => {
+    expect(() =>
+      validateNetworkMode("container:abc123", {
+        allowContainerNamespaceJoin: true,
+      }),
+    ).not.toThrow();
   });
 });
 

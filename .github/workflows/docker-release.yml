@@ -172,6 +172,9 @@ jobs:
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             version="${GITHUB_REF#refs/tags/v}"
             tags+=("${IMAGE}:${version}")
+            if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
+              tags+=("${IMAGE}:latest")
+            fi
           fi
           if [[ ${#tags[@]} -eq 0 ]]; then
             echo "::error::No manifest tags resolved for ref ${GITHUB_REF}"

@@ -16,6 +16,17 @@ export const TalkConfigParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const TalkProviderConfigSchema = Type.Object(
+  {
+    voiceId: Type.Optional(Type.String()),
+    voiceAliases: Type.Optional(Type.Record(Type.String(), Type.String())),
+    modelId: Type.Optional(Type.String()),
+    outputFormat: Type.Optional(Type.String()),
+    apiKey: Type.Optional(Type.String()),
+  },
+  { additionalProperties: true },
+);
+
 export const TalkConfigResultSchema = Type.Object(
   {
     config: Type.Object(
@@ -23,6 +34,8 @@ export const TalkConfigResultSchema = Type.Object(
         talk: Type.Optional(
           Type.Object(
             {
+              provider: Type.Optional(Type.String()),
+              providers: Type.Optional(Type.Record(Type.String(), TalkProviderConfigSchema)),
               voiceId: Type.Optional(Type.String()),
               voiceAliases: Type.Optional(Type.Record(Type.String(), Type.String())),
               modelId: Type.Optional(Type.String()),

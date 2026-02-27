@@ -190,7 +190,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     label: "cron",
     description: "Schedule tasks",
     sectionId: "automation",
-    profiles: [],
+    profiles: ["coding"],
     includeInOpenClawGroup: true,
   },
   {

@@ -71,4 +71,41 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(1);
     expect(replyPayloads[0]?.mediaUrl).toBe("file:///tmp/photo.jpg");
   });
+
+  it("suppresses same-target replies when messageProvider is synthetic but originatingChannel is set", () => {
+    const { replyPayloads } = buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "hello world!" }],
+      messageProvider: "heartbeat",
+      originatingChannel: "telegram",
+      originatingTo: "268300329",
+      messagingToolSentTexts: ["different message"],
+      messagingToolSentTargets: [{ tool: "telegram", provider: "telegram", to: "268300329" }],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("does not suppress same-target replies when accountId differs", () => {
+    const { replyPayloads } = buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "hello world!" }],
+      messageProvider: "heartbeat",
+      originatingChannel: "telegram",
+      originatingTo: "268300329",
+      accountId: "personal",
+      messagingToolSentTexts: ["different message"],
+      messagingToolSentTargets: [
+        {
+          tool: "telegram",
+          provider: "telegram",
+          to: "268300329",
+          accountId: "work",
+        },
+      ],
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("hello world!");
+  });
 });

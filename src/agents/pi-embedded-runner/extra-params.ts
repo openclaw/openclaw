@@ -14,7 +14,7 @@ const ANTHROPIC_1M_MODEL_PREFIXES = ["claude-opus-4", "claude-sonnet-4"] as cons
 // NOTE: We only force `store=true` for *direct* OpenAI Responses.
 // Codex responses (chatgpt.com/backend-api/codex/responses) require `store=false`.
 const OPENAI_RESPONSES_APIS = new Set(["openai-responses"]);
-const OPENAI_RESPONSES_PROVIDERS = new Set(["openai"]);
+const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai-responses"]);
 
 /**
  * Resolve provider-specific extra params from model config.
@@ -117,6 +117,13 @@ function createStreamFnWithExtraParams(
   if (typeof extraParams.maxTokens === "number") {
     streamParams.maxTokens = extraParams.maxTokens;
   }
+  const transport = extraParams.transport;
+  if (transport === "sse" || transport === "websocket" || transport === "auto") {
+    streamParams.transport = transport;
+  } else if (transport != null) {
+    const transportSummary = typeof transport === "string" ? transport : typeof transport;
+    log.warn(`ignoring invalid transport param: ${transportSummary}`);
+  }
   const cacheRetention = resolveCacheRetention(extraParams, provider);
   if (cacheRetention) {
     streamParams.cacheRetention = cacheRetention;
@@ -184,10 +191,16 @@ function isDirectOpenAIBaseUrl(baseUrl: unknown): boolean {
 
   try {
     const host = new URL(baseUrl).hostname.toLowerCase();
-    return host === "api.openai.com" || host === "chatgpt.com";
+    return (
+      host === "api.openai.com" || host === "chatgpt.com" || host.endsWith(".openai.azure.com")
+    );
   } catch {
     const normalized = baseUrl.toLowerCase();
-    return normalized.includes("api.openai.com") || normalized.includes("chatgpt.com");
+    return (
+      normalized.includes("api.openai.com") ||
+      normalized.includes("chatgpt.com") ||
+      normalized.includes(".openai.azure.com")
+    );
   }
 }
 
@@ -226,6 +239,15 @@ function createOpenAIResponsesStoreWrapper(baseStreamFn: StreamFn | undefined): 
       },
     });
   };
+}
+
+function createCodexDefaultTransportWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) =>
+    underlying(model, context, {
+      ...options,
+      transport: options?.transport ?? "auto",
+    });
 }
 
 function isAnthropic1MModel(modelId: string): boolean {
@@ -408,6 +430,42 @@ function mapThinkingLevelToOpenRouterReasoningEffort(
   return thinkingLevel;
 }
 
+function shouldApplySiliconFlowThinkingOffCompat(params: {
+  provider: string;
+  modelId: string;
+  thinkingLevel?: ThinkLevel;
+}): boolean {
+  return (
+    params.provider === "siliconflow" &&
+    params.thinkingLevel === "off" &&
+    params.modelId.startsWith("Pro/")
+  );
+}
+
+/**
+ * SiliconFlow's Pro/* models reject string thinking modes (including "off")
+ * with HTTP 400 invalid-parameter errors. Normalize to `thinking: null` to
+ * preserve "thinking disabled" intent without sending an invalid enum value.
+ */
+function createSiliconFlowThinkingWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const originalOnPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (payload && typeof payload === "object") {
+          const payloadObj = payload as Record<string, unknown>;
+          if (payloadObj.thinking === "off") {
+            payloadObj.thinking = null;
+          }
+        }
+        originalOnPayload?.(payload);
+      },
+    });
+  };
+}
+
 /**
  * Create a streamFn wrapper that adds OpenRouter app attribution headers
  * and injects reasoning.effort based on the configured thinking level.
@@ -461,6 +519,94 @@ function createOpenRouterWrapper(
               };
             }
           }
+        }
+        onPayload?.(payload);
+      },
+    });
+  };
+}
+
+function isGemini31Model(modelId: string): boolean {
+  const normalized = modelId.toLowerCase();
+  return normalized.includes("gemini-3.1-pro") || normalized.includes("gemini-3.1-flash");
+}
+
+function mapThinkLevelToGoogleThinkingLevel(
+  thinkingLevel: ThinkLevel,
+): "MINIMAL" | "LOW" | "MEDIUM" | "HIGH" | undefined {
+  switch (thinkingLevel) {
+    case "minimal":
+      return "MINIMAL";
+    case "low":
+      return "LOW";
+    case "medium":
+      return "MEDIUM";
+    case "high":
+    case "xhigh":
+      return "HIGH";
+    default:
+      return undefined;
+  }
+}
+
+function sanitizeGoogleThinkingPayload(params: {
+  payload: unknown;
+  modelId?: string;
+  thinkingLevel?: ThinkLevel;
+}): void {
+  if (!params.payload || typeof params.payload !== "object") {
+    return;
+  }
+  const payloadObj = params.payload as Record<string, unknown>;
+  const config = payloadObj.config;
+  if (!config || typeof config !== "object") {
+    return;
+  }
+  const configObj = config as Record<string, unknown>;
+  const thinkingConfig = configObj.thinkingConfig;
+  if (!thinkingConfig || typeof thinkingConfig !== "object") {
+    return;
+  }
+  const thinkingConfigObj = thinkingConfig as Record<string, unknown>;
+  const thinkingBudget = thinkingConfigObj.thinkingBudget;
+  if (typeof thinkingBudget !== "number" || thinkingBudget >= 0) {
+    return;
+  }
+
+  // pi-ai can emit thinkingBudget=-1 for some Gemini 3.1 IDs; a negative budget
+  // is invalid for Google-compatible backends and can lead to malformed handling.
+  delete thinkingConfigObj.thinkingBudget;
+
+  if (
+    typeof params.modelId === "string" &&
+    isGemini31Model(params.modelId) &&
+    params.thinkingLevel &&
+    params.thinkingLevel !== "off" &&
+    thinkingConfigObj.thinkingLevel === undefined
+  ) {
+    const mappedLevel = mapThinkLevelToGoogleThinkingLevel(params.thinkingLevel);
+    if (mappedLevel) {
+      thinkingConfigObj.thinkingLevel = mappedLevel;
+    }
+  }
+}
+
+function createGoogleThinkingPayloadWrapper(
+  baseStreamFn: StreamFn | undefined,
+  thinkingLevel?: ThinkLevel,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const onPayload = options?.onPayload;
+    return underlying(model, context, {
+      ...options,
+      onPayload: (payload) => {
+        if (model.api === "google-generative-ai") {
+          sanitizeGoogleThinkingPayload({
+            payload,
+            modelId: model.id,
+            thinkingLevel,
+          });
         }
         onPayload?.(payload);
       },
@@ -522,6 +668,10 @@ export function applyExtraParamsToAgent(
     modelId,
     agentId,
   });
+  if (provider === "openai-codex") {
+    // Default Codex to WebSocket-first when nothing else specifies transport.
+    agent.streamFn = createCodexDefaultTransportWrapper(agent.streamFn);
+  }
   const override =
     extraParamsOverride && Object.keys(extraParamsOverride).length > 0
       ? Object.fromEntries(
@@ -542,6 +692,13 @@ export function applyExtraParamsToAgent(
       `applying Anthropic beta header for ${provider}/${modelId}: ${anthropicBetas.join(",")}`,
     );
     agent.streamFn = createAnthropicBetaHeadersWrapper(agent.streamFn, anthropicBetas);
+  }
+
+  if (shouldApplySiliconFlowThinkingOffCompat({ provider, modelId, thinkingLevel })) {
+    log.debug(
+      `normalizing thinking=off to thinking=null for SiliconFlow compatibility (${provider}/${modelId})`,
+    );
+    agent.streamFn = createSiliconFlowThinkingWrapper(agent.streamFn);
   }
 
   if (provider === "openrouter") {
@@ -571,6 +728,10 @@ export function applyExtraParamsToAgent(
       agent.streamFn = createZaiToolStreamWrapper(agent.streamFn, true);
     }
   }
+
+  // Guard Google payloads against invalid negative thinking budgets emitted by
+  // upstream model-ID heuristics for Gemini 3.1 variants.
+  agent.streamFn = createGoogleThinkingPayloadWrapper(agent.streamFn, thinkingLevel);
 
   // Work around upstream pi-ai hardcoding `store: false` for Responses API.
   // Force `store=true` for direct OpenAI/OpenAI Codex providers so multi-turn

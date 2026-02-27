@@ -123,7 +123,7 @@ describe("typing controller", () => {
     ] as const;
 
     for (const testCase of cases) {
-      const onReplyStart = vi.fn(async () => {});
+      const onReplyStart = vi.fn();
       const typing = createTypingController({
         onReplyStart,
         typingIntervalSeconds: 1,
@@ -133,7 +133,7 @@ describe("typing controller", () => {
       await typing.startTypingLoop();
       expect(onReplyStart, testCase.name).toHaveBeenCalledTimes(1);
 
-      vi.advanceTimersByTime(2_000);
+      await vi.advanceTimersByTimeAsync(2_000);
       expect(onReplyStart, testCase.name).toHaveBeenCalledTimes(3);
 
       if (testCase.first === "run") {
@@ -141,22 +141,22 @@ describe("typing controller", () => {
       } else {
         typing.markDispatchIdle();
       }
-      vi.advanceTimersByTime(2_000);
-      expect(onReplyStart, testCase.name).toHaveBeenCalledTimes(5);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(onReplyStart, testCase.name).toHaveBeenCalledTimes(testCase.first === "run" ? 3 : 5);
 
       if (testCase.second === "run") {
         typing.markRunComplete();
       } else {
         typing.markDispatchIdle();
       }
-      vi.advanceTimersByTime(2_000);
-      expect(onReplyStart, testCase.name).toHaveBeenCalledTimes(5);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(onReplyStart, testCase.name).toHaveBeenCalledTimes(testCase.first === "run" ? 3 : 5);
     }
   });
 
   it("does not start typing after run completion", async () => {
     vi.useFakeTimers();
-    const onReplyStart = vi.fn(async () => {});
+    const onReplyStart = vi.fn();
     const typing = createTypingController({
       onReplyStart,
       typingIntervalSeconds: 1,
@@ -165,13 +165,13 @@ describe("typing controller", () => {
 
     typing.markRunComplete();
     await typing.startTypingOnText("late text");
-    vi.advanceTimersByTime(2_000);
+    await vi.advanceTimersByTimeAsync(2_000);
     expect(onReplyStart).not.toHaveBeenCalled();
   });
 
   it("does not restart typing after it has stopped", async () => {
     vi.useFakeTimers();
-    const onReplyStart = vi.fn(async () => {});
+    const onReplyStart = vi.fn();
     const typing = createTypingController({
       onReplyStart,
       typingIntervalSeconds: 1,
@@ -184,12 +184,12 @@ describe("typing controller", () => {
     typing.markRunComplete();
     typing.markDispatchIdle();
 
-    vi.advanceTimersByTime(5_000);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(onReplyStart).toHaveBeenCalledTimes(1);
 
     // Late callbacks should be ignored and must not restart the interval.
     await typing.startTypingOnText("late tool result");
-    vi.advanceTimersByTime(5_000);
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(onReplyStart).toHaveBeenCalledTimes(1);
   });
 });
@@ -254,6 +254,28 @@ describe("resolveTypingMode", () => {
           isGroupChat: false,
           wasMentioned: false,
           isHeartbeat: true,
+        },
+        expected: "never",
+      },
+      {
+        name: "suppressTyping forces never",
+        input: {
+          configured: "instant" as const,
+          isGroupChat: false,
+          wasMentioned: false,
+          isHeartbeat: false,
+          suppressTyping: true,
+        },
+        expected: "never",
+      },
+      {
+        name: "typingPolicy system_event forces never",
+        input: {
+          configured: "instant" as const,
+          isGroupChat: false,
+          wasMentioned: false,
+          isHeartbeat: false,
+          typingPolicy: "system_event" as const,
         },
         expected: "never",
       },
