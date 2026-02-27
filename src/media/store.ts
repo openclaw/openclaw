@@ -94,12 +94,11 @@ export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS) {
     await Promise.all(
       dirEntries.map(async (entry) => {
         const fullPath = path.join(dir, entry);
-        const stat = await fs.stat(fullPath).catch(() => null);
+        const stat = await fs.lstat(fullPath).catch(() => null);
         if (!stat) {
           return;
         }
-        if (stat.isDirectory()) {
-          await removeExpiredFilesRecursively(fullPath);
+        if (stat.isDirectory() && !stat.isSymbolicLink()) {
           return;
         }
         if (!stat.isFile()) {
