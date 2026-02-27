@@ -56,6 +56,7 @@ See [Venice AI](/providers/venice).
 - [Ollama (local models)](/providers/ollama)
 - [vLLM (local models)](/providers/vllm)
 - [Qianfan](/providers/qianfan)
+- [Vivgrid](/providers/vivgrid)
 - [NVIDIA](/providers/nvidia)
 
 ## Transcription providers
