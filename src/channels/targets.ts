@@ -16,7 +16,8 @@ export type MessagingTargetParseOptions = {
 };
 
 export function normalizeTargetId(kind: MessagingTargetKind, id: string): string {
-  return `${kind}:${id}`.toLowerCase();
+  // Only lowercase the kind prefix; preserve ID case (Slack IDs are case-sensitive).
+  return `${kind.toLowerCase()}:${id}`;
 }
 
 export function buildMessagingTarget(

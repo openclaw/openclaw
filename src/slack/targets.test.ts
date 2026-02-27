@@ -5,9 +5,9 @@ import { parseSlackTarget, resolveSlackChannelId } from "./targets.js";
 describe("parseSlackTarget", () => {
   it("parses user mentions and prefixes", () => {
     const cases = [
-      { input: "<@U123>", id: "U123", normalized: "user:u123" },
-      { input: "user:U456", id: "U456", normalized: "user:u456" },
-      { input: "slack:U789", id: "U789", normalized: "user:u789" },
+      { input: "<@U123>", id: "U123", normalized: "user:U123" },
+      { input: "user:U456", id: "U456", normalized: "user:U456" },
+      { input: "slack:U789", id: "U789", normalized: "user:U789" },
     ] as const;
     for (const testCase of cases) {
       expect(parseSlackTarget(testCase.input), testCase.input).toMatchObject({
@@ -20,8 +20,8 @@ describe("parseSlackTarget", () => {
 
   it("parses channel targets", () => {
     const cases = [
-      { input: "channel:C123", id: "C123", normalized: "channel:c123" },
-      { input: "#C999", id: "C999", normalized: "channel:c999" },
+      { input: "channel:C123", id: "C123", normalized: "channel:C123" },
+      { input: "#C999", id: "C999", normalized: "channel:C999" },
     ] as const;
     for (const testCase of cases) {
       expect(parseSlackTarget(testCase.input), testCase.input).toMatchObject({
@@ -58,6 +58,6 @@ describe("resolveSlackChannelId", () => {
 
 describe("normalizeSlackMessagingTarget", () => {
   it("defaults raw ids to channels", () => {
-    expect(normalizeSlackMessagingTarget("C123")).toBe("channel:c123");
+    expect(normalizeSlackMessagingTarget("C123")).toBe("channel:C123");
   });
 });
