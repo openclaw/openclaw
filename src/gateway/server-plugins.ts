@@ -1,4 +1,5 @@
 import type { loadConfig } from "../config/config.js";
+import { resolvePluginMissingDependencyHint } from "../plugins/load-error-hints.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 
@@ -38,10 +39,18 @@ export function loadGatewayPlugins(params: {
       const message = details
         ? `[plugins] ${diag.message} (${details})`
         : `[plugins] ${diag.message}`;
+      const hint =
+        diag.level === "error"
+          ? resolvePluginMissingDependencyHint({
+              message: diag.message,
+              pluginId: diag.pluginId,
+            })
+          : null;
+      const finalMessage = hint ? `${message} Hint: ${hint}` : message;
       if (diag.level === "error") {
-        params.log.error(message);
+        params.log.error(finalMessage);
       } else {
-        params.log.info(message);
+        params.log.info(finalMessage);
       }
     }
   }

@@ -1,3 +1,4 @@
+import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { loadDotEnv } from "../infra/dotenv.js";
@@ -20,6 +21,31 @@ export function rewriteUpdateFlagArgv(argv: string[]): string[] {
 
   const next = [...argv];
   next.splice(index, 1, "update");
+  return next;
+}
+
+function isLegacyGatewayBinary(entryPath: string | undefined): boolean {
+  if (!entryPath) {
+    return false;
+  }
+  const base = path.basename(entryPath).toLowerCase();
+  return (
+    base === "openclaw-gateway" ||
+    base === "openclaw-gateway.cmd" ||
+    base === "openclaw-gateway.ps1" ||
+    base === "openclaw-gateway.exe"
+  );
+}
+
+export function rewriteLegacyGatewayBinaryArgv(argv: string[]): string[] {
+  if (!isLegacyGatewayBinary(argv[1])) {
+    return argv;
+  }
+  if (argv[2] === "gateway") {
+    return argv;
+  }
+  const next = [...argv];
+  next.splice(2, 0, "gateway");
   return next;
 }
 
@@ -62,7 +88,7 @@ export function shouldEnsureCliPath(argv: string[]): boolean {
 }
 
 export async function runCli(argv: string[] = process.argv) {
-  const normalizedArgv = normalizeWindowsArgv(argv);
+  const normalizedArgv = rewriteLegacyGatewayBinaryArgv(normalizeWindowsArgv(argv));
   loadDotEnv({ quiet: true });
   normalizeEnv();
   if (shouldEnsureCliPath(normalizedArgv)) {

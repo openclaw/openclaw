@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  rewriteLegacyGatewayBinaryArgv,
   rewriteUpdateFlagArgv,
   shouldEnsureCliPath,
   shouldRegisterPrimarySubcommand,
@@ -37,6 +38,34 @@ describe("rewriteUpdateFlagArgv", () => {
       "update",
       "--json",
     ]);
+  });
+});
+
+describe("rewriteLegacyGatewayBinaryArgv", () => {
+  it("rewrites legacy openclaw-gateway invocations to the gateway command path", () => {
+    expect(rewriteLegacyGatewayBinaryArgv(["node", "/usr/local/bin/openclaw-gateway"])).toEqual([
+      "node",
+      "/usr/local/bin/openclaw-gateway",
+      "gateway",
+    ]);
+    expect(
+      rewriteLegacyGatewayBinaryArgv([
+        "node",
+        "/usr/local/bin/openclaw-gateway",
+        "--port",
+        "18789",
+      ]),
+    ).toEqual(["node", "/usr/local/bin/openclaw-gateway", "gateway", "--port", "18789"]);
+  });
+
+  it("keeps modern argv untouched", () => {
+    const argv = ["node", "/usr/local/bin/openclaw", "gateway", "status"];
+    expect(rewriteLegacyGatewayBinaryArgv(argv)).toBe(argv);
+  });
+
+  it("avoids double-prefixing when gateway is already present", () => {
+    const argv = ["node", "/usr/local/bin/openclaw-gateway", "gateway", "status"];
+    expect(rewriteLegacyGatewayBinaryArgv(argv)).toBe(argv);
   });
 });
 

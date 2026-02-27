@@ -10,6 +10,7 @@ import { findBundledPluginByNpmSpec } from "../plugins/bundled-sources.js";
 import { enablePluginInConfig } from "../plugins/enable.js";
 import { installPluginFromNpmSpec, installPluginFromPath } from "../plugins/install.js";
 import { recordPluginInstall } from "../plugins/installs.js";
+import { resolvePluginMissingDependencyHint } from "../plugins/load-error-hints.js";
 import { clearPluginManifestRegistryCache } from "../plugins/manifest-registry.js";
 import type { PluginRecord } from "../plugins/registry.js";
 import { applyExclusiveSlotSelection } from "../plugins/slots.js";
@@ -777,6 +778,13 @@ export function registerPluginsCli(program: Command) {
         lines.push(theme.error("Plugin errors:"));
         for (const entry of errors) {
           lines.push(`- ${entry.id}: ${entry.error ?? "failed to load"} (${entry.source})`);
+          const hint = resolvePluginMissingDependencyHint({
+            message: entry.error ?? "",
+            pluginId: entry.id,
+          });
+          if (hint) {
+            lines.push(`  ${theme.muted(`Hint: ${hint}`)}`);
+          }
         }
       }
       if (diags.length > 0) {
@@ -787,6 +795,13 @@ export function registerPluginsCli(program: Command) {
         for (const diag of diags) {
           const target = diag.pluginId ? `${diag.pluginId}: ` : "";
           lines.push(`- ${target}${diag.message}`);
+          const hint = resolvePluginMissingDependencyHint({
+            message: diag.message,
+            pluginId: diag.pluginId,
+          });
+          if (hint) {
+            lines.push(`  ${theme.muted(`Hint: ${hint}`)}`);
+          }
         }
       }
       const docs = formatDocsLink("/plugin", "docs.openclaw.ai/plugin");

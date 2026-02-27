@@ -64,6 +64,48 @@ function resolvePairingRecoveryContext(params: {
   return { requestId: requestId || null };
 }
 
+function isLoopbackWsUrl(url?: string | null): boolean {
+  if (!url) {
+    return false;
+  }
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+      return false;
+    }
+    const host = parsed.hostname.toLowerCase();
+    return host === "localhost" || host === "127.0.0.1" || host === "::1";
+  } catch {
+    return false;
+  }
+}
+
+function resolveNonceRecoveryContext(params: {
+  error?: string | null;
+  closeReason?: string | null;
+  gatewayUrl?: string | null;
+}): {
+  loopbackUrl: boolean;
+} | null {
+  const source = [params.error, params.closeReason]
+    .filter((part) => typeof part === "string" && part.trim().length > 0)
+    .join(" ")
+    .toLowerCase();
+  if (!source) {
+    return null;
+  }
+  const hasNonceHandshakeFailure =
+    source.includes("device nonce required") ||
+    source.includes("device nonce mismatch") ||
+    source.includes("connect challenge missing nonce");
+  if (!hasNonceHandshakeFailure) {
+    return null;
+  }
+  return {
+    loopbackUrl: isLoopbackWsUrl(params.gatewayUrl),
+  };
+}
+
 export async function statusCommand(
   opts: {
     json?: boolean;
@@ -261,6 +303,11 @@ export async function statusCommand(
     error: gatewayProbe?.error ?? null,
     closeReason: gatewayProbe?.close?.reason ?? null,
   });
+  const nonceRecovery = resolveNonceRecoveryContext({
+    error: gatewayProbe?.error ?? null,
+    closeReason: gatewayProbe?.close?.reason ?? null,
+    gatewayUrl: gatewayProbe?.url ?? gatewayConnection.url,
+  });
 
   const agentsValue = (() => {
     const pending =
@@ -442,6 +489,26 @@ export async function statusCommand(
     }
     runtime.log(theme.muted(`Fallback: ${formatCliCommand("openclaw devices approve --latest")}`));
     runtime.log(theme.muted(`Inspect: ${formatCliCommand("openclaw devices list")}`));
+  }
+
+  if (nonceRecovery) {
+    runtime.log("");
+    runtime.log(theme.warn("Gateway device nonce handshake failed."));
+    runtime.log(
+      theme.muted(
+        "If this dashboard is behind a cloud proxy/WSS forwarder, it may strip handshake data.",
+      ),
+    );
+    if (!nonceRecovery.loopbackUrl) {
+      runtime.log(theme.muted("Use a local SSH tunnel instead of a provider web proxy."));
+    }
+    runtime.log(theme.muted("Tunnel: ssh -L 18789:127.0.0.1:18789 <user>@<host>"));
+    runtime.log(theme.muted("Then open: http://127.0.0.1:18789"));
+    runtime.log(
+      theme.muted(
+        "If you must stay behind a reverse proxy, configure gateway auth mode as trusted-proxy.",
+      ),
+    );
   }
 
   runtime.log("");
