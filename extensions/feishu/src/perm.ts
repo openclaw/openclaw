@@ -154,14 +154,14 @@ export function registerFeishuPermTools(api: OpenClawPluginApi) {
             });
             switch (p.action) {
               case "list":
-                return json(await listMembers(client, p.token, p.type));
+                return json(await listMembers(client, p.file_token, p.type));
               case "add":
                 return json(
-                  await addMember(client, p.token, p.type, p.member_type, p.member_id, p.perm),
+                  await addMember(client, p.file_token, p.type, p.member_type, p.member_id, p.perm),
                 );
               case "remove":
                 return json(
-                  await removeMember(client, p.token, p.type, p.member_type, p.member_id),
+                  await removeMember(client, p.file_token, p.type, p.member_type, p.member_id),
                 );
               default:
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- exhaustive check fallback

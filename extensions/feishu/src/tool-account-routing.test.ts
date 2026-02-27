@@ -6,8 +6,14 @@ import { registerFeishuPermTools } from "./perm.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 import { registerFeishuWikiTools } from "./wiki.js";
 
+const permissionMemberListMock = vi.fn(async () => ({ code: 0, data: { items: [] } }));
 const createFeishuClientMock = vi.fn((account: { appId?: string } | undefined) => ({
   __appId: account?.appId,
+  drive: {
+    permissionMember: {
+      list: permissionMemberListMock,
+    },
+  },
 }));
 
 vi.mock("./client.js", () => ({
@@ -113,6 +119,27 @@ describe("feishu tool account routing", () => {
     await tool.execute("call", { action: "unknown_action" });
 
     expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-b");
+  });
+
+  test("perm list action maps file_token to Feishu path token", async () => {
+    const { api, resolveTool } = createToolFactoryHarness(
+      createConfig({
+        toolsA: { perm: true },
+      }),
+    );
+    registerFeishuPermTools(api);
+
+    const tool = resolveTool("feishu_perm", { agentAccountId: "a" });
+    await tool.execute("call", {
+      action: "list",
+      file_token: "file_token_123",
+      type: "docx",
+    });
+
+    expect(permissionMemberListMock).toHaveBeenCalledWith({
+      path: { token: "file_token_123" },
+      params: { type: "docx" },
+    });
   });
 
   test("bitable tool routes to agentAccountId and allows explicit accountId override", async () => {

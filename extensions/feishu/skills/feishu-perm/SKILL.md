@@ -13,7 +13,7 @@ Single tool `feishu_perm` for managing file/document permissions.
 ### List Collaborators
 
 ```json
-{ "action": "list", "token": "ABC123", "type": "docx" }
+{ "action": "list", "file_token": "ABC123", "type": "docx" }
 ```
 
 Returns: members with member_type, member_id, perm, name.
@@ -23,7 +23,7 @@ Returns: members with member_type, member_id, perm, name.
 ```json
 {
   "action": "add",
-  "token": "ABC123",
+  "file_token": "ABC123",
   "type": "docx",
   "member_type": "email",
   "member_id": "user@example.com",
@@ -36,7 +36,7 @@ Returns: members with member_type, member_id, perm, name.
 ```json
 {
   "action": "remove",
-  "token": "ABC123",
+  "file_token": "ABC123",
   "type": "docx",
   "member_type": "email",
   "member_id": "user@example.com"
@@ -82,7 +82,7 @@ Share document with email:
 ```json
 {
   "action": "add",
-  "token": "doxcnXXX",
+  "file_token": "doxcnXXX",
   "type": "docx",
   "member_type": "email",
   "member_id": "alice@company.com",
@@ -95,7 +95,7 @@ Share folder with group:
 ```json
 {
   "action": "add",
-  "token": "fldcnXXX",
+  "file_token": "fldcnXXX",
   "type": "folder",
   "member_type": "openchat",
   "member_id": "oc_xxx",
