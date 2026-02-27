@@ -144,7 +144,7 @@ export function resolveFailureDestination(
     mode = normalizeFailureMode(globalConfig.mode);
   }
 
-  if (!channel && !to && !mode) {
+  if (!channel && !to && !accountId && !mode) {
     return null;
   }
 

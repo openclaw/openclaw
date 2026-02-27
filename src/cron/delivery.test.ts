@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveCronDeliveryPlan } from "./delivery.js";
+import { resolveCronDeliveryPlan, resolveFailureDestination } from "./delivery.js";
 import type { CronJob } from "./types.js";
 
 function makeJob(overrides: Partial<CronJob>): CronJob {
@@ -83,5 +83,141 @@ describe("resolveCronDeliveryPlan", () => {
     expect(plan.channel).toBe("telegram");
     expect(plan.to).toBe("123");
     expect(plan.accountId).toBe("bot-a");
+  });
+});
+
+describe("resolveFailureDestination", () => {
+  it("returns null when no failureDestination configured", () => {
+    const job = makeJob({
+      delivery: { mode: "announce", channel: "telegram", to: "123" },
+    });
+    const result = resolveFailureDestination(job);
+    expect(result).toBeNull();
+  });
+
+  it("returns job-level failureDestination", () => {
+    const job = makeJob({
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "123",
+        failureDestination: {
+          channel: "slack",
+          to: "#alerts",
+          mode: "announce",
+        },
+      },
+    });
+    const result = resolveFailureDestination(job);
+    expect(result).not.toBeNull();
+    expect(result?.mode).toBe("announce");
+    expect(result?.channel).toBe("slack");
+    expect(result?.to).toBe("#alerts");
+  });
+
+  it("falls back to global config when job has no failureDestination", () => {
+    const job = makeJob({
+      delivery: { mode: "announce", channel: "telegram", to: "123" },
+    });
+    const globalConfig = {
+      channel: "slack",
+      to: "#global-alerts",
+      mode: "webhook" as const,
+    };
+    const result = resolveFailureDestination(job, globalConfig);
+    expect(result).not.toBeNull();
+    expect(result?.mode).toBe("webhook");
+    expect(result?.channel).toBeUndefined(); // webhook mode doesn't use channel
+    expect(result?.to).toBe("#global-alerts");
+  });
+
+  it("job config takes priority over global config", () => {
+    const job = makeJob({
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        failureDestination: {
+          channel: "discord",
+          to: "job-channel",
+        },
+      },
+    });
+    const globalConfig = {
+      channel: "slack",
+      to: "#global-alerts",
+    };
+    const result = resolveFailureDestination(job, globalConfig);
+    expect(result?.channel).toBe("discord");
+    expect(result?.to).toBe("job-channel");
+  });
+
+  it("returns null when all fields are empty in job config", () => {
+    const job = makeJob({
+      delivery: {
+        mode: "announce",
+        failureDestination: {},
+      },
+    });
+    const result = resolveFailureDestination(job);
+    expect(result).toBeNull();
+  });
+
+  it("returns null when only accountId is set but not in global", () => {
+    const job = makeJob({
+      delivery: {
+        mode: "announce",
+        failureDestination: {
+          accountId: "my-account",
+        },
+      },
+    });
+    const result = resolveFailureDestination(job);
+    expect(result).not.toBeNull();
+    expect(result?.accountId).toBe("my-account");
+    expect(result?.channel).toBe("last");
+  });
+
+  it("webhook mode stores URL in to field", () => {
+    const job = makeJob({
+      delivery: {
+        mode: "announce",
+        failureDestination: {
+          to: "https://hooks.example.com/alerts",
+          mode: "webhook",
+        },
+      },
+    });
+    const result = resolveFailureDestination(job);
+    expect(result).not.toBeNull();
+    expect(result?.mode).toBe("webhook");
+    expect(result?.to).toBe("https://hooks.example.com/alerts");
+    expect(result?.channel).toBeUndefined();
+  });
+
+  it("normalizes channel to lowercase", () => {
+    const job = makeJob({
+      delivery: {
+        mode: "announce",
+        failureDestination: {
+          channel: "TELEGRAM",
+        },
+      },
+    });
+    const result = resolveFailureDestination(job);
+    expect(result?.channel).toBe("telegram");
+  });
+
+  it("uses default announce mode when mode not specified", () => {
+    const job = makeJob({
+      delivery: {
+        mode: "announce",
+        failureDestination: {
+          channel: "slack",
+          to: "#alerts",
+        },
+      },
+    });
+    const result = resolveFailureDestination(job);
+    expect(result?.mode).toBe("announce");
   });
 });

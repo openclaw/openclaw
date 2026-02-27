@@ -632,8 +632,19 @@ function mergeCronDelivery(
   if (typeof patch.bestEffort === "boolean") {
     next.bestEffort = patch.bestEffort;
   }
-  if ("failureDestination" in patch && patch.failureDestination !== undefined) {
-    next.failureDestination = patch.failureDestination;
+  if ("failureDestination" in patch) {
+    if (patch.failureDestination === undefined) {
+      next.failureDestination = undefined;
+    } else {
+      const existingFd = next.failureDestination;
+      const patchFd = patch.failureDestination;
+      next.failureDestination = {
+        channel: patchFd.channel ?? existingFd?.channel,
+        to: patchFd.to ?? existingFd?.to,
+        accountId: patchFd.accountId ?? existingFd?.accountId,
+        mode: patchFd.mode ?? existingFd?.mode,
+      };
+    }
   }
 
   return next;
