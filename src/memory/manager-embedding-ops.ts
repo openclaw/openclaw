@@ -8,7 +8,8 @@ import {
 } from "./batch-openai.js";
 import { type VoyageBatchRequest, runVoyageEmbeddingBatches } from "./batch-voyage.js";
 import { enforceEmbeddingMaxInputTokens } from "./embedding-chunk-limits.js";
-import { estimateUtf8Bytes } from "./embedding-input-limits.js";
+import { estimateUtf8Bytes, splitTextToUtf8ByteLimit } from "./embedding-input-limits.js";
+import { resolveEmbeddingMaxInputTokens } from "./embedding-model-limits.js";
 import {
   chunkMarkdown,
   hashText,
@@ -550,9 +551,25 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       throw new Error("Cannot embed query in FTS-only mode (no embedding provider)");
     }
     const timeoutMs = this.resolveEmbeddingTimeout("query");
+
+    // Truncate query to fit within the embedding model's max input limit.
+    // Unlike document indexing (which splits into multiple chunks), queries
+    // produce a single vector so we keep only the first segment.
+    const maxInputBytes = resolveEmbeddingMaxInputTokens(this.provider);
+    let truncated = text;
+    if (estimateUtf8Bytes(text) > maxInputBytes) {
+      const parts = splitTextToUtf8ByteLimit(text, maxInputBytes);
+      truncated = parts[0] ?? text;
+      log.warn("memory embeddings: query truncated to fit embedding model limit", {
+        provider: this.provider.id,
+        originalBytes: estimateUtf8Bytes(text),
+        maxBytes: maxInputBytes,
+      });
+    }
+
     log.debug("memory embeddings: query start", { provider: this.provider.id, timeoutMs });
     return await this.withTimeout(
-      this.provider.embedQuery(text),
+      this.provider.embedQuery(truncated),
       timeoutMs,
       `memory embeddings query timed out after ${Math.round(timeoutMs / 1000)}s`,
     );

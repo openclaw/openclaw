@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { enforceEmbeddingMaxInputTokens } from "./embedding-chunk-limits.js";
-import { estimateUtf8Bytes } from "./embedding-input-limits.js";
+import { estimateUtf8Bytes, splitTextToUtf8ByteLimit } from "./embedding-input-limits.js";
+import { resolveEmbeddingMaxInputTokens } from "./embedding-model-limits.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 
 function createProvider(maxInputTokens: number): EmbeddingProvider {
@@ -98,5 +99,51 @@ describe("embedding chunk limits", () => {
 
     expect(out.length).toBeGreaterThan(1);
     expect(out.every((chunk) => estimateUtf8Bytes(chunk.text) <= 8000)).toBe(true);
+  });
+});
+
+describe("query text truncation for embedding limits", () => {
+  // Mirrors the truncation logic in embedQueryWithTimeout: when a search
+  // query exceeds the provider's max input, take the first segment.
+  it("truncates oversized query text to fit provider limit", () => {
+    const provider = createProvider(2048);
+    const oversizedQuery = "x".repeat(5000);
+    const maxInputBytes = resolveEmbeddingMaxInputTokens(provider);
+
+    expect(estimateUtf8Bytes(oversizedQuery)).toBeGreaterThan(maxInputBytes);
+
+    const parts = splitTextToUtf8ByteLimit(oversizedQuery, maxInputBytes);
+    const truncated = parts[0] ?? oversizedQuery;
+
+    expect(estimateUtf8Bytes(truncated)).toBeLessThanOrEqual(maxInputBytes);
+    expect(truncated.length).toBeLessThan(oversizedQuery.length);
+  });
+
+  it("does not truncate queries within limit", () => {
+    const provider = createProvider(8192);
+    const shortQuery = "find all memory entries about cron jobs";
+    const maxInputBytes = resolveEmbeddingMaxInputTokens(provider);
+
+    expect(estimateUtf8Bytes(shortQuery)).toBeLessThanOrEqual(maxInputBytes);
+
+    const parts = splitTextToUtf8ByteLimit(shortQuery, maxInputBytes);
+    expect(parts).toHaveLength(1);
+    expect(parts[0]).toBe(shortQuery);
+  });
+
+  it("handles multibyte query text without corruption", () => {
+    const provider = createProvider(2048);
+    const emoji = "😀";
+    const oversizedQuery = emoji.repeat(1500);
+    const maxInputBytes = resolveEmbeddingMaxInputTokens(provider);
+
+    expect(estimateUtf8Bytes(oversizedQuery)).toBeGreaterThan(maxInputBytes);
+
+    const parts = splitTextToUtf8ByteLimit(oversizedQuery, maxInputBytes);
+    const truncated = parts[0] ?? oversizedQuery;
+
+    expect(estimateUtf8Bytes(truncated)).toBeLessThanOrEqual(maxInputBytes);
+    // No surrogate pair corruption
+    expect(truncated).not.toContain("\uFFFD");
   });
 });
