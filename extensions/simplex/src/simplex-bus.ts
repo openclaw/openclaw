@@ -166,10 +166,7 @@ export function startSimplexBus(options: SimplexBusOptions): SimplexBusHandle {
           };
 
           options.onMessage(msg).catch((err) => {
-            options.onError(
-              err instanceof Error ? err : new Error(String(err)),
-              "message_handler",
-            );
+            options.onError(err instanceof Error ? err : new Error(String(err)), "message_handler");
           });
         }
       }

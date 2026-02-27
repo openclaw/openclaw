@@ -4,8 +4,20 @@
   "description": "SimpleX Chat channel plugin for OpenClaw — zero-metadata, decentralized DMs",
   "type": "module",
   "main": "index.ts",
+  "dependencies": {
+    "ws": "^8.0.0"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.0.0"
+  },
+  "peerDependencies": {
+    "openclaw": "*",
+    "zod": "*"
+  },
   "openclaw": {
-    "extensions": ["./index.ts"],
+    "extensions": [
+      "./index.ts"
+    ],
     "channel": {
       "id": "simplex",
       "label": "SimpleX",
@@ -21,15 +33,5 @@
       "localPath": "extensions/simplex",
       "defaultChoice": "local"
     }
-  },
-  "dependencies": {
-    "ws": "^8.0.0"
-  },
-  "devDependencies": {
-    "@types/ws": "^8.0.0"
-  },
-  "peerDependencies": {
-    "openclaw": "*",
-    "zod": "*"
   }
 }

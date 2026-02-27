@@ -6,8 +6,8 @@ import {
   type ChannelPlugin,
 } from "openclaw/plugin-sdk";
 import { simplexChannelConfigSchema } from "./config-schema.js";
-import { startSimplexBus, type SimplexBusHandle } from "./simplex-bus.js";
 import { getSimplexRuntime } from "./runtime.js";
+import { startSimplexBus, type SimplexBusHandle } from "./simplex-bus.js";
 import {
   listSimplexAccountIds,
   resolveDefaultSimplexAccountId,
@@ -54,9 +54,7 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
     resolveAllowFrom: ({ cfg, accountId }) =>
       resolveSimplexAccount({ cfg, accountId }).allowFrom.map(String),
     formatAllowFrom: ({ allowFrom }) =>
-      allowFrom
-        .map((entry) => String(entry).trim())
-        .filter(Boolean),
+      allowFrom.map((entry) => String(entry).trim()).filter(Boolean),
   },
 
   pairing: {
@@ -154,9 +152,7 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
         accountId: account.accountId,
         wsUrl: account.wsUrl,
       });
-      ctx.log?.info(
-        `[${account.accountId}] Starting SimpleX provider (${account.wsUrl})`,
-      );
+      ctx.log?.info(`[${account.accountId}] Starting SimpleX provider (${account.wsUrl})`);
 
       if (!account.configured) {
         throw new Error("SimpleX channel not configured");
@@ -193,9 +189,7 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
         },
 
         onError: (error, context) => {
-          ctx.log?.error?.(
-            `[${account.accountId}] SimpleX error (${context}): ${error.message}`,
-          );
+          ctx.log?.error?.(`[${account.accountId}] SimpleX error (${context}): ${error.message}`);
         },
 
         onConnect: () => {
@@ -211,9 +205,7 @@ export const simplexPlugin: ChannelPlugin<ResolvedSimplexAccount> = {
 
       activeBuses.set(account.accountId, bus);
 
-      ctx.log?.info(
-        `[${account.accountId}] SimpleX provider started`,
-      );
+      ctx.log?.info(`[${account.accountId}] SimpleX provider started`);
 
       return {
         stop: () => {

@@ -15,6 +15,7 @@ SimpleX Chat channel plugin for OpenClaw.
 ## Prerequisites
 
 1. Install the SimpleX Chat CLI:
+
    ```bash
    # Ubuntu/Debian
    curl -L https://github.com/simplex-chat/simplex-chat/releases/latest/download/simplex-chat-ubuntu-22_04-x86-64 -o /usr/local/bin/simplex-chat
@@ -22,6 +23,7 @@ SimpleX Chat channel plugin for OpenClaw.
    ```
 
 2. Create a SimpleX profile:
+
    ```bash
    simplex-chat
    # Follow the prompts to create a profile
@@ -59,15 +61,15 @@ In your `openclaw.json`:
 
 ## Configuration Options
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `enabled` | `true` | Enable/disable the channel |
-| `wsPort` | `5225` | WebSocket port for simplex-chat CLI |
-| `wsHost` | `127.0.0.1` | WebSocket host (keep localhost!) |
-| `dmPolicy` | `"pairing"` | DM policy: `"open"` or `"pairing"` |
-| `allowFrom` | `[]` | Pre-approved contact IDs |
-| `cliPath` | auto | Path to simplex-chat binary |
-| `autoStart` | `false` | Auto-start the CLI process |
+| Option      | Default     | Description                         |
+| ----------- | ----------- | ----------------------------------- |
+| `enabled`   | `true`      | Enable/disable the channel          |
+| `wsPort`    | `5225`      | WebSocket port for simplex-chat CLI |
+| `wsHost`    | `127.0.0.1` | WebSocket host (keep localhost!)    |
+| `dmPolicy`  | `"pairing"` | DM policy: `"open"` or `"pairing"`  |
+| `allowFrom` | `[]`        | Pre-approved contact IDs            |
+| `cliPath`   | auto        | Path to simplex-chat binary         |
+| `autoStart` | `false`     | Auto-start the CLI process          |
 
 ## Connecting
 
