@@ -49,3 +49,25 @@ The agent runtime assembles a system prompt from your bootstrap files, workspace
 OpenClaw ships with a set of built-in tools that let the agent interact with your computer. It can run shell commands, read and write files, edit documents, and send messages through any connected channel. The default working directory is the agent's workspace folder, so file operations stay organized. Beyond the basics, extended capabilities include browser automation, web search, media understanding (images, PDFs, and video), scheduled tasks via cron, and inbound webhooks for external triggers.
 
 Safety is enforced through tool policies that control what each channel or session is allowed to do. For example, a group chat can be restricted to read-only tools while a private conversation has full access. Optional sandboxing can further isolate the agent's file-system reach. The agent always operates within the boundaries you configure -- it cannot escalate its own permissions.
+
+---
+
+# Part 2: Deployment
+
+## Cloud Model API Setup
+
+OpenClaw supports a wide range of cloud model providers out of the box: Anthropic (Claude), OpenAI (GPT), Google (Gemini), Mistral, DeepSeek, Qwen/Tongyi, and OpenRouter. To get started, run the interactive setup wizard (`openclaw configure`), which walks you through selecting a provider and entering credentials. For most providers this means pasting in an API key; Google also supports OAuth-based authentication. If you prefer, you can skip the wizard and edit the configuration file directly -- the result is the same.
+
+For added reliability, you can configure multiple accounts or API keys for the same provider. If one key hits a rate limit or returns an error, OpenClaw automatically rotates to the next available key before retrying. Think of it like having several passes to the same venue: if the line at one entrance is too long, you walk to the next one. This makes your assistant more resilient without any extra effort on your part once the keys are in place.
+
+## Local Model Deployment
+
+If you want to run models entirely on your own hardware -- for privacy, cost, or offline access -- OpenClaw supports several local inference engines. Ollama is the recommended starting point because of its straightforward setup, but LM Studio, vLLM, and LiteLLM are also supported. The mental model is simple: install a local inference engine, pull a model, and OpenClaw discovers it automatically.
+
+In practice, the flow looks like this: install Ollama, use it to pull a model (for example, qwen3:8b), set an environment variable telling OpenClaw to enable the local provider, and restart the Gateway. On startup, OpenClaw queries every configured local engine for its list of available models and adds them to your model menu -- no manual registration or model-by-model configuration required. If you later pull additional models into Ollama, they appear in OpenClaw the next time the Gateway starts.
+
+## Hybrid Mode (Cloud + Local)
+
+The most flexible setup combines cloud and local models in a single configuration -- think of it as having a primary pilot and a backup co-pilot. You designate one model as your primary (say, a cloud model for its reasoning strength) and one or more others as fallbacks (say, a fast local model for when the cloud is unreachable). If the primary provider errors out -- network blip, rate limit, outage -- OpenClaw automatically switches to the next model in the fallback chain, seamlessly and mid-conversation. The user on the other end of the chat never needs to know a swap happened.
+
+Recovery is equally hands-off. When a provider fails, it enters a cooldown period during which OpenClaw stops sending it requests. In the background, the Gateway periodically retests the provider with lightweight probe requests. Once the provider responds successfully, OpenClaw restores it to active duty and resumes using it according to its original priority. The entire cycle -- detection, fallback, cooldown, probe, recovery -- happens without any manual intervention.
