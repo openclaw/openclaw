@@ -50,6 +50,6 @@ Use this format when adding entries:
   repo: `https://github.com/icesword0760/openclaw-wechat`
   install: `openclaw plugins install @icesword760/openclaw-wechat`
 - **Secret Wallet** — Use macOS Keychain secrets from OpenClaw with selective inject (`--only`) and optional write/inject tool gating.
-  npm: `@baekho-lim/openclaw-secret-wallet`
+  npm: `@baekho-lim/secret-wallet`
   repo: `https://github.com/baekho-lim/openclaw-secret-wallet`
-  install: `openclaw plugins install @baekho-lim/openclaw-secret-wallet`
+  install: `openclaw plugins install @baekho-lim/secret-wallet`
