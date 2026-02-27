@@ -523,7 +523,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         hasGroupAllowFrom: deps.groupAllowFrom.length > 0,
       });
       if (!channelGroupPolicy.allowed) {
-        // Fall back to sender-level check only if no explicit groups config matched
+        // Group not explicitly allowed — check sender-level groupAllowFrom
         const groupAccess = resolveAccessDecision(true);
         if (groupAccess.decision !== "allow") {
           if (groupAccess.reasonCode === DM_GROUP_ACCESS_REASON.GROUP_POLICY_DISABLED) {
@@ -535,6 +535,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           } else {
             logVerbose(`Blocked signal group sender ${senderDisplay} (not in groupAllowFrom)`);
           }
+          return;
+        }
+      } else if (deps.groupAllowFrom.length > 0) {
+        // Group is allowed, but still enforce sender-level gating if groupAllowFrom is configured
+        const groupAccess = resolveAccessDecision(true);
+        if (groupAccess.decision !== "allow") {
+          logVerbose(
+            `Blocked signal group sender ${senderDisplay} (group allowed, sender not in groupAllowFrom)`,
+          );
           return;
         }
       }
