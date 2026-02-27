@@ -29,17 +29,22 @@ async function getToken(creds: Credentials): Promise<string> {
     return cached.token;
   }
 
-  const res = await fetch(`${resolveApiBase(creds.domain)}/auth/v3/tenant_access_token/internal`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ app_id: creds.appId, app_secret: creds.appSecret }),
+  const { response: tokenRes, release } = await fetchWithSsrFGuard({
+    url: `${resolveApiBase(creds.domain)}/auth/v3/tenant_access_token/internal`,
+    init: {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ app_id: creds.appId, app_secret: creds.appSecret }),
+    },
+    auditContext: "feishu.streaming-card.token",
   });
-  const data = (await res.json()) as {
+  const data = (await tokenRes.json()) as {
     code: number;
     msg: string;
     tenant_access_token?: string;
     expire?: number;
   };
+  await release();
   if (data.code !== 0 || !data.tenant_access_token) {
     throw new Error(`Token error: ${data.msg}`);
   }
