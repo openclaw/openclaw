@@ -524,4 +524,13 @@ describe("cron cli", () => {
     const params = runCall?.[2] as { id?: string; mode?: string };
     expect(params?.mode).toBe("due");
   });
+
+  it("respects custom timeout when passed to cron run", async () => {
+    await runCronCommand(["cron", "run", "job-1", "--timeout", "120000"]);
+
+    const runCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.run");
+    expect(runCall).toBeDefined();
+    const opts = runCall?.[1] as { timeout?: string };
+    expect(opts?.timeout).toBe("120000");
+  });
 });

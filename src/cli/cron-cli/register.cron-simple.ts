@@ -97,7 +97,7 @@ export function registerCronSimpleCommands(cron: Command) {
         try {
           const res = await callGatewayFromCli(
             "cron.run",
-            { ...opts, timeout: "600000" },
+            { ...opts, timeout: opts.timeout === "30000" ? "600000" : opts.timeout },
             {
               id,
               mode: opts.due ? "due" : "force",
