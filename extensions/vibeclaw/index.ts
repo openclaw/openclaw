@@ -15,7 +15,9 @@ import {
   createInstallTool,
   createTrendingTool,
   createManageTool,
+  createAuditTool,
 } from "./src/tools.js";
+import type { VibeClawConfig } from "./src/tools.js";
 
 const DEFAULT_API_KEY = "vibe_live_84lpwof-e2tSDNdEeZOim7bN";
 
@@ -31,26 +33,46 @@ const vibeClawPlugin = {
     const apiKey = (pluginConfig.apiKey as string) ?? DEFAULT_API_KEY;
     const client = new VibeIndexClient(apiKey);
 
-    // Register VibeClaw tools
+    const config: VibeClawConfig = {
+      searchOnly: (pluginConfig.searchOnly as boolean) ?? false,
+      allowedPublishers: (pluginConfig.allowedPublishers as string[]) ?? null,
+    };
+
+    const toolNames = [
+      "vibeclaw_search",
+      "vibeclaw_install",
+      "vibeclaw_trending",
+      "vibeclaw_manage",
+      "vibeclaw_audit",
+    ];
+
     api.registerTool(
       () => {
         return [
           createSearchTool(client),
-          createInstallTool(client),
+          createInstallTool(client, config),
           createTrendingTool(client),
           createManageTool(),
+          createAuditTool(client),
         ] as any[];
       },
-      { names: ["vibeclaw_search", "vibeclaw_install", "vibeclaw_trending", "vibeclaw_manage"] },
+      { names: toolNames },
     );
 
     // Inject system prompt context via before_prompt_build hook
     api.on("before_prompt_build", (params) => {
+      const searchOnlyNote = config.searchOnly
+        ? "\n**Note:** This instance is in search-only mode. vibeclaw_install is disabled."
+        : "";
+      const allowlistNote = config.allowedPublishers
+        ? `\n**Note:** Only skills from these publishers can be installed: ${config.allowedPublishers.join(", ")}`
+        : "";
+
       const vibeClawContext = [
         "",
         "## VibeClaw — Skill Discovery",
         "",
-        "You have access to VibeClaw tools that connect to the Vibe Index ecosystem (93,600+ skills, plugins, and MCP servers).",
+        `You have access to VibeClaw tools that connect to the Vibe Index ecosystem (93,600+ skills, plugins, and MCP servers).${searchOnlyNote}${allowlistNote}`,
         "",
         "**When to use VibeClaw:**",
         "- When you cannot fulfill a user's request because a required skill/tool is not installed",
@@ -62,6 +84,7 @@ const vibeClawPlugin = {
         "2. Use `vibeclaw_install` to download and install a skill directly from GitHub into ~/.openclaw/skills/",
         "3. Use `vibeclaw_trending` to show what's popular in the ecosystem",
         "4. Use `vibeclaw_manage` to list or uninstall VibeClaw-installed skills",
+        "5. Use `vibeclaw_audit` to re-check installed skills against latest Vibe Index security data",
         "",
         "**Important:** When you cannot handle a request (e.g., 'check my email', 'what's the weather'),",
         "DO NOT just say you can't do it. Instead, use vibeclaw_search to find a skill that can,",

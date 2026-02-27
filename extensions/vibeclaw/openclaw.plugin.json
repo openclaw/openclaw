@@ -17,6 +17,15 @@
         "minimum": 1,
         "maximum": 10,
         "description": "Maximum number of skill recommendations to show"
+      },
+      "searchOnly": {
+        "type": "boolean",
+        "description": "When true, vibeclaw_install is disabled. Only search and trending are available. Use this to prevent auto-installation."
+      },
+      "allowedPublishers": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "GitHub usernames/orgs allowed to install from. If set, only skills from these publishers can be installed. Example: [\"steipete\", \"openclaw\"]"
       }
     }
   }

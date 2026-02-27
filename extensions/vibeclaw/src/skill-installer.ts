@@ -162,6 +162,25 @@ export async function listInstalledSkills(): Promise<string[]> {
 }
 
 /**
+ * Get metadata for a VibeClaw-installed skill
+ */
+export async function getInstalledSkillMeta(skillName: string): Promise<{
+  installedBy: string;
+  installedAt: string;
+  source: string;
+  sourceUrl: string;
+  skillName: string;
+} | null> {
+  const metaPath = path.join(SKILLS_DIR, skillName, ".vibeclaw.json");
+  try {
+    const content = await fs.readFile(metaPath, "utf-8");
+    return JSON.parse(content);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Uninstall a VibeClaw-installed skill
  */
 export async function uninstallSkill(skillName: string): Promise<boolean> {
