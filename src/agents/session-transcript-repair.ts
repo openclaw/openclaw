@@ -60,7 +60,7 @@ function hasToolCallName(block: ToolCallBlock, allowedToolNames: Set<string> | n
     return false;
   }
   const trimmed = block.name.trim();
-  if (!trimmed || trimmed !== block.name) {
+  if (!trimmed) {
     return false;
   }
   if (trimmed.length > TOOL_CALL_NAME_MAX_CHARS || !TOOL_CALL_NAME_RE.test(trimmed)) {
@@ -143,8 +143,9 @@ export function repairToolCallInputs(
       continue;
     }
 
-    const nextContent = [];
+    const nextContent: typeof msg.content = [];
     let droppedInMessage = 0;
+    let trimmedInMessage = 0;
 
     for (const block of msg.content) {
       if (
@@ -158,6 +159,19 @@ export function repairToolCallInputs(
         changed = true;
         continue;
       }
+      // Normalize tool call names by trimming whitespace so that downstream
+      // lookup (toolsByName map) matches correctly even when the model emits
+      // names with leading/trailing spaces (e.g. " read" → "read").
+      if (isToolCallBlock(block) && typeof (block as ToolCallBlock).name === "string") {
+        const rawName = (block as ToolCallBlock).name as string;
+        if (rawName !== rawName.trim()) {
+          const normalized = { ...block, name: rawName.trim() } as typeof block;
+          nextContent.push(normalized);
+          trimmedInMessage += 1;
+          changed = true;
+          continue;
+        }
+      }
       nextContent.push(block);
     }
 
@@ -167,6 +181,13 @@ export function repairToolCallInputs(
         changed = true;
         continue;
       }
+      out.push({ ...msg, content: nextContent });
+      continue;
+    }
+
+    // When tool names were trimmed but nothing was dropped,
+    // we still need to emit the message with the normalized content.
+    if (trimmedInMessage > 0) {
       out.push({ ...msg, content: nextContent });
       continue;
     }

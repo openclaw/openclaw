@@ -26,10 +26,34 @@ class OpenClawProtocolConstantsTest {
     assertEquals("camera", OpenClawCapability.Camera.rawValue)
     assertEquals("screen", OpenClawCapability.Screen.rawValue)
     assertEquals("voiceWake", OpenClawCapability.VoiceWake.rawValue)
+    assertEquals("location", OpenClawCapability.Location.rawValue)
+    assertEquals("sms", OpenClawCapability.Sms.rawValue)
+    assertEquals("device", OpenClawCapability.Device.rawValue)
+  }
+
+  @Test
+  fun cameraCommandsUseStableStrings() {
+    assertEquals("camera.list", OpenClawCameraCommand.List.rawValue)
+    assertEquals("camera.snap", OpenClawCameraCommand.Snap.rawValue)
+    assertEquals("camera.clip", OpenClawCameraCommand.Clip.rawValue)
   }
 
   @Test
   fun screenCommandsUseStableStrings() {
     assertEquals("screen.record", OpenClawScreenCommand.Record.rawValue)
+  }
+
+  @Test
+  fun notificationsCommandsUseStableStrings() {
+    assertEquals("notifications.list", OpenClawNotificationsCommand.List.rawValue)
+    assertEquals("notifications.actions", OpenClawNotificationsCommand.Actions.rawValue)
+  }
+
+  @Test
+  fun deviceCommandsUseStableStrings() {
+    assertEquals("device.status", OpenClawDeviceCommand.Status.rawValue)
+    assertEquals("device.info", OpenClawDeviceCommand.Info.rawValue)
+    assertEquals("device.permissions", OpenClawDeviceCommand.Permissions.rawValue)
+    assertEquals("device.health", OpenClawDeviceCommand.Health.rawValue)
   }
 }

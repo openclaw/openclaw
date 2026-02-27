@@ -11,6 +11,7 @@ import {
   type DeliverFn,
   enqueueDelivery,
   failDelivery,
+  isEntryEligibleForRecoveryRetry,
   isPermanentDeliveryError,
   loadPendingDeliveries,
   MAX_RETRIES,
@@ -104,7 +105,7 @@ describe("delivery-queue", () => {
   });
 
   describe("failDelivery", () => {
-    it("increments retryCount and sets lastError", async () => {
+    it("increments retryCount, records attempt time, and sets lastError", async () => {
       const id = await enqueueDelivery(
         {
           channel: "telegram",
@@ -119,6 +120,8 @@ describe("delivery-queue", () => {
       const queueDir = path.join(tmpDir, "delivery-queue");
       const entry = JSON.parse(fs.readFileSync(path.join(queueDir, `${id}.json`), "utf-8"));
       expect(entry.retryCount).toBe(1);
+      expect(typeof entry.lastAttemptAt).toBe("number");
+      expect(entry.lastAttemptAt).toBeGreaterThan(0);
       expect(entry.lastError).toBe("connection refused");
     });
   });
@@ -181,6 +184,25 @@ describe("delivery-queue", () => {
       const entries = await loadPendingDeliveries(tmpDir);
       expect(entries).toHaveLength(2);
     });
+
+    it("backfills lastAttemptAt for legacy retry entries during load", async () => {
+      const id = await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "legacy" }] },
+        tmpDir,
+      );
+      const filePath = path.join(tmpDir, "delivery-queue", `${id}.json`);
+      const legacyEntry = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+      legacyEntry.retryCount = 2;
+      delete legacyEntry.lastAttemptAt;
+      fs.writeFileSync(filePath, JSON.stringify(legacyEntry), "utf-8");
+
+      const entries = await loadPendingDeliveries(tmpDir);
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.lastAttemptAt).toBe(entries[0]?.enqueuedAt);
+
+      const persisted = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+      expect(persisted.lastAttemptAt).toBe(persisted.enqueuedAt);
+    });
   });
 
   describe("computeBackoffMs", () => {
@@ -203,29 +225,76 @@ describe("delivery-queue", () => {
     });
   });
 
+  describe("isEntryEligibleForRecoveryRetry", () => {
+    it("allows first replay after crash for retryCount=0 without lastAttemptAt", () => {
+      const now = Date.now();
+      const result = isEntryEligibleForRecoveryRetry(
+        {
+          id: "entry-1",
+          channel: "whatsapp",
+          to: "+1",
+          payloads: [{ text: "a" }],
+          enqueuedAt: now,
+          retryCount: 0,
+        },
+        now,
+      );
+      expect(result).toEqual({ eligible: true });
+    });
+
+    it("defers retry entries until backoff window elapses", () => {
+      const now = Date.now();
+      const result = isEntryEligibleForRecoveryRetry(
+        {
+          id: "entry-2",
+          channel: "whatsapp",
+          to: "+1",
+          payloads: [{ text: "a" }],
+          enqueuedAt: now - 30_000,
+          retryCount: 3,
+          lastAttemptAt: now,
+        },
+        now,
+      );
+      expect(result.eligible).toBe(false);
+      if (result.eligible) {
+        throw new Error("Expected ineligible retry entry");
+      }
+      expect(result.remainingBackoffMs).toBeGreaterThan(0);
+    });
+  });
+
   describe("recoverPendingDeliveries", () => {
-    const noopDelay = async () => {};
     const baseCfg = {};
     const createLog = () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() });
     const enqueueCrashRecoveryEntries = async () => {
       await enqueueDelivery({ channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] }, tmpDir);
       await enqueueDelivery({ channel: "telegram", to: "2", payloads: [{ text: "b" }] }, tmpDir);
     };
-    const setEntryRetryCount = (id: string, retryCount: number) => {
+    const setEntryState = (
+      id: string,
+      state: { retryCount: number; lastAttemptAt?: number; enqueuedAt?: number },
+    ) => {
       const filePath = path.join(tmpDir, "delivery-queue", `${id}.json`);
       const entry = JSON.parse(fs.readFileSync(filePath, "utf-8"));
-      entry.retryCount = retryCount;
+      entry.retryCount = state.retryCount;
+      if (state.lastAttemptAt === undefined) {
+        delete entry.lastAttemptAt;
+      } else {
+        entry.lastAttemptAt = state.lastAttemptAt;
+      }
+      if (state.enqueuedAt !== undefined) {
+        entry.enqueuedAt = state.enqueuedAt;
+      }
       fs.writeFileSync(filePath, JSON.stringify(entry), "utf-8");
     };
     const runRecovery = async ({
       deliver,
       log = createLog(),
-      delay = noopDelay,
       maxRecoveryMs,
     }: {
       deliver: ReturnType<typeof vi.fn>;
       log?: ReturnType<typeof createLog>;
-      delay?: (ms: number) => Promise<void>;
       maxRecoveryMs?: number;
     }) => {
       const result = await recoverPendingDeliveries({
@@ -233,7 +302,6 @@ describe("delivery-queue", () => {
         log,
         cfg: baseCfg,
         stateDir: tmpDir,
-        delay,
         ...(maxRecoveryMs === undefined ? {} : { maxRecoveryMs }),
       });
       return { result, log };
@@ -248,7 +316,8 @@ describe("delivery-queue", () => {
       expect(deliver).toHaveBeenCalledTimes(2);
       expect(result.recovered).toBe(2);
       expect(result.failed).toBe(0);
-      expect(result.skipped).toBe(0);
+      expect(result.skippedMaxRetries).toBe(0);
+      expect(result.deferredBackoff).toBe(0);
 
       // Queue should be empty after recovery.
       const remaining = await loadPendingDeliveries(tmpDir);
@@ -261,13 +330,14 @@ describe("delivery-queue", () => {
         { channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] },
         tmpDir,
       );
-      setEntryRetryCount(id, MAX_RETRIES);
+      setEntryState(id, { retryCount: MAX_RETRIES });
 
       const deliver = vi.fn();
       const { result } = await runRecovery({ deliver });
 
       expect(deliver).not.toHaveBeenCalled();
-      expect(result.skipped).toBe(1);
+      expect(result.skippedMaxRetries).toBe(1);
+      expect(result.deferredBackoff).toBe(0);
 
       // Entry should be in failed/ directory.
       const failedDir = path.join(tmpDir, "delivery-queue", "failed");
@@ -367,7 +437,8 @@ describe("delivery-queue", () => {
       expect(deliver).not.toHaveBeenCalled();
       expect(result.recovered).toBe(0);
       expect(result.failed).toBe(0);
-      expect(result.skipped).toBe(0);
+      expect(result.skippedMaxRetries).toBe(0);
+      expect(result.deferredBackoff).toBe(0);
 
       // All entries should still be in the queue.
       const remaining = await loadPendingDeliveries(tmpDir);
@@ -377,36 +448,114 @@ describe("delivery-queue", () => {
       expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("deferred to next restart"));
     });
 
-    it("defers entries when backoff exceeds the recovery budget", async () => {
+    it("defers entries until backoff becomes eligible", async () => {
       const id = await enqueueDelivery(
         { channel: "whatsapp", to: "+1", payloads: [{ text: "a" }] },
         tmpDir,
       );
-      setEntryRetryCount(id, 3);
+      setEntryState(id, { retryCount: 3, lastAttemptAt: Date.now() });
 
       const deliver = vi.fn().mockResolvedValue([]);
-      const delay = vi.fn(async () => {});
       const { result, log } = await runRecovery({
         deliver,
-        delay,
-        maxRecoveryMs: 1000,
+        maxRecoveryMs: 60_000,
       });
 
       expect(deliver).not.toHaveBeenCalled();
-      expect(delay).not.toHaveBeenCalled();
-      expect(result).toEqual({ recovered: 0, failed: 0, skipped: 0 });
+      expect(result).toEqual({
+        recovered: 0,
+        failed: 0,
+        skippedMaxRetries: 0,
+        deferredBackoff: 1,
+      });
 
       const remaining = await loadPendingDeliveries(tmpDir);
       expect(remaining).toHaveLength(1);
 
-      expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("deferred to next restart"));
+      expect(log.info).toHaveBeenCalledWith(expect.stringContaining("not ready for retry yet"));
+    });
+
+    it("continues past high-backoff entries and recovers ready entries behind them", async () => {
+      const now = Date.now();
+      const blockedId = await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "blocked" }] },
+        tmpDir,
+      );
+      const readyId = await enqueueDelivery(
+        { channel: "telegram", to: "2", payloads: [{ text: "ready" }] },
+        tmpDir,
+      );
+
+      setEntryState(blockedId, { retryCount: 3, lastAttemptAt: now, enqueuedAt: now - 30_000 });
+      setEntryState(readyId, { retryCount: 0, enqueuedAt: now - 10_000 });
+
+      const deliver = vi.fn().mockResolvedValue([]);
+      const { result } = await runRecovery({ deliver, maxRecoveryMs: 60_000 });
+
+      expect(result).toEqual({
+        recovered: 1,
+        failed: 0,
+        skippedMaxRetries: 0,
+        deferredBackoff: 1,
+      });
+      expect(deliver).toHaveBeenCalledTimes(1);
+      expect(deliver).toHaveBeenCalledWith(
+        expect.objectContaining({ channel: "telegram", to: "2", skipQueue: true }),
+      );
+
+      const remaining = await loadPendingDeliveries(tmpDir);
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0]?.id).toBe(blockedId);
+    });
+
+    it("recovers deferred entries on a later restart once backoff elapsed", async () => {
+      vi.useFakeTimers();
+      const start = new Date("2026-01-01T00:00:00.000Z");
+      vi.setSystemTime(start);
+
+      const id = await enqueueDelivery(
+        { channel: "whatsapp", to: "+1", payloads: [{ text: "later" }] },
+        tmpDir,
+      );
+      setEntryState(id, { retryCount: 3, lastAttemptAt: start.getTime() });
+
+      const firstDeliver = vi.fn().mockResolvedValue([]);
+      const firstRun = await runRecovery({ deliver: firstDeliver, maxRecoveryMs: 60_000 });
+      expect(firstRun.result).toEqual({
+        recovered: 0,
+        failed: 0,
+        skippedMaxRetries: 0,
+        deferredBackoff: 1,
+      });
+      expect(firstDeliver).not.toHaveBeenCalled();
+
+      vi.setSystemTime(new Date(start.getTime() + 600_000 + 1));
+      const secondDeliver = vi.fn().mockResolvedValue([]);
+      const secondRun = await runRecovery({ deliver: secondDeliver, maxRecoveryMs: 60_000 });
+      expect(secondRun.result).toEqual({
+        recovered: 1,
+        failed: 0,
+        skippedMaxRetries: 0,
+        deferredBackoff: 0,
+      });
+      expect(secondDeliver).toHaveBeenCalledTimes(1);
+
+      const remaining = await loadPendingDeliveries(tmpDir);
+      expect(remaining).toHaveLength(0);
+
+      vi.useRealTimers();
     });
 
     it("returns zeros when queue is empty", async () => {
       const deliver = vi.fn();
       const { result } = await runRecovery({ deliver });
 
-      expect(result).toEqual({ recovered: 0, failed: 0, skipped: 0 });
+      expect(result).toEqual({
+        recovered: 0,
+        failed: 0,
+        skippedMaxRetries: 0,
+        deferredBackoff: 0,
+      });
       expect(deliver).not.toHaveBeenCalled();
     });
   });
