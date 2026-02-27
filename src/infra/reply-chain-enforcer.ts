@@ -1,5 +1,6 @@
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { onAgentEvent, type AgentEventPayload } from "./agent-events.js";
 type SessionKey = string;
 
 type EnforcerState = {
@@ -17,6 +18,16 @@ export class ReplyChainEnforcer {
   private timers = new Map<SessionKey, NodeJS.Timeout>();
   private recoveryRuns = new Set<SessionKey>();
   private logger = createSubsystemLogger("watchdog");
+  /**
+   * Accumulate raw assistant text per runId (including NO_REPLY tokens that
+   * the upstream execution layer strips before server-chat sees them).
+   * On lifecycle:end we check this buffer for sign-off tokens and call
+   * onChatFinal ourselves, making the watchdog self-contained.
+   */
+  private runBuffers = new Map<string, { sessionKey: SessionKey; text: string }>();
+  /** Sessions force-DISARMed by raw stream sign-off detection. Prevents onChatFinal from re-ARMing. */
+  private rawSignOffSessions = new Set<SessionKey>();
+  private agentEventUnsub: (() => void) | null = null;
 
   constructor(
     private config: {
@@ -36,7 +47,97 @@ export class ReplyChainEnforcer {
         reason: string;
       }) => Promise<void>;
     },
-  ) {}
+  ) {
+    this.startAgentEventListener();
+  }
+
+  /**
+   * Subscribe to the global agent event bus to independently track assistant
+   * text and lifecycle events. This lets the watchdog see the FULL agent output
+   * (including NO_REPLY tokens stripped by the execution layer) and decide
+   * ARM/DISARM without depending on server-chat's buffer.
+   */
+  private startAgentEventListener() {
+    this.agentEventUnsub = onAgentEvent((evt: AgentEventPayload) => {
+      if (!this.config.enabled) {
+        return;
+      }
+
+      const sessionKey = evt.sessionKey;
+      if (!sessionKey) {
+        return;
+      }
+
+      // Accumulate assistant text per run (text is cumulative in streaming)
+      if (evt.stream === "assistant" && typeof evt.data?.text === "string") {
+        const existing = this.runBuffers.get(evt.runId);
+        if (existing) {
+          existing.text = evt.data.text;
+        } else {
+          this.runBuffers.set(evt.runId, { sessionKey, text: evt.data.text });
+        }
+        return;
+      }
+
+      // On lifecycle:end, check our own buffer for sign-off
+      if (evt.stream === "lifecycle" && evt.data?.phase === "end") {
+        const buf = this.runBuffers.get(evt.runId);
+        this.runBuffers.delete(evt.runId);
+        if (buf) {
+          const trimmed = buf.text.trim();
+          // The streaming handler strips full NO_REPLY via parseReplyDirectives
+          // before emitting assistant events, so we may only see partial prefixes
+          // like "NO" when the model actually said "NO_REPLY". Check full tokens
+          // AND whether the entire buffer is a known sign-off prefix.
+          const NO_REPLY_PREFIXES = [
+            "N",
+            "NO",
+            "NO_",
+            "NO_R",
+            "NO_RE",
+            "NO_REP",
+            "NO_REPL",
+            "NO_REPLY",
+          ];
+          const HEARTBEAT_PREFIXES = [
+            "H",
+            "HE",
+            "HEA",
+            "HEAR",
+            "HEART",
+            "HEARTB",
+            "HEARTBE",
+            "HEARTBEA",
+            "HEARTBEAT",
+            "HEARTBEAT_",
+            "HEARTBEAT_O",
+            "HEARTBEAT_OK",
+          ];
+          const SIGN_OFF_TOKENS = [...NO_REPLY_PREFIXES, ...HEARTBEAT_PREFIXES, SILENT_REPLY_TOKEN];
+          const isSignOff =
+            !trimmed ||
+            trimmed.endsWith("NO_REPLY") ||
+            trimmed.endsWith(SILENT_REPLY_TOKEN) ||
+            trimmed === "HEARTBEAT_OK" ||
+            SIGN_OFF_TOKENS.includes(trimmed);
+          if (isSignOff) {
+            this.logger.info("DISARM (sign-off detected in raw stream)", {
+              key: buf.sessionKey,
+              textTail: trimmed.slice(-30),
+            });
+            this.rawSignOffSessions.add(buf.sessionKey);
+            this.setState(buf.sessionKey, "disarmed", "Agent sign-off (raw stream)");
+          }
+        }
+        return;
+      }
+
+      // Clean up on error too
+      if (evt.stream === "lifecycle" && evt.data?.phase === "error") {
+        this.runBuffers.delete(evt.runId);
+      }
+    });
+  }
 
   public updateConfig(newConfig: Partial<typeof this.config>) {
     const wasEnabled = this.config.enabled;
@@ -52,6 +153,10 @@ export class ReplyChainEnforcer {
       clearTimeout(timer);
     }
     this.timers.clear();
+    this.runBuffers.clear();
+    this.rawSignOffSessions.clear();
+    this.agentEventUnsub?.();
+    this.agentEventUnsub = null;
   }
 
   /**
@@ -76,6 +181,14 @@ export class ReplyChainEnforcer {
    */
   public onChatFinal(sessionKey: SessionKey, text: string) {
     if (!this.config.enabled) {
+      return;
+    }
+
+    // If raw stream listener already detected sign-off, don't re-arm
+    if (this.rawSignOffSessions.delete(sessionKey)) {
+      this.logger.info("DISARM (onChatFinal skipped — raw stream already signed off)", {
+        key: sessionKey,
+      });
       return;
     }
 
