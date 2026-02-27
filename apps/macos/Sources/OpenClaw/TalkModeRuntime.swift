@@ -542,10 +542,10 @@ actor TalkModeRuntime {
 
         let language = ElevenLabsTTSClient.validatedLanguage(directive?.language)
 
-        // Voice resolution is ElevenLabs-specific; OpenAI uses a simple voice name.
+        // Voice resolution is ElevenLabs-specific; OpenAI uses its own voice config.
         let voiceId: String?
         if provider == Self.openaiTalkProvider {
-            voiceId = preferredVoice
+            voiceId = nil
         } else if let apiKey, !apiKey.isEmpty {
             voiceId = await self.resolveVoiceId(preferred: preferredVoice, apiKey: apiKey)
         } else {
@@ -609,7 +609,7 @@ actor TalkModeRuntime {
 
         let baseUrl = self.openaiBaseUrl ?? Self.defaultOpenAIBaseUrl
         let model = self.openaiModel ?? Self.defaultOpenAIModel
-        let voice = input.voiceId ?? self.openaiVoice ?? Self.defaultOpenAIVoice
+        let voice = self.openaiVoice ?? Self.defaultOpenAIVoice
 
         guard let url = URL(string: "\(baseUrl.absoluteString)/audio/speech") else {
             throw NSError(
@@ -646,6 +646,10 @@ actor TalkModeRuntime {
 
         guard self.isCurrent(input.generation) else { return }
         let (bytes, response) = try await URLSession.shared.bytes(for: request)
+
+        // Re-check after await: user may have interrupted during the network call.
+        guard self.isCurrent(input.generation) else { return }
+
         guard let http = response as? HTTPURLResponse else {
             throw NSError(
                 domain: "OpenAITTS", code: 0,
