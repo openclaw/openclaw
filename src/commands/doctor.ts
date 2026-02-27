@@ -43,7 +43,7 @@ import {
 } from "./doctor-platform-notes.js";
 import { createDoctorPrompter, type DoctorOptions } from "./doctor-prompter.js";
 import { maybeRepairSandboxImages, noteSandboxScopeWarnings } from "./doctor-sandbox.js";
-import { noteSecurityWarnings } from "./doctor-security.js";
+import { noteSecurityPosture, noteSecurityWarnings } from "./doctor-security.js";
 import { noteSessionLockHealth } from "./doctor-session-locks.js";
 import { noteStateIntegrity, noteWorkspaceBackupTip } from "./doctor-state-integrity.js";
 import {
@@ -198,6 +198,7 @@ export async function doctorCommand(
   await noteMacLaunchctlGatewayEnvOverrides(cfg);
 
   await noteSecurityWarnings(cfg);
+  await noteSecurityPosture();
 
   if (cfg.hooks?.gmail?.model?.trim()) {
     const hooksModelRef = resolveHooksGmailModel({

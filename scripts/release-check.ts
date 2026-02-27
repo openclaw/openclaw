@@ -13,8 +13,15 @@ const requiredPathGroups = [
   "dist/plugin-sdk/index.js",
   "dist/plugin-sdk/index.d.ts",
   "dist/build-info.json",
+  // Vault crypto must ship: without it the credential vault is silently broken.
+  "dist/security/vault-crypto.js",
 ];
-const forbiddenPrefixes = ["dist/OpenClaw.app/"];
+const forbiddenPrefixes = [
+  "dist/OpenClaw.app/",
+  // Raw credential files must never be bundled into the npm package.
+  "dist/credentials.json",
+  "dist/credentials.enc",
+];
 
 type PackageJson = {
   name?: string;

@@ -1,10 +1,14 @@
+import fs from "node:fs";
+import path from "node:path";
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type { ChannelId } from "../channels/plugins/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig, GatewayBindMode } from "../config/config.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
+import { resolveCredentialVaultDir } from "../security/credential-vault.js";
 import { resolveDmAllowState } from "../security/dm-policy-shared.js";
+import { formatHealthSummary, getSecurityHealthReport } from "../security/security-health.js";
 import { note } from "../terminal/note.js";
 import { resolveDefaultChannelAccountContext } from "./channel-account-context.js";
 
@@ -184,4 +188,78 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   const lines = warnings.length > 0 ? warnings : ["- No channel security warnings detected."];
   lines.push(auditHint);
   note(lines.join("\n"), "Security");
+}
+
+/**
+ * Surface security posture from Phase 5 (credential vault) and Phase 6
+ * (monitoring & detection) subsystems in the doctor output.
+ *
+ * This is intentionally separate from noteSecurityWarnings — that function
+ * covers config-level concerns (network exposure, channel policies), while
+ * this covers runtime security state.
+ */
+export async function noteSecurityPosture(): Promise<void> {
+  try {
+    const report = await getSecurityHealthReport();
+    const summary = formatHealthSummary(report);
+    const lines: string[] = [`- ${summary}`];
+
+    // Vault
+    if (!report.vault.auditIntegrityOk) {
+      lines.push(
+        "- CRITICAL: Credential audit log integrity broken — run `openclaw security audit --deep`",
+      );
+    } else if (report.vault.rotationDueCount > 0) {
+      lines.push(
+        `- WARN: ${report.vault.rotationDueCount} credential(s) due for rotation — run \`${formatCliCommand("openclaw security credentials status")}\``,
+      );
+    }
+
+    // Monitoring
+    if (report.monitoring.criticalEvents > 0) {
+      lines.push(
+        `- CRITICAL: ${report.monitoring.criticalEvents} unacknowledged critical security event(s)`,
+      );
+      for (const alert of report.monitoring.recentCriticalAlerts) {
+        lines.push(`    ${alert}`);
+      }
+      lines.push(
+        `  Run: ${formatCliCommand("openclaw security monitoring events --severity critical")}`,
+      );
+    }
+    if (report.monitoring.highRiskSessions > 0) {
+      lines.push(
+        `- WARN: ${report.monitoring.highRiskSessions} high-risk session(s) detected — run \`${formatCliCommand("openclaw security monitoring status")}\``,
+      );
+    }
+    if (!report.monitoring.runnerRunning) {
+      lines.push("- WARN: Security monitor runner is not active (gateway may not be running)");
+    }
+
+    // Injection defense
+    if (report.injectionDefense.criticalDetections > 0) {
+      lines.push(
+        `- WARN: ${report.injectionDefense.criticalDetections} critical injection pattern(s) detected in files (last 24h)`,
+      );
+    }
+
+    // Legacy plaintext credential file (CD-4)
+    // Pre-encryption installs left credentials.json alongside the vault.
+    // Flag it so users know to migrate and remove the plaintext file.
+    const vaultDir = resolveCredentialVaultDir();
+    const legacyCredPath = path.join(vaultDir, "credentials.json");
+    if (fs.existsSync(legacyCredPath)) {
+      lines.push(
+        `- WARN: Legacy plaintext credential file detected: ${legacyCredPath}`,
+        `  Run: ${formatCliCommand("openclaw security credentials migrate")} to encrypt and remove it`,
+      );
+    }
+
+    note(lines.join("\n"), "Security Posture");
+  } catch {
+    note(
+      "- Security posture check unavailable (run `openclaw security health` for details)",
+      "Security Posture",
+    );
+  }
 }

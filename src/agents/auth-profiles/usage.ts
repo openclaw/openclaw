@@ -1,7 +1,75 @@
 import type { OpenClawConfig } from "../../config/config.js";
+import { emitSecurityEvent } from "../../security/security-events.js";
 import { normalizeProviderId } from "../model-selection.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
 import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
+
+// ---------------------------------------------------------------------------
+// Sliding-window rate limiter (in-memory, per profile, resets on restart)
+// ---------------------------------------------------------------------------
+
+const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
+const RATE_LIMIT_MAX_ATTEMPTS = 10;
+
+/** profileId → sorted array of attempt timestamps (ms epoch) */
+const rateLimitWindows = new Map<string, number[]>();
+
+export interface AuthProfileRateLimitResult {
+  allowed: boolean;
+  /** Only set when allowed=false: milliseconds until oldest attempt leaves the window */
+  retryAfterMs?: number;
+}
+
+/**
+ * Check (and record) an auth attempt against the sliding-window rate limiter.
+ *
+ * Each call that returns `allowed: true` records a timestamp entry. When the
+ * count of attempts within `windowMs` reaches `maxAttempts`, subsequent calls
+ * return `allowed: false` and emit an `auth_rate_limited` security event.
+ *
+ * The limiter is intentionally in-memory and not persisted — it protects
+ * against burst abuse within a single process lifetime rather than long-term
+ * limits (which are handled by the cooldown/backoff system).
+ */
+export function checkAuthProfileRateLimit(
+  profileId: string,
+  opts?: { windowMs?: number; maxAttempts?: number },
+): AuthProfileRateLimitResult {
+  const windowMs = opts?.windowMs ?? RATE_LIMIT_WINDOW_MS;
+  const maxAttempts = opts?.maxAttempts ?? RATE_LIMIT_MAX_ATTEMPTS;
+  const now = Date.now();
+  const cutoff = now - windowMs;
+
+  // Retrieve and prune stale entries
+  const entries = (rateLimitWindows.get(profileId) ?? []).filter((ts) => ts > cutoff);
+
+  if (entries.length >= maxAttempts) {
+    const oldest = entries[0] ?? now;
+    const retryAfterMs = Math.max(1, oldest + windowMs - now);
+    emitSecurityEvent({
+      type: "auth_rate_limited",
+      severity: "warn",
+      source: "auth-profiles/usage",
+      message: `Auth rate limit exceeded for profile "${profileId}" (${entries.length} attempts in ${windowMs}ms window)`,
+      details: { profileId, attempts: entries.length, windowMs, maxAttempts },
+      remediation: "Check for credential abuse or misconfigured retry loops",
+    });
+    rateLimitWindows.set(profileId, entries);
+    return { allowed: false, retryAfterMs };
+  }
+
+  entries.push(now);
+  rateLimitWindows.set(profileId, entries);
+  return { allowed: true };
+}
+
+/**
+ * Clear the in-memory rate-limit window for a profile.
+ * Primarily useful in tests and after manual profile resets.
+ */
+export function clearAuthProfileRateLimitWindow(profileId: string): void {
+  rateLimitWindows.delete(profileId);
+}
 
 const FAILURE_REASON_PRIORITY: AuthProfileFailureReason[] = [
   "auth_permanent",

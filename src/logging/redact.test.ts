@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getDefaultRedactPatterns, redactSensitiveText } from "./redact.js";
+import { getDefaultRedactPatterns, invalidateRedactCache, redactSensitiveText } from "./redact.js";
 
 const defaults = getDefaultRedactPatterns();
 
@@ -109,5 +109,48 @@ describe("redactSensitiveText", () => {
       patterns: defaults,
     });
     expect(output).toBe(input);
+  });
+});
+
+describe("invalidateRedactCache (TC-5)", () => {
+  it("can be called without throwing", () => {
+    expect(() => invalidateRedactCache()).not.toThrow();
+  });
+
+  it("repeated calls are idempotent", () => {
+    expect(() => {
+      invalidateRedactCache();
+      invalidateRedactCache();
+    }).not.toThrow();
+  });
+
+  it("redactSensitiveText still works after cache invalidation when options are passed", () => {
+    invalidateRedactCache();
+
+    // Pass explicit options so the config-load path is bypassed;
+    // the important assertion is that invalidation doesn't break the hot path.
+    const input = "ANTHROPIC_API_KEY=sk-ant-api01-abcdefghijklmnop";
+    const output = redactSensitiveText(input, {
+      mode: "tools",
+      patterns: defaults,
+    });
+    expect(output).not.toBe(input);
+    // The redact pattern masks the middle, keeping a short prefix and suffix
+    expect(output).toContain("sk-ant");
+  });
+
+  it("redactSensitiveText falls back gracefully to defaults after cache invalidation (config-resolved path)", () => {
+    invalidateRedactCache();
+
+    // Call without explicit options — exercises resolveConfigRedaction() which will
+    // try loadConfig() (expected to fail/return undefined in test env) and fall back
+    // to the default mode ("tools" with no extra patterns).
+    const benign = "nothing sensitive here";
+    const output = redactSensitiveText(benign);
+    // In tools mode with no patterns, benign text is returned unchanged
+    expect(output).toBe(benign);
+
+    // Clean up: invalidate again so other tests don't inherit the cached fallback state
+    invalidateRedactCache();
   });
 });

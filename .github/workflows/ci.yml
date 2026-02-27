@@ -239,6 +239,31 @@ jobs:
             ${{ env.OPENCLAW_VITEST_REPORT_DIR }}
             ${{ runner.temp }}/vitest-slowest.md
 
+  # Coverage with per-file threshold enforcement (CD-1).
+  # Runs after `check` (types/lint) to avoid wasting resources on broken code.
+  coverage:
+    needs: [docs-scope, changed-scope, check]
+    if: needs.docs-scope.outputs.docs_only != 'true' && (github.event_name == 'push' || needs.changed-scope.outputs.run_node == 'true')
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Configure coverage resources
+        run: |
+          echo "OPENCLAW_TEST_WORKERS=2" >> "$GITHUB_ENV"
+          echo "OPENCLAW_TEST_MAX_OLD_SPACE_SIZE_MB=6144" >> "$GITHUB_ENV"
+
+      - name: Run coverage with threshold enforcement
+        run: pnpm test:coverage
+
   # Types, lint, and format check.
   check:
     name: "check"

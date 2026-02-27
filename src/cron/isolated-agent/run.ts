@@ -47,6 +47,7 @@ import {
   getHookType,
   isExternalHookSession,
 } from "../../security/external-content.js";
+import { emitSecurityEvent } from "../../security/security-events.js";
 import { resolveCronDeliveryPlan } from "../delivery.js";
 import type { CronJob, CronRunOutcome, CronRunTelemetry } from "../types.js";
 import {
@@ -334,13 +335,30 @@ export async function runCronIsolatedAgentTurn(params: {
   let commandBody: string;
 
   if (isExternalHook) {
-    // Log suspicious patterns for security monitoring
+    // Scanner always runs — allowUnsafeExternalContent skips wrapping but never detection.
     const suspiciousPatterns = detectSuspiciousPatterns(params.message);
     if (suspiciousPatterns.length > 0) {
+      // When bypass is active the content reaches the agent unwrapped: escalate to critical.
+      const severity = allowUnsafeExternalContent ? "critical" : "warn";
       logWarn(
         `[security] Suspicious patterns detected in external hook content ` +
-          `(session=${baseSessionKey}, patterns=${suspiciousPatterns.length}): ${suspiciousPatterns.slice(0, 3).join(", ")}`,
+          `(session=${baseSessionKey}, bypass=${allowUnsafeExternalContent}, patterns=${suspiciousPatterns.length}): ${suspiciousPatterns.slice(0, 3).join(", ")}`,
       );
+      emitSecurityEvent({
+        type: "injection_detected",
+        severity,
+        source: "cron/hooks",
+        message: `Injection patterns detected in external hook content (session=${baseSessionKey})`,
+        details: {
+          sessionKey: baseSessionKey,
+          patternCount: suspiciousPatterns.length,
+          topPatterns: suspiciousPatterns.slice(0, 5),
+          allowUnsafeExternalContent,
+        },
+        remediation: allowUnsafeExternalContent
+          ? "Remove allowUnsafeExternalContent:true from hook config to enable safety wrapping."
+          : "Content will be wrapped with safety boundaries before processing.",
+      });
     }
   }
 

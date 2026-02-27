@@ -63,6 +63,27 @@ export default defineConfig({
         functions: 70,
         branches: 55,
         statements: 70,
+        // Per-file floors for crypto-critical modules (CD-2).
+        // Set ~2pp below current measured coverage to catch regressions without
+        // requiring 100% on every PR.
+        "src/security/vault-crypto.ts": {
+          lines: 98,
+          functions: 98,
+          branches: 98,
+          statements: 98,
+        },
+        "src/security/credential-vault.ts": {
+          lines: 79,
+          functions: 90,
+          branches: 60,
+          statements: 79,
+        },
+        "src/security/security-events.ts": {
+          lines: 77,
+          functions: 75,
+          branches: 68,
+          statements: 77,
+        },
       },
       // Anchor to repo-root `src/` only. Without this, coverage globs can
       // unintentionally match nested `*/src/**` folders (extensions, apps, etc).
