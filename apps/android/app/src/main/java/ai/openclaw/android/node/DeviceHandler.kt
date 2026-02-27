@@ -26,6 +26,13 @@ import kotlinx.serialization.json.put
 class DeviceHandler(
   private val appContext: Context,
 ) {
+  private data class BatterySnapshot(
+    val status: Int,
+    val plugged: Int,
+    val levelFraction: Double?,
+    val temperatureC: Double?,
+  )
+
   fun handleDeviceStatus(_paramsJson: String?): GatewaySession.InvokeResult {
     return GatewaySession.InvokeResult.ok(statusPayloadJson())
   }
@@ -43,11 +50,7 @@ class DeviceHandler(
   }
 
   private fun statusPayloadJson(): String {
-    val batteryIntent = appContext.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-    val batteryStatus =
-      batteryIntent?.getIntExtra(BatteryManager.EXTRA_STATUS, BatteryManager.BATTERY_STATUS_UNKNOWN)
-        ?: BatteryManager.BATTERY_STATUS_UNKNOWN
-    val batteryLevel = batteryLevelFraction(batteryIntent)
+    val battery = readBatterySnapshot()
     val powerManager = appContext.getSystemService(PowerManager::class.java)
     val storage = StatFs(Environment.getDataDirectory().absolutePath)
     val totalBytes = storage.totalBytes
@@ -62,8 +65,8 @@ class DeviceHandler(
       put(
         "battery",
         buildJsonObject {
-          batteryLevel?.let { put("level", JsonPrimitive(it)) }
-          put("state", JsonPrimitive(mapBatteryState(batteryStatus)))
+          battery.levelFraction?.let { put("level", JsonPrimitive(it)) }
+          put("state", JsonPrimitive(mapBatteryState(battery.status)))
           put("lowPowerModeEnabled", JsonPrimitive(powerManager?.isPowerSaveMode == true))
         },
       )
@@ -189,20 +192,7 @@ class DeviceHandler(
   }
 
   private fun healthPayloadJson(): String {
-    val batteryIntent = appContext.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-    val batteryStatus =
-      batteryIntent?.getIntExtra(BatteryManager.EXTRA_STATUS, BatteryManager.BATTERY_STATUS_UNKNOWN)
-        ?: BatteryManager.BATTERY_STATUS_UNKNOWN
-    val batteryPlugged = batteryIntent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0
-    val batteryTempTenths = batteryIntent?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, Int.MIN_VALUE)
-      ?: Int.MIN_VALUE
-    val batteryTempC =
-      if (batteryTempTenths == Int.MIN_VALUE) {
-        null
-      } else {
-        batteryTempTenths.toDouble() / 10.0
-      }
-
+    val battery = readBatterySnapshot()
     val batteryManager = appContext.getSystemService(BatteryManager::class.java)
     val currentNowUa = batteryManager?.getLongProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW)
     val currentNowMa =
@@ -237,9 +227,9 @@ class DeviceHandler(
       put(
         "battery",
         buildJsonObject {
-          put("state", JsonPrimitive(mapBatteryState(batteryStatus)))
-          put("chargingType", JsonPrimitive(mapChargingType(batteryPlugged)))
-          batteryTempC?.let { put("temperatureC", JsonPrimitive(it)) }
+          put("state", JsonPrimitive(mapBatteryState(battery.status)))
+          put("chargingType", JsonPrimitive(mapChargingType(battery.plugged)))
+          battery.temperatureC?.let { put("temperatureC", JsonPrimitive(it)) }
           currentNowMa?.let { put("currentMa", JsonPrimitive(it)) }
         },
       )
@@ -260,6 +250,26 @@ class DeviceHandler(
         },
       )
     }.toString()
+  }
+
+  private fun readBatterySnapshot(): BatterySnapshot {
+    val intent = appContext.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+    val status =
+      intent?.getIntExtra(BatteryManager.EXTRA_STATUS, BatteryManager.BATTERY_STATUS_UNKNOWN)
+        ?: BatteryManager.BATTERY_STATUS_UNKNOWN
+    val plugged = intent?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0
+    val temperatureC =
+      intent
+        ?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, Int.MIN_VALUE)
+        ?.takeIf { it != Int.MIN_VALUE }
+        ?.toDouble()
+        ?.div(10.0)
+    return BatterySnapshot(
+      status = status,
+      plugged = plugged,
+      levelFraction = batteryLevelFraction(intent),
+      temperatureC = temperatureC,
+    )
   }
 
   private fun batteryLevelFraction(intent: Intent?): Double? {
