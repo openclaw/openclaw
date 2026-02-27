@@ -423,11 +423,18 @@ const PLACEHOLDER_SECRET_PATTERNS: RegExp[] = [
   // REPLACE_ME variants (xoxb-REPLACE_ME, xapp-REPLACE_ME, plain REPLACE_ME)
   /^(?:[a-z]+-)*REPLACE_ME$/i,
   // Docs/template placeholders: your-token, your-password, your-api-key, your-secret, etc.
-  /^your-[a-z][\w-]*$/i,
+  // Tightened to known secret suffixes to avoid false positives on e.g. "your-workspace"
+  /^your-(token|password|api[_-]?key|secret|credential|auth|bot[_-]?token)[\w-]*$/i,
   // paste-your-* variants (paste-your-key, paste-your-token)
   /^paste-your-[a-z][\w-]*$/i,
   // sk-xxx / sk-yyy style dummy keys used in documentation
   /^sk-x{2,}$/i,
+  // Angle-bracket placeholders common in docs (e.g. <token>, <api-key>)
+  /^<[a-z][\w-]*>$/i,
+  // Common sentinel values
+  /^(?:TODO|CHANGEME|FIXME)$/,
+  // Test/example/dummy prefixed placeholders (e.g. test-token, example-password)
+  /^(?:test|example|sample|dummy|fake)-(?:token|password|api[_-]?key|secret|credential|auth)[\w-]*$/i,
 ];
 
 function isPlaceholderSecretValue(value: string): boolean {
@@ -467,7 +474,9 @@ function findPlaceholderSecretPath(
     // Determine whether this path is sensitive via hints (preferred) or pattern guessing
     const hintSensitive =
       hints && (hints[path]?.sensitive === true || hints[wildcardPath]?.sensitive === true);
-    const guessSensitive = !hintSensitive && isSensitivePath(path);
+    const hintExplicitlyNonSensitive =
+      hints && (hints[path]?.sensitive === false || hints[wildcardPath]?.sensitive === false);
+    const guessSensitive = !hintSensitive && !hintExplicitlyNonSensitive && isSensitivePath(path);
     const sensitive = hintSensitive || guessSensitive;
     if (sensitive && typeof value === "string" && isPlaceholderSecretValue(value)) {
       return path;
