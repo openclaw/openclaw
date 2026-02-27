@@ -82,7 +82,7 @@ async function runModelsListAndGetProvider(providerPrefix: string) {
 describe("models list auth-profile sync", () => {
   it("marks models available when auth exists only in auth-profiles.json", async () => {
     await withAuthSyncFixture(async ({ agentDir, authPath }) => {
-      saveAuthProfileStore(
+      await saveAuthProfileStore(
         {
           version: 1,
           profiles: {
@@ -106,7 +106,7 @@ describe("models list auth-profile sync", () => {
 
   it("does not persist blank auth-profile credentials", async () => {
     await withAuthSyncFixture(async ({ agentDir, authPath }) => {
-      saveAuthProfileStore(
+      await saveAuthProfileStore(
         {
           version: 1,
           profiles: {

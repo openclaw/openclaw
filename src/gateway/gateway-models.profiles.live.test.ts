@@ -630,10 +630,10 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-state-"));
   process.env.OPENCLAW_STATE_DIR = tempStateDir;
   tempAgentDir = path.join(tempStateDir, "agents", DEFAULT_AGENT_ID, "agent");
-  saveAuthProfileStore(sanitizedStore, tempAgentDir);
+  await saveAuthProfileStore(sanitizedStore, tempAgentDir);
   const tempSessionAgentDir = path.join(tempStateDir, "agents", agentId, "agent");
   if (tempSessionAgentDir !== tempAgentDir) {
-    saveAuthProfileStore(sanitizedStore, tempSessionAgentDir);
+    await saveAuthProfileStore(sanitizedStore, tempSessionAgentDir);
   }
   process.env.OPENCLAW_AGENT_DIR = tempAgentDir;
   process.env.PI_CODING_AGENT_DIR = tempAgentDir;

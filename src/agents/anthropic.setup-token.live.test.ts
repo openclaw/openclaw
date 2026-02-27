@@ -85,7 +85,7 @@ async function resolveTokenSource(): Promise<TokenSource> {
       provider: "anthropic",
       token: explicitToken,
     };
-    saveAuthProfileStore(store, tempDir);
+    await saveAuthProfileStore(store, tempDir);
     return {
       agentDir: tempDir,
       profileId,

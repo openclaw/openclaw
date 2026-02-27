@@ -22,7 +22,7 @@ describe("discoverAuthStorage", () => {
   it("loads runtime credentials from auth-profiles without writing auth.json", async () => {
     const agentDir = await createAgentDir();
     try {
-      saveAuthProfileStore(
+      await saveAuthProfileStore(
         {
           version: 1,
           profiles: {
@@ -69,7 +69,7 @@ describe("discoverAuthStorage", () => {
   it("scrubs static api_key entries from legacy auth.json and keeps oauth entries", async () => {
     const agentDir = await createAgentDir();
     try {
-      saveAuthProfileStore(
+      await saveAuthProfileStore(
         {
           version: 1,
           profiles: {
@@ -119,7 +119,7 @@ describe("discoverAuthStorage", () => {
     const previous = process.env.OPENCLAW_AUTH_STORE_READONLY;
     process.env.OPENCLAW_AUTH_STORE_READONLY = "1";
     try {
-      saveAuthProfileStore(
+      await saveAuthProfileStore(
         {
           version: 1,
           profiles: {

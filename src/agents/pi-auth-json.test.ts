@@ -11,8 +11,8 @@ async function createAgentDir() {
   return fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
 }
 
-function writeProfiles(agentDir: string, profiles: AuthProfileStore["profiles"]) {
-  saveAuthProfileStore(
+async function writeProfiles(agentDir: string, profiles: AuthProfileStore["profiles"]) {
+  await saveAuthProfileStore(
     {
       version: 1,
       profiles,
@@ -30,7 +30,7 @@ describe("ensurePiAuthJsonFromAuthProfiles", () => {
   it("writes openai-codex oauth credentials into auth.json for pi-coding-agent discovery", async () => {
     const agentDir = await createAgentDir();
 
-    writeProfiles(agentDir, {
+    await writeProfiles(agentDir, {
       "openai-codex:default": {
         type: "oauth",
         provider: "openai-codex",
@@ -57,7 +57,7 @@ describe("ensurePiAuthJsonFromAuthProfiles", () => {
   it("writes api_key credentials into auth.json", async () => {
     const agentDir = await createAgentDir();
 
-    writeProfiles(agentDir, {
+    await writeProfiles(agentDir, {
       "openrouter:default": {
         type: "api_key",
         provider: "openrouter",
@@ -78,7 +78,7 @@ describe("ensurePiAuthJsonFromAuthProfiles", () => {
   it("writes token credentials as api_key into auth.json", async () => {
     const agentDir = await createAgentDir();
 
-    writeProfiles(agentDir, {
+    await writeProfiles(agentDir, {
       "anthropic:default": {
         type: "token",
         provider: "anthropic",
@@ -99,7 +99,7 @@ describe("ensurePiAuthJsonFromAuthProfiles", () => {
   it("syncs multiple providers at once", async () => {
     const agentDir = await createAgentDir();
 
-    writeProfiles(agentDir, {
+    await writeProfiles(agentDir, {
       "openrouter:default": {
         type: "api_key",
         provider: "openrouter",
@@ -132,7 +132,7 @@ describe("ensurePiAuthJsonFromAuthProfiles", () => {
   it("skips profiles with empty keys", async () => {
     const agentDir = await createAgentDir();
 
-    writeProfiles(agentDir, {
+    await writeProfiles(agentDir, {
       "openrouter:default": {
         type: "api_key",
         provider: "openrouter",
@@ -147,7 +147,7 @@ describe("ensurePiAuthJsonFromAuthProfiles", () => {
   it("skips expired token credentials", async () => {
     const agentDir = await createAgentDir();
 
-    writeProfiles(agentDir, {
+    await writeProfiles(agentDir, {
       "anthropic:default": {
         type: "token",
         provider: "anthropic",
@@ -163,7 +163,7 @@ describe("ensurePiAuthJsonFromAuthProfiles", () => {
   it("normalizes provider ids when writing auth.json keys", async () => {
     const agentDir = await createAgentDir();
 
-    writeProfiles(agentDir, {
+    await writeProfiles(agentDir, {
       "z.ai:default": {
         type: "api_key",
         provider: "z.ai",
@@ -189,7 +189,7 @@ describe("ensurePiAuthJsonFromAuthProfiles", () => {
       JSON.stringify({ "legacy-provider": { type: "api_key", key: "legacy-key" } }),
     );
 
-    writeProfiles(agentDir, {
+    await writeProfiles(agentDir, {
       "openrouter:default": {
         type: "api_key",
         provider: "openrouter",

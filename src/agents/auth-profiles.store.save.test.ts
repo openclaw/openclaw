@@ -33,7 +33,7 @@ describe("saveAuthProfileStore", () => {
         },
       };
 
-      saveAuthProfileStore(store, agentDir);
+      await saveAuthProfileStore(store, agentDir);
 
       const parsed = JSON.parse(await fs.readFile(resolveAuthStorePath(agentDir), "utf8")) as {
         profiles: Record<

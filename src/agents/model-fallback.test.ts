@@ -43,7 +43,7 @@ async function withTempAuthStore<T>(
   run: (tempDir: string) => Promise<T>,
 ): Promise<T> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-auth-"));
-  saveAuthProfileStore(store, tempDir);
+  await saveAuthProfileStore(store, tempDir);
   try {
     return await run(tempDir);
   } finally {
@@ -958,7 +958,7 @@ describe("runWithModelFallback", () => {
                 },
         },
       };
-      saveAuthProfileStore(store, tmpDir);
+      await saveAuthProfileStore(store, tmpDir);
       return { store, dir: tmpDir };
     }
 
@@ -1064,7 +1064,7 @@ describe("runWithModelFallback", () => {
           // Groq not in cooldown
         },
       };
-      saveAuthProfileStore(store, tmpDir);
+      await saveAuthProfileStore(store, tmpDir);
 
       const cfg = makeCfg({
         agents: {
