@@ -180,6 +180,14 @@ export const SkillsStatusParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const SkillsVerdictParamsSchema = Type.Object(
+  {
+    skillKey: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
 export const SkillsBinsParamsSchema = Type.Object({}, { additionalProperties: false });
 
 export const SkillsBinsResultSchema = Type.Object(

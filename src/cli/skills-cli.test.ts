@@ -148,6 +148,47 @@ describe("skills-cli", () => {
       expect(output).toContain("Any binaries");
       expect(output).toContain("API_KEY");
     });
+
+    it("includes security verdict explainability details when provided", () => {
+      const report = createMockReport([
+        createMockSkill({
+          name: "secure-check",
+          description: "Security check skill",
+        }),
+      ]);
+
+      const output = formatSkillInfo(
+        report,
+        "secure-check",
+        {},
+        {
+          skillKey: "secure-check",
+          skillName: "secure-check",
+          verdict: "review",
+          confidence: 0.82,
+          generatedAtMs: Date.now(),
+          summary: {
+            scannedFiles: 3,
+            critical: 0,
+            warn: 1,
+            info: 0,
+            ruleIds: ["suspicious-network"],
+          },
+          antiAbuse: {
+            maxFiles: 500,
+            maxFileBytes: 1024 * 1024,
+            cappedAtMaxFiles: false,
+          },
+          remediationHints: ["Restrict outbound endpoints to trusted hosts."],
+          findings: [],
+        },
+      );
+
+      expect(output).toContain("Security verdict");
+      expect(output).toContain("82%");
+      expect(output).toContain("suspicious-network");
+      expect(output).toContain("Remediation hints");
+    });
   });
 
   describe("formatSkillsCheck", () => {

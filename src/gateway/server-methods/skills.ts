@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import { loadConfig, writeConfigFile } from "../../config/config.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { buildSkillSecurityVerdictExplainability } from "../../security/skill-verdict.js";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import {
   ErrorCodes,
@@ -19,9 +20,20 @@ import {
   validateSkillsBinsParams,
   validateSkillsInstallParams,
   validateSkillsStatusParams,
+  validateSkillsVerdictParams,
   validateSkillsUpdateParams,
 } from "../protocol/index.js";
 import type { GatewayRequestHandlers } from "./types.js";
+
+const SKILL_VERDICT_CACHE_TTL_MS = 30_000;
+const SKILL_VERDICT_CACHE_MAX_ENTRIES = 200;
+
+type SkillVerdictCacheEntry = {
+  expiresAtMs: number;
+  verdict: Awaited<ReturnType<typeof buildSkillSecurityVerdictExplainability>>;
+};
+
+const skillVerdictCache = new Map<string, SkillVerdictCacheEntry>();
 
 function collectSkillBins(entries: SkillEntry[]): string[] {
   const bins = new Set<string>();
@@ -54,6 +66,57 @@ function collectSkillBins(entries: SkillEntry[]): string[] {
   return [...bins].toSorted();
 }
 
+function resolveSkillKey(entry: SkillEntry): string {
+  return entry.metadata?.skillKey ?? entry.skill.name;
+}
+
+function resolveAgentWorkspace(params: {
+  config: OpenClawConfig;
+  agentIdRaw?: string;
+}): { ok: true; agentId: string; workspaceDir: string } | { ok: false; message: string } {
+  const agentIdRaw = typeof params.agentIdRaw === "string" ? params.agentIdRaw.trim() : "";
+  const agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : resolveDefaultAgentId(params.config);
+  if (agentIdRaw) {
+    const knownAgents = listAgentIds(params.config);
+    if (!knownAgents.includes(agentId)) {
+      return { ok: false, message: `unknown agent id "${agentIdRaw}"` };
+    }
+  }
+  return {
+    ok: true,
+    agentId,
+    workspaceDir: resolveAgentWorkspaceDir(params.config, agentId),
+  };
+}
+
+function getCachedSkillVerdict(cacheKey: string) {
+  const cached = skillVerdictCache.get(cacheKey);
+  if (!cached) {
+    return undefined;
+  }
+  if (cached.expiresAtMs <= Date.now()) {
+    skillVerdictCache.delete(cacheKey);
+    return undefined;
+  }
+  return cached.verdict;
+}
+
+function setCachedSkillVerdict(
+  cacheKey: string,
+  verdict: Awaited<ReturnType<typeof buildSkillSecurityVerdictExplainability>>,
+) {
+  if (skillVerdictCache.size >= SKILL_VERDICT_CACHE_MAX_ENTRIES) {
+    const oldestKey = skillVerdictCache.keys().next().value;
+    if (oldestKey) {
+      skillVerdictCache.delete(oldestKey);
+    }
+  }
+  skillVerdictCache.set(cacheKey, {
+    expiresAtMs: Date.now() + SKILL_VERDICT_CACHE_TTL_MS,
+    verdict,
+  });
+}
+
 export const skillsHandlers: GatewayRequestHandlers = {
   "skills.status": ({ params, respond }) => {
     if (!validateSkillsStatusParams(params)) {
@@ -68,25 +131,81 @@ export const skillsHandlers: GatewayRequestHandlers = {
       return;
     }
     const cfg = loadConfig();
-    const agentIdRaw = typeof params?.agentId === "string" ? params.agentId.trim() : "";
-    const agentId = agentIdRaw ? normalizeAgentId(agentIdRaw) : resolveDefaultAgentId(cfg);
-    if (agentIdRaw) {
-      const knownAgents = listAgentIds(cfg);
-      if (!knownAgents.includes(agentId)) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `unknown agent id "${agentIdRaw}"`),
-        );
-        return;
-      }
+    const workspace = resolveAgentWorkspace({
+      config: cfg,
+      agentIdRaw: typeof params?.agentId === "string" ? params.agentId : undefined,
+    });
+    if (!workspace.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, workspace.message));
+      return;
     }
-    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-    const report = buildWorkspaceSkillStatus(workspaceDir, {
+    const report = buildWorkspaceSkillStatus(workspace.workspaceDir, {
       config: cfg,
       eligibility: { remote: getRemoteSkillEligibility() },
     });
     respond(true, report, undefined);
+  },
+  "skills.verdict": async ({ params, respond }) => {
+    if (!validateSkillsVerdictParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid skills.verdict params: ${formatValidationErrors(validateSkillsVerdictParams.errors)}`,
+        ),
+      );
+      return;
+    }
+
+    const cfg = loadConfig();
+    const workspace = resolveAgentWorkspace({
+      config: cfg,
+      agentIdRaw: typeof params?.agentId === "string" ? params.agentId : undefined,
+    });
+    if (!workspace.ok) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, workspace.message));
+      return;
+    }
+
+    const entries = loadWorkspaceSkillEntries(workspace.workspaceDir, { config: cfg });
+    const requestedSkillKey = typeof params?.skillKey === "string" ? params.skillKey.trim() : "";
+    const entry = entries.find((item) => resolveSkillKey(item) === requestedSkillKey);
+    if (!entry) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, `unknown skill key "${requestedSkillKey}"`),
+      );
+      return;
+    }
+
+    const resolvedSkillKey = resolveSkillKey(entry);
+    const cacheKey = `${workspace.workspaceDir}::${resolvedSkillKey}`;
+    const cachedVerdict = getCachedSkillVerdict(cacheKey);
+    if (cachedVerdict) {
+      respond(true, cachedVerdict, undefined);
+      return;
+    }
+
+    try {
+      const verdict = await buildSkillSecurityVerdictExplainability({
+        skillKey: resolvedSkillKey,
+        skillName: entry.skill.name,
+        skillDir: entry.skill.baseDir,
+      });
+      setCachedSkillVerdict(cacheKey, verdict);
+      respond(true, verdict, undefined);
+    } catch (err) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.UNAVAILABLE,
+          `failed to scan skill "${entry.skill.name}": ${String(err)}`,
+        ),
+      );
+    }
   },
   "skills.bins": ({ params, respond }) => {
     if (!validateSkillsBinsParams(params)) {
@@ -137,6 +256,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       timeoutMs: p.timeoutMs,
       config: cfg,
     });
+    skillVerdictCache.clear();
     respond(
       result.ok,
       result,

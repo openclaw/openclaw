@@ -57,8 +57,10 @@ import { loadPresence } from "./controllers/presence.ts";
 import { deleteSessionAndRefresh, loadSessions, patchSession } from "./controllers/sessions.ts";
 import {
   installSkill,
+  loadSkillVerdict,
   loadSkills,
   saveSkillApiKey,
+  toggleSkillVerdictPanel,
   updateSkillEdit,
   updateSkillEnabled,
 } from "./controllers/skills.ts";
@@ -881,6 +883,10 @@ export function renderApp(state: AppViewState) {
                 edits: state.skillEdits,
                 messages: state.skillMessages,
                 busyKey: state.skillsBusyKey,
+                verdicts: state.skillVerdicts,
+                verdictErrors: state.skillVerdictErrors,
+                verdictExpanded: state.skillVerdictExpanded,
+                verdictLoadingKey: state.skillVerdictLoadingKey,
                 onFilterChange: (next) => (state.skillsFilter = next),
                 onRefresh: () => loadSkills(state, { clearMessages: true }),
                 onToggle: (key, enabled) => updateSkillEnabled(state, key, enabled),
@@ -888,6 +894,8 @@ export function renderApp(state: AppViewState) {
                 onSaveKey: (key) => saveSkillApiKey(state, key),
                 onInstall: (skillKey, name, installId) =>
                   installSkill(state, skillKey, name, installId),
+                onToggleVerdict: (skillKey) => toggleSkillVerdictPanel(state, skillKey),
+                onRefreshVerdict: (skillKey) => loadSkillVerdict(state, skillKey, { force: true }),
               })
             : nothing
         }
