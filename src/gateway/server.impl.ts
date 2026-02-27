@@ -64,6 +64,7 @@ import {
   type GatewayUpdateAvailableEventPayload,
 } from "./events.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
+import { initializeGlobalExecApprovalManager } from "../security/exec-approval-global.js";
 import { NodeRegistry } from "./node-registry.js";
 import type { startBrowserControlServerIfEnabled } from "./server-browser.js";
 import { createChannelManager } from "./server-channels.js";
@@ -684,6 +685,7 @@ export async function startGatewayServer(
   }
 
   const execApprovalManager = new ExecApprovalManager();
+  initializeGlobalExecApprovalManager(execApprovalManager);
   const execApprovalForwarder = createExecApprovalForwarder();
   const execApprovalHandlers = createExecApprovalHandlers(execApprovalManager, {
     forwarder: execApprovalForwarder,

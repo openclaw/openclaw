@@ -9,6 +9,8 @@ export type SessionState = {
   toolCallHistory?: ToolCallRecord[];
   toolLoopWarningBuckets?: Map<string, number>;
   commandPollCounts?: Map<string, { count: number; lastPollAt: number }>;
+  /** IBEL: per-session taint tracker for instruction boundary enforcement. */
+  taintTracker?: import("../security/taint-tracker.js").TaintTracker;
 };
 
 export type ToolCallRecord = {

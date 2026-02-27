@@ -17,32 +17,6 @@ function makeEscalateResult(overrides?: Partial<EscalateResult>): EscalateResult
 }
 
 describe("handleEscalation", () => {
-  it("returns approved:true when decision is allow-once", async () => {
-    const manager = new ExecApprovalManager();
-    const escalation = makeEscalateResult();
-
-    const promise = handleEscalation(escalation, manager, {
-      agentId: "agent-1",
-      sessionKey: "session-1",
-    });
-
-    // Simulate human approval — find the pending record and resolve it.
-    // The create() call returns the record synchronously, so we need a tick.
-    await new Promise((r) => setTimeout(r, 10));
-
-    // Find the pending approval by iterating (manager doesn't expose list,
-    // but we can resolve by inspecting the created record's ID).
-    // Instead, we can use a spy to capture the record ID.
-    // Re-approach: use a manager with known ID.
-    const manager2 = new ExecApprovalManager();
-    const record = manager2.create({ command: "test" }, 5_000, "known-id");
-    const decisionPromise = manager2.register(record, 5_000);
-
-    manager2.resolve("known-id", "allow-once");
-    const decision = await decisionPromise;
-    expect(decision).toBe("allow-once");
-  });
-
   it("returns approved:true for allow-once decision", async () => {
     const manager = new ExecApprovalManager();
     const escalation = makeEscalateResult();

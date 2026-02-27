@@ -10,7 +10,7 @@ export type AnyAgentTool = AgentTool<any, unknown> & {
   /** IBEL: intrinsic tool risk level. Optional — falls back to registry defaults. */
   riskLevel?: "low" | "medium" | "high" | "critical";
   /** IBEL: plain-English summary for HITL approval UIs. */
-  humanReadableSummary?: string;
+  humanReadableSummary?: string | ((args: unknown) => string);
 };
 
 export type StringParamOptions = {

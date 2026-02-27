@@ -15,6 +15,7 @@ const DEFAULT_RISK_MAP: Record<string, RiskLevel> = {
   exec: "critical",
   gateway: "critical",
   sessions_spawn: "critical",
+  whatsapp_login: "critical",
   // High — file mutation, persistent automation, cross-session messaging
   fs_write: "high",
   fs_delete: "high",
@@ -56,6 +57,7 @@ const DEFAULT_SUMMARIES: Record<string, SummaryFn> = {
   exec: (args) => `Execute command: ${String(arg(args, "command") ?? "unknown")}`,
   gateway: (args) => `Gateway operation: ${String(arg(args, "action") ?? "unknown")}`,
   sessions_spawn: (args) => `Spawn session: ${String(arg(args, "agentId") ?? "unknown")}`,
+  whatsapp_login: () => "WhatsApp login operation",
   fs_write: (args) => `Write file: ${String(arg(args, "path") ?? arg(args, "file") ?? "unknown")}`,
   fs_delete: (args) => `Delete: ${String(arg(args, "path") ?? arg(args, "file") ?? "unknown")}`,
   fs_move: (args) =>

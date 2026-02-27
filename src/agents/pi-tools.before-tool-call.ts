@@ -2,6 +2,7 @@ import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import type { TaintTracker } from "../security/taint-tracker.js";
 import { isPlainObject } from "../utils.js";
 import { normalizeToolName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
@@ -10,6 +11,8 @@ export type HookContext = {
   agentId?: string;
   sessionKey?: string;
   loopDetection?: ToolLoopDetectionConfig;
+  /** IBEL: explicit taint tracker for non-session flows. */
+  taintTracker?: TaintTracker;
 };
 
 type HookOutcome = { blocked: true; reason: string } | { blocked: false; params: unknown };
@@ -80,12 +83,14 @@ export async function runBeforeToolCallHook(args: {
   const toolName = normalizeToolName(args.toolName || "tool");
   const params = args.params;
 
+  let sessionState: import("../logging/diagnostic-session-state.js").SessionState | undefined;
+
   if (args.ctx?.sessionKey) {
     const { getDiagnosticSessionState } = await import("../logging/diagnostic-session-state.js");
     const { logToolLoopAction } = await import("../logging/diagnostic.js");
     const { detectToolCallLoop, recordToolCall } = await import("./tool-loop-detection.js");
 
-    const sessionState = getDiagnosticSessionState({
+    sessionState = getDiagnosticSessionState({
       sessionKey: args.ctx.sessionKey,
       sessionId: args.ctx?.agentId,
     });
@@ -144,10 +149,14 @@ export async function runBeforeToolCallHook(args: {
 
       const normalizedArgs = isPlainObject(params) ? (params as Record<string, unknown>) : {};
 
+      // Resolve taint tracker: explicit ctx > session state > none
+      const taintTracker = args.ctx?.taintTracker ?? sessionState?.taintTracker;
+
       const toolMeta = getToolMetadata(toolName);
       const context = buildExecutionContext({
         agentId: args.ctx?.agentId,
         sessionKey: args.ctx?.sessionKey,
+        taintTracker,
       });
 
       const guardResult = await guardPipeline.validate(
@@ -166,9 +175,13 @@ export async function runBeforeToolCallHook(args: {
 
       if (guardResult.action === "escalate") {
         const { handleEscalation } = await import("../security/hitl-escalation.js");
-        const { ExecApprovalManager } = await import("../gateway/exec-approval-manager.js");
-        // Use a dedicated approval manager instance for IBEL escalations.
-        const approvalManager = new ExecApprovalManager();
+        const { getGlobalExecApprovalManager } = await import(
+          "../security/exec-approval-global.js"
+        );
+        const approvalManager = getGlobalExecApprovalManager();
+        if (!approvalManager) {
+          return { blocked: true, reason: "HITL escalation unavailable (non-gateway context)" };
+        }
         const escalationResult = await handleEscalation(guardResult, approvalManager, {
           agentId: args.ctx?.agentId,
           sessionKey: args.ctx?.sessionKey,
