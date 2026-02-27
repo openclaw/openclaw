@@ -812,6 +812,15 @@ export const chatHandlers: GatewayRequestHandlers = {
       // See: https://github.com/moltbot/moltbot/issues/3658
       const stampedMessage = injectTimestamp(parsedMessage, timestampOptsFromConfig(cfg));
 
+      // When a client connects with operator.admin scope, grant owner status at the
+      // context level so owner-only tools (cron, gateway, etc.) are available even if
+      // the tenant config is missing commands.ownerAllowFrom.  The config-based path
+      // still takes priority (see resolveCommandAuthorization); this is a runtime fallback.
+      const scopes = client?.connect?.scopes ?? [];
+      const ownerAllowFrom = scopes.includes("operator.admin")
+        ? [clientInfo?.id ?? "gateway-client"]
+        : undefined;
+
       const ctx: MsgContext = {
         Body: parsedMessage,
         BodyForAgent: stampedMessage,
@@ -828,7 +837,8 @@ export const chatHandlers: GatewayRequestHandlers = {
         SenderId: clientInfo?.id,
         SenderName: clientInfo?.displayName,
         SenderUsername: clientInfo?.displayName,
-        GatewayClientScopes: client?.connect?.scopes,
+        GatewayClientScopes: scopes,
+        OwnerAllowFrom: ownerAllowFrom,
       };
 
       const agentId = resolveSessionAgentId({
