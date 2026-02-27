@@ -145,6 +145,10 @@ export type ChatRunState = {
   buffers: Map<string, string>;
   deltaSentAt: Map<string, number>;
   abortedRuns: Map<string, number>;
+  /** Text from prior assistant messages within the same run, accumulated at message boundaries. */
+  priorSegments: Map<string, string>;
+  /** High-water mark of buffer length per run, used to detect message boundaries. */
+  bufferHighWater: Map<string, number>;
   clear: () => void;
 };
 
@@ -153,12 +157,16 @@ export function createChatRunState(): ChatRunState {
   const buffers = new Map<string, string>();
   const deltaSentAt = new Map<string, number>();
   const abortedRuns = new Map<string, number>();
+  const priorSegments = new Map<string, string>();
+  const bufferHighWater = new Map<string, number>();
 
   const clear = () => {
     registry.clear();
     buffers.clear();
     deltaSentAt.clear();
     abortedRuns.clear();
+    priorSegments.clear();
+    bufferHighWater.clear();
   };
 
   return {
@@ -166,6 +174,8 @@ export function createChatRunState(): ChatRunState {
     buffers,
     deltaSentAt,
     abortedRuns,
+    priorSegments,
+    bufferHighWater,
     clear,
   };
 }
@@ -291,6 +301,34 @@ export function createAgentEventHandler({
     if (isSilentReplyText(cleaned, SILENT_REPLY_TOKEN)) {
       return;
     }
+    // Detect new-message boundary: when the agent starts a new assistant
+    // message (typically after a tool call), the accumulated text resets.
+    // Snapshot the current buffer as a prior segment so text from earlier
+    // messages is preserved (#28180).
+    //
+    // Two complementary signals detect boundaries:
+    // 1. Content discontinuity: the incoming text does not start with the
+    //    existing buffer. The agent guarantees monotonically growing text
+    //    within a single message (non-growing deltas are silently dropped in
+    //    pi-embedded-subscribe.handlers.messages.ts), and server-side
+    //    directive stripping is idempotent on already-stripped agent output.
+    //    So any content discontinuity is a real message boundary.
+    // 2. Length shrink: the incoming text is shorter than the high-water mark.
+    //    Catches the rare edge case where post-tool text happens to share a
+    //    prefix with the pre-tool text.
+    const existing = chatRunState.buffers.get(clientRunId);
+    const highWater = chatRunState.bufferHighWater.get(clientRunId) ?? 0;
+    const isBoundary =
+      existing != null &&
+      ((!cleaned.startsWith(existing) && existing.length > 0) ||
+        (highWater > 0 && cleaned.length < highWater));
+    if (isBoundary) {
+      const prior = chatRunState.priorSegments.get(clientRunId);
+      chatRunState.priorSegments.set(clientRunId, prior ? `${prior}\n\n${existing}` : existing);
+      chatRunState.bufferHighWater.set(clientRunId, cleaned.length);
+    } else {
+      chatRunState.bufferHighWater.set(clientRunId, Math.max(highWater, cleaned.length));
+    }
     chatRunState.buffers.set(clientRunId, cleaned);
     if (shouldHideHeartbeatChatOutput(clientRunId, sourceRunId)) {
       return;
@@ -301,6 +339,9 @@ export function createAgentEventHandler({
       return;
     }
     chatRunState.deltaSentAt.set(clientRunId, now);
+    // Compose full run text from prior segments + current buffer.
+    const prior = chatRunState.priorSegments.get(clientRunId);
+    const fullText = prior ? `${prior}\n\n${cleaned}` : cleaned;
     const payload = {
       runId: clientRunId,
       sessionKey,
@@ -308,7 +349,7 @@ export function createAgentEventHandler({
       state: "delta" as const,
       message: {
         role: "assistant",
-        content: [{ type: "text", text: cleaned }],
+        content: [{ type: "text", text: fullText }],
         timestamp: now,
       },
     };
@@ -324,9 +365,11 @@ export function createAgentEventHandler({
     jobState: "done" | "error",
     error?: unknown,
   ) => {
-    const bufferedText = stripInlineDirectiveTagsForDisplay(
-      chatRunState.buffers.get(clientRunId) ?? "",
-    ).text.trim();
+    const currentBuffer = chatRunState.buffers.get(clientRunId) ?? "";
+    const prior = chatRunState.priorSegments.get(clientRunId);
+    const fullBuffer =
+      prior && currentBuffer ? `${prior}\n\n${currentBuffer}` : (prior ?? currentBuffer);
+    const bufferedText = stripInlineDirectiveTagsForDisplay(fullBuffer).text.trim();
     const normalizedHeartbeatText = normalizeHeartbeatChatFinalText({
       runId: clientRunId,
       sourceRunId,
@@ -337,6 +380,8 @@ export function createAgentEventHandler({
       normalizedHeartbeatText.suppress || isSilentReplyText(text, SILENT_REPLY_TOKEN);
     chatRunState.buffers.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
+    chatRunState.priorSegments.delete(clientRunId);
+    chatRunState.bufferHighWater.delete(clientRunId);
     if (jobState === "done") {
       const payload = {
         runId: clientRunId,
@@ -485,6 +530,8 @@ export function createAgentEventHandler({
         chatRunState.abortedRuns.delete(evt.runId);
         chatRunState.buffers.delete(clientRunId);
         chatRunState.deltaSentAt.delete(clientRunId);
+        chatRunState.priorSegments.delete(clientRunId);
+        chatRunState.bufferHighWater.delete(clientRunId);
         if (chatLink) {
           chatRunState.registry.remove(evt.runId, clientRunId, sessionKey);
         }

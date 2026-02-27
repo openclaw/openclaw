@@ -509,4 +509,365 @@ describe("agent event handler", () => {
       "Disk usage crossed 95 percent on /data and needs cleanup now.",
     );
   });
+
+  describe("tool-call message boundary text preservation (#28180)", () => {
+    // Helper: emit assistant text, advancing time to bypass 150ms throttle.
+    function emitAssistantText(params: {
+      handler: ReturnType<typeof createHarness>["handler"];
+      runId: string;
+      seq: number;
+      text: string;
+      nowSpy: ReturnType<typeof vi.spyOn>;
+      time: number;
+    }) {
+      params.nowSpy.mockReturnValue(params.time);
+      params.handler({
+        runId: params.runId,
+        seq: params.seq,
+        stream: "assistant",
+        ts: params.time,
+        data: { text: params.text },
+      });
+    }
+
+    function lastDeltaText(broadcast: ReturnType<typeof vi.fn>): string | undefined {
+      const deltas = chatBroadcastCalls(broadcast)
+        .map(([, payload]) => payload as Record<string, unknown>)
+        .filter((p) => p.state === "delta") as Array<{
+        message?: { content?: Array<{ text?: string }> };
+      }>;
+      return deltas[deltas.length - 1]?.message?.content?.[0]?.text;
+    }
+
+    const PRE_TOOL_TEXT = "Lorem ipsum dolor sit amet, consectetur adipiscing elit.";
+    const PRE_TOOL_GROWING = "Lorem ipsum dolor sit amet, consectetur adipiscing";
+
+    it("preserves pre-tool text when post-tool text arrives from a new assistant message", () => {
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      const harness = createHarness({ now: 1_000 });
+      const { broadcast, chatRunState, handler } = harness;
+      chatRunState.registry.add("run-tool-boundary", {
+        sessionKey: "session-1",
+        clientRunId: "client-tool-boundary",
+      });
+
+      // Pre-tool text grows normally (same assistant message).
+      emitAssistantText({
+        handler,
+        runId: "run-tool-boundary",
+        seq: 1,
+        text: PRE_TOOL_GROWING,
+        nowSpy,
+        time: 1_000,
+      });
+      expect(lastDeltaText(broadcast)).toBe(PRE_TOOL_GROWING);
+
+      emitAssistantText({
+        handler,
+        runId: "run-tool-boundary",
+        seq: 2,
+        text: PRE_TOOL_TEXT,
+        nowSpy,
+        time: 1_200,
+      });
+      expect(lastDeltaText(broadcast)).toBe(PRE_TOOL_TEXT);
+
+      // After tool call, the agent starts a new assistant message — text resets.
+      emitAssistantText({
+        handler,
+        runId: "run-tool-boundary",
+        seq: 3,
+        text: "After tool call.",
+        nowSpy,
+        time: 5_000,
+      });
+
+      // The delta should include BOTH pre-tool and post-tool text.
+      expect(lastDeltaText(broadcast)).toBe(`${PRE_TOOL_TEXT}\n\nAfter tool call.`);
+      nowSpy.mockRestore();
+    });
+
+    it("preserves text across multiple tool-call boundaries", () => {
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      const harness = createHarness({ now: 1_000 });
+      const { broadcast, chatRunState, handler } = harness;
+      chatRunState.registry.add("run-multi-tool", {
+        sessionKey: "session-1",
+        clientRunId: "client-multi-tool",
+      });
+
+      // Simulate realistic streaming: each segment grows from short to long,
+      // then after a tool call the next segment starts short again. The new
+      // segment's initial delta must be shorter than (high-water - 32) to
+      // trigger boundary detection.
+      const seg1 =
+        "Step one: a fairly long first message that exceeds the tolerance threshold with plenty of room to spare in the buffer.";
+      const seg2 =
+        "Step two: another long message after the first tool call that also exceeds the tolerance threshold substantially.";
+      const seg3 = "Step three.";
+
+      emitAssistantText({
+        handler,
+        runId: "run-multi-tool",
+        seq: 1,
+        text: seg1,
+        nowSpy,
+        time: 1_000,
+      });
+      expect(lastDeltaText(broadcast)).toBe(seg1);
+
+      // After first tool call: seg2 starts as "S" (1 char << 118 - 32 = 86).
+      emitAssistantText({
+        handler,
+        runId: "run-multi-tool",
+        seq: 2,
+        text: "S",
+        nowSpy,
+        time: 3_000,
+      });
+      expect(lastDeltaText(broadcast)).toBe(`${seg1}\n\nS`);
+
+      // seg2 grows to full length.
+      emitAssistantText({
+        handler,
+        runId: "run-multi-tool",
+        seq: 3,
+        text: seg2,
+        nowSpy,
+        time: 3_200,
+      });
+      expect(lastDeltaText(broadcast)).toBe(`${seg1}\n\n${seg2}`);
+
+      // After second tool call: seg3 starts short again.
+      emitAssistantText({
+        handler,
+        runId: "run-multi-tool",
+        seq: 4,
+        text: seg3,
+        nowSpy,
+        time: 5_000,
+      });
+      expect(lastDeltaText(broadcast)).toBe(`${seg1}\n\n${seg2}\n\n${seg3}`);
+
+      nowSpy.mockRestore();
+    });
+
+    it("includes prior segments in the final chat event text", () => {
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      const harness = createHarness({ now: 1_000 });
+      const { broadcast, chatRunState, handler } = harness;
+      chatRunState.registry.add("run-final-segments", {
+        sessionKey: "session-1",
+        clientRunId: "client-final-segments",
+      });
+
+      emitAssistantText({
+        handler,
+        runId: "run-final-segments",
+        seq: 1,
+        text: PRE_TOOL_TEXT,
+        nowSpy,
+        time: 1_000,
+      });
+
+      emitAssistantText({
+        handler,
+        runId: "run-final-segments",
+        seq: 2,
+        text: "After tool.",
+        nowSpy,
+        time: 3_000,
+      });
+
+      // Lifecycle end triggers chat final.
+      nowSpy.mockReturnValue(4_000);
+      handler({
+        runId: "run-final-segments",
+        seq: 3,
+        stream: "lifecycle",
+        ts: 4_000,
+        data: { phase: "end" },
+      });
+
+      const finalCalls = chatBroadcastCalls(broadcast)
+        .map(([, payload]) => payload as Record<string, unknown>)
+        .filter((p) => p.state === "final") as Array<{
+        message?: { content?: Array<{ text?: string }> };
+      }>;
+      expect(finalCalls).toHaveLength(1);
+      expect(finalCalls[0]?.message?.content?.[0]?.text).toBe(`${PRE_TOOL_TEXT}\n\nAfter tool.`);
+
+      nowSpy.mockRestore();
+    });
+
+    it("does not create false boundary when text grows monotonically", () => {
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      const harness = createHarness({ now: 1_000 });
+      const { broadcast, chatRunState, handler } = harness;
+      chatRunState.registry.add("run-no-false-boundary", {
+        sessionKey: "session-1",
+        clientRunId: "client-no-false-boundary",
+      });
+
+      emitAssistantText({
+        handler,
+        runId: "run-no-false-boundary",
+        seq: 1,
+        text: "Hello",
+        nowSpy,
+        time: 1_000,
+      });
+      expect(lastDeltaText(broadcast)).toBe("Hello");
+
+      emitAssistantText({
+        handler,
+        runId: "run-no-false-boundary",
+        seq: 2,
+        text: "Hello world",
+        nowSpy,
+        time: 1_200,
+      });
+      expect(lastDeltaText(broadcast)).toBe("Hello world");
+
+      emitAssistantText({
+        handler,
+        runId: "run-no-false-boundary",
+        seq: 3,
+        text: "Hello world, how are you?",
+        nowSpy,
+        time: 1_400,
+      });
+      // No duplication — text grew normally.
+      expect(lastDeltaText(broadcast)).toBe("Hello world, how are you?");
+
+      nowSpy.mockRestore();
+    });
+
+    it("preserves short pre-tool text (no minimum length requirement)", () => {
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      const harness = createHarness({ now: 1_000 });
+      const { broadcast, chatRunState, handler } = harness;
+      chatRunState.registry.add("run-short", {
+        sessionKey: "session-1",
+        clientRunId: "client-short",
+      });
+
+      // Short pre-tool text (well under 32 chars).
+      emitAssistantText({
+        handler,
+        runId: "run-short",
+        seq: 1,
+        text: "Sure, let me check.",
+        nowSpy,
+        time: 1_000,
+      });
+      expect(lastDeltaText(broadcast)).toBe("Sure, let me check.");
+
+      // Post-tool text arrives — boundary must be detected even for short text.
+      emitAssistantText({
+        handler,
+        runId: "run-short",
+        seq: 2,
+        text: "Here are the results.",
+        nowSpy,
+        time: 3_000,
+      });
+      expect(lastDeltaText(broadcast)).toBe("Sure, let me check.\n\nHere are the results.");
+
+      nowSpy.mockRestore();
+    });
+
+    it("preserves pre-tool text even when post-tool text shares a common prefix", () => {
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      const harness = createHarness({ now: 1_000 });
+      const { broadcast, chatRunState, handler } = harness;
+      chatRunState.registry.add("run-shared-prefix", {
+        sessionKey: "session-1",
+        clientRunId: "client-shared-prefix",
+      });
+
+      // Pre-tool text.
+      emitAssistantText({
+        handler,
+        runId: "run-shared-prefix",
+        seq: 1,
+        text: "Lorem ipsum dolor sit amet.",
+        nowSpy,
+        time: 1_000,
+      });
+
+      // Post-tool text starts streaming token by token — first delta is short
+      // and doesn't start with the full pre-tool text, so boundary is detected
+      // even though the eventual text will share a common prefix.
+      emitAssistantText({
+        handler,
+        runId: "run-shared-prefix",
+        seq: 2,
+        text: "Lorem",
+        nowSpy,
+        time: 3_000,
+      });
+      expect(lastDeltaText(broadcast)).toBe("Lorem ipsum dolor sit amet.\n\nLorem");
+
+      // Post-tool text continues growing.
+      emitAssistantText({
+        handler,
+        runId: "run-shared-prefix",
+        seq: 3,
+        text: "Lorem ipsum dolor sit amet, with new content.",
+        nowSpy,
+        time: 3_200,
+      });
+      expect(lastDeltaText(broadcast)).toBe(
+        "Lorem ipsum dolor sit amet.\n\nLorem ipsum dolor sit amet, with new content.",
+      );
+
+      nowSpy.mockRestore();
+    });
+
+    it("cleans up priorSegments on abort", () => {
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      const harness = createHarness({ now: 1_000 });
+      const { chatRunState, handler } = harness;
+      chatRunState.registry.add("run-abort-cleanup", {
+        sessionKey: "session-1",
+        clientRunId: "client-abort-cleanup",
+      });
+
+      emitAssistantText({
+        handler,
+        runId: "run-abort-cleanup",
+        seq: 1,
+        text: PRE_TOOL_TEXT,
+        nowSpy,
+        time: 1_000,
+      });
+
+      // New message boundary — text shrinks well below high-water mark.
+      emitAssistantText({
+        handler,
+        runId: "run-abort-cleanup",
+        seq: 2,
+        text: "After tool.",
+        nowSpy,
+        time: 3_000,
+      });
+      expect(chatRunState.priorSegments.has("client-abort-cleanup")).toBe(true);
+
+      // Mark aborted and send lifecycle end.
+      chatRunState.abortedRuns.set("client-abort-cleanup", Date.now());
+      nowSpy.mockReturnValue(4_000);
+      handler({
+        runId: "run-abort-cleanup",
+        seq: 3,
+        stream: "lifecycle",
+        ts: 4_000,
+        data: { phase: "end" },
+      });
+
+      // priorSegments should be cleaned up.
+      expect(chatRunState.priorSegments.has("client-abort-cleanup")).toBe(false);
+      nowSpy.mockRestore();
+    });
+  });
 });
