@@ -291,14 +291,16 @@ export async function sendBlueBubblesAttachment(params: {
             { method: "GET" },
             opts.timeoutMs,
           );
-          const verifyJson = (await verifyRes.json().catch(() => null)) as
-            | { data?: { isAudioMessage?: boolean } }
-            | null;
-          const persistedAsVoice = verifyJson?.data?.isAudioMessage === true;
-          if (!persistedAsVoice) {
-            const isLastAttempt = i === candidateFileFields.length - 1;
-            if (!isLastAttempt) {
-              continue;
+          if (verifyRes.ok) {
+            const verifyJson = (await verifyRes.json().catch(() => null)) as
+              | { data?: { isAudioMessage?: boolean } }
+              | null;
+            const explicitlyNotVoice = verifyJson?.data?.isAudioMessage === false;
+            if (explicitlyNotVoice) {
+              const isLastAttempt = i === candidateFileFields.length - 1;
+              if (!isLastAttempt) {
+                continue;
+              }
             }
           }
         } catch {

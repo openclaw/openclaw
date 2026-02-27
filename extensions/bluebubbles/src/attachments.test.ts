@@ -385,6 +385,11 @@ describe("sendBlueBubblesAttachment", () => {
       .mockResolvedValueOnce({
         ok: true,
         text: () => Promise.resolve(JSON.stringify({ messageId: "msg-retry" })),
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ data: { isAudioMessage: true } }),
       });
 
     await sendBlueBubblesAttachment({
@@ -396,7 +401,7 @@ describe("sendBlueBubblesAttachment", () => {
       opts: { serverUrl: "http://localhost:1234", password: "test" },
     });
 
-    expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
     const firstBody = decodeBody(mockFetch.mock.calls[0][1]?.body as Uint8Array);
     const secondBody = decodeBody(mockFetch.mock.calls[1][1]?.body as Uint8Array);
     expect(firstBody).toContain('name="attachment"');
@@ -445,6 +450,35 @@ describe("sendBlueBubblesAttachment", () => {
     const secondPostBody = decodeBody(mockFetch.mock.calls[2][1]?.body as Uint8Array);
     expect(firstPostBody).toContain('name="attachment"');
     expect(secondPostBody).toContain('name="attachments"');
+  });
+
+  it("does not retry on verification failures or non-ok verify responses", async () => {
+    mockFetch
+      // POST success
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve(JSON.stringify({ messageId: "msg-verify-unavailable" })),
+      })
+      // Verification endpoint unavailable / non-ok
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 404,
+        json: () => Promise.resolve({ message: "not found" }),
+      });
+
+    const result = await sendBlueBubblesAttachment({
+      to: "chat_guid:iMessage;-;+15551234567",
+      buffer: new Uint8Array([1, 2, 3]),
+      filename: "voice.mp3",
+      contentType: "audio/mpeg",
+      asVoice: true,
+      opts: { serverUrl: "http://localhost:1234", password: "test" },
+    });
+
+    expect(result.messageId).toBe("msg-verify-unavailable");
+    // One POST + one verify GET, no re-upload attempts.
+    expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
   it("normalizes mp3 filenames for voice memos", async () => {
