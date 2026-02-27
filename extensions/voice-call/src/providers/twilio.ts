@@ -587,7 +587,7 @@ export class TwilioProvider implements VoiceCallProvider {
       "[voice-call] Using TwiML <Say> fallback - telephony TTS not configured or media stream not active",
     );
 
-    const pollyVoice = mapVoiceToPolly(input.voice);
+    const pollyVoice = mapVoiceToPolly(input.voice, input.text);
     const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Say voice="${pollyVoice}" language="${input.locale || "en-US"}">${escapeXml(input.text)}</Say>
