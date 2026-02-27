@@ -1,11 +1,22 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync } from "node:fs";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import os from "node:os";
+import os, { platform } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const SCRIPT = path.join(process.cwd(), "scripts", "ios-team-id.sh");
+
+// Detect if running on Windows without proper bash support
+const isWindows = platform() === "win32";
+const hasBashSupport = (() => {
+  if (!isWindows) {
+    return true;
+  }
+  // Check if bash is available (e.g., via WSL or Git Bash)
+  const result = spawnSync("bash", ["-c", "exit 0"], { encoding: "utf8" });
+  return !result.error && result.status === 0;
+})();
 
 async function writeExecutable(filePath: string, body: string): Promise<void> {
   await writeFile(filePath, body, "utf8");
@@ -47,6 +58,10 @@ function runScript(
 
 describe("scripts/ios-team-id.sh", () => {
   it("falls back to Xcode-managed provisioning profiles when preference teams are empty", async () => {
+    if (!hasBashSupport) {
+      // Skip bash-dependent tests on Windows without WSL/Git Bash
+      return;
+    }
     const homeDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-ios-team-id-"));
     const binDir = path.join(homeDir, "bin");
     await mkdir(binDir, { recursive: true });
@@ -62,14 +77,13 @@ describe("scripts/ios-team-id.sh", () => {
 
     await writeExecutable(
       path.join(binDir, "plutil"),
-      `#!/usr/bin/env bash
-echo '{}'`,
+      `#!/usr/bin/env bash\necho '{}'`,
     );
     await writeExecutable(
       path.join(binDir, "defaults"),
       `#!/usr/bin/env bash
 if [[ "$3" == "DVTDeveloperAccountManagerAppleIDLists" ]]; then
-  echo '(identifier = "dev@example.com";)'
+  echo '(identifier = "dev@example.com";);'
   exit 0
 fi
 exit 0`,
@@ -101,6 +115,10 @@ exit 0`,
   });
 
   it("prints actionable guidance when Xcode account exists but no Team ID is resolvable", async () => {
+    if (!hasBashSupport) {
+      // Skip bash-dependent tests on Windows without WSL/Git Bash
+      return;
+    }
     const homeDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-ios-team-id-"));
     const binDir = path.join(homeDir, "bin");
     await mkdir(binDir, { recursive: true });
@@ -109,14 +127,13 @@ exit 0`,
 
     await writeExecutable(
       path.join(binDir, "plutil"),
-      `#!/usr/bin/env bash
-echo '{}'`,
+      `#!/usr/bin/env bash\necho '{}'`,
     );
     await writeExecutable(
       path.join(binDir, "defaults"),
       `#!/usr/bin/env bash
 if [[ "$3" == "DVTDeveloperAccountManagerAppleIDLists" ]]; then
-  echo '(identifier = "dev@example.com";)'
+  echo '(identifier = "dev@example.com";);'
   exit 0
 fi
 echo "Domain/default pair of (com.apple.dt.Xcode, $3) does not exist" >&2
@@ -135,6 +152,10 @@ exit 1`,
   });
 
   it("honors IOS_PREFERRED_TEAM_ID when multiple profile teams are available", async () => {
+    if (!hasBashSupport) {
+      // Skip bash-dependent tests on Windows without WSL/Git Bash
+      return;
+    }
     const homeDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-ios-team-id-"));
     const binDir = path.join(homeDir, "bin");
     await mkdir(binDir, { recursive: true });
@@ -154,14 +175,13 @@ exit 1`,
 
     await writeExecutable(
       path.join(binDir, "plutil"),
-      `#!/usr/bin/env bash
-echo '{}'`,
+      `#!/usr/bin/env bash\necho '{}'`,
     );
     await writeExecutable(
       path.join(binDir, "defaults"),
       `#!/usr/bin/env bash
 if [[ "$3" == "DVTDeveloperAccountManagerAppleIDLists" ]]; then
-  echo '(identifier = "dev@example.com";)'
+  echo '(identifier = "dev@example.com";);'
   exit 0
 fi
 exit 0`,
@@ -194,6 +214,10 @@ exit 0`,
   });
 
   it("matches preferred team IDs even when parser output uses CRLF line endings", async () => {
+    if (!hasBashSupport) {
+      // Skip bash-dependent tests on Windows without WSL/Git Bash
+      return;
+    }
     const homeDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-ios-team-id-"));
     const binDir = path.join(homeDir, "bin");
     await mkdir(binDir, { recursive: true });
@@ -202,14 +226,13 @@ exit 0`,
 
     await writeExecutable(
       path.join(binDir, "plutil"),
-      `#!/usr/bin/env bash
-echo '{}'`,
+      `#!/usr/bin/env bash\necho '{}'`,
     );
     await writeExecutable(
       path.join(binDir, "defaults"),
       `#!/usr/bin/env bash
 if [[ "$3" == "DVTDeveloperAccountManagerAppleIDLists" ]]; then
-  echo '(identifier = "dev@example.com";)'
+  echo '(identifier = "dev@example.com";);'
   exit 0
 fi
 exit 0`,

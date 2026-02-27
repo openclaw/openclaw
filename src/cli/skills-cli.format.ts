@@ -150,12 +150,12 @@ export function formatSkillInfo(
   }
 
   if (opts.json) {
-    // Strip ANSI escape codes from emoji field to ensure valid JSON output
+    // Strip ANSI escape codes from emoji to ensure valid JSON output
     // eslint-disable-next-line no-control-regex
-    const ansiPattern = /[\u001B\u009B][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[a-zA-Z\d]*)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-ntqry=><~]))/g;
+    const ansiRegex = /\u001b\[[0-9;]*m/g;
     const cleanSkill = {
       ...skill,
-      emoji: skill.emoji?.replace(ansiPattern, ""),
+      emoji: skill.emoji?.replace(ansiRegex, ""),
     };
     return JSON.stringify(cleanSkill, null, 2);
   }

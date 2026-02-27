@@ -264,9 +264,9 @@ Run without --dry-run to clean up stale jobs.`,
           // Report any failures
           if (failedJobs.length > 0) {
             const failedIds = failedJobs.map((j) => j.id || "unknown").join(", ");
-            defaultRuntime.warn(`⚠️  Failed to clean up ${failedJobs.length} job(s): ${failedIds}`);
+            defaultRuntime.log(`⚠️  Failed to clean up ${failedJobs.length} job(s): ${failedIds}`);
             for (const failed of failedJobs) {
-              defaultRuntime.warn(`  - ${failed.id}${failed.name ? ` (${failed.name})` : ""}: ${failed.error}`);
+              defaultRuntime.log(`  - ${failed.id}${failed.name ? ` (${failed.name})` : ""}: ${failed.error}`);
             }
           }
 
