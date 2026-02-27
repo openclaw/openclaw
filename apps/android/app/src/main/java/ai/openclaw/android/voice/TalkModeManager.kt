@@ -254,88 +254,82 @@ private const val defaultTalkProvider = "elevenlabs"
   private var streamingTts: ElevenLabsStreamingTts? = null
   private var streamingRunId: String? = null
 
-  private fun handleStreamingTts(runId: String, state: String, obj: JsonObject) {
-    when (state) {
-      "delta" -> {
-        val text = extractTextFromChatEventMessage(obj["message"])
-        if (text.isNullOrBlank()) return
+  /** Handle agent stream events — only speak assistant text, not tool calls or thinking. */
+  private fun handleAgentStreamEvent(payloadJson: String?) {
+    if (payloadJson.isNullOrBlank()) return
+    val payload = try {
+      json.parseToJsonElement(payloadJson).asObjectOrNull()
+    } catch (_: Throwable) { null } ?: return
 
-        // Start streaming session on first delta for this run
-        if (streamingRunId != runId) {
-          // New run — stop any previous stream
-          streamingTts?.stop()
-          streamingTts = null
+    val stream = payload["stream"]?.asStringOrNull() ?: return
+    if (stream != "assistant") return  // Only speak assistant text
+    val data = payload["data"]?.asObjectOrNull() ?: return
+    val text = data["text"]?.asStringOrNull()?.trim() ?: return
+    if (text.isEmpty()) return
 
-          val voiceId = currentVoiceId ?: defaultVoiceId
-          val apiKey = this.apiKey
-          if (voiceId == null || apiKey == null) {
-            Log.w(tag, "streaming TTS: missing voiceId or apiKey, falling back to non-streaming")
-            return
-          }
-
-          // Use flash model for streaming (v3 doesn't support WebSocket)
-          val modelId = currentModelId ?: defaultModelId ?: ""
-          val streamModel = if (ElevenLabsStreamingTts.supportsStreaming(modelId)) {
-            modelId
-          } else {
-            "eleven_flash_v2_5"
-          }
-
-          val tts = ElevenLabsStreamingTts(
-            scope = scope,
-            voiceId = voiceId,
-            apiKey = apiKey,
-            modelId = streamModel,
-            outputFormat = "pcm_24000",
-            sampleRate = 24000,
-          )
-          streamingTts = tts
-          streamingRunId = runId
-          _isSpeaking.value = true
-          _statusText.value = "Speaking…"
-          tts.start()
-        }
-
-        // Feed accumulated text to the stream
-        streamingTts?.sendText(text)
+    // Start streaming session if not already active
+    if (streamingTts == null) {
+      val voiceId = currentVoiceId ?: defaultVoiceId
+      val apiKey = this.apiKey
+      if (voiceId == null || apiKey == null) {
+        Log.w(tag, "streaming TTS: missing voiceId or apiKey")
+        return
       }
-      "final" -> {
-        if (streamingRunId == runId) {
-          // Send any remaining text from final event
-          val text = extractTextFromChatEventMessage(obj["message"])
-          if (!text.isNullOrBlank()) {
-            streamingTts?.sendText(text)
-          }
-          streamingTts?.finish()
-          streamingRunId = null
-          // Don't clear streamingTts yet — let it drain audio, cleanup is internal
-          scope.launch {
-            // Wait for playback to finish before resetting state
-            delay(500)
-            while (streamingTts?.isPlaying?.value == true) {
-              delay(200)
-            }
-            _isSpeaking.value = false
-            _statusText.value = "Ready"
-            streamingTts = null
-          }
-        } else {
-          // No streaming session for this run — fall back to non-streaming
-          val text = extractTextFromChatEventMessage(obj["message"])
-          if (!text.isNullOrBlank()) {
-            playTtsForText(text)
-          }
-        }
+      val modelId = currentModelId ?: defaultModelId ?: ""
+      val streamModel = if (ElevenLabsStreamingTts.supportsStreaming(modelId)) {
+        modelId
+      } else {
+        "eleven_flash_v2_5"
       }
-      "error", "aborted" -> {
-        if (streamingRunId == runId) {
-          streamingTts?.stop()
-          streamingTts = null
-          streamingRunId = null
-          _isSpeaking.value = false
-          _statusText.value = "Ready"
-        }
+      val tts = ElevenLabsStreamingTts(
+        scope = scope,
+        voiceId = voiceId,
+        apiKey = apiKey,
+        modelId = streamModel,
+        outputFormat = "pcm_24000",
+        sampleRate = 24000,
+      )
+      streamingTts = tts
+      _isSpeaking.value = true
+      _statusText.value = "Speaking…"
+      tts.start()
+      Log.d(tag, "streaming TTS started for agent assistant text")
+    }
+
+    // Feed text — if text diverged (tool call replaced response), restart stream
+    val accepted = streamingTts?.sendText(text) ?: false
+    if (!accepted && streamingTts != null) {
+      Log.d(tag, "text diverged, restarting streaming TTS")
+      streamingTts?.stop()
+      streamingTts = null
+      // Restart with the new text
+      val voiceId2 = currentVoiceId ?: defaultVoiceId
+      val apiKey2 = this.apiKey
+      if (voiceId2 != null && apiKey2 != null) {
+        val modelId2 = currentModelId ?: defaultModelId ?: ""
+        val streamModel2 = if (ElevenLabsStreamingTts.supportsStreaming(modelId2)) modelId2 else "eleven_flash_v2_5"
+        val newTts = ElevenLabsStreamingTts(
+          scope = scope, voiceId = voiceId2, apiKey = apiKey2,
+          modelId = streamModel2, outputFormat = "pcm_24000", sampleRate = 24000,
+        )
+        streamingTts = newTts
+        newTts.start()
+        newTts.sendText(text)
+        Log.d(tag, "streaming TTS restarted with new text")
       }
+    }
+  }
+
+  /** Called when chat final/error/aborted arrives — finish any active streaming TTS. */
+  private fun finishStreamingTts() {
+    val tts = streamingTts ?: return
+    tts.finish()
+    scope.launch {
+      delay(500)
+      while (tts.isPlaying.value) { delay(200) }
+      _isSpeaking.value = false
+      _statusText.value = "Ready"
+      streamingTts = null
     }
   }
 
@@ -349,6 +343,13 @@ private const val defaultTalkProvider = "elevenlabs"
   }
 
   fun handleGatewayEvent(event: String, payloadJson: String?) {
+    if (ttsOnAllResponses) {
+      Log.d(tag, "gateway event: $event")
+    }
+    if (event == "agent" && ttsOnAllResponses) {
+      handleAgentStreamEvent(payloadJson)
+      return
+    }
     if (event != "chat") return
     if (payloadJson.isNullOrBlank()) return
     val obj =
@@ -361,11 +362,19 @@ private const val defaultTalkProvider = "elevenlabs"
     val state = obj["state"].asStringOrNull() ?: return
 
     // If this is a response we initiated, handle normally below.
-    // Otherwise, if ttsOnAllResponses, stream TTS for delta/final events.
+    // Otherwise, if ttsOnAllResponses, finish streaming TTS on terminal events.
     val pending = pendingRunId
     if (pending == null || runId != pending) {
-      if (ttsOnAllResponses) {
-        handleStreamingTts(runId, state, obj)
+      if (ttsOnAllResponses && state in listOf("final", "error", "aborted")) {
+        if (streamingTts != null) {
+          finishStreamingTts()
+        } else if (state == "final") {
+          // No streaming was active — fall back to non-streaming
+          val text = extractTextFromChatEventMessage(obj["message"])
+          if (!text.isNullOrBlank()) {
+            playTtsForText(text)
+          }
+        }
       }
       if (pending == null || runId != pending) return
     }

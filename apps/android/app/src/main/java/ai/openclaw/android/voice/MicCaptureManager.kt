@@ -98,14 +98,18 @@ class MicCaptureManager(
       start()
       sendQueuedIfIdle()
     } else {
-      stop()
-      // Capture any partial transcript that didn't get a final result from the recognizer
-      val partial = _liveTranscript.value?.trim().orEmpty()
-      if (partial.isNotEmpty() && sessionSegments.isEmpty()) {
-        sessionSegments.add(partial)
+      // Give the recognizer time to finish processing buffered audio
+      scope.launch {
+        delay(2000L)
+        stop()
+        // Capture any partial transcript that didn't get a final result from the recognizer
+        val partial = _liveTranscript.value?.trim().orEmpty()
+        if (partial.isNotEmpty() && sessionSegments.isEmpty()) {
+          sessionSegments.add(partial)
+        }
+        flushSessionToQueue()
+        sendQueuedIfIdle()
       }
-      flushSessionToQueue()
-      sendQueuedIfIdle()
     }
   }
 
@@ -246,7 +250,11 @@ class MicCaptureManager(
   }
 
   private fun flushSessionToQueue() {
-    val message = sessionSegments.joinToString(" ").trim()
+    // Add sentence-ending punctuation between recognizer segments to avoid run-on text
+    val message = sessionSegments.joinToString(". ") { segment ->
+      val trimmed = segment.trimEnd()
+      if (trimmed.isNotEmpty() && trimmed.last() in ".!?,;:") trimmed else trimmed
+    }.trim().let { if (it.isNotEmpty() && it.last() !in ".!?") "$it." else it }
     sessionSegments.clear()
     _liveTranscript.value = null
     lastFinalSegment = null

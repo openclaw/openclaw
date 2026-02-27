@@ -67,6 +67,8 @@ class ElevenLabsStreamingTts(
 
   // Track text already sent so we only send incremental chunks
   private var sentTextLength = 0
+  @Volatile private var wsReady = false
+  private val pendingText = mutableListOf<String>()
 
   /**
    * Open the WebSocket connection and prepare AudioTrack.
@@ -77,6 +79,9 @@ class ElevenLabsStreamingTts(
     finished = false
     sentTextLength = 0
     trackStarted = false
+    wsReady = false
+    sentFullText = ""
+    synchronized(pendingText) { pendingText.clear() }
 
     // Prepare AudioTrack
     val minBuffer = AudioTrack.getMinBufferSize(
@@ -136,6 +141,16 @@ class ElevenLabsStreamingTts(
           })
         }
         webSocket.send(config.toString())
+        wsReady = true
+        // Flush any text that was queued before WebSocket was ready
+        synchronized(pendingText) {
+          for (queued in pendingText) {
+            val msg = JSONObject().apply { put("text", queued) }
+            webSocket.send(msg.toString())
+            Log.d(TAG, "flushed queued chunk: ${queued.length} chars")
+          }
+          pendingText.clear()
+        }
       }
 
       override fun onMessage(webSocket: WebSocket, text: String) {
@@ -172,16 +187,38 @@ class ElevenLabsStreamingTts(
    * Send incremental text. Call with the full accumulated text so far —
    * only the new portion (since last send) will be transmitted.
    */
-  fun sendText(fullText: String) {
-    if (stopped || finished) return
-    val ws = webSocket ?: return
+  // Track the full text we've sent so we can detect replacement vs append
+  private var sentFullText = ""
+
+  /**
+   * Returns true if text was accepted, false if text diverged (caller should restart).
+   */
+  fun sendText(fullText: String): Boolean {
+    if (stopped || finished) return false
+    val ws = webSocket ?: return false
+
+    // Detect text replacement: if the new text doesn't start with what we already sent,
+    // the stream has diverged (e.g., tool call interrupted and text was replaced).
+    if (sentFullText.isNotEmpty() && !fullText.startsWith(sentFullText)) {
+      Log.d(TAG, "text diverged — stream needs restart")
+      return false
+    }
 
     if (fullText.length > sentTextLength) {
       val newText = fullText.substring(sentTextLength)
       sentTextLength = fullText.length
-      val msg = JSONObject().apply { put("text", newText) }
-      ws.send(msg.toString())
+      sentFullText = fullText
+
+      if (wsReady) {
+        val msg = JSONObject().apply { put("text", newText) }
+        ws.send(msg.toString())
+        Log.d(TAG, "sent chunk: ${newText.length} chars")
+      } else {
+        synchronized(pendingText) { pendingText.add(newText) }
+        Log.d(TAG, "queued chunk: ${newText.length} chars (ws not ready)")
+      }
     }
+    return true
   }
 
   /**
