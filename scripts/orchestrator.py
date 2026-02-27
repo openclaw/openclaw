@@ -94,11 +94,45 @@ PHILOSOPHY_STRUCTURE_MD = os.path.join(HOME, ".openclaw/workspace/PHILOSOPHY_STR
 TRIAD_SYNC_SCRIPT = os.path.join(HOME, ".openclaw/workspace/scripts/triad_directive_sync.py")
 
 # v3: Ron LLM 쿨다운/안전 설정
-RON_LLM_COOLDOWN_SEC = 300
-RON_LLM_FALLBACK_SEC = 300  # 3회 연속 실패 → 5분 fallback
-RON_LLM_MAX_FAILURES = 3
+RON_LLM_COOLDOWN_SEC = int(os.environ.get("ORCH_RON_LLM_COOLDOWN_SEC", "900"))
+RON_LLM_FALLBACK_SEC = int(os.environ.get("ORCH_RON_LLM_FALLBACK_SEC", "600"))  # 3회 연속 실패 → 10분 fallback
+RON_LLM_MAX_FAILURES = int(os.environ.get("ORCH_RON_LLM_MAX_FAILURES", "3"))
+RON_LLM_TIMEOUT_SEC = int(os.environ.get("ORCH_RON_LLM_TIMEOUT_SEC", "900"))  # LLM 호출 타임아웃: 15분
+RON_LLM_RETRY_MAX = int(os.environ.get("ORCH_RON_LLM_RETRY_MAX", "3"))  # 최대 재시도 횟수
+RON_LLM_RETRY_BACKOFF_BASE = int(os.environ.get("ORCH_RON_LLM_RETRY_BACKOFF_BASE", "5"))  # 백오프 기본값(초)
 QUEUE_CAP = 6
 AGENT_CAP = 2
+
+# 환각 캐스케이드 차단 상수
+_WHITELIST_BLOCK_PATTERNS = (
+    "blocked: not in whitelist",
+    "refused: payload references system path",
+    "화이트리스트 필요",
+    "화이트리스트 추가 필요",
+    "not in whitelist",
+)
+# LLM/인프라 실패 결과는 follow-up 평가에서 제외 (에이전트가 해결 불가)
+_INFRA_FAIL_PATTERNS = (
+    "timed out",
+    "timeout",
+    "empty_response",
+    "cooldown",
+    "connection refused",
+    "econnrefused",
+)
+_PHANTOM_KEYWORDS = frozenset([
+    "포렌식", "증거수집", "증거 수집", "증거 보존", "증거 확보",
+    "whitelist_rollback", "롤백 스크립트", "루트 잠금", "앵커 락",
+    "DRIFT", "forensic", "evidence collection", "evidence preservation",
+    "무결성 점검 결과 검증",
+    # v4: 화이트리스트 관련 전면 차단 (에이전트가 스스로 풀 수 없는 보안 정책)
+    "화이트리스트",  # 모든 한글 변형 포괄: 차단/변경/복구/적용/복원/배포/요청/추가/문제/항목 등
+    "whitelist", "allowlist",  # 영문 변형 포괄
+    "안전 래퍼", "안전 배포", "안전 재기동", "openclaw_safe_run",
+    "ocw-whitelist", "root_anchor", "sudoers",
+    "/etc/openclaw", "/usr/local/bin/openclaw",
+    "정책 엔진", "policy engine", "SOP 문서",
+])
 
 # v3.1: Rate limiting caps
 DAILY_TASK_CAP = 200
@@ -107,9 +141,9 @@ CYCLE_INTERVAL_SEC = 120
 DATA_DB = os.path.join(HOME, ".openclaw/data/ops_multiagent.db")
 
 # v3.4: Global circuit breaker — 시스템 전체 장애 감지
-GLOBAL_CB_FAIL_RATE = 0.6       # 60%↑ 실패 → 시스템 장애
-GLOBAL_CB_MIN_CMDS = 5          # 최소 5건 이상이어야 판정
-GLOBAL_CB_WINDOW_MIN = 30       # 30분 윈도우
+GLOBAL_CB_FAIL_RATE = float(os.environ.get("ORCH_GLOBAL_CB_FAIL_RATE", "0.7"))  # 70%↑ 실패 → 시스템 장애 (기존 60%→70% 상향)
+GLOBAL_CB_MIN_CMDS = int(os.environ.get("ORCH_GLOBAL_CB_MIN_CMDS", "10"))       # 최소 10건 이상이어야 판정 (기존 5→10 상향)
+GLOBAL_CB_WINDOW_MIN = int(os.environ.get("ORCH_GLOBAL_CB_WINDOW_MIN", "30"))   # 30분 윈도우
 
 # Cowork stall-rescue autopilot tuning.
 COWORK_STALE_SEC = int(os.environ.get("ORCH_COWORK_STALE_SEC", "90"))
@@ -214,13 +248,20 @@ def jpost(path, payload, timeout=15):
         return {"error": str(e)}
 
 
-def chat_completion_with_fallback(messages, temperature=0.3, max_tokens=1000, timeout_sec=90):
+def chat_completion_with_fallback(messages, temperature=0.3, max_tokens=1000, timeout_sec=None):
+    """Call chat API with dynamic model chain fallback.
+    
+    timeout_sec가 None이면 RON_LLM_TIMEOUT_SEC(기본 900초) 사용.
+    900초를 초과하는 값은 강제로 900초로 제한(최대 타임아웃 안전장치).
+    """
+    # 타임아웃 유효성 검증: None이면 기본값, 900초 초과 시 900초로 클램핑
+    effective_timeout = min(timeout_sec or RON_LLM_TIMEOUT_SEC, RON_LLM_TIMEOUT_SEC)
     """Call chat API with dynamic model chain fallback."""
     from shared.llm import llm_chat_with_fallback
     model_chain = get_model_chain(default_model=RON_CHAT_MODEL, include_default=False)
     content, used_model, error = llm_chat_with_fallback(
         messages, model_chain, temperature=temperature,
-        max_tokens=max_tokens, timeout=timeout_sec,
+        max_tokens=max_tokens, timeout=effective_timeout,
     )
     if content:
         return content, used_model, ""
@@ -230,7 +271,9 @@ def bus_write(to, msg_type, body):
     # DM 노이즈 필터: tool error, 짧은 alert 메시지는 로그에만 기록
     if to == "harry" and msg_type == "alert":
         noise_kw = ["tool error", "tool_error", "ToolError", "subprocess", "traceback",
-                     "Errno", "ModuleNotFoundError", "FileNotFoundError"]
+                     "Errno", "ModuleNotFoundError", "FileNotFoundError",
+                     "timed out", "timeout", "cooldown", "econnrefused",
+                     "empty_response", "connection refused"]
         if any(kw.lower() in body.lower() for kw in noise_kw):
             msg = {"ts": now_utc(), "from": "orchestrator", "to": "log", "type": "filtered_alert", "body": body}
             with open(BUS_FILE, "a") as f:
@@ -602,21 +645,47 @@ def gather_system_context():
 
 
 def call_ron_for_decisions(context_str):
-    """Ron Chat API를 호출하여 태스크 할당 결정을 받는다."""
+    """Ron Chat API를 호출하여 태스크 할당 결정을 받는다.
+    
+    - 타임아웃 시 graceful failover: exponential backoff 재시도
+    - 최대 RON_LLM_RETRY_MAX회 재시도, 백오프 간격은 5초×2^attempt
+    - 타임아웃 vs 일반 에러 구분하여 로깅
+    """
     messages = [
         {"role": "system", "content": RON_SYSTEM_PROMPT},
         {"role": "user", "content": "현재 시스템 상태:\n" + context_str + "\n\n이 상태를 분석하고 필요한 태스크를 JSON으로 응답하라."},
     ]
-    content, used_model, err = chat_completion_with_fallback(
-        messages=messages,
-        temperature=0.3,
-        max_tokens=1000,
-        timeout_sec=90,
-    )
-    if content:
-        log("Ron LLM response received ({} chars, model={})".format(len(content), used_model))
-        return content
-    log("Ron LLM call failed: {}".format(err or "no_response"))
+    
+    last_error = None
+    for attempt in range(RON_LLM_RETRY_MAX):
+        content, used_model, err = chat_completion_with_fallback(
+            messages=messages,
+            temperature=0.3,
+            max_tokens=1000,
+            timeout_sec=None,  # 기본값 RON_LLM_TIMEOUT_SEC(900초) 사용
+        )
+        if content:
+            if attempt > 0:
+                log("Ron LLM recovered after {} retry(s), model={}".format(attempt, used_model))
+            else:
+                log("Ron LLM response received ({} chars, model={})".format(len(content), used_model))
+            return content
+        
+        last_error = err
+        # 타임아웃 vs 일반 에러 구분
+        is_timeout = err and any(kw in str(err).lower() for kw in ["timeout", "timed out", "_ssl.c", "ssl"])
+        error_type = "TIMEOUT" if is_timeout else "ERROR"
+        
+        if attempt < RON_LLM_RETRY_MAX - 1:
+            backoff_sec = RON_LLM_RETRY_BACKOFF_BASE * (2 ** attempt)  # 5s, 10s, 20s
+            log("Ron LLM {} (attempt {}/{}), retrying in {}s: {}".format(
+                error_type, attempt + 1, RON_LLM_RETRY_MAX, backoff_sec, str(err)[:80]))
+            time.sleep(backoff_sec)
+        else:
+            log("Ron LLM {} exhausted all {} attempts".format(error_type, RON_LLM_RETRY_MAX))
+    
+    # 모든 재시도 실패
+    log("Ron LLM call failed after {} retries: {}".format(RON_LLM_RETRY_MAX, last_error or "no_response"))
     return None
 
 
@@ -675,6 +744,12 @@ def parse_ron_response(response_text):
         if priority not in valid_priorities:
             priority = "normal"
 
+        # Layer 2: 환각 키워드 차단
+        title_body = (title + " " + body).lower()
+        if any(kw.lower() in title_body for kw in _PHANTOM_KEYWORDS):
+            log("HALLUCINATION_BLOCKED: '{}' → agent={}".format(title[:50], agent))
+            continue
+
         # 에이전트당 2개 상한
         agent_counts[agent] = agent_counts.get(agent, 0) + 1
         if agent_counts[agent] > AGENT_CAP:
@@ -700,6 +775,15 @@ def _call_ron_for_followup(completed_tasks):
     if not completed_tasks:
         return []
 
+    # Layer 1: whitelist block / system path refusal / infra failure 결과를 Ron LLM에 보여주지 않음
+    completed_tasks = [
+        t for t in completed_tasks
+        if not any(p in (t.get("result_note") or "").lower() for p in _WHITELIST_BLOCK_PATTERNS)
+        and not any(p in (t.get("result_note") or "").lower() for p in _INFRA_FAIL_PATTERNS)
+    ]
+    if not completed_tasks:
+        return []
+
     summaries = []
     for t in completed_tasks[:5]:
         summaries.append("- [{}] {}: {} → 결과: {}".format(
@@ -719,19 +803,41 @@ def _call_ron_for_followup(completed_tasks):
     ).format("\n".join(summaries))
 
     messages = [
-        {"role": "system", "content": "너는 Ron, 태스크 완료 후 후속 판단을 하는 지휘자다. 불필요한 후속은 만들지 마라."},
+        {"role": "system", "content": "너는 Ron, 태스크 완료 후 후속 판단을 하는 지휘자다. 불필요한 후속은 만들지 마라.\n"
+         "절대 금지: 포렌식/증거수집/증거보존, whitelist 롤백/예외 추가, "
+         "루트 잠금/앵커 락/DRIFT 관련 태스크 생성 금지. "
+         "'blocked: not in whitelist'는 정상 보안 동작이다."},
         {"role": "user", "content": prompt},
     ]
-    content, used_model, err = chat_completion_with_fallback(
-        messages=messages,
-        temperature=0.2,
-        max_tokens=600,
-        timeout_sec=90,
-    )
-    if content:
-        log("Ron followup model used: {}".format(used_model))
-        return parse_ron_response(content)
-    log("Ron followup LLM call failed: {}".format(err or "no_response"))
+    # 재시도/백오프 전략 적용 (graceful failover)
+    last_error = None
+    for attempt in range(RON_LLM_RETRY_MAX):
+        content, used_model, err = chat_completion_with_fallback(
+            messages=messages,
+            temperature=0.2,
+            max_tokens=600,
+            timeout_sec=None,  # 기본값 RON_LLM_TIMEOUT_SEC(900초) 사용
+        )
+        if content:
+            if attempt > 0:
+                log("Ron followup recovered after {} retry(s), model={}".format(attempt, used_model))
+            else:
+                log("Ron followup model used: {}".format(used_model))
+            return parse_ron_response(content)
+        
+        last_error = err
+        is_timeout = err and any(kw in str(err).lower() for kw in ["timeout", "timed out", "_ssl.c", "ssl"])
+        error_type = "TIMEOUT" if is_timeout else "ERROR"
+        
+        if attempt < RON_LLM_RETRY_MAX - 1:
+            backoff_sec = RON_LLM_RETRY_BACKOFF_BASE * (2 ** attempt)
+            log("Ron followup {} (attempt {}/{}), retrying in {}s: {}".format(
+                error_type, attempt + 1, RON_LLM_RETRY_MAX, backoff_sec, str(err)[:80]))
+            time.sleep(backoff_sec)
+        else:
+            log("Ron followup {} exhausted all {} attempts".format(error_type, RON_LLM_RETRY_MAX))
+    
+    log("Ron followup LLM call failed after {} retries: {}".format(RON_LLM_RETRY_MAX, last_error or "no_response"))
     return []
 
 
@@ -1302,6 +1408,11 @@ def check_idle_and_assign(state):
         log("Queue has {} queued tasks, skipping".format(queued))
         return 0
 
+    # 시스템 장애 구간에서는 추가 LLM 태스크 생성을 멈춰 사용자 응답 lane을 우선 확보
+    if _is_system_degraded():
+        log("SKIP LLM: system degraded")
+        return 0
+
     # Pre-check: daily/hourly cap BEFORE calling Ron LLM (avoid wasting quota)
     at_cap, cap_reason = _tasks_at_cap()
     if at_cap:
@@ -1387,22 +1498,30 @@ def check_completions_and_follow_up(state):
     for cmd in commands:
         if cmd.get("status") != "done":
             continue
-        completed_at = cmd.get("completed_at", "")
+        completed_at = cmd.get("completed_at") or ""
         if completed_at <= last_check:
             continue
         new_completions.append(cmd)
 
     if not new_completions:
-        done_times = [cmd.get("completed_at", "") for cmd in commands if cmd.get("status") == "done"]
+        done_times = [cmd.get("completed_at") or "" for cmd in commands if cmd.get("status") == "done"]
         if done_times:
             state["last_completion_check"] = max(done_times)
+        return 0
+
+    # 시스템 장애 구간에서는 후속 LLM 호출을 멈춰 lane 혼잡을 방지
+    if _is_system_degraded():
+        done_times = [cmd.get("completed_at") or "" for cmd in commands if cmd.get("status") == "done"]
+        if done_times:
+            state["last_completion_check"] = max(done_times)
+        log("SKIP follow-up LLM: system degraded")
         return 0
 
     # Pre-check: daily/hourly cap BEFORE calling follow-up LLM (avoid wasting quota)
     at_cap, cap_reason = _tasks_at_cap()
     if at_cap:
         log("SKIP follow-up LLM: {} -- no tasks can be created".format(cap_reason))
-        done_times = [cmd.get("completed_at", "") for cmd in commands if cmd.get("status") == "done"]
+        done_times = [cmd.get("completed_at") or "" for cmd in commands if cmd.get("status") == "done"]
         if done_times:
             state["last_completion_check"] = max(done_times)
         return 0
@@ -1424,7 +1543,7 @@ def check_completions_and_follow_up(state):
             if generated > 0:
                 log("Ron LLM follow-up: {} tasks from {} completions".format(
                     generated, len(new_completions)))
-                done_times = [cmd.get("completed_at", "") for cmd in commands if cmd.get("status") == "done"]
+                done_times = [cmd.get("completed_at") or "" for cmd in commands if cmd.get("status") == "done"]
                 if done_times:
                     state["last_completion_check"] = max(done_times)
                 return generated
@@ -1736,7 +1855,9 @@ def _retry_failed_commands(state):
                 "can't open file", "filenotfounderror",
                 "timed out", "agent_timeout", "timeout",
                 "cooldown", "failovererror", "econnrefused",
-                "[react]", "[alert]", "coverage gap"]):
+                "[react]", "[alert]", "coverage gap",
+                "refused: payload references system path",
+                "blocked: not in whitelist"]):
             continue
 
         # Skip if circuit breaker is tripped for this pattern
@@ -1817,7 +1938,7 @@ def _scan_specialist_reports(state):
 def _scan_report_dir(report_dir, report_type, commands, state, keywords, target_agent, title_prefix):
     """Scan a report directory for files newer than last scan with actionable keywords."""
     last_key = "last_{}_report_ts".format(report_type)
-    last_ts = state.get(last_key, "")
+    last_ts = state.get(last_key) or ""
     created = 0
 
     try:
@@ -1906,9 +2027,9 @@ def send_report(state):
 # v3.5: bus_commands 서킷브레이커 (동일 에러 패턴 반복 차단)
 # ============================================================
 
-BUS_CB_THRESHOLD = 3       # 동일 signature 3회 → trip
-BUS_CB_WINDOW_SEC = 3600   # 1시간 sliding window
-BUS_CB_COOLDOWN_SEC = 86400  # 24시간 후 자동 해제
+BUS_CB_THRESHOLD = int(os.environ.get("ORCH_BUS_CB_THRESHOLD", "5"))       # 동일 signature 5회 → trip (기존 3→5 상향)
+BUS_CB_WINDOW_SEC = int(os.environ.get("ORCH_BUS_CB_WINDOW_SEC", "3600"))   # 1시간 sliding window
+BUS_CB_COOLDOWN_SEC = int(os.environ.get("ORCH_BUS_CB_COOLDOWN_SEC", "43200"))  # 12시간 후 자동 해제 (기존 24h→12h 단축)
 
 # Telegram DM for circuit breaker alerts
 _CB_BOT_TOKEN = None
@@ -2118,7 +2239,7 @@ def _is_bus_cb_tripped(state, title, target_agent):
         title_lower = (title or "").lower()
         if cb_sig.startswith("path-guard:") and ("path-guard" in title_lower or "path_guard" in title_lower or "note_guard" in title_lower):
             return True, cb_sig
-        # For missing: check if same file is referenced in title
+        # For missing: check if same file referenced in title (also try basename match for short titles)
         if cb_sig.startswith("missing:"):
             missing_path = cb_sig[8:]
             if missing_path.split("/")[-1] in title_lower:
@@ -2137,8 +2258,8 @@ def _is_bus_cb_tripped(state, title, target_agent):
 # ============================================================
 
 CRON_JOBS_FILE = os.path.join(HOME, ".openclaw/cron/jobs.json")
-CIRCUIT_BREAKER_THRESHOLD = 5  # 연속 N회 실패 시 자동 비활성화
-CIRCUIT_BREAKER_INTERVAL_MIN = 30  # 30분 간격으로 체크
+CRON_CB_THRESHOLD = int(os.environ.get("ORCH_CRON_CB_THRESHOLD", "5"))  # 연속 N회 실패 시 자동 비활성화 (기본 5회)
+CRON_CB_INTERVAL_MIN = int(os.environ.get("ORCH_CRON_CB_INTERVAL_MIN", "30"))  # 체크 간격(분)
 
 
 def check_cron_circuit_breaker(state):
@@ -2147,7 +2268,7 @@ def check_cron_circuit_breaker(state):
     게이트웨이는 연속 실패 시 백오프만 적용하고 자동 비활성화하지 않는다.
     이 함수가 jobs.json을 직접 수정하여 서킷브레이커 역할을 한다.
     """
-    if not is_interval_passed(state, "last_circuit_breaker_check", CIRCUIT_BREAKER_INTERVAL_MIN):
+    if not is_interval_passed(state, "last_circuit_breaker_check", CRON_CB_INTERVAL_MIN):
         return 0
 
     state["last_circuit_breaker_check"] = now_ts()
@@ -2173,7 +2294,7 @@ def check_cron_circuit_breaker(state):
         job_state = job.get("state", {})
         consecutive = job_state.get("consecutiveErrors", 0)
 
-        if consecutive < CIRCUIT_BREAKER_THRESHOLD:
+        if consecutive < CRON_CB_THRESHOLD:
             continue
 
         name = job.get("name", "unknown")
@@ -2201,7 +2322,7 @@ def check_cron_circuit_breaker(state):
             if disabled_count > 0:
                 bus_write("harry", "alert",
                     "[서킷브레이커] 크론잡 {}개 자동 비활성화 (연속 {}회+ 실패)".format(
-                        disabled_count, CIRCUIT_BREAKER_THRESHOLD))
+                        disabled_count, CRON_CB_THRESHOLD))
         except Exception as e:
             log("circuit_breaker: failed to save jobs.json: {}".format(str(e)[:80]))
 
