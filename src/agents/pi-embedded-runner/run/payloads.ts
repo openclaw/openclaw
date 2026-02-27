@@ -24,7 +24,7 @@ export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
   toolMetas: ToolMetaEntry[];
   lastAssistant: AssistantMessage | undefined;
-  lastToolError?: { toolName: string; meta?: string; error?: string };
+  toolErrors: Array<{ toolName: string; meta?: string; error?: string }>;
   config?: MoltbotConfig;
   sessionKey: string;
   verboseLevel?: VerboseLevel;
@@ -168,7 +168,7 @@ export function buildEmbeddedRunPayloads(params: {
     });
   }
 
-  if (params.lastToolError) {
+  for (const toolError of params.toolErrors) {
     const lastAssistantHasToolCalls =
       Array.isArray(params.lastAssistant?.content) &&
       params.lastAssistant?.content.some((block) =>
@@ -181,7 +181,7 @@ export function buildEmbeddedRunPayloads(params: {
       replyItems.length > 0 && !lastAssistantHasToolCalls && !lastAssistantWasToolUse;
     // Check if this is a recoverable/internal tool error that shouldn't be shown to users
     // when there's already a user-facing reply (the model should have retried).
-    const errorLower = (params.lastToolError.error ?? "").toLowerCase();
+    const errorLower = (toolError.error ?? "").toLowerCase();
     const isRecoverableError =
       errorLower.includes("required") ||
       errorLower.includes("missing") ||
@@ -197,11 +197,11 @@ export function buildEmbeddedRunPayloads(params: {
     // and shouldn't be surfaced to users since the model should retry.
     if (!hasUserFacingReply && !isRecoverableError) {
       const toolSummary = formatToolAggregate(
-        params.lastToolError.toolName,
-        params.lastToolError.meta ? [params.lastToolError.meta] : undefined,
+        toolError.toolName,
+        toolError.meta ? [toolError.meta] : undefined,
         { markdown: useMarkdown },
       );
-      const errorSuffix = params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
+      const errorSuffix = toolError.error ? `: ${toolError.error}` : "";
       replyItems.push({
         text: `⚠️ ${toolSummary} failed${errorSuffix}`,
         isError: true,

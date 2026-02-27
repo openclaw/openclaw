@@ -98,7 +98,7 @@ export type EmbeddedRunAttemptResult = {
   assistantTexts: string[];
   toolMetas: Array<{ toolName: string; meta?: string }>;
   lastAssistant: AssistantMessage | undefined;
-  lastToolError?: { toolName: string; meta?: string; error?: string };
+  toolErrors: Array<{ toolName: string; meta?: string; error?: string }>;
   didSendViaMessagingTool: boolean;
   messagingToolSentTexts: string[];
   messagingToolSentTargets: MessagingToolSend[];

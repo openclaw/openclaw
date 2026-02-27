@@ -26,7 +26,7 @@ export type EmbeddedPiSubscribeState = {
   toolMetas: Array<{ toolName?: string; meta?: string }>;
   toolMetaById: Map<string, string | undefined>;
   toolSummaryById: Set<string>;
-  lastToolError?: ToolErrorSummary;
+  toolErrors: ToolErrorSummary[];
 
   blockReplyBreak: "text_end" | "message_end";
   reasoningMode: ReasoningLevel;

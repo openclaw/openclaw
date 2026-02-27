@@ -1,5 +1,7 @@
 import type { AgentEvent } from "@mariozechner/pi-agent-core";
 
+import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
+import { formatToolAggregate } from "../auto-reply/tool-meta.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { normalizeTextForComparison } from "./pi-embedded-helpers.js";
 import { isMessagingTool, isMessagingToolSendAction } from "./pi-embedded-messaging.js";
@@ -157,11 +159,32 @@ export function handleToolExecutionEnd(
   ctx.state.toolSummaryById.delete(toolCallId);
   if (isToolError) {
     const errorMessage = extractToolErrorMessage(sanitizedResult);
-    ctx.state.lastToolError = {
+    ctx.state.toolErrors.push({
       toolName,
       meta,
       error: errorMessage,
-    };
+    });
+
+    // Emit tool error separately via onToolResult to avoid overwriting the agent's final response
+    if (ctx.params.onToolResult && ctx.shouldEmitToolResult()) {
+      const useMarkdown = ctx.params.toolResultFormat === "markdown";
+      const toolSummary = formatToolAggregate(toolName, meta ? [meta] : undefined, {
+        markdown: useMarkdown,
+      });
+      const errorSuffix = errorMessage ? `: ${errorMessage}` : "";
+      const errorText = `⚠️ ${toolSummary} failed${errorSuffix}`;
+      const { text: cleanedText, mediaUrls } = parseReplyDirectives(errorText);
+      if (cleanedText) {
+        try {
+          void ctx.params.onToolResult({
+            text: cleanedText,
+            mediaUrls: mediaUrls?.length ? mediaUrls : undefined,
+          });
+        } catch {
+          // ignore tool error delivery failures
+        }
+      }
+    }
   }
 
   // Commit messaging tool text on success, discard on error.
