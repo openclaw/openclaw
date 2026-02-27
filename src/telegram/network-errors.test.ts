@@ -39,9 +39,9 @@ describe("isRecoverableTelegramNetworkError", () => {
     expect(isRecoverableTelegramNetworkError(err, { context: "polling" })).toBe(true);
   });
 
-  it("skips broad message matches for send context", () => {
+  it("treats grammY network-request failures as recoverable in send context", () => {
     const networkRequestErr = new Error("Network request for 'sendMessage' failed!");
-    expect(isRecoverableTelegramNetworkError(networkRequestErr, { context: "send" })).toBe(false);
+    expect(isRecoverableTelegramNetworkError(networkRequestErr, { context: "send" })).toBe(true);
     expect(isRecoverableTelegramNetworkError(networkRequestErr, { context: "polling" })).toBe(true);
 
     const undiciSnippetErr = new Error("Undici: socket failure");
