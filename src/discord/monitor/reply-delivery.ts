@@ -21,6 +21,7 @@ export type DiscordThreadBindingLookupRecord = {
 
 export type DiscordThreadBindingLookup = {
   listBySessionKey: (targetSessionKey: string) => DiscordThreadBindingLookupRecord[];
+  touchThread?: (params: { threadId: string; at?: number; persist?: boolean }) => unknown;
 };
 
 function resolveTargetChannelId(target: string): string | undefined {
@@ -174,6 +175,7 @@ export async function deliverDiscordReply(params: {
     target: params.target,
   });
   const persona = resolveBindingPersona(binding);
+  let deliveredAny = false;
   for (const payload of params.replies) {
     // Run message_sending plugin hook (may modify content or cancel).
     if (payload.text) {
@@ -222,6 +224,7 @@ export async function deliverDiscordReply(params: {
           username: persona.username,
           avatarUrl: persona.avatarUrl,
         });
+        deliveredAny = true;
       }
       continue;
     }
@@ -240,6 +243,7 @@ export async function deliverDiscordReply(params: {
         accountId: params.accountId,
         replyTo,
       });
+      deliveredAny = true;
       // Voice messages cannot include text; send remaining text separately if present.
       await sendDiscordChunkWithFallback({
         target: params.target,
@@ -272,6 +276,7 @@ export async function deliverDiscordReply(params: {
       accountId: params.accountId,
       replyTo,
     });
+    deliveredAny = true;
     await sendAdditionalDiscordMedia({
       target: params.target,
       token: params.token,
@@ -280,5 +285,9 @@ export async function deliverDiscordReply(params: {
       mediaUrls: mediaList.slice(1),
       resolveReplyTo,
     });
+  }
+
+  if (binding && deliveredAny) {
+    params.threadBindings?.touchThread?.({ threadId: binding.threadId });
   }
 }
