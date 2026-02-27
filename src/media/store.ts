@@ -87,37 +87,45 @@ export async function ensureMediaDir() {
 
 export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS) {
   const mediaDir = await ensureMediaDir();
-  const entries = await fs.readdir(mediaDir).catch(() => []);
   const now = Date.now();
-  const removeExpiredFilesInDir = async (dir: string) => {
+
+  const removeExpiredFilesRecursively = async (dir: string): Promise<void> => {
     const dirEntries = await fs.readdir(dir).catch(() => []);
     await Promise.all(
       dirEntries.map(async (entry) => {
-        const full = path.join(dir, entry);
-        const stat = await fs.stat(full).catch(() => null);
-        if (!stat || !stat.isFile()) {
+        const fullPath = path.join(dir, entry);
+        const stat = await fs.stat(fullPath).catch(() => null);
+        if (!stat) {
+          return;
+        }
+        if (stat.isDirectory()) {
+          await removeExpiredFilesRecursively(fullPath);
+          return;
+        }
+        if (!stat.isFile()) {
           return;
         }
         if (now - stat.mtimeMs > ttlMs) {
-          await fs.rm(full).catch(() => {});
+          await fs.rm(fullPath).catch(() => {});
         }
       }),
     );
   };
 
+  const mediaEntries = await fs.readdir(mediaDir).catch(() => []);
   await Promise.all(
-    entries.map(async (file) => {
-      const full = path.join(mediaDir, file);
-      const stat = await fs.stat(full).catch(() => null);
+    mediaEntries.map(async (entry) => {
+      const fullPath = path.join(mediaDir, entry);
+      const stat = await fs.stat(fullPath).catch(() => null);
       if (!stat) {
         return;
       }
       if (stat.isDirectory()) {
-        await removeExpiredFilesInDir(full);
+        await removeExpiredFilesRecursively(fullPath);
         return;
       }
       if (stat.isFile() && now - stat.mtimeMs > ttlMs) {
-        await fs.rm(full).catch(() => {});
+        await fs.rm(fullPath).catch(() => {});
       }
     }),
   );
