@@ -282,3 +282,19 @@ export function isMessageSentEvent(event: InternalHookEvent): event is MessageSe
     typeof context.success === "boolean"
   );
 }
+
+/**
+ * Check if any internal hooks are registered for a given event key.
+ *
+ * Checks both the general event type (e.g., 'message') and the
+ * specific event:action combination (e.g., 'message:sent').
+ *
+ * @param type - The event type
+ * @param action - The action within that type
+ * @returns true if at least one handler is registered
+ */
+export function hasInternalHooks(type: string, action: string): boolean {
+  const typeHandlers = handlers.get(type) ?? [];
+  const specificHandlers = handlers.get(`${type}:${action}`) ?? [];
+  return typeHandlers.length + specificHandlers.length > 0;
+}

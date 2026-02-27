@@ -18,7 +18,7 @@ import {
   resolveMirroredTranscriptText,
 } from "../../config/sessions.js";
 import type { sendMessageDiscord } from "../../discord/send.js";
-import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
+import { createInternalHookEvent, hasInternalHooks, triggerInternalHook } from "../../hooks/internal-hooks.js";
 import type { sendMessageIMessage } from "../../imessage/send.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
@@ -450,7 +450,7 @@ async function deliverOutboundPayloadsCore(
   const hookRunner = getGlobalHookRunner();
   const sessionKeyForInternalHooks = params.mirror?.sessionKey ?? params.session?.key;
   if (
-    hookRunner?.hasHooks("message_sent") &&
+    (hookRunner?.hasHooks("message_sent") || hasInternalHooks("message", "sent")) &&
     params.session?.agentId &&
     !sessionKeyForInternalHooks
   ) {
