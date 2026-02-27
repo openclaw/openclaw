@@ -76,6 +76,8 @@ export type SessionEntry = {
   lastHeartbeatSentAt?: number;
   /** Timestamp (ms) for the most recent message-tool send fingerprint (cross-run dedupe). */
   lastMessagingToolSentAt?: number;
+  /** Session id that produced the most recent message-tool dedupe fingerprint. */
+  lastMessagingToolSessionId?: string;
   /** Recently sent message-tool text payloads for short-window cross-run dedupe. */
   lastMessagingToolSentTexts?: string[];
   /** Recently sent message-tool media urls for short-window cross-run dedupe. */

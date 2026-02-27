@@ -284,6 +284,7 @@ export function createFollowupRunner(params: {
       const now = Date.now();
       const recentWindowActive =
         typeof sessionEntry?.lastMessagingToolSentAt === "number" &&
+        sessionEntry?.lastMessagingToolSessionId === queued.run.sessionId &&
         now - sessionEntry.lastMessagingToolSentAt <= RECENT_MESSAGING_TOOL_DEDUPE_WINDOW_MS;
       const recentTargetMatch =
         recentWindowActive &&
