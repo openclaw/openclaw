@@ -204,6 +204,7 @@ const TARGET_KEYS = [
   "nodeHost.browserProxy.allowProfiles",
   "media",
   "media.preserveFilenames",
+  "media.localRoots",
   "audio",
   "audio.transcription",
   "audio.transcription.command",

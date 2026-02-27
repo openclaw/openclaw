@@ -138,6 +138,12 @@ export type OpenClawConfig = {
   canvasHost?: CanvasHostConfig;
   talk?: TalkConfig;
   gateway?: GatewayConfig;
+  media?: {
+    /** Preserve original filenames when storing received media. */
+    preserveFilenames?: boolean;
+    /** Extra local directories to allow for media file access (outbound). */
+    localRoots?: string[];
+  };
   memory?: MemoryConfig;
   mcp?: McpConfig;
   /** Network-level SSRF protection via an operator-managed forward proxy. */

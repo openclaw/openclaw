@@ -23,6 +23,8 @@ export type WhatsAppActionConfig = {
 export type WhatsAppReactionLevel = ReactionLevel;
 
 export type WhatsAppGroupConfig = {
+  /** Friendly display name for target resolution (e.g. "Bot Bros"). */
+  name?: string;
   requireMention?: boolean;
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;

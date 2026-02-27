@@ -1,3 +1,4 @@
+import type { SkillCommandSpec } from "../agents/skills/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -12,7 +13,7 @@ import { stripInboundMetadata } from "./reply/strip-inbound-meta.js";
 export function hasControlCommand(
   text?: string,
   cfg?: OpenClawConfig,
-  options?: CommandNormalizeOptions,
+  options?: CommandNormalizeOptions & { skillCommands?: SkillCommandSpec[] },
 ): boolean {
   if (!text) {
     return false;
@@ -30,7 +31,10 @@ export function hasControlCommand(
     return false;
   }
   const lowered = normalizeLowercaseStringOrEmpty(normalizedBody);
-  const commands = cfg ? listChatCommandsForConfig(cfg) : listChatCommands();
+  const skillCommands = options?.skillCommands;
+  const commands = cfg
+    ? listChatCommandsForConfig(cfg, { skillCommands })
+    : listChatCommands({ skillCommands });
   for (const command of commands) {
     for (const alias of command.textAliases) {
       const normalized = normalizeOptionalLowercaseString(alias);
