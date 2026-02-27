@@ -71,6 +71,33 @@ describe("Ollama provider", () => {
     }
   });
 
+  it("injects ollama with placeholder key when explicitly configured but no env key", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const saved = process.env.OLLAMA_API_KEY;
+    delete process.env.OLLAMA_API_KEY;
+
+    try {
+      const providers = await resolveImplicitProviders({
+        agentDir,
+        explicitProviders: {
+          ollama: {
+            baseUrl: "http://127.0.0.1:11434",
+            api: "ollama",
+            models: [],
+          },
+        },
+      });
+
+      expect(providers?.ollama).toBeDefined();
+      expect(providers?.ollama?.apiKey).toBe("local");
+      expect(providers?.ollama?.api).toBe("ollama");
+    } finally {
+      if (saved !== undefined) {
+        process.env.OLLAMA_API_KEY = saved;
+      }
+    }
+  });
+
   it("should have correct model structure without streaming override", () => {
     const mockOllamaModel = {
       id: "llama3.3:latest",

@@ -1,6 +1,15 @@
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { AuthProfileStore } from "./auth-profiles.js";
-import { requireApiKey, resolveAwsSdkEnvVarName, resolveModelAuthMode } from "./model-auth.js";
+import {
+  KEYLESS_LOCAL_PLACEHOLDER,
+  requireApiKey,
+  resolveApiKeyForProvider,
+  resolveAwsSdkEnvVarName,
+  resolveModelAuthMode,
+} from "./model-auth.js";
 
 describe("resolveAwsSdkEnvVarName", () => {
   it("prefers bearer token over access keys and profile", () => {
@@ -115,5 +124,57 @@ describe("requireApiKey", () => {
         "openai",
       ),
     ).toThrow('No API key resolved for provider "openai"');
+  });
+});
+
+describe("resolveApiKeyForProvider — keyless local providers", () => {
+  it("returns placeholder key for ollama when no auth is configured", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const saved = process.env.OLLAMA_API_KEY;
+    delete process.env.OLLAMA_API_KEY;
+    try {
+      const result = await resolveApiKeyForProvider({ provider: "ollama", agentDir });
+      expect(result.apiKey).toBe(KEYLESS_LOCAL_PLACEHOLDER);
+      expect(result.source).toBe("local-provider-default");
+      expect(result.mode).toBe("api-key");
+    } finally {
+      if (saved !== undefined) {
+        process.env.OLLAMA_API_KEY = saved;
+      }
+    }
+  });
+
+  it("returns placeholder key for vllm when no auth is configured", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    const saved = process.env.VLLM_API_KEY;
+    delete process.env.VLLM_API_KEY;
+    try {
+      const result = await resolveApiKeyForProvider({ provider: "vllm", agentDir });
+      expect(result.apiKey).toBe(KEYLESS_LOCAL_PLACEHOLDER);
+      expect(result.source).toBe("local-provider-default");
+    } finally {
+      if (saved !== undefined) {
+        process.env.VLLM_API_KEY = saved;
+      }
+    }
+  });
+
+  it("prefers real env key over placeholder for ollama", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    process.env.OLLAMA_API_KEY = "real-key";
+    try {
+      const result = await resolveApiKeyForProvider({ provider: "ollama", agentDir });
+      expect(result.apiKey).toBe("real-key");
+      expect(result.source).toContain("OLLAMA_API_KEY");
+    } finally {
+      delete process.env.OLLAMA_API_KEY;
+    }
+  });
+
+  it("still throws for non-local providers without auth", async () => {
+    const agentDir = mkdtempSync(join(tmpdir(), "openclaw-test-"));
+    await expect(resolveApiKeyForProvider({ provider: "anthropic", agentDir })).rejects.toThrow(
+      'No API key found for provider "anthropic"',
+    );
   });
 });

@@ -40,7 +40,12 @@ import {
   HUGGINGFACE_MODEL_CATALOG,
   buildHuggingfaceModelDefinition,
 } from "./huggingface-models.js";
-import { resolveAwsSdkEnvVarName, resolveEnvApiKey } from "./model-auth.js";
+import {
+  KEYLESS_LOCAL_PLACEHOLDER,
+  KEYLESS_LOCAL_PROVIDERS,
+  resolveAwsSdkEnvVarName,
+  resolveEnvApiKey,
+} from "./model-auth.js";
 import { OLLAMA_NATIVE_BASE_URL } from "./ollama-stream.js";
 import {
   buildSyntheticModelDefinition,
@@ -480,6 +485,14 @@ export function normalizeProviders(params: {
           normalizedProvider = { ...normalizedProvider, apiKey };
         }
       }
+    }
+
+    // Keyless local providers (ollama, vllm) don't need real auth — inject a
+    // placeholder so the pi SDK's ModelRegistry accepts the provider config.
+    const currentApiKey = normalizeOptionalSecretInput(normalizedProvider.apiKey);
+    if (!currentApiKey?.trim() && KEYLESS_LOCAL_PROVIDERS.has(normalizedKey)) {
+      mutated = true;
+      normalizedProvider = { ...normalizedProvider, apiKey: KEYLESS_LOCAL_PLACEHOLDER };
     }
 
     if (normalizedKey === "google") {
@@ -959,15 +972,20 @@ export async function resolveImplicitProviders(params: {
     break;
   }
 
-  // Ollama provider - only add if explicitly configured.
-  // Use the user's configured baseUrl (from explicit providers) for model
-  // discovery so that remote / non-default Ollama instances are reachable.
+  // Ollama provider — inject when the user has an env key, auth profile, or
+  // explicit provider config.  Ollama's HTTP API works without auth, so we
+  // fall back to a placeholder key when none is found (the pi SDK requires a
+  // truthy apiKey to register custom models).
   const ollamaKey =
     resolveEnvApiKeyVarName("ollama") ??
     resolveApiKeyFromProfiles({ provider: "ollama", store: authStore });
-  if (ollamaKey) {
-    const ollamaBaseUrl = params.explicitProviders?.ollama?.baseUrl;
-    providers.ollama = { ...(await buildOllamaProvider(ollamaBaseUrl)), apiKey: ollamaKey };
+  const ollamaExplicit = params.explicitProviders?.ollama;
+  if (ollamaKey || ollamaExplicit) {
+    const ollamaBaseUrl = ollamaExplicit?.baseUrl;
+    providers.ollama = {
+      ...(await buildOllamaProvider(ollamaBaseUrl)),
+      apiKey: ollamaKey ?? KEYLESS_LOCAL_PLACEHOLDER,
+    };
   }
 
   // vLLM provider - OpenAI-compatible local server (opt-in via env/profile).

@@ -20,6 +20,10 @@ import { normalizeProviderId } from "./model-selection.js";
 
 export { ensureAuthProfileStore, resolveAuthProfileOrder } from "./auth-profiles.js";
 
+/** Local providers whose HTTP APIs work without authentication. */
+export const KEYLESS_LOCAL_PROVIDERS = new Set(["ollama", "vllm"]);
+export const KEYLESS_LOCAL_PLACEHOLDER = "local";
+
 const AWS_BEARER_ENV = "AWS_BEARER_TOKEN_BEDROCK";
 const AWS_ACCESS_KEY_ENV = "AWS_ACCESS_KEY_ID";
 const AWS_SECRET_KEY_ENV = "AWS_SECRET_ACCESS_KEY";
@@ -219,6 +223,10 @@ export async function resolveApiKeyForProvider(params: {
         'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.3-codex (OAuth) or set OPENAI_API_KEY to use openai/gpt-5.1-codex.',
       );
     }
+  }
+
+  if (KEYLESS_LOCAL_PROVIDERS.has(normalized)) {
+    return { apiKey: KEYLESS_LOCAL_PLACEHOLDER, source: "local-provider-default", mode: "api-key" };
   }
 
   const authStorePath = resolveAuthStorePathForDisplay(params.agentDir);
