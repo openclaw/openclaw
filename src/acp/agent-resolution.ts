@@ -11,11 +11,18 @@ const MODEL_TO_AGENT: Record<string, string> = {
   gemini: "gemini",
 };
 
+export interface ResolvedAcpAgent {
+  /** Logical agent ID — used in metadata, policy checks, and user-facing messages. */
+  logicalId: string;
+  /** Runtime agent name passed to the acpx backend (e.g. "codex", "claude"). */
+  runtimeId: string;
+}
+
 export function resolveAcpAgent(
   requestedId: string | undefined,
   defaultAgent: string | undefined,
   agentsList: Array<{ id: string; model?: string | { primary?: string } }> = [],
-): string {
+): ResolvedAcpAgent {
   const candidate = requestedId ?? defaultAgent;
   if (!candidate) {
     throw new Error("No ACP agent specified and no defaultAgent configured.");
@@ -23,9 +30,9 @@ export function resolveAcpAgent(
 
   const normalizedCandidate = candidate.toLowerCase();
 
-  // Already a built-in acpx agent
+  // Already a built-in acpx agent — logical and runtime IDs are the same
   if (ACPX_BUILTIN_AGENTS.has(normalizedCandidate)) {
-    return normalizedCandidate;
+    return { logicalId: normalizedCandidate, runtimeId: normalizedCandidate };
   }
 
   // Try to resolve from fleet agents list
@@ -36,7 +43,8 @@ export function resolveAcpAgent(
 
     for (const [prefix, acpxName] of Object.entries(MODEL_TO_AGENT)) {
       if (model.toLowerCase().includes(prefix.toLowerCase())) {
-        return acpxName;
+        // Preserve the original fleet ID as the logical identifier
+        return { logicalId: fleetAgent.id, runtimeId: acpxName };
       }
     }
   }

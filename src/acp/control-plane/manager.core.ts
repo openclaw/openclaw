@@ -215,7 +215,7 @@ export class AcpSessionManager {
     if (!sessionKey) {
       throw new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "ACP session key is required.");
     }
-    const agent = resolveAcpAgent(
+    const resolvedAgent = resolveAcpAgent(
       input.agent,
       input.cfg.acp?.defaultAgent,
       input.cfg.agents?.list ?? [],
@@ -234,7 +234,7 @@ export class AcpSessionManager {
         run: async () =>
           await runtime.ensureSession({
             sessionKey,
-            agent,
+            agent: resolvedAgent.runtimeId,
             mode: input.mode,
             cwd: requestedCwd,
           }),
@@ -264,7 +264,7 @@ export class AcpSessionManager {
         } as const);
       const meta: SessionAcpMeta = {
         backend: handle.backend || backend.id,
-        agent,
+        agent: resolvedAgent.logicalId,
         runtimeSessionName: handle.runtimeSessionName,
         identity: initializedIdentity,
         mode: input.mode,
@@ -305,7 +305,7 @@ export class AcpSessionManager {
         runtime,
         handle,
         backend: handle.backend || backend.id,
-        agent,
+        agent: resolvedAgent.logicalId,
         mode: input.mode,
         cwd: effectiveCwd,
       });
