@@ -465,6 +465,7 @@ export async function runReplyAgent(params: {
             storePath,
             sessionKey,
             update: async () => ({
+              lastMessagingToolSessionId: sessionDedupeEntry.lastMessagingToolSessionId,
               lastMessagingToolSentAt: sessionDedupeEntry.lastMessagingToolSentAt,
               lastMessagingToolSentTexts: sessionDedupeEntry.lastMessagingToolSentTexts,
               lastMessagingToolSentMediaUrls: sessionDedupeEntry.lastMessagingToolSentMediaUrls,
