@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isFeishuBackoffError, hasBackoffCodeInResponse, FeishuBackoffError } from "./typing.js";
+import { isFeishuBackoffError, getBackoffCodeFromResponse, FeishuBackoffError } from "./typing.js";
 
 describe("isFeishuBackoffError", () => {
   it("returns true for HTTP 429 (AxiosError shape)", () => {
@@ -54,38 +54,38 @@ describe("isFeishuBackoffError", () => {
   });
 });
 
-describe("hasBackoffCodeInResponse", () => {
+describe("getBackoffCodeFromResponse", () => {
   it("returns true for response with quota exceeded code", () => {
     const response = { code: 99991403, msg: "quota exceeded", data: null };
-    expect(hasBackoffCodeInResponse(response)).toBe(true);
+    expect(getBackoffCodeFromResponse(response)).toBe(response.code);
   });
 
   it("returns true for response with rate limit code", () => {
     const response = { code: 99991400, msg: "rate limit", data: null };
-    expect(hasBackoffCodeInResponse(response)).toBe(true);
+    expect(getBackoffCodeFromResponse(response)).toBe(response.code);
   });
 
   it("returns false for successful response (code 0)", () => {
     const response = { code: 0, msg: "success", data: { reaction_id: "r1" } };
-    expect(hasBackoffCodeInResponse(response)).toBe(false);
+    expect(getBackoffCodeFromResponse(response)).toBeUndefined();
   });
 
   it("returns false for other error codes", () => {
     const response = { code: 99991401, msg: "other error", data: null };
-    expect(hasBackoffCodeInResponse(response)).toBe(false);
+    expect(getBackoffCodeFromResponse(response)).toBeUndefined();
   });
 
   it("returns false for null", () => {
-    expect(hasBackoffCodeInResponse(null)).toBe(false);
+    expect(getBackoffCodeFromResponse(null)).toBeUndefined();
   });
 
   it("returns false for undefined", () => {
-    expect(hasBackoffCodeInResponse(undefined)).toBe(false);
+    expect(getBackoffCodeFromResponse(undefined)).toBeUndefined();
   });
 
   it("returns false for response without code field", () => {
     const response = { data: { reaction_id: "r1" } };
-    expect(hasBackoffCodeInResponse(response)).toBe(false);
+    expect(getBackoffCodeFromResponse(response)).toBeUndefined();
   });
 });
 

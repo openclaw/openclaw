@@ -78,12 +78,15 @@ export function isFeishuBackoffError(err: unknown): boolean {
  * API-level error code in the response body. This must be detected so the
  * circuit breaker can trip. See codex review on #28157.
  */
-export function hasBackoffCodeInResponse(response: unknown): boolean {
+export function getBackoffCodeFromResponse(response: unknown): number | undefined {
   if (typeof response !== "object" || response === null) {
-    return false;
+    return undefined;
   }
   const code = (response as { code?: number }).code;
-  return typeof code === "number" && FEISHU_BACKOFF_CODES.has(code);
+  if (typeof code === "number" && FEISHU_BACKOFF_CODES.has(code)) {
+    return code;
+  }
+  return undefined;
 }
 
 /**
@@ -118,12 +121,12 @@ export async function addTypingIndicator(params: {
 
     // Feishu SDK may return a normal response with an API-level error code
     // instead of throwing. Detect backoff codes and throw to trip the breaker.
-    if (hasBackoffCodeInResponse(response)) {
-      const code = (response as { code?: number }).code;
+    const backoffCode = getBackoffCodeFromResponse(response);
+    if (backoffCode !== undefined) {
       console.log(
-        `[feishu] typing indicator response contains backoff code ${code}, stopping keepalive`,
+        `[feishu] typing indicator response contains backoff code ${backoffCode}, stopping keepalive`,
       );
-      throw new FeishuBackoffError(code);
+      throw new FeishuBackoffError(backoffCode);
     }
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- SDK response type
@@ -171,12 +174,12 @@ export async function removeTypingIndicator(params: {
     });
 
     // Check for backoff codes in non-throwing SDK responses
-    if (hasBackoffCodeInResponse(result)) {
-      const code = (result as { code?: number }).code;
+    const backoffCode = getBackoffCodeFromResponse(result);
+    if (backoffCode !== undefined) {
       console.log(
-        `[feishu] typing indicator removal response contains backoff code ${code}, stopping keepalive`,
+        `[feishu] typing indicator removal response contains backoff code ${backoffCode}, stopping keepalive`,
       );
-      throw new FeishuBackoffError(code);
+      throw new FeishuBackoffError(backoffCode);
     }
   } catch (err) {
     if (isFeishuBackoffError(err)) {
