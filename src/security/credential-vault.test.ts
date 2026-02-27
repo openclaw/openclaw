@@ -456,7 +456,10 @@ describe("credential-vault", () => {
   });
 
   describe("file permissions", () => {
-    it("should create registry with secure permissions", () => {
+    // Windows does not honour Unix chmod bits — skip permission checks there
+    const itUnix = process.platform === "win32" ? it.skip : it;
+
+    itUnix("should create registry with secure permissions", () => {
       storeCredential("perm-test", "value-12345678901234567890", "provider", vaultOptions);
 
       const registryPath = path.join(testVaultDir, "registry.json");
@@ -467,7 +470,7 @@ describe("credential-vault", () => {
       expect(mode).toBe(0o600);
     });
 
-    it("should create credentials file with secure permissions", () => {
+    itUnix("should create credentials file with secure permissions", () => {
       storeCredential("perm-test", "value-12345678901234567890", "provider", vaultOptions);
 
       const credPath = path.join(testVaultDir, "credentials.enc");
