@@ -18,7 +18,11 @@ import type {
 } from "./pi-embedded-subscribe.handlers.types.js";
 import { filterToolResultMediaUrls } from "./pi-embedded-subscribe.tools.js";
 import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
-import { formatReasoningMessage, stripDowngradedToolCallText } from "./pi-embedded-utils.js";
+import {
+  formatReasoningMessage,
+  stripDowngradedToolCallText,
+  stripToolXmlBlocks,
+} from "./pi-embedded-utils.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
 const THINKING_TAG_SCAN_RE = /<\s*(\/?)\s*(?:think(?:ing)?|thought|antthinking)\s*>/gi;
@@ -49,8 +53,18 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     deltaBuffer: "",
     blockBuffer: "",
     // Track if a streamed chunk opened a <think> block (stateful across chunks).
-    blockState: { thinking: false, final: false, inlineCode: createInlineCodeState() },
-    partialBlockState: { thinking: false, final: false, inlineCode: createInlineCodeState() },
+    blockState: {
+      thinking: false,
+      final: false,
+      toolXmlDepth: 0,
+      inlineCode: createInlineCodeState(),
+    },
+    partialBlockState: {
+      thinking: false,
+      final: false,
+      toolXmlDepth: 0,
+      inlineCode: createInlineCodeState(),
+    },
     lastStreamedAssistant: undefined,
     lastStreamedAssistantCleaned: undefined,
     emittedAssistantUpdate: false,
@@ -109,9 +123,11 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     partialReplyDirectiveAccumulator.reset();
     state.blockState.thinking = false;
     state.blockState.final = false;
+    state.blockState.toolXmlDepth = 0;
     state.blockState.inlineCode = createInlineCodeState();
     state.partialBlockState.thinking = false;
     state.partialBlockState.final = false;
+    state.partialBlockState.toolXmlDepth = 0;
     state.partialBlockState.inlineCode = createInlineCodeState();
     state.lastStreamedAssistant = undefined;
     state.lastStreamedAssistantCleaned = undefined;
@@ -354,7 +370,12 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
 
   const stripBlockTags = (
     text: string,
-    state: { thinking: boolean; final: boolean; inlineCode?: InlineCodeState },
+    state: {
+      thinking: boolean;
+      final: boolean;
+      toolXmlDepth?: number;
+      inlineCode?: InlineCodeState;
+    },
   ): string => {
     if (!text) {
       return text;
@@ -384,6 +405,12 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       processed += text.slice(lastIndex);
     }
     state.thinking = inThinking;
+
+    // 1.5. Handle tool XML blocks (stateful, strip content inside — depth-counted).
+    const toolXmlState = { toolXmlDepth: state.toolXmlDepth ?? 0 };
+    const toolCodeSpans = buildCodeSpanIndex(processed, inlineStateStart);
+    processed = stripToolXmlBlocks(processed, toolXmlState, toolCodeSpans.isInside);
+    state.toolXmlDepth = toolXmlState.toolXmlDepth;
 
     // 2. Handle <final> blocks (stateful, strip content OUTSIDE)
     // If enforcement is disabled, we still strip the tags themselves to prevent

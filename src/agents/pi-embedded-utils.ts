@@ -415,6 +415,69 @@ export function extractThinkingFromTaggedStream(text: string): string {
   return text.slice(start).trim();
 }
 
+// Regex matching Anthropic-style tool XML tags that leak via OpenAI-compatible proxies.
+const TOOL_XML_TAG_SCAN_RE =
+  /<\s*(\/?)\s*(?:antml_function_calls|antml_invoke|tool_call|tool_result)\b[^>]*>/gi;
+
+/**
+ * Stateful tool XML block stripper for streaming paths.
+ *
+ * Tracks open/close depth across calls so that tool XML blocks split across
+ * chunk boundaries are fully suppressed. Content inside tool XML (depth > 0)
+ * is dropped; content outside is preserved.
+ *
+ * @param text           The current chunk text (post-thinking-strip).
+ * @param state          Mutable state; `toolXmlDepth` is updated across calls.
+ * @param isInsideCodeSpan Optional predicate — tags inside backtick code spans are preserved.
+ */
+export function stripToolXmlBlocks(
+  text: string,
+  state: { toolXmlDepth: number },
+  isInsideCodeSpan?: (index: number) => boolean,
+): string {
+  // Fast path: skip regex scan when no tool XML markers present and not inside an open block.
+  if (
+    state.toolXmlDepth === 0 &&
+    !/<\s*\/?(?:antml_function_calls|antml_invoke|tool_call|tool_result)\b/i.test(text)
+  ) {
+    return text;
+  }
+
+  let result = "";
+  let lastIndex = 0;
+  let depth = state.toolXmlDepth;
+  TOOL_XML_TAG_SCAN_RE.lastIndex = 0;
+
+  for (const match of text.matchAll(TOOL_XML_TAG_SCAN_RE)) {
+    const idx = match.index ?? 0;
+    if (isInsideCodeSpan?.(idx)) {
+      continue;
+    }
+    const isClose = match[1] === "/";
+
+    // Emit text before this tag only when outside tool XML blocks.
+    // Covers both open tags (entering a block) and orphaned close tags (strip the tag itself).
+    if (depth === 0) {
+      result += text.slice(lastIndex, idx);
+    }
+
+    if (isClose) {
+      depth = Math.max(0, depth - 1);
+    } else {
+      depth += 1;
+    }
+    lastIndex = idx + match[0].length;
+  }
+
+  // Emit trailing text only when outside tool XML blocks.
+  if (depth === 0) {
+    result += text.slice(lastIndex);
+  }
+
+  state.toolXmlDepth = depth;
+  return result;
+}
+
 export function inferToolMetaFromArgs(toolName: string, args: unknown): string | undefined {
   const display = resolveToolDisplay({ name: toolName, args });
   return formatToolDetail(display);
