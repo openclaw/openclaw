@@ -5,6 +5,7 @@ import { ExecApprovalManager } from "./exec-approval-manager.js";
 import { CORE_GATEWAY_METHODS, listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";
+import { createSecretsHandlers } from "./server-methods/secrets.js";
 
 const INTERNAL_ONLY_METHODS = new Set([
   "connect",
@@ -36,9 +37,13 @@ describe("gateway method catalog consistency", () => {
 
   it("matches listed public methods to implemented handlers", () => {
     const supplementalHandlers = createExecApprovalHandlers(new ExecApprovalManager());
+    const secretsHandlers = createSecretsHandlers({
+      reloadSecrets: async () => ({ warningCount: 0 }),
+    });
     const implementedHandlers = new Set([
       ...Object.keys(coreGatewayHandlers),
       ...Object.keys(supplementalHandlers),
+      ...Object.keys(secretsHandlers),
     ]);
 
     const missingPublicMethods = CORE_GATEWAY_METHODS.filter(
