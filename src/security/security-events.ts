@@ -375,6 +375,12 @@ export class SecurityEventsManager {
 
   /**
    * Query events with filters.
+   *
+   * **Partial-results caveat:** if called before `init()` has resolved, only
+   * events emitted since process start are visible — the on-disk history has
+   * not yet been hydrated into the ring buffer.  For a complete view always
+   * `await init()` first (or use the manager through
+   * `SecuritySubsystemCoordinator.start()`, which does this automatically).
    */
   query(filters?: SecurityEventQueryFilters): SecurityEvent[] {
     // Start with in-memory events
@@ -765,6 +771,11 @@ let defaultManager: SecurityEventsManager | undefined;
 
 /**
  * Get or create the default SecurityEventsManager instance.
+ *
+ * **Config is only accepted on the first call.** Subsequent calls with a
+ * `config` or `alerting` argument will log a warning and return the already-
+ * initialised singleton unchanged. Configure this singleton exactly once,
+ * at application startup, before any other subsystem calls it.
  */
 export function getSecurityEventsManager(
   config?: SecurityEventsConfig,

@@ -150,15 +150,18 @@ export async function safeReadTextFile(
   options: Omit<InspectTextContentOptions, "filePath"> = {},
 ): Promise<SafeReadTextResult> {
   const maxBytes = clampMaxBytes(options.maxBytes);
-  const stat = await fs.stat(filePath);
-  if (stat.size > maxBytes) {
+  // Read first, check size afterward to eliminate the stat→read TOCTOU window.
+  // A file could be replaced with a larger one between a pre-read stat and the
+  // actual read; measuring the decoded byte length after reading is race-free.
+  const content = await fs.readFile(filePath, "utf-8");
+  const actualBytes = Buffer.byteLength(content, "utf-8");
+  if (actualBytes > maxBytes) {
     throw new FileReadTooLargeError({
       filePath,
-      actualBytes: stat.size,
+      actualBytes,
       maxBytes,
     });
   }
-  const content = await fs.readFile(filePath, "utf-8");
   const inspected = inspectTextContent(content, {
     ...options,
     filePath,

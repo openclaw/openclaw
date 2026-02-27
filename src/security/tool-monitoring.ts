@@ -568,6 +568,11 @@ let defaultMonitor: ToolMonitor | undefined;
 
 /**
  * Get or create the default ToolMonitor instance.
+ *
+ * **Config is only accepted on the first call.** Subsequent calls with a
+ * `config` argument will log a warning and return the already-initialised
+ * singleton unchanged. Configure this singleton exactly once, at application
+ * startup, before any other subsystem calls it.
  */
 export function getToolMonitor(config?: ToolMonitoringConfig): ToolMonitor {
   if (!defaultMonitor) {

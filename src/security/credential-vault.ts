@@ -99,7 +99,13 @@ const CREDENTIAL_VALIDATORS: Record<string, RegExp> = {
   // GitHub tokens
   github_pat: /^ghp_[A-Za-z0-9]{36}$/,
   github_fine: /^github_pat_[A-Za-z0-9_]{22,}$/,
-  // Generic (minimum 16 chars, alphanumeric with common separators)
+  // Generic fallback — intentionally permissive (≥16 alphanumeric chars with
+  // common separators). Accepts any credential whose name does not match a
+  // known provider prefix AND whose value looks like a plausible key.  This is
+  // by design: OpenClaw stores credentials for many providers that do not have
+  // a dedicated regex above, and rejecting them would break user workflows.
+  // Increase specificity by adding a provider entry above rather than tightening
+  // the generic rule (which would silently drop valid third-party credentials).
   generic: /^[A-Za-z0-9_-]{16,}$/,
 };
 
@@ -273,10 +279,20 @@ function loadFileCredentials(options?: VaultOptions): FileCredentialsStore {
       }
       const json = decryptCredentials(data, vaultDir);
       const raw = JSON.parse(json) as unknown;
-      if (!raw || typeof raw !== "object") {
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
         return {};
       }
-      return raw as FileCredentialsStore;
+      // Validate each entry: skip non-string values so a tampered vault cannot
+      // inject objects/arrays into code paths that expect plain credential strings.
+      const validated: FileCredentialsStore = {};
+      for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+        if (typeof v === "string") {
+          validated[k] = v;
+        } else {
+          log.warn("vault entry skipped: value is not a string", { key: k });
+        }
+      }
+      return validated;
     } catch (error) {
       log.warn("failed to decrypt vault file, treating as empty store", {
         error: error instanceof Error ? error.message : String(error),
@@ -289,8 +305,18 @@ function loadFileCredentials(options?: VaultOptions): FileCredentialsStore {
   const legacyPath = path.join(vaultDir, CREDENTIALS_JSON_FILENAME);
   if (fs.existsSync(legacyPath)) {
     const raw = loadJsonFile(legacyPath);
-    const store: FileCredentialsStore =
-      raw && typeof raw === "object" ? (raw as FileCredentialsStore) : {};
+    // Validate per-field: skip non-string values so a corrupt/tampered legacy
+    // file cannot inject objects or arrays into credential-consuming code paths.
+    const store: FileCredentialsStore = {};
+    if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+      for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+        if (typeof v === "string") {
+          store[k] = v;
+        } else {
+          log.warn("legacy vault entry skipped: value is not a string", { key: k });
+        }
+      }
+    }
     try {
       const encrypted = encryptCredentials(JSON.stringify(store), vaultDir);
       if (!fs.existsSync(vaultDir)) {
@@ -405,7 +431,10 @@ export function validateCredentialFormat(
     }
   }
 
-  // Fall back to generic validation
+  // Fall back to generic validation (CQ-16 — intentional): accept any
+  // credential that looks like a plausible key even if no provider-specific
+  // regex matched the name.  This prevents false rejections for third-party
+  // or custom credentials that have no dedicated validator.
   if (CREDENTIAL_VALIDATORS.generic.test(value)) {
     return { valid: true };
   }
