@@ -1,4 +1,6 @@
 import fs from "node:fs/promises";
+import type { SessionFileEntry } from "./session-files.js";
+import type { MemorySource } from "./types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runGeminiEmbeddingBatches, type GeminiBatchRequest } from "./batch-gemini.js";
 import {
@@ -18,8 +20,6 @@ import {
   type MemoryFileEntry,
 } from "./internal.js";
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
-import type { SessionFileEntry } from "./session-files.js";
-import type { MemorySource } from "./types.js";
 
 const VECTOR_TABLE = "chunks_vec";
 const FTS_TABLE = "chunks_fts";
@@ -805,3 +805,5 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       .run(entry.path, options.source, entry.hash, entry.mtimeMs, entry.size);
   }
 }
+
+export const memoryManagerEmbeddingOps = MemoryManagerEmbeddingOps.prototype;
