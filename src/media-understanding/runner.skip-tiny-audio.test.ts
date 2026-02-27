@@ -24,7 +24,9 @@ describe("runCapability skips tiny audio files", () => {
 
     const ctx: MsgContext = { MediaPath: tmpPath, MediaType: "audio/wav" };
     const media = normalizeMediaAttachments(ctx);
-    const cache = createMediaAttachmentCache(media);
+    const cache = createMediaAttachmentCache(media, {
+      localPathRoots: [path.dirname(tmpPath)],
+    });
 
     let transcribeCalled = false;
     const providerRegistry = buildProviderRegistry({
@@ -85,7 +87,9 @@ describe("runCapability skips tiny audio files", () => {
 
     const ctx: MsgContext = { MediaPath: tmpPath, MediaType: "audio/ogg" };
     const media = normalizeMediaAttachments(ctx);
-    const cache = createMediaAttachmentCache(media);
+    const cache = createMediaAttachmentCache(media, {
+      localPathRoots: [path.dirname(tmpPath)],
+    });
 
     let transcribeCalled = false;
     const providerRegistry = buildProviderRegistry({
@@ -139,7 +143,9 @@ describe("runCapability skips tiny audio files", () => {
 
     const ctx: MsgContext = { MediaPath: tmpPath, MediaType: "audio/wav" };
     const media = normalizeMediaAttachments(ctx);
-    const cache = createMediaAttachmentCache(media);
+    const cache = createMediaAttachmentCache(media, {
+      localPathRoots: [path.dirname(tmpPath)],
+    });
 
     let transcribeCalled = false;
     const providerRegistry = buildProviderRegistry({
