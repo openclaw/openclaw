@@ -184,7 +184,8 @@ When validation fails:
         dmScope: "per-channel-peer",  // recommended for multi-user
         threadBindings: {
           enabled: true,
-          ttlHours: 24,
+          idleHours: 24,
+          maxAgeHours: 0,
         },
         reset: {
           mode: "daily",
@@ -196,7 +197,7 @@ When validation fails:
     ```
 
     - `dmScope`: `main` (shared) | `per-peer` | `per-channel-peer` | `per-account-channel-peer`
-    - `threadBindings`: global defaults for thread-bound session routing (Discord supports `/focus`, `/unfocus`, `/agents`, and `/session ttl`).
+    - `threadBindings`: global defaults for thread-bound session routing (Discord supports `/focus`, `/unfocus`, `/agents`, `/session idle`, and `/session max-age`).
     - See [Session Management](/concepts/session) for scoping, identity links, and send policy.
     - See [full reference](/gateway/configuration-reference#session) for all fields.
 

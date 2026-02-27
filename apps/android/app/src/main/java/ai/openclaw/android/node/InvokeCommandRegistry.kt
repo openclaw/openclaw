@@ -63,6 +63,11 @@ object InvokeCommandRegistry {
         requiresForeground = true,
       ),
       InvokeCommandSpec(
+        name = OpenClawCameraCommand.List.rawValue,
+        requiresForeground = true,
+        availability = InvokeCommandAvailability.CameraEnabled,
+      ),
+      InvokeCommandSpec(
         name = OpenClawCameraCommand.Snap.rawValue,
         requiresForeground = true,
         availability = InvokeCommandAvailability.CameraEnabled,
@@ -83,7 +88,16 @@ object InvokeCommandRegistry {
         name = OpenClawDeviceCommand.Info.rawValue,
       ),
       InvokeCommandSpec(
+        name = OpenClawDeviceCommand.Permissions.rawValue,
+      ),
+      InvokeCommandSpec(
+        name = OpenClawDeviceCommand.Health.rawValue,
+      ),
+      InvokeCommandSpec(
         name = OpenClawNotificationsCommand.List.rawValue,
+      ),
+      InvokeCommandSpec(
+        name = OpenClawNotificationsCommand.Actions.rawValue,
       ),
       InvokeCommandSpec(
         name = OpenClawSmsCommand.Send.rawValue,
